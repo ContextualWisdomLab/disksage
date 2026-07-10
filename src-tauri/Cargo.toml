@@ -27,3 +27,6 @@ jwalk = "0.8"
 [dev-dependencies]
 tempfile = "3.27.0"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage)", "cfg(coverage_nightly)"] }
+
