@@ -2,6 +2,10 @@
 # 버전이 tauri에 의해 고정되어 있어 저장소 차원의 수정 불가 — tauri 메이저 업그레이드 시 재검토.
 
 [[IgnoredVulns]]
+id = "RUSTSEC-2025-0098"
+reason = "unic-* unmaintained; build-time transitive dep pinned by tauri toolchain"
+
+[[IgnoredVulns]]
 id = "RUSTSEC-2024-0411"
 reason = "unmaintained gtk-rs GTK3 binding, pinned transitively by tauri/wry; no fix without upstream tauri migration"
 

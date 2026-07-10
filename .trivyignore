@@ -1,0 +1,5 @@
+# glib 0.18 VariantStrIter unsoundness — glib 버전이 tauri GTK3 스택에 고정되어
+# 저장소 차원의 업그레이드 불가, 해당 API는 이 크레이트에서 미사용.
+# tauri 메이저 업그레이드 시 재검토. (osv-scanner.toml의 동일 항목과 짝)
+GHSA-wrw7-89jp-8q8g
+RUSTSEC-2024-0429
