@@ -37,8 +37,9 @@
 
   function click(ev: MouseEvent) {
     const b = canvas.getBoundingClientRect();
-    const px = ev.clientX - b.left;
-    const py = ev.clientY - b.top;
+    // CSS 축소 표시 시 내부 좌표계(920x420)로 환산
+    const px = (ev.clientX - b.left) * (W / b.width);
+    const py = (ev.clientY - b.top) * (H / b.height);
     const hit = rects.find(
       (r) => px >= r.x && px < r.x + r.w && py >= r.y && py < r.y + r.h,
     );
