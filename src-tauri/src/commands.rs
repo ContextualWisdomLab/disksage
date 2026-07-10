@@ -186,8 +186,8 @@ mod tests {
     fn node_view_rejects_parent_dir_components() {
         let tmp = tempfile::tempdir().unwrap();
         let res = scan_dir(tmp.path(), &AtomicBool::new(false), |_| {});
-        // lexical starts_with는 통과하지만 OS 해석은 루트 밖인 경로
-        let sneaky = tmp.path().join("..").join("elsewhere");
+        // lexical starts_with는 통과하지만 OS 해석은 루트 밖(실존 디렉토리)인 경로 — 가드 없으면 Ok
+        let sneaky = tmp.path().join("..");
         assert!(node_view(&res, &sneaky).is_err());
     }
 }
