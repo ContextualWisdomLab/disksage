@@ -1,0 +1,70 @@
+# Tauri 2가 Linux에서 사용하는 GTK3 스택(wry/tao)의 전이 의존성 권고.
+# 버전이 tauri에 의해 고정되어 있어 저장소 차원의 수정 불가 — tauri 메이저 업그레이드 시 재검토.
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0411"
+reason = "unmaintained gtk-rs GTK3 binding, pinned transitively by tauri/wry; no fix without upstream tauri migration"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0412"
+reason = "unmaintained gtk-rs GTK3 binding, pinned transitively by tauri/wry; no fix without upstream tauri migration"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0413"
+reason = "unmaintained gtk-rs GTK3 binding, pinned transitively by tauri/wry; no fix without upstream tauri migration"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0414"
+reason = "unmaintained gtk-rs GTK3 binding, pinned transitively by tauri/wry; no fix without upstream tauri migration"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0415"
+reason = "unmaintained gtk-rs GTK3 binding, pinned transitively by tauri/wry; no fix without upstream tauri migration"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0416"
+reason = "unmaintained gtk-rs GTK3 binding, pinned transitively by tauri/wry; no fix without upstream tauri migration"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0417"
+reason = "unmaintained gtk-rs GTK3 binding, pinned transitively by tauri/wry; no fix without upstream tauri migration"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0418"
+reason = "unmaintained gtk-rs GTK3 binding, pinned transitively by tauri/wry; no fix without upstream tauri migration"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0419"
+reason = "unmaintained gtk-rs GTK3 binding, pinned transitively by tauri/wry; no fix without upstream tauri migration"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0420"
+reason = "unmaintained gtk-rs GTK3 binding, pinned transitively by tauri/wry; no fix without upstream tauri migration"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0429"
+reason = "glib 0.18 VariantStrIter unsoundness; glib version pinned by tauri GTK3 stack, API not used by this crate; revisit on tauri upgrade"
+
+[[IgnoredVulns]]
+id = "GHSA-wrw7-89jp-8q8g"
+reason = "alias of RUSTSEC-2024-0429 (glib 0.18), same justification"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0370"
+reason = "proc-macro-error unmaintained; build-time transitive dep of tauri GTK3 macros, not runtime code"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0075"
+reason = "unic-* unmaintained; build-time transitive dep pinned by tauri toolchain"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0080"
+reason = "unic-* unmaintained; build-time transitive dep pinned by tauri toolchain"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0081"
+reason = "unic-* unmaintained; build-time transitive dep pinned by tauri toolchain"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0100"
+reason = "unic-* unmaintained; build-time transitive dep pinned by tauri toolchain"

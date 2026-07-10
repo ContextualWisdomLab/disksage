@@ -32,4 +32,24 @@ describe("squarify", () => {
     expect(squarify([{ key: "z", value: 0 }, { key: "n", value: -5 }], 0, 0, 10, 10)).toEqual([]);
     expect(squarify([], 0, 0, 10, 10)).toEqual([]);
   });
+
+  it("returns empty for degenerate containers", () => {
+    expect(squarify([{ key: "a", value: 5 }], 0, 0, 0, 10)).toEqual([]);
+    expect(squarify([{ key: "a", value: 5 }], 0, 0, 10, 0)).toEqual([]);
+  });
+
+  // ponytail: covers the tie branch in worst()'s min/max scan (equal-area items
+  // don't update the running min), which the other fixtures never hit since
+  // their values are all distinct.
+  it("handles tied values without favoring either rect", () => {
+    const rects = squarify(
+      [
+        { key: "a", value: 5 },
+        { key: "b", value: 5 },
+      ],
+      0, 0, 100, 100,
+    );
+    expect(rects).toHaveLength(2);
+    expect(area(rects[0])).toBeCloseTo(area(rects[1]), 6);
+  });
 });

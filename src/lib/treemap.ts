@@ -74,6 +74,6 @@ export function squarify(
       row = [item];
     }
   }
-  if (row.length > 0) layoutRow(row);
+  layoutRow(row); // 빈 입력은 위에서 early-return — 여기선 row가 항상 비어있지 않음
   return out;
 }
