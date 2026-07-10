@@ -3,6 +3,7 @@
   import * as api from "$lib/api";
   import { fmtBytes } from "$lib/fmt";
   import TopFiles from "$lib/TopFiles.svelte";
+  import Treemap from "$lib/Treemap.svelte";
 
   let roots: string[] = $state([]);
   let selectedRoot = $state("");
@@ -89,6 +90,7 @@
         {#if i < crumbs.length - 1}<span>›</span>{/if}
       {/each}
     </nav>
+    <Treemap {node} onOpen={open} />
     <ul class="entries">
       {#each node.entries as e}
         <li>
