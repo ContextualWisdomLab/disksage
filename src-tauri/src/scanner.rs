@@ -36,6 +36,7 @@ pub fn scan_dir_with_interval(
     progress_every: u64,
     mut on_progress: impl FnMut(&ScanStats),
 ) -> ScanResult {
+    let progress_every = progress_every.max(1);
     let mut dir_sizes: HashMap<PathBuf, u64> = HashMap::new();
     // min-heap: 가장 작은 항목이 루트에 오도록 Reverse
     let mut top: BinaryHeap<std::cmp::Reverse<(u64, PathBuf)>> = BinaryHeap::new();
@@ -59,24 +60,31 @@ pub fn scan_dir_with_interval(
                     stats.dirs += 1;
                     dir_sizes.entry(e.path()).or_insert(0);
                 } else if e.file_type().is_file() {
-                    let size = e.metadata().map(|m| m.len()).unwrap_or(0);
-                    stats.files += 1;
-                    stats.bytes += size;
-                    top.push(std::cmp::Reverse((size, e.path())));
-                    if top.len() > TOP_FILES_CAP {
-                        top.pop();
-                    }
-                    // 파일 크기를 root까지의 모든 조상 디렉토리에 누적
-                    // ponytail: PathBuf 키 HashMap — 초대형 드라이브에서 스캔이 수십 초를
-                    // 넘기면 인터닝된 디렉토리 인덱스로 교체
-                    let mut anc = e.path().parent().map(|p| p.to_path_buf());
-                    while let Some(d) = anc {
-                        *dir_sizes.entry(d.clone()).or_insert(0) += size;
-                        if d == root {
-                            break;
+                    match e.metadata() {
+                        Ok(md) => {
+                            let size = md.len();
+                            stats.files += 1;
+                            stats.bytes += size;
+                            top.push(std::cmp::Reverse((size, e.path())));
+                            if top.len() > TOP_FILES_CAP {
+                                top.pop();
+                            }
+                            // 파일 크기를 root까지의 모든 조상 디렉토리에 누적
+                            // ponytail: PathBuf 키 HashMap — 초대형 드라이브에서 스캔이 수십 초를
+                            // 넘기면 인터닝된 디렉토리 인덱스로 교체
+                            let mut anc = e.path().parent().map(|p| p.to_path_buf());
+                            while let Some(d) = anc {
+                                *dir_sizes.entry(d.clone()).or_insert(0) += size;
+                                if d == root {
+                                    break;
+                                }
+                                anc = d.parent().map(|p| p.to_path_buf());
+                            }
                         }
-                        anc = d.parent().map(|p| p.to_path_buf());
+                        Err(_) => stats.skipped += 1,
                     }
+                } else {
+                    // ponytail: symlinks land here uncounted; Task 4 excludes them from the walk entirely
                 }
             }
             Err(_) => stats.skipped += 1,
@@ -148,5 +156,13 @@ mod tests {
             .collect();
         assert_eq!(names, vec!["big.bin", "mid.bin", "small.bin"]);
         assert_eq!(res.top_files[0].1, 300);
+    }
+
+    #[test]
+    fn progress_every_zero_does_not_panic() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(&tmp.path().join("f.bin"), 1);
+        let res = scan_dir_with_interval(tmp.path(), &AtomicBool::new(false), 0, |_| {});
+        assert_eq!(res.stats.files, 1);
     }
 }
