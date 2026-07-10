@@ -92,12 +92,19 @@ pub fn start_scan(root: String, app: AppHandle, state: State<AppState>) -> Resul
     let slot = state.result.clone();
     let scanning = state.scanning.clone();
     std::thread::spawn(move || {
+        // 패닉으로 스레드가 죽어도 scanning 플래그는 반드시 해제
+        struct ScanningReset(Arc<AtomicBool>);
+        impl Drop for ScanningReset {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::SeqCst);
+            }
+        }
+        let _reset = ScanningReset(scanning);
         let res = scanner::scan_dir(Path::new(&root), &cancel, |s| {
             let _ = app.emit("scan://progress", s.clone());
         });
         let stats = res.stats.clone();
         *slot.lock().unwrap() = Some(res); // done 이벤트 전에 저장 (레이스 방지)
-        scanning.store(false, Ordering::SeqCst);
         let _ = app.emit("scan://done", stats);
     });
     Ok(())
@@ -110,6 +117,7 @@ pub fn cancel_scan(state: State<AppState>) {
 
 #[tauri::command]
 pub fn get_node(path: String, state: State<AppState>) -> Result<NodeView, String> {
+    // ponytail: lock held across read_dir I/O; snapshot dir_sizes and read outside the lock if this stalls on huge/network dirs
     let guard = state.result.lock().unwrap();
     let res = guard.as_ref().ok_or("no scan result")?;
     node_view(res, &PathBuf::from(path))
