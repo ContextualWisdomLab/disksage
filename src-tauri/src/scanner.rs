@@ -46,7 +46,13 @@ pub fn scan_dir_with_interval(
 
     let walker = jwalk::WalkDir::new(root)
         .follow_links(false)
-        .skip_hidden(false);
+        .skip_hidden(false)
+        .process_read_dir(|_depth, _path, _state, children| {
+            children.retain(|r| match r {
+                Ok(e) => keep_entry(e),
+                Err(_) => true, // 에러 엔트리는 유지해서 skipped로 집계
+            });
+        });
 
     for entry in walker {
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
@@ -107,6 +113,24 @@ pub fn scan_dir_with_interval(
         stats,
         cancelled,
     }
+}
+
+/// 심링크(전 플랫폼)와 reparse point(Windows 정션 등)를 순회에서 제외
+fn keep_entry(e: &jwalk::DirEntry<((), ())>) -> bool {
+    if e.file_type().is_symlink() {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if let Ok(md) = e.metadata() {
+            if md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 #[cfg(test)]
@@ -190,5 +214,21 @@ mod tests {
         let res = scan_dir(root, &cancel, |_| {});
         assert!(res.cancelled);
         assert!(res.stats.files < 50);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn does_not_follow_symlinks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        fs::create_dir(root.join("real")).unwrap();
+        write(&root.join("real").join("data.bin"), 100);
+        std::os::unix::fs::symlink(root.join("real"), root.join("link")).unwrap();
+
+        let res = scan_dir(root, &AtomicBool::new(false), |_| {});
+
+        // 심링크를 따라갔다면 200이 된다
+        assert_eq!(res.stats.bytes, 100);
+        assert!(!res.dir_sizes.contains_key(&root.join("link")));
     }
 }
