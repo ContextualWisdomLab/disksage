@@ -63,6 +63,11 @@ pub fn scan_dir_with_interval(
         let Ok(e) = entry else { stats.skipped += 1; continue };
         if e.file_type().is_dir() {
             stats.dirs += 1;
+            // jwalk는 하위 목록 읽기 실패를 Err 항목이 아니라 디렉토리 엔트리의
+            // read_children_error에 담아 전달한다 — 놓치면 스킵 집계가 새는 버그
+            if e.read_children_error.is_some() {
+                stats.skipped += 1;
+            }
             dir_sizes.entry(e.path()).or_insert(0);
         } else if e.file_type().is_file() {
             let Ok(md) = e.metadata() else { stats.skipped += 1; continue };
