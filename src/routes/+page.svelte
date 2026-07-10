@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import * as api from "$lib/api";
   import { fmtBytes } from "$lib/fmt";
+  import TopFiles from "$lib/TopFiles.svelte";
 
   let roots: string[] = $state([]);
   let selectedRoot = $state("");
@@ -100,6 +101,10 @@
         </li>
       {/each}
     </ul>
+  {/if}
+
+  {#if top.length > 0}
+    <TopFiles files={top} />
   {/if}
 </main>
 
