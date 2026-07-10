@@ -85,7 +85,7 @@ pub fn scan_dir_with_interval(
                 anc = d.parent().map(|p| p.to_path_buf());
             }
         }
-        // 그 외(심링크 등)는 keep_entry가 이미 걸러내므로 별도 분기 불필요
+        // dir도 file도 아닌 항목(FIFO/소켓 등)은 집계 없이 무시됨 (심링크/reparse는 keep_entry가 순회에서 제외)
         if seen % progress_every == 0 {
             on_progress(&stats);
         }
