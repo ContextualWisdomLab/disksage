@@ -30,6 +30,10 @@ pub struct NodeView {
 
 /// 스캔 결과 + 실시간 read_dir로 한 레벨을 조회 (순수 함수 — 테스트 대상)
 pub fn node_view(res: &ScanResult, path: &Path) -> Result<NodeView, String> {
+    // '..'는 lexical starts_with를 우회해 루트 밖을 열람할 수 있음 — 컴포넌트 단위로 거부
+    if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return Err("path outside scanned root".into());
+    }
     if !path.starts_with(&res.root) {
         return Err("path outside scanned root".into());
     }
@@ -105,6 +109,7 @@ pub fn start_scan(root: String, app: AppHandle, state: State<AppState>) -> Resul
         });
         let stats = res.stats.clone();
         *slot.lock().unwrap() = Some(res); // done 이벤트 전에 저장 (레이스 방지)
+        drop(_reset); // emit 전에 scanning 플래그 해제 (원래 순서 복원, 패닉 안전성은 Drop이 유지)
         let _ = app.emit("scan://done", stats);
     });
     Ok(())
@@ -175,5 +180,14 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let res = scan_dir(tmp.path(), &AtomicBool::new(false), |_| {});
         assert!(node_view(&res, &std::env::temp_dir().join("..")).is_err());
+    }
+
+    #[test]
+    fn node_view_rejects_parent_dir_components() {
+        let tmp = tempfile::tempdir().unwrap();
+        let res = scan_dir(tmp.path(), &AtomicBool::new(false), |_| {});
+        // lexical starts_with는 통과하지만 OS 해석은 루트 밖인 경로
+        let sneaky = tmp.path().join("..").join("elsewhere");
+        assert!(node_view(&res, &sneaky).is_err());
     }
 }

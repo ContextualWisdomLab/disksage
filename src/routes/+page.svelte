@@ -21,9 +21,13 @@
     await api.onScanDone(async (s) => {
       stats = s;
       scanning = false;
-      crumbs = [selectedRoot];
-      node = await api.getNode(selectedRoot);
-      top = await api.topFiles(200);
+      try {
+        crumbs = [selectedRoot];
+        node = await api.getNode(selectedRoot);
+        top = await api.topFiles(200);
+      } catch (e) {
+        console.error("post-scan load failed:", e);
+      }
     });
   });
 
