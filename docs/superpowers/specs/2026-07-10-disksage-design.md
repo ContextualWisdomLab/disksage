@@ -95,6 +95,18 @@ LLM에 샘플 배치를 보내 "이 뭉치는 무엇인가" 요약을 받을 수
 ## 6. LLM 설계
 
 - `llama-cpp-2` 크레이트로 llama.cpp 내장 (별도 프로세스·설치 없음)
+
+### GPU 가속 매트릭스
+
+| 하드웨어 | 백엔드 | 비고 |
+|----------|--------|------|
+| Apple Silicon (macOS) | llama.cpp **Metal** | 기본 활성. GGUF 추론에서 MLX와 동급의 Apple GPU 가속 |
+| Nvidia (Windows/Linux) | llama.cpp **CUDA** | CUDA 런타임 감지 시 사용 |
+| AMD/Intel GPU | llama.cpp **Vulkan** | CUDA 미감지 시 폴백 |
+| GPU 없음 | CPU | 항상 동작하는 최종 폴백 |
+
+- 런타임에 사용 가능한 백엔드를 자동 감지, 실패 시 단계적으로 CPU까지 폴백 — 사용자 설정 불필요
+- 별도 MLX 프레임워크 통합은 비채택: 제2의 추론 엔진과 별도 모델 포맷(MLX ≠ GGUF)이 필요해져 복잡도 대비 이득이 없음. Metal 백엔드가 동일 목적(Apple GPU 가속)을 달성. MLX 네이티브가 꼭 필요해지면 v2에서 재검토
 - 모델: 기본 후보 Qwen3-1.7B-Instruct GGUF Q4 (약 1.1GB), 경량 대안 Llama-3.2-1B (약 0.8GB). 구현 계획 단계에서 분류 정확도 벤치 후 하나로 확정. 첫 사용 시 앱 데이터 디렉토리로 다운로드, SHA-256 검증
 - 입력: 파일 메타데이터(경로, 이름, 크기, mtime, 부모 컨텍스트). **파일 내용은 보내지 않음** (첫 바이트 기반 타입 감지는 로컬 시그니처로)
 - 출력: 강제 JSON `{"verdict": "safe"|"caution"|"keep", "reason": "..."}` — temperature 0, 판정 결과 로컬 캐시
@@ -131,6 +143,7 @@ LLM에 샘플 배치를 보내 "이 뭉치는 무엇인가" 요약을 받을 수
 
 - 레포: `ContextualWisdomLab/disksage` (공개), 라이선스 MIT
 - 릴리스 태그 → CI가 MSI(Win) / dmg(macOS) / AppImage+deb(Linux) 빌드
+- 릴리스 빌드의 LLM 백엔드: macOS는 Metal 내장, Windows/Linux는 CUDA+Vulkan 백엔드 동봉 (llama.cpp 백엔드 동적 로딩, CI에 CUDA 툴킷 셋업 필요 — M6 범위)
 - 코드 서명·Tauri 업데이터: 1.0 이전 과제 (인증서 확보 후)
 - 도메인: disksage.com / disksage.app 등록은 소유자 액션 아이템
 
