@@ -10,6 +10,7 @@
   let node: api.NodeView | null = $state(null);
   let crumbs: string[] = $state([]);
   let top: api.EntryView[] = $state([]);
+  let navSeq = 0;
 
   onMount(async () => {
     roots = await api.listRoots();
@@ -28,17 +29,36 @@
     scanning = true;
     node = null;
     top = [];
-    await api.startScan(selectedRoot);
+    try {
+      await api.startScan(selectedRoot);
+    } catch (e) {
+      scanning = false;
+      alert(`스캔 시작 실패: ${e}`);
+    }
   }
 
   async function open(path: string) {
-    crumbs = [...crumbs, path];
-    node = await api.getNode(path);
+    const seq = ++navSeq;
+    try {
+      const n = await api.getNode(path);
+      if (seq !== navSeq) return; // 더 새로운 내비게이션이 이미 시작됨
+      crumbs = [...crumbs, path];
+      node = n;
+    } catch (e) {
+      console.error("getNode failed:", e);
+    }
   }
 
   async function jump(i: number) {
-    crumbs = crumbs.slice(0, i + 1);
-    node = await api.getNode(crumbs[i]);
+    const seq = ++navSeq;
+    try {
+      const n = await api.getNode(crumbs[i]);
+      if (seq !== navSeq) return;
+      crumbs = crumbs.slice(0, i + 1);
+      node = n;
+    } catch (e) {
+      console.error("getNode failed:", e);
+    }
   }
 </script>
 
