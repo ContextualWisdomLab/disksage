@@ -165,4 +165,30 @@ mod tests {
         let res = scan_dir_with_interval(tmp.path(), &AtomicBool::new(false), 0, |_| {});
         assert_eq!(res.stats.files, 1);
     }
+
+    #[test]
+    fn progress_callback_fires_at_interval() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        for i in 0..10 {
+            write(&root.join(format!("f{i}.bin")), 1);
+        }
+        let mut calls = 0;
+        scan_dir_with_interval(root, &AtomicBool::new(false), 3, |_| calls += 1);
+        // 루트 dir + 10 files = 11 entries → 간격 3이면 최소 3회
+        assert!(calls >= 3, "expected >=3 progress calls, got {calls}");
+    }
+
+    #[test]
+    fn cancel_stops_scan_early() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        for i in 0..50 {
+            write(&root.join(format!("f{i}.bin")), 1);
+        }
+        let cancel = AtomicBool::new(true); // 시작 전부터 취소됨
+        let res = scan_dir(root, &cancel, |_| {});
+        assert!(res.cancelled);
+        assert!(res.stats.files < 50);
+    }
 }
