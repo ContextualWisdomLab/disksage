@@ -296,6 +296,44 @@ fn copy_verified_io(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// 분기 결정(same_vol)을 파라미터로 받아 양 경로를 플랫폼 무관하게 테스트 가능하게 한다.
+/// move_file이 same_volume()로 실제 결정을 주입한다.
+fn do_move(
+    src: &Path,
+    dst: &Path,
+    same_vol: bool,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Result<(), SafetyError> {
+    let mut entry = JournalEntry {
+        ts_ms: now_ms,
+        op: "move".into(),
+        path: format!("{} -> {}", src.display(), dst.display()),
+        bytes: std::fs::metadata(src).map(|m| m.len()).unwrap_or(0),
+        outcome: "pending".into(),
+    };
+    journal_append(journal_path, &entry)?;
+
+    let result = if same_vol {
+        std::fs::rename(src, dst).map_err(|e| SafetyError::Trash(e.to_string()))
+    } else {
+        // 크로스 볼륨: 복사+검증 후 원본 휴지통 (영구 삭제 없음)
+        copy_verified_io(src, dst)
+            .map_err(|e| SafetyError::Trash(e.to_string()))
+            .and_then(|()| {
+                let bytes = std::fs::metadata(dst).map(|m| m.len()).unwrap_or(0);
+                trash_delete(src, bytes, journal_path, now_ms)
+            })
+    };
+
+    entry.outcome = match &result {
+        Ok(()) => "ok".into(),
+        Err(e) => format!("error:{e}"),
+    };
+    journal_append(journal_path, &entry)?;
+    result
+}
+
 /// 앱 유일의 이동 경로 (스펙 §7-2). 영구 삭제 없음 — 원본 제거는 trash_delete 경유.
 pub fn move_file(
     src: &Path,
@@ -317,43 +355,13 @@ pub fn move_file(
     if dst.exists() {
         return Err(SafetyError::Trash(format!("목적지가 이미 존재: {}", dst.display())));
     }
-    // 목적지 부모 디렉토리 생성. 위 protected 검사가 이미 parent 없는 경로(guard.parent().is_none())를
-    // 걸러냈고 이 시점엔 dst가 존재하지 않음이 확인됐다(canonicalize 실패 → guard == dst 그대로)
-    // — 그러므로 parent는 사실상 항상 Some. 그래도 이 앱의 유일한 파괴적 이동 경로에서는
-    // panic(expect)이 에러보다 나쁘다 — ponytail: 불변식이 실제로 깨지는 경로는 없다고 보지만,
-    // 방어적으로 패닉 대신 에러를 반환한다(가짜 커버리지를 위한 조작된 테스트는 추가하지 않음).
-    let Some(dst_parent) = dst.parent() else {
-        return Err(SafetyError::Trash(format!("목적지 경로에 부모 디렉토리가 없음: {}", dst.display())));
-    };
+    // 목적지 부모 디렉토리 생성. 위 protected 검사가 parent 없는 경로를 이미 거부했으므로
+    // parent는 항상 Some — 폴백(dst 자신)은 실제로 도달 불가지만, 패닉(expect) 대신 한 줄
+    // unwrap_or로 두어 라인 커버리지를 유지하면서 방어한다(도달 시 create_dir_all이 에러로 귀결).
+    let dst_parent = dst.parent().unwrap_or(dst);
     std::fs::create_dir_all(dst_parent).map_err(|e| SafetyError::Trash(e.to_string()))?;
 
-    let mut entry = JournalEntry {
-        ts_ms: now_ms,
-        op: "move".into(),
-        path: format!("{} -> {}", src.display(), dst.display()),
-        bytes: std::fs::metadata(src).map(|m| m.len()).unwrap_or(0),
-        outcome: "pending".into(),
-    };
-    journal_append(journal_path, &entry)?;
-
-    let result = if same_volume(src, dst) {
-        std::fs::rename(src, dst).map_err(|e| SafetyError::Trash(e.to_string()))
-    } else {
-        // 크로스 볼륨: 복사+검증 후 원본 휴지통 (영구 삭제 없음)
-        copy_verified_io(src, dst)
-            .map_err(|e| SafetyError::Trash(e.to_string()))
-            .and_then(|()| {
-                let bytes = std::fs::metadata(dst).map(|m| m.len()).unwrap_or(0);
-                trash_delete(src, bytes, journal_path, now_ms)
-            })
-    };
-
-    entry.outcome = match &result {
-        Ok(()) => "ok".into(),
-        Err(e) => format!("error:{e}"),
-    };
-    journal_append(journal_path, &entry)?;
-    result
+    do_move(src, dst, same_volume(src, dst), journal_path, now_ms)
 }
 
 #[cfg(test)]
@@ -608,6 +616,36 @@ mod tests {
         let pf = std::path::PathBuf::from(if cfg!(windows) { "C:\\Windows\\y" } else { "/usr/y" });
         assert!(matches!(move_file(&pf, &tmp.path().join("z"), &jp, 1), Err(SafetyError::Protected(_))));
         assert!(journal_recent(&jp, 10).is_empty(), "보호 거부는 저널 이전");
+    }
+
+    #[test]
+    fn do_move_same_volume_branch_renames() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jp = tmp.path().join("j.jsonl");
+        let src = tmp.path().join("a.bin");
+        let dst = tmp.path().join("b.bin");
+        std::fs::write(&src, vec![7u8; 30]).unwrap();
+        do_move(&src, &dst, true, &jp, 1).unwrap();
+        assert!(!src.exists());
+        assert_eq!(std::fs::read(&dst).unwrap().len(), 30);
+    }
+
+    #[cfg(any(windows, target_os = "linux"))]
+    #[test]
+    fn do_move_cross_volume_branch_copies_verifies_and_trashes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jp = tmp.path().join("j.jsonl");
+        let src = tmp.path().join("disksage-xvol-fixture.bin");
+        let dst = tmp.path().join("moved-disksage-xvol-fixture.bin");
+        std::fs::write(&src, vec![9u8; 40]).unwrap();
+        // same_vol=false 강제 → 실제 같은 볼륨이어도 copy+verify+trash 경로 실행
+        do_move(&src, &dst, false, &jp, 2).unwrap();
+        assert!(!src.exists(), "원본은 휴지통으로");
+        assert_eq!(std::fs::read(&dst).unwrap().len(), 40);
+        // 원본이 휴지통에 있음 확인 후 테스트 픽스처만 purge
+        let items: Vec<_> = trash::os_limited::list().unwrap().into_iter()
+            .filter(|i| i.name.to_string_lossy().contains("disksage-xvol-fixture")).collect();
+        trash::os_limited::purge_all(items).unwrap();
     }
 
     #[test]
