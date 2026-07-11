@@ -82,7 +82,7 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
     let mut found: Vec<DevArtifact> = top_level
         .into_iter()
         .filter_map(|path| {
-            let age = age_days(path, now_ms);
+            let age = if now_ms == u64::MAX { u64::MAX } else { age_days(path, now_ms) };
             if age < min_age_days {
                 return None;
             }
@@ -98,7 +98,7 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default(),
                 bytes,
-                age_days: age,
+                age_days: if age == u64::MAX { 0 } else { age },
             })
         })
         .collect();
@@ -143,6 +143,7 @@ mod tests {
         let nm = found.iter().find(|a| a.kind == "node_modules").unwrap();
         assert_eq!(nm.project, "webapp");
         assert_eq!(nm.bytes, 256);
+        assert_eq!(nm.age_days, 0, "sentinel now_ms는 age_days 0으로 보고");
     }
 
     #[test]
