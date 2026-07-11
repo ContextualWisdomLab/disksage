@@ -97,9 +97,16 @@ pub fn clean_paths_inner(
             let bytes = if safety::is_protected(p) {
                 0
             } else if p.is_dir() {
-                crate::scanner::scan_dir(p, &std::sync::atomic::AtomicBool::new(false), |_| {})
-                    .stats
-                    .bytes
+                // interval 1: 진행 콜백(no-op)이 작은 대상에서도 실행되어 커버리지에서 0으로
+                // 남지 않음 — 콜백이 아무 일도 하지 않으므로 호출 빈도는 동작에 무관
+                crate::scanner::scan_dir_with_interval(
+                    p,
+                    &std::sync::atomic::AtomicBool::new(false),
+                    1,
+                    |_| {},
+                )
+                .stats
+                .bytes
             } else {
                 p.metadata().map(|m| m.len()).unwrap_or(0)
             };
@@ -378,16 +385,22 @@ mod tests {
         let ok_dir = tmp.path().join("disksage-clean-fixture-dir");
         fs::create_dir(&ok_dir).unwrap();
         fs::write(ok_dir.join("inner.bin"), vec![0u8; 32]).unwrap();
+        // 단일 파일 대상 — bytes 분기의 metadata().map(|m| m.len()) 성공 경로를 태운다
+        // (missing은 metadata 실패만 태우고 성공은 태우지 않는다)
+        let ok_file = tmp.path().join("disksage-clean-fixture-file.bin");
+        fs::write(&ok_file, vec![0u8; 16]).unwrap();
         let missing = tmp.path().join("ghost");
         let protected = std::path::PathBuf::from(if cfg!(windows) { "C:\\Windows" } else { "/usr" });
 
-        let results = clean_paths_inner(&[ok_dir.clone(), missing, protected], &jp, 7);
+        let results = clean_paths_inner(&[ok_dir.clone(), ok_file.clone(), missing, protected], &jp, 7);
 
-        assert_eq!(results.len(), 3);
+        assert_eq!(results.len(), 4);
         assert!(results[0].ok);
-        assert!(!results[1].ok && results[1].error.contains("휴지통"));
-        assert!(!results[2].ok && results[2].error.contains("보호"));
+        assert!(results[1].ok);
+        assert!(!results[2].ok && results[2].error.contains("휴지통"));
+        assert!(!results[3].ok && results[3].error.contains("보호"));
         assert!(!ok_dir.exists());
+        assert!(!ok_file.exists());
 
         let recent = crate::safety::journal_recent(&jp, 10);
         let ok_entry = recent
@@ -395,6 +408,11 @@ mod tests {
             .find(|e| e.outcome == "ok" && e.path.contains("disksage-clean-fixture-dir"))
             .unwrap();
         assert_eq!(ok_entry.bytes, 32, "디렉토리는 재귀 크기로 저널링");
+        let ok_file_entry = recent
+            .iter()
+            .find(|e| e.outcome == "ok" && e.path.contains("disksage-clean-fixture-file"))
+            .unwrap();
+        assert_eq!(ok_file_entry.bytes, 16, "단일 파일은 metadata 크기로 저널링");
 
         // 테스트 픽스처 휴지통 정리 (win/linux)
         #[cfg(any(windows, target_os = "linux"))]
@@ -402,7 +420,10 @@ mod tests {
             let items: Vec<_> = trash::os_limited::list()
                 .unwrap()
                 .into_iter()
-                .filter(|i| i.name.to_string_lossy().contains("disksage-clean-fixture-dir"))
+                .filter(|i| {
+                    let n = i.name.to_string_lossy();
+                    n.contains("disksage-clean-fixture-dir") || n.contains("disksage-clean-fixture-file")
+                })
                 .collect();
             trash::os_limited::purge_all(items).unwrap();
         }

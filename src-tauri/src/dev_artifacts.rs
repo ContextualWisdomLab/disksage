@@ -89,7 +89,9 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
             let name = path.file_name()?.to_string_lossy().into_owned();
             let (kind, _) = artifact_kind(&name)?;
             let parent = path.parent().unwrap_or(root);
-            let bytes = scanner::scan_dir(path, &AtomicBool::new(false), |_| {}).stats.bytes;
+            // interval 1: 진행 콜백(no-op)이 작은 테스트 픽스처에서도 실행되어 커버리지에서
+            // 0으로 남지 않음 — 콜백이 아무 일도 하지 않으므로 호출 빈도는 동작에 무관
+            let bytes = scanner::scan_dir_with_interval(path, &AtomicBool::new(false), 1, |_| {}).stats.bytes;
             Some(DevArtifact {
                 path: path.to_string_lossy().into_owned(),
                 kind: kind.to_string(),

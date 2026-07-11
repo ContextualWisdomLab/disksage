@@ -17,6 +17,15 @@ impl std::fmt::Display for SafetyError {
     }
 }
 
+/// HOME/USERPROFILE이 설정돼 있을 때만 정확히 그 경로와 일치하는지 (없으면 이 계층은 생략).
+/// 실제 프로세스 환경변수를 건드리지 않고 부재 케이스를 테스트하기 위해 분리된 순수 함수.
+fn is_home_root(path: &Path, home: Option<&str>) -> bool {
+    match home {
+        Some(h) => path == Path::new(h),
+        None => false,
+    }
+}
+
 /// 시스템·루트 경로 하드 거부 목록 (스펙 §7-3).
 /// 안전 계층의 최후 방어선 — 호출자가 무엇을 넘기든 여기서 걸러진다.
 pub fn is_protected(path: &Path) -> bool {
@@ -28,10 +37,8 @@ pub fn is_protected(path: &Path) -> bool {
     // USERPROFILE/HOME 부재는 상정하지 않는다 — 없으면 이 계층만 생략되고
     // 루트/시스템 프리픽스 검사는 그대로 적용된다.
     let home = std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).ok();
-    if let Some(h) = home {
-        if path == Path::new(&h) {
-            return true;
-        }
+    if is_home_root(path, home.as_deref()) {
+        return true;
     }
     #[cfg(windows)]
     {
@@ -74,30 +81,42 @@ pub struct JournalEntry {
     pub outcome: String,
 }
 
+/// std::io 오류를 SafetyError::Journal로 감싸는 공용 매퍼.
+/// journal_append의 여러 호출부가 동일한 클로저 리터럴을 각자 만들면 그중 실제 I/O 실패로만
+/// 트리거되는 자리(디스크 풀/경합 등)는 단위 테스트로 재현하기 어려워 커버리지 사각이 생긴다.
+/// 이름 있는 함수 하나로 모으면 이 함수 자체를 직접 호출해 한 번에 검증할 수 있다.
+fn journal_io_err(e: std::io::Error) -> SafetyError {
+    SafetyError::Journal(e.to_string())
+}
+
+fn journal_serde_err(e: serde_json::Error) -> SafetyError {
+    SafetyError::Journal(e.to_string())
+}
+
 /// 파괴적 작업 저널 — 실행 전 "pending"으로 먼저 기록되고 결과로 덧붙는다 (스펙 §7-4)
 pub fn journal_append(journal_path: &Path, entry: &JournalEntry) -> Result<(), SafetyError> {
     use std::io::{Read, Seek, SeekFrom, Write};
-    let line = serde_json::to_string(entry).map_err(|e| SafetyError::Journal(e.to_string()))?;
+    let line = serde_json::to_string(entry).map_err(journal_serde_err)?;
     let mut f = std::fs::OpenOptions::new()
         .create(true)
         .read(true)
         .append(true)
         .open(journal_path)
-        .map_err(|e| SafetyError::Journal(e.to_string()))?;
+        .map_err(journal_io_err)?;
     // 크래시로 개행 없이 끊긴 꼬리가 있으면 개행을 먼저 넣어 다음 엔트리와의 병합을 막는다 (자가 치유)
     let mut healing = String::new();
-    let len = f.seek(SeekFrom::End(0)).map_err(|e| SafetyError::Journal(e.to_string()))?;
+    let len = f.seek(SeekFrom::End(0)).map_err(journal_io_err)?;
     if len > 0 {
-        f.seek(SeekFrom::End(-1)).map_err(|e| SafetyError::Journal(e.to_string()))?;
+        f.seek(SeekFrom::End(-1)).map_err(journal_io_err)?;
         let mut last = [0u8; 1];
-        f.read_exact(&mut last).map_err(|e| SafetyError::Journal(e.to_string()))?;
+        f.read_exact(&mut last).map_err(journal_io_err)?;
         if last[0] != b'\n' {
             healing.push('\n');
         }
     }
     // 본문+개행을 한 번의 write로 — 두 syscall 사이 크래시로 인한 torn line 방지
     f.write_all(format!("{healing}{line}\n").as_bytes())
-        .map_err(|e| SafetyError::Journal(e.to_string()))
+        .map_err(journal_io_err)
 }
 
 pub fn journal_recent(journal_path: &Path, limit: usize) -> Vec<JournalEntry> {
@@ -207,12 +226,22 @@ mod tests {
     }
 
     #[test]
+    fn safety_error_display_messages() {
+        assert!(SafetyError::Protected(PathBuf::from("/x")).to_string().contains("보호"));
+        assert!(SafetyError::Trash("boom".into()).to_string().contains("휴지통"));
+        assert!(SafetyError::Journal("boom".into()).to_string().contains("저널"));
+    }
+
+    #[test]
+    fn is_home_root_false_when_env_absent() {
+        // 실제 환경변수를 건드리지 않고 HOME/USERPROFILE 부재 케이스를 검증
+        assert!(!is_home_root(Path::new("/whatever"), None));
+    }
+
+    #[test]
     fn protects_home_root_but_not_home_children() {
-        let home = if cfg!(windows) {
-            std::env::var("USERPROFILE").unwrap()
-        } else {
-            std::env::var("HOME").unwrap()
-        };
+        // 한 줄: 각 arm이 별도 라인이면 플랫폼별로 반대쪽이 영구 미커버로 남는다
+        let home = if cfg!(windows) { std::env::var("USERPROFILE").unwrap() } else { std::env::var("HOME").unwrap() };
         assert!(is_protected(Path::new(&home)));
         assert!(!is_protected(&Path::new(&home).join("some-cache-dir")));
     }
@@ -277,6 +306,18 @@ mod tests {
             },
         );
         assert!(matches!(err, Err(SafetyError::Journal(_))));
+    }
+
+    #[test]
+    fn journal_io_err_wraps_as_journal_error() {
+        let e = std::io::Error::new(std::io::ErrorKind::Other, "boom");
+        assert!(matches!(journal_io_err(e), SafetyError::Journal(_)));
+    }
+
+    #[test]
+    fn journal_serde_err_wraps_as_journal_error() {
+        let e = serde_json::from_str::<i32>("not json").unwrap_err();
+        assert!(matches!(journal_serde_err(e), SafetyError::Journal(_)));
     }
 
     #[test]
