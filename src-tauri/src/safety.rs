@@ -111,6 +111,49 @@ pub fn journal_recent(journal_path: &Path, limit: usize) -> Vec<JournalEntry> {
     entries
 }
 
+/// 앱 유일의 삭제 경로 (스펙 §7-1). 영구 삭제 API는 이 크레이트 어디에도 없다.
+pub fn trash_delete(
+    path: &Path,
+    bytes: u64,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Result<(), SafetyError> {
+    // '..'는 lexical 가드를 우회해 보호 경로 밖으로 보이게 할 수 있음 — 컴포넌트 단위로 먼저 거부
+    if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return Err(SafetyError::Protected(path.to_path_buf()));
+    }
+    // 가드는 정규화된 경로로 판정 — \\?\ verbatim 접두는 컴포넌트 비교를 깨므로 제거.
+    // canonicalize 실패(예: 이미 사라진 경로)면 어차피 trash 단계가 실패해 저널에 남으므로
+    // lexical 경로로 판정한다 (ParentDir는 위에서 이미 거부됨).
+    let guard_path = std::fs::canonicalize(path)
+        .map(|c| PathBuf::from(c.to_string_lossy().trim_start_matches(r"\\?\").to_string()))
+        .unwrap_or_else(|_| path.to_path_buf());
+    if is_protected(&guard_path) {
+        return Err(SafetyError::Protected(path.to_path_buf()));
+    }
+    let mut entry = JournalEntry {
+        ts_ms: now_ms,
+        op: "trash_delete".into(),
+        path: path.to_string_lossy().into_owned(),
+        bytes,
+        outcome: "pending".into(),
+    };
+    journal_append(journal_path, &entry)?;
+    // fsync 없음(의식적 선택): 삭제는 휴지통 경유라 전원 단절로 pending 기록을 잃어도 복구 가능
+    match trash::delete(path) {
+        Ok(()) => {
+            entry.outcome = "ok".into();
+            journal_append(journal_path, &entry)?;
+            Ok(())
+        }
+        Err(e) => {
+            entry.outcome = format!("error:{e}");
+            journal_append(journal_path, &entry)?;
+            Err(SafetyError::Trash(e.to_string()))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,6 +251,76 @@ mod tests {
             },
         );
         assert!(matches!(err, Err(SafetyError::Journal(_))));
+    }
+
+    #[test]
+    fn trash_delete_rejects_protected_path_without_journaling() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jp = tmp.path().join("j.jsonl");
+        let root = if cfg!(windows) { "C:\\Windows" } else { "/usr" };
+        let err = trash_delete(Path::new(root), 0, &jp, 1);
+        assert!(matches!(err, Err(SafetyError::Protected(_))));
+        assert!(journal_recent(&jp, 10).is_empty(), "보호 거부는 저널 이전에 일어나야 함");
+    }
+
+    #[test]
+    fn trash_delete_missing_path_journals_error_outcome() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jp = tmp.path().join("j.jsonl");
+        let missing = tmp.path().join("ghost.bin");
+        let err = trash_delete(&missing, 0, &jp, 1);
+        assert!(matches!(err, Err(SafetyError::Trash(_))));
+        let recent = journal_recent(&jp, 10);
+        assert_eq!(recent.len(), 2); // pending + error
+        assert!(recent[0].outcome.starts_with("error:"));
+        assert_eq!(recent[1].outcome, "pending");
+    }
+
+    // 실제 휴지통 왕복 (스펙 §9 통합 테스트 1). trash::os_limited는 win/linux 전용.
+    #[cfg(any(windows, target_os = "linux"))]
+    #[test]
+    fn trash_delete_roundtrip_lands_in_trash() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jp = tmp.path().join("j.jsonl");
+        let victim = tmp.path().join("disksage-roundtrip-fixture.bin");
+        std::fs::write(&victim, vec![0u8; 64]).unwrap();
+
+        trash_delete(&victim, 64, &jp, 42).unwrap();
+
+        assert!(!victim.exists(), "원본은 사라져야 함");
+        let recent = journal_recent(&jp, 10);
+        assert_eq!(recent[0].outcome, "ok");
+        assert_eq!(recent[0].ts_ms, 42);
+
+        // 휴지통에서 확인 후 테스트 픽스처만 purge (제품 코드가 아닌 테스트 정리)
+        let items: Vec<_> = trash::os_limited::list()
+            .unwrap()
+            .into_iter()
+            .filter(|i| i.name.to_string_lossy().contains("disksage-roundtrip-fixture"))
+            .collect();
+        assert!(!items.is_empty(), "휴지통에 있어야 함");
+        trash::os_limited::purge_all(items).unwrap();
+    }
+
+    #[test]
+    fn trash_delete_rejects_parent_dir_traversal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jp = tmp.path().join("j.jsonl");
+        let sneaky = tmp.path().join("..");
+        let err = trash_delete(&sneaky, 0, &jp, 1);
+        assert!(matches!(err, Err(SafetyError::Protected(_))));
+        assert!(journal_recent(&jp, 10).is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn trash_delete_rejects_verbatim_protected_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jp = tmp.path().join("j.jsonl");
+        // 실존하는 보호 경로의 verbatim 형태 — canonicalize가 verbatim을 돌려줘도 가드가 잡아야 함
+        let err = trash_delete(Path::new(r"\\?\C:\Windows\System32"), 0, &jp, 1);
+        assert!(matches!(err, Err(SafetyError::Protected(_))));
+        assert!(journal_recent(&jp, 10).is_empty());
     }
 
     #[test]
