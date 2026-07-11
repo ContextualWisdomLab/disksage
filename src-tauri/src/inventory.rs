@@ -37,6 +37,9 @@ pub struct InventoryReport {
 /// 스캔 파일을 클래스별로 집계. 미분류·온톨로지에 없는 클래스는 Unknown(일급 시민).
 pub fn build_inventory(files: &[FileEntry], onto: &Ontology) -> InventoryReport {
     // 온톨로지 클래스 로컬 id(끝부분) → (전체 id, label)
+    // ponytail: 활성 온톨로지 안에서 로컬 id는 유일하다고 가정 — 서로 다른 네임스페이스의
+    // 두 클래스가 같은 끝부분(#Image 등)을 가지면 뒤엣것이 앞엣것을 덮는다. 사용자 오버라이드
+    // 온톨로지가 커지면 full IRI 키 매칭으로 승격
     let mut local_to_class: HashMap<String, (String, String)> = HashMap::new();
     for c in &onto.classes {
         let local = c.id.rsplit(['#', '/']).next().unwrap_or(&c.id).to_string();
@@ -66,7 +69,8 @@ pub fn build_inventory(files: &[FileEntry], onto: &Ontology) -> InventoryReport 
         .into_iter()
         .map(|(class_id, (label, bytes, count))| ClassTally { class_id, label, bytes, count })
         .collect();
-    tallies.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+    // bytes 내림차순, 동점은 class_id로 결정적 정렬(HashMap 순서 무작위성 → UI 깜빡임 방지)
+    tallies.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.class_id.cmp(&b.class_id)));
 
     InventoryReport { tallies, unknown_bytes, unknown_count }
 }
