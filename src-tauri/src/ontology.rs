@@ -170,10 +170,37 @@ dm:B a owl:Class ;
     }
 
     #[test]
+    fn preserves_declaration_order() {
+        // 계약: owl:Class 선언 순서 보존. SAMPLE은 Document 먼저, Receipt 다음.
+        let onto = parse_ttl(SAMPLE).unwrap();
+        assert!(onto.classes[0].id.ends_with("Document"));
+        assert!(onto.classes[1].id.ends_with("Receipt"));
+    }
+
+    #[test]
     fn default_ontology_asset_parses() {
         let ttl = include_str!("../resources/ontology/default.ttl");
         let onto = parse_ttl(ttl).unwrap();
         assert!(onto.classes.len() >= 8);
+    }
+
+    #[test]
+    fn default_asset_inheritance_resolves_against_real_ttl() {
+        // 실제 번들 애셋에서 상속이 동작하는지 (오타/네임스페이스 불일치 방어)
+        let ttl = include_str!("../resources/ontology/default.ttl");
+        let onto = parse_ttl(ttl).unwrap();
+        let find = |suffix: &str| {
+            onto.classes.iter().find(|c| c.id.ends_with(suffix)).map(|c| c.id.clone())
+        };
+        // Receipt → Document의 폴더 상속
+        let receipt = find("Receipt").unwrap();
+        assert_eq!(onto.resolve_target(&receipt).as_deref(), Some("~/Documents/{class}"));
+        // Image → Media의 폴더 상속
+        let image = find("Image").unwrap();
+        assert_eq!(onto.resolve_target(&image).as_deref(), Some("~/Media/{class}"));
+        // Installer는 자체 폴더
+        let installer = find("Installer").unwrap();
+        assert_eq!(onto.resolve_target(&installer).as_deref(), Some("~/Installers"));
     }
 
     #[test]
