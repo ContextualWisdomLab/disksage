@@ -1,5 +1,6 @@
 mod backend;
 mod cache;
+mod model;
 mod parse;
 mod prompt;
 mod verdict;
@@ -8,6 +9,8 @@ mod verdict;
 pub use backend::{choose_backend, Backend};
 #[cfg_attr(coverage, allow(unused_imports))]
 pub use cache::VerdictCache;
+#[cfg_attr(coverage, allow(unused_imports))]
+pub use model::{verify_sha256, ModelSpec, DEFAULT};
 #[cfg_attr(coverage, allow(unused_imports))]
 pub use parse::{parse_class_pick, parse_summary, parse_verdict, parse_verdict_full};
 #[cfg_attr(coverage, allow(unused_imports))]
