@@ -272,6 +272,19 @@ mod tests {
     }
 
     #[test]
+    fn same_size_different_prefix_drops_at_prefix_stage() {
+        let tmp = tempfile::tempdir().unwrap();
+        // 크기는 같지만(8B) 앞부분이 달라 부분해시 단계서 각자 싱글턴 → 그룹 없음
+        let a = write_file(tmp.path(), "a", b"AAAA1111");
+        let b = write_file(tmp.path(), "b", b"BBBB2222");
+        let files = vec![
+            FileEntry { path: a, size: 8 },
+            FileEntry { path: b, size: 8 },
+        ];
+        assert!(find_duplicates(files, 4).is_empty());
+    }
+
+    #[test]
     fn hash_failures_are_skipped_not_fatal() {
         let tmp = tempfile::tempdir().unwrap();
         let d1 = write_file(tmp.path(), "d1", b"same content x");
