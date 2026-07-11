@@ -804,14 +804,14 @@ mod tests {
         assert!(same_volume(&a, &b));
     }
 
-    #[cfg(windows)]
     #[test]
-    fn same_volume_relative_missing_path_falls_back_without_prefix() {
+    fn same_volume_missing_path_is_not_same_volume() {
         let tmp = tempfile::tempdir().unwrap();
-        let missing_rel = Path::new("no-such-relative-file.tmp");
-        // canonicalize 실패 시 상대경로로 폴백 — 첫 컴포넌트가 드라이브 Prefix가 아니므로
-        // drive()의 방어적 `_ => None` 분기를 탄다. 실 드라이브를 가진 tmp와는 다르다고 판정.
-        assert!(!same_volume(missing_rel, tmp.path()));
+        let missing = tmp.path().join("no-such-file.tmp");
+        // 존재하지 않는 경로 → 볼륨 판정 불가 → false. 플랫폼 무관:
+        // Windows는 canonicalize 실패 후 drive() 불일치, unix는 metadata Err.
+        // (unix same_volume의 metadata-Err/false 경로를 리눅스 게이트에서 커버)
+        assert!(!same_volume(&missing, tmp.path()));
     }
 
     #[test]

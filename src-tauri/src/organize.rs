@@ -96,6 +96,14 @@ dm:Installer a owl:Class ; rdfs:label "설치파일"@ko ; dm:targetFolder "~/Ins
     }
 
     #[test]
+    fn skips_classified_file_whose_class_absent_from_ontology() {
+        // mp4 → classify "Video"지만 ONTO엔 Video 클래스가 없음 → 클래스 조회 else(continue) 커버
+        let onto = parse_ttl(ONTO).unwrap();
+        let home = Path::new("/home/u");
+        assert!(plan_moves(&[fe("/x/movie.mp4", 100)], &onto, home).is_empty());
+    }
+
+    #[test]
     fn skips_path_with_no_filename() {
         // 파일명 없는 경로(루트)는 filename 가드에서 걸러진다
         let onto = parse_ttl(ONTO).unwrap();
