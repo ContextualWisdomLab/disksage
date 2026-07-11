@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::io::Read;
 
 #[derive(Debug, Clone)]
 pub struct FileEntry {
@@ -23,13 +24,55 @@ pub fn group_by_size(files: Vec<FileEntry>) -> Vec<Vec<FileEntry>> {
     groups
 }
 
+/// 2단계: 앞 prefix_len 바이트만 해시 — 대용량 파일의 전체 해시를 피하는 저비용 필터
+pub fn hash_prefix(path: &Path, prefix_len: usize) -> Result<String, String> {
+    let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut buf = vec![0u8; prefix_len];
+    let mut filled = 0;
+    // 짧은 read를 대비해 EOF까지 채운다
+    loop {
+        let n = f.read(&mut buf[filled..]).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        filled += n;
+        if filled == prefix_len {
+            break;
+        }
+    }
+    Ok(blake3::hash(&buf[..filled]).to_hex().to_string())
+}
+
+/// 3단계: 전체 스트리밍 해시 — 부분 해시가 충돌한 후보만 여기 도달
+pub fn hash_full(path: &Path) -> Result<String, String> {
+    let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut hasher = blake3::Hasher::new();
+    let mut buf = [0u8; 65536];
+    loop {
+        let n = f.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use std::io::Write;
 
     fn fe(p: &str, size: u64) -> FileEntry {
         FileEntry { path: PathBuf::from(p), size }
+    }
+
+    fn write_file(dir: &std::path::Path, name: &str, bytes: &[u8]) -> PathBuf {
+        let p = dir.join(name);
+        let mut f = std::fs::File::create(&p).unwrap();
+        f.write_all(bytes).unwrap();
+        p
     }
 
     #[test]
@@ -65,5 +108,39 @@ mod tests {
     #[test]
     fn empty_input_is_empty() {
         assert!(group_by_size(Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn prefix_hash_same_head_matches_regardless_of_tail() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = write_file(tmp.path(), "a.bin", b"HEADHEADHEAD-tailA");
+        let b = write_file(tmp.path(), "b.bin", b"HEADHEADHEAD-tailB");
+        // 앞 12바이트만 보면 같음
+        assert_eq!(hash_prefix(&a, 12).unwrap(), hash_prefix(&b, 12).unwrap());
+        // 전체는 다름
+        assert_ne!(hash_full(&a).unwrap(), hash_full(&b).unwrap());
+    }
+
+    #[test]
+    fn full_hash_identical_content_matches() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = write_file(tmp.path(), "a.bin", b"identical bytes here");
+        let b = write_file(tmp.path(), "b.bin", b"identical bytes here");
+        assert_eq!(hash_full(&a).unwrap(), hash_full(&b).unwrap());
+    }
+
+    #[test]
+    fn hash_prefix_shorter_file_uses_available_bytes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = write_file(tmp.path(), "a.bin", b"tiny");
+        // prefix_len이 파일보다 커도 성공 (있는 4바이트만)
+        assert!(hash_prefix(&a, 4096).is_ok());
+    }
+
+    #[test]
+    fn hash_missing_file_is_err() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(hash_full(&tmp.path().join("ghost")).is_err());
+        assert!(hash_prefix(&tmp.path().join("ghost"), 16).is_err());
     }
 }
