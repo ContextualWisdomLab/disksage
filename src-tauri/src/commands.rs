@@ -374,11 +374,35 @@ fn resolve_home(app: &AppHandle) -> PathBuf {
 }
 
 #[cfg(not(coverage))]
+#[cfg_attr(not(feature = "llm-engine"), allow(unused_variables))]
 #[tauri::command(async)]
-pub fn plan_organize(root: String, app: AppHandle) -> Result<Vec<organize::MovePlan>, String> {
+pub fn plan_organize(root: String, app: AppHandle, state: State<AppState>) -> Result<Vec<organize::MovePlan>, String> {
     let onto = load_ontology_from(&bundled_ontology_ttl(&app)?)?;
     let files = dupes::collect_files(Path::new(&root));
     let home = resolve_home(&app);
+    // classify_prompt는 name/parent만 쓰므로 picker는 size 불필요(0으로 구성).
+    // ponytail: LLM picker는 파일마다 추론 1회 — 대규모 스캔 프리뷰에선 느릴 수 있음.
+    //           지금은 모델 있으면 전부 LLM 분류; 필요 시 후속에서 미분류 항목만으로 제한.
+    #[cfg(feature = "llm-engine")]
+    {
+        use tauri::Manager;
+        let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        if model_status_for(&model_file_path(&dir)).present {
+            let mut guard = state.engine.lock().unwrap();
+            if guard.is_none() {
+                if let Ok(e) = crate::llm::LlamaEngine::new(&model_file_path(&dir)) {
+                    *guard = Some(e);
+                }
+            }
+            if let Some(engine) = guard.as_ref() {
+                let pick = |p: &Path, cands: &[&str]| {
+                    let meta = file_meta_at(p, 0, 0);
+                    crate::llm::pick_class(engine, &meta, cands)
+                };
+                return Ok(organize::plan_moves_with(&files, &onto, &home, &pick));
+            }
+        }
+    }
     Ok(organize::plan_moves(&files, &onto, &home))
 }
 
