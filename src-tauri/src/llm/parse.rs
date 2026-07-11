@@ -66,6 +66,13 @@ mod tests {
         assert_eq!(parse_verdict(r#"{"verdict":"keep"}"#), Verdict::Keep);
     }
     #[test]
+    fn parses_nested_json_object() {
+        // 중첩 객체 — 안쪽 {..}가 먼저 닫혀 depth가 0이 아닌 값으로 감소하는 fall-through 경로 커버.
+        // extract_json은 바깥 객체 전체를 반환해야 한다.
+        assert_eq!(parse_verdict(r#"{"verdict":"safe","meta":{"x":1}}"#), Verdict::Safe);
+    }
+
+    #[test]
     fn parses_json_with_prose_and_fences() {
         let raw = "Sure!\n```json\n{\"verdict\": \"keep\", \"reason\": \"user doc\"}\n```\n";
         assert_eq!(parse_verdict(raw), Verdict::Keep);
