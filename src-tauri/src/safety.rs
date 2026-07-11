@@ -111,6 +111,35 @@ pub fn journal_recent(journal_path: &Path, limit: usize) -> Vec<JournalEntry> {
     entries
 }
 
+/// Windows verbatim 접두(\\?\C:\, \\?\UNC\srv\share)를 일반 형태로 재구성한다.
+/// 문자열 수술이 아니라 파싱된 Prefix 컴포넌트 기반 — UNC가 상대경로로 망가지지 않는다.
+#[cfg(windows)]
+fn strip_verbatim(p: &Path) -> PathBuf {
+    use std::path::{Component, Prefix};
+    let mut comps = p.components();
+    let Some(Component::Prefix(pr)) = comps.next() else { return p.to_path_buf() };
+    match pr.kind() {
+        Prefix::VerbatimDisk(d) => {
+            let mut out = PathBuf::from(format!("{}:\\", d as char));
+            out.extend(comps.filter(|c| !matches!(c, Component::RootDir)));
+            out
+        }
+        Prefix::VerbatimUNC(server, share) => {
+            let mut out = PathBuf::from(r"\\");
+            out.push(server);
+            out.push(share);
+            out.extend(comps.filter(|c| !matches!(c, Component::RootDir)));
+            out
+        }
+        _ => p.to_path_buf(),
+    }
+}
+
+#[cfg(not(windows))]
+fn strip_verbatim(p: &Path) -> PathBuf {
+    p.to_path_buf()
+}
+
 /// 앱 유일의 삭제 경로 (스펙 §7-1). 영구 삭제 API는 이 크레이트 어디에도 없다.
 pub fn trash_delete(
     path: &Path,
@@ -122,12 +151,9 @@ pub fn trash_delete(
     if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
         return Err(SafetyError::Protected(path.to_path_buf()));
     }
-    // 가드는 정규화된 경로로 판정 — \\?\ verbatim 접두는 컴포넌트 비교를 깨므로 제거.
-    // canonicalize 실패(예: 이미 사라진 경로)면 어차피 trash 단계가 실패해 저널에 남으므로
-    // lexical 경로로 판정한다 (ParentDir는 위에서 이미 거부됨).
-    let guard_path = std::fs::canonicalize(path)
-        .map(|c| PathBuf::from(c.to_string_lossy().trim_start_matches(r"\\?\").to_string()))
-        .unwrap_or_else(|_| path.to_path_buf());
+    // 가드는 정규화된 경로로 판정. canonicalize 실패(예: 이미 사라진 경로)면
+    // lexical 경로로 판정한다 (ParentDir는 위에서 이미 거부됨) — 어느 쪽이든 verbatim은 재구성.
+    let guard_path = strip_verbatim(&std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
     if is_protected(&guard_path) {
         return Err(SafetyError::Protected(path.to_path_buf()));
     }
@@ -321,6 +347,23 @@ mod tests {
         let err = trash_delete(Path::new(r"\\?\C:\Windows\System32"), 0, &jp, 1);
         assert!(matches!(err, Err(SafetyError::Protected(_))));
         assert!(journal_recent(&jp, 10).is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn strip_verbatim_reconstructs_disk_and_unc_forms() {
+        assert_eq!(
+            strip_verbatim(Path::new(r"\\?\C:\Windows\System32")),
+            Path::new(r"C:\Windows\System32")
+        );
+        assert_eq!(
+            strip_verbatim(Path::new(r"\\?\UNC\srv\share\dir")),
+            Path::new(r"\\srv\share\dir")
+        );
+        assert_eq!(strip_verbatim(Path::new(r"C:\plain")), Path::new(r"C:\plain"));
+        assert_eq!(strip_verbatim(Path::new("relative/only")), Path::new("relative/only"));
+        // 재구성된 UNC 공유 루트는 parent가 없어 보호된다 (fail-closed 확인)
+        assert!(is_protected(&strip_verbatim(Path::new(r"\\?\UNC\srv\share"))));
     }
 
     #[test]
