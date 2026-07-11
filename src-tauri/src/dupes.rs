@@ -58,6 +58,61 @@ pub fn hash_full(path: &Path) -> Result<String, String> {
     Ok(hasher.finalize().to_hex().to_string())
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DupeGroup {
+    pub hash: String,
+    pub size: u64,
+    pub paths: Vec<String>,
+}
+
+/// 같은 (size, hash) 파일을 그룹으로 묶는 헬퍼. 해시 실패 파일은 제외.
+fn regroup_by_hash(
+    group: Vec<FileEntry>,
+    hash_fn: impl Fn(&Path) -> Result<String, String>,
+) -> HashMap<String, Vec<FileEntry>> {
+    let mut by_hash: HashMap<String, Vec<FileEntry>> = HashMap::new();
+    for f in group {
+        let Ok(h) = hash_fn(&f.path) else { continue };
+        by_hash.entry(h).or_default().push(f);
+    }
+    by_hash
+}
+
+/// 전체 3단계 파이프라인. 최종 그룹은 낭비 용량(size*(n-1)) 내림차순.
+pub fn find_duplicates(files: Vec<FileEntry>, prefix_len: usize) -> Vec<DupeGroup> {
+    let mut out: Vec<DupeGroup> = Vec::new();
+    for size_group in group_by_size(files) {
+        let size = size_group[0].size;
+        // 2단계: 부분 해시로 재그룹, 2개 이상만
+        for (_, prefix_group) in regroup_by_hash(size_group, |p| hash_prefix(p, prefix_len)) {
+            if prefix_group.len() < 2 {
+                continue;
+            }
+            // 3단계: 전체 해시로 확정, 2개 이상만
+            for (hash, full_group) in regroup_by_hash(prefix_group, hash_full) {
+                if full_group.len() < 2 {
+                    continue;
+                }
+                out.push(DupeGroup {
+                    hash,
+                    size,
+                    paths: full_group
+                        .iter()
+                        .map(|f| f.path.to_string_lossy().into_owned())
+                        .collect(),
+                });
+            }
+        }
+    }
+    // 낭비 용량 내림차순
+    out.sort_by(|a, b| {
+        let wa = a.size * (a.paths.len() as u64 - 1);
+        let wb = b.size * (b.paths.len() as u64 - 1);
+        wb.cmp(&wa)
+    });
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,5 +197,72 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         assert!(hash_full(&tmp.path().join("ghost")).is_err());
         assert!(hash_prefix(&tmp.path().join("ghost"), 16).is_err());
+    }
+
+    #[test]
+    fn end_to_end_finds_true_duplicates_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        // dup1/dup2: 완전 동일. near1/near2: 같은 크기+같은 앞부분, 다른 꼬리 → 전체해시서 갈림.
+        let d1 = write_file(tmp.path(), "d1", b"AAAABBBBCCCCDDDD");
+        let d2 = write_file(tmp.path(), "d2", b"AAAABBBBCCCCDDDD");
+        let n1 = write_file(tmp.path(), "n1", b"AAAABBBBCCCCXXX1");
+        let n2 = write_file(tmp.path(), "n2", b"AAAABBBBCCCCXXX2");
+        let solo = write_file(tmp.path(), "solo", b"different length entirely");
+
+        let files = vec![
+            FileEntry { path: d1, size: 16 },
+            FileEntry { path: d2, size: 16 },
+            FileEntry { path: n1, size: 16 },
+            FileEntry { path: n2, size: 16 },
+            FileEntry { path: solo.clone(), size: std::fs::metadata(&solo).unwrap().len() },
+        ];
+        let groups = find_duplicates(files, 8);
+
+        // d1/d2만 진짜 중복. n1/n2는 전체해시서 갈리고, solo는 크기 단독.
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].paths.len(), 2);
+        assert_eq!(groups[0].size, 16);
+        let names: Vec<String> = groups[0]
+            .paths
+            .iter()
+            .map(|p| std::path::Path::new(p).file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.contains(&"d1".to_string()) && names.contains(&"d2".to_string()));
+    }
+
+    #[test]
+    fn groups_sorted_by_wasted_space_desc() {
+        let tmp = tempfile::tempdir().unwrap();
+        // 작은-쌍(10B x2 = 낭비 10) vs 큰-쌍(1000B x2 = 낭비 1000)
+        let big = vec![0u8; 1000];
+        let b1 = write_file(tmp.path(), "b1", &big);
+        let b2 = write_file(tmp.path(), "b2", &big);
+        let s1 = write_file(tmp.path(), "s1", b"tenbytes!!");
+        let s2 = write_file(tmp.path(), "s2", b"tenbytes!!");
+        let files = vec![
+            FileEntry { path: b1, size: 1000 },
+            FileEntry { path: b2, size: 1000 },
+            FileEntry { path: s1, size: 10 },
+            FileEntry { path: s2, size: 10 },
+        ];
+        let groups = find_duplicates(files, 4096);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].size, 1000); // 큰 낭비가 먼저
+    }
+
+    #[test]
+    fn hash_failures_are_skipped_not_fatal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let d1 = write_file(tmp.path(), "d1", b"same content x");
+        let d2 = write_file(tmp.path(), "d2", b"same content x");
+        let files = vec![
+            FileEntry { path: d1, size: 14 },
+            FileEntry { path: d2, size: 14 },
+            FileEntry { path: tmp.path().join("ghost"), size: 14 }, // 존재하지 않음
+        ];
+        // ghost는 크기 그룹엔 들어가지만 해시 단계서 실패 → 조용히 빠지고 d1/d2는 확정
+        let groups = find_duplicates(files, 4096);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].paths.len(), 2);
     }
 }
