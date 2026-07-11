@@ -242,33 +242,55 @@ pub fn same_volume(src: &Path, dst: &Path) -> bool {
 }
 
 /// 크로스 볼륨 복사 — io 에러는 `?`로 전파(커버리지 규율: happy path에서 map_err 클로저가
-/// 미실행 라인으로 남지 않도록). 검증은 별도 순수 함수로 분리해 실패 arm을 직접 단위 테스트한다.
-fn copy_then_hash(src: &Path, dst: &Path) -> std::io::Result<(u64, u64, String, String)> {
-    std::fs::copy(src, dst)?;
+/// 미실행 라인으로 남지 않도록). 목적지는 create_new로 열어 "존재 확인 → 복사" 사이의 TOCTOU
+/// 경합에서도 그 사이 생긴 파일을 덮어쓰지 않는다(경합 시 AlreadyExists로 실패).
+/// 해시는 Result 그대로 반환 — 실패를 빈 문자열로 뭉개면 "둘 다 실패 → 둘 다 빈 문자열 → 일치"라는
+/// 거짓 검증 통과가 생긴다(blake3 해시는 절대 비지 않으므로 실패는 반드시 실패로 남아야 함).
+/// 검증은 별도 순수 함수로 분리해 실패 arm을 직접 단위 테스트한다.
+fn copy_then_hash(
+    src: &Path,
+    dst: &Path,
+) -> std::io::Result<(u64, u64, Result<String, String>, Result<String, String>)> {
+    {
+        let mut src_file = std::fs::File::open(src)?;
+        let mut dst_file = std::fs::OpenOptions::new().write(true).create_new(true).open(dst)?;
+        std::io::copy(&mut src_file, &mut dst_file)?;
+        // 핸들을 여기서 닫아 이후 metadata/hash_full이 경로로 다시 읽을 때 걸리지 않게 함
+    }
     let src_len = std::fs::metadata(src)?.len();
     let dst_len = std::fs::metadata(dst)?.len();
-    let src_hash = crate::dupes::hash_full(src).unwrap_or_default();
-    let dst_hash = crate::dupes::hash_full(dst).unwrap_or_default();
+    let src_hash = crate::dupes::hash_full(src);
+    let dst_hash = crate::dupes::hash_full(dst);
     Ok((src_len, dst_len, src_hash, dst_hash))
 }
 
-/// 순수 검증 판정 — 크기+blake3 일치 여부. copy_verified_io에서 분리해 실패 arm을 직접 테스트 가능하게 함.
-fn verify_copy(src_len: u64, dst_len: u64, src_hash: &str, dst_hash: &str) -> bool {
-    src_len == dst_len && src_hash == dst_hash
+/// 순수 검증 판정 — 크기 일치 + 양쪽 해시가 모두 성공했고 서로 같을 때만 true.
+/// 해시 중 하나라도 Err면 무조건 false(fail-closed) — "계산 실패"를 "일치"로 오인하지 않는다.
+fn hashes_match(
+    src_hash: &Result<String, String>,
+    dst_hash: &Result<String, String>,
+    src_len: u64,
+    dst_len: u64,
+) -> bool {
+    matches!((src_hash, dst_hash), (Ok(s), Ok(d)) if src_len == dst_len && s == d)
 }
 
-// 크로스 볼륨 복사+검증(내부 io, ? 전파). 복사 도중 실패하든 검증에서 실패하든 목적지를
-// 정리하고 io::Error — 어느 실패든 원본은 절대 건드리지 않는다.
+// 크로스 볼륨 복사+검증(내부 io, ? 전파). 복사 도중 실패하든 검증에서 실패하든, 우리가 만든
+// 목적지라면 정리하고 io::Error — 어느 실패든 원본은 절대 건드리지 않는다.
 fn copy_verified_io(src: &Path, dst: &Path) -> std::io::Result<()> {
     let (src_len, dst_len, src_hash, dst_hash) = match copy_then_hash(src, dst) {
         Ok(v) => v,
         Err(e) => {
-            let _ = std::fs::remove_file(dst); // 복사 도중 실패해도 부분 목적지 정리 (원본은 보존)
+            // create_new가 AlreadyExists로 실패했다면 dst는 우리가 만든 게 아니다(TOCTOU 경합
+            // 상대가 먼저 만든 파일) — 지우면 안 된다. 그 외 실패는 우리가 만든 부분 목적지이므로 정리.
+            if e.kind() != std::io::ErrorKind::AlreadyExists {
+                let _ = std::fs::remove_file(dst);
+            }
             return Err(e);
         }
     };
-    if !verify_copy(src_len, dst_len, &src_hash, &dst_hash) {
-        let _ = std::fs::remove_file(dst); // 부분 복사 정리 (원본은 건드리지 않음)
+    if !hashes_match(&src_hash, &dst_hash, src_len, dst_len) {
+        let _ = std::fs::remove_file(dst); // 검증 실패 — 우리가 만든 목적지이므로 정리(원본은 안 건드림)
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "복사 검증 실패"));
     }
     Ok(())
@@ -297,8 +319,12 @@ pub fn move_file(
     }
     // 목적지 부모 디렉토리 생성. 위 protected 검사가 이미 parent 없는 경로(guard.parent().is_none())를
     // 걸러냈고 이 시점엔 dst가 존재하지 않음이 확인됐다(canonicalize 실패 → guard == dst 그대로)
-    // — 그러므로 parent는 항상 Some. expect로 그 불변식을 문서화한다(코드 버그가 아니면 도달 불가).
-    let dst_parent = dst.parent().expect("protected 검사가 이미 parent 없는 경로를 걸러냄");
+    // — 그러므로 parent는 사실상 항상 Some. 그래도 이 앱의 유일한 파괴적 이동 경로에서는
+    // panic(expect)이 에러보다 나쁘다 — ponytail: 불변식이 실제로 깨지는 경로는 없다고 보지만,
+    // 방어적으로 패닉 대신 에러를 반환한다(가짜 커버리지를 위한 조작된 테스트는 추가하지 않음).
+    let Some(dst_parent) = dst.parent() else {
+        return Err(SafetyError::Trash(format!("목적지 경로에 부모 디렉토리가 없음: {}", dst.display())));
+    };
     std::fs::create_dir_all(dst_parent).map_err(|e| SafetyError::Trash(e.to_string()))?;
 
     let mut entry = JournalEntry {
@@ -689,14 +715,28 @@ mod tests {
         let (sl, dl, sh, dh) = copy_then_hash(&src, &dst).unwrap();
         assert_eq!(sl, dl);
         assert_eq!(sh, dh);
-        assert!(verify_copy(sl, dl, &sh, &dh));
+        assert!(hashes_match(&sh, &dh, sl, dl));
     }
 
     #[test]
-    fn verify_copy_detects_size_or_hash_mismatch() {
-        assert!(!verify_copy(1, 2, "a", "a")); // 크기 불일치
-        assert!(!verify_copy(1, 1, "a", "b")); // 해시 불일치
-        assert!(verify_copy(1, 1, "a", "a"));
+    fn hashes_match_detects_size_or_hash_mismatch() {
+        let a = || Ok::<String, String>("a".into());
+        let b = || Ok::<String, String>("b".into());
+        assert!(!hashes_match(&a(), &a(), 1, 2)); // 크기 불일치
+        assert!(!hashes_match(&a(), &b(), 1, 1)); // 해시 불일치
+        assert!(hashes_match(&a(), &a(), 1, 1));
+    }
+
+    // Fix 1 회귀 테스트: 해시 계산 자체가 실패하면(예: 읽기 오류로 Err) 절대 "일치"로 읽히면 안 된다.
+    // 예전 코드는 unwrap_or_default()로 실패를 ""로 뭉개서, 양쪽 다 실패하면 ""=="" → 거짓 검증
+    // 통과가 됐었다(blake3 해시는 절대 비지 않으므로 ""는 반드시 실패를 의미해야 한다).
+    #[test]
+    fn hashes_match_fails_closed_when_either_hash_errored() {
+        let ok = || Ok::<String, String>("same-hash".into());
+        let err = || Err::<String, String>("read failed".into());
+        assert!(!hashes_match(&err(), &ok(), 10, 10));
+        assert!(!hashes_match(&ok(), &err(), 10, 10));
+        assert!(!hashes_match(&err(), &err(), 10, 10), "양쪽 다 실패해도 절대 일치로 읽히면 안 됨");
     }
 
     #[test]
@@ -718,6 +758,26 @@ mod tests {
         let err = copy_verified_io(&missing_src, &dst);
         assert!(err.is_err());
         assert!(!dst.exists());
+    }
+
+    // Fix 2 회귀 테스트: dst.exists() 체크와 실제 복사 사이의 TOCTOU 경합 대응.
+    // create_new(true)라 복사 단계 자체가 "이미 있으면 실패"이므로 경합 상대가 방금 만든
+    // 파일을 절대 덮어쓰지 않는다 — 그리고 그 파일을 우리가 만든 게 아니므로 정리 대상도 아니다.
+    #[test]
+    fn copy_verified_io_does_not_overwrite_existing_destination() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("s3.bin");
+        let dst = tmp.path().join("d3.bin");
+        std::fs::write(&src, b"new-content").unwrap();
+        std::fs::write(&dst, b"pre-existing").unwrap(); // TOCTOU 경합에서 먼저 생긴 것처럼 시뮬레이션
+        let err = copy_verified_io(&src, &dst);
+        assert!(err.is_err());
+        assert_eq!(
+            std::fs::read(&dst).unwrap(),
+            b"pre-existing",
+            "경합 상대의 목적지를 덮어쓰거나 지우면 안 됨"
+        );
+        assert!(src.exists(), "원본은 실패 시에도 그대로 보존");
     }
 
     // 진짜 크로스 볼륨 통합 테스트 — 이 저장소(예: D:)와 OS 임시 볼륨(예: C:)이 실제로 다를 때만
