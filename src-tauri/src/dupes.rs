@@ -319,4 +319,58 @@ mod tests {
         assert!(names.contains(&"nested.bin".to_string()));
         assert!(!names.contains(&"link.bin".to_string()), "심링크 제외");
     }
+
+    #[cfg(unix)]
+    fn running_as_root() -> bool {
+        std::process::Command::new("id")
+            .arg("-u")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "0")
+            .unwrap_or(false)
+    }
+
+    // collect_files의 entry 에러 arm — 읽을 수 없는 하위 디렉토리는 jwalk가 Err로 전달, 건너뛰고 계속
+    #[cfg(unix)]
+    #[test]
+    fn collect_files_survives_unreadable_dir() {
+        use std::os::unix::fs::PermissionsExt;
+        if running_as_root() {
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write_file(root, "readable.bin", b"ok");
+        let locked = root.join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        write_file(&locked, "hidden.bin", b"secret");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let files = collect_files(root);
+
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // 패닉 없이 읽을 수 있는 파일은 여전히 수집됨
+        assert!(files.iter().any(|f| f.path.file_name().unwrap() == "readable.bin"));
+    }
+
+    // collect_files의 metadata 에러 arm — r-- 디렉토리는 목록은 되지만 자식 stat이 실패
+    #[cfg(unix)]
+    #[test]
+    fn collect_files_survives_metadata_failure() {
+        use std::os::unix::fs::PermissionsExt;
+        if running_as_root() {
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write_file(root, "readable.bin", b"ok");
+        let noexec = root.join("noexec");
+        std::fs::create_dir(&noexec).unwrap();
+        write_file(&noexec, "unstattable.bin", b"data");
+        std::fs::set_permissions(&noexec, std::fs::Permissions::from_mode(0o444)).unwrap();
+
+        let files = collect_files(root);
+
+        std::fs::set_permissions(&noexec, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(files.iter().any(|f| f.path.file_name().unwrap() == "readable.bin"));
+    }
 }
