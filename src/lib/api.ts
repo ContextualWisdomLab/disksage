@@ -72,3 +72,28 @@ export const onScanProgress = (cb: (s: ScanStats) => void) =>
   listen<ScanStats>("scan://progress", (e) => cb(e.payload));
 export const onScanDone = (cb: (s: ScanStats) => void) =>
   listen<ScanStats>("scan://done", (e) => cb(e.payload));
+
+export interface ClassTally {
+  class_id: string;
+  label: string;
+  bytes: number;
+  count: number;
+}
+export interface InventoryReport {
+  tallies: ClassTally[];
+  unknown_bytes: number;
+  unknown_count: number;
+}
+export interface OntoClass {
+  id: string;
+  label: string;
+  parent: string | null;
+  target_folder: string | null;
+}
+export interface Ontology {
+  classes: OntoClass[];
+}
+
+export const diskInventory = (root: string) =>
+  invoke<InventoryReport>("disk_inventory", { root });
+export const getOntology = () => invoke<Ontology>("get_ontology");
