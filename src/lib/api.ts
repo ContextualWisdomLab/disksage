@@ -97,3 +97,16 @@ export interface Ontology {
 export const diskInventory = (root: string) =>
   invoke<InventoryReport>("disk_inventory", { root });
 export const getOntology = () => invoke<Ontology>("get_ontology");
+
+export interface MovePlan {
+  src: string;
+  dst: string;
+  class_id: string;
+}
+
+export const planOrganize = (root: string) =>
+  invoke<MovePlan[]>("plan_organize", { root });
+export const executeMoves = (plans: MovePlan[]) =>
+  invoke<CleanResult[]>("execute_moves", { plans });
+export const undoLastMoves = (limit = 50) =>
+  invoke<CleanResult[]>("undo_last_moves", { limit });

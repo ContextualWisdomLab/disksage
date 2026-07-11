@@ -52,7 +52,10 @@ pub fn parse_ttl(turtle_src: &str) -> Result<Ontology, String> {
             }
             RDFS_SUBCLASS => {
                 if let Term::NamedNode(o) = &triple.object {
-                    parents.insert(s, o.as_str().to_string());
+                    // 다중 rdfs:subClassOf는 첫 선언만 부모로 채택(단일 부모 트리 가정) —
+                    // targetFolder 상속의 결정성을 위해. OWL은 다중 상위를 허용하지만
+                    // 이동 목적지가 arbitrary 분기에 좌우되지 않도록 first-wins 고정.
+                    parents.entry(s).or_insert(o.as_str().to_string());
                 }
             }
             RDFS_LABEL => {
@@ -175,6 +178,24 @@ dm:B a owl:Class ;
         let onto = parse_ttl(SAMPLE).unwrap();
         assert!(onto.classes[0].id.ends_with("Document"));
         assert!(onto.classes[1].id.ends_with("Receipt"));
+    }
+
+    #[test]
+    fn multiple_subclassof_keeps_first_parent_deterministically() {
+        // OWL은 다중 상위클래스를 허용하지만 targetFolder 상속은 결정적이어야 한다.
+        // 정책: 첫 subClassOf 선언(문서 순서)을 부모로 채택, 이후는 무시.
+        let ttl = r#"
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix dm: <https://disksage.app/ontology#> .
+dm:A a owl:Class ; dm:targetFolder "~/A" .
+dm:B a owl:Class ; dm:targetFolder "~/B" .
+dm:C a owl:Class ; rdfs:subClassOf dm:A ; rdfs:subClassOf dm:B .
+"#;
+        let onto = parse_ttl(ttl).unwrap();
+        let c = onto.classes.iter().find(|c| c.id.ends_with("#C")).unwrap();
+        assert!(c.parent.as_deref().unwrap().ends_with("#A"), "첫 부모 A 채택");
+        assert_eq!(onto.resolve_target(&c.id).as_deref(), Some("~/A"));
     }
 
     #[test]

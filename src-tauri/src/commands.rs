@@ -11,7 +11,8 @@ use tauri::{AppHandle, Emitter, State};
 use crate::scanner;
 use crate::scanner::ScanResult;
 
-// clean_paths_inner(순수 함수)가 쓰는 것은 무조건 import; 래퍼 전용은 cfg(not(coverage))
+// clean_paths_inner/execute_moves_inner/undo_last_moves_inner(순수 함수)가 쓰는 것은 무조건 import; 래퍼 전용은 cfg(not(coverage))
+use crate::organize;
 use crate::safety;
 #[cfg(not(coverage))]
 use crate::{dev_artifacts, dupes, rules};
@@ -126,6 +127,42 @@ pub fn clean_paths_inner(
         .collect()
 }
 
+/// 저널의 move 경로 필드 "src -> dst"를 분리 (순수 함수 — 테스트 대상). 구분자 없으면 None.
+pub fn parse_move_entry(path_field: &str) -> Option<(String, String)> {
+    path_field
+        .split_once(" -> ")
+        .map(|(s, d)| (s.to_string(), d.to_string()))
+}
+
+/// MovePlan을 safety::move_file로 실행하는 순수 코어 — 항목별 결과, 하나 실패해도 나머지는 진행 (M2와 동일 원칙)
+pub fn execute_moves_inner(plans: &[organize::MovePlan], journal_path: &Path, now_ms: u64) -> Vec<CleanResult> {
+    plans
+        .iter()
+        .map(|p| match safety::move_file(Path::new(&p.src), Path::new(&p.dst), journal_path, now_ms) {
+            Ok(()) => CleanResult { path: p.src.clone(), ok: true, error: String::new() },
+            Err(e) => CleanResult { path: p.src.clone(), ok: false, error: e.to_string() },
+        })
+        .collect()
+}
+
+/// 최근 저널에서 op=="move"·outcome=="ok" 항목을 찾아 역이동(dst→src)하는 순수 코어
+pub fn undo_last_moves_inner(limit: usize, journal_path: &Path, now_ms: u64) -> Vec<CleanResult> {
+    // 저널은 move당 pending+ok 두 줄을 남긴다 — limit을 raw 줄 수로 쓰면 pending 잡음에
+    // 밀려 실제 undo 가능한 항목이 limit보다 적게 잡힐 수 있다. 전체를 읽어 outcome=="ok"로
+    // 거른 뒤에 limit을 적용해야 "최근 성공한 이동 limit개"라는 의미가 정확해진다.
+    let entries = safety::journal_recent(journal_path, usize::MAX);
+    entries
+        .iter()
+        .filter(|e| e.op == "move" && e.outcome == "ok")
+        .take(limit)
+        .filter_map(|e| parse_move_entry(&e.path))
+        .map(|(src, dst)| match safety::move_file(Path::new(&dst), Path::new(&src), journal_path, now_ms) {
+            Ok(()) => CleanResult { path: src, ok: true, error: String::new() },
+            Err(e) => CleanResult { path: src, ok: false, error: e.to_string() },
+        })
+        .collect()
+}
+
 #[tauri::command]
 pub fn list_roots() -> Vec<String> {
     #[cfg(windows)]
@@ -153,7 +190,10 @@ pub fn load_ontology_from(ttl: &str) -> Result<crate::ontology::Ontology, String
 #[cfg(not(coverage))]
 fn bundled_ontology_ttl(app: &AppHandle) -> Result<String, String> {
     use tauri::Manager;
-    // 사용자 설정 디렉토리 오버라이드 우선, 없으면 번들 리소스
+    // 사용자 설정 디렉토리 오버라이드 우선, 없으면 번들 리소스.
+    // 오버라이드 파일이 없으면(read 실패) 조용히 번들로 폴백하지만, 파일이 있어도
+    // parse가 실패하면(malformed) 상위 load_ontology_from이 에러를 낸다 — 의도적:
+    // 사용자가 편집한 잘못된 온톨로지를 조용히 무시하지 않고 알린다.
     if let Ok(dir) = app.path().app_config_dir() {
         let user_ttl = dir.join("ontology.ttl");
         if let Ok(s) = std::fs::read_to_string(&user_ttl) {
@@ -316,6 +356,43 @@ pub fn find_duplicate_files(root: String) -> Result<Vec<dupes::DupeGroup>, Strin
     Ok(dupes::find_duplicates(files, 4096))
 }
 
+/// home 해석: app.path().home_dir() 우선, 실패 시 HOME/USERPROFILE 환경변수 폴백.
+#[cfg(not(coverage))]
+fn resolve_home(app: &AppHandle) -> PathBuf {
+    use tauri::Manager;
+    app.path()
+        .home_dir()
+        .ok()
+        .or_else(|| std::env::var("HOME").ok().map(PathBuf::from))
+        .or_else(|| std::env::var("USERPROFILE").ok().map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn plan_organize(root: String, app: AppHandle) -> Result<Vec<organize::MovePlan>, String> {
+    let onto = load_ontology_from(&bundled_ontology_ttl(&app)?)?;
+    let files = dupes::collect_files(Path::new(&root));
+    let home = resolve_home(&app);
+    Ok(organize::plan_moves(&files, &onto, &home))
+}
+
+/// MovePlan을 safety::move_file로 실행 — 항목별 결과, 하나 실패해도 나머지는 진행 (M2와 동일 원칙)
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn execute_moves(plans: Vec<organize::MovePlan>, app: AppHandle) -> Result<Vec<CleanResult>, String> {
+    let jp = journal_file_path(&app)?;
+    Ok(execute_moves_inner(&plans, &jp, now_ms()))
+}
+
+/// 최근 저널에서 op=="move"·outcome=="ok" 항목을 찾아 역이동(dst→src)한다.
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn undo_last_moves(limit: usize, app: AppHandle) -> Result<Vec<CleanResult>, String> {
+    let jp = journal_file_path(&app)?;
+    Ok(undo_last_moves_inner(limit, &jp, now_ms()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,6 +506,19 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
     }
 
     #[test]
+    fn parse_move_entry_splits_valid_entry() {
+        assert_eq!(
+            parse_move_entry("/a/b -> /c/d"),
+            Some(("/a/b".to_string(), "/c/d".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_move_entry_malformed_is_none() {
+        assert_eq!(parse_move_entry("no arrow here"), None);
+    }
+
+    #[test]
     fn list_roots_returns_platform_roots() {
         let roots = list_roots();
         assert!(!roots.is_empty());
@@ -487,5 +577,78 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
                 .collect();
             trash::os_limited::purge_all(items).unwrap();
         }
+    }
+
+    #[test]
+    fn execute_moves_inner_reports_per_item_and_isolates_failures() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jp = tmp.path().join("j.jsonl");
+        let src_ok = tmp.path().join("a.bin");
+        std::fs::write(&src_ok, vec![1u8; 16]).unwrap();
+        let dst_ok = tmp.path().join("sub").join("a.bin");
+        // 하나는 성공(같은 볼륨 rename), 하나는 실패(존재하지 않는 src)
+        let plans = vec![
+            organize::MovePlan { src: src_ok.to_string_lossy().into(), dst: dst_ok.to_string_lossy().into(), class_id: "x".into() },
+            organize::MovePlan { src: tmp.path().join("ghost").to_string_lossy().into(), dst: tmp.path().join("g2").to_string_lossy().into(), class_id: "x".into() },
+        ];
+        let results = execute_moves_inner(&plans, &jp, 1);
+        assert_eq!(results.len(), 2);
+        assert!(results[0].ok);
+        assert!(!results[1].ok);
+        assert!(!src_ok.exists());
+        assert!(dst_ok.exists());
+    }
+
+    #[test]
+    fn undo_last_moves_inner_reverses_recent_moves_newest_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jp = tmp.path().join("j.jsonl");
+        let a = tmp.path().join("a.bin");
+        std::fs::write(&a, vec![2u8; 8]).unwrap();
+        let a_moved = tmp.path().join("dest").join("a.bin");
+        // 먼저 이동 실행(저널에 move/ok 기록)
+        let plans = vec![organize::MovePlan { src: a.to_string_lossy().into(), dst: a_moved.to_string_lossy().into(), class_id: "x".into() }];
+        execute_moves_inner(&plans, &jp, 5);
+        assert!(!a.exists());
+        assert!(a_moved.exists());
+        // 되돌리기 → 원위치 복원
+        let undone = undo_last_moves_inner(10, &jp, 6);
+        assert_eq!(undone.len(), 1);
+        assert!(undone[0].ok);
+        assert!(a.exists(), "되돌리기로 원위치 복원");
+        assert!(!a_moved.exists());
+    }
+
+    #[test]
+    fn undo_last_moves_inner_respects_limit_after_filtering() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jp = tmp.path().join("j.jsonl");
+        // 두 번 이동 → 저널에 move/ok 2건(+pending 2건). limit=1이면 최신 1건만 되돌림.
+        for name in ["x.bin", "y.bin"] {
+            let s = tmp.path().join(name);
+            std::fs::write(&s, b"z").unwrap();
+            let d = tmp.path().join("d").join(name);
+            execute_moves_inner(&[organize::MovePlan { src: s.to_string_lossy().into(), dst: d.to_string_lossy().into(), class_id: "x".into() }], &jp, 1);
+        }
+        let undone = undo_last_moves_inner(1, &jp, 9);
+        assert_eq!(undone.len(), 1, "filter-before-take: pending 라인이 실제 성공을 밀어내지 않음");
+    }
+
+    #[test]
+    fn undo_last_moves_inner_reports_failure_when_original_path_reoccupied() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jp = tmp.path().join("j.jsonl");
+        let a = tmp.path().join("a.bin");
+        std::fs::write(&a, vec![3u8; 4]).unwrap();
+        let a_moved = tmp.path().join("dest").join("a.bin");
+        let plans = vec![organize::MovePlan { src: a.to_string_lossy().into(), dst: a_moved.to_string_lossy().into(), class_id: "x".into() }];
+        execute_moves_inner(&plans, &jp, 1);
+        assert!(a_moved.exists());
+        // 원래 자리에 새 파일이 다시 생겨 되돌리기 목적지가 막힘 → move_file이 실패해야 함
+        std::fs::write(&a, b"blocker").unwrap();
+        let undone = undo_last_moves_inner(1, &jp, 2);
+        assert_eq!(undone.len(), 1);
+        assert!(!undone[0].ok, "목적지 재점유 시 되돌리기 실패를 보고해야 함");
+        assert!(a_moved.exists(), "실패 시 원본은 이동된 위치에 그대로 남음");
     }
 }

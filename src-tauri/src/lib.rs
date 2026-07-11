@@ -15,6 +15,8 @@ mod dev_artifacts;
 mod ontology;
 #[cfg_attr(coverage, allow(dead_code))]
 mod inventory;
+#[cfg_attr(coverage, allow(dead_code))]
+mod organize;
 
 // coverage 빌드에서 제외 — GUI 런타임은 헤드리스 테스트로 실행 불가
 #[cfg(not(coverage))]
@@ -36,7 +38,10 @@ pub fn run() {
             commands::expand_clean_targets,
             commands::find_duplicate_files,
             commands::get_ontology,
-            commands::disk_inventory
+            commands::disk_inventory,
+            commands::plan_organize,
+            commands::execute_moves,
+            commands::undo_last_moves
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
