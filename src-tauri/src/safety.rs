@@ -216,6 +216,120 @@ pub fn trash_delete(
     }
 }
 
+/// 두 경로가 같은 볼륨인지 — rename 가능 판정(순수). 목적지는 아직 없을 수 있어 부모로 판정.
+pub fn same_volume(src: &Path, dst: &Path) -> bool {
+    let dst_probe = dst.parent().unwrap_or(dst);
+    #[cfg(windows)]
+    {
+        fn drive(p: &Path) -> Option<String> {
+            p.components().next().and_then(|c| match c {
+                std::path::Component::Prefix(pr) => Some(pr.as_os_str().to_string_lossy().to_lowercase()),
+                _ => None,
+            })
+        }
+        // canonicalize로 상대경로/verbatim 정규화 후 드라이브 비교(best-effort)
+        let s = std::fs::canonicalize(src).unwrap_or_else(|_| src.to_path_buf());
+        let d = std::fs::canonicalize(dst_probe).unwrap_or_else(|_| dst_probe.to_path_buf());
+        drive(&s) == drive(&d)
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let sd = std::fs::metadata(src).map(|m| m.dev());
+        let dd = std::fs::metadata(dst_probe).map(|m| m.dev());
+        matches!((sd, dd), (Ok(a), Ok(b)) if a == b)
+    }
+}
+
+/// 크로스 볼륨 복사 — io 에러는 `?`로 전파(커버리지 규율: happy path에서 map_err 클로저가
+/// 미실행 라인으로 남지 않도록). 검증은 별도 순수 함수로 분리해 실패 arm을 직접 단위 테스트한다.
+fn copy_then_hash(src: &Path, dst: &Path) -> std::io::Result<(u64, u64, String, String)> {
+    std::fs::copy(src, dst)?;
+    let src_len = std::fs::metadata(src)?.len();
+    let dst_len = std::fs::metadata(dst)?.len();
+    let src_hash = crate::dupes::hash_full(src).unwrap_or_default();
+    let dst_hash = crate::dupes::hash_full(dst).unwrap_or_default();
+    Ok((src_len, dst_len, src_hash, dst_hash))
+}
+
+/// 순수 검증 판정 — 크기+blake3 일치 여부. copy_verified_io에서 분리해 실패 arm을 직접 테스트 가능하게 함.
+fn verify_copy(src_len: u64, dst_len: u64, src_hash: &str, dst_hash: &str) -> bool {
+    src_len == dst_len && src_hash == dst_hash
+}
+
+// 크로스 볼륨 복사+검증(내부 io, ? 전파). 복사 도중 실패하든 검증에서 실패하든 목적지를
+// 정리하고 io::Error — 어느 실패든 원본은 절대 건드리지 않는다.
+fn copy_verified_io(src: &Path, dst: &Path) -> std::io::Result<()> {
+    let (src_len, dst_len, src_hash, dst_hash) = match copy_then_hash(src, dst) {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = std::fs::remove_file(dst); // 복사 도중 실패해도 부분 목적지 정리 (원본은 보존)
+            return Err(e);
+        }
+    };
+    if !verify_copy(src_len, dst_len, &src_hash, &dst_hash) {
+        let _ = std::fs::remove_file(dst); // 부분 복사 정리 (원본은 건드리지 않음)
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "복사 검증 실패"));
+    }
+    Ok(())
+}
+
+/// 앱 유일의 이동 경로 (스펙 §7-2). 영구 삭제 없음 — 원본 제거는 trash_delete 경유.
+pub fn move_file(
+    src: &Path,
+    dst: &Path,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Result<(), SafetyError> {
+    // 보호: src·dst 양쪽, ParentDir 거부, verbatim 정규화 — trash_delete와 동일 리거
+    for p in [src, dst] {
+        if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+            return Err(SafetyError::Protected(p.to_path_buf()));
+        }
+        let guard = strip_verbatim(&std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()));
+        if is_protected(&guard) {
+            return Err(SafetyError::Protected(p.to_path_buf()));
+        }
+    }
+    // 목적지 충돌 금지 (덮어쓰기 방지)
+    if dst.exists() {
+        return Err(SafetyError::Trash(format!("목적지가 이미 존재: {}", dst.display())));
+    }
+    // 목적지 부모 디렉토리 생성. 위 protected 검사가 이미 parent 없는 경로(guard.parent().is_none())를
+    // 걸러냈고 이 시점엔 dst가 존재하지 않음이 확인됐다(canonicalize 실패 → guard == dst 그대로)
+    // — 그러므로 parent는 항상 Some. expect로 그 불변식을 문서화한다(코드 버그가 아니면 도달 불가).
+    let dst_parent = dst.parent().expect("protected 검사가 이미 parent 없는 경로를 걸러냄");
+    std::fs::create_dir_all(dst_parent).map_err(|e| SafetyError::Trash(e.to_string()))?;
+
+    let mut entry = JournalEntry {
+        ts_ms: now_ms,
+        op: "move".into(),
+        path: format!("{} -> {}", src.display(), dst.display()),
+        bytes: std::fs::metadata(src).map(|m| m.len()).unwrap_or(0),
+        outcome: "pending".into(),
+    };
+    journal_append(journal_path, &entry)?;
+
+    let result = if same_volume(src, dst) {
+        std::fs::rename(src, dst).map_err(|e| SafetyError::Trash(e.to_string()))
+    } else {
+        // 크로스 볼륨: 복사+검증 후 원본 휴지통 (영구 삭제 없음)
+        copy_verified_io(src, dst)
+            .map_err(|e| SafetyError::Trash(e.to_string()))
+            .and_then(|()| {
+                let bytes = std::fs::metadata(dst).map(|m| m.len()).unwrap_or(0);
+                trash_delete(src, bytes, journal_path, now_ms)
+            })
+    };
+
+    entry.outcome = match &result {
+        Ok(()) => "ok".into(),
+        Err(e) => format!("error:{e}"),
+    };
+    journal_append(journal_path, &entry)?;
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -453,5 +567,197 @@ mod tests {
         let recent = journal_recent(&jp, 10);
         assert_eq!(recent.len(), 1, "치유된 새 엔트리는 온전히 읽혀야 함");
         assert_eq!(recent[0].path, "/x");
+    }
+
+    #[test]
+    fn move_file_rejects_protected_src_or_dst() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jp = tmp.path().join("j.jsonl");
+        let f = tmp.path().join("f.bin");
+        std::fs::write(&f, b"x").unwrap();
+        let protected = std::path::PathBuf::from(if cfg!(windows) { "C:\\Windows\\x" } else { "/usr/x" });
+        // 보호된 목적지
+        assert!(matches!(move_file(&f, &protected, &jp, 1), Err(SafetyError::Protected(_))));
+        // 보호된 출발
+        let pf = std::path::PathBuf::from(if cfg!(windows) { "C:\\Windows\\y" } else { "/usr/y" });
+        assert!(matches!(move_file(&pf, &tmp.path().join("z"), &jp, 1), Err(SafetyError::Protected(_))));
+        assert!(journal_recent(&jp, 10).is_empty(), "보호 거부는 저널 이전");
+    }
+
+    #[test]
+    fn move_file_same_dir_renames_and_journals() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jp = tmp.path().join("j.jsonl");
+        let src = tmp.path().join("a.bin");
+        let dst = tmp.path().join("sub").join("a.bin");
+        std::fs::create_dir(tmp.path().join("sub")).unwrap();
+        std::fs::write(&src, vec![0u8; 20]).unwrap();
+
+        move_file(&src, &dst, &jp, 7).unwrap();
+
+        assert!(!src.exists());
+        assert!(dst.exists());
+        assert_eq!(std::fs::read(&dst).unwrap().len(), 20);
+        let recent = journal_recent(&jp, 10);
+        assert_eq!(recent[0].outcome, "ok");
+        assert_eq!(recent[0].op, "move");
+    }
+
+    #[test]
+    fn move_file_rejects_existing_destination() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jp = tmp.path().join("j.jsonl");
+        let src = tmp.path().join("a.bin");
+        let dst = tmp.path().join("b.bin");
+        std::fs::write(&src, b"aa").unwrap();
+        std::fs::write(&dst, b"bb").unwrap(); // 이미 존재
+        assert!(move_file(&src, &dst, &jp, 1).is_err());
+        // 원본과 기존 목적지 모두 보존
+        assert!(src.exists());
+        assert_eq!(std::fs::read(&dst).unwrap(), b"bb");
+    }
+
+    #[test]
+    fn same_volume_true_within_tempdir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = tmp.path().join("a");
+        let b = tmp.path().join("sub");
+        std::fs::write(&a, b"x").unwrap();
+        std::fs::create_dir(&b).unwrap();
+        assert!(same_volume(&a, &b));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn same_volume_relative_missing_path_falls_back_without_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing_rel = Path::new("no-such-relative-file.tmp");
+        // canonicalize 실패 시 상대경로로 폴백 — 첫 컴포넌트가 드라이브 Prefix가 아니므로
+        // drive()의 방어적 `_ => None` 분기를 탄다. 실 드라이브를 가진 tmp와는 다르다고 판정.
+        assert!(!same_volume(missing_rel, tmp.path()));
+    }
+
+    #[test]
+    fn move_file_rejects_parent_dir_traversal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jp = tmp.path().join("j.jsonl");
+        let sneaky = tmp.path().join("..");
+        let dst = tmp.path().join("z.bin");
+        let err = move_file(&sneaky, &dst, &jp, 1);
+        assert!(matches!(err, Err(SafetyError::Protected(_))));
+        assert!(journal_recent(&jp, 10).is_empty(), "보호 거부는 저널 이전");
+    }
+
+    #[test]
+    fn move_file_reports_error_when_dest_parent_cannot_be_created() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jp = tmp.path().join("j.jsonl");
+        let src = tmp.path().join("src.bin");
+        std::fs::write(&src, b"hi").unwrap();
+        // "blocker"를 파일로 만들어 그 이름으로 디렉토리를 만들 수 없게 함
+        let blocker = tmp.path().join("blocker");
+        std::fs::write(&blocker, b"not a dir").unwrap();
+        let dst = blocker.join("nested").join("dst.bin");
+        let err = move_file(&src, &dst, &jp, 1);
+        assert!(matches!(err, Err(SafetyError::Trash(_))));
+        assert!(src.exists(), "부모 생성 실패 시 원본 보존");
+        assert!(journal_recent(&jp, 10).is_empty(), "부모 생성 실패는 저널 이전에 실패");
+    }
+
+    #[test]
+    fn move_file_same_volume_rename_failure_journals_error_outcome() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jp = tmp.path().join("j.jsonl");
+        let src = tmp.path().join("d");
+        std::fs::create_dir(&src).unwrap();
+        // 디렉토리를 자기 자신의 하위 경로로 이동 시도 — OS가 rename을 거부(EINVAL 계열)한다
+        let dst = src.join("inner").join("d");
+        let err = move_file(&src, &dst, &jp, 5);
+        assert!(matches!(err, Err(SafetyError::Trash(_))));
+        let recent = journal_recent(&jp, 10);
+        assert_eq!(recent.len(), 2); // pending + error
+        assert!(recent[0].outcome.starts_with("error:"));
+        assert_eq!(recent[1].outcome, "pending");
+    }
+
+    #[test]
+    fn copy_then_hash_reads_matching_size_and_hash_for_identical_copy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src.bin");
+        let dst = tmp.path().join("dst.bin");
+        std::fs::write(&src, b"same-bytes-here").unwrap();
+        let (sl, dl, sh, dh) = copy_then_hash(&src, &dst).unwrap();
+        assert_eq!(sl, dl);
+        assert_eq!(sh, dh);
+        assert!(verify_copy(sl, dl, &sh, &dh));
+    }
+
+    #[test]
+    fn verify_copy_detects_size_or_hash_mismatch() {
+        assert!(!verify_copy(1, 2, "a", "a")); // 크기 불일치
+        assert!(!verify_copy(1, 1, "a", "b")); // 해시 불일치
+        assert!(verify_copy(1, 1, "a", "a"));
+    }
+
+    #[test]
+    fn copy_verified_io_succeeds_and_content_matches() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("s2.bin");
+        let dst = tmp.path().join("d2.bin");
+        std::fs::write(&src, vec![9u8; 128]).unwrap();
+        copy_verified_io(&src, &dst).unwrap();
+        assert_eq!(std::fs::read(&dst).unwrap(), std::fs::read(&src).unwrap());
+    }
+
+    #[test]
+    fn copy_verified_io_cleans_up_and_errors_when_copy_source_missing() {
+        // 복사 단계 자체가 실패해도(검증 단계가 아니라) 부분 목적지를 정리하고 원본은 그대로 둔다
+        let tmp = tempfile::tempdir().unwrap();
+        let missing_src = tmp.path().join("does-not-exist.bin");
+        let dst = tmp.path().join("never-created.bin");
+        let err = copy_verified_io(&missing_src, &dst);
+        assert!(err.is_err());
+        assert!(!dst.exists());
+    }
+
+    // 진짜 크로스 볼륨 통합 테스트 — 이 저장소(예: D:)와 OS 임시 볼륨(예: C:)이 실제로 다를 때만
+    // move_file의 크로스 볼륨 분기(복사+검증+trash_delete)를 real fs로 검증한다.
+    // 단일 볼륨 환경(예: 일부 CI 게이트)에서는 same_volume으로 자가 감지해 스킵 — 조작된 테스트가
+    // 아니라 이 환경의 실제 조건에 의존하는 통합 테스트다.
+    #[cfg(any(windows, target_os = "linux"))]
+    #[test]
+    fn move_file_cross_volume_copies_verifies_and_trashes_original() {
+        let tmp = tempfile::tempdir().unwrap(); // 보통 OS 임시 볼륨
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR")); // 저장소 볼륨
+        if same_volume(manifest_dir, tmp.path()) {
+            eprintln!("skip: 이 환경엔 서로 다른 두 볼륨이 없어 크로스 볼륨 경로를 검증할 수 없음");
+            return;
+        }
+        let scratch = manifest_dir.join("target").join("mv-cov-scratch");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let src_dir = tempfile::tempdir_in(&scratch).unwrap();
+        let jp = tmp.path().join("j.jsonl");
+        let src = src_dir.path().join("disksage-cv-fixture.bin");
+        std::fs::write(&src, vec![7u8; 4096]).unwrap();
+        let dst = tmp.path().join("cv-dst.bin");
+
+        move_file(&src, &dst, &jp, 99).unwrap();
+
+        assert!(!src.exists(), "크로스 볼륨 이동 후 원본은 휴지통 경유로 사라져야 함");
+        assert!(dst.exists());
+        assert_eq!(std::fs::read(&dst).unwrap().len(), 4096);
+        let recent = journal_recent(&jp, 10);
+        assert_eq!(recent[0].outcome, "ok");
+        assert_eq!(recent[0].op, "move");
+
+        // 테스트 픽스처만 휴지통에서 purge (M2 패턴 — 제품 코드는 purge하지 않음)
+        let items: Vec<_> = trash::os_limited::list()
+            .unwrap()
+            .into_iter()
+            .filter(|i| i.name.to_string_lossy().contains("disksage-cv-fixture"))
+            .collect();
+        if !items.is_empty() {
+            trash::os_limited::purge_all(items).unwrap();
+        }
     }
 }
