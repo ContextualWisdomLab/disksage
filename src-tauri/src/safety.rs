@@ -76,14 +76,28 @@ pub struct JournalEntry {
 
 /// 파괴적 작업 저널 — 실행 전 "pending"으로 먼저 기록되고 결과로 덧붙는다 (스펙 §7-4)
 pub fn journal_append(journal_path: &Path, entry: &JournalEntry) -> Result<(), SafetyError> {
-    use std::io::Write;
+    use std::io::{Read, Seek, SeekFrom, Write};
     let line = serde_json::to_string(entry).map_err(|e| SafetyError::Journal(e.to_string()))?;
     let mut f = std::fs::OpenOptions::new()
         .create(true)
+        .read(true)
         .append(true)
         .open(journal_path)
         .map_err(|e| SafetyError::Journal(e.to_string()))?;
-    writeln!(f, "{line}").map_err(|e| SafetyError::Journal(e.to_string()))
+    // 크래시로 개행 없이 끊긴 꼬리가 있으면 개행을 먼저 넣어 다음 엔트리와의 병합을 막는다 (자가 치유)
+    let mut healing = String::new();
+    let len = f.seek(SeekFrom::End(0)).map_err(|e| SafetyError::Journal(e.to_string()))?;
+    if len > 0 {
+        f.seek(SeekFrom::End(-1)).map_err(|e| SafetyError::Journal(e.to_string()))?;
+        let mut last = [0u8; 1];
+        f.read_exact(&mut last).map_err(|e| SafetyError::Journal(e.to_string()))?;
+        if last[0] != b'\n' {
+            healing.push('\n');
+        }
+    }
+    // 본문+개행을 한 번의 write로 — 두 syscall 사이 크래시로 인한 torn line 방지
+    f.write_all(format!("{healing}{line}\n").as_bytes())
+        .map_err(|e| SafetyError::Journal(e.to_string()))
 }
 
 pub fn journal_recent(journal_path: &Path, limit: usize) -> Vec<JournalEntry> {
@@ -194,5 +208,27 @@ mod tests {
             },
         );
         assert!(matches!(err, Err(SafetyError::Journal(_))));
+    }
+
+    #[test]
+    fn journal_append_heals_torn_tail() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jp = tmp.path().join("j.jsonl");
+        // 개행 없이 끊긴 꼬리를 시뮬레이션
+        std::fs::write(&jp, "{\"torn\":").unwrap();
+        journal_append(
+            &jp,
+            &JournalEntry {
+                ts_ms: 1,
+                op: "trash_delete".into(),
+                path: "/x".into(),
+                bytes: 0,
+                outcome: "ok".into(),
+            },
+        )
+        .unwrap();
+        let recent = journal_recent(&jp, 10);
+        assert_eq!(recent.len(), 1, "치유된 새 엔트리는 온전히 읽혀야 함");
+        assert_eq!(recent[0].path, "/x");
     }
 }
