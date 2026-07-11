@@ -43,7 +43,11 @@ pub fn run() {
             commands::disk_inventory,
             commands::plan_organize,
             commands::execute_moves,
-            commands::undo_last_moves
+            commands::undo_last_moves,
+            commands::model_status,
+            commands::download_model,
+            commands::file_verdicts,
+            commands::summarize_unknown_bucket
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

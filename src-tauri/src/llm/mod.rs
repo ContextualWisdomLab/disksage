@@ -15,6 +15,10 @@ pub use cache::VerdictCache;
 pub use engine::LlamaEngine;
 #[cfg_attr(coverage, allow(unused_imports))]
 pub use model::{verify_sha256, ModelSpec, DEFAULT};
+// commands.rs의 download_model 래퍼가 필요로 하는 다운로드 fn — model 모듈 자체는 private이라 재-export로만 노출.
+// download_to는 네트워크 io라 coverage 빌드에서 이미 제외돼 있으므로(model.rs) 이 재-export도 동일하게 게이트.
+#[cfg(not(coverage))]
+pub use model::download_to;
 #[cfg_attr(coverage, allow(unused_imports))]
 pub use parse::{parse_class_pick, parse_summary, parse_verdict, parse_verdict_full};
 #[cfg_attr(coverage, allow(unused_imports))]
