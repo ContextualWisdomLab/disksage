@@ -112,7 +112,8 @@ pub fn scan_dir_with_interval(
 }
 
 /// 심링크(전 플랫폼)와 reparse point(Windows 정션 등)를 순회에서 제외
-fn keep_entry(e: &jwalk::DirEntry<((), ())>) -> bool {
+/// (crate 내 다른 순회 지점 — dev_artifacts 등 — 에서도 재사용)
+pub(crate) fn keep_entry(e: &jwalk::DirEntry<((), ())>) -> bool {
     if e.file_type().is_symlink() {
         return false;
     }

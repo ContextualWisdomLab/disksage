@@ -4,6 +4,7 @@
   import { fmtBytes } from "$lib/fmt";
   import TopFiles from "$lib/TopFiles.svelte";
   import Treemap from "$lib/Treemap.svelte";
+  import Cleanup from "$lib/Cleanup.svelte";
 
   let roots: string[] = $state([]);
   let selectedRoot = $state("");
@@ -112,6 +113,8 @@
   {#if top.length > 0}
     <TopFiles files={top} />
   {/if}
+
+  <Cleanup scannedRoot={crumbs.length > 0 ? crumbs[0] : null} />
 </main>
 
 <style>

@@ -25,6 +25,42 @@ export const cancelScan = () => invoke<void>("cancel_scan");
 export const getNode = (path: string) => invoke<NodeView>("get_node", { path });
 export const topFiles = (limit = 200) => invoke<EntryView[]>("top_files", { limit });
 
+export interface CacheCandidate {
+  id: string;
+  label: string;
+  path: string;
+  bytes: number;
+  exists: boolean;
+}
+export interface DevArtifact {
+  path: string;
+  kind: string;
+  project: string;
+  bytes: number;
+  age_days: number;
+}
+export interface CleanResult {
+  path: string;
+  ok: boolean;
+  error: string;
+}
+export interface JournalEntry {
+  ts_ms: number;
+  op: string;
+  path: string;
+  bytes: number;
+  outcome: string;
+}
+
+export const listCacheCandidates = () => invoke<CacheCandidate[]>("list_cache_candidates");
+export const listDevArtifacts = (root: string, minAgeDays = 30) =>
+  invoke<DevArtifact[]>("list_dev_artifacts", { root, minAgeDays });
+export const cleanPaths = (paths: string[]) => invoke<CleanResult[]>("clean_paths", { paths });
+export const expandCleanTargets = (dir: string) =>
+  invoke<string[]>("expand_clean_targets", { dir });
+export const recentOperations = (limit = 20) =>
+  invoke<JournalEntry[]>("recent_operations", { limit });
+
 export const onScanProgress = (cb: (s: ScanStats) => void) =>
   listen<ScanStats>("scan://progress", (e) => cb(e.payload));
 export const onScanDone = (cb: (s: ScanStats) => void) =>
