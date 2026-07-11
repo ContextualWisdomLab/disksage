@@ -2,6 +2,7 @@
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
   import { blocksDeletion } from "./dupeGuard";
+  import { verdictBadge } from "./verdictBadge";
 
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
@@ -11,6 +12,16 @@
   // 각 그룹에서 삭제 대상으로 선택된 경로 (보존할 하나를 제외한 나머지)
   let toDelete: Set<string> = $state(new Set());
   let results: api.CleanResult[] = $state([]);
+  let verdicts: Record<string, api.Verdict> = $state({});
+
+  async function loadVerdicts(paths: string[]) {
+    try {
+      const fvs = await api.fileVerdicts(paths);
+      verdicts = Object.fromEntries(fvs.map((f) => [f.path, f.verdict]));
+    } catch {
+      /* advisory only — ignore */
+    }
+  }
 
   async function scan() {
     if (!scannedRoot) return;
@@ -25,6 +36,7 @@
         for (const p of g.paths.slice(1)) next.add(p);
       }
       toDelete = next;
+      loadVerdicts(groups.flatMap((g) => g.paths));
     } catch (e) {
       loadError = String(e);
     } finally {
@@ -98,6 +110,10 @@
                 onchange={() => toggle(p)}
               />
               <span class="path" title={p}>{p}</span>
+              {#if verdicts[p]}
+                {@const b = verdictBadge(verdicts[p])}
+                <span class={b.cls} title={b.title}>{b.label}</span>
+              {/if}
               {#if !toDelete.has(p)}<em class="keep">보존</em>{/if}
             </label>
           </li>
@@ -138,4 +154,12 @@
   .muted { color: #999; }
   .error { color: #b00; }
   .errors { color: #b00; font-size: 0.85rem; list-style: none; padding: 0; }
+  .badge-safe, .badge-caution, .badge-keep, .badge-unrated {
+    display: inline-block; margin-left: 0.4rem; padding: 1px 6px; border-radius: 8px;
+    font-size: 0.75rem; color: #fff;
+  }
+  .badge-safe { background: #2a8f4a; }
+  .badge-caution { background: #b8860b; }
+  .badge-keep { background: #b03030; }
+  .badge-unrated { background: #888; }
 </style>

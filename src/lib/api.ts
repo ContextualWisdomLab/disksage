@@ -83,6 +83,7 @@ export interface InventoryReport {
   tallies: ClassTally[];
   unknown_bytes: number;
   unknown_count: number;
+  unknown_samples: string[];
 }
 export interface OntoClass {
   id: string;
@@ -110,3 +111,20 @@ export const executeMoves = (plans: MovePlan[]) =>
   invoke<CleanResult[]>("execute_moves", { plans });
 export const undoLastMoves = (limit = 50) =>
   invoke<CleanResult[]>("undo_last_moves", { limit });
+
+export type Verdict = "safe" | "caution" | "keep" | "unrated";
+export interface FileVerdict {
+  path: string;
+  verdict: Verdict;
+  reason: string;
+}
+export interface ModelStatus {
+  present: boolean;
+  name: string;
+}
+
+export const modelStatus = () => invoke<ModelStatus>("model_status");
+export const downloadModel = () => invoke<void>("download_model");
+export const fileVerdicts = (paths: string[]) => invoke<FileVerdict[]>("file_verdicts", { paths });
+export const summarizeUnknownBucket = (paths: string[]) =>
+  invoke<string | null>("summarize_unknown_bucket", { paths });

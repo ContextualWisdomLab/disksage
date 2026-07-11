@@ -11,23 +11,44 @@ pub struct MovePlan {
     pub class_id: String,
 }
 
-/// 파일 → 클래스 → targetFolder → 목적지 경로. 미분류·targetFolder 없음·이미 목적지 안은 제외.
-pub fn plan_moves(files: &[FileEntry], onto: &Ontology, home: &Path) -> Vec<MovePlan> {
+/// 후보 클래스 로컬명(온톨로지에서). picker에 전달.
+fn local_name(id: &str) -> &str {
+    id.rsplit(['#', '/']).next().unwrap_or(id)
+}
+
+/// 파일 → (picker 또는 확장자 classify) 로컬 클래스 → targetFolder → 목적지.
+/// picker(step ②): 후보 목록 중 하나를 고르거나 None(그러면 확장자 classify로 폴백).
+// ponytail: pick은 &dyn Fn(트레이트 객체) — generic(impl Fn)이면 호출부 클로저 타입마다
+// 별도 단형화(monomorphization)가 생겨, 커버리지 게이트가 단형화별 죽은 분기를 분기 미도달로
+// 집계한다(테스트를 아무리 추가해도 100%에 못 미침). 단일 컴파일 바디로 만들어 분기 커버리지를
+// 호출부 전체에서 합산되게 한다 — llm::InferenceEngine을 &dyn으로 주입하는 것과 같은 패턴.
+pub fn plan_moves_with(
+    files: &[FileEntry],
+    onto: &Ontology,
+    home: &Path,
+    pick: &dyn Fn(&Path, &[&str]) -> Option<String>,
+) -> Vec<MovePlan> {
+    let candidates: Vec<&str> = onto.classes.iter().map(|c| local_name(&c.id)).collect();
     let mut plans = Vec::new();
     for f in files {
         // filename을 classify보다 먼저 확인 — 파일명 없는 경로(루트 등)는 여기서 걸러진다.
         // (classify 뒤에 두면 이 분기가 도달 불가라 커버리지 사각이 됨)
         let Some(name) = f.path.file_name() else { continue };
-        let Some(local) = classify(&f.path) else { continue };
+        // step ②: picker가 후보 중 선택; None이면 확장자 classify 폴백; 둘 다 없으면 제외
+        let local: String = match pick(&f.path, &candidates) {
+            Some(picked) => picked,
+            None => match classify(&f.path) {
+                Some(c) => c.to_string(),
+                None => continue,
+            },
+        };
         // 로컬명 → 온톨로지 클래스
-        let Some(class) = onto.classes.iter().find(|c| {
-            c.id.rsplit(['#', '/']).next().unwrap_or(&c.id) == local
-        }) else { continue };
+        let Some(class) = onto.classes.iter().find(|c| local_name(&c.id) == local) else { continue };
         let Some(template) = onto.resolve_target(&class.id) else { continue };
         // 템플릿 치환: ~ → home, {class} → 로컬명
         let folder = template
             .replacen('~', &home.to_string_lossy(), 1)
-            .replace("{class}", local);
+            .replace("{class}", &local);
         let dst = Path::new(&folder).join(name);
         // 이미 목적지 폴더에 있으면 제외
         if f.path.parent() == Some(Path::new(&folder)) {
@@ -40,6 +61,11 @@ pub fn plan_moves(files: &[FileEntry], onto: &Ontology, home: &Path) -> Vec<Move
         });
     }
     plans
+}
+
+/// 확장자 규칙만 사용(picker 없음) — 기존 동작 유지.
+pub fn plan_moves(files: &[FileEntry], onto: &Ontology, home: &Path) -> Vec<MovePlan> {
+    plan_moves_with(files, onto, home, &|_, _| None)
 }
 
 #[cfg(test)]
@@ -139,5 +165,47 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
         assert_eq!(plans.len(), 1);
         let expected = Path::new("/opt/media/Image").join("pic.png");
         assert_eq!(plans[0].dst, expected.to_string_lossy().to_string());
+    }
+
+    #[test]
+    fn picker_choice_overrides_extension_classify() {
+        // main.rs는 확장자로 "Code"(targetFolder 없음 → 평소 제외)로 분류되지만,
+        // picker가 "Image"(targetFolder 있음)를 고르면 Image 목적지로 계획된다.
+        let onto = parse_ttl(ONTO).unwrap();
+        let home = Path::new("/home/u");
+        let files = vec![fe("/src/main.rs", 20)];
+        let pick = |_p: &Path, _c: &[&str]| Some("Image".to_string());
+        let plans = plan_moves_with(&files, &onto, home, &pick);
+        assert_eq!(plans.len(), 1);
+        assert!(plans[0].class_id.ends_with("Image"));
+    }
+
+    #[test]
+    fn picker_none_falls_back_to_extension_classify() {
+        // picker가 None이면 기존 확장자 분류(pic.png → Image)로 폴백 — plan_moves와 동일
+        let onto = parse_ttl(ONTO).unwrap();
+        let home = Path::new("/home/u");
+        let files = vec![fe("/downloads/pic.png", 100)];
+        let pick = |_p: &Path, _c: &[&str]| None;
+        let plans = plan_moves_with(&files, &onto, home, &pick);
+        assert_eq!(plans.len(), 1);
+        assert!(plans[0].class_id.ends_with("Image"));
+    }
+
+    #[test]
+    fn picker_candidates_include_ontology_class_names() {
+        // picker에 넘어오는 후보 목록이 온톨로지 클래스 로컬명을 포함하는지 확인
+        let onto = parse_ttl(ONTO).unwrap();
+        let home = Path::new("/home/u");
+        let files = vec![fe("/downloads/pic.png", 100)];
+        let seen = std::cell::RefCell::new(Vec::<String>::new());
+        let pick = |_p: &Path, cands: &[&str]| {
+            *seen.borrow_mut() = cands.iter().map(|s| s.to_string()).collect();
+            None
+        };
+        let _ = plan_moves_with(&files, &onto, home, &pick);
+        let c = seen.borrow();
+        assert!(c.iter().any(|s| s == "Image"));
+        assert!(c.iter().any(|s| s == "Installer"));
     }
 }

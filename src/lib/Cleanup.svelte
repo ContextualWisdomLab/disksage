@@ -1,6 +1,7 @@
 <script lang="ts">
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
+  import { verdictBadge } from "./verdictBadge";
 
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
@@ -11,12 +12,24 @@
   let results: api.CleanResult[] = $state([]);
   let busy = $state(false);
   let loadError = $state("");
+  // ponytail: 배지는 개별 파일/디렉토리 후보(artifacts)에만 표시 — caches는 소수의 고정 규칙 카테고리라 LLM 판정 가치가 낮음.
+  let verdicts: Record<string, api.Verdict> = $state({});
+
+  async function loadVerdicts(paths: string[]) {
+    try {
+      const fvs = await api.fileVerdicts(paths);
+      verdicts = Object.fromEntries(fvs.map((f) => [f.path, f.verdict]));
+    } catch {
+      /* advisory only — ignore */
+    }
+  }
 
   async function load() {
     loadError = "";
     try {
       caches = await api.listCacheCandidates();
       artifacts = scannedRoot ? await api.listDevArtifacts(scannedRoot) : [];
+      loadVerdicts(artifacts.map((a) => a.path));
     } catch (e) {
       loadError = String(e);
     }
@@ -111,6 +124,10 @@
           />
           {a.kind} <em>({a.project}, {a.age_days}일)</em>
           <span class="size">{fmtBytes(a.bytes)}</span>
+          {#if verdicts[a.path]}
+            {@const b = verdictBadge(verdicts[a.path])}
+            <span class={b.cls} title={b.title}>{b.label}</span>
+          {/if}
         </label>
         <span class="path" title={a.path}>{a.path}</span>
       </li>
@@ -148,4 +165,12 @@
   .disabled { color: #aaa; }
   .error, .errors { color: #b00; }
   .errors { font-size: 0.85rem; }
+  .badge-safe, .badge-caution, .badge-keep, .badge-unrated {
+    display: inline-block; margin-left: 0.4rem; padding: 1px 6px; border-radius: 8px;
+    font-size: 0.75rem; color: #fff;
+  }
+  .badge-safe { background: #2a8f4a; }
+  .badge-caution { background: #b8860b; }
+  .badge-keep { background: #b03030; }
+  .badge-unrated { background: #888; }
 </style>

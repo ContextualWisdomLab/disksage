@@ -22,6 +22,11 @@ pub struct AppState {
     pub result: Arc<Mutex<Option<ScanResult>>>,
     pub cancel: Arc<AtomicBool>,
     pub scanning: Arc<AtomicBool>,
+    // 엔진은 최초 사용 시 한 번만 로드해 보관(모델 로드는 ~1GB — 호출마다 재로드 금지). feature off/coverage에서는 필드 자체가 없음.
+    #[cfg(all(not(coverage), feature = "llm-engine"))]
+    pub engine: Arc<Mutex<Option<crate::llm::LlamaEngine>>>,
+    #[cfg(all(not(coverage), feature = "llm-engine"))]
+    pub verdict_cache: Arc<Mutex<crate::llm::VerdictCache>>,
 }
 
 #[derive(serde::Serialize)]
@@ -369,11 +374,35 @@ fn resolve_home(app: &AppHandle) -> PathBuf {
 }
 
 #[cfg(not(coverage))]
+#[cfg_attr(not(feature = "llm-engine"), allow(unused_variables))]
 #[tauri::command(async)]
-pub fn plan_organize(root: String, app: AppHandle) -> Result<Vec<organize::MovePlan>, String> {
+pub fn plan_organize(root: String, app: AppHandle, state: State<AppState>) -> Result<Vec<organize::MovePlan>, String> {
     let onto = load_ontology_from(&bundled_ontology_ttl(&app)?)?;
     let files = dupes::collect_files(Path::new(&root));
     let home = resolve_home(&app);
+    // classify_prompt는 name/parent만 쓰므로 picker는 size 불필요(0으로 구성).
+    // ponytail: LLM picker는 파일마다 추론 1회 — 대규모 스캔 프리뷰에선 느릴 수 있음.
+    //           지금은 모델 있으면 전부 LLM 분류; 필요 시 후속에서 미분류 항목만으로 제한.
+    #[cfg(feature = "llm-engine")]
+    {
+        use tauri::Manager;
+        let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        if model_status_for(&model_file_path(&dir)).present {
+            let mut guard = state.engine.lock().unwrap();
+            if guard.is_none() {
+                if let Ok(e) = crate::llm::LlamaEngine::new(&model_file_path(&dir)) {
+                    *guard = Some(e);
+                }
+            }
+            if let Some(engine) = guard.as_ref() {
+                let pick = |p: &Path, cands: &[&str]| {
+                    let meta = file_meta_at(p, 0, 0);
+                    crate::llm::pick_class(engine, &meta, cands)
+                };
+                return Ok(organize::plan_moves_with(&files, &onto, &home, &pick));
+            }
+        }
+    }
     Ok(organize::plan_moves(&files, &onto, &home))
 }
 
@@ -393,12 +422,228 @@ pub fn undo_last_moves(limit: usize, app: AppHandle) -> Result<Vec<CleanResult>,
     Ok(undo_last_moves_inner(limit, &jp, now_ms()))
 }
 
+#[derive(serde::Serialize)]
+pub struct ModelStatus {
+    pub present: bool,
+    pub name: String,
+}
+
+/// 모델 파일 경로: <app_data>/models/<DEFAULT.name>.gguf
+pub fn model_file_path(app_data_dir: &Path) -> PathBuf {
+    app_data_dir.join("models").join(format!("{}.gguf", crate::llm::DEFAULT.name))
+}
+
+/// 모델 존재 여부 + 이름. 없으면 앱은 규칙 기반으로 동작(배지 미판정).
+pub fn model_status_for(model_path: &Path) -> ModelStatus {
+    ModelStatus { present: model_path.exists(), name: crate::llm::DEFAULT.name.to_string() }
+}
+
+/// 경로 + (이미 읽은) size·age로 FileMeta 구성. name/parent는 경로에서, 없으면 빈 문자열(패닉 없음).
+pub fn file_meta_at(path: &Path, size: u64, mtime_days: u64) -> crate::llm::FileMeta {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let parent = path
+        .parent()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    crate::llm::FileMeta { path: path.to_string_lossy().into_owned(), name, size, mtime_days, parent }
+}
+
+/// 항목마다 캐시(path|size|mtime_ms) 확인 후 미스면 추론. 판정만 캐시(이유는 미스 시에만).
+pub fn verdicts_with(
+    engine: &dyn crate::llm::InferenceEngine,
+    cache: &mut crate::llm::VerdictCache,
+    items: &[(crate::llm::FileMeta, u64)],
+) -> Vec<crate::llm::FileVerdict> {
+    let mut out = Vec::with_capacity(items.len());
+    for (meta, mtime_ms) in items {
+        let key = crate::llm::VerdictCache::key(&meta.path, meta.size, *mtime_ms);
+        if let Some(v) = cache.get(&key) {
+            out.push(crate::llm::FileVerdict { path: meta.path.clone(), verdict: v, reason: String::new() });
+        } else {
+            let fv = crate::llm::verdict_for(engine, meta);
+            cache.put(key, fv.verdict);
+            out.push(fv);
+        }
+    }
+    out
+}
+
+// --- M5: 모델 상태/다운로드, 캐시된 파일 판정, 미분류 뭉치 요약 IPC ---
+// 순수 로직(model_file_path/model_status_for/file_meta_at/verdicts_with)은 위(게이트 측정 대상)에 있음.
+// 아래는 io/엔진 수명주기를 다루는 얇은 래퍼 — coverage에서 제외.
+
+#[cfg(not(coverage))]
+fn meta_items(paths: &[String]) -> Vec<(crate::llm::FileMeta, u64)> {
+    paths.iter().filter_map(|p| {
+        let path = std::path::Path::new(p);
+        let md = std::fs::metadata(path).ok()?;
+        let mtime_ms = md.modified().ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let age_days = now_ms().saturating_sub(mtime_ms) / 86_400_000; // 실제 파일 나이(프롬프트용); 캐시 키는 원시 mtime_ms 사용
+        Some((file_meta_at(path, md.len(), age_days), mtime_ms))
+    }).collect()
+}
+
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn model_status(app: AppHandle) -> Result<ModelStatus, String> {
+    use tauri::Manager;
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    Ok(model_status_for(&model_file_path(&dir)))
+}
+
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn download_model(app: AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let path = model_file_path(&dir);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    crate::llm::download_to(&crate::llm::DEFAULT, &path)
+}
+
+/// 캐시된 파일 판정 — 엔진 있으면 실제 추론(세션 캐시 활용), 없으면(feature off/모델 없음/엔진 초기화 실패) 전부 Unrated로 완만히 저하.
+#[cfg(not(coverage))]
+#[cfg_attr(not(feature = "llm-engine"), allow(unused_variables))]
+#[tauri::command(async)]
+pub fn file_verdicts(paths: Vec<String>, app: AppHandle, state: State<AppState>) -> Result<Vec<crate::llm::FileVerdict>, String> {
+    let items = meta_items(&paths);
+
+    #[cfg(feature = "llm-engine")]
+    {
+        use tauri::Manager;
+        let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        if model_status_for(&model_file_path(&dir)).present {
+            let mut guard = state.engine.lock().unwrap();
+            if guard.is_none() {
+                if let Ok(e) = crate::llm::LlamaEngine::new(&model_file_path(&dir)) {
+                    *guard = Some(e);
+                }
+            }
+            if let Some(engine) = guard.as_ref() {
+                let mut cache = state.verdict_cache.lock().unwrap();
+                return Ok(verdicts_with(engine, &mut cache, &items));
+            }
+        }
+    }
+
+    Ok(items
+        .iter()
+        .map(|(meta, _)| crate::llm::FileVerdict {
+            path: meta.path.clone(),
+            verdict: crate::llm::Verdict::Unrated,
+            reason: String::new(),
+        })
+        .collect())
+}
+
+/// 미분류 뭉치 한 줄 요약 — 엔진 없으면 None(스펙 §6 graceful degradation).
+#[cfg(not(coverage))]
+#[cfg_attr(not(feature = "llm-engine"), allow(unused_variables))]
+#[tauri::command(async)]
+pub fn summarize_unknown_bucket(paths: Vec<String>, app: AppHandle, state: State<AppState>) -> Result<Option<String>, String> {
+    if paths.is_empty() {
+        return Ok(None);
+    }
+    let metas: Vec<crate::llm::FileMeta> = meta_items(&paths).into_iter().map(|(m, _)| m).collect();
+
+    #[cfg(feature = "llm-engine")]
+    {
+        use tauri::Manager;
+        let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        if model_status_for(&model_file_path(&dir)).present {
+            let mut guard = state.engine.lock().unwrap();
+            if guard.is_none() {
+                if let Ok(e) = crate::llm::LlamaEngine::new(&model_file_path(&dir)) {
+                    *guard = Some(e);
+                }
+            }
+            if let Some(engine) = guard.as_ref() {
+                return Ok(crate::llm::summarize_unknown(engine, &metas));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::scanner::scan_dir_with_interval;
     use std::fs;
     use std::sync::atomic::AtomicBool;
+
+    // --- M5 LLM 커맨드 순수 헬퍼 ---
+    use crate::llm::{InferenceEngine, Verdict, VerdictCache};
+
+    struct CountingFake { out: String, calls: std::cell::Cell<usize> }
+    impl InferenceEngine for CountingFake {
+        fn infer(&self, _p: &str) -> Result<String, String> {
+            self.calls.set(self.calls.get() + 1);
+            Ok(self.out.clone())
+        }
+    }
+
+    #[test]
+    fn model_file_path_is_under_models_dir() {
+        let p = model_file_path(std::path::Path::new("/data"));
+        assert!(p.ends_with(format!("{}.gguf", crate::llm::DEFAULT.name)));
+        assert!(p.to_string_lossy().contains("models"));
+    }
+
+    #[test]
+    fn model_status_reflects_presence() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("no.gguf");
+        assert!(!model_status_for(&missing).present);
+        let there = tmp.path().join("m.gguf");
+        std::fs::write(&there, b"x").unwrap();
+        assert!(model_status_for(&there).present);
+        assert_eq!(model_status_for(&there).name, crate::llm::DEFAULT.name);
+    }
+
+    #[test]
+    fn file_meta_at_extracts_name_and_parent() {
+        let m = file_meta_at(std::path::Path::new("/downloads/report.pdf"), 42, 7);
+        assert_eq!(m.name, "report.pdf");
+        assert_eq!(m.parent, "downloads");
+        assert_eq!(m.size, 42);
+        assert_eq!(m.mtime_days, 7);
+        // 파일명/부모 없는 경로 → 빈 문자열(패닉 없음)
+        let root = file_meta_at(std::path::Path::new("/"), 0, 0);
+        assert_eq!(root.name, "");
+        assert_eq!(root.parent, "");
+    }
+
+    #[test]
+    fn verdicts_with_caches_and_avoids_reinference() {
+        let engine = CountingFake { out: r#"{"verdict":"safe","reason":"r"}"#.into(), calls: std::cell::Cell::new(0) };
+        let mut cache = VerdictCache::new();
+        let meta = file_meta_at(std::path::Path::new("/x/a.bin"), 100, 1);
+        let items = vec![(meta.clone(), 1700u64), (meta, 1700u64)]; // 같은 path|size|mtime → 두 번째는 캐시 히트
+        let out = verdicts_with(&engine, &mut cache, &items);
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().all(|fv| fv.verdict == Verdict::Safe));
+        assert_eq!(engine.calls.get(), 1, "두 번째 항목은 캐시 히트라 추론 1회만");
+    }
+
+    #[test]
+    fn verdicts_with_distinct_items_infer_each() {
+        let engine = CountingFake { out: r#"{"verdict":"keep"}"#.into(), calls: std::cell::Cell::new(0) };
+        let mut cache = VerdictCache::new();
+        let a = (file_meta_at(std::path::Path::new("/x/a"), 1, 1), 10u64);
+        let b = (file_meta_at(std::path::Path::new("/x/b"), 2, 2), 20u64);
+        let out = verdicts_with(&engine, &mut cache, &[a, b]);
+        assert_eq!(out.len(), 2);
+        assert_eq!(engine.calls.get(), 2);
+        let _ = out; // FileVerdict used
+    }
 
     // 간격 1로 스캔 — 진행 콜백(클로저)도 매 엔트리마다 실행돼 커버리지에 0으로 남지 않는다
     fn scan(root: &Path) -> ScanResult {

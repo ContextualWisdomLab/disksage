@@ -8,6 +8,12 @@
   let busy = $state(false);
   let loadError = $state("");
 
+  let model = $state<api.ModelStatus | null>(null);
+  let modelBusy = $state(false);
+  let summary = $state<string | null>(null);
+  let summaryLoaded = $state(false);
+  let summaryBusy = $state(false);
+
   async function load() {
     if (!scannedRoot) return;
     busy = true;
@@ -20,6 +26,44 @@
       busy = false;
     }
   }
+
+  async function loadModel() {
+    try {
+      model = await api.modelStatus();
+    } catch {
+      model = null;
+    }
+  }
+
+  async function doDownload() {
+    modelBusy = true;
+    try {
+      await api.downloadModel();
+      await loadModel();
+    } catch (e) {
+      loadError = String(e);
+    } finally {
+      modelBusy = false;
+    }
+  }
+
+  // 미분류 버킷 요약: 스캔된 미분류 파일 경로 샘플(unknown_samples)을 백엔드가 모델로 요약.
+  // 샘플이 없거나 모델이 없으면 null(안내 문구로 대체).
+  async function summarizeUnknown() {
+    summaryBusy = true;
+    try {
+      summary = await api.summarizeUnknownBucket(report?.unknown_samples ?? []);
+    } catch (e) {
+      summary = String(e);
+    } finally {
+      summaryLoaded = true;
+      summaryBusy = false;
+    }
+  }
+
+  $effect(() => {
+    loadModel();
+  });
 
   let totalBytes = $derived.by(() => {
     if (!report) return 0;
@@ -37,6 +81,15 @@
     <button onclick={load} disabled={busy || !scannedRoot}>{busy ? "집계 중…" : "인벤토리 집계"}</button>
   </h2>
   {#if loadError}<p class="error">{loadError}</p>{/if}
+
+  <div class="model-status">
+    {#if model?.present}
+      <span>모델: {model.name} ✓</span>
+    {:else}
+      <button onclick={doDownload} disabled={modelBusy}>{modelBusy ? "다운로드 중…" : "모델 다운로드"}</button>
+    {/if}
+    <span class="muted small">판정은 참고용(자문)입니다 — 모델 없이도 규칙 기반으로 전체 기능이 동작합니다.</span>
+  </div>
 
   {#if report}
     <ul class="bars">
@@ -56,6 +109,12 @@
             <span class="size">{fmtBytes(report.unknown_bytes)} · {report.unknown_count}개 · {pct(report.unknown_bytes)}%</span>
           </div>
           <div class="bar"><div class="fill unk" style="width:{pct(report.unknown_bytes)}%"></div></div>
+          <div class="unknown-summary">
+            <button onclick={summarizeUnknown} disabled={summaryBusy}>{summaryBusy ? "요약 중…" : "요약 보기"}</button>
+            {#if summaryLoaded}
+              <span class="summary-text">{summary ?? "미판정 (모델 없음)"}</span>
+            {/if}
+          </div>
         </li>
       {/if}
     </ul>
@@ -74,4 +133,8 @@
   .fill.unk { background: #d98a4a; }
   .unknown .label em { color: #a60; font-style: normal; font-size: 0.8rem; }
   .error { color: #b00; }
+  .model-status { display: flex; align-items: center; gap: 0.5rem; margin: 0.5rem 0; font-size: 0.85rem; }
+  .muted.small { color: #999; font-size: 0.75rem; }
+  .unknown-summary { margin-top: 0.25rem; display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; }
+  .summary-text { color: #555; }
 </style>
