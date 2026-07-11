@@ -49,10 +49,27 @@ pub fn is_protected(path: &Path) -> bool {
                 .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
                 .collect()
         }
-        let denied_roots = ["C:\\Windows", "C:\\Program Files", "C:\\Program Files (x86)"];
+        // 시스템 드라이브가 C:가 아닌 머신도 보호 — env에서 유도, 실패 시 C: 폴백
+        let denied_roots: Vec<String> = {
+            let mut roots = Vec::new();
+            if let Ok(w) = std::env::var("SystemRoot") {
+                roots.push(w); // 예: C:\Windows, D:\Windows
+            } else {
+                roots.push(r"C:\Windows".to_string());
+            }
+            match std::env::var("ProgramFiles") {
+                Ok(p) => roots.push(p),
+                Err(_) => roots.push(r"C:\Program Files".to_string()),
+            }
+            match std::env::var("ProgramFiles(x86)") {
+                Ok(p) => roots.push(p),
+                Err(_) => roots.push(r"C:\Program Files (x86)".to_string()),
+            }
+            roots
+        };
         let pc = lower_components(path);
         for d in denied_roots {
-            let dc = lower_components(Path::new(d));
+            let dc = lower_components(Path::new(&d));
             if pc.len() >= dc.len() && pc[..dc.len()] == dc[..] {
                 return true;
             }
@@ -250,6 +267,15 @@ mod tests {
     fn allows_ordinary_deep_paths() {
         let tmp = tempfile::tempdir().unwrap();
         assert!(!is_protected(&tmp.path().join("node_modules")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_guard_follows_system_root_env() {
+        // 현재 머신의 실제 SystemRoot는 반드시 보호됨 (C:든 다른 드라이브든)
+        let sysroot = std::env::var("SystemRoot").unwrap();
+        assert!(is_protected(std::path::Path::new(&sysroot)));
+        assert!(is_protected(&std::path::Path::new(&sysroot).join("System32")));
     }
 
     #[cfg(windows)]

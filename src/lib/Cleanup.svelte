@@ -33,6 +33,11 @@
       artifacts.filter((a) => selected.has(a.path)).reduce((s, a) => s + a.bytes, 0),
   );
 
+  let selectionCount = $derived(
+    caches.filter((c) => selectedRules.has(c.id) && c.exists).length +
+      artifacts.filter((a) => selected.has(a.path)).length,
+  );
+
   async function executeClean() {
     // 검토·확인 (스펙 §7-6): 명시적 승인 없이는 아무것도 실행되지 않는다
     const ruleDirs = caches.filter((c) => selectedRules.has(c.id) && c.exists);
@@ -113,7 +118,7 @@
   </ul>
 
   <div class="actions">
-    <button onclick={executeClean} disabled={busy || totalSelected === 0}>
+    <button onclick={executeClean} disabled={busy || selectionCount === 0}>
       {busy ? "정리 중…" : `선택 항목 휴지통으로 (${fmtBytes(totalSelected)})`}
     </button>
   </div>
