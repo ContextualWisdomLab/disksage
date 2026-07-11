@@ -24,7 +24,9 @@ pub fn is_protected(path: &Path) -> bool {
     if path.parent().is_none() {
         return true;
     }
-    // 사용자 홈 루트 자체 (하위는 허용)
+    // 사용자 홈 루트 자체 (하위는 허용). 데스크톱 앱은 항상 사용자 세션에서 실행되므로
+    // USERPROFILE/HOME 부재는 상정하지 않는다 — 없으면 이 계층만 생략되고
+    // 루트/시스템 프리픽스 검사는 그대로 적용된다.
     let home = std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).ok();
     if let Some(h) = home {
         if path == Path::new(&h) {
@@ -33,10 +35,20 @@ pub fn is_protected(path: &Path) -> bool {
     }
     #[cfg(windows)]
     {
-        let lower = path.to_string_lossy().to_lowercase();
-        let denied_prefixes = ["c:\\windows", "c:\\program files", "c:\\program files (x86)"];
-        if denied_prefixes.iter().any(|d| lower.starts_with(d)) {
-            return true;
+        // 컴포넌트 단위 비교: '/'와 '\\' 모두 구분자로 파싱되고(C:/Windows 우회 차단),
+        // 경계가 정확해 C:\WindowsBackup 같은 형제 폴더를 오차단하지 않는다
+        fn lower_components(p: &Path) -> Vec<String> {
+            p.components()
+                .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
+                .collect()
+        }
+        let denied_roots = ["C:\\Windows", "C:\\Program Files", "C:\\Program Files (x86)"];
+        let pc = lower_components(path);
+        for d in denied_roots {
+            let dc = lower_components(Path::new(d));
+            if pc.len() >= dc.len() && pc[..dc.len()] == dc[..] {
+                return true;
+            }
         }
     }
     #[cfg(unix)]
@@ -94,5 +106,15 @@ mod tests {
     fn allows_ordinary_deep_paths() {
         let tmp = tempfile::tempdir().unwrap();
         assert!(!is_protected(&tmp.path().join("node_modules")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_guard_is_separator_agnostic_and_boundary_exact() {
+        assert!(is_protected(Path::new("C:/Windows/System32")));
+        assert!(is_protected(Path::new("c:/program files/SomeApp")));
+        assert!(is_protected(Path::new("C:\\Program Files (x86)\\App")));
+        assert!(!is_protected(Path::new("C:\\WindowsBackup")));
+        assert!(!is_protected(Path::new("C:\\Windows.old"))); // 정당한 정리 대상
     }
 }
