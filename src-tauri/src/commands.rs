@@ -145,6 +145,42 @@ pub fn list_roots() -> Vec<String> {
     }
 }
 
+/// 순수: TTL 문자열 → Ontology (테스트 대상). 잘못된 TTL은 Err.
+pub fn load_ontology_from(ttl: &str) -> Result<crate::ontology::Ontology, String> {
+    crate::ontology::parse_ttl(ttl)
+}
+
+#[cfg(not(coverage))]
+fn bundled_ontology_ttl(app: &AppHandle) -> Result<String, String> {
+    use tauri::Manager;
+    // 사용자 설정 디렉토리 오버라이드 우선, 없으면 번들 리소스
+    if let Ok(dir) = app.path().app_config_dir() {
+        let user_ttl = dir.join("ontology.ttl");
+        if let Ok(s) = std::fs::read_to_string(&user_ttl) {
+            return Ok(s);
+        }
+    }
+    let res = app
+        .path()
+        .resolve("resources/ontology/default.ttl", tauri::path::BaseDirectory::Resource)
+        .map_err(|e| e.to_string())?;
+    std::fs::read_to_string(&res).map_err(|e| e.to_string())
+}
+
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn get_ontology(app: AppHandle) -> Result<crate::ontology::Ontology, String> {
+    load_ontology_from(&bundled_ontology_ttl(&app)?)
+}
+
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn disk_inventory(root: String, app: AppHandle) -> Result<crate::inventory::InventoryReport, String> {
+    let onto = load_ontology_from(&bundled_ontology_ttl(&app)?)?;
+    let files = crate::dupes::collect_files(std::path::Path::new(&root));
+    Ok(crate::inventory::build_inventory(&files, &onto))
+}
+
 // 아래 Tauri command 래퍼들은 coverage 빌드에서 제외 — 순수 로직(node_view 등)은 위에서 측정됨
 #[cfg(not(coverage))]
 #[tauri::command]
@@ -290,6 +326,23 @@ mod tests {
     // 간격 1로 스캔 — 진행 콜백(클로저)도 매 엔트리마다 실행돼 커버리지에 0으로 남지 않는다
     fn scan(root: &Path) -> ScanResult {
         scan_dir_with_interval(root, &AtomicBool::new(false), 1, |_| {})
+    }
+
+    #[test]
+    fn load_ontology_from_valid_ttl_ok() {
+        let ttl = r#"
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix dm: <https://disksage.app/ontology#> .
+dm:Image a owl:Class ; rdfs:label "이미지"@ko .
+"#;
+        let onto = load_ontology_from(ttl).unwrap();
+        assert_eq!(onto.classes.len(), 1);
+    }
+
+    #[test]
+    fn load_ontology_from_garbage_is_err() {
+        assert!(load_ontology_from("@@@ not turtle").is_err());
     }
 
     #[test]

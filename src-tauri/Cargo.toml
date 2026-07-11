@@ -25,6 +25,8 @@ serde_json = "1"
 jwalk = "0.8"
 trash = "5.2.6"
 blake3 = "1.8.5"
+oxttl = "0.2.3"
+oxrdf = "0.3.3"
 
 [dev-dependencies]
 tempfile = "3.27.0"
