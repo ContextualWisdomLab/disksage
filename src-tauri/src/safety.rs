@@ -189,9 +189,9 @@ fn normalize_for_guard(p: &Path) -> PathBuf {
     loop {
         match cur.parent() {
             Some(parent) => {
-                if let Some(name) = cur.file_name() {
-                    suffix.push(name.to_os_string());
-                }
+                // parent가 있으면 cur은 루트가 아니므로 file_name은 항상 Some — 그래도
+                // extend(Option)로 분기 없이 처리해 도달 불가 else가 커버리지 사각을 만들지 않게
+                suffix.extend(cur.file_name().map(|n| n.to_os_string()));
                 if let Ok(c) = std::fs::canonicalize(parent) {
                     let mut base = strip_verbatim(&c);
                     for part in suffix.iter().rev() {

@@ -15,6 +15,9 @@ pub struct MovePlan {
 pub fn plan_moves(files: &[FileEntry], onto: &Ontology, home: &Path) -> Vec<MovePlan> {
     let mut plans = Vec::new();
     for f in files {
+        // filename을 classify보다 먼저 확인 — 파일명 없는 경로(루트 등)는 여기서 걸러진다.
+        // (classify 뒤에 두면 이 분기가 도달 불가라 커버리지 사각이 됨)
+        let Some(name) = f.path.file_name() else { continue };
         let Some(local) = classify(&f.path) else { continue };
         // 로컬명 → 온톨로지 클래스
         let Some(class) = onto.classes.iter().find(|c| {
@@ -25,9 +28,6 @@ pub fn plan_moves(files: &[FileEntry], onto: &Ontology, home: &Path) -> Vec<Move
         let folder = template
             .replacen('~', &home.to_string_lossy(), 1)
             .replace("{class}", local);
-        // ponytail: 현재 classify가 확장자(→filename)를 보장하므로 도달 불가지만, M5 LLM 분류가
-        // 확장자 없는 파일을 받을 수 있어 방어적으로 둔다(한 줄이라 라인 커버리지엔 영향 없음)
-        let Some(name) = f.path.file_name() else { continue };
         let dst = Path::new(&folder).join(name);
         // 이미 목적지 폴더에 있으면 제외
         if f.path.parent() == Some(Path::new(&folder)) {
@@ -93,6 +93,14 @@ dm:Installer a owl:Class ; rdfs:label "설치파일"@ko ; dm:targetFolder "~/Ins
         // 이미 목적지 폴더에 있는 파일
         let files = vec![fe("/home/u/Media/Image/pic.png", 100)];
         assert!(plan_moves(&files, &onto, home).is_empty());
+    }
+
+    #[test]
+    fn skips_path_with_no_filename() {
+        // 파일명 없는 경로(루트)는 filename 가드에서 걸러진다
+        let onto = parse_ttl(ONTO).unwrap();
+        let home = Path::new("/home/u");
+        assert!(plan_moves(&[fe("/", 100)], &onto, home).is_empty());
     }
 
     #[test]
