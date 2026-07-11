@@ -335,6 +335,15 @@ fn copy_verified_io(src: &Path, dst: &Path) -> std::io::Result<()> {
 }
 
 /// 분기 결정(same_vol)을 파라미터로 받아 양 경로를 플랫폼 무관하게 테스트 가능하게 한다.
+/// 같은 볼륨 이동 io — hard_link(create-only) 후 원본 링크 제거. 두 io 에러 모두 `?`로
+/// 전파(커버리지 규율: happy path에서 map_err 클로저가 미실행 라인으로 남지 않도록).
+/// dst가 이미 있으면 hard_link가 AlreadyExists로 실패해 덮어쓰지 않는다.
+fn hardlink_move_io(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::hard_link(src, dst)?;
+    std::fs::remove_file(src)?;
+    Ok(())
+}
+
 /// move_file이 same_volume()로 실제 결정을 주입한다.
 fn do_move(
     src: &Path,
@@ -357,10 +366,9 @@ fn do_move(
         // 파일이 휴지통도 안 거치고 영구 소실될 수 있다. hard_link는 create-only라 dst가 이미
         // 있으면 AlreadyExists로 실패(덮어쓰지 않음) — 링크 성공 후 원본 링크만 제거한다.
         // 두 단계 사이 크래시 시엔 양쪽이 같은 inode를 가리키는 무해한 중복이 남는다(손실 아님).
-        match std::fs::hard_link(src, dst) {
-            Ok(()) => std::fs::remove_file(src).map_err(|e| SafetyError::Trash(e.to_string())),
-            Err(e) => Err(SafetyError::Trash(e.to_string())),
-        }
+        // io는 헬퍼가 `?`로 전파 → happy path에서 map_err 클로저가 미실행 라인으로 남지 않는다.
+        // 단일 경계 map_err은 hard_link 실패 테스트(dest-exists)가 커버한다.
+        hardlink_move_io(src, dst).map_err(|e| SafetyError::Trash(e.to_string()))
     } else {
         // 크로스 볼륨: 복사+검증 후 원본 휴지통 (영구 삭제 없음)
         copy_verified_io(src, dst)
