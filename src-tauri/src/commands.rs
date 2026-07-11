@@ -91,7 +91,18 @@ pub fn clean_paths_inner(
     paths
         .iter()
         .map(|p| {
-            let bytes = p.metadata().map(|m| m.len()).unwrap_or(0);
+            // 저널의 bytes는 감사 추적용 — 디렉토리는 재귀 합산 (metadata.len()은 dir 엔트리 자체 크기라 무의미).
+            // 보호된 경로는 trash_delete가 저널링 전에 거부해 bytes를 쓰지 않으므로, 그런 경로(예: C:\Windows
+            // 전체)를 재귀 스캔하는 낭비를 미리 걸러낸다 — 최종 판정은 여전히 trash_delete가 내린다.
+            let bytes = if safety::is_protected(p) {
+                0
+            } else if p.is_dir() {
+                crate::scanner::scan_dir(p, &std::sync::atomic::AtomicBool::new(false), |_| {})
+                    .stats
+                    .bytes
+            } else {
+                p.metadata().map(|m| m.len()).unwrap_or(0)
+            };
             match safety::trash_delete(p, bytes, journal_path, now_ms) {
                 Ok(()) => CleanResult {
                     path: p.to_string_lossy().into_owned(),
@@ -243,7 +254,13 @@ pub fn recent_operations(limit: usize, app: AppHandle) -> Result<Vec<safety::Jou
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn expand_clean_targets(dir: String) -> Vec<String> {
-    rules::clean_targets(Path::new(&dir))
+    // 카탈로그 경로로만 스코프 — 임의 디렉토리 열람 IPC가 되지 않도록
+    let Some(bases) = rules::BaseDirs::from_env() else { return Vec::new() };
+    let d = Path::new(&dir);
+    if !rules::is_catalog_path(&bases, d) {
+        return Vec::new();
+    }
+    rules::clean_targets(d)
         .into_iter()
         .map(|p| p.to_string_lossy().into_owned())
         .collect()
@@ -358,18 +375,26 @@ mod tests {
     fn clean_paths_inner_reports_per_item_results() {
         let tmp = tempfile::tempdir().unwrap();
         let jp = tmp.path().join("j.jsonl");
-        let ok_file = tmp.path().join("disksage-clean-fixture.bin");
-        fs::write(&ok_file, vec![0u8; 32]).unwrap();
+        let ok_dir = tmp.path().join("disksage-clean-fixture-dir");
+        fs::create_dir(&ok_dir).unwrap();
+        fs::write(ok_dir.join("inner.bin"), vec![0u8; 32]).unwrap();
         let missing = tmp.path().join("ghost");
         let protected = std::path::PathBuf::from(if cfg!(windows) { "C:\\Windows" } else { "/usr" });
 
-        let results = clean_paths_inner(&[ok_file.clone(), missing, protected], &jp, 7);
+        let results = clean_paths_inner(&[ok_dir.clone(), missing, protected], &jp, 7);
 
         assert_eq!(results.len(), 3);
         assert!(results[0].ok);
         assert!(!results[1].ok && results[1].error.contains("휴지통"));
         assert!(!results[2].ok && results[2].error.contains("보호"));
-        assert!(!ok_file.exists());
+        assert!(!ok_dir.exists());
+
+        let recent = crate::safety::journal_recent(&jp, 10);
+        let ok_entry = recent
+            .iter()
+            .find(|e| e.outcome == "ok" && e.path.contains("disksage-clean-fixture-dir"))
+            .unwrap();
+        assert_eq!(ok_entry.bytes, 32, "디렉토리는 재귀 크기로 저널링");
 
         // 테스트 픽스처 휴지통 정리 (win/linux)
         #[cfg(any(windows, target_os = "linux"))]
@@ -377,7 +402,7 @@ mod tests {
             let items: Vec<_> = trash::os_limited::list()
                 .unwrap()
                 .into_iter()
-                .filter(|i| i.name.to_string_lossy().contains("disksage-clean-fixture"))
+                .filter(|i| i.name.to_string_lossy().contains("disksage-clean-fixture-dir"))
                 .collect();
             trash::os_limited::purge_all(items).unwrap();
         }

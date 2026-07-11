@@ -79,6 +79,11 @@ pub fn cache_candidates(bases: &BaseDirs) -> Vec<CacheCandidate> {
         .collect()
 }
 
+/// dir이 현재 카탈로그가 가리키는 경로인지 (expand_clean_targets의 스코프 검증용 — 크기 계산 없음)
+pub fn is_catalog_path(bases: &BaseDirs, dir: &Path) -> bool {
+    catalog(bases).iter().any(|(_, _, p)| p == dir)
+}
+
 /// 캐시 디렉토리 자체는 보존하고 내용물만 비우기 위한 직계 자식 열거.
 /// 심링크는 제외 — 이 코드베이스의 모든 순회와 동일한 방어 (scanner keep_entry, node_view 참조)
 pub fn clean_targets(dir: &Path) -> Vec<PathBuf> {
@@ -125,6 +130,14 @@ mod tests {
         assert_eq!(temp_c.bytes, 0);
         // 카탈로그에 최소 4개 규칙
         assert!(cands.len() >= 4);
+    }
+
+    #[test]
+    fn is_catalog_path_scopes_to_catalog() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bases = fake_bases(tmp.path());
+        assert!(is_catalog_path(&bases, &bases.temp));
+        assert!(!is_catalog_path(&bases, tmp.path()));
     }
 
     #[test]
