@@ -47,13 +47,12 @@
     }
   }
 
-  // 미분류 버킷 요약: 스캔된 파일 경로 샘플을 백엔드가 모델로 요약. 모델 없으면 null(안내 문구).
-  // ponytail: InventoryReport가 미분류 항목의 실제 경로를 아직 노출하지 않아 빈 배열로 호출 —
-  // 백엔드는 샘플이 없거나 모델이 없으면 null을 반환하므로 v1로 충분. 리포트가 경로를 노출하면 교체.
+  // 미분류 버킷 요약: 스캔된 미분류 파일 경로 샘플(unknown_samples)을 백엔드가 모델로 요약.
+  // 샘플이 없거나 모델이 없으면 null(안내 문구로 대체).
   async function summarizeUnknown() {
     summaryBusy = true;
     try {
-      summary = await api.summarizeUnknownBucket([]);
+      summary = await api.summarizeUnknownBucket(report?.unknown_samples ?? []);
     } catch (e) {
       summary = String(e);
     } finally {

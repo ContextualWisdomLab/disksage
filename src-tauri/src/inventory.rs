@@ -32,7 +32,11 @@ pub struct InventoryReport {
     pub tallies: Vec<ClassTally>,
     pub unknown_bytes: u64,
     pub unknown_count: u64,
+    pub unknown_samples: Vec<String>,
 }
+
+/// unknown_samples에 담을 경로 표본 상한 — 프롬프트/페이로드 비대화 방지.
+const UNKNOWN_SAMPLE_CAP: usize = 20;
 
 /// 스캔 파일을 클래스별로 집계. 미분류·온톨로지에 없는 클래스는 Unknown(일급 시민).
 pub fn build_inventory(files: &[FileEntry], onto: &Ontology) -> InventoryReport {
@@ -49,6 +53,7 @@ pub fn build_inventory(files: &[FileEntry], onto: &Ontology) -> InventoryReport 
     let mut acc: HashMap<String, (String, u64, u64)> = HashMap::new(); // class_id → (label, bytes, count)
     let mut unknown_bytes = 0u64;
     let mut unknown_count = 0u64;
+    let mut unknown_samples: Vec<String> = Vec::new();
 
     for f in files {
         let mapped = classify(&f.path).and_then(|local| local_to_class.get(local));
@@ -61,6 +66,9 @@ pub fn build_inventory(files: &[FileEntry], onto: &Ontology) -> InventoryReport 
             None => {
                 unknown_bytes += f.size;
                 unknown_count += 1;
+                if unknown_samples.len() < UNKNOWN_SAMPLE_CAP {
+                    unknown_samples.push(f.path.to_string_lossy().into_owned());
+                }
             }
         }
     }
@@ -72,7 +80,7 @@ pub fn build_inventory(files: &[FileEntry], onto: &Ontology) -> InventoryReport 
     // bytes 내림차순, 동점은 class_id로 결정적 정렬(HashMap 순서 무작위성 → UI 깜빡임 방지)
     tallies.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.class_id.cmp(&b.class_id)));
 
-    InventoryReport { tallies, unknown_bytes, unknown_count }
+    InventoryReport { tallies, unknown_bytes, unknown_count, unknown_samples }
 }
 
 #[cfg(test)]
@@ -128,6 +136,7 @@ dm:Code a owl:Class ; rdfs:label "코드"@ko .
         // Unknown은 일급 필드
         assert_eq!(rep.unknown_bytes, 999);
         assert_eq!(rep.unknown_count, 1);
+        assert_eq!(rep.unknown_samples, vec!["/d.xyz".to_string()]);
         // tallies는 바이트 내림차순: Image(300) > Code(50)
         assert_eq!(rep.tallies[0].class_id, "https://disksage.app/ontology#Image");
         assert_eq!(rep.tallies[0].bytes, 300);
@@ -152,6 +161,18 @@ dm:Code a owl:Class ; rdfs:label "코드"@ko .
         assert!(rep.tallies.is_empty());
         assert_eq!(rep.unknown_bytes, 0);
         assert_eq!(rep.unknown_count, 0);
+    }
+
+    #[test]
+    fn unknown_samples_capped_and_unaffected_by_over_cap_files() {
+        // CAP개 초과로 unknown 파일을 넣어 push 분기(len < CAP)와 cap-reached 분기(len >= CAP) 둘 다 태운다
+        let onto = parse_ttl(ONTO).unwrap();
+        let files: Vec<FileEntry> = (0..UNKNOWN_SAMPLE_CAP + 1)
+            .map(|i| fe(&format!("/unknown{i}.xyz"), 1))
+            .collect();
+        let rep = build_inventory(&files, &onto);
+        assert_eq!(rep.unknown_count, (UNKNOWN_SAMPLE_CAP + 1) as u64);
+        assert_eq!(rep.unknown_samples.len(), UNKNOWN_SAMPLE_CAP);
     }
 
     #[test]

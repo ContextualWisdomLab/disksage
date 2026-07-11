@@ -28,7 +28,8 @@ pub fn verify_sha256(bytes: &[u8], expected_hex: &str) -> bool {
     got.eq_ignore_ascii_case(expected_hex)
 }
 
-/// 모델을 dest로 다운로드 → SHA 검증 → 원자적 배치. 검증 실패 시 부분 파일 삭제 + Err.
+/// 모델을 dest로 다운로드 → 메모리 버퍼에서 SHA 검증(쓰기 전) → 통과 시에만 .part로 쓰고 원자적 rename으로 배치.
+/// 검증이 쓰기보다 먼저 일어나므로 불일치 시 부분 파일 자체가 생기지 않는다(Err만 반환).
 /// cfg(not(coverage)): 네트워크/파일 io는 게이트에서 실행 불가라 제외(스펙 §9: 실 모델은 --ignored/수동).
 #[cfg(not(coverage))]
 pub fn download_to(spec: &ModelSpec, dest: &std::path::Path) -> Result<(), String> {

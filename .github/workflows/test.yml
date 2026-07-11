@@ -43,4 +43,4 @@ jobs:
         with:
           workspaces: src-tauri
       - name: Build with llm-engine (compiles real llama.cpp CPU + engine.rs FFI)
-        run: cargo build --manifest-path src-tauri/Cargo.toml --features llm-engine --lib
+        run: cargo test --manifest-path src-tauri/Cargo.toml --features llm-engine --lib --no-run

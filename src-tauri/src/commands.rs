@@ -482,7 +482,7 @@ fn meta_items(paths: &[String]) -> Vec<(crate::llm::FileMeta, u64)> {
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        let age_days = mtime_ms / 86_400_000; // 대략적 age 신호(프롬프트용); 캐시 키는 원시 mtime_ms 사용
+        let age_days = now_ms().saturating_sub(mtime_ms) / 86_400_000; // 실제 파일 나이(프롬프트용); 캐시 키는 원시 mtime_ms 사용
         Some((file_meta_at(path, md.len(), age_days), mtime_ms))
     }).collect()
 }
@@ -547,6 +547,9 @@ pub fn file_verdicts(paths: Vec<String>, app: AppHandle, state: State<AppState>)
 #[cfg_attr(not(feature = "llm-engine"), allow(unused_variables))]
 #[tauri::command(async)]
 pub fn summarize_unknown_bucket(paths: Vec<String>, app: AppHandle, state: State<AppState>) -> Result<Option<String>, String> {
+    if paths.is_empty() {
+        return Ok(None);
+    }
     let metas: Vec<crate::llm::FileMeta> = meta_items(&paths).into_iter().map(|(m, _)| m).collect();
 
     #[cfg(feature = "llm-engine")]
@@ -577,7 +580,7 @@ mod tests {
     use std::sync::atomic::AtomicBool;
 
     // --- M5 LLM 커맨드 순수 헬퍼 ---
-    use crate::llm::{FileVerdict, InferenceEngine, Verdict, VerdictCache};
+    use crate::llm::{InferenceEngine, Verdict, VerdictCache};
 
     struct CountingFake { out: String, calls: std::cell::Cell<usize> }
     impl InferenceEngine for CountingFake {

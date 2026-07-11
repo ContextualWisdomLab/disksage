@@ -83,6 +83,7 @@ export interface InventoryReport {
   tallies: ClassTally[];
   unknown_bytes: number;
   unknown_count: number;
+  unknown_samples: string[];
 }
 export interface OntoClass {
   id: string;
