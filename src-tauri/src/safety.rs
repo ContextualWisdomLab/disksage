@@ -65,6 +65,38 @@ pub fn is_protected(path: &Path) -> bool {
     false
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct JournalEntry {
+    pub ts_ms: u64,
+    pub op: String,
+    pub path: String,
+    pub bytes: u64,
+    pub outcome: String,
+}
+
+/// 파괴적 작업 저널 — 실행 전 "pending"으로 먼저 기록되고 결과로 덧붙는다 (스펙 §7-4)
+pub fn journal_append(journal_path: &Path, entry: &JournalEntry) -> Result<(), SafetyError> {
+    use std::io::Write;
+    let line = serde_json::to_string(entry).map_err(|e| SafetyError::Journal(e.to_string()))?;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(journal_path)
+        .map_err(|e| SafetyError::Journal(e.to_string()))?;
+    writeln!(f, "{line}").map_err(|e| SafetyError::Journal(e.to_string()))
+}
+
+pub fn journal_recent(journal_path: &Path, limit: usize) -> Vec<JournalEntry> {
+    let Ok(content) = std::fs::read_to_string(journal_path) else { return Vec::new() };
+    let mut entries: Vec<JournalEntry> = content
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    entries.reverse();
+    entries.truncate(limit);
+    entries
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,5 +148,51 @@ mod tests {
         assert!(is_protected(Path::new("C:\\Program Files (x86)\\App")));
         assert!(!is_protected(Path::new("C:\\WindowsBackup")));
         assert!(!is_protected(Path::new("C:\\Windows.old"))); // 정당한 정리 대상
+    }
+
+    #[test]
+    fn journal_roundtrip_newest_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jp = tmp.path().join("journal.jsonl");
+        for i in 0..3u64 {
+            journal_append(
+                &jp,
+                &JournalEntry {
+                    ts_ms: 1000 + i,
+                    op: "trash_delete".into(),
+                    path: format!("/x/{i}"),
+                    bytes: i * 10,
+                    outcome: "ok".into(),
+                },
+            )
+            .unwrap();
+        }
+        let recent = journal_recent(&jp, 2);
+        assert_eq!(recent.len(), 2);
+        assert_eq!(recent[0].path, "/x/2"); // 최신이 먼저
+        assert_eq!(recent[1].path, "/x/1");
+    }
+
+    #[test]
+    fn journal_recent_missing_file_is_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(journal_recent(&tmp.path().join("none.jsonl"), 5).is_empty());
+    }
+
+    #[test]
+    fn journal_append_reports_io_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        // 디렉토리를 저널 경로로 주면 열기 실패
+        let err = journal_append(
+            tmp.path(),
+            &JournalEntry {
+                ts_ms: 1,
+                op: "trash_delete".into(),
+                path: "/x".into(),
+                bytes: 0,
+                outcome: "ok".into(),
+            },
+        );
+        assert!(matches!(err, Err(SafetyError::Journal(_))));
     }
 }
