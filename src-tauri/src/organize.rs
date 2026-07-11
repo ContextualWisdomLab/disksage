@@ -25,6 +25,8 @@ pub fn plan_moves(files: &[FileEntry], onto: &Ontology, home: &Path) -> Vec<Move
         let folder = template
             .replacen('~', &home.to_string_lossy(), 1)
             .replace("{class}", local);
+        // ponytail: 현재 classify가 확장자(→filename)를 보장하므로 도달 불가지만, M5 LLM 분류가
+        // 확장자 없는 파일을 받을 수 있어 방어적으로 둔다(한 줄이라 라인 커버리지엔 영향 없음)
         let Some(name) = f.path.file_name() else { continue };
         let dst = Path::new(&folder).join(name);
         // 이미 목적지 폴더에 있으면 제외
@@ -52,6 +54,7 @@ mod tests {
 @prefix dm: <https://disksage.app/ontology#> .
 dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "~/Media/{class}" .
 dm:Code a owl:Class ; rdfs:label "코드"@ko .
+dm:Installer a owl:Class ; rdfs:label "설치파일"@ko ; dm:targetFolder "~/Installers" .
 "#;
 
     fn fe(p: &str, size: u64) -> FileEntry {
@@ -93,11 +96,32 @@ dm:Code a owl:Class ; rdfs:label "코드"@ko .
     }
 
     #[test]
-    fn skips_path_with_no_filename() {
+    fn target_folder_without_class_placeholder_is_used_verbatim() {
+        // ~/Installers 처럼 {class} 없는 targetFolder — 치환 없이 그대로, filename만 붙는다
         let onto = parse_ttl(ONTO).unwrap();
         let home = Path::new("/home/u");
-        // 경로가 파일명이 없는 경우 (루트 등) — file_name() 반환 None
-        let files = vec![fe("/", 100)];
-        assert!(plan_moves(&files, &onto, home).is_empty());
+        let files = vec![fe("/downloads/setup.exe", 100)];
+        let plans = plan_moves(&files, &onto, home);
+        assert_eq!(plans.len(), 1);
+        let expected = Path::new("/home/u/Installers").join("setup.exe");
+        assert_eq!(plans[0].dst, expected.to_string_lossy().to_string());
+    }
+
+    #[test]
+    fn target_folder_without_tilde_is_absolute() {
+        // ~ 없는 절대경로 targetFolder — home 치환 없이 그대로
+        let ttl = r#"
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix dm: <https://disksage.app/ontology#> .
+dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{class}" .
+"#;
+        let onto = parse_ttl(ttl).unwrap();
+        let home = Path::new("/home/u");
+        let files = vec![fe("/downloads/pic.png", 100)];
+        let plans = plan_moves(&files, &onto, home);
+        assert_eq!(plans.len(), 1);
+        let expected = Path::new("/opt/media/Image").join("pic.png");
+        assert_eq!(plans[0].dst, expected.to_string_lossy().to_string());
     }
 }
