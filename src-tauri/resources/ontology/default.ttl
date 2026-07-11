@@ -1,0 +1,35 @@
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix dm:   <https://disksage.app/ontology#> .
+
+dm:Document a owl:Class ;
+    rdfs:label "문서"@ko , "Document"@en ;
+    dm:targetFolder "~/Documents/{class}" .
+
+dm:Receipt a owl:Class ;
+    rdfs:subClassOf dm:Document ;
+    rdfs:label "영수증"@ko , "Receipt"@en .
+
+dm:Media a owl:Class ;
+    rdfs:label "미디어"@ko , "Media"@en ;
+    dm:targetFolder "~/Media/{class}" .
+
+dm:Image a owl:Class ;
+    rdfs:subClassOf dm:Media ;
+    rdfs:label "이미지"@ko , "Image"@en .
+
+dm:Video a owl:Class ;
+    rdfs:subClassOf dm:Media ;
+    rdfs:label "영상"@ko , "Video"@en .
+
+dm:Installer a owl:Class ;
+    rdfs:label "설치파일"@ko , "Installer"@en ;
+    dm:targetFolder "~/Installers" .
+
+dm:Code a owl:Class ;
+    rdfs:label "코드"@ko , "Code"@en ;
+    dm:targetFolder "~/Code" .
+
+dm:Dataset a owl:Class ;
+    rdfs:label "데이터셋"@ko , "Dataset"@en ;
+    dm:targetFolder "~/Datasets" .
