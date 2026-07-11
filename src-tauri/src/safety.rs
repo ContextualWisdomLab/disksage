@@ -176,6 +176,36 @@ fn strip_verbatim(p: &Path) -> PathBuf {
     p.to_path_buf()
 }
 
+/// 존재하지 않을 수 있는 경로의 보호 여부 판정용 정규화: 가장 가까운 실존 조상을 canonicalize하고
+/// 나머지 미존재 접미부를 붙인다 — dst의 조상이 심링크로 보호 위치를 가리켜도 is_protected가 놓치지 않게.
+fn normalize_for_guard(p: &Path) -> PathBuf {
+    // 이미 존재하면 그대로 canonicalize
+    if let Ok(c) = std::fs::canonicalize(p) {
+        return strip_verbatim(&c);
+    }
+    // 존재하지 않으면: 실존하는 가장 가까운 조상을 찾아 canonicalize + 나머지 접미부
+    let mut suffix: Vec<std::ffi::OsString> = Vec::new();
+    let mut cur = p;
+    loop {
+        match cur.parent() {
+            Some(parent) => {
+                if let Some(name) = cur.file_name() {
+                    suffix.push(name.to_os_string());
+                }
+                if let Ok(c) = std::fs::canonicalize(parent) {
+                    let mut base = strip_verbatim(&c);
+                    for part in suffix.iter().rev() {
+                        base.push(part);
+                    }
+                    return base;
+                }
+                cur = parent;
+            }
+            None => return strip_verbatim(p), // 조상이 하나도 실존하지 않음(드묾) — lexical
+        }
+    }
+}
+
 /// 앱 유일의 삭제 경로 (스펙 §7-1). 영구 삭제 API는 이 크레이트 어디에도 없다.
 pub fn trash_delete(
     path: &Path,
@@ -323,7 +353,14 @@ fn do_move(
     journal_append(journal_path, &entry)?;
 
     let result = if same_vol {
-        std::fs::rename(src, dst).map_err(|e| SafetyError::Trash(e.to_string()))
+        // rename은 dst를 원자적으로 덮어쓴다(REPLACE) → dst.exists() 체크 이후 경합으로 생긴
+        // 파일이 휴지통도 안 거치고 영구 소실될 수 있다. hard_link는 create-only라 dst가 이미
+        // 있으면 AlreadyExists로 실패(덮어쓰지 않음) — 링크 성공 후 원본 링크만 제거한다.
+        // 두 단계 사이 크래시 시엔 양쪽이 같은 inode를 가리키는 무해한 중복이 남는다(손실 아님).
+        match std::fs::hard_link(src, dst) {
+            Ok(()) => std::fs::remove_file(src).map_err(|e| SafetyError::Trash(e.to_string())),
+            Err(e) => Err(SafetyError::Trash(e.to_string())),
+        }
     } else {
         // 크로스 볼륨: 복사+검증 후 원본 휴지통 (영구 삭제 없음)
         copy_verified_io(src, dst)
@@ -354,7 +391,7 @@ pub fn move_file(
         if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
             return Err(SafetyError::Protected(p.to_path_buf()));
         }
-        let guard = strip_verbatim(&std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()));
+        let guard = normalize_for_guard(p);
         if is_protected(&guard) {
             return Err(SafetyError::Protected(p.to_path_buf()));
         }
@@ -626,6 +663,53 @@ mod tests {
         assert!(journal_recent(&jp, 10).is_empty(), "보호 거부는 저널 이전");
     }
 
+    // Fix 2 회귀 테스트: 존재하는 경로는 그대로 canonicalize — 기존 가드와 동일한 결과.
+    #[test]
+    fn normalize_for_guard_existing_path_canonicalizes_directly() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("exists.bin");
+        std::fs::write(&f, b"x").unwrap();
+        let expected = strip_verbatim(&std::fs::canonicalize(&f).unwrap());
+        assert_eq!(normalize_for_guard(&f), expected);
+    }
+
+    // Fix 2 회귀 테스트: dst는 보통 존재하지 않는다 — 실존하는 가장 가까운 조상(tmp 자체)까지
+    // 걸어 올라가 canonicalize하고, 미존재 접미부("nested/does-not-exist.bin")를 그대로 붙여야 한다.
+    #[test]
+    fn normalize_for_guard_walks_up_to_existing_ancestor_for_missing_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("nested").join("does-not-exist.bin");
+        let expected_base = strip_verbatim(&std::fs::canonicalize(tmp.path()).unwrap());
+        assert_eq!(normalize_for_guard(&missing), expected_base.join("nested").join("does-not-exist.bin"));
+    }
+
+    // Fix 2 회귀 테스트: 슬래시 없는 단일 상대 컴포넌트는 조상이 ""까지 내려가고 canonicalize("")도
+    // 실패해 `cur.parent() == None` 최종 폴백(조상이 하나도 실존하지 않음)에 도달 — lexical 그대로 반환.
+    #[test]
+    fn normalize_for_guard_no_existing_ancestor_falls_back_to_lexical() {
+        let p = Path::new("disksage-nonexistent-relative-xyz-zzz");
+        assert_eq!(normalize_for_guard(p), strip_verbatim(p));
+    }
+
+    // Fix 2 회귀 테스트: dst의 조상이 심링크로 보호 위치(/usr)를 가리키면, dst 자신은 존재하지
+    // 않아도(그래서 lexical 폴백이 아니라 조상-워크가 심링크를 실제로 resolve해서) is_protected가
+    // 우회되지 않고 걸려야 한다.
+    #[cfg(unix)]
+    #[test]
+    fn move_file_rejects_dst_via_symlinked_protected_ancestor() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jp = tmp.path().join("j.jsonl");
+        let src = tmp.path().join("src.bin");
+        std::fs::write(&src, b"x").unwrap();
+        let link = tmp.path().join("media_link");
+        std::os::unix::fs::symlink("/usr", &link).unwrap(); // 사용자가 심어놓은 ~/Media -> /usr 시뮬레이션
+        let dst = link.join("evil.bin"); // lexical로는 안전해 보이지만 실제로는 /usr/evil.bin
+        let err = move_file(&src, &dst, &jp, 1);
+        assert!(matches!(err, Err(SafetyError::Protected(_))));
+        assert!(src.exists(), "거부 시 원본 보존");
+        assert!(journal_recent(&jp, 10).is_empty(), "보호 거부는 저널 이전");
+    }
+
     #[test]
     fn do_move_same_volume_branch_renames() {
         let tmp = tempfile::tempdir().unwrap();
@@ -636,6 +720,27 @@ mod tests {
         do_move(&src, &dst, true, &jp, 1).unwrap();
         assert!(!src.exists());
         assert_eq!(std::fs::read(&dst).unwrap().len(), 30);
+    }
+
+    // Fix 1 회귀 테스트: hard_link는 create-only라 dst가 이미 있으면(TOCTOU 경합으로 그 사이
+    // 생긴 파일 시뮬레이션) AlreadyExists로 실패해야 하며, 그 경합 상대의 dst도 원본 src도
+    // 절대 건드리면 안 된다 — rename의 REPLACE 시맨틱이었다면 여기서 dst가 파괴됐을 것.
+    #[test]
+    fn do_move_same_volume_hard_link_fails_when_dest_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jp = tmp.path().join("j.jsonl");
+        let src = tmp.path().join("a.bin");
+        let dst = tmp.path().join("b.bin");
+        std::fs::write(&src, b"original").unwrap();
+        std::fs::write(&dst, b"pre-existing").unwrap(); // TOCTOU 경합에서 먼저 생긴 것처럼 시뮬레이션
+        let err = do_move(&src, &dst, true, &jp, 1);
+        assert!(matches!(err, Err(SafetyError::Trash(_))));
+        assert!(src.exists(), "원본은 실패 시 보존");
+        assert_eq!(
+            std::fs::read(&dst).unwrap(),
+            b"pre-existing",
+            "경합 상대의 목적지를 덮어쓰면 안 됨"
+        );
     }
 
     #[cfg(any(windows, target_os = "linux"))]
