@@ -1,5 +1,7 @@
 // coverage 빌드(비-테스트)에서는 run()이 빠져 모듈 내용이 테스트에서만 쓰이므로 dead_code만 허용
 #[cfg_attr(coverage, allow(dead_code))]
+mod dupes;
+#[cfg_attr(coverage, allow(dead_code))]
 mod commands;
 #[cfg_attr(coverage, allow(dead_code))]
 mod scanner;
