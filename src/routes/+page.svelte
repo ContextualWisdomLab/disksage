@@ -5,6 +5,7 @@
   import TopFiles from "$lib/TopFiles.svelte";
   import Treemap from "$lib/Treemap.svelte";
   import Cleanup from "$lib/Cleanup.svelte";
+  import Duplicates from "$lib/Duplicates.svelte";
 
   let roots: string[] = $state([]);
   let selectedRoot = $state("");
@@ -115,6 +116,8 @@
   {/if}
 
   <Cleanup scannedRoot={crumbs.length > 0 ? crumbs[0] : null} />
+
+  <Duplicates scannedRoot={crumbs.length > 0 ? crumbs[0] : null} />
 </main>
 
 <style>

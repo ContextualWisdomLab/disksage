@@ -51,6 +51,11 @@ export interface JournalEntry {
   bytes: number;
   outcome: string;
 }
+export interface DupeGroup {
+  hash: string;
+  size: number;
+  paths: string[];
+}
 
 export const listCacheCandidates = () => invoke<CacheCandidate[]>("list_cache_candidates");
 export const listDevArtifacts = (root: string, minAgeDays = 30) =>
@@ -60,6 +65,8 @@ export const expandCleanTargets = (dir: string) =>
   invoke<string[]>("expand_clean_targets", { dir });
 export const recentOperations = (limit = 20) =>
   invoke<JournalEntry[]>("recent_operations", { limit });
+export const findDuplicateFiles = (root: string) =>
+  invoke<DupeGroup[]>("find_duplicate_files", { root });
 
 export const onScanProgress = (cb: (s: ScanStats) => void) =>
   listen<ScanStats>("scan://progress", (e) => cb(e.payload));
