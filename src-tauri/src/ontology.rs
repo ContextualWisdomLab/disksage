@@ -55,7 +55,7 @@ pub fn parse_ttl(turtle_src: &str) -> Result<Ontology, String> {
                     // 다중 rdfs:subClassOf는 첫 선언만 부모로 채택(단일 부모 트리 가정) —
                     // targetFolder 상속의 결정성을 위해. OWL은 다중 상위를 허용하지만
                     // 이동 목적지가 arbitrary 분기에 좌우되지 않도록 first-wins 고정.
-                    parents.entry(s).or_insert_with(|| o.as_str().to_string());
+                    parents.entry(s).or_insert(o.as_str().to_string());
                 }
             }
             RDFS_LABEL => {
