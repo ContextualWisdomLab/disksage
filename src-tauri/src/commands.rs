@@ -368,10 +368,14 @@ pub fn execute_moves(plans: Vec<organize::MovePlan>, app: AppHandle) -> Result<V
 pub fn undo_last_moves(limit: usize, app: AppHandle) -> Result<Vec<CleanResult>, String> {
     let jp = journal_file_path(&app)?;
     let ts = now_ms();
-    let entries = safety::journal_recent(&jp, limit);
+    // 저널은 move당 pending+ok 두 줄을 남긴다 — limit을 raw 줄 수로 쓰면 pending 잡음에
+    // 밀려 실제 undo 가능한 항목이 limit보다 적게 잡힐 수 있다. 전체를 읽어 outcome=="ok"로
+    // 거른 뒤에 limit을 적용해야 "최근 성공한 이동 limit개"라는 의미가 정확해진다.
+    let entries = safety::journal_recent(&jp, usize::MAX);
     Ok(entries
         .iter()
         .filter(|e| e.op == "move" && e.outcome == "ok")
+        .take(limit)
         .filter_map(|e| parse_move_entry(&e.path))
         .map(|(src, dst)| match safety::move_file(Path::new(&dst), Path::new(&src), &jp, ts) {
             Ok(()) => CleanResult { path: src, ok: true, error: String::new() },
