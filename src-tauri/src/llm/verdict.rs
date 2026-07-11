@@ -25,6 +25,9 @@ mod tests {
             let s = serde_json::to_string(&v).unwrap();
             assert_eq!(serde_json::from_str::<Verdict>(&s).unwrap(), v);
         }
+        // 프런트엔드가 소문자 문자열 리터럴로 switch하므로 와이어 포맷을 고정한다.
+        assert_eq!(serde_json::to_string(&Verdict::Safe).unwrap(), "\"safe\"");
+        assert_eq!(serde_json::to_string(&Verdict::Unrated).unwrap(), "\"unrated\"");
         let fv = FileVerdict { path: "/a".into(), verdict: Verdict::Safe, reason: "cache".into() };
         let s = serde_json::to_string(&fv).unwrap();
         assert_eq!(serde_json::from_str::<FileVerdict>(&s).unwrap(), fv);

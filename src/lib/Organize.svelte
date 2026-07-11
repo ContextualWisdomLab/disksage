@@ -1,6 +1,7 @@
 <script lang="ts">
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
+  import { verdictBadge } from "./verdictBadge";
 
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
@@ -8,6 +9,16 @@
   let busy = $state(false);
   let loadError = $state("");
   let results: api.CleanResult[] = $state([]);
+  let verdicts: Record<string, api.Verdict> = $state({});
+
+  async function loadVerdicts(paths: string[]) {
+    try {
+      const fvs = await api.fileVerdicts(paths);
+      verdicts = Object.fromEntries(fvs.map((f) => [f.path, f.verdict]));
+    } catch {
+      /* advisory only — ignore */
+    }
+  }
 
   async function loadPlans() {
     if (!scannedRoot) return;
@@ -16,6 +27,7 @@
     results = [];
     try {
       plans = await api.planOrganize(scannedRoot);
+      loadVerdicts(plans.map((p) => p.src));
     } catch (e) {
       loadError = String(e);
     } finally {
@@ -86,6 +98,10 @@
         {#each group as p (p.src)}
           <li>
             <span class="path" title={p.src}>{p.src}</span>
+            {#if verdicts[p.src]}
+              {@const b = verdictBadge(verdicts[p.src])}
+              <span class={b.cls} title={b.title}>{b.label}</span>
+            {/if}
             <span class="arrow">→</span>
             <span class="path" title={p.dst}>{p.dst}</span>
           </li>
@@ -128,4 +144,12 @@
   .errors { color: #b00; font-size: 0.85rem; list-style: none; padding: 0; }
   .actions { margin-top: 0.5rem; display: flex; gap: 0.5rem; }
   .undo { margin-left: auto; font-size: 0.85rem; }
+  .badge-safe, .badge-caution, .badge-keep, .badge-unrated {
+    display: inline-block; flex-shrink: 0; padding: 1px 6px; border-radius: 8px;
+    font-size: 0.75rem; color: #fff;
+  }
+  .badge-safe { background: #2a8f4a; }
+  .badge-caution { background: #b8860b; }
+  .badge-keep { background: #b03030; }
+  .badge-unrated { background: #888; }
 </style>
