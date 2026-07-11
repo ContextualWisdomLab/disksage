@@ -106,8 +106,9 @@ pub fn find_duplicates(files: Vec<FileEntry>, prefix_len: usize) -> Vec<DupeGrou
     }
     // 낭비 용량 내림차순
     out.sort_by(|a, b| {
-        let wa = a.size * (a.paths.len() as u64 - 1);
-        let wb = b.size * (b.paths.len() as u64 - 1);
+        // saturating: DupeGroup는 항상 paths>=2로 생성되지만, 다른 곳에서 만들어져도 패닉 없이
+        let wa = a.size.saturating_mul((a.paths.len() as u64).saturating_sub(1));
+        let wb = b.size.saturating_mul((b.paths.len() as u64).saturating_sub(1));
         wb.cmp(&wa)
     });
     out
