@@ -1,5 +1,7 @@
 mod backend;
 mod cache;
+#[cfg(all(not(coverage), feature = "llm-engine"))]
+mod engine;
 mod model;
 mod parse;
 mod prompt;
@@ -9,6 +11,8 @@ mod verdict;
 pub use backend::{choose_backend, Backend};
 #[cfg_attr(coverage, allow(unused_imports))]
 pub use cache::VerdictCache;
+#[cfg(all(not(coverage), feature = "llm-engine"))]
+pub use engine::LlamaEngine;
 #[cfg_attr(coverage, allow(unused_imports))]
 pub use model::{verify_sha256, ModelSpec, DEFAULT};
 #[cfg_attr(coverage, allow(unused_imports))]
