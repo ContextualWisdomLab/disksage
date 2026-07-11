@@ -17,6 +17,8 @@ mod ontology;
 mod inventory;
 #[cfg_attr(coverage, allow(dead_code))]
 mod organize;
+#[cfg_attr(coverage, allow(dead_code))]
+mod llm;
 
 // coverage 빌드에서 제외 — GUI 런타임은 헤드리스 테스트로 실행 불가
 #[cfg(not(coverage))]
