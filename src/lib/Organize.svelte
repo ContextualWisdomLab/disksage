@@ -69,6 +69,9 @@
   <h2>
     정리정돈 {scannedRoot ? "" : "(먼저 스캔하세요)"}
     <button onclick={loadPlans} disabled={busy || !scannedRoot}>{busy ? "계획 중…" : "정리정돈 미리보기"}</button>
+    <!-- 되돌리기는 상시 안전장치 — 저널에 이동 기록이 있으면 언제든 최근 이동을 복원한다.
+         미리보기/실행 상태와 무관하게 항상 노출되어야 한다(그렇지 않으면 재-미리보기로 사라짐). -->
+    <button class="undo" onclick={undoMoves} disabled={busy}>마지막 이동 되돌리기</button>
   </h2>
   {#if loadError}<p class="error">{loadError}</p>{/if}
 
@@ -100,7 +103,7 @@
   {/if}
 
   {#if results.length > 0}
-    <p>{results.filter((r) => r.ok).length}/{results.length}개 파일 이동 완료 — 되돌리기 가능합니다.</p>
+    <p>{results.filter((r) => r.ok).length}/{results.length}개 완료 — 위 "되돌리기"로 복원할 수 있습니다.</p>
     {#if results.some((r) => !r.ok)}
       <ul class="errors">
         {#each results.filter((r) => !r.ok) as r (r.path)}
@@ -108,11 +111,6 @@
         {/each}
       </ul>
     {/if}
-    <div class="actions">
-      <button onclick={undoMoves} disabled={busy}>
-        마지막 이동 되돌리기
-      </button>
-    </div>
   {/if}
 </section>
 
@@ -129,4 +127,5 @@
   .error { color: #b00; }
   .errors { color: #b00; font-size: 0.85rem; list-style: none; padding: 0; }
   .actions { margin-top: 0.5rem; display: flex; gap: 0.5rem; }
+  .undo { margin-left: auto; font-size: 0.85rem; }
 </style>
