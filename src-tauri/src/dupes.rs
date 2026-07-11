@@ -334,9 +334,7 @@ mod tests {
     #[test]
     fn collect_files_survives_unreadable_dir() {
         use std::os::unix::fs::PermissionsExt;
-        if running_as_root() {
-            return;
-        }
+        if running_as_root() { return; }
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         write_file(root, "readable.bin", b"ok");
@@ -357,9 +355,7 @@ mod tests {
     #[test]
     fn collect_files_survives_metadata_failure() {
         use std::os::unix::fs::PermissionsExt;
-        if running_as_root() {
-            return;
-        }
+        if running_as_root() { return; }
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         write_file(root, "readable.bin", b"ok");
