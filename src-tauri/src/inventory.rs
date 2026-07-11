@@ -153,4 +153,16 @@ dm:Code a owl:Class ; rdfs:label "코드"@ko .
         assert_eq!(rep.unknown_bytes, 0);
         assert_eq!(rep.unknown_count, 0);
     }
+
+    #[test]
+    fn equal_bytes_tie_broken_by_class_id_deterministically() {
+        // Image와 Code가 정확히 같은 bytes → class_id로 결정적 정렬 (then_with 커버)
+        let onto = parse_ttl(ONTO).unwrap();
+        let files = vec![fe("/a.png", 100), fe("/b.rs", 100)];
+        let rep = build_inventory(&files, &onto);
+        assert_eq!(rep.tallies.len(), 2);
+        assert_eq!(rep.tallies[0].bytes, rep.tallies[1].bytes);
+        // 두 실행에서 같은 순서 (결정적) — class_id 오름차순
+        assert!(rep.tallies[0].class_id < rep.tallies[1].class_id);
+    }
 }
