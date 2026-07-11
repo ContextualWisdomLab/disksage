@@ -1,6 +1,7 @@
 <script lang="ts">
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
+  import { blocksDeletion } from "./dupeGuard";
 
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
@@ -48,12 +49,9 @@
     const paths = [...toDelete];
     if (paths.length === 0) return;
     // 안전: 그룹 전체가 삭제 선택되면 최소 1개는 보존하도록 막는다
-    for (const g of groups) {
-      const remaining = g.paths.filter((p) => !toDelete.has(p));
-      if (remaining.length === 0) {
-        alert(`중복 그룹 하나가 통째로 삭제 선택됐습니다. 각 그룹에서 최소 1개는 보존해야 합니다.`);
-        return;
-      }
+    if (blocksDeletion(groups, toDelete)) {
+      alert("중복 그룹 하나가 통째로 삭제 선택됐습니다. 각 그룹에서 최소 1개는 보존해야 합니다.");
+      return;
     }
     const okay = confirm(
       `${paths.length}개 중복 파일을 휴지통으로 보냅니다 (${fmtBytes(reclaimable)} 확보).\n` +
@@ -62,8 +60,9 @@
     if (!okay) return;
     busy = true;
     try {
-      results = await api.cleanPaths(paths);
+      const r = await api.cleanPaths(paths);
       await scan();
+      results = r;
     } catch (e) {
       loadError = String(e);
     } finally {
@@ -117,6 +116,13 @@
 
   {#if results.length > 0}
     <p>{results.filter((r) => r.ok).length}/{results.length}개 휴지통으로 이동 — 복원 가능합니다.</p>
+    {#if results.some((r) => !r.ok)}
+      <ul class="errors">
+        {#each results.filter((r) => !r.ok) as r (r.path)}
+          <li title={r.path}>⚠ {r.path} — {r.error}</li>
+        {/each}
+      </ul>
+    {/if}
   {/if}
 </section>
 
@@ -131,4 +137,5 @@
   .keep { color: #080; margin-left: 0.5rem; font-size: 0.8rem; }
   .muted { color: #999; }
   .error { color: #b00; }
+  .errors { color: #b00; font-size: 0.85rem; list-style: none; padding: 0; }
 </style>

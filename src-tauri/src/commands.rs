@@ -274,7 +274,7 @@ pub fn expand_clean_targets(dir: String) -> Vec<String> {
 }
 
 #[cfg(not(coverage))]
-#[tauri::command]
+#[tauri::command(async)]
 pub fn find_duplicate_files(root: String) -> Result<Vec<dupes::DupeGroup>, String> {
     let files = dupes::collect_files(Path::new(&root));
     Ok(dupes::find_duplicates(files, 4096))
