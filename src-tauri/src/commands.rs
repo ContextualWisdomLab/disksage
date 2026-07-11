@@ -1,6 +1,4 @@
-use std::path::Path;
-#[cfg(not(coverage))]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 #[cfg(not(coverage))]
 use std::sync::atomic::Ordering;
@@ -12,6 +10,11 @@ use tauri::{AppHandle, Emitter, State};
 #[cfg(not(coverage))]
 use crate::scanner;
 use crate::scanner::ScanResult;
+
+// clean_paths_inner(순수 함수)가 쓰는 것은 무조건 import; 래퍼 전용은 cfg(not(coverage))
+use crate::safety;
+#[cfg(not(coverage))]
+use crate::{dev_artifacts, rules};
 
 #[derive(Default)]
 pub struct AppState {
@@ -70,6 +73,39 @@ pub fn node_view(res: &ScanResult, path: &Path) -> Result<NodeView, String> {
         size: res.dir_sizes.get(path).copied().unwrap_or(0),
         entries,
     })
+}
+
+#[derive(serde::Serialize)]
+pub struct CleanResult {
+    pub path: String,
+    pub ok: bool,
+    pub error: String,
+}
+
+/// 정리 실행의 순수 코어 — 결과는 항목별, 하나가 실패해도 나머지는 진행 (스펙 §8)
+pub fn clean_paths_inner(
+    paths: &[PathBuf],
+    journal_path: &Path,
+    now_ms: u64,
+) -> Vec<CleanResult> {
+    paths
+        .iter()
+        .map(|p| {
+            let bytes = p.metadata().map(|m| m.len()).unwrap_or(0);
+            match safety::trash_delete(p, bytes, journal_path, now_ms) {
+                Ok(()) => CleanResult {
+                    path: p.to_string_lossy().into_owned(),
+                    ok: true,
+                    error: String::new(),
+                },
+                Err(e) => CleanResult {
+                    path: p.to_string_lossy().into_owned(),
+                    ok: false,
+                    error: e.to_string(),
+                },
+            }
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -156,6 +192,61 @@ pub fn top_files(limit: usize, state: State<AppState>) -> Result<Vec<EntryView>,
             is_dir: false,
         })
         .collect())
+}
+
+#[cfg(not(coverage))]
+fn journal_file_path(app: &AppHandle) -> Result<PathBuf, String> {
+    use tauri::Manager;
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join("journal.jsonl"))
+}
+
+#[cfg(not(coverage))]
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn list_cache_candidates() -> Result<Vec<rules::CacheCandidate>, String> {
+    let bases = rules::BaseDirs::from_env().ok_or("환경변수에서 기본 경로를 찾지 못함")?;
+    Ok(rules::cache_candidates(&bases))
+}
+
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn list_dev_artifacts(
+    root: String,
+    min_age_days: u64,
+) -> Result<Vec<dev_artifacts::DevArtifact>, String> {
+    Ok(dev_artifacts::find_artifacts(Path::new(&root), min_age_days, now_ms()))
+}
+
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn clean_paths(paths: Vec<String>, app: AppHandle) -> Result<Vec<CleanResult>, String> {
+    let jp = journal_file_path(&app)?;
+    let pbufs: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+    Ok(clean_paths_inner(&pbufs, &jp, now_ms()))
+}
+
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn recent_operations(limit: usize, app: AppHandle) -> Result<Vec<safety::JournalEntry>, String> {
+    Ok(safety::journal_recent(&journal_file_path(&app)?, limit))
+}
+
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn expand_clean_targets(dir: String) -> Vec<String> {
+    rules::clean_targets(Path::new(&dir))
+        .into_iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect()
 }
 
 #[cfg(test)]
@@ -261,5 +352,34 @@ mod tests {
         assert!(roots.iter().any(|r| r.ends_with(":\\")));
         #[cfg(not(windows))]
         assert!(roots.contains(&"/".to_string()));
+    }
+
+    #[test]
+    fn clean_paths_inner_reports_per_item_results() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jp = tmp.path().join("j.jsonl");
+        let ok_file = tmp.path().join("disksage-clean-fixture.bin");
+        fs::write(&ok_file, vec![0u8; 32]).unwrap();
+        let missing = tmp.path().join("ghost");
+        let protected = std::path::PathBuf::from(if cfg!(windows) { "C:\\Windows" } else { "/usr" });
+
+        let results = clean_paths_inner(&[ok_file.clone(), missing, protected], &jp, 7);
+
+        assert_eq!(results.len(), 3);
+        assert!(results[0].ok);
+        assert!(!results[1].ok && results[1].error.contains("휴지통"));
+        assert!(!results[2].ok && results[2].error.contains("보호"));
+        assert!(!ok_file.exists());
+
+        // 테스트 픽스처 휴지통 정리 (win/linux)
+        #[cfg(any(windows, target_os = "linux"))]
+        {
+            let items: Vec<_> = trash::os_limited::list()
+                .unwrap()
+                .into_iter()
+                .filter(|i| i.name.to_string_lossy().contains("disksage-clean-fixture"))
+                .collect();
+            trash::os_limited::purge_all(items).unwrap();
+        }
     }
 }
