@@ -275,6 +275,18 @@ fn hashes_match(
     matches!((src_hash, dst_hash), (Ok(s), Ok(d)) if src_len == dst_len && s == d)
 }
 
+/// 검증 결과에 따라 목적지를 정리하거나 성공 반환. 검증-실패 정리 arm은 복사 성공 후 해시
+/// 불일치라는 정직하게 재현 불가한 상황에서만 도달하므로, 판정을 파라미터로 받아 양 arm을
+/// 직접 단위 테스트한다(원본은 어느 쪽이든 건드리지 않는다).
+fn finalize_verified_copy(dst: &Path, verified: bool) -> std::io::Result<()> {
+    if verified {
+        Ok(())
+    } else {
+        let _ = std::fs::remove_file(dst); // 우리가 만든 목적지이므로 정리
+        Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "복사 검증 실패"))
+    }
+}
+
 // 크로스 볼륨 복사+검증(내부 io, ? 전파). 복사 도중 실패하든 검증에서 실패하든, 우리가 만든
 // 목적지라면 정리하고 io::Error — 어느 실패든 원본은 절대 건드리지 않는다.
 fn copy_verified_io(src: &Path, dst: &Path) -> std::io::Result<()> {
@@ -289,11 +301,7 @@ fn copy_verified_io(src: &Path, dst: &Path) -> std::io::Result<()> {
             return Err(e);
         }
     };
-    if !hashes_match(&src_hash, &dst_hash, src_len, dst_len) {
-        let _ = std::fs::remove_file(dst); // 검증 실패 — 우리가 만든 목적지이므로 정리(원본은 안 건드림)
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "복사 검증 실패"));
-    }
-    Ok(())
+    finalize_verified_copy(dst, hashes_match(&src_hash, &dst_hash, src_len, dst_len))
 }
 
 /// 분기 결정(same_vol)을 파라미터로 받아 양 경로를 플랫폼 무관하게 테스트 가능하게 한다.
@@ -778,6 +786,24 @@ mod tests {
     }
 
     #[test]
+    fn finalize_verified_copy_removes_dst_and_errors_when_unverified() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dst = tmp.path().join("partial.bin");
+        std::fs::write(&dst, b"partial").unwrap();
+        assert!(finalize_verified_copy(&dst, false).is_err());
+        assert!(!dst.exists(), "검증 실패 시 우리가 만든 목적지를 정리");
+    }
+
+    #[test]
+    fn finalize_verified_copy_keeps_dst_when_verified() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dst = tmp.path().join("good.bin");
+        std::fs::write(&dst, b"good").unwrap();
+        assert!(finalize_verified_copy(&dst, true).is_ok());
+        assert!(dst.exists());
+    }
+
+    #[test]
     fn copy_verified_io_succeeds_and_content_matches() {
         let tmp = tempfile::tempdir().unwrap();
         let src = tmp.path().join("s2.bin");
@@ -818,44 +844,7 @@ mod tests {
         assert!(src.exists(), "원본은 실패 시에도 그대로 보존");
     }
 
-    // 진짜 크로스 볼륨 통합 테스트 — 이 저장소(예: D:)와 OS 임시 볼륨(예: C:)이 실제로 다를 때만
-    // move_file의 크로스 볼륨 분기(복사+검증+trash_delete)를 real fs로 검증한다.
-    // 단일 볼륨 환경(예: 일부 CI 게이트)에서는 same_volume으로 자가 감지해 스킵 — 조작된 테스트가
-    // 아니라 이 환경의 실제 조건에 의존하는 통합 테스트다.
-    #[cfg(any(windows, target_os = "linux"))]
-    #[test]
-    fn move_file_cross_volume_copies_verifies_and_trashes_original() {
-        let tmp = tempfile::tempdir().unwrap(); // 보통 OS 임시 볼륨
-        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR")); // 저장소 볼륨
-        if same_volume(manifest_dir, tmp.path()) {
-            eprintln!("skip: 이 환경엔 서로 다른 두 볼륨이 없어 크로스 볼륨 경로를 검증할 수 없음");
-            return;
-        }
-        let scratch = manifest_dir.join("target").join("mv-cov-scratch");
-        std::fs::create_dir_all(&scratch).unwrap();
-        let src_dir = tempfile::tempdir_in(&scratch).unwrap();
-        let jp = tmp.path().join("j.jsonl");
-        let src = src_dir.path().join("disksage-cv-fixture.bin");
-        std::fs::write(&src, vec![7u8; 4096]).unwrap();
-        let dst = tmp.path().join("cv-dst.bin");
-
-        move_file(&src, &dst, &jp, 99).unwrap();
-
-        assert!(!src.exists(), "크로스 볼륨 이동 후 원본은 휴지통 경유로 사라져야 함");
-        assert!(dst.exists());
-        assert_eq!(std::fs::read(&dst).unwrap().len(), 4096);
-        let recent = journal_recent(&jp, 10);
-        assert_eq!(recent[0].outcome, "ok");
-        assert_eq!(recent[0].op, "move");
-
-        // 테스트 픽스처만 휴지통에서 purge (M2 패턴 — 제품 코드는 purge하지 않음)
-        let items: Vec<_> = trash::os_limited::list()
-            .unwrap()
-            .into_iter()
-            .filter(|i| i.name.to_string_lossy().contains("disksage-cv-fixture"))
-            .collect();
-        if !items.is_empty() {
-            trash::os_limited::purge_all(items).unwrap();
-        }
-    }
+    // 크로스 볼륨 분기(복사+검증+trash_delete)의 결정적 커버리지는 do_move_cross_volume_*
+    // 테스트가 same_vol=false를 강제해 양 플랫폼에서 담당한다. 실제 두 볼륨에 의존하는 통합
+    // 테스트는 어느 단일 볼륨 게이트에서도 본문이 스킵돼 커버리지 갭을 만들므로 두지 않는다.
 }
