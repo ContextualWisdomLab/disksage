@@ -14,7 +14,7 @@ use crate::scanner::ScanResult;
 // clean_paths_inner(순수 함수)가 쓰는 것은 무조건 import; 래퍼 전용은 cfg(not(coverage))
 use crate::safety;
 #[cfg(not(coverage))]
-use crate::{dev_artifacts, rules};
+use crate::{dev_artifacts, dupes, rules};
 
 #[derive(Default)]
 pub struct AppState {
@@ -271,6 +271,13 @@ pub fn expand_clean_targets(dir: String) -> Vec<String> {
         .into_iter()
         .map(|p| p.to_string_lossy().into_owned())
         .collect()
+}
+
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn find_duplicate_files(root: String) -> Result<Vec<dupes::DupeGroup>, String> {
+    let files = dupes::collect_files(Path::new(&root));
+    Ok(dupes::find_duplicates(files, 4096))
 }
 
 #[cfg(test)]

@@ -13,3 +13,7 @@ vite.config.ts.timestamp-*
 src-tauri/target
 
 .superpowers/
+
+# Claude Code session-local state
+.claude/scheduled_tasks.lock
+.claude/*.lock
