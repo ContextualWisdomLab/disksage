@@ -153,7 +153,10 @@ pub fn load_ontology_from(ttl: &str) -> Result<crate::ontology::Ontology, String
 #[cfg(not(coverage))]
 fn bundled_ontology_ttl(app: &AppHandle) -> Result<String, String> {
     use tauri::Manager;
-    // 사용자 설정 디렉토리 오버라이드 우선, 없으면 번들 리소스
+    // 사용자 설정 디렉토리 오버라이드 우선, 없으면 번들 리소스.
+    // 오버라이드 파일이 없으면(read 실패) 조용히 번들로 폴백하지만, 파일이 있어도
+    // parse가 실패하면(malformed) 상위 load_ontology_from이 에러를 낸다 — 의도적:
+    // 사용자가 편집한 잘못된 온톨로지를 조용히 무시하지 않고 알린다.
     if let Ok(dir) = app.path().app_config_dir() {
         let user_ttl = dir.join("ontology.ttl");
         if let Ok(s) = std::fs::read_to_string(&user_ttl) {
