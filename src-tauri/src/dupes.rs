@@ -114,6 +114,26 @@ pub fn find_duplicates(files: Vec<FileEntry>, prefix_len: usize) -> Vec<DupeGrou
     out
 }
 
+/// jwalk로 파일만 수집 — 심링크/reparse는 scanner::keep_entry가 순회에서 제외
+pub fn collect_files(root: &Path) -> Vec<FileEntry> {
+    let mut out = Vec::new();
+    let walker = jwalk::WalkDir::new(root)
+        .follow_links(false)
+        .skip_hidden(false)
+        .process_read_dir(|_d, _p, _s, children| {
+            children.retain(|r| r.as_ref().map(crate::scanner::keep_entry).unwrap_or(true));
+        });
+    for entry in walker {
+        let Ok(e) = entry else { continue };
+        if !e.file_type().is_file() {
+            continue;
+        }
+        let Ok(md) = e.metadata() else { continue };
+        out.push(FileEntry { path: e.path(), size: md.len() });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,5 +285,25 @@ mod tests {
         let groups = find_duplicates(files, 4096);
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].paths.len(), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn collect_files_excludes_dirs_and_symlinks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write_file(root, "real.bin", b"data");
+        std::fs::create_dir(root.join("sub")).unwrap();
+        write_file(&root.join("sub"), "nested.bin", b"more");
+        std::os::unix::fs::symlink(root.join("real.bin"), root.join("link.bin")).unwrap();
+
+        let files = collect_files(root);
+        let names: Vec<String> = files
+            .iter()
+            .map(|f| f.path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.contains(&"real.bin".to_string()));
+        assert!(names.contains(&"nested.bin".to_string()));
+        assert!(!names.contains(&"link.bin".to_string()), "심링크 제외");
     }
 }

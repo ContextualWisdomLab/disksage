@@ -29,7 +29,8 @@ pub fn run() {
             commands::list_dev_artifacts,
             commands::clean_paths,
             commands::recent_operations,
-            commands::expand_clean_targets
+            commands::expand_clean_targets,
+            commands::find_duplicate_files
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
