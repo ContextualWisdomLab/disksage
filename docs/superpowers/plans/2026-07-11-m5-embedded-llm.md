@@ -11,7 +11,8 @@
 ## Global Constraints
 
 - **Coverage gate (org CI):** `cargo llvm-cov --all-features --fail-under-lines 100` on ubuntu MUST stay at 100% lines. Every effectful/FFI/GUI path is `#[cfg(not(coverage))]`; only pure logic is measured. Reuse the established patterns: io-helper returns `io::Result` with `?` (no happy-path `map_err` closure) + one boundary `map_err` covered by an error test; single-line `if running_as_root() { return; }` guards; no unreachable `else` branches; platform-neutral test assertions are NOT `#[cfg]`-gated.
-- **`--all-features` must build CPU-only:** disksage's `Cargo.toml` declares **NO** `cuda`/`vulkan`/`metal` passthrough features. `llama-cpp-2` is depended on with default features (CPU). GPU backends are enabled only by M6 release builds via `cargo build --features "llama-cpp-2/cuda"` etc. — never as disksage features (else `--all-features` would pull CUDA toolkit and break the gate).
+- **`llama-cpp-2` is an OPTIONAL dependency behind the `llm-engine` feature.** Rationale: the native build needs cmake + a C++ compiler + libclang, which local dev machines may lack. With it optional and **off by default**, `cargo test --lib` and local `cargo llvm-cov --lib --no-cfg-coverage` build **without** the native toolchain and exercise 100% of the coverage-gated pure logic. `engine.rs` (the only user of `llama-cpp-2`) is gated `#[cfg(all(not(coverage), feature = "llm-engine"))]`. The org gate's `cargo llvm-cov --all-features` turns `llm-engine` ON → `llama-cpp-2` compiles on the ubuntu runner (which has cmake + clang) → but `engine.rs` is excluded under the `coverage` cfg, so only pure logic is measured. (Cost: the coverage runner compiles CPU llama.cpp for symbols it won't measure — green but slower; ccache tuning is M6.)
+- **`--all-features` must build CPU-only:** declare **NO** `cuda`/`vulkan`/`metal` passthrough features — `llm-engine` maps only to `dep:llama-cpp-2` with its default (CPU) features. GPU backends are enabled only by M6 release builds via `cargo build --features "llm-engine,llama-cpp-2/cuda"` etc. (else `--all-features` would pull the CUDA toolkit and break the gate).
 - **Privacy:** file **content is never sent** to the model. Prompts contain only metadata: path, name, size, mtime, parent-dir context, and locally-derived type signals.
 - **Advisory only:** an LLM verdict is a badge. No code path lets a verdict trigger trash/move. Deletion stays `safety::trash_delete`; move stays `safety::move_file`.
 - **Forced JSON, temp 0:** model output is coerced to `{"verdict":"safe"|"caution"|"keep","reason":"..."}`; classify returns a class id chosen from the candidate list only (free generation rejected).
@@ -56,12 +57,19 @@
 - [ ] **Step 1: Add dependencies.** In `src-tauri/Cargo.toml` `[dependencies]` add (pin exact versions at implementation time from crates.io latest stable):
 
 ```toml
-llama-cpp-2 = "0.1"      # CPU build only — do NOT enable cuda/vulkan/metal features here
+llama-cpp-2 = { version = "0.1", optional = true }   # CPU only; behind llm-engine feature
 sha2 = "0.10"
 ureq = { version = "2", features = ["tls"] }
 ```
 
-Do NOT add any `[features]` mapping to `llama-cpp-2/cuda|vulkan|metal`.
+And a `[features]` table:
+
+```toml
+[features]
+llm-engine = ["dep:llama-cpp-2"]
+```
+
+Do NOT add any feature mapping to `llama-cpp-2/cuda|vulkan|metal` (those are enabled only by M6 release builds on the command line). `sha2` and `ureq` are pure-Rust and stay non-optional (they build without cmake).
 
 - [ ] **Step 2: Write failing test for `choose_backend`** in `backend.rs`:
 
@@ -180,7 +188,7 @@ pub use verdict::{FileVerdict, Verdict};
 mod llm;
 ```
 
-- [ ] **Step 8: Run tests + coverage build** — `cargo test --lib` (all pass) and `cargo build --lib` (compiles llama.cpp — expect a long first build). Then `RUSTFLAGS="--cfg coverage" cargo build --lib` → 0 code warnings.
+- [ ] **Step 8: Run tests + coverage build** — `cargo test --lib` (all pass; `llm-engine` OFF so no cmake needed) and `RUSTFLAGS="--cfg coverage" cargo build --lib` → 0 code warnings. (Building with `--features llm-engine` requires cmake + a C++ compiler + libclang; skip locally if absent — CI's `--all-features` verifies it.)
 
 - [ ] **Step 9: Commit** — `git commit -m "feat(llm): add llama-cpp-2 dep + Verdict/Backend types + choose_backend"`.
 
@@ -429,14 +437,14 @@ mod tests {
 
 - [ ] **Step 3: Implement the trait + orchestration** in `mod.rs`. Each orchestration fn: build prompt (Task 2) → `engine.infer()` → on `Ok` parse (Task 3), on `Err` return the fail-closed value. `verdict_for` also passes the `reason` field through when present (extend `parse` with a `parse_verdict_full(raw) -> (Verdict, String)` helper, tested here — keep the earlier `parse_verdict` or fold it in; ensure no line goes uncovered).
 
-- [ ] **Step 4: Implement `engine.rs`** (`#[cfg(not(coverage))]`) — real `llama-cpp-2` CPU engine. Pin the crate version and follow its current API for: `LlamaBackend::init()`, `LlamaModel::load_from_file` with `LlamaModelParams` (n_gpu_layers = 0 for CPU in M5), `model.new_context` with a small `n_ctx`, tokenize the prompt, greedy decode (temperature 0 via a deterministic sampler) up to ~256 tokens or EOS, detokenize. Wrap all fallible calls returning `Result<String, String>`. This file is excluded from coverage; correctness is verified by a `#[ignore]` integration test (Step 5) and manual run, per spec §9.
+- [ ] **Step 4: Implement `engine.rs`** gated `#[cfg(all(not(coverage), feature = "llm-engine"))]` and declare it in `mod.rs` with the same gate (`#[cfg(all(not(coverage), feature = "llm-engine"))] mod engine;`) — real `llama-cpp-2` CPU engine. Pin the crate version and follow its current API for: `LlamaBackend::init()`, `LlamaModel::load_from_file` with `LlamaModelParams` (n_gpu_layers = 0 for CPU in M5), `model.new_context` with a small `n_ctx`, tokenize the prompt, greedy decode (temperature 0 via a deterministic sampler) up to ~256 tokens or EOS, detokenize. Wrap all fallible calls returning `Result<String, String>`. This file is excluded from coverage; correctness is verified by CI's `--all-features` build, a `#[ignore]` integration test (Step 5), and manual run, per spec §9. **Cannot be compile-checked locally without cmake** — if the toolchain is absent, note that in the report; CI is the verification point.
 
-- [ ] **Step 5: Add an `#[ignore]` real-model smoke test** (runs only with a downloaded model, never on the gate):
+- [ ] **Step 5: Add an `#[ignore]` real-model smoke test** (runs only with a downloaded model + the feature, never on the gate):
 
 ```rust
-#[cfg(not(coverage))]
+#[cfg(all(not(coverage), feature = "llm-engine"))]
 #[test]
-#[ignore = "requires a downloaded GGUF model; run manually"]
+#[ignore = "requires --features llm-engine + a downloaded GGUF model; run manually"]
 fn real_engine_returns_parseable_verdict() {
     // path from env DISKSAGE_MODEL; load LlamaEngine; verdict_for(...) is Safe|Caution|Keep (not Unrated)
 }
@@ -461,7 +469,7 @@ fn real_engine_returns_parseable_verdict() {
 
 - [ ] **Step 2: Run** — FAIL.
 
-- [ ] **Step 3: Implement inner helpers** (measured) and `#[cfg(not(coverage))]` wrappers (excluded). Wrappers resolve the app data dir via `app.path()`, build/hold a `LlamaEngine` in `AppState` (lazy `OnceCell`/`Mutex<Option<...>>`), and degrade to `Unrated` when the model file is absent (never construct the engine → all `Unrated`). Add the new commands to the `generate_handler!` list in `lib.rs`.
+- [ ] **Step 3: Implement inner helpers** (measured) and `#[cfg(not(coverage))]` wrappers (excluded). Wrappers resolve the app data dir via `app.path()`. Constructing/holding the real `LlamaEngine` is additionally `#[cfg(feature = "llm-engine")]`; when the feature is off OR the model file is absent, every verdict degrades to `Unrated` (never construct the engine). Structure the wrapper so the non-engine path (Unrated fallback) is the default and the engine path is a feature-gated branch. Add the new commands to the `generate_handler!` list in `lib.rs`.
 
 - [ ] **Step 4: Run** — `cargo test --lib commands` PASS.
 
