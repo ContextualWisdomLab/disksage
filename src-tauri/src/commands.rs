@@ -14,7 +14,7 @@ use crate::scanner::ScanResult;
 // clean_paths_inner(순수 함수)가 쓰는 것은 무조건 import; 래퍼 전용은 cfg(not(coverage))
 use crate::safety;
 #[cfg(not(coverage))]
-use crate::{dev_artifacts, dupes, rules};
+use crate::{dev_artifacts, dupes, organize, rules};
 
 #[derive(Default)]
 pub struct AppState {
@@ -124,6 +124,13 @@ pub fn clean_paths_inner(
             }
         })
         .collect()
+}
+
+/// 저널의 move 경로 필드 "src -> dst"를 분리 (순수 함수 — 테스트 대상). 구분자 없으면 None.
+pub fn parse_move_entry(path_field: &str) -> Option<(String, String)> {
+    path_field
+        .split_once(" -> ")
+        .map(|(s, d)| (s.to_string(), d.to_string()))
 }
 
 #[tauri::command]
@@ -319,6 +326,60 @@ pub fn find_duplicate_files(root: String) -> Result<Vec<dupes::DupeGroup>, Strin
     Ok(dupes::find_duplicates(files, 4096))
 }
 
+/// home 해석: app.path().home_dir() 우선, 실패 시 HOME/USERPROFILE 환경변수 폴백.
+#[cfg(not(coverage))]
+fn resolve_home(app: &AppHandle) -> PathBuf {
+    use tauri::Manager;
+    app.path()
+        .home_dir()
+        .ok()
+        .or_else(|| std::env::var("HOME").ok().map(PathBuf::from))
+        .or_else(|| std::env::var("USERPROFILE").ok().map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn plan_organize(root: String, app: AppHandle) -> Result<Vec<organize::MovePlan>, String> {
+    let onto = load_ontology_from(&bundled_ontology_ttl(&app)?)?;
+    let files = dupes::collect_files(Path::new(&root));
+    let home = resolve_home(&app);
+    Ok(organize::plan_moves(&files, &onto, &home))
+}
+
+/// MovePlan을 safety::move_file로 실행 — 항목별 결과, 하나 실패해도 나머지는 진행 (M2와 동일 원칙)
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn execute_moves(plans: Vec<organize::MovePlan>, app: AppHandle) -> Result<Vec<CleanResult>, String> {
+    let jp = journal_file_path(&app)?;
+    let ts = now_ms();
+    Ok(plans
+        .iter()
+        .map(|p| match safety::move_file(Path::new(&p.src), Path::new(&p.dst), &jp, ts) {
+            Ok(()) => CleanResult { path: p.src.clone(), ok: true, error: String::new() },
+            Err(e) => CleanResult { path: p.src.clone(), ok: false, error: e.to_string() },
+        })
+        .collect())
+}
+
+/// 최근 저널에서 op=="move"·outcome=="ok" 항목을 찾아 역이동(dst→src)한다.
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn undo_last_moves(limit: usize, app: AppHandle) -> Result<Vec<CleanResult>, String> {
+    let jp = journal_file_path(&app)?;
+    let ts = now_ms();
+    let entries = safety::journal_recent(&jp, limit);
+    Ok(entries
+        .iter()
+        .filter(|e| e.op == "move" && e.outcome == "ok")
+        .filter_map(|e| parse_move_entry(&e.path))
+        .map(|(src, dst)| match safety::move_file(Path::new(&dst), Path::new(&src), &jp, ts) {
+            Ok(()) => CleanResult { path: src, ok: true, error: String::new() },
+            Err(e) => CleanResult { path: src, ok: false, error: e.to_string() },
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,6 +490,19 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         let res = scan(root);
         let view = node_view(&res, root).unwrap();
         assert!(view.entries.iter().all(|e| e.name != "link.bin"));
+    }
+
+    #[test]
+    fn parse_move_entry_splits_valid_entry() {
+        assert_eq!(
+            parse_move_entry("/a/b -> /c/d"),
+            Some(("/a/b".to_string(), "/c/d".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_move_entry_malformed_is_none() {
+        assert_eq!(parse_move_entry("no arrow here"), None);
     }
 
     #[test]

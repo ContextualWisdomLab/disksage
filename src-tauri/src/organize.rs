@@ -4,7 +4,7 @@ use crate::dupes::FileEntry;
 use crate::inventory::classify;
 use crate::ontology::Ontology;
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MovePlan {
     pub src: String,
     pub dst: String,
