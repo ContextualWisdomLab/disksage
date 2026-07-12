@@ -3,6 +3,7 @@
   import { fmtBytes } from "./fmt";
   import { blocksDeletion } from "./dupeGuard";
   import { verdictBadge } from "./verdictBadge";
+  import { confirm } from "@tauri-apps/plugin-dialog";
 
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
@@ -65,9 +66,10 @@
       alert("중복 그룹 하나가 통째로 삭제 선택됐습니다. 각 그룹에서 최소 1개는 보존해야 합니다.");
       return;
     }
-    const okay = confirm(
+    const okay = await confirm(
       `${paths.length}개 중복 파일을 휴지통으로 보냅니다 (${fmtBytes(reclaimable)} 확보).\n` +
         `각 그룹의 사본 1개는 보존됩니다. 휴지통에서 복원할 수 있습니다.`,
+      { title: "DiskSage", kind: "warning" },
     );
     if (!okay) return;
     busy = true;

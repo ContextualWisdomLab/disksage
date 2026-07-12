@@ -2,6 +2,7 @@
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
   import { verdictBadge } from "./verdictBadge";
+  import { confirm } from "@tauri-apps/plugin-dialog";
 
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
@@ -60,11 +61,12 @@
       ...artifactPaths,
     ];
     if (summary.length === 0) return;
-    const okay = confirm(
+    const okay = await confirm(
       `다음 ${summary.length}개 항목을 휴지통으로 보냅니다 (총 ${fmtBytes(totalSelected)}):\n\n` +
         summary.slice(0, 15).join("\n") +
         (summary.length > 15 ? `\n… 외 ${summary.length - 15}개` : "") +
         "\n\n휴지통에서 언제든 복원할 수 있습니다.",
+      { title: "DiskSage", kind: "warning" },
     );
     if (!okay) return;
 

@@ -2,6 +2,7 @@
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
   import { verdictBadge } from "./verdictBadge";
+  import { confirm } from "@tauri-apps/plugin-dialog";
 
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
@@ -47,9 +48,10 @@
 
   async function executeSelected() {
     if (plans.length === 0) return;
-    const okay = confirm(
+    const okay = await confirm(
       `${plans.length}개 파일을 정리합니다 (온톨로지 targetFolder로 이동).\n` +
         `되돌리기 버튼으로 복원할 수 있습니다.`,
+      { title: "DiskSage", kind: "warning" },
     );
     if (!okay) return;
     busy = true;
