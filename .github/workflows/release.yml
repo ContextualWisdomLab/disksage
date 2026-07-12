@@ -13,10 +13,13 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
+    # Minimal top-level (read); elevate only this job — it publishes the Release on tag.
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
