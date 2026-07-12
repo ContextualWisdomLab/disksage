@@ -170,6 +170,12 @@ jobs:
       - name: "Tauri build (GPU: CUDA [+ Vulkan on Linux] + dynamic backends)"
         run: npm run tauri -- build --no-bundle --features "${{ matrix.features }}"
 
+      # Also build the lib test binary (contains engine.rs's #[ignore] real-model smoke test) so GPU
+      # offload can be verified headlessly via CLI — no GUI needed. Run it with DISKSAGE_MODEL set.
+      - name: Build engine smoke-test binary
+        shell: bash
+        run: cargo test --manifest-path src-tauri/Cargo.toml --release --no-run --features "${{ matrix.features }}" --lib 2>&1 | tail -5
+
       # Diagnostic: learn WHERE the shared libs landed (first-attempt discovery).
       - name: List built shared libs (diagnostic)
         if: always()
@@ -189,6 +195,10 @@ jobs:
           mkdir -p gpu-run
           # app binary (Tauri output name follows productName/crate; grab both just in case)
           find src-tauri/target/release -maxdepth 1 -type f \( -name 'disksage' -o -name 'disksage.exe' -o -name 'DiskSage' -o -name 'DiskSage.exe' \) -exec cp {} gpu-run/ \; 2>/dev/null || true
+          # engine smoke-test binary (real inference via #[ignore] test) for headless GPU verification.
+          # Pick the freshest disksage_lib-* (ls -t) to avoid stale cached hashes; skip .d dep files.
+          tb=$(ls -t src-tauri/target/release/deps/disksage_lib-* 2>/dev/null | grep -viE '\.(d|pdb)$' | head -1)
+          [ -n "$tb" ] && cp "$tb" "gpu-run/engine_smoketest${{ matrix.os == 'windows-2022' && '.exe' || '' }}" 2>/dev/null || true
           # all ggml/llama shared libs incl. dynamic backends (deep in build/.../out/backends) and
           # Linux SONAME-versioned .so.N files; copy symlinks + targets so the set is self-contained.
           find src-tauri/target -maxdepth 8 -iregex '.*\(ggml\|llama\).*\(\.dll\|\.so\|\.so\..*\)' -exec cp {} gpu-run/ \; 2>/dev/null || true
