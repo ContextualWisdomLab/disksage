@@ -20,6 +20,10 @@ jobs:
     # Minimal top-level (read); elevate only this job — it publishes the Release on tag.
     permissions:
       contents: write
+    env:
+      # llama.cpp's ggml uses std::filesystem (needs macOS 10.15+). macos-latest is arm64 → 11.0.
+      # Ignored on Windows/Linux runners.
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
     strategy:
       fail-fast: false
       matrix:
