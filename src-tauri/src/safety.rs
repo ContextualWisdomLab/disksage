@@ -77,7 +77,15 @@ pub fn is_protected(path: &Path) -> bool {
     }
     #[cfg(unix)]
     {
-        let denied_prefixes = ["/usr", "/etc", "/bin", "/sbin", "/lib", "/boot", "/proc", "/sys", "/dev"];
+        // macOS는 extend로 시스템 경로를 더 넣는다 — 다른 unix에선 그 라인이 cfg-out되어 mut가
+        // 미사용이므로 allow(unused_mut). Linux 게이트는 macOS 전용 라인을 컴파일하지 않아 커버 불필요.
+        #[allow(unused_mut)]
+        let mut denied_prefixes: Vec<&str> =
+            vec!["/usr", "/etc", "/bin", "/sbin", "/lib", "/boot", "/proc", "/sys", "/dev"];
+        #[cfg(target_os = "macos")]
+        denied_prefixes.extend_from_slice(&[
+            "/System", "/Library", "/Applications", "/private", "/Volumes", "/cores", "/Network",
+        ]);
         let s = path.to_string_lossy();
         if denied_prefixes
             .iter()
@@ -440,6 +448,24 @@ mod tests {
             assert!(is_protected(Path::new("/etc")));
             assert!(is_protected(Path::new("/bin")));
             assert!(is_protected(Path::new("/lib")));
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn protects_macos_system_paths() {
+        // macOS 전용 시스템 경로 — extend_from_slice 라인을 macOS서 커버.
+        for p in [
+            "/System",
+            "/System/Library/CoreServices",
+            "/Library",
+            "/Applications",
+            "/private/etc",
+            "/Volumes/Macintosh HD",
+            "/cores",
+            "/Network",
+        ] {
+            assert!(is_protected(Path::new(p)), "{p} must be protected on macOS");
         }
     }
 
