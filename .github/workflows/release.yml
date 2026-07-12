@@ -172,9 +172,10 @@ jobs:
 
       # Also build the lib test binary (contains engine.rs's #[ignore] real-model smoke test) so GPU
       # offload can be verified headlessly via CLI — no GUI needed. Run it with DISKSAGE_MODEL set.
+      # No `shell: bash` — on Windows that puts git-bash's /usr/bin/link ahead of MSVC link.exe
+      # and breaks linking. Default shell (pwsh on Windows / bash on Linux) uses the right linker.
       - name: Build engine smoke-test binary
-        shell: bash
-        run: cargo test --manifest-path src-tauri/Cargo.toml --release --no-run --features "${{ matrix.features }}" --lib 2>&1 | tail -5
+        run: cargo test --manifest-path src-tauri/Cargo.toml --release --no-run --features "${{ matrix.features }}" --lib
 
       # Diagnostic: learn WHERE the shared libs landed (first-attempt discovery).
       - name: List built shared libs (diagnostic)
@@ -192,6 +193,7 @@ jobs:
         if: always()
         shell: bash
         run: |
+          set +e +o pipefail  # best-effort staging must never fail the job
           mkdir -p gpu-run
           # app binary (Tauri output name follows productName/crate; grab both just in case)
           find src-tauri/target/release -maxdepth 1 -type f \( -name 'disksage' -o -name 'disksage.exe' -o -name 'DiskSage' -o -name 'DiskSage.exe' \) -exec cp {} gpu-run/ \; 2>/dev/null || true
