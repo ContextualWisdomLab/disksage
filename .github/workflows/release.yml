@@ -101,7 +101,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, windows-latest]
+        # windows-2022 (VS 2022 / MSVC 14.4x): CUDA 12.6 rejects the newer MSVC on windows-latest
+        # (VS 2026) via host_config.h "unsupported Microsoft Visual Studio version".
+        os: [ubuntu-22.04, windows-2022]
     runs-on: ${{ matrix.os }}
     env:
       # Target the tester's GPU (RTX 3050 Ti = Ampere, compute 8.6) to keep the CUDA compile
@@ -143,19 +145,21 @@ jobs:
       # so cmake's VS generator fails with "No CUDA toolset found". Switch to Ninja + activate the
       # MSVC env so nvcc uses cl.exe directly as the host compiler (no VS-integration files needed).
       - name: Setup MSVC dev environment (Windows)
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == 'windows-2022'
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
       - name: Force Ninja generator (Windows)
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == 'windows-2022'
         shell: bash
         run: echo "CMAKE_GENERATOR=Ninja" >> "$GITHUB_ENV"
 
       # CUDA is dynamically linked (NVIDIA ships no static cudart); dynamic-backends builds each
       # ggml backend as a separate shared lib loaded at runtime, so the app launches on machines
       # WITHOUT CUDA (Vulkan/CPU fallback) — the distributable design from spec §6.
+      # --no-bundle: build the app binary + shared libs only, skip installer bundling (linuxdeploy
+      # fails on the dynamic backend .so's, and verification needs just the raw exe + libs anyway).
       - name: "Tauri build (GPU: CUDA + Vulkan + dynamic backends)"
-        run: npm run tauri -- build --features "llm-engine,llama-cpp-2/cuda,llama-cpp-2/vulkan,llama-cpp-2/dynamic-backends"
+        run: npm run tauri -- build --no-bundle --features "llm-engine,llama-cpp-2/cuda,llama-cpp-2/vulkan,llama-cpp-2/dynamic-backends"
 
       # Diagnostic: learn WHERE the shared libs landed (first-attempt discovery).
       - name: List built shared libs (diagnostic)
@@ -163,7 +167,8 @@ jobs:
         shell: bash
         run: |
           echo "== target/release top =="; ls -la src-tauri/target/release/ 2>/dev/null | head -40 || true
-          echo "== ggml/llama/cuda/vulkan libs under target =="; find src-tauri/target -maxdepth 4 -iregex '.*\(ggml\|llama\|cudart\|vulkan\).*\.\(dll\|so\|dylib\)' 2>/dev/null | head -40 || true
+          echo "== ggml/llama/cuda/vulkan libs under target (backends land in out/backends) =="; find src-tauri/target -maxdepth 8 -iregex '.*\(ggml\|llama\|cudart\|vulkan\).*\.\(dll\|so\|dylib\)' 2>/dev/null | head -60 || true
+          echo "== out/backends dirs =="; find src-tauri/target -type d -name backends 2>/dev/null | head || true
           echo "== CUDA runtime dll/so =="; find "${CUDA_PATH:-/usr/local/cuda}" -iname 'cudart*' 2>/dev/null | head || true
 
       # Best-effort stage: app exe + every ggml/llama/cuda/vulkan shared lib next to it, so the
@@ -175,11 +180,17 @@ jobs:
           mkdir -p gpu-run
           # app binary (Tauri output name follows productName/crate; grab both just in case)
           find src-tauri/target/release -maxdepth 1 -type f \( -name 'disksage' -o -name 'disksage.exe' -o -name 'DiskSage' -o -name 'DiskSage.exe' \) -exec cp {} gpu-run/ \; 2>/dev/null || true
-          # all ggml/llama shared libs cargo produced
-          find src-tauri/target -maxdepth 4 -iregex '.*\(ggml\|llama\).*\.\(dll\|so\)' -exec cp {} gpu-run/ \; 2>/dev/null || true
-          # CUDA runtime lib (needed next to the ggml-cuda lib on the tester's machine)
-          find "${CUDA_PATH:-/usr/local/cuda}" -iname 'cudart64_*.dll' -exec cp {} gpu-run/ \; 2>/dev/null || true
-          find "${CUDA_PATH:-/usr/local/cuda}" -iname 'libcudart.so*' -exec cp {} gpu-run/ \; 2>/dev/null || true
+          # all ggml/llama shared libs incl. dynamic backends (deep in build/.../out/backends) and
+          # Linux SONAME-versioned .so.N files; copy symlinks + targets so the set is self-contained.
+          find src-tauri/target -maxdepth 8 -iregex '.*\(ggml\|llama\).*\(\.dll\|\.so\|\.so\..*\)' -exec cp {} gpu-run/ \; 2>/dev/null || true
+          # CUDA runtime libs ggml-cuda needs at load time (cudart + cuBLAS). nvcuda/vulkan-1 come
+          # from the GPU driver / Vulkan runtime already on the tester's machine.
+          for pat in 'cudart64_*.dll' 'cublas64_*.dll' 'cublasLt64_*.dll'; do
+            find "${CUDA_PATH:-/usr/local/cuda}" -iname "$pat" -exec cp {} gpu-run/ \; 2>/dev/null || true
+          done
+          for pat in 'libcudart.so*' 'libcublas.so*' 'libcublasLt.so*'; do
+            find "${CUDA_PATH:-/usr/local/cuda}" -iname "$pat" -exec cp -L {} gpu-run/ \; 2>/dev/null || true
+          done
           echo "== staged =="; ls -la gpu-run/ || true
 
       - name: Upload GPU run bundle (for manual GPU verification)
