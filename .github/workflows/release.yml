@@ -103,7 +103,15 @@ jobs:
       matrix:
         # windows-2022 (VS 2022 / MSVC 14.4x): CUDA 12.6 rejects the newer MSVC on windows-latest
         # (VS 2026) via host_config.h "unsupported Microsoft Visual Studio version".
-        os: [ubuntu-22.04, windows-2022]
+        # Windows drops Vulkan: llama.cpp's vulkan-shaders-gen nested build blows past the Windows
+        # 260-char MAX_PATH ("C1083: Cannot open compiler generated file"). The tester's GPU is
+        # NVIDIA (CUDA), so CUDA+CPU covers it; Windows Vulkan is a follow-up (needs a short build
+        # path). Linux keeps CUDA+Vulkan (no MAX_PATH limit).
+        include:
+          - os: ubuntu-22.04
+            features: "llm-engine,llama-cpp-2/cuda,llama-cpp-2/vulkan,llama-cpp-2/dynamic-backends"
+          - os: windows-2022
+            features: "llm-engine,llama-cpp-2/cuda,llama-cpp-2/dynamic-backends"
     runs-on: ${{ matrix.os }}
     env:
       # Target the tester's GPU (RTX 3050 Ti = Ampere, compute 8.6) to keep the CUDA compile
@@ -125,6 +133,7 @@ jobs:
           method: "network"
 
       - name: Install Vulkan SDK
+        if: matrix.os == 'ubuntu-22.04'
         uses: jakoch/install-vulkan-sdk-action@37effcfa045411f8bfbbda26df2fd1b3bf3436fa # v1.6.0
         with:
           version: "1.3.290.0"
@@ -158,8 +167,8 @@ jobs:
       # WITHOUT CUDA (Vulkan/CPU fallback) — the distributable design from spec §6.
       # --no-bundle: build the app binary + shared libs only, skip installer bundling (linuxdeploy
       # fails on the dynamic backend .so's, and verification needs just the raw exe + libs anyway).
-      - name: "Tauri build (GPU: CUDA + Vulkan + dynamic backends)"
-        run: npm run tauri -- build --no-bundle --features "llm-engine,llama-cpp-2/cuda,llama-cpp-2/vulkan,llama-cpp-2/dynamic-backends"
+      - name: "Tauri build (GPU: CUDA [+ Vulkan on Linux] + dynamic backends)"
+        run: npm run tauri -- build --no-bundle --features "${{ matrix.features }}"
 
       # Diagnostic: learn WHERE the shared libs landed (first-attempt discovery).
       - name: List built shared libs (diagnostic)
