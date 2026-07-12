@@ -21,10 +21,16 @@ pub struct LlamaEngine {
 }
 
 impl LlamaEngine {
-    /// 모델을 한 번 로드(백엔드+모델). n_gpu_layers=0을 명시해 CPU 고정(M5; 라이브러리 기본값은 -1이라 명시 필요). 실패는 Err(문자열).
+    /// 모델을 한 번 로드(백엔드+모델). GPU 층수는 기본 999(가능한 만큼 GPU로 오프로드) —
+    /// GPU 백엔드(CUDA/Vulkan/Metal)가 컴파일돼 있으면 그걸 쓰고, 없으면(CPU 빌드) 무시되어 CPU.
+    /// `DISKSAGE_GPU_LAYERS`로 오버라이드(0이면 CPU 강제 — GPU 대비 검증용). 실패는 Err(문자열).
     pub fn new(model_path: &Path) -> Result<Self, String> {
         let backend = LlamaBackend::init().map_err(|e| e.to_string())?;
-        let params = LlamaModelParams::default().with_n_gpu_layers(0);
+        let gpu_layers: u32 = std::env::var("DISKSAGE_GPU_LAYERS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(999);
+        let params = LlamaModelParams::default().with_n_gpu_layers(gpu_layers);
         let model = LlamaModel::load_from_file(&backend, model_path, &params).map_err(|e| e.to_string())?;
         Ok(Self { backend, model })
     }
