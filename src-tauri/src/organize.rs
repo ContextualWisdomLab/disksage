@@ -38,7 +38,8 @@ pub fn plan_moves_with(
         // (classify 뒤에 두면 이 분기가 도달 불가라 커버리지 사각이 됨)
         let Some(name) = f.path.file_name() else { continue };
         // precedence: 사용자 규칙 → picker(LLM) → 확장자 classify → 제외
-        let local: String = match crate::userrules::classify_by_rules(rules, &f.path, f.size) {
+        // ponytail: age_days=0 고정 — 실제 now_ms 스레딩은 Task 3(plan_moves_with(now_ms))에서.
+        let local: String = match crate::userrules::classify_by_rules(rules, &f.path, f.size, 0) {
             Some(c) => c,
             None => match pick(&f.path, &candidates) {
                 Some(picked) => picked,
@@ -221,7 +222,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
         let onto = parse_ttl(ONTO).unwrap();
         let home = Path::new("/home/u");
         let rules = vec![crate::userrules::Rule {
-            r#match: crate::userrules::RuleMatch { ext: Some("png".into()), name_contains: None, path_contains: None, min_size: None, max_size: None },
+            r#match: crate::userrules::RuleMatch { ext: Some("png".into()), name_contains: None, path_contains: None, min_size: None, max_size: None, min_age_days: None, max_age_days: None },
             class: "Installer".into(),
         }];
         let pick = |_p: &Path, _c: &[&str]| Some("Image".to_string()); // picker가 Image를 골라도
@@ -239,7 +240,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
         let onto = parse_ttl(ONTO).unwrap();
         let home = Path::new("/home/u");
         let rules = vec![crate::userrules::Rule {
-            r#match: crate::userrules::RuleMatch { ext: Some("iso".into()), name_contains: None, path_contains: None, min_size: None, max_size: None },
+            r#match: crate::userrules::RuleMatch { ext: Some("iso".into()), name_contains: None, path_contains: None, min_size: None, max_size: None, min_age_days: None, max_age_days: None },
             class: "Installer".into(),
         }];
         let pick = |_p: &Path, _c: &[&str]| None;
