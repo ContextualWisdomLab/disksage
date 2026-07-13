@@ -3,6 +3,7 @@
 use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RuleMatch {
     #[serde(default)] pub ext: Option<String>,
     #[serde(default)] pub name_contains: Option<String>,
@@ -12,6 +13,7 @@ pub struct RuleMatch {
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Rule {
     pub r#match: RuleMatch,
     pub class: String,
@@ -109,5 +111,12 @@ mod tests {
         assert_eq!(classify_by_rules(&catch, &PathBuf::from("/anything.zzz"), 0).as_deref(), Some("Any"));
         // 빈 규칙 → None
         assert_eq!(classify_by_rules(&[], &PathBuf::from("/x"), 0), None);
+    }
+
+    #[test]
+    fn unknown_field_is_rejected_not_silent_catch_all() {
+        // 예: "exten"(오타) — deny_unknown_fields로 조용한 catch-all 대신 에러
+        assert!(parse_rules(r#"[{"match":{"exten":"iso"},"class":"X"}]"#).is_err());
+        assert!(parse_rules(r#"[{"match":{},"class":"X","typo":1}]"#).is_err());
     }
 }

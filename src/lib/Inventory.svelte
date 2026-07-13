@@ -35,6 +35,7 @@
       userRulesCount = rules.length;
       userRulesError = "";
     } catch (e) {
+      userRulesCount = null;
       userRulesError = String(e);
     }
   }
