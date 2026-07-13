@@ -1,6 +1,7 @@
 <script lang="ts">
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
+  import Settings from "./Settings.svelte";
 
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
@@ -20,6 +21,8 @@
   // 활성 사용자 규칙 개수(advisory) — 손상된 규칙 파일은 조용히 무시하지 않고 안내만(게이트 아님)
   let userRulesCount = $state<number | null>(null);
   let userRulesError = $state("");
+  // 미분류 확장자 자문 인사이트(advisory) — 오프라인 LLM + (online_mode일 때만) 웹. 실패해도 조용히 무시(게이트 아님)
+  let insights = $state<api.ExtInsight[]>([]);
 
   async function loadCoherence() {
     try {
@@ -44,10 +47,13 @@
     if (!scannedRoot) return;
     busy = true;
     loadError = "";
+    insights = [];
     try {
       report = await api.diskInventory(scannedRoot);
       await loadCoherence();
       await loadUserRules();
+      // 미분류 확장자 인사이트: 비차단(fire-and-forget) — 실패해도 인벤토리 표시를 막지 않음
+      api.reasonUnknownExtensions(report.unknown_samples).then((r) => (insights = r)).catch(() => {});
     } catch (e) {
       loadError = String(e);
     } finally {
@@ -119,6 +125,8 @@
     <span class="muted small">판정은 참고용(자문)입니다 — 모델 없이도 규칙 기반으로 전체 기능이 동작합니다.</span>
   </div>
 
+  <Settings />
+
   {#if report}
     <ul class="bars">
       {#each report.tallies as t (t.class_id)}
@@ -143,6 +151,16 @@
               <span class="summary-text">{summary ?? "미판정 (모델 없음)"}</span>
             {/if}
           </div>
+          {#if insights.length > 0}
+            <ul class="ext-insights">
+              {#each insights as i (i.ext)}
+                <li>
+                  .{i.ext}: {i.type_desc ?? "?"}
+                  {#if i.suggested_class}<span class="hint">→ {i.suggested_class}</span>{/if}
+                </li>
+              {/each}
+            </ul>
+          {/if}
         </li>
       {/if}
     </ul>
@@ -188,6 +206,9 @@
   .muted.small { color: #999; font-size: 0.75rem; }
   .unknown-summary { margin-top: 0.25rem; display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; }
   .summary-text { color: #555; }
+  .ext-insights { list-style: none; padding: 0; margin: 0.35rem 0 0; }
+  .ext-insights li { font-size: 0.78rem; color: #666; margin: 0.1rem 0; }
+  .ext-insights .hint { color: #4a90d9; margin-left: 0.25rem; }
   .coherence { margin-top: 0.75rem; }
   .ok.small { color: #2a7; font-size: 0.8rem; }
   .warn.small { color: #a60; font-size: 0.8rem; }

@@ -1,5 +1,5 @@
 //! 강제-JSON 파싱 — 모델 출력에서 첫 균형 잡힌 {..}를 뽑아 serde. 모든 실패는 fail-closed(Unrated/None).
-use crate::llm::Verdict;
+use crate::llm::{ExtReasoning, Verdict};
 
 /// 첫 '{'부터 짝이 맞는 '}'까지 슬라이스. 없거나 안 맞으면 None.
 // ponytail: 순진한 중괄호 카운트 — 문자열 값 안의 중괄호는 오분류 가능. 소형 모델 강제 JSON엔 충분.
@@ -54,6 +54,15 @@ pub fn parse_summary(raw: &str) -> Option<String> {
     let js = extract_json(raw)?;
     let v = serde_json::from_str::<serde_json::Value>(js).ok()?;
     Some(v.get("summary")?.as_str()?.to_string())
+}
+
+/// 확장자 추론 파싱. type 문자열이 있어야 Some; class는 후보에 있을 때만 Some(그 외/none은 None).
+pub fn parse_ext_reasoning(raw: &str, candidates: &[&str]) -> Option<ExtReasoning> {
+    let js = extract_json(raw)?;
+    let v = serde_json::from_str::<serde_json::Value>(js).ok()?;
+    let type_desc = v.get("type")?.as_str()?.to_string();
+    let class = v.get("class").and_then(|c| c.as_str()).filter(|c| candidates.contains(c)).map(|c| c.to_string());
+    Some(ExtReasoning { type_desc, class })
 }
 
 #[cfg(test)]
@@ -120,5 +129,26 @@ mod tests {
         assert_eq!(parse_summary("{bad}"), None);            // serde err
         assert_eq!(parse_summary(r#"{"x":1}"#), None);       // summary 필드 없음
         assert_eq!(parse_summary(r#"{"summary":9}"#), None); // 문자열 아님
+    }
+    #[test]
+    fn ext_reasoning_extracts_type_and_validates_class() {
+        // class가 후보에 있으면 Some
+        let r = parse_ext_reasoning(r#"{"type":"3D model","class":"Model3D"}"#, &["Model3D"]).unwrap();
+        assert_eq!(r.type_desc, "3D model");
+        assert_eq!(r.class.as_deref(), Some("Model3D"));
+        // class가 후보 밖이면 type은 유지, class는 None(자유 생성 거부)
+        let r2 = parse_ext_reasoning(r#"{"type":"3D model","class":"Nope"}"#, &["Model3D"]).unwrap();
+        assert_eq!(r2.class, None);
+        assert_eq!(r2.type_desc, "3D model");
+        // class:"none" → None
+        let r3 = parse_ext_reasoning(r#"{"type":"data","class":"none"}"#, &["Model3D"]).unwrap();
+        assert_eq!(r3.class, None);
+    }
+    #[test]
+    fn ext_reasoning_failure_paths_are_none() {
+        assert!(parse_ext_reasoning("no json", &["X"]).is_none());       // extract None
+        assert!(parse_ext_reasoning("{bad}", &["X"]).is_none());         // serde err
+        assert!(parse_ext_reasoning(r#"{"class":"X"}"#, &["X"]).is_none()); // type 필드 없음 → None
+        assert!(parse_ext_reasoning(r#"{"type":9}"#, &["X"]).is_none());  // type이 문자열 아님
     }
 }

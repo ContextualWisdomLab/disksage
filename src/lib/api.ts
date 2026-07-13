@@ -147,3 +147,11 @@ export const downloadModel = () => invoke<void>("download_model");
 export const fileVerdicts = (paths: string[]) => invoke<FileVerdict[]>("file_verdicts", { paths });
 export const summarizeUnknownBucket = (paths: string[]) =>
   invoke<string | null>("summarize_unknown_bucket", { paths });
+
+export interface Settings { online_mode: boolean; }
+export const getSettings = () => invoke<Settings>("get_settings");
+export const setSettings = (online_mode: boolean) => invoke<Settings>("set_settings", { onlineMode: online_mode });
+
+export interface ExtInsight { ext: string; type_desc: string | null; suggested_class: string | null; source: string; }
+export const reasonUnknownExtensions = (samples: string[]) =>
+  invoke<ExtInsight[]>("reason_unknown_extensions", { samples });

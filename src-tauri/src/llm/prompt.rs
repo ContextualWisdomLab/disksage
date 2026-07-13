@@ -10,6 +10,13 @@ pub struct FileMeta {
     pub parent: String,
 }
 
+/// LLM 확장자 추론 결과. type_desc = "무슨 파일인가" 짧은 설명, class = 후보 중 제안(없으면 None).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExtReasoning {
+    pub type_desc: String,
+    pub class: Option<String>,
+}
+
 /// 삭제-안전 판정 프롬프트. 강제 JSON, 메타데이터만.
 pub fn verdict_prompt(m: &FileMeta) -> String {
     format!(
@@ -46,6 +53,18 @@ pub fn summary_prompt(samples: &[FileMeta]) -> String {
     )
 }
 
+/// 확장자 추론 프롬프트 — 확장자 토큰만(파일명/경로/내용 금지). 후보 중 하나 또는 'none'.
+pub fn ext_reason_prompt(ext: &str, candidates: &[&str]) -> String {
+    format!(
+        "A file has extension \".{ext}\". Using ONLY the extension, say what kind of content it is, \
+         and pick the best-fitting class id from the candidates, or \"none\".\n\
+         Candidates: {list}\n\
+         Reply with ONLY this JSON, no prose:\n\
+         {{\"type\":\"<short type, e.g. '3D model'>\",\"class\":\"<one candidate id or none>\"}}",
+        ext = ext, list = candidates.join(", ")
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -78,5 +97,14 @@ mod tests {
         let b = FileMeta { path: "/a/y.dat".into(), name: "y.dat".into(), size: 2, mtime_days: 2, parent: "a".into() };
         let p = summary_prompt(&[a, b]);
         assert!(p.contains("x.bin") && p.contains("y.dat"));
+    }
+    #[test]
+    fn ext_reason_prompt_has_ext_and_schema_no_pii() {
+        let p = ext_reason_prompt("fbx", &["Image", "Model3D"]);
+        assert!(p.contains("fbx"));
+        assert!(p.contains("Model3D"));
+        assert!(p.contains(r#""type""#) && p.contains(r#""class""#));
+        // 프라이버시: 확장자 토큰만 — 파일명/경로가 프롬프트에 섞이지 않음(이 프롬프트는 ext만 받음)
+        assert!(!p.contains("/"));
     }
 }

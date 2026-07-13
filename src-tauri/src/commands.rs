@@ -244,6 +244,35 @@ pub fn ontology_coherence(app: AppHandle) -> Result<Vec<crate::ontology::Issue>,
     Ok(crate::ontology::Reasoner::build(&onto).check_coherence())
 }
 
+#[cfg(not(coverage))]
+fn settings_file_path(app: &AppHandle) -> Result<PathBuf, String> {
+    use tauri::Manager;
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join("settings.json"))
+}
+
+/// 현재 설정 조회. 파일 없으면 기본값(offline). 손상 파일은 parse_settings가 기본값으로 흡수.
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn get_settings(app: AppHandle) -> Result<crate::settings::Settings, String> {
+    let path = settings_file_path(&app)?;
+    match std::fs::read_to_string(&path) {
+        Ok(s) => Ok(crate::settings::parse_settings(&s)),
+        Err(_) => Ok(crate::settings::Settings::default()),
+    }
+}
+
+/// online_mode 설정 후 영속. 반환은 저장된 설정.
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn set_settings(online_mode: bool, app: AppHandle) -> Result<crate::settings::Settings, String> {
+    let s = crate::settings::Settings { online_mode };
+    let path = settings_file_path(&app)?;
+    std::fs::write(&path, crate::settings::serialize_settings(&s)).map_err(|e| e.to_string())?;
+    Ok(s)
+}
+
 // 아래 Tauri command 래퍼들은 coverage 빌드에서 제외 — 순수 로직(node_view 등)은 위에서 측정됨
 #[cfg(not(coverage))]
 #[tauri::command]
@@ -596,6 +625,55 @@ pub fn summarize_unknown_bucket(paths: Vec<String>, app: AppHandle, state: State
     }
 
     Ok(None)
+}
+
+/// 미분류 확장자 자문 추론. samples = InventoryReport.unknown_samples(경로). online_mode일 때만 웹 조회.
+/// LLM은 feature+모델 있을 때만; 웹은 online_mode일 때만(feature 무관). 둘 다 없으면 source="none".
+#[cfg(not(coverage))]
+#[cfg_attr(not(feature = "llm-engine"), allow(unused_variables))]
+#[tauri::command(async)]
+pub fn reason_unknown_extensions(
+    samples: Vec<String>,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<Vec<crate::reasoning::ExtInsight>, String> {
+    let exts = crate::reasoning::distinct_extensions(&samples);
+
+    // opt-in 웹: online_mode일 때만 DdgLookup, 아니면 None → build_insights의 웹 분기 절대 미실행(default offline)
+    let settings = get_settings(app.clone())?;
+    let ddg = crate::web::DdgLookup;
+    let web_fn = |ext: &str| -> Option<String> { crate::web::WebLookup::file_type(&ddg, ext).ok().flatten() };
+    let web: Option<&dyn Fn(&str) -> Option<String>> = if settings.online_mode { Some(&web_fn) } else { None };
+
+    // 오프라인 LLM(feature+모델+엔진 있으면 실제; 그 블록에서 반환). 없으면 아래 fallback로 낙하.
+    #[cfg(feature = "llm-engine")]
+    {
+        use tauri::Manager;
+        let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        if model_status_for(&model_file_path(&dir)).present {
+            // 온톨로지 로드는 LLM 경로에서만 필요 — 여기로 이동해 기본/웹전용 빌드가 malformed ontology.ttl로 실패하지 않게 함
+            let onto = load_ontology_from(&bundled_ontology_ttl(&app)?)?;
+            let candidates: Vec<String> = onto.classes.iter()
+                .map(|c| c.id.rsplit(['#', '/']).next().unwrap_or(&c.id).to_string()).collect();
+            let cand_refs: Vec<&str> = candidates.iter().map(|s| s.as_str()).collect();
+
+            let mut guard = state.engine.lock().unwrap();
+            if guard.is_none() {
+                if let Ok(e) = crate::llm::LlamaEngine::new(&model_file_path(&dir)) {
+                    *guard = Some(e);
+                }
+            }
+            if let Some(engine) = guard.as_ref() {
+                let reason = |ext: &str| crate::llm::reason_extension(engine, ext, &cand_refs);
+                // ponytail: engine lock held across the opt-in web lookups in build_insights (≤5s×N). Fine for the few distinct unknown exts; if a concurrent verdict call ever contends, split into a locked LLM pass + an unlocked web pass.
+                return Ok(crate::reasoning::build_insights(&exts, &reason, web));
+            }
+        }
+    }
+
+    // fallback: LLM 없음(feature off/모델 없음/init 실패) — reason은 항상 None, 웹은 위 settings대로 적용
+    let reason = |_: &str| -> Option<crate::llm::ExtReasoning> { None };
+    Ok(crate::reasoning::build_insights(&exts, &reason, web))
 }
 
 #[cfg(test)]
