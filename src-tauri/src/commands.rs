@@ -620,10 +620,6 @@ pub fn reason_unknown_extensions(
     state: State<AppState>,
 ) -> Result<Vec<crate::reasoning::ExtInsight>, String> {
     let exts = crate::reasoning::distinct_extensions(&samples);
-    let onto = load_ontology_from(&bundled_ontology_ttl(&app)?)?;
-    let candidates: Vec<String> = onto.classes.iter()
-        .map(|c| c.id.rsplit(['#', '/']).next().unwrap_or(&c.id).to_string()).collect();
-    let cand_refs: Vec<&str> = candidates.iter().map(|s| s.as_str()).collect();
 
     // opt-in 웹: online_mode일 때만 DdgLookup, 아니면 None → build_insights의 웹 분기 절대 미실행(default offline)
     let settings = get_settings(app.clone())?;
@@ -637,6 +633,12 @@ pub fn reason_unknown_extensions(
         use tauri::Manager;
         let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
         if model_status_for(&model_file_path(&dir)).present {
+            // 온톨로지 로드는 LLM 경로에서만 필요 — 여기로 이동해 기본/웹전용 빌드가 malformed ontology.ttl로 실패하지 않게 함
+            let onto = load_ontology_from(&bundled_ontology_ttl(&app)?)?;
+            let candidates: Vec<String> = onto.classes.iter()
+                .map(|c| c.id.rsplit(['#', '/']).next().unwrap_or(&c.id).to_string()).collect();
+            let cand_refs: Vec<&str> = candidates.iter().map(|s| s.as_str()).collect();
+
             let mut guard = state.engine.lock().unwrap();
             if guard.is_none() {
                 if let Ok(e) = crate::llm::LlamaEngine::new(&model_file_path(&dir)) {
@@ -645,6 +647,7 @@ pub fn reason_unknown_extensions(
             }
             if let Some(engine) = guard.as_ref() {
                 let reason = |ext: &str| crate::llm::reason_extension(engine, ext, &cand_refs);
+                // ponytail: engine lock held across the opt-in web lookups in build_insights (≤5s×N). Fine for the few distinct unknown exts; if a concurrent verdict call ever contends, split into a locked LLM pass + an unlocked web pass.
                 return Ok(crate::reasoning::build_insights(&exts, &reason, web));
             }
         }

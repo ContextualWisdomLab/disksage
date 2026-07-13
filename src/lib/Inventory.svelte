@@ -33,6 +33,7 @@
     if (!scannedRoot) return;
     busy = true;
     loadError = "";
+    insights = [];
     try {
       report = await api.diskInventory(scannedRoot);
       await loadCoherence();
