@@ -20,9 +20,9 @@ pub use model::{verify_sha256, ModelSpec, DEFAULT};
 #[cfg(not(coverage))]
 pub use model::download_to;
 #[cfg_attr(coverage, allow(unused_imports))]
-pub use parse::{parse_class_pick, parse_summary, parse_verdict, parse_verdict_full};
+pub use parse::{parse_class_pick, parse_ext_reasoning, parse_summary, parse_verdict, parse_verdict_full};
 #[cfg_attr(coverage, allow(unused_imports))]
-pub use prompt::{classify_prompt, summary_prompt, verdict_prompt, FileMeta};
+pub use prompt::{classify_prompt, ext_reason_prompt, summary_prompt, verdict_prompt, ExtReasoning, FileMeta};
 #[cfg_attr(coverage, allow(unused_imports))]
 pub use verdict::{FileVerdict, Verdict};
 
@@ -52,6 +52,12 @@ pub fn pick_class(engine: &dyn InferenceEngine, meta: &FileMeta, candidates: &[&
 pub fn summarize_unknown(engine: &dyn InferenceEngine, samples: &[FileMeta]) -> Option<String> {
     let out = engine.infer(&summary_prompt(samples)).ok()?;
     parse_summary(&out)
+}
+
+/// 확장자 하나를 추론(type + 제안 class). infer 실패·파싱 실패는 None.
+pub fn reason_extension(engine: &dyn InferenceEngine, ext: &str, candidates: &[&str]) -> Option<ExtReasoning> {
+    let out = engine.infer(&ext_reason_prompt(ext, candidates)).ok()?;
+    parse_ext_reasoning(&out, candidates)
 }
 
 #[cfg(test)]
@@ -106,5 +112,17 @@ mod tests {
     fn summarize_unknown_error_is_none() {
         let e = Fake(Err("x".into()));
         assert_eq!(summarize_unknown(&e, &[meta()]), None);
+    }
+    #[test]
+    fn reason_extension_maps_llm_json() {
+        let e = Fake(Ok(r#"{"type":"3D model","class":"Model3D"}"#.into()));
+        let r = reason_extension(&e, "fbx", &["Model3D"]).unwrap();
+        assert_eq!(r.type_desc, "3D model");
+        assert_eq!(r.class.as_deref(), Some("Model3D"));
+    }
+    #[test]
+    fn reason_extension_error_is_none() {
+        let e = Fake(Err("no model".into()));
+        assert!(reason_extension(&e, "fbx", &["Model3D"]).is_none());
     }
 }
