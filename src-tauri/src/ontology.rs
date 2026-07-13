@@ -14,12 +14,16 @@ const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const RDFS_SUBCLASS: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
 const RDFS_LABEL: &str = "http://www.w3.org/2000/01/rdf-schema#label";
 const DM_TARGET: &str = "https://disksage.app/ontology#targetFolder";
+const OWL_EQUIVALENT_CLASS: &str = "http://www.w3.org/2002/07/owl#equivalentClass";
+const OWL_DISJOINT_WITH: &str = "http://www.w3.org/2002/07/owl#disjointWith";
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct OntoClass {
     pub id: String,
     pub label: String,
-    pub parent: Option<String>,
+    pub parents: Vec<String>,
+    pub equivalents: Vec<String>,
+    pub disjoints: Vec<String>,
     pub target_folder: Option<String>,
 }
 
@@ -31,9 +35,22 @@ pub struct Ontology {
 /// owl:Class 주어를 선언 순서로 수집하고 subClassOf/label/targetFolder를 매칭한다.
 pub fn parse_ttl(turtle_src: &str) -> Result<Ontology, String> {
     let mut order: Vec<String> = Vec::new();
-    let mut parents: BTreeMap<String, String> = BTreeMap::new();
+    let mut parents: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut equivalents: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut disjoints: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut labels: BTreeMap<String, String> = BTreeMap::new();
     let mut targets: BTreeMap<String, String> = BTreeMap::new();
+
+    // 명명 노드 오브젝트만 채택, 순서 보존, 동일 오브젝트 중복 무시.
+    let push = |map: &mut BTreeMap<String, Vec<String>>, s: String, o: &Term| {
+        if let Term::NamedNode(o) = o {
+            let v = map.entry(s).or_default();
+            let o = o.as_str().to_string();
+            if !v.contains(&o) {
+                v.push(o);
+            }
+        }
+    };
 
     for triple in TurtleParser::new().for_reader(turtle_src.as_bytes()) {
         let triple: Triple = triple.map_err(|e| e.to_string())?;
@@ -50,14 +67,11 @@ pub fn parse_ttl(turtle_src: &str) -> Result<Ontology, String> {
                     }
                 }
             }
-            RDFS_SUBCLASS => {
-                if let Term::NamedNode(o) = &triple.object {
-                    // 다중 rdfs:subClassOf는 첫 선언만 부모로 채택(단일 부모 트리 가정) —
-                    // targetFolder 상속의 결정성을 위해. OWL은 다중 상위를 허용하지만
-                    // 이동 목적지가 arbitrary 분기에 좌우되지 않도록 first-wins 고정.
-                    parents.entry(s).or_insert(o.as_str().to_string());
-                }
-            }
+            // 다중 rdfs:subClassOf/owl:equivalentClass/owl:disjointWith를 선언 순서대로
+            // 모두 수집한다(Task 2 추론기 입력). resolve_target은 여전히 첫 부모만 사용.
+            RDFS_SUBCLASS => push(&mut parents, s, &triple.object),
+            OWL_EQUIVALENT_CLASS => push(&mut equivalents, s, &triple.object),
+            OWL_DISJOINT_WITH => push(&mut disjoints, s, &triple.object),
             RDFS_LABEL => {
                 // 첫 라벨만 취함(언어 무관) — 이미 있으면 유지
                 if let Term::Literal(lit) = &triple.object {
@@ -77,7 +91,9 @@ pub fn parse_ttl(turtle_src: &str) -> Result<Ontology, String> {
         .into_iter()
         .map(|id| OntoClass {
             label: labels.get(&id).cloned().unwrap_or_else(|| id.clone()),
-            parent: parents.get(&id).cloned(),
+            parents: parents.get(&id).cloned().unwrap_or_default(),
+            equivalents: equivalents.get(&id).cloned().unwrap_or_default(),
+            disjoints: disjoints.get(&id).cloned().unwrap_or_default(),
             target_folder: targets.get(&id).cloned(),
             id,
         })
@@ -96,7 +112,7 @@ impl Ontology {
             if let Some(t) = &cls.target_folder {
                 return Some(t.clone());
             }
-            cur = cls.parent.clone()?;
+            cur = cls.parents.first().cloned()?;
         }
         None
     }
@@ -143,14 +159,45 @@ dm:B a owl:Class ;
     fn parses_classes_labels_parents_and_targets() {
         let onto = parse_ttl(SAMPLE).unwrap();
         let doc = onto.classes.iter().find(|c| c.id.ends_with("Document")).unwrap();
-        assert_eq!(doc.parent, None);
+        assert!(doc.parents.is_empty());
         assert_eq!(doc.target_folder.as_deref(), Some("~/Documents/{class}"));
-        // 라벨은 최소 하나(en 또는 ko) — 존재만 확인
         assert!(!doc.label.is_empty());
-
         let rcpt = onto.classes.iter().find(|c| c.id.ends_with("Receipt")).unwrap();
-        assert!(rcpt.parent.as_deref().unwrap().ends_with("Document"));
-        assert_eq!(rcpt.target_folder, None); // 자체 targetFolder 없음
+        assert!(rcpt.parents.iter().any(|p| p.ends_with("Document")));
+        assert_eq!(rcpt.target_folder, None);
+    }
+
+    #[test]
+    fn parses_multiple_subclassof_equivalent_and_disjoint() {
+        let ttl = r#"
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix dm: <https://disksage.app/ontology#> .
+dm:A a owl:Class . dm:B a owl:Class . dm:P a owl:Class . dm:Q a owl:Class .
+dm:C a owl:Class ; rdfs:subClassOf dm:A ; rdfs:subClassOf dm:B ;
+    owl:equivalentClass dm:P ; owl:disjointWith dm:Q .
+"#;
+        let onto = parse_ttl(ttl).unwrap();
+        let c = onto.classes.iter().find(|c| c.id.ends_with("#C")).unwrap();
+        assert_eq!(c.parents.len(), 2);
+        assert!(c.parents.iter().any(|p| p.ends_with("#A")) && c.parents.iter().any(|p| p.ends_with("#B")));
+        assert!(c.equivalents.iter().any(|e| e.ends_with("#P")));
+        assert!(c.disjoints.iter().any(|d| d.ends_with("#Q")));
+    }
+
+    #[test]
+    fn dedup_skips_repeated_axiom_object_for_same_subject() {
+        // 브리프의 dedup 규칙(이미 존재하는 오브젝트는 재수집하지 않음) 커버리지.
+        let ttl = r#"
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix dm: <https://disksage.app/ontology#> .
+dm:A a owl:Class . dm:C a owl:Class ; rdfs:subClassOf dm:A ; rdfs:subClassOf dm:A ;
+    rdfs:subClassOf "리터럴은 명명 노드 아님" .
+"#;
+        let onto = parse_ttl(ttl).unwrap();
+        let c = onto.classes.iter().find(|c| c.id.ends_with("#C")).unwrap();
+        assert_eq!(c.parents.len(), 1, "중복 subClassOf 오브젝트는 한 번만 채택, 리터럴 오브젝트는 무시");
     }
 
     #[test]
@@ -194,7 +241,7 @@ dm:C a owl:Class ; rdfs:subClassOf dm:A ; rdfs:subClassOf dm:B .
 "#;
         let onto = parse_ttl(ttl).unwrap();
         let c = onto.classes.iter().find(|c| c.id.ends_with("#C")).unwrap();
-        assert!(c.parent.as_deref().unwrap().ends_with("#A"), "첫 부모 A 채택");
+        assert!(c.parents.iter().any(|p| p.ends_with("#A")));
         assert_eq!(onto.resolve_target(&c.id).as_deref(), Some("~/A"));
     }
 

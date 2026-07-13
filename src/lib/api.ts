@@ -88,7 +88,9 @@ export interface InventoryReport {
 export interface OntoClass {
   id: string;
   label: string;
-  parent: string | null;
+  parents: string[];
+  equivalents: string[];
+  disjoints: string[];
   target_folder: string | null;
 }
 export interface Ontology {
