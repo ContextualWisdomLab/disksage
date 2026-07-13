@@ -192,6 +192,16 @@ pub fn load_ontology_from(ttl: &str) -> Result<crate::ontology::Ontology, String
     crate::ontology::parse_ttl(ttl)
 }
 
+/// 사용자 규칙 JSON 오버라이드 로드 — app_config_dir/userrules.json, 없으면 빈 배열. 파싱은 호출부(에러 표면화).
+#[cfg(not(coverage))]
+fn user_rules_json(app: &AppHandle) -> String {
+    use tauri::Manager;
+    if let Ok(dir) = app.path().app_config_dir() {
+        if let Ok(s) = std::fs::read_to_string(dir.join("userrules.json")) { return s; }
+    }
+    "[]".to_string()
+}
+
 #[cfg(not(coverage))]
 fn bundled_ontology_ttl(app: &AppHandle) -> Result<String, String> {
     use tauri::Manager;
@@ -386,6 +396,7 @@ fn resolve_home(app: &AppHandle) -> PathBuf {
 #[tauri::command(async)]
 pub fn plan_organize(root: String, app: AppHandle, state: State<AppState>) -> Result<Vec<organize::MovePlan>, String> {
     let onto = load_ontology_from(&bundled_ontology_ttl(&app)?)?;
+    let rules = crate::userrules::parse_rules(&user_rules_json(&app))?; // malformed → Err surfaced
     let files = dupes::collect_files(Path::new(&root));
     let home = resolve_home(&app);
     // classify_prompt는 name/parent만 쓰므로 picker는 size 불필요(0으로 구성).
@@ -407,11 +418,11 @@ pub fn plan_organize(root: String, app: AppHandle, state: State<AppState>) -> Re
                     let meta = file_meta_at(p, 0, 0);
                     crate::llm::pick_class(engine, &meta, cands)
                 };
-                return Ok(organize::plan_moves_with(&files, &onto, &home, &pick));
+                return Ok(organize::plan_moves_with(&files, &onto, &home, &rules, &pick));
             }
         }
     }
-    Ok(organize::plan_moves(&files, &onto, &home))
+    Ok(organize::plan_moves_with(&files, &onto, &home, &rules, &|_, _| None))
 }
 
 /// MovePlan을 safety::move_file로 실행 — 항목별 결과, 하나 실패해도 나머지는 진행 (M2와 동일 원칙)
