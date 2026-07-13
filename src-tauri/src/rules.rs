@@ -51,13 +51,31 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
     #[cfg(not(any(windows, target_os = "macos")))]
     let pip = bases.local_data.join("pip"); // linux: ~/.cache/pip
 
-    vec![
+    // Windows 전용 진단/트레이스 캐시는 아래 extend로 추가 — 다른 플랫폼선 그 라인이 cfg-absent라
+    // mut가 미사용이므로 allow(unused_mut). (npm/pip와 같은 cfg 규율)
+    #[allow(unused_mut)]
+    let mut entries = vec![
         ("os-temp", "OS 임시 폴더", bases.temp.clone()),
         ("npm-cache", "npm 캐시", npm),
         ("pip-cache", "pip 캐시", pip),
         ("cargo-registry-cache", "cargo 레지스트리 캐시",
             bases.home.join(".cargo").join("registry").join("cache")),
-    ]
+    ];
+
+    // Windows 진단 캐시 — 조용히 수십 GB로 자라는 것들. RDP 자동 추적(RdClientAutoTrace)의 .etl 로그가
+    // 대표적: 원격 접속 세션마다 쌓여 재발하므로, os-temp에 묻어두지 않고 명명 항목으로 노출해
+    // 사용자가 크기를 보고 그것만 콕 집어 정리하게 한다. WER/CrashDumps도 동류의 진단 산출물.
+    #[cfg(windows)]
+    entries.extend([
+        ("rdp-autotrace", "원격 데스크톱 추적 로그",
+            bases.temp.join("DiagOutputDir").join("RdClientAutoTrace")),
+        ("windows-crashdumps", "앱 크래시 덤프",
+            bases.local_data.join("CrashDumps")),
+        ("windows-wer", "Windows 오류 보고 (WER)",
+            bases.local_data.join("Microsoft").join("Windows").join("WER")),
+    ]);
+
+    entries
 }
 
 pub fn cache_candidates(bases: &BaseDirs) -> Vec<CacheCandidate> {
@@ -140,6 +158,21 @@ mod tests {
         assert_eq!(temp_c.bytes, 0);
         // 카탈로그에 최소 4개 규칙
         assert!(cands.len() >= 4);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn catalog_includes_windows_diagnostic_caches() {
+        // RDP 추적/크래시 덤프/WER를 명명 항목으로 노출 — extend arm 커버(Windows)
+        let tmp = tempfile::tempdir().unwrap();
+        let bases = fake_bases(tmp.path());
+        let cands = cache_candidates(&bases);
+        for id in ["rdp-autotrace", "windows-crashdumps", "windows-wer"] {
+            assert!(cands.iter().any(|c| c.id == id), "{id} 항목 누락");
+        }
+        let rdp = cands.iter().find(|c| c.id == "rdp-autotrace").unwrap();
+        assert!(rdp.path.contains("RdClientAutoTrace"));
+        assert!(cands.len() >= 7);
     }
 
     #[test]
