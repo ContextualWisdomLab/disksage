@@ -99,7 +99,7 @@ dm:Code a owl:Class ; rdfs:label "코드"@ko .
 "#;
 
     fn fe(p: &str, size: u64) -> FileEntry {
-        FileEntry { path: PathBuf::from(p), size }
+        FileEntry { path: PathBuf::from(p), size, mtime_ms: 0 }
     }
 
     #[test]

@@ -90,7 +90,7 @@ dm:Installer a owl:Class ; rdfs:label "설치파일"@ko ; dm:targetFolder "~/Ins
 "#;
 
     fn fe(p: &str, size: u64) -> FileEntry {
-        FileEntry { path: PathBuf::from(p), size }
+        FileEntry { path: PathBuf::from(p), size, mtime_ms: 0 }
     }
 
     #[test]
