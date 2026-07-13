@@ -119,8 +119,6 @@ export interface RuleMatch {
   path_contains: string | null;
   min_size: number | null;
   max_size: number | null;
-  min_age_days: number | null;
-  max_age_days: number | null;
 }
 export interface Rule {
   match: RuleMatch;
