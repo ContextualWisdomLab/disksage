@@ -6,6 +6,8 @@ mod commands;
 #[cfg_attr(coverage, allow(dead_code))]
 mod scanner;
 #[cfg_attr(coverage, allow(dead_code))]
+mod userrules;
+#[cfg_attr(coverage, allow(dead_code))]
 mod safety;
 #[cfg_attr(coverage, allow(dead_code))]
 mod rules;
