@@ -18,6 +18,9 @@
   // 온톨로지 정합성(advisory) — 인벤토리 집계와 별개로 로드 실패해도 조용히 무시(게이트 아님)
   let issues = $state<api.Issue[] | null>(null);
 
+  // 활성 사용자 규칙 개수(advisory) — 손상된 규칙 파일은 조용히 무시하지 않고 안내만(게이트 아님)
+  let userRulesCount = $state<number | null>(null);
+  let userRulesError = $state("");
   // 미분류 확장자 자문 인사이트(advisory) — 오프라인 LLM + (online_mode일 때만) 웹. 실패해도 조용히 무시(게이트 아님)
   let insights = $state<api.ExtInsight[]>([]);
 
@@ -29,6 +32,17 @@
     }
   }
 
+  async function loadUserRules() {
+    try {
+      const rules = await api.getUserRules();
+      userRulesCount = rules.length;
+      userRulesError = "";
+    } catch (e) {
+      userRulesCount = null;
+      userRulesError = String(e);
+    }
+  }
+
   async function load() {
     if (!scannedRoot) return;
     busy = true;
@@ -37,6 +51,7 @@
     try {
       report = await api.diskInventory(scannedRoot);
       await loadCoherence();
+      await loadUserRules();
       // 미분류 확장자 인사이트: 비차단(fire-and-forget) — 실패해도 인벤토리 표시를 막지 않음
       api.reasonUnknownExtensions(report.unknown_samples).then((r) => (insights = r)).catch(() => {});
     } catch (e) {
@@ -166,6 +181,12 @@
         {/if}
       </div>
     {/if}
+
+    {#if userRulesCount}
+      <p class="ok small">사용자 규칙 {userRulesCount}개 적용 중</p>
+    {:else if userRulesError}
+      <p class="warn small">규칙 파일 오류: {userRulesError}</p>
+    {/if}
   {/if}
 </section>
 
@@ -190,6 +211,7 @@
   .ext-insights .hint { color: #4a90d9; margin-left: 0.25rem; }
   .coherence { margin-top: 0.75rem; }
   .ok.small { color: #2a7; font-size: 0.8rem; }
+  .warn.small { color: #a60; font-size: 0.8rem; }
   .issues { list-style: none; padding: 0; margin: 0; }
   .issues .warn { color: #a60; font-size: 0.8rem; margin: 0.15rem 0; }
 </style>

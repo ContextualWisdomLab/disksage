@@ -49,6 +49,7 @@ describe("api wrappers", () => {
       [() => api.getSettings(), "get_settings"],
       [() => api.setSettings(true), "set_settings", { onlineMode: true }],
       [() => api.reasonUnknownExtensions(["/a.abc"]), "reason_unknown_extensions", { samples: ["/a.abc"] }],
+      [() => api.getUserRules(), "user_rules"],
     ];
 
     for (const [call, command, payload] of cases) {

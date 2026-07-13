@@ -6,6 +6,8 @@ mod commands;
 #[cfg_attr(coverage, allow(dead_code))]
 mod scanner;
 #[cfg_attr(coverage, allow(dead_code))]
+mod userrules;
+#[cfg_attr(coverage, allow(dead_code))]
 mod settings;
 #[cfg_attr(coverage, allow(dead_code))]
 mod safety;
@@ -50,6 +52,7 @@ pub fn run() {
             commands::disk_inventory,
             commands::ontology_coherence,
             commands::plan_organize,
+            commands::user_rules,
             commands::execute_moves,
             commands::undo_last_moves,
             commands::model_status,
