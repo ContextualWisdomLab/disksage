@@ -137,3 +137,7 @@ export const summarizeUnknownBucket = (paths: string[]) =>
 export interface Settings { online_mode: boolean; }
 export const getSettings = () => invoke<Settings>("get_settings");
 export const setSettings = (online_mode: boolean) => invoke<Settings>("set_settings", { onlineMode: online_mode });
+
+export interface ExtInsight { ext: string; type_desc: string | null; suggested_class: string | null; source: string; }
+export const reasonUnknownExtensions = (samples: string[]) =>
+  invoke<ExtInsight[]>("reason_unknown_extensions", { samples });

@@ -609,6 +609,52 @@ pub fn summarize_unknown_bucket(paths: Vec<String>, app: AppHandle, state: State
     Ok(None)
 }
 
+/// 미분류 확장자 자문 추론. samples = InventoryReport.unknown_samples(경로). online_mode일 때만 웹 조회.
+/// LLM은 feature+모델 있을 때만; 웹은 online_mode일 때만(feature 무관). 둘 다 없으면 source="none".
+#[cfg(not(coverage))]
+#[cfg_attr(not(feature = "llm-engine"), allow(unused_variables))]
+#[tauri::command(async)]
+pub fn reason_unknown_extensions(
+    samples: Vec<String>,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<Vec<crate::reasoning::ExtInsight>, String> {
+    let exts = crate::reasoning::distinct_extensions(&samples);
+    let onto = load_ontology_from(&bundled_ontology_ttl(&app)?)?;
+    let candidates: Vec<String> = onto.classes.iter()
+        .map(|c| c.id.rsplit(['#', '/']).next().unwrap_or(&c.id).to_string()).collect();
+    let cand_refs: Vec<&str> = candidates.iter().map(|s| s.as_str()).collect();
+
+    // opt-in 웹: online_mode일 때만 DdgLookup, 아니면 None → build_insights의 웹 분기 절대 미실행(default offline)
+    let settings = get_settings(app.clone())?;
+    let ddg = crate::web::DdgLookup;
+    let web_fn = |ext: &str| -> Option<String> { crate::web::WebLookup::file_type(&ddg, ext).ok().flatten() };
+    let web: Option<&dyn Fn(&str) -> Option<String>> = if settings.online_mode { Some(&web_fn) } else { None };
+
+    // 오프라인 LLM(feature+모델+엔진 있으면 실제; 그 블록에서 반환). 없으면 아래 fallback로 낙하.
+    #[cfg(feature = "llm-engine")]
+    {
+        use tauri::Manager;
+        let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        if model_status_for(&model_file_path(&dir)).present {
+            let mut guard = state.engine.lock().unwrap();
+            if guard.is_none() {
+                if let Ok(e) = crate::llm::LlamaEngine::new(&model_file_path(&dir)) {
+                    *guard = Some(e);
+                }
+            }
+            if let Some(engine) = guard.as_ref() {
+                let reason = |ext: &str| crate::llm::reason_extension(engine, ext, &cand_refs);
+                return Ok(crate::reasoning::build_insights(&exts, &reason, web));
+            }
+        }
+    }
+
+    // fallback: LLM 없음(feature off/모델 없음/init 실패) — reason은 항상 None, 웹은 위 settings대로 적용
+    let reason = |_: &str| -> Option<crate::llm::ExtReasoning> { None };
+    Ok(crate::reasoning::build_insights(&exts, &reason, web))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

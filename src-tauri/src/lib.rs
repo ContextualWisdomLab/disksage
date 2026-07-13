@@ -23,6 +23,8 @@ mod organize;
 mod llm;
 #[cfg_attr(coverage, allow(dead_code))]
 mod web;
+#[cfg_attr(coverage, allow(dead_code))]
+mod reasoning;
 
 // coverage 빌드에서 제외 — GUI 런타임은 헤드리스 테스트로 실행 불가
 #[cfg(not(coverage))]
@@ -55,7 +57,8 @@ pub fn run() {
             commands::file_verdicts,
             commands::summarize_unknown_bucket,
             commands::get_settings,
-            commands::set_settings
+            commands::set_settings,
+            commands::reason_unknown_extensions
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
