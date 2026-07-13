@@ -26,6 +26,7 @@ pub fn plan_moves_with(
     files: &[FileEntry],
     onto: &Ontology,
     home: &Path,
+    now_ms: u64,
     rules: &[crate::userrules::Rule],
     pick: &dyn Fn(&Path, &[&str]) -> Option<String>,
 ) -> Vec<MovePlan> {
@@ -37,9 +38,9 @@ pub fn plan_moves_with(
         // filename을 classify보다 먼저 확인 — 파일명 없는 경로(루트 등)는 여기서 걸러진다.
         // (classify 뒤에 두면 이 분기가 도달 불가라 커버리지 사각이 됨)
         let Some(name) = f.path.file_name() else { continue };
+        let age_days = now_ms.saturating_sub(f.mtime_ms) / 86_400_000;
         // precedence: 사용자 규칙 → picker(LLM) → 확장자 classify → 제외
-        // ponytail: age_days=0 고정 — 실제 now_ms 스레딩은 Task 3(plan_moves_with(now_ms))에서.
-        let local: String = match crate::userrules::classify_by_rules(rules, &f.path, f.size, 0) {
+        let local: String = match crate::userrules::classify_by_rules(rules, &f.path, f.size, age_days) {
             Some(c) => c,
             None => match pick(&f.path, &candidates) {
                 Some(picked) => picked,
@@ -72,7 +73,7 @@ pub fn plan_moves_with(
 
 /// 확장자 규칙만 사용(picker 없음) — 기존 동작 유지.
 pub fn plan_moves(files: &[FileEntry], onto: &Ontology, home: &Path) -> Vec<MovePlan> {
-    plan_moves_with(files, onto, home, &[], &|_, _| None)
+    plan_moves_with(files, onto, home, 0, &[], &|_, _| None)
 }
 
 #[cfg(test)]
@@ -92,6 +93,10 @@ dm:Installer a owl:Class ; rdfs:label "설치파일"@ko ; dm:targetFolder "~/Ins
 
     fn fe(p: &str, size: u64) -> FileEntry {
         FileEntry { path: PathBuf::from(p), size, mtime_ms: 0 }
+    }
+
+    fn fe_at(p: &str, size: u64, mtime_ms: u64) -> FileEntry {
+        FileEntry { path: PathBuf::from(p), size, mtime_ms }
     }
 
     #[test]
@@ -182,7 +187,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
         let home = Path::new("/home/u");
         let files = vec![fe("/src/main.rs", 20)];
         let pick = |_p: &Path, _c: &[&str]| Some("Image".to_string());
-        let plans = plan_moves_with(&files, &onto, home, &[], &pick);
+        let plans = plan_moves_with(&files, &onto, home, 0, &[], &pick);
         assert_eq!(plans.len(), 1);
         assert!(plans[0].class_id.ends_with("Image"));
     }
@@ -194,7 +199,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
         let home = Path::new("/home/u");
         let files = vec![fe("/downloads/pic.png", 100)];
         let pick = |_p: &Path, _c: &[&str]| None;
-        let plans = plan_moves_with(&files, &onto, home, &[], &pick);
+        let plans = plan_moves_with(&files, &onto, home, 0, &[], &pick);
         assert_eq!(plans.len(), 1);
         assert!(plans[0].class_id.ends_with("Image"));
     }
@@ -210,7 +215,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
             *seen.borrow_mut() = cands.iter().map(|s| s.to_string()).collect();
             None
         };
-        let _ = plan_moves_with(&files, &onto, home, &[], &pick);
+        let _ = plan_moves_with(&files, &onto, home, 0, &[], &pick);
         let c = seen.borrow();
         assert!(c.iter().any(|s| s == "Image"));
         assert!(c.iter().any(|s| s == "Installer"));
@@ -226,7 +231,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
             class: "Installer".into(),
         }];
         let pick = |_p: &Path, _c: &[&str]| Some("Image".to_string()); // picker가 Image를 골라도
-        let plans = plan_moves_with(&[fe("/d/pic.png", 10)], &onto, home, &rules, &pick);
+        let plans = plan_moves_with(&[fe("/d/pic.png", 10)], &onto, home, 0, &rules, &pick);
         assert_eq!(plans.len(), 1);
         assert!(plans[0].class_id.ends_with("Installer")); // 규칙이 picker를 이긴다
         // 규칙이 우선하므로 plan_moves_with 내부에서 pick은 호출되지 않는다(설계상 의도).
@@ -244,8 +249,29 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
             class: "Installer".into(),
         }];
         let pick = |_p: &Path, _c: &[&str]| None;
-        let plans = plan_moves_with(&[fe("/d/pic.png", 10)], &onto, home, &rules, &pick);
+        let plans = plan_moves_with(&[fe("/d/pic.png", 10)], &onto, home, 0, &rules, &pick);
         assert_eq!(plans.len(), 1);
         assert!(plans[0].class_id.ends_with("Image")); // 확장자 폴백
+    }
+
+    #[test]
+    fn user_rule_age_predicate_matches_old_file_only() {
+        // now = 100 days in ms; rule: min_age_days 30 → Installer. Old file (mtime 0 → age 100d) matches; fresh (mtime≈now → age 0) doesn't.
+        let onto = parse_ttl(ONTO).unwrap();
+        let home = Path::new("/home/u");
+        let now = 100 * 86_400_000u64;
+        let rules = vec![crate::userrules::Rule {
+            r#match: crate::userrules::RuleMatch { ext: None, name_contains: None, path_contains: None, min_size: None, max_size: None, min_age_days: Some(30), max_age_days: None },
+            class: "Installer".into(),
+        }];
+        let pick = |_p: &Path, _c: &[&str]| None;
+        // old file → age 100d ≥ 30 → rule matches → Installer target
+        let old = plan_moves_with(&[fe_at("/d/pic.png", 10, 0)], &onto, home, now, &rules, &pick);
+        assert_eq!(old.len(), 1);
+        assert!(old[0].class_id.ends_with("Installer"));
+        // fresh file → age 0 < 30 → rule skips → extension classify (png→Image)
+        let fresh = plan_moves_with(&[fe_at("/d/pic.png", 10, now)], &onto, home, now, &rules, &pick);
+        assert_eq!(fresh.len(), 1);
+        assert!(fresh[0].class_id.ends_with("Image"));
     }
 }
