@@ -233,7 +233,6 @@ impl Reasoner {
         reps.insert(r); // scm-cls reflexive
         let mut out: BTreeSet<String> = BTreeSet::new();
         for rep in reps { out.extend(self.groups.get(&rep).into_iter().flatten().cloned()); }
-        out.insert(class_id.to_string()); // include self (scm-cls c ⊑ c)
         out.into_iter().collect()
     }
 
@@ -242,7 +241,8 @@ impl Reasoner {
         self.rep_of(class_id).and_then(|r| self.groups.get(&r).cloned()).unwrap_or_default()
     }
 
-    /// Groups formed by folding a subClassOf cycle (size > 1), advisory only.
+    /// Equivalence groups (size > 1), including both explicit equivalentClass groups
+    /// and subClassOf-cycle folds. Advisory only.
     pub fn cycle_equivalences(&self) -> Vec<Vec<String>> {
         self.groups.values().filter(|g| g.len() > 1).cloned().collect()
     }
@@ -275,7 +275,12 @@ impl Ontology {
 
     /// targetFolder from the nearest ancestor/equivalent (BFS hops; ties by ascending class id).
     pub fn resolve_target(&self, class_id: &str) -> Option<String> {
-        let r = self.reasoner();
+        self.resolve_target_with(&self.reasoner(), class_id)
+    }
+
+    // ponytail: split out so an organize plan can build the Reasoner once (spec §6)
+    // and reuse it across every file, instead of rebuilding it per call.
+    pub fn resolve_target_with(&self, r: &Reasoner, class_id: &str) -> Option<String> {
         let start = r.rep_of(class_id)?;
         // BFS distance over rep sup-graph
         let mut dist: BTreeMap<String, usize> = BTreeMap::new();
@@ -545,6 +550,18 @@ dm:C a owl:Class ; rdfs:subClassOf dm:A ; rdfs:subClassOf dm:B .
         let o = onto(&format!("{PRE}dm:A a owl:Class ; rdfs:subClassOf dm:B .\ndm:B a owl:Class ; rdfs:subClassOf dm:A .\ndm:X a owl:Class .\n"));
         let r = Reasoner::build(&o);
         assert!(r.cycle_equivalences().iter().any(|g| g.len() == 2 && ends(g, "#A") && ends(g, "#B")));
+    }
+
+    #[test]
+    fn undeclared_iri_axioms_are_ignored_without_panic() {
+        // subClassOf / equivalentClass / disjointWith → never-declared classes: must be skipped, no panic (spec §7)
+        let o = onto(&format!("{PRE}dm:A a owl:Class ; rdfs:subClassOf dm:Ghost ; owl:equivalentClass dm:Phantom ; owl:disjointWith dm:Specter .\n"));
+        let r = Reasoner::build(&o);
+        let a = o.classes.iter().find(|c| c.id.ends_with("#A")).unwrap().id.clone();
+        // A has no known supers/equivalents beyond itself; nothing panics; ontology is coherent
+        assert!(r.ancestors(&a).iter().any(|x| x.ends_with("#A"))); // scm-cls self
+        assert!(r.check_coherence().is_empty());
+        assert_eq!(o.resolve_target(&a), None);
     }
 
     #[test]
