@@ -447,11 +447,11 @@ pub fn plan_organize(root: String, app: AppHandle, state: State<AppState>) -> Re
                     let meta = file_meta_at(p, 0, 0);
                     crate::llm::pick_class(engine, &meta, cands)
                 };
-                return Ok(organize::plan_moves_with(&files, &onto, &home, &rules, &pick));
+                return Ok(organize::plan_moves_with(&files, &onto, &home, now_ms(), &rules, &pick));
             }
         }
     }
-    Ok(organize::plan_moves_with(&files, &onto, &home, &rules, &|_, _| None))
+    Ok(organize::plan_moves_with(&files, &onto, &home, now_ms(), &rules, &|_, _| None))
 }
 
 /// 활성 사용자 규칙 조회(UI 표시용). 손상 파일은 Err.

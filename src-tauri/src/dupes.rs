@@ -6,6 +6,15 @@ use std::io::Read;
 pub struct FileEntry {
     pub path: PathBuf,
     pub size: u64,
+    pub mtime_ms: u64,
+}
+
+/// Metadata의 수정시각 → epoch millis. 지원 안 되면 0 (플랫폼별 실패는 드묾; 0 폴백).
+fn mtime_millis(md: &std::fs::Metadata) -> u64 {
+    md.modified().ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// 1단계: 크기가 같은 파일만 중복 후보. size 0과 단독 크기는 제외.
@@ -120,7 +129,7 @@ pub fn collect_files(root: &Path) -> Vec<FileEntry> {
         .into_iter()
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file())
-        .filter_map(|e| e.metadata().ok().map(|md| FileEntry { path: e.path(), size: md.len() }))
+        .filter_map(|e| e.metadata().ok().map(|md| FileEntry { path: e.path(), size: md.len(), mtime_ms: mtime_millis(&md) }))
         .collect()
 }
 
@@ -131,7 +140,7 @@ mod tests {
     use std::io::Write;
 
     fn fe(p: &str, size: u64) -> FileEntry {
-        FileEntry { path: PathBuf::from(p), size }
+        FileEntry { path: PathBuf::from(p), size, mtime_ms: 0 }
     }
 
     fn write_file(dir: &std::path::Path, name: &str, bytes: &[u8]) -> PathBuf {
@@ -221,11 +230,11 @@ mod tests {
         let solo = write_file(tmp.path(), "solo", b"different length entirely");
 
         let files = vec![
-            FileEntry { path: d1, size: 16 },
-            FileEntry { path: d2, size: 16 },
-            FileEntry { path: n1, size: 16 },
-            FileEntry { path: n2, size: 16 },
-            FileEntry { path: solo.clone(), size: std::fs::metadata(&solo).unwrap().len() },
+            FileEntry { path: d1, size: 16, mtime_ms: 0 },
+            FileEntry { path: d2, size: 16, mtime_ms: 0 },
+            FileEntry { path: n1, size: 16, mtime_ms: 0 },
+            FileEntry { path: n2, size: 16, mtime_ms: 0 },
+            FileEntry { path: solo.clone(), size: std::fs::metadata(&solo).unwrap().len(), mtime_ms: 0 },
         ];
         let groups = find_duplicates(files, 8);
 
@@ -251,10 +260,10 @@ mod tests {
         let s1 = write_file(tmp.path(), "s1", b"tenbytes!!");
         let s2 = write_file(tmp.path(), "s2", b"tenbytes!!");
         let files = vec![
-            FileEntry { path: b1, size: 1000 },
-            FileEntry { path: b2, size: 1000 },
-            FileEntry { path: s1, size: 10 },
-            FileEntry { path: s2, size: 10 },
+            FileEntry { path: b1, size: 1000, mtime_ms: 0 },
+            FileEntry { path: b2, size: 1000, mtime_ms: 0 },
+            FileEntry { path: s1, size: 10, mtime_ms: 0 },
+            FileEntry { path: s2, size: 10, mtime_ms: 0 },
         ];
         let groups = find_duplicates(files, 4096);
         assert_eq!(groups.len(), 2);
@@ -268,8 +277,8 @@ mod tests {
         let a = write_file(tmp.path(), "a", b"AAAA1111");
         let b = write_file(tmp.path(), "b", b"BBBB2222");
         let files = vec![
-            FileEntry { path: a, size: 8 },
-            FileEntry { path: b, size: 8 },
+            FileEntry { path: a, size: 8, mtime_ms: 0 },
+            FileEntry { path: b, size: 8, mtime_ms: 0 },
         ];
         assert!(find_duplicates(files, 4).is_empty());
     }
@@ -280,9 +289,9 @@ mod tests {
         let d1 = write_file(tmp.path(), "d1", b"same content x");
         let d2 = write_file(tmp.path(), "d2", b"same content x");
         let files = vec![
-            FileEntry { path: d1, size: 14 },
-            FileEntry { path: d2, size: 14 },
-            FileEntry { path: tmp.path().join("ghost"), size: 14 }, // 존재하지 않음
+            FileEntry { path: d1, size: 14, mtime_ms: 0 },
+            FileEntry { path: d2, size: 14, mtime_ms: 0 },
+            FileEntry { path: tmp.path().join("ghost"), size: 14, mtime_ms: 0 }, // 존재하지 않음
         ];
         // ghost는 크기 그룹엔 들어가지만 해시 단계서 실패 → 조용히 빠지고 d1/d2는 확정
         let groups = find_duplicates(files, 4096);
@@ -307,6 +316,14 @@ mod tests {
         assert_eq!(names, vec!["inner.bin", "top.bin"]);
         // 크기도 채워짐
         assert!(files.iter().any(|f| f.size == 4));
+    }
+
+    #[test]
+    fn collect_files_populates_mtime() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_file(tmp.path(), "x.bin", b"data");
+        let files = collect_files(tmp.path());
+        assert!(files.iter().any(|f| f.mtime_ms > 0), "mtime_ms filled for a real file");
     }
 
     #[cfg(unix)]
