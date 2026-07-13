@@ -106,6 +106,7 @@ mod tests {
         assert_eq!(classify_by_rules(&r, &PathBuf::from("/x"), 0, 29), None); // 하한 미만
         assert_eq!(classify_by_rules(&r, &PathBuf::from("/x"), 0, 91), None); // 상한 초과
     }
+
     #[test]
     fn age_ands_with_other_predicates() {
         let r = vec![Rule { r#match: RuleMatch { ext: Some("iso".into()), min_age_days: Some(365), ..m() }, class: "OldIso".into() }];

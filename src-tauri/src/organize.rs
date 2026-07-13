@@ -274,4 +274,22 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
         assert_eq!(fresh.len(), 1);
         assert!(fresh[0].class_id.ends_with("Image"));
     }
+
+    #[test]
+    fn future_dated_file_saturates_to_age_zero() {
+        // mtime > now (future-dated / clock skew): saturating_sub → age 0, no panic/underflow.
+        // rule min_age_days: 1 → age 0 < 1 → no match → extension classify (png → Image).
+        let onto = parse_ttl(ONTO).unwrap();
+        let home = Path::new("/home/u");
+        let now = 100 * 86_400_000u64;
+        let future = 200 * 86_400_000u64; // mtime in the future relative to now
+        let rules = vec![crate::userrules::Rule {
+            r#match: crate::userrules::RuleMatch { ext: None, name_contains: None, path_contains: None, min_size: None, max_size: None, min_age_days: Some(1), max_age_days: None },
+            class: "Installer".into(),
+        }];
+        let pick = |_p: &Path, _c: &[&str]| None;
+        let plans = plan_moves_with(&[fe_at("/d/pic.png", 10, future)], &onto, home, now, &rules, &pick);
+        assert_eq!(plans.len(), 1);
+        assert!(plans[0].class_id.ends_with("Image")); // age saturated to 0 → rule skipped → ext classify
+    }
 }
