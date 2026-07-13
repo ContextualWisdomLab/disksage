@@ -6,6 +6,8 @@ mod commands;
 #[cfg_attr(coverage, allow(dead_code))]
 mod scanner;
 #[cfg_attr(coverage, allow(dead_code))]
+mod settings;
+#[cfg_attr(coverage, allow(dead_code))]
 mod safety;
 #[cfg_attr(coverage, allow(dead_code))]
 mod rules;
@@ -49,7 +51,9 @@ pub fn run() {
             commands::model_status,
             commands::download_model,
             commands::file_verdicts,
-            commands::summarize_unknown_bucket
+            commands::summarize_unknown_bucket,
+            commands::get_settings,
+            commands::set_settings
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -234,6 +234,35 @@ pub fn ontology_coherence(app: AppHandle) -> Result<Vec<crate::ontology::Issue>,
     Ok(crate::ontology::Reasoner::build(&onto).check_coherence())
 }
 
+#[cfg(not(coverage))]
+fn settings_file_path(app: &AppHandle) -> Result<PathBuf, String> {
+    use tauri::Manager;
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join("settings.json"))
+}
+
+/// 현재 설정 조회. 파일 없으면 기본값(offline). 손상 파일은 parse_settings가 기본값으로 흡수.
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn get_settings(app: AppHandle) -> Result<crate::settings::Settings, String> {
+    let path = settings_file_path(&app)?;
+    match std::fs::read_to_string(&path) {
+        Ok(s) => Ok(crate::settings::parse_settings(&s)),
+        Err(_) => Ok(crate::settings::Settings::default()),
+    }
+}
+
+/// online_mode 설정 후 영속. 반환은 저장된 설정.
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn set_settings(online_mode: bool, app: AppHandle) -> Result<crate::settings::Settings, String> {
+    let s = crate::settings::Settings { online_mode };
+    let path = settings_file_path(&app)?;
+    std::fs::write(&path, crate::settings::serialize_settings(&s)).map_err(|e| e.to_string())?;
+    Ok(s)
+}
+
 // 아래 Tauri command 래퍼들은 coverage 빌드에서 제외 — 순수 로직(node_view 등)은 위에서 측정됨
 #[cfg(not(coverage))]
 #[tauri::command]
