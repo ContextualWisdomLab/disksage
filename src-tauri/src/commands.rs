@@ -425,6 +425,13 @@ pub fn plan_organize(root: String, app: AppHandle, state: State<AppState>) -> Re
     Ok(organize::plan_moves_with(&files, &onto, &home, &rules, &|_, _| None))
 }
 
+/// 활성 사용자 규칙 조회(UI 표시용). 손상 파일은 Err.
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn user_rules(app: AppHandle) -> Result<Vec<crate::userrules::Rule>, String> {
+    crate::userrules::parse_rules(&user_rules_json(&app))
+}
+
 /// MovePlan을 safety::move_file로 실행 — 항목별 결과, 하나 실패해도 나머지는 진행 (M2와 동일 원칙)
 #[cfg(not(coverage))]
 #[tauri::command(async)]

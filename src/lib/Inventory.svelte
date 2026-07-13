@@ -17,11 +17,25 @@
   // 온톨로지 정합성(advisory) — 인벤토리 집계와 별개로 로드 실패해도 조용히 무시(게이트 아님)
   let issues = $state<api.Issue[] | null>(null);
 
+  // 활성 사용자 규칙 개수(advisory) — 손상된 규칙 파일은 조용히 무시하지 않고 안내만(게이트 아님)
+  let userRulesCount = $state<number | null>(null);
+  let userRulesError = $state("");
+
   async function loadCoherence() {
     try {
       issues = await api.ontologyCoherence();
     } catch {
       issues = null;
+    }
+  }
+
+  async function loadUserRules() {
+    try {
+      const rules = await api.getUserRules();
+      userRulesCount = rules.length;
+      userRulesError = "";
+    } catch (e) {
+      userRulesError = String(e);
     }
   }
 
@@ -32,6 +46,7 @@
     try {
       report = await api.diskInventory(scannedRoot);
       await loadCoherence();
+      await loadUserRules();
     } catch (e) {
       loadError = String(e);
     } finally {
@@ -147,6 +162,12 @@
         {/if}
       </div>
     {/if}
+
+    {#if userRulesCount}
+      <p class="ok small">사용자 규칙 {userRulesCount}개 적용 중</p>
+    {:else if userRulesError}
+      <p class="warn small">규칙 파일 오류: {userRulesError}</p>
+    {/if}
   {/if}
 </section>
 
@@ -168,6 +189,7 @@
   .summary-text { color: #555; }
   .coherence { margin-top: 0.75rem; }
   .ok.small { color: #2a7; font-size: 0.8rem; }
+  .warn.small { color: #a60; font-size: 0.8rem; }
   .issues { list-style: none; padding: 0; margin: 0; }
   .issues .warn { color: #a60; font-size: 0.8rem; margin: 0.15rem 0; }
 </style>

@@ -46,6 +46,7 @@ pub fn run() {
             commands::disk_inventory,
             commands::ontology_coherence,
             commands::plan_organize,
+            commands::user_rules,
             commands::execute_moves,
             commands::undo_last_moves,
             commands::model_status,

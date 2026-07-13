@@ -112,6 +112,20 @@ export interface MovePlan {
 
 export const planOrganize = (root: string) =>
   invoke<MovePlan[]>("plan_organize", { root });
+
+export interface RuleMatch {
+  ext: string | null;
+  name_contains: string | null;
+  path_contains: string | null;
+  min_size: number | null;
+  max_size: number | null;
+}
+export interface Rule {
+  match: RuleMatch;
+  class: string;
+}
+export const getUserRules = () => invoke<Rule[]>("user_rules");
+
 export const executeMoves = (plans: MovePlan[]) =>
   invoke<CleanResult[]>("execute_moves", { plans });
 export const undoLastMoves = (limit = 50) =>
