@@ -226,6 +226,14 @@ pub fn disk_inventory(root: String, app: AppHandle) -> Result<crate::inventory::
     Ok(crate::inventory::build_inventory(&files, &onto))
 }
 
+/// 번들/오버라이드 온톨로지의 정합성 검사(advisory) — 불충족 클래스 목록. 로직은 Task 2의 Reasoner::check_coherence에 이미 있음.
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn ontology_coherence(app: AppHandle) -> Result<Vec<crate::ontology::Issue>, String> {
+    let onto = load_ontology_from(&bundled_ontology_ttl(&app)?)?;
+    Ok(crate::ontology::Reasoner::build(&onto).check_coherence())
+}
+
 // 아래 Tauri command 래퍼들은 coverage 빌드에서 제외 — 순수 로직(node_view 등)은 위에서 측정됨
 #[cfg(not(coverage))]
 #[tauri::command]

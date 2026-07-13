@@ -42,6 +42,7 @@ pub fn run() {
             commands::find_duplicate_files,
             commands::get_ontology,
             commands::disk_inventory,
+            commands::ontology_coherence,
             commands::plan_organize,
             commands::execute_moves,
             commands::undo_last_moves,
