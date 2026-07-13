@@ -14,12 +14,24 @@
   let summaryLoaded = $state(false);
   let summaryBusy = $state(false);
 
+  // 온톨로지 정합성(advisory) — 인벤토리 집계와 별개로 로드 실패해도 조용히 무시(게이트 아님)
+  let issues = $state<api.Issue[] | null>(null);
+
+  async function loadCoherence() {
+    try {
+      issues = await api.ontologyCoherence();
+    } catch {
+      issues = null;
+    }
+  }
+
   async function load() {
     if (!scannedRoot) return;
     busy = true;
     loadError = "";
     try {
       report = await api.diskInventory(scannedRoot);
+      await loadCoherence();
     } catch (e) {
       loadError = String(e);
     } finally {
@@ -118,6 +130,23 @@
         </li>
       {/if}
     </ul>
+
+    {#if issues !== null}
+      <div class="coherence">
+        {#if issues.length === 0}
+          <span class="ok small">온톨로지 정합 ✓</span>
+        {:else}
+          <ul class="issues">
+            {#each issues as i}
+              <li class="warn">
+                불충족 클래스: {i.UnsatisfiableClass.class}
+                (분리 공리: {i.UnsatisfiableClass.via_disjoint[0]} ↔ {i.UnsatisfiableClass.via_disjoint[1]})
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
+    {/if}
   {/if}
 </section>
 
@@ -137,4 +166,8 @@
   .muted.small { color: #999; font-size: 0.75rem; }
   .unknown-summary { margin-top: 0.25rem; display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; }
   .summary-text { color: #555; }
+  .coherence { margin-top: 0.75rem; }
+  .ok.small { color: #2a7; font-size: 0.8rem; }
+  .issues { list-style: none; padding: 0; margin: 0; }
+  .issues .warn { color: #a60; font-size: 0.8rem; margin: 0.15rem 0; }
 </style>

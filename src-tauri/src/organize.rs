@@ -29,6 +29,8 @@ pub fn plan_moves_with(
     pick: &dyn Fn(&Path, &[&str]) -> Option<String>,
 ) -> Vec<MovePlan> {
     let candidates: Vec<&str> = onto.classes.iter().map(|c| local_name(&c.id)).collect();
+    // spec §6: build the Reasoner once per plan, reuse across every file (not per file).
+    let reasoner = crate::ontology::Reasoner::build(onto);
     let mut plans = Vec::new();
     for f in files {
         // filename을 classify보다 먼저 확인 — 파일명 없는 경로(루트 등)는 여기서 걸러진다.
@@ -44,7 +46,7 @@ pub fn plan_moves_with(
         };
         // 로컬명 → 온톨로지 클래스
         let Some(class) = onto.classes.iter().find(|c| local_name(&c.id) == local) else { continue };
-        let Some(template) = onto.resolve_target(&class.id) else { continue };
+        let Some(template) = onto.resolve_target_with(&reasoner, &class.id) else { continue };
         // 템플릿 치환: ~ → home, {class} → 로컬명
         let folder = template
             .replacen('~', &home.to_string_lossy(), 1)

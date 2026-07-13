@@ -88,7 +88,9 @@ export interface InventoryReport {
 export interface OntoClass {
   id: string;
   label: string;
-  parent: string | null;
+  parents: string[];
+  equivalents: string[];
+  disjoints: string[];
   target_folder: string | null;
 }
 export interface Ontology {
@@ -98,6 +100,9 @@ export interface Ontology {
 export const diskInventory = (root: string) =>
   invoke<InventoryReport>("disk_inventory", { root });
 export const getOntology = () => invoke<Ontology>("get_ontology");
+
+export type Issue = { UnsatisfiableClass: { class: string; via_disjoint: [string, string] } };
+export const ontologyCoherence = () => invoke<Issue[]>("ontology_coherence");
 
 export interface MovePlan {
   src: string;
