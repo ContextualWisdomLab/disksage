@@ -8,13 +8,21 @@
 use crate::dataset_metadata::profile_dataset;
 use crate::dataset_metadata::DatasetProfile;
 use std::collections::BTreeSet;
+#[cfg(not(coverage))]
+use std::io::Read;
 use std::path::{Path, PathBuf};
 #[cfg(not(coverage))]
-use std::process::Command;
+use std::process::{Command, Stdio};
+#[cfg(not(coverage))]
+use std::time::{Duration, Instant};
 use unicode_normalization::UnicodeNormalization;
 
 const ARCHIVE_DIR: &str = "DiskSage Archive";
 const DAY_MS: u64 = 86_400_000;
+#[cfg(not(coverage))]
+const METADATA_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(not(coverage))]
+const METADATA_PROBE_OUTPUT_LIMIT: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -602,6 +610,110 @@ fn local_command(name: &str) -> Command {
     Command::new(name)
 }
 
+#[cfg(not(coverage))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MetadataProbeFailure {
+    Spawn,
+    Wait,
+    Timeout,
+    Exit,
+    Read,
+    OutputTooLarge,
+    InvalidOutput,
+}
+
+#[cfg(not(coverage))]
+impl MetadataProbeFailure {
+    fn code(self) -> &'static str {
+        match self {
+            Self::Spawn => "spawn-failed",
+            Self::Wait => "wait-failed",
+            Self::Timeout => "timeout",
+            Self::Exit => "nonzero-exit",
+            Self::Read => "output-read-failed",
+            Self::OutputTooLarge => "output-limit-exceeded",
+            Self::InvalidOutput => "invalid-output",
+        }
+    }
+}
+
+#[cfg(not(coverage))]
+fn run_metadata_command_with_limits(
+    mut command: Command,
+    timeout: Duration,
+    output_limit: usize,
+) -> Result<Vec<u8>, MetadataProbeFailure> {
+    command.stdout(Stdio::piped()).stderr(Stdio::null());
+    let mut child = command.spawn().map_err(|_| MetadataProbeFailure::Spawn)?;
+    let mut stdout = child.stdout.take().ok_or(MetadataProbeFailure::Read)?;
+    let output_reader = std::thread::spawn(move || {
+        let mut retained = Vec::with_capacity(output_limit.min(64 * 1024));
+        let mut truncated = false;
+        let mut buffer = [0_u8; 8192];
+        loop {
+            let read = stdout
+                .read(&mut buffer)
+                .map_err(|_| MetadataProbeFailure::Read)?;
+            if read == 0 {
+                break;
+            }
+            let remaining = output_limit.saturating_sub(retained.len());
+            let keep = remaining.min(read);
+            retained.extend_from_slice(&buffer[..keep]);
+            truncated |= keep < read;
+        }
+        Ok::<_, MetadataProbeFailure>((retained, truncated))
+    });
+
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = output_reader.join();
+                return Err(MetadataProbeFailure::Timeout);
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = output_reader.join();
+                return Err(MetadataProbeFailure::Wait);
+            }
+        }
+    };
+    let (stdout, truncated) = output_reader
+        .join()
+        .map_err(|_| MetadataProbeFailure::Read)??;
+    if !status.success() {
+        return Err(MetadataProbeFailure::Exit);
+    }
+    if truncated {
+        return Err(MetadataProbeFailure::OutputTooLarge);
+    }
+    Ok(stdout)
+}
+
+#[cfg(not(coverage))]
+fn run_metadata_command(command: Command) -> Result<Vec<u8>, MetadataProbeFailure> {
+    run_metadata_command_with_limits(command, METADATA_PROBE_TIMEOUT, METADATA_PROBE_OUTPUT_LIMIT)
+}
+
+#[cfg(not(coverage))]
+fn add_probe_warning(metadata: &mut ContentMetadata, tool: &str, failure: MetadataProbeFailure) {
+    add_evidence(
+        metadata,
+        "metadata-probe-warning",
+        format!("{tool}:{}", failure.code()),
+        &format!("local:metadata-probe:{tool}"),
+        "high",
+    );
+}
+
 fn json_strings(value: Option<&serde_json::Value>) -> Vec<String> {
     match value {
         Some(serde_json::Value::String(value)) if !value.trim().is_empty() => {
@@ -632,7 +744,8 @@ fn push_context(metadata: &mut ContentMetadata, field: &str, value: &str, source
 #[cfg(not(coverage))]
 fn exiftool_metadata(path: &Path) -> ContentMetadata {
     let mut metadata = ContentMetadata::default();
-    let Ok(output) = local_command("exiftool")
+    let mut command = local_command("exiftool");
+    command
         .args([
             "-j",
             "-n",
@@ -661,13 +774,24 @@ fn exiftool_metadata(path: &Path) -> ContentMetadata {
             "-GPSLongitude",
             "-Location",
         ])
-        .arg(path)
-        .output()
-    else {
-        return metadata;
+        .arg(path);
+    let output = match run_metadata_command(command) {
+        Ok(output) => output,
+        Err(failure) => {
+            add_probe_warning(&mut metadata, "exiftool", failure);
+            return metadata;
+        }
     };
-    let Ok(document) = serde_json::from_slice::<Vec<serde_json::Value>>(&output.stdout) else {
-        return metadata;
+    let document = match serde_json::from_slice::<Vec<serde_json::Value>>(&output) {
+        Ok(document) => document,
+        Err(_) => {
+            add_probe_warning(
+                &mut metadata,
+                "exiftool",
+                MetadataProbeFailure::InvalidOutput,
+            );
+            return metadata;
+        }
     };
     let Some(values) = document.first().and_then(|value| value.as_object()) else {
         return metadata;
@@ -796,7 +920,8 @@ fn exiftool_metadata(path: &Path) -> ContentMetadata {
 #[cfg(not(coverage))]
 fn ffprobe_metadata(path: &Path) -> ContentMetadata {
     let mut metadata = ContentMetadata::default();
-    let Ok(output) = local_command("ffprobe")
+    let mut command = local_command("ffprobe");
+    command
         .args([
             "-v",
             "error",
@@ -805,13 +930,24 @@ fn ffprobe_metadata(path: &Path) -> ContentMetadata {
             "-of",
             "json",
         ])
-        .arg(path)
-        .output()
-    else {
-        return metadata;
+        .arg(path);
+    let output = match run_metadata_command(command) {
+        Ok(output) => output,
+        Err(failure) => {
+            add_probe_warning(&mut metadata, "ffprobe", failure);
+            return metadata;
+        }
     };
-    let Ok(document) = serde_json::from_slice::<serde_json::Value>(&output.stdout) else {
-        return metadata;
+    let document = match serde_json::from_slice::<serde_json::Value>(&output) {
+        Ok(document) => document,
+        Err(_) => {
+            add_probe_warning(
+                &mut metadata,
+                "ffprobe",
+                MetadataProbeFailure::InvalidOutput,
+            );
+            return metadata;
+        }
     };
     let Some(format) = document.get("format") else {
         return metadata;
@@ -939,10 +1075,16 @@ fn pdf_date(value: &str) -> Option<u64> {
 #[cfg(not(coverage))]
 fn pdfinfo_metadata(path: &Path) -> ContentMetadata {
     let mut metadata = ContentMetadata::default();
-    let Ok(output) = local_command("pdfinfo").arg(path).output() else {
-        return metadata;
+    let mut command = local_command("pdfinfo");
+    command.arg(path);
+    let output = match run_metadata_command(command) {
+        Ok(output) => output,
+        Err(failure) => {
+            add_probe_warning(&mut metadata, "pdfinfo", failure);
+            return metadata;
+        }
     };
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = String::from_utf8_lossy(&output);
     for line in stdout.lines() {
         let Some((field, value)) = line.split_once(':') else {
             continue;
@@ -1019,15 +1161,16 @@ fn xml_value(xml: &str, local_name: &str) -> Option<String> {
 #[cfg(not(coverage))]
 fn zipped_document_metadata(path: &Path, entry: &str) -> ContentMetadata {
     let mut metadata = ContentMetadata::default();
-    let Ok(output) = local_command("unzip")
-        .args(["-p"])
-        .arg(path)
-        .arg(entry)
-        .output()
-    else {
-        return metadata;
+    let mut command = local_command("unzip");
+    command.args(["-p"]).arg(path).arg(entry);
+    let output = match run_metadata_command(command) {
+        Ok(output) => output,
+        Err(failure) => {
+            add_probe_warning(&mut metadata, "unzip", failure);
+            return metadata;
+        }
     };
-    let xml = String::from_utf8_lossy(&output.stdout);
+    let xml = String::from_utf8_lossy(&output);
     if let Some(title) = xml_value(&xml, "title").filter(|v| !v.is_empty()) {
         metadata.title = Some(title.clone());
         add_evidence(
@@ -1287,6 +1430,13 @@ fn embedded_metadata_review_reasons(
     }
     if production_time_ms > filesystem_modified_ms.saturating_add(DAY_MS) {
         reasons.push("embedded-production-date-after-filesystem-modified".into());
+    }
+    if metadata
+        .evidence
+        .iter()
+        .any(|evidence| evidence.field == "metadata-probe-warning")
+    {
+        reasons.push("embedded-metadata-probe-incomplete".into());
     }
     reasons
 }
@@ -1593,6 +1743,44 @@ mod tests {
             label: "test".into(),
             path: path.to_string_lossy().into_owned(),
         }
+    }
+
+    #[cfg(all(not(coverage), unix))]
+    #[test]
+    fn metadata_probe_commands_bound_runtime_output_and_failures() {
+        let mut ok = Command::new("sh");
+        ok.args(["-c", "printf ok"]);
+        assert_eq!(
+            run_metadata_command_with_limits(ok, Duration::from_secs(1), 16).unwrap(),
+            b"ok"
+        );
+
+        let mut oversized = Command::new("sh");
+        oversized.args(["-c", "printf 0123456789"]);
+        assert_eq!(
+            run_metadata_command_with_limits(oversized, Duration::from_secs(1), 4),
+            Err(MetadataProbeFailure::OutputTooLarge)
+        );
+
+        let mut slow = Command::new("sh");
+        slow.args(["-c", "sleep 1"]);
+        assert_eq!(
+            run_metadata_command_with_limits(slow, Duration::from_millis(10), 16),
+            Err(MetadataProbeFailure::Timeout)
+        );
+
+        let mut failed = Command::new("sh");
+        failed.args(["-c", "exit 2"]);
+        assert_eq!(
+            run_metadata_command_with_limits(failed, Duration::from_secs(1), 16),
+            Err(MetadataProbeFailure::Exit)
+        );
+
+        let missing = Command::new("/definitely/missing/disksage-probe");
+        assert_eq!(
+            run_metadata_command_with_limits(missing, Duration::from_secs(1), 16),
+            Err(MetadataProbeFailure::Spawn)
+        );
     }
 
     #[cfg(not(coverage))]
@@ -2030,6 +2218,23 @@ mod tests {
             date_epoch_ms(2026, 7, 1).unwrap(),
         )
         .contains(&"embedded-production-date-after-filesystem-modified".to_string()));
+
+        let incomplete_probe = ContentMetadata {
+            evidence: vec![MetadataEvidence {
+                field: "metadata-probe-warning".into(),
+                value: "pdfinfo:timeout".into(),
+                source: "local:metadata-probe:pdfinfo".into(),
+                confidence: "high".into(),
+            }],
+            ..ContentMetadata::default()
+        };
+        assert!(embedded_metadata_review_reasons(
+            Path::new("report.pdf"),
+            &incomplete_probe,
+            date_epoch_ms(2026, 6, 1).unwrap(),
+            date_epoch_ms(2026, 6, 2).unwrap(),
+        )
+        .contains(&"embedded-metadata-probe-incomplete".to_string()));
     }
 
     #[cfg(not(coverage))]
