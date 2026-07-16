@@ -57,10 +57,27 @@ export interface WorktreeCandidate {
   last_activity_ms: number;
   age_days: number;
   allocated_bytes: number;
+  generated_artifact_bytes: number;
+  generated_artifacts: GeneratedArtifact[];
   filesystem_scanned: boolean;
   filesystem_scan_complete: boolean;
   removal_eligible: boolean;
   metadata_prune_eligible: boolean;
+  review_reasons: string[];
+}
+export interface GeneratedArtifact {
+  path: string;
+  kind: string;
+  allocated_bytes: number;
+}
+export interface OrphanWorktreeCandidate {
+  path: string;
+  missing_git_dir: string;
+  allocated_bytes: number;
+  generated_artifact_bytes: number;
+  generated_artifacts: GeneratedArtifact[];
+  filesystem_scan_complete: boolean;
+  removal_eligible: false;
   review_reasons: string[];
 }
 export interface WorktreeReport {
@@ -70,7 +87,9 @@ export interface WorktreeReport {
   search_max_depth: number;
   repository_count: number;
   worktrees: WorktreeCandidate[];
+  orphaned_worktrees: OrphanWorktreeCandidate[];
   potentially_reclaimable_bytes: number;
+  reviewable_generated_artifact_bytes: number;
   scan_issues: WorktreeScanIssue[];
   notices: string[];
 }

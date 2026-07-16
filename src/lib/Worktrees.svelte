@@ -61,7 +61,9 @@
   {#if report}
     <div class="summary">
       linked 등록 저장소 {report.repository_count}개 · 확인한 worktree {report.worktrees.length}개 ·
-      안전 조건 충족 예상 회수 {fmtBytes(report.potentially_reclaimable_bytes)}
+      고아 worktree {report.orphaned_worktrees.length}개 · 안전 조건 충족 예상 회수
+      {fmtBytes(report.potentially_reclaimable_bytes)} · 별도 검토 가능한 재생성 산출물
+      {fmtBytes(report.reviewable_generated_artifact_bytes)}
     </div>
     <p class="muted">저장소 검색 깊이: 선택 루트에서 최대 {report.search_max_depth}단계</p>
     <p class="warning">
@@ -106,6 +108,46 @@
             {#if worktree.review_reasons.length > 0}
               <div class="reasons">보류/보호 근거: {worktree.review_reasons.join(", ")}</div>
             {/if}
+            {#if worktree.generated_artifacts.length > 0}
+              <details class="artifacts">
+                <summary>재생성 산출물 {fmtBytes(worktree.generated_artifact_bytes)}</summary>
+                <ul>
+                  {#each worktree.generated_artifacts as artifact (artifact.path)}
+                    <li title={artifact.path}>{artifact.kind} · {fmtBytes(artifact.allocated_bytes)} · {artifact.path}</li>
+                  {/each}
+                </ul>
+              </details>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+    {/if}
+    {#if report.orphaned_worktrees.length > 0}
+      <h3>Git 메타데이터가 끊긴 고아 worktree</h3>
+      <p class="warning">
+        원래 HEAD와 dirty 상태를 증명할 수 없어 소스 트리 전체 제거는 금지됩니다. 아래 재생성 산출물만 별도로 검토하세요.
+      </p>
+      <ul class="worktrees orphaned">
+        {#each report.orphaned_worktrees as worktree (worktree.path)}
+          <li>
+            <div class="line">
+              <strong>{fmtBytes(worktree.allocated_bytes)}{worktree.filesystem_scan_complete ? "" : "+ (부분 측정)"}</strong>
+              <span>재생성 산출물 {fmtBytes(worktree.generated_artifact_bytes)}</span>
+              <em>소스 제거 금지</em>
+            </div>
+            <div class="path" title={worktree.path}>{worktree.path}</div>
+            <div class="details" title={worktree.missing_git_dir}>누락 gitdir: {worktree.missing_git_dir}</div>
+            <div class="reasons">보호 근거: {worktree.review_reasons.join(", ")}</div>
+            {#if worktree.generated_artifacts.length > 0}
+              <details class="artifacts">
+                <summary>재생성 산출물 경로</summary>
+                <ul>
+                  {#each worktree.generated_artifacts as artifact (artifact.path)}
+                    <li title={artifact.path}>{artifact.kind} · {fmtBytes(artifact.allocated_bytes)} · {artifact.path}</li>
+                  {/each}
+                </ul>
+              </details>
+            {/if}
           </li>
         {/each}
       </ul>
@@ -133,6 +175,10 @@
   .details, .reasons { color: #777; font-size: 0.75rem; margin-top: 0.2rem; overflow-wrap: anywhere; }
   .issues { color: #9a5b00; font-size: 0.8rem; }
   .issues ul { margin: 0.25rem 0; padding-left: 1.2rem; }
+  .artifacts { color: #555; font-size: 0.75rem; margin-top: 0.35rem; }
+  .artifacts ul { margin: 0.25rem 0; padding-left: 1.2rem; }
+  .artifacts li { border: 0; padding: 0; margin: 0.15rem 0; overflow-wrap: anywhere; }
+  .orphaned li { border-color: #b97800; background: #fffaf0; }
   .muted { color: #777; }
   .warning { color: #8a5700; }
   .error { color: #b00; }

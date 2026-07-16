@@ -22,6 +22,23 @@ Identify linked Git worktrees that consume local disk but can be considered for 
 - Missing paths that Git marks prunable are reported separately and never counted as disk-reclaim candidates.
 - Bound every Git subprocess to five seconds and the repository evidence phase to 180 seconds. Timed-out children are killed and reaped off the inventory path. A broken or slow repository is reported as a scan issue and cannot become removal-eligible.
 
+## Orphaned worktree and generated-artifact evidence
+
+A worktree directory may remain after its `.git/worktrees/<id>` registration has disappeared. In
+that state Git cannot prove the original HEAD, branch, dirty state, ahead count, or merge state.
+DiskSage therefore reports the directory as an orphaned worktree, records the missing gitdir, and
+categorically sets source-tree removal eligibility to false.
+
+The same bounded Rust filesystem walk separately attributes allocated bytes under exact,
+regenerable directory names: `node_modules`, Rust `target`, Python virtual environments and cache
+directories, `.next`, and `.turbo`. Ambiguous names such as `build` and `dist` are excluded. These
+paths are review evidence only; this slice exposes no deletion command. Partial walks are labeled
+and never upgraded to complete evidence.
+
+On 2026-07-16 this policy was derived from a real 1.5 GiB orphaned Naruon worktree whose gitfile
+pointed to a missing registration. The source tree was preserved while only its 1.4 GiB
+`frontend/node_modules` directory was removed through the existing operator workflow.
+
 ## Local validation snapshot
 
 On 2026-07-16, a read-only scan of the local Codex development root found 15 repositories with linked-worktree registration metadata and inspected 23 worktrees. All 17 non-primary worktree filesystem measurements completed. One clean, merged, zero-ahead worktree accounted for 1,345,085,440 allocated bytes, but its last activity was only two days old, so the 30-day policy blocked removal. The removal-eligible count remained zero. Slow or unavailable repository metadata still produced 40 explicit scan issues (30 bounded gitfile reads, nine bounded Git commands, and one bounded discovery pass); none were silently treated as safe. No worktree was changed.

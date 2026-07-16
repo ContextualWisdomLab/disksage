@@ -38,6 +38,19 @@ const REPOSITORY_SEARCH_TIMEOUT: Duration = Duration::from_secs(60);
 #[cfg(not(coverage))]
 const REPOSITORY_SEARCH_MAX_DIRECTORIES: usize = 500_000;
 
+const GENERATED_ARTIFACT_DIRECTORY_NAMES: &[&str] = &[
+    "node_modules",
+    "target",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".next",
+    ".turbo",
+];
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct RawWorktree {
     path: PathBuf,
@@ -67,10 +80,31 @@ pub struct WorktreeCandidate {
     pub last_activity_ms: u64,
     pub age_days: u64,
     pub allocated_bytes: u64,
+    pub generated_artifact_bytes: u64,
+    pub generated_artifacts: Vec<GeneratedArtifact>,
     pub filesystem_scanned: bool,
     pub filesystem_scan_complete: bool,
     pub removal_eligible: bool,
     pub metadata_prune_eligible: bool,
+    pub review_reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GeneratedArtifact {
+    pub path: String,
+    pub kind: String,
+    pub allocated_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct OrphanWorktreeCandidate {
+    pub path: String,
+    pub missing_git_dir: String,
+    pub allocated_bytes: u64,
+    pub generated_artifact_bytes: u64,
+    pub generated_artifacts: Vec<GeneratedArtifact>,
+    pub filesystem_scan_complete: bool,
+    pub removal_eligible: bool,
     pub review_reasons: Vec<String>,
 }
 
@@ -82,9 +116,27 @@ pub struct WorktreeReport {
     pub search_max_depth: usize,
     pub repository_count: usize,
     pub worktrees: Vec<WorktreeCandidate>,
+    pub orphaned_worktrees: Vec<OrphanWorktreeCandidate>,
     pub potentially_reclaimable_bytes: u64,
+    pub reviewable_generated_artifact_bytes: u64,
     pub scan_issues: Vec<WorktreeScanIssue>,
     pub notices: Vec<String>,
+}
+
+#[cfg(not(coverage))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OrphanWorktreeMarker {
+    path: PathBuf,
+    missing_git_dir: PathBuf,
+}
+
+#[cfg(not(coverage))]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct FilesystemEvidence {
+    allocated_bytes: u64,
+    latest_ms: u64,
+    complete: bool,
+    generated_artifacts: Vec<GeneratedArtifact>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -216,6 +268,31 @@ fn read_small_text_with_timeout(path: &Path, timeout: Duration) -> Result<String
 }
 
 #[cfg(not(coverage))]
+fn gitfile_target(repository: &Path) -> Result<PathBuf, String> {
+    let marker = repository.join(".git");
+    let metadata = std::fs::symlink_metadata(&marker).map_err(|error| error.to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("git-marker-is-not-regular-file".into());
+    }
+    if metadata.len() > GIT_METADATA_MAX_BYTES {
+        return Err(format!("git-marker-too-large-{}", metadata.len()));
+    }
+    let marker_value = read_small_text_with_timeout(&marker, GIT_METADATA_READ_TIMEOUT)?;
+    let value = marker_value
+        .trim()
+        .strip_prefix("gitdir:")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "malformed-gitfile".to_string())?;
+    let target = PathBuf::from(value);
+    Ok(if target.is_absolute() {
+        target
+    } else {
+        repository.join(target)
+    })
+}
+
+#[cfg(not(coverage))]
 fn common_dir_from_marker(repository: &Path) -> Result<PathBuf, String> {
     let marker = repository.join(".git");
     let metadata = std::fs::symlink_metadata(&marker).map_err(|error| error.to_string())?;
@@ -228,22 +305,7 @@ fn common_dir_from_marker(repository: &Path) -> Result<PathBuf, String> {
     if !metadata.is_file() {
         return Err("git-marker-is-not-file-or-directory".into());
     }
-    if metadata.len() > GIT_METADATA_MAX_BYTES {
-        return Err(format!("git-marker-too-large-{}", metadata.len()));
-    }
-    let marker_value = read_small_text_with_timeout(&marker, GIT_METADATA_READ_TIMEOUT)?;
-    let gitdir_value = marker_value
-        .trim()
-        .strip_prefix("gitdir:")
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "malformed-gitfile".to_string())?;
-    let gitdir = PathBuf::from(gitdir_value);
-    let gitdir = if gitdir.is_absolute() {
-        gitdir
-    } else {
-        repository.join(gitdir)
-    };
+    let gitdir = gitfile_target(repository)?;
     let gitdir = std::fs::canonicalize(&gitdir).map_err(|error| error.to_string())?;
     let commondir_file = gitdir.join("commondir");
     if !commondir_file.is_file() {
@@ -265,11 +327,16 @@ fn repository_seeds_with_limits(
     max_depth: usize,
     max_directories: usize,
     timeout: Duration,
-) -> (BTreeMap<PathBuf, PathBuf>, Vec<WorktreeScanIssue>) {
+) -> (
+    BTreeMap<PathBuf, PathBuf>,
+    Vec<OrphanWorktreeMarker>,
+    Vec<WorktreeScanIssue>,
+) {
     if !root.is_dir() {
-        return (BTreeMap::new(), Vec::new());
+        return (BTreeMap::new(), Vec::new(), Vec::new());
     }
     let mut seeds = BTreeMap::new();
+    let mut orphaned = Vec::new();
     let mut issues = Vec::new();
     let mut directories = vec![(root.to_path_buf(), 0usize)];
     let mut inspected = 0usize;
@@ -293,11 +360,21 @@ fn repository_seeds_with_limits(
                 Ok(common) => {
                     seeds.entry(common).or_insert(path);
                 }
-                Err(reason) => issues.push(WorktreeScanIssue {
-                    path: path.to_string_lossy().into_owned(),
-                    operation: "resolve-git-common-dir".into(),
-                    reason,
-                }),
+                Err(reason) => {
+                    if let Ok(missing_git_dir) = gitfile_target(&path) {
+                        if !missing_git_dir.exists() {
+                            orphaned.push(OrphanWorktreeMarker {
+                                path: path.clone(),
+                                missing_git_dir,
+                            });
+                        }
+                    }
+                    issues.push(WorktreeScanIssue {
+                        path: path.to_string_lossy().into_owned(),
+                        operation: "resolve-git-common-dir".into(),
+                        reason,
+                    });
+                }
             }
             continue;
         }
@@ -324,11 +401,19 @@ fn repository_seeds_with_limits(
             }
         }
     }
-    (seeds, issues)
+    orphaned.sort_by(|left, right| left.path.cmp(&right.path));
+    orphaned.dedup_by(|left, right| left.path == right.path);
+    (seeds, orphaned, issues)
 }
 
 #[cfg(not(coverage))]
-fn repository_seeds(root: &Path) -> (BTreeMap<PathBuf, PathBuf>, Vec<WorktreeScanIssue>) {
+fn repository_seeds(
+    root: &Path,
+) -> (
+    BTreeMap<PathBuf, PathBuf>,
+    Vec<OrphanWorktreeMarker>,
+    Vec<WorktreeScanIssue>,
+) {
     repository_seeds_with_limits(
         root,
         REPOSITORY_SEARCH_MAX_DEPTH,
@@ -424,23 +509,32 @@ fn allocated_bytes(metadata: &std::fs::Metadata) -> u64 {
     metadata.len()
 }
 
+fn generated_artifact_kind(name: &str) -> Option<&'static str> {
+    GENERATED_ARTIFACT_DIRECTORY_NAMES
+        .iter()
+        .copied()
+        .find(|candidate| *candidate == name)
+}
+
 #[cfg(not(coverage))]
 fn filesystem_evidence_with_limits(
     root: &Path,
     max_entries: usize,
     timeout: Duration,
-) -> (u64, u64, bool) {
+) -> FilesystemEvidence {
     if !root.is_dir() {
-        return (0, 0, false);
+        return FilesystemEvidence::default();
     }
-    let mut bytes = 0u64;
-    let mut latest_ms = 0u64;
+    let mut evidence = FilesystemEvidence::default();
+    let mut generated_bytes = BTreeMap::<(PathBuf, String), u64>::new();
     let mut inspected = 0usize;
     let started = Instant::now();
-    let mut directories = vec![root.to_path_buf()];
-    while let Some(directory) = directories.pop() {
+    let mut directories = vec![(root.to_path_buf(), None::<(PathBuf, String)>)];
+    evidence.complete = true;
+    'scan: while let Some((directory, artifact_root)) = directories.pop() {
         if started.elapsed() >= timeout {
-            return (bytes, latest_ms, false);
+            evidence.complete = false;
+            break;
         }
         let Ok(entries) = std::fs::read_dir(directory) else {
             continue;
@@ -448,9 +542,11 @@ fn filesystem_evidence_with_limits(
         for entry in entries.filter_map(Result::ok) {
             inspected = inspected.saturating_add(1);
             if inspected > max_entries || started.elapsed() >= timeout {
-                return (bytes, latest_ms, false);
+                evidence.complete = false;
+                break 'scan;
             }
-            let Ok(metadata) = std::fs::symlink_metadata(entry.path()) else {
+            let path = entry.path();
+            let Ok(metadata) = std::fs::symlink_metadata(&path) else {
                 continue;
             };
             if metadata.file_type().is_symlink() {
@@ -458,23 +554,42 @@ fn filesystem_evidence_with_limits(
             }
             if metadata.is_dir() {
                 if entry.file_name() != ".git" {
-                    directories.push(entry.path());
+                    let nested_artifact = artifact_root.clone().or_else(|| {
+                        entry.file_name().to_str().and_then(|name| {
+                            generated_artifact_kind(name)
+                                .map(|kind| (path.clone(), kind.to_string()))
+                        })
+                    });
+                    directories.push((path, nested_artifact));
                 }
                 continue;
             }
             if metadata.is_file() {
-                bytes = bytes.saturating_add(allocated_bytes(&metadata));
+                let allocated = allocated_bytes(&metadata);
+                evidence.allocated_bytes = evidence.allocated_bytes.saturating_add(allocated);
+                if let Some(artifact) = &artifact_root {
+                    let value = generated_bytes.entry(artifact.clone()).or_default();
+                    *value = value.saturating_add(allocated);
+                }
                 let modified_ms = metadata
                     .modified()
                     .ok()
                     .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
                     .map(|duration| duration.as_millis() as u64)
                     .unwrap_or(0);
-                latest_ms = latest_ms.max(modified_ms);
+                evidence.latest_ms = evidence.latest_ms.max(modified_ms);
             }
         }
     }
-    (bytes, latest_ms, true)
+    evidence.generated_artifacts = generated_bytes
+        .into_iter()
+        .map(|((path, kind), allocated_bytes)| GeneratedArtifact {
+            path: path.to_string_lossy().into_owned(),
+            kind,
+            allocated_bytes,
+        })
+        .collect();
+    evidence
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -562,7 +677,7 @@ fn classify(
 #[cfg(not(coverage))]
 pub fn inventory(root: &Path, min_age_days: u64, now_ms: u64) -> WorktreeReport {
     let inventory_started = Instant::now();
-    let (repositories, mut scan_issues) = repository_seeds(root);
+    let (repositories, orphan_markers, mut scan_issues) = repository_seeds(root);
     let mut worktrees = Vec::new();
     let filesystem_scan_started = Instant::now();
     let registered_worktree_repository_count = repositories
@@ -620,16 +735,23 @@ pub fn inventory(root: &Path, min_age_days: u64, now_ms: u64) -> WorktreeReport 
             let filesystem_scanned = exists && !is_primary;
             let filesystem_scan_remaining =
                 FILESYSTEM_SCAN_TOTAL_TIMEOUT.saturating_sub(filesystem_scan_started.elapsed());
-            let (bytes, latest_file_ms, filesystem_scan_complete) =
-                if filesystem_scanned && !filesystem_scan_remaining.is_zero() {
-                    filesystem_evidence_with_limits(
-                        &worktree.path,
-                        FILESYSTEM_SCAN_MAX_ENTRIES,
-                        FILESYSTEM_SCAN_TIMEOUT.min(filesystem_scan_remaining),
-                    )
-                } else {
-                    (0, 0, false)
-                };
+            let filesystem_evidence = if filesystem_scanned && !filesystem_scan_remaining.is_zero()
+            {
+                filesystem_evidence_with_limits(
+                    &worktree.path,
+                    FILESYSTEM_SCAN_MAX_ENTRIES,
+                    FILESYSTEM_SCAN_TIMEOUT.min(filesystem_scan_remaining),
+                )
+            } else {
+                FilesystemEvidence::default()
+            };
+            let filesystem_scan_complete = filesystem_evidence.complete;
+            let latest_file_ms = filesystem_evidence.latest_ms;
+            let generated_artifact_bytes = filesystem_evidence
+                .generated_artifacts
+                .iter()
+                .map(|artifact| artifact.allocated_bytes)
+                .sum();
             let commit_ms = commit_time_ms(seed, &worktree.head);
             let last_activity_ms = latest_file_ms.max(commit_ms);
             let age_days = now_ms.saturating_sub(last_activity_ms) / DAY_MS;
@@ -685,7 +807,9 @@ pub fn inventory(root: &Path, min_age_days: u64, now_ms: u64) -> WorktreeReport 
                 merged_into_default: merged,
                 last_activity_ms,
                 age_days,
-                allocated_bytes: bytes,
+                allocated_bytes: filesystem_evidence.allocated_bytes,
+                generated_artifact_bytes,
+                generated_artifacts: filesystem_evidence.generated_artifacts,
                 filesystem_scanned,
                 filesystem_scan_complete,
                 removal_eligible,
@@ -693,6 +817,43 @@ pub fn inventory(root: &Path, min_age_days: u64, now_ms: u64) -> WorktreeReport 
                 review_reasons,
             });
         }
+    }
+    let mut orphaned_worktrees = Vec::new();
+    for orphan in orphan_markers {
+        let filesystem_scan_remaining =
+            FILESYSTEM_SCAN_TOTAL_TIMEOUT.saturating_sub(filesystem_scan_started.elapsed());
+        let evidence = if filesystem_scan_remaining.is_zero() {
+            FilesystemEvidence::default()
+        } else {
+            filesystem_evidence_with_limits(
+                &orphan.path,
+                FILESYSTEM_SCAN_MAX_ENTRIES,
+                FILESYSTEM_SCAN_TIMEOUT.min(filesystem_scan_remaining),
+            )
+        };
+        let generated_artifact_bytes = evidence
+            .generated_artifacts
+            .iter()
+            .map(|artifact| artifact.allocated_bytes)
+            .sum();
+        let mut review_reasons = vec![
+            "git-worktree-metadata-missing".to_string(),
+            "git-status-unavailable".to_string(),
+            "source-tree-removal-prohibited".to_string(),
+        ];
+        if !evidence.complete {
+            review_reasons.push("filesystem-evidence-incomplete".into());
+        }
+        orphaned_worktrees.push(OrphanWorktreeCandidate {
+            path: orphan.path.to_string_lossy().into_owned(),
+            missing_git_dir: orphan.missing_git_dir.to_string_lossy().into_owned(),
+            allocated_bytes: evidence.allocated_bytes,
+            generated_artifact_bytes,
+            generated_artifacts: evidence.generated_artifacts,
+            filesystem_scan_complete: evidence.complete,
+            removal_eligible: false,
+            review_reasons,
+        });
     }
     worktrees.sort_by(|left, right| {
         right
@@ -706,6 +867,16 @@ pub fn inventory(root: &Path, min_age_days: u64, now_ms: u64) -> WorktreeReport 
         .filter(|worktree| worktree.removal_eligible)
         .map(|worktree| worktree.allocated_bytes)
         .sum();
+    let reviewable_generated_artifact_bytes = worktrees
+        .iter()
+        .filter(|worktree| !worktree.is_primary)
+        .map(|worktree| worktree.generated_artifact_bytes)
+        .chain(
+            orphaned_worktrees
+                .iter()
+                .map(|worktree| worktree.generated_artifact_bytes),
+        )
+        .sum();
     WorktreeReport {
         scanned_root: root.to_string_lossy().into_owned(),
         generated_at_ms: now_ms,
@@ -713,7 +884,9 @@ pub fn inventory(root: &Path, min_age_days: u64, now_ms: u64) -> WorktreeReport 
         search_max_depth: REPOSITORY_SEARCH_MAX_DEPTH,
         repository_count: registered_worktree_repository_count,
         worktrees,
+        orphaned_worktrees,
         potentially_reclaimable_bytes,
+        reviewable_generated_artifact_bytes,
         scan_issues,
         notices: vec![
             "read-only-no-worktree-removal-or-prune".into(),
@@ -725,7 +898,8 @@ pub fn inventory(root: &Path, min_age_days: u64, now_ms: u64) -> WorktreeReport 
                 .into(),
             "repository-discovery-has-time-and-directory-budgets".into(),
             "repository-git-evidence-has-a-global-time-budget".into(),
-            "repositories-without-linked-worktree-metadata-are-skipped".into(),
+            "orphaned-worktree-source-trees-are-never-removal-eligible".into(),
+            "generated-artifacts-are-reported-for-separate-review-only".into(),
             "dirty-locked-detached-unmerged-or-ahead-worktrees-fail-closed".into(),
         ],
     }
@@ -963,6 +1137,16 @@ mod tests {
         assert!(!prune_repository_search("src"));
     }
 
+    #[test]
+    fn generated_artifact_policy_is_exact_and_bounded() {
+        for name in GENERATED_ARTIFACT_DIRECTORY_NAMES {
+            assert_eq!(generated_artifact_kind(name), Some(*name));
+        }
+        assert_eq!(generated_artifact_kind("node_modules_backup"), None);
+        assert_eq!(generated_artifact_kind("build"), None);
+        assert_eq!(generated_artifact_kind("dist"), None);
+    }
+
     #[cfg(not(coverage))]
     #[test]
     fn allocated_size_and_activity_ignore_git_metadata_and_symlinks() {
@@ -972,15 +1156,16 @@ mod tests {
         std::fs::write(tmp.path().join("payload"), vec![1u8; 4096]).unwrap();
         #[cfg(unix)]
         std::os::unix::fs::symlink(tmp.path().join("payload"), tmp.path().join("link")).unwrap();
-        let (bytes, latest, complete) = filesystem_evidence_with_limits(
+        let evidence = filesystem_evidence_with_limits(
             tmp.path(),
             FILESYSTEM_SCAN_MAX_ENTRIES,
             FILESYSTEM_SCAN_TIMEOUT,
         );
-        assert!(bytes > 0);
-        assert!(bytes < 1024 * 1024);
-        assert!(latest > 0);
-        assert!(complete);
+        assert!(evidence.allocated_bytes > 0);
+        assert!(evidence.allocated_bytes < 1024 * 1024);
+        assert!(evidence.latest_ms > 0);
+        assert!(evidence.complete);
+        assert!(evidence.generated_artifacts.is_empty());
     }
 
     #[cfg(not(coverage))]
@@ -989,9 +1174,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("one"), b"one").unwrap();
         std::fs::write(tmp.path().join("two"), b"two").unwrap();
-        let (_, _, complete) =
-            filesystem_evidence_with_limits(tmp.path(), 1, Duration::from_secs(30));
-        assert!(!complete);
+        let evidence = filesystem_evidence_with_limits(tmp.path(), 1, Duration::from_secs(30));
+        assert!(!evidence.complete);
     }
 
     #[cfg(not(coverage))]
@@ -1002,8 +1186,10 @@ mod tests {
         let report = inventory(tmp.path(), 30, system_now_ms());
         assert_eq!(report.repository_count, 0);
         assert!(report.worktrees.is_empty());
+        assert!(report.orphaned_worktrees.is_empty());
         assert!(report.scan_issues.is_empty());
         assert_eq!(report.potentially_reclaimable_bytes, 0);
+        assert_eq!(report.reviewable_generated_artifact_bytes, 0);
     }
 
     #[cfg(not(coverage))]
@@ -1011,7 +1197,7 @@ mod tests {
     fn repository_discovery_reports_an_exhausted_directory_budget() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir(tmp.path().join("first")).unwrap();
-        let (_, issues) = repository_seeds_with_limits(
+        let (_, _, issues) = repository_seeds_with_limits(
             tmp.path(),
             REPOSITORY_SEARCH_MAX_DEPTH,
             1,
@@ -1021,6 +1207,44 @@ mod tests {
             issue.operation == "discover-repositories"
                 && issue.reason == "directory-budget-exhausted-1"
         }));
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn orphaned_gitfile_reports_generated_artifacts_but_protects_source_tree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let orphan = tmp.path().join("orphan");
+        let generated = orphan.join("frontend/node_modules/package");
+        std::fs::create_dir_all(&generated).unwrap();
+        std::fs::write(orphan.join("source.txt"), b"preserve me").unwrap();
+        std::fs::write(generated.join("index.js"), vec![1_u8; 4096]).unwrap();
+        let missing = tmp.path().join("repository/.git/worktrees/orphan");
+        std::fs::write(
+            orphan.join(".git"),
+            format!("gitdir: {}\n", missing.display()),
+        )
+        .unwrap();
+
+        let report = inventory(tmp.path(), 0, system_now_ms());
+        assert_eq!(report.repository_count, 0);
+        assert!(report.worktrees.is_empty());
+        assert_eq!(report.orphaned_worktrees.len(), 1);
+        let candidate = &report.orphaned_worktrees[0];
+        assert_eq!(Path::new(&candidate.path), orphan);
+        assert_eq!(Path::new(&candidate.missing_git_dir), missing);
+        assert!(!candidate.removal_eligible);
+        assert!(candidate.filesystem_scan_complete);
+        assert!(candidate.allocated_bytes >= candidate.generated_artifact_bytes);
+        assert!(candidate.generated_artifact_bytes > 0);
+        assert_eq!(candidate.generated_artifacts.len(), 1);
+        assert_eq!(candidate.generated_artifacts[0].kind, "node_modules");
+        assert!(candidate
+            .review_reasons
+            .contains(&"source-tree-removal-prohibited".to_string()));
+        assert_eq!(
+            report.reviewable_generated_artifact_bytes,
+            candidate.generated_artifact_bytes
+        );
     }
 
     #[cfg(not(coverage))]
