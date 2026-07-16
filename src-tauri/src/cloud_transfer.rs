@@ -8,17 +8,34 @@ use crate::cloud::{CloudCandidate, CloudProvider, CloudRoot};
 use std::path::Path;
 
 #[cfg(not(coverage))]
+use crate::content_digest::{ContentDigests, ContentHasher};
+#[cfg(not(coverage))]
 use std::io::{Read, Write};
 #[cfg(not(coverage))]
 use std::path::PathBuf;
 
-pub const RECEIPT_VERSION: u32 = 1;
+pub const RECEIPT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SyncEvidenceKind {
     ProviderApi,
     ProviderNativeStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RemoteChecksumAlgorithm {
+    Sha256,
+    QuickXor,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RemoteContentProof {
+    pub object_id: String,
+    pub revision: String,
+    pub algorithm: RemoteChecksumAlgorithm,
+    pub checksum: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -31,6 +48,8 @@ pub struct CloudCopyReceipt {
     pub destination: String,
     pub bytes: u64,
     pub blake3: String,
+    pub sha256: String,
+    pub quick_xor_base64: String,
     pub source_modified_ms: u64,
     pub copied_at_ms: u64,
     pub copy_verified: bool,
@@ -48,6 +67,7 @@ pub struct ProviderSyncEvidence {
     pub kind: SyncEvidenceKind,
     pub evidence_id: String,
     pub sync_complete: bool,
+    pub remote_content: Option<RemoteContentProof>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -127,6 +147,8 @@ fn receipt_id_for(
     destination: &str,
     bytes: u64,
     content_hash: &str,
+    sha256: &str,
+    quick_xor_base64: &str,
     source_modified_ms: u64,
     copied_at_ms: u64,
     copy_verified: bool,
@@ -144,6 +166,8 @@ fn receipt_id_for(
     hasher.update(&[0]);
     hasher.update(&bytes.to_le_bytes());
     hasher.update(content_hash.as_bytes());
+    hasher.update(sha256.as_bytes());
+    hasher.update(quick_xor_base64.as_bytes());
     hasher.update(&source_modified_ms.to_le_bytes());
     hasher.update(&copied_at_ms.to_le_bytes());
     hasher.update(&[copy_verified as u8, provider_sync_confirmed as u8]);
@@ -159,6 +183,8 @@ fn receipt_integrity_valid(receipt: &CloudCopyReceipt) -> bool {
             &receipt.destination,
             receipt.bytes,
             &receipt.blake3,
+            &receipt.sha256,
+            &receipt.quick_xor_base64,
             receipt.source_modified_ms,
             receipt.copied_at_ms,
             receipt.copy_verified,
@@ -210,6 +236,38 @@ pub fn approve_local_eviction(
     if evidence.evidence_id.trim().is_empty() {
         blockers.push("sync-evidence-id-missing".into());
     }
+    match (evidence.kind, receipt.provider, &evidence.remote_content) {
+        (SyncEvidenceKind::ProviderNativeStatus, CloudProvider::Icloud, None) => {}
+        (SyncEvidenceKind::ProviderNativeStatus, _, _) => {
+            blockers.push("native-status-provider-unsupported".into());
+        }
+        (SyncEvidenceKind::ProviderApi, CloudProvider::Icloud, _) => {
+            blockers.push("icloud-provider-api-unsupported".into());
+        }
+        (SyncEvidenceKind::ProviderApi, _, None) => {
+            blockers.push("remote-content-proof-missing".into());
+        }
+        (SyncEvidenceKind::ProviderApi, provider, Some(proof)) => {
+            if proof.object_id.trim().is_empty() {
+                blockers.push("remote-object-id-missing".into());
+            }
+            if proof.revision.trim().is_empty() {
+                blockers.push("remote-revision-missing".into());
+            }
+            let checksum_matches = match (provider, proof.algorithm) {
+                (CloudProvider::Onedrive, RemoteChecksumAlgorithm::QuickXor) => {
+                    proof.checksum == receipt.quick_xor_base64
+                }
+                (CloudProvider::GoogleDrive, RemoteChecksumAlgorithm::Sha256) => {
+                    proof.checksum.eq_ignore_ascii_case(&receipt.sha256)
+                }
+                _ => false,
+            };
+            if !checksum_matches {
+                blockers.push("remote-checksum-mismatch".into());
+            }
+        }
+    }
     if !blockers.is_empty() {
         return Err(blockers);
     }
@@ -237,11 +295,18 @@ fn modified_ms(metadata: &std::fs::Metadata) -> Result<u64, String> {
 }
 
 #[cfg(not(coverage))]
-fn hash_file(path: &Path) -> Result<String, String> {
+fn hash_file(path: &Path) -> Result<ContentDigests, String> {
     let mut file = std::fs::File::open(path).map_err(|error| error.to_string())?;
-    let mut hasher = blake3::Hasher::new();
-    std::io::copy(&mut file, &mut hasher).map_err(|error| error.to_string())?;
-    Ok(hasher.finalize().to_hex().to_string())
+    let mut hasher = ContentHasher::default();
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    loop {
+        let read = file.read(&mut buffer).map_err(|error| error.to_string())?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher.finalize())
 }
 
 #[cfg(not(coverage))]
@@ -253,7 +318,7 @@ fn remove_created_file(path: &Path) {
 fn copy_and_verify(
     candidate: &CloudCandidate,
     cloud_root: &CloudRoot,
-) -> Result<(u64, String), String> {
+) -> Result<(u64, ContentDigests), String> {
     let source = Path::new(&candidate.src);
     let destination = Path::new(&candidate.dst);
     let before = std::fs::symlink_metadata(source).map_err(|error| error.to_string())?;
@@ -289,10 +354,10 @@ fn copy_and_verify(
         .open(destination)
         .map_err(|error| error.to_string())?;
 
-    let copy_result = (|| -> Result<(u64, String), String> {
-        let mut source_hasher = blake3::Hasher::new();
+    let copy_result = (|| -> Result<(u64, ContentDigests), String> {
+        let mut source_hasher = ContentHasher::default();
         let mut copied = 0_u64;
-        let mut buffer = [0_u8; 1024 * 1024];
+        let mut buffer = vec![0_u8; 1024 * 1024];
         loop {
             let read = source_file
                 .read(&mut buffer)
@@ -311,9 +376,9 @@ fn copy_and_verify(
             .map_err(|error| error.to_string())?;
         drop(destination_file);
 
-        let streamed_hash = source_hasher.finalize().to_hex().to_string();
-        let source_hash = hash_file(source)?;
-        let destination_hash = hash_file(destination)?;
+        let streamed_hashes = source_hasher.finalize();
+        let source_hashes = hash_file(source)?;
+        let destination_hashes = hash_file(destination)?;
         let after = std::fs::symlink_metadata(source).map_err(|error| error.to_string())?;
         let unchanged = after.is_file()
             && !after.file_type().is_symlink()
@@ -325,12 +390,12 @@ fn copy_and_verify(
         if !unchanged
             || copied != candidate.bytes
             || destination_len != candidate.bytes
-            || streamed_hash != source_hash
-            || source_hash != destination_hash
+            || streamed_hashes != source_hashes
+            || source_hashes != destination_hashes
         {
             return Err("copy-verification-failed".into());
         }
-        Ok((copied, destination_hash))
+        Ok((copied, destination_hashes))
     })();
 
     if copy_result.is_err() {
@@ -389,7 +454,7 @@ pub fn prepare_cloud_copy(
     if !blockers.is_empty() {
         return Err(blockers.join(","));
     }
-    let (_, hash) = copy_and_verify(candidate, cloud_root)?;
+    let (_, hashes) = copy_and_verify(candidate, cloud_root)?;
     let mut receipt = CloudCopyReceipt {
         version: RECEIPT_VERSION,
         receipt_id: String::new(),
@@ -398,7 +463,9 @@ pub fn prepare_cloud_copy(
         source: candidate.src.clone(),
         destination: candidate.dst.clone(),
         bytes: candidate.bytes,
-        blake3: hash,
+        blake3: hashes.blake3,
+        sha256: hashes.sha256,
+        quick_xor_base64: hashes.quick_xor_base64,
         source_modified_ms: candidate.modified_ms,
         copied_at_ms,
         copy_verified: true,
@@ -411,6 +478,8 @@ pub fn prepare_cloud_copy(
         &receipt.destination,
         receipt.bytes,
         &receipt.blake3,
+        &receipt.sha256,
+        &receipt.quick_xor_base64,
         receipt.source_modified_ms,
         receipt.copied_at_ms,
         receipt.copy_verified,
@@ -495,6 +564,8 @@ mod tests {
             destination: DESTINATION.into(),
             bytes: 12,
             blake3: "content-hash".into(),
+            sha256: "sha256-hash".into(),
+            quick_xor_base64: "quick-xor".into(),
             source_modified_ms: 2,
             copied_at_ms: 100,
             copy_verified: true,
@@ -507,12 +578,34 @@ mod tests {
             &receipt.destination,
             receipt.bytes,
             &receipt.blake3,
+            &receipt.sha256,
+            &receipt.quick_xor_base64,
             receipt.source_modified_ms,
             receipt.copied_at_ms,
             receipt.copy_verified,
             receipt.provider_sync_confirmed,
         );
         receipt
+    }
+
+    fn receipt_for(provider: CloudProvider) -> CloudCopyReceipt {
+        let mut provider_receipt = receipt();
+        provider_receipt.provider = provider;
+        provider_receipt.receipt_id = receipt_id_for(
+            &provider_receipt.candidate_fingerprint,
+            provider_receipt.provider,
+            &provider_receipt.source,
+            &provider_receipt.destination,
+            provider_receipt.bytes,
+            &provider_receipt.blake3,
+            &provider_receipt.sha256,
+            &provider_receipt.quick_xor_base64,
+            provider_receipt.source_modified_ms,
+            provider_receipt.copied_at_ms,
+            provider_receipt.copy_verified,
+            provider_receipt.provider_sync_confirmed,
+        );
+        provider_receipt
     }
 
     fn evidence() -> ProviderSyncEvidence {
@@ -526,6 +619,7 @@ mod tests {
             kind: SyncEvidenceKind::ProviderNativeStatus,
             evidence_id: "icloud-uploaded-flag".into(),
             sync_complete: true,
+            remote_content: None,
         }
     }
 
@@ -609,6 +703,7 @@ mod tests {
         invalid_evidence.confirmed_at_ms = 1;
         invalid_evidence.kind = SyncEvidenceKind::ProviderApi;
         invalid_evidence.evidence_id = " ".into();
+        invalid_evidence.remote_content = None;
         let blockers = approve_local_eviction(&invalid_receipt, &invalid_evidence).unwrap_err();
         for expected in [
             "receipt-version-unsupported",
@@ -623,9 +718,87 @@ mod tests {
             "destination-hash-mismatch",
             "sync-evidence-predates-copy",
             "sync-evidence-id-missing",
+            "icloud-provider-api-unsupported",
         ] {
             assert!(blockers.contains(&expected.to_string()), "{expected}");
         }
+    }
+
+    #[test]
+    fn provider_api_evidence_requires_provider_specific_remote_checksum() {
+        for (provider, algorithm, checksum) in [
+            (
+                CloudProvider::Onedrive,
+                RemoteChecksumAlgorithm::QuickXor,
+                "quick-xor",
+            ),
+            (
+                CloudProvider::GoogleDrive,
+                RemoteChecksumAlgorithm::Sha256,
+                "SHA256-HASH",
+            ),
+        ] {
+            let provider_receipt = receipt_for(provider);
+            let api_evidence = ProviderSyncEvidence {
+                receipt_id: provider_receipt.receipt_id.clone(),
+                provider,
+                destination: provider_receipt.destination.clone(),
+                observed_bytes: provider_receipt.bytes,
+                destination_blake3: provider_receipt.blake3.clone(),
+                confirmed_at_ms: 101,
+                kind: SyncEvidenceKind::ProviderApi,
+                evidence_id: "authenticated-provider-response".into(),
+                sync_complete: true,
+                remote_content: Some(RemoteContentProof {
+                    object_id: "remote-id".into(),
+                    revision: "revision-1".into(),
+                    algorithm,
+                    checksum: checksum.into(),
+                }),
+            };
+            assert!(approve_local_eviction(&provider_receipt, &api_evidence).is_ok());
+        }
+    }
+
+    #[test]
+    fn provider_api_evidence_rejects_missing_or_wrong_remote_proof() {
+        let provider_receipt = receipt_for(CloudProvider::Onedrive);
+        let mut api_evidence = ProviderSyncEvidence {
+            receipt_id: provider_receipt.receipt_id.clone(),
+            provider: CloudProvider::Onedrive,
+            destination: provider_receipt.destination.clone(),
+            observed_bytes: provider_receipt.bytes,
+            destination_blake3: provider_receipt.blake3.clone(),
+            confirmed_at_ms: 101,
+            kind: SyncEvidenceKind::ProviderApi,
+            evidence_id: "authenticated-provider-response".into(),
+            sync_complete: true,
+            remote_content: None,
+        };
+        assert!(approve_local_eviction(&provider_receipt, &api_evidence)
+            .unwrap_err()
+            .contains(&"remote-content-proof-missing".to_string()));
+
+        api_evidence.remote_content = Some(RemoteContentProof {
+            object_id: " ".into(),
+            revision: " ".into(),
+            algorithm: RemoteChecksumAlgorithm::Sha256,
+            checksum: "wrong".into(),
+        });
+        let blockers = approve_local_eviction(&provider_receipt, &api_evidence).unwrap_err();
+        for expected in [
+            "remote-object-id-missing",
+            "remote-revision-missing",
+            "remote-checksum-mismatch",
+        ] {
+            assert!(blockers.contains(&expected.to_string()), "{expected}");
+        }
+
+        api_evidence.kind = SyncEvidenceKind::ProviderNativeStatus;
+        api_evidence.remote_content = None;
+        assert!(approve_local_eviction(&provider_receipt, &api_evidence)
+            .unwrap_err()
+            .contains(&"native-status-provider-unsupported".to_string()));
     }
 
     #[cfg(not(coverage))]
@@ -655,7 +828,7 @@ mod tests {
             prepare_cloud_copy(&test_candidate, &test_root, &receipt_dir, 123).unwrap();
         assert!(source.exists());
         assert_eq!(std::fs::read(&destination).unwrap(), b"hello-cloud");
-        assert_eq!(copy_receipt.blake3, hash_file(&source).unwrap());
+        assert_eq!(copy_receipt.blake3, hash_file(&source).unwrap().blake3);
         assert!(receipt_path.metadata().unwrap().permissions().readonly());
         let persisted: CloudCopyReceipt =
             serde_json::from_slice(&std::fs::read(receipt_path).unwrap()).unwrap();
@@ -765,7 +938,9 @@ mod tests {
             &test_candidate.src,
             &test_candidate.dst,
             test_candidate.bytes,
-            &content_hash,
+            &content_hash.blake3,
+            &content_hash.sha256,
+            &content_hash.quick_xor_base64,
             test_candidate.modified_ms,
             123,
             true,

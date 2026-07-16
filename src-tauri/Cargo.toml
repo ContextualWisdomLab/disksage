@@ -26,6 +26,7 @@ serde_json = "1"
 jwalk = "0.8"
 trash = "5.2.6"
 blake3 = "1.8.5"
+base64 = "0.22.1"
 oxttl = "0.2.3"
 oxrdf = "0.3.3"
 llama-cpp-2 = { version = "0.1.151", optional = true }

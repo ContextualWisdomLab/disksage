@@ -19,10 +19,12 @@ matching are deterministic Rust operations.
    dry-run candidate.
 4. Create the destination with `create_new` so an existing or concurrently created file is never
    overwritten.
-5. Stream-copy while calculating BLAKE3, `sync_all` the destination, then re-hash both source and
-   destination. Source metadata, byte counts, and all hashes must still match.
+5. Stream-copy while calculating BLAKE3, SHA-256, and Microsoft QuickXorHash, `sync_all` the
+   destination, then re-hash both source and destination. Source metadata, byte counts, and all
+   hashes must still match.
 6. Persist a create-only, read-only receipt whose identifier binds the planner fingerprint,
-   provider, paths, byte count, BLAKE3, source modification time, copy time, and state flags.
+   provider, paths, byte count, all three content digests, source modification time, copy time, and
+   state flags.
 7. Keep the source. A verified copy remains `awaiting-provider-sync`.
 8. Accept only provider API or provider-native sync evidence whose receipt ID, provider,
    destination, byte count, destination BLAKE3, and timestamp match. Only then create a
@@ -45,7 +47,7 @@ matching are deterministic Rust operations.
 ## Provider adapter status
 
 The pure evidence gate is provider-neutral. macOS iCloud now has a Foundation-backed, per-file
-native adapter. OneDrive and Google Drive still require authenticated provider API adapters (or an
-explicitly configured trusted remote) that convert remote size/checksum observations into
-`ProviderSyncEvidence`. Until the selected provider's adapter returns complete evidence, the source
-remains local.
+native adapter. OneDrive and Google Drive response parsers and evidence builders bind Graph
+QuickXorHash and Drive v3 SHA-256 respectively to the local receipt. Authenticated OAuth/API clients
+(or an explicitly configured trusted remote) are still required to obtain those responses. Until
+the selected provider's adapter returns complete evidence, the source remains local.
