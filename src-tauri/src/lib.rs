@@ -31,6 +31,8 @@ mod reasoning;
 mod dataset_metadata;
 #[cfg_attr(coverage, allow(dead_code))]
 pub mod cloud;
+#[cfg(not(coverage))]
+pub mod cloud_eviction;
 pub mod cloud_review;
 pub mod cloud_transfer;
 pub mod content_digest;

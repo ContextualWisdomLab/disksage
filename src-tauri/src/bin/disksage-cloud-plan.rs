@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 #[cfg(not(coverage))]
 use disksage_lib::cloud::{self, CloudPlanOptions, CloudProvider, CloudRoot};
 #[cfg(not(coverage))]
+use disksage_lib::cloud_eviction::{self, CloudEvictionResult};
+#[cfg(not(coverage))]
 use disksage_lib::cloud_review::{self, CloudReviewDecision, CloudReviewDisposition};
 #[cfg(not(coverage))]
 use disksage_lib::cloud_transfer::{self, CloudCopyReceipt, LocalEvictionPermit};
@@ -25,6 +27,10 @@ struct Args {
     copy_fingerprint: Option<String>,
     receipt_dir: Option<PathBuf>,
     attest_receipt: Option<PathBuf>,
+    evict_receipt: Option<PathBuf>,
+    confirm_receipt_id: Option<String>,
+    eviction_dir: Option<PathBuf>,
+    journal_path: Option<PathBuf>,
     review_candidate_fingerprint: Option<String>,
     review_fingerprint: Option<String>,
     review_disposition: Option<CloudReviewDisposition>,
@@ -62,6 +68,10 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
         copy_fingerprint: None,
         receipt_dir: None,
         attest_receipt: None,
+        evict_receipt: None,
+        confirm_receipt_id: None,
+        eviction_dir: None,
+        journal_path: None,
         review_candidate_fingerprint: None,
         review_fingerprint: None,
         review_disposition: None,
@@ -106,6 +116,25 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
                     "--attest-receipt",
                 )?))
             }
+            "--evict-receipt" => {
+                parsed.evict_receipt = Some(PathBuf::from(value(
+                    args,
+                    &mut index,
+                    "--evict-receipt",
+                )?))
+            }
+            "--confirm-receipt-id" => {
+                parsed.confirm_receipt_id =
+                    Some(value(args, &mut index, "--confirm-receipt-id")?)
+            }
+            "--eviction-dir" => {
+                parsed.eviction_dir =
+                    Some(PathBuf::from(value(args, &mut index, "--eviction-dir")?))
+            }
+            "--journal-path" => {
+                parsed.journal_path =
+                    Some(PathBuf::from(value(args, &mut index, "--journal-path")?))
+            }
             "--review-candidate-fingerprint" => {
                 parsed.review_candidate_fingerprint = Some(value(
                     args,
@@ -136,7 +165,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             }
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive] [--min-size-mib N] [--min-age-days N] [--limit N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --review-dir PATH]".into(),
+                    "usage: disksage-cloud-plan [--list-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive] [--min-size-mib N] [--min-age-days N] [--limit N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --review-dir PATH]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -166,6 +195,16 @@ struct AttestationOutput {
 
 #[cfg(not(coverage))]
 #[derive(Debug, serde::Serialize)]
+struct EvictionOutput {
+    action: &'static str,
+    receipt_id: String,
+    evidence: disksage_lib::cloud_transfer::ProviderSyncEvidence,
+    permit: LocalEvictionPermit,
+    eviction: CloudEvictionResult,
+}
+
+#[cfg(not(coverage))]
+#[derive(Debug, serde::Serialize)]
 struct ReviewOutput {
     action: &'static str,
     decision: CloudReviewDecision,
@@ -186,6 +225,18 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
         return Err("review fingerprint와 disposition은 모두 함께 지정해야 함".into());
     }
     let review_action = review_fields.iter().all(|value| *value);
+    let eviction_fields = [
+        args.evict_receipt.is_some(),
+        args.confirm_receipt_id.is_some(),
+        args.eviction_dir.is_some(),
+        args.journal_path.is_some(),
+    ];
+    if eviction_fields.iter().any(|value| *value) && !eviction_fields.iter().all(|value| *value) {
+        return Err(
+            "eviction action에는 receipt, 확인 id, eviction dir, journal path가 모두 필요함".into(),
+        );
+    }
+    let eviction_action = eviction_fields.iter().all(|value| *value);
     if review_action && args.review_dir.is_none() {
         return Err("review action에는 --review-dir이 필요함".into());
     }
@@ -195,10 +246,11 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     let actions = usize::from(args.list_roots)
         + usize::from(args.copy_fingerprint.is_some())
         + usize::from(args.attest_receipt.is_some())
+        + usize::from(eviction_action)
         + usize::from(review_action);
     if actions > 1 {
         return Err(
-            "--list-roots, --copy-fingerprint, --attest-receipt, review action은 동시에 사용할 수 없음".into(),
+            "--list-roots, --copy-fingerprint, --attest-receipt, eviction action, review action은 동시에 사용할 수 없음".into(),
         );
     }
     for (flag, fingerprint) in [
@@ -208,6 +260,7 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
             args.review_candidate_fingerprint.as_ref(),
         ),
         ("--review-fingerprint", args.review_fingerprint.as_ref()),
+        ("--confirm-receipt-id", args.confirm_receipt_id.as_ref()),
     ] {
         let Some(fingerprint) = fingerprint else {
             continue;
@@ -224,6 +277,21 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     if let Some(receipt_path) = &args.attest_receipt {
         if !receipt_path.is_absolute() {
             return Err("--attest-receipt는 절대 경로여야 함".into());
+        }
+    }
+    if let Some(receipt_path) = &args.evict_receipt {
+        if !receipt_path.is_absolute() {
+            return Err("--evict-receipt는 절대 경로여야 함".into());
+        }
+    }
+    if let Some(eviction_dir) = &args.eviction_dir {
+        if !eviction_dir.is_absolute() {
+            return Err("--eviction-dir은 절대 경로여야 함".into());
+        }
+    }
+    if let Some(journal_path) = &args.journal_path {
+        if !journal_path.is_absolute() {
+            return Err("--journal-path는 절대 경로여야 함".into());
         }
     }
     if let Some(review_dir) = &args.review_dir {
@@ -260,6 +328,45 @@ fn attest_native_receipt(path: &Path) -> Result<AttestationOutput, String> {
 }
 
 #[cfg(not(coverage))]
+fn evict_native_receipt(
+    path: &Path,
+    confirmation_receipt_id: &str,
+    eviction_dir: &Path,
+    journal_path: &Path,
+) -> Result<EvictionOutput, String> {
+    let receipt = cloud_transfer::read_immutable_receipt(path)?;
+    if confirmation_receipt_id != receipt.receipt_id {
+        return Err("eviction-confirmation-receipt-id-mismatch".into());
+    }
+    let confirmed_at_ms = cloud::system_now_ms();
+    let evidence = match receipt.provider {
+        CloudProvider::Icloud => {
+            provider_sync::collect_icloud_sync_evidence(&receipt, confirmed_at_ms)?
+        }
+        CloudProvider::Onedrive | CloudProvider::GoogleDrive => {
+            provider_sync::collect_file_provider_sync_evidence(&receipt, confirmed_at_ms)?
+        }
+    };
+    let permit = cloud_transfer::approve_local_eviction(&receipt, &evidence)
+        .map_err(|blockers| blockers.join(","))?;
+    let eviction = cloud_eviction::evict_source(
+        &receipt,
+        &permit,
+        confirmation_receipt_id,
+        eviction_dir,
+        journal_path,
+        cloud::system_now_ms(),
+    )?;
+    Ok(EvictionOutput {
+        action: "attest-and-trash-verified-cloud-source",
+        receipt_id: receipt.receipt_id,
+        evidence,
+        permit,
+        eviction,
+    })
+}
+
+#[cfg(not(coverage))]
 fn home_dir() -> Result<PathBuf, String> {
     std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
@@ -292,6 +399,25 @@ fn run() -> Result<(), String> {
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let args = parse_args(&raw, &home)?;
     validate_action_args(&args)?;
+    if let Some(receipt_path) = &args.evict_receipt {
+        let output = evict_native_receipt(
+            receipt_path,
+            args.confirm_receipt_id
+                .as_deref()
+                .ok_or_else(|| "--confirm-receipt-id가 필요함".to_string())?,
+            args.eviction_dir
+                .as_deref()
+                .ok_or_else(|| "--eviction-dir이 필요함".to_string())?,
+            args.journal_path
+                .as_deref()
+                .ok_or_else(|| "--journal-path가 필요함".to_string())?,
+        )?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&output).map_err(|error| error.to_string())?
+        );
+        return Ok(());
+    }
     if let Some(receipt_path) = &args.attest_receipt {
         println!(
             "{}",
@@ -454,6 +580,7 @@ mod tests {
         assert_eq!(defaults.root, PathBuf::from("/home/test"));
         assert_eq!(defaults.min_size_mib, 256);
         assert!(defaults.copy_fingerprint.is_none());
+        assert!(defaults.evict_receipt.is_none());
         assert!(defaults.review_candidate_fingerprint.is_none());
         let args = vec![
             "--root".into(),
@@ -590,6 +717,39 @@ mod tests {
         args.review_fingerprint = None;
         args.review_disposition = None;
         assert!(validate_action_args(&args).is_ok());
+    }
+
+    #[test]
+    fn action_validation_requires_explicit_complete_eviction_arguments() {
+        let mut args = parse_args(&[], Path::new("/h")).unwrap();
+        args.evict_receipt = Some(PathBuf::from("/receipts/a.json"));
+        assert!(validate_action_args(&args).is_err());
+        args.confirm_receipt_id = Some("a".repeat(64));
+        args.eviction_dir = Some(PathBuf::from("/evictions"));
+        args.journal_path = Some(PathBuf::from("relative-journal"));
+        assert!(validate_action_args(&args).is_err());
+        args.journal_path = Some(PathBuf::from("/journal/operations.jsonl"));
+        assert!(validate_action_args(&args).is_ok());
+
+        args.attest_receipt = Some(PathBuf::from("/receipt.json"));
+        assert!(validate_action_args(&args).is_err());
+
+        let parsed = parse_args(
+            &[
+                "--evict-receipt".into(),
+                "/receipts/a.json".into(),
+                "--confirm-receipt-id".into(),
+                "b".repeat(64),
+                "--eviction-dir".into(),
+                "/evictions".into(),
+                "--journal-path".into(),
+                "/journal/operations.jsonl".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert_eq!(parsed.confirm_receipt_id, Some("b".repeat(64)));
+        assert!(validate_action_args(&parsed).is_ok());
     }
 
     #[test]
