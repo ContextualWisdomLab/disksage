@@ -1706,6 +1706,8 @@ pub fn plan_cloud_archive(
         }
         if !production_time_source.starts_with("embedded:") {
             review_reasons.push("production-date-not-from-embedded-metadata".into());
+        } else if production_time_confidence != "high" {
+            review_reasons.push("embedded-production-date-confidence-not-high".into());
         }
         let embedded_dates: BTreeSet<&str> = lineage_metadata
             .evidence
@@ -2617,6 +2619,10 @@ mod tests {
             "embedded:unknown"
         );
         assert_eq!(report.candidates[0].production_time_confidence, "medium");
+        assert!(report.candidates[0].requires_review);
+        assert!(report.candidates[0]
+            .review_reasons
+            .contains(&"embedded-production-date-confidence-not-high".to_string()));
     }
 
     #[test]

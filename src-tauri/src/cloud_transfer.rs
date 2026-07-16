@@ -112,6 +112,7 @@ pub fn candidate_blockers_with_review(
     let destination = Path::new(&candidate.dst);
     let root = Path::new(&cloud_root.path);
     let mut blockers = Vec::new();
+    let mut exact_review_approved = false;
 
     if candidate.review_fingerprint.len() != 64
         || !candidate
@@ -140,13 +141,17 @@ pub fn candidate_blockers_with_review(
             Some(decision) if decision.disposition == CloudReviewDisposition::Held => {
                 blockers.push("review-held".into());
             }
-            Some(_) => {}
+            Some(_) => exact_review_approved = true,
         }
     }
     if candidate.blocked_reason.is_some() {
         blockers.push("planner-blocked".into());
     }
-    if !embedded_high_confidence(candidate) {
+    // Embedded, high-confidence production time remains the only evidence that can pass without
+    // an operator decision. Lower-ranked evidence (explicit filename date, filesystem creation,
+    // then modification) may enter the copy-only phase only when an approval is bound to the
+    // exact candidate evidence and destination above. The headless CLI never supplies a decision.
+    if !embedded_high_confidence(candidate) && !exact_review_approved {
         blockers.push("embedded-high-confidence-date-required".into());
     }
     if candidate.metadata_fingerprint.trim().is_empty() {
@@ -876,7 +881,21 @@ mod tests {
         )
         .unwrap();
         assert!(candidate_blockers_with_review(&reviewed, &root(), Some(&filename_approval))
+            .is_empty());
+
+        assert!(candidate_blockers_with_review(&reviewed, &root(), None)
             .contains(&"embedded-high-confidence-date-required".to_string()));
+
+        let filename_hold = crate::cloud_review::create_decision(
+            &reviewed,
+            CloudReviewDisposition::Held,
+            13,
+        )
+        .unwrap();
+        let held_blockers =
+            candidate_blockers_with_review(&reviewed, &root(), Some(&filename_hold));
+        assert!(held_blockers.contains(&"review-held".to_string()));
+        assert!(held_blockers.contains(&"embedded-high-confidence-date-required".to_string()));
     }
 
     #[test]

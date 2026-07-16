@@ -60,10 +60,12 @@
 
   function copyEligible(candidate: api.CloudCandidate): boolean {
     const decision = matchingReviewDecision(candidate);
-    return candidate.blocked_reason === null
-      && (!candidate.requires_review || decision?.disposition === "approved")
-      && candidate.production_time_confidence === "high"
+    const exactApproval = decision?.disposition === "approved";
+    const embeddedHighConfidence = candidate.production_time_confidence === "high"
       && candidate.production_time_source.startsWith("embedded:");
+    return candidate.blocked_reason === null
+      && (!candidate.requires_review || exactApproval)
+      && (embeddedHighConfidence || exactApproval);
   }
 
   function reviewDecision(candidate: api.CloudCandidate): api.CloudReviewDecision | null {
@@ -300,7 +302,7 @@
       충돌 제외 잠재 회수 {fmtBytes(report.potentially_reclaimable_bytes)}
     </div>
     <p class="warning">
-      복사는 내부 메타데이터가 고신뢰이고, 검토 사유가 있으면 현재 증거에 결박된 명시적 승인이 있는 후보만 가능합니다. 원본 삭제 기능은 제공하지 않으며, 업로드 증거가 확인되어도 허가 정보만 표시합니다.
+      내장 고신뢰 생산일은 자동 자격을 얻습니다. 파일명·파일시스템 등 보조 생산일은 현재 메타데이터와 목적지에 결박된 명시적 승인이 있어야만 복사할 수 있습니다. 원본 삭제 기능은 제공하지 않으며, 업로드 증거가 확인되어도 허가 정보만 표시합니다.
     </p>
     {#if copied}
       <div class="receipt">
