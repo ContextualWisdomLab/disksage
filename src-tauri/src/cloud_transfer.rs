@@ -636,6 +636,7 @@ mod tests {
             content_authors: vec!["Author".into()],
             content_context: vec!["Context".into()],
             duration_ms: None,
+            dataset_profile: None,
             metadata_evidence: vec![MetadataEvidence {
                 field: "production_time".into(),
                 value: "2026-01-01".into(),

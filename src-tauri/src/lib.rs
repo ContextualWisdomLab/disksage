@@ -28,6 +28,8 @@ mod web;
 #[cfg_attr(coverage, allow(dead_code))]
 mod reasoning;
 #[cfg_attr(coverage, allow(dead_code))]
+mod dataset_metadata;
+#[cfg_attr(coverage, allow(dead_code))]
 pub mod cloud;
 pub mod cloud_transfer;
 pub mod content_digest;

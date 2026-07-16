@@ -313,6 +313,34 @@
             {#if candidate.duration_ms !== null}
               <div class="metadata">재생 시간: {duration(candidate.duration_ms)}</div>
             {/if}
+            {#if candidate.dataset_profile}
+              <div class="dataset-profile">
+                <strong>
+                  데이터 메타데이터: {candidate.dataset_profile.format.toUpperCase()} ·
+                  표본 {candidate.dataset_profile.sampled_rows.toLocaleString()}행 ·
+                  {candidate.dataset_profile.columns.length.toLocaleString()}열
+                </strong>
+                <div class="metadata">
+                  {candidate.dataset_profile.profile_complete ? "스키마 표본 완료" : "스키마 표본 불완전·검토 필요"}
+                  {candidate.dataset_profile.sample_truncated ? " · 제한 범위까지만 읽음" : ""}
+                </div>
+                {#if candidate.dataset_profile.columns.length > 0}
+                  <ul class="schema-columns">
+                    {#each candidate.dataset_profile.columns as column}
+                      <li>
+                        {column.name}: {column.inferred_type} · 관측 {column.observed_values.toLocaleString()} ·
+                        결측 {column.missing_values.toLocaleString()}
+                        {#if column.sensitive_name}<em>민감 컬럼명 징후</em>{/if}
+                      </li>
+                    {/each}
+                  </ul>
+                {/if}
+                {#if candidate.dataset_profile.quality_warnings.length > 0}
+                  <div class="context">데이터 품질 경고: {candidate.dataset_profile.quality_warnings.join(", ")}</div>
+                {/if}
+                <div class="context">셀 값은 저장하거나 표시하지 않습니다.</div>
+              </div>
+            {/if}
             <div class="arrow">→ {candidate.dst}</div>
             <div class="context">맥락: {candidate.source_context} · lineage: {candidate.metadata_fingerprint.slice(0, 12)}</div>
             {#if copyEligible(candidate)}
@@ -364,6 +392,9 @@
   .path, .arrow { overflow-wrap: anywhere; font-size: 0.85rem; }
   .arrow { color: #555; margin-top: 0.2rem; }
   .metadata { color: #3f5368; font-size: 0.78rem; margin-top: 0.2rem; }
+  .dataset-profile { margin-top: 0.4rem; padding: 0.45rem; border: 1px solid #c8d4df; border-radius: 4px; background: #f8fafc; font-size: 0.78rem; }
+  .schema-columns { margin: 0.25rem 0; padding-left: 1.2rem; max-height: 10rem; overflow-y: auto; }
+  .schema-columns em { margin-left: 0.4rem; color: #9a5b00; }
   .context { color: #777; font-size: 0.75rem; margin-top: 0.2rem; }
   .copy { margin-top: 0.4rem; }
   details { margin-top: 0.3rem; color: #59636e; font-size: 0.75rem; }

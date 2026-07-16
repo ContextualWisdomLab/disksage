@@ -198,8 +198,26 @@ export interface CloudCandidate {
   content_authors: string[];
   content_context: string[];
   duration_ms: number | null;
+  dataset_profile: DatasetProfile | null;
   metadata_evidence: MetadataEvidence[];
   blocked_reason: string | null;
+}
+
+export interface DatasetColumnProfile {
+  name: string;
+  inferred_type: string;
+  observed_values: number;
+  missing_values: number;
+  sensitive_name: boolean;
+}
+
+export interface DatasetProfile {
+  format: string;
+  sampled_rows: number;
+  profile_complete: boolean;
+  sample_truncated: boolean;
+  columns: DatasetColumnProfile[];
+  quality_warnings: string[];
 }
 
 export interface MetadataEvidence {
