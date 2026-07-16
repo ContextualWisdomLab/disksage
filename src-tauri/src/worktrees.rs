@@ -18,25 +18,25 @@ use std::time::{Duration, Instant};
 #[cfg(not(coverage))]
 const DAY_MS: u64 = 86_400_000;
 #[cfg(not(coverage))]
-const GIT_TIMEOUT: Duration = Duration::from_secs(1);
+const GIT_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(not(coverage))]
-const GIT_METADATA_READ_TIMEOUT: Duration = Duration::from_millis(250);
+const GIT_METADATA_READ_TIMEOUT: Duration = Duration::from_secs(2);
 #[cfg(not(coverage))]
 const GIT_METADATA_MAX_BYTES: u64 = 4_096;
 #[cfg(not(coverage))]
-const INVENTORY_TIMEOUT: Duration = Duration::from_secs(30);
+const INVENTORY_TIMEOUT: Duration = Duration::from_secs(180);
 #[cfg(not(coverage))]
-const FILESYSTEM_SCAN_TIMEOUT: Duration = Duration::from_secs(2);
+const FILESYSTEM_SCAN_TIMEOUT: Duration = Duration::from_secs(15);
 #[cfg(not(coverage))]
-const FILESYSTEM_SCAN_TOTAL_TIMEOUT: Duration = Duration::from_secs(10);
+const FILESYSTEM_SCAN_TOTAL_TIMEOUT: Duration = Duration::from_secs(120);
 #[cfg(not(coverage))]
-const FILESYSTEM_SCAN_MAX_ENTRIES: usize = 200_000;
+const FILESYSTEM_SCAN_MAX_ENTRIES: usize = 1_000_000;
 #[cfg(not(coverage))]
 const REPOSITORY_SEARCH_MAX_DEPTH: usize = 8;
 #[cfg(not(coverage))]
-const REPOSITORY_SEARCH_TIMEOUT: Duration = Duration::from_secs(5);
+const REPOSITORY_SEARCH_TIMEOUT: Duration = Duration::from_secs(60);
 #[cfg(not(coverage))]
-const REPOSITORY_SEARCH_MAX_DIRECTORIES: usize = 100_000;
+const REPOSITORY_SEARCH_MAX_DIRECTORIES: usize = 500_000;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct RawWorktree {
@@ -630,11 +630,7 @@ pub fn inventory(root: &Path, min_age_days: u64, now_ms: u64) -> WorktreeReport 
                 } else {
                     (0, 0, false)
                 };
-            let commit_ms = if is_primary {
-                0
-            } else {
-                commit_time_ms(seed, &worktree.head)
-            };
+            let commit_ms = commit_time_ms(seed, &worktree.head);
             let last_activity_ms = latest_file_ms.max(commit_ms);
             let age_days = now_ms.saturating_sub(last_activity_ms) / DAY_MS;
             let (ahead, behind) = if is_primary {
@@ -1078,6 +1074,7 @@ mod tests {
         assert!(report.worktrees.iter().any(|worktree| {
             worktree.is_primary
                 && !worktree.filesystem_scanned
+                && worktree.last_activity_ms > 0
                 && !worktree.removal_eligible
                 && worktree
                     .review_reasons
