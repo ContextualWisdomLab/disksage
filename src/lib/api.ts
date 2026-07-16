@@ -173,6 +173,8 @@ export interface CloudRoot {
   account_scope: CloudAccountScope;
   label: string;
   path: string;
+  readable: boolean;
+  access_issue: string | null;
 }
 
 export interface OAuthConnection {

@@ -436,6 +436,7 @@ fn run() -> Result<(), String> {
     }
     cloud::validate_source_root_readable(&args.root)?;
     let selected = select_root(&roots, &args)?;
+    cloud::validate_cloud_root_readable(&selected)?;
     let excluded: Vec<PathBuf> = roots.iter().map(|r| PathBuf::from(&r.path)).collect();
     if excluded
         .iter()
@@ -611,6 +612,8 @@ mod tests {
                 account_scope: disksage_lib::cloud::CloudAccountScope::Unknown,
                 label: "a".into(),
                 path: "/a".into(),
+                readable: true,
+                access_issue: None,
             },
             CloudRoot {
                 id: "/b".into(),
@@ -618,6 +621,8 @@ mod tests {
                 account_scope: disksage_lib::cloud::CloudAccountScope::Unknown,
                 label: "b".into(),
                 path: "/b".into(),
+                readable: true,
+                access_issue: None,
             },
         ];
         let mut args = parse_args(&[], Path::new("/h")).unwrap();

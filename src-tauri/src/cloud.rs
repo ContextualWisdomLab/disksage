@@ -70,6 +70,14 @@ pub struct CloudRoot {
     pub account_scope: CloudAccountScope,
     pub label: String,
     pub path: String,
+    /// Readability observed during the latest bounded discovery pass.
+    ///
+    /// This is only a snapshot. Every operation revalidates the directory before use.
+    #[serde(default)]
+    pub readable: bool,
+    /// Stable, non-sensitive reason for a failed discovery-time access probe.
+    #[serde(default)]
+    pub access_issue: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -199,11 +207,38 @@ pub fn validate_source_root_readable(root: &Path) -> Result<(), String> {
         .map_err(|error| format!("source-root-unreadable:{}:{error}", root.display()))
 }
 
+/// Revalidate a selected destination immediately before it is used.
+pub fn validate_cloud_root_readable(root: &CloudRoot) -> Result<(), String> {
+    if !root.readable {
+        return Err(format!(
+            "cloud-root-unreadable:{}:{}",
+            root.path,
+            root.access_issue.as_deref().unwrap_or("not-verified")
+        ));
+    }
+    std::fs::read_dir(&root.path)
+        .map(|_| ())
+        .map_err(|error| format!("cloud-root-unreadable:{}:{error}", root.path))
+}
+
 #[cfg(not(coverage))]
 fn is_writable_dir(path: &Path) -> bool {
     path.metadata()
         .map(|m| m.is_dir() && !m.permissions().readonly())
         .unwrap_or(false)
+}
+
+#[cfg(not(coverage))]
+fn directory_access_issue(path: &Path) -> Option<String> {
+    std::fs::read_dir(path).err().map(|error| {
+        match error.kind() {
+            std::io::ErrorKind::PermissionDenied => "permission-denied",
+            std::io::ErrorKind::NotFound => "not-found",
+            std::io::ErrorKind::NotADirectory => "not-a-directory",
+            _ => "read-dir-failed",
+        }
+        .into()
+    })
 }
 
 #[cfg(not(coverage))]
@@ -233,6 +268,8 @@ fn push_root(
     if !is_writable_dir(&path) || !seen.insert(identity) {
         return;
     }
+    let access_issue = directory_access_issue(&path);
+    let readable = access_issue.is_none();
     let value = path.to_string_lossy().into_owned();
     roots.push(CloudRoot {
         id: value.clone(),
@@ -240,6 +277,8 @@ fn push_root(
         account_scope,
         label,
         path: value,
+        readable,
+        access_issue,
     });
 }
 
@@ -306,7 +345,9 @@ fn account_scope(
     }
 }
 
-/// Discover writable local File Provider roots without creating a probe file.
+/// Discover permission-writable local File Provider roots without creating a probe file, and
+/// attach a bounded readability snapshot so privacy-controlled destinations remain visible but
+/// fail closed before selection.
 ///
 /// Google Drive's account root is read-only on macOS, so each writable direct child (for
 /// example "My Drive" or a writable shared drive) is surfaced as a separate destination.
@@ -2225,6 +2266,8 @@ mod tests {
             account_scope: CloudAccountScope::Organization,
             label: "test".into(),
             path: path.to_string_lossy().into_owned(),
+            readable: true,
+            access_issue: None,
         }
     }
 
@@ -2279,6 +2322,9 @@ mod tests {
         writable_dir(&google.join(".Trash"));
         let roots = discover_cloud_roots(home);
         assert_eq!(roots.len(), 4);
+        assert!(roots
+            .iter()
+            .all(|root| root.readable && root.access_issue.is_none()));
         assert!(roots.iter().any(|r| {
             r.provider == CloudProvider::Icloud && r.account_scope == CloudAccountScope::Unknown
         }));
@@ -2382,6 +2428,31 @@ mod tests {
         writable_dir(&one);
         std::fs::set_permissions(&one, std::fs::Permissions::from_mode(0o500)).unwrap();
         assert!(discover_cloud_roots(tmp.path()).is_empty());
+    }
+
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
+    fn exposes_unreadable_provider_root_and_rejects_selection() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let one = tmp.path().join("OneDrive");
+        writable_dir(&one);
+        std::fs::set_permissions(&one, std::fs::Permissions::from_mode(0o300)).unwrap();
+
+        let roots = discover_cloud_roots(tmp.path());
+        assert_eq!(roots.len(), 1);
+        assert!(!roots[0].readable);
+        assert_eq!(roots[0].access_issue.as_deref(), Some("permission-denied"));
+        assert_eq!(
+            validate_cloud_root_readable(&roots[0]),
+            Err(format!(
+                "cloud-root-unreadable:{}:permission-denied",
+                one.display()
+            ))
+        );
+
+        std::fs::set_permissions(&one, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
 
     #[cfg(not(coverage))]

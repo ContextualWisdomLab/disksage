@@ -823,6 +823,8 @@ mod tests {
             account_scope: CloudAccountScope::Organization,
             label: "iCloud Drive".into(),
             path: ROOT.into(),
+            readable: true,
+            access_issue: None,
         }
     }
 
@@ -1301,6 +1303,8 @@ mod tests {
             account_scope: CloudAccountScope::Organization,
             label: "iCloud Drive".into(),
             path: cloud.to_string_lossy().into_owned(),
+            readable: true,
+            access_issue: None,
         };
         let receipt_dir = tmp.path().join("receipts");
         let (copy_receipt, receipt_path) =
@@ -1368,6 +1372,8 @@ mod tests {
             account_scope: CloudAccountScope::Organization,
             label: "iCloud Drive".into(),
             path: cloud.to_string_lossy().into_owned(),
+            readable: true,
+            access_issue: None,
         };
 
         assert_eq!(
@@ -1422,6 +1428,8 @@ mod tests {
             account_scope: CloudAccountScope::Organization,
             label: "iCloud Drive".into(),
             path: cloud.to_string_lossy().into_owned(),
+            readable: true,
+            access_issue: None,
         };
         let receipt_dir = tmp.path().join("receipts");
         assert_eq!(
@@ -1464,6 +1472,8 @@ mod tests {
             account_scope: CloudAccountScope::Organization,
             label: "iCloud Drive".into(),
             path: cloud.to_string_lossy().into_owned(),
+            readable: true,
+            access_issue: None,
         };
         assert_eq!(
             prepare_cloud_copy(
@@ -1503,6 +1513,8 @@ mod tests {
             account_scope: CloudAccountScope::Organization,
             label: "iCloud Drive".into(),
             path: cloud.to_string_lossy().into_owned(),
+            readable: true,
+            access_issue: None,
         };
         let content_hash = hash_file(&source).unwrap();
         let lineage = lineage_snapshot(&test_candidate, None);

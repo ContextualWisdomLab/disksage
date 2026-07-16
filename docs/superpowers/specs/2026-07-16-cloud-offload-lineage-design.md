@@ -6,7 +6,7 @@ Use DiskSage against a genuinely space-constrained machine to identify files tha
 
 ## Scope
 
-- Discover writable local roots for all three providers. Google Drive writable children are separate destinations because the account root is read-only on macOS.
+- Discover permission-writable local roots for all three providers. Google Drive writable children are separate destinations because the account root is read-only on macOS. Record a bounded readability snapshot and a stable non-sensitive access issue for every surfaced root; an unreadable root remains visible for diagnosis but is disabled in the UI and revalidated immediately before planning or OAuth use.
 - Scan locally in Rust while pruning provider roots, symlinks, hidden trees, OS `Library`/`System` trees, and regenerable developer artifacts.
 - Consider only a conservative allowlist of document, media, archive, dataset, backup, and creative file extensions.
 - Default to files at least 256 MiB and not modified for 90 days.

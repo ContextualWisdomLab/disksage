@@ -29,7 +29,7 @@
       roots = await api.listCloudRoots();
       connections = await api.listCloudProviderConnections();
       reviewDecisions = await api.listCloudReviewDecisions();
-      selectedRoot = roots[0]?.path ?? "";
+      selectedRoot = roots.find((root) => root.readable)?.path ?? "";
     } catch (e) {
       loadError = String(e);
     }
@@ -235,7 +235,9 @@
         대상
         <select bind:value={selectedRoot} disabled={busy}>
           {#each roots as root (root.id)}
-            <option value={root.path}>{root.label} · {accountScopeLabel(root.account_scope)}</option>
+            <option value={root.path} disabled={!root.readable}>
+              {root.label} · {accountScopeLabel(root.account_scope)}{root.readable ? "" : " · 접근 불가"}
+            </option>
           {/each}
         </select>
       </label>
@@ -251,7 +253,12 @@
         {busy ? "계획 중…" : "오프로드 후보 미리보기"}
       </button>
     </div>
-    {#if selectedRootDetails()?.provider !== "icloud"}
+    {#if roots.some((root) => !root.readable)}
+      <p class="warning">
+        접근 불가 클라우드 루트는 선택에서 제외했습니다. macOS 개인정보 보호 권한을 허용한 뒤 목록을 다시 불러오세요.
+      </p>
+    {/if}
+    {#if selectedRootDetails() && selectedRootDetails()?.provider !== "icloud"}
       <div class="oauth-panel">
         {#if connectionForSelectedRoot()}
           <strong>읽기 전용 OAuth 연결됨</strong>

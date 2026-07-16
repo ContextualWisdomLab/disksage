@@ -265,6 +265,8 @@ fn validate_connection(connection: &OAuthConnection) -> Result<(), String> {
         account_scope: crate::cloud::CloudAccountScope::Unknown,
         label: String::new(),
         path: connection.cloud_root_path.clone(),
+        readable: true,
+        access_issue: None,
     };
     if connection.connection_id != connection_id(&root) {
         return Err("oauth-connection-id-mismatch".into());
@@ -932,6 +934,8 @@ mod tests {
             account_scope: crate::cloud::CloudAccountScope::Unknown,
             label: "Cloud".into(),
             path: path.into(),
+            readable: true,
+            access_issue: None,
         }
     }
 

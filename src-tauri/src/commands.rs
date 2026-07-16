@@ -425,7 +425,8 @@ fn resolve_home(app: &AppHandle) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// Writable local roots exposed by iCloud Drive, OneDrive, and Google Drive.
+/// Candidate local roots exposed by iCloud Drive, OneDrive, and Google Drive, including their
+/// discovery-time readability evidence.
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn list_cloud_roots(app: AppHandle) -> Vec<cloud::CloudRoot> {
@@ -488,6 +489,7 @@ pub async fn connect_cloud_provider(
     app: AppHandle,
 ) -> Result<provider_oauth::OAuthConnection, String> {
     let selected = selected_cloud_root(&app, &cloud_root)?;
+    cloud::validate_cloud_root_readable(&selected)?;
     if selected.provider == cloud::CloudProvider::Icloud {
         return Err("icloud-oauth-not-supported".into());
     }
@@ -547,6 +549,7 @@ fn cloud_plan_for_inputs(
         .find(|candidate| candidate.path == cloud_root)
         .cloned()
         .ok_or_else(|| "탐지된 클라우드 루트가 아님".to_string())?;
+    cloud::validate_cloud_root_readable(&selected)?;
     let excluded: Vec<PathBuf> = discovered.iter().map(|root| PathBuf::from(&root.path)).collect();
     if excluded.iter().any(|cloud| root_path.starts_with(cloud)) {
         return Err("이미 클라우드 안에 있는 경로는 오프로드 원본으로 사용할 수 없음".into());

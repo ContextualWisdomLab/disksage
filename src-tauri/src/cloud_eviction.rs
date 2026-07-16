@@ -671,6 +671,8 @@ mod tests {
             account_scope: crate::cloud::CloudAccountScope::Organization,
             label: "test".into(),
             path: cloud_dir.to_string_lossy().into_owned(),
+            readable: true,
+            access_issue: None,
         };
         let (receipt, _) = prepare_cloud_copy(&candidate, &root, &receipt_dir, 100).unwrap();
         let evidence = ProviderSyncEvidence {
