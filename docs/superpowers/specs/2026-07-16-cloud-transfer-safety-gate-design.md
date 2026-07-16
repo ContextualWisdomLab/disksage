@@ -1,0 +1,46 @@
+# Cloud transfer safety gate
+
+## Scope
+
+This slice turns an approved cloud-archive candidate into a verified **copy**. It does not evict,
+trash, move, hydrate, or delete the source. A later source-eviction command must require the permit
+defined here and must still use DiskSage's trash-only deletion path.
+
+No model is involved. Eligibility, hashing, path containment, receipt integrity, and sync evidence
+matching are deterministic Rust operations.
+
+## Required sequence
+
+1. Accept only a planner candidate with an embedded, high-confidence production date, no review
+   requirement, no planner blocker, and a non-empty metadata fingerprint.
+2. Revalidate absolute source/destination paths and require the destination to be under the selected
+   provider root.
+3. Re-stat the source immediately before copying; size and modification time must still match the
+   dry-run candidate.
+4. Create the destination with `create_new` so an existing or concurrently created file is never
+   overwritten.
+5. Stream-copy while calculating BLAKE3, `sync_all` the destination, then re-hash both source and
+   destination. Source metadata, byte counts, and all hashes must still match.
+6. Persist a create-only, read-only receipt whose identifier binds the planner fingerprint,
+   provider, paths, byte count, BLAKE3, source modification time, copy time, and state flags.
+7. Keep the source. A verified copy remains `awaiting-provider-sync`.
+8. Accept only provider API or provider-native sync evidence whose receipt ID, provider,
+   destination, byte count, and timestamp match. Only then create a local-eviction permit.
+
+## Fail-closed boundaries
+
+- A filename date or filesystem timestamp cannot enter the copy phase by itself.
+- A symlinked destination parent that resolves outside the cloud root is rejected.
+- A copy failure removes only a destination that this invocation successfully created.
+- A pre-existing receipt is never overwritten or removed.
+- Provider sync evidence is a separate immutable record. Manual assumption that a local cloud
+  folder "will eventually sync" is not evidence.
+- This slice deliberately exposes no eviction function, so a permit cannot accidentally delete a
+  source until the trash-only follow-up is separately implemented and reviewed.
+
+## Provider adapters still required
+
+The pure evidence gate is provider-neutral. iCloud, OneDrive, and Google Drive each need a trusted
+adapter that converts a provider-native remote/sync-complete observation into
+`ProviderSyncEvidence`. Until an adapter exists and returns complete evidence, the source remains
+local.
