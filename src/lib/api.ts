@@ -157,7 +157,14 @@ export const reasonUnknownExtensions = (samples: string[]) =>
   invoke<ExtInsight[]>("reason_unknown_extensions", { samples });
 
 export type CloudProvider = "icloud" | "onedrive" | "google-drive";
-export type ArchiveKind = "document" | "media" | "archive" | "dataset" | "backup" | "creative";
+export type ArchiveKind =
+  | "document"
+  | "media"
+  | "archive"
+  | "dataset"
+  | "backup"
+  | "creative"
+  | "incomplete-download";
 
 export interface CloudRoot {
   id: string;

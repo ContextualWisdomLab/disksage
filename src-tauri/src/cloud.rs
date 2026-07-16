@@ -59,6 +59,7 @@ pub enum ArchiveKind {
     Dataset,
     Backup,
     Creative,
+    IncompleteDownload,
 }
 
 impl ArchiveKind {
@@ -70,6 +71,7 @@ impl ArchiveKind {
             Self::Dataset => "datasets",
             Self::Backup => "backups",
             Self::Creative => "creative",
+            Self::IncompleteDownload => "incomplete-downloads",
         }
     }
 }
@@ -323,8 +325,21 @@ fn archive_kind(path: &Path) -> Option<ArchiveKind> {
         | "rds" | "sqlite" | "sqlite3" | "db" | "sql" | "jsonl" => Some(ArchiveKind::Dataset),
         "bak" | "backup" | "vhd" | "vhdx" | "qcow2" | "img" => Some(ArchiveKind::Backup),
         "psd" | "ai" | "indd" | "sketch" | "fig" | "blend" => Some(ArchiveKind::Creative),
+        "crdownload" => Some(ArchiveKind::IncompleteDownload),
+        _ if multipart_archive_part(path).is_some() => Some(ArchiveKind::Archive),
         _ => None,
     }
+}
+
+fn multipart_archive_part(path: &Path) -> Option<(String, u32)> {
+    let name = path.file_name()?.to_string_lossy();
+    let normalized = name.to_ascii_lowercase();
+    let (base, part) = normalized.rsplit_once(".part")?;
+    if !base.ends_with(".zip") || part.len() != 3 || !part.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    Some((base.to_string(), part.parse().ok()?))
 }
 
 #[cfg(not(coverage))]
@@ -741,6 +756,113 @@ fn push_context(metadata: &mut ContentMetadata, field: &str, value: &str, source
     let bounded: String = value.chars().take(500).collect();
     metadata.context.push(format!("{field}={bounded}"));
     add_evidence(metadata, field, bounded, source, "high");
+}
+
+fn origin_host(value: &str) -> Option<String> {
+    let (_, remainder) = value.trim().split_once("://")?;
+    let authority = remainder.split(['/', '?', '#']).next()?;
+    let authority = authority.rsplit('@').next()?;
+    let host = if authority.starts_with('[') {
+        authority.split(']').next()?.trim_start_matches('[')
+    } else {
+        authority.split(':').next()?
+    };
+    let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    (!host.is_empty()).then_some(host)
+}
+
+fn decode_hex_ascii(value: &[u8]) -> Option<Vec<u8>> {
+    fn nibble(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        }
+    }
+
+    let digits: Vec<u8> = value
+        .iter()
+        .copied()
+        .filter(|byte| !byte.is_ascii_whitespace())
+        .collect();
+    if digits.is_empty() || digits.len() % 2 != 0 {
+        return None;
+    }
+    digits
+        .chunks_exact(2)
+        .map(|pair| Some((nibble(pair[0])? << 4) | nibble(pair[1])?))
+        .collect()
+}
+
+fn quarantine_record(value: &str) -> Option<(u64, String)> {
+    let mut fields = value.trim().split(';');
+    let _flags = fields.next()?;
+    let acquired_seconds = u64::from_str_radix(fields.next()?, 16).ok()?;
+    let agent = fields.next()?.trim();
+    if agent.is_empty() {
+        return None;
+    }
+    Some((acquired_seconds, agent.to_string()))
+}
+
+#[cfg(all(not(coverage), target_os = "macos"))]
+fn macos_file_provenance_metadata(path: &Path) -> ContentMetadata {
+    let mut metadata = ContentMetadata::default();
+
+    let mut where_froms = local_command("xattr");
+    where_froms
+        .args(["-px", "com.apple.metadata:kMDItemWhereFroms"])
+        .arg(path);
+    if let Ok(output) = run_metadata_command(where_froms) {
+        if let Some(bytes) = decode_hex_ascii(&output) {
+            if let Ok(plist::Value::Array(values)) =
+                plist::Value::from_reader(std::io::Cursor::new(bytes))
+            {
+                let hosts: BTreeSet<String> = values
+                    .iter()
+                    .filter_map(plist::Value::as_string)
+                    .filter_map(origin_host)
+                    .collect();
+                for host in hosts {
+                    push_context(
+                        &mut metadata,
+                        "download-origin-host",
+                        &host,
+                        "filesystem:macos-where-froms",
+                    );
+                }
+            }
+        }
+    }
+
+    let mut quarantine = local_command("xattr");
+    quarantine.args(["-p", "com.apple.quarantine"]).arg(path);
+    if let Ok(output) = run_metadata_command(quarantine) {
+        if let Some((acquired_seconds, agent)) =
+            quarantine_record(&String::from_utf8_lossy(&output))
+        {
+            push_context(
+                &mut metadata,
+                "download-agent",
+                &agent,
+                "filesystem:macos-quarantine",
+            );
+            add_evidence(
+                &mut metadata,
+                "download-acquired-date",
+                date_value(acquired_seconds.saturating_mul(1_000)),
+                "filesystem:macos-quarantine",
+                "medium",
+            );
+        }
+    }
+    metadata
+}
+
+#[cfg(all(not(coverage), not(target_os = "macos")))]
+fn macos_file_provenance_metadata(_path: &Path) -> ContentMetadata {
+    ContentMetadata::default()
 }
 
 #[cfg(not(coverage))]
@@ -1218,6 +1340,95 @@ fn zipped_document_metadata(path: &Path, entry: &str) -> ContentMetadata {
     metadata
 }
 
+#[cfg(not(coverage))]
+fn zip_archive_metadata(path: &Path) -> ContentMetadata {
+    let mut metadata = ContentMetadata::default();
+    let mut command = local_command("zipinfo");
+    command.arg("-h").arg(path);
+    let output = match run_metadata_command(command) {
+        Ok(output) => output,
+        Err(failure) => {
+            add_probe_warning(&mut metadata, "zipinfo", failure);
+            return metadata;
+        }
+    };
+    add_evidence(
+        &mut metadata,
+        "archive-index-status",
+        "readable",
+        "embedded:zip-central-directory",
+        "high",
+    );
+    let stdout = String::from_utf8_lossy(&output);
+    if let Some(entries) = stdout.lines().find_map(|line| {
+        let (_, value) = line.split_once("number of entries:")?;
+        value.trim().split_whitespace().next()?.parse::<u64>().ok()
+    }) {
+        add_evidence(
+            &mut metadata,
+            "archive-entry-count",
+            entries.to_string(),
+            "embedded:zip-central-directory",
+            "high",
+        );
+    }
+    metadata
+}
+
+#[cfg(not(coverage))]
+fn multipart_archive_metadata(path: &Path) -> ContentMetadata {
+    let mut metadata = ContentMetadata::default();
+    let Some((base, current_part)) = multipart_archive_part(path) else {
+        return metadata;
+    };
+    let present: BTreeSet<u32> = path
+        .parent()
+        .and_then(|parent| std::fs::read_dir(parent).ok())
+        .into_iter()
+        .flatten()
+        .take(4_096)
+        .filter_map(Result::ok)
+        .filter_map(|entry| multipart_archive_part(&entry.path()))
+        .filter_map(|(candidate_base, part)| (candidate_base == base).then_some(part))
+        .collect();
+    let max_part = present.iter().next_back().copied().unwrap_or(current_part);
+    let missing: Vec<u32> = (0..=max_part)
+        .filter(|part| !present.contains(part))
+        .collect();
+    add_evidence(
+        &mut metadata,
+        "multipart-archive-current-part",
+        format!("{current_part:03}"),
+        "filesystem:multipart-sibling-set",
+        "high",
+    );
+    add_evidence(
+        &mut metadata,
+        "multipart-archive-present-parts",
+        present
+            .iter()
+            .map(|part| format!("{part:03}"))
+            .collect::<Vec<_>>()
+            .join(","),
+        "filesystem:multipart-sibling-set",
+        "high",
+    );
+    if !missing.is_empty() {
+        add_evidence(
+            &mut metadata,
+            "multipart-archive-missing-parts",
+            missing
+                .iter()
+                .map(|part| format!("{part:03}"))
+                .collect::<Vec<_>>()
+                .join(","),
+            "filesystem:multipart-sibling-set",
+            "high",
+        );
+    }
+    metadata
+}
+
 fn merge_metadata(mut primary: ContentMetadata, secondary: ContentMetadata) -> ContentMetadata {
     let confidence_rank = |value: Option<&str>| match value {
         Some("high") => 3,
@@ -1317,19 +1528,36 @@ fn probe_content_metadata(path: &Path) -> ContentMetadata {
         .extension()
         .map(|e| e.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
-    let general = exiftool_metadata(path);
+    // Transient downloads and raw multipart members do not represent standalone payloads.
+    // ExifTool can spend the full timeout trying to infer their format, so retain only the
+    // lightweight acquisition/sibling-set evidence for these fail-closed candidates.
+    let general = if should_probe_general_metadata(path) {
+        exiftool_metadata(path)
+    } else {
+        ContentMetadata::default()
+    };
     let format_specific = match extension.as_str() {
         "m4a" | "mp4" | "m4v" | "mov" | "mkv" | "avi" | "wav" | "mp3" | "flac" | "aiff" => {
             ffprobe_metadata(path)
         }
         "pdf" => pdfinfo_metadata(path),
+        "zip" => zip_archive_metadata(path),
         "docx" | "xlsx" | "pptx" => zipped_document_metadata(path, "docProps/core.xml"),
         "odt" | "ods" | "odp" => zipped_document_metadata(path, "meta.xml"),
         "csv" | "tsv" | "parquet" | "feather" | "arrow" | "sav" | "sas7bdat" | "dta" | "rdata"
         | "rds" | "sqlite" | "sqlite3" | "db" | "sql" | "jsonl" => dataset_content_metadata(path),
+        _ if multipart_archive_part(path).is_some() => multipart_archive_metadata(path),
         _ => ContentMetadata::default(),
     };
-    merge_metadata(general, format_specific)
+    merge_metadata(
+        merge_metadata(general, format_specific),
+        macos_file_provenance_metadata(path),
+    )
+}
+
+fn should_probe_general_metadata(path: &Path) -> bool {
+    archive_kind(path) != Some(ArchiveKind::IncompleteDownload)
+        && multipart_archive_part(path).is_none()
 }
 
 fn looks_like_coordinates(name: &str) -> bool {
@@ -1401,6 +1629,7 @@ fn embedded_metadata_review_reasons(
             "security",
             "contract",
             "evaluation",
+            "hyosung",
             "내부",
             "보안",
             "계약",
@@ -1440,6 +1669,13 @@ fn embedded_metadata_review_reasons(
     {
         reasons.push("embedded-metadata-probe-incomplete".into());
     }
+    if metadata
+        .evidence
+        .iter()
+        .any(|evidence| evidence.field == "download-origin-host")
+    {
+        reasons.push("download-origin-needs-destination-review".into());
+    }
     reasons
 }
 
@@ -1450,6 +1686,12 @@ fn review_reasons(path: &Path, kind: ArchiveKind) -> Vec<String> {
     }
     if kind == ArchiveKind::Dataset {
         reasons.push("structured-data-may-contain-personal-data".into());
+    }
+    if kind == ArchiveKind::IncompleteDownload {
+        reasons.push("incomplete-download-extension".into());
+    }
+    if multipart_archive_part(path).is_some() {
+        reasons.push("multipart-archive-member".into());
     }
     let extension = path
         .extension()
@@ -1511,6 +1753,36 @@ fn review_reasons(path: &Path, kind: ArchiveKind) -> Vec<String> {
     reasons
 }
 
+fn planner_blocked_reason(
+    path: &Path,
+    kind: ArchiveKind,
+    metadata: &ContentMetadata,
+    destination: &Path,
+) -> Option<String> {
+    if destination.exists() {
+        return Some("destination-exists".into());
+    }
+    if kind == ArchiveKind::IncompleteDownload {
+        return Some("incomplete-download".into());
+    }
+    if multipart_archive_part(path).is_some() {
+        return Some("multipart-archive-atomic-copy-required".into());
+    }
+    let extension = path
+        .extension()
+        .map(|extension| extension.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    if extension == "zip"
+        && metadata.evidence.iter().any(|evidence| {
+            evidence.field == "metadata-probe-warning"
+                && evidence.source == "local:metadata-probe:zipinfo"
+        })
+    {
+        return Some("archive-index-unreadable".into());
+    }
+    None
+}
+
 fn metadata_fingerprint(file: &FileFact, relative: &Path) -> String {
     let input = format!(
         "{}\0{}\0{}\0{}",
@@ -1543,7 +1815,11 @@ pub fn candidate_review_fingerprint(candidate: &CloudCandidate) -> String {
         candidate.source_root.as_bytes(),
         candidate.relative_path.as_bytes(),
         candidate.source_context.as_bytes(),
-        if candidate.requires_review { b"1" } else { b"0" },
+        if candidate.requires_review {
+            b"1"
+        } else {
+            b"0"
+        },
     ] {
         hash_review_value(&mut hasher, value);
     }
@@ -1556,7 +1832,11 @@ pub fn candidate_review_fingerprint(candidate: &CloudCandidate) -> String {
     }
     hash_review_value(
         &mut hasher,
-        candidate.content_title.as_deref().unwrap_or_default().as_bytes(),
+        candidate
+            .content_title
+            .as_deref()
+            .unwrap_or_default()
+            .as_bytes(),
     );
     for author in &candidate.content_authors {
         hash_review_value(&mut hasher, author.as_bytes());
@@ -1675,7 +1955,7 @@ pub fn plan_cloud_archive(
             .join(format!("{month:02}"))
             .join(kind.folder())
             .join(relative);
-        let blocked_reason = dst.exists().then(|| "destination-exists".to_string());
+        let blocked_reason = planner_blocked_reason(&file.path, kind, &lineage_metadata, &dst);
         let source_context = relative
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -1960,6 +2240,91 @@ mod tests {
             (2024, 2, 29)
         );
         assert_eq!(date_epoch_ms(2023, 2, 29), None);
+    }
+
+    #[test]
+    fn local_download_provenance_parsers_keep_hosts_and_acquisition_separate() {
+        assert_eq!(
+            origin_host("https://GW.Example.com/path?q=secret"),
+            Some("gw.example.com".into())
+        );
+        assert_eq!(origin_host("file:///private/tmp/report.pdf"), None);
+        assert_eq!(decode_hex_ascii(b"62 70\n6c69"), Some(b"bpli".to_vec()));
+        assert_eq!(decode_hex_ascii(b"xyz"), None);
+        assert_eq!(
+            quarantine_record("0081;65F00A10;Edge;opaque-id"),
+            Some((0x65F00A10, "Edge".into()))
+        );
+        assert!(!should_probe_general_metadata(Path::new(
+            "unknown.crdownload"
+        )));
+        assert!(!should_probe_general_metadata(Path::new(
+            "bundle.zip.part004"
+        )));
+        assert!(should_probe_general_metadata(Path::new("complete.zip")));
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn multipart_archive_metadata_reports_internal_gaps_without_reading_payloads() {
+        let tmp = tempfile::tempdir().unwrap();
+        for part in [0, 1, 3, 4] {
+            std::fs::write(
+                tmp.path().join(format!("bundle.zip.part{part:03}")),
+                b"part",
+            )
+            .unwrap();
+        }
+        let metadata = multipart_archive_metadata(&tmp.path().join("bundle.zip.part004"));
+        assert!(metadata.evidence.iter().any(|evidence| {
+            evidence.field == "multipart-archive-present-parts"
+                && evidence.value == "000,001,003,004"
+        }));
+        assert!(metadata.evidence.iter().any(|evidence| {
+            evidence.field == "multipart-archive-missing-parts" && evidence.value == "002"
+        }));
+    }
+
+    #[test]
+    fn incomplete_and_unreadable_download_artifacts_are_non_overridable_planner_blocks() {
+        let destination = Path::new("/definitely/missing/disksage-destination");
+        assert_eq!(
+            planner_blocked_reason(
+                Path::new("unknown.crdownload"),
+                ArchiveKind::IncompleteDownload,
+                &ContentMetadata::default(),
+                destination,
+            )
+            .as_deref(),
+            Some("incomplete-download")
+        );
+        assert_eq!(
+            planner_blocked_reason(
+                Path::new("bundle.zip.part003"),
+                ArchiveKind::Archive,
+                &ContentMetadata::default(),
+                destination,
+            )
+            .as_deref(),
+            Some("multipart-archive-atomic-copy-required")
+        );
+        let mut metadata = ContentMetadata::default();
+        metadata.evidence.push(MetadataEvidence {
+            field: "metadata-probe-warning".into(),
+            value: "zipinfo:nonzero-exit".into(),
+            source: "local:metadata-probe:zipinfo".into(),
+            confidence: "high".into(),
+        });
+        assert_eq!(
+            planner_blocked_reason(
+                Path::new("broken.zip"),
+                ArchiveKind::Archive,
+                &metadata,
+                destination,
+            )
+            .as_deref(),
+            Some("archive-index-unreadable")
+        );
     }
 
     #[test]
@@ -2638,10 +3003,13 @@ mod tests {
             ("x.csv", ArchiveKind::Dataset),
             ("x.bak", ArchiveKind::Backup),
             ("x.psd", ArchiveKind::Creative),
+            ("x.crdownload", ArchiveKind::IncompleteDownload),
+            ("x.zip.part004", ArchiveKind::Archive),
         ] {
             assert_eq!(archive_kind(Path::new(ext)), Some(expected));
             assert!(!expected.folder().is_empty());
         }
+        assert_eq!(archive_kind(Path::new("x.zip.part04")), None);
         assert_eq!(archive_kind(Path::new("README")), None);
     }
 }

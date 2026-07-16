@@ -12,6 +12,10 @@ on:
       - "package-lock.json"
   workflow_dispatch:
 
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -113,6 +117,7 @@ jobs:
           - os: windows-2022
             features: "llm-engine,llama-cpp-2/cuda,llama-cpp-2/dynamic-backends"
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     env:
       # Target the tester's GPU (RTX 3050 Ti = Ampere, compute 8.6) to keep the CUDA compile
       # from building every arch. Best-effort — ignored if the build system doesn't read it.
