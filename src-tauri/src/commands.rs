@@ -15,7 +15,7 @@ use crate::scanner::ScanResult;
 use crate::organize;
 use crate::safety;
 #[cfg(not(coverage))]
-use crate::{cloud, dev_artifacts, dupes, rules};
+use crate::{cloud, cloud_transfer, dev_artifacts, dupes, provider_api_client, provider_sync, rules};
 
 #[derive(Default)]
 pub struct AppState {
@@ -427,6 +427,44 @@ pub fn list_cloud_roots(app: AppHandle) -> Vec<cloud::CloudRoot> {
     cloud::discover_cloud_roots(&resolve_home(&app))
 }
 
+#[cfg(not(coverage))]
+fn cloud_plan_for_inputs(
+    root: &str,
+    cloud_root: &str,
+    min_size_mib: u64,
+    min_age_days: u64,
+    limit: usize,
+    app: &AppHandle,
+) -> Result<(cloud::CloudRoot, cloud::CloudPlanReport), String> {
+    let root_path = PathBuf::from(root);
+    if !root_path.is_dir() {
+        return Err(format!("스캔 루트가 디렉터리가 아님: {root}"));
+    }
+    let discovered = cloud::discover_cloud_roots(&resolve_home(app));
+    let selected = discovered
+        .iter()
+        .find(|candidate| candidate.path == cloud_root)
+        .cloned()
+        .ok_or_else(|| "탐지된 클라우드 루트가 아님".to_string())?;
+    let excluded: Vec<PathBuf> = discovered.iter().map(|root| PathBuf::from(&root.path)).collect();
+    if excluded.iter().any(|cloud| root_path.starts_with(cloud)) {
+        return Err("이미 클라우드 안에 있는 경로는 오프로드 원본으로 사용할 수 없음".into());
+    }
+    let files = cloud::collect_archive_files(&root_path, &excluded);
+    let report = cloud::plan_cloud_archive(
+        &files,
+        &root_path,
+        &selected,
+        cloud::system_now_ms(),
+        cloud::CloudPlanOptions {
+            min_size_bytes: min_size_mib.saturating_mul(1024 * 1024),
+            min_age_days,
+            limit: limit.clamp(1, 1_000),
+        },
+    );
+    Ok((selected, report))
+}
+
 /// Read-only cloud offload plan. The selected destination must be one of the roots discovered
 /// on this machine; this command never creates a folder or moves a file.
 #[cfg(not(coverage))]
@@ -439,32 +477,152 @@ pub fn plan_cloud_archive(
     limit: usize,
     app: AppHandle,
 ) -> Result<cloud::CloudPlanReport, String> {
-    let root_path = PathBuf::from(&root);
-    if !root_path.is_dir() {
-        return Err(format!("스캔 루트가 디렉터리가 아님: {root}"));
+    cloud_plan_for_inputs(&root, &cloud_root, min_size_mib, min_age_days, limit, &app)
+        .map(|(_, report)| report)
+}
+
+#[cfg(not(coverage))]
+#[derive(serde::Serialize)]
+pub struct CloudCopyOutput {
+    pub receipt: cloud_transfer::CloudCopyReceipt,
+    pub receipt_path: String,
+}
+
+/// Rebuild the plan from current metadata, then copy one uniquely matching safe candidate.
+/// The source is retained and no local-eviction API is exposed by this command.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn copy_cloud_candidate(
+    root: String,
+    cloud_root: String,
+    metadata_fingerprint: String,
+    min_size_mib: u64,
+    min_age_days: u64,
+    limit: usize,
+    app: AppHandle,
+) -> Result<CloudCopyOutput, String> {
+    if metadata_fingerprint.len() != 64
+        || !metadata_fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err("metadata-fingerprint-invalid".into());
     }
-    let discovered = cloud::discover_cloud_roots(&resolve_home(&app));
-    let selected = discovered
+    let (selected, report) = cloud_plan_for_inputs(
+        &root,
+        &cloud_root,
+        min_size_mib,
+        min_age_days,
+        limit,
+        &app,
+    )?;
+    let matches: Vec<_> = report
+        .candidates
         .iter()
-        .find(|candidate| candidate.path == cloud_root)
-        .cloned()
-        .ok_or_else(|| "탐지된 클라우드 루트가 아님".to_string())?;
-    let excluded: Vec<PathBuf> = discovered.iter().map(|r| PathBuf::from(&r.path)).collect();
-    if excluded.iter().any(|cloud| root_path.starts_with(cloud)) {
-        return Err("이미 클라우드 안에 있는 경로는 오프로드 원본으로 사용할 수 없음".into());
-    }
-    let files = cloud::collect_archive_files(&root_path, &excluded);
-    Ok(cloud::plan_cloud_archive(
-        &files,
-        &root_path,
+        .filter(|candidate| candidate.metadata_fingerprint == metadata_fingerprint)
+        .collect();
+    let candidate = match matches.as_slice() {
+        [only] => *only,
+        [] => return Err("fresh-plan-candidate-not-found".into()),
+        _ => return Err("fresh-plan-candidate-ambiguous".into()),
+    };
+    use tauri::Manager;
+    let receipt_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "app-data-directory-unavailable".to_string())?
+        .join("cloud-receipts");
+    let (receipt, receipt_path) = cloud_transfer::prepare_cloud_copy(
+        candidate,
         &selected,
+        &receipt_dir,
         cloud::system_now_ms(),
-        cloud::CloudPlanOptions {
-            min_size_bytes: min_size_mib.saturating_mul(1024 * 1024),
-            min_age_days,
-            limit: limit.clamp(1, 1_000),
-        },
-    ))
+    )?;
+    Ok(CloudCopyOutput {
+        receipt,
+        receipt_path: receipt_path.to_string_lossy().into_owned(),
+    })
+}
+
+#[cfg(not(coverage))]
+#[derive(serde::Serialize)]
+pub struct CloudAttestationOutput {
+    pub evidence: cloud_transfer::ProviderSyncEvidence,
+    pub permit: Option<cloud_transfer::LocalEvictionPermit>,
+    pub blockers: Vec<String>,
+}
+
+/// Read-only provider attestation. OAuth access tokens are accepted only as ephemeral command
+/// input and are never written to a receipt, log, setting, or response.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn attest_cloud_copy(
+    receipt_id: String,
+    object_id: Option<String>,
+    access_token: Option<String>,
+    app: AppHandle,
+) -> Result<CloudAttestationOutput, String> {
+    if receipt_id.len() != 64 || !receipt_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("receipt-id-invalid".into());
+    }
+    use tauri::Manager;
+    let receipt_path = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "app-data-directory-unavailable".to_string())?
+        .join("cloud-receipts")
+        .join(format!("{receipt_id}.json"));
+    tauri::async_runtime::spawn_blocking(move || {
+        let receipt = cloud_transfer::read_immutable_receipt(&receipt_path)?;
+        if receipt.receipt_id != receipt_id {
+            return Err("receipt-id-mismatch".into());
+        }
+        let confirmed_at_ms = cloud::system_now_ms();
+        let evidence = match receipt.provider {
+            cloud::CloudProvider::Icloud => {
+                if object_id.as_deref().is_some_and(|value| !value.trim().is_empty())
+                    || access_token.as_deref().is_some_and(|value| !value.trim().is_empty())
+                {
+                    return Err("icloud-provider-credentials-not-accepted".into());
+                }
+                provider_sync::collect_icloud_sync_evidence(&receipt, confirmed_at_ms)?
+            }
+            cloud::CloudProvider::Onedrive | cloud::CloudProvider::GoogleDrive => {
+                let object_id = object_id
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| "provider-object-id-missing".to_string())?;
+                let access_token = access_token
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| "provider-access-token-missing".to_string())?;
+                let locator = match receipt.provider {
+                    cloud::CloudProvider::Onedrive => {
+                        provider_api_client::ProviderRemoteLocator::OneDriveItemId(object_id)
+                    }
+                    cloud::CloudProvider::GoogleDrive => {
+                        provider_api_client::ProviderRemoteLocator::GoogleDriveFileId(object_id)
+                    }
+                    cloud::CloudProvider::Icloud => unreachable!(),
+                };
+                let client = provider_api_client::FixedHostProviderMetadataClient::default();
+                provider_api_client::collect_authenticated_provider_api_evidence(
+                    &receipt,
+                    &locator,
+                    &access_token,
+                    &client,
+                    confirmed_at_ms,
+                )?
+            }
+        };
+        let (permit, blockers) = match cloud_transfer::approve_local_eviction(&receipt, &evidence) {
+            Ok(permit) => (Some(permit), Vec::new()),
+            Err(blockers) => (None, blockers),
+        };
+        Ok(CloudAttestationOutput {
+            evidence,
+            permit,
+            blockers,
+        })
+    })
+    .await
+    .map_err(|_| "cloud-attestation-task-failed".to_string())?
 }
 
 #[cfg(not(coverage))]

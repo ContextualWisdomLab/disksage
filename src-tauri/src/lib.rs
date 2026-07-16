@@ -69,7 +69,9 @@ pub fn run() {
             commands::set_settings,
             commands::reason_unknown_extensions,
             commands::list_cloud_roots,
-            commands::plan_cloud_archive
+            commands::plan_cloud_archive,
+            commands::copy_cloud_candidate,
+            commands::attest_cloud_copy
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

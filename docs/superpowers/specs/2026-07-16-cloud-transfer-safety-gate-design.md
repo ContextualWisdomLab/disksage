@@ -30,8 +30,11 @@ matching are deterministic Rust operations.
    destination, byte count, destination BLAKE3, and timestamp match. Only then create a
    local-eviction permit.
 
-The headless CLI regenerates a fresh metadata plan before a fingerprint-selected copy. It offers a
-separate iCloud attestation action, but neither action removes the source.
+The headless CLI and desktop command regenerate a fresh metadata plan before a
+fingerprint-selected copy. Receipts are bounded, read-only regular files named for their validated
+receipt IDs. The desktop stores them under its private application-data receipt directory and only
+accepts a validated receipt ID back from the UI, never an arbitrary receipt path. Both surfaces can
+collect read-only provider evidence, but neither exposes source removal.
 
 ## Fail-closed boundaries
 
@@ -59,6 +62,8 @@ native adapter. OneDrive and Google Drive response parsers and evidence builders
 QuickXorHash and Drive v3 SHA-256 respectively to the local receipt. Their authenticated read-only
 client accepts an ephemeral caller-supplied OAuth access token and provider-native object ID, calls
 only fixed Microsoft or Google HTTPS hosts with redirects disabled and bounded response bodies, and
-re-hashes the local destination before and after the API request. OAuth consent and secure token
-acquisition remain a UI/platform integration concern; DiskSage does not persist the token. Until the
-selected provider's adapter returns complete evidence, the source remains local.
+re-hashes the local destination before and after the API request. The desktop clears the access-token
+field after every attempt, and the Rust command never persists or returns it. OAuth consent, refresh
+token acquisition, and Keychain storage remain a separate platform-security slice; this UI supports
+only a manually supplied one-shot access token. Until the selected provider's adapter returns
+complete evidence, the source remains local.

@@ -159,24 +159,7 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
 
 #[cfg(not(coverage))]
 fn attest_icloud_receipt(path: &Path) -> Result<AttestationOutput, String> {
-    let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err("영수증은 심볼릭 링크가 아닌 일반 파일이어야 함".into());
-    }
-    if !metadata.permissions().readonly() {
-        return Err("영수증은 읽기 전용이어야 함".into());
-    }
-    let encoded = std::fs::read(path).map_err(|error| error.to_string())?;
-    let receipt: CloudCopyReceipt =
-        serde_json::from_slice(&encoded).map_err(|error| error.to_string())?;
-    let receipt_blockers = cloud_transfer::receipt_blockers(&receipt);
-    if !receipt_blockers.is_empty() {
-        return Err(receipt_blockers.join(","));
-    }
-    let expected_name = format!("{}.json", receipt.receipt_id);
-    if path.file_name().and_then(|name| name.to_str()) != Some(expected_name.as_str()) {
-        return Err("영수증 파일명이 receipt_id와 일치하지 않음".into());
-    }
+    let receipt = cloud_transfer::read_immutable_receipt(path)?;
     if receipt.provider != CloudProvider::Icloud {
         return Err("--attest-receipt는 현재 iCloud 영수증만 지원함".into());
     }

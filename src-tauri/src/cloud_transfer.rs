@@ -15,6 +15,8 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 
 pub const RECEIPT_VERSION: u32 = 2;
+#[cfg(not(coverage))]
+const MAX_RECEIPT_BYTES: u64 = 64 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -222,6 +224,76 @@ pub fn receipt_blockers(receipt: &CloudCopyReceipt) -> Vec<String> {
         blockers.push("receipt-source-equals-destination".into());
     }
     blockers
+}
+
+#[cfg(not(coverage))]
+fn same_receipt_file_identity(
+    expected: &std::fs::Metadata,
+    observed: &std::fs::Metadata,
+) -> bool {
+    let common = expected.file_type().is_file()
+        && observed.file_type().is_file()
+        && !expected.file_type().is_symlink()
+        && !observed.file_type().is_symlink()
+        && expected.len() == observed.len()
+        && expected.permissions().readonly()
+        && observed.permissions().readonly()
+        && expected.modified().ok() == observed.modified().ok();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        common && expected.dev() == observed.dev() && expected.ino() == observed.ino()
+    }
+    #[cfg(not(unix))]
+    {
+        common
+    }
+}
+
+/// Read and validate a copy receipt before any provider-specific status probe.
+///
+/// Receipts must be bounded, read-only regular files whose filename is bound to the validated
+/// receipt id. This keeps UI and CLI callers from trusting receipt-controlled paths first.
+#[cfg(not(coverage))]
+pub fn read_immutable_receipt(path: &Path) -> Result<CloudCopyReceipt, String> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("receipt-must-be-read-only-regular-file".into());
+    }
+    if !metadata.permissions().readonly() {
+        return Err("receipt-must-be-read-only-regular-file".into());
+    }
+    if metadata.len() > MAX_RECEIPT_BYTES {
+        return Err("receipt-too-large".into());
+    }
+    let mut file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+    let opened = file.metadata().map_err(|error| error.to_string())?;
+    if !same_receipt_file_identity(&metadata, &opened) {
+        return Err("receipt-changed-during-read".into());
+    }
+    let mut encoded = Vec::with_capacity(metadata.len() as usize);
+    std::io::Read::by_ref(&mut file)
+        .take(MAX_RECEIPT_BYTES + 1)
+        .read_to_end(&mut encoded)
+        .map_err(|error| error.to_string())?;
+    if encoded.len() as u64 > MAX_RECEIPT_BYTES {
+        return Err("receipt-too-large".into());
+    }
+    let after = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    if !same_receipt_file_identity(&metadata, &after) {
+        return Err("receipt-changed-during-read".into());
+    }
+    let receipt: CloudCopyReceipt =
+        serde_json::from_slice(&encoded).map_err(|_| "receipt-json-invalid".to_string())?;
+    let blockers = receipt_blockers(&receipt);
+    if !blockers.is_empty() {
+        return Err(blockers.join(","));
+    }
+    let expected_name = format!("{}.json", receipt.receipt_id);
+    if path.file_name().and_then(|name| name.to_str()) != Some(expected_name.as_str()) {
+        return Err("receipt-filename-id-mismatch".into());
+    }
+    Ok(receipt)
 }
 
 /// Convert provider-native sync evidence into a permit for a later trash-only eviction step.
@@ -856,9 +928,18 @@ mod tests {
         assert_eq!(std::fs::read(&destination).unwrap(), b"hello-cloud");
         assert_eq!(copy_receipt.blake3, hash_file(&source).unwrap().blake3);
         assert!(receipt_path.metadata().unwrap().permissions().readonly());
-        let persisted: CloudCopyReceipt =
-            serde_json::from_slice(&std::fs::read(receipt_path).unwrap()).unwrap();
+        let persisted = read_immutable_receipt(&receipt_path).unwrap();
         assert_eq!(persisted, copy_receipt);
+
+        let wrong_name = receipt_dir.join("wrong-name.json");
+        std::fs::copy(&receipt_path, &wrong_name).unwrap();
+        let mut permissions = std::fs::metadata(&wrong_name).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&wrong_name, permissions).unwrap();
+        assert_eq!(
+            read_immutable_receipt(&wrong_name).unwrap_err(),
+            "receipt-filename-id-mismatch"
+        );
     }
 
     #[cfg(not(coverage))]

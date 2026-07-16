@@ -12,6 +12,12 @@
   let busy = $state(false);
   let loadError = $state("");
   let report: api.CloudPlanReport | null = $state(null);
+  let copyingFingerprint = $state("");
+  let copied: api.CloudCopyOutput | null = $state(null);
+  let attesting = $state(false);
+  let attestation: api.CloudAttestationOutput | null = $state(null);
+  let objectId = $state("");
+  let accessToken = $state("");
 
   onMount(async () => {
     try {
@@ -27,6 +33,10 @@
     busy = true;
     loadError = "";
     report = null;
+    copied = null;
+    attestation = null;
+    objectId = "";
+    accessToken = "";
     try {
       report = await api.planCloudArchive(
         scannedRoot,
@@ -39,6 +49,58 @@
       loadError = String(e);
     } finally {
       busy = false;
+    }
+  }
+
+  function copyEligible(candidate: api.CloudCandidate): boolean {
+    return candidate.blocked_reason === null
+      && !candidate.requires_review
+      && candidate.production_time_confidence === "high"
+      && candidate.production_time_source.startsWith("embedded:");
+  }
+
+  async function copyCandidate(candidate: api.CloudCandidate) {
+    if (!scannedRoot || !selectedRoot || !copyEligible(candidate)) return;
+    copyingFingerprint = candidate.metadata_fingerprint;
+    loadError = "";
+    copied = null;
+    attestation = null;
+    objectId = "";
+    accessToken = "";
+    try {
+      copied = await api.copyCloudCandidate(
+        scannedRoot,
+        selectedRoot,
+        candidate.metadata_fingerprint,
+        Math.max(1, Math.floor(minSizeMib)),
+        Math.max(0, Math.floor(minAgeDays)),
+        200,
+      );
+    } catch (e) {
+      loadError = String(e);
+    } finally {
+      copyingFingerprint = "";
+    }
+  }
+
+  async function attestCopy() {
+    if (!copied) return;
+    const isIcloud = copied.receipt.provider === "icloud";
+    if (!isIcloud && (!objectId.trim() || !accessToken.trim())) return;
+    attesting = true;
+    loadError = "";
+    attestation = null;
+    try {
+      attestation = await api.attestCloudCopy(
+        copied.receipt.receipt_id,
+        isIcloud ? null : objectId.trim(),
+        isIcloud ? null : accessToken,
+      );
+    } catch (e) {
+      loadError = String(e);
+    } finally {
+      accessToken = "";
+      attesting = false;
     }
   }
 
@@ -95,8 +157,41 @@
       충돌 제외 잠재 회수 {fmtBytes(report.potentially_reclaimable_bytes)}
     </div>
     <p class="warning">
-      아직 이동하지 않습니다. 클라우드 잔여 용량, 업로드 완료, 로컬 사본 제거 가능 상태를 검증하는 실행 게이트가 추가되어야 합니다.
+      복사는 내부 메타데이터가 고신뢰이고 별도 검토 사유가 없는 후보만 가능합니다. 원본 삭제 기능은 제공하지 않으며, 업로드 증거가 확인되어도 허가 정보만 표시합니다.
     </p>
+    {#if copied}
+      <div class="receipt">
+        <strong>검증 복사 완료 · 원본 보존됨</strong>
+        <div class="context">영수증 {copied.receipt.receipt_id} · {fmtBytes(copied.receipt.bytes)}</div>
+        <div class="path">{copied.receipt.destination}</div>
+        {#if copied.receipt.provider !== "icloud"}
+          <div class="provider-auth">
+            <label>
+              {copied.receipt.provider === "onedrive" ? "OneDrive item ID" : "Google Drive file ID"}
+              <input type="text" bind:value={objectId} autocomplete="off" disabled={attesting} />
+            </label>
+            <label>
+              일회성 OAuth access token
+              <input type="password" bind:value={accessToken} autocomplete="off" disabled={attesting} />
+            </label>
+          </div>
+          <p class="muted">토큰은 이 원격 메타데이터 확인 요청에만 사용하고 저장하거나 응답에 포함하지 않습니다.</p>
+        {/if}
+        <button
+          onclick={attestCopy}
+          disabled={attesting || (copied.receipt.provider !== "icloud" && (!objectId.trim() || !accessToken.trim()))}
+        >
+          {attesting ? "검증 중…" : "클라우드 업로드 증거 확인"}
+        </button>
+        {#if attestation}
+          {#if attestation.permit}
+            <p class="safe">업로드·원격 체크섬 검증 완료. 로컬 제거 허가 증거가 생성되었지만 파일은 그대로 보존됩니다.</p>
+          {:else}
+            <p class="warning">아직 제거 불가: {attestation.blockers.join(", ")}</p>
+          {/if}
+        {/if}
+      </div>
+    {/if}
     {#if report.candidates.length === 0}
       <p class="muted">현재 크기·경과일·지원 파일 유형 조건에 맞는 후보가 없습니다.</p>
     {:else}
@@ -127,6 +222,15 @@
             {/if}
             <div class="arrow">→ {candidate.dst}</div>
             <div class="context">맥락: {candidate.source_context} · lineage: {candidate.metadata_fingerprint.slice(0, 12)}</div>
+            {#if copyEligible(candidate)}
+              <button
+                class="copy"
+                onclick={() => copyCandidate(candidate)}
+                disabled={copyingFingerprint !== "" || copied?.receipt.candidate_fingerprint === candidate.metadata_fingerprint}
+              >
+                {copyingFingerprint === candidate.metadata_fingerprint ? "복사·해시 검증 중…" : "원본을 유지하고 클라우드에 복사"}
+              </button>
+            {/if}
             <details>
               <summary>메타데이터 증거 {candidate.metadata_evidence.length}건</summary>
               <ul class="evidence">
@@ -150,10 +254,13 @@
   h2 { display: flex; gap: 0.5rem; align-items: center; }
   .dry { font-size: 0.7rem; color: #fff; background: #59636e; border-radius: 8px; padding: 2px 7px; }
   .controls { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: end; }
+  .provider-auth { display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 0.5rem 0; }
   label { display: grid; gap: 0.2rem; font-size: 0.8rem; color: #555; }
   select { max-width: 32rem; }
   input { width: 7rem; }
+  .provider-auth input { width: min(32rem, 75vw); }
   .summary { margin-top: 0.8rem; font-weight: 600; }
+  .receipt { margin: 0.75rem 0; padding: 0.75rem; border: 1px solid #6b8e72; border-radius: 4px; background: #f5fbf6; }
   .candidates { list-style: none; margin: 0.5rem 0; padding: 0; max-height: 34rem; overflow-y: auto; }
   .candidates li { padding: 0.6rem; border: 1px solid #e3e3e3; border-radius: 4px; margin-bottom: 0.4rem; }
   .candidates li.blocked { border-color: #b03030; background: #fff7f7; }
@@ -163,9 +270,11 @@
   .arrow { color: #555; margin-top: 0.2rem; }
   .metadata { color: #3f5368; font-size: 0.78rem; margin-top: 0.2rem; }
   .context { color: #777; font-size: 0.75rem; margin-top: 0.2rem; }
+  .copy { margin-top: 0.4rem; }
   details { margin-top: 0.3rem; color: #59636e; font-size: 0.75rem; }
   .evidence { margin: 0.25rem 0 0; padding-left: 1.2rem; }
   .muted { color: #777; }
   .warning { color: #8a5700; }
+  .safe { color: #276437; }
   .error { color: #b00; }
 </style>
