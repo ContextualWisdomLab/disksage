@@ -192,13 +192,11 @@ fn receipt_integrity_valid(receipt: &CloudCopyReceipt) -> bool {
         )
 }
 
-/// Convert provider-native sync evidence into a permit for a later trash-only eviction step.
+/// Validate a persisted copy receipt before any provider-specific filesystem or API probe.
 ///
-/// This does not delete, move, hydrate, or modify either file.
-pub fn approve_local_eviction(
-    receipt: &CloudCopyReceipt,
-    evidence: &ProviderSyncEvidence,
-) -> Result<LocalEvictionPermit, Vec<String>> {
+/// This function is read-only and deliberately excludes provider evidence. It prevents callers
+/// from trusting receipt-controlled paths before the receipt's structure and integrity pass.
+pub fn receipt_blockers(receipt: &CloudCopyReceipt) -> Vec<String> {
     let mut blockers = Vec::new();
     if receipt.version != RECEIPT_VERSION {
         blockers.push("receipt-version-unsupported".into());
@@ -212,6 +210,28 @@ pub fn approve_local_eviction(
     if receipt.provider_sync_confirmed {
         blockers.push("receipt-already-consumed".into());
     }
+    let source = Path::new(&receipt.source);
+    let destination = Path::new(&receipt.destination);
+    if !absolute_without_parent(source) {
+        blockers.push("receipt-source-path-not-safe-absolute".into());
+    }
+    if !absolute_without_parent(destination) {
+        blockers.push("receipt-destination-path-not-safe-absolute".into());
+    }
+    if source == destination {
+        blockers.push("receipt-source-equals-destination".into());
+    }
+    blockers
+}
+
+/// Convert provider-native sync evidence into a permit for a later trash-only eviction step.
+///
+/// This does not delete, move, hydrate, or modify either file.
+pub fn approve_local_eviction(
+    receipt: &CloudCopyReceipt,
+    evidence: &ProviderSyncEvidence,
+) -> Result<LocalEvictionPermit, Vec<String>> {
+    let mut blockers = receipt_blockers(receipt);
     if !evidence.sync_complete {
         blockers.push("provider-sync-incomplete".into());
     }
@@ -675,6 +695,7 @@ mod tests {
     #[test]
     fn provider_sync_evidence_is_required_before_eviction_permit() {
         let valid_receipt = receipt();
+        assert!(receipt_blockers(&valid_receipt).is_empty());
         let approved = approve_local_eviction(&valid_receipt, &evidence()).unwrap();
         assert_eq!(approved.receipt_id, valid_receipt.receipt_id);
         assert_eq!(approved.provider, CloudProvider::Icloud);
@@ -693,6 +714,8 @@ mod tests {
         invalid_receipt.version = 99;
         invalid_receipt.copy_verified = false;
         invalid_receipt.provider_sync_confirmed = true;
+        invalid_receipt.source = "relative/../source".into();
+        invalid_receipt.destination = invalid_receipt.source.clone();
         let mut invalid_evidence = evidence();
         invalid_evidence.sync_complete = false;
         invalid_evidence.receipt_id = "other".into();
@@ -710,6 +733,9 @@ mod tests {
             "receipt-integrity-mismatch",
             "copy-not-verified",
             "receipt-already-consumed",
+            "receipt-source-path-not-safe-absolute",
+            "receipt-destination-path-not-safe-absolute",
+            "receipt-source-equals-destination",
             "provider-sync-incomplete",
             "receipt-id-mismatch",
             "provider-mismatch",

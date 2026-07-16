@@ -11,12 +11,12 @@ Use DiskSage against a genuinely space-constrained machine to identify files tha
 - Consider only a conservative allowlist of document, media, archive, dataset, backup, and creative file extensions.
 - Default to files at least 256 MiB and not modified for 90 days.
 - Extract content metadata from media containers (`ffprobe`), PDF document info (`pdfinfo`), and OOXML/ODF core properties (`unzip`), when the corresponding local SDK is available.
-- Resolve production time in this order: embedded content metadata, explicit date in the filename, filesystem creation time, then filesystem modification time. Within embedded metadata, prefer high-confidence recording/capture/document-creation fields over medium-confidence dates inferred from titles. Preserve every observed value and its source/confidence as lineage evidence rather than discarding conflicts.
+- Resolve production time in this order: embedded content metadata, explicit date in the filename, filesystem creation time, then filesystem modification time. Within embedded metadata, prefer high-confidence recording/capture/document-creation fields over medium-confidence dates inferred from titles. Preserve every observed value and its source/confidence as lineage evidence rather than discarding conflicts. Embedded does not automatically mean trustworthy: known OOXML template defaults, an embedded date after the filesystem modification date, and metadata-derived personal or confidential context require review.
 - Preserve lineage fields: source root, original relative path and parent context, created and modified timestamps, content title/authors/duration, production timestamp source, all metadata evidence, planned provider/destination, and a stable metadata fingerprint.
 - Plan the destination as `DiskSage Archive/<production year>/<month>/<kind>/<original relative path>`.
 - Mark datasets and backups for explicit review.
 - Surface destination collisions and exclude them from potentially reclaimable bytes.
-- Require review when embedded geolocation is present, embedded production-date fields disagree, an embedded production date conflicts with a filename date, or no embedded production date is available.
+- Require review when embedded geolocation is present, embedded production-date fields disagree, an embedded production date conflicts with a filename date, a known template/default timestamp is detected, embedded title/author/context indicates personal or confidential material, or no embedded production date is available.
 - Provide both a Tauri UI and a headless JSON CLI.
 
 ## Safety boundary

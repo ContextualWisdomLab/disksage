@@ -30,14 +30,22 @@ matching are deterministic Rust operations.
    destination, byte count, destination BLAKE3, and timestamp match. Only then create a
    local-eviction permit.
 
+The headless CLI regenerates a fresh metadata plan before a fingerprint-selected copy. It offers a
+separate iCloud attestation action, but neither action removes the source.
+
 ## Fail-closed boundaries
 
 - A filename date or filesystem timestamp cannot enter the copy phase by itself.
+- An embedded date that is a known document-template default, contradicts later evidence, or is
+  accompanied by sensitive metadata remains review-required and cannot enter the copy phase.
 - A symlinked destination parent that resolves outside the cloud root is rejected.
 - A copy failure removes only a destination that this invocation successfully created.
 - A pre-existing receipt is never overwritten or removed.
 - Provider sync evidence is a separate immutable record. Manual assumption that a local cloud
   folder "will eventually sync" is not evidence.
+- Before a provider adapter reads a destination path from a receipt, the CLI requires an absolute,
+  regular, read-only receipt file named for its receipt ID and validates receipt version, integrity,
+  copy state, and safe absolute source/destination paths.
 - The iCloud adapter checks Foundation's ubiquitous-item, uploaded, and local-current status before
   reading content, so an evicted placeholder is not hydrated merely to prove its hash. It then
   revalidates file identity, size, modification time, and BLAKE3 around the status observation.
