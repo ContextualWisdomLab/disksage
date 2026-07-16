@@ -1,10 +1,12 @@
-//! Headless, read-only entrypoint for using the cloud planner before launching the GUI.
+//! Headless entrypoint for planning, reviewing, copying, and attesting cloud archive candidates.
 
 #[cfg(not(coverage))]
 use std::path::{Path, PathBuf};
 
 #[cfg(not(coverage))]
 use disksage_lib::cloud::{self, CloudPlanOptions, CloudProvider, CloudRoot};
+#[cfg(not(coverage))]
+use disksage_lib::cloud_review::{self, CloudReviewDecision, CloudReviewDisposition};
 #[cfg(not(coverage))]
 use disksage_lib::cloud_transfer::{self, CloudCopyReceipt, LocalEvictionPermit};
 #[cfg(not(coverage))]
@@ -23,6 +25,10 @@ struct Args {
     copy_fingerprint: Option<String>,
     receipt_dir: Option<PathBuf>,
     attest_receipt: Option<PathBuf>,
+    review_candidate_fingerprint: Option<String>,
+    review_fingerprint: Option<String>,
+    review_disposition: Option<CloudReviewDisposition>,
+    review_dir: Option<PathBuf>,
 }
 
 #[cfg(not(coverage))]
@@ -56,6 +62,10 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
         copy_fingerprint: None,
         receipt_dir: None,
         attest_receipt: None,
+        review_candidate_fingerprint: None,
+        review_fingerprint: None,
+        review_disposition: None,
+        review_dir: None,
     };
     let mut index = 0;
     while index < args.len() {
@@ -96,9 +106,37 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
                     "--attest-receipt",
                 )?))
             }
+            "--review-candidate-fingerprint" => {
+                parsed.review_candidate_fingerprint = Some(value(
+                    args,
+                    &mut index,
+                    "--review-candidate-fingerprint",
+                )?)
+            }
+            "--review-fingerprint" => {
+                parsed.review_fingerprint =
+                    Some(value(args, &mut index, "--review-fingerprint")?)
+            }
+            "--review-disposition" => {
+                parsed.review_disposition = Some(match value(
+                    args,
+                    &mut index,
+                    "--review-disposition",
+                )?
+                .as_str()
+                {
+                    "approved" => CloudReviewDisposition::Approved,
+                    "held" => CloudReviewDisposition::Held,
+                    value => return Err(format!("지원하지 않는 review disposition: {value}")),
+                })
+            }
+            "--review-dir" => {
+                parsed.review_dir =
+                    Some(PathBuf::from(value(args, &mut index, "--review-dir")?))
+            }
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive] [--min-size-mib N] [--min-age-days N] [--limit N] [--copy-fingerprint HEX64 --receipt-dir PATH | --attest-receipt RECEIPT.json]".into(),
+                    "usage: disksage-cloud-plan [--list-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive] [--min-size-mib N] [--min-age-days N] [--limit N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --review-dir PATH]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -127,21 +165,55 @@ struct AttestationOutput {
 }
 
 #[cfg(not(coverage))]
+#[derive(Debug, serde::Serialize)]
+struct ReviewOutput {
+    action: &'static str,
+    decision: CloudReviewDecision,
+    decision_path: String,
+}
+
+#[cfg(not(coverage))]
 fn validate_action_args(args: &Args) -> Result<(), String> {
     if args.copy_fingerprint.is_some() != args.receipt_dir.is_some() {
         return Err("--copy-fingerprint와 --receipt-dir은 함께 지정해야 함".into());
     }
+    let review_fields = [
+        args.review_candidate_fingerprint.is_some(),
+        args.review_fingerprint.is_some(),
+        args.review_disposition.is_some(),
+    ];
+    if review_fields.iter().any(|value| *value) && !review_fields.iter().all(|value| *value) {
+        return Err("review fingerprint와 disposition은 모두 함께 지정해야 함".into());
+    }
+    let review_action = review_fields.iter().all(|value| *value);
+    if review_action && args.review_dir.is_none() {
+        return Err("review action에는 --review-dir이 필요함".into());
+    }
+    if args.review_dir.is_some() && !review_action && args.copy_fingerprint.is_none() {
+        return Err("--review-dir은 review action 또는 copy action에만 지정할 수 있음".into());
+    }
     let actions = usize::from(args.list_roots)
         + usize::from(args.copy_fingerprint.is_some())
-        + usize::from(args.attest_receipt.is_some());
+        + usize::from(args.attest_receipt.is_some())
+        + usize::from(review_action);
     if actions > 1 {
         return Err(
-            "--list-roots, --copy-fingerprint, --attest-receipt는 동시에 사용할 수 없음".into(),
+            "--list-roots, --copy-fingerprint, --attest-receipt, review action은 동시에 사용할 수 없음".into(),
         );
     }
-    if let Some(fingerprint) = &args.copy_fingerprint {
+    for (flag, fingerprint) in [
+        ("--copy-fingerprint", args.copy_fingerprint.as_ref()),
+        (
+            "--review-candidate-fingerprint",
+            args.review_candidate_fingerprint.as_ref(),
+        ),
+        ("--review-fingerprint", args.review_fingerprint.as_ref()),
+    ] {
+        let Some(fingerprint) = fingerprint else {
+            continue;
+        };
         if fingerprint.len() != 64 || !fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err("--copy-fingerprint는 64자리 16진수여야 함".into());
+            return Err(format!("{flag}는 64자리 16진수여야 함"));
         }
     }
     if let Some(receipt_dir) = &args.receipt_dir {
@@ -152,6 +224,11 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     if let Some(receipt_path) = &args.attest_receipt {
         if !receipt_path.is_absolute() {
             return Err("--attest-receipt는 절대 경로여야 함".into());
+        }
+    }
+    if let Some(review_dir) = &args.review_dir {
+        if !review_dir.is_absolute() {
+            return Err("--review-dir은 절대 경로여야 함".into());
         }
     }
     Ok(())
@@ -257,6 +334,46 @@ fn run() -> Result<(), String> {
             limit: args.limit.clamp(1, 1_000),
         },
     );
+    if let Some(candidate_fingerprint) = &args.review_candidate_fingerprint {
+        let review_fingerprint = args
+            .review_fingerprint
+            .as_deref()
+            .ok_or_else(|| "--review-fingerprint가 필요함".to_string())?;
+        let matches: Vec<_> = report
+            .candidates
+            .iter()
+            .filter(|candidate| {
+                candidate.metadata_fingerprint == *candidate_fingerprint
+                    && candidate.review_fingerprint == review_fingerprint
+            })
+            .collect();
+        let candidate = match matches.as_slice() {
+            [only] => *only,
+            [] => return Err("현재 fresh plan에 review fingerprint가 일치하는 후보가 없음".into()),
+            _ => return Err("현재 fresh plan에서 review fingerprint가 중복됨".into()),
+        };
+        let disposition = args
+            .review_disposition
+            .ok_or_else(|| "--review-disposition이 필요함".to_string())?;
+        let decision =
+            cloud_review::create_decision(candidate, disposition, cloud::system_now_ms())?;
+        let decision_path = cloud_review::write_immutable_decision(
+            args.review_dir
+                .as_deref()
+                .ok_or_else(|| "--review-dir이 필요함".to_string())?,
+            &decision,
+        )?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&ReviewOutput {
+                action: "review",
+                decision,
+                decision_path: decision_path.to_string_lossy().into_owned(),
+            })
+            .map_err(|error| error.to_string())?
+        );
+        return Ok(());
+    }
     if let Some(fingerprint) = &args.copy_fingerprint {
         let matches: Vec<_> = report
             .candidates
@@ -272,11 +389,23 @@ fn run() -> Result<(), String> {
             .receipt_dir
             .as_deref()
             .ok_or_else(|| "--receipt-dir이 필요함".to_string())?;
-        let (receipt, receipt_path) = cloud_transfer::prepare_cloud_copy(
+        let review_decision = if candidate.requires_review {
+            args.review_dir
+                .as_deref()
+                .map(cloud_review::load_latest_decisions)
+                .transpose()?
+                .unwrap_or_default()
+                .into_iter()
+                .find(|decision| decision.candidate_fingerprint == candidate.metadata_fingerprint)
+        } else {
+            None
+        };
+        let (receipt, receipt_path) = cloud_transfer::prepare_cloud_copy_with_review(
             candidate,
             &selected,
             receipt_dir,
             cloud::system_now_ms(),
+            review_decision.as_ref(),
         )?;
         println!(
             "{}",
@@ -325,6 +454,7 @@ mod tests {
         assert_eq!(defaults.root, PathBuf::from("/home/test"));
         assert_eq!(defaults.min_size_mib, 256);
         assert!(defaults.copy_fingerprint.is_none());
+        assert!(defaults.review_candidate_fingerprint.is_none());
         let args = vec![
             "--root".into(),
             "/scan".into(),
@@ -408,6 +538,58 @@ mod tests {
         .unwrap();
         assert_eq!(parsed.copy_fingerprint, Some("b".repeat(64)));
         assert_eq!(parsed.receipt_dir, Some(PathBuf::from("/receipts")));
+
+        let review = parse_args(
+            &[
+                "--review-candidate-fingerprint".into(),
+                "c".repeat(64),
+                "--review-fingerprint".into(),
+                "d".repeat(64),
+                "--review-disposition".into(),
+                "approved".into(),
+                "--review-dir".into(),
+                "/reviews".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert_eq!(review.review_candidate_fingerprint, Some("c".repeat(64)));
+        assert_eq!(review.review_fingerprint, Some("d".repeat(64)));
+        assert_eq!(
+            review.review_disposition,
+            Some(CloudReviewDisposition::Approved)
+        );
+        assert_eq!(review.review_dir, Some(PathBuf::from("/reviews")));
+        assert!(validate_action_args(&review).is_ok());
+
+        assert!(parse_args(
+            &["--review-disposition".into(), "maybe".into(),],
+            Path::new("/h"),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn action_validation_requires_complete_review_arguments() {
+        let mut args = parse_args(&[], Path::new("/h")).unwrap();
+        args.review_candidate_fingerprint = Some("c".repeat(64));
+        assert!(validate_action_args(&args).is_err());
+        args.review_fingerprint = Some("d".repeat(64));
+        args.review_disposition = Some(CloudReviewDisposition::Held);
+        assert!(validate_action_args(&args).is_err());
+        args.review_dir = Some(PathBuf::from("relative-reviews"));
+        assert!(validate_action_args(&args).is_err());
+        args.review_dir = Some(PathBuf::from("/reviews"));
+        assert!(validate_action_args(&args).is_ok());
+
+        args.copy_fingerprint = Some("a".repeat(64));
+        args.receipt_dir = Some(PathBuf::from("/receipts"));
+        assert!(validate_action_args(&args).is_err());
+
+        args.review_candidate_fingerprint = None;
+        args.review_fingerprint = None;
+        args.review_disposition = None;
+        assert!(validate_action_args(&args).is_ok());
     }
 
     #[test]
