@@ -21,9 +21,10 @@ Failure is closed and leaves the source untouched.
 Receipt version 3 seals the metadata evidence that justified the archive destination before any
 source can be trashed. The receipt carries an immutable `CloudLineageSnapshot` containing the
 candidate and review fingerprints, optional review-decision id, disposition and timestamp, archive
-kind, embedded production time and confidence, source-relative context, title, authors, contextual
-fields, duration, dataset profile, and every bounded metadata-evidence item. A separate lineage
-fingerprint hashes the canonical snapshot and is itself included in the receipt id.
+kind, destination account scope, embedded production time and confidence, source-relative context,
+title, authors, contextual fields, duration, dataset profile, and every bounded metadata-evidence
+item. A separate lineage fingerprint hashes the canonical snapshot and is itself included in the
+receipt id.
 
 Receipt validation fails closed when the lineage is missing, changed, or belongs to another
 candidate. Existing version 2 receipts remain readable and integrity-valid with their original id
@@ -34,6 +35,28 @@ Because lineage can contain sensitive local context, the writer rejects symlink 
 directories, enforces the existing 64 KiB receipt bound before creation, and uses owner-read-only
 `0400` permissions on Unix. A write failure rolls back the just-created cloud copy and never touches
 the source.
+
+## Account-scoped destination suitability
+
+Cloud roots carry a deterministic `personal`, `organization`, `shared`, or `unknown` account
+scope. Known consumer domains and OneDrive Personal labels classify as personal; non-consumer
+email domains classify as organization; Google shared-drive roots classify as shared. iCloud and
+ambiguous provider labels remain unknown instead of being guessed.
+
+The selected scope is copied into each candidate, bound into the review fingerprint, displayed in
+the UI, and sealed in the version 3 lineage snapshot. Changing only the destination account scope
+therefore invalidates an earlier operator decision. Unknown and shared scopes always require
+review. A personal destination with recording, personal-data, confidential, geolocation, opaque
+container, or sensitive dataset evidence adds
+`personal-cloud-sensitive-context-needs-explicit-approval`.
+
+The copy gate independently requires the candidate scope to match the freshly selected cloud root
+scope. A caller cannot construct an organization-scoped candidate and copy it into a personal root.
+
+Before collection, both the CLI and Tauri command verify that the source directory can actually be
+enumerated. This distinguishes an empty source from macOS privacy controls that permit metadata
+lookup but deny `read_dir`; unreadable roots fail with `source-root-unreadable` instead of emitting
+a misleading zero-candidate plan.
 
 ## Crash-safe sequence
 

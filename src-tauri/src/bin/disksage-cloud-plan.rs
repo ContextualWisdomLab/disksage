@@ -434,12 +434,7 @@ fn run() -> Result<(), String> {
         );
         return Ok(());
     }
-    if !args.root.is_dir() {
-        return Err(format!(
-            "스캔 루트가 디렉터리가 아님: {}",
-            args.root.display()
-        ));
-    }
+    cloud::validate_source_root_readable(&args.root)?;
     let selected = select_root(&roots, &args)?;
     let excluded: Vec<PathBuf> = roots.iter().map(|r| PathBuf::from(&r.path)).collect();
     if excluded
@@ -613,12 +608,14 @@ mod tests {
             CloudRoot {
                 id: "/a".into(),
                 provider: CloudProvider::Icloud,
+                account_scope: disksage_lib::cloud::CloudAccountScope::Unknown,
                 label: "a".into(),
                 path: "/a".into(),
             },
             CloudRoot {
                 id: "/b".into(),
                 provider: CloudProvider::Icloud,
+                account_scope: disksage_lib::cloud::CloudAccountScope::Unknown,
                 label: "b".into(),
                 path: "/b".into(),
             },

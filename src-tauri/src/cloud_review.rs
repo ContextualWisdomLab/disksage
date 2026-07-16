@@ -281,7 +281,7 @@ pub fn load_latest_decisions(directory: &Path) -> Result<Vec<CloudReviewDecision
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cloud::{ArchiveKind, CloudProvider, MetadataEvidence};
+    use crate::cloud::{ArchiveKind, CloudAccountScope, CloudProvider, MetadataEvidence};
 
     fn candidate() -> CloudCandidate {
         let mut candidate = CloudCandidate {
@@ -290,6 +290,7 @@ mod tests {
             src: "/source/report.pdf".into(),
             dst: "/cloud/report.pdf".into(),
             provider: CloudProvider::Icloud,
+            destination_account_scope: CloudAccountScope::Organization,
             kind: ArchiveKind::Document,
             bytes: 12,
             age_days: 90,
@@ -335,6 +336,13 @@ mod tests {
         assert_ne!(
             decision.review_fingerprint,
             candidate_review_fingerprint(&changed)
+        );
+
+        let mut changed_scope = candidate();
+        changed_scope.destination_account_scope = CloudAccountScope::Personal;
+        assert_ne!(
+            decision.review_fingerprint,
+            candidate_review_fingerprint(&changed_scope)
         );
     }
 

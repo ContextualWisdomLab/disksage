@@ -157,6 +157,7 @@ export const reasonUnknownExtensions = (samples: string[]) =>
   invoke<ExtInsight[]>("reason_unknown_extensions", { samples });
 
 export type CloudProvider = "icloud" | "onedrive" | "google-drive";
+export type CloudAccountScope = "personal" | "organization" | "shared" | "unknown";
 export type ArchiveKind =
   | "document"
   | "media"
@@ -169,6 +170,7 @@ export type ArchiveKind =
 export interface CloudRoot {
   id: string;
   provider: CloudProvider;
+  account_scope: CloudAccountScope;
   label: string;
   path: string;
 }
@@ -189,6 +191,7 @@ export interface CloudCandidate {
   src: string;
   dst: string;
   provider: CloudProvider;
+  destination_account_scope: CloudAccountScope;
   kind: ArchiveKind;
   bytes: number;
   age_days: number;

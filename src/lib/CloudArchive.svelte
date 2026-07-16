@@ -210,6 +210,15 @@
     const minutes = totalMinutes % 60;
     return hours > 0 ? `${hours}시간 ${minutes}분` : `${minutes}분`;
   }
+
+  function accountScopeLabel(scope: api.CloudAccountScope): string {
+    return {
+      personal: "개인",
+      organization: "조직",
+      shared: "공유",
+      unknown: "범위 미확인",
+    }[scope];
+  }
 </script>
 
 <section>
@@ -226,7 +235,7 @@
         대상
         <select bind:value={selectedRoot} disabled={busy}>
           {#each roots as root (root.id)}
-            <option value={root.path}>{root.label}</option>
+            <option value={root.path}>{root.label} · {accountScopeLabel(root.account_scope)}</option>
           {/each}
         </select>
       </label>
@@ -377,7 +386,9 @@
               </div>
             {/if}
             <div class="arrow">→ {candidate.dst}</div>
-            <div class="context">맥락: {candidate.source_context} · lineage: {candidate.metadata_fingerprint.slice(0, 12)}</div>
+            <div class="context">
+              맥락: {candidate.source_context} · 대상 계정: {accountScopeLabel(candidate.destination_account_scope)} · lineage: {candidate.metadata_fingerprint.slice(0, 12)}
+            </div>
             {#if candidate.requires_review}
               <div class="review-controls">
                 {#if matchingReviewDecision(candidate)?.disposition === "approved"}

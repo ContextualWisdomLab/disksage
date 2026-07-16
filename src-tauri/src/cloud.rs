@@ -42,10 +42,32 @@ impl CloudProvider {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CloudAccountScope {
+    Personal,
+    Organization,
+    Shared,
+    #[default]
+    Unknown,
+}
+
+impl CloudAccountScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Personal => "personal",
+            Self::Organization => "organization",
+            Self::Shared => "shared",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CloudRoot {
     pub id: String,
     pub provider: CloudProvider,
+    pub account_scope: CloudAccountScope,
     pub label: String,
     pub path: String,
 }
@@ -132,6 +154,7 @@ pub struct CloudCandidate {
     pub src: String,
     pub dst: String,
     pub provider: CloudProvider,
+    pub destination_account_scope: CloudAccountScope,
     pub kind: ArchiveKind,
     pub bytes: u64,
     pub age_days: u64,
@@ -164,6 +187,18 @@ pub struct CloudPlanReport {
     pub notices: Vec<String>,
 }
 
+/// Fail closed when the selected source cannot be enumerated. Filesystem metadata alone is not
+/// sufficient on platforms such as macOS where privacy controls may allow `stat` but deny
+/// directory traversal.
+pub fn validate_source_root_readable(root: &Path) -> Result<(), String> {
+    if !root.is_dir() {
+        return Err(format!("source-root-not-directory:{}", root.display()));
+    }
+    std::fs::read_dir(root)
+        .map(|_| ())
+        .map_err(|error| format!("source-root-unreadable:{}:{error}", root.display()))
+}
+
 #[cfg(not(coverage))]
 fn is_writable_dir(path: &Path) -> bool {
     path.metadata()
@@ -190,6 +225,7 @@ fn push_root(
     roots: &mut Vec<CloudRoot>,
     seen: &mut BTreeSet<PathBuf>,
     provider: CloudProvider,
+    account_scope: CloudAccountScope,
     path: PathBuf,
     label: String,
 ) {
@@ -201,6 +237,7 @@ fn push_root(
     roots.push(CloudRoot {
         id: value.clone(),
         provider,
+        account_scope,
         label,
         path: value,
     });
@@ -218,6 +255,57 @@ fn provider_account_label(prefix: &str, path: &Path) -> String {
         .unwrap_or_else(|| "default".into())
 }
 
+fn normalized_account_text(value: &str) -> String {
+    value.nfc().flat_map(char::to_lowercase).collect()
+}
+
+fn account_email_scope(account: &str) -> CloudAccountScope {
+    let normalized = normalized_account_text(account);
+    let Some((_, domain)) = normalized.rsplit_once('@') else {
+        return CloudAccountScope::Unknown;
+    };
+    if matches!(
+        domain,
+        "gmail.com" | "googlemail.com" | "outlook.com" | "hotmail.com" | "live.com"
+    ) {
+        CloudAccountScope::Personal
+    } else if domain.contains('.') {
+        CloudAccountScope::Organization
+    } else {
+        CloudAccountScope::Unknown
+    }
+}
+
+fn account_scope(
+    provider: CloudProvider,
+    account: &str,
+    drive_name: Option<&str>,
+) -> CloudAccountScope {
+    if provider == CloudProvider::Icloud {
+        return CloudAccountScope::Unknown;
+    }
+    let account = normalized_account_text(account);
+    if provider == CloudProvider::GoogleDrive {
+        let drive = normalized_account_text(drive_name.unwrap_or_default());
+        if contains_any(&drive, &["shared drive", "shared drives", "공유 드라이브"]) {
+            return CloudAccountScope::Shared;
+        }
+        return account_email_scope(&account);
+    }
+    if contains_any(&account, &["personal", "consumer", "개인"]) {
+        return CloudAccountScope::Personal;
+    }
+    let email_scope = account_email_scope(&account);
+    if email_scope != CloudAccountScope::Unknown {
+        return email_scope;
+    }
+    if matches!(account.as_str(), "" | "default" | "onedrive") {
+        CloudAccountScope::Unknown
+    } else {
+        CloudAccountScope::Organization
+    }
+}
+
 /// Discover writable local File Provider roots without creating a probe file.
 ///
 /// Google Drive's account root is read-only on macOS, so each writable direct child (for
@@ -231,6 +319,7 @@ pub fn discover_cloud_roots(home: &Path) -> Vec<CloudRoot> {
         &mut roots,
         &mut seen,
         CloudProvider::Icloud,
+        CloudAccountScope::Unknown,
         home.join("Library/Mobile Documents/com~apple~CloudDocs"),
         "iCloud Drive".into(),
     );
@@ -238,6 +327,7 @@ pub fn discover_cloud_roots(home: &Path) -> Vec<CloudRoot> {
         &mut roots,
         &mut seen,
         CloudProvider::Icloud,
+        CloudAccountScope::Unknown,
         home.join("iCloudDrive"),
         "iCloud Drive".into(),
     );
@@ -254,6 +344,7 @@ pub fn discover_cloud_roots(home: &Path) -> Vec<CloudRoot> {
                 &mut roots,
                 &mut seen,
                 CloudProvider::Onedrive,
+                account_scope(CloudProvider::Onedrive, &account, None),
                 account_root,
                 format!("OneDrive · {account}"),
             );
@@ -271,6 +362,7 @@ pub fn discover_cloud_roots(home: &Path) -> Vec<CloudRoot> {
                     &mut roots,
                     &mut seen,
                     CloudProvider::GoogleDrive,
+                    account_scope(CloudProvider::GoogleDrive, &account, Some(&drive_name)),
                     drive,
                     format!("Google Drive · {account} · {drive_name}"),
                 );
@@ -289,6 +381,7 @@ pub fn discover_cloud_roots(home: &Path) -> Vec<CloudRoot> {
                 &mut roots,
                 &mut seen,
                 CloudProvider::Onedrive,
+                account_scope(CloudProvider::Onedrive, &name, None),
                 path,
                 format!("OneDrive · {name}"),
             );
@@ -297,6 +390,7 @@ pub fn discover_cloud_roots(home: &Path) -> Vec<CloudRoot> {
                 &mut roots,
                 &mut seen,
                 CloudProvider::GoogleDrive,
+                account_scope(CloudProvider::GoogleDrive, &name, None),
                 path,
                 format!("Google Drive · {name}"),
             );
@@ -1754,6 +1848,36 @@ fn review_reasons(path: &Path, kind: ArchiveKind) -> Vec<String> {
     reasons
 }
 
+fn destination_scope_review_reasons(
+    scope: CloudAccountScope,
+    existing_reasons: &[String],
+) -> Vec<String> {
+    let sensitive_context = existing_reasons.iter().any(|reason| {
+        matches!(
+            reason.as_str(),
+            "opaque-container-content-uninspected"
+                | "structured-data-may-contain-personal-data"
+                | "recording-may-contain-sensitive-speech"
+                | "filename-context-may-be-confidential"
+                | "filename-contains-geolocation"
+                | "embedded-metadata-may-contain-personal-context"
+                | "embedded-metadata-context-may-be-confidential"
+                | "embedded-metadata-contains-geolocation"
+                | "dataset-schema-profile-missing"
+                | "dataset-schema-profile-incomplete"
+                | "dataset-sensitive-column-name-detected"
+        )
+    });
+    match scope {
+        CloudAccountScope::Unknown => vec!["destination-account-scope-unknown".into()],
+        CloudAccountScope::Shared => vec!["shared-destination-access-needs-review".into()],
+        CloudAccountScope::Personal if sensitive_context => {
+            vec!["personal-cloud-sensitive-context-needs-explicit-approval".into()]
+        }
+        CloudAccountScope::Personal | CloudAccountScope::Organization => Vec::new(),
+    }
+}
+
 fn planner_blocked_reason(
     path: &Path,
     kind: ArchiveKind,
@@ -1808,6 +1932,7 @@ pub fn candidate_review_fingerprint(candidate: &CloudCandidate) -> String {
     for value in [
         candidate.metadata_fingerprint.as_bytes(),
         candidate.provider.as_str().as_bytes(),
+        candidate.destination_account_scope.as_str().as_bytes(),
         candidate.src.as_bytes(),
         candidate.dst.as_bytes(),
         candidate.kind.folder().as_bytes(),
@@ -2016,6 +2141,10 @@ pub fn plan_cloud_archive(
                 review_reasons.push("embedded-and-filename-date-conflict".into());
             }
         }
+        review_reasons.extend(destination_scope_review_reasons(
+            cloud_root.account_scope,
+            &review_reasons,
+        ));
         review_reasons.sort();
         review_reasons.dedup();
         let mut candidate = CloudCandidate {
@@ -2024,6 +2153,7 @@ pub fn plan_cloud_archive(
             src: file.path.to_string_lossy().into_owned(),
             dst: dst.to_string_lossy().into_owned(),
             provider: cloud_root.provider,
+            destination_account_scope: cloud_root.account_scope,
             kind,
             bytes: file.bytes,
             age_days,
@@ -2092,6 +2222,7 @@ mod tests {
         CloudRoot {
             id: path.to_string_lossy().into_owned(),
             provider,
+            account_scope: CloudAccountScope::Organization,
             label: "test".into(),
             path: path.to_string_lossy().into_owned(),
         }
@@ -2144,15 +2275,67 @@ mod tests {
         writable_dir(&home.join("Library/CloudStorage/OneDrive-Personal"));
         let google = home.join("Library/CloudStorage/GoogleDrive-me@example.com");
         writable_dir(&google.join("My Drive"));
+        writable_dir(&google.join("Shared drives"));
         writable_dir(&google.join(".Trash"));
         let roots = discover_cloud_roots(home);
-        assert_eq!(roots.len(), 3);
-        assert!(roots.iter().any(|r| r.provider == CloudProvider::Icloud));
-        assert!(roots.iter().any(|r| r.provider == CloudProvider::Onedrive));
-        assert!(roots
-            .iter()
-            .any(|r| r.provider == CloudProvider::GoogleDrive && r.path.ends_with("My Drive")));
+        assert_eq!(roots.len(), 4);
+        assert!(roots.iter().any(|r| {
+            r.provider == CloudProvider::Icloud && r.account_scope == CloudAccountScope::Unknown
+        }));
+        assert!(roots.iter().any(|r| {
+            r.provider == CloudProvider::Onedrive && r.account_scope == CloudAccountScope::Personal
+        }));
+        assert!(roots.iter().any(|r| {
+            r.provider == CloudProvider::GoogleDrive
+                && r.account_scope == CloudAccountScope::Organization
+                && r.path.ends_with("My Drive")
+        }));
+        assert!(roots.iter().any(|r| {
+            r.provider == CloudProvider::GoogleDrive
+                && r.account_scope == CloudAccountScope::Shared
+                && r.path.ends_with("Shared drives")
+        }));
         assert!(!roots.iter().any(|r| r.path.ends_with(".Trash")));
+    }
+
+    #[test]
+    fn account_scope_classification_is_explicit_and_fail_closed() {
+        assert_eq!(
+            account_scope(CloudProvider::Icloud, "", None),
+            CloudAccountScope::Unknown
+        );
+        assert_eq!(
+            account_scope(CloudProvider::Onedrive, "개인", None),
+            CloudAccountScope::Personal
+        );
+        assert_eq!(
+            account_scope(CloudProvider::Onedrive, "Example Corp", None),
+            CloudAccountScope::Organization
+        );
+        assert_eq!(
+            account_scope(CloudProvider::Onedrive, "OneDrive", None),
+            CloudAccountScope::Unknown
+        );
+        assert_eq!(
+            account_scope(CloudProvider::GoogleDrive, "me@gmail.com", Some("My Drive")),
+            CloudAccountScope::Personal
+        );
+        assert_eq!(
+            account_scope(
+                CloudProvider::GoogleDrive,
+                "me@example.com",
+                Some("My Drive")
+            ),
+            CloudAccountScope::Organization
+        );
+        assert_eq!(
+            account_scope(
+                CloudProvider::GoogleDrive,
+                "me@example.com",
+                Some("공유 드라이브")
+            ),
+            CloudAccountScope::Shared
+        );
     }
 
     #[cfg(not(coverage))]
@@ -2244,6 +2427,18 @@ mod tests {
             (2024, 2, 29)
         );
         assert_eq!(date_epoch_ms(2023, 2, 29), None);
+    }
+
+    #[test]
+    fn source_root_preflight_distinguishes_readable_directory_from_file() {
+        let temp = tempfile::tempdir().unwrap();
+        assert_eq!(validate_source_root_readable(temp.path()), Ok(()));
+        let file = temp.path().join("report.pdf");
+        std::fs::write(&file, b"pdf").unwrap();
+        assert_eq!(
+            validate_source_root_readable(&file),
+            Err(format!("source-root-not-directory:{}", file.display()))
+        );
     }
 
     #[test]
@@ -2603,6 +2798,27 @@ mod tests {
         assert!(review_reasons(Path::new("photo.jpg"), ArchiveKind::Media).is_empty());
         let personnel = review_reasons(Path::new("직원_실적데이터.xlsx"), ArchiveKind::Document);
         assert!(personnel.contains(&"filename-context-may-be-confidential".to_string()));
+    }
+
+    #[test]
+    fn destination_scope_review_is_transparent_and_fail_closed() {
+        let sensitive = vec!["recording-may-contain-sensitive-speech".into()];
+        assert_eq!(
+            destination_scope_review_reasons(CloudAccountScope::Personal, &sensitive),
+            ["personal-cloud-sensitive-context-needs-explicit-approval"]
+        );
+        assert!(
+            destination_scope_review_reasons(CloudAccountScope::Organization, &sensitive)
+                .is_empty()
+        );
+        assert_eq!(
+            destination_scope_review_reasons(CloudAccountScope::Shared, &[]),
+            ["shared-destination-access-needs-review"]
+        );
+        assert_eq!(
+            destination_scope_review_reasons(CloudAccountScope::Unknown, &[]),
+            ["destination-account-scope-unknown"]
+        );
     }
 
     #[test]

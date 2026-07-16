@@ -262,6 +262,7 @@ fn validate_connection(connection: &OAuthConnection) -> Result<(), String> {
     let root = CloudRoot {
         id: connection.cloud_root_id.clone(),
         provider: connection.provider,
+        account_scope: crate::cloud::CloudAccountScope::Unknown,
         label: String::new(),
         path: connection.cloud_root_path.clone(),
     };
@@ -928,6 +929,7 @@ mod tests {
         CloudRoot {
             id: format!("{}:account", provider.as_str()),
             provider,
+            account_scope: crate::cloud::CloudAccountScope::Unknown,
             label: "Cloud".into(),
             path: path.into(),
         }

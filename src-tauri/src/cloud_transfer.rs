@@ -5,8 +5,8 @@
 //! produces an eviction permit but intentionally exposes no source deletion API.
 
 use crate::cloud::{
-    candidate_review_fingerprint, ArchiveKind, CloudCandidate, CloudProvider, CloudRoot,
-    MetadataEvidence,
+    candidate_review_fingerprint, ArchiveKind, CloudAccountScope, CloudCandidate, CloudProvider,
+    CloudRoot, MetadataEvidence,
 };
 use crate::cloud_review::{validate_decision, CloudReviewDecision, CloudReviewDisposition};
 use crate::dataset_metadata::DatasetProfile;
@@ -53,6 +53,7 @@ pub struct CloudLineageSnapshot {
     pub review_decision_id: Option<String>,
     pub review_disposition: Option<CloudReviewDisposition>,
     pub reviewed_at_ms: Option<u64>,
+    pub destination_account_scope: CloudAccountScope,
     pub kind: ArchiveKind,
     pub created_ms: u64,
     pub modified_ms: u64,
@@ -198,6 +199,9 @@ pub fn candidate_blockers_with_review(
     if candidate.provider != cloud_root.provider {
         blockers.push("provider-mismatch".into());
     }
+    if candidate.destination_account_scope != cloud_root.account_scope {
+        blockers.push("destination-account-scope-mismatch".into());
+    }
     if !absolute_without_parent(source) {
         blockers.push("source-path-not-safe-absolute".into());
     }
@@ -273,6 +277,7 @@ fn lineage_snapshot(
         review_decision_id: review_decision.map(|decision| decision.decision_id.clone()),
         review_disposition: review_decision.map(|decision| decision.disposition),
         reviewed_at_ms: review_decision.map(|decision| decision.reviewed_at_ms),
+        destination_account_scope: candidate.destination_account_scope,
         kind: candidate.kind,
         created_ms: candidate.created_ms,
         modified_ms: candidate.modified_ms,
@@ -815,6 +820,7 @@ mod tests {
         CloudRoot {
             id: "icloud:test".into(),
             provider: CloudProvider::Icloud,
+            account_scope: CloudAccountScope::Organization,
             label: "iCloud Drive".into(),
             path: ROOT.into(),
         }
@@ -827,6 +833,7 @@ mod tests {
             src: SOURCE.into(),
             dst: DESTINATION.into(),
             provider: CloudProvider::Icloud,
+            destination_account_scope: CloudAccountScope::Organization,
             kind: ArchiveKind::Document,
             bytes: 12,
             age_days: 90,
@@ -998,6 +1005,11 @@ mod tests {
         same_path.dst = same_path.src.clone();
         assert!(candidate_blockers(&same_path, &root())
             .contains(&"source-equals-destination".to_string()));
+
+        let mut changed_scope = root();
+        changed_scope.account_scope = CloudAccountScope::Personal;
+        assert!(candidate_blockers(&candidate(), &changed_scope)
+            .contains(&"destination-account-scope-mismatch".to_string()));
 
         let mut unsafe_paths = candidate();
         unsafe_paths.src = "relative/../source".into();
@@ -1286,6 +1298,7 @@ mod tests {
         let test_root = CloudRoot {
             id: "icloud:test".into(),
             provider: CloudProvider::Icloud,
+            account_scope: CloudAccountScope::Organization,
             label: "iCloud Drive".into(),
             path: cloud.to_string_lossy().into_owned(),
         };
@@ -1352,6 +1365,7 @@ mod tests {
         let test_root = CloudRoot {
             id: "icloud:test".into(),
             provider: CloudProvider::Icloud,
+            account_scope: CloudAccountScope::Organization,
             label: "iCloud Drive".into(),
             path: cloud.to_string_lossy().into_owned(),
         };
@@ -1405,6 +1419,7 @@ mod tests {
         let test_root = CloudRoot {
             id: "icloud:test".into(),
             provider: CloudProvider::Icloud,
+            account_scope: CloudAccountScope::Organization,
             label: "iCloud Drive".into(),
             path: cloud.to_string_lossy().into_owned(),
         };
@@ -1446,6 +1461,7 @@ mod tests {
         let test_root = CloudRoot {
             id: "icloud:test".into(),
             provider: CloudProvider::Icloud,
+            account_scope: CloudAccountScope::Organization,
             label: "iCloud Drive".into(),
             path: cloud.to_string_lossy().into_owned(),
         };
@@ -1484,6 +1500,7 @@ mod tests {
         let test_root = CloudRoot {
             id: "icloud:test".into(),
             provider: CloudProvider::Icloud,
+            account_scope: CloudAccountScope::Organization,
             label: "iCloud Drive".into(),
             path: cloud.to_string_lossy().into_owned(),
         };
