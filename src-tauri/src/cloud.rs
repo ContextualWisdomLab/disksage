@@ -493,7 +493,8 @@ fn token_boundary(bytes: &[u8], start: usize, end: usize) -> bool {
         && bytes.get(end).map(|b| !b.is_ascii_digit()).unwrap_or(true)
 }
 
-/// Extract common production-date tokens from a filename without reading file contents.
+/// Extract common date tokens from a filename as a low-confidence review signal.
+/// This is never embedded metadata and cannot independently authorize a cloud copy.
 /// Supported shapes: YYYY-MM-DD, YYYY_MM_DD, YYYY.MM.DD, YYYYMMDD, and YYMMDD.
 fn filename_date_ms(path: &Path) -> Option<u64> {
     let normalized: String = path.file_name()?.to_string_lossy().nfc().collect();
@@ -1937,6 +1938,9 @@ pub fn plan_cloud_archive(
                         .clone()
                         .unwrap_or_else(|| "medium".into()),
                 )
+            // Without embedded metadata, retain the best available date only for archive-preview
+            // placement. The review reasons below mark this as non-embedded, so it cannot
+            // independently authorize a cloud copy.
             } else if let Some(filename_ms) = filename_ms {
                 (filename_ms, "filename-date".into(), "low".into())
             } else if file.created_ms > 0 {
@@ -2328,7 +2332,7 @@ mod tests {
     }
 
     #[test]
-    fn filename_dates_override_filesystem_creation_time() {
+    fn filename_date_parser_recognizes_low_confidence_review_tokens() {
         assert_eq!(
             date_parts(filename_date_ms(Path::new("2026-04-28T10_00.m4a")).unwrap()),
             (2026, 4, 28)
