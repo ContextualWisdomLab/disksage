@@ -125,6 +125,8 @@ impl Default for CloudPlanOptions {
 pub struct CloudCandidate {
     /// Stable metadata fingerprint. This is not a content hash.
     pub metadata_fingerprint: String,
+    /// Stable digest of the metadata evidence shown to an operator for an approve/hold decision.
+    pub review_fingerprint: String,
     pub src: String,
     pub dst: String,
     pub provider: CloudProvider,
@@ -1520,6 +1522,67 @@ fn metadata_fingerprint(file: &FileFact, relative: &Path) -> String {
     blake3::hash(input.as_bytes()).to_hex().to_string()
 }
 
+fn hash_review_value(hasher: &mut blake3::Hasher, value: &[u8]) {
+    hasher.update(&(value.len() as u64).to_le_bytes());
+    hasher.update(value);
+}
+
+/// Bind an operator review to the exact metadata evidence and destination context they saw.
+/// Volatile fields such as plan generation time and `age_days` are intentionally excluded.
+pub fn candidate_review_fingerprint(candidate: &CloudCandidate) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage-cloud-review-v1\0");
+    for value in [
+        candidate.metadata_fingerprint.as_bytes(),
+        candidate.provider.as_str().as_bytes(),
+        candidate.src.as_bytes(),
+        candidate.dst.as_bytes(),
+        candidate.kind.folder().as_bytes(),
+        candidate.production_time_source.as_bytes(),
+        candidate.production_time_confidence.as_bytes(),
+        candidate.source_root.as_bytes(),
+        candidate.relative_path.as_bytes(),
+        candidate.source_context.as_bytes(),
+        if candidate.requires_review { b"1" } else { b"0" },
+    ] {
+        hash_review_value(&mut hasher, value);
+    }
+    hash_review_value(&mut hasher, &candidate.bytes.to_le_bytes());
+    hash_review_value(&mut hasher, &candidate.created_ms.to_le_bytes());
+    hash_review_value(&mut hasher, &candidate.modified_ms.to_le_bytes());
+    hash_review_value(&mut hasher, &candidate.production_time_ms.to_le_bytes());
+    for reason in &candidate.review_reasons {
+        hash_review_value(&mut hasher, reason.as_bytes());
+    }
+    hash_review_value(
+        &mut hasher,
+        candidate.content_title.as_deref().unwrap_or_default().as_bytes(),
+    );
+    for author in &candidate.content_authors {
+        hash_review_value(&mut hasher, author.as_bytes());
+    }
+    for context in &candidate.content_context {
+        hash_review_value(&mut hasher, context.as_bytes());
+    }
+    hash_review_value(
+        &mut hasher,
+        &candidate.duration_ms.unwrap_or_default().to_le_bytes(),
+    );
+    let dataset = serde_json::to_vec(&candidate.dataset_profile).unwrap_or_default();
+    hash_review_value(&mut hasher, &dataset);
+    for evidence in &candidate.metadata_evidence {
+        for value in [
+            evidence.field.as_bytes(),
+            evidence.value.as_bytes(),
+            evidence.source.as_bytes(),
+            evidence.confidence.as_bytes(),
+        ] {
+            hash_review_value(&mut hasher, value);
+        }
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
 /// Build a dry-run report. No filesystem mutation occurs.
 pub fn plan_cloud_archive(
     files: &[FileFact],
@@ -1669,8 +1732,9 @@ pub fn plan_cloud_archive(
         }
         review_reasons.sort();
         review_reasons.dedup();
-        candidates.push(CloudCandidate {
+        let mut candidate = CloudCandidate {
             metadata_fingerprint: metadata_fingerprint(file, relative),
+            review_fingerprint: String::new(),
             src: file.path.to_string_lossy().into_owned(),
             dst: dst.to_string_lossy().into_owned(),
             provider: cloud_root.provider,
@@ -1694,7 +1758,9 @@ pub fn plan_cloud_archive(
             dataset_profile: lineage_metadata.dataset_profile,
             metadata_evidence: lineage_metadata.evidence,
             blocked_reason,
-        });
+        };
+        candidate.review_fingerprint = candidate_review_fingerprint(&candidate);
+        candidates.push(candidate);
     }
     candidates.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.src.cmp(&b.src)));
     candidates.truncate(options.limit);

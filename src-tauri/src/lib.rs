@@ -31,6 +31,7 @@ mod reasoning;
 mod dataset_metadata;
 #[cfg_attr(coverage, allow(dead_code))]
 pub mod cloud;
+pub mod cloud_review;
 pub mod cloud_transfer;
 pub mod content_digest;
 pub mod provider_api_client;
@@ -73,9 +74,11 @@ pub fn run() {
             commands::reason_unknown_extensions,
             commands::list_cloud_roots,
             commands::list_cloud_provider_connections,
+            commands::list_cloud_review_decisions,
             commands::connect_cloud_provider,
             commands::disconnect_cloud_provider,
             commands::plan_cloud_archive,
+            commands::review_cloud_candidate,
             commands::copy_cloud_candidate,
             commands::attest_cloud_copy
         ])

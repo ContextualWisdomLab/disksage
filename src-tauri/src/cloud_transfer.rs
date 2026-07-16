@@ -4,7 +4,10 @@
 //! provider-native synchronization attestation matches the immutable copy receipt. This module
 //! produces an eviction permit but intentionally exposes no source deletion API.
 
-use crate::cloud::{CloudCandidate, CloudProvider, CloudRoot};
+use crate::cloud::{candidate_review_fingerprint, CloudCandidate, CloudProvider, CloudRoot};
+use crate::cloud_review::{
+    validate_decision, CloudReviewDecision, CloudReviewDisposition,
+};
 use std::path::Path;
 
 #[cfg(not(coverage))]
@@ -100,14 +103,45 @@ fn embedded_high_confidence(candidate: &CloudCandidate) -> bool {
 /// Validate that a dry-run candidate is still eligible to enter the copy-only phase.
 ///
 /// The function collects every reason so the UI can explain why a candidate remains blocked.
-pub fn candidate_blockers(candidate: &CloudCandidate, cloud_root: &CloudRoot) -> Vec<String> {
+pub fn candidate_blockers_with_review(
+    candidate: &CloudCandidate,
+    cloud_root: &CloudRoot,
+    review_decision: Option<&CloudReviewDecision>,
+) -> Vec<String> {
     let source = Path::new(&candidate.src);
     let destination = Path::new(&candidate.dst);
     let root = Path::new(&cloud_root.path);
     let mut blockers = Vec::new();
 
+    if candidate.review_fingerprint.len() != 64
+        || !candidate
+            .review_fingerprint
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        blockers.push("review-fingerprint-invalid".into());
+    } else if candidate.review_fingerprint != candidate_review_fingerprint(candidate) {
+        blockers.push("review-fingerprint-mismatch".into());
+    }
     if candidate.requires_review {
-        blockers.push("review-required".into());
+        match review_decision {
+            None => blockers.push("review-required".into()),
+            Some(decision) if validate_decision(decision).is_err() => {
+                blockers.push("review-decision-invalid".into());
+            }
+            Some(decision)
+                if decision.candidate_fingerprint != candidate.metadata_fingerprint =>
+            {
+                blockers.push("review-decision-candidate-mismatch".into());
+            }
+            Some(decision) if decision.review_fingerprint != candidate.review_fingerprint => {
+                blockers.push("review-decision-stale".into());
+            }
+            Some(decision) if decision.disposition == CloudReviewDisposition::Held => {
+                blockers.push("review-held".into());
+            }
+            Some(_) => {}
+        }
     }
     if candidate.blocked_reason.is_some() {
         blockers.push("planner-blocked".into());
@@ -117,6 +151,13 @@ pub fn candidate_blockers(candidate: &CloudCandidate, cloud_root: &CloudRoot) ->
     }
     if candidate.metadata_fingerprint.trim().is_empty() {
         blockers.push("metadata-fingerprint-missing".into());
+    } else if candidate.metadata_fingerprint.len() != 64
+        || !candidate
+            .metadata_fingerprint
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        blockers.push("metadata-fingerprint-invalid".into());
     }
     if candidate.provider != cloud_root.provider {
         blockers.push("provider-mismatch".into());
@@ -140,6 +181,10 @@ pub fn candidate_blockers(candidate: &CloudCandidate, cloud_root: &CloudRoot) ->
         blockers.push("destination-outside-cloud-root".into());
     }
     blockers
+}
+
+pub fn candidate_blockers(candidate: &CloudCandidate, cloud_root: &CloudRoot) -> Vec<String> {
+    candidate_blockers_with_review(candidate, cloud_root, None)
 }
 
 fn receipt_id_for(
@@ -542,7 +587,21 @@ pub fn prepare_cloud_copy(
     receipt_dir: &Path,
     copied_at_ms: u64,
 ) -> Result<(CloudCopyReceipt, PathBuf), String> {
-    let blockers = candidate_blockers(candidate, cloud_root);
+    prepare_cloud_copy_with_review(candidate, cloud_root, receipt_dir, copied_at_ms, None)
+}
+
+/// Copy a candidate after validating an optional operator review decision. Approval can clear only
+/// the `review-required` gate; embedded high-confidence dates and all path/provider/planner gates
+/// remain mandatory.
+#[cfg(not(coverage))]
+pub fn prepare_cloud_copy_with_review(
+    candidate: &CloudCandidate,
+    cloud_root: &CloudRoot,
+    receipt_dir: &Path,
+    copied_at_ms: u64,
+    review_decision: Option<&CloudReviewDecision>,
+) -> Result<(CloudCopyReceipt, PathBuf), String> {
+    let blockers = candidate_blockers_with_review(candidate, cloud_root, review_decision);
     if !blockers.is_empty() {
         return Err(blockers.join(","));
     }
@@ -614,8 +673,9 @@ mod tests {
     }
 
     fn candidate() -> CloudCandidate {
-        CloudCandidate {
-            metadata_fingerprint: "metadata-fingerprint".into(),
+        let mut candidate = CloudCandidate {
+            metadata_fingerprint: "a".repeat(64),
+            review_fingerprint: String::new(),
             src: SOURCE.into(),
             dst: DESTINATION.into(),
             provider: CloudProvider::Icloud,
@@ -644,7 +704,13 @@ mod tests {
                 confidence: "high".into(),
             }],
             blocked_reason: None,
-        }
+        };
+        candidate.review_fingerprint = candidate_review_fingerprint(&candidate);
+        candidate
+    }
+
+    fn refresh_review_fingerprint(candidate: &mut CloudCandidate) {
+        candidate.review_fingerprint = candidate_review_fingerprint(candidate);
     }
 
     fn receipt() -> CloudCopyReceipt {
@@ -763,6 +829,54 @@ mod tests {
         already_cloud.src = DESTINATION.into();
         assert!(candidate_blockers(&already_cloud, &root())
             .contains(&"source-already-in-cloud-root".to_string()));
+    }
+
+    #[test]
+    fn operator_decision_clears_only_the_matching_review_gate() {
+        let mut reviewed = candidate();
+        reviewed.metadata_fingerprint = "a".repeat(64);
+        reviewed.requires_review = true;
+        reviewed.review_reasons = vec!["embedded-metadata-probe-incomplete".into()];
+        reviewed.review_fingerprint = crate::cloud::candidate_review_fingerprint(&reviewed);
+        let approved = crate::cloud_review::create_decision(
+            &reviewed,
+            CloudReviewDisposition::Approved,
+            10,
+        )
+        .unwrap();
+        assert!(candidate_blockers_with_review(&reviewed, &root(), Some(&approved)).is_empty());
+
+        let held = crate::cloud_review::create_decision(
+            &reviewed,
+            CloudReviewDisposition::Held,
+            11,
+        )
+        .unwrap();
+        assert!(candidate_blockers_with_review(&reviewed, &root(), Some(&held))
+            .contains(&"review-held".to_string()));
+
+        let mut changed = reviewed.clone();
+        changed.review_reasons.push("new-warning".into());
+        changed.review_fingerprint = crate::cloud::candidate_review_fingerprint(&changed);
+        assert!(candidate_blockers_with_review(&changed, &root(), Some(&approved))
+            .contains(&"review-decision-stale".to_string()));
+
+        let mut tampered = reviewed.clone();
+        tampered.content_title = Some("Changed after review".into());
+        assert!(candidate_blockers_with_review(&tampered, &root(), Some(&approved))
+            .contains(&"review-fingerprint-mismatch".to_string()));
+
+        reviewed.production_time_source = "filename-date".into();
+        reviewed.production_time_confidence = "low".into();
+        reviewed.review_fingerprint = crate::cloud::candidate_review_fingerprint(&reviewed);
+        let filename_approval = crate::cloud_review::create_decision(
+            &reviewed,
+            CloudReviewDisposition::Approved,
+            12,
+        )
+        .unwrap();
+        assert!(candidate_blockers_with_review(&reviewed, &root(), Some(&filename_approval))
+            .contains(&"embedded-high-confidence-date-required".to_string()));
     }
 
     #[test]
@@ -916,6 +1030,7 @@ mod tests {
         test_candidate.dst = destination.to_string_lossy().into_owned();
         test_candidate.bytes = metadata.len();
         test_candidate.modified_ms = modified_ms(&metadata).unwrap();
+        refresh_review_fingerprint(&mut test_candidate);
         let test_root = CloudRoot {
             id: "icloud:test".into(),
             provider: CloudProvider::Icloud,
@@ -957,6 +1072,7 @@ mod tests {
         test_candidate.dst = destination.to_string_lossy().into_owned();
         test_candidate.bytes = 999;
         test_candidate.modified_ms = modified_ms(&std::fs::metadata(&source).unwrap()).unwrap();
+        refresh_review_fingerprint(&mut test_candidate);
         let test_root = CloudRoot {
             id: "icloud:test".into(),
             provider: CloudProvider::Icloud,
@@ -969,6 +1085,7 @@ mod tests {
             "source-changed-since-plan"
         );
         test_candidate.bytes = std::fs::metadata(&source).unwrap().len();
+        refresh_review_fingerprint(&mut test_candidate);
         std::fs::write(&destination, b"existing").unwrap();
         assert_eq!(
             prepare_cloud_copy(&test_candidate, &test_root, &receipt_dir, 124).unwrap_err(),
@@ -996,6 +1113,7 @@ mod tests {
         test_candidate.dst = destination.to_string_lossy().into_owned();
         test_candidate.bytes = metadata.len();
         test_candidate.modified_ms = modified_ms(&metadata).unwrap();
+        refresh_review_fingerprint(&mut test_candidate);
         let test_root = CloudRoot {
             id: "icloud:test".into(),
             provider: CloudProvider::Icloud,
@@ -1033,6 +1151,7 @@ mod tests {
         test_candidate.dst = destination.to_string_lossy().into_owned();
         test_candidate.bytes = metadata.len();
         test_candidate.modified_ms = modified_ms(&metadata).unwrap();
+        refresh_review_fingerprint(&mut test_candidate);
         let test_root = CloudRoot {
             id: "icloud:test".into(),
             provider: CloudProvider::Icloud,

@@ -178,6 +178,7 @@ export interface OAuthConnection {
 
 export interface CloudCandidate {
   metadata_fingerprint: string;
+  review_fingerprint: string;
   src: string;
   dst: string;
   provider: CloudProvider;
@@ -201,6 +202,17 @@ export interface CloudCandidate {
   dataset_profile: DatasetProfile | null;
   metadata_evidence: MetadataEvidence[];
   blocked_reason: string | null;
+}
+
+export type CloudReviewDisposition = "approved" | "held";
+
+export interface CloudReviewDecision {
+  version: number;
+  decision_id: string;
+  candidate_fingerprint: string;
+  review_fingerprint: string;
+  disposition: CloudReviewDisposition;
+  reviewed_at_ms: number;
 }
 
 export interface DatasetColumnProfile {
@@ -302,6 +314,8 @@ export interface CloudAttestationOutput {
 export const listCloudRoots = () => invoke<CloudRoot[]>("list_cloud_roots");
 export const listCloudProviderConnections = () =>
   invoke<OAuthConnection[]>("list_cloud_provider_connections");
+export const listCloudReviewDecisions = () =>
+  invoke<CloudReviewDecision[]>("list_cloud_review_decisions");
 export const connectCloudProvider = (cloudRoot: string, clientId: string) =>
   invoke<OAuthConnection>("connect_cloud_provider", { cloudRoot, clientId });
 export const disconnectCloudProvider = (cloudRoot: string) =>
@@ -315,6 +329,25 @@ export const planCloudArchive = (
 ) => invoke<CloudPlanReport>("plan_cloud_archive", {
   root,
   cloudRoot,
+  minSizeMib,
+  minAgeDays,
+  limit,
+});
+export const reviewCloudCandidate = (
+  root: string,
+  cloudRoot: string,
+  metadataFingerprint: string,
+  reviewFingerprint: string,
+  disposition: CloudReviewDisposition,
+  minSizeMib = 256,
+  minAgeDays = 90,
+  limit = 200,
+) => invoke<CloudReviewDecision>("review_cloud_candidate", {
+  root,
+  cloudRoot,
+  metadataFingerprint,
+  reviewFingerprint,
+  disposition,
   minSizeMib,
   minAgeDays,
   limit,

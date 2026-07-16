@@ -7,6 +7,7 @@
 
   let roots: api.CloudRoot[] = $state([]);
   let connections: api.OAuthConnection[] = $state([]);
+  let reviewDecisions: api.CloudReviewDecision[] = $state([]);
   let selectedRoot = $state("");
   let minSizeMib = $state(256);
   let minAgeDays = $state(90);
@@ -14,6 +15,7 @@
   let loadError = $state("");
   let report: api.CloudPlanReport | null = $state(null);
   let copyingFingerprint = $state("");
+  let reviewingFingerprint = $state("");
   let copied: api.CloudCopyOutput | null = $state(null);
   let attesting = $state(false);
   let attestation: api.CloudAttestationOutput | null = $state(null);
@@ -26,6 +28,7 @@
     try {
       roots = await api.listCloudRoots();
       connections = await api.listCloudProviderConnections();
+      reviewDecisions = await api.listCloudReviewDecisions();
       selectedRoot = roots[0]?.path ?? "";
     } catch (e) {
       loadError = String(e);
@@ -56,10 +59,53 @@
   }
 
   function copyEligible(candidate: api.CloudCandidate): boolean {
+    const decision = matchingReviewDecision(candidate);
     return candidate.blocked_reason === null
-      && !candidate.requires_review
+      && (!candidate.requires_review || decision?.disposition === "approved")
       && candidate.production_time_confidence === "high"
       && candidate.production_time_source.startsWith("embedded:");
+  }
+
+  function reviewDecision(candidate: api.CloudCandidate): api.CloudReviewDecision | null {
+    return reviewDecisions.find((decision) =>
+      decision.candidate_fingerprint === candidate.metadata_fingerprint
+    ) ?? null;
+  }
+
+  function matchingReviewDecision(candidate: api.CloudCandidate): api.CloudReviewDecision | null {
+    const decision = reviewDecision(candidate);
+    return decision?.review_fingerprint === candidate.review_fingerprint ? decision : null;
+  }
+
+  async function reviewCandidate(
+    candidate: api.CloudCandidate,
+    disposition: api.CloudReviewDisposition,
+  ) {
+    if (!scannedRoot || !selectedRoot || !candidate.requires_review) return;
+    reviewingFingerprint = candidate.metadata_fingerprint;
+    loadError = "";
+    try {
+      const decision = await api.reviewCloudCandidate(
+        scannedRoot,
+        selectedRoot,
+        candidate.metadata_fingerprint,
+        candidate.review_fingerprint,
+        disposition,
+        Math.max(1, Math.floor(minSizeMib)),
+        Math.max(0, Math.floor(minAgeDays)),
+        200,
+      );
+      reviewDecisions = [
+        ...reviewDecisions.filter((entry) =>
+          entry.candidate_fingerprint !== decision.candidate_fingerprint
+        ),
+        decision,
+      ];
+    } catch (e) {
+      loadError = String(e);
+    } finally {
+      reviewingFingerprint = "";
+    }
   }
 
   async function copyCandidate(candidate: api.CloudCandidate) {
@@ -254,7 +300,7 @@
       충돌 제외 잠재 회수 {fmtBytes(report.potentially_reclaimable_bytes)}
     </div>
     <p class="warning">
-      복사는 내부 메타데이터가 고신뢰이고 별도 검토 사유가 없는 후보만 가능합니다. 원본 삭제 기능은 제공하지 않으며, 업로드 증거가 확인되어도 허가 정보만 표시합니다.
+      복사는 내부 메타데이터가 고신뢰이고, 검토 사유가 있으면 현재 증거에 결박된 명시적 승인이 있는 후보만 가능합니다. 원본 삭제 기능은 제공하지 않으며, 업로드 증거가 확인되어도 허가 정보만 표시합니다.
     </p>
     {#if copied}
       <div class="receipt">
@@ -343,6 +389,29 @@
             {/if}
             <div class="arrow">→ {candidate.dst}</div>
             <div class="context">맥락: {candidate.source_context} · lineage: {candidate.metadata_fingerprint.slice(0, 12)}</div>
+            {#if candidate.requires_review}
+              <div class="review-controls">
+                {#if matchingReviewDecision(candidate)?.disposition === "approved"}
+                  <strong class="approved">현재 메타데이터 증거 검토 승인됨</strong>
+                {:else if matchingReviewDecision(candidate)?.disposition === "held"}
+                  <strong class="held">현재 메타데이터 증거 보류됨</strong>
+                {:else if reviewDecision(candidate)}
+                  <strong class="held">메타데이터 증거가 바뀌어 이전 결정이 만료됨</strong>
+                {:else}
+                  <span class="context">아래 증거를 확인한 뒤 승인 또는 보류하세요.</span>
+                {/if}
+                <button
+                  onclick={() => reviewCandidate(candidate, "approved")}
+                  disabled={reviewingFingerprint !== "" || matchingReviewDecision(candidate)?.disposition === "approved"}
+                >
+                  {reviewingFingerprint === candidate.metadata_fingerprint ? "기록 중…" : "메타데이터 검토 승인"}
+                </button>
+                <button
+                  onclick={() => reviewCandidate(candidate, "held")}
+                  disabled={reviewingFingerprint !== "" || matchingReviewDecision(candidate)?.disposition === "held"}
+                >보류</button>
+              </div>
+            {/if}
             {#if copyEligible(candidate)}
               <button
                 class="copy"
@@ -384,6 +453,9 @@
   .client-id { width: min(40rem, 80vw); }
   .summary { margin-top: 0.8rem; font-weight: 600; }
   .receipt { margin: 0.75rem 0; padding: 0.75rem; border: 1px solid #6b8e72; border-radius: 4px; background: #f5fbf6; }
+  .review-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin: 0.5rem 0; }
+  .approved { color: #25643b; }
+  .held { color: #8a4b16; }
   .candidates { list-style: none; margin: 0.5rem 0; padding: 0; max-height: 34rem; overflow-y: auto; }
   .candidates li { padding: 0.6rem; border: 1px solid #e3e3e3; border-radius: 4px; margin-bottom: 0.4rem; }
   .candidates li.blocked { border-color: #b03030; background: #fff7f7; }
