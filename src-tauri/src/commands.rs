@@ -373,6 +373,19 @@ pub fn list_dev_artifacts(
 }
 
 #[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn list_stale_worktrees(
+    root: String,
+    min_age_days: u64,
+) -> Result<crate::worktrees::WorktreeReport, String> {
+    let root = PathBuf::from(root);
+    if !root.is_dir() {
+        return Err(format!("스캔 루트가 디렉터리가 아님: {}", root.display()));
+    }
+    Ok(crate::worktrees::inventory(&root, min_age_days, now_ms()))
+}
+
+#[cfg(not(coverage))]
 #[tauri::command]
 pub fn clean_paths(paths: Vec<String>, app: AppHandle) -> Result<Vec<CleanResult>, String> {
     let jp = journal_file_path(&app)?;

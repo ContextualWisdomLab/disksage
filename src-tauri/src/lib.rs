@@ -27,6 +27,8 @@ mod llm;
 mod web;
 #[cfg_attr(coverage, allow(dead_code))]
 mod reasoning;
+#[cfg_attr(coverage, allow(dead_code))]
+pub mod worktrees;
 
 // coverage 빌드에서 제외 — GUI 런타임은 헤드리스 테스트로 실행 불가
 #[cfg(not(coverage))]
@@ -44,6 +46,7 @@ pub fn run() {
             commands::top_files,
             commands::list_cache_candidates,
             commands::list_dev_artifacts,
+            commands::list_stale_worktrees,
             commands::clean_paths,
             commands::recent_operations,
             commands::expand_clean_targets,

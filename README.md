@@ -10,6 +10,7 @@
 - 🗺 **Large file explorer** — parallel scan with treemap visualization
 - 🧹 **Known cache & temp cleanup** — OS, browser, and package-manager caches
 - 🛠 **Dev artifact cleanup** — stale `node_modules`, `target/`, `venv`, …
+- 🌿 **Git worktree inventory** — finds old linked worktrees, preserves dirty/merge/ahead/lock evidence, and estimates safely reviewable disk reclaim (read-only)
 - 👯 **Duplicate finder** — size → partial hash → BLAKE3 full hash
 - 🗂 **Ontology-based organizing** — files classified into an OWL taxonomy you can edit
 - 📊 **Disk inventory** — "what is on my disk?", aggregated by category, unknowns surfaced
