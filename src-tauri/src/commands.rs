@@ -16,8 +16,8 @@ use crate::organize;
 use crate::safety;
 #[cfg(not(coverage))]
 use crate::{
-    cloud, cloud_transfer, dev_artifacts, dupes, provider_api_client, provider_oauth,
-    provider_sync, rules,
+    cloud, cloud_review, cloud_transfer, dev_artifacts, dupes, provider_api_client,
+    provider_oauth, provider_sync, rules,
 };
 
 #[derive(Default)]
@@ -25,6 +25,8 @@ pub struct AppState {
     pub result: Arc<Mutex<Option<ScanResult>>>,
     pub cancel: Arc<AtomicBool>,
     pub scanning: Arc<AtomicBool>,
+    /// Serialize review writes with review-gated copies so a later hold cannot race a copy.
+    pub cloud_review: Arc<Mutex<()>>,
     // 엔진은 최초 사용 시 한 번만 로드해 보관(모델 로드는 ~1GB — 호출마다 재로드 금지). feature off/coverage에서는 필드 자체가 없음.
     #[cfg(all(not(coverage), feature = "llm-engine"))]
     pub engine: Arc<Mutex<Option<crate::llm::LlamaEngine>>>,
@@ -447,6 +449,15 @@ fn oauth_connections_path(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|_| "app-data-directory-unavailable".to_string())
 }
 
+#[cfg(not(coverage))]
+fn cloud_review_directory(app: &AppHandle) -> Result<PathBuf, String> {
+    use tauri::Manager;
+    app.path()
+        .app_data_dir()
+        .map(|directory| directory.join("cloud-review-decisions"))
+        .map_err(|_| "app-data-directory-unavailable".to_string())
+}
+
 /// Return non-secret OAuth connection descriptors. Refresh tokens remain in the OS credential
 /// store and this command never reads or returns them.
 #[cfg(not(coverage))]
@@ -455,6 +466,15 @@ pub fn list_cloud_provider_connections(
     app: AppHandle,
 ) -> Result<Vec<provider_oauth::OAuthConnection>, String> {
     provider_oauth::load_connections(&oauth_connections_path(&app)?)
+}
+
+/// Return only the latest non-secret approve/hold decision for each candidate fingerprint.
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn list_cloud_review_decisions(
+    app: AppHandle,
+) -> Result<Vec<cloud_review::CloudReviewDecision>, String> {
+    cloud_review::load_latest_decisions(&cloud_review_directory(&app)?)
 }
 
 /// Start a native browser authorization-code flow with PKCE and a random loopback port. The
@@ -564,6 +584,60 @@ pub fn plan_cloud_archive(
         .map(|(_, report)| report)
 }
 
+/// Rebuild the plan and append an immutable approve/hold decision for the exact evidence shown by
+/// the UI. A stale UI cannot approve a changed metadata snapshot.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn review_cloud_candidate(
+    root: String,
+    cloud_root: String,
+    metadata_fingerprint: String,
+    review_fingerprint: String,
+    disposition: cloud_review::CloudReviewDisposition,
+    min_size_mib: u64,
+    min_age_days: u64,
+    limit: usize,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<cloud_review::CloudReviewDecision, String> {
+    for fingerprint in [&metadata_fingerprint, &review_fingerprint] {
+        if fingerprint.len() != 64
+            || !fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err("cloud-review-fingerprint-invalid".into());
+        }
+    }
+    let _guard = state
+        .cloud_review
+        .lock()
+        .map_err(|_| "cloud-review-lock-poisoned".to_string())?;
+    let (_, report) = cloud_plan_for_inputs(
+        &root,
+        &cloud_root,
+        min_size_mib,
+        min_age_days,
+        limit,
+        &app,
+    )?;
+    let matches: Vec<_> = report
+        .candidates
+        .iter()
+        .filter(|candidate| candidate.metadata_fingerprint == metadata_fingerprint)
+        .collect();
+    let candidate = match matches.as_slice() {
+        [only] => *only,
+        [] => return Err("fresh-plan-candidate-not-found".into()),
+        _ => return Err("fresh-plan-candidate-ambiguous".into()),
+    };
+    if candidate.review_fingerprint != review_fingerprint {
+        return Err("fresh-plan-review-fingerprint-mismatch".into());
+    }
+    let decision =
+        cloud_review::create_decision(candidate, disposition, cloud::system_now_ms())?;
+    cloud_review::write_immutable_decision(&cloud_review_directory(&app)?, &decision)?;
+    Ok(decision)
+}
+
 #[cfg(not(coverage))]
 #[derive(serde::Serialize)]
 pub struct CloudCopyOutput {
@@ -583,12 +657,17 @@ pub fn copy_cloud_candidate(
     min_age_days: u64,
     limit: usize,
     app: AppHandle,
+    state: State<AppState>,
 ) -> Result<CloudCopyOutput, String> {
     if metadata_fingerprint.len() != 64
         || !metadata_fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit())
     {
         return Err("metadata-fingerprint-invalid".into());
     }
+    let _guard = state
+        .cloud_review
+        .lock()
+        .map_err(|_| "cloud-review-lock-poisoned".to_string())?;
     let (selected, report) = cloud_plan_for_inputs(
         &root,
         &cloud_root,
@@ -613,11 +692,19 @@ pub fn copy_cloud_candidate(
         .app_data_dir()
         .map_err(|_| "app-data-directory-unavailable".to_string())?
         .join("cloud-receipts");
-    let (receipt, receipt_path) = cloud_transfer::prepare_cloud_copy(
+    let review_decision = if candidate.requires_review {
+        cloud_review::load_latest_decisions(&cloud_review_directory(&app)?)?
+            .into_iter()
+            .find(|decision| decision.candidate_fingerprint == candidate.metadata_fingerprint)
+    } else {
+        None
+    };
+    let (receipt, receipt_path) = cloud_transfer::prepare_cloud_copy_with_review(
         candidate,
         &selected,
         &receipt_dir,
         cloud::system_now_ms(),
+        review_decision.as_ref(),
     )?;
     Ok(CloudCopyOutput {
         receipt,
