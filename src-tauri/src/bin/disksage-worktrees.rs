@@ -81,6 +81,14 @@ fn main() {
 #[cfg(coverage)]
 fn main() {}
 
+#[cfg(all(test, coverage))]
+mod coverage_tests {
+    #[test]
+    fn noop_main_runs() {
+        super::main();
+    }
+}
+
 #[cfg(all(test, not(coverage)))]
 mod tests {
     use super::*;

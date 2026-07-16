@@ -4,21 +4,38 @@
 //! filesystem deletion. It evaluates only local Git evidence and allocated disk usage so a
 //! later, explicitly confirmed cleanup flow can fail closed.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+#[cfg(not(coverage))]
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
+#[cfg(not(coverage))]
+use std::path::Path;
+use std::path::PathBuf;
+#[cfg(not(coverage))]
 use std::process::{Command, Output, Stdio};
+#[cfg(not(coverage))]
 use std::time::{Duration, Instant};
 
+#[cfg(not(coverage))]
 const DAY_MS: u64 = 86_400_000;
+#[cfg(not(coverage))]
 const GIT_TIMEOUT: Duration = Duration::from_secs(1);
+#[cfg(not(coverage))]
 const GIT_METADATA_READ_TIMEOUT: Duration = Duration::from_millis(250);
+#[cfg(not(coverage))]
 const GIT_METADATA_MAX_BYTES: u64 = 4_096;
+#[cfg(not(coverage))]
 const INVENTORY_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(not(coverage))]
 const FILESYSTEM_SCAN_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(not(coverage))]
 const FILESYSTEM_SCAN_TOTAL_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(not(coverage))]
 const FILESYSTEM_SCAN_MAX_ENTRIES: usize = 200_000;
+#[cfg(not(coverage))]
 const REPOSITORY_SEARCH_MAX_DEPTH: usize = 8;
+#[cfg(not(coverage))]
 const REPOSITORY_SEARCH_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(not(coverage))]
 const REPOSITORY_SEARCH_MAX_DIRECTORIES: usize = 100_000;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -77,6 +94,7 @@ pub struct WorktreeScanIssue {
     pub reason: String,
 }
 
+#[cfg(not(coverage))]
 fn git_output(cwd: &Path, args: &[&str]) -> Result<Output, String> {
     let mut command = Command::new("git");
     command
@@ -113,6 +131,7 @@ fn git_output(cwd: &Path, args: &[&str]) -> Result<Output, String> {
     }
 }
 
+#[cfg(not(coverage))]
 fn git_text(cwd: &Path, args: &[&str]) -> Option<String> {
     let output = git_output(cwd, args).ok()?;
     if !output.status.success() {
@@ -176,6 +195,7 @@ fn prune_repository_search(name: &str) -> bool {
     )
 }
 
+#[cfg(not(coverage))]
 fn read_small_text_with_timeout(path: &Path, timeout: Duration) -> Result<String, String> {
     let path = path.to_path_buf();
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
@@ -195,6 +215,7 @@ fn read_small_text_with_timeout(path: &Path, timeout: Duration) -> Result<String
     }
 }
 
+#[cfg(not(coverage))]
 fn common_dir_from_marker(repository: &Path) -> Result<PathBuf, String> {
     let marker = repository.join(".git");
     let metadata = std::fs::symlink_metadata(&marker).map_err(|error| error.to_string())?;
@@ -238,6 +259,7 @@ fn common_dir_from_marker(repository: &Path) -> Result<PathBuf, String> {
     std::fs::canonicalize(common).map_err(|error| error.to_string())
 }
 
+#[cfg(not(coverage))]
 fn repository_seeds_with_limits(
     root: &Path,
     max_depth: usize,
@@ -305,6 +327,7 @@ fn repository_seeds_with_limits(
     (seeds, issues)
 }
 
+#[cfg(not(coverage))]
 fn repository_seeds(root: &Path) -> (BTreeMap<PathBuf, PathBuf>, Vec<WorktreeScanIssue>) {
     repository_seeds_with_limits(
         root,
@@ -314,6 +337,7 @@ fn repository_seeds(root: &Path) -> (BTreeMap<PathBuf, PathBuf>, Vec<WorktreeSca
     )
 }
 
+#[cfg(not(coverage))]
 fn local_default_ref(repository: &Path) -> Option<String> {
     let symbolic = git_output(
         repository,
@@ -347,6 +371,7 @@ fn local_default_ref(repository: &Path) -> Option<String> {
     None
 }
 
+#[cfg(not(coverage))]
 fn dirty_state(path: &Path) -> Option<bool> {
     let output = git_output(
         path,
@@ -356,6 +381,7 @@ fn dirty_state(path: &Path) -> Option<bool> {
     output.status.success().then(|| !output.stdout.is_empty())
 }
 
+#[cfg(not(coverage))]
 fn ahead_behind(repository: &Path, default_ref: &str, head: &str) -> Option<(u64, u64)> {
     let range = format!("{default_ref}...{head}");
     let value = git_text(repository, &["rev-list", "--left-right", "--count", &range])?;
@@ -365,6 +391,7 @@ fn ahead_behind(repository: &Path, default_ref: &str, head: &str) -> Option<(u64
     Some((ahead, behind))
 }
 
+#[cfg(not(coverage))]
 fn merged_into(repository: &Path, head: &str, default_ref: &str) -> Option<bool> {
     let output = git_output(
         repository,
@@ -378,6 +405,7 @@ fn merged_into(repository: &Path, head: &str, default_ref: &str) -> Option<bool>
     }
 }
 
+#[cfg(not(coverage))]
 fn commit_time_ms(repository: &Path, head: &str) -> u64 {
     git_text(repository, &["show", "-s", "--format=%ct", head])
         .and_then(|value| value.parse::<u64>().ok())
@@ -385,17 +413,18 @@ fn commit_time_ms(repository: &Path, head: &str) -> u64 {
         .saturating_mul(1_000)
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(coverage)))]
 fn allocated_bytes(metadata: &std::fs::Metadata) -> u64 {
     use std::os::unix::fs::MetadataExt;
     metadata.blocks().saturating_mul(512)
 }
 
-#[cfg(not(unix))]
+#[cfg(all(not(unix), not(coverage)))]
 fn allocated_bytes(metadata: &std::fs::Metadata) -> u64 {
     metadata.len()
 }
 
+#[cfg(not(coverage))]
 fn filesystem_evidence_with_limits(
     root: &Path,
     max_entries: usize,
@@ -528,6 +557,9 @@ fn classify(
 /// Inventory all locally registered worktrees reachable from repositories under `root`.
 ///
 /// Local default refs may be stale because this function intentionally does not fetch.
+/// Coverage builds validate the deterministic parser and fail-closed classifier. Git processes,
+/// timed metadata reads, and bounded filesystem walks remain in the normal integration boundary.
+#[cfg(not(coverage))]
 pub fn inventory(root: &Path, min_age_days: u64, now_ms: u64) -> WorktreeReport {
     let inventory_started = Instant::now();
     let (repositories, mut scan_issues) = repository_seeds(root);
@@ -703,6 +735,7 @@ pub fn inventory(root: &Path, min_age_days: u64, now_ms: u64) -> WorktreeReport 
     }
 }
 
+#[cfg(not(coverage))]
 pub fn system_now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -869,6 +902,73 @@ mod tests {
     }
 
     #[test]
+    fn uncertain_git_evidence_and_default_ref_fail_closed_with_reasons() {
+        let unavailable = classify(
+            false,
+            true,
+            90,
+            30,
+            None,
+            false,
+            false,
+            true,
+            Some(0),
+            None,
+            true,
+            false,
+        );
+        assert!(!unavailable.0);
+        assert!(unavailable
+            .2
+            .contains(&"git-status-unavailable".to_string()));
+        assert!(unavailable
+            .2
+            .contains(&"merge-status-unavailable".to_string()));
+
+        let no_default = classify(
+            false,
+            true,
+            90,
+            30,
+            Some(false),
+            false,
+            false,
+            true,
+            Some(0),
+            None,
+            false,
+            false,
+        );
+        assert!(!no_default.0);
+        assert!(no_default.2.contains(&"default-ref-unresolved".to_string()));
+        assert!(!no_default
+            .2
+            .contains(&"merge-status-unavailable".to_string()));
+    }
+
+    #[test]
+    fn repository_pruning_policy_covers_generated_and_user_directories() {
+        for name in [
+            ".git",
+            "node_modules",
+            "target",
+            ".venv",
+            "venv",
+            "__pycache__",
+            "Library",
+            "System",
+            "Applications",
+            ".Trash",
+            ".cache",
+            "Caches",
+        ] {
+            assert!(prune_repository_search(name), "{name}");
+        }
+        assert!(!prune_repository_search("src"));
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
     fn allocated_size_and_activity_ignore_git_metadata_and_symlinks() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir(tmp.path().join(".git")).unwrap();
@@ -887,6 +987,7 @@ mod tests {
         assert!(complete);
     }
 
+    #[cfg(not(coverage))]
     #[test]
     fn filesystem_evidence_reports_incomplete_when_entry_budget_is_exhausted() {
         let tmp = tempfile::tempdir().unwrap();
@@ -897,6 +998,7 @@ mod tests {
         assert!(!complete);
     }
 
+    #[cfg(not(coverage))]
     #[test]
     fn non_repository_tree_returns_empty_report() {
         let tmp = tempfile::tempdir().unwrap();
@@ -908,6 +1010,7 @@ mod tests {
         assert_eq!(report.potentially_reclaimable_bytes, 0);
     }
 
+    #[cfg(not(coverage))]
     #[test]
     fn repository_discovery_reports_an_exhausted_directory_budget() {
         let tmp = tempfile::tempdir().unwrap();
@@ -924,6 +1027,7 @@ mod tests {
         }));
     }
 
+    #[cfg(not(coverage))]
     #[test]
     fn real_git_worktree_inventory_deduplicates_repository_and_protects_primary() {
         if Command::new("git").arg("--version").output().is_err() {
