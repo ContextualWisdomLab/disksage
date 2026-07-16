@@ -4,6 +4,9 @@
 //! hydrates, or calls a model.  The plan preserves enough source metadata to become the first
 //! lineage record for a later verified move.
 
+#[cfg(not(coverage))]
+use crate::dataset_metadata::profile_dataset;
+use crate::dataset_metadata::DatasetProfile;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 #[cfg(not(coverage))]
@@ -81,6 +84,7 @@ pub struct ContentMetadata {
     pub authors: Vec<String>,
     pub context: Vec<String>,
     pub duration_ms: Option<u64>,
+    pub dataset_profile: Option<DatasetProfile>,
     pub evidence: Vec<MetadataEvidence>,
 }
 
@@ -133,6 +137,7 @@ pub struct CloudCandidate {
     pub content_authors: Vec<String>,
     pub content_context: Vec<String>,
     pub duration_ms: Option<u64>,
+    pub dataset_profile: Option<DatasetProfile>,
     pub metadata_evidence: Vec<MetadataEvidence>,
     pub blocked_reason: Option<String>,
 }
@@ -1099,8 +1104,66 @@ fn merge_metadata(mut primary: ContentMetadata, secondary: ContentMetadata) -> C
     if primary.duration_ms.is_none() {
         primary.duration_ms = secondary.duration_ms;
     }
+    if primary.dataset_profile.is_none() {
+        primary.dataset_profile = secondary.dataset_profile;
+    }
     primary.evidence.extend(secondary.evidence);
     primary
+}
+
+#[cfg(not(coverage))]
+fn dataset_content_metadata(path: &Path) -> ContentMetadata {
+    let mut metadata = ContentMetadata::default();
+    let profile = profile_dataset(path);
+    let source = format!("embedded:dataset-profile:{}", profile.format);
+    add_evidence(
+        &mut metadata,
+        "dataset-format",
+        profile.format.clone(),
+        &source,
+        "high",
+    );
+    add_evidence(
+        &mut metadata,
+        "dataset-sampled-rows",
+        profile.sampled_rows.to_string(),
+        &source,
+        "medium",
+    );
+    add_evidence(
+        &mut metadata,
+        "dataset-column-count",
+        profile.columns.len().to_string(),
+        &source,
+        "medium",
+    );
+    for column in &profile.columns {
+        add_evidence(
+            &mut metadata,
+            "dataset-column",
+            format!(
+                "{}:{} observed={} missing={} sensitive-name={}",
+                column.name,
+                column.inferred_type,
+                column.observed_values,
+                column.missing_values,
+                column.sensitive_name
+            ),
+            &source,
+            "medium",
+        );
+    }
+    for warning in &profile.quality_warnings {
+        add_evidence(
+            &mut metadata,
+            "dataset-quality-warning",
+            warning,
+            &source,
+            "high",
+        );
+    }
+    metadata.dataset_profile = Some(profile);
+    metadata
 }
 
 #[cfg(not(coverage))]
@@ -1117,6 +1180,8 @@ fn probe_content_metadata(path: &Path) -> ContentMetadata {
         "pdf" => pdfinfo_metadata(path),
         "docx" | "xlsx" | "pptx" => zipped_document_metadata(path, "docProps/core.xml"),
         "odt" | "ods" | "odp" => zipped_document_metadata(path, "meta.xml"),
+        "csv" | "tsv" | "parquet" | "feather" | "arrow" | "sav" | "sas7bdat" | "dta" | "rdata"
+        | "rds" | "sqlite" | "sqlite3" | "db" | "sql" | "jsonl" => dataset_content_metadata(path),
         _ => ContentMetadata::default(),
     };
     merge_metadata(general, format_specific)
@@ -1410,6 +1475,22 @@ pub fn plan_cloud_archive(
             production_time_ms,
             file.modified_ms,
         ));
+        if kind == ArchiveKind::Dataset {
+            match lineage_metadata.dataset_profile.as_ref() {
+                None => review_reasons.push("dataset-schema-profile-missing".into()),
+                Some(profile) => {
+                    if !profile.profile_complete {
+                        review_reasons.push("dataset-schema-profile-incomplete".into());
+                    }
+                    if profile.columns.iter().any(|column| column.sensitive_name) {
+                        review_reasons.push("dataset-sensitive-column-name-detected".into());
+                    }
+                    if !profile.quality_warnings.is_empty() {
+                        review_reasons.push("dataset-quality-warning-present".into());
+                    }
+                }
+            }
+        }
         if !production_time_source.starts_with("embedded:") {
             review_reasons.push("production-date-not-from-embedded-metadata".into());
         }
@@ -1460,6 +1541,7 @@ pub fn plan_cloud_archive(
             content_authors: lineage_metadata.authors,
             content_context: lineage_metadata.context,
             duration_ms: lineage_metadata.duration_ms,
+            dataset_profile: lineage_metadata.dataset_profile,
             metadata_evidence: lineage_metadata.evidence,
             blocked_reason,
         });
@@ -1760,6 +1842,7 @@ mod tests {
             authors: vec!["Alice".into()],
             context: vec!["subject=one".into()],
             duration_ms: Some(10),
+            dataset_profile: None,
             evidence: vec![],
         };
         let secondary = ContentMetadata {
@@ -1770,6 +1853,11 @@ mod tests {
             authors: vec!["Alice".into(), "Bob".into()],
             context: vec!["subject=one".into(), "subject=two".into()],
             duration_ms: Some(20),
+            dataset_profile: Some(DatasetProfile {
+                format: "csv".into(),
+                profile_complete: true,
+                ..DatasetProfile::default()
+            }),
             evidence: vec![MetadataEvidence {
                 field: "title".into(),
                 value: "Secondary".into(),
@@ -1783,6 +1871,7 @@ mod tests {
         assert_eq!(merged.authors, ["Alice", "Bob"]);
         assert_eq!(merged.context, ["subject=one", "subject=two"]);
         assert_eq!(merged.duration_ms, Some(10));
+        assert_eq!(merged.dataset_profile.unwrap().format, "csv");
         assert_eq!(merged.evidence.len(), 1);
 
         let merged = merge_metadata(
@@ -1824,6 +1913,7 @@ mod tests {
                     authors: vec!["Recorder".into()],
                     context: vec!["subject=Planning".into()],
                     duration_ms: Some(60_000),
+                    dataset_profile: None,
                     evidence: vec![
                         MetadataEvidence {
                             field: "production-date".into(),
@@ -1942,6 +2032,52 @@ mod tests {
         .contains(&"embedded-production-date-after-filesystem-modified".to_string()));
     }
 
+    #[cfg(not(coverage))]
+    #[test]
+    fn planner_profiles_dataset_schema_without_retaining_cell_values() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let cloud = tmp.path().join("cloud");
+        writable_dir(&source);
+        writable_dir(&cloud);
+        let path = source.join("2026-01-01-data.csv");
+        let contents = b"customer_email,amount,active\nalice@example.com,42,true\n";
+        std::fs::File::create(&path)
+            .unwrap()
+            .write_all(contents)
+            .unwrap();
+        let modified_ms = date_epoch_ms(2026, 1, 2).unwrap();
+        let report = plan_cloud_archive(
+            &[FileFact {
+                path,
+                bytes: contents.len() as u64,
+                created_ms: modified_ms,
+                modified_ms,
+                content_metadata: ContentMetadata::default(),
+            }],
+            &source,
+            &root(CloudProvider::GoogleDrive, &cloud),
+            modified_ms + 200 * DAY_MS,
+            CloudPlanOptions {
+                min_size_bytes: 0,
+                min_age_days: 1,
+                limit: 10,
+            },
+        );
+
+        let candidate = &report.candidates[0];
+        let profile = candidate.dataset_profile.as_ref().unwrap();
+        assert_eq!(profile.format, "csv");
+        assert_eq!(profile.sampled_rows, 1);
+        assert_eq!(profile.columns[0].name, "customer_email");
+        assert!(candidate
+            .review_reasons
+            .contains(&"dataset-sensitive-column-name-detected".to_string()));
+        let evidence = serde_json::to_string(&candidate.metadata_evidence).unwrap();
+        assert!(!evidence.contains("alice@example.com"));
+        assert!(!evidence.contains("42"));
+    }
+
     #[test]
     fn plans_lineage_layout_age_risk_sort_limit_and_collision() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1958,7 +2094,22 @@ mod tests {
                     bytes: 500,
                     created_ms: old,
                     modified_ms: old,
-                    content_metadata: ContentMetadata::default(),
+                    content_metadata: ContentMetadata {
+                        dataset_profile: Some(DatasetProfile {
+                            format: "csv".into(),
+                            sampled_rows: 2,
+                            profile_complete: true,
+                            columns: vec![crate::dataset_metadata::DatasetColumnProfile {
+                                name: "customer_email".into(),
+                                inferred_type: "text".into(),
+                                observed_values: 2,
+                                missing_values: 0,
+                                sensitive_name: true,
+                            }],
+                            ..DatasetProfile::default()
+                        }),
+                        ..ContentMetadata::default()
+                    },
                 },
                 FileFact {
                     path: source.join("research/paper.pdf"),
@@ -2005,6 +2156,18 @@ mod tests {
         assert!(report.candidates[1]
             .review_reasons
             .contains(&"structured-data-may-contain-personal-data".to_string()));
+        assert!(report.candidates[1]
+            .review_reasons
+            .contains(&"dataset-sensitive-column-name-detected".to_string()));
+        assert_eq!(
+            report.candidates[1]
+                .dataset_profile
+                .as_ref()
+                .unwrap()
+                .columns[0]
+                .name,
+            "customer_email"
+        );
         assert_eq!(report.candidate_bytes, 1_400);
         assert_eq!(report.potentially_reclaimable_bytes, 1_400);
 
