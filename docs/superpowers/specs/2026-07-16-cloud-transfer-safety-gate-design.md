@@ -25,7 +25,8 @@ matching are deterministic Rust operations.
    provider, paths, byte count, BLAKE3, source modification time, copy time, and state flags.
 7. Keep the source. A verified copy remains `awaiting-provider-sync`.
 8. Accept only provider API or provider-native sync evidence whose receipt ID, provider,
-   destination, byte count, and timestamp match. Only then create a local-eviction permit.
+   destination, byte count, destination BLAKE3, and timestamp match. Only then create a
+   local-eviction permit.
 
 ## Fail-closed boundaries
 
@@ -35,12 +36,16 @@ matching are deterministic Rust operations.
 - A pre-existing receipt is never overwritten or removed.
 - Provider sync evidence is a separate immutable record. Manual assumption that a local cloud
   folder "will eventually sync" is not evidence.
+- The iCloud adapter checks Foundation's ubiquitous-item, uploaded, and local-current status before
+  reading content, so an evicted placeholder is not hydrated merely to prove its hash. It then
+  revalidates file identity, size, modification time, and BLAKE3 around the status observation.
 - This slice deliberately exposes no eviction function, so a permit cannot accidentally delete a
   source until the trash-only follow-up is separately implemented and reviewed.
 
-## Provider adapters still required
+## Provider adapter status
 
-The pure evidence gate is provider-neutral. iCloud, OneDrive, and Google Drive each need a trusted
-adapter that converts a provider-native remote/sync-complete observation into
-`ProviderSyncEvidence`. Until an adapter exists and returns complete evidence, the source remains
-local.
+The pure evidence gate is provider-neutral. macOS iCloud now has a Foundation-backed, per-file
+native adapter. OneDrive and Google Drive still require authenticated provider API adapters (or an
+explicitly configured trusted remote) that convert remote size/checksum observations into
+`ProviderSyncEvidence`. Until the selected provider's adapter returns complete evidence, the source
+remains local.

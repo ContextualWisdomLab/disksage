@@ -43,6 +43,7 @@ pub struct ProviderSyncEvidence {
     pub provider: CloudProvider,
     pub destination: String,
     pub observed_bytes: u64,
+    pub destination_blake3: String,
     pub confirmed_at_ms: u64,
     pub kind: SyncEvidenceKind,
     pub evidence_id: String,
@@ -199,6 +200,9 @@ pub fn approve_local_eviction(
     }
     if evidence.observed_bytes != receipt.bytes {
         blockers.push("remote-size-mismatch".into());
+    }
+    if evidence.destination_blake3 != receipt.blake3 {
+        blockers.push("destination-hash-mismatch".into());
     }
     if evidence.confirmed_at_ms < receipt.copied_at_ms {
         blockers.push("sync-evidence-predates-copy".into());
@@ -517,6 +521,7 @@ mod tests {
             provider: CloudProvider::Icloud,
             destination: DESTINATION.into(),
             observed_bytes: 12,
+            destination_blake3: "content-hash".into(),
             confirmed_at_ms: 101,
             kind: SyncEvidenceKind::ProviderNativeStatus,
             evidence_id: "icloud-uploaded-flag".into(),
@@ -600,6 +605,7 @@ mod tests {
         invalid_evidence.provider = CloudProvider::GoogleDrive;
         invalid_evidence.destination = "other".into();
         invalid_evidence.observed_bytes = 99;
+        invalid_evidence.destination_blake3 = "other-hash".into();
         invalid_evidence.confirmed_at_ms = 1;
         invalid_evidence.kind = SyncEvidenceKind::ProviderApi;
         invalid_evidence.evidence_id = " ".into();
@@ -614,6 +620,7 @@ mod tests {
             "provider-mismatch",
             "destination-mismatch",
             "remote-size-mismatch",
+            "destination-hash-mismatch",
             "sync-evidence-predates-copy",
             "sync-evidence-id-missing",
         ] {
