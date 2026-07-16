@@ -440,9 +440,7 @@ pub fn plan_cloud_archive(
     app: AppHandle,
 ) -> Result<cloud::CloudPlanReport, String> {
     let root_path = PathBuf::from(&root);
-    if !root_path.is_dir() {
-        return Err(format!("스캔 루트가 디렉터리가 아님: {root}"));
-    }
+    cloud::validate_source_root_readable(&root_path)?;
     let discovered = cloud::discover_cloud_roots(&resolve_home(&app));
     let selected = discovered
         .iter()
