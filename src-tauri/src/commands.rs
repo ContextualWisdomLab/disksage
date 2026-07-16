@@ -749,16 +749,15 @@ pub async fn attest_cloud_copy(
         let confirmed_at_ms = cloud::system_now_ms();
         let evidence = match receipt.provider {
             cloud::CloudProvider::Icloud => {
-                if object_id.as_deref().is_some_and(|value| !value.trim().is_empty())
+                if object_id
+                    .as_deref()
+                    .is_some_and(|value| !value.trim().is_empty())
                 {
                     return Err("icloud-provider-object-id-not-accepted".into());
                 }
                 provider_sync::collect_icloud_sync_evidence(&receipt, confirmed_at_ms)?
             }
             cloud::CloudProvider::Onedrive | cloud::CloudProvider::GoogleDrive => {
-                let object_id = object_id
-                    .filter(|value| !value.trim().is_empty())
-                    .ok_or_else(|| "provider-object-id-missing".to_string())?;
                 let destination = Path::new(&receipt.destination);
                 let selected_root = cloud_roots
                     .iter()
@@ -769,25 +768,42 @@ pub async fn attest_cloud_copy(
                     .max_by_key(|root| Path::new(&root.path).components().count())
                     .cloned()
                     .ok_or_else(|| "receipt-cloud-root-unavailable".to_string())?;
-                let access_token =
-                    provider_oauth::refreshed_access_token(&connection_path, &selected_root)?;
-                let locator = match receipt.provider {
-                    cloud::CloudProvider::Onedrive => {
-                        provider_api_client::ProviderRemoteLocator::OneDriveItemId(object_id)
+                let object_id = object_id.filter(|value| !value.trim().is_empty());
+                let has_object_id = object_id.is_some();
+                match provider_sync::collect_file_provider_sync_evidence(&receipt, confirmed_at_ms)
+                {
+                    Ok(evidence) if evidence.sync_complete || !has_object_id => evidence,
+                    Err(error) if !has_object_id => return Err(error),
+                    Ok(_) | Err(_) => {
+                        let object_id = object_id.expect("object id checked above");
+                        let access_token = provider_oauth::refreshed_access_token(
+                            &connection_path,
+                            &selected_root,
+                        )?;
+                        let locator = match receipt.provider {
+                            cloud::CloudProvider::Onedrive => {
+                                provider_api_client::ProviderRemoteLocator::OneDriveItemId(
+                                    object_id,
+                                )
+                            }
+                            cloud::CloudProvider::GoogleDrive => {
+                                provider_api_client::ProviderRemoteLocator::GoogleDriveFileId(
+                                    object_id,
+                                )
+                            }
+                            cloud::CloudProvider::Icloud => unreachable!(),
+                        };
+                        let client =
+                            provider_api_client::FixedHostProviderMetadataClient::default();
+                        provider_api_client::collect_authenticated_provider_api_evidence(
+                            &receipt,
+                            &locator,
+                            access_token.as_str(),
+                            &client,
+                            confirmed_at_ms,
+                        )?
                     }
-                    cloud::CloudProvider::GoogleDrive => {
-                        provider_api_client::ProviderRemoteLocator::GoogleDriveFileId(object_id)
-                    }
-                    cloud::CloudProvider::Icloud => unreachable!(),
-                };
-                let client = provider_api_client::FixedHostProviderMetadataClient::default();
-                provider_api_client::collect_authenticated_provider_api_evidence(
-                    &receipt,
-                    &locator,
-                    access_token.as_str(),
-                    &client,
-                    confirmed_at_ms,
-                )?
+                }
             }
         };
         let (permit, blockers) = match cloud_transfer::approve_local_eviction(&receipt, &evidence) {

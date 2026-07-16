@@ -158,18 +158,23 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
 }
 
 #[cfg(not(coverage))]
-fn attest_icloud_receipt(path: &Path) -> Result<AttestationOutput, String> {
+fn attest_native_receipt(path: &Path) -> Result<AttestationOutput, String> {
     let receipt = cloud_transfer::read_immutable_receipt(path)?;
-    if receipt.provider != CloudProvider::Icloud {
-        return Err("--attest-receipt는 현재 iCloud 영수증만 지원함".into());
-    }
-    let evidence = provider_sync::collect_icloud_sync_evidence(&receipt, cloud::system_now_ms())?;
+    let confirmed_at_ms = cloud::system_now_ms();
+    let evidence = match receipt.provider {
+        CloudProvider::Icloud => {
+            provider_sync::collect_icloud_sync_evidence(&receipt, confirmed_at_ms)?
+        }
+        CloudProvider::Onedrive | CloudProvider::GoogleDrive => {
+            provider_sync::collect_file_provider_sync_evidence(&receipt, confirmed_at_ms)?
+        }
+    };
     let (permit, blockers) = match cloud_transfer::approve_local_eviction(&receipt, &evidence) {
         Ok(permit) => (Some(permit), Vec::new()),
         Err(blockers) => (None, blockers),
     };
     Ok(AttestationOutput {
-        action: "attest-icloud",
+        action: "attest-provider-native",
         receipt_id: receipt.receipt_id,
         evidence,
         permit,
@@ -213,7 +218,7 @@ fn run() -> Result<(), String> {
     if let Some(receipt_path) = &args.attest_receipt {
         println!(
             "{}",
-            serde_json::to_string_pretty(&attest_icloud_receipt(receipt_path)?)
+            serde_json::to_string_pretty(&attest_native_receipt(receipt_path)?)
                 .map_err(|error| error.to_string())?
         );
         return Ok(());
@@ -438,7 +443,7 @@ mod tests {
         permissions.set_readonly(true);
         std::fs::set_permissions(&path, permissions).unwrap();
 
-        let error = attest_icloud_receipt(&path).unwrap_err();
+        let error = attest_native_receipt(&path).unwrap_err();
         assert!(error.contains("receipt-integrity-mismatch"));
         assert!(!error.contains("No such file"));
     }
