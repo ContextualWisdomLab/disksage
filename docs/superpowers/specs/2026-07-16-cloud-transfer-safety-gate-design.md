@@ -48,6 +48,9 @@ matching are deterministic Rust operations.
 
 The pure evidence gate is provider-neutral. macOS iCloud now has a Foundation-backed, per-file
 native adapter. OneDrive and Google Drive response parsers and evidence builders bind Graph
-QuickXorHash and Drive v3 SHA-256 respectively to the local receipt. Authenticated OAuth/API clients
-(or an explicitly configured trusted remote) are still required to obtain those responses. Until
-the selected provider's adapter returns complete evidence, the source remains local.
+QuickXorHash and Drive v3 SHA-256 respectively to the local receipt. Their authenticated read-only
+client accepts an ephemeral caller-supplied OAuth access token and provider-native object ID, calls
+only fixed Microsoft or Google HTTPS hosts with redirects disabled and bounded response bodies, and
+re-hashes the local destination before and after the API request. OAuth consent and secure token
+acquisition remain a UI/platform integration concern; DiskSage does not persist the token. Until the
+selected provider's adapter returns complete evidence, the source remains local.
