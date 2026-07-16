@@ -32,6 +32,7 @@ pub mod cloud;
 pub mod cloud_transfer;
 pub mod content_digest;
 pub mod provider_api_client;
+pub mod provider_oauth;
 pub mod provider_sync;
 
 // coverage 빌드에서 제외 — GUI 런타임은 헤드리스 테스트로 실행 불가
@@ -69,6 +70,9 @@ pub fn run() {
             commands::set_settings,
             commands::reason_unknown_extensions,
             commands::list_cloud_roots,
+            commands::list_cloud_provider_connections,
+            commands::connect_cloud_provider,
+            commands::disconnect_cloud_provider,
             commands::plan_cloud_archive,
             commands::copy_cloud_candidate,
             commands::attest_cloud_copy

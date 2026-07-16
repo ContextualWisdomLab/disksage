@@ -166,6 +166,16 @@ export interface CloudRoot {
   path: string;
 }
 
+export interface OAuthConnection {
+  connection_id: string;
+  provider: CloudProvider;
+  cloud_root_id: string;
+  cloud_root_path: string;
+  client_id: string;
+  scope: string;
+  connected_at_ms: number;
+}
+
 export interface CloudCandidate {
   metadata_fingerprint: string;
   src: string;
@@ -272,6 +282,12 @@ export interface CloudAttestationOutput {
 }
 
 export const listCloudRoots = () => invoke<CloudRoot[]>("list_cloud_roots");
+export const listCloudProviderConnections = () =>
+  invoke<OAuthConnection[]>("list_cloud_provider_connections");
+export const connectCloudProvider = (cloudRoot: string, clientId: string) =>
+  invoke<OAuthConnection>("connect_cloud_provider", { cloudRoot, clientId });
+export const disconnectCloudProvider = (cloudRoot: string) =>
+  invoke<void>("disconnect_cloud_provider", { cloudRoot });
 export const planCloudArchive = (
   root: string,
   cloudRoot: string,
@@ -303,9 +319,7 @@ export const copyCloudCandidate = (
 export const attestCloudCopy = (
   receiptId: string,
   objectId: string | null = null,
-  accessToken: string | null = null,
 ) => invoke<CloudAttestationOutput>("attest_cloud_copy", {
   receiptId,
   objectId,
-  accessToken,
 });
