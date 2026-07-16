@@ -1534,7 +1534,14 @@ fn probe_content_metadata(path: &Path) -> ContentMetadata {
         .extension()
         .map(|e| e.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
-    let general = exiftool_metadata(path);
+    // Transient downloads and raw multipart members do not represent standalone payloads.
+    // ExifTool can spend the full timeout trying to infer their format, so retain only the
+    // lightweight acquisition/sibling-set evidence for these fail-closed candidates.
+    let general = if should_probe_general_metadata(path) {
+        exiftool_metadata(path)
+    } else {
+        ContentMetadata::default()
+    };
     let format_specific = match extension.as_str() {
         "m4a" | "mp4" | "m4v" | "mov" | "mkv" | "avi" | "wav" | "mp3" | "flac" | "aiff" => {
             ffprobe_metadata(path)
@@ -1552,6 +1559,11 @@ fn probe_content_metadata(path: &Path) -> ContentMetadata {
         merge_metadata(general, format_specific),
         macos_file_provenance_metadata(path),
     )
+}
+
+fn should_probe_general_metadata(path: &Path) -> bool {
+    archive_kind(path) != Some(ArchiveKind::IncompleteDownload)
+        && multipart_archive_part(path).is_none()
 }
 
 fn looks_like_coordinates(name: &str) -> bool {
@@ -2249,6 +2261,9 @@ mod tests {
             quarantine_record("0081;65F00A10;Edge;opaque-id"),
             Some((0x65F00A10, "Edge".into()))
         );
+        assert!(!should_probe_general_metadata(Path::new("unknown.crdownload")));
+        assert!(!should_probe_general_metadata(Path::new("bundle.zip.part004")));
+        assert!(should_probe_general_metadata(Path::new("complete.zip")));
     }
 
     #[cfg(not(coverage))]
