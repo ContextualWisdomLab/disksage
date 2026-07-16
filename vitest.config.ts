@@ -13,6 +13,7 @@ export default defineConfig({
         "src/lib/fmt.ts",
         "src/lib/dupeGuard.ts",
         "src/lib/verdictBadge.ts",
+        "src/lib/viteHost.ts",
       ],
       reporter: ["text", "json", "json-summary"],
     },

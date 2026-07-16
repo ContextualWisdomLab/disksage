@@ -39,6 +39,46 @@ export interface DevArtifact {
   bytes: number;
   age_days: number;
 }
+export interface WorktreeCandidate {
+  repository_common_dir: string;
+  path: string;
+  head: string;
+  branch: string | null;
+  default_ref: string | null;
+  is_primary: boolean;
+  detached: boolean;
+  exists: boolean;
+  dirty: boolean | null;
+  locked_reason: string | null;
+  prunable_reason: string | null;
+  ahead: number | null;
+  behind: number | null;
+  merged_into_default: boolean | null;
+  last_activity_ms: number;
+  age_days: number;
+  allocated_bytes: number;
+  filesystem_scanned: boolean;
+  filesystem_scan_complete: boolean;
+  removal_eligible: boolean;
+  metadata_prune_eligible: boolean;
+  review_reasons: string[];
+}
+export interface WorktreeReport {
+  scanned_root: string;
+  generated_at_ms: number;
+  min_age_days: number;
+  search_max_depth: number;
+  repository_count: number;
+  worktrees: WorktreeCandidate[];
+  potentially_reclaimable_bytes: number;
+  scan_issues: WorktreeScanIssue[];
+  notices: string[];
+}
+export interface WorktreeScanIssue {
+  path: string;
+  operation: string;
+  reason: string;
+}
 export interface CleanResult {
   path: string;
   ok: boolean;
@@ -60,6 +100,8 @@ export interface DupeGroup {
 export const listCacheCandidates = () => invoke<CacheCandidate[]>("list_cache_candidates");
 export const listDevArtifacts = (root: string, minAgeDays = 30) =>
   invoke<DevArtifact[]>("list_dev_artifacts", { root, minAgeDays });
+export const listStaleWorktrees = (root: string, minAgeDays = 30) =>
+  invoke<WorktreeReport>("list_stale_worktrees", { root, minAgeDays });
 export const cleanPaths = (paths: string[]) => invoke<CleanResult[]>("clean_paths", { paths });
 export const expandCleanTargets = (dir: string) =>
   invoke<string[]>("expand_clean_targets", { dir });
