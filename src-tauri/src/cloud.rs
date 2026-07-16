@@ -2261,8 +2261,12 @@ mod tests {
             quarantine_record("0081;65F00A10;Edge;opaque-id"),
             Some((0x65F00A10, "Edge".into()))
         );
-        assert!(!should_probe_general_metadata(Path::new("unknown.crdownload")));
-        assert!(!should_probe_general_metadata(Path::new("bundle.zip.part004")));
+        assert!(!should_probe_general_metadata(Path::new(
+            "unknown.crdownload"
+        )));
+        assert!(!should_probe_general_metadata(Path::new(
+            "bundle.zip.part004"
+        )));
         assert!(should_probe_general_metadata(Path::new("complete.zip")));
     }
 
