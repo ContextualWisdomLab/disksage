@@ -379,9 +379,9 @@ pub fn approve_local_eviction(
         blockers.push("sync-evidence-id-missing".into());
     }
     match (evidence.kind, receipt.provider, &evidence.remote_content) {
-        (SyncEvidenceKind::ProviderNativeStatus, CloudProvider::Icloud, None) => {}
-        (SyncEvidenceKind::ProviderNativeStatus, _, _) => {
-            blockers.push("native-status-provider-unsupported".into());
+        (SyncEvidenceKind::ProviderNativeStatus, _, None) => {}
+        (SyncEvidenceKind::ProviderNativeStatus, _, Some(_)) => {
+            blockers.push("native-status-remote-content-unexpected".into());
         }
         (SyncEvidenceKind::ProviderApi, CloudProvider::Icloud, _) => {
             blockers.push("icloud-provider-api-unsupported".into());
@@ -1028,9 +1028,17 @@ mod tests {
 
         api_evidence.kind = SyncEvidenceKind::ProviderNativeStatus;
         api_evidence.remote_content = None;
+        assert!(approve_local_eviction(&provider_receipt, &api_evidence).is_ok());
+
+        api_evidence.remote_content = Some(RemoteContentProof {
+            object_id: "remote-id".into(),
+            revision: "revision-1".into(),
+            algorithm: RemoteChecksumAlgorithm::QuickXor,
+            checksum: "quick-xor".into(),
+        });
         assert!(approve_local_eviction(&provider_receipt, &api_evidence)
             .unwrap_err()
-            .contains(&"native-status-provider-unsupported".to_string()));
+            .contains(&"native-status-remote-content-unexpected".to_string()));
     }
 
     #[cfg(not(coverage))]

@@ -73,6 +73,133 @@ pub fn evidence_from_icloud_snapshot(
     })
 }
 
+const FILE_PROVIDER_CTL_EVALUATE: &str = "fileproviderctl:evaluate";
+
+/// Provider-neutral facts exposed by macOS File Provider for third-party cloud roots.
+///
+/// Acquisition of the facts is platform-specific, while this value and its decision policy stay
+/// deterministic and unit-testable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileProviderStatusSnapshot {
+    pub is_downloaded: bool,
+    pub is_downloading: bool,
+    pub is_most_recent_version_downloaded: bool,
+    pub is_uploaded: bool,
+    pub is_uploading: bool,
+    pub is_excluded_from_sync: bool,
+    pub is_sync_paused: bool,
+    pub observed_bytes: u64,
+    pub destination_blake3: String,
+}
+
+impl FileProviderStatusSnapshot {
+    fn is_local_current(&self) -> bool {
+        self.is_downloaded && !self.is_downloading && self.is_most_recent_version_downloaded
+    }
+
+    fn is_sync_complete(&self) -> bool {
+        self.is_local_current()
+            && self.is_uploaded
+            && !self.is_uploading
+            && !self.is_excluded_from_sync
+            && !self.is_sync_paused
+    }
+}
+
+fn file_provider_evidence_id(
+    receipt: &CloudCopyReceipt,
+    snapshot: &FileProviderStatusSnapshot,
+    confirmed_at_ms: u64,
+) -> String {
+    let mut hasher = blake3::Hasher::new();
+    for value in [
+        receipt.receipt_id.as_str(),
+        receipt.provider.as_str(),
+        FILE_PROVIDER_CTL_EVALUATE,
+        snapshot.destination_blake3.as_str(),
+    ] {
+        hasher.update(value.as_bytes());
+        hasher.update(&[0]);
+    }
+    hasher.update(&[
+        snapshot.is_downloaded as u8,
+        snapshot.is_downloading as u8,
+        snapshot.is_most_recent_version_downloaded as u8,
+        snapshot.is_uploaded as u8,
+        snapshot.is_uploading as u8,
+        snapshot.is_excluded_from_sync as u8,
+        snapshot.is_sync_paused as u8,
+    ]);
+    hasher.update(&snapshot.observed_bytes.to_le_bytes());
+    hasher.update(&confirmed_at_ms.to_le_bytes());
+    format!("file-provider:{}", hasher.finalize().to_hex())
+}
+
+/// Convert third-party File Provider status into hash-bound native evidence.
+pub fn evidence_from_file_provider_snapshot(
+    receipt: &CloudCopyReceipt,
+    snapshot: &FileProviderStatusSnapshot,
+    confirmed_at_ms: u64,
+) -> Result<ProviderSyncEvidence, String> {
+    if !matches!(
+        receipt.provider,
+        CloudProvider::Onedrive | CloudProvider::GoogleDrive
+    ) {
+        return Err("third-party-file-provider-receipt-required".into());
+    }
+    if receipt.destination.trim().is_empty() {
+        return Err("destination-missing".into());
+    }
+    Ok(ProviderSyncEvidence {
+        receipt_id: receipt.receipt_id.clone(),
+        provider: receipt.provider,
+        destination: receipt.destination.clone(),
+        observed_bytes: snapshot.observed_bytes,
+        destination_blake3: snapshot.destination_blake3.clone(),
+        confirmed_at_ms,
+        kind: SyncEvidenceKind::ProviderNativeStatus,
+        evidence_id: file_provider_evidence_id(receipt, snapshot, confirmed_at_ms),
+        sync_complete: snapshot.is_sync_complete(),
+        remote_content: None,
+    })
+}
+
+fn file_provider_status_bool(output: &str, key: &str) -> Result<bool, String> {
+    let prefix = format!("{key} = ");
+    let value = output
+        .lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix(&prefix))
+        .map(|value| value.trim().trim_end_matches(';'))
+        .ok_or_else(|| format!("file-provider-status-field-missing:{key}"))?;
+    match value {
+        "1" => Ok(true),
+        "0" => Ok(false),
+        _ => Err(format!("file-provider-status-field-invalid:{key}")),
+    }
+}
+
+pub fn parse_file_providerctl_snapshot(
+    output: &str,
+    observed_bytes: u64,
+    destination_blake3: &str,
+) -> Result<FileProviderStatusSnapshot, String> {
+    Ok(FileProviderStatusSnapshot {
+        is_downloaded: file_provider_status_bool(output, "isDownloaded")?,
+        is_downloading: file_provider_status_bool(output, "isDownloading")?,
+        is_most_recent_version_downloaded: file_provider_status_bool(
+            output,
+            "isMostRecentVersionDownloaded",
+        )?,
+        is_uploaded: file_provider_status_bool(output, "isUploaded")?,
+        is_uploading: file_provider_status_bool(output, "isUploading")?,
+        is_excluded_from_sync: file_provider_status_bool(output, "isExcludedFromSync")?,
+        is_sync_paused: file_provider_status_bool(output, "isSyncPaused")?,
+        observed_bytes,
+        destination_blake3: destination_blake3.into(),
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderApiSnapshot {
     pub provider: CloudProvider,
@@ -323,6 +450,123 @@ fn hash_file(path: &std::path::Path) -> Result<String, String> {
     Ok(hasher.finalize().to_hex().to_string())
 }
 
+#[cfg(all(target_os = "macos", not(coverage)))]
+fn file_providerctl_status(path: &str) -> Result<String, String> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    const TIMEOUT: Duration = Duration::from_secs(5);
+    const OUTPUT_LIMIT: u64 = 256 * 1_024;
+
+    let mut child = Command::new("/usr/bin/fileproviderctl")
+        .arg("evaluate")
+        .arg(path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| "file-provider-status-command-unavailable".to_string())?;
+    let deadline = Instant::now() + TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("file-provider-status-command-timeout".into());
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("file-provider-status-command-wait-failed".into());
+            }
+        }
+    };
+    let mut output = Vec::new();
+    child
+        .stdout
+        .take()
+        .ok_or_else(|| "file-provider-status-output-missing".to_string())?
+        .take(OUTPUT_LIMIT + 1)
+        .read_to_end(&mut output)
+        .map_err(|_| "file-provider-status-output-read-failed".to_string())?;
+    if !status.success() {
+        return Err("file-provider-status-command-failed".into());
+    }
+    if output.len() as u64 > OUTPUT_LIMIT {
+        return Err("file-provider-status-output-too-large".into());
+    }
+    String::from_utf8(output).map_err(|_| "file-provider-status-output-not-utf8".into())
+}
+
+/// Read macOS File Provider status for a OneDrive or Google Drive destination and bind it to the
+/// verified local copy. This never hydrates, evicts, uploads, or mutates the file.
+#[cfg(all(target_os = "macos", not(coverage)))]
+pub fn collect_file_provider_sync_evidence(
+    receipt: &CloudCopyReceipt,
+    confirmed_at_ms: u64,
+) -> Result<ProviderSyncEvidence, String> {
+    use std::os::unix::fs::MetadataExt;
+    use std::path::Path;
+
+    if !matches!(
+        receipt.provider,
+        CloudProvider::Onedrive | CloudProvider::GoogleDrive
+    ) {
+        return Err("third-party-file-provider-receipt-required".into());
+    }
+    let destination = Path::new(&receipt.destination);
+    let metadata = std::fs::symlink_metadata(destination).map_err(|error| error.to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("file-provider-destination-must-be-regular-file".into());
+    }
+    let before_modified = metadata.modified().map_err(|error| error.to_string())?;
+    let path = destination
+        .to_str()
+        .ok_or_else(|| "file-provider-destination-not-unicode".to_string())?;
+    let before = parse_file_providerctl_snapshot(
+        &file_providerctl_status(path)?,
+        metadata.len(),
+        "hash-pending",
+    )?;
+    if !before.is_local_current() {
+        return Err("file-provider-destination-not-local-current".into());
+    }
+
+    // Hash only after File Provider says the latest version is already local, avoiding hydration.
+    let destination_hash = hash_file(destination)?;
+    if metadata.len() != receipt.bytes || destination_hash != receipt.blake3 {
+        return Err("file-provider-destination-content-mismatch".into());
+    }
+    let after_status = file_providerctl_status(path)?;
+    let after = std::fs::symlink_metadata(destination).map_err(|error| error.to_string())?;
+    if after.file_type().is_symlink()
+        || !after.is_file()
+        || after.len() != metadata.len()
+        || after.dev() != metadata.dev()
+        || after.ino() != metadata.ino()
+        || after.modified().map_err(|error| error.to_string())? != before_modified
+    {
+        return Err("file-provider-destination-changed-during-status-check".into());
+    }
+    let snapshot = parse_file_providerctl_snapshot(&after_status, after.len(), &destination_hash)?;
+    if !snapshot.is_local_current() {
+        return Err("file-provider-destination-status-changed-during-check".into());
+    }
+    evidence_from_file_provider_snapshot(receipt, &snapshot, confirmed_at_ms)
+}
+
+#[cfg(any(not(target_os = "macos"), coverage))]
+pub fn collect_file_provider_sync_evidence(
+    _receipt: &CloudCopyReceipt,
+    _confirmed_at_ms: u64,
+) -> Result<ProviderSyncEvidence, String> {
+    Err("file-provider-native-status-unsupported-platform".into())
+}
+
 /// Read Apple's per-file ubiquitous-item flags and produce provider-native evidence.
 ///
 /// This function is read-only. It does not start a download, evict a local file, or mutate the
@@ -439,6 +683,63 @@ mod tests {
         assert!(evidence.evidence_id.starts_with("foundation:"));
         assert_eq!(evidence.evidence_id.len(), 75);
         assert_eq!(evidence.remote_content, None);
+    }
+
+    fn uploaded_file_provider_output() -> &'static str {
+        r#"
+            isDownloaded = 1;
+            isDownloading = 0;
+            isMostRecentVersionDownloaded = 1;
+            isUploaded = 1;
+            isUploading = 0;
+            isExcludedFromSync = 0;
+            isSyncPaused = 0;
+        "#
+    }
+
+    #[test]
+    fn third_party_file_provider_status_becomes_complete_native_evidence() {
+        let snapshot =
+            parse_file_providerctl_snapshot(uploaded_file_provider_output(), 42, "content-hash")
+                .unwrap();
+        assert!(snapshot.is_local_current());
+        assert!(snapshot.is_sync_complete());
+
+        for provider in [CloudProvider::Onedrive, CloudProvider::GoogleDrive] {
+            let evidence =
+                evidence_from_file_provider_snapshot(&receipt(provider), &snapshot, 30).unwrap();
+            assert!(evidence.sync_complete);
+            assert_eq!(evidence.provider, provider);
+            assert_eq!(evidence.kind, SyncEvidenceKind::ProviderNativeStatus);
+            assert!(evidence.evidence_id.starts_with("file-provider:"));
+            assert_eq!(evidence.remote_content, None);
+        }
+        assert_eq!(
+            evidence_from_file_provider_snapshot(&receipt(CloudProvider::Icloud), &snapshot, 30,)
+                .unwrap_err(),
+            "third-party-file-provider-receipt-required"
+        );
+    }
+
+    #[test]
+    fn file_provider_status_fails_closed_on_upload_locality_or_policy_flags() {
+        for (field, replacement) in [
+            ("isDownloaded = 1", "isDownloaded = 0"),
+            ("isDownloading = 0", "isDownloading = 1"),
+            (
+                "isMostRecentVersionDownloaded = 1",
+                "isMostRecentVersionDownloaded = 0",
+            ),
+            ("isUploaded = 1", "isUploaded = 0"),
+            ("isUploading = 0", "isUploading = 1"),
+            ("isExcludedFromSync = 0", "isExcludedFromSync = 1"),
+            ("isSyncPaused = 0", "isSyncPaused = 1"),
+        ] {
+            let output = uploaded_file_provider_output().replace(field, replacement);
+            let snapshot = parse_file_providerctl_snapshot(&output, 42, "content-hash").unwrap();
+            assert!(!snapshot.is_sync_complete(), "{field}");
+        }
+        assert!(parse_file_providerctl_snapshot("isUploaded = maybe;", 42, "hash").is_err());
     }
 
     fn api_snapshot(provider: CloudProvider, checksum: &str) -> ProviderApiSnapshot {

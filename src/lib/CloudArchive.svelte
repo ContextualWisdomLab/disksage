@@ -136,14 +136,13 @@
   async function attestCopy() {
     if (!copied) return;
     const isIcloud = copied.receipt.provider === "icloud";
-    if (!isIcloud && (!objectId.trim() || !connectionForCopiedReceipt())) return;
     attesting = true;
     loadError = "";
     attestation = null;
     try {
       attestation = await api.attestCloudCopy(
         copied.receipt.receipt_id,
-        isIcloud ? null : objectId.trim(),
+        isIcloud ? null : objectId.trim() || null,
       );
     } catch (e) {
       loadError = String(e);
@@ -164,19 +163,6 @@
       && connection.cloud_root_id === root.id
       && connection.cloud_root_path === root.path
     ) ?? null;
-  }
-
-  function connectionForCopiedReceipt(): api.OAuthConnection | null {
-    if (!copied || copied.receipt.provider === "icloud") return null;
-    const destination = copied.receipt.destination;
-    return connections
-      .filter((connection) => {
-        if (connection.provider !== copied?.receipt.provider) return false;
-        const separator = connection.cloud_root_path.includes("\\") ? "\\" : "/";
-        return destination === connection.cloud_root_path
-          || destination.startsWith(`${connection.cloud_root_path}${separator}`);
-      })
-      .sort((left, right) => right.cloud_root_path.length - left.cloud_root_path.length)[0] ?? null;
   }
 
   async function connectProvider() {
@@ -312,21 +298,22 @@
         {#if copied.receipt.provider !== "icloud"}
           <div class="provider-auth">
             <label>
-              {copied.receipt.provider === "onedrive" ? "OneDrive item ID" : "Google Drive file ID"}
+              {copied.receipt.provider === "onedrive" ? "OneDrive item ID (선택)" : "Google Drive file ID (선택)"}
               <input type="text" bind:value={objectId} autocomplete="off" disabled={attesting} />
             </label>
           </div>
-          <p class="muted">access token은 OS 보안 저장소의 refresh token으로 Rust 내부에서 한 번만 갱신하며 UI·설정·영수증에 노출하지 않습니다.</p>
+          <p class="muted">먼저 macOS File Provider의 업로드·최신 버전 메타데이터를 확인합니다. item/file ID를 입력하면 네이티브 증거가 불완전할 때만 OAuth API 체크섬 검증으로 보완합니다.</p>
+          <p class="muted">API 보완 시 access token은 OS 보안 저장소의 refresh token으로 Rust 내부에서 한 번만 갱신하며 UI·설정·영수증에 노출하지 않습니다.</p>
         {/if}
         <button
           onclick={attestCopy}
-          disabled={attesting || (copied.receipt.provider !== "icloud" && (!objectId.trim() || !connectionForCopiedReceipt()))}
+          disabled={attesting}
         >
-          {attesting ? "검증 중…" : "클라우드 업로드 증거 확인"}
+          {attesting ? "검증 중…" : "클라우드 업로드 상태·콘텐츠 확인"}
         </button>
         {#if attestation}
           {#if attestation.permit}
-            <p class="safe">업로드·원격 체크섬 검증 완료. 로컬 제거 허가 증거가 생성되었지만 파일은 그대로 보존됩니다.</p>
+            <p class="safe">업로드 상태와 복사 콘텐츠 검증 완료. 로컬 제거 허가 증거가 생성되었지만 파일은 그대로 보존됩니다.</p>
           {:else}
             <p class="warning">아직 제거 불가: {attestation.blockers.join(", ")}</p>
           {/if}
