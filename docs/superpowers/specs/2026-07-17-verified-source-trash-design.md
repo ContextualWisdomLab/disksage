@@ -16,6 +16,25 @@ The headless action requires all of the following in one invocation:
 
 Failure is closed and leaves the source untouched.
 
+## Durable lineage receipt
+
+Receipt version 3 seals the metadata evidence that justified the archive destination before any
+source can be trashed. The receipt carries an immutable `CloudLineageSnapshot` containing the
+candidate and review fingerprints, optional review-decision id, disposition and timestamp, archive
+kind, embedded production time and confidence, source-relative context, title, authors, contextual
+fields, duration, dataset profile, and every bounded metadata-evidence item. A separate lineage
+fingerprint hashes the canonical snapshot and is itself included in the receipt id.
+
+Receipt validation fails closed when the lineage is missing, changed, or belongs to another
+candidate. Existing version 2 receipts remain readable and integrity-valid with their original id
+algorithm so already verified provider copies do not need to be hydrated or recopied. Version 2
+receipts cannot claim that they contain the new lineage snapshot.
+
+Because lineage can contain sensitive local context, the writer rejects symlink receipt
+directories, enforces the existing 64 KiB receipt bound before creation, and uses owner-read-only
+`0400` permissions on Unix. A write failure rolls back the just-created cloud copy and never touches
+the source.
+
 ## Crash-safe sequence
 
 DiskSage writes a bounded, read-only, receipt-bound intent with `create_new`, flushes it, and fsyncs its directory. It then atomically renames the source within its existing directory to a deterministic hidden staging path. The staged file is verified again before the existing trash-only safety API is called.

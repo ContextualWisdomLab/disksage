@@ -778,6 +778,8 @@ mod tests {
             copied_at_ms: 2,
             copy_verified: true,
             provider_sync_confirmed: false,
+            lineage_fingerprint: None,
+            lineage: None,
         };
         let path = temp.path().join(format!("{}.json", receipt.receipt_id));
         std::fs::write(&path, serde_json::to_vec(&receipt).unwrap()).unwrap();

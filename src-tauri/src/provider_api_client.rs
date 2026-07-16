@@ -282,7 +282,7 @@ pub fn collect_authenticated_provider_api_evidence(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cloud_transfer::RECEIPT_VERSION;
+    use crate::cloud_transfer::LEGACY_RECEIPT_VERSION;
     #[cfg(not(coverage))]
     use std::cell::Cell;
     #[cfg(not(coverage))]
@@ -291,7 +291,7 @@ mod tests {
     fn receipt(provider: CloudProvider, destination: &Path, bytes: &[u8]) -> CloudCopyReceipt {
         let digests = crate::content_digest::digest_bytes(bytes);
         CloudCopyReceipt {
-            version: RECEIPT_VERSION,
+            version: LEGACY_RECEIPT_VERSION,
             receipt_id: "receipt-id".into(),
             candidate_fingerprint: "metadata-fingerprint".into(),
             provider,
@@ -305,6 +305,8 @@ mod tests {
             copied_at_ms: 20,
             copy_verified: true,
             provider_sync_confirmed: false,
+            lineage_fingerprint: None,
+            lineage: None,
         }
     }
 
@@ -553,7 +555,7 @@ mod tests {
     fn json_evidence_rejects_wrong_provider_or_local_digest() {
         let digests = crate::content_digest::digest_bytes(b"hello-cloud");
         let receipt = CloudCopyReceipt {
-            version: RECEIPT_VERSION,
+            version: LEGACY_RECEIPT_VERSION,
             receipt_id: "receipt-id".into(),
             candidate_fingerprint: "fingerprint".into(),
             provider: CloudProvider::Onedrive,
@@ -567,6 +569,8 @@ mod tests {
             copied_at_ms: 2,
             copy_verified: true,
             provider_sync_confirmed: false,
+            lineage_fingerprint: None,
+            lineage: None,
         };
         let google = ProviderRemoteLocator::GoogleDriveFileId("google-id".into());
         assert_eq!(

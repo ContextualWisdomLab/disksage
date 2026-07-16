@@ -4,10 +4,12 @@
 //! provider-native synchronization attestation matches the immutable copy receipt. This module
 //! produces an eviction permit but intentionally exposes no source deletion API.
 
-use crate::cloud::{candidate_review_fingerprint, CloudCandidate, CloudProvider, CloudRoot};
-use crate::cloud_review::{
-    validate_decision, CloudReviewDecision, CloudReviewDisposition,
+use crate::cloud::{
+    candidate_review_fingerprint, ArchiveKind, CloudCandidate, CloudProvider, CloudRoot,
+    MetadataEvidence,
 };
+use crate::cloud_review::{validate_decision, CloudReviewDecision, CloudReviewDisposition};
+use crate::dataset_metadata::DatasetProfile;
 use std::path::Path;
 
 #[cfg(not(coverage))]
@@ -17,7 +19,8 @@ use std::io::{Read, Write};
 #[cfg(not(coverage))]
 use std::path::PathBuf;
 
-pub const RECEIPT_VERSION: u32 = 2;
+pub const LEGACY_RECEIPT_VERSION: u32 = 2;
+pub const RECEIPT_VERSION: u32 = 3;
 #[cfg(not(coverage))]
 const MAX_RECEIPT_BYTES: u64 = 64 * 1024;
 
@@ -44,6 +47,32 @@ pub struct RemoteContentProof {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CloudLineageSnapshot {
+    pub candidate_fingerprint: String,
+    pub review_fingerprint: String,
+    pub review_decision_id: Option<String>,
+    pub review_disposition: Option<CloudReviewDisposition>,
+    pub reviewed_at_ms: Option<u64>,
+    pub kind: ArchiveKind,
+    pub created_ms: u64,
+    pub modified_ms: u64,
+    pub production_time_ms: u64,
+    pub production_time_source: String,
+    pub production_time_confidence: String,
+    pub source_root: String,
+    pub relative_path: String,
+    pub source_context: String,
+    pub requires_review: bool,
+    pub review_reasons: Vec<String>,
+    pub content_title: Option<String>,
+    pub content_authors: Vec<String>,
+    pub content_context: Vec<String>,
+    pub duration_ms: Option<u64>,
+    pub dataset_profile: Option<DatasetProfile>,
+    pub metadata_evidence: Vec<MetadataEvidence>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CloudCopyReceipt {
     pub version: u32,
     pub receipt_id: String,
@@ -59,6 +88,10 @@ pub struct CloudCopyReceipt {
     pub copied_at_ms: u64,
     pub copy_verified: bool,
     pub provider_sync_confirmed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lineage_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lineage: Option<CloudLineageSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -130,9 +163,7 @@ pub fn candidate_blockers_with_review(
             Some(decision) if validate_decision(decision).is_err() => {
                 blockers.push("review-decision-invalid".into());
             }
-            Some(decision)
-                if decision.candidate_fingerprint != candidate.metadata_fingerprint =>
-            {
+            Some(decision) if decision.candidate_fingerprint != candidate.metadata_fingerprint => {
                 blockers.push("review-decision-candidate-mismatch".into());
             }
             Some(decision) if decision.review_fingerprint != candidate.review_fingerprint => {
@@ -193,6 +224,7 @@ pub fn candidate_blockers(candidate: &CloudCandidate, cloud_root: &CloudRoot) ->
 }
 
 fn receipt_id_for(
+    version: u32,
     candidate_fingerprint: &str,
     provider: CloudProvider,
     source: &str,
@@ -205,9 +237,10 @@ fn receipt_id_for(
     copied_at_ms: u64,
     copy_verified: bool,
     provider_sync_confirmed: bool,
+    lineage_fingerprint: Option<&str>,
 ) -> String {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(&RECEIPT_VERSION.to_le_bytes());
+    hasher.update(&version.to_le_bytes());
     hasher.update(candidate_fingerprint.as_bytes());
     hasher.update(&[0]);
     hasher.update(provider.as_str().as_bytes());
@@ -223,12 +256,57 @@ fn receipt_id_for(
     hasher.update(&source_modified_ms.to_le_bytes());
     hasher.update(&copied_at_ms.to_le_bytes());
     hasher.update(&[copy_verified as u8, provider_sync_confirmed as u8]);
+    if version >= RECEIPT_VERSION {
+        hasher.update(b"\0lineage\0");
+        hasher.update(lineage_fingerprint.unwrap_or_default().as_bytes());
+    }
     hasher.finalize().to_hex().to_string()
+}
+
+fn lineage_snapshot(
+    candidate: &CloudCandidate,
+    review_decision: Option<&CloudReviewDecision>,
+) -> CloudLineageSnapshot {
+    CloudLineageSnapshot {
+        candidate_fingerprint: candidate.metadata_fingerprint.clone(),
+        review_fingerprint: candidate.review_fingerprint.clone(),
+        review_decision_id: review_decision.map(|decision| decision.decision_id.clone()),
+        review_disposition: review_decision.map(|decision| decision.disposition),
+        reviewed_at_ms: review_decision.map(|decision| decision.reviewed_at_ms),
+        kind: candidate.kind,
+        created_ms: candidate.created_ms,
+        modified_ms: candidate.modified_ms,
+        production_time_ms: candidate.production_time_ms,
+        production_time_source: candidate.production_time_source.clone(),
+        production_time_confidence: candidate.production_time_confidence.clone(),
+        source_root: candidate.source_root.clone(),
+        relative_path: candidate.relative_path.clone(),
+        source_context: candidate.source_context.clone(),
+        requires_review: candidate.requires_review,
+        review_reasons: candidate.review_reasons.clone(),
+        content_title: candidate.content_title.clone(),
+        content_authors: candidate.content_authors.clone(),
+        content_context: candidate.content_context.clone(),
+        duration_ms: candidate.duration_ms,
+        dataset_profile: candidate.dataset_profile.clone(),
+        metadata_evidence: candidate.metadata_evidence.clone(),
+    }
+}
+
+fn lineage_fingerprint(snapshot: &CloudLineageSnapshot) -> Result<String, String> {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage-cloud-lineage-v1\0");
+    let encoded = serde_json::to_vec(snapshot)
+        .map_err(|_| "receipt-lineage-serialization-failed".to_string())?;
+    hasher.update(&(encoded.len() as u64).to_le_bytes());
+    hasher.update(&encoded);
+    Ok(hasher.finalize().to_hex().to_string())
 }
 
 fn receipt_integrity_valid(receipt: &CloudCopyReceipt) -> bool {
     receipt.receipt_id
         == receipt_id_for(
+            receipt.version,
             &receipt.candidate_fingerprint,
             receipt.provider,
             &receipt.source,
@@ -241,6 +319,7 @@ fn receipt_integrity_valid(receipt: &CloudCopyReceipt) -> bool {
             receipt.copied_at_ms,
             receipt.copy_verified,
             receipt.provider_sync_confirmed,
+            receipt.lineage_fingerprint.as_deref(),
         )
 }
 
@@ -250,8 +329,55 @@ fn receipt_integrity_valid(receipt: &CloudCopyReceipt) -> bool {
 /// from trusting receipt-controlled paths before the receipt's structure and integrity pass.
 pub fn receipt_blockers(receipt: &CloudCopyReceipt) -> Vec<String> {
     let mut blockers = Vec::new();
-    if receipt.version != RECEIPT_VERSION {
+    if !matches!(receipt.version, LEGACY_RECEIPT_VERSION | RECEIPT_VERSION) {
         blockers.push("receipt-version-unsupported".into());
+    }
+    match receipt.version {
+        LEGACY_RECEIPT_VERSION => {
+            if receipt.lineage.is_some() || receipt.lineage_fingerprint.is_some() {
+                blockers.push("legacy-receipt-lineage-unexpected".into());
+            }
+        }
+        RECEIPT_VERSION => match (&receipt.lineage, &receipt.lineage_fingerprint) {
+            (Some(lineage), Some(fingerprint)) => {
+                if lineage.candidate_fingerprint != receipt.candidate_fingerprint {
+                    blockers.push("receipt-lineage-candidate-mismatch".into());
+                }
+                if lineage.modified_ms != receipt.source_modified_ms {
+                    blockers.push("receipt-lineage-modified-time-mismatch".into());
+                }
+                if lineage.review_fingerprint.len() != 64
+                    || !lineage
+                        .review_fingerprint
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit())
+                {
+                    blockers.push("receipt-lineage-review-fingerprint-invalid".into());
+                }
+                let complete_review = lineage.review_decision_id.is_some()
+                    && lineage.review_disposition.is_some()
+                    && lineage.reviewed_at_ms.is_some();
+                let empty_review = lineage.review_decision_id.is_none()
+                    && lineage.review_disposition.is_none()
+                    && lineage.reviewed_at_ms.is_none();
+                if (lineage.requires_review && !complete_review)
+                    || (!lineage.requires_review && !empty_review)
+                {
+                    blockers.push("receipt-lineage-review-decision-mismatch".into());
+                }
+                let lineage_matches = lineage_fingerprint(lineage)
+                    .map(|observed| observed == *fingerprint)
+                    .unwrap_or(false);
+                if fingerprint.len() != 64
+                    || !fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    || !lineage_matches
+                {
+                    blockers.push("receipt-lineage-integrity-mismatch".into());
+                }
+            }
+            _ => blockers.push("receipt-lineage-missing".into()),
+        },
+        _ => {}
     }
     if !receipt_integrity_valid(receipt) {
         blockers.push("receipt-integrity-mismatch".into());
@@ -277,10 +403,7 @@ pub fn receipt_blockers(receipt: &CloudCopyReceipt) -> Vec<String> {
 }
 
 #[cfg(not(coverage))]
-fn same_receipt_file_identity(
-    expected: &std::fs::Metadata,
-    observed: &std::fs::Metadata,
-) -> bool {
+fn same_receipt_file_identity(expected: &std::fs::Metadata, observed: &std::fs::Metadata) -> bool {
     let common = expected.file_type().is_file()
         && observed.file_type().is_file()
         && !expected.file_type().is_symlink()
@@ -552,8 +675,16 @@ fn write_immutable_receipt(
     receipt_dir: &Path,
 ) -> Result<PathBuf, String> {
     std::fs::create_dir_all(receipt_dir).map_err(|error| error.to_string())?;
+    let directory_metadata = std::fs::symlink_metadata(receipt_dir)
+        .map_err(|_| "receipt-directory-metadata-failed".to_string())?;
+    if !directory_metadata.is_dir() || directory_metadata.file_type().is_symlink() {
+        return Err("receipt-directory-unsafe".into());
+    }
     let path = receipt_dir.join(format!("{}.json", receipt.receipt_id));
     let encoded = serde_json::to_vec_pretty(receipt).map_err(|error| error.to_string())?;
+    if encoded.len() as u64 > MAX_RECEIPT_BYTES {
+        return Err("receipt-too-large".into());
+    }
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -567,6 +698,12 @@ fn write_immutable_receipt(
             .metadata()
             .map_err(|error| error.to_string())?
             .permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            permissions.set_mode(0o400);
+        }
+        #[cfg(not(unix))]
         permissions.set_readonly(true);
         std::fs::set_permissions(&path, permissions).map_err(|error| error.to_string())?;
         #[cfg(unix)]
@@ -611,6 +748,8 @@ pub fn prepare_cloud_copy_with_review(
         return Err(blockers.join(","));
     }
     let (_, hashes) = copy_and_verify(candidate, cloud_root)?;
+    let lineage = lineage_snapshot(candidate, review_decision);
+    let lineage_fingerprint = lineage_fingerprint(&lineage)?;
     let mut receipt = CloudCopyReceipt {
         version: RECEIPT_VERSION,
         receipt_id: String::new(),
@@ -626,8 +765,11 @@ pub fn prepare_cloud_copy_with_review(
         copied_at_ms,
         copy_verified: true,
         provider_sync_confirmed: false,
+        lineage_fingerprint: Some(lineage_fingerprint),
+        lineage: Some(lineage),
     };
     receipt.receipt_id = receipt_id_for(
+        receipt.version,
         &receipt.candidate_fingerprint,
         receipt.provider,
         &receipt.source,
@@ -640,6 +782,7 @@ pub fn prepare_cloud_copy_with_review(
         receipt.copied_at_ms,
         receipt.copy_verified,
         receipt.provider_sync_confirmed,
+        receipt.lineage_fingerprint.as_deref(),
     );
     match write_immutable_receipt(&receipt, receipt_dir) {
         Ok(path) => Ok((receipt, path)),
@@ -719,10 +862,13 @@ mod tests {
     }
 
     fn receipt() -> CloudCopyReceipt {
+        let candidate = candidate();
+        let lineage = lineage_snapshot(&candidate, None);
+        let lineage_fingerprint = lineage_fingerprint(&lineage).unwrap();
         let mut receipt = CloudCopyReceipt {
             version: RECEIPT_VERSION,
             receipt_id: String::new(),
-            candidate_fingerprint: "metadata-fingerprint".into(),
+            candidate_fingerprint: candidate.metadata_fingerprint,
             provider: CloudProvider::Icloud,
             source: SOURCE.into(),
             destination: DESTINATION.into(),
@@ -734,8 +880,11 @@ mod tests {
             copied_at_ms: 100,
             copy_verified: true,
             provider_sync_confirmed: false,
+            lineage_fingerprint: Some(lineage_fingerprint),
+            lineage: Some(lineage),
         };
         receipt.receipt_id = receipt_id_for(
+            receipt.version,
             &receipt.candidate_fingerprint,
             receipt.provider,
             &receipt.source,
@@ -748,6 +897,7 @@ mod tests {
             receipt.copied_at_ms,
             receipt.copy_verified,
             receipt.provider_sync_confirmed,
+            receipt.lineage_fingerprint.as_deref(),
         );
         receipt
     }
@@ -756,6 +906,7 @@ mod tests {
         let mut provider_receipt = receipt();
         provider_receipt.provider = provider;
         provider_receipt.receipt_id = receipt_id_for(
+            provider_receipt.version,
             &provider_receipt.candidate_fingerprint,
             provider_receipt.provider,
             &provider_receipt.source,
@@ -768,8 +919,33 @@ mod tests {
             provider_receipt.copied_at_ms,
             provider_receipt.copy_verified,
             provider_receipt.provider_sync_confirmed,
+            provider_receipt.lineage_fingerprint.as_deref(),
         );
         provider_receipt
+    }
+
+    fn legacy_receipt() -> CloudCopyReceipt {
+        let mut legacy = receipt();
+        legacy.version = LEGACY_RECEIPT_VERSION;
+        legacy.lineage_fingerprint = None;
+        legacy.lineage = None;
+        legacy.receipt_id = receipt_id_for(
+            legacy.version,
+            &legacy.candidate_fingerprint,
+            legacy.provider,
+            &legacy.source,
+            &legacy.destination,
+            legacy.bytes,
+            &legacy.blake3,
+            &legacy.sha256,
+            &legacy.quick_xor_base64,
+            legacy.source_modified_ms,
+            legacy.copied_at_ms,
+            legacy.copy_verified,
+            legacy.provider_sync_confirmed,
+            None,
+        );
+        legacy
     }
 
     fn evidence() -> ProviderSyncEvidence {
@@ -837,61 +1013,110 @@ mod tests {
     }
 
     #[test]
+    fn receipt_lineage_is_integrity_bound_and_legacy_v2_remains_valid() {
+        let current = receipt();
+        assert!(receipt_blockers(&current).is_empty());
+        let lineage = current.lineage.as_ref().unwrap();
+        assert_eq!(lineage.candidate_fingerprint, current.candidate_fingerprint);
+        assert_eq!(
+            lineage.production_time_source,
+            "embedded:exiftool:CreateDate"
+        );
+        assert_eq!(lineage.content_title.as_deref(), Some("Report"));
+        assert_eq!(lineage.metadata_evidence.len(), 1);
+
+        let mut tampered = current.clone();
+        tampered.lineage.as_mut().unwrap().content_title = Some("Tampered".into());
+        let blockers = receipt_blockers(&tampered);
+        assert!(blockers.contains(&"receipt-lineage-integrity-mismatch".to_string()));
+
+        let mut inconsistent_review = current.clone();
+        inconsistent_review.lineage.as_mut().unwrap().reviewed_at_ms = Some(10);
+        assert!(receipt_blockers(&inconsistent_review)
+            .contains(&"receipt-lineage-review-decision-mismatch".to_string()));
+
+        let mut inconsistent_time = current.clone();
+        inconsistent_time.lineage.as_mut().unwrap().modified_ms += 1;
+        assert!(receipt_blockers(&inconsistent_time)
+            .contains(&"receipt-lineage-modified-time-mismatch".to_string()));
+
+        let mut missing = current;
+        missing.lineage = None;
+        assert!(receipt_blockers(&missing).contains(&"receipt-lineage-missing".to_string()));
+
+        let legacy = legacy_receipt();
+        assert!(receipt_blockers(&legacy).is_empty());
+        let encoded = serde_json::to_vec(&legacy).unwrap();
+        let decoded: CloudCopyReceipt = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded, legacy);
+        assert!(!String::from_utf8(encoded).unwrap().contains("lineage"));
+    }
+
+    #[test]
     fn operator_decision_clears_only_the_matching_review_gate() {
         let mut reviewed = candidate();
         reviewed.metadata_fingerprint = "a".repeat(64);
         reviewed.requires_review = true;
         reviewed.review_reasons = vec!["embedded-metadata-probe-incomplete".into()];
         reviewed.review_fingerprint = crate::cloud::candidate_review_fingerprint(&reviewed);
-        let approved = crate::cloud_review::create_decision(
-            &reviewed,
-            CloudReviewDisposition::Approved,
-            10,
-        )
-        .unwrap();
+        let approved =
+            crate::cloud_review::create_decision(&reviewed, CloudReviewDisposition::Approved, 10)
+                .unwrap();
         assert!(candidate_blockers_with_review(&reviewed, &root(), Some(&approved)).is_empty());
+        let reviewed_lineage = lineage_snapshot(&reviewed, Some(&approved));
+        assert_eq!(
+            reviewed_lineage.review_decision_id.as_deref(),
+            Some(approved.decision_id.as_str())
+        );
+        assert_eq!(
+            reviewed_lineage.review_disposition,
+            Some(CloudReviewDisposition::Approved)
+        );
+        assert_eq!(reviewed_lineage.reviewed_at_ms, Some(10));
+        assert_eq!(
+            reviewed_lineage.review_fingerprint,
+            reviewed.review_fingerprint
+        );
 
-        let held = crate::cloud_review::create_decision(
-            &reviewed,
-            CloudReviewDisposition::Held,
-            11,
-        )
-        .unwrap();
-        assert!(candidate_blockers_with_review(&reviewed, &root(), Some(&held))
-            .contains(&"review-held".to_string()));
+        let held =
+            crate::cloud_review::create_decision(&reviewed, CloudReviewDisposition::Held, 11)
+                .unwrap();
+        assert!(
+            candidate_blockers_with_review(&reviewed, &root(), Some(&held))
+                .contains(&"review-held".to_string())
+        );
 
         let mut changed = reviewed.clone();
         changed.review_reasons.push("new-warning".into());
         changed.review_fingerprint = crate::cloud::candidate_review_fingerprint(&changed);
-        assert!(candidate_blockers_with_review(&changed, &root(), Some(&approved))
-            .contains(&"review-decision-stale".to_string()));
+        assert!(
+            candidate_blockers_with_review(&changed, &root(), Some(&approved))
+                .contains(&"review-decision-stale".to_string())
+        );
 
         let mut tampered = reviewed.clone();
         tampered.content_title = Some("Changed after review".into());
-        assert!(candidate_blockers_with_review(&tampered, &root(), Some(&approved))
-            .contains(&"review-fingerprint-mismatch".to_string()));
+        assert!(
+            candidate_blockers_with_review(&tampered, &root(), Some(&approved))
+                .contains(&"review-fingerprint-mismatch".to_string())
+        );
 
         reviewed.production_time_source = "filename-date".into();
         reviewed.production_time_confidence = "low".into();
         reviewed.review_fingerprint = crate::cloud::candidate_review_fingerprint(&reviewed);
-        let filename_approval = crate::cloud_review::create_decision(
-            &reviewed,
-            CloudReviewDisposition::Approved,
-            12,
-        )
-        .unwrap();
-        assert!(candidate_blockers_with_review(&reviewed, &root(), Some(&filename_approval))
-            .is_empty());
+        let filename_approval =
+            crate::cloud_review::create_decision(&reviewed, CloudReviewDisposition::Approved, 12)
+                .unwrap();
+        assert!(
+            candidate_blockers_with_review(&reviewed, &root(), Some(&filename_approval)).is_empty()
+        );
 
         assert!(candidate_blockers_with_review(&reviewed, &root(), None)
             .contains(&"embedded-high-confidence-date-required".to_string()));
 
-        let filename_hold = crate::cloud_review::create_decision(
-            &reviewed,
-            CloudReviewDisposition::Held,
-            13,
-        )
-        .unwrap();
+        let filename_hold =
+            crate::cloud_review::create_decision(&reviewed, CloudReviewDisposition::Held, 13)
+                .unwrap();
         let held_blockers =
             candidate_blockers_with_review(&reviewed, &root(), Some(&filename_hold));
         assert!(held_blockers.contains(&"review-held".to_string()));
@@ -1071,8 +1296,28 @@ mod tests {
         assert_eq!(std::fs::read(&destination).unwrap(), b"hello-cloud");
         assert_eq!(copy_receipt.blake3, hash_file(&source).unwrap().blake3);
         assert!(receipt_path.metadata().unwrap().permissions().readonly());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                receipt_path.metadata().unwrap().permissions().mode() & 0o777,
+                0o400
+            );
+        }
         let persisted = read_immutable_receipt(&receipt_path).unwrap();
         assert_eq!(persisted, copy_receipt);
+        let lineage = persisted.lineage.as_ref().unwrap();
+        assert_eq!(persisted.version, RECEIPT_VERSION);
+        assert_eq!(
+            lineage.review_fingerprint,
+            test_candidate.review_fingerprint
+        );
+        assert_eq!(
+            lineage.production_time_ms,
+            test_candidate.production_time_ms
+        );
+        assert_eq!(lineage.metadata_evidence, test_candidate.metadata_evidence);
+        assert_eq!(lineage.review_decision_id, None);
 
         let wrong_name = receipt_dir.join("wrong-name.json");
         std::fs::copy(&receipt_path, &wrong_name).unwrap();
@@ -1083,6 +1328,63 @@ mod tests {
             read_immutable_receipt(&wrong_name).unwrap_err(),
             "receipt-filename-id-mismatch"
         );
+    }
+
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
+    fn receipt_write_rejects_oversized_lineage_and_symlink_directory_without_leaving_copy() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source.bin");
+        let cloud = tmp.path().join("cloud");
+        let destination = cloud.join("destination.bin");
+        std::fs::create_dir_all(&cloud).unwrap();
+        std::fs::write(&source, b"content").unwrap();
+        let metadata = std::fs::metadata(&source).unwrap();
+        let mut test_candidate = candidate();
+        test_candidate.src = source.to_string_lossy().into_owned();
+        test_candidate.dst = destination.to_string_lossy().into_owned();
+        test_candidate.bytes = metadata.len();
+        test_candidate.modified_ms = modified_ms(&metadata).unwrap();
+        test_candidate.metadata_evidence[0].value = "x".repeat(MAX_RECEIPT_BYTES as usize);
+        refresh_review_fingerprint(&mut test_candidate);
+        let test_root = CloudRoot {
+            id: "icloud:test".into(),
+            provider: CloudProvider::Icloud,
+            label: "iCloud Drive".into(),
+            path: cloud.to_string_lossy().into_owned(),
+        };
+
+        assert_eq!(
+            prepare_cloud_copy(
+                &test_candidate,
+                &test_root,
+                &tmp.path().join("receipts"),
+                123,
+            )
+            .unwrap_err(),
+            "receipt-too-large"
+        );
+        assert!(source.exists());
+        assert!(!destination.exists());
+
+        test_candidate.metadata_evidence[0].value = "bounded".into();
+        refresh_review_fingerprint(&mut test_candidate);
+        let real_receipt_dir = tmp.path().join("real-receipts");
+        let receipt_link = tmp.path().join("receipt-link");
+        std::fs::create_dir(&real_receipt_dir).unwrap();
+        symlink(&real_receipt_dir, &receipt_link).unwrap();
+        assert_eq!(
+            prepare_cloud_copy(&test_candidate, &test_root, &receipt_link, 124).unwrap_err(),
+            "receipt-directory-unsafe"
+        );
+        assert!(source.exists());
+        assert!(!destination.exists());
+        assert!(std::fs::read_dir(real_receipt_dir)
+            .unwrap()
+            .next()
+            .is_none());
     }
 
     #[cfg(not(coverage))]
@@ -1186,7 +1488,10 @@ mod tests {
             path: cloud.to_string_lossy().into_owned(),
         };
         let content_hash = hash_file(&source).unwrap();
+        let lineage = lineage_snapshot(&test_candidate, None);
+        let lineage_fingerprint = lineage_fingerprint(&lineage).unwrap();
         let receipt_id = receipt_id_for(
+            RECEIPT_VERSION,
             &test_candidate.metadata_fingerprint,
             test_candidate.provider,
             &test_candidate.src,
@@ -1199,6 +1504,7 @@ mod tests {
             123,
             true,
             false,
+            Some(&lineage_fingerprint),
         );
         let existing_receipt = receipt_dir.join(format!("{receipt_id}.json"));
         std::fs::write(&existing_receipt, b"existing-receipt").unwrap();

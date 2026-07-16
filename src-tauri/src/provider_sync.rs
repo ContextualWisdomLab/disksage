@@ -5,7 +5,7 @@ use crate::cloud_transfer::{
 };
 
 #[cfg(test)]
-use crate::cloud_transfer::RECEIPT_VERSION;
+use crate::cloud_transfer::LEGACY_RECEIPT_VERSION;
 
 const ICLOUD_UPLOADED_KEY: &str = "NSURLUbiquitousItemIsUploadedKey";
 
@@ -644,7 +644,7 @@ mod tests {
 
     fn receipt(provider: CloudProvider) -> CloudCopyReceipt {
         CloudCopyReceipt {
-            version: RECEIPT_VERSION,
+            version: LEGACY_RECEIPT_VERSION,
             receipt_id: "receipt-id".into(),
             candidate_fingerprint: "metadata-fingerprint".into(),
             provider,
@@ -658,6 +658,8 @@ mod tests {
             copied_at_ms: 20,
             copy_verified: true,
             provider_sync_confirmed: false,
+            lineage_fingerprint: None,
+            lineage: None,
         }
     }
 
