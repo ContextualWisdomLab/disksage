@@ -836,31 +836,25 @@ fn macos_file_provenance_metadata(path: &Path) -> ContentMetadata {
         }
     }
 
-    if path.extension().is_some_and(|extension| {
-        extension
-            .to_string_lossy()
-            .eq_ignore_ascii_case("crdownload")
-    }) {
-        let mut quarantine = local_command("xattr");
-        quarantine.args(["-p", "com.apple.quarantine"]).arg(path);
-        if let Ok(output) = run_metadata_command(quarantine) {
-            if let Some((acquired_seconds, agent)) =
-                quarantine_record(&String::from_utf8_lossy(&output))
-            {
-                push_context(
-                    &mut metadata,
-                    "download-agent",
-                    &agent,
-                    "filesystem:macos-quarantine",
-                );
-                add_evidence(
-                    &mut metadata,
-                    "download-acquired-date",
-                    date_value(acquired_seconds.saturating_mul(1_000)),
-                    "filesystem:macos-quarantine",
-                    "medium",
-                );
-            }
+    let mut quarantine = local_command("xattr");
+    quarantine.args(["-p", "com.apple.quarantine"]).arg(path);
+    if let Ok(output) = run_metadata_command(quarantine) {
+        if let Some((acquired_seconds, agent)) =
+            quarantine_record(&String::from_utf8_lossy(&output))
+        {
+            push_context(
+                &mut metadata,
+                "download-agent",
+                &agent,
+                "filesystem:macos-quarantine",
+            );
+            add_evidence(
+                &mut metadata,
+                "download-acquired-date",
+                date_value(acquired_seconds.saturating_mul(1_000)),
+                "filesystem:macos-quarantine",
+                "medium",
+            );
         }
     }
     metadata
