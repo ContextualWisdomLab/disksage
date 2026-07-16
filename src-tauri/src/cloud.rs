@@ -80,6 +80,21 @@ pub struct CloudRoot {
     pub access_issue: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CloudRootDiscoveryIssue {
+    pub provider: Option<CloudProvider>,
+    pub account_scope: CloudAccountScope,
+    pub label: String,
+    pub path: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CloudRootDiscoveryReport {
+    pub roots: Vec<CloudRoot>,
+    pub issues: Vec<CloudRootDiscoveryIssue>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ArchiveKind {
@@ -222,64 +237,128 @@ pub fn validate_cloud_root_readable(root: &CloudRoot) -> Result<(), String> {
 }
 
 #[cfg(not(coverage))]
-fn is_writable_dir(path: &Path) -> bool {
-    path.metadata()
-        .map(|m| m.is_dir() && !m.permissions().readonly())
-        .unwrap_or(false)
+fn access_issue_for_error(error: &std::io::Error) -> String {
+    match error.kind() {
+        std::io::ErrorKind::PermissionDenied => "permission-denied",
+        std::io::ErrorKind::NotFound => "not-found",
+        std::io::ErrorKind::NotADirectory => "not-a-directory",
+        _ => "read-dir-failed",
+    }
+    .into()
 }
 
 #[cfg(not(coverage))]
 fn directory_access_issue(path: &Path) -> Option<String> {
-    std::fs::read_dir(path).err().map(|error| {
-        match error.kind() {
-            std::io::ErrorKind::PermissionDenied => "permission-denied",
-            std::io::ErrorKind::NotFound => "not-found",
-            std::io::ErrorKind::NotADirectory => "not-a-directory",
-            _ => "read-dir-failed",
-        }
-        .into()
-    })
+    std::fs::read_dir(path)
+        .err()
+        .map(|error| access_issue_for_error(&error))
 }
 
 #[cfg(not(coverage))]
-fn read_children_sorted(path: &Path, limit: usize) -> Vec<PathBuf> {
-    let mut children: Vec<PathBuf> = std::fs::read_dir(path)
-        .ok()
-        .into_iter()
-        .flatten()
-        .take(limit)
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .collect();
+fn read_children_sorted(path: &Path, limit: usize) -> Result<Vec<PathBuf>, String> {
+    let entries = std::fs::read_dir(path).map_err(|error| access_issue_for_error(&error))?;
+    let mut children = Vec::new();
+    for entry in entries.take(limit) {
+        children.push(
+            entry
+                .map_err(|error| access_issue_for_error(&error))?
+                .path(),
+        );
+    }
     children.sort();
-    children
+    Ok(children)
+}
+
+#[cfg(not(coverage))]
+fn push_discovery_issue(
+    report: &mut CloudRootDiscoveryReport,
+    provider: Option<CloudProvider>,
+    account_scope: CloudAccountScope,
+    path: &Path,
+    label: String,
+    reason: String,
+) {
+    report.issues.push(CloudRootDiscoveryIssue {
+        provider,
+        account_scope,
+        label,
+        path: path.to_string_lossy().into_owned(),
+        reason,
+    });
 }
 
 #[cfg(not(coverage))]
 fn push_root(
-    roots: &mut Vec<CloudRoot>,
+    report: &mut CloudRootDiscoveryReport,
     seen: &mut BTreeSet<PathBuf>,
     provider: CloudProvider,
     account_scope: CloudAccountScope,
     path: PathBuf,
     label: String,
 ) {
+    let metadata = match path.metadata() {
+        Ok(metadata) if metadata.is_dir() => metadata,
+        Ok(_) => {
+            push_discovery_issue(
+                report,
+                Some(provider),
+                account_scope,
+                &path,
+                label,
+                "not-a-directory".into(),
+            );
+            return;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            push_discovery_issue(
+                report,
+                Some(provider),
+                account_scope,
+                &path,
+                label,
+                access_issue_for_error(&error),
+            );
+            return;
+        }
+    };
+    if metadata.permissions().readonly() {
+        push_discovery_issue(
+            report,
+            Some(provider),
+            account_scope,
+            &path,
+            label,
+            "read-only".into(),
+        );
+        return;
+    }
     let identity = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
-    if !is_writable_dir(&path) || !seen.insert(identity) {
+    if !seen.insert(identity) {
         return;
     }
     let access_issue = directory_access_issue(&path);
     let readable = access_issue.is_none();
     let value = path.to_string_lossy().into_owned();
-    roots.push(CloudRoot {
+    report.roots.push(CloudRoot {
         id: value.clone(),
         provider,
         account_scope,
-        label,
+        label: label.clone(),
         path: value,
         readable,
-        access_issue,
+        access_issue: access_issue.clone(),
     });
+    if let Some(reason) = access_issue {
+        push_discovery_issue(
+            report,
+            Some(provider),
+            account_scope,
+            &path,
+            label,
+            reason,
+        );
+    }
 }
 
 #[cfg(not(coverage))]
@@ -352,12 +431,12 @@ fn account_scope(
 /// Google Drive's account root is read-only on macOS, so each writable direct child (for
 /// example "My Drive" or a writable shared drive) is surfaced as a separate destination.
 #[cfg(not(coverage))]
-pub fn discover_cloud_roots(home: &Path) -> Vec<CloudRoot> {
-    let mut roots = Vec::new();
+pub fn discover_cloud_roots_report(home: &Path) -> CloudRootDiscoveryReport {
+    let mut report = CloudRootDiscoveryReport::default();
     let mut seen = BTreeSet::new();
 
     push_root(
-        &mut roots,
+        &mut report,
         &mut seen,
         CloudProvider::Icloud,
         CloudAccountScope::Unknown,
@@ -365,7 +444,7 @@ pub fn discover_cloud_roots(home: &Path) -> Vec<CloudRoot> {
         "iCloud Drive".into(),
     );
     push_root(
-        &mut roots,
+        &mut report,
         &mut seen,
         CloudProvider::Icloud,
         CloudAccountScope::Unknown,
@@ -374,7 +453,22 @@ pub fn discover_cloud_roots(home: &Path) -> Vec<CloudRoot> {
     );
 
     let cloud_storage = home.join("Library/CloudStorage");
-    for account_root in read_children_sorted(&cloud_storage, 128) {
+    let account_roots = match read_children_sorted(&cloud_storage, 128) {
+        Ok(account_roots) => account_roots,
+        Err(reason) if reason == "not-found" => Vec::new(),
+        Err(reason) => {
+            push_discovery_issue(
+                &mut report,
+                None,
+                CloudAccountScope::Unknown,
+                &cloud_storage,
+                "Cloud File Provider storage".into(),
+                reason,
+            );
+            Vec::new()
+        }
+    };
+    for account_root in account_roots {
         let name = account_root
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -382,7 +476,7 @@ pub fn discover_cloud_roots(home: &Path) -> Vec<CloudRoot> {
         if name.starts_with("OneDrive-") {
             let account = provider_account_label("OneDrive-", &account_root);
             push_root(
-                &mut roots,
+                &mut report,
                 &mut seen,
                 CloudProvider::Onedrive,
                 account_scope(CloudProvider::Onedrive, &account, None),
@@ -391,7 +485,22 @@ pub fn discover_cloud_roots(home: &Path) -> Vec<CloudRoot> {
             );
         } else if name.starts_with("GoogleDrive-") {
             let account = provider_account_label("GoogleDrive-", &account_root);
-            for drive in read_children_sorted(&account_root, 128) {
+            let scope = account_scope(CloudProvider::GoogleDrive, &account, None);
+            let drives = match read_children_sorted(&account_root, 128) {
+                Ok(drives) => drives,
+                Err(reason) => {
+                    push_discovery_issue(
+                        &mut report,
+                        Some(CloudProvider::GoogleDrive),
+                        scope,
+                        &account_root,
+                        "Google Drive account".into(),
+                        reason,
+                    );
+                    continue;
+                }
+            };
+            for drive in drives {
                 let drive_name = drive
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
@@ -400,7 +509,7 @@ pub fn discover_cloud_roots(home: &Path) -> Vec<CloudRoot> {
                     continue;
                 }
                 push_root(
-                    &mut roots,
+                    &mut report,
                     &mut seen,
                     CloudProvider::GoogleDrive,
                     account_scope(CloudProvider::GoogleDrive, &account, Some(&drive_name)),
@@ -412,14 +521,28 @@ pub fn discover_cloud_roots(home: &Path) -> Vec<CloudRoot> {
     }
 
     // Windows and older clients commonly place provider roots directly under the home folder.
-    for path in read_children_sorted(home, 128) {
+    let home_children = match read_children_sorted(home, 128) {
+        Ok(children) => children,
+        Err(reason) => {
+            push_discovery_issue(
+                &mut report,
+                None,
+                CloudAccountScope::Unknown,
+                home,
+                "Home provider-root discovery".into(),
+                reason,
+            );
+            Vec::new()
+        }
+    };
+    for path in home_children {
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         if name == "OneDrive" || name.starts_with("OneDrive - ") {
             push_root(
-                &mut roots,
+                &mut report,
                 &mut seen,
                 CloudProvider::Onedrive,
                 account_scope(CloudProvider::Onedrive, &name, None),
@@ -428,7 +551,7 @@ pub fn discover_cloud_roots(home: &Path) -> Vec<CloudRoot> {
             );
         } else if name == "Google Drive" || name.starts_with("Google Drive ") {
             push_root(
-                &mut roots,
+                &mut report,
                 &mut seen,
                 CloudProvider::GoogleDrive,
                 account_scope(CloudProvider::GoogleDrive, &name, None),
@@ -438,10 +561,32 @@ pub fn discover_cloud_roots(home: &Path) -> Vec<CloudRoot> {
         }
     }
 
-    roots.sort_by(|a, b| {
+    report.roots.sort_by(|a, b| {
         (a.provider.as_str(), &a.label, &a.path).cmp(&(b.provider.as_str(), &b.label, &b.path))
     });
-    roots
+    report.issues.sort_by(|a, b| {
+        (
+            a.provider.map(CloudProvider::as_str).unwrap_or(""),
+            a.account_scope.as_str(),
+            &a.label,
+            &a.path,
+            &a.reason,
+        )
+            .cmp(&(
+                b.provider.map(CloudProvider::as_str).unwrap_or(""),
+                b.account_scope.as_str(),
+                &b.label,
+                &b.path,
+                &b.reason,
+            ))
+    });
+    report.issues.dedup();
+    report
+}
+
+#[cfg(not(coverage))]
+pub fn discover_cloud_roots(home: &Path) -> Vec<CloudRoot> {
+    discover_cloud_roots_report(home).roots
 }
 
 fn archive_kind(path: &Path) -> Option<ArchiveKind> {
@@ -2427,7 +2572,10 @@ mod tests {
         let one = tmp.path().join("OneDrive");
         writable_dir(&one);
         std::fs::set_permissions(&one, std::fs::Permissions::from_mode(0o500)).unwrap();
-        assert!(discover_cloud_roots(tmp.path()).is_empty());
+        let report = discover_cloud_roots_report(tmp.path());
+        assert!(report.roots.is_empty());
+        assert_eq!(report.issues.len(), 1);
+        assert_eq!(report.issues[0].reason, "read-only");
     }
 
     #[cfg(all(unix, not(coverage)))]
@@ -2440,12 +2588,18 @@ mod tests {
         writable_dir(&one);
         std::fs::set_permissions(&one, std::fs::Permissions::from_mode(0o300)).unwrap();
 
-        let roots = discover_cloud_roots(tmp.path());
-        assert_eq!(roots.len(), 1);
-        assert!(!roots[0].readable);
-        assert_eq!(roots[0].access_issue.as_deref(), Some("permission-denied"));
+        let report = discover_cloud_roots_report(tmp.path());
+        assert_eq!(report.roots.len(), 1);
+        assert_eq!(report.issues.len(), 1);
+        assert_eq!(report.issues[0].provider, Some(CloudProvider::Onedrive));
+        assert_eq!(report.issues[0].reason, "permission-denied");
+        assert!(!report.roots[0].readable);
         assert_eq!(
-            validate_cloud_root_readable(&roots[0]),
+            report.roots[0].access_issue.as_deref(),
+            Some("permission-denied")
+        );
+        assert_eq!(
+            validate_cloud_root_readable(&report.roots[0]),
             Err(format!(
                 "cloud-root-unreadable:{}:permission-denied",
                 one.display()
@@ -2453,6 +2607,35 @@ mod tests {
         );
 
         std::fs::set_permissions(&one, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
+    fn reports_google_account_when_drive_children_cannot_be_enumerated() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let account = tmp
+            .path()
+            .join("Library/CloudStorage/GoogleDrive-me@example.com");
+        writable_dir(&account);
+        std::fs::set_permissions(&account, std::fs::Permissions::from_mode(0o300)).unwrap();
+
+        let report = discover_cloud_roots_report(tmp.path());
+        assert!(report.roots.is_empty());
+        assert_eq!(report.issues.len(), 1);
+        assert_eq!(
+            report.issues[0].provider,
+            Some(CloudProvider::GoogleDrive)
+        );
+        assert_eq!(
+            report.issues[0].account_scope,
+            CloudAccountScope::Organization
+        );
+        assert_eq!(report.issues[0].label, "Google Drive account");
+        assert_eq!(report.issues[0].reason, "permission-denied");
+
+        std::fs::set_permissions(&account, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
 
     #[cfg(not(coverage))]

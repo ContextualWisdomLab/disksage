@@ -433,6 +433,14 @@ pub fn list_cloud_roots(app: AppHandle) -> Vec<cloud::CloudRoot> {
     cloud::discover_cloud_roots(&resolve_home(&app))
 }
 
+/// Return selectable roots together with bounded provider/account discovery failures. This does
+/// not create a probe file, hydrate a placeholder, or contact a provider API.
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn inspect_cloud_roots(app: AppHandle) -> cloud::CloudRootDiscoveryReport {
+    cloud::discover_cloud_roots_report(&resolve_home(&app))
+}
+
 #[cfg(not(coverage))]
 fn selected_cloud_root(app: &AppHandle, cloud_root: &str) -> Result<cloud::CloudRoot, String> {
     cloud::discover_cloud_roots(&resolve_home(app))

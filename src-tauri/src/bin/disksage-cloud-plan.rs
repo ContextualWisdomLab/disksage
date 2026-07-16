@@ -24,6 +24,7 @@ struct Args {
     min_age_days: u64,
     limit: usize,
     list_roots: bool,
+    inspect_roots: bool,
     copy_fingerprint: Option<String>,
     receipt_dir: Option<PathBuf>,
     attest_receipt: Option<PathBuf>,
@@ -65,6 +66,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
         min_age_days: 90,
         limit: 200,
         list_roots: false,
+        inspect_roots: false,
         copy_fingerprint: None,
         receipt_dir: None,
         attest_receipt: None,
@@ -103,6 +105,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
                     .map_err(|_| "--limit는 정수여야 함".to_string())?
             }
             "--list-roots" => parsed.list_roots = true,
+            "--inspect-roots" => parsed.inspect_roots = true,
             "--copy-fingerprint" => {
                 parsed.copy_fingerprint = Some(value(args, &mut index, "--copy-fingerprint")?)
             }
@@ -165,7 +168,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             }
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive] [--min-size-mib N] [--min-age-days N] [--limit N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --review-dir PATH]".into(),
+                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive] [--min-size-mib N] [--min-age-days N] [--limit N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --review-dir PATH]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -244,13 +247,14 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
         return Err("--review-dir은 review action 또는 copy action에만 지정할 수 있음".into());
     }
     let actions = usize::from(args.list_roots)
+        + usize::from(args.inspect_roots)
         + usize::from(args.copy_fingerprint.is_some())
         + usize::from(args.attest_receipt.is_some())
         + usize::from(eviction_action)
         + usize::from(review_action);
     if actions > 1 {
         return Err(
-            "--list-roots, --copy-fingerprint, --attest-receipt, eviction action, review action은 동시에 사용할 수 없음".into(),
+            "--list-roots, --inspect-roots, --copy-fingerprint, --attest-receipt, eviction action, review action은 동시에 사용할 수 없음".into(),
         );
     }
     for (flag, fingerprint) in [
@@ -426,7 +430,15 @@ fn run() -> Result<(), String> {
         );
         return Ok(());
     }
-    let roots = cloud::discover_cloud_roots(&home);
+    let discovery = cloud::discover_cloud_roots_report(&home);
+    if args.inspect_roots {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&discovery).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    let roots = discovery.roots;
     if args.list_roots {
         println!(
             "{}",
@@ -605,6 +617,14 @@ mod tests {
         assert!(parse_args(&["--provider".into(), "box".into()], Path::new("/h")).is_err());
         assert!(parse_args(&["--limit".into(), "x".into()], Path::new("/h")).is_err());
         assert!(parse_args(&["--root".into()], Path::new("/h")).is_err());
+        let inspect = parse_args(&["--inspect-roots".into()], Path::new("/h")).unwrap();
+        assert!(inspect.inspect_roots);
+        let both = parse_args(
+            &["--list-roots".into(), "--inspect-roots".into()],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&both).is_err());
         let roots = vec![
             CloudRoot {
                 id: "/a".into(),

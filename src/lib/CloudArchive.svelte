@@ -6,6 +6,7 @@
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
   let roots: api.CloudRoot[] = $state([]);
+  let rootIssues: api.CloudRootDiscoveryIssue[] = $state([]);
   let connections: api.OAuthConnection[] = $state([]);
   let reviewDecisions: api.CloudReviewDecision[] = $state([]);
   let selectedRoot = $state("");
@@ -26,7 +27,9 @@
 
   onMount(async () => {
     try {
-      roots = await api.listCloudRoots();
+      const discovery = await api.inspectCloudRoots();
+      roots = discovery.roots;
+      rootIssues = discovery.issues;
       connections = await api.listCloudProviderConnections();
       reviewDecisions = await api.listCloudReviewDecisions();
       selectedRoot = roots.find((root) => root.readable)?.path ?? "";
@@ -256,6 +259,11 @@
     {#if roots.some((root) => !root.readable)}
       <p class="warning">
         접근 불가 클라우드 루트는 선택에서 제외했습니다. macOS 개인정보 보호 권한을 허용한 뒤 목록을 다시 불러오세요.
+      </p>
+    {/if}
+    {#if rootIssues.length > 0}
+      <p class="warning">
+        클라우드 루트 탐지 문제 {rootIssues.length}건: {rootIssues.map((issue) => `${issue.provider ?? "file-provider"}/${issue.account_scope}/${issue.reason}`).join(", ")}
       </p>
     {/if}
     {#if selectedRootDetails() && selectedRootDetails()?.provider !== "icloud"}

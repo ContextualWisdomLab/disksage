@@ -177,6 +177,19 @@ export interface CloudRoot {
   access_issue: string | null;
 }
 
+export interface CloudRootDiscoveryIssue {
+  provider: CloudProvider | null;
+  account_scope: CloudAccountScope;
+  label: string;
+  path: string;
+  reason: string;
+}
+
+export interface CloudRootDiscoveryReport {
+  roots: CloudRoot[];
+  issues: CloudRootDiscoveryIssue[];
+}
+
 export interface OAuthConnection {
   connection_id: string;
   provider: CloudProvider;
@@ -324,6 +337,8 @@ export interface CloudAttestationOutput {
 }
 
 export const listCloudRoots = () => invoke<CloudRoot[]>("list_cloud_roots");
+export const inspectCloudRoots = () =>
+  invoke<CloudRootDiscoveryReport>("inspect_cloud_roots");
 export const listCloudProviderConnections = () =>
   invoke<OAuthConnection[]>("list_cloud_provider_connections");
 export const listCloudReviewDecisions = () =>

@@ -75,6 +75,7 @@ pub fn run() {
             commands::set_settings,
             commands::reason_unknown_extensions,
             commands::list_cloud_roots,
+            commands::inspect_cloud_roots,
             commands::list_cloud_provider_connections,
             commands::list_cloud_review_decisions,
             commands::connect_cloud_provider,
