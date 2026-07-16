@@ -773,8 +773,8 @@ fn token_boundary(bytes: &[u8], start: usize, end: usize) -> bool {
         && bytes.get(end).map(|b| !b.is_ascii_digit()).unwrap_or(true)
 }
 
-/// Extract common date tokens from a filename as a low-confidence review signal.
-/// This is never embedded metadata and cannot independently authorize a cloud copy.
+/// Extract common date tokens from a filename as a low-confidence conflict/review hint.
+/// This is never production-time evidence and is never promoted into archive placement.
 /// Supported shapes: YYYY-MM-DD, YYYY_MM_DD, YYYY.MM.DD, YYYYMMDD, and YYMMDD.
 fn filename_date_ms(path: &Path) -> Option<u64> {
     let normalized: String = path.file_name()?.to_string_lossy().nfc().collect();
@@ -2214,9 +2214,9 @@ pub fn plan_cloud_archive(
         if let Some(value) = filename_ms {
             add_evidence(
                 &mut lineage_metadata,
-                "production-date",
+                "filename-date-hint",
                 date_value(value),
-                "filename-date",
+                "filename:path-token",
                 "low",
             );
         }
@@ -2249,11 +2249,9 @@ pub fn plan_cloud_archive(
                         .clone()
                         .unwrap_or_else(|| "medium".into()),
                 )
-            // Without embedded metadata, retain the best available date only for archive-preview
-            // placement. The review reasons below mark this as non-embedded, so it cannot
-            // independently authorize a cloud copy.
-            } else if let Some(filename_ms) = filename_ms {
-                (filename_ms, "filename-date".into(), "low".into())
+            // A filename date is lineage context only. Without embedded metadata, archive-preview
+            // placement falls back to filesystem creation and then modification time; review is
+            // still mandatory before a copy can use either fallback.
             } else if file.created_ms > 0 {
                 (file.created_ms, "filesystem:created".into(), "low".into())
             } else {
@@ -3034,7 +3032,9 @@ mod tests {
             .contains(&"production-date-not-from-embedded-metadata".to_string()));
         assert_eq!(candidate.content_context, ["subject=Planning"]);
         assert!(candidate.metadata_evidence.iter().any(|evidence| {
-            evidence.source == "filename-date" && evidence.confidence == "low"
+            evidence.field == "filename-date-hint"
+                && evidence.source == "filename:path-token"
+                && evidence.confidence == "low"
         }));
     }
 
@@ -3364,7 +3364,7 @@ mod tests {
     }
 
     #[test]
-    fn planner_covers_filename_dates_geolocation_and_invalid_relative_paths() {
+    fn planner_keeps_filename_dates_as_hints_and_uses_filesystem_fallback() {
         let source = PathBuf::from("/source.pdf");
         let now = date_epoch_ms(2026, 7, 1).unwrap();
         let report = plan_cloud_archive(
@@ -3379,7 +3379,7 @@ mod tests {
                 FileFact {
                     path: PathBuf::from("/source.pdf/2025-12-10 report.pdf"),
                     bytes: 20,
-                    created_ms: 1,
+                    created_ms: date_epoch_ms(2025, 11, 9).unwrap(),
                     modified_ms: 1,
                     content_metadata: ContentMetadata {
                         evidence: vec![MetadataEvidence {
@@ -3410,8 +3410,13 @@ mod tests {
         );
         assert_eq!(report.candidates.len(), 1);
         let candidate = &report.candidates[0];
-        assert_eq!(candidate.production_time_source, "filename-date");
-        assert_eq!(date_parts(candidate.production_time_ms), (2025, 12, 10));
+        assert_eq!(candidate.production_time_source, "filesystem:created");
+        assert_eq!(date_parts(candidate.production_time_ms), (2025, 11, 9));
+        assert!(candidate.metadata_evidence.iter().any(|evidence| {
+            evidence.field == "filename-date-hint"
+                && evidence.value == "2025-12-10"
+                && evidence.source == "filename:path-token"
+        }));
         assert!(candidate
             .review_reasons
             .contains(&"embedded-metadata-contains-geolocation".to_string()));

@@ -180,9 +180,10 @@ pub fn candidate_blockers_with_review(
         blockers.push("planner-blocked".into());
     }
     // Embedded, high-confidence production time remains the only evidence that can pass without
-    // an operator decision. Lower-ranked evidence (explicit filename date, filesystem creation,
-    // then modification) may enter the copy-only phase only when an approval is bound to the
-    // exact candidate evidence and destination above. The headless CLI never supplies a decision.
+    // an operator decision. Filesystem creation or modification fallbacks may enter the copy-only
+    // phase only when an approval is bound to the exact candidate evidence and destination above.
+    // Filename dates remain conflict/review hints and are never promoted to production time. The
+    // headless CLI never supplies a decision.
     if !embedded_high_confidence(candidate) && !exact_review_approved {
         blockers.push("embedded-high-confidence-date-required".into());
     }
@@ -982,7 +983,7 @@ mod tests {
         let mut rejected = accepted;
         rejected.requires_review = true;
         rejected.blocked_reason = Some("blocked".into());
-        rejected.production_time_source = "filename-date".into();
+        rejected.production_time_source = "filesystem:created".into();
         rejected.production_time_confidence = "low".into();
         rejected.metadata_fingerprint = " ".into();
         rejected.provider = CloudProvider::Onedrive;
@@ -1115,14 +1116,14 @@ mod tests {
                 .contains(&"review-fingerprint-mismatch".to_string())
         );
 
-        reviewed.production_time_source = "filename-date".into();
+        reviewed.production_time_source = "filesystem:created".into();
         reviewed.production_time_confidence = "low".into();
         reviewed.review_fingerprint = crate::cloud::candidate_review_fingerprint(&reviewed);
-        let filename_approval =
+        let filesystem_approval =
             crate::cloud_review::create_decision(&reviewed, CloudReviewDisposition::Approved, 12)
                 .unwrap();
         assert!(
-            candidate_blockers_with_review(&reviewed, &root(), Some(&filename_approval)).is_empty()
+            candidate_blockers_with_review(&reviewed, &root(), Some(&filesystem_approval)).is_empty()
         );
 
         assert!(candidate_blockers_with_review(&reviewed, &root(), None)
