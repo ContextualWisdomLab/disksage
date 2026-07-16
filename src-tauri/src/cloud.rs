@@ -773,8 +773,8 @@ fn token_boundary(bytes: &[u8], start: usize, end: usize) -> bool {
         && bytes.get(end).map(|b| !b.is_ascii_digit()).unwrap_or(true)
 }
 
-/// Extract common date tokens from a filename as a low-confidence conflict/review hint.
-/// This is never production-time evidence and is never promoted into archive placement.
+/// Extract common date tokens from a filename as a low-confidence provisional date hint.
+/// Embedded metadata always wins, and this hint can never authorize a copy without review.
 /// Supported shapes: YYYY-MM-DD, YYYY_MM_DD, YYYY.MM.DD, YYYYMMDD, and YYMMDD.
 fn filename_date_ms(path: &Path) -> Option<u64> {
     let normalized: String = path.file_name()?.to_string_lossy().nfc().collect();
@@ -2249,9 +2249,11 @@ pub fn plan_cloud_archive(
                         .clone()
                         .unwrap_or_else(|| "medium".into()),
                 )
-            // A filename date is lineage context only. Without embedded metadata, archive-preview
-            // placement falls back to filesystem creation and then modification time; review is
-            // still mandatory before a copy can use either fallback.
+            // Without embedded metadata, an explicit filename date is the next provisional value
+            // for archive-preview placement, followed by filesystem creation and modification.
+            // Every non-embedded value remains low confidence and review-required.
+            } else if let Some(filename_ms) = filename_ms {
+                (filename_ms, "filename:path-token".into(), "low".into())
             } else if file.created_ms > 0 {
                 (file.created_ms, "filesystem:created".into(), "low".into())
             } else {
@@ -3364,7 +3366,7 @@ mod tests {
     }
 
     #[test]
-    fn planner_keeps_filename_dates_as_hints_and_uses_filesystem_fallback() {
+    fn planner_uses_filename_date_only_as_review_required_provisional_value() {
         let source = PathBuf::from("/source.pdf");
         let now = date_epoch_ms(2026, 7, 1).unwrap();
         let report = plan_cloud_archive(
@@ -3410,8 +3412,13 @@ mod tests {
         );
         assert_eq!(report.candidates.len(), 1);
         let candidate = &report.candidates[0];
-        assert_eq!(candidate.production_time_source, "filesystem:created");
-        assert_eq!(date_parts(candidate.production_time_ms), (2025, 11, 9));
+        assert_eq!(candidate.production_time_source, "filename:path-token");
+        assert_eq!(candidate.production_time_confidence, "low");
+        assert_eq!(date_parts(candidate.production_time_ms), (2025, 12, 10));
+        assert!(candidate.requires_review);
+        assert!(candidate
+            .review_reasons
+            .contains(&"production-date-not-from-embedded-metadata".to_string()));
         assert!(candidate.metadata_evidence.iter().any(|evidence| {
             evidence.field == "filename-date-hint"
                 && evidence.value == "2025-12-10"

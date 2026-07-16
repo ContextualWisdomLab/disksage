@@ -2,9 +2,9 @@
 
 ## Problem
 
-DiskSage ranks production-time evidence as embedded metadata, filesystem creation time, then
-modification time. Filename date tokens are retained only as conflict/review hints and are never
-promoted to production time. The copy gate nevertheless rejected every
+DiskSage ranks production-time evidence as embedded metadata, an explicit filename date,
+filesystem creation time, then modification time. Filename dates are low-confidence provisional
+values and never authorize a copy without evidence-bound review. The copy gate nevertheless rejected every
 candidate that lacked an embedded, high-confidence production date, even after an operator had
 approved the exact evidence shown in the review UI. That made the fallback ranking unusable for
 opaque archives and older files while adding no extra protection after an evidence-bound review.
@@ -23,12 +23,13 @@ Held, absent, invalid, mismatched, or stale decisions do not waive the embedded-
 headless CLI does not accept or load review decisions, so it cannot use fallback dates to copy.
 
 Embedded dates below high confidence receive an explicit
-`embedded-production-date-confidence-not-high` review reason. Filesystem fallbacks receive
-`production-date-not-from-embedded-metadata`; filename hints remain separate lineage evidence.
+`embedded-production-date-confidence-not-high` review reason. Filename and filesystem fallbacks
+receive `production-date-not-from-embedded-metadata`; the filename value also remains separate
+`filename-date-hint` lineage evidence.
 
 ## Safety invariants
 
-- A filename date is never production-time evidence, even after review.
+- A filename date is never trusted automatically and never outranks embedded metadata.
 - An approval is bound to the source, destination, provider, file identity, selected date,
   confidence, review reasons, and all displayed metadata evidence.
 - Replanning occurs before the decision is stored and again before copying.
