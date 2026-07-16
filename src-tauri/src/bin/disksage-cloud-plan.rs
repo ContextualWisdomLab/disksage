@@ -1,5 +1,8 @@
 //! Headless entrypoint for planning, reviewing, copying, and attesting cloud archive candidates.
 
+#[cfg(target_os = "macos")]
+embed_plist::embed_info_plist!("../../disksage-cloud-plan.Info.plist");
+
 #[cfg(not(coverage))]
 use std::path::{Path, PathBuf};
 

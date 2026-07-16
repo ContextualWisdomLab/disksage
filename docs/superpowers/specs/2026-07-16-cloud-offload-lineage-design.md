@@ -7,6 +7,7 @@ Use DiskSage against a genuinely space-constrained machine to identify files tha
 ## Scope
 
 - Discover permission-writable local roots for all three providers. Google Drive writable children are separate destinations because the account root is read-only on macOS. Record a bounded readability snapshot and a stable non-sensitive access issue for every surfaced root; an unreadable root remains visible for diagnosis but is disabled in the UI and revalidated immediately before planning or OAuth use. A separate discovery report preserves failures above the destination level, such as a Google account root whose children cannot be enumerated, while the legacy root-list response remains backward compatible.
+- On macOS, keep the Tauri GUI (`disksage`) and headless planner (`disksage-cloud-plan`) as distinct binaries and embed purpose strings for Downloads and File Provider access. The headless binary is behind the explicit `cloud-cli` Cargo feature so Tauri's `--bins` build cannot substitute it for the GUI executable; CI tests it separately. Permission remains user-mediated; DiskSage never edits TCC or bypasses a denial.
 - Scan locally in Rust while pruning provider roots, symlinks, hidden trees, OS `Library`/`System` trees, and regenerable developer artifacts.
 - Consider only a conservative allowlist of document, media, archive, dataset, backup, and creative file extensions.
 - Default to files at least 256 MiB and not modified for 90 days.

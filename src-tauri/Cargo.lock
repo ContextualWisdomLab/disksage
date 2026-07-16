@@ -969,6 +969,7 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "csv",
+ "embed_plist",
  "getrandom 0.3.4",
  "jwalk",
  "keyring",
