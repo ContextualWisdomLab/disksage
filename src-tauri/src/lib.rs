@@ -37,6 +37,7 @@ pub mod cloud_review;
 pub mod cloud_transfer;
 pub mod content_digest;
 pub mod provider_api_client;
+pub mod provider_evidence;
 pub mod provider_oauth;
 pub mod provider_sync;
 

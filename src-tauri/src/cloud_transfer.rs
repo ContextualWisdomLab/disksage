@@ -53,6 +53,7 @@ impl CloudCopyVerificationMethod {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RemoteContentProof {
     pub object_id: String,
     pub revision: String,
@@ -129,6 +130,7 @@ pub struct CloudCopyReceipt {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProviderSyncEvidence {
     pub receipt_id: String,
     pub provider: CloudProvider,

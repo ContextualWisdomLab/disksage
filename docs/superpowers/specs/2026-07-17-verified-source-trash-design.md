@@ -11,10 +11,27 @@ The headless action requires all of the following in one invocation:
 1. An immutable, integrity-valid copy receipt.
 2. Fresh provider-native evidence for the receipt destination and a matching `LocalEvictionPermit`.
 3. An operator confirmation value exactly equal to the 64-hex receipt id.
-4. An absolute eviction-record directory and destructive-operation journal path.
+4. An absolute provider-evidence directory, eviction-record directory, and destructive-operation
+   journal path.
 5. A regular, non-symlink source whose size, modification time, BLAKE3, SHA-256, QuickXor, and stable file identity still match the receipt.
 
 Failure is closed and leaves the source untouched.
+
+## Durable provider evidence
+
+Provider status is time-sensitive and must not survive only in terminal or UI output. Every
+attestation now writes the complete `ProviderSyncEvidence` into a versioned, integrity-bound
+record before returning a permit. The record retains the provider, receipt and destination,
+observation time, local content hash, provider evidence id, completion state, and—when an OAuth
+API was used—the remote object id, revision, checksum algorithm/value, and exact path or parent-chain
+proof.
+
+Evidence records use a canonical domain-separated BLAKE3 record id and an identity-bound filename.
+They are bounded to 64 KiB, created with `create_new`, flushed and fsynced, and made owner-read-only
+on Unix. Readers reject symlinks, writable files, renamed records, unsupported versions, unsafe
+destination paths, invalid receipt/hash identifiers, unexpected native remote content, missing API
+remote content, and any record digest mismatch. A source-eviction invocation persists fresh evidence
+before staging or trashing the source; persistence failure leaves the source untouched.
 
 ## Durable lineage receipt
 
@@ -85,9 +102,13 @@ After Trash succeeds, DiskSage writes a bounded, read-only completion record. A 
 --confirm-receipt-id HEX64
 --eviction-dir ABSOLUTE_PATH
 --journal-path ABSOLUTE_PATH
+--evidence-dir ABSOLUTE_PATH
 ```
 
-The action recollects provider-native evidence immediately before eviction. It does not accept a serialized permit or stale evidence from another process.
+The action recollects provider-native evidence immediately before eviction. It does not accept a
+serialized permit or stale evidence from another process. The separate read-only attestation action
+also requires `--evidence-dir`, so a successful or incomplete observation always has a durable audit
+record rather than relying on captured stdout.
 
 ## Scope
 

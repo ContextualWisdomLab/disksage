@@ -17,7 +17,7 @@ use crate::safety;
 #[cfg(not(coverage))]
 use crate::{
     cloud, cloud_review, cloud_transfer, dev_artifacts, dupes, provider_api_client,
-    provider_oauth, provider_sync, rules,
+    provider_evidence, provider_oauth, provider_sync, rules,
 };
 
 #[derive(Default)]
@@ -824,6 +824,8 @@ pub fn adopt_existing_cloud_candidate(
 #[derive(serde::Serialize)]
 pub struct CloudAttestationOutput {
     pub evidence: cloud_transfer::ProviderSyncEvidence,
+    pub evidence_record: provider_evidence::ProviderSyncEvidenceRecord,
+    pub evidence_path: String,
     pub permit: Option<cloud_transfer::LocalEvictionPermit>,
     pub blockers: Vec<String>,
 }
@@ -841,12 +843,14 @@ pub async fn attest_cloud_copy(
         return Err("receipt-id-invalid".into());
     }
     use tauri::Manager;
-    let receipt_path = app
+    let app_data_dir = app
         .path()
         .app_data_dir()
-        .map_err(|_| "app-data-directory-unavailable".to_string())?
+        .map_err(|_| "app-data-directory-unavailable".to_string())?;
+    let receipt_path = app_data_dir
         .join("cloud-receipts")
         .join(format!("{receipt_id}.json"));
+    let evidence_dir = app_data_dir.join("cloud-provider-evidence");
     let connection_path = oauth_connections_path(&app)?;
     let cloud_roots = cloud::discover_cloud_roots(&resolve_home(&app));
     tauri::async_runtime::spawn_blocking(move || {
@@ -929,12 +933,16 @@ pub async fn attest_cloud_copy(
                 }
             }
         };
+        let (evidence_record, evidence_path) =
+            provider_evidence::write_immutable_sync_evidence(&evidence_dir, &evidence)?;
         let (permit, blockers) = match cloud_transfer::approve_local_eviction(&receipt, &evidence) {
             Ok(permit) => (Some(permit), Vec::new()),
             Err(blockers) => (None, blockers),
         };
         Ok(CloudAttestationOutput {
             evidence,
+            evidence_record,
+            evidence_path: evidence_path.to_string_lossy().into_owned(),
             permit,
             blockers,
         })
