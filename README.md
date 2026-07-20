@@ -31,7 +31,9 @@ cargo run --manifest-path src-tauri/Cargo.toml --bin disksage-reclaim-plan -- \
 The JSON report never moves or deletes supplied paths. It is identified by
 `schema_kind: disksage.reclaim-plan` and `schema_version: 1`, and reports logical bytes and observed
 allocated bytes, while `physically_reclaimable_bytes` remains `null` until strong post-operation or
-filesystem-native evidence exists.
+filesystem-native evidence exists. Interchange output is bounded to 1,000 normalized roots and
+4,096 UTF-8 bytes per canonical path; non-UTF-8 and control-character paths fail closed instead of
+being serialized ambiguously.
 
 ## Status
 

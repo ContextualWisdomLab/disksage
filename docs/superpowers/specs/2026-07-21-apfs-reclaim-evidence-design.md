@@ -18,7 +18,10 @@ reports:
 Nested selected roots are deduplicated and symbolic-link roots are rejected. The command never
 moves, unlinks, or writes to supplied paths. APFS clone sharing is intentionally not inferred from
 content equality or per-inode allocated blocks because those are not proof of unique extents or
-physical reclaimability.
+physical reclaimability. The JSON interchange contract permits at most 1,000 normalized roots and
+4,096 UTF-8 bytes per canonical path. Non-UTF-8 paths, control-character paths, and directory roots
+that disappear before a directory entry can be observed fail closed. Filtered symbolic links and
+reparse points are included in `skipped` rather than silently disappearing from the evidence.
 
 The GUI must label selection totals as logical size. Moving an item to Trash preserves its blocks;
 actual physical recovery can only be claimed from a post-lifecycle filesystem free-space

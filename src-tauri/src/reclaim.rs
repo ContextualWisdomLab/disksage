@@ -10,8 +10,12 @@ use serde::Serialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 pub const RECLAIM_PLAN_SCHEMA_KIND: &str = "disksage.reclaim-plan";
+pub const MAX_RECLAIM_PATHS: usize = 1_000;
+pub const MAX_RECLAIM_PATH_UTF8_BYTES: usize = 4_096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -179,6 +183,33 @@ fn estimate(acc: &Accumulator, operation: PlannedOperation) -> ReclaimEstimate {
     }
 }
 
+fn validated_evidence_path(path: &Path) -> Result<String, String> {
+    let value = path
+        .to_str()
+        .ok_or_else(|| "reclaim-plan paths must be valid UTF-8".to_string())?;
+    if value.is_empty() {
+        return Err("reclaim-plan paths must not be empty".to_string());
+    }
+    if value.chars().any(char::is_control) {
+        return Err("reclaim-plan paths must not contain control characters".to_string());
+    }
+    if value.len() > MAX_RECLAIM_PATH_UTF8_BYTES {
+        return Err(format!(
+            "reclaim-plan paths must not exceed {MAX_RECLAIM_PATH_UTF8_BYTES} UTF-8 bytes"
+        ));
+    }
+    Ok(value.to_string())
+}
+
+fn validate_root_count(roots: &[PathBuf]) -> Result<(), String> {
+    if roots.len() > MAX_RECLAIM_PATHS {
+        return Err(format!(
+            "reclaim plans support at most {MAX_RECLAIM_PATHS} normalized roots"
+        ));
+    }
+    Ok(())
+}
+
 fn normalize_roots(raw_paths: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     if raw_paths.is_empty() {
         return Err("at least one path is required".to_string());
@@ -186,6 +217,7 @@ fn normalize_roots(raw_paths: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
 
     let mut paths = Vec::with_capacity(raw_paths.len());
     for raw in raw_paths {
+        validated_evidence_path(raw)?;
         let metadata = std::fs::symlink_metadata(raw)
             .map_err(|error| format!("cannot inspect {}: {error}", raw.display()))?;
         if metadata.file_type().is_symlink() {
@@ -197,10 +229,11 @@ fn normalize_roots(raw_paths: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
         if !metadata.is_file() && !metadata.is_dir() {
             return Err(format!("unsupported path type: {}", raw.display()));
         }
-        paths.push(
-            raw.canonicalize()
-                .map_err(|error| format!("cannot canonicalize {}: {error}", raw.display()))?,
-        );
+        let canonical = raw
+            .canonicalize()
+            .map_err(|error| format!("cannot canonicalize {}: {error}", raw.display()))?;
+        validated_evidence_path(&canonical)?;
+        paths.push(canonical);
     }
 
     paths.sort();
@@ -215,6 +248,7 @@ fn normalize_roots(raw_paths: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
             roots.push(path);
         }
     }
+    validate_root_count(&roots)?;
     Ok(roots)
 }
 
@@ -249,15 +283,21 @@ fn scan_root(
         record_for_both(&metadata, &mut local, totals);
         RootKind::File
     } else {
+        let filtered_entries = Arc::new(AtomicU64::new(0));
+        let filtered_entries_for_walk = Arc::clone(&filtered_entries);
         let walker = jwalk::WalkDir::new(root)
             .follow_links(false)
             .skip_hidden(false)
-            .process_read_dir(|_depth, _path, _state, children| {
+            .process_read_dir(move |_depth, _path, _state, children| {
                 children.retain(|entry| {
-                    entry
+                    let keep = entry
                         .as_ref()
                         .map(crate::scanner::keep_entry)
-                        .unwrap_or(true)
+                        .unwrap_or(true);
+                    if !keep {
+                        filtered_entries_for_walk.fetch_add(1, Ordering::Relaxed);
+                    }
+                    keep
                 });
             });
 
@@ -289,11 +329,20 @@ fn scan_root(
                 }
             }
         }
+        let filtered = filtered_entries.load(Ordering::Relaxed);
+        local.skipped = local.skipped.saturating_add(filtered);
+        totals.skipped = totals.skipped.saturating_add(filtered);
+        if local.dirs == 0 {
+            return Err(format!(
+                "directory root became unavailable while scanning: {}",
+                root.display()
+            ));
+        }
         RootKind::Directory
     };
 
     Ok(PathReclaimEstimate {
-        path: root.to_string_lossy().into_owned(),
+        path: validated_evidence_path(root)?,
         kind,
         files: local.files,
         dirs: local.dirs,
@@ -407,5 +456,46 @@ mod tests {
         assert_eq!("trash".parse(), Ok(PlannedOperation::Trash));
         assert_eq!("delete".parse(), Ok(PlannedOperation::Delete));
         assert!("move".parse::<PlannedOperation>().is_err());
+    }
+
+    #[test]
+    fn evidence_paths_and_normalized_root_count_are_bounded() {
+        let boundary = PathBuf::from("x".repeat(MAX_RECLAIM_PATH_UTF8_BYTES));
+        assert!(validated_evidence_path(&boundary).is_ok());
+
+        let too_long = PathBuf::from("x".repeat(MAX_RECLAIM_PATH_UTF8_BYTES + 1));
+        assert!(validated_evidence_path(&too_long).is_err());
+        assert!(validated_evidence_path(Path::new("safe\nunsafe")).is_err());
+
+        let roots: Vec<PathBuf> = (0..=MAX_RECLAIM_PATHS)
+            .map(|index| PathBuf::from(format!("root-{index}")))
+            .collect();
+        assert!(validate_root_count(&roots).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_non_utf8_evidence_paths() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let path = PathBuf::from(OsString::from_vec(vec![b'f', 0x80]));
+        assert!(validated_evidence_path(&path).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn filtered_symbolic_links_are_reported_as_skipped() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("target.bin");
+        let link = temp.path().join("link.bin");
+        fs::write(&target, b"payload").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let plan = plan_reclaim(&[temp.path().to_path_buf()], PlannedOperation::Delete).unwrap();
+
+        assert_eq!(plan.paths[0].files, 1);
+        assert_eq!(plan.paths[0].dirs, 1);
+        assert_eq!(plan.paths[0].skipped, 1);
     }
 }
