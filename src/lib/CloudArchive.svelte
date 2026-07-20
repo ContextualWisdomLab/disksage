@@ -374,7 +374,7 @@
               <input type="text" bind:value={objectId} autocomplete="off" disabled={attesting} />
             </label>
           </div>
-          <p class="muted">먼저 macOS File Provider의 업로드·최신 버전 메타데이터를 확인합니다. file ID를 입력하면 네이티브 증거가 불완전할 때 OAuth API 체크섬을 확인하지만, 원격 부모 경로가 아직 결합되지 않으므로 이 증거만으로는 원본 제거를 허가하지 않습니다.</p>
+          <p class="muted">먼저 macOS File Provider의 업로드·최신 버전 메타데이터를 확인합니다. file ID를 입력하면 네이티브 증거가 불완전할 때 OAuth API로 SHA-256과 부모 폴더 체인을 My Drive 루트까지 두 차례 검증합니다. 영수증 목적지와 정확히 일치하고 검증 중 변경되지 않은 경우에만 원본 제거 허가를 생성합니다. 공유 드라이브는 아직 실패 폐쇄합니다.</p>
           <p class="muted">API 보완 시 access token은 OS 보안 저장소의 refresh token으로 Rust 내부에서 한 번만 갱신하며 UI·설정·영수증에 노출하지 않습니다.</p>
         {:else if copied.receipt.provider === "onedrive"}
           <p class="muted">macOS File Provider 증거가 불완전하면 OAuth 연결을 사용해 영수증의 OneDrive 상대 경로를 직접 조회하고 QuickXorHash를 검증합니다. 임의 item ID는 받지 않습니다.</p>

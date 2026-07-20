@@ -15,9 +15,7 @@ use disksage_lib::cloud_review::{self, CloudReviewDecision, CloudReviewDispositi
 #[cfg(not(coverage))]
 use disksage_lib::cloud_transfer::{self, CloudCopyReceipt, LocalEvictionPermit};
 #[cfg(not(coverage))]
-use disksage_lib::provider_api_client::{
-    self, FixedHostProviderMetadataClient, ProviderRemoteLocator,
-};
+use disksage_lib::provider_api_client::{self, FixedHostProviderMetadataClient};
 #[cfg(not(coverage))]
 use disksage_lib::provider_oauth;
 #[cfg(not(coverage))]
@@ -424,30 +422,40 @@ fn collect_receipt_sync_evidence(
                     let selected_root = receipt_cloud_root(receipt, home)?;
                     let access_token =
                         provider_oauth::refreshed_access_token(connection_path, &selected_root)?;
-                    let locator = match receipt.provider {
+                    match receipt.provider {
                         CloudProvider::Onedrive => {
                             if provider_object_id.is_some() {
                                 return Err("onedrive-provider-object-id-not-accepted".into());
                             }
-                            provider_api_client::onedrive_path_locator(
+                            let locator = provider_api_client::onedrive_path_locator(
                                 Path::new(&selected_root.path),
                                 Path::new(&receipt.destination),
-                            )?
+                            )?;
+                            provider_api_client::collect_authenticated_provider_api_evidence_from_source(
+                                receipt,
+                                &locator,
+                                access_token.as_str(),
+                                &FixedHostProviderMetadataClient::default(),
+                                confirmed_at_ms,
+                            )
                         }
-                        CloudProvider::GoogleDrive => ProviderRemoteLocator::GoogleDriveFileId(
-                            provider_object_id
-                                .ok_or_else(|| "provider-object-id-missing".to_string())?
-                                .into(),
-                        ),
+                        CloudProvider::GoogleDrive => {
+                            let locator = provider_api_client::google_drive_path_locator(
+                                Path::new(&selected_root.path),
+                                Path::new(&receipt.destination),
+                                provider_object_id
+                                    .ok_or_else(|| "provider-object-id-missing".to_string())?,
+                            )?;
+                            provider_api_client::collect_authenticated_google_drive_path_evidence_from_source(
+                                receipt,
+                                &locator,
+                                access_token.as_str(),
+                                &FixedHostProviderMetadataClient::default(),
+                                confirmed_at_ms,
+                            )
+                        }
                         CloudProvider::Icloud => unreachable!(),
-                    };
-                    provider_api_client::collect_authenticated_provider_api_evidence_from_source(
-                        receipt,
-                        &locator,
-                        access_token.as_str(),
-                        &FixedHostProviderMetadataClient::default(),
-                        confirmed_at_ms,
-                    )
+                    }
                 }
             }
         }

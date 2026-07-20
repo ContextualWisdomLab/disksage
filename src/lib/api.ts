@@ -350,6 +350,7 @@ export interface RemoteContentProof {
   algorithm: RemoteChecksumAlgorithm;
   checksum: string;
   location_bound: boolean;
+  location_proof?: string;
 }
 
 export interface ProviderSyncEvidence {

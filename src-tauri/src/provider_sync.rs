@@ -216,7 +216,7 @@ fn provider_api_evidence_id(
     receipt: &CloudCopyReceipt,
     snapshot: &ProviderApiSnapshot,
     algorithm: RemoteChecksumAlgorithm,
-    location_bound: bool,
+    location_proof: Option<&str>,
     confirmed_at_ms: u64,
 ) -> String {
     let mut hasher = blake3::Hasher::new();
@@ -233,7 +233,9 @@ fn provider_api_evidence_id(
     }
     hasher.update(&snapshot.observed_bytes.to_le_bytes());
     hasher.update(&[snapshot.available as u8, snapshot.trashed as u8]);
-    hasher.update(&[location_bound as u8]);
+    hasher.update(&[location_proof.is_some() as u8]);
+    hasher.update(location_proof.unwrap_or_default().as_bytes());
+    hasher.update(&[0]);
     hasher.update(&[match algorithm {
         RemoteChecksumAlgorithm::Sha256 => 1,
         RemoteChecksumAlgorithm::QuickXor => 2,
@@ -253,7 +255,7 @@ pub fn evidence_from_provider_api_snapshot(
     snapshot: &ProviderApiSnapshot,
     confirmed_at_ms: u64,
 ) -> Result<ProviderSyncEvidence, String> {
-    evidence_from_provider_api_snapshot_with_location(receipt, snapshot, false, confirmed_at_ms)
+    evidence_from_provider_api_snapshot_with_location(receipt, snapshot, None, confirmed_at_ms)
 }
 
 /// Convert provider metadata into content evidence and record whether the authenticated lookup was
@@ -262,7 +264,7 @@ pub fn evidence_from_provider_api_snapshot(
 pub fn evidence_from_provider_api_snapshot_with_location(
     receipt: &CloudCopyReceipt,
     snapshot: &ProviderApiSnapshot,
-    location_bound: bool,
+    location_proof: Option<&str>,
     confirmed_at_ms: u64,
 ) -> Result<ProviderSyncEvidence, String> {
     if snapshot.provider != receipt.provider {
@@ -303,7 +305,7 @@ pub fn evidence_from_provider_api_snapshot_with_location(
             receipt,
             snapshot,
             algorithm,
-            location_bound,
+            location_proof,
             confirmed_at_ms,
         ),
         sync_complete,
@@ -312,7 +314,8 @@ pub fn evidence_from_provider_api_snapshot_with_location(
             revision: snapshot.remote_revision.clone(),
             algorithm,
             checksum: snapshot.remote_checksum.clone(),
-            location_bound,
+            location_bound: location_proof.is_some(),
+            location_proof: location_proof.map(str::to_owned),
         }),
     })
 }
@@ -809,11 +812,16 @@ mod tests {
             let location_bound = evidence_from_provider_api_snapshot_with_location(
                 &receipt(provider),
                 &api_snapshot(provider, checksum),
-                true,
+                Some("provider-path-v1:proof"),
                 30,
             )
             .unwrap();
-            assert!(location_bound.remote_content.unwrap().location_bound);
+            let location_proof = location_bound.remote_content.unwrap();
+            assert!(location_proof.location_bound);
+            assert_eq!(
+                location_proof.location_proof.as_deref(),
+                Some("provider-path-v1:proof")
+            );
             assert_ne!(evidence.evidence_id, location_bound.evidence_id);
         }
     }

@@ -62,6 +62,10 @@ pub struct RemoteContentProof {
     /// rather than an operator-supplied object ID that could name equal content elsewhere.
     #[serde(default)]
     pub location_bound: bool,
+    /// Integrity-bound description of how the exact destination was resolved. OneDrive records a
+    /// canonical path-addressed lookup; Google Drive records the verified parent chain to My Drive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location_proof: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -595,6 +599,28 @@ pub fn approve_local_eviction(
             }
             if !proof.location_bound {
                 blockers.push("remote-location-unbound".into());
+            } else if proof
+                .location_proof
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                blockers.push("remote-location-proof-missing".into());
+            } else {
+                let expected_prefix = match provider {
+                    CloudProvider::Onedrive => "onedrive-path-v1:",
+                    CloudProvider::GoogleDrive => "google-drive-parent-chain-v1:",
+                    CloudProvider::Icloud => "",
+                };
+                let valid = proof
+                    .location_proof
+                    .as_deref()
+                    .and_then(|value| value.strip_prefix(expected_prefix))
+                    .is_some_and(|digest| {
+                        digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    });
+                if !valid {
+                    blockers.push("remote-location-proof-invalid".into());
+                }
             }
             let checksum_matches = match (provider, proof.algorithm) {
                 (CloudProvider::Onedrive, RemoteChecksumAlgorithm::QuickXor) => {
@@ -1454,6 +1480,15 @@ mod tests {
                     algorithm,
                     checksum: checksum.into(),
                     location_bound: true,
+                    location_proof: Some(format!(
+                        "{}{}",
+                        match provider {
+                            CloudProvider::Onedrive => "onedrive-path-v1:",
+                            CloudProvider::GoogleDrive => "google-drive-parent-chain-v1:",
+                            CloudProvider::Icloud => unreachable!(),
+                        },
+                        "a".repeat(64)
+                    )),
                 }),
             };
             assert!(approve_local_eviction(&provider_receipt, &api_evidence).is_ok());
@@ -1485,6 +1520,7 @@ mod tests {
             algorithm: RemoteChecksumAlgorithm::Sha256,
             checksum: "wrong".into(),
             location_bound: false,
+            location_proof: None,
         });
         let blockers = approve_local_eviction(&provider_receipt, &api_evidence).unwrap_err();
         for expected in [
@@ -1496,6 +1532,30 @@ mod tests {
             assert!(blockers.contains(&expected.to_string()), "{expected}");
         }
 
+        api_evidence.remote_content = Some(RemoteContentProof {
+            object_id: "remote-id".into(),
+            revision: "revision-1".into(),
+            algorithm: RemoteChecksumAlgorithm::QuickXor,
+            checksum: "quick-xor".into(),
+            location_bound: true,
+            location_proof: None,
+        });
+        assert!(approve_local_eviction(&provider_receipt, &api_evidence)
+            .unwrap_err()
+            .contains(&"remote-location-proof-missing".to_string()));
+
+        api_evidence.remote_content = Some(RemoteContentProof {
+            object_id: "remote-id".into(),
+            revision: "revision-1".into(),
+            algorithm: RemoteChecksumAlgorithm::QuickXor,
+            checksum: "quick-xor".into(),
+            location_bound: true,
+            location_proof: Some("onedrive-path-v1:not-a-valid-digest".into()),
+        });
+        assert!(approve_local_eviction(&provider_receipt, &api_evidence)
+            .unwrap_err()
+            .contains(&"remote-location-proof-invalid".to_string()));
+
         api_evidence.kind = SyncEvidenceKind::ProviderNativeStatus;
         api_evidence.remote_content = None;
         assert!(approve_local_eviction(&provider_receipt, &api_evidence).is_ok());
@@ -1506,6 +1566,7 @@ mod tests {
             algorithm: RemoteChecksumAlgorithm::QuickXor,
             checksum: "quick-xor".into(),
             location_bound: true,
+            location_proof: Some(format!("onedrive-path-v1:{}", "a".repeat(64))),
         });
         assert!(approve_local_eviction(&provider_receipt, &api_evidence)
             .unwrap_err()

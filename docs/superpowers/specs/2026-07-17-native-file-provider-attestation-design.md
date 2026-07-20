@@ -36,9 +36,11 @@ hydrate, evict, upload, delete, or otherwise mutate either file.
 
 ## User experience
 
-OneDrive and Google Drive item IDs are optional. The UI explains that File Provider metadata is
-checked first and that an item ID plus an existing OS-keychain OAuth connection is used only as an
-API fallback. The headless `--attest-receipt` path supports all three providers using native status.
+File Provider metadata is checked first. OneDrive derives its API fallback from the exact receipt
+path and rejects an item ID. Google Drive accepts a file ID only as the starting point for a twice-
+stable parent-chain proof to the My Drive root; ID-only checksum evidence cannot authorize source
+eviction. Both use an existing OS-keychain OAuth connection. The headless `--attest-receipt` path
+supports all three providers using native status and the same provider-specific fallback rules.
 
 ## Why this remains metadata-first
 

@@ -888,33 +888,43 @@ pub async fn attest_cloud_copy(
                             &connection_path,
                             &selected_root,
                         )?;
-                        let locator = match receipt.provider {
+                        let client =
+                            provider_api_client::FixedHostProviderMetadataClient::default();
+                        match receipt.provider {
                             cloud::CloudProvider::Onedrive => {
                                 if object_id.is_some() {
                                     return Err("onedrive-provider-object-id-not-accepted".into());
                                 }
-                                provider_api_client::onedrive_path_locator(
+                                let locator = provider_api_client::onedrive_path_locator(
                                     Path::new(&selected_root.path),
                                     Path::new(&receipt.destination),
+                                )?;
+                                provider_api_client::collect_authenticated_provider_api_evidence_from_source(
+                                    &receipt,
+                                    &locator,
+                                    access_token.as_str(),
+                                    &client,
+                                    confirmed_at_ms,
                                 )?
                             }
                             cloud::CloudProvider::GoogleDrive => {
-                                provider_api_client::ProviderRemoteLocator::GoogleDriveFileId(
+                                let locator = provider_api_client::google_drive_path_locator(
+                                    Path::new(&selected_root.path),
+                                    Path::new(&receipt.destination),
                                     object_id
+                                        .as_deref()
                                         .ok_or_else(|| "provider-object-id-missing".to_string())?,
-                                )
+                                )?;
+                                provider_api_client::collect_authenticated_google_drive_path_evidence_from_source(
+                                    &receipt,
+                                    &locator,
+                                    access_token.as_str(),
+                                    &client,
+                                    confirmed_at_ms,
+                                )?
                             }
                             cloud::CloudProvider::Icloud => unreachable!(),
-                        };
-                        let client =
-                            provider_api_client::FixedHostProviderMetadataClient::default();
-                        provider_api_client::collect_authenticated_provider_api_evidence_from_source(
-                            &receipt,
-                            &locator,
-                            access_token.as_str(),
-                            &client,
-                            confirmed_at_ms,
-                        )?
+                        }
                     }
                 }
             }
