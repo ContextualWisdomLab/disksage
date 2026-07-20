@@ -19,6 +19,8 @@ use disksage_lib::naruon_lineage;
 #[cfg(not(coverage))]
 use disksage_lib::provider_api_client::{self, FixedHostProviderMetadataClient};
 #[cfg(not(coverage))]
+use disksage_lib::provider_capacity::{self, FixedHostProviderCapacityClient};
+#[cfg(not(coverage))]
 use disksage_lib::provider_evidence::{self, ProviderSyncEvidenceRecord};
 #[cfg(not(coverage))]
 use disksage_lib::provider_oauth;
@@ -26,7 +28,7 @@ use disksage_lib::provider_oauth;
 use disksage_lib::provider_sync;
 
 #[cfg(not(coverage))]
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Args {
     root: PathBuf,
     cloud_root: Option<PathBuf>,
@@ -36,6 +38,8 @@ struct Args {
     limit: usize,
     list_roots: bool,
     inspect_roots: bool,
+    verify_capacity: bool,
+    capacity_reserve_mib: u64,
     copy_fingerprint: Option<String>,
     adopt_existing_fingerprint: Option<String>,
     receipt_dir: Option<PathBuf>,
@@ -86,6 +90,8 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
         limit: 200,
         list_roots: false,
         inspect_roots: false,
+        verify_capacity: false,
+        capacity_reserve_mib: 1024,
         copy_fingerprint: None,
         adopt_existing_fingerprint: None,
         receipt_dir: None,
@@ -133,6 +139,12 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             }
             "--list-roots" => parsed.list_roots = true,
             "--inspect-roots" => parsed.inspect_roots = true,
+            "--verify-capacity" => parsed.verify_capacity = true,
+            "--capacity-reserve-mib" => {
+                parsed.capacity_reserve_mib = value(args, &mut index, "--capacity-reserve-mib")?
+                    .parse()
+                    .map_err(|_| "--capacity-reserve-mib는 정수여야 함".to_string())?
+            }
             "--copy-fingerprint" => {
                 parsed.copy_fingerprint = Some(value(args, &mut index, "--copy-fingerprint")?)
             }
@@ -239,7 +251,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             }
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive] [--min-size-mib N] [--min-age-days N] [--limit N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
+                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive] [--min-size-mib N] [--min-age-days N] [--limit N] [--verify-capacity [--oauth-connections ABSOLUTE_PATH]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -331,11 +343,28 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     if args.provider_object_id.is_some() && args.oauth_connections.is_none() {
         return Err("--provider-object-id에는 --oauth-connections가 필요함".into());
     }
-    let remote_attestation = args.oauth_connections.is_some();
-    if remote_attestation && args.attest_receipt.is_none() && !eviction_action {
+    let remote_provider_api = args.oauth_connections.is_some();
+    if remote_provider_api
+        && args.attest_receipt.is_none()
+        && !eviction_action
+        && !copy_action
+        && !args.verify_capacity
+    {
         return Err(
-            "provider API fallback은 attestation 또는 eviction action에만 지정할 수 있음".into(),
+            "provider API는 capacity, copy, attestation 또는 eviction action에만 지정할 수 있음"
+                .into(),
         );
+    }
+    if args.verify_capacity
+        && (args.list_roots
+            || args.inspect_roots
+            || adoption_action
+            || attestation_action
+            || eviction_action
+            || review_action
+            || args.export_naruon_lineage.is_some())
+    {
+        return Err("capacity verification은 plan 또는 copy action에서만 사용할 수 있음".into());
     }
     if args
         .provider_object_id
@@ -447,6 +476,52 @@ fn receipt_cloud_root(receipt: &CloudCopyReceipt, home: &Path) -> Result<CloudRo
         })
         .max_by_key(|root| Path::new(&root.path).components().count())
         .ok_or_else(|| "receipt-cloud-root-unavailable".to_string())
+}
+
+#[cfg(not(coverage))]
+fn collect_root_capacity(
+    root: &CloudRoot,
+    oauth_connections: Option<&Path>,
+    observed_at_ms: u64,
+) -> Result<provider_capacity::CloudCapacitySnapshot, String> {
+    if root.provider == CloudProvider::Icloud {
+        return provider_capacity::collect_icloud_native_capacity(observed_at_ms);
+    }
+    let connection_path = oauth_connections
+        .ok_or_else(|| "provider-capacity-oauth-connections-required".to_string())?;
+    let access_token = provider_oauth::refreshed_access_token(connection_path, root)?;
+    provider_capacity::collect_authenticated_capacity(
+        root.provider,
+        access_token.as_str(),
+        observed_at_ms,
+        &FixedHostProviderCapacityClient::default(),
+    )
+}
+
+#[cfg(not(coverage))]
+fn verified_capacity_for_bytes(
+    root: &CloudRoot,
+    oauth_connections: Option<&Path>,
+    requested_bytes: u64,
+    largest_candidate_bytes: u64,
+    reserve_mib: u64,
+) -> Result<provider_capacity::CloudCapacityAssessment, String> {
+    let reserve_bytes = reserve_mib.saturating_mul(1024 * 1024);
+    let observed_at_ms = cloud::system_now_ms();
+    let snapshot = match collect_root_capacity(root, oauth_connections, observed_at_ms) {
+        Ok(snapshot) => snapshot,
+        Err(error) => provider_capacity::unavailable_capacity_from_error(
+            root.provider,
+            observed_at_ms,
+            &error,
+        ),
+    };
+    Ok(provider_capacity::assess_capacity(
+        snapshot,
+        requested_bytes,
+        largest_candidate_bytes,
+        reserve_bytes,
+    ))
 }
 
 #[cfg(not(coverage))]
@@ -714,7 +789,7 @@ fn run() -> Result<(), String> {
         return Err("이미 클라우드 안에 있는 경로는 오프로드 원본으로 사용할 수 없음".into());
     }
     let files = cloud::collect_archive_files(&args.root, &excluded);
-    let report = cloud::plan_cloud_archive(
+    let mut report = cloud::plan_cloud_archive(
         &files,
         &args.root,
         &selected,
@@ -725,6 +800,40 @@ fn run() -> Result<(), String> {
             limit: args.limit.clamp(1, 1_000),
         },
     );
+    if args.verify_capacity {
+        let largest_candidate_bytes = report
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.blocked_reason.is_none())
+            .map(|candidate| candidate.bytes)
+            .max()
+            .unwrap_or_default();
+        let assessment = verified_capacity_for_bytes(
+            &selected,
+            args.oauth_connections.as_deref(),
+            report.potentially_reclaimable_bytes,
+            largest_candidate_bytes,
+            args.capacity_reserve_mib,
+        )?;
+        report
+            .notices
+            .retain(|notice| notice != "cloud-quota-unverified");
+        report.notices.push(
+            match assessment.can_fit {
+                Some(true)
+                    if assessment.snapshot.evidence_kind
+                        == provider_capacity::CapacityEvidenceKind::ProviderNativeStatus =>
+                {
+                    "cloud-quota-provider-native-verified"
+                }
+                Some(true) => "cloud-quota-provider-api-verified",
+                Some(false) => "cloud-quota-insufficient-or-blocked",
+                None => "cloud-quota-unavailable",
+            }
+            .into(),
+        );
+        report.capacity = Some(assessment);
+    }
     if let Some(candidate_fingerprint) = &args.review_candidate_fingerprint {
         let review_fingerprint = args
             .review_fingerprint
@@ -809,6 +918,22 @@ fn run() -> Result<(), String> {
         } else {
             None
         };
+        if !adopt_existing {
+            let assessment = verified_capacity_for_bytes(
+                &selected,
+                args.oauth_connections.as_deref(),
+                candidate.bytes,
+                candidate.bytes,
+                args.capacity_reserve_mib,
+            )?;
+            if assessment.can_fit != Some(true) {
+                return Err(if assessment.blockers.is_empty() {
+                    "cloud-capacity-verification-required".into()
+                } else {
+                    assessment.blockers.join(",")
+                });
+            }
+        }
         let (receipt, receipt_path) = if adopt_existing {
             cloud_transfer::adopt_existing_cloud_copy_with_review(
                 candidate,
@@ -887,6 +1012,8 @@ mod tests {
         assert!(defaults.review_rationale.is_none());
         assert!(defaults.export_naruon_lineage.is_none());
         assert!(defaults.naruon_sync_evidence.is_none());
+        assert!(!defaults.verify_capacity);
+        assert_eq!(defaults.capacity_reserve_mib, 1024);
         let args = vec![
             "--root".into(),
             "/scan".into(),
@@ -898,6 +1025,9 @@ mod tests {
             "2".into(),
             "--limit".into(),
             "3".into(),
+            "--verify-capacity".into(),
+            "--capacity-reserve-mib".into(),
+            "2048".into(),
         ];
         let parsed = parse_args(&args, Path::new("/home/test")).unwrap();
         assert_eq!(parsed.root, PathBuf::from("/scan"));
@@ -906,6 +1036,8 @@ mod tests {
             (parsed.min_size_mib, parsed.min_age_days, parsed.limit),
             (1, 2, 3)
         );
+        assert!(parsed.verify_capacity);
+        assert_eq!(parsed.capacity_reserve_mib, 2048);
     }
 
     #[test]
@@ -913,6 +1045,11 @@ mod tests {
         assert!(parse_args(&["--wat".into()], Path::new("/h")).is_err());
         assert!(parse_args(&["--provider".into(), "box".into()], Path::new("/h")).is_err());
         assert!(parse_args(&["--limit".into(), "x".into()], Path::new("/h")).is_err());
+        assert!(parse_args(
+            &["--capacity-reserve-mib".into(), "x".into()],
+            Path::new("/h")
+        )
+        .is_err());
         assert!(parse_args(&["--root".into()], Path::new("/h")).is_err());
         let inspect = parse_args(&["--inspect-roots".into()], Path::new("/h")).unwrap();
         assert!(inspect.inspect_roots);
@@ -1065,6 +1202,52 @@ mod tests {
             Path::new("/h"),
         )
         .is_err());
+    }
+
+    #[test]
+    fn capacity_verification_allows_plan_and_copy_actions() {
+        let mut plan = parse_args(&["--verify-capacity".into()], Path::new("/h")).unwrap();
+        plan.oauth_connections = Some(PathBuf::from("/connections.json"));
+        assert!(validate_action_args(&plan).is_ok());
+
+        let mut copy = parse_args(&[], Path::new("/h")).unwrap();
+        copy.copy_fingerprint = Some("a".repeat(64));
+        copy.receipt_dir = Some(PathBuf::from("/receipts"));
+        copy.oauth_connections = Some(PathBuf::from("/connections.json"));
+        assert!(validate_action_args(&copy).is_ok());
+
+        let mut adoption = copy.clone();
+        adoption.copy_fingerprint = None;
+        adoption.adopt_existing_fingerprint = Some("b".repeat(64));
+        assert!(validate_action_args(&adoption).is_err());
+
+        plan.list_roots = true;
+        assert!(validate_action_args(&plan).is_err());
+    }
+
+    #[test]
+    fn capacity_verification_without_connection_is_a_redacted_blocked_assessment() {
+        let root = CloudRoot {
+            id: "onedrive:test".into(),
+            provider: CloudProvider::Onedrive,
+            account_scope: disksage_lib::cloud::CloudAccountScope::Personal,
+            label: "OneDrive".into(),
+            path: "/Cloud/OneDrive".into(),
+            readable: true,
+            access_issue: None,
+        };
+
+        let assessment = verified_capacity_for_bytes(&root, None, 10, 10, 1).unwrap();
+
+        assert_eq!(assessment.can_fit, None);
+        assert_eq!(
+            assessment.snapshot.unavailable_reason.as_deref(),
+            Some("provider-oauth-connection-missing")
+        );
+        assert_eq!(
+            assessment.blockers,
+            ["provider-oauth-connection-missing".to_string()]
+        );
     }
 
     #[test]

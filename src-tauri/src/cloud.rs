@@ -224,6 +224,8 @@ pub struct CloudPlanReport {
     pub candidate_bytes: u64,
     pub potentially_reclaimable_bytes: u64,
     pub exact_duplicates: ExactDuplicateSummary,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity: Option<crate::provider_capacity::CloudCapacityAssessment>,
     pub notices: Vec<String>,
 }
 
@@ -3420,6 +3422,7 @@ pub fn plan_cloud_archive(
         candidate_bytes,
         potentially_reclaimable_bytes,
         exact_duplicates,
+        capacity: None,
         notices: vec![
             "dry-run-only".into(),
             "cloud-quota-unverified".into(),

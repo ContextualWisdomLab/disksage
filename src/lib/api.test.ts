@@ -52,6 +52,7 @@ describe("api wrappers", () => {
       [() => api.getUserRules(), "user_rules"],
       [() => api.listCloudRoots(), "list_cloud_roots"],
       [() => api.listCloudProviderConnections(), "list_cloud_provider_connections"],
+      [() => api.verifyCloudProviderCapacity("/cloud"), "verify_cloud_provider_capacity", { cloudRoot: "/cloud" }],
       [() => api.connectCloudProvider("/cloud", "desktop-client-id"), "connect_cloud_provider", { cloudRoot: "/cloud", clientId: "desktop-client-id" }],
       [() => api.disconnectCloudProvider("/cloud"), "disconnect_cloud_provider", { cloudRoot: "/cloud" }],
       [() => api.planCloudArchive("/scan", "/cloud"), "plan_cloud_archive", { root: "/scan", cloudRoot: "/cloud", minSizeMib: 256, minAgeDays: 90, limit: 200 }],
@@ -125,5 +126,53 @@ describe("cloud root identity", () => {
     expect(api.cloudRootIdentityMatches({ ...connection, provider: "onedrive" }, root)).toBe(false);
     expect(api.cloudRootIdentityMatches({ ...connection, cloud_root_id: "/Cloud/other" }, root)).toBe(false);
     expect(api.cloudRootIdentityMatches({ ...connection, cloud_root_path: "/Cloud/other" }, root)).toBe(false);
+  });
+});
+
+describe("cloud capacity copy gate", () => {
+  const snapshot: api.CloudCapacitySnapshot = {
+    schema_version: 2,
+    provider: "icloud",
+    evidence_kind: "provider-native-status",
+    observed_at_ms: 1,
+    total_bytes: null,
+    used_bytes: null,
+    remaining_bytes: 2_000,
+    trashed_bytes: null,
+    max_upload_size_bytes: null,
+    state: "available",
+    evidence_fingerprint: "a".repeat(64),
+    unavailable_reason: null,
+  };
+  const assessment: api.CloudCapacityAssessment = {
+    snapshot,
+    requested_bytes: 100,
+    largest_candidate_bytes: 100,
+    reserve_bytes: 1_000,
+    required_bytes: 1_100,
+    can_fit: true,
+    blockers: [],
+    notices: [],
+  };
+
+  it("accepts provider-native iCloud evidence when the byte gate fits", () => {
+    expect(api.cloudCapacityAllowsCopy(assessment)).toBe(true);
+  });
+
+  it("rejects unavailable or failed capacity evidence for every provider", () => {
+    expect(api.cloudCapacityAllowsCopy(undefined)).toBe(false);
+    expect(api.cloudCapacityAllowsCopy({ ...assessment, can_fit: false })).toBe(false);
+    expect(api.cloudCapacityAllowsCopy({
+      ...assessment,
+      can_fit: null,
+      snapshot: {
+        ...snapshot,
+        evidence_kind: "unavailable",
+        state: "unavailable",
+        remaining_bytes: null,
+        evidence_fingerprint: null,
+        unavailable_reason: "icloud-native-quota-unavailable",
+      },
+    })).toBe(false);
   });
 });

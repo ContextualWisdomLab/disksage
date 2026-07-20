@@ -284,7 +284,51 @@ export interface CloudPlanReport {
   candidate_bytes: number;
   potentially_reclaimable_bytes: number;
   exact_duplicates: ExactDuplicateSummary;
+  capacity?: CloudCapacityAssessment;
   notices: string[];
+}
+
+export type CapacityEvidenceKind = "provider-api" | "provider-native-status" | "unavailable";
+export type CloudCapacityState =
+  | "available"
+  | "normal"
+  | "nearing"
+  | "critical"
+  | "exceeded"
+  | "unlimited"
+  | "unavailable";
+
+export interface CloudCapacitySnapshot {
+  schema_version: number;
+  provider: CloudProvider;
+  evidence_kind: CapacityEvidenceKind;
+  observed_at_ms: number;
+  total_bytes: number | null;
+  used_bytes: number | null;
+  remaining_bytes: number | null;
+  trashed_bytes: number | null;
+  max_upload_size_bytes: number | null;
+  state: CloudCapacityState;
+  evidence_fingerprint: string | null;
+  unavailable_reason: string | null;
+}
+
+export interface CloudCapacityAssessment {
+  snapshot: CloudCapacitySnapshot;
+  requested_bytes: number;
+  largest_candidate_bytes: number;
+  reserve_bytes: number;
+  required_bytes: number | null;
+  can_fit: boolean | null;
+  blockers: string[];
+  notices: string[];
+}
+
+export function cloudCapacityAllowsCopy(
+  assessment: CloudCapacityAssessment | null | undefined,
+): boolean {
+  return assessment?.can_fit === true
+    && assessment.snapshot.evidence_kind !== "unavailable";
 }
 
 export interface ExactDuplicateSummary {
@@ -407,6 +451,8 @@ export const inspectCloudRoots = () =>
   invoke<CloudRootDiscoveryReport>("inspect_cloud_roots");
 export const listCloudProviderConnections = () =>
   invoke<OAuthConnection[]>("list_cloud_provider_connections");
+export const verifyCloudProviderCapacity = (cloudRoot: string) =>
+  invoke<CloudCapacitySnapshot>("verify_cloud_provider_capacity", { cloudRoot });
 export const listCloudReviewDecisions = () =>
   invoke<CloudReviewDecision[]>("list_cloud_review_decisions");
 export const connectCloudProvider = (cloudRoot: string, clientId: string) =>
