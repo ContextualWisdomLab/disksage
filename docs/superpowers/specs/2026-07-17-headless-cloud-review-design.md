@@ -12,7 +12,9 @@ review fingerprint includes the destination and current evidence.
 1. Plan again from the source root and selected provider root.
 2. Require both the candidate metadata fingerprint and the current review fingerprint.
 3. Record either `approved` or `held` through the existing immutable, hash-bound review decision
-   writer in an explicit absolute review directory.
+   writer in an explicit absolute review directory. The attributed reviewer must use the
+   `human:ID` namespace; an agent must use a separately integrated provenance path rather than
+   impersonating a human reviewer.
 4. For a later copy action, load the latest immutable decision for that candidate from the same
    directory.
 5. Pass it to the existing `prepare_cloud_copy_with_review` gate, which rejects missing, held,
@@ -24,7 +26,10 @@ the source and refuses an existing destination.
 ## Interface
 
 - Review: `--review-candidate-fingerprint`, `--review-fingerprint`,
-  `--review-disposition approved|held`, and `--review-dir`.
+  `--review-disposition approved|held`, `--reviewed-by human:ID`,
+  `--review-rationale TEXT`, and `--review-dir`.
 - Copy: existing `--copy-fingerprint` and `--receipt-dir`, plus `--review-dir` when the candidate
   requires review.
 - Review, copy, attestation, and root-list actions are mutually exclusive.
+- Attribution is validated before the source tree is planned so malformed or non-human identities
+  fail without an expensive metadata scan.

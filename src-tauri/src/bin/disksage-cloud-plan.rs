@@ -251,7 +251,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             }
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive] [--min-size-mib N] [--min-age-days N] [--limit N] [--verify-capacity [--oauth-connections ABSOLUTE_PATH]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
+                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive] [--min-size-mib N] [--min-age-days N] [--limit N] [--verify-capacity [--oauth-connections ABSOLUTE_PATH]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -324,6 +324,16 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
         );
     }
     let review_action = review_fields.iter().all(|value| *value);
+    if review_action {
+        cloud_review::validate_review_attribution(
+            args.reviewed_by
+                .as_deref()
+                .ok_or_else(|| "--reviewed-by가 필요함".to_string())?,
+            args.review_rationale
+                .as_deref()
+                .ok_or_else(|| "--review-rationale가 필요함".to_string())?,
+        )?;
+    }
     let eviction_fields = [
         args.evict_receipt.is_some(),
         args.confirm_receipt_id.is_some(),
@@ -1196,6 +1206,16 @@ mod tests {
             Some("metadata reviewed")
         );
         assert!(validate_action_args(&review).is_ok());
+
+        let mut non_human_review = review.clone();
+        non_human_review.reviewed_by = Some("agent:codex".into());
+        assert_eq!(
+            validate_action_args(&non_human_review).unwrap_err(),
+            "cloud-review-decision-attribution-invalid"
+        );
+
+        let help = parse_args(&["--help".into()], Path::new("/h")).unwrap_err();
+        assert!(help.contains("--reviewed-by human:ID"));
 
         assert!(parse_args(
             &["--review-disposition".into(), "maybe".into(),],
