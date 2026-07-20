@@ -249,6 +249,28 @@ pub fn validate_cloud_root_readable(root: &CloudRoot) -> Result<(), String> {
         .map_err(|error| format!("cloud-root-unreadable:{}:{error}", root.path))
 }
 
+/// Match an operator-supplied cloud root to a discovered root without depending on the Unicode
+/// normalization form exposed by the shell or macOS File Provider. Filesystem identity wins when
+/// both spellings resolve; canonical-equivalent UTF-8 is the bounded fallback. Callers still fail
+/// closed when more than one discovered root matches.
+pub fn cloud_root_path_matches(discovered: &Path, requested: &Path) -> bool {
+    if discovered == requested {
+        return true;
+    }
+    if let (Ok(discovered), Ok(requested)) = (
+        std::fs::canonicalize(discovered),
+        std::fs::canonicalize(requested),
+    ) {
+        if discovered == requested {
+            return true;
+        }
+    }
+    match (discovered.to_str(), requested.to_str()) {
+        (Some(discovered), Some(requested)) => discovered.nfc().eq(requested.nfc()),
+        _ => false,
+    }
+}
+
 #[cfg(not(coverage))]
 fn access_issue_for_error(error: &std::io::Error) -> String {
     match error.kind() {

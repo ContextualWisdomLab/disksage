@@ -443,10 +443,17 @@ pub fn inspect_cloud_roots(app: AppHandle) -> cloud::CloudRootDiscoveryReport {
 
 #[cfg(not(coverage))]
 fn selected_cloud_root(app: &AppHandle, cloud_root: &str) -> Result<cloud::CloudRoot, String> {
-    cloud::discover_cloud_roots(&resolve_home(app))
+    let matches: Vec<_> = cloud::discover_cloud_roots(&resolve_home(app))
         .into_iter()
-        .find(|candidate| candidate.path == cloud_root)
-        .ok_or_else(|| "탐지된 클라우드 루트가 아님".to_string())
+        .filter(|candidate| {
+            cloud::cloud_root_path_matches(Path::new(&candidate.path), Path::new(cloud_root))
+        })
+        .collect();
+    match matches.as_slice() {
+        [only] => Ok(only.clone()),
+        [] => Err("탐지된 클라우드 루트가 아님".into()),
+        _ => Err("정규화 후 클라우드 루트가 여러 개와 일치함".into()),
+    }
 }
 
 #[cfg(not(coverage))]

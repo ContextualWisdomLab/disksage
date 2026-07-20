@@ -407,7 +407,7 @@ fn select_root(roots: &[CloudRoot], args: &Args) -> Result<CloudRoot, String> {
         .filter(|root| {
             args.cloud_root
                 .as_ref()
-                .map(|path| Path::new(&root.path) == path)
+                .map(|path| cloud::cloud_root_path_matches(Path::new(&root.path), path))
                 .unwrap_or(true)
                 && args.provider.map(|p| p == root.provider).unwrap_or(true)
         })
@@ -697,6 +697,32 @@ mod tests {
         assert_eq!(select_root(&roots, &args).unwrap().path, "/b");
         args.cloud_root = Some(PathBuf::from("/missing"));
         assert!(select_root(&roots, &args).is_err());
+    }
+
+    #[test]
+    fn selector_accepts_canonically_equivalent_unicode_path_and_fails_ambiguous() {
+        let decomposed = "/cloud/GoogleDrive-user/\u{1102}\u{1162} \u{1103}\u{1173}\u{1105}\u{1161}\u{110b}\u{1175}\u{1107}\u{1173}";
+        let composed = "/cloud/GoogleDrive-user/내 드라이브";
+        let root = CloudRoot {
+            id: decomposed.into(),
+            provider: CloudProvider::GoogleDrive,
+            account_scope: disksage_lib::cloud::CloudAccountScope::Personal,
+            label: "Google Drive".into(),
+            path: decomposed.into(),
+            readable: true,
+            access_issue: None,
+        };
+        let mut args = parse_args(&[], Path::new("/home/test")).unwrap();
+        args.cloud_root = Some(PathBuf::from(composed));
+
+        assert_eq!(select_root(&[root.clone()], &args).unwrap(), root);
+
+        let canonically_equivalent_duplicate = CloudRoot {
+            id: composed.into(),
+            path: composed.into(),
+            ..root.clone()
+        };
+        assert!(select_root(&[root, canonically_equivalent_duplicate], &args).is_err());
     }
 
     #[test]
