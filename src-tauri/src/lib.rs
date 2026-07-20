@@ -29,6 +29,7 @@ mod web;
 mod reasoning;
 #[cfg_attr(coverage, allow(dead_code))]
 mod dataset_metadata;
+pub mod archive_git_tree;
 #[cfg_attr(coverage, allow(dead_code))]
 pub mod cloud;
 #[cfg(not(coverage))]
