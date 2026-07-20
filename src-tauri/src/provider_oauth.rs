@@ -4,11 +4,12 @@
 //! hosts, and an OS credential store. Refresh tokens never enter settings or command responses;
 //! access tokens live only long enough to perform one provider metadata request.
 
-use crate::cloud::{CloudProvider, CloudRoot};
+use crate::cloud::{cloud_root_path_matches, CloudProvider, CloudRoot};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+use unicode_normalization::UnicodeNormalization;
 use zeroize::Zeroizing;
 
 #[cfg(not(coverage))]
@@ -230,9 +231,9 @@ fn build_authorization_url(
     Ok(query_url(endpoint, &params))
 }
 
-fn connection_id(root: &CloudRoot) -> String {
+fn connection_id_for_values(provider: &str, root_id: &str, root_path: &str) -> String {
     let mut hasher = Sha256::new();
-    for value in [root.provider.as_str(), root.id.as_str(), root.path.as_str()] {
+    for value in [provider, root_id, root_path] {
         hasher.update(value.as_bytes());
         hasher.update([0]);
     }
@@ -243,6 +244,19 @@ fn connection_id(root: &CloudRoot) -> String {
         write!(&mut encoded, "{byte:02x}").expect("writing to String cannot fail");
     }
     encoded
+}
+
+/// Keep OAuth identities stable when macOS File Provider exposes the same root in NFC or NFD.
+fn connection_id(root: &CloudRoot) -> String {
+    let root_id = root.id.nfc().collect::<String>();
+    let root_path = root.path.nfc().collect::<String>();
+    connection_id_for_values(root.provider.as_str(), &root_id, &root_path)
+}
+
+/// Version 1 connection documents hashed the raw filesystem spelling. Accept those records so an
+/// OS remount never strands the refresh token that is still stored under the legacy identifier.
+fn legacy_connection_id(root: &CloudRoot) -> String {
+    connection_id_for_values(root.provider.as_str(), &root.id, &root.path)
 }
 
 fn validate_connection(connection: &OAuthConnection) -> Result<(), String> {
@@ -268,10 +282,22 @@ fn validate_connection(connection: &OAuthConnection) -> Result<(), String> {
         readable: true,
         access_issue: None,
     };
-    if connection.connection_id != connection_id(&root) {
+    if connection.connection_id != connection_id(&root)
+        && connection.connection_id != legacy_connection_id(&root)
+    {
         return Err("oauth-connection-id-mismatch".into());
     }
     Ok(())
+}
+
+fn connection_matches_root(connection: &OAuthConnection, root: &CloudRoot) -> bool {
+    validate_connection(connection).is_ok()
+        && connection.provider == root.provider
+        && connection.cloud_root_id.nfc().eq(root.id.nfc())
+        && cloud_root_path_matches(
+            Path::new(&connection.cloud_root_path),
+            Path::new(&root.path),
+        )
 }
 
 pub fn connections_path(app_data_dir: &Path) -> PathBuf {
@@ -363,14 +389,19 @@ pub fn connection_for_root(
     let expected_id = connection_id(root);
     let matches: Vec<_> = connections
         .iter()
-        .filter(|connection| {
-            connection.connection_id == expected_id
-                && connection.provider == root.provider
-                && connection.cloud_root_id == root.id
-                && connection.cloud_root_path == root.path
-        })
+        .filter(|connection| connection_matches_root(connection, root))
         .cloned()
         .collect();
+    let preferred: Vec<_> = matches
+        .iter()
+        .filter(|connection| connection.connection_id == expected_id)
+        .cloned()
+        .collect();
+    match preferred.as_slice() {
+        [only] => return Ok(only.clone()),
+        [] => {}
+        _ => return Err("provider-oauth-connection-ambiguous".into()),
+    }
     match matches.as_slice() {
         [only] => Ok(only.clone()),
         [] => Err("provider-oauth-connection-missing".into()),
@@ -869,7 +900,7 @@ pub fn finish_authorization(
     validate_connection(&connection)?;
     let original = load_connections(connection_document_path)?;
     let mut updated = original.clone();
-    updated.retain(|entry| entry.connection_id != connection.connection_id);
+    updated.retain(|entry| !connection_matches_root(entry, root));
     updated.push(connection.clone());
     updated.sort_by(|left, right| left.connection_id.cmp(&right.connection_id));
     save_connections(connection_document_path, &updated)?;
@@ -878,6 +909,11 @@ pub fn finish_authorization(
             return Err("provider-oauth-keyring-write-and-config-rollback-failed".into());
         }
         return Err(error);
+    }
+    for stale in original.iter().filter(|entry| {
+        entry.connection_id != connection.connection_id && connection_matches_root(entry, root)
+    }) {
+        let _ = delete_refresh_token(&stale.connection_id);
     }
     Ok(connection)
 }
@@ -1084,6 +1120,68 @@ mod tests {
         assert!(save_connections(&path, &[tampered]).is_err());
         std::fs::write(&path, b"not-json").unwrap();
         assert!(load_connections(&path).is_err());
+    }
+
+    fn unicode_root(provider: CloudProvider, decomposed: bool) -> CloudRoot {
+        #[cfg(windows)]
+        let composed = r"C:\Cloud\내 드라이브";
+        #[cfg(not(windows))]
+        let composed = "/Cloud/내 드라이브";
+        let path = if decomposed {
+            composed.nfd().collect::<String>()
+        } else {
+            composed.to_string()
+        };
+        CloudRoot {
+            id: path.clone(),
+            provider,
+            account_scope: crate::cloud::CloudAccountScope::Organization,
+            label: "Google Drive".into(),
+            path,
+            readable: true,
+            access_issue: None,
+        }
+    }
+
+    #[test]
+    fn connection_id_is_stable_across_file_provider_unicode_forms() {
+        let composed = unicode_root(CloudProvider::GoogleDrive, false);
+        let decomposed = unicode_root(CloudProvider::GoogleDrive, true);
+        assert_ne!(composed.path, decomposed.path);
+        assert_eq!(connection_id(&composed), connection_id(&decomposed));
+        assert_ne!(
+            legacy_connection_id(&composed),
+            legacy_connection_id(&decomposed)
+        );
+    }
+
+    #[test]
+    fn connection_lookup_accepts_legacy_canonical_equivalent_root() {
+        let saved_root = unicode_root(CloudProvider::GoogleDrive, true);
+        let requested_root = unicode_root(CloudProvider::GoogleDrive, false);
+        let mut saved = connection(CloudProvider::GoogleDrive);
+        saved.cloud_root_id = saved_root.id.clone();
+        saved.cloud_root_path = saved_root.path.clone();
+        saved.connection_id = legacy_connection_id(&saved_root);
+        assert!(validate_connection(&saved).is_ok());
+        assert_eq!(
+            connection_for_root(std::slice::from_ref(&saved), &requested_root).unwrap(),
+            saved
+        );
+
+        let mut wrong_root = requested_root.clone();
+        wrong_root.id.push_str("-other");
+        assert_eq!(
+            connection_for_root(std::slice::from_ref(&saved), &wrong_root).unwrap_err(),
+            "provider-oauth-connection-missing"
+        );
+
+        let mut tampered = saved.clone();
+        tampered.connection_id = "0".repeat(64);
+        assert_eq!(
+            connection_for_root(&[tampered], &requested_root).unwrap_err(),
+            "provider-oauth-connection-missing"
+        );
     }
 
     #[cfg(unix)]

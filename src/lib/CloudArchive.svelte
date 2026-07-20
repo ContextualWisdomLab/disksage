@@ -208,11 +208,7 @@
   function connectionForSelectedRoot(): api.OAuthConnection | null {
     const root = selectedRootDetails();
     if (!root) return null;
-    return connections.find((connection) =>
-      connection.provider === root.provider
-      && connection.cloud_root_id === root.id
-      && connection.cloud_root_path === root.path
-    ) ?? null;
+    return connections.find((connection) => api.cloudRootIdentityMatches(connection, root)) ?? null;
   }
 
   async function connectProvider() {
