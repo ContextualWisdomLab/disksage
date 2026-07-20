@@ -10,6 +10,7 @@ use unicode_normalization::UnicodeNormalization;
 
 const REPORT_VERSION: u32 = 1;
 const COMPARISON_REPORT_VERSION: u32 = 1;
+const COMPARISON_SCHEMA_KIND: &str = "disksage.archive-content-inclusion";
 const MAX_ZIP_ENTRIES: usize = 100_000;
 const MAX_PATH_BYTES: usize = 4_096;
 const MAX_UNCOMPRESSED_BYTES: u64 = 16 * 1024 * 1024 * 1024;
@@ -39,6 +40,7 @@ pub struct ArchiveGitTreeReport {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ArchiveContentInclusionReport {
     pub version: u32,
+    pub schema_kind: &'static str,
     pub subset_archive: String,
     pub superset_archive: String,
     pub root_mode: String,
@@ -562,6 +564,7 @@ pub fn compare_zip_content_inclusion(
 
     Ok(ArchiveContentInclusionReport {
         version: COMPARISON_REPORT_VERSION,
+        schema_kind: COMPARISON_SCHEMA_KIND,
         subset_archive: subset.report.archive,
         superset_archive: superset.report.archive,
         root_mode: root_mode.label().to_string(),
@@ -805,6 +808,7 @@ mod tests {
         .unwrap();
 
         assert!(report.subset_content_included);
+        assert_eq!(report.schema_kind, "disksage.archive-content-inclusion");
         assert!(!report.archives_identical);
         assert_eq!(report.matching_file_count, 2);
         assert_eq!(report.missing_file_count, 0);

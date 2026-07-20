@@ -28,8 +28,9 @@ streams both archives into a content manifest. Each file is bound by its exact p
 mode, declared-and-observed uncompressed byte length, and SHA-256 of the uncompressed bytes.
 Compression method, archive entry order, and ZIP container metadata do not affect the proof. The
 JSON report includes complete matching/missing/changed/additional counts, bounded sorted path
-samples, both manifest SHA-256 values, and a role-sensitive comparison fingerprint. It exits
-nonzero unless every subset entry is present and identical.
+samples, both manifest SHA-256 values, a role-sensitive comparison fingerprint, and the versioned
+`disksage.archive-content-inclusion` schema kind consumed by Naruon. It exits nonzero unless every
+subset entry is present and identical.
 
 The proof contains paths, counts, byte totals, modes, and object digests. It does not retain file
 contents, call a network service, mutate the ZIP, or authorize deletion.
