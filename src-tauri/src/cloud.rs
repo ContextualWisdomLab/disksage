@@ -871,6 +871,88 @@ fn filename_date_ms(path: &Path) -> Option<u64> {
     None
 }
 
+fn filename_publication_month(path: &Path) -> Option<(i32, u32)> {
+    let normalized: String = path.file_name()?.to_string_lossy().nfc().collect();
+    let chars: Vec<char> = normalized.chars().collect();
+    for start in 0..chars.len() {
+        if start > 0 && chars[start - 1].is_alphanumeric() {
+            continue;
+        }
+        for year_len in [4, 2] {
+            let Some(year_digits) = chars.get(start..start + year_len) else {
+                continue;
+            };
+            if !year_digits.iter().all(char::is_ascii_digit) {
+                continue;
+            }
+            let mut index = start + year_len;
+            while chars.get(index).is_some_and(|value| value.is_whitespace()) {
+                index += 1;
+            }
+            if chars.get(index) != Some(&'년') {
+                continue;
+            }
+            index += 1;
+            while chars.get(index).is_some_and(|value| value.is_whitespace()) {
+                index += 1;
+            }
+            let month_start = index;
+            while index < chars.len() && index - month_start < 2 && chars[index].is_ascii_digit() {
+                index += 1;
+            }
+            if index == month_start || chars.get(index).is_some_and(char::is_ascii_digit) {
+                continue;
+            }
+            let month = chars[month_start..index].iter().fold(0u32, |value, digit| {
+                value * 10 + digit.to_digit(10).unwrap_or_default()
+            });
+            while chars.get(index).is_some_and(|value| value.is_whitespace()) {
+                index += 1;
+            }
+            if chars.get(index) != Some(&'월') {
+                continue;
+            }
+            index += 1;
+            while chars.get(index).is_some_and(|value| value.is_whitespace()) {
+                index += 1;
+            }
+            if chars.get(index) != Some(&'호') {
+                continue;
+            }
+            index += 1;
+            if chars
+                .get(index)
+                .is_some_and(|value| value.is_alphanumeric())
+            {
+                continue;
+            }
+            let year = year_digits.iter().fold(0i32, |value, digit| {
+                value * 10 + digit.to_digit(10).unwrap_or_default() as i32
+            });
+            let year = if year_len == 2 { 2000 + year } else { year };
+            if (1970..=2100).contains(&year) && (1..=12).contains(&month) {
+                return Some((year, month));
+            }
+        }
+    }
+    None
+}
+
+fn add_filename_publication_month(metadata: &mut ContentMetadata, year: i32, month: u32) {
+    let value = format!("{year:04}-{month:02}");
+    let context = format!("filename-publication-month={value}");
+    if !metadata.context.contains(&context) {
+        metadata.context.push(context);
+    }
+    add_evidence(
+        metadata,
+        "filename-publication-month",
+        value,
+        "filename:publication-month",
+        "low",
+    );
+}
+
 fn date_value(epoch_ms: u64) -> String {
     let (year, month, day) = date_parts(epoch_ms);
     format!("{year:04}-{month:02}-{day:02}")
@@ -3121,6 +3203,7 @@ pub fn plan_cloud_archive(
             continue;
         }
         let filename_ms = filename_date_ms(&file.path);
+        let filename_publication_month = filename_publication_month(&file.path);
         let mut lineage_metadata = file.content_metadata.clone();
         // Coverage builds exercise the deterministic planning core. Content probing is an
         // external-process adapter (ExifTool/ffprobe/pdfinfo/unzip) covered by normal tests and
@@ -3138,6 +3221,9 @@ pub fn plan_cloud_archive(
                 "filename:path-token",
                 "low",
             );
+        }
+        if let Some((year, month)) = filename_publication_month {
+            add_filename_publication_month(&mut lineage_metadata, year, month);
         }
         if file.created_ms > 0 {
             add_evidence(
@@ -3268,6 +3354,14 @@ pub fn plan_cloud_archive(
         if let (Some(embedded_ms), Some(filename_ms)) = (embedded_production_time_ms, filename_ms) {
             if embedded_ms.abs_diff(filename_ms) > DAY_MS {
                 review_reasons.push("embedded-and-filename-date-conflict".into());
+            }
+        }
+        if let (Some(embedded_ms), Some((publication_year, publication_month))) =
+            (embedded_production_time_ms, filename_publication_month)
+        {
+            let (embedded_year, embedded_month, _) = date_parts(embedded_ms);
+            if (embedded_year, embedded_month) != (publication_year, publication_month) {
+                review_reasons.push("embedded-date-differs-from-filename-publication-month".into());
             }
         }
         review_reasons.extend(destination_scope_review_reasons(
@@ -3936,6 +4030,30 @@ mod tests {
     }
 
     #[test]
+    fn filename_publication_month_parser_preserves_issue_context_without_fabricating_a_day() {
+        assert_eq!(
+            filename_publication_month(Path::new("(견본) 플라스틱스_'26년 1월호.pdf")),
+            Some((2026, 1))
+        );
+        assert_eq!(
+            filename_publication_month(Path::new("정기간행물 2026년 12 월 호 최종.pdf")),
+            Some((2026, 12))
+        );
+        assert_eq!(
+            filename_publication_month(Path::new("archive_2026년 1월.pdf")),
+            None
+        );
+        assert_eq!(
+            filename_publication_month(Path::new("archive_2026년 13월호.pdf")),
+            None
+        );
+        assert_eq!(
+            filename_publication_month(Path::new("reportA2026년 1월호.pdf")),
+            None
+        );
+    }
+
+    #[test]
     fn metadata_helpers_extract_embedded_dates_and_namespaced_values() {
         let decoded =
             decoded_hex_ascii("323032352d31312d31375430393a32363a30342b30393a3030").unwrap();
@@ -4176,6 +4294,72 @@ mod tests {
                 && evidence.source == "filename:path-token"
                 && evidence.confidence == "low"
         }));
+    }
+
+    #[test]
+    fn planner_keeps_filename_publication_month_as_secondary_lineage_context() {
+        let source = PathBuf::from("/source");
+        let cloud = root(CloudProvider::GoogleDrive, Path::new("/cloud"));
+        let embedded_ms = date_epoch_ms(2026, 4, 17).unwrap();
+        let modified_ms = date_epoch_ms(2026, 4, 30).unwrap();
+        let report = plan_cloud_archive(
+            &[FileFact {
+                path: source.join("(견본) 플라스틱스_'26년 1월호.pdf"),
+                bytes: 103_544_637,
+                created_ms: modified_ms,
+                modified_ms,
+                content_metadata: ContentMetadata {
+                    production_time_ms: Some(embedded_ms),
+                    production_time_source: Some("embedded:exiftool:CreateDate".into()),
+                    production_time_confidence: Some("high".into()),
+                    evidence: vec![MetadataEvidence {
+                        field: "production-date".into(),
+                        value: "2026-04-17".into(),
+                        source: "embedded:exiftool:CreateDate".into(),
+                        confidence: "high".into(),
+                    }],
+                    ..ContentMetadata::default()
+                },
+            }],
+            &source,
+            &cloud,
+            modified_ms,
+            CloudPlanOptions {
+                min_size_bytes: 0,
+                min_age_days: 0,
+                limit: 10,
+            },
+        );
+        let candidate = &report.candidates[0];
+        assert_eq!(candidate.production_time_ms, embedded_ms);
+        assert_eq!(
+            candidate.production_time_source,
+            "embedded:exiftool:CreateDate"
+        );
+        assert!(candidate
+            .dst
+            .contains("DiskSage Archive/2026/04/documents/(견본) 플라스틱스_'26년 1월호.pdf"));
+        assert!(candidate
+            .content_context
+            .contains(&"filename-publication-month=2026-01".to_string()));
+        assert!(candidate.metadata_evidence.iter().any(|evidence| {
+            evidence.field == "filename-publication-month"
+                && evidence.value == "2026-01"
+                && evidence.source == "filename:publication-month"
+                && evidence.confidence == "low"
+        }));
+        assert!(candidate
+            .review_reasons
+            .contains(&"embedded-date-differs-from-filename-publication-month".to_string()));
+
+        let mut evidence_removed = candidate.clone();
+        evidence_removed
+            .metadata_evidence
+            .retain(|evidence| evidence.field != "filename-publication-month");
+        assert_ne!(
+            candidate.review_fingerprint,
+            candidate_review_fingerprint(&evidence_removed)
+        );
     }
 
     #[test]

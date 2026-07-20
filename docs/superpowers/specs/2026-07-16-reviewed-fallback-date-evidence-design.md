@@ -27,9 +27,16 @@ Embedded dates below high confidence receive an explicit
 receive `production-date-not-from-embedded-metadata`; the filename value also remains separate
 `filename-date-hint` lineage evidence.
 
+A partial publication marker such as `26년 1월호` is not eligible for this fallback. DiskSage
+records it as low-confidence `filename-publication-month` evidence and content context without
+inventing a day. It never changes production time or destination placement. When its year/month
+differs from an embedded production date, the planner adds
+`embedded-date-differs-from-filename-publication-month` and requires an evidence-bound review.
+
 ## Safety invariants
 
 - A filename date is never trusted automatically and never outranks embedded metadata.
+- A filename publication month is lineage context, not a production timestamp or fallback date.
 - An approval is bound to the source, destination, provider, file identity, selected date,
   confidence, review reasons, and all displayed metadata evidence.
 - Replanning occurs before the decision is stored and again before copying.
