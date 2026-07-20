@@ -28,6 +28,15 @@ pub struct ArchiveGitTreeReport {
     pub case_collision_groups: Vec<Vec<String>>,
 }
 
+/// Choose whether the archive's first path component is a transport wrapper or logical content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArchiveTreeRootMode {
+    /// Require one shared top-level directory and omit it from the computed tree.
+    StripSharedRoot,
+    /// Preserve every validated path component in the computed tree.
+    KeepTopLevel,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BlobEntry {
     mode: &'static [u8],
@@ -216,6 +225,23 @@ pub fn inspect_zip_git_tree(
     archive_path: &Path,
     expected_tree: Option<&str>,
 ) -> Result<ArchiveGitTreeReport, String> {
+    inspect_zip_git_tree_with_mode(
+        archive_path,
+        expected_tree,
+        ArchiveTreeRootMode::StripSharedRoot,
+    )
+}
+
+/// Compute a Git-compatible logical tree for a ZIP without extracting it.
+///
+/// The default wrapper-stripping behavior remains available through [`inspect_zip_git_tree`].
+/// Use [`ArchiveTreeRootMode::KeepTopLevel`] only when top-level entries are part of the logical
+/// archive content rather than a transport wrapper.
+pub fn inspect_zip_git_tree_with_mode(
+    archive_path: &Path,
+    expected_tree: Option<&str>,
+    root_mode: ArchiveTreeRootMode,
+) -> Result<ArchiveGitTreeReport, String> {
     let expected_git_tree_sha1 = validate_expected_tree(expected_tree)?;
     let file = File::open(archive_path).map_err(|_| "archive-open-failed".to_string())?;
     let mut archive =
@@ -239,20 +265,26 @@ pub fn inspect_zip_git_tree(
         }
         let directory = entry.is_dir() || entry.name_raw().ends_with(b"/");
         let components = zip_path_components(entry.name_raw(), directory)?;
-        let (root, relative) = components
-            .split_first()
-            .ok_or_else(|| "archive-shared-root-missing".to_string())?;
-        match root_prefix.as_ref() {
-            None => root_prefix = Some(root.clone()),
-            Some(expected) if expected == root => {}
-            Some(_) => return Err("archive-shared-root-mismatch".into()),
-        }
-        if relative.is_empty() {
-            if directory {
-                continue;
+        let relative = match root_mode {
+            ArchiveTreeRootMode::StripSharedRoot => {
+                let (root, relative) = components
+                    .split_first()
+                    .ok_or_else(|| "archive-shared-root-missing".to_string())?;
+                match root_prefix.as_ref() {
+                    None => root_prefix = Some(root.clone()),
+                    Some(expected) if expected == root => {}
+                    Some(_) => return Err("archive-shared-root-mismatch".into()),
+                }
+                if relative.is_empty() {
+                    if directory {
+                        continue;
+                    }
+                    return Err("archive-entry-empty-relative-path".into());
+                }
+                relative
             }
-            return Err("archive-entry-empty-relative-path".into());
-        }
+            ArchiveTreeRootMode::KeepTopLevel => components.as_slice(),
+        };
         if directory {
             if entry.size() != 0 {
                 return Err("archive-directory-entry-has-payload".into());
@@ -292,9 +324,13 @@ pub fn inspect_zip_git_tree(
     if file_count == 0 {
         return Err("archive-no-git-files".into());
     }
-    let root_prefix =
-        String::from_utf8(root_prefix.ok_or_else(|| "archive-shared-root-missing".to_string())?)
-            .map_err(|_| "archive-entry-path-not-utf8".to_string())?;
+    let root_prefix = match root_mode {
+        ArchiveTreeRootMode::StripSharedRoot => {
+            String::from_utf8(root_prefix.ok_or_else(|| "archive-shared-root-missing".to_string())?)
+                .map_err(|_| "archive-entry-path-not-utf8".to_string())?
+        }
+        ArchiveTreeRootMode::KeepTopLevel => ".".to_string(),
+    };
     let (tree_oid, directory_count) = git_tree_oid(&tree);
     let git_tree_sha1 = hex_sha1(&tree_oid);
     let case_collision_groups: Vec<Vec<String>> = case_paths
@@ -354,6 +390,28 @@ mod tests {
         temp
     }
 
+    fn generic_fixture(
+        entries: &[(&str, &[u8], u32, zip::CompressionMethod)],
+    ) -> tempfile::TempDir {
+        let temp = tempfile::tempdir().unwrap();
+        let archive_path = temp.path().join("fixture.zip");
+        let file = File::create(&archive_path).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        for (path, contents, mode, compression) in entries {
+            archive
+                .start_file(
+                    path,
+                    SimpleFileOptions::default()
+                        .compression_method(*compression)
+                        .unix_permissions(*mode),
+                )
+                .unwrap();
+            archive.write_all(contents).unwrap();
+        }
+        archive.finish().unwrap();
+        temp
+    }
+
     #[test]
     fn single_file_matches_known_git_tree_object() {
         let temp = fixture(&[("a.txt", b"hello\n", 0o100644)]);
@@ -395,6 +453,87 @@ mod tests {
             ]
         );
         assert_eq!(report.matches_expected, None);
+    }
+
+    #[test]
+    fn generic_multi_root_zip_requires_explicit_keep_top_level_mode() {
+        let temp = generic_fixture(&[
+            (
+                "audio/clip.txt",
+                b"clip\n",
+                0o100644,
+                zip::CompressionMethod::Stored,
+            ),
+            (
+                "notes.md",
+                b"notes\n",
+                0o100644,
+                zip::CompressionMethod::Stored,
+            ),
+        ]);
+        let path = temp.path().join("fixture.zip");
+
+        assert_eq!(
+            inspect_zip_git_tree(&path, None).unwrap_err(),
+            "archive-shared-root-mismatch"
+        );
+        let report =
+            inspect_zip_git_tree_with_mode(&path, None, ArchiveTreeRootMode::KeepTopLevel).unwrap();
+        assert_eq!(report.root_prefix, ".");
+        assert_eq!(report.file_count, 2);
+        assert_eq!(report.directory_count, 1);
+    }
+
+    #[test]
+    fn logical_tree_ignores_zip_order_and_compression() {
+        let stored = generic_fixture(&[
+            (
+                "a.txt",
+                b"alpha\n",
+                0o100644,
+                zip::CompressionMethod::Stored,
+            ),
+            (
+                "nested/b.txt",
+                b"beta\n",
+                0o100755,
+                zip::CompressionMethod::Stored,
+            ),
+        ]);
+        let deflated = generic_fixture(&[
+            (
+                "nested/b.txt",
+                b"beta\n",
+                0o100755,
+                zip::CompressionMethod::Deflated,
+            ),
+            (
+                "a.txt",
+                b"alpha\n",
+                0o100644,
+                zip::CompressionMethod::Deflated,
+            ),
+        ]);
+
+        let stored_report = inspect_zip_git_tree_with_mode(
+            &stored.path().join("fixture.zip"),
+            None,
+            ArchiveTreeRootMode::KeepTopLevel,
+        )
+        .unwrap();
+        let deflated_report = inspect_zip_git_tree_with_mode(
+            &deflated.path().join("fixture.zip"),
+            None,
+            ArchiveTreeRootMode::KeepTopLevel,
+        )
+        .unwrap();
+
+        assert_eq!(stored_report.git_tree_sha1, deflated_report.git_tree_sha1);
+        assert_eq!(stored_report.file_count, deflated_report.file_count);
+        assert_eq!(
+            stored_report.uncompressed_bytes,
+            deflated_report.uncompressed_bytes
+        );
     }
 
     #[test]

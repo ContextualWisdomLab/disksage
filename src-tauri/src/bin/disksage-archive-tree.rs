@@ -2,16 +2,17 @@
 
 use std::path::PathBuf;
 
-use disksage_lib::archive_git_tree::inspect_zip_git_tree;
+use disksage_lib::archive_git_tree::{inspect_zip_git_tree_with_mode, ArchiveTreeRootMode};
 
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
     zip: PathBuf,
     expected_tree: Option<String>,
+    keep_top_level: bool,
 }
 
 fn usage() -> &'static str {
-    "DiskSage archive Git tree proof: usage: disksage-archive-tree --zip PATH [--expected-tree HEX40]"
+    "DiskSage archive Git tree proof: usage: disksage-archive-tree --zip PATH [--expected-tree HEX40] [--keep-top-level]"
 }
 
 fn value(args: &[String], index: &mut usize, flag: &str) -> Result<String, String> {
@@ -24,11 +25,13 @@ fn value(args: &[String], index: &mut usize, flag: &str) -> Result<String, Strin
 fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut zip = None;
     let mut expected_tree = None;
+    let mut keep_top_level = false;
     let mut index = 0usize;
     while index < args.len() {
         match args[index].as_str() {
             "--zip" => zip = Some(PathBuf::from(value(args, &mut index, "--zip")?)),
             "--expected-tree" => expected_tree = Some(value(args, &mut index, "--expected-tree")?),
+            "--keep-top-level" => keep_top_level = true,
             "--help" | "-h" => return Err(usage().into()),
             unknown => return Err(format!("알 수 없는 인자: {unknown}")),
         }
@@ -37,13 +40,20 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     Ok(Args {
         zip: zip.ok_or_else(|| "--zip 값이 필요함".to_string())?,
         expected_tree,
+        keep_top_level,
     })
 }
 
 fn run() -> Result<(), String> {
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let args = parse_args(&raw)?;
-    let report = inspect_zip_git_tree(&args.zip, args.expected_tree.as_deref())?;
+    let root_mode = if args.keep_top_level {
+        ArchiveTreeRootMode::KeepTopLevel
+    } else {
+        ArchiveTreeRootMode::StripSharedRoot
+    };
+    let report =
+        inspect_zip_git_tree_with_mode(&args.zip, args.expected_tree.as_deref(), root_mode)?;
     println!(
         "{}",
         serde_json::to_string_pretty(&report).map_err(|error| error.to_string())?
@@ -73,11 +83,21 @@ mod tests {
                 "/tmp/source.zip".into(),
                 "--expected-tree".into(),
                 "a".repeat(40),
+                "--keep-top-level".into(),
             ])
             .unwrap(),
             Args {
                 zip: PathBuf::from("/tmp/source.zip"),
                 expected_tree: Some("a".repeat(40)),
+                keep_top_level: true,
+            }
+        );
+        assert_eq!(
+            parse_args(&["--zip".into(), "/tmp/source.zip".into()]).unwrap(),
+            Args {
+                zip: PathBuf::from("/tmp/source.zip"),
+                expected_tree: None,
+                keep_top_level: false,
             }
         );
         assert!(parse_args(&[]).is_err());

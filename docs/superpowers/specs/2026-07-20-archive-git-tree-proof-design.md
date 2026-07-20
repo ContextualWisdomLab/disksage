@@ -9,10 +9,12 @@ the current macOS volume because the archive contains both `.Jules/palette.md` a
 
 ## Decision
 
-`disksage-archive-tree` computes the Git tree represented by a wrapped ZIP without extracting any
-entry. The Rust implementation:
+`disksage-archive-tree` computes the Git-compatible logical tree represented by a ZIP without
+extracting any entry. Its default mode preserves the original GitHub-source proof contract: one
+shared transport wrapper is required and stripped. An explicit `--keep-top-level` mode supports
+generic multi-root archives whose top-level paths are logical content. The Rust implementation:
 
-1. Validates a bounded ZIP central directory and a single shared top-level directory.
+1. Validates a bounded ZIP central directory and, by default, a single shared top-level directory.
 2. Rejects absolute, parent-traversal, backslash, NUL, non-UTF-8, duplicate, encrypted, oversized,
    and Git-unrepresentable entries.
 3. Streams each regular, executable, or symlink entry into the canonical Git blob SHA-1 framing.
@@ -30,15 +32,17 @@ contents, call a network service, mutate the ZIP, or authorize deletion.
 - At most 4,096 bytes per path.
 - At most 16 GiB declared uncompressed file bytes.
 - More than 1,000 case-collision groups fails closed rather than truncating evidence.
-- One shared wrapper directory is mandatory, matching GitHub source archive structure.
+- One shared wrapper directory remains mandatory by default, matching GitHub source archive
+  structure. `--keep-top-level` must be explicit and preserves every validated path component.
 - Unsupported compression or an observed-size mismatch fails closed.
 
 ## Cleanup gate
 
-An exact tree match proves only that the ZIP's source bytes are reproducible from the identified
-Git commit. Local removal still requires a separate approval naming the ZIP, commit, remote
-repository, exact tree, reclaimable bytes, and Trash-only action. Remote reachability is checked
-fresh before that approval is applied.
+An exact tree match proves only that the ZIP's logical file bytes, paths, and Git-representable
+modes match the comparison tree. It does not prove provenance or intended canonical status. Local
+removal still requires a separate approval naming both compared inputs (or the ZIP, commit, and
+remote repository), exact tree, reclaimable bytes, and Trash-only action. Remote reachability is
+checked fresh before a Git-backed approval is applied.
 
 ## Integration decision
 
