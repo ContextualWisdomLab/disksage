@@ -5,8 +5,12 @@
 //! lineage record for a later verified move.
 
 #[cfg(not(coverage))]
+use crate::content_digest::{ContentDigests, ContentHasher};
+#[cfg(not(coverage))]
 use crate::dataset_metadata::profile_dataset;
 use crate::dataset_metadata::DatasetProfile;
+#[cfg(not(coverage))]
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 #[cfg(not(coverage))]
 use std::io::Read;
@@ -207,7 +211,16 @@ pub struct CloudPlanReport {
     pub candidates: Vec<CloudCandidate>,
     pub candidate_bytes: u64,
     pub potentially_reclaimable_bytes: u64,
+    pub exact_duplicates: ExactDuplicateSummary,
     pub notices: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ExactDuplicateSummary {
+    pub cluster_count: usize,
+    pub candidate_count: usize,
+    pub candidate_bytes: u64,
+    pub redundant_bytes: u64,
 }
 
 /// Fail closed when the selected source cannot be enumerated. Filesystem metadata alone is not
@@ -2105,6 +2118,144 @@ fn metadata_fingerprint(file: &FileFact, relative: &Path) -> String {
     blake3::hash(input.as_bytes()).to_hex().to_string()
 }
 
+#[cfg(not(coverage))]
+fn hash_duplicate_candidate(path: &Path, expected_bytes: u64) -> Result<ContentDigests, String> {
+    let before =
+        std::fs::metadata(path).map_err(|_| "duplicate-content-metadata-unreadable".to_string())?;
+    if !before.is_file() {
+        return Err("duplicate-content-source-not-file".into());
+    }
+    if before.len() != expected_bytes {
+        return Err("duplicate-content-size-changed".into());
+    }
+    let before_modified_ms = millis(before.modified());
+    let mut source =
+        std::fs::File::open(path).map_err(|_| "duplicate-content-open-failed".to_string())?;
+    let mut hasher = ContentHasher::default();
+    let mut buffer = [0_u8; 128 * 1024];
+    loop {
+        let read = source
+            .read(&mut buffer)
+            .map_err(|_| "duplicate-content-read-failed".to_string())?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    let after =
+        std::fs::metadata(path).map_err(|_| "duplicate-content-metadata-unreadable".to_string())?;
+    if after.len() != expected_bytes || millis(after.modified()) != before_modified_ms {
+        return Err("duplicate-content-source-changed".into());
+    }
+    Ok(hasher.finalize())
+}
+
+#[cfg(not(coverage))]
+fn push_candidate_evidence(
+    candidate: &mut CloudCandidate,
+    field: &str,
+    value: impl Into<String>,
+    source: &str,
+    confidence: &str,
+) {
+    candidate.metadata_evidence.push(MetadataEvidence {
+        field: field.into(),
+        value: value.into(),
+        source: source.into(),
+        confidence: confidence.into(),
+    });
+}
+
+/// Hash only non-blocked candidates that share a byte length. Exact duplicates remain movable,
+/// but require an operator to select the canonical lineage instead of silently copying every path.
+#[cfg(not(coverage))]
+fn mark_exact_duplicate_candidates(candidates: &mut [CloudCandidate]) -> ExactDuplicateSummary {
+    let mut summary = ExactDuplicateSummary::default();
+    let mut by_size: BTreeMap<u64, Vec<usize>> = BTreeMap::new();
+    for (index, candidate) in candidates.iter().enumerate() {
+        if candidate.blocked_reason.is_none() {
+            by_size.entry(candidate.bytes).or_default().push(index);
+        }
+    }
+
+    for same_size in by_size.values().filter(|indices| indices.len() > 1) {
+        let mut by_digest: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
+        for &index in same_size {
+            let candidate = &candidates[index];
+            match hash_duplicate_candidate(Path::new(&candidate.src), candidate.bytes) {
+                Ok(digests) => by_digest
+                    .entry((digests.sha256, digests.blake3))
+                    .or_default()
+                    .push(index),
+                Err(reason) => {
+                    let candidate = &mut candidates[index];
+                    candidate
+                        .review_reasons
+                        .push("exact-duplicate-content-probe-incomplete".into());
+                    push_candidate_evidence(
+                        candidate,
+                        "metadata-probe-warning",
+                        reason,
+                        "local:content-hash",
+                        "high",
+                    );
+                }
+            }
+        }
+
+        for ((sha256, blake3), exact_matches) in by_digest
+            .into_iter()
+            .filter(|(_, indices)| indices.len() > 1)
+        {
+            let bytes_per_candidate = candidates[exact_matches[0]].bytes;
+            summary.cluster_count += 1;
+            summary.candidate_count += exact_matches.len();
+            summary.candidate_bytes = summary.candidate_bytes.saturating_add(
+                bytes_per_candidate.saturating_mul(exact_matches.len() as u64),
+            );
+            summary.redundant_bytes = summary.redundant_bytes.saturating_add(
+                bytes_per_candidate.saturating_mul((exact_matches.len() - 1) as u64),
+            );
+            let candidate_count = exact_matches.len().to_string();
+            for index in exact_matches {
+                let candidate = &mut candidates[index];
+                candidate
+                    .review_reasons
+                    .push("exact-duplicate-content-needs-canonical-selection".into());
+                push_candidate_evidence(
+                    candidate,
+                    "exact-duplicate-content-sha256",
+                    sha256.clone(),
+                    "local:content-hash",
+                    "high",
+                );
+                push_candidate_evidence(
+                    candidate,
+                    "exact-duplicate-content-blake3",
+                    blake3.clone(),
+                    "local:content-hash",
+                    "high",
+                );
+                push_candidate_evidence(
+                    candidate,
+                    "exact-duplicate-candidate-count",
+                    candidate_count.clone(),
+                    "planner:exact-content-cluster",
+                    "high",
+                );
+            }
+        }
+    }
+
+    for candidate in candidates {
+        candidate.review_reasons.sort();
+        candidate.review_reasons.dedup();
+        candidate.requires_review = !candidate.review_reasons.is_empty();
+        candidate.review_fingerprint = candidate_review_fingerprint(candidate);
+    }
+    summary
+}
+
 fn hash_review_value(hasher: &mut blake3::Hasher, value: &[u8]) {
     hasher.update(&(value.len() as u64).to_le_bytes());
     hasher.update(value);
@@ -2364,6 +2515,10 @@ pub fn plan_cloud_archive(
         candidate.review_fingerprint = candidate_review_fingerprint(&candidate);
         candidates.push(candidate);
     }
+    #[cfg(not(coverage))]
+    let exact_duplicates = mark_exact_duplicate_candidates(&mut candidates);
+    #[cfg(coverage)]
+    let exact_duplicates = ExactDuplicateSummary::default();
     candidates.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.src.cmp(&b.src)));
     candidates.truncate(options.limit);
     let candidate_bytes = candidates.iter().map(|c| c.bytes).sum();
@@ -2378,6 +2533,7 @@ pub fn plan_cloud_archive(
         candidates,
         candidate_bytes,
         potentially_reclaimable_bytes,
+        exact_duplicates,
         notices: vec![
             "dry-run-only".into(),
             "cloud-quota-unverified".into(),
@@ -3190,6 +3346,94 @@ mod tests {
         let evidence = serde_json::to_string(&candidate.metadata_evidence).unwrap();
         assert!(!evidence.contains("alice@example.com"));
         assert!(!evidence.contains("42"));
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn planner_requires_canonical_selection_for_exact_duplicate_candidates() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let cloud = tmp.path().join("cloud");
+        writable_dir(&source);
+        writable_dir(&cloud);
+        for (name, contents) in [
+            ("a.pdf", &b"same-content"[..]),
+            ("b.pdf", &b"same-content"[..]),
+            ("c.pdf", &b"uniq-content"[..]),
+        ] {
+            std::fs::write(source.join(name), contents).unwrap();
+        }
+        let production_time_ms = date_epoch_ms(2026, 1, 2).unwrap();
+        let metadata = ContentMetadata {
+            production_time_ms: Some(production_time_ms),
+            production_time_source: Some("embedded:test:creation-date".into()),
+            production_time_confidence: Some("high".into()),
+            ..ContentMetadata::default()
+        };
+        let files: Vec<_> = ["a.pdf", "b.pdf", "c.pdf"]
+            .into_iter()
+            .map(|name| {
+                let path = source.join(name);
+                let file_metadata = std::fs::metadata(&path).unwrap();
+                FileFact {
+                    path,
+                    bytes: file_metadata.len(),
+                    created_ms: millis(file_metadata.created()),
+                    modified_ms: millis(file_metadata.modified()),
+                    content_metadata: metadata.clone(),
+                }
+            })
+            .collect();
+
+        let report = plan_cloud_archive(
+            &files,
+            &source,
+            &root(CloudProvider::GoogleDrive, &cloud),
+            system_now_ms() + DAY_MS,
+            CloudPlanOptions {
+                min_size_bytes: 0,
+                min_age_days: 0,
+                limit: 10,
+            },
+        );
+
+        let mut duplicate_hashes = Vec::new();
+        for name in ["a.pdf", "b.pdf"] {
+            let candidate = report
+                .candidates
+                .iter()
+                .find(|candidate| candidate.relative_path == name)
+                .unwrap();
+            assert!(candidate.requires_review);
+            assert!(candidate
+                .review_reasons
+                .contains(&"exact-duplicate-content-needs-canonical-selection".to_string()));
+            assert!(candidate.metadata_evidence.iter().any(|evidence| {
+                evidence.field == "exact-duplicate-candidate-count" && evidence.value == "2"
+            }));
+            duplicate_hashes.push(
+                candidate
+                    .metadata_evidence
+                    .iter()
+                    .find(|evidence| evidence.field == "exact-duplicate-content-sha256")
+                    .unwrap()
+                    .value
+                    .clone(),
+            );
+        }
+        assert_eq!(duplicate_hashes[0], duplicate_hashes[1]);
+        assert_eq!(report.exact_duplicates.cluster_count, 1);
+        assert_eq!(report.exact_duplicates.candidate_count, 2);
+        assert_eq!(report.exact_duplicates.candidate_bytes, 24);
+        assert_eq!(report.exact_duplicates.redundant_bytes, 12);
+        let unique = report
+            .candidates
+            .iter()
+            .find(|candidate| candidate.relative_path == "c.pdf")
+            .unwrap();
+        assert!(!unique
+            .review_reasons
+            .contains(&"exact-duplicate-content-needs-canonical-selection".to_string()));
     }
 
     #[test]

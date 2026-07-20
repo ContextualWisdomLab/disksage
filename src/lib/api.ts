@@ -270,7 +270,15 @@ export interface CloudPlanReport {
   candidates: CloudCandidate[];
   candidate_bytes: number;
   potentially_reclaimable_bytes: number;
+  exact_duplicates: ExactDuplicateSummary;
   notices: string[];
+}
+
+export interface ExactDuplicateSummary {
+  cluster_count: number;
+  candidate_count: number;
+  candidate_bytes: number;
+  redundant_bytes: number;
 }
 
 export interface CloudCopyReceipt {

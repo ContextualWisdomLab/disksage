@@ -344,6 +344,14 @@
       {report.candidates.length}개 후보 · 총 {fmtBytes(report.candidate_bytes)} ·
       충돌 제외 잠재 회수 {fmtBytes(report.potentially_reclaimable_bytes)}
     </div>
+    {#if report.exact_duplicates.candidate_count > 0}
+      <p class="warning">
+        정확 중복 {report.exact_duplicates.candidate_count.toLocaleString()}개 ·
+        {report.exact_duplicates.cluster_count.toLocaleString()}개 콘텐츠 클러스터 ·
+        대표본 외 중복 경로 {fmtBytes(report.exact_duplicates.redundant_bytes)}.
+        동일 크기 후보만 로컬 SHA-256·BLAKE3로 확인했으며, 대표 lineage를 선택하기 전에는 자동 복사하지 않습니다.
+      </p>
+    {/if}
     <p class="warning">
       생산일 우선순위는 내장 메타데이터 → 명시적 파일명 날짜 → 파일시스템 생성 → 수정 시각입니다. 파일명 날짜와 파일시스템 시각은 저신뢰 잠정값이며, 현재 메타데이터와 목적지에 결박된 명시적 승인 없이는 복사할 수 없습니다. 이미 존재하는 클라우드 파일은 전체 콘텐츠 해시가 모두 같을 때만 채택합니다. 앱 UI는 원본을 삭제하지 않으며, 업로드 증거가 확인되어도 허가 정보만 표시합니다.
     </p>
