@@ -23,6 +23,14 @@ generic multi-root archives whose top-level paths are logical content. The Rust 
 6. Optionally compares the resulting 40-hex tree SHA with an operator-supplied commit tree SHA and
    exits nonzero on mismatch.
 
+For generic ZIP-to-ZIP review, `--prove-subset-of PATH` uses the same validated logical paths but
+streams both archives into a content manifest. Each file is bound by its exact path, normalized Git
+mode, declared-and-observed uncompressed byte length, and SHA-256 of the uncompressed bytes.
+Compression method, archive entry order, and ZIP container metadata do not affect the proof. The
+JSON report includes complete matching/missing/changed/additional counts, bounded sorted path
+samples, both manifest SHA-256 values, and a role-sensitive comparison fingerprint. It exits
+nonzero unless every subset entry is present and identical.
+
 The proof contains paths, counts, byte totals, modes, and object digests. It does not retain file
 contents, call a network service, mutate the ZIP, or authorize deletion.
 
@@ -32,6 +40,10 @@ contents, call a network service, mutate the ZIP, or authorize deletion.
 - At most 4,096 bytes per path.
 - At most 16 GiB declared uncompressed file bytes.
 - More than 1,000 case-collision groups fails closed rather than truncating evidence.
+- ZIP-to-ZIP inclusion rejects any case or Unicode-normalization collision as ambiguous; it does
+  not claim that a colliding manifest can be safely materialized on macOS.
+- Difference path samples are capped at 1,000 per category while full counts remain available;
+  `paths_truncated` explicitly reports any truncation.
 - One shared wrapper directory remains mandatory by default, matching GitHub source archive
   structure. `--keep-top-level` must be explicit and preserves every validated path component.
 - Unsupported compression or an observed-size mismatch fails closed.
@@ -43,6 +55,11 @@ modes match the comparison tree. It does not prove provenance or intended canoni
 removal still requires a separate approval naming both compared inputs (or the ZIP, commit, and
 remote repository), exact tree, reclaimable bytes, and Trash-only action. Remote reachability is
 checked fresh before a Git-backed approval is applied.
+
+Likewise, `subset_content_included: true` proves content containment, not which archive is the
+authoritative copy or whether its destination tenant is permitted. A smaller contained archive is
+only a reversible Trash candidate after the operator explicitly selects and retains the superset
+as canonical. A later cloud-source eviction still requires provider-native remote evidence.
 
 ## Integration decision
 
