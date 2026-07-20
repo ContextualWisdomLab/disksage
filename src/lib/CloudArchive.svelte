@@ -9,6 +9,7 @@
   let rootIssues: api.CloudRootDiscoveryIssue[] = $state([]);
   let connections: api.OAuthConnection[] = $state([]);
   let reviewDecisions: api.CloudReviewDecision[] = $state([]);
+  let reviewRationales: Record<string, string> = $state({});
   let selectedRoot = $state("");
   let minSizeMib = $state(256);
   let minAgeDays = $state(90);
@@ -97,6 +98,8 @@
     disposition: api.CloudReviewDisposition,
   ) {
     if (!scannedRoot || !selectedRoot || !candidate.requires_review) return;
+    const rationale = (reviewRationales[candidate.metadata_fingerprint] ?? "").trim();
+    if (!rationale) return;
     reviewingFingerprint = candidate.metadata_fingerprint;
     loadError = "";
     try {
@@ -106,6 +109,7 @@
         candidate.metadata_fingerprint,
         candidate.review_fingerprint,
         disposition,
+        rationale,
         Math.max(1, Math.floor(minSizeMib)),
         Math.max(0, Math.floor(minAgeDays)),
         200,
@@ -116,6 +120,10 @@
         ),
         decision,
       ];
+      reviewRationales = {
+        ...reviewRationales,
+        [candidate.metadata_fingerprint]: "",
+      };
     } catch (e) {
       loadError = String(e);
     } finally {
@@ -462,15 +470,35 @@
                 {:else}
                   <span class="context">아래 증거를 확인한 뒤 승인 또는 보류하세요.</span>
                 {/if}
+                {#if matchingReviewDecision(candidate)}
+                  <span class="context">
+                    검토자: {matchingReviewDecision(candidate)?.reviewed_by ?? "legacy-local-operator"} ·
+                    근거: {matchingReviewDecision(candidate)?.rationale ?? "legacy decision"}
+                  </span>
+                {/if}
+                <label class="review-rationale">
+                  새 승인·보류 근거 (민감한 셀 값이나 문서 본문은 입력하지 마세요)
+                  <textarea
+                    maxlength="1000"
+                    value={reviewRationales[candidate.metadata_fingerprint] ?? ""}
+                    oninput={(event) => {
+                      reviewRationales = {
+                        ...reviewRationales,
+                        [candidate.metadata_fingerprint]: event.currentTarget.value,
+                      };
+                    }}
+                    disabled={reviewingFingerprint !== ""}
+                  ></textarea>
+                </label>
                 <button
                   onclick={() => reviewCandidate(candidate, "approved")}
-                  disabled={reviewingFingerprint !== "" || matchingReviewDecision(candidate)?.disposition === "approved"}
+                  disabled={reviewingFingerprint !== "" || !(reviewRationales[candidate.metadata_fingerprint] ?? "").trim()}
                 >
                   {reviewingFingerprint === candidate.metadata_fingerprint ? "기록 중…" : "메타데이터 검토 승인"}
                 </button>
                 <button
                   onclick={() => reviewCandidate(candidate, "held")}
-                  disabled={reviewingFingerprint !== "" || matchingReviewDecision(candidate)?.disposition === "held"}
+                  disabled={reviewingFingerprint !== "" || !(reviewRationales[candidate.metadata_fingerprint] ?? "").trim()}
                 >보류</button>
               </div>
             {/if}
@@ -525,6 +553,8 @@
   .summary { margin-top: 0.8rem; font-weight: 600; }
   .receipt { margin: 0.75rem 0; padding: 0.75rem; border: 1px solid #6b8e72; border-radius: 4px; background: #f5fbf6; }
   .review-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin: 0.5rem 0; }
+  .review-rationale { flex-basis: 100%; }
+  .review-rationale textarea { width: min(52rem, 88vw); min-height: 3.5rem; resize: vertical; }
   .approved { color: #25643b; }
   .held { color: #8a4b16; }
   .candidates { list-style: none; margin: 0.5rem 0; padding: 0; max-height: 34rem; overflow-y: auto; }

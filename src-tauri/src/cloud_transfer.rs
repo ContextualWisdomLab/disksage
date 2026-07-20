@@ -74,6 +74,10 @@ pub struct CloudLineageSnapshot {
     pub review_decision_id: Option<String>,
     pub review_disposition: Option<CloudReviewDisposition>,
     pub reviewed_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewed_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_rationale: Option<String>,
     pub destination_account_scope: CloudAccountScope,
     pub kind: ArchiveKind,
     pub created_ms: u64,
@@ -327,6 +331,12 @@ fn lineage_snapshot(
         review_decision_id: review_decision.map(|decision| decision.decision_id.clone()),
         review_disposition: review_decision.map(|decision| decision.disposition),
         reviewed_at_ms: review_decision.map(|decision| decision.reviewed_at_ms),
+        reviewed_by: review_decision
+            .filter(|decision| !decision.reviewed_by.is_empty())
+            .map(|decision| decision.reviewed_by.clone()),
+        review_rationale: review_decision
+            .filter(|decision| !decision.rationale.is_empty())
+            .map(|decision| decision.rationale.clone()),
         destination_account_scope: candidate.destination_account_scope,
         kind: candidate.kind,
         created_ms: candidate.created_ms,
@@ -415,8 +425,13 @@ pub fn receipt_blockers(receipt: &CloudCopyReceipt) -> Vec<String> {
                 let empty_review = lineage.review_decision_id.is_none()
                     && lineage.review_disposition.is_none()
                     && lineage.reviewed_at_ms.is_none();
+                let complete_attribution =
+                    lineage.reviewed_by.is_some() && lineage.review_rationale.is_some();
+                let empty_attribution =
+                    lineage.reviewed_by.is_none() && lineage.review_rationale.is_none();
                 if (lineage.requires_review && !complete_review)
                     || (!lineage.requires_review && !empty_review)
+                    || (!complete_attribution && !empty_attribution)
                 {
                     blockers.push("receipt-lineage-review-decision-mismatch".into());
                 }
@@ -1267,6 +1282,35 @@ mod tests {
         assert_eq!(
             reviewed_lineage.review_fingerprint,
             reviewed.review_fingerprint
+        );
+
+        let attributed = crate::cloud_review::create_attributed_decision(
+            &reviewed,
+            CloudReviewDisposition::Approved,
+            11,
+            "human:local:reviewer",
+            "Metadata title, account scope, and destination reviewed.",
+        )
+        .unwrap();
+        let attributed_lineage = lineage_snapshot(
+            &reviewed,
+            Some(&attributed),
+            CloudCopyVerificationMethod::CopiedByDiskSage,
+        );
+        assert_eq!(
+            attributed_lineage.reviewed_by.as_deref(),
+            Some("human:local:reviewer")
+        );
+        assert_eq!(
+            attributed_lineage.review_rationale.as_deref(),
+            Some("Metadata title, account scope, and destination reviewed.")
+        );
+        let original_fingerprint = lineage_fingerprint(&attributed_lineage).unwrap();
+        let mut changed_attribution = attributed_lineage;
+        changed_attribution.review_rationale = Some("Changed rationale".into());
+        assert_ne!(
+            original_fingerprint,
+            lineage_fingerprint(&changed_attribution).unwrap()
         );
 
         let held =

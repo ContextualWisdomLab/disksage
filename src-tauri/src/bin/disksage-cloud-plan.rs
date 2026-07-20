@@ -39,6 +39,8 @@ struct Args {
     review_candidate_fingerprint: Option<String>,
     review_fingerprint: Option<String>,
     review_disposition: Option<CloudReviewDisposition>,
+    reviewed_by: Option<String>,
+    review_rationale: Option<String>,
     review_dir: Option<PathBuf>,
 }
 
@@ -82,6 +84,8 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
         review_candidate_fingerprint: None,
         review_fingerprint: None,
         review_disposition: None,
+        reviewed_by: None,
+        review_rationale: None,
         review_dir: None,
     };
     let mut index = 0;
@@ -174,13 +178,19 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
                     value => return Err(format!("지원하지 않는 review disposition: {value}")),
                 })
             }
+            "--reviewed-by" => {
+                parsed.reviewed_by = Some(value(args, &mut index, "--reviewed-by")?)
+            }
+            "--review-rationale" => {
+                parsed.review_rationale = Some(value(args, &mut index, "--review-rationale")?)
+            }
             "--review-dir" => {
                 parsed.review_dir =
                     Some(PathBuf::from(value(args, &mut index, "--review-dir")?))
             }
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive] [--min-size-mib N] [--min-age-days N] [--limit N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --review-dir PATH]".into(),
+                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive] [--min-size-mib N] [--min-age-days N] [--limit N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by ID --review-rationale TEXT --review-dir PATH]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -240,9 +250,13 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
         args.review_candidate_fingerprint.is_some(),
         args.review_fingerprint.is_some(),
         args.review_disposition.is_some(),
+        args.reviewed_by.is_some(),
+        args.review_rationale.is_some(),
     ];
     if review_fields.iter().any(|value| *value) && !review_fields.iter().all(|value| *value) {
-        return Err("review fingerprint와 disposition은 모두 함께 지정해야 함".into());
+        return Err(
+            "review fingerprint, disposition, reviewer, rationale는 모두 함께 지정해야 함".into(),
+        );
     }
     let review_action = review_fields.iter().all(|value| *value);
     let eviction_fields = [
@@ -511,8 +525,17 @@ fn run() -> Result<(), String> {
         let disposition = args
             .review_disposition
             .ok_or_else(|| "--review-disposition이 필요함".to_string())?;
-        let decision =
-            cloud_review::create_decision(candidate, disposition, cloud::system_now_ms())?;
+        let decision = cloud_review::create_attributed_decision(
+            candidate,
+            disposition,
+            cloud::system_now_ms(),
+            args.reviewed_by
+                .as_deref()
+                .ok_or_else(|| "--reviewed-by가 필요함".to_string())?,
+            args.review_rationale
+                .as_deref()
+                .ok_or_else(|| "--review-rationale가 필요함".to_string())?,
+        )?;
         let decision_path = cloud_review::write_immutable_decision(
             args.review_dir
                 .as_deref()
@@ -636,6 +659,8 @@ mod tests {
         assert!(defaults.adopt_existing_fingerprint.is_none());
         assert!(defaults.evict_receipt.is_none());
         assert!(defaults.review_candidate_fingerprint.is_none());
+        assert!(defaults.reviewed_by.is_none());
+        assert!(defaults.review_rationale.is_none());
         let args = vec![
             "--root".into(),
             "/scan".into(),
@@ -785,6 +810,10 @@ mod tests {
                 "d".repeat(64),
                 "--review-disposition".into(),
                 "approved".into(),
+                "--reviewed-by".into(),
+                "human:local:test".into(),
+                "--review-rationale".into(),
+                "metadata reviewed".into(),
                 "--review-dir".into(),
                 "/reviews".into(),
             ],
@@ -798,6 +827,11 @@ mod tests {
             Some(CloudReviewDisposition::Approved)
         );
         assert_eq!(review.review_dir, Some(PathBuf::from("/reviews")));
+        assert_eq!(review.reviewed_by.as_deref(), Some("human:local:test"));
+        assert_eq!(
+            review.review_rationale.as_deref(),
+            Some("metadata reviewed")
+        );
         assert!(validate_action_args(&review).is_ok());
 
         assert!(parse_args(
@@ -815,6 +849,8 @@ mod tests {
         args.review_fingerprint = Some("d".repeat(64));
         args.review_disposition = Some(CloudReviewDisposition::Held);
         assert!(validate_action_args(&args).is_err());
+        args.reviewed_by = Some("human:local:test".into());
+        args.review_rationale = Some("metadata reviewed".into());
         args.review_dir = Some(PathBuf::from("relative-reviews"));
         assert!(validate_action_args(&args).is_err());
         args.review_dir = Some(PathBuf::from("/reviews"));
@@ -827,6 +863,8 @@ mod tests {
         args.review_candidate_fingerprint = None;
         args.review_fingerprint = None;
         args.review_disposition = None;
+        args.reviewed_by = None;
+        args.review_rationale = None;
         assert!(validate_action_args(&args).is_ok());
     }
 

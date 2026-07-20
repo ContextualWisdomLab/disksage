@@ -7,7 +7,10 @@ use crate::cloud::{candidate_review_fingerprint, CloudCandidate};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub const DECISION_VERSION: u32 = 1;
+const LEGACY_DECISION_VERSION: u32 = 1;
+pub const DECISION_VERSION: u32 = 2;
+const MAX_REVIEWED_BY_CHARS: usize = 128;
+const MAX_RATIONALE_CHARS: usize = 1_000;
 #[cfg(not(coverage))]
 const MAX_DECISION_BYTES: u64 = 8 * 1024;
 #[cfg(not(coverage))]
@@ -28,6 +31,10 @@ pub struct CloudReviewDecision {
     pub review_fingerprint: String,
     pub disposition: CloudReviewDisposition,
     pub reviewed_at_ms: u64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reviewed_by: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub rationale: String,
 }
 
 fn valid_fingerprint(value: &str) -> bool {
@@ -35,13 +42,16 @@ fn valid_fingerprint(value: &str) -> bool {
 }
 
 fn decision_id_for(
+    version: u32,
     candidate_fingerprint: &str,
     review_fingerprint: &str,
     disposition: CloudReviewDisposition,
     reviewed_at_ms: u64,
+    reviewed_by: &str,
+    rationale: &str,
 ) -> String {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(&DECISION_VERSION.to_le_bytes());
+    hasher.update(&version.to_le_bytes());
     hasher.update(candidate_fingerprint.as_bytes());
     hasher.update(&[0]);
     hasher.update(review_fingerprint.as_bytes());
@@ -51,12 +61,38 @@ fn decision_id_for(
         CloudReviewDisposition::Held => b"held",
     });
     hasher.update(&reviewed_at_ms.to_le_bytes());
+    if version >= DECISION_VERSION {
+        hasher.update(reviewed_by.as_bytes());
+        hasher.update(&[0]);
+        hasher.update(rationale.as_bytes());
+    }
     hasher.finalize().to_hex().to_string()
 }
 
+fn valid_reviewed_by(value: &str) -> bool {
+    let value = value.trim();
+    value.starts_with("human:")
+        && value.chars().count() <= MAX_REVIEWED_BY_CHARS
+        && !value.chars().any(char::is_control)
+}
+
+fn valid_rationale(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && value.chars().count() <= MAX_RATIONALE_CHARS
+        && !value.chars().any(|character| character == '\0')
+}
+
 pub(crate) fn validate_decision(decision: &CloudReviewDecision) -> Result<(), String> {
-    if decision.version != DECISION_VERSION {
+    if !matches!(decision.version, LEGACY_DECISION_VERSION | DECISION_VERSION) {
         return Err("cloud-review-decision-version-unsupported".into());
+    }
+    if decision.version == LEGACY_DECISION_VERSION {
+        if !decision.reviewed_by.is_empty() || !decision.rationale.is_empty() {
+            return Err("legacy-cloud-review-attribution-unexpected".into());
+        }
+    } else if !valid_reviewed_by(&decision.reviewed_by) || !valid_rationale(&decision.rationale) {
+        return Err("cloud-review-decision-attribution-invalid".into());
     }
     if !valid_fingerprint(&decision.candidate_fingerprint)
         || !valid_fingerprint(&decision.review_fingerprint)
@@ -66,10 +102,13 @@ pub(crate) fn validate_decision(decision: &CloudReviewDecision) -> Result<(), St
     }
     if decision.decision_id
         != decision_id_for(
+            decision.version,
             &decision.candidate_fingerprint,
             &decision.review_fingerprint,
             decision.disposition,
             decision.reviewed_at_ms,
+            &decision.reviewed_by,
+            &decision.rationale,
         )
     {
         return Err("cloud-review-decision-integrity-mismatch".into());
@@ -94,10 +133,60 @@ pub fn create_decision(
         return Err("cloud-review-fingerprint-mismatch".into());
     }
     let decision_id = decision_id_for(
+        LEGACY_DECISION_VERSION,
         &candidate.metadata_fingerprint,
         &candidate.review_fingerprint,
         disposition,
         reviewed_at_ms,
+        "",
+        "",
+    );
+    Ok(CloudReviewDecision {
+        version: LEGACY_DECISION_VERSION,
+        decision_id,
+        candidate_fingerprint: candidate.metadata_fingerprint.clone(),
+        review_fingerprint: candidate.review_fingerprint.clone(),
+        disposition,
+        reviewed_at_ms,
+        reviewed_by: String::new(),
+        rationale: String::new(),
+    })
+}
+
+/// Create a v2 decision whose human reviewer and bounded rationale are integrity-bound alongside
+/// the exact metadata evidence. Agent-authored decisions must use a separate, explicitly integrated
+/// provenance path rather than impersonating a local human reviewer.
+pub fn create_attributed_decision(
+    candidate: &CloudCandidate,
+    disposition: CloudReviewDisposition,
+    reviewed_at_ms: u64,
+    reviewed_by: &str,
+    rationale: &str,
+) -> Result<CloudReviewDecision, String> {
+    if !candidate.requires_review {
+        return Err("cloud-review-not-required".into());
+    }
+    if !valid_fingerprint(&candidate.metadata_fingerprint)
+        || !valid_fingerprint(&candidate.review_fingerprint)
+    {
+        return Err("cloud-review-candidate-fingerprint-invalid".into());
+    }
+    if candidate.review_fingerprint != candidate_review_fingerprint(candidate) {
+        return Err("cloud-review-fingerprint-mismatch".into());
+    }
+    let reviewed_by = reviewed_by.trim();
+    let rationale = rationale.trim();
+    if !valid_reviewed_by(reviewed_by) || !valid_rationale(rationale) {
+        return Err("cloud-review-decision-attribution-invalid".into());
+    }
+    let decision_id = decision_id_for(
+        DECISION_VERSION,
+        &candidate.metadata_fingerprint,
+        &candidate.review_fingerprint,
+        disposition,
+        reviewed_at_ms,
+        reviewed_by,
+        rationale,
     );
     Ok(CloudReviewDecision {
         version: DECISION_VERSION,
@@ -106,6 +195,8 @@ pub fn create_decision(
         review_fingerprint: candidate.review_fingerprint.clone(),
         disposition,
         reviewed_at_ms,
+        reviewed_by: reviewed_by.into(),
+        rationale: rationale.into(),
     })
 }
 
@@ -344,6 +435,45 @@ mod tests {
             decision.review_fingerprint,
             candidate_review_fingerprint(&changed_scope)
         );
+    }
+
+    #[test]
+    fn attributed_decision_binds_reviewer_and_rationale() {
+        let candidate = candidate();
+        let decision = create_attributed_decision(
+            &candidate,
+            CloudReviewDisposition::Approved,
+            10,
+            "human:local:reviewer",
+            "Personal slide deck; embedded title and destination reviewed.",
+        )
+        .unwrap();
+        assert_eq!(decision.version, DECISION_VERSION);
+        assert_eq!(decision.reviewed_by, "human:local:reviewer");
+        assert!(validate_decision(&decision).is_ok());
+
+        let mut tampered = decision;
+        tampered.rationale.push_str(" changed");
+        assert_eq!(
+            validate_decision(&tampered).unwrap_err(),
+            "cloud-review-decision-integrity-mismatch"
+        );
+        assert!(create_attributed_decision(
+            &candidate,
+            CloudReviewDisposition::Approved,
+            10,
+            "",
+            "reason"
+        )
+        .is_err());
+        assert!(create_attributed_decision(
+            &candidate,
+            CloudReviewDisposition::Approved,
+            10,
+            "agent:local:test",
+            "reason"
+        )
+        .is_err());
     }
 
     #[cfg(not(coverage))]

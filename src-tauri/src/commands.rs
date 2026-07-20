@@ -603,6 +603,23 @@ pub fn plan_cloud_archive(
 /// Rebuild the plan and append an immutable approve/hold decision for the exact evidence shown by
 /// the UI. A stale UI cannot approve a changed metadata snapshot.
 #[cfg(not(coverage))]
+fn local_human_reviewer() -> String {
+    let raw = std::env::var(if cfg!(windows) { "USERNAME" } else { "USER" })
+        .unwrap_or_else(|_| "unknown".into());
+    let bounded: String = raw
+        .chars()
+        .filter(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+        })
+        .take(64)
+        .collect();
+    format!(
+        "human:local:{}",
+        if bounded.is_empty() { "unknown" } else { &bounded }
+    )
+}
+
+#[cfg(not(coverage))]
 #[tauri::command(async)]
 pub fn review_cloud_candidate(
     root: String,
@@ -610,6 +627,7 @@ pub fn review_cloud_candidate(
     metadata_fingerprint: String,
     review_fingerprint: String,
     disposition: cloud_review::CloudReviewDisposition,
+    rationale: String,
     min_size_mib: u64,
     min_age_days: u64,
     limit: usize,
@@ -648,8 +666,13 @@ pub fn review_cloud_candidate(
     if candidate.review_fingerprint != review_fingerprint {
         return Err("fresh-plan-review-fingerprint-mismatch".into());
     }
-    let decision =
-        cloud_review::create_decision(candidate, disposition, cloud::system_now_ms())?;
+    let decision = cloud_review::create_attributed_decision(
+        candidate,
+        disposition,
+        cloud::system_now_ms(),
+        &local_human_reviewer(),
+        &rationale,
+    )?;
     cloud_review::write_immutable_decision(&cloud_review_directory(&app)?, &decision)?;
     Ok(decision)
 }

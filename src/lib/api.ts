@@ -238,6 +238,8 @@ export interface CloudReviewDecision {
   review_fingerprint: string;
   disposition: CloudReviewDisposition;
   reviewed_at_ms: number;
+  reviewed_by?: string;
+  rationale?: string;
 }
 
 export interface DatasetColumnProfile {
@@ -311,6 +313,8 @@ export interface CloudLineageSnapshot {
   review_decision_id: string | null;
   review_disposition: CloudReviewDisposition | null;
   reviewed_at_ms: number | null;
+  reviewed_by?: string;
+  review_rationale?: string;
   destination_account_scope: CloudAccountScope;
   kind: ArchiveKind;
   created_ms: number;
@@ -408,6 +412,7 @@ export const reviewCloudCandidate = (
   metadataFingerprint: string,
   reviewFingerprint: string,
   disposition: CloudReviewDisposition,
+  rationale: string,
   minSizeMib = 256,
   minAgeDays = 90,
   limit = 200,
@@ -417,6 +422,7 @@ export const reviewCloudCandidate = (
   metadataFingerprint,
   reviewFingerprint,
   disposition,
+  rationale,
   minSizeMib,
   minAgeDays,
   limit,
