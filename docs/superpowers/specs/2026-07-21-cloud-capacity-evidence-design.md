@@ -41,6 +41,21 @@ No capacity check authorizes deletion. DiskSage still retains the source until c
 provider sync attestation, immutable receipt validation, and an explicit local-eviction confirmation
 all succeed.
 
+## Restart and connection verification
+
+A non-secret connection descriptor is not proof that the OS credential store still contains the
+matching refresh token or that the provider still accepts it. After launch, DiskSage therefore labels
+the descriptor as discovered rather than claiming the account is connected. The user can explicitly
+run `verify_cloud_provider_capacity`, which reads the credential store and contacts only the fixed
+provider metadata endpoint on a blocking worker.
+
+The command returns provider evidence on success. On failure it emits an unavailable snapshot with
+one of a bounded set of redacted reasons: missing or ambiguous descriptor, invalid descriptor
+document, unavailable credential, failed OAuth refresh, or unavailable provider API. Raw token,
+transport, response-body, and account-identifier details never cross the Tauri command boundary.
+Planning uses the same redaction so a missing connection is distinguishable from an insufficient
+quota without weakening the copy gate.
+
 ## References
 
 - [Microsoft Graph drive quota resource](https://learn.microsoft.com/en-us/graph/api/resources/quota?view=graph-rest-1.0)

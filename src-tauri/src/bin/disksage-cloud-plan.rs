@@ -511,7 +511,15 @@ fn verified_capacity_for_bytes(
     reserve_mib: u64,
 ) -> Result<provider_capacity::CloudCapacityAssessment, String> {
     let reserve_bytes = reserve_mib.saturating_mul(1024 * 1024);
-    let snapshot = collect_root_capacity(root, oauth_connections, cloud::system_now_ms())?;
+    let observed_at_ms = cloud::system_now_ms();
+    let snapshot = match collect_root_capacity(root, oauth_connections, observed_at_ms) {
+        Ok(snapshot) => snapshot,
+        Err(error) => provider_capacity::unavailable_capacity_from_error(
+            root.provider,
+            observed_at_ms,
+            &error,
+        ),
+    };
     Ok(provider_capacity::assess_capacity(
         snapshot,
         requested_bytes,
@@ -1213,6 +1221,31 @@ mod tests {
 
         plan.list_roots = true;
         assert!(validate_action_args(&plan).is_err());
+    }
+
+    #[test]
+    fn capacity_verification_without_connection_is_a_redacted_blocked_assessment() {
+        let root = CloudRoot {
+            id: "onedrive:test".into(),
+            provider: CloudProvider::Onedrive,
+            account_scope: disksage_lib::cloud::CloudAccountScope::Personal,
+            label: "OneDrive".into(),
+            path: "/Cloud/OneDrive".into(),
+            readable: true,
+            access_issue: None,
+        };
+
+        let assessment = verified_capacity_for_bytes(&root, None, 10, 10, 1).unwrap();
+
+        assert_eq!(assessment.can_fit, None);
+        assert_eq!(
+            assessment.snapshot.unavailable_reason.as_deref(),
+            Some("provider-oauth-connection-missing")
+        );
+        assert_eq!(
+            assessment.blockers,
+            ["provider-oauth-connection-missing".to_string()]
+        );
     }
 
     #[test]

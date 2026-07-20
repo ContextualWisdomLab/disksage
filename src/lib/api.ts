@@ -443,6 +443,8 @@ export const inspectCloudRoots = () =>
   invoke<CloudRootDiscoveryReport>("inspect_cloud_roots");
 export const listCloudProviderConnections = () =>
   invoke<OAuthConnection[]>("list_cloud_provider_connections");
+export const verifyCloudProviderCapacity = (cloudRoot: string) =>
+  invoke<CloudCapacitySnapshot>("verify_cloud_provider_capacity", { cloudRoot });
 export const listCloudReviewDecisions = () =>
   invoke<CloudReviewDecision[]>("list_cloud_review_decisions");
 export const connectCloudProvider = (cloudRoot: string, clientId: string) =>

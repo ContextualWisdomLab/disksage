@@ -25,6 +25,9 @@
   let oauthClientId = $state("");
   let connecting = $state(false);
   let disconnecting = $state(false);
+  let checkingCapacity = $state(false);
+  let connectionCapacity: api.CloudCapacitySnapshot | null = $state(null);
+  let connectionCapacityRoot = $state("");
 
   onMount(async () => {
     try {
@@ -48,13 +51,18 @@
     attestation = null;
     objectId = "";
     try {
-      report = await api.planCloudArchive(
+      const planned = await api.planCloudArchive(
         scannedRoot,
         selectedRoot,
         Math.max(1, Math.floor(minSizeMib)),
         Math.max(0, Math.floor(minAgeDays)),
         200,
       );
+      report = planned;
+      if (planned.capacity) {
+        connectionCapacity = planned.capacity.snapshot;
+        connectionCapacityRoot = selectedRoot;
+      }
     } catch (e) {
       loadError = String(e);
     } finally {
@@ -214,6 +222,38 @@
     return connections.find((connection) => api.cloudRootIdentityMatches(connection, root)) ?? null;
   }
 
+  function capacityForSelectedRoot(): api.CloudCapacitySnapshot | null {
+    return connectionCapacityRoot === selectedRoot ? connectionCapacity : null;
+  }
+
+  function capacityUnavailableLabel(reason: string | null): string {
+    const labels: Record<string, string> = {
+      "provider-oauth-connection-missing": "저장된 연결 설정이 없습니다.",
+      "provider-oauth-connection-ambiguous": "이 루트와 일치하는 연결 설정이 여러 개입니다.",
+      "provider-oauth-connection-document-invalid": "연결 설정 문서를 안전하게 읽을 수 없습니다.",
+      "provider-oauth-credential-unavailable": "OS Keychain의 refresh token을 사용할 수 없습니다. 연결 해제 후 다시 연결하세요.",
+      "provider-oauth-refresh-failed": "공급자 인증 갱신에 실패했습니다. 연결 해제 후 다시 동의해야 할 수 있습니다.",
+      "cloud-capacity-provider-api-unavailable": "공급자 용량 API를 현재 확인할 수 없습니다.",
+      "icloud-quota-api-unavailable": "iCloud는 제3자 계정 quota API를 제공하지 않습니다.",
+    };
+    return labels[reason ?? ""] ?? "원격 용량을 확인할 수 없습니다.";
+  }
+
+  async function verifyProviderCapacity() {
+    const root = selectedRootDetails();
+    if (!root) return;
+    checkingCapacity = true;
+    loadError = "";
+    try {
+      connectionCapacity = await api.verifyCloudProviderCapacity(root.path);
+      connectionCapacityRoot = root.path;
+    } catch (e) {
+      loadError = String(e);
+    } finally {
+      checkingCapacity = false;
+    }
+  }
+
   async function connectProvider() {
     const root = selectedRootDetails();
     if (!root || root.provider === "icloud" || !oauthClientId.trim()) return;
@@ -226,6 +266,8 @@
         connection,
       ];
       oauthClientId = "";
+      connectionCapacity = await api.verifyCloudProviderCapacity(root.path);
+      connectionCapacityRoot = root.path;
     } catch (e) {
       loadError = String(e);
     } finally {
@@ -242,6 +284,8 @@
     try {
       await api.disconnectCloudProvider(root.path);
       connections = connections.filter((entry) => entry.connection_id !== connection.connection_id);
+      connectionCapacity = null;
+      connectionCapacityRoot = "";
     } catch (e) {
       loadError = String(e);
     } finally {
@@ -315,11 +359,35 @@
     {#if selectedRootDetails() && selectedRootDetails()?.provider !== "icloud"}
       <div class="oauth-panel">
         {#if connectionForSelectedRoot()}
-          <strong>읽기 전용 OAuth 연결됨</strong>
+          <strong>읽기 전용 OAuth descriptor 발견</strong>
           <span class="context">범위: {connectionForSelectedRoot()?.scope}</span>
-          <button onclick={disconnectProvider} disabled={disconnecting || connecting}>
+          <button
+            onclick={verifyProviderCapacity}
+            disabled={checkingCapacity || disconnecting || connecting}
+          >
+            {checkingCapacity ? "Keychain·원격 API 확인 중…" : "재시작 후 연결·원격 용량 검증"}
+          </button>
+          <button onclick={disconnectProvider} disabled={disconnecting || connecting || checkingCapacity}>
             {disconnecting ? "연결 해제 중…" : "보안 저장소 연결 해제"}
           </button>
+          {#if capacityForSelectedRoot()?.evidence_kind === "provider-api"}
+            <p class="capacity-ok">
+              Keychain 인증 갱신과 공급자 API 확인 완료
+              {#if capacityForSelectedRoot()?.remaining_bytes !== null}
+                · 원격 잔여 {fmtBytes(capacityForSelectedRoot()?.remaining_bytes ?? 0)}
+              {:else}
+                · 공급자 무제한 계정
+              {/if}
+            </p>
+          {:else if capacityForSelectedRoot()}
+            <p class="warning">
+              {capacityUnavailableLabel(capacityForSelectedRoot()?.unavailable_reason ?? null)}
+            </p>
+          {:else}
+            <p class="muted">
+              descriptor만 확인했습니다. 재시작 후 Keychain 자격 증명과 실제 공급자 API는 아직 검증하지 않았습니다.
+            </p>
+          {/if}
         {:else}
           <label>
             {selectedRootDetails()?.provider === "onedrive" ? "Microsoft Desktop OAuth Client ID" : "Google Desktop OAuth Client ID"}

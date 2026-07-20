@@ -14,7 +14,7 @@
 - 🗂 **Ontology-based organizing** — files classified into an OWL taxonomy you can edit
 - 📊 **Disk inventory** — "what is on my disk?", aggregated by category, unknowns surfaced
 - 🧠 **On-device LLM advisor** — embedded llama.cpp model judges delete-safety, fully offline
-- ☁️ **Metadata-first cloud archive** — detects iCloud Drive, OneDrive, and Google Drive; inspects embedded file metadata, bounded dataset schemas, Rust-parsed ZIP indexes, and incomplete-download archive fragments without extracting payloads; checks authoritative OneDrive/Google account capacity with a conservative reserve; performs gated copy-plus-hash verification; and verifies macOS File Provider status first with native PKCE OAuth checksum plus exact OneDrive path or Google My Drive parent-chain fallback while retaining the source
+- ☁️ **Metadata-first cloud archive** — detects iCloud Drive, OneDrive, and Google Drive; inspects embedded file metadata, bounded dataset schemas, Rust-parsed ZIP indexes, and incomplete-download archive fragments without extracting payloads; revalidates the OS credential and authoritative OneDrive/Google account capacity after launch with a conservative reserve; performs gated copy-plus-hash verification; and verifies macOS File Provider status first with native PKCE OAuth checksum plus exact OneDrive path or Google My Drive parent-chain fallback while retaining the source
 
 ## Safety first
 

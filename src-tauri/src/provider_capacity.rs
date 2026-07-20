@@ -337,6 +337,44 @@ pub fn unavailable_capacity(
     }
 }
 
+/// Reduce OAuth and provider failures to stable, non-secret reasons suitable for UI and receipts.
+///
+/// Transport details and provider response bodies must never cross the command boundary because
+/// future clients could accidentally include credentials or customer identifiers in their errors.
+pub fn unavailable_capacity_from_error(
+    provider: CloudProvider,
+    observed_at_ms: u64,
+    error: &str,
+) -> CloudCapacitySnapshot {
+    let reason = if provider == CloudProvider::Icloud {
+        "icloud-quota-api-unavailable"
+    } else if matches!(
+        error,
+        "provider-oauth-connection-missing" | "provider-capacity-oauth-connections-required"
+    ) {
+        "provider-oauth-connection-missing"
+    } else if error == "provider-oauth-connection-ambiguous" {
+        "provider-oauth-connection-ambiguous"
+    } else if error.starts_with("oauth-connection-document-") {
+        "provider-oauth-connection-document-invalid"
+    } else if matches!(
+        error,
+        "provider-oauth-keyring-unavailable"
+            | "provider-oauth-refresh-token-unavailable"
+            | "provider-oauth-refresh-token-invalid"
+    ) {
+        "provider-oauth-credential-unavailable"
+    } else if error.starts_with("oauth-token-")
+        || error.starts_with("oauth-access-token-")
+        || error == "oauth-required-scope-missing"
+    {
+        "provider-oauth-refresh-failed"
+    } else {
+        "cloud-capacity-provider-api-unavailable"
+    };
+    unavailable_capacity(provider, observed_at_ms, reason)
+}
+
 pub fn assess_capacity(
     snapshot: CloudCapacitySnapshot,
     requested_bytes: u64,
@@ -631,6 +669,47 @@ mod tests {
             unavailable.blockers,
             ["icloud-quota-api-unavailable".to_string()]
         );
+    }
+
+    #[test]
+    fn connection_failures_are_redacted_into_actionable_capacity_reasons() {
+        let cases = [
+            (
+                "provider-oauth-connection-missing",
+                "provider-oauth-connection-missing",
+            ),
+            (
+                "provider-capacity-oauth-connections-required",
+                "provider-oauth-connection-missing",
+            ),
+            (
+                "oauth-connection-document-invalid",
+                "provider-oauth-connection-document-invalid",
+            ),
+            (
+                "provider-oauth-refresh-token-unavailable",
+                "provider-oauth-credential-unavailable",
+            ),
+            (
+                "oauth-token-http-status:401",
+                "provider-oauth-refresh-failed",
+            ),
+            (
+                "provider-capacity-http-status:503",
+                "cloud-capacity-provider-api-unavailable",
+            ),
+            (
+                "secret-bearing unexpected transport detail",
+                "cloud-capacity-provider-api-unavailable",
+            ),
+        ];
+        for (error, expected) in cases {
+            let snapshot = unavailable_capacity_from_error(CloudProvider::Onedrive, 42, error);
+            assert_eq!(snapshot.unavailable_reason.as_deref(), Some(expected));
+            if error.contains("secret") {
+                assert!(!serde_json::to_string(&snapshot).unwrap().contains(error));
+            }
+        }
     }
 
     #[test]

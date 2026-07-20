@@ -547,6 +547,58 @@ pub async fn disconnect_cloud_provider(
     .map_err(|_| "provider-oauth-task-failed".to_string())?
 }
 
+/// Revalidate a saved provider connection after launch without exposing access or refresh tokens.
+///
+/// This is deliberately opt-in because it reads the OS credential store and contacts the fixed
+/// provider capacity endpoint. Failures are returned as redacted, stable capacity evidence rather
+/// than raw OAuth or transport details.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn verify_cloud_provider_capacity(
+    cloud_root: String,
+    app: AppHandle,
+) -> Result<provider_capacity::CloudCapacitySnapshot, String> {
+    let selected = selected_cloud_root(&app, &cloud_root)?;
+    cloud::validate_cloud_root_readable(&selected)?;
+    let observed_at_ms = cloud::system_now_ms();
+    if selected.provider == cloud::CloudProvider::Icloud {
+        return Ok(provider_capacity::unavailable_capacity(
+            selected.provider,
+            observed_at_ms,
+            "icloud-quota-api-unavailable",
+        ));
+    }
+    let provider = selected.provider;
+    let connection_path = match oauth_connections_path(&app) {
+        Ok(path) => path,
+        Err(error) => {
+            return Ok(provider_capacity::unavailable_capacity_from_error(
+                provider,
+                observed_at_ms,
+                &error,
+            ))
+        }
+    };
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let access_token = provider_oauth::refreshed_access_token(&connection_path, &selected)?;
+        provider_capacity::collect_authenticated_capacity(
+            provider,
+            access_token.as_str(),
+            observed_at_ms,
+            &provider_capacity::FixedHostProviderCapacityClient::default(),
+        )
+    })
+    .await
+    .map_err(|_| "provider-oauth-task-failed".to_string());
+    let snapshot = match result {
+        Ok(Ok(snapshot)) => snapshot,
+        Ok(Err(error)) | Err(error) => {
+            provider_capacity::unavailable_capacity_from_error(provider, observed_at_ms, &error)
+        }
+    };
+    Ok(snapshot)
+}
+
 #[cfg(not(coverage))]
 fn cloud_plan_for_inputs(
     root: &str,
@@ -616,10 +668,10 @@ fn attach_capacity_assessment(
     let observed_at_ms = cloud::system_now_ms();
     let snapshot = match authenticated_capacity_snapshot(selected, app, observed_at_ms) {
         Ok(snapshot) => snapshot,
-        Err(_) => provider_capacity::unavailable_capacity(
+        Err(error) => provider_capacity::unavailable_capacity_from_error(
             selected.provider,
             observed_at_ms,
-            "cloud-capacity-provider-api-unavailable",
+            &error,
         ),
     };
     let largest_candidate_bytes = report
