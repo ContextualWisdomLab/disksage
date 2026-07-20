@@ -13,7 +13,7 @@ use crate::dataset_metadata::DatasetProfile;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 #[cfg(not(coverage))]
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 #[cfg(not(coverage))]
 use std::process::{Command, Stdio};
@@ -27,6 +27,18 @@ const DAY_MS: u64 = 86_400_000;
 const METADATA_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(not(coverage))]
 const METADATA_PROBE_OUTPUT_LIMIT: usize = 1024 * 1024;
+#[cfg(not(coverage))]
+const MAX_ZIP_METADATA_ENTRIES: usize = 10_000;
+#[cfg(not(coverage))]
+const MAX_ZIP_CONTEXT_NAMES: usize = 16;
+#[cfg(not(coverage))]
+const MAX_ZIP_CENTRAL_DIRECTORY_BYTES: u64 = 16 * 1024 * 1024;
+#[cfg(not(coverage))]
+const INCOMPLETE_DOWNLOAD_SCAN_CHUNK_BYTES: usize = 1024 * 1024;
+#[cfg(not(coverage))]
+const MAX_INCOMPLETE_DOWNLOAD_SCAN_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+#[cfg(not(coverage))]
+const MAX_INCOMPLETE_DOWNLOAD_EOCD_OFFSETS: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -1659,14 +1671,131 @@ fn zipped_document_metadata(path: &Path, entry: &str) -> ContentMetadata {
 }
 
 #[cfg(not(coverage))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ZipEocdPreflight {
+    entry_count: usize,
+    central_directory_bytes: u64,
+}
+
+#[cfg(not(coverage))]
+fn zip_eocd_preflight(file: &mut std::fs::File) -> Result<ZipEocdPreflight, &'static str> {
+    const EOCD_BYTES: usize = 22;
+    const MAX_COMMENT_BYTES: usize = u16::MAX as usize;
+    const EOCD_SIGNATURE: &[u8; 4] = b"PK\x05\x06";
+
+    let file_bytes = file.seek(SeekFrom::End(0)).map_err(|_| "seek-failed")?;
+    if file_bytes < EOCD_BYTES as u64 {
+        return Err("eocd-missing");
+    }
+    let tail_bytes = usize::try_from(file_bytes.min((EOCD_BYTES + MAX_COMMENT_BYTES) as u64))
+        .map_err(|_| "size-overflow")?;
+    file.seek(SeekFrom::End(-(tail_bytes as i64)))
+        .map_err(|_| "seek-failed")?;
+    let mut tail = vec![0u8; tail_bytes];
+    file.read_exact(&mut tail).map_err(|_| "read-failed")?;
+
+    let eocd = (0..=tail.len() - EOCD_BYTES).rev().find(|offset| {
+        if tail.get(*offset..*offset + 4) != Some(EOCD_SIGNATURE.as_slice()) {
+            return false;
+        }
+        let comment_bytes = u16::from_le_bytes([tail[*offset + 20], tail[*offset + 21]]) as usize;
+        *offset + EOCD_BYTES + comment_bytes == tail.len()
+    });
+    let offset = eocd.ok_or("eocd-missing")?;
+    let u16_at = |relative: usize| {
+        u16::from_le_bytes([tail[offset + relative], tail[offset + relative + 1]])
+    };
+    let u32_at = |relative: usize| {
+        u32::from_le_bytes([
+            tail[offset + relative],
+            tail[offset + relative + 1],
+            tail[offset + relative + 2],
+            tail[offset + relative + 3],
+        ])
+    };
+    let disk = u16_at(4);
+    let central_disk = u16_at(6);
+    let entries_on_disk = u16_at(8);
+    let total_entries = u16_at(10);
+    let central_directory_bytes = u64::from(u32_at(12));
+    let central_directory_offset = u64::from(u32_at(16));
+    if disk != 0 || central_disk != 0 || entries_on_disk != total_entries {
+        return Err("multi-disk-unsupported");
+    }
+    if total_entries == u16::MAX
+        || central_directory_bytes == u64::from(u32::MAX)
+        || central_directory_offset == u64::from(u32::MAX)
+    {
+        return Err("zip64-unsupported");
+    }
+    let entry_count = usize::from(total_entries);
+    if entry_count > MAX_ZIP_METADATA_ENTRIES {
+        return Err("entry-limit-exceeded");
+    }
+    if central_directory_bytes > MAX_ZIP_CENTRAL_DIRECTORY_BYTES {
+        return Err("central-directory-too-large");
+    }
+    if central_directory_offset
+        .checked_add(central_directory_bytes)
+        .is_none_or(|end| end > file_bytes)
+    {
+        return Err("central-directory-out-of-bounds");
+    }
+    Ok(ZipEocdPreflight {
+        entry_count,
+        central_directory_bytes,
+    })
+}
+
+#[cfg(not(coverage))]
 fn zip_archive_metadata(path: &Path) -> ContentMetadata {
     let mut metadata = ContentMetadata::default();
-    let mut command = local_command("zipinfo");
-    command.arg("-h").arg(path);
-    let output = match run_metadata_command(command) {
-        Ok(output) => output,
-        Err(failure) => {
-            add_probe_warning(&mut metadata, "zipinfo", failure);
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(_) => {
+            add_evidence(
+                &mut metadata,
+                "metadata-probe-warning",
+                "zip-central-directory:open-failed",
+                "local:metadata-probe:rust-zip",
+                "high",
+            );
+            return metadata;
+        }
+    };
+    let preflight = match zip_eocd_preflight(&mut file) {
+        Ok(preflight) => preflight,
+        Err(reason) => {
+            add_evidence(
+                &mut metadata,
+                "metadata-probe-warning",
+                format!("zip-central-directory:{reason}"),
+                "local:metadata-probe:rust-zip",
+                "high",
+            );
+            return metadata;
+        }
+    };
+    if file.seek(SeekFrom::Start(0)).is_err() {
+        add_evidence(
+            &mut metadata,
+            "metadata-probe-warning",
+            "zip-central-directory:seek-failed",
+            "local:metadata-probe:rust-zip",
+            "high",
+        );
+        return metadata;
+    }
+    let mut archive = match zip::ZipArchive::new(std::io::BufReader::new(file)) {
+        Ok(archive) => archive,
+        Err(_) => {
+            add_evidence(
+                &mut metadata,
+                "metadata-probe-warning",
+                "zip-central-directory:index-unreadable",
+                "local:metadata-probe:rust-zip",
+                "high",
+            );
             return metadata;
         }
     };
@@ -1677,17 +1806,544 @@ fn zip_archive_metadata(path: &Path) -> ContentMetadata {
         "embedded:zip-central-directory",
         "high",
     );
-    let stdout = String::from_utf8_lossy(&output);
-    if let Some(entries) = stdout.lines().find_map(|line| {
-        let (_, value) = line.split_once("number of entries:")?;
-        value.trim().split_whitespace().next()?.parse::<u64>().ok()
-    }) {
+    let entry_count = archive.len();
+    if entry_count != preflight.entry_count {
         add_evidence(
             &mut metadata,
-            "archive-entry-count",
-            entries.to_string(),
+            "metadata-probe-warning",
+            format!(
+                "zip-central-directory:entry-count-mismatch:{}:{entry_count}",
+                preflight.entry_count
+            ),
+            "local:metadata-probe:rust-zip",
+            "high",
+        );
+        return metadata;
+    }
+    add_evidence(
+        &mut metadata,
+        "archive-entry-count",
+        entry_count.to_string(),
+        "embedded:zip-central-directory",
+        "high",
+    );
+    add_evidence(
+        &mut metadata,
+        "archive-central-directory-bytes",
+        preflight.central_directory_bytes.to_string(),
+        "embedded:zip-central-directory",
+        "high",
+    );
+
+    let mut earliest_modified_ms = None;
+    let mut latest_modified_ms = None;
+    let mut timestamped_entries = 0u64;
+    let mut uncompressed_bytes = 0u64;
+    let mut encrypted_entries = 0u64;
+    let mut unsafe_path_entries = 0u64;
+    let mut top_level_names = BTreeSet::new();
+    let mut content_classes = BTreeSet::new();
+    for index in 0..entry_count {
+        let entry = match archive.by_index_raw(index) {
+            Ok(entry) => entry,
+            Err(_) => {
+                add_evidence(
+                    &mut metadata,
+                    "metadata-probe-warning",
+                    format!("zip-central-directory:entry-unreadable:{index}"),
+                    "local:metadata-probe:rust-zip",
+                    "high",
+                );
+                return metadata;
+            }
+        };
+        uncompressed_bytes = uncompressed_bytes.saturating_add(entry.size());
+        encrypted_entries += u64::from(entry.encrypted());
+        if entry.is_file() {
+            if let Some(epoch_ms) = entry.last_modified().and_then(zip_datetime_epoch_ms) {
+                timestamped_entries += 1;
+                earliest_modified_ms = Some(
+                    earliest_modified_ms.map_or(epoch_ms, |current: u64| current.min(epoch_ms)),
+                );
+                latest_modified_ms =
+                    Some(latest_modified_ms.map_or(epoch_ms, |current: u64| current.max(epoch_ms)));
+            }
+        }
+
+        let Some(enclosed) = entry.enclosed_name() else {
+            unsafe_path_entries += 1;
+            continue;
+        };
+        if enclosed.components().any(|component| {
+            !matches!(
+                component,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )
+        }) {
+            unsafe_path_entries += 1;
+            continue;
+        }
+        let Some(unicode_path) = enclosed.to_str() else {
+            unsafe_path_entries += 1;
+            continue;
+        };
+        let normalized: String = unicode_path.nfc().take(512).collect();
+        if normalized.bytes().any(|byte| byte.is_ascii_control()) {
+            unsafe_path_entries += 1;
+            continue;
+        }
+        if let Some(name) = enclosed
+            .components()
+            .find_map(|component| match component {
+                std::path::Component::Normal(name) => name.to_str(),
+                _ => None,
+            })
+            .map(|name| name.nfc().take(160).collect::<String>())
+            .filter(|name| !name.is_empty())
+        {
+            if top_level_names.len() < MAX_ZIP_CONTEXT_NAMES {
+                top_level_names.insert(name);
+            }
+        }
+
+        let lower = normalized.to_lowercase();
+        let extension = enclosed
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_default();
+        if matches!(
+            extension.as_str(),
+            "csv"
+                | "tsv"
+                | "parquet"
+                | "feather"
+                | "arrow"
+                | "sav"
+                | "sas7bdat"
+                | "dta"
+                | "rdata"
+                | "rds"
+                | "sqlite"
+                | "sqlite3"
+                | "db"
+                | "sql"
+                | "jsonl"
+                | "xls"
+                | "xlsx"
+                | "xlsm"
+                | "xlsb"
+                | "ods"
+        ) {
+            content_classes.insert("structured-data");
+        }
+        if matches!(
+            extension.as_str(),
+            "wav" | "mp3" | "m4a" | "flac" | "aiff" | "aac" | "ogg"
+        ) {
+            content_classes.insert("recording-media");
+        }
+        if matches!(
+            extension.as_str(),
+            "doc" | "docx" | "ppt" | "pptx" | "pdf" | "odt" | "odp"
+        ) {
+            content_classes.insert("document");
+        }
+        const SOURCE_EXTENSIONS: &[&str] = &[
+            "rs", "py", "js", "jsx", "ts", "tsx", "java", "kt", "go", "c", "cc", "cpp", "h", "hpp",
+            "cs", "swift", "rb", "php", "scala", "sh", "ps1",
+        ];
+        if SOURCE_EXTENSIONS.contains(&extension.as_str()) {
+            content_classes.insert("source-code");
+        }
+        let file_name = enclosed
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_default();
+        let env_secret = (file_name == ".env" || file_name.starts_with(".env."))
+            && !matches!(
+                file_name.as_str(),
+                ".env.example" | ".env.sample" | ".env.template"
+            );
+        if env_secret
+            || matches!(extension.as_str(), "key" | "pem" | "p12" | "pfx")
+            || lower.contains("credential")
+            || lower.contains("private_key")
+            || lower.contains("private-key")
+        {
+            content_classes.insert("secret-like-path");
+        }
+    }
+
+    for (field, value) in [
+        ("archive-uncompressed-bytes", uncompressed_bytes),
+        ("archive-timestamped-entry-count", timestamped_entries),
+        ("archive-encrypted-entry-count", encrypted_entries),
+        ("archive-unsafe-path-entry-count", unsafe_path_entries),
+    ] {
+        add_evidence(
+            &mut metadata,
+            field,
+            value.to_string(),
             "embedded:zip-central-directory",
             "high",
+        );
+    }
+    if let Some(epoch_ms) = earliest_modified_ms {
+        add_evidence(
+            &mut metadata,
+            "archive-earliest-entry-modified",
+            date_value(epoch_ms),
+            "embedded:zip-central-directory",
+            "medium",
+        );
+    }
+    if let Some(epoch_ms) = latest_modified_ms {
+        set_production_time(
+            &mut metadata,
+            epoch_ms,
+            "embedded:zip-central-directory:latest-entry-modified",
+            "medium",
+        );
+    }
+    for name in top_level_names {
+        push_context(
+            &mut metadata,
+            "archive-top-level-entry",
+            &name,
+            "embedded:zip-central-directory",
+        );
+    }
+    for class in content_classes {
+        push_context(
+            &mut metadata,
+            "archive-content-class",
+            class,
+            "embedded:zip-central-directory",
+        );
+    }
+    metadata
+}
+
+#[cfg(not(coverage))]
+fn zip_datetime_epoch_ms(value: zip::DateTime) -> Option<u64> {
+    if !value.is_valid()
+        || (
+            value.year(),
+            value.month(),
+            value.day(),
+            value.hour(),
+            value.minute(),
+            value.second(),
+        ) == (1980, 1, 1, 0, 0, 0)
+    {
+        return None;
+    }
+    let date = date_epoch_ms(
+        i32::from(value.year()),
+        u32::from(value.month()),
+        u32::from(value.day()),
+    )?;
+    let seconds = u64::from(value.hour()) * 3_600
+        + u64::from(value.minute()) * 60
+        + u64::from(value.second());
+    Some(date + seconds * 1_000)
+}
+
+#[cfg(not(coverage))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct IncompleteDownloadSignatureScan {
+    file_bytes: u64,
+    zip_eocd_count: u64,
+    zip_eocd_offsets: Vec<u64>,
+}
+
+#[cfg(not(coverage))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EmbeddedZipStructuralCandidate {
+    start: u64,
+    end: u64,
+    entry_count: usize,
+    central_directory_bytes: u64,
+}
+
+#[cfg(not(coverage))]
+fn scan_incomplete_download_signatures(
+    path: &Path,
+) -> Result<IncompleteDownloadSignatureScan, &'static str> {
+    const ZIP_EOCD_SIGNATURE: &[u8; 4] = b"PK\x05\x06";
+    const SIGNATURE_OVERLAP_BYTES: usize = ZIP_EOCD_SIGNATURE.len() - 1;
+
+    let file = std::fs::File::open(path).map_err(|_| "open-failed")?;
+    let file_bytes = file.metadata().map_err(|_| "metadata-failed")?.len();
+    if file_bytes > MAX_INCOMPLETE_DOWNLOAD_SCAN_BYTES {
+        return Err("size-limit-exceeded");
+    }
+
+    let mut reader = std::io::BufReader::with_capacity(
+        INCOMPLETE_DOWNLOAD_SCAN_CHUNK_BYTES,
+        file.take(file_bytes),
+    );
+    let mut chunk = vec![0u8; INCOMPLETE_DOWNLOAD_SCAN_CHUNK_BYTES];
+    let mut overlap = Vec::with_capacity(SIGNATURE_OVERLAP_BYTES);
+    let mut bytes_read = 0u64;
+    let mut zip_eocd_count = 0u64;
+    let mut zip_eocd_offsets = Vec::new();
+    loop {
+        let read = reader.read(&mut chunk).map_err(|_| "read-failed")?;
+        if read == 0 {
+            break;
+        }
+        let window_offset = bytes_read.saturating_sub(overlap.len() as u64);
+        let mut window = Vec::with_capacity(overlap.len() + read);
+        window.extend_from_slice(&overlap);
+        window.extend_from_slice(&chunk[..read]);
+        for relative in memchr::memmem::find_iter(&window, ZIP_EOCD_SIGNATURE) {
+            zip_eocd_count = zip_eocd_count.saturating_add(1);
+            if zip_eocd_offsets.len() < MAX_INCOMPLETE_DOWNLOAD_EOCD_OFFSETS {
+                zip_eocd_offsets.push(window_offset + relative as u64);
+            }
+        }
+        overlap.clear();
+        let overlap_start = window.len().saturating_sub(SIGNATURE_OVERLAP_BYTES);
+        overlap.extend_from_slice(&window[overlap_start..]);
+        bytes_read = bytes_read.saturating_add(read as u64);
+    }
+    if bytes_read != file_bytes {
+        return Err("size-changed-during-scan");
+    }
+
+    Ok(IncompleteDownloadSignatureScan {
+        file_bytes,
+        zip_eocd_count,
+        zip_eocd_offsets,
+    })
+}
+
+#[cfg(not(coverage))]
+fn embedded_zip_structural_candidate(
+    file: &mut std::fs::File,
+    file_bytes: u64,
+    eocd_offset: u64,
+) -> Option<EmbeddedZipStructuralCandidate> {
+    const EOCD_BYTES: u64 = 22;
+    const CENTRAL_HEADER_BYTES: usize = 46;
+    const EOCD_SIGNATURE: &[u8; 4] = b"PK\x05\x06";
+    const CENTRAL_SIGNATURE: &[u8; 4] = b"PK\x01\x02";
+    const LOCAL_SIGNATURE: &[u8; 4] = b"PK\x03\x04";
+
+    let u16_at = |bytes: &[u8], offset: usize| {
+        bytes
+            .get(offset..offset + 2)
+            .map(|value| u16::from_le_bytes([value[0], value[1]]))
+    };
+    let u32_at = |bytes: &[u8], offset: usize| {
+        bytes
+            .get(offset..offset + 4)
+            .map(|value| u32::from_le_bytes([value[0], value[1], value[2], value[3]]))
+    };
+
+    let mut eocd = [0u8; EOCD_BYTES as usize];
+    file.seek(SeekFrom::Start(eocd_offset)).ok()?;
+    file.read_exact(&mut eocd).ok()?;
+    if eocd.get(..4) != Some(EOCD_SIGNATURE.as_slice()) {
+        return None;
+    }
+    let disk = u16_at(&eocd, 4)?;
+    let central_disk = u16_at(&eocd, 6)?;
+    let entries_on_disk = u16_at(&eocd, 8)?;
+    let total_entries = u16_at(&eocd, 10)?;
+    let central_directory_bytes = u64::from(u32_at(&eocd, 12)?);
+    let central_directory_offset = u64::from(u32_at(&eocd, 16)?);
+    let comment_bytes = u64::from(u16_at(&eocd, 20)?);
+    let entry_count = usize::from(total_entries);
+    if disk != 0
+        || central_disk != 0
+        || entries_on_disk != total_entries
+        || total_entries == 0
+        || total_entries == u16::MAX
+        || entry_count > MAX_ZIP_METADATA_ENTRIES
+        || central_directory_bytes == u64::from(u32::MAX)
+        || central_directory_bytes > MAX_ZIP_CENTRAL_DIRECTORY_BYTES
+        || central_directory_offset == u64::from(u32::MAX)
+    {
+        return None;
+    }
+    let end = eocd_offset
+        .checked_add(EOCD_BYTES)?
+        .checked_add(comment_bytes)?;
+    if end > file_bytes {
+        return None;
+    }
+    let relative_central_end = central_directory_offset.checked_add(central_directory_bytes)?;
+    let start = eocd_offset.checked_sub(relative_central_end)?;
+    let central_start = start.checked_add(central_directory_offset)?;
+    if central_start.checked_add(central_directory_bytes)? != eocd_offset {
+        return None;
+    }
+
+    let central_len = usize::try_from(central_directory_bytes).ok()?;
+    let mut central = vec![0u8; central_len];
+    file.seek(SeekFrom::Start(central_start)).ok()?;
+    file.read_exact(&mut central).ok()?;
+    let mut cursor = 0usize;
+    let mut first_local_header = None;
+    let mut last_local_header = None;
+    for _ in 0..entry_count {
+        let fixed_end = cursor.checked_add(CENTRAL_HEADER_BYTES)?;
+        let header = central.get(cursor..fixed_end)?;
+        if header.get(..4) != Some(CENTRAL_SIGNATURE.as_slice())
+            || u32_at(header, 20)? == u32::MAX
+            || u32_at(header, 24)? == u32::MAX
+            || u16_at(header, 34)? != 0
+            || u32_at(header, 42)? == u32::MAX
+        {
+            return None;
+        }
+        let variable_bytes = usize::from(u16_at(header, 28)?)
+            .checked_add(usize::from(u16_at(header, 30)?))?
+            .checked_add(usize::from(u16_at(header, 32)?))?;
+        cursor = fixed_end.checked_add(variable_bytes)?;
+        if cursor > central.len() {
+            return None;
+        }
+        let local_header = start.checked_add(u64::from(u32_at(header, 42)?))?;
+        if local_header.checked_add(4)? > central_start {
+            return None;
+        }
+        first_local_header.get_or_insert(local_header);
+        last_local_header = Some(local_header);
+    }
+    if cursor != central.len() {
+        return None;
+    }
+    for local_header in [first_local_header?, last_local_header?] {
+        let mut signature = [0u8; 4];
+        file.seek(SeekFrom::Start(local_header)).ok()?;
+        file.read_exact(&mut signature).ok()?;
+        if signature != *LOCAL_SIGNATURE {
+            return None;
+        }
+    }
+    Some(EmbeddedZipStructuralCandidate {
+        start,
+        end,
+        entry_count,
+        central_directory_bytes,
+    })
+}
+
+#[cfg(not(coverage))]
+fn incomplete_download_metadata(path: &Path) -> ContentMetadata {
+    let mut metadata = ContentMetadata::default();
+    let scan = match scan_incomplete_download_signatures(path) {
+        Ok(scan) => scan,
+        Err(reason) => {
+            add_evidence(
+                &mut metadata,
+                "metadata-probe-warning",
+                format!("incomplete-download-signature-scan:{reason}"),
+                "local:metadata-probe:rust-signature-scan",
+                "high",
+            );
+            return metadata;
+        }
+    };
+    add_evidence(
+        &mut metadata,
+        "incomplete-download-file-bytes",
+        scan.file_bytes.to_string(),
+        "filesystem:bounded-content-signature-scan",
+        "high",
+    );
+    add_evidence(
+        &mut metadata,
+        "incomplete-download-embedded-zip-eocd-count",
+        scan.zip_eocd_count.to_string(),
+        "content-signature:zip-eocd-stream-scan",
+        "medium",
+    );
+    add_evidence(
+        &mut metadata,
+        "incomplete-download-embedded-zip-eocd-offsets-retained",
+        scan.zip_eocd_offsets.len().to_string(),
+        "content-signature:zip-eocd-stream-scan",
+        "high",
+    );
+    if scan.zip_eocd_count > scan.zip_eocd_offsets.len() as u64 {
+        add_evidence(
+            &mut metadata,
+            "metadata-probe-warning",
+            "incomplete-download-signature-scan:offset-limit-reached",
+            "local:metadata-probe:rust-signature-scan",
+            "high",
+        );
+    }
+    for offset in &scan.zip_eocd_offsets {
+        add_evidence(
+            &mut metadata,
+            "incomplete-download-embedded-zip-eocd-offset",
+            offset.to_string(),
+            "content-signature:zip-eocd-stream-scan",
+            "medium",
+        );
+    }
+    let structural_candidates = match std::fs::File::open(path) {
+        Ok(mut file)
+            if file
+                .metadata()
+                .is_ok_and(|value| value.len() == scan.file_bytes) =>
+        {
+            scan.zip_eocd_offsets
+                .iter()
+                .copied()
+                .filter_map(|offset| {
+                    embedded_zip_structural_candidate(&mut file, scan.file_bytes, offset)
+                })
+                .collect::<Vec<_>>()
+        }
+        Ok(_) => {
+            add_evidence(
+                &mut metadata,
+                "metadata-probe-warning",
+                "incomplete-download-structural-scan:size-changed",
+                "local:metadata-probe:rust-signature-scan",
+                "high",
+            );
+            Vec::new()
+        }
+        Err(_) => {
+            add_evidence(
+                &mut metadata,
+                "metadata-probe-warning",
+                "incomplete-download-structural-scan:reopen-failed",
+                "local:metadata-probe:rust-signature-scan",
+                "high",
+            );
+            Vec::new()
+        }
+    };
+    add_evidence(
+        &mut metadata,
+        "incomplete-download-structural-zip-candidate-count",
+        structural_candidates.len().to_string(),
+        "content-structure:zip-central-directory",
+        "medium",
+    );
+    for candidate in structural_candidates {
+        add_evidence(
+            &mut metadata,
+            "incomplete-download-structural-zip-candidate",
+            format!(
+                "start={};end={};entries={};central-directory-bytes={}",
+                candidate.start,
+                candidate.end,
+                candidate.entry_count,
+                candidate.central_directory_bytes
+            ),
+            "content-structure:zip-central-directory",
+            "medium",
         );
     }
     metadata
@@ -1876,6 +2532,7 @@ fn probe_content_metadata(path: &Path) -> ContentMetadata {
         }
         "pdf" => pdfinfo_metadata(path),
         "zip" => zip_archive_metadata(path),
+        "crdownload" => incomplete_download_metadata(path),
         "xlsx" | "xlsm" => merge_metadata(
             zipped_document_metadata(path, "docProps/core.xml"),
             dataset_content_metadata(path),
@@ -1939,6 +2596,45 @@ fn embedded_metadata_review_reasons(
 ) -> Vec<String> {
     let mut reasons = Vec::new();
     let text = normalized_metadata_text(metadata);
+    let archive_class = |expected: &str| {
+        metadata
+            .evidence
+            .iter()
+            .any(|evidence| evidence.field == "archive-content-class" && evidence.value == expected)
+    };
+    if archive_class("structured-data") {
+        reasons.push("archive-contains-structured-data".into());
+    }
+    if archive_class("recording-media") {
+        reasons.push("archive-contains-recording-media".into());
+    }
+    if archive_class("secret-like-path") {
+        reasons.push("archive-contains-secret-like-path".into());
+    }
+    if metadata.evidence.iter().any(|evidence| {
+        evidence.field == "incomplete-download-embedded-zip-eocd-count"
+            && evidence.value.parse::<u64>().is_ok_and(|count| count > 0)
+    }) {
+        reasons.push("incomplete-download-contains-zip-fragment".into());
+    }
+    if metadata.evidence.iter().any(|evidence| {
+        evidence.field == "incomplete-download-structural-zip-candidate-count"
+            && evidence.value.parse::<u64>().is_ok_and(|count| count > 0)
+    }) {
+        reasons.push("incomplete-download-has-structural-zip-candidate".into());
+    }
+    if metadata.evidence.iter().any(|evidence| {
+        evidence.field == "archive-encrypted-entry-count"
+            && evidence.value.parse::<u64>().is_ok_and(|count| count > 0)
+    }) {
+        reasons.push("archive-contains-encrypted-entries".into());
+    }
+    if metadata.evidence.iter().any(|evidence| {
+        evidence.field == "archive-unsafe-path-entry-count"
+            && evidence.value.parse::<u64>().is_ok_and(|count| count > 0)
+    }) {
+        reasons.push("archive-contains-unsafe-entry-path".into());
+    }
     if contains_any(
         &text,
         &[
@@ -2113,6 +2809,13 @@ fn destination_scope_review_reasons(
         matches!(
             reason.as_str(),
             "opaque-container-content-uninspected"
+                | "archive-contains-structured-data"
+                | "archive-contains-recording-media"
+                | "archive-contains-secret-like-path"
+                | "archive-contains-encrypted-entries"
+                | "archive-contains-unsafe-entry-path"
+                | "incomplete-download-contains-zip-fragment"
+                | "incomplete-download-has-structural-zip-candidate"
                 | "structured-data-may-contain-personal-data"
                 | "spreadsheet-content-needs-review"
                 | "recording-may-contain-sensitive-speech"
@@ -2158,7 +2861,10 @@ fn planner_blocked_reason(
     if extension == "zip"
         && metadata.evidence.iter().any(|evidence| {
             evidence.field == "metadata-probe-warning"
-                && evidence.source == "local:metadata-probe:zipinfo"
+                && matches!(
+                    evidence.source.as_str(),
+                    "local:metadata-probe:zipinfo" | "local:metadata-probe:rust-zip"
+                )
         })
     {
         return Some("archive-index-unreadable".into());
@@ -2975,6 +3681,196 @@ mod tests {
         assert!(metadata.evidence.iter().any(|evidence| {
             evidence.field == "multipart-archive-missing-parts" && evidence.value == "002"
         }));
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn incomplete_download_signature_scan_is_streaming_bounded_and_non_overridable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("unknown.crdownload");
+        let crossing_offset = INCOMPLETE_DOWNLOAD_SCAN_CHUNK_BYTES - 2;
+        let mut payload = vec![0u8; INCOMPLETE_DOWNLOAD_SCAN_CHUNK_BYTES + 8];
+        payload[crossing_offset..crossing_offset + 4].copy_from_slice(b"PK\x05\x06");
+        for _ in 0..70 {
+            payload.extend_from_slice(b"PK\x05\x06x");
+        }
+        std::fs::write(&path, &payload).unwrap();
+
+        let scan = scan_incomplete_download_signatures(&path).unwrap();
+        assert_eq!(scan.file_bytes, payload.len() as u64);
+        assert_eq!(scan.zip_eocd_count, 71);
+        assert_eq!(scan.zip_eocd_offsets.len(), 64);
+        assert_eq!(scan.zip_eocd_offsets[0], crossing_offset as u64);
+
+        let metadata = incomplete_download_metadata(&path);
+        assert!(metadata.evidence.iter().any(|evidence| {
+            evidence.field == "incomplete-download-embedded-zip-eocd-count"
+                && evidence.value == "71"
+        }));
+        assert!(embedded_metadata_review_reasons(&path, &metadata, 0, 0)
+            .contains(&"incomplete-download-contains-zip-fragment".to_string()));
+        assert!(metadata.evidence.iter().any(|evidence| {
+            evidence.field == "incomplete-download-structural-zip-candidate-count"
+                && evidence.value == "0"
+        }));
+        assert_eq!(
+            planner_blocked_reason(
+                &path,
+                ArchiveKind::IncompleteDownload,
+                &metadata,
+                Path::new("/definitely/missing/disksage-destination"),
+            )
+            .as_deref(),
+            Some("incomplete-download")
+        );
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn incomplete_download_structural_zip_candidate_ignores_prefix_and_trailing_bytes() {
+        use std::io::Cursor;
+        use zip::write::SimpleFileOptions;
+        use zip::{CompressionMethod, ZipWriter};
+
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .start_file(
+                "evidence/manifest.csv",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+        writer.write_all(b"sha256,path\n").unwrap();
+        let archive = writer.finish().unwrap().into_inner();
+        let prefix = b"incomplete-prefix";
+        let suffix = b"incomplete-trailing-data";
+        let mut payload = prefix.to_vec();
+        payload.extend_from_slice(&archive);
+        payload.extend_from_slice(suffix);
+
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("unknown.crdownload");
+        std::fs::write(&path, &payload).unwrap();
+        let metadata = incomplete_download_metadata(&path);
+        let expected = format!(
+            "start={};end={};entries=1;",
+            prefix.len(),
+            prefix.len() + archive.len()
+        );
+        assert!(metadata.evidence.iter().any(|evidence| {
+            evidence.field == "incomplete-download-structural-zip-candidate-count"
+                && evidence.value == "1"
+        }));
+        assert!(metadata.evidence.iter().any(|evidence| {
+            evidence.field == "incomplete-download-structural-zip-candidate"
+                && evidence.value.starts_with(&expected)
+        }));
+        let reasons = embedded_metadata_review_reasons(&path, &metadata, 0, 0);
+        assert!(reasons.contains(&"incomplete-download-contains-zip-fragment".to_string()));
+        assert!(reasons.contains(&"incomplete-download-has-structural-zip-candidate".to_string()));
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn zip_archive_metadata_reads_lineage_and_content_classes_without_extracting() {
+        use zip::write::SimpleFileOptions;
+        use zip::{CompressionMethod, DateTime, ZipWriter};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("bundle.zip");
+        let file = std::fs::File::create(&path).unwrap();
+        let mut writer = ZipWriter::new(file);
+        for (name, contents, timestamp) in [
+            (
+                "dataset/customers.csv",
+                b"email,amount\n".as_slice(),
+                DateTime::from_date_and_time(2026, 6, 4, 10, 30, 0).unwrap(),
+            ),
+            (
+                "audio/meeting.m4a",
+                b"audio".as_slice(),
+                DateTime::from_date_and_time(2026, 6, 5, 11, 45, 0).unwrap(),
+            ),
+            (
+                "config/.env",
+                b"SECRET=redacted\n".as_slice(),
+                DateTime::from_date_and_time(2026, 6, 3, 9, 0, 0).unwrap(),
+            ),
+            (
+                "src/main.rs",
+                b"fn main() {}\n".as_slice(),
+                DateTime::from_date_and_time(2026, 6, 4, 12, 0, 0).unwrap(),
+            ),
+        ] {
+            let options = SimpleFileOptions::default()
+                .compression_method(CompressionMethod::Stored)
+                .last_modified_time(timestamp);
+            writer.start_file(name, options).unwrap();
+            writer.write_all(contents).unwrap();
+        }
+        writer.finish().unwrap();
+
+        let metadata = zip_archive_metadata(&path);
+        assert_eq!(
+            metadata.production_time_source.as_deref(),
+            Some("embedded:zip-central-directory:latest-entry-modified")
+        );
+        assert_eq!(
+            metadata.production_time_confidence.as_deref(),
+            Some("medium")
+        );
+        assert_eq!(
+            date_parts(metadata.production_time_ms.unwrap()),
+            (2026, 6, 5)
+        );
+        for expected in [
+            "structured-data",
+            "recording-media",
+            "secret-like-path",
+            "source-code",
+        ] {
+            assert!(metadata.evidence.iter().any(|evidence| {
+                evidence.field == "archive-content-class" && evidence.value == expected
+            }));
+        }
+        for expected in [
+            "archive-contains-structured-data",
+            "archive-contains-recording-media",
+            "archive-contains-secret-like-path",
+        ] {
+            assert!(embedded_metadata_review_reasons(
+                &path,
+                &metadata,
+                metadata.production_time_ms.unwrap(),
+                date_epoch_ms(2026, 6, 6).unwrap(),
+            )
+            .contains(&expected.to_string()));
+        }
+        assert!(!tmp.path().join("dataset").exists());
+        assert!(!tmp.path().join("audio").exists());
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn zip_archive_metadata_rejects_unreadable_index_and_default_timestamp() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("broken.zip");
+        std::fs::write(&path, b"not-a-zip").unwrap();
+        let metadata = zip_archive_metadata(&path);
+        assert!(metadata.evidence.iter().any(|evidence| {
+            evidence.field == "metadata-probe-warning"
+                && evidence.source == "local:metadata-probe:rust-zip"
+        }));
+        assert_eq!(
+            planner_blocked_reason(
+                &path,
+                ArchiveKind::Archive,
+                &metadata,
+                Path::new("/definitely/missing/disksage-destination"),
+            )
+            .as_deref(),
+            Some("archive-index-unreadable")
+        );
+        assert_eq!(zip_datetime_epoch_ms(zip::DateTime::default()), None);
     }
 
     #[test]
