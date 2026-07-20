@@ -420,6 +420,12 @@
                   표본 {candidate.dataset_profile.sampled_rows.toLocaleString()}행 ·
                   {candidate.dataset_profile.columns.length.toLocaleString()}열
                 </strong>
+                {#if candidate.dataset_profile.worksheet_names.length > 0}
+                  <div class="metadata">
+                    시트 {candidate.dataset_profile.sampled_worksheets.toLocaleString()}개:
+                    {candidate.dataset_profile.worksheet_names.join(", ")}
+                  </div>
+                {/if}
                 <div class="metadata">
                   {candidate.dataset_profile.profile_complete ? "스키마 표본 완료" : "스키마 표본 불완전·검토 필요"}
                   {candidate.dataset_profile.sample_truncated ? " · 제한 범위까지만 읽음" : ""}

@@ -627,8 +627,10 @@ pub fn discover_cloud_roots(home: &Path) -> Vec<CloudRoot> {
 fn archive_kind(path: &Path) -> Option<ArchiveKind> {
     let ext = path.extension()?.to_string_lossy().to_ascii_lowercase();
     match ext.as_str() {
-        "pdf" | "doc" | "docx" | "ppt" | "pptx" | "xls" | "xlsx" | "odt" | "ods" | "odp"
-        | "pages" | "numbers" | "key" | "epub" | "mobi" => Some(ArchiveKind::Document),
+        "pdf" | "doc" | "docx" | "ppt" | "pptx" | "xls" | "xlsx" | "xlsm" | "xlsb"
+        | "odt" | "ods" | "odp" | "pages" | "numbers" | "key" | "epub" | "mobi" => {
+            Some(ArchiveKind::Document)
+        }
         "jpg" | "jpeg" | "png" | "heic" | "tif" | "tiff" | "gif" | "webp" | "raw" | "mov"
         | "mp4" | "m4v" | "mkv" | "avi" | "wav" | "mp3" | "m4a" | "flac" | "aiff" => {
             Some(ArchiveKind::Media)
@@ -1809,6 +1811,22 @@ fn dataset_content_metadata(path: &Path) -> ContentMetadata {
         &source,
         "medium",
     );
+    add_evidence(
+        &mut metadata,
+        "dataset-sampled-worksheets",
+        profile.sampled_worksheets.to_string(),
+        &source,
+        "medium",
+    );
+    for worksheet in &profile.worksheet_names {
+        add_evidence(
+            &mut metadata,
+            "dataset-worksheet",
+            worksheet,
+            &source,
+            "high",
+        );
+    }
     for column in &profile.columns {
         add_evidence(
             &mut metadata,
@@ -1858,8 +1876,17 @@ fn probe_content_metadata(path: &Path) -> ContentMetadata {
         }
         "pdf" => pdfinfo_metadata(path),
         "zip" => zip_archive_metadata(path),
-        "docx" | "xlsx" | "pptx" => zipped_document_metadata(path, "docProps/core.xml"),
-        "odt" | "ods" | "odp" => zipped_document_metadata(path, "meta.xml"),
+        "xlsx" | "xlsm" => merge_metadata(
+            zipped_document_metadata(path, "docProps/core.xml"),
+            dataset_content_metadata(path),
+        ),
+        "ods" => merge_metadata(
+            zipped_document_metadata(path, "meta.xml"),
+            dataset_content_metadata(path),
+        ),
+        "xls" | "xlsb" => dataset_content_metadata(path),
+        "docx" | "pptx" => zipped_document_metadata(path, "docProps/core.xml"),
+        "odt" | "odp" => zipped_document_metadata(path, "meta.xml"),
         "csv" | "tsv" | "parquet" | "feather" | "arrow" | "sav" | "sas7bdat" | "dta" | "rdata"
         | "rds" | "sqlite" | "sqlite3" | "db" | "sql" | "jsonl" => dataset_content_metadata(path),
         _ if multipart_archive_part(path).is_some() => multipart_archive_metadata(path),
@@ -2478,6 +2505,30 @@ pub fn plan_cloud_archive(
                     }
                     if !profile.quality_warnings.is_empty() {
                         review_reasons.push("dataset-quality-warning-present".into());
+                    }
+                }
+            }
+        }
+        let extension = file
+            .path
+            .extension()
+            .map(|extension| extension.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        if matches!(
+            extension.as_str(),
+            "xls" | "xlsx" | "xlsm" | "xlsb" | "ods"
+        ) {
+            match lineage_metadata.dataset_profile.as_ref() {
+                None => review_reasons.push("spreadsheet-schema-profile-missing".into()),
+                Some(profile) => {
+                    if !profile.profile_complete {
+                        review_reasons.push("spreadsheet-schema-profile-incomplete".into());
+                    }
+                    if profile.columns.iter().any(|column| column.sensitive_name) {
+                        review_reasons.push("spreadsheet-sensitive-column-name-detected".into());
+                    }
+                    if !profile.quality_warnings.is_empty() {
+                        review_reasons.push("spreadsheet-quality-warning-present".into());
                     }
                 }
             }

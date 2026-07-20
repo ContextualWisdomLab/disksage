@@ -1,3 +1,5 @@
+#[cfg(not(coverage))]
+use calamine::{open_workbook_auto, Data, Reader};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader, Read};
@@ -7,6 +9,12 @@ const MAX_PROFILE_BYTES: u64 = 1024 * 1024;
 const MAX_PROFILE_ROWS: u64 = 100;
 const MAX_PROFILE_COLUMNS: usize = 128;
 const MAX_COLUMN_NAME_CHARS: usize = 128;
+#[cfg(not(coverage))]
+const MAX_SPREADSHEET_BYTES: u64 = 64 * 1024 * 1024;
+#[cfg(not(coverage))]
+const MAX_PROFILE_WORKSHEETS: usize = 32;
+#[cfg(not(coverage))]
+const MAX_WORKSHEET_NAME_CHARS: usize = 128;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DatasetColumnProfile {
@@ -21,6 +29,10 @@ pub struct DatasetColumnProfile {
 pub struct DatasetProfile {
     pub format: String,
     pub sampled_rows: u64,
+    #[serde(default)]
+    pub sampled_worksheets: u64,
+    #[serde(default)]
+    pub worksheet_names: Vec<String>,
     pub profile_complete: bool,
     pub sample_truncated: bool,
     pub columns: Vec<DatasetColumnProfile>,
@@ -115,6 +127,29 @@ impl ColumnAccumulator {
             serde_json::Value::Array(_) | serde_json::Value::Object(_) => ValueKind::Json,
         };
         self.kind = self.kind.merge(next);
+    }
+
+    #[cfg(not(coverage))]
+    fn observe_spreadsheet(&mut self, value: &Data) -> bool {
+        let kind = match value {
+            Data::Empty => {
+                self.missing_values += 1;
+                return false;
+            }
+            Data::Bool(_) => ValueKind::Boolean,
+            Data::Int(_) => ValueKind::Integer,
+            Data::Float(_) => ValueKind::Number,
+            Data::DateTime(_) | Data::DateTimeIso(_) => ValueKind::DateTime,
+            Data::DurationIso(_) => ValueKind::Text,
+            Data::String(value) => {
+                self.observe_text(value);
+                return false;
+            }
+            Data::Error(_) => ValueKind::Mixed,
+        };
+        self.observed_values += 1;
+        self.kind = self.kind.merge(kind);
+        matches!(value, Data::Error(_))
     }
 
     fn finish(self) -> DatasetColumnProfile {
@@ -391,11 +426,186 @@ fn profile_json_lines<R: BufRead>(reader: R) -> DatasetProfile {
 }
 
 #[cfg(not(coverage))]
+fn bounded_worksheet_name(value: &str, index: usize) -> String {
+    let value = value.trim();
+    if value.is_empty() {
+        format!("worksheet_{}", index + 1)
+    } else {
+        value.chars().take(MAX_WORKSHEET_NAME_CHARS).collect()
+    }
+}
+
+#[cfg(not(coverage))]
+fn spreadsheet_header_name(value: &Data, index: usize) -> (String, bool) {
+    match value {
+        Data::String(value) if !value.trim().is_empty() => {
+            (bounded_column_name(value, index), true)
+        }
+        _ => (format!("column_{}", index + 1), false),
+    }
+}
+
+#[cfg(not(coverage))]
+fn profile_spreadsheet_rows<'a, I>(
+    profile: &mut DatasetProfile,
+    worksheet: &str,
+    rows: I,
+    columns: &mut Vec<ColumnAccumulator>,
+    prefix_columns: bool,
+) where
+    I: IntoIterator<Item = &'a [Data]>,
+{
+    let mut rows = rows.into_iter();
+    let Some(header) = rows.next() else {
+        profile.profile_complete = false;
+        push_warning(profile, "empty-worksheet");
+        return;
+    };
+    if header.is_empty() {
+        profile.profile_complete = false;
+        push_warning(profile, "missing-header");
+        return;
+    }
+
+    let source_column_count = header.len();
+    let available = MAX_PROFILE_COLUMNS.saturating_sub(columns.len());
+    let retained = source_column_count.min(available);
+    if retained < source_column_count {
+        profile.profile_complete = false;
+        push_warning(profile, "column-limit-exceeded");
+    }
+    let start = columns.len();
+    let mut names_seen = BTreeSet::new();
+    for (index, value) in header.iter().take(retained).enumerate() {
+        let (mut name, explicit) = spreadsheet_header_name(value, index);
+        if !explicit {
+            profile.profile_complete = false;
+            push_warning(profile, "non-text-or-empty-column-name");
+        }
+        if !names_seen.insert(name.to_lowercase()) {
+            profile.profile_complete = false;
+            push_warning(profile, "duplicate-column-name");
+        }
+        if prefix_columns {
+            name = format!("{worksheet}!{name}");
+        }
+        columns.push(ColumnAccumulator::new(name, 0));
+    }
+
+    for row in rows {
+        if profile.sampled_rows >= MAX_PROFILE_ROWS {
+            profile.profile_complete = false;
+            profile.sample_truncated = true;
+            push_warning(profile, "row-sample-limit-reached");
+            break;
+        }
+        if row.len() != source_column_count {
+            profile.profile_complete = false;
+            push_warning(profile, "inconsistent-row-width");
+        }
+        let mut cell_error = false;
+        for offset in 0..retained {
+            cell_error |= match row.get(offset) {
+                Some(value) => columns[start + offset].observe_spreadsheet(value),
+                None => {
+                    columns[start + offset].missing_values += 1;
+                    false
+                }
+            };
+        }
+        if cell_error {
+            profile.profile_complete = false;
+            push_warning(profile, "cell-error-present");
+        }
+        profile.sampled_rows += 1;
+    }
+}
+
+#[cfg(not(coverage))]
+fn profile_spreadsheet(path: &Path, format: &str) -> DatasetProfile {
+    let mut profile = DatasetProfile {
+        format: format.into(),
+        profile_complete: true,
+        ..DatasetProfile::default()
+    };
+    let bytes = match std::fs::metadata(path) {
+        Ok(metadata) => metadata.len(),
+        Err(_) => {
+            profile.profile_complete = false;
+            push_warning(&mut profile, "dataset-open-error");
+            return profile;
+        }
+    };
+    if bytes > MAX_SPREADSHEET_BYTES {
+        profile.profile_complete = false;
+        profile.sample_truncated = true;
+        push_warning(&mut profile, "spreadsheet-size-limit-exceeded");
+        return profile;
+    }
+    let mut workbook = match open_workbook_auto(path) {
+        Ok(workbook) => workbook,
+        Err(_) => {
+            profile.profile_complete = false;
+            push_warning(&mut profile, "spreadsheet-open-error");
+            return profile;
+        }
+    };
+    let source_names = workbook.sheet_names().to_owned();
+    if source_names.is_empty() {
+        profile.profile_complete = false;
+        push_warning(&mut profile, "missing-worksheet");
+        return profile;
+    }
+    if source_names.len() > MAX_PROFILE_WORKSHEETS {
+        profile.profile_complete = false;
+        profile.sample_truncated = true;
+        push_warning(&mut profile, "worksheet-limit-exceeded");
+    }
+    let retained_names: Vec<_> = source_names
+        .iter()
+        .take(MAX_PROFILE_WORKSHEETS)
+        .enumerate()
+        .map(|(index, name)| (name.clone(), bounded_worksheet_name(name, index)))
+        .collect();
+    let prefix_columns = retained_names.len() > 1;
+    let mut columns = Vec::new();
+    for (source_name, worksheet_name) in retained_names {
+        if profile.sampled_rows >= MAX_PROFILE_ROWS {
+            profile.profile_complete = false;
+            profile.sample_truncated = true;
+            push_warning(&mut profile, "row-sample-limit-reached");
+            break;
+        }
+        profile.worksheet_names.push(worksheet_name.clone());
+        let range = match workbook.worksheet_range(&source_name) {
+            Ok(range) => range,
+            Err(_) => {
+                profile.profile_complete = false;
+                push_warning(&mut profile, "worksheet-read-error");
+                continue;
+            }
+        };
+        profile.sampled_worksheets += 1;
+        profile_spreadsheet_rows(
+            &mut profile,
+            &worksheet_name,
+            range.rows(),
+            &mut columns,
+            prefix_columns,
+        );
+    }
+    finalize_profile(profile, columns)
+}
+
+#[cfg(not(coverage))]
 pub fn profile_dataset(path: &Path) -> DatasetProfile {
     let format = path
         .extension()
         .map(|extension| extension.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_else(|| "unknown".into());
+    if matches!(format.as_str(), "xls" | "xlsx" | "xlsm" | "xlsb" | "ods") {
+        return profile_spreadsheet(path, &format);
+    }
     if !matches!(format.as_str(), "csv" | "tsv" | "jsonl") {
         return DatasetProfile {
             format,
@@ -441,6 +651,45 @@ mod tests {
     use super::*;
     use std::io::Cursor;
     use std::io::Write;
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn spreadsheet_profile_keeps_schema_but_not_cell_values() {
+        let rows = vec![
+            vec![Data::String("email".into()), Data::String("amount".into())],
+            vec![
+                Data::String("person@example.com".into()),
+                Data::Int(42),
+            ],
+            vec![Data::Empty, Data::Float(3.5)],
+        ];
+        let mut profile = DatasetProfile {
+            format: "xlsx".into(),
+            sampled_worksheets: 1,
+            worksheet_names: vec!["Sheet1".into()],
+            profile_complete: true,
+            ..DatasetProfile::default()
+        };
+        let mut columns = Vec::new();
+        profile_spreadsheet_rows(
+            &mut profile,
+            "Sheet1",
+            rows.iter().map(Vec::as_slice),
+            &mut columns,
+            false,
+        );
+        let profile = finalize_profile(profile, columns);
+
+        assert_eq!(profile.sampled_rows, 2);
+        assert_eq!(profile.columns[0].name, "email");
+        assert!(profile.columns[0].sensitive_name);
+        assert_eq!(profile.columns[0].missing_values, 1);
+        assert_eq!(profile.columns[1].inferred_type, "number");
+        let serialized = serde_json::to_string(&profile).unwrap();
+        assert!(!serialized.contains("person@example.com"));
+        assert!(!serialized.contains("42"));
+        assert!(!serialized.contains("3.5"));
+    }
 
     #[test]
     fn csv_profile_records_schema_without_cell_values() {

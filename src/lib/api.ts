@@ -251,6 +251,8 @@ export interface DatasetColumnProfile {
 export interface DatasetProfile {
   format: string;
   sampled_rows: number;
+  sampled_worksheets: number;
+  worksheet_names: string[];
   profile_complete: boolean;
   sample_truncated: boolean;
   columns: DatasetColumnProfile[];
