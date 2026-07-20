@@ -6,8 +6,10 @@
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
   let roots: api.CloudRoot[] = $state([]);
+  let rootIssues: api.CloudRootDiscoveryIssue[] = $state([]);
   let connections: api.OAuthConnection[] = $state([]);
   let reviewDecisions: api.CloudReviewDecision[] = $state([]);
+  let reviewRationales: Record<string, string> = $state({});
   let selectedRoot = $state("");
   let minSizeMib = $state(256);
   let minAgeDays = $state(90);
@@ -26,10 +28,12 @@
 
   onMount(async () => {
     try {
-      roots = await api.listCloudRoots();
+      const discovery = await api.inspectCloudRoots();
+      roots = discovery.roots;
+      rootIssues = discovery.issues;
       connections = await api.listCloudProviderConnections();
       reviewDecisions = await api.listCloudReviewDecisions();
-      selectedRoot = roots[0]?.path ?? "";
+      selectedRoot = roots.find((root) => root.readable)?.path ?? "";
     } catch (e) {
       loadError = String(e);
     }
@@ -68,6 +72,16 @@
       && (embeddedHighConfidence || exactApproval);
   }
 
+  function adoptEligible(candidate: api.CloudCandidate): boolean {
+    const decision = matchingReviewDecision(candidate);
+    const exactApproval = decision?.disposition === "approved";
+    const embeddedHighConfidence = candidate.production_time_confidence === "high"
+      && candidate.production_time_source.startsWith("embedded:");
+    return candidate.blocked_reason === "destination-exists"
+      && (!candidate.requires_review || exactApproval)
+      && (embeddedHighConfidence || exactApproval);
+  }
+
   function reviewDecision(candidate: api.CloudCandidate): api.CloudReviewDecision | null {
     return reviewDecisions.find((decision) =>
       decision.candidate_fingerprint === candidate.metadata_fingerprint
@@ -84,6 +98,8 @@
     disposition: api.CloudReviewDisposition,
   ) {
     if (!scannedRoot || !selectedRoot || !candidate.requires_review) return;
+    const rationale = (reviewRationales[candidate.metadata_fingerprint] ?? "").trim();
+    if (!rationale) return;
     reviewingFingerprint = candidate.metadata_fingerprint;
     loadError = "";
     try {
@@ -93,6 +109,7 @@
         candidate.metadata_fingerprint,
         candidate.review_fingerprint,
         disposition,
+        rationale,
         Math.max(1, Math.floor(minSizeMib)),
         Math.max(0, Math.floor(minAgeDays)),
         200,
@@ -103,6 +120,10 @@
         ),
         decision,
       ];
+      reviewRationales = {
+        ...reviewRationales,
+        [candidate.metadata_fingerprint]: "",
+      };
     } catch (e) {
       loadError = String(e);
     } finally {
@@ -133,16 +154,38 @@
     }
   }
 
+  async function adoptExistingCandidate(candidate: api.CloudCandidate) {
+    if (!scannedRoot || !selectedRoot || !adoptEligible(candidate)) return;
+    copyingFingerprint = candidate.metadata_fingerprint;
+    loadError = "";
+    copied = null;
+    attestation = null;
+    objectId = "";
+    try {
+      copied = await api.adoptExistingCloudCandidate(
+        scannedRoot,
+        selectedRoot,
+        candidate.metadata_fingerprint,
+        Math.max(1, Math.floor(minSizeMib)),
+        Math.max(0, Math.floor(minAgeDays)),
+        200,
+      );
+    } catch (e) {
+      loadError = String(e);
+    } finally {
+      copyingFingerprint = "";
+    }
+  }
+
   async function attestCopy() {
     if (!copied) return;
-    const isIcloud = copied.receipt.provider === "icloud";
     attesting = true;
     loadError = "";
     attestation = null;
     try {
       attestation = await api.attestCloudCopy(
         copied.receipt.receipt_id,
-        isIcloud ? null : objectId.trim() || null,
+        copied.receipt.provider === "google-drive" ? objectId.trim() || null : null,
       );
     } catch (e) {
       loadError = String(e);
@@ -210,6 +253,15 @@
     const minutes = totalMinutes % 60;
     return hours > 0 ? `${hours}시간 ${minutes}분` : `${minutes}분`;
   }
+
+  function accountScopeLabel(scope: api.CloudAccountScope): string {
+    return {
+      personal: "개인",
+      organization: "조직",
+      shared: "공유",
+      unknown: "범위 미확인",
+    }[scope];
+  }
 </script>
 
 <section>
@@ -226,7 +278,9 @@
         대상
         <select bind:value={selectedRoot} disabled={busy}>
           {#each roots as root (root.id)}
-            <option value={root.path}>{root.label}</option>
+            <option value={root.path} disabled={!root.readable}>
+              {root.label} · {accountScopeLabel(root.account_scope)}{root.readable ? "" : " · 접근 불가"}
+            </option>
           {/each}
         </select>
       </label>
@@ -242,7 +296,17 @@
         {busy ? "계획 중…" : "오프로드 후보 미리보기"}
       </button>
     </div>
-    {#if selectedRootDetails()?.provider !== "icloud"}
+    {#if roots.some((root) => !root.readable)}
+      <p class="warning">
+        접근 불가 클라우드 루트는 선택에서 제외했습니다. macOS 개인정보 보호 권한을 허용한 뒤 목록을 다시 불러오세요.
+      </p>
+    {/if}
+    {#if rootIssues.length > 0}
+      <p class="warning">
+        클라우드 루트 탐지 문제 {rootIssues.length}건: {rootIssues.map((issue) => `${issue.provider ?? "file-provider"}/${issue.account_scope}/${issue.reason}`).join(", ")}
+      </p>
+    {/if}
+    {#if selectedRootDetails() && selectedRootDetails()?.provider !== "icloud"}
       <div class="oauth-panel">
         {#if connectionForSelectedRoot()}
           <strong>읽기 전용 OAuth 연결됨</strong>
@@ -287,23 +351,33 @@
       {report.candidates.length}개 후보 · 총 {fmtBytes(report.candidate_bytes)} ·
       충돌 제외 잠재 회수 {fmtBytes(report.potentially_reclaimable_bytes)}
     </div>
+    {#if report.exact_duplicates.candidate_count > 0}
+      <p class="warning">
+        정확 중복 {report.exact_duplicates.candidate_count.toLocaleString()}개 ·
+        {report.exact_duplicates.cluster_count.toLocaleString()}개 콘텐츠 클러스터 ·
+        대표본 외 중복 경로 {fmtBytes(report.exact_duplicates.redundant_bytes)}.
+        동일 크기 후보만 로컬 SHA-256·BLAKE3로 확인했으며, 대표 lineage를 선택하기 전에는 자동 복사하지 않습니다.
+      </p>
+    {/if}
     <p class="warning">
-      내장 고신뢰 생산일은 자동 자격을 얻습니다. 파일명·파일시스템 등 보조 생산일은 현재 메타데이터와 목적지에 결박된 명시적 승인이 있어야만 복사할 수 있습니다. 원본 삭제 기능은 제공하지 않으며, 업로드 증거가 확인되어도 허가 정보만 표시합니다.
+      생산일 우선순위는 내장 메타데이터 → 명시적 파일명 날짜 → 파일시스템 생성 → 수정 시각입니다. 파일명 날짜와 파일시스템 시각은 저신뢰 잠정값이며, 현재 메타데이터와 목적지에 결박된 명시적 승인 없이는 복사할 수 없습니다. 이미 존재하는 클라우드 파일은 전체 콘텐츠 해시가 모두 같을 때만 채택합니다. 앱 UI는 원본을 삭제하지 않으며, 업로드 증거가 확인되어도 허가 정보만 표시합니다.
     </p>
     {#if copied}
       <div class="receipt">
-        <strong>검증 복사 완료 · 원본 보존됨</strong>
+        <strong>{copied.action === "adopt-existing-copy" ? "기존 클라우드 복사본 검증·채택 완료" : "검증 복사 완료"} · 원본 보존됨</strong>
         <div class="context">영수증 {copied.receipt.receipt_id} · {fmtBytes(copied.receipt.bytes)}</div>
         <div class="path">{copied.receipt.destination}</div>
-        {#if copied.receipt.provider !== "icloud"}
+        {#if copied.receipt.provider === "google-drive"}
           <div class="provider-auth">
             <label>
-              {copied.receipt.provider === "onedrive" ? "OneDrive item ID (선택)" : "Google Drive file ID (선택)"}
+              Google Drive file ID (선택)
               <input type="text" bind:value={objectId} autocomplete="off" disabled={attesting} />
             </label>
           </div>
-          <p class="muted">먼저 macOS File Provider의 업로드·최신 버전 메타데이터를 확인합니다. item/file ID를 입력하면 네이티브 증거가 불완전할 때만 OAuth API 체크섬 검증으로 보완합니다.</p>
+          <p class="muted">먼저 macOS File Provider의 업로드·최신 버전 메타데이터를 확인합니다. file ID를 입력하면 네이티브 증거가 불완전할 때 OAuth API로 SHA-256과 부모 폴더 체인을 My Drive 루트까지 두 차례 검증합니다. 영수증 목적지와 정확히 일치하고 검증 중 변경되지 않은 경우에만 원본 제거 허가를 생성합니다. 공유 드라이브는 아직 실패 폐쇄합니다.</p>
           <p class="muted">API 보완 시 access token은 OS 보안 저장소의 refresh token으로 Rust 내부에서 한 번만 갱신하며 UI·설정·영수증에 노출하지 않습니다.</p>
+        {:else if copied.receipt.provider === "onedrive"}
+          <p class="muted">macOS File Provider 증거가 불완전하면 OAuth 연결을 사용해 영수증의 OneDrive 상대 경로를 직접 조회하고 QuickXorHash를 검증합니다. 임의 item ID는 받지 않습니다.</p>
         {/if}
         <button
           onclick={attestCopy}
@@ -325,7 +399,7 @@
     {:else}
       <ul class="candidates">
         {#each report.candidates as candidate (candidate.metadata_fingerprint)}
-          <li class:blocked={candidate.blocked_reason !== null}>
+          <li class:blocked={candidate.blocked_reason !== null} class:adoptable={adoptEligible(candidate)}>
             <div class="line">
               <strong>{fmtBytes(candidate.bytes)}</strong>
               <span>{candidate.kind}</span>
@@ -355,6 +429,12 @@
                   표본 {candidate.dataset_profile.sampled_rows.toLocaleString()}행 ·
                   {candidate.dataset_profile.columns.length.toLocaleString()}열
                 </strong>
+                {#if candidate.dataset_profile.worksheet_names.length > 0}
+                  <div class="metadata">
+                    시트 {candidate.dataset_profile.sampled_worksheets.toLocaleString()}개:
+                    {candidate.dataset_profile.worksheet_names.join(", ")}
+                  </div>
+                {/if}
                 <div class="metadata">
                   {candidate.dataset_profile.profile_complete ? "스키마 표본 완료" : "스키마 표본 불완전·검토 필요"}
                   {candidate.dataset_profile.sample_truncated ? " · 제한 범위까지만 읽음" : ""}
@@ -377,7 +457,9 @@
               </div>
             {/if}
             <div class="arrow">→ {candidate.dst}</div>
-            <div class="context">맥락: {candidate.source_context} · lineage: {candidate.metadata_fingerprint.slice(0, 12)}</div>
+            <div class="context">
+              맥락: {candidate.source_context} · 대상 계정: {accountScopeLabel(candidate.destination_account_scope)} · lineage: {candidate.metadata_fingerprint.slice(0, 12)}
+            </div>
             {#if candidate.requires_review}
               <div class="review-controls">
                 {#if matchingReviewDecision(candidate)?.disposition === "approved"}
@@ -389,15 +471,35 @@
                 {:else}
                   <span class="context">아래 증거를 확인한 뒤 승인 또는 보류하세요.</span>
                 {/if}
+                {#if matchingReviewDecision(candidate)}
+                  <span class="context">
+                    검토자: {matchingReviewDecision(candidate)?.reviewed_by ?? "legacy-local-operator"} ·
+                    근거: {matchingReviewDecision(candidate)?.rationale ?? "legacy decision"}
+                  </span>
+                {/if}
+                <label class="review-rationale">
+                  새 승인·보류 근거 (민감한 셀 값이나 문서 본문은 입력하지 마세요)
+                  <textarea
+                    maxlength="1000"
+                    value={reviewRationales[candidate.metadata_fingerprint] ?? ""}
+                    oninput={(event) => {
+                      reviewRationales = {
+                        ...reviewRationales,
+                        [candidate.metadata_fingerprint]: event.currentTarget.value,
+                      };
+                    }}
+                    disabled={reviewingFingerprint !== ""}
+                  ></textarea>
+                </label>
                 <button
                   onclick={() => reviewCandidate(candidate, "approved")}
-                  disabled={reviewingFingerprint !== "" || matchingReviewDecision(candidate)?.disposition === "approved"}
+                  disabled={reviewingFingerprint !== "" || !(reviewRationales[candidate.metadata_fingerprint] ?? "").trim()}
                 >
                   {reviewingFingerprint === candidate.metadata_fingerprint ? "기록 중…" : "메타데이터 검토 승인"}
                 </button>
                 <button
                   onclick={() => reviewCandidate(candidate, "held")}
-                  disabled={reviewingFingerprint !== "" || matchingReviewDecision(candidate)?.disposition === "held"}
+                  disabled={reviewingFingerprint !== "" || !(reviewRationales[candidate.metadata_fingerprint] ?? "").trim()}
                 >보류</button>
               </div>
             {/if}
@@ -408,6 +510,15 @@
                 disabled={copyingFingerprint !== "" || copied?.receipt.candidate_fingerprint === candidate.metadata_fingerprint}
               >
                 {copyingFingerprint === candidate.metadata_fingerprint ? "복사·해시 검증 중…" : "원본을 유지하고 클라우드에 복사"}
+              </button>
+            {/if}
+            {#if adoptEligible(candidate)}
+              <button
+                class="copy"
+                onclick={() => adoptExistingCandidate(candidate)}
+                disabled={copyingFingerprint !== "" || copied?.receipt.candidate_fingerprint === candidate.metadata_fingerprint}
+              >
+                {copyingFingerprint === candidate.metadata_fingerprint ? "기존 파일 전체 해시 검증 중…" : "기존 클라우드 복사본 해시 검증·채택"}
               </button>
             {/if}
             <details>
@@ -443,11 +554,14 @@
   .summary { margin-top: 0.8rem; font-weight: 600; }
   .receipt { margin: 0.75rem 0; padding: 0.75rem; border: 1px solid #6b8e72; border-radius: 4px; background: #f5fbf6; }
   .review-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin: 0.5rem 0; }
+  .review-rationale { flex-basis: 100%; }
+  .review-rationale textarea { width: min(52rem, 88vw); min-height: 3.5rem; resize: vertical; }
   .approved { color: #25643b; }
   .held { color: #8a4b16; }
   .candidates { list-style: none; margin: 0.5rem 0; padding: 0; max-height: 34rem; overflow-y: auto; }
   .candidates li { padding: 0.6rem; border: 1px solid #e3e3e3; border-radius: 4px; margin-bottom: 0.4rem; }
   .candidates li.blocked { border-color: #b03030; background: #fff7f7; }
+  .candidates li.adoptable { border-color: #6b8e72; background: #f5fbf6; }
   .line { display: flex; flex-wrap: wrap; gap: 0.6rem; font-size: 0.8rem; }
   .line em { color: #9a5b00; }
   .path, .arrow { overflow-wrap: anywhere; font-size: 0.85rem; }

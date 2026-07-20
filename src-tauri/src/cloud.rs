@@ -5,8 +5,12 @@
 //! lineage record for a later verified move.
 
 #[cfg(not(coverage))]
+use crate::content_digest::{ContentDigests, ContentHasher};
+#[cfg(not(coverage))]
 use crate::dataset_metadata::profile_dataset;
 use crate::dataset_metadata::DatasetProfile;
+#[cfg(not(coverage))]
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 #[cfg(not(coverage))]
 use std::io::Read;
@@ -42,12 +46,57 @@ impl CloudProvider {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CloudAccountScope {
+    Personal,
+    Organization,
+    Shared,
+    #[default]
+    Unknown,
+}
+
+impl CloudAccountScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Personal => "personal",
+            Self::Organization => "organization",
+            Self::Shared => "shared",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CloudRoot {
     pub id: String,
     pub provider: CloudProvider,
+    pub account_scope: CloudAccountScope,
     pub label: String,
     pub path: String,
+    /// Readability observed during the latest bounded discovery pass.
+    ///
+    /// This is only a snapshot. Every operation revalidates the directory before use.
+    #[serde(default)]
+    pub readable: bool,
+    /// Stable, non-sensitive reason for a failed discovery-time access probe.
+    #[serde(default)]
+    pub access_issue: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CloudRootDiscoveryIssue {
+    pub provider: Option<CloudProvider>,
+    pub account_scope: CloudAccountScope,
+    pub label: String,
+    pub path: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CloudRootDiscoveryReport {
+    pub roots: Vec<CloudRoot>,
+    pub issues: Vec<CloudRootDiscoveryIssue>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -132,6 +181,7 @@ pub struct CloudCandidate {
     pub src: String,
     pub dst: String,
     pub provider: CloudProvider,
+    pub destination_account_scope: CloudAccountScope,
     pub kind: ArchiveKind,
     pub bytes: u64,
     pub age_days: u64,
@@ -161,49 +211,189 @@ pub struct CloudPlanReport {
     pub candidates: Vec<CloudCandidate>,
     pub candidate_bytes: u64,
     pub potentially_reclaimable_bytes: u64,
+    pub exact_duplicates: ExactDuplicateSummary,
     pub notices: Vec<String>,
 }
 
-#[cfg(not(coverage))]
-fn is_writable_dir(path: &Path) -> bool {
-    path.metadata()
-        .map(|m| m.is_dir() && !m.permissions().readonly())
-        .unwrap_or(false)
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ExactDuplicateSummary {
+    pub cluster_count: usize,
+    pub candidate_count: usize,
+    pub candidate_bytes: u64,
+    pub redundant_bytes: u64,
+}
+
+/// Fail closed when the selected source cannot be enumerated. Filesystem metadata alone is not
+/// sufficient on platforms such as macOS where privacy controls may allow `stat` but deny
+/// directory traversal.
+pub fn validate_source_root_readable(root: &Path) -> Result<(), String> {
+    if !root.is_dir() {
+        return Err(format!("source-root-not-directory:{}", root.display()));
+    }
+    std::fs::read_dir(root)
+        .map(|_| ())
+        .map_err(|error| format!("source-root-unreadable:{}:{error}", root.display()))
+}
+
+/// Revalidate a selected destination immediately before it is used.
+pub fn validate_cloud_root_readable(root: &CloudRoot) -> Result<(), String> {
+    if !root.readable {
+        return Err(format!(
+            "cloud-root-unreadable:{}:{}",
+            root.path,
+            root.access_issue.as_deref().unwrap_or("not-verified")
+        ));
+    }
+    std::fs::read_dir(&root.path)
+        .map(|_| ())
+        .map_err(|error| format!("cloud-root-unreadable:{}:{error}", root.path))
+}
+
+/// Match an operator-supplied cloud root to a discovered root without depending on the Unicode
+/// normalization form exposed by the shell or macOS File Provider. Filesystem identity wins when
+/// both spellings resolve; canonical-equivalent UTF-8 is the bounded fallback. Callers still fail
+/// closed when more than one discovered root matches.
+pub fn cloud_root_path_matches(discovered: &Path, requested: &Path) -> bool {
+    if discovered == requested {
+        return true;
+    }
+    if let (Ok(discovered), Ok(requested)) = (
+        std::fs::canonicalize(discovered),
+        std::fs::canonicalize(requested),
+    ) {
+        if discovered == requested {
+            return true;
+        }
+    }
+    match (discovered.to_str(), requested.to_str()) {
+        (Some(discovered), Some(requested)) => discovered.nfc().eq(requested.nfc()),
+        _ => false,
+    }
 }
 
 #[cfg(not(coverage))]
-fn read_children_sorted(path: &Path, limit: usize) -> Vec<PathBuf> {
-    let mut children: Vec<PathBuf> = std::fs::read_dir(path)
-        .ok()
-        .into_iter()
-        .flatten()
-        .take(limit)
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .collect();
+fn access_issue_for_error(error: &std::io::Error) -> String {
+    match error.kind() {
+        std::io::ErrorKind::PermissionDenied => "permission-denied",
+        std::io::ErrorKind::NotFound => "not-found",
+        std::io::ErrorKind::NotADirectory => "not-a-directory",
+        _ => "read-dir-failed",
+    }
+    .into()
+}
+
+#[cfg(not(coverage))]
+fn directory_access_issue(path: &Path) -> Option<String> {
+    std::fs::read_dir(path)
+        .err()
+        .map(|error| access_issue_for_error(&error))
+}
+
+#[cfg(not(coverage))]
+fn read_children_sorted(path: &Path, limit: usize) -> Result<Vec<PathBuf>, String> {
+    let entries = std::fs::read_dir(path).map_err(|error| access_issue_for_error(&error))?;
+    let mut children = Vec::new();
+    for entry in entries.take(limit) {
+        children.push(
+            entry
+                .map_err(|error| access_issue_for_error(&error))?
+                .path(),
+        );
+    }
     children.sort();
-    children
+    Ok(children)
+}
+
+#[cfg(not(coverage))]
+fn push_discovery_issue(
+    report: &mut CloudRootDiscoveryReport,
+    provider: Option<CloudProvider>,
+    account_scope: CloudAccountScope,
+    path: &Path,
+    label: String,
+    reason: String,
+) {
+    report.issues.push(CloudRootDiscoveryIssue {
+        provider,
+        account_scope,
+        label,
+        path: path.to_string_lossy().into_owned(),
+        reason,
+    });
 }
 
 #[cfg(not(coverage))]
 fn push_root(
-    roots: &mut Vec<CloudRoot>,
+    report: &mut CloudRootDiscoveryReport,
     seen: &mut BTreeSet<PathBuf>,
     provider: CloudProvider,
+    account_scope: CloudAccountScope,
     path: PathBuf,
     label: String,
 ) {
-    let identity = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
-    if !is_writable_dir(&path) || !seen.insert(identity) {
+    let metadata = match path.metadata() {
+        Ok(metadata) if metadata.is_dir() => metadata,
+        Ok(_) => {
+            push_discovery_issue(
+                report,
+                Some(provider),
+                account_scope,
+                &path,
+                label,
+                "not-a-directory".into(),
+            );
+            return;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            push_discovery_issue(
+                report,
+                Some(provider),
+                account_scope,
+                &path,
+                label,
+                access_issue_for_error(&error),
+            );
+            return;
+        }
+    };
+    if metadata.permissions().readonly() {
+        push_discovery_issue(
+            report,
+            Some(provider),
+            account_scope,
+            &path,
+            label,
+            "read-only".into(),
+        );
         return;
     }
+    let identity = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+    if !seen.insert(identity) {
+        return;
+    }
+    let access_issue = directory_access_issue(&path);
+    let readable = access_issue.is_none();
     let value = path.to_string_lossy().into_owned();
-    roots.push(CloudRoot {
+    report.roots.push(CloudRoot {
         id: value.clone(),
         provider,
-        label,
+        account_scope,
+        label: label.clone(),
         path: value,
+        readable,
+        access_issue: access_issue.clone(),
     });
+    if let Some(reason) = access_issue {
+        push_discovery_issue(
+            report,
+            Some(provider),
+            account_scope,
+            &path,
+            label,
+            reason,
+        );
+    }
 }
 
 #[cfg(not(coverage))]
@@ -218,32 +408,102 @@ fn provider_account_label(prefix: &str, path: &Path) -> String {
         .unwrap_or_else(|| "default".into())
 }
 
-/// Discover writable local File Provider roots without creating a probe file.
+fn normalized_account_text(value: &str) -> String {
+    value.nfc().flat_map(char::to_lowercase).collect()
+}
+
+fn account_email_scope(account: &str) -> CloudAccountScope {
+    let normalized = normalized_account_text(account);
+    let Some((_, domain)) = normalized.rsplit_once('@') else {
+        return CloudAccountScope::Unknown;
+    };
+    if matches!(
+        domain,
+        "gmail.com" | "googlemail.com" | "outlook.com" | "hotmail.com" | "live.com"
+    ) {
+        CloudAccountScope::Personal
+    } else if domain.contains('.') {
+        CloudAccountScope::Organization
+    } else {
+        CloudAccountScope::Unknown
+    }
+}
+
+fn account_scope(
+    provider: CloudProvider,
+    account: &str,
+    drive_name: Option<&str>,
+) -> CloudAccountScope {
+    if provider == CloudProvider::Icloud {
+        return CloudAccountScope::Unknown;
+    }
+    let account = normalized_account_text(account);
+    if provider == CloudProvider::GoogleDrive {
+        let drive = normalized_account_text(drive_name.unwrap_or_default());
+        if contains_any(&drive, &["shared drive", "shared drives", "공유 드라이브"]) {
+            return CloudAccountScope::Shared;
+        }
+        return account_email_scope(&account);
+    }
+    if contains_any(&account, &["personal", "consumer", "개인"]) {
+        return CloudAccountScope::Personal;
+    }
+    let email_scope = account_email_scope(&account);
+    if email_scope != CloudAccountScope::Unknown {
+        return email_scope;
+    }
+    if matches!(account.as_str(), "" | "default" | "onedrive") {
+        CloudAccountScope::Unknown
+    } else {
+        CloudAccountScope::Organization
+    }
+}
+
+/// Discover permission-writable local File Provider roots without creating a probe file, and
+/// attach a bounded readability snapshot so privacy-controlled destinations remain visible but
+/// fail closed before selection.
 ///
 /// Google Drive's account root is read-only on macOS, so each writable direct child (for
 /// example "My Drive" or a writable shared drive) is surfaced as a separate destination.
 #[cfg(not(coverage))]
-pub fn discover_cloud_roots(home: &Path) -> Vec<CloudRoot> {
-    let mut roots = Vec::new();
+pub fn discover_cloud_roots_report(home: &Path) -> CloudRootDiscoveryReport {
+    let mut report = CloudRootDiscoveryReport::default();
     let mut seen = BTreeSet::new();
 
     push_root(
-        &mut roots,
+        &mut report,
         &mut seen,
         CloudProvider::Icloud,
+        CloudAccountScope::Unknown,
         home.join("Library/Mobile Documents/com~apple~CloudDocs"),
         "iCloud Drive".into(),
     );
     push_root(
-        &mut roots,
+        &mut report,
         &mut seen,
         CloudProvider::Icloud,
+        CloudAccountScope::Unknown,
         home.join("iCloudDrive"),
         "iCloud Drive".into(),
     );
 
     let cloud_storage = home.join("Library/CloudStorage");
-    for account_root in read_children_sorted(&cloud_storage, 128) {
+    let account_roots = match read_children_sorted(&cloud_storage, 128) {
+        Ok(account_roots) => account_roots,
+        Err(reason) if reason == "not-found" => Vec::new(),
+        Err(reason) => {
+            push_discovery_issue(
+                &mut report,
+                None,
+                CloudAccountScope::Unknown,
+                &cloud_storage,
+                "Cloud File Provider storage".into(),
+                reason,
+            );
+            Vec::new()
+        }
+    };
+    for account_root in account_roots {
         let name = account_root
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -251,15 +511,31 @@ pub fn discover_cloud_roots(home: &Path) -> Vec<CloudRoot> {
         if name.starts_with("OneDrive-") {
             let account = provider_account_label("OneDrive-", &account_root);
             push_root(
-                &mut roots,
+                &mut report,
                 &mut seen,
                 CloudProvider::Onedrive,
+                account_scope(CloudProvider::Onedrive, &account, None),
                 account_root,
                 format!("OneDrive · {account}"),
             );
         } else if name.starts_with("GoogleDrive-") {
             let account = provider_account_label("GoogleDrive-", &account_root);
-            for drive in read_children_sorted(&account_root, 128) {
+            let scope = account_scope(CloudProvider::GoogleDrive, &account, None);
+            let drives = match read_children_sorted(&account_root, 128) {
+                Ok(drives) => drives,
+                Err(reason) => {
+                    push_discovery_issue(
+                        &mut report,
+                        Some(CloudProvider::GoogleDrive),
+                        scope,
+                        &account_root,
+                        "Google Drive account".into(),
+                        reason,
+                    );
+                    continue;
+                }
+            };
+            for drive in drives {
                 let drive_name = drive
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
@@ -268,9 +544,10 @@ pub fn discover_cloud_roots(home: &Path) -> Vec<CloudRoot> {
                     continue;
                 }
                 push_root(
-                    &mut roots,
+                    &mut report,
                     &mut seen,
                     CloudProvider::GoogleDrive,
+                    account_scope(CloudProvider::GoogleDrive, &account, Some(&drive_name)),
                     drive,
                     format!("Google Drive · {account} · {drive_name}"),
                 );
@@ -279,41 +556,81 @@ pub fn discover_cloud_roots(home: &Path) -> Vec<CloudRoot> {
     }
 
     // Windows and older clients commonly place provider roots directly under the home folder.
-    for path in read_children_sorted(home, 128) {
+    let home_children = match read_children_sorted(home, 128) {
+        Ok(children) => children,
+        Err(reason) => {
+            push_discovery_issue(
+                &mut report,
+                None,
+                CloudAccountScope::Unknown,
+                home,
+                "Home provider-root discovery".into(),
+                reason,
+            );
+            Vec::new()
+        }
+    };
+    for path in home_children {
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         if name == "OneDrive" || name.starts_with("OneDrive - ") {
             push_root(
-                &mut roots,
+                &mut report,
                 &mut seen,
                 CloudProvider::Onedrive,
+                account_scope(CloudProvider::Onedrive, &name, None),
                 path,
                 format!("OneDrive · {name}"),
             );
         } else if name == "Google Drive" || name.starts_with("Google Drive ") {
             push_root(
-                &mut roots,
+                &mut report,
                 &mut seen,
                 CloudProvider::GoogleDrive,
+                account_scope(CloudProvider::GoogleDrive, &name, None),
                 path,
                 format!("Google Drive · {name}"),
             );
         }
     }
 
-    roots.sort_by(|a, b| {
+    report.roots.sort_by(|a, b| {
         (a.provider.as_str(), &a.label, &a.path).cmp(&(b.provider.as_str(), &b.label, &b.path))
     });
-    roots
+    report.issues.sort_by(|a, b| {
+        (
+            a.provider.map(CloudProvider::as_str).unwrap_or(""),
+            a.account_scope.as_str(),
+            &a.label,
+            &a.path,
+            &a.reason,
+        )
+            .cmp(&(
+                b.provider.map(CloudProvider::as_str).unwrap_or(""),
+                b.account_scope.as_str(),
+                &b.label,
+                &b.path,
+                &b.reason,
+            ))
+    });
+    report.issues.dedup();
+    report
+}
+
+#[cfg(not(coverage))]
+pub fn discover_cloud_roots(home: &Path) -> Vec<CloudRoot> {
+    discover_cloud_roots_report(home).roots
 }
 
 fn archive_kind(path: &Path) -> Option<ArchiveKind> {
     let ext = path.extension()?.to_string_lossy().to_ascii_lowercase();
     match ext.as_str() {
-        "pdf" | "doc" | "docx" | "ppt" | "pptx" | "xls" | "xlsx" | "odt" | "ods" | "odp"
-        | "pages" | "numbers" | "key" | "epub" | "mobi" => Some(ArchiveKind::Document),
+        "pdf" | "doc" | "docx" | "ppt" | "pptx" | "xls" | "xlsx" | "xlsm" | "xlsb"
+        | "odt" | "ods" | "odp" | "pages" | "numbers" | "key" | "epub" | "mobi" => {
+            Some(ArchiveKind::Document)
+        }
         "jpg" | "jpeg" | "png" | "heic" | "tif" | "tiff" | "gif" | "webp" | "raw" | "mov"
         | "mp4" | "m4v" | "mkv" | "avi" | "wav" | "mp3" | "m4a" | "flac" | "aiff" => {
             Some(ArchiveKind::Media)
@@ -493,7 +810,8 @@ fn token_boundary(bytes: &[u8], start: usize, end: usize) -> bool {
         && bytes.get(end).map(|b| !b.is_ascii_digit()).unwrap_or(true)
 }
 
-/// Extract common production-date tokens from a filename without reading file contents.
+/// Extract common date tokens from a filename as a low-confidence provisional date hint.
+/// Embedded metadata always wins, and this hint can never authorize a copy without review.
 /// Supported shapes: YYYY-MM-DD, YYYY_MM_DD, YYYY.MM.DD, YYYYMMDD, and YYMMDD.
 fn filename_date_ms(path: &Path) -> Option<u64> {
     let normalized: String = path.file_name()?.to_string_lossy().nfc().collect();
@@ -1493,6 +1811,22 @@ fn dataset_content_metadata(path: &Path) -> ContentMetadata {
         &source,
         "medium",
     );
+    add_evidence(
+        &mut metadata,
+        "dataset-sampled-worksheets",
+        profile.sampled_worksheets.to_string(),
+        &source,
+        "medium",
+    );
+    for worksheet in &profile.worksheet_names {
+        add_evidence(
+            &mut metadata,
+            "dataset-worksheet",
+            worksheet,
+            &source,
+            "high",
+        );
+    }
     for column in &profile.columns {
         add_evidence(
             &mut metadata,
@@ -1542,8 +1876,17 @@ fn probe_content_metadata(path: &Path) -> ContentMetadata {
         }
         "pdf" => pdfinfo_metadata(path),
         "zip" => zip_archive_metadata(path),
-        "docx" | "xlsx" | "pptx" => zipped_document_metadata(path, "docProps/core.xml"),
-        "odt" | "ods" | "odp" => zipped_document_metadata(path, "meta.xml"),
+        "xlsx" | "xlsm" => merge_metadata(
+            zipped_document_metadata(path, "docProps/core.xml"),
+            dataset_content_metadata(path),
+        ),
+        "ods" => merge_metadata(
+            zipped_document_metadata(path, "meta.xml"),
+            dataset_content_metadata(path),
+        ),
+        "xls" | "xlsb" => dataset_content_metadata(path),
+        "docx" | "pptx" => zipped_document_metadata(path, "docProps/core.xml"),
+        "odt" | "odp" => zipped_document_metadata(path, "meta.xml"),
         "csv" | "tsv" | "parquet" | "feather" | "arrow" | "sav" | "sas7bdat" | "dta" | "rdata"
         | "rds" | "sqlite" | "sqlite3" | "db" | "sql" | "jsonl" => dataset_content_metadata(path),
         _ if multipart_archive_part(path).is_some() => multipart_archive_metadata(path),
@@ -1697,6 +2040,15 @@ fn review_reasons(path: &Path, kind: ArchiveKind) -> Vec<String> {
         .extension()
         .map(|e| e.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
+    // Spreadsheet containers can carry personal or confidential cell data even when their
+    // document-level metadata is complete and innocuous. Until DiskSage profiles worksheet
+    // contents, never let a spreadsheet become an automatic cloud-copy candidate.
+    if matches!(
+        extension.as_str(),
+        "xls" | "xlsx" | "xlsm" | "xlsb" | "ods" | "numbers"
+    ) {
+        reasons.push("spreadsheet-content-needs-review".into());
+    }
     if matches!(extension.as_str(), "wav" | "mp3" | "m4a" | "flac" | "aiff") {
         reasons.push("recording-may-contain-sensitive-speech".into());
     }
@@ -1753,6 +2105,37 @@ fn review_reasons(path: &Path, kind: ArchiveKind) -> Vec<String> {
     reasons
 }
 
+fn destination_scope_review_reasons(
+    scope: CloudAccountScope,
+    existing_reasons: &[String],
+) -> Vec<String> {
+    let sensitive_context = existing_reasons.iter().any(|reason| {
+        matches!(
+            reason.as_str(),
+            "opaque-container-content-uninspected"
+                | "structured-data-may-contain-personal-data"
+                | "spreadsheet-content-needs-review"
+                | "recording-may-contain-sensitive-speech"
+                | "filename-context-may-be-confidential"
+                | "filename-contains-geolocation"
+                | "embedded-metadata-may-contain-personal-context"
+                | "embedded-metadata-context-may-be-confidential"
+                | "embedded-metadata-contains-geolocation"
+                | "dataset-schema-profile-missing"
+                | "dataset-schema-profile-incomplete"
+                | "dataset-sensitive-column-name-detected"
+        )
+    });
+    match scope {
+        CloudAccountScope::Unknown => vec!["destination-account-scope-unknown".into()],
+        CloudAccountScope::Shared => vec!["shared-destination-access-needs-review".into()],
+        CloudAccountScope::Personal if sensitive_context => {
+            vec!["personal-cloud-sensitive-context-needs-explicit-approval".into()]
+        }
+        CloudAccountScope::Personal | CloudAccountScope::Organization => Vec::new(),
+    }
+}
+
 fn planner_blocked_reason(
     path: &Path,
     kind: ArchiveKind,
@@ -1794,6 +2177,144 @@ fn metadata_fingerprint(file: &FileFact, relative: &Path) -> String {
     blake3::hash(input.as_bytes()).to_hex().to_string()
 }
 
+#[cfg(not(coverage))]
+fn hash_duplicate_candidate(path: &Path, expected_bytes: u64) -> Result<ContentDigests, String> {
+    let before =
+        std::fs::metadata(path).map_err(|_| "duplicate-content-metadata-unreadable".to_string())?;
+    if !before.is_file() {
+        return Err("duplicate-content-source-not-file".into());
+    }
+    if before.len() != expected_bytes {
+        return Err("duplicate-content-size-changed".into());
+    }
+    let before_modified_ms = millis(before.modified());
+    let mut source =
+        std::fs::File::open(path).map_err(|_| "duplicate-content-open-failed".to_string())?;
+    let mut hasher = ContentHasher::default();
+    let mut buffer = [0_u8; 128 * 1024];
+    loop {
+        let read = source
+            .read(&mut buffer)
+            .map_err(|_| "duplicate-content-read-failed".to_string())?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    let after =
+        std::fs::metadata(path).map_err(|_| "duplicate-content-metadata-unreadable".to_string())?;
+    if after.len() != expected_bytes || millis(after.modified()) != before_modified_ms {
+        return Err("duplicate-content-source-changed".into());
+    }
+    Ok(hasher.finalize())
+}
+
+#[cfg(not(coverage))]
+fn push_candidate_evidence(
+    candidate: &mut CloudCandidate,
+    field: &str,
+    value: impl Into<String>,
+    source: &str,
+    confidence: &str,
+) {
+    candidate.metadata_evidence.push(MetadataEvidence {
+        field: field.into(),
+        value: value.into(),
+        source: source.into(),
+        confidence: confidence.into(),
+    });
+}
+
+/// Hash only non-blocked candidates that share a byte length. Exact duplicates remain movable,
+/// but require an operator to select the canonical lineage instead of silently copying every path.
+#[cfg(not(coverage))]
+fn mark_exact_duplicate_candidates(candidates: &mut [CloudCandidate]) -> ExactDuplicateSummary {
+    let mut summary = ExactDuplicateSummary::default();
+    let mut by_size: BTreeMap<u64, Vec<usize>> = BTreeMap::new();
+    for (index, candidate) in candidates.iter().enumerate() {
+        if candidate.blocked_reason.is_none() {
+            by_size.entry(candidate.bytes).or_default().push(index);
+        }
+    }
+
+    for same_size in by_size.values().filter(|indices| indices.len() > 1) {
+        let mut by_digest: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
+        for &index in same_size {
+            let candidate = &candidates[index];
+            match hash_duplicate_candidate(Path::new(&candidate.src), candidate.bytes) {
+                Ok(digests) => by_digest
+                    .entry((digests.sha256, digests.blake3))
+                    .or_default()
+                    .push(index),
+                Err(reason) => {
+                    let candidate = &mut candidates[index];
+                    candidate
+                        .review_reasons
+                        .push("exact-duplicate-content-probe-incomplete".into());
+                    push_candidate_evidence(
+                        candidate,
+                        "metadata-probe-warning",
+                        reason,
+                        "local:content-hash",
+                        "high",
+                    );
+                }
+            }
+        }
+
+        for ((sha256, blake3), exact_matches) in by_digest
+            .into_iter()
+            .filter(|(_, indices)| indices.len() > 1)
+        {
+            let bytes_per_candidate = candidates[exact_matches[0]].bytes;
+            summary.cluster_count += 1;
+            summary.candidate_count += exact_matches.len();
+            summary.candidate_bytes = summary.candidate_bytes.saturating_add(
+                bytes_per_candidate.saturating_mul(exact_matches.len() as u64),
+            );
+            summary.redundant_bytes = summary.redundant_bytes.saturating_add(
+                bytes_per_candidate.saturating_mul((exact_matches.len() - 1) as u64),
+            );
+            let candidate_count = exact_matches.len().to_string();
+            for index in exact_matches {
+                let candidate = &mut candidates[index];
+                candidate
+                    .review_reasons
+                    .push("exact-duplicate-content-needs-canonical-selection".into());
+                push_candidate_evidence(
+                    candidate,
+                    "exact-duplicate-content-sha256",
+                    sha256.clone(),
+                    "local:content-hash",
+                    "high",
+                );
+                push_candidate_evidence(
+                    candidate,
+                    "exact-duplicate-content-blake3",
+                    blake3.clone(),
+                    "local:content-hash",
+                    "high",
+                );
+                push_candidate_evidence(
+                    candidate,
+                    "exact-duplicate-candidate-count",
+                    candidate_count.clone(),
+                    "planner:exact-content-cluster",
+                    "high",
+                );
+            }
+        }
+    }
+
+    for candidate in candidates {
+        candidate.review_reasons.sort();
+        candidate.review_reasons.dedup();
+        candidate.requires_review = !candidate.review_reasons.is_empty();
+        candidate.review_fingerprint = candidate_review_fingerprint(candidate);
+    }
+    summary
+}
+
 fn hash_review_value(hasher: &mut blake3::Hasher, value: &[u8]) {
     hasher.update(&(value.len() as u64).to_le_bytes());
     hasher.update(value);
@@ -1807,6 +2328,7 @@ pub fn candidate_review_fingerprint(candidate: &CloudCandidate) -> String {
     for value in [
         candidate.metadata_fingerprint.as_bytes(),
         candidate.provider.as_str().as_bytes(),
+        candidate.destination_account_scope.as_str().as_bytes(),
         candidate.src.as_bytes(),
         candidate.dst.as_bytes(),
         candidate.kind.folder().as_bytes(),
@@ -1902,9 +2424,9 @@ pub fn plan_cloud_archive(
         if let Some(value) = filename_ms {
             add_evidence(
                 &mut lineage_metadata,
-                "production-date",
+                "filename-date-hint",
                 date_value(value),
-                "filename-date",
+                "filename:path-token",
                 "low",
             );
         }
@@ -1937,8 +2459,11 @@ pub fn plan_cloud_archive(
                         .clone()
                         .unwrap_or_else(|| "medium".into()),
                 )
+            // Without embedded metadata, an explicit filename date is the next provisional value
+            // for archive-preview placement, followed by filesystem creation and modification.
+            // Every non-embedded value remains low confidence and review-required.
             } else if let Some(filename_ms) = filename_ms {
-                (filename_ms, "filename-date".into(), "low".into())
+                (filename_ms, "filename:path-token".into(), "low".into())
             } else if file.created_ms > 0 {
                 (file.created_ms, "filesystem:created".into(), "low".into())
             } else {
@@ -1984,6 +2509,30 @@ pub fn plan_cloud_archive(
                 }
             }
         }
+        let extension = file
+            .path
+            .extension()
+            .map(|extension| extension.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        if matches!(
+            extension.as_str(),
+            "xls" | "xlsx" | "xlsm" | "xlsb" | "ods"
+        ) {
+            match lineage_metadata.dataset_profile.as_ref() {
+                None => review_reasons.push("spreadsheet-schema-profile-missing".into()),
+                Some(profile) => {
+                    if !profile.profile_complete {
+                        review_reasons.push("spreadsheet-schema-profile-incomplete".into());
+                    }
+                    if profile.columns.iter().any(|column| column.sensitive_name) {
+                        review_reasons.push("spreadsheet-sensitive-column-name-detected".into());
+                    }
+                    if !profile.quality_warnings.is_empty() {
+                        review_reasons.push("spreadsheet-quality-warning-present".into());
+                    }
+                }
+            }
+        }
         if !production_time_source.starts_with("embedded:") {
             review_reasons.push("production-date-not-from-embedded-metadata".into());
         } else if production_time_confidence != "high" {
@@ -2012,6 +2561,10 @@ pub fn plan_cloud_archive(
                 review_reasons.push("embedded-and-filename-date-conflict".into());
             }
         }
+        review_reasons.extend(destination_scope_review_reasons(
+            cloud_root.account_scope,
+            &review_reasons,
+        ));
         review_reasons.sort();
         review_reasons.dedup();
         let mut candidate = CloudCandidate {
@@ -2020,6 +2573,7 @@ pub fn plan_cloud_archive(
             src: file.path.to_string_lossy().into_owned(),
             dst: dst.to_string_lossy().into_owned(),
             provider: cloud_root.provider,
+            destination_account_scope: cloud_root.account_scope,
             kind,
             bytes: file.bytes,
             age_days,
@@ -2044,6 +2598,10 @@ pub fn plan_cloud_archive(
         candidate.review_fingerprint = candidate_review_fingerprint(&candidate);
         candidates.push(candidate);
     }
+    #[cfg(not(coverage))]
+    let exact_duplicates = mark_exact_duplicate_candidates(&mut candidates);
+    #[cfg(coverage)]
+    let exact_duplicates = ExactDuplicateSummary::default();
     candidates.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.src.cmp(&b.src)));
     candidates.truncate(options.limit);
     let candidate_bytes = candidates.iter().map(|c| c.bytes).sum();
@@ -2058,6 +2616,7 @@ pub fn plan_cloud_archive(
         candidates,
         candidate_bytes,
         potentially_reclaimable_bytes,
+        exact_duplicates,
         notices: vec![
             "dry-run-only".into(),
             "cloud-quota-unverified".into(),
@@ -2088,8 +2647,11 @@ mod tests {
         CloudRoot {
             id: path.to_string_lossy().into_owned(),
             provider,
+            account_scope: CloudAccountScope::Organization,
             label: "test".into(),
             path: path.to_string_lossy().into_owned(),
+            readable: true,
+            access_issue: None,
         }
     }
 
@@ -2140,15 +2702,70 @@ mod tests {
         writable_dir(&home.join("Library/CloudStorage/OneDrive-Personal"));
         let google = home.join("Library/CloudStorage/GoogleDrive-me@example.com");
         writable_dir(&google.join("My Drive"));
+        writable_dir(&google.join("Shared drives"));
         writable_dir(&google.join(".Trash"));
         let roots = discover_cloud_roots(home);
-        assert_eq!(roots.len(), 3);
-        assert!(roots.iter().any(|r| r.provider == CloudProvider::Icloud));
-        assert!(roots.iter().any(|r| r.provider == CloudProvider::Onedrive));
+        assert_eq!(roots.len(), 4);
         assert!(roots
             .iter()
-            .any(|r| r.provider == CloudProvider::GoogleDrive && r.path.ends_with("My Drive")));
+            .all(|root| root.readable && root.access_issue.is_none()));
+        assert!(roots.iter().any(|r| {
+            r.provider == CloudProvider::Icloud && r.account_scope == CloudAccountScope::Unknown
+        }));
+        assert!(roots.iter().any(|r| {
+            r.provider == CloudProvider::Onedrive && r.account_scope == CloudAccountScope::Personal
+        }));
+        assert!(roots.iter().any(|r| {
+            r.provider == CloudProvider::GoogleDrive
+                && r.account_scope == CloudAccountScope::Organization
+                && r.path.ends_with("My Drive")
+        }));
+        assert!(roots.iter().any(|r| {
+            r.provider == CloudProvider::GoogleDrive
+                && r.account_scope == CloudAccountScope::Shared
+                && r.path.ends_with("Shared drives")
+        }));
         assert!(!roots.iter().any(|r| r.path.ends_with(".Trash")));
+    }
+
+    #[test]
+    fn account_scope_classification_is_explicit_and_fail_closed() {
+        assert_eq!(
+            account_scope(CloudProvider::Icloud, "", None),
+            CloudAccountScope::Unknown
+        );
+        assert_eq!(
+            account_scope(CloudProvider::Onedrive, "개인", None),
+            CloudAccountScope::Personal
+        );
+        assert_eq!(
+            account_scope(CloudProvider::Onedrive, "Example Corp", None),
+            CloudAccountScope::Organization
+        );
+        assert_eq!(
+            account_scope(CloudProvider::Onedrive, "OneDrive", None),
+            CloudAccountScope::Unknown
+        );
+        assert_eq!(
+            account_scope(CloudProvider::GoogleDrive, "me@gmail.com", Some("My Drive")),
+            CloudAccountScope::Personal
+        );
+        assert_eq!(
+            account_scope(
+                CloudProvider::GoogleDrive,
+                "me@example.com",
+                Some("My Drive")
+            ),
+            CloudAccountScope::Organization
+        );
+        assert_eq!(
+            account_scope(
+                CloudProvider::GoogleDrive,
+                "me@example.com",
+                Some("공유 드라이브")
+            ),
+            CloudAccountScope::Shared
+        );
     }
 
     #[cfg(not(coverage))]
@@ -2194,7 +2811,70 @@ mod tests {
         let one = tmp.path().join("OneDrive");
         writable_dir(&one);
         std::fs::set_permissions(&one, std::fs::Permissions::from_mode(0o500)).unwrap();
-        assert!(discover_cloud_roots(tmp.path()).is_empty());
+        let report = discover_cloud_roots_report(tmp.path());
+        assert!(report.roots.is_empty());
+        assert_eq!(report.issues.len(), 1);
+        assert_eq!(report.issues[0].reason, "read-only");
+    }
+
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
+    fn exposes_unreadable_provider_root_and_rejects_selection() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let one = tmp.path().join("OneDrive");
+        writable_dir(&one);
+        std::fs::set_permissions(&one, std::fs::Permissions::from_mode(0o300)).unwrap();
+
+        let report = discover_cloud_roots_report(tmp.path());
+        assert_eq!(report.roots.len(), 1);
+        assert_eq!(report.issues.len(), 1);
+        assert_eq!(report.issues[0].provider, Some(CloudProvider::Onedrive));
+        assert_eq!(report.issues[0].reason, "permission-denied");
+        assert!(!report.roots[0].readable);
+        assert_eq!(
+            report.roots[0].access_issue.as_deref(),
+            Some("permission-denied")
+        );
+        assert_eq!(
+            validate_cloud_root_readable(&report.roots[0]),
+            Err(format!(
+                "cloud-root-unreadable:{}:permission-denied",
+                one.display()
+            ))
+        );
+
+        std::fs::set_permissions(&one, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
+    fn reports_google_account_when_drive_children_cannot_be_enumerated() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let account = tmp
+            .path()
+            .join("Library/CloudStorage/GoogleDrive-me@example.com");
+        writable_dir(&account);
+        std::fs::set_permissions(&account, std::fs::Permissions::from_mode(0o300)).unwrap();
+
+        let report = discover_cloud_roots_report(tmp.path());
+        assert!(report.roots.is_empty());
+        assert_eq!(report.issues.len(), 1);
+        assert_eq!(
+            report.issues[0].provider,
+            Some(CloudProvider::GoogleDrive)
+        );
+        assert_eq!(
+            report.issues[0].account_scope,
+            CloudAccountScope::Organization
+        );
+        assert_eq!(report.issues[0].label, "Google Drive account");
+        assert_eq!(report.issues[0].reason, "permission-denied");
+
+        std::fs::set_permissions(&account, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
 
     #[cfg(not(coverage))]
@@ -2240,6 +2920,18 @@ mod tests {
             (2024, 2, 29)
         );
         assert_eq!(date_epoch_ms(2023, 2, 29), None);
+    }
+
+    #[test]
+    fn source_root_preflight_distinguishes_readable_directory_from_file() {
+        let temp = tempfile::tempdir().unwrap();
+        assert_eq!(validate_source_root_readable(temp.path()), Ok(()));
+        let file = temp.path().join("report.pdf");
+        std::fs::write(&file, b"pdf").unwrap();
+        assert_eq!(
+            validate_source_root_readable(&file),
+            Err(format!("source-root-not-directory:{}", file.display()))
+        );
     }
 
     #[test]
@@ -2328,7 +3020,7 @@ mod tests {
     }
 
     #[test]
-    fn filename_dates_override_filesystem_creation_time() {
+    fn filename_date_parser_recognizes_low_confidence_review_tokens() {
         assert_eq!(
             date_parts(filename_date_ms(Path::new("2026-04-28T10_00.m4a")).unwrap()),
             (2026, 4, 28)
@@ -2581,7 +3273,9 @@ mod tests {
             .contains(&"production-date-not-from-embedded-metadata".to_string()));
         assert_eq!(candidate.content_context, ["subject=Planning"]);
         assert!(candidate.metadata_evidence.iter().any(|evidence| {
-            evidence.source == "filename-date" && evidence.confidence == "low"
+            evidence.field == "filename-date-hint"
+                && evidence.source == "filename:path-token"
+                && evidence.confidence == "low"
         }));
     }
 
@@ -2599,6 +3293,36 @@ mod tests {
         assert!(review_reasons(Path::new("photo.jpg"), ArchiveKind::Media).is_empty());
         let personnel = review_reasons(Path::new("직원_실적데이터.xlsx"), ArchiveKind::Document);
         assert!(personnel.contains(&"filename-context-may-be-confidential".to_string()));
+        assert!(personnel.contains(&"spreadsheet-content-needs-review".to_string()));
+        let neutral_spreadsheet =
+            review_reasons(Path::new("quarterly-report.xlsx"), ArchiveKind::Document);
+        assert!(neutral_spreadsheet.contains(&"spreadsheet-content-needs-review".to_string()));
+    }
+
+    #[test]
+    fn destination_scope_review_is_transparent_and_fail_closed() {
+        let sensitive = vec!["recording-may-contain-sensitive-speech".into()];
+        assert_eq!(
+            destination_scope_review_reasons(CloudAccountScope::Personal, &sensitive),
+            ["personal-cloud-sensitive-context-needs-explicit-approval"]
+        );
+        let spreadsheet = vec!["spreadsheet-content-needs-review".into()];
+        assert_eq!(
+            destination_scope_review_reasons(CloudAccountScope::Personal, &spreadsheet),
+            ["personal-cloud-sensitive-context-needs-explicit-approval"]
+        );
+        assert!(
+            destination_scope_review_reasons(CloudAccountScope::Organization, &sensitive)
+                .is_empty()
+        );
+        assert_eq!(
+            destination_scope_review_reasons(CloudAccountScope::Shared, &[]),
+            ["shared-destination-access-needs-review"]
+        );
+        assert_eq!(
+            destination_scope_review_reasons(CloudAccountScope::Unknown, &[]),
+            ["destination-account-scope-unknown"]
+        );
     }
 
     #[test]
@@ -2714,6 +3438,94 @@ mod tests {
         let evidence = serde_json::to_string(&candidate.metadata_evidence).unwrap();
         assert!(!evidence.contains("alice@example.com"));
         assert!(!evidence.contains("42"));
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn planner_requires_canonical_selection_for_exact_duplicate_candidates() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let cloud = tmp.path().join("cloud");
+        writable_dir(&source);
+        writable_dir(&cloud);
+        for (name, contents) in [
+            ("a.pdf", &b"same-content"[..]),
+            ("b.pdf", &b"same-content"[..]),
+            ("c.pdf", &b"uniq-content"[..]),
+        ] {
+            std::fs::write(source.join(name), contents).unwrap();
+        }
+        let production_time_ms = date_epoch_ms(2026, 1, 2).unwrap();
+        let metadata = ContentMetadata {
+            production_time_ms: Some(production_time_ms),
+            production_time_source: Some("embedded:test:creation-date".into()),
+            production_time_confidence: Some("high".into()),
+            ..ContentMetadata::default()
+        };
+        let files: Vec<_> = ["a.pdf", "b.pdf", "c.pdf"]
+            .into_iter()
+            .map(|name| {
+                let path = source.join(name);
+                let file_metadata = std::fs::metadata(&path).unwrap();
+                FileFact {
+                    path,
+                    bytes: file_metadata.len(),
+                    created_ms: millis(file_metadata.created()),
+                    modified_ms: millis(file_metadata.modified()),
+                    content_metadata: metadata.clone(),
+                }
+            })
+            .collect();
+
+        let report = plan_cloud_archive(
+            &files,
+            &source,
+            &root(CloudProvider::GoogleDrive, &cloud),
+            system_now_ms() + DAY_MS,
+            CloudPlanOptions {
+                min_size_bytes: 0,
+                min_age_days: 0,
+                limit: 10,
+            },
+        );
+
+        let mut duplicate_hashes = Vec::new();
+        for name in ["a.pdf", "b.pdf"] {
+            let candidate = report
+                .candidates
+                .iter()
+                .find(|candidate| candidate.relative_path == name)
+                .unwrap();
+            assert!(candidate.requires_review);
+            assert!(candidate
+                .review_reasons
+                .contains(&"exact-duplicate-content-needs-canonical-selection".to_string()));
+            assert!(candidate.metadata_evidence.iter().any(|evidence| {
+                evidence.field == "exact-duplicate-candidate-count" && evidence.value == "2"
+            }));
+            duplicate_hashes.push(
+                candidate
+                    .metadata_evidence
+                    .iter()
+                    .find(|evidence| evidence.field == "exact-duplicate-content-sha256")
+                    .unwrap()
+                    .value
+                    .clone(),
+            );
+        }
+        assert_eq!(duplicate_hashes[0], duplicate_hashes[1]);
+        assert_eq!(report.exact_duplicates.cluster_count, 1);
+        assert_eq!(report.exact_duplicates.candidate_count, 2);
+        assert_eq!(report.exact_duplicates.candidate_bytes, 24);
+        assert_eq!(report.exact_duplicates.redundant_bytes, 12);
+        let unique = report
+            .candidates
+            .iter()
+            .find(|candidate| candidate.relative_path == "c.pdf")
+            .unwrap();
+        assert!(!unique
+            .review_reasons
+            .contains(&"exact-duplicate-content-needs-canonical-selection".to_string()));
     }
 
     #[test]
@@ -2890,7 +3702,7 @@ mod tests {
     }
 
     #[test]
-    fn planner_covers_filename_dates_geolocation_and_invalid_relative_paths() {
+    fn planner_uses_filename_date_only_as_review_required_provisional_value() {
         let source = PathBuf::from("/source.pdf");
         let now = date_epoch_ms(2026, 7, 1).unwrap();
         let report = plan_cloud_archive(
@@ -2905,7 +3717,7 @@ mod tests {
                 FileFact {
                     path: PathBuf::from("/source.pdf/2025-12-10 report.pdf"),
                     bytes: 20,
-                    created_ms: 1,
+                    created_ms: date_epoch_ms(2025, 11, 9).unwrap(),
                     modified_ms: 1,
                     content_metadata: ContentMetadata {
                         evidence: vec![MetadataEvidence {
@@ -2936,8 +3748,18 @@ mod tests {
         );
         assert_eq!(report.candidates.len(), 1);
         let candidate = &report.candidates[0];
-        assert_eq!(candidate.production_time_source, "filename-date");
+        assert_eq!(candidate.production_time_source, "filename:path-token");
+        assert_eq!(candidate.production_time_confidence, "low");
         assert_eq!(date_parts(candidate.production_time_ms), (2025, 12, 10));
+        assert!(candidate.requires_review);
+        assert!(candidate
+            .review_reasons
+            .contains(&"production-date-not-from-embedded-metadata".to_string()));
+        assert!(candidate.metadata_evidence.iter().any(|evidence| {
+            evidence.field == "filename-date-hint"
+                && evidence.value == "2025-12-10"
+                && evidence.source == "filename:path-token"
+        }));
         assert!(candidate
             .review_reasons
             .contains(&"embedded-metadata-contains-geolocation".to_string()));

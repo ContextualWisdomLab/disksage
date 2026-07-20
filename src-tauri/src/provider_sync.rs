@@ -5,7 +5,7 @@ use crate::cloud_transfer::{
 };
 
 #[cfg(test)]
-use crate::cloud_transfer::RECEIPT_VERSION;
+use crate::cloud_transfer::LEGACY_RECEIPT_VERSION;
 
 const ICLOUD_UPLOADED_KEY: &str = "NSURLUbiquitousItemIsUploadedKey";
 
@@ -216,6 +216,7 @@ fn provider_api_evidence_id(
     receipt: &CloudCopyReceipt,
     snapshot: &ProviderApiSnapshot,
     algorithm: RemoteChecksumAlgorithm,
+    location_proof: Option<&str>,
     confirmed_at_ms: u64,
 ) -> String {
     let mut hasher = blake3::Hasher::new();
@@ -232,6 +233,9 @@ fn provider_api_evidence_id(
     }
     hasher.update(&snapshot.observed_bytes.to_le_bytes());
     hasher.update(&[snapshot.available as u8, snapshot.trashed as u8]);
+    hasher.update(&[location_proof.is_some() as u8]);
+    hasher.update(location_proof.unwrap_or_default().as_bytes());
+    hasher.update(&[0]);
     hasher.update(&[match algorithm {
         RemoteChecksumAlgorithm::Sha256 => 1,
         RemoteChecksumAlgorithm::QuickXor => 2,
@@ -249,6 +253,18 @@ fn provider_api_evidence_id(
 pub fn evidence_from_provider_api_snapshot(
     receipt: &CloudCopyReceipt,
     snapshot: &ProviderApiSnapshot,
+    confirmed_at_ms: u64,
+) -> Result<ProviderSyncEvidence, String> {
+    evidence_from_provider_api_snapshot_with_location(receipt, snapshot, None, confirmed_at_ms)
+}
+
+/// Convert provider metadata into content evidence and record whether the authenticated lookup was
+/// addressed by the exact receipt-relative path. Object-ID-only evidence remains useful for audit,
+/// but cannot authorize source eviction because equal content can exist elsewhere in the drive.
+pub fn evidence_from_provider_api_snapshot_with_location(
+    receipt: &CloudCopyReceipt,
+    snapshot: &ProviderApiSnapshot,
+    location_proof: Option<&str>,
     confirmed_at_ms: u64,
 ) -> Result<ProviderSyncEvidence, String> {
     if snapshot.provider != receipt.provider {
@@ -285,13 +301,21 @@ pub fn evidence_from_provider_api_snapshot(
         destination_blake3: snapshot.destination_blake3.clone(),
         confirmed_at_ms,
         kind: SyncEvidenceKind::ProviderApi,
-        evidence_id: provider_api_evidence_id(receipt, snapshot, algorithm, confirmed_at_ms),
+        evidence_id: provider_api_evidence_id(
+            receipt,
+            snapshot,
+            algorithm,
+            location_proof,
+            confirmed_at_ms,
+        ),
         sync_complete,
         remote_content: Some(RemoteContentProof {
             object_id: snapshot.remote_object_id.clone(),
             revision: snapshot.remote_revision.clone(),
             algorithm,
             checksum: snapshot.remote_checksum.clone(),
+            location_bound: location_proof.is_some(),
+            location_proof: location_proof.map(str::to_owned),
         }),
     })
 }
@@ -644,7 +668,7 @@ mod tests {
 
     fn receipt(provider: CloudProvider) -> CloudCopyReceipt {
         CloudCopyReceipt {
-            version: RECEIPT_VERSION,
+            version: LEGACY_RECEIPT_VERSION,
             receipt_id: "receipt-id".into(),
             candidate_fingerprint: "metadata-fingerprint".into(),
             provider,
@@ -658,6 +682,8 @@ mod tests {
             copied_at_ms: 20,
             copy_verified: true,
             provider_sync_confirmed: false,
+            lineage_fingerprint: None,
+            lineage: None,
         }
     }
 
@@ -779,7 +805,24 @@ mod tests {
             assert_eq!(evidence.kind, SyncEvidenceKind::ProviderApi);
             assert!(evidence.evidence_id.starts_with("provider-api:"));
             assert_eq!(evidence.evidence_id.len(), 77);
-            assert_eq!(evidence.remote_content.unwrap().algorithm, algorithm);
+            let proof = evidence.remote_content.unwrap();
+            assert_eq!(proof.algorithm, algorithm);
+            assert!(!proof.location_bound);
+
+            let location_bound = evidence_from_provider_api_snapshot_with_location(
+                &receipt(provider),
+                &api_snapshot(provider, checksum),
+                Some("provider-path-v1:proof"),
+                30,
+            )
+            .unwrap();
+            let location_proof = location_bound.remote_content.unwrap();
+            assert!(location_proof.location_bound);
+            assert_eq!(
+                location_proof.location_proof.as_deref(),
+                Some("provider-path-v1:proof")
+            );
+            assert_ne!(evidence.evidence_id, location_bound.evidence_id);
         }
     }
 

@@ -157,6 +157,7 @@ export const reasonUnknownExtensions = (samples: string[]) =>
   invoke<ExtInsight[]>("reason_unknown_extensions", { samples });
 
 export type CloudProvider = "icloud" | "onedrive" | "google-drive";
+export type CloudAccountScope = "personal" | "organization" | "shared" | "unknown";
 export type ArchiveKind =
   | "document"
   | "media"
@@ -169,8 +170,24 @@ export type ArchiveKind =
 export interface CloudRoot {
   id: string;
   provider: CloudProvider;
+  account_scope: CloudAccountScope;
   label: string;
   path: string;
+  readable: boolean;
+  access_issue: string | null;
+}
+
+export interface CloudRootDiscoveryIssue {
+  provider: CloudProvider | null;
+  account_scope: CloudAccountScope;
+  label: string;
+  path: string;
+  reason: string;
+}
+
+export interface CloudRootDiscoveryReport {
+  roots: CloudRoot[];
+  issues: CloudRootDiscoveryIssue[];
 }
 
 export interface OAuthConnection {
@@ -189,6 +206,7 @@ export interface CloudCandidate {
   src: string;
   dst: string;
   provider: CloudProvider;
+  destination_account_scope: CloudAccountScope;
   kind: ArchiveKind;
   bytes: number;
   age_days: number;
@@ -220,6 +238,8 @@ export interface CloudReviewDecision {
   review_fingerprint: string;
   disposition: CloudReviewDisposition;
   reviewed_at_ms: number;
+  reviewed_by?: string;
+  rationale?: string;
 }
 
 export interface DatasetColumnProfile {
@@ -233,6 +253,8 @@ export interface DatasetColumnProfile {
 export interface DatasetProfile {
   format: string;
   sampled_rows: number;
+  sampled_worksheets: number;
+  worksheet_names: string[];
   profile_complete: boolean;
   sample_truncated: boolean;
   columns: DatasetColumnProfile[];
@@ -252,7 +274,15 @@ export interface CloudPlanReport {
   candidates: CloudCandidate[];
   candidate_bytes: number;
   potentially_reclaimable_bytes: number;
+  exact_duplicates: ExactDuplicateSummary;
   notices: string[];
+}
+
+export interface ExactDuplicateSummary {
+  cluster_count: number;
+  candidate_count: number;
+  candidate_bytes: number;
+  redundant_bytes: number;
 }
 
 export interface CloudCopyReceipt {
@@ -270,9 +300,43 @@ export interface CloudCopyReceipt {
   copied_at_ms: number;
   copy_verified: boolean;
   provider_sync_confirmed: boolean;
+  lineage_fingerprint?: string;
+  lineage?: CloudLineageSnapshot;
+}
+
+export type CloudCopyVerificationMethod = "copied-by-disk-sage" | "adopted-existing";
+
+export interface CloudLineageSnapshot {
+  candidate_fingerprint: string;
+  review_fingerprint: string;
+  copy_verification_method?: CloudCopyVerificationMethod;
+  review_decision_id: string | null;
+  review_disposition: CloudReviewDisposition | null;
+  reviewed_at_ms: number | null;
+  reviewed_by?: string;
+  review_rationale?: string;
+  destination_account_scope: CloudAccountScope;
+  kind: ArchiveKind;
+  created_ms: number;
+  modified_ms: number;
+  production_time_ms: number;
+  production_time_source: string;
+  production_time_confidence: string;
+  source_root: string;
+  relative_path: string;
+  source_context: string;
+  requires_review: boolean;
+  review_reasons: string[];
+  content_title: string | null;
+  content_authors: string[];
+  content_context: string[];
+  duration_ms: number | null;
+  dataset_profile: DatasetProfile | null;
+  metadata_evidence: MetadataEvidence[];
 }
 
 export interface CloudCopyOutput {
+  action: "copy-only" | "adopt-existing-copy";
   receipt: CloudCopyReceipt;
   receipt_path: string;
 }
@@ -285,6 +349,8 @@ export interface RemoteContentProof {
   revision: string;
   algorithm: RemoteChecksumAlgorithm;
   checksum: string;
+  location_bound: boolean;
+  location_proof?: string;
 }
 
 export interface ProviderSyncEvidence {
@@ -319,6 +385,8 @@ export interface CloudAttestationOutput {
 }
 
 export const listCloudRoots = () => invoke<CloudRoot[]>("list_cloud_roots");
+export const inspectCloudRoots = () =>
+  invoke<CloudRootDiscoveryReport>("inspect_cloud_roots");
 export const listCloudProviderConnections = () =>
   invoke<OAuthConnection[]>("list_cloud_provider_connections");
 export const listCloudReviewDecisions = () =>
@@ -346,6 +414,7 @@ export const reviewCloudCandidate = (
   metadataFingerprint: string,
   reviewFingerprint: string,
   disposition: CloudReviewDisposition,
+  rationale: string,
   minSizeMib = 256,
   minAgeDays = 90,
   limit = 200,
@@ -355,6 +424,7 @@ export const reviewCloudCandidate = (
   metadataFingerprint,
   reviewFingerprint,
   disposition,
+  rationale,
   minSizeMib,
   minAgeDays,
   limit,
@@ -367,6 +437,21 @@ export const copyCloudCandidate = (
   minAgeDays = 90,
   limit = 200,
 ) => invoke<CloudCopyOutput>("copy_cloud_candidate", {
+  root,
+  cloudRoot,
+  metadataFingerprint,
+  minSizeMib,
+  minAgeDays,
+  limit,
+});
+export const adoptExistingCloudCandidate = (
+  root: string,
+  cloudRoot: string,
+  metadataFingerprint: string,
+  minSizeMib = 256,
+  minAgeDays = 90,
+  limit = 200,
+) => invoke<CloudCopyOutput>("adopt_existing_cloud_candidate", {
   root,
   cloudRoot,
   metadataFingerprint,

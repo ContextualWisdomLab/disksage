@@ -14,6 +14,11 @@ edition = "2021"
 name = "disksage_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[[bin]]
+name = "disksage-cloud-plan"
+path = "src/bin/disksage-cloud-plan.rs"
+required-features = ["cloud-cli"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -34,11 +39,13 @@ sha2 = "0.11.0"
 ureq = "3.3.0"
 unicode-normalization = "0.1"
 csv = "1.4.0"
+calamine = "0.36.0"
 getrandom = "0.3.4"
 keyring = "4.1.5"
 zeroize = { version = "1.9.0", features = ["derive"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+embed_plist = "1.2.2"
 objc2 = "0.6.4"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSError", "NSObject", "NSString", "NSURL", "NSValue"] }
 plist = "1"
@@ -47,6 +54,7 @@ plist = "1"
 tempfile = "3.27.0"
 
 [features]
+cloud-cli = []
 llm-engine = ["dep:llama-cpp-2"]
 
 [lints.rust]

@@ -59,11 +59,12 @@ collect read-only provider evidence, but neither exposes source removal.
 
 The pure evidence gate is provider-neutral. macOS iCloud now has a Foundation-backed, per-file
 native adapter. OneDrive and Google Drive response parsers and evidence builders bind Graph
-QuickXorHash and Drive v3 SHA-256 respectively to the local receipt. Their authenticated read-only
-client accepts an ephemeral caller-supplied OAuth access token and provider-native object ID, calls
-only fixed Microsoft or Google HTTPS hosts with redirects disabled and bounded response bodies, and
-re-hashes the local destination before and after the API request. The desktop clears the access-token
-field after every attempt, and the Rust command never persists or returns it. OAuth consent, refresh
-token acquisition, and Keychain storage remain a separate platform-security slice; this UI supports
-only a manually supplied one-shot access token. Until the selected provider's adapter returns
-complete evidence, the source remains local.
+QuickXorHash and Drive v3 SHA-256 respectively to the local receipt. OneDrive is addressed by the
+exact receipt-relative path. Google Drive starts from an operator-supplied opaque file ID, then reads
+the file and every `parents[]` link to the authenticated My Drive `root` twice; normalized names,
+IDs, and revisions must stay stable and exactly match the receipt path. Shared-drive chains fail
+closed until their roots are modeled explicitly. The authenticated client calls only fixed Microsoft
+or Google HTTPS hosts with redirects disabled and bounded response bodies, obtains access tokens
+just in time from the OS credential store, and re-hashes the source before and after API proof so a
+cloud placeholder is not hydrated. Until the selected provider's adapter returns integrity-bound
+content and location evidence, the source remains local.

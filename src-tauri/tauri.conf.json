@@ -3,6 +3,7 @@
   "productName": "DiskSage",
   "version": "0.1.0",
   "identifier": "com.contextualwisdomlab.disksage",
+  "mainBinaryName": "disksage",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
