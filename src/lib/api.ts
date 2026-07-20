@@ -200,6 +200,15 @@ export interface OAuthConnection {
   connected_at_ms: number;
 }
 
+export function cloudRootIdentityMatches(
+  connection: OAuthConnection,
+  root: CloudRoot,
+): boolean {
+  return connection.provider === root.provider
+    && connection.cloud_root_id.normalize("NFC") === root.id.normalize("NFC")
+    && connection.cloud_root_path.normalize("NFC") === root.path.normalize("NFC");
+}
+
 export interface CloudCandidate {
   metadata_fingerprint: string;
   review_fingerprint: string;

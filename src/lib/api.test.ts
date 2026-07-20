@@ -94,3 +94,36 @@ describe("api wrappers", () => {
     expect(doneCb).toHaveBeenCalledWith(done);
   });
 });
+
+describe("cloud root identity", () => {
+  const root: api.CloudRoot = {
+    id: "/Cloud/내 드라이브",
+    provider: "google-drive",
+    account_scope: "organization",
+    label: "Google Drive",
+    path: "/Cloud/내 드라이브",
+    readable: true,
+    access_issue: null,
+  };
+
+  const connection: api.OAuthConnection = {
+    connection_id: "a".repeat(64),
+    provider: "google-drive",
+    cloud_root_id: root.id.normalize("NFD"),
+    cloud_root_path: root.path.normalize("NFD"),
+    client_id: "desktop-client-id",
+    scope: "https://www.googleapis.com/auth/drive.metadata.readonly",
+    connected_at_ms: 1,
+  };
+
+  it("matches NFC and NFD spellings of the same File Provider root", () => {
+    expect(connection.cloud_root_path).not.toBe(root.path);
+    expect(api.cloudRootIdentityMatches(connection, root)).toBe(true);
+  });
+
+  it("rejects a different provider, root id, or path", () => {
+    expect(api.cloudRootIdentityMatches({ ...connection, provider: "onedrive" }, root)).toBe(false);
+    expect(api.cloudRootIdentityMatches({ ...connection, cloud_root_id: "/Cloud/other" }, root)).toBe(false);
+    expect(api.cloudRootIdentityMatches({ ...connection, cloud_root_path: "/Cloud/other" }, root)).toBe(false);
+  });
+});
