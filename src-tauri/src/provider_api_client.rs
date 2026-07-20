@@ -1,44 +1,53 @@
 //! Authenticated, read-only metadata clients for cloud-provider content proof.
 //!
-//! Callers supply an ephemeral OAuth access token and a provider-native object identifier. The
-//! production transport only talks to fixed Microsoft Graph or Google Drive API hosts, never
-//! persists the token, and never includes it in returned errors.
+//! Callers supply an ephemeral OAuth access token and a provider-native object identifier or a
+//! validated OneDrive path. The production transport only talks to fixed Microsoft Graph or Google
+//! Drive API hosts, never persists the token, and never includes it in returned errors.
 
 use crate::cloud::CloudProvider;
 use crate::cloud_transfer::{CloudCopyReceipt, ProviderSyncEvidence};
 use crate::content_digest::ContentDigests;
 #[cfg(not(coverage))]
 use crate::content_digest::ContentHasher;
-use crate::provider_sync::{
-    evidence_from_provider_api_snapshot, parse_google_drive_file_snapshot,
-    parse_onedrive_item_snapshot,
-};
+use crate::provider_sync::{parse_google_drive_file_snapshot, parse_onedrive_item_snapshot};
 #[cfg(not(coverage))]
 use std::io::Read;
 use std::path::Path;
 
 const MAX_REMOTE_ID_BYTES: usize = 1_024;
+const MAX_REMOTE_PATH_BYTES: usize = 4_096;
 #[cfg(not(coverage))]
 const MAX_METADATA_RESPONSE_BYTES: u64 = 256 * 1_024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OneDrivePath(String);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderRemoteLocator {
     OneDriveItemId(String),
+    /// A drive-root-relative path. Unlike an opaque item ID, this binds the response to the exact
+    /// receipt destination hierarchy.
+    OneDriveItemPath(OneDrivePath),
     GoogleDriveFileId(String),
 }
 
 impl ProviderRemoteLocator {
     pub fn provider(&self) -> CloudProvider {
         match self {
-            Self::OneDriveItemId(_) => CloudProvider::Onedrive,
+            Self::OneDriveItemId(_) | Self::OneDriveItemPath(_) => CloudProvider::Onedrive,
             Self::GoogleDriveFileId(_) => CloudProvider::GoogleDrive,
         }
     }
 
-    pub fn object_id(&self) -> &str {
+    pub fn object_id(&self) -> Option<&str> {
         match self {
-            Self::OneDriveItemId(id) | Self::GoogleDriveFileId(id) => id,
+            Self::OneDriveItemId(id) | Self::GoogleDriveFileId(id) => Some(id),
+            Self::OneDriveItemPath(_) => None,
         }
+    }
+
+    pub fn location_bound(&self) -> bool {
+        matches!(self, Self::OneDriveItemPath(_))
     }
 }
 
@@ -56,23 +65,83 @@ fn percent_encode_segment(value: &str) -> String {
 }
 
 pub fn provider_metadata_url(locator: &ProviderRemoteLocator) -> Result<String, String> {
-    let object_id = locator.object_id();
-    if object_id.is_empty()
-        || object_id.trim() != object_id
-        || object_id.len() > MAX_REMOTE_ID_BYTES
-        || object_id.bytes().any(|byte| byte.is_ascii_control())
-    {
-        return Err("provider-object-id-invalid".into());
-    }
-    let encoded = percent_encode_segment(object_id);
     Ok(match locator {
-        ProviderRemoteLocator::OneDriveItemId(_) => format!(
-            "https://graph.microsoft.com/v1.0/me/drive/items/{encoded}?%24select=id%2Csize%2CeTag%2Cfile%2Cdeleted"
-        ),
-        ProviderRemoteLocator::GoogleDriveFileId(_) => format!(
-            "https://www.googleapis.com/drive/v3/files/{encoded}?fields=id%2Cversion%2Csize%2Csha256Checksum%2Ctrashed"
-        ),
+        ProviderRemoteLocator::OneDriveItemId(object_id)
+        | ProviderRemoteLocator::GoogleDriveFileId(object_id) => {
+            if object_id.is_empty()
+                || object_id.trim() != object_id
+                || object_id.len() > MAX_REMOTE_ID_BYTES
+                || object_id.bytes().any(|byte| byte.is_ascii_control())
+            {
+                return Err("provider-object-id-invalid".into());
+            }
+            let encoded = percent_encode_segment(object_id);
+            match locator {
+                ProviderRemoteLocator::OneDriveItemId(_) => format!(
+                    "https://graph.microsoft.com/v1.0/me/drive/items/{encoded}?%24select=id%2Csize%2CeTag%2Cfile%2Cdeleted"
+                ),
+                ProviderRemoteLocator::GoogleDriveFileId(_) => format!(
+                    "https://www.googleapis.com/drive/v3/files/{encoded}?fields=id%2Cversion%2Csize%2Csha256Checksum%2Ctrashed"
+                ),
+                ProviderRemoteLocator::OneDriveItemPath(_) => unreachable!(),
+            }
+        }
+        ProviderRemoteLocator::OneDriveItemPath(path) => {
+            let path = &path.0;
+            if path.is_empty()
+                || path.trim() != path
+                || path.len() > MAX_REMOTE_PATH_BYTES
+                || path.bytes().any(|byte| byte.is_ascii_control())
+            {
+                return Err("provider-path-invalid".into());
+            }
+            let segments: Vec<_> = path.split('/').collect();
+            if segments
+                .iter()
+                .any(|segment| segment.is_empty() || matches!(*segment, "." | ".."))
+            {
+                return Err("provider-path-invalid".into());
+            }
+            let encoded = segments
+                .into_iter()
+                .map(percent_encode_segment)
+                .collect::<Vec<_>>()
+                .join("/");
+            format!(
+                "https://graph.microsoft.com/v1.0/me/drive/root:/{encoded}?%24select=id%2Csize%2CeTag%2Cfile%2Cdeleted"
+            )
+        }
     })
+}
+
+/// Build a OneDrive drive-root-relative locator from the exact local File Provider root and
+/// receipt destination. Parent traversal, non-Unicode segments, and the root itself are rejected.
+pub fn onedrive_path_locator(
+    local_root: &Path,
+    destination: &Path,
+) -> Result<ProviderRemoteLocator, String> {
+    use std::path::Component;
+    use unicode_normalization::UnicodeNormalization;
+
+    let relative = destination
+        .strip_prefix(local_root)
+        .map_err(|_| "destination-outside-cloud-root".to_string())?;
+    let mut segments = Vec::new();
+    for component in relative.components() {
+        let Component::Normal(segment) = component else {
+            return Err("provider-path-invalid".into());
+        };
+        let segment = segment
+            .to_str()
+            .ok_or_else(|| "provider-path-not-unicode".to_string())?;
+        segments.push(segment.nfc().collect::<String>());
+    }
+    if segments.is_empty() {
+        return Err("provider-path-invalid".into());
+    }
+    let locator = ProviderRemoteLocator::OneDriveItemPath(OneDrivePath(segments.join("/")));
+    provider_metadata_url(&locator)?;
+    Ok(locator)
 }
 
 #[cfg(not(coverage))]
@@ -231,17 +300,25 @@ pub fn evidence_from_provider_api_json(
         return Err("destination-content-mismatch".into());
     }
     let snapshot = match locator {
-        ProviderRemoteLocator::OneDriveItemId(_) => {
+        ProviderRemoteLocator::OneDriveItemId(_) | ProviderRemoteLocator::OneDriveItemPath(_) => {
             parse_onedrive_item_snapshot(json, &destination_digests.blake3)?
         }
         ProviderRemoteLocator::GoogleDriveFileId(_) => {
             parse_google_drive_file_snapshot(json, &destination_digests.blake3)?
         }
     };
-    if snapshot.remote_object_id != locator.object_id() {
+    if locator
+        .object_id()
+        .is_some_and(|object_id| snapshot.remote_object_id != object_id)
+    {
         return Err("provider-object-id-mismatch".into());
     }
-    evidence_from_provider_api_snapshot(receipt, &snapshot, confirmed_at_ms)
+    crate::provider_sync::evidence_from_provider_api_snapshot_with_location(
+        receipt,
+        &snapshot,
+        locator.location_bound(),
+        confirmed_at_ms,
+    )
 }
 
 /// Fetch authenticated provider metadata between two stable local content snapshots.
@@ -275,6 +352,47 @@ pub fn collect_authenticated_provider_api_evidence(
     let (after_identity, after_digests) = stable_local_snapshot(destination)?;
     if after_identity != before_identity || after_digests != before_digests {
         return Err("destination-changed-during-provider-check".into());
+    }
+    evidence_from_provider_api_json(receipt, locator, &json, &after_digests, confirmed_at_ms)
+}
+
+/// Fetch authenticated remote metadata while anchoring the content proof to the source that may be
+/// evicted. This avoids reading or hydrating a cloud placeholder merely to prove remote content.
+/// The source is hashed before and after the fixed-host API request and must remain identical to the
+/// immutable receipt throughout.
+#[cfg(not(coverage))]
+pub fn collect_authenticated_provider_api_evidence_from_source(
+    receipt: &CloudCopyReceipt,
+    locator: &ProviderRemoteLocator,
+    bearer_token: &str,
+    transport: &dyn ProviderMetadataTransport,
+    confirmed_at_ms: u64,
+) -> Result<ProviderSyncEvidence, String> {
+    if bearer_token.trim().is_empty() {
+        return Err("provider-access-token-missing".into());
+    }
+    if locator.provider() != receipt.provider {
+        return Err("provider-mismatch".into());
+    }
+    provider_metadata_url(locator)?;
+    let source = Path::new(&receipt.source);
+    if !source.is_absolute() {
+        return Err("source-path-not-absolute".into());
+    }
+    let source_error = |error: String| {
+        error
+            .strip_prefix("destination-")
+            .map(|suffix| format!("source-{suffix}"))
+            .unwrap_or(error)
+    };
+    let (before_identity, before_digests) = stable_local_snapshot(source).map_err(&source_error)?;
+    if before_identity.bytes != receipt.bytes || !digests_match_receipt(&before_digests, receipt) {
+        return Err("source-content-mismatch".into());
+    }
+    let json = transport.fetch_json(locator, bearer_token)?;
+    let (after_identity, after_digests) = stable_local_snapshot(source).map_err(source_error)?;
+    if after_identity != before_identity || after_digests != before_digests {
+        return Err("source-changed-during-provider-check".into());
     }
     evidence_from_provider_api_json(receipt, locator, &json, &after_digests, confirmed_at_ms)
 }
@@ -356,6 +474,13 @@ mod tests {
                 .unwrap(),
             "https://www.googleapis.com/drive/v3/files/g%2Fid?fields=id%2Cversion%2Csize%2Csha256Checksum%2Ctrashed"
         );
+        assert_eq!(
+            provider_metadata_url(&ProviderRemoteLocator::OneDriveItemPath(
+                OneDrivePath("DiskSage Archive/보고서 #1.pdf".into())
+            ))
+            .unwrap(),
+            "https://graph.microsoft.com/v1.0/me/drive/root:/DiskSage%20Archive/%EB%B3%B4%EA%B3%A0%EC%84%9C%20%231.pdf?%24select=id%2Csize%2CeTag%2Cfile%2Cdeleted"
+        );
         for id in ["", " leading", "trailing ", "line\nbreak"] {
             assert_eq!(
                 provider_metadata_url(&ProviderRemoteLocator::GoogleDriveFileId(id.into()))
@@ -370,6 +495,29 @@ mod tests {
             .unwrap_err(),
             "provider-object-id-invalid"
         );
+        for path in ["", "/leading", "trailing/", "a/../b", "line\nbreak"] {
+            assert_eq!(
+                provider_metadata_url(&ProviderRemoteLocator::OneDriveItemPath(OneDrivePath(
+                    path.into()
+                )))
+                .unwrap_err(),
+                "provider-path-invalid"
+            );
+        }
+
+        let root = Path::new("/cloud");
+        let locator = onedrive_path_locator(
+            root,
+            Path::new("/cloud/DiskSage Archive/e\u{301}vidence.pdf"),
+        )
+        .unwrap();
+        assert_eq!(
+            locator,
+            ProviderRemoteLocator::OneDriveItemPath(OneDrivePath(
+                "DiskSage Archive/évidence.pdf".into()
+            ))
+        );
+        assert!(locator.location_bound());
     }
 
     #[test]
@@ -394,7 +542,56 @@ mod tests {
         )
         .unwrap();
         assert!(evidence.sync_complete);
+        assert!(!evidence.remote_content.unwrap().location_bound);
         assert_eq!(remote.calls.get(), 1);
+
+        let path_locator = ProviderRemoteLocator::OneDriveItemPath(OneDrivePath(
+            "DiskSage Archive/2026/report.pdf".into(),
+        ));
+        let path_remote = transport(&format!(
+            r#"{{"id":"one-id","size":11,"eTag":"revision-1","file":{{"hashes":{{"quickXorHash":"{}"}}}}}}"#,
+            receipt.quick_xor_base64
+        ));
+        let path_evidence = collect_authenticated_provider_api_evidence(
+            &receipt,
+            &path_locator,
+            "secret-token",
+            &path_remote,
+            30,
+        )
+        .unwrap();
+        assert!(path_evidence.sync_complete);
+        assert!(path_evidence.remote_content.unwrap().location_bound);
+    }
+
+    #[test]
+    #[cfg(not(coverage))]
+    fn source_anchored_collection_does_not_read_cloud_placeholder() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("source.pdf");
+        let cloud_placeholder = temporary.path().join("cloud-placeholder.pdf");
+        std::fs::write(&source, b"hello-cloud").unwrap();
+        let mut receipt = receipt(CloudProvider::Onedrive, &cloud_placeholder, b"hello-cloud");
+        receipt.source = source.to_string_lossy().into_owned();
+        let locator = ProviderRemoteLocator::OneDriveItemPath(OneDrivePath(
+            "DiskSage Archive/report.pdf".into(),
+        ));
+        let remote = transport(&format!(
+            r#"{{"id":"one-id","size":11,"eTag":"revision-1","file":{{"hashes":{{"quickXorHash":"{}"}}}}}}"#,
+            receipt.quick_xor_base64
+        ));
+
+        let evidence = collect_authenticated_provider_api_evidence_from_source(
+            &receipt,
+            &locator,
+            "secret-token",
+            &remote,
+            30,
+        )
+        .unwrap();
+        assert!(evidence.sync_complete);
+        assert!(evidence.remote_content.unwrap().location_bound);
+        assert!(!cloud_placeholder.exists());
     }
 
     #[test]

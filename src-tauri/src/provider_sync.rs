@@ -216,6 +216,7 @@ fn provider_api_evidence_id(
     receipt: &CloudCopyReceipt,
     snapshot: &ProviderApiSnapshot,
     algorithm: RemoteChecksumAlgorithm,
+    location_bound: bool,
     confirmed_at_ms: u64,
 ) -> String {
     let mut hasher = blake3::Hasher::new();
@@ -232,6 +233,7 @@ fn provider_api_evidence_id(
     }
     hasher.update(&snapshot.observed_bytes.to_le_bytes());
     hasher.update(&[snapshot.available as u8, snapshot.trashed as u8]);
+    hasher.update(&[location_bound as u8]);
     hasher.update(&[match algorithm {
         RemoteChecksumAlgorithm::Sha256 => 1,
         RemoteChecksumAlgorithm::QuickXor => 2,
@@ -249,6 +251,18 @@ fn provider_api_evidence_id(
 pub fn evidence_from_provider_api_snapshot(
     receipt: &CloudCopyReceipt,
     snapshot: &ProviderApiSnapshot,
+    confirmed_at_ms: u64,
+) -> Result<ProviderSyncEvidence, String> {
+    evidence_from_provider_api_snapshot_with_location(receipt, snapshot, false, confirmed_at_ms)
+}
+
+/// Convert provider metadata into content evidence and record whether the authenticated lookup was
+/// addressed by the exact receipt-relative path. Object-ID-only evidence remains useful for audit,
+/// but cannot authorize source eviction because equal content can exist elsewhere in the drive.
+pub fn evidence_from_provider_api_snapshot_with_location(
+    receipt: &CloudCopyReceipt,
+    snapshot: &ProviderApiSnapshot,
+    location_bound: bool,
     confirmed_at_ms: u64,
 ) -> Result<ProviderSyncEvidence, String> {
     if snapshot.provider != receipt.provider {
@@ -285,13 +299,20 @@ pub fn evidence_from_provider_api_snapshot(
         destination_blake3: snapshot.destination_blake3.clone(),
         confirmed_at_ms,
         kind: SyncEvidenceKind::ProviderApi,
-        evidence_id: provider_api_evidence_id(receipt, snapshot, algorithm, confirmed_at_ms),
+        evidence_id: provider_api_evidence_id(
+            receipt,
+            snapshot,
+            algorithm,
+            location_bound,
+            confirmed_at_ms,
+        ),
         sync_complete,
         remote_content: Some(RemoteContentProof {
             object_id: snapshot.remote_object_id.clone(),
             revision: snapshot.remote_revision.clone(),
             algorithm,
             checksum: snapshot.remote_checksum.clone(),
+            location_bound,
         }),
     })
 }
@@ -781,7 +802,19 @@ mod tests {
             assert_eq!(evidence.kind, SyncEvidenceKind::ProviderApi);
             assert!(evidence.evidence_id.starts_with("provider-api:"));
             assert_eq!(evidence.evidence_id.len(), 77);
-            assert_eq!(evidence.remote_content.unwrap().algorithm, algorithm);
+            let proof = evidence.remote_content.unwrap();
+            assert_eq!(proof.algorithm, algorithm);
+            assert!(!proof.location_bound);
+
+            let location_bound = evidence_from_provider_api_snapshot_with_location(
+                &receipt(provider),
+                &api_snapshot(provider, checksum),
+                true,
+                30,
+            )
+            .unwrap();
+            assert!(location_bound.remote_content.unwrap().location_bound);
+            assert_ne!(evidence.evidence_id, location_bound.evidence_id);
         }
     }
 

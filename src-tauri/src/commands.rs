@@ -877,33 +877,38 @@ pub async fn attest_cloud_copy(
                     .cloned()
                     .ok_or_else(|| "receipt-cloud-root-unavailable".to_string())?;
                 let object_id = object_id.filter(|value| !value.trim().is_empty());
-                let has_object_id = object_id.is_some();
+                let fallback_requested = receipt.provider == cloud::CloudProvider::Onedrive
+                    || object_id.is_some();
                 match provider_sync::collect_file_provider_sync_evidence(&receipt, confirmed_at_ms)
                 {
-                    Ok(evidence) if evidence.sync_complete || !has_object_id => evidence,
-                    Err(error) if !has_object_id => return Err(error),
+                    Ok(evidence) if evidence.sync_complete || !fallback_requested => evidence,
+                    Err(error) if !fallback_requested => return Err(error),
                     Ok(_) | Err(_) => {
-                        let object_id = object_id.expect("object id checked above");
                         let access_token = provider_oauth::refreshed_access_token(
                             &connection_path,
                             &selected_root,
                         )?;
                         let locator = match receipt.provider {
                             cloud::CloudProvider::Onedrive => {
-                                provider_api_client::ProviderRemoteLocator::OneDriveItemId(
-                                    object_id,
-                                )
+                                if object_id.is_some() {
+                                    return Err("onedrive-provider-object-id-not-accepted".into());
+                                }
+                                provider_api_client::onedrive_path_locator(
+                                    Path::new(&selected_root.path),
+                                    Path::new(&receipt.destination),
+                                )?
                             }
                             cloud::CloudProvider::GoogleDrive => {
                                 provider_api_client::ProviderRemoteLocator::GoogleDriveFileId(
-                                    object_id,
+                                    object_id
+                                        .ok_or_else(|| "provider-object-id-missing".to_string())?,
                                 )
                             }
                             cloud::CloudProvider::Icloud => unreachable!(),
                         };
                         let client =
                             provider_api_client::FixedHostProviderMetadataClient::default();
-                        provider_api_client::collect_authenticated_provider_api_evidence(
+                        provider_api_client::collect_authenticated_provider_api_evidence_from_source(
                             &receipt,
                             &locator,
                             access_token.as_str(),

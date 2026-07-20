@@ -179,14 +179,13 @@
 
   async function attestCopy() {
     if (!copied) return;
-    const isIcloud = copied.receipt.provider === "icloud";
     attesting = true;
     loadError = "";
     attestation = null;
     try {
       attestation = await api.attestCloudCopy(
         copied.receipt.receipt_id,
-        isIcloud ? null : objectId.trim() || null,
+        copied.receipt.provider === "google-drive" ? objectId.trim() || null : null,
       );
     } catch (e) {
       loadError = String(e);
@@ -368,15 +367,17 @@
         <strong>{copied.action === "adopt-existing-copy" ? "기존 클라우드 복사본 검증·채택 완료" : "검증 복사 완료"} · 원본 보존됨</strong>
         <div class="context">영수증 {copied.receipt.receipt_id} · {fmtBytes(copied.receipt.bytes)}</div>
         <div class="path">{copied.receipt.destination}</div>
-        {#if copied.receipt.provider !== "icloud"}
+        {#if copied.receipt.provider === "google-drive"}
           <div class="provider-auth">
             <label>
-              {copied.receipt.provider === "onedrive" ? "OneDrive item ID (선택)" : "Google Drive file ID (선택)"}
+              Google Drive file ID (선택)
               <input type="text" bind:value={objectId} autocomplete="off" disabled={attesting} />
             </label>
           </div>
-          <p class="muted">먼저 macOS File Provider의 업로드·최신 버전 메타데이터를 확인합니다. item/file ID를 입력하면 네이티브 증거가 불완전할 때만 OAuth API 체크섬 검증으로 보완합니다.</p>
+          <p class="muted">먼저 macOS File Provider의 업로드·최신 버전 메타데이터를 확인합니다. file ID를 입력하면 네이티브 증거가 불완전할 때 OAuth API 체크섬을 확인하지만, 원격 부모 경로가 아직 결합되지 않으므로 이 증거만으로는 원본 제거를 허가하지 않습니다.</p>
           <p class="muted">API 보완 시 access token은 OS 보안 저장소의 refresh token으로 Rust 내부에서 한 번만 갱신하며 UI·설정·영수증에 노출하지 않습니다.</p>
+        {:else if copied.receipt.provider === "onedrive"}
+          <p class="muted">macOS File Provider 증거가 불완전하면 OAuth 연결을 사용해 영수증의 OneDrive 상대 경로를 직접 조회하고 QuickXorHash를 검증합니다. 임의 item ID는 받지 않습니다.</p>
         {/if}
         <button
           onclick={attestCopy}

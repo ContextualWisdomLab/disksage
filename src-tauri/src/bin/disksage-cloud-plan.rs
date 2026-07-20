@@ -15,6 +15,12 @@ use disksage_lib::cloud_review::{self, CloudReviewDecision, CloudReviewDispositi
 #[cfg(not(coverage))]
 use disksage_lib::cloud_transfer::{self, CloudCopyReceipt, LocalEvictionPermit};
 #[cfg(not(coverage))]
+use disksage_lib::provider_api_client::{
+    self, FixedHostProviderMetadataClient, ProviderRemoteLocator,
+};
+#[cfg(not(coverage))]
+use disksage_lib::provider_oauth;
+#[cfg(not(coverage))]
 use disksage_lib::provider_sync;
 
 #[cfg(not(coverage))]
@@ -32,6 +38,8 @@ struct Args {
     adopt_existing_fingerprint: Option<String>,
     receipt_dir: Option<PathBuf>,
     attest_receipt: Option<PathBuf>,
+    provider_object_id: Option<String>,
+    oauth_connections: Option<PathBuf>,
     evict_receipt: Option<PathBuf>,
     confirm_receipt_id: Option<String>,
     eviction_dir: Option<PathBuf>,
@@ -77,6 +85,8 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
         adopt_existing_fingerprint: None,
         receipt_dir: None,
         attest_receipt: None,
+        provider_object_id: None,
+        oauth_connections: None,
         evict_receipt: None,
         confirm_receipt_id: None,
         eviction_dir: None,
@@ -135,6 +145,16 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
                     "--attest-receipt",
                 )?))
             }
+            "--provider-object-id" => {
+                parsed.provider_object_id = Some(value(args, &mut index, "--provider-object-id")?)
+            }
+            "--oauth-connections" => {
+                parsed.oauth_connections = Some(PathBuf::from(value(
+                    args,
+                    &mut index,
+                    "--oauth-connections",
+                )?))
+            }
             "--evict-receipt" => {
                 parsed.evict_receipt = Some(PathBuf::from(value(
                     args,
@@ -190,7 +210,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             }
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive] [--min-size-mib N] [--min-age-days N] [--limit N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by ID --review-rationale TEXT --review-dir PATH]".into(),
+                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive] [--min-size-mib N] [--min-age-days N] [--limit N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by ID --review-rationale TEXT --review-dir PATH]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -271,6 +291,22 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
         );
     }
     let eviction_action = eviction_fields.iter().all(|value| *value);
+    if args.provider_object_id.is_some() && args.oauth_connections.is_none() {
+        return Err("--provider-object-id에는 --oauth-connections가 필요함".into());
+    }
+    let remote_attestation = args.oauth_connections.is_some();
+    if remote_attestation && args.attest_receipt.is_none() && !eviction_action {
+        return Err(
+            "provider API fallback은 attestation 또는 eviction action에만 지정할 수 있음".into(),
+        );
+    }
+    if args
+        .provider_object_id
+        .as_deref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return Err("--provider-object-id는 비어 있을 수 없음".into());
+    }
     if review_action && args.review_dir.is_none() {
         return Err("review action에는 --review-dir이 필요함".into());
     }
@@ -319,6 +355,11 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
             return Err("--attest-receipt는 절대 경로여야 함".into());
         }
     }
+    if let Some(connection_path) = &args.oauth_connections {
+        if !connection_path.is_absolute() {
+            return Err("--oauth-connections는 절대 경로여야 함".into());
+        }
+    }
     if let Some(receipt_path) = &args.evict_receipt {
         if !receipt_path.is_absolute() {
             return Err("--evict-receipt는 절대 경로여야 함".into());
@@ -343,17 +384,92 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
 }
 
 #[cfg(not(coverage))]
-fn attest_native_receipt(path: &Path) -> Result<AttestationOutput, String> {
-    let receipt = cloud_transfer::read_immutable_receipt(path)?;
-    let confirmed_at_ms = cloud::system_now_ms();
-    let evidence = match receipt.provider {
+fn receipt_cloud_root(receipt: &CloudCopyReceipt, home: &Path) -> Result<CloudRoot, String> {
+    let destination = Path::new(&receipt.destination);
+    cloud::discover_cloud_roots(home)
+        .into_iter()
+        .filter(|root| {
+            root.provider == receipt.provider && destination.starts_with(Path::new(&root.path))
+        })
+        .max_by_key(|root| Path::new(&root.path).components().count())
+        .ok_or_else(|| "receipt-cloud-root-unavailable".to_string())
+}
+
+#[cfg(not(coverage))]
+fn collect_receipt_sync_evidence(
+    receipt: &CloudCopyReceipt,
+    provider_object_id: Option<&str>,
+    oauth_connections: Option<&Path>,
+    home: &Path,
+    confirmed_at_ms: u64,
+) -> Result<disksage_lib::cloud_transfer::ProviderSyncEvidence, String> {
+    let provider_object_id = provider_object_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    match receipt.provider {
         CloudProvider::Icloud => {
-            provider_sync::collect_icloud_sync_evidence(&receipt, confirmed_at_ms)?
+            if provider_object_id.is_some() || oauth_connections.is_some() {
+                return Err("icloud-provider-api-fallback-not-supported".into());
+            }
+            provider_sync::collect_icloud_sync_evidence(receipt, confirmed_at_ms)
         }
         CloudProvider::Onedrive | CloudProvider::GoogleDrive => {
-            provider_sync::collect_file_provider_sync_evidence(&receipt, confirmed_at_ms)?
+            let fallback_requested = oauth_connections.is_some();
+            match provider_sync::collect_file_provider_sync_evidence(receipt, confirmed_at_ms) {
+                Ok(evidence) if evidence.sync_complete || !fallback_requested => Ok(evidence),
+                Err(error) if !fallback_requested => Err(error),
+                Ok(_) | Err(_) => {
+                    let connection_path = oauth_connections
+                        .ok_or_else(|| "oauth-connections-path-missing".to_string())?;
+                    let selected_root = receipt_cloud_root(receipt, home)?;
+                    let access_token =
+                        provider_oauth::refreshed_access_token(connection_path, &selected_root)?;
+                    let locator = match receipt.provider {
+                        CloudProvider::Onedrive => {
+                            if provider_object_id.is_some() {
+                                return Err("onedrive-provider-object-id-not-accepted".into());
+                            }
+                            provider_api_client::onedrive_path_locator(
+                                Path::new(&selected_root.path),
+                                Path::new(&receipt.destination),
+                            )?
+                        }
+                        CloudProvider::GoogleDrive => ProviderRemoteLocator::GoogleDriveFileId(
+                            provider_object_id
+                                .ok_or_else(|| "provider-object-id-missing".to_string())?
+                                .into(),
+                        ),
+                        CloudProvider::Icloud => unreachable!(),
+                    };
+                    provider_api_client::collect_authenticated_provider_api_evidence_from_source(
+                        receipt,
+                        &locator,
+                        access_token.as_str(),
+                        &FixedHostProviderMetadataClient::default(),
+                        confirmed_at_ms,
+                    )
+                }
+            }
         }
-    };
+    }
+}
+
+#[cfg(not(coverage))]
+fn attest_receipt(
+    path: &Path,
+    provider_object_id: Option<&str>,
+    oauth_connections: Option<&Path>,
+    home: &Path,
+) -> Result<AttestationOutput, String> {
+    let receipt = cloud_transfer::read_immutable_receipt(path)?;
+    let confirmed_at_ms = cloud::system_now_ms();
+    let evidence = collect_receipt_sync_evidence(
+        &receipt,
+        provider_object_id,
+        oauth_connections,
+        home,
+        confirmed_at_ms,
+    )?;
     let (permit, blockers) = match cloud_transfer::approve_local_eviction(&receipt, &evidence) {
         Ok(permit) => (Some(permit), Vec::new()),
         Err(blockers) => (None, blockers),
@@ -373,20 +489,22 @@ fn evict_native_receipt(
     confirmation_receipt_id: &str,
     eviction_dir: &Path,
     journal_path: &Path,
+    provider_object_id: Option<&str>,
+    oauth_connections: Option<&Path>,
+    home: &Path,
 ) -> Result<EvictionOutput, String> {
     let receipt = cloud_transfer::read_immutable_receipt(path)?;
     if confirmation_receipt_id != receipt.receipt_id {
         return Err("eviction-confirmation-receipt-id-mismatch".into());
     }
     let confirmed_at_ms = cloud::system_now_ms();
-    let evidence = match receipt.provider {
-        CloudProvider::Icloud => {
-            provider_sync::collect_icloud_sync_evidence(&receipt, confirmed_at_ms)?
-        }
-        CloudProvider::Onedrive | CloudProvider::GoogleDrive => {
-            provider_sync::collect_file_provider_sync_evidence(&receipt, confirmed_at_ms)?
-        }
-    };
+    let evidence = collect_receipt_sync_evidence(
+        &receipt,
+        provider_object_id,
+        oauth_connections,
+        home,
+        confirmed_at_ms,
+    )?;
     let permit = cloud_transfer::approve_local_eviction(&receipt, &evidence)
         .map_err(|blockers| blockers.join(","))?;
     let eviction = cloud_eviction::evict_source(
@@ -451,6 +569,9 @@ fn run() -> Result<(), String> {
             args.journal_path
                 .as_deref()
                 .ok_or_else(|| "--journal-path가 필요함".to_string())?,
+            args.provider_object_id.as_deref(),
+            args.oauth_connections.as_deref(),
+            &home,
         )?;
         println!(
             "{}",
@@ -461,8 +582,13 @@ fn run() -> Result<(), String> {
     if let Some(receipt_path) = &args.attest_receipt {
         println!(
             "{}",
-            serde_json::to_string_pretty(&attest_native_receipt(receipt_path)?)
-                .map_err(|error| error.to_string())?
+            serde_json::to_string_pretty(&attest_receipt(
+                receipt_path,
+                args.provider_object_id.as_deref(),
+                args.oauth_connections.as_deref(),
+                &home,
+            )?)
+            .map_err(|error| error.to_string())?
         );
         return Ok(());
     }
@@ -657,6 +783,8 @@ mod tests {
         assert_eq!(defaults.min_size_mib, 256);
         assert!(defaults.copy_fingerprint.is_none());
         assert!(defaults.adopt_existing_fingerprint.is_none());
+        assert!(defaults.provider_object_id.is_none());
+        assert!(defaults.oauth_connections.is_none());
         assert!(defaults.evict_receipt.is_none());
         assert!(defaults.review_candidate_fingerprint.is_none());
         assert!(defaults.reviewed_by.is_none());
@@ -902,6 +1030,59 @@ mod tests {
     }
 
     #[test]
+    fn provider_api_fallback_requires_complete_scoped_arguments() {
+        let parsed = parse_args(
+            &[
+                "--attest-receipt".into(),
+                "/receipts/a.json".into(),
+                "--provider-object-id".into(),
+                "remote-item-id".into(),
+                "--oauth-connections".into(),
+                "/app-data/cloud-oauth-connections.json".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert_eq!(parsed.provider_object_id.as_deref(), Some("remote-item-id"));
+        assert_eq!(
+            parsed.oauth_connections,
+            Some(PathBuf::from("/app-data/cloud-oauth-connections.json"))
+        );
+        assert!(validate_action_args(&parsed).is_ok());
+
+        let onedrive_path_fallback = parse_args(
+            &[
+                "--attest-receipt".into(),
+                "/receipts/a.json".into(),
+                "--oauth-connections".into(),
+                "/app-data/cloud-oauth-connections.json".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&onedrive_path_fallback).is_ok());
+
+        let mut incomplete = parse_args(
+            &[
+                "--attest-receipt".into(),
+                "/receipts/a.json".into(),
+                "--provider-object-id".into(),
+                "remote-item-id".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&incomplete).is_err());
+        incomplete.oauth_connections = Some(PathBuf::from("relative-connections.json"));
+        assert!(validate_action_args(&incomplete).is_err());
+
+        let mut unscoped = parse_args(&[], Path::new("/h")).unwrap();
+        unscoped.provider_object_id = Some("remote-item-id".into());
+        unscoped.oauth_connections = Some(PathBuf::from("/connections.json"));
+        assert!(validate_action_args(&unscoped).is_err());
+    }
+
+    #[test]
     fn attestation_rejects_forged_receipt_before_destination_probe() {
         let temp = tempfile::tempdir().unwrap();
         let receipt = CloudCopyReceipt {
@@ -936,7 +1117,7 @@ mod tests {
         permissions.set_readonly(true);
         std::fs::set_permissions(&path, permissions).unwrap();
 
-        let error = attest_native_receipt(&path).unwrap_err();
+        let error = attest_receipt(&path, None, None, Path::new("/home/test")).unwrap_err();
         assert!(error.contains("receipt-integrity-mismatch"));
         assert!(!error.contains("No such file"));
     }

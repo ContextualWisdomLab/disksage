@@ -58,6 +58,10 @@ pub struct RemoteContentProof {
     pub revision: String,
     pub algorithm: RemoteChecksumAlgorithm,
     pub checksum: String,
+    /// True only when the authenticated provider lookup addressed the exact receipt destination,
+    /// rather than an operator-supplied object ID that could name equal content elsewhere.
+    #[serde(default)]
+    pub location_bound: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -588,6 +592,9 @@ pub fn approve_local_eviction(
             }
             if proof.revision.trim().is_empty() {
                 blockers.push("remote-revision-missing".into());
+            }
+            if !proof.location_bound {
+                blockers.push("remote-location-unbound".into());
             }
             let checksum_matches = match (provider, proof.algorithm) {
                 (CloudProvider::Onedrive, RemoteChecksumAlgorithm::QuickXor) => {
@@ -1446,6 +1453,7 @@ mod tests {
                     revision: "revision-1".into(),
                     algorithm,
                     checksum: checksum.into(),
+                    location_bound: true,
                 }),
             };
             assert!(approve_local_eviction(&provider_receipt, &api_evidence).is_ok());
@@ -1476,11 +1484,13 @@ mod tests {
             revision: " ".into(),
             algorithm: RemoteChecksumAlgorithm::Sha256,
             checksum: "wrong".into(),
+            location_bound: false,
         });
         let blockers = approve_local_eviction(&provider_receipt, &api_evidence).unwrap_err();
         for expected in [
             "remote-object-id-missing",
             "remote-revision-missing",
+            "remote-location-unbound",
             "remote-checksum-mismatch",
         ] {
             assert!(blockers.contains(&expected.to_string()), "{expected}");
@@ -1495,6 +1505,7 @@ mod tests {
             revision: "revision-1".into(),
             algorithm: RemoteChecksumAlgorithm::QuickXor,
             checksum: "quick-xor".into(),
+            location_bound: true,
         });
         assert!(approve_local_eviction(&provider_receipt, &api_evidence)
             .unwrap_err()
