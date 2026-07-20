@@ -83,6 +83,17 @@ fn valid_rationale(value: &str) -> bool {
         && !value.chars().any(|character| character == '\0')
 }
 
+/// Validate the integrity-bound human attribution before an expensive cloud plan is evaluated.
+///
+/// Agent-authored decisions intentionally fail this check; they require a separate provenance
+/// path instead of borrowing the `human:` namespace.
+pub fn validate_review_attribution(reviewed_by: &str, rationale: &str) -> Result<(), String> {
+    if !valid_reviewed_by(reviewed_by) || !valid_rationale(rationale) {
+        return Err("cloud-review-decision-attribution-invalid".into());
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_decision(decision: &CloudReviewDecision) -> Result<(), String> {
     if !matches!(decision.version, LEGACY_DECISION_VERSION | DECISION_VERSION) {
         return Err("cloud-review-decision-version-unsupported".into());
@@ -91,8 +102,8 @@ pub(crate) fn validate_decision(decision: &CloudReviewDecision) -> Result<(), St
         if !decision.reviewed_by.is_empty() || !decision.rationale.is_empty() {
             return Err("legacy-cloud-review-attribution-unexpected".into());
         }
-    } else if !valid_reviewed_by(&decision.reviewed_by) || !valid_rationale(&decision.rationale) {
-        return Err("cloud-review-decision-attribution-invalid".into());
+    } else {
+        validate_review_attribution(&decision.reviewed_by, &decision.rationale)?;
     }
     if !valid_fingerprint(&decision.candidate_fingerprint)
         || !valid_fingerprint(&decision.review_fingerprint)
@@ -176,9 +187,7 @@ pub fn create_attributed_decision(
     }
     let reviewed_by = reviewed_by.trim();
     let rationale = rationale.trim();
-    if !valid_reviewed_by(reviewed_by) || !valid_rationale(rationale) {
-        return Err("cloud-review-decision-attribution-invalid".into());
-    }
+    validate_review_attribution(reviewed_by, rationale)?;
     let decision_id = decision_id_for(
         DECISION_VERSION,
         &candidate.metadata_fingerprint,
