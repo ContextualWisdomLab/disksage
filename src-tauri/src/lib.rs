@@ -28,6 +28,9 @@ mod web;
 #[cfg_attr(coverage, allow(dead_code))]
 mod reasoning;
 
+/// Read-only, fail-closed logical/allocation/reclaimability evidence.
+pub mod reclaim;
+
 // coverage 빌드에서 제외 — GUI 런타임은 헤드리스 테스트로 실행 불가
 #[cfg(not(coverage))]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
