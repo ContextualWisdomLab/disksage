@@ -2835,6 +2835,9 @@ fn destination_scope_review_reasons(
         CloudAccountScope::Personal if sensitive_context => {
             vec!["personal-cloud-sensitive-context-needs-explicit-approval".into()]
         }
+        CloudAccountScope::Organization if sensitive_context => {
+            vec!["organization-cloud-sensitive-context-needs-explicit-tenant-approval".into()]
+        }
         CloudAccountScope::Personal | CloudAccountScope::Organization => Vec::new(),
     }
 }
@@ -4207,10 +4210,11 @@ mod tests {
             destination_scope_review_reasons(CloudAccountScope::Personal, &spreadsheet),
             ["personal-cloud-sensitive-context-needs-explicit-approval"]
         );
-        assert!(
-            destination_scope_review_reasons(CloudAccountScope::Organization, &sensitive)
-                .is_empty()
+        assert_eq!(
+            destination_scope_review_reasons(CloudAccountScope::Organization, &sensitive),
+            ["organization-cloud-sensitive-context-needs-explicit-tenant-approval"]
         );
+        assert!(destination_scope_review_reasons(CloudAccountScope::Organization, &[]).is_empty());
         assert_eq!(
             destination_scope_review_reasons(CloudAccountScope::Shared, &[]),
             ["shared-destination-access-needs-review"]
