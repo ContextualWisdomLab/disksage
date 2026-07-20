@@ -15,6 +15,8 @@ use disksage_lib::cloud_review::{self, CloudReviewDecision, CloudReviewDispositi
 #[cfg(not(coverage))]
 use disksage_lib::cloud_transfer::{self, CloudCopyReceipt, LocalEvictionPermit};
 #[cfg(not(coverage))]
+use disksage_lib::naruon_lineage;
+#[cfg(not(coverage))]
 use disksage_lib::provider_api_client::{self, FixedHostProviderMetadataClient};
 #[cfg(not(coverage))]
 use disksage_lib::provider_evidence::{self, ProviderSyncEvidenceRecord};
@@ -51,6 +53,8 @@ struct Args {
     reviewed_by: Option<String>,
     review_rationale: Option<String>,
     review_dir: Option<PathBuf>,
+    export_naruon_lineage: Option<PathBuf>,
+    naruon_sync_evidence: Option<PathBuf>,
 }
 
 #[cfg(not(coverage))]
@@ -99,6 +103,8 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
         reviewed_by: None,
         review_rationale: None,
         review_dir: None,
+        export_naruon_lineage: None,
+        naruon_sync_evidence: None,
     };
     let mut index = 0;
     while index < args.len() {
@@ -217,9 +223,23 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
                 parsed.review_dir =
                     Some(PathBuf::from(value(args, &mut index, "--review-dir")?))
             }
+            "--export-naruon-lineage" => {
+                parsed.export_naruon_lineage = Some(PathBuf::from(value(
+                    args,
+                    &mut index,
+                    "--export-naruon-lineage",
+                )?))
+            }
+            "--naruon-sync-evidence" => {
+                parsed.naruon_sync_evidence = Some(PathBuf::from(value(
+                    args,
+                    &mut index,
+                    "--naruon-sync-evidence",
+                )?))
+            }
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive] [--min-size-mib N] [--min-age-days N] [--limit N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by ID --review-rationale TEXT --review-dir PATH]".into(),
+                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive] [--min-size-mib N] [--min-age-days N] [--limit N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -330,13 +350,17 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     if args.review_dir.is_some() && !review_action && !copy_action && !adoption_action {
         return Err("--review-dir은 review, copy, adoption action에만 지정할 수 있음".into());
     }
+    if args.naruon_sync_evidence.is_some() && args.export_naruon_lineage.is_none() {
+        return Err("--naruon-sync-evidence에는 --export-naruon-lineage가 필요함".into());
+    }
     let actions = usize::from(args.list_roots)
         + usize::from(args.inspect_roots)
         + usize::from(copy_action)
         + usize::from(adoption_action)
         + usize::from(args.attest_receipt.is_some())
         + usize::from(eviction_action)
-        + usize::from(review_action);
+        + usize::from(review_action)
+        + usize::from(args.export_naruon_lineage.is_some());
     if actions > 1 {
         return Err(
             "root inspection, copy, adoption, attestation, eviction, review action은 동시에 사용할 수 없음".into(),
@@ -400,6 +424,14 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     if let Some(review_dir) = &args.review_dir {
         if !review_dir.is_absolute() {
             return Err("--review-dir은 절대 경로여야 함".into());
+        }
+    }
+    for (flag, path) in [
+        ("--export-naruon-lineage", &args.export_naruon_lineage),
+        ("--naruon-sync-evidence", &args.naruon_sync_evidence),
+    ] {
+        if path.as_ref().is_some_and(|path| !path.is_absolute()) {
+            return Err(format!("{flag}는 절대 경로여야 함"));
         }
     }
     Ok(())
@@ -600,6 +632,20 @@ fn run() -> Result<(), String> {
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let args = parse_args(&raw, &home)?;
     validate_action_args(&args)?;
+    if let Some(receipt_path) = &args.export_naruon_lineage {
+        let receipt = cloud_transfer::read_immutable_receipt(receipt_path)?;
+        let evidence = args
+            .naruon_sync_evidence
+            .as_deref()
+            .map(provider_evidence::read_immutable_sync_evidence)
+            .transpose()?;
+        let envelope = naruon_lineage::export_naruon_file_lineage(&receipt, evidence.as_ref())?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&envelope).map_err(|error| error.to_string())?
+        );
+        return Ok(());
+    }
     if let Some(receipt_path) = &args.evict_receipt {
         let output = evict_native_receipt(
             receipt_path,
@@ -839,6 +885,8 @@ mod tests {
         assert!(defaults.review_candidate_fingerprint.is_none());
         assert!(defaults.reviewed_by.is_none());
         assert!(defaults.review_rationale.is_none());
+        assert!(defaults.export_naruon_lineage.is_none());
+        assert!(defaults.naruon_sync_evidence.is_none());
         let args = vec![
             "--root".into(),
             "/scan".into(),
@@ -1044,6 +1092,42 @@ mod tests {
         args.reviewed_by = None;
         args.review_rationale = None;
         assert!(validate_action_args(&args).is_ok());
+    }
+
+    #[test]
+    fn naruon_export_requires_absolute_receipt_and_bound_optional_evidence() {
+        let export = parse_args(
+            &[
+                "--export-naruon-lineage".into(),
+                "/receipts/receipt.json".into(),
+                "--naruon-sync-evidence".into(),
+                "/evidence/evidence.json".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&export).is_ok());
+
+        let relative = parse_args(
+            &["--export-naruon-lineage".into(), "receipt.json".into()],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&relative).is_err());
+
+        let evidence_only = parse_args(
+            &[
+                "--naruon-sync-evidence".into(),
+                "/evidence/evidence.json".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&evidence_only).is_err());
+
+        let mut conflicting = export;
+        conflicting.list_roots = true;
+        assert!(validate_action_args(&conflicting).is_err());
     }
 
     #[test]
