@@ -650,40 +650,34 @@ pub fn review_cloud_candidate(
 #[cfg(not(coverage))]
 #[derive(serde::Serialize)]
 pub struct CloudCopyOutput {
+    pub action: &'static str,
     pub receipt: cloud_transfer::CloudCopyReceipt,
     pub receipt_path: String,
 }
 
-/// Rebuild the plan from current metadata, then copy one uniquely matching safe candidate.
-/// The source is retained and no local-eviction API is exposed by this command.
 #[cfg(not(coverage))]
-#[tauri::command(async)]
-pub fn copy_cloud_candidate(
-    root: String,
-    cloud_root: String,
-    metadata_fingerprint: String,
+fn create_cloud_candidate_receipt(
+    root: &str,
+    cloud_root: &str,
+    metadata_fingerprint: &str,
     min_size_mib: u64,
     min_age_days: u64,
     limit: usize,
-    app: AppHandle,
-    state: State<AppState>,
+    app: &AppHandle,
+    adopt_existing: bool,
 ) -> Result<CloudCopyOutput, String> {
     if metadata_fingerprint.len() != 64
         || !metadata_fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit())
     {
         return Err("metadata-fingerprint-invalid".into());
     }
-    let _guard = state
-        .cloud_review
-        .lock()
-        .map_err(|_| "cloud-review-lock-poisoned".to_string())?;
     let (selected, report) = cloud_plan_for_inputs(
-        &root,
-        &cloud_root,
+        root,
+        cloud_root,
         min_size_mib,
         min_age_days,
         limit,
-        &app,
+        app,
     )?;
     let matches: Vec<_> = report
         .candidates
@@ -708,17 +702,92 @@ pub fn copy_cloud_candidate(
     } else {
         None
     };
-    let (receipt, receipt_path) = cloud_transfer::prepare_cloud_copy_with_review(
-        candidate,
-        &selected,
-        &receipt_dir,
-        cloud::system_now_ms(),
-        review_decision.as_ref(),
-    )?;
+    let (receipt, receipt_path) = if adopt_existing {
+        cloud_transfer::adopt_existing_cloud_copy_with_review(
+            candidate,
+            &selected,
+            &receipt_dir,
+            cloud::system_now_ms(),
+            review_decision.as_ref(),
+        )?
+    } else {
+        cloud_transfer::prepare_cloud_copy_with_review(
+            candidate,
+            &selected,
+            &receipt_dir,
+            cloud::system_now_ms(),
+            review_decision.as_ref(),
+        )?
+    };
     Ok(CloudCopyOutput {
+        action: if adopt_existing {
+            "adopt-existing-copy"
+        } else {
+            "copy-only"
+        },
         receipt,
         receipt_path: receipt_path.to_string_lossy().into_owned(),
     })
+}
+
+/// Rebuild the plan from current metadata, then copy one uniquely matching safe candidate.
+/// The source is retained and no local-eviction API is exposed by this command.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn copy_cloud_candidate(
+    root: String,
+    cloud_root: String,
+    metadata_fingerprint: String,
+    min_size_mib: u64,
+    min_age_days: u64,
+    limit: usize,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<CloudCopyOutput, String> {
+    let _guard = state
+        .cloud_review
+        .lock()
+        .map_err(|_| "cloud-review-lock-poisoned".to_string())?;
+    create_cloud_candidate_receipt(
+        &root,
+        &cloud_root,
+        &metadata_fingerprint,
+        min_size_mib,
+        min_age_days,
+        limit,
+        &app,
+        false,
+    )
+}
+
+/// Rebuild the plan and adopt an already-existing destination only after full content-digest
+/// equality is proven. Both source and destination remain in place.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn adopt_existing_cloud_candidate(
+    root: String,
+    cloud_root: String,
+    metadata_fingerprint: String,
+    min_size_mib: u64,
+    min_age_days: u64,
+    limit: usize,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<CloudCopyOutput, String> {
+    let _guard = state
+        .cloud_review
+        .lock()
+        .map_err(|_| "cloud-review-lock-poisoned".to_string())?;
+    create_cloud_candidate_receipt(
+        &root,
+        &cloud_root,
+        &metadata_fingerprint,
+        min_size_mib,
+        min_age_days,
+        limit,
+        &app,
+        true,
+    )
 }
 
 #[cfg(not(coverage))]

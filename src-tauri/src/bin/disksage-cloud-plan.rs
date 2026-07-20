@@ -29,6 +29,7 @@ struct Args {
     list_roots: bool,
     inspect_roots: bool,
     copy_fingerprint: Option<String>,
+    adopt_existing_fingerprint: Option<String>,
     receipt_dir: Option<PathBuf>,
     attest_receipt: Option<PathBuf>,
     evict_receipt: Option<PathBuf>,
@@ -71,6 +72,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
         list_roots: false,
         inspect_roots: false,
         copy_fingerprint: None,
+        adopt_existing_fingerprint: None,
         receipt_dir: None,
         attest_receipt: None,
         evict_receipt: None,
@@ -111,6 +113,13 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             "--inspect-roots" => parsed.inspect_roots = true,
             "--copy-fingerprint" => {
                 parsed.copy_fingerprint = Some(value(args, &mut index, "--copy-fingerprint")?)
+            }
+            "--adopt-existing-fingerprint" => {
+                parsed.adopt_existing_fingerprint = Some(value(
+                    args,
+                    &mut index,
+                    "--adopt-existing-fingerprint",
+                )?)
             }
             "--receipt-dir" => {
                 parsed.receipt_dir = Some(PathBuf::from(value(args, &mut index, "--receipt-dir")?))
@@ -171,7 +180,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             }
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive] [--min-size-mib N] [--min-age-days N] [--limit N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --review-dir PATH]".into(),
+                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive] [--min-size-mib N] [--min-age-days N] [--limit N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --review-dir PATH]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -219,8 +228,13 @@ struct ReviewOutput {
 
 #[cfg(not(coverage))]
 fn validate_action_args(args: &Args) -> Result<(), String> {
-    if args.copy_fingerprint.is_some() != args.receipt_dir.is_some() {
-        return Err("--copy-fingerprint와 --receipt-dir은 함께 지정해야 함".into());
+    let copy_action = args.copy_fingerprint.is_some();
+    let adoption_action = args.adopt_existing_fingerprint.is_some();
+    if copy_action && adoption_action {
+        return Err("copy action과 existing-copy adoption action은 동시에 사용할 수 없음".into());
+    }
+    if (copy_action || adoption_action) != args.receipt_dir.is_some() {
+        return Err("copy/adoption fingerprint와 --receipt-dir은 함께 지정해야 함".into());
     }
     let review_fields = [
         args.review_candidate_fingerprint.is_some(),
@@ -246,22 +260,27 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     if review_action && args.review_dir.is_none() {
         return Err("review action에는 --review-dir이 필요함".into());
     }
-    if args.review_dir.is_some() && !review_action && args.copy_fingerprint.is_none() {
-        return Err("--review-dir은 review action 또는 copy action에만 지정할 수 있음".into());
+    if args.review_dir.is_some() && !review_action && !copy_action && !adoption_action {
+        return Err("--review-dir은 review, copy, adoption action에만 지정할 수 있음".into());
     }
     let actions = usize::from(args.list_roots)
         + usize::from(args.inspect_roots)
-        + usize::from(args.copy_fingerprint.is_some())
+        + usize::from(copy_action)
+        + usize::from(adoption_action)
         + usize::from(args.attest_receipt.is_some())
         + usize::from(eviction_action)
         + usize::from(review_action);
     if actions > 1 {
         return Err(
-            "--list-roots, --inspect-roots, --copy-fingerprint, --attest-receipt, eviction action, review action은 동시에 사용할 수 없음".into(),
+            "root inspection, copy, adoption, attestation, eviction, review action은 동시에 사용할 수 없음".into(),
         );
     }
     for (flag, fingerprint) in [
         ("--copy-fingerprint", args.copy_fingerprint.as_ref()),
+        (
+            "--adopt-existing-fingerprint",
+            args.adopt_existing_fingerprint.as_ref(),
+        ),
         (
             "--review-candidate-fingerprint",
             args.review_candidate_fingerprint.as_ref(),
@@ -511,7 +530,16 @@ fn run() -> Result<(), String> {
         );
         return Ok(());
     }
-    if let Some(fingerprint) = &args.copy_fingerprint {
+    let receipt_action = args
+        .copy_fingerprint
+        .as_ref()
+        .map(|fingerprint| (fingerprint, false))
+        .or_else(|| {
+            args.adopt_existing_fingerprint
+                .as_ref()
+                .map(|fingerprint| (fingerprint, true))
+        });
+    if let Some((fingerprint, adopt_existing)) = receipt_action {
         let matches: Vec<_> = report
             .candidates
             .iter()
@@ -537,17 +565,31 @@ fn run() -> Result<(), String> {
         } else {
             None
         };
-        let (receipt, receipt_path) = cloud_transfer::prepare_cloud_copy_with_review(
-            candidate,
-            &selected,
-            receipt_dir,
-            cloud::system_now_ms(),
-            review_decision.as_ref(),
-        )?;
+        let (receipt, receipt_path) = if adopt_existing {
+            cloud_transfer::adopt_existing_cloud_copy_with_review(
+                candidate,
+                &selected,
+                receipt_dir,
+                cloud::system_now_ms(),
+                review_decision.as_ref(),
+            )?
+        } else {
+            cloud_transfer::prepare_cloud_copy_with_review(
+                candidate,
+                &selected,
+                receipt_dir,
+                cloud::system_now_ms(),
+                review_decision.as_ref(),
+            )?
+        };
         println!(
             "{}",
             serde_json::to_string_pretty(&CopyOutput {
-                action: "copy-only",
+                action: if adopt_existing {
+                    "adopt-existing-copy"
+                } else {
+                    "copy-only"
+                },
                 receipt,
                 receipt_path: receipt_path.to_string_lossy().into_owned(),
             })
@@ -591,6 +633,7 @@ mod tests {
         assert_eq!(defaults.root, PathBuf::from("/home/test"));
         assert_eq!(defaults.min_size_mib, 256);
         assert!(defaults.copy_fingerprint.is_none());
+        assert!(defaults.adopt_existing_fingerprint.is_none());
         assert!(defaults.evict_receipt.is_none());
         assert!(defaults.review_candidate_fingerprint.is_none());
         let args = vec![
@@ -690,6 +733,23 @@ mod tests {
         .unwrap();
         assert_eq!(parsed.copy_fingerprint, Some("b".repeat(64)));
         assert_eq!(parsed.receipt_dir, Some(PathBuf::from("/receipts")));
+
+        let adoption = parse_args(
+            &[
+                "--adopt-existing-fingerprint".into(),
+                "e".repeat(64),
+                "--receipt-dir".into(),
+                "/receipts".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert_eq!(adoption.adopt_existing_fingerprint, Some("e".repeat(64)));
+        assert!(validate_action_args(&adoption).is_ok());
+
+        let mut conflicting_receipt_actions = adoption;
+        conflicting_receipt_actions.copy_fingerprint = Some("f".repeat(64));
+        assert!(validate_action_args(&conflicting_receipt_actions).is_err());
 
         let review = parse_args(
             &[

@@ -83,6 +83,7 @@ pub fn run() {
             commands::plan_cloud_archive,
             commands::review_cloud_candidate,
             commands::copy_cloud_candidate,
+            commands::adopt_existing_cloud_candidate,
             commands::attest_cloud_copy
         ])
         .run(tauri::generate_context!())

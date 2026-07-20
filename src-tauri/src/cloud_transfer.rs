@@ -38,6 +38,20 @@ pub enum RemoteChecksumAlgorithm {
     QuickXor,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CloudCopyVerificationMethod {
+    #[default]
+    CopiedByDiskSage,
+    AdoptedExisting,
+}
+
+impl CloudCopyVerificationMethod {
+    fn is_copied_by_disksage(&self) -> bool {
+        *self == Self::CopiedByDiskSage
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RemoteContentProof {
     pub object_id: String,
@@ -50,6 +64,13 @@ pub struct RemoteContentProof {
 pub struct CloudLineageSnapshot {
     pub candidate_fingerprint: String,
     pub review_fingerprint: String,
+    /// How the destination content entered this receipt. The default is omitted so persisted v3
+    /// receipts created before existing-copy adoption retain the same lineage fingerprint.
+    #[serde(
+        default,
+        skip_serializing_if = "CloudCopyVerificationMethod::is_copied_by_disksage"
+    )]
+    pub copy_verification_method: CloudCopyVerificationMethod,
     pub review_decision_id: Option<String>,
     pub review_disposition: Option<CloudReviewDisposition>,
     pub reviewed_at_ms: Option<u64>,
@@ -137,10 +158,11 @@ fn embedded_high_confidence(candidate: &CloudCandidate) -> bool {
 /// Validate that a dry-run candidate is still eligible to enter the copy-only phase.
 ///
 /// The function collects every reason so the UI can explain why a candidate remains blocked.
-pub fn candidate_blockers_with_review(
+fn candidate_blockers_for_action(
     candidate: &CloudCandidate,
     cloud_root: &CloudRoot,
     review_decision: Option<&CloudReviewDecision>,
+    allow_existing_destination: bool,
 ) -> Vec<String> {
     let source = Path::new(&candidate.src);
     let destination = Path::new(&candidate.dst);
@@ -176,8 +198,15 @@ pub fn candidate_blockers_with_review(
             Some(_) => exact_review_approved = true,
         }
     }
-    if candidate.blocked_reason.is_some() {
+    let existing_destination_candidate =
+        candidate.blocked_reason.as_deref() == Some("destination-exists");
+    if candidate.blocked_reason.is_some()
+        && !(allow_existing_destination && existing_destination_candidate)
+    {
         blockers.push("planner-blocked".into());
+    }
+    if allow_existing_destination && !existing_destination_candidate {
+        blockers.push("existing-destination-plan-required".into());
     }
     // Embedded, high-confidence production time remains the only evidence that can pass without
     // an operator decision. A low-confidence explicit filename date, filesystem creation time, or
@@ -221,6 +250,25 @@ pub fn candidate_blockers_with_review(
         blockers.push("destination-outside-cloud-root".into());
     }
     blockers
+}
+
+pub fn candidate_blockers_with_review(
+    candidate: &CloudCandidate,
+    cloud_root: &CloudRoot,
+    review_decision: Option<&CloudReviewDecision>,
+) -> Vec<String> {
+    candidate_blockers_for_action(candidate, cloud_root, review_decision, false)
+}
+
+/// Validate a fresh planner candidate for adopting a destination that already exists. This clears
+/// only the exact `destination-exists` planner condition; every metadata, review, account-scope,
+/// and path gate remains identical to a DiskSage-created copy.
+pub fn existing_copy_candidate_blockers_with_review(
+    candidate: &CloudCandidate,
+    cloud_root: &CloudRoot,
+    review_decision: Option<&CloudReviewDecision>,
+) -> Vec<String> {
+    candidate_blockers_for_action(candidate, cloud_root, review_decision, true)
 }
 
 pub fn candidate_blockers(candidate: &CloudCandidate, cloud_root: &CloudRoot) -> Vec<String> {
@@ -270,10 +318,12 @@ fn receipt_id_for(
 fn lineage_snapshot(
     candidate: &CloudCandidate,
     review_decision: Option<&CloudReviewDecision>,
+    copy_verification_method: CloudCopyVerificationMethod,
 ) -> CloudLineageSnapshot {
     CloudLineageSnapshot {
         candidate_fingerprint: candidate.metadata_fingerprint.clone(),
         review_fingerprint: candidate.review_fingerprint.clone(),
+        copy_verification_method,
         review_decision_id: review_decision.map(|decision| decision.decision_id.clone()),
         review_disposition: review_decision.map(|decision| decision.disposition),
         reviewed_at_ms: review_decision.map(|decision| decision.reviewed_at_ms),
@@ -675,6 +725,69 @@ fn copy_and_verify(
 }
 
 #[cfg(not(coverage))]
+fn verify_existing_destination(
+    candidate: &CloudCandidate,
+    cloud_root: &CloudRoot,
+) -> Result<ContentDigests, String> {
+    let source = Path::new(&candidate.src);
+    let destination = Path::new(&candidate.dst);
+    let source_before = std::fs::symlink_metadata(source).map_err(|error| error.to_string())?;
+    if source_before.file_type().is_symlink() || !source_before.is_file() {
+        return Err("source-must-be-regular-file".into());
+    }
+    let source_modified_ms = modified_ms(&source_before)?;
+    if source_before.len() != candidate.bytes || source_modified_ms != candidate.modified_ms {
+        return Err("source-changed-since-plan".into());
+    }
+
+    let destination_before = std::fs::symlink_metadata(destination)
+        .map_err(|_| "existing-destination-missing".to_string())?;
+    if destination_before.file_type().is_symlink() || !destination_before.is_file() {
+        return Err("existing-destination-must-be-regular-file".into());
+    }
+    if destination_before.len() != candidate.bytes {
+        return Err("existing-destination-size-mismatch".into());
+    }
+    let destination_modified = destination_before.modified().ok();
+
+    let canonical_root =
+        std::fs::canonicalize(&cloud_root.path).map_err(|error| error.to_string())?;
+    let canonical_source = std::fs::canonicalize(source).map_err(|error| error.to_string())?;
+    let canonical_destination =
+        std::fs::canonicalize(destination).map_err(|error| error.to_string())?;
+    if canonical_source.starts_with(&canonical_root) {
+        return Err("source-already-in-cloud-root".into());
+    }
+    if !canonical_destination.starts_with(&canonical_root) {
+        return Err("existing-destination-escapes-cloud-root".into());
+    }
+
+    // Opening a File Provider placeholder can materialize it. This happens only after an explicit
+    // adoption action and is required to prove byte identity before a receipt can be issued.
+    let source_hashes = hash_file(source)?;
+    let destination_hashes = hash_file(destination)?;
+
+    let source_after = std::fs::symlink_metadata(source).map_err(|error| error.to_string())?;
+    let destination_after =
+        std::fs::symlink_metadata(destination).map_err(|error| error.to_string())?;
+    let source_unchanged = source_after.is_file()
+        && !source_after.file_type().is_symlink()
+        && source_after.len() == source_before.len()
+        && modified_ms(&source_after)? == source_modified_ms;
+    let destination_unchanged = destination_after.is_file()
+        && !destination_after.file_type().is_symlink()
+        && destination_after.len() == destination_before.len()
+        && destination_after.modified().ok() == destination_modified;
+    if !source_unchanged || !destination_unchanged {
+        return Err("existing-copy-changed-during-verification".into());
+    }
+    if source_hashes != destination_hashes {
+        return Err("existing-destination-content-mismatch".into());
+    }
+    Ok(destination_hashes)
+}
+
+#[cfg(not(coverage))]
 fn write_immutable_receipt(
     receipt: &CloudCopyReceipt,
     receipt_dir: &Path,
@@ -725,6 +838,53 @@ fn write_immutable_receipt(
     Ok(path)
 }
 
+#[cfg(not(coverage))]
+fn build_verified_receipt(
+    candidate: &CloudCandidate,
+    review_decision: Option<&CloudReviewDecision>,
+    hashes: ContentDigests,
+    verified_at_ms: u64,
+    copy_verification_method: CloudCopyVerificationMethod,
+) -> Result<CloudCopyReceipt, String> {
+    let lineage = lineage_snapshot(candidate, review_decision, copy_verification_method);
+    let lineage_fingerprint = lineage_fingerprint(&lineage)?;
+    let mut receipt = CloudCopyReceipt {
+        version: RECEIPT_VERSION,
+        receipt_id: String::new(),
+        candidate_fingerprint: candidate.metadata_fingerprint.clone(),
+        provider: candidate.provider,
+        source: candidate.src.clone(),
+        destination: candidate.dst.clone(),
+        bytes: candidate.bytes,
+        blake3: hashes.blake3,
+        sha256: hashes.sha256,
+        quick_xor_base64: hashes.quick_xor_base64,
+        source_modified_ms: candidate.modified_ms,
+        copied_at_ms: verified_at_ms,
+        copy_verified: true,
+        provider_sync_confirmed: false,
+        lineage_fingerprint: Some(lineage_fingerprint),
+        lineage: Some(lineage),
+    };
+    receipt.receipt_id = receipt_id_for(
+        receipt.version,
+        &receipt.candidate_fingerprint,
+        receipt.provider,
+        &receipt.source,
+        &receipt.destination,
+        receipt.bytes,
+        &receipt.blake3,
+        &receipt.sha256,
+        &receipt.quick_xor_base64,
+        receipt.source_modified_ms,
+        receipt.copied_at_ms,
+        receipt.copy_verified,
+        receipt.provider_sync_confirmed,
+        receipt.lineage_fingerprint.as_deref(),
+    );
+    Ok(receipt)
+}
+
 /// Copy a pre-approved candidate into its cloud root and persist an immutable verification
 /// receipt. The source is never removed, even when receipt persistence fails.
 #[cfg(not(coverage))]
@@ -753,42 +913,13 @@ pub fn prepare_cloud_copy_with_review(
         return Err(blockers.join(","));
     }
     let (_, hashes) = copy_and_verify(candidate, cloud_root)?;
-    let lineage = lineage_snapshot(candidate, review_decision);
-    let lineage_fingerprint = lineage_fingerprint(&lineage)?;
-    let mut receipt = CloudCopyReceipt {
-        version: RECEIPT_VERSION,
-        receipt_id: String::new(),
-        candidate_fingerprint: candidate.metadata_fingerprint.clone(),
-        provider: candidate.provider,
-        source: candidate.src.clone(),
-        destination: candidate.dst.clone(),
-        bytes: candidate.bytes,
-        blake3: hashes.blake3,
-        sha256: hashes.sha256,
-        quick_xor_base64: hashes.quick_xor_base64,
-        source_modified_ms: candidate.modified_ms,
+    let receipt = build_verified_receipt(
+        candidate,
+        review_decision,
+        hashes,
         copied_at_ms,
-        copy_verified: true,
-        provider_sync_confirmed: false,
-        lineage_fingerprint: Some(lineage_fingerprint),
-        lineage: Some(lineage),
-    };
-    receipt.receipt_id = receipt_id_for(
-        receipt.version,
-        &receipt.candidate_fingerprint,
-        receipt.provider,
-        &receipt.source,
-        &receipt.destination,
-        receipt.bytes,
-        &receipt.blake3,
-        &receipt.sha256,
-        &receipt.quick_xor_base64,
-        receipt.source_modified_ms,
-        receipt.copied_at_ms,
-        receipt.copy_verified,
-        receipt.provider_sync_confirmed,
-        receipt.lineage_fingerprint.as_deref(),
-    );
+        CloudCopyVerificationMethod::CopiedByDiskSage,
+    )?;
     match write_immutable_receipt(&receipt, receipt_dir) {
         Ok(path) => Ok((receipt, path)),
         Err(error) => {
@@ -796,6 +927,44 @@ pub fn prepare_cloud_copy_with_review(
             Err(error)
         }
     }
+}
+
+/// Verify and adopt a destination that already exists under the selected cloud root. Neither file
+/// is modified or removed. A receipt is issued only when the fresh planner reported exactly
+/// `destination-exists` and all three content digests match.
+#[cfg(not(coverage))]
+pub fn adopt_existing_cloud_copy(
+    candidate: &CloudCandidate,
+    cloud_root: &CloudRoot,
+    receipt_dir: &Path,
+    verified_at_ms: u64,
+) -> Result<(CloudCopyReceipt, PathBuf), String> {
+    adopt_existing_cloud_copy_with_review(candidate, cloud_root, receipt_dir, verified_at_ms, None)
+}
+
+#[cfg(not(coverage))]
+pub fn adopt_existing_cloud_copy_with_review(
+    candidate: &CloudCandidate,
+    cloud_root: &CloudRoot,
+    receipt_dir: &Path,
+    verified_at_ms: u64,
+    review_decision: Option<&CloudReviewDecision>,
+) -> Result<(CloudCopyReceipt, PathBuf), String> {
+    let blockers =
+        existing_copy_candidate_blockers_with_review(candidate, cloud_root, review_decision);
+    if !blockers.is_empty() {
+        return Err(blockers.join(","));
+    }
+    let hashes = verify_existing_destination(candidate, cloud_root)?;
+    let receipt = build_verified_receipt(
+        candidate,
+        review_decision,
+        hashes,
+        verified_at_ms,
+        CloudCopyVerificationMethod::AdoptedExisting,
+    )?;
+    let path = write_immutable_receipt(&receipt, receipt_dir)?;
+    Ok((receipt, path))
 }
 
 #[cfg(test)]
@@ -872,7 +1041,11 @@ mod tests {
 
     fn receipt() -> CloudCopyReceipt {
         let candidate = candidate();
-        let lineage = lineage_snapshot(&candidate, None);
+        let lineage = lineage_snapshot(
+            &candidate,
+            None,
+            CloudCopyVerificationMethod::CopiedByDiskSage,
+        );
         let lineage_fingerprint = lineage_fingerprint(&lineage).unwrap();
         let mut receipt = CloudCopyReceipt {
             version: RECEIPT_VERSION,
@@ -1077,7 +1250,11 @@ mod tests {
             crate::cloud_review::create_decision(&reviewed, CloudReviewDisposition::Approved, 10)
                 .unwrap();
         assert!(candidate_blockers_with_review(&reviewed, &root(), Some(&approved)).is_empty());
-        let reviewed_lineage = lineage_snapshot(&reviewed, Some(&approved));
+        let reviewed_lineage = lineage_snapshot(
+            &reviewed,
+            Some(&approved),
+            CloudCopyVerificationMethod::CopiedByDiskSage,
+        );
         assert_eq!(
             reviewed_lineage.review_decision_id.as_deref(),
             Some(approved.decision_id.as_str())
@@ -1347,6 +1524,106 @@ mod tests {
         );
     }
 
+    #[cfg(not(coverage))]
+    #[test]
+    fn identical_existing_destination_is_adopted_without_modifying_either_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source/report.pdf");
+        let cloud = tmp.path().join("cloud");
+        let destination = cloud.join("DiskSage Archive/report.pdf");
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        std::fs::write(&source, b"already-in-cloud").unwrap();
+        std::fs::write(&destination, b"already-in-cloud").unwrap();
+        let metadata = std::fs::metadata(&source).unwrap();
+        let mut test_candidate = candidate();
+        test_candidate.src = source.to_string_lossy().into_owned();
+        test_candidate.dst = destination.to_string_lossy().into_owned();
+        test_candidate.bytes = metadata.len();
+        test_candidate.modified_ms = modified_ms(&metadata).unwrap();
+        test_candidate.blocked_reason = Some("destination-exists".into());
+        refresh_review_fingerprint(&mut test_candidate);
+        let test_root = CloudRoot {
+            id: "icloud:test".into(),
+            provider: CloudProvider::Icloud,
+            account_scope: CloudAccountScope::Organization,
+            label: "iCloud Drive".into(),
+            path: cloud.to_string_lossy().into_owned(),
+            readable: true,
+            access_issue: None,
+        };
+
+        assert!(candidate_blockers(&test_candidate, &test_root)
+            .contains(&"planner-blocked".to_string()));
+        assert!(
+            existing_copy_candidate_blockers_with_review(&test_candidate, &test_root, None)
+                .is_empty()
+        );
+        let (receipt, receipt_path) = adopt_existing_cloud_copy(
+            &test_candidate,
+            &test_root,
+            &tmp.path().join("receipts"),
+            456,
+        )
+        .unwrap();
+
+        assert_eq!(std::fs::read(&source).unwrap(), b"already-in-cloud");
+        assert_eq!(std::fs::read(&destination).unwrap(), b"already-in-cloud");
+        assert!(receipt_path.metadata().unwrap().permissions().readonly());
+        assert_eq!(
+            receipt.lineage.as_ref().unwrap().copy_verification_method,
+            CloudCopyVerificationMethod::AdoptedExisting
+        );
+        assert!(String::from_utf8(std::fs::read(receipt_path).unwrap())
+            .unwrap()
+            .contains("\"copy_verification_method\": \"adopted-existing\""));
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn existing_destination_adoption_rejects_mismatch_and_requires_fresh_plan_blocker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source.bin");
+        let cloud = tmp.path().join("cloud");
+        let destination = cloud.join("destination.bin");
+        std::fs::create_dir_all(&cloud).unwrap();
+        std::fs::write(&source, b"source-a").unwrap();
+        std::fs::write(&destination, b"cloud--b").unwrap();
+        let metadata = std::fs::metadata(&source).unwrap();
+        let mut test_candidate = candidate();
+        test_candidate.src = source.to_string_lossy().into_owned();
+        test_candidate.dst = destination.to_string_lossy().into_owned();
+        test_candidate.bytes = metadata.len();
+        test_candidate.modified_ms = modified_ms(&metadata).unwrap();
+        test_candidate.blocked_reason = Some("destination-exists".into());
+        refresh_review_fingerprint(&mut test_candidate);
+        let test_root = CloudRoot {
+            id: "icloud:test".into(),
+            provider: CloudProvider::Icloud,
+            account_scope: CloudAccountScope::Organization,
+            label: "iCloud Drive".into(),
+            path: cloud.to_string_lossy().into_owned(),
+            readable: true,
+            access_issue: None,
+        };
+        let receipt_dir = tmp.path().join("receipts");
+
+        assert_eq!(
+            adopt_existing_cloud_copy(&test_candidate, &test_root, &receipt_dir, 456).unwrap_err(),
+            "existing-destination-content-mismatch"
+        );
+        assert_eq!(std::fs::read(&source).unwrap(), b"source-a");
+        assert_eq!(std::fs::read(&destination).unwrap(), b"cloud--b");
+        assert!(!receipt_dir.exists());
+
+        test_candidate.blocked_reason = None;
+        refresh_review_fingerprint(&mut test_candidate);
+        assert!(
+            existing_copy_candidate_blockers_with_review(&test_candidate, &test_root, None)
+                .contains(&"existing-destination-plan-required".to_string())
+        );
+    }
+
     #[cfg(all(unix, not(coverage)))]
     #[test]
     fn receipt_write_rejects_oversized_lineage_and_symlink_directory_without_leaving_copy() {
@@ -1517,7 +1794,11 @@ mod tests {
             access_issue: None,
         };
         let content_hash = hash_file(&source).unwrap();
-        let lineage = lineage_snapshot(&test_candidate, None);
+        let lineage = lineage_snapshot(
+            &test_candidate,
+            None,
+            CloudCopyVerificationMethod::CopiedByDiskSage,
+        );
         let lineage_fingerprint = lineage_fingerprint(&lineage).unwrap();
         let receipt_id = receipt_id_for(
             RECEIPT_VERSION,

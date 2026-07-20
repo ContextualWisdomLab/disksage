@@ -288,9 +288,41 @@ export interface CloudCopyReceipt {
   copied_at_ms: number;
   copy_verified: boolean;
   provider_sync_confirmed: boolean;
+  lineage_fingerprint?: string;
+  lineage?: CloudLineageSnapshot;
+}
+
+export type CloudCopyVerificationMethod = "copied-by-disk-sage" | "adopted-existing";
+
+export interface CloudLineageSnapshot {
+  candidate_fingerprint: string;
+  review_fingerprint: string;
+  copy_verification_method?: CloudCopyVerificationMethod;
+  review_decision_id: string | null;
+  review_disposition: CloudReviewDisposition | null;
+  reviewed_at_ms: number | null;
+  destination_account_scope: CloudAccountScope;
+  kind: ArchiveKind;
+  created_ms: number;
+  modified_ms: number;
+  production_time_ms: number;
+  production_time_source: string;
+  production_time_confidence: string;
+  source_root: string;
+  relative_path: string;
+  source_context: string;
+  requires_review: boolean;
+  review_reasons: string[];
+  content_title: string | null;
+  content_authors: string[];
+  content_context: string[];
+  duration_ms: number | null;
+  dataset_profile: DatasetProfile | null;
+  metadata_evidence: MetadataEvidence[];
 }
 
 export interface CloudCopyOutput {
+  action: "copy-only" | "adopt-existing-copy";
   receipt: CloudCopyReceipt;
   receipt_path: string;
 }
@@ -387,6 +419,21 @@ export const copyCloudCandidate = (
   minAgeDays = 90,
   limit = 200,
 ) => invoke<CloudCopyOutput>("copy_cloud_candidate", {
+  root,
+  cloudRoot,
+  metadataFingerprint,
+  minSizeMib,
+  minAgeDays,
+  limit,
+});
+export const adoptExistingCloudCandidate = (
+  root: string,
+  cloudRoot: string,
+  metadataFingerprint: string,
+  minSizeMib = 256,
+  minAgeDays = 90,
+  limit = 200,
+) => invoke<CloudCopyOutput>("adopt_existing_cloud_candidate", {
   root,
   cloudRoot,
   metadataFingerprint,

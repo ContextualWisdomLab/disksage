@@ -58,6 +58,8 @@ describe("api wrappers", () => {
       [() => api.planCloudArchive("/scan", "/cloud", 10, 30, 5), "plan_cloud_archive", { root: "/scan", cloudRoot: "/cloud", minSizeMib: 10, minAgeDays: 30, limit: 5 }],
       [() => api.copyCloudCandidate("/scan", "/cloud", "a".repeat(64)), "copy_cloud_candidate", { root: "/scan", cloudRoot: "/cloud", metadataFingerprint: "a".repeat(64), minSizeMib: 256, minAgeDays: 90, limit: 200 }],
       [() => api.copyCloudCandidate("/scan", "/cloud", "b".repeat(64), 10, 30, 5), "copy_cloud_candidate", { root: "/scan", cloudRoot: "/cloud", metadataFingerprint: "b".repeat(64), minSizeMib: 10, minAgeDays: 30, limit: 5 }],
+      [() => api.adoptExistingCloudCandidate("/scan", "/cloud", "e".repeat(64)), "adopt_existing_cloud_candidate", { root: "/scan", cloudRoot: "/cloud", metadataFingerprint: "e".repeat(64), minSizeMib: 256, minAgeDays: 90, limit: 200 }],
+      [() => api.adoptExistingCloudCandidate("/scan", "/cloud", "f".repeat(64), 10, 30, 5), "adopt_existing_cloud_candidate", { root: "/scan", cloudRoot: "/cloud", metadataFingerprint: "f".repeat(64), minSizeMib: 10, minAgeDays: 30, limit: 5 }],
       [() => api.attestCloudCopy("c".repeat(64)), "attest_cloud_copy", { receiptId: "c".repeat(64), objectId: null }],
       [() => api.attestCloudCopy("d".repeat(64), "remote-id"), "attest_cloud_copy", { receiptId: "d".repeat(64), objectId: "remote-id" }],
     ];

@@ -71,6 +71,16 @@
       && (embeddedHighConfidence || exactApproval);
   }
 
+  function adoptEligible(candidate: api.CloudCandidate): boolean {
+    const decision = matchingReviewDecision(candidate);
+    const exactApproval = decision?.disposition === "approved";
+    const embeddedHighConfidence = candidate.production_time_confidence === "high"
+      && candidate.production_time_source.startsWith("embedded:");
+    return candidate.blocked_reason === "destination-exists"
+      && (!candidate.requires_review || exactApproval)
+      && (embeddedHighConfidence || exactApproval);
+  }
+
   function reviewDecision(candidate: api.CloudCandidate): api.CloudReviewDecision | null {
     return reviewDecisions.find((decision) =>
       decision.candidate_fingerprint === candidate.metadata_fingerprint
@@ -122,6 +132,29 @@
     objectId = "";
     try {
       copied = await api.copyCloudCandidate(
+        scannedRoot,
+        selectedRoot,
+        candidate.metadata_fingerprint,
+        Math.max(1, Math.floor(minSizeMib)),
+        Math.max(0, Math.floor(minAgeDays)),
+        200,
+      );
+    } catch (e) {
+      loadError = String(e);
+    } finally {
+      copyingFingerprint = "";
+    }
+  }
+
+  async function adoptExistingCandidate(candidate: api.CloudCandidate) {
+    if (!scannedRoot || !selectedRoot || !adoptEligible(candidate)) return;
+    copyingFingerprint = candidate.metadata_fingerprint;
+    loadError = "";
+    copied = null;
+    attestation = null;
+    objectId = "";
+    try {
+      copied = await api.adoptExistingCloudCandidate(
         scannedRoot,
         selectedRoot,
         candidate.metadata_fingerprint,
@@ -312,11 +345,11 @@
       충돌 제외 잠재 회수 {fmtBytes(report.potentially_reclaimable_bytes)}
     </div>
     <p class="warning">
-      생산일 우선순위는 내장 메타데이터 → 명시적 파일명 날짜 → 파일시스템 생성 → 수정 시각입니다. 파일명 날짜와 파일시스템 시각은 저신뢰 잠정값이며, 현재 메타데이터와 목적지에 결박된 명시적 승인 없이는 복사할 수 없습니다. 원본 삭제 기능은 제공하지 않으며, 업로드 증거가 확인되어도 허가 정보만 표시합니다.
+      생산일 우선순위는 내장 메타데이터 → 명시적 파일명 날짜 → 파일시스템 생성 → 수정 시각입니다. 파일명 날짜와 파일시스템 시각은 저신뢰 잠정값이며, 현재 메타데이터와 목적지에 결박된 명시적 승인 없이는 복사할 수 없습니다. 이미 존재하는 클라우드 파일은 전체 콘텐츠 해시가 모두 같을 때만 채택합니다. 앱 UI는 원본을 삭제하지 않으며, 업로드 증거가 확인되어도 허가 정보만 표시합니다.
     </p>
     {#if copied}
       <div class="receipt">
-        <strong>검증 복사 완료 · 원본 보존됨</strong>
+        <strong>{copied.action === "adopt-existing-copy" ? "기존 클라우드 복사본 검증·채택 완료" : "검증 복사 완료"} · 원본 보존됨</strong>
         <div class="context">영수증 {copied.receipt.receipt_id} · {fmtBytes(copied.receipt.bytes)}</div>
         <div class="path">{copied.receipt.destination}</div>
         {#if copied.receipt.provider !== "icloud"}
@@ -349,7 +382,7 @@
     {:else}
       <ul class="candidates">
         {#each report.candidates as candidate (candidate.metadata_fingerprint)}
-          <li class:blocked={candidate.blocked_reason !== null}>
+          <li class:blocked={candidate.blocked_reason !== null} class:adoptable={adoptEligible(candidate)}>
             <div class="line">
               <strong>{fmtBytes(candidate.bytes)}</strong>
               <span>{candidate.kind}</span>
@@ -436,6 +469,15 @@
                 {copyingFingerprint === candidate.metadata_fingerprint ? "복사·해시 검증 중…" : "원본을 유지하고 클라우드에 복사"}
               </button>
             {/if}
+            {#if adoptEligible(candidate)}
+              <button
+                class="copy"
+                onclick={() => adoptExistingCandidate(candidate)}
+                disabled={copyingFingerprint !== "" || copied?.receipt.candidate_fingerprint === candidate.metadata_fingerprint}
+              >
+                {copyingFingerprint === candidate.metadata_fingerprint ? "기존 파일 전체 해시 검증 중…" : "기존 클라우드 복사본 해시 검증·채택"}
+              </button>
+            {/if}
             <details>
               <summary>메타데이터 증거 {candidate.metadata_evidence.length}건</summary>
               <ul class="evidence">
@@ -474,6 +516,7 @@
   .candidates { list-style: none; margin: 0.5rem 0; padding: 0; max-height: 34rem; overflow-y: auto; }
   .candidates li { padding: 0.6rem; border: 1px solid #e3e3e3; border-radius: 4px; margin-bottom: 0.4rem; }
   .candidates li.blocked { border-color: #b03030; background: #fff7f7; }
+  .candidates li.adoptable { border-color: #6b8e72; background: #f5fbf6; }
   .line { display: flex; flex-wrap: wrap; gap: 0.6rem; font-size: 0.8rem; }
   .line em { color: #9a5b00; }
   .path, .arrow { overflow-wrap: anywhere; font-size: 0.85rem; }
