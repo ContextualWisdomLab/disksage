@@ -9,6 +9,7 @@ free blocks by only about 66.8 MiB.
 `disksage-reclaim-plan` is a Rust, read-only evidence command. For each supplied file or directory it
 reports:
 
+- the stable `schema_kind: disksage.reclaim-plan` discriminator and `schema_version: 1`;
 - logical selected bytes;
 - observed allocated bytes, with observable Unix hard-link identities deduplicated;
 - `physically_reclaimable_bytes: null` and `status: unverified` before the operation;

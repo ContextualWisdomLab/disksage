@@ -28,7 +28,8 @@ cargo run --manifest-path src-tauri/Cargo.toml --bin disksage-reclaim-plan -- \
   --operation trash --pretty PATH...
 ```
 
-The JSON report never moves or deletes supplied paths. It reports logical bytes and observed
+The JSON report never moves or deletes supplied paths. It is identified by
+`schema_kind: disksage.reclaim-plan` and `schema_version: 1`, and reports logical bytes and observed
 allocated bytes, while `physically_reclaimable_bytes` remains `null` until strong post-operation or
 filesystem-native evidence exists.
 

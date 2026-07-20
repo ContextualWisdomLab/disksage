@@ -11,6 +11,8 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+pub const RECLAIM_PLAN_SCHEMA_KIND: &str = "disksage.reclaim-plan";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlannedOperation {
@@ -69,6 +71,7 @@ pub struct PathReclaimEstimate {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReclaimPlan {
+    pub schema_kind: &'static str,
     pub schema_version: u32,
     pub operation: PlannedOperation,
     pub paths: Vec<PathReclaimEstimate>,
@@ -312,6 +315,7 @@ pub fn plan_reclaim(
     }
 
     Ok(ReclaimPlan {
+        schema_kind: RECLAIM_PLAN_SCHEMA_KIND,
         schema_version: 1,
         operation,
         paths,
@@ -346,6 +350,8 @@ mod tests {
         fs::write(&file, vec![7u8; 8_192]).unwrap();
 
         let plan = plan_reclaim(&[file], PlannedOperation::Delete).unwrap();
+        assert_eq!(plan.schema_kind, RECLAIM_PLAN_SCHEMA_KIND);
+        assert_eq!(plan.schema_version, 1);
         assert_eq!(plan.totals.logical_bytes, 8_192);
         assert_eq!(plan.totals.physically_reclaimable_bytes, None);
         assert_eq!(plan.totals.status, ReclaimabilityStatus::Unverified);
@@ -355,6 +361,10 @@ mod tests {
             .contains(&"shared-extents-or-clones-unproven".to_string()));
         #[cfg(unix)]
         assert!(plan.totals.allocated_bytes.unwrap() > 0);
+
+        let json = serde_json::to_value(&plan).unwrap();
+        assert_eq!(json["schema_kind"], "disksage.reclaim-plan");
+        assert_eq!(json["schema_version"], 1);
     }
 
     #[test]
