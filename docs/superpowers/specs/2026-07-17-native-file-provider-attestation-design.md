@@ -31,8 +31,9 @@ hydrate, evict, upload, delete, or otherwise mutate either file.
   and parses every required boolean field fail-closed.
 - Native evidence records the provider, receipt ID, destination, observed bytes, destination hash,
   status bits, and confirmation time in its evidence identifier.
-- A successful attestation creates only a local-eviction permit value. DiskSage still retains the
-  source and performs no removal action.
+- Every attestation first writes the complete observation into a bounded, read-only,
+  integrity-bound provider evidence record. A successful attestation additionally creates only a
+  local-eviction permit value. DiskSage still retains the source and performs no removal action.
 
 ## User experience
 
@@ -41,6 +42,8 @@ path and rejects an item ID. Google Drive accepts a file ID only as the starting
 stable parent-chain proof to the My Drive root; ID-only checksum evidence cannot authorize source
 eviction. Both use an existing OS-keychain OAuth connection. The headless `--attest-receipt` path
 supports all three providers using native status and the same provider-specific fallback rules.
+The desktop app stores records under its application-data `cloud-provider-evidence` directory;
+the headless command requires an explicit absolute `--evidence-dir`.
 
 ## Why this remains metadata-first
 

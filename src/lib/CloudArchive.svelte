@@ -391,6 +391,7 @@
           {:else}
             <p class="warning">아직 제거 불가: {attestation.blockers.join(", ")}</p>
           {/if}
+          <p class="muted">변경 불가 공급자 증거 기록: {attestation.evidence_path}</p>
         {/if}
       </div>
     {/if}

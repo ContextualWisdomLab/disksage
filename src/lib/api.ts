@@ -366,6 +366,12 @@ export interface ProviderSyncEvidence {
   remote_content: RemoteContentProof | null;
 }
 
+export interface ProviderSyncEvidenceRecord {
+  version: number;
+  record_id: string;
+  evidence: ProviderSyncEvidence;
+}
+
 export interface LocalEvictionPermit {
   receipt_id: string;
   provider: CloudProvider;
@@ -380,6 +386,8 @@ export interface LocalEvictionPermit {
 
 export interface CloudAttestationOutput {
   evidence: ProviderSyncEvidence;
+  evidence_record: ProviderSyncEvidenceRecord;
+  evidence_path: string;
   permit: LocalEvictionPermit | null;
   blockers: string[];
 }

@@ -17,6 +17,8 @@ use disksage_lib::cloud_transfer::{self, CloudCopyReceipt, LocalEvictionPermit};
 #[cfg(not(coverage))]
 use disksage_lib::provider_api_client::{self, FixedHostProviderMetadataClient};
 #[cfg(not(coverage))]
+use disksage_lib::provider_evidence::{self, ProviderSyncEvidenceRecord};
+#[cfg(not(coverage))]
 use disksage_lib::provider_oauth;
 #[cfg(not(coverage))]
 use disksage_lib::provider_sync;
@@ -36,6 +38,7 @@ struct Args {
     adopt_existing_fingerprint: Option<String>,
     receipt_dir: Option<PathBuf>,
     attest_receipt: Option<PathBuf>,
+    evidence_dir: Option<PathBuf>,
     provider_object_id: Option<String>,
     oauth_connections: Option<PathBuf>,
     evict_receipt: Option<PathBuf>,
@@ -83,6 +86,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
         adopt_existing_fingerprint: None,
         receipt_dir: None,
         attest_receipt: None,
+        evidence_dir: None,
         provider_object_id: None,
         oauth_connections: None,
         evict_receipt: None,
@@ -141,6 +145,13 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
                     args,
                     &mut index,
                     "--attest-receipt",
+                )?))
+            }
+            "--evidence-dir" => {
+                parsed.evidence_dir = Some(PathBuf::from(value(
+                    args,
+                    &mut index,
+                    "--evidence-dir",
                 )?))
             }
             "--provider-object-id" => {
@@ -208,7 +219,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             }
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive] [--min-size-mib N] [--min-age-days N] [--limit N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by ID --review-rationale TEXT --review-dir PATH]".into(),
+                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive] [--min-size-mib N] [--min-age-days N] [--limit N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by ID --review-rationale TEXT --review-dir PATH]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -232,6 +243,8 @@ struct AttestationOutput {
     action: &'static str,
     receipt_id: String,
     evidence: disksage_lib::cloud_transfer::ProviderSyncEvidence,
+    evidence_record: ProviderSyncEvidenceRecord,
+    evidence_path: String,
     permit: Option<LocalEvictionPermit>,
     blockers: Vec<String>,
 }
@@ -242,6 +255,8 @@ struct EvictionOutput {
     action: &'static str,
     receipt_id: String,
     evidence: disksage_lib::cloud_transfer::ProviderSyncEvidence,
+    evidence_record: ProviderSyncEvidenceRecord,
+    evidence_path: String,
     permit: LocalEvictionPermit,
     eviction: CloudEvictionResult,
 }
@@ -289,6 +304,10 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
         );
     }
     let eviction_action = eviction_fields.iter().all(|value| *value);
+    let attestation_action = args.attest_receipt.is_some();
+    if (attestation_action || eviction_action) != args.evidence_dir.is_some() {
+        return Err("attestation/eviction action에는 --evidence-dir이 반드시 필요함".into());
+    }
     if args.provider_object_id.is_some() && args.oauth_connections.is_none() {
         return Err("--provider-object-id에는 --oauth-connections가 필요함".into());
     }
@@ -351,6 +370,11 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     if let Some(receipt_path) = &args.attest_receipt {
         if !receipt_path.is_absolute() {
             return Err("--attest-receipt는 절대 경로여야 함".into());
+        }
+    }
+    if let Some(evidence_dir) = &args.evidence_dir {
+        if !evidence_dir.is_absolute() {
+            return Err("--evidence-dir은 절대 경로여야 함".into());
         }
     }
     if let Some(connection_path) = &args.oauth_connections {
@@ -465,6 +489,7 @@ fn collect_receipt_sync_evidence(
 #[cfg(not(coverage))]
 fn attest_receipt(
     path: &Path,
+    evidence_dir: &Path,
     provider_object_id: Option<&str>,
     oauth_connections: Option<&Path>,
     home: &Path,
@@ -478,6 +503,8 @@ fn attest_receipt(
         home,
         confirmed_at_ms,
     )?;
+    let (evidence_record, evidence_path) =
+        provider_evidence::write_immutable_sync_evidence(evidence_dir, &evidence)?;
     let (permit, blockers) = match cloud_transfer::approve_local_eviction(&receipt, &evidence) {
         Ok(permit) => (Some(permit), Vec::new()),
         Err(blockers) => (None, blockers),
@@ -486,6 +513,8 @@ fn attest_receipt(
         action: "attest-provider-native",
         receipt_id: receipt.receipt_id,
         evidence,
+        evidence_record,
+        evidence_path: evidence_path.to_string_lossy().into_owned(),
         permit,
         blockers,
     })
@@ -497,6 +526,7 @@ fn evict_native_receipt(
     confirmation_receipt_id: &str,
     eviction_dir: &Path,
     journal_path: &Path,
+    evidence_dir: &Path,
     provider_object_id: Option<&str>,
     oauth_connections: Option<&Path>,
     home: &Path,
@@ -515,6 +545,8 @@ fn evict_native_receipt(
     )?;
     let permit = cloud_transfer::approve_local_eviction(&receipt, &evidence)
         .map_err(|blockers| blockers.join(","))?;
+    let (evidence_record, evidence_path) =
+        provider_evidence::write_immutable_sync_evidence(evidence_dir, &evidence)?;
     let eviction = cloud_eviction::evict_source(
         &receipt,
         &permit,
@@ -527,6 +559,8 @@ fn evict_native_receipt(
         action: "attest-and-trash-verified-cloud-source",
         receipt_id: receipt.receipt_id,
         evidence,
+        evidence_record,
+        evidence_path: evidence_path.to_string_lossy().into_owned(),
         permit,
         eviction,
     })
@@ -577,6 +611,9 @@ fn run() -> Result<(), String> {
             args.journal_path
                 .as_deref()
                 .ok_or_else(|| "--journal-path가 필요함".to_string())?,
+            args.evidence_dir
+                .as_deref()
+                .ok_or_else(|| "--evidence-dir이 필요함".to_string())?,
             args.provider_object_id.as_deref(),
             args.oauth_connections.as_deref(),
             &home,
@@ -592,6 +629,9 @@ fn run() -> Result<(), String> {
             "{}",
             serde_json::to_string_pretty(&attest_receipt(
                 receipt_path,
+                args.evidence_dir
+                    .as_deref()
+                    .ok_or_else(|| "--evidence-dir이 필요함".to_string())?,
                 args.provider_object_id.as_deref(),
                 args.oauth_connections.as_deref(),
                 &home,
@@ -793,6 +833,7 @@ mod tests {
         assert!(defaults.adopt_existing_fingerprint.is_none());
         assert!(defaults.provider_object_id.is_none());
         assert!(defaults.oauth_connections.is_none());
+        assert!(defaults.evidence_dir.is_none());
         assert!(defaults.evict_receipt.is_none());
         assert!(defaults.review_candidate_fingerprint.is_none());
         assert!(defaults.reviewed_by.is_none());
@@ -1014,6 +1055,9 @@ mod tests {
         args.journal_path = Some(PathBuf::from("relative-journal"));
         assert!(validate_action_args(&args).is_err());
         args.journal_path = Some(PathBuf::from("/journal/operations.jsonl"));
+        args.evidence_dir = Some(PathBuf::from("relative-evidence"));
+        assert!(validate_action_args(&args).is_err());
+        args.evidence_dir = Some(PathBuf::from("/evidence"));
         assert!(validate_action_args(&args).is_ok());
 
         args.attest_receipt = Some(PathBuf::from("/receipt.json"));
@@ -1029,6 +1073,8 @@ mod tests {
                 "/evictions".into(),
                 "--journal-path".into(),
                 "/journal/operations.jsonl".into(),
+                "--evidence-dir".into(),
+                "/evidence".into(),
             ],
             Path::new("/h"),
         )
@@ -1047,6 +1093,8 @@ mod tests {
                 "remote-item-id".into(),
                 "--oauth-connections".into(),
                 "/app-data/cloud-oauth-connections.json".into(),
+                "--evidence-dir".into(),
+                "/evidence".into(),
             ],
             Path::new("/h"),
         )
@@ -1064,6 +1112,8 @@ mod tests {
                 "/receipts/a.json".into(),
                 "--oauth-connections".into(),
                 "/app-data/cloud-oauth-connections.json".into(),
+                "--evidence-dir".into(),
+                "/evidence".into(),
             ],
             Path::new("/h"),
         )
@@ -1076,6 +1126,8 @@ mod tests {
                 "/receipts/a.json".into(),
                 "--provider-object-id".into(),
                 "remote-item-id".into(),
+                "--evidence-dir".into(),
+                "/evidence".into(),
             ],
             Path::new("/h"),
         )
@@ -1125,7 +1177,8 @@ mod tests {
         permissions.set_readonly(true);
         std::fs::set_permissions(&path, permissions).unwrap();
 
-        let error = attest_receipt(&path, None, None, Path::new("/home/test")).unwrap_err();
+        let error =
+            attest_receipt(&path, temp.path(), None, None, Path::new("/home/test")).unwrap_err();
         assert!(error.contains("receipt-integrity-mismatch"));
         assert!(!error.contains("No such file"));
     }
