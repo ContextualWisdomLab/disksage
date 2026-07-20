@@ -10,6 +10,7 @@ use crate::cloud::{
 };
 use crate::cloud_review::{validate_decision, CloudReviewDecision, CloudReviewDisposition};
 use crate::dataset_metadata::DatasetProfile;
+use crate::provider_evidence::{validate_sync_evidence_record, ProviderSyncEvidenceRecord};
 use std::path::Path;
 
 #[cfg(not(coverage))]
@@ -145,6 +146,7 @@ pub struct ProviderSyncEvidence {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LocalEvictionPermit {
     pub receipt_id: String,
     pub provider: CloudProvider,
@@ -155,6 +157,7 @@ pub struct LocalEvictionPermit {
     pub approved_at_ms: u64,
     pub evidence_kind: SyncEvidenceKind,
     pub evidence_id: String,
+    pub evidence_record_id: String,
 }
 
 fn absolute_without_parent(path: &Path) -> bool {
@@ -554,9 +557,13 @@ pub fn read_immutable_receipt(path: &Path) -> Result<CloudCopyReceipt, String> {
 /// This does not delete, move, hydrate, or modify either file.
 pub fn approve_local_eviction(
     receipt: &CloudCopyReceipt,
-    evidence: &ProviderSyncEvidence,
+    evidence_record: &ProviderSyncEvidenceRecord,
 ) -> Result<LocalEvictionPermit, Vec<String>> {
     let mut blockers = receipt_blockers(receipt);
+    if let Err(error) = validate_sync_evidence_record(evidence_record) {
+        blockers.push(error);
+    }
+    let evidence = &evidence_record.evidence;
     if !evidence.sync_complete {
         blockers.push("provider-sync-incomplete".into());
     }
@@ -651,6 +658,7 @@ pub fn approve_local_eviction(
         approved_at_ms: evidence.confirmed_at_ms,
         evidence_kind: evidence.kind,
         evidence_id: evidence.evidence_id.clone(),
+        evidence_record_id: evidence_record.record_id.clone(),
     })
 }
 
@@ -1021,6 +1029,9 @@ pub fn adopt_existing_cloud_copy_with_review(
 mod tests {
     use super::*;
     use crate::cloud::{ArchiveKind, MetadataEvidence};
+    use crate::provider_evidence::{
+        create_sync_evidence_record, ProviderSyncEvidenceRecord, PROVIDER_EVIDENCE_RECORD_VERSION,
+    };
 
     #[cfg(windows)]
     const ROOT: &str = r"C:\cloud";
@@ -1034,6 +1045,19 @@ mod tests {
     const DESTINATION: &str = r"C:\cloud\DiskSage Archive\report.pdf";
     #[cfg(not(windows))]
     const DESTINATION: &str = "/cloud/DiskSage Archive/report.pdf";
+
+    fn approve_evidence(
+        receipt: &CloudCopyReceipt,
+        evidence: &ProviderSyncEvidence,
+    ) -> Result<LocalEvictionPermit, Vec<String>> {
+        let record =
+            create_sync_evidence_record(evidence).unwrap_or_else(|_| ProviderSyncEvidenceRecord {
+                version: PROVIDER_EVIDENCE_RECORD_VERSION,
+                record_id: "0".repeat(64),
+                evidence: evidence.clone(),
+            });
+        approve_local_eviction(receipt, &record)
+    }
 
     fn root() -> CloudRoot {
         CloudRoot {
@@ -1105,7 +1129,7 @@ mod tests {
             source: SOURCE.into(),
             destination: DESTINATION.into(),
             bytes: 12,
-            blake3: "content-hash".into(),
+            blake3: "b".repeat(64),
             sha256: "sha256-hash".into(),
             quick_xor_base64: "quick-xor".into(),
             source_modified_ms: 2,
@@ -1186,7 +1210,7 @@ mod tests {
             provider: CloudProvider::Icloud,
             destination: DESTINATION.into(),
             observed_bytes: 12,
-            destination_blake3: "content-hash".into(),
+            destination_blake3: "b".repeat(64),
             confirmed_at_ms: 101,
             kind: SyncEvidenceKind::ProviderNativeStatus,
             evidence_id: "icloud-uploaded-flag".into(),
@@ -1397,19 +1421,20 @@ mod tests {
     fn provider_sync_evidence_is_required_before_eviction_permit() {
         let valid_receipt = receipt();
         assert!(receipt_blockers(&valid_receipt).is_empty());
-        let approved = approve_local_eviction(&valid_receipt, &evidence()).unwrap();
+        let approved = approve_evidence(&valid_receipt, &evidence()).unwrap();
         assert_eq!(approved.receipt_id, valid_receipt.receipt_id);
         assert_eq!(approved.provider, CloudProvider::Icloud);
         assert_eq!(approved.source, SOURCE);
         assert_eq!(approved.destination, DESTINATION);
         assert_eq!(approved.bytes, 12);
-        assert_eq!(approved.blake3, "content-hash");
+        assert_eq!(approved.blake3, "b".repeat(64));
         assert_eq!(approved.approved_at_ms, 101);
         assert_eq!(
             approved.evidence_kind,
             SyncEvidenceKind::ProviderNativeStatus
         );
         assert_eq!(approved.evidence_id, "icloud-uploaded-flag");
+        assert_eq!(approved.evidence_record_id.len(), 64);
 
         let mut invalid_receipt = receipt();
         invalid_receipt.version = 99;
@@ -1428,7 +1453,7 @@ mod tests {
         invalid_evidence.kind = SyncEvidenceKind::ProviderApi;
         invalid_evidence.evidence_id = " ".into();
         invalid_evidence.remote_content = None;
-        let blockers = approve_local_eviction(&invalid_receipt, &invalid_evidence).unwrap_err();
+        let blockers = approve_evidence(&invalid_receipt, &invalid_evidence).unwrap_err();
         for expected in [
             "receipt-version-unsupported",
             "receipt-integrity-mismatch",
@@ -1449,6 +1474,20 @@ mod tests {
         ] {
             assert!(blockers.contains(&expected.to_string()), "{expected}");
         }
+    }
+
+    #[test]
+    fn eviction_permit_rejects_tampered_evidence_record() {
+        let valid_receipt = receipt();
+        let mut record = create_sync_evidence_record(&evidence()).unwrap();
+        let expected_record_id = record.record_id.clone();
+        let permit = approve_local_eviction(&valid_receipt, &record).unwrap();
+        assert_eq!(permit.evidence_record_id, expected_record_id);
+
+        record.evidence.confirmed_at_ms += 1;
+        assert!(approve_local_eviction(&valid_receipt, &record)
+            .unwrap_err()
+            .contains(&"provider-evidence-record-integrity-mismatch".to_string()));
     }
 
     #[test]
@@ -1493,7 +1532,7 @@ mod tests {
                     )),
                 }),
             };
-            assert!(approve_local_eviction(&provider_receipt, &api_evidence).is_ok());
+            assert!(approve_evidence(&provider_receipt, &api_evidence).is_ok());
         }
     }
 
@@ -1512,7 +1551,7 @@ mod tests {
             sync_complete: true,
             remote_content: None,
         };
-        assert!(approve_local_eviction(&provider_receipt, &api_evidence)
+        assert!(approve_evidence(&provider_receipt, &api_evidence)
             .unwrap_err()
             .contains(&"remote-content-proof-missing".to_string()));
 
@@ -1524,7 +1563,7 @@ mod tests {
             location_bound: false,
             location_proof: None,
         });
-        let blockers = approve_local_eviction(&provider_receipt, &api_evidence).unwrap_err();
+        let blockers = approve_evidence(&provider_receipt, &api_evidence).unwrap_err();
         for expected in [
             "remote-object-id-missing",
             "remote-revision-missing",
@@ -1542,7 +1581,7 @@ mod tests {
             location_bound: true,
             location_proof: None,
         });
-        assert!(approve_local_eviction(&provider_receipt, &api_evidence)
+        assert!(approve_evidence(&provider_receipt, &api_evidence)
             .unwrap_err()
             .contains(&"remote-location-proof-missing".to_string()));
 
@@ -1554,13 +1593,13 @@ mod tests {
             location_bound: true,
             location_proof: Some("onedrive-path-v1:not-a-valid-digest".into()),
         });
-        assert!(approve_local_eviction(&provider_receipt, &api_evidence)
+        assert!(approve_evidence(&provider_receipt, &api_evidence)
             .unwrap_err()
             .contains(&"remote-location-proof-invalid".to_string()));
 
         api_evidence.kind = SyncEvidenceKind::ProviderNativeStatus;
         api_evidence.remote_content = None;
-        assert!(approve_local_eviction(&provider_receipt, &api_evidence).is_ok());
+        assert!(approve_evidence(&provider_receipt, &api_evidence).is_ok());
 
         api_evidence.remote_content = Some(RemoteContentProof {
             object_id: "remote-id".into(),
@@ -1570,7 +1609,7 @@ mod tests {
             location_bound: true,
             location_proof: Some(format!("onedrive-path-v1:{}", "a".repeat(64))),
         });
-        assert!(approve_local_eviction(&provider_receipt, &api_evidence)
+        assert!(approve_evidence(&provider_receipt, &api_evidence)
             .unwrap_err()
             .contains(&"native-status-remote-content-unexpected".to_string()));
     }

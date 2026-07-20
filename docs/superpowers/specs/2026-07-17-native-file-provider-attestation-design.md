@@ -32,8 +32,9 @@ hydrate, evict, upload, delete, or otherwise mutate either file.
 - Native evidence records the provider, receipt ID, destination, observed bytes, destination hash,
   status bits, and confirmation time in its evidence identifier.
 - Every attestation first writes the complete observation into a bounded, read-only,
-  integrity-bound provider evidence record. A successful attestation additionally creates only a
-  local-eviction permit value. DiskSage still retains the source and performs no removal action.
+  integrity-bound provider evidence record. A successful attestation validates that record and
+  creates a local-eviction permit bound to its integrity ID. DiskSage still retains the source and
+  performs no removal action.
 
 ## User experience
 

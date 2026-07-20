@@ -9,7 +9,8 @@ Free local space only after a copy receipt and fresh provider-native synchroniza
 The headless action requires all of the following in one invocation:
 
 1. An immutable, integrity-valid copy receipt.
-2. Fresh provider-native evidence for the receipt destination and a matching `LocalEvictionPermit`.
+2. Fresh provider-native evidence for the receipt destination, a validated immutable evidence
+   record, and a `LocalEvictionPermit` bound to that record's 64-hex integrity ID.
 3. An operator confirmation value exactly equal to the 64-hex receipt id.
 4. An absolute provider-evidence directory, eviction-record directory, and destructive-operation
    journal path.
@@ -32,6 +33,11 @@ on Unix. Readers reject symlinks, writable files, renamed records, unsupported v
 destination paths, invalid receipt/hash identifiers, unexpected native remote content, missing API
 remote content, and any record digest mismatch. A source-eviction invocation persists fresh evidence
 before staging or trashing the source; persistence failure leaves the source untouched.
+
+The permit is derived from the validated record rather than from an unpersisted evidence value.
+Its `evidence_record_id` is sealed into eviction-record version 2, the intent ID, the completion
+record and completion ID, and the public eviction result. Resuming an interrupted eviction with a
+different evidence record fails closed before the completion record is consulted.
 
 ## Durable lineage receipt
 
@@ -82,7 +88,10 @@ a misleading zero-candidate plan.
 
 ## Crash-safe sequence
 
-DiskSage writes a bounded, read-only, receipt-bound intent with `create_new`, flushes it, and fsyncs its directory. It then atomically renames the source within its existing directory to a deterministic hidden staging path. The staged file is verified again before the existing trash-only safety API is called.
+DiskSage writes a bounded, read-only, receipt-, permit-, and provider-evidence-record-bound intent
+with `create_new`, flushes it, and fsyncs its directory. It then atomically renames the source within
+its existing directory to a deterministic hidden staging path. The staged file is verified again
+before the existing trash-only safety API is called.
 
 The intent makes interrupted operations resumable:
 
@@ -91,7 +100,9 @@ The intent makes interrupted operations resumable:
 - both present: stop as ambiguous;
 - neither present: record a reconciled completion without touching another path.
 
-After Trash succeeds, DiskSage writes a bounded, read-only completion record. A completion record prevents receipt replay, including deletion of a later file recreated at the original path.
+After Trash succeeds, DiskSage writes a bounded, read-only completion record that repeats and hashes
+the evidence record ID. A completion record prevents receipt replay, including deletion of a later
+file recreated at the original path.
 
 ## CLI surface
 
