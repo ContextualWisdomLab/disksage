@@ -2013,6 +2013,15 @@ fn review_reasons(path: &Path, kind: ArchiveKind) -> Vec<String> {
         .extension()
         .map(|e| e.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
+    // Spreadsheet containers can carry personal or confidential cell data even when their
+    // document-level metadata is complete and innocuous. Until DiskSage profiles worksheet
+    // contents, never let a spreadsheet become an automatic cloud-copy candidate.
+    if matches!(
+        extension.as_str(),
+        "xls" | "xlsx" | "xlsm" | "xlsb" | "ods" | "numbers"
+    ) {
+        reasons.push("spreadsheet-content-needs-review".into());
+    }
     if matches!(extension.as_str(), "wav" | "mp3" | "m4a" | "flac" | "aiff") {
         reasons.push("recording-may-contain-sensitive-speech".into());
     }
@@ -2078,6 +2087,7 @@ fn destination_scope_review_reasons(
             reason.as_str(),
             "opaque-container-content-uninspected"
                 | "structured-data-may-contain-personal-data"
+                | "spreadsheet-content-needs-review"
                 | "recording-may-contain-sensitive-speech"
                 | "filename-context-may-be-confidential"
                 | "filename-contains-geolocation"
@@ -3232,6 +3242,10 @@ mod tests {
         assert!(review_reasons(Path::new("photo.jpg"), ArchiveKind::Media).is_empty());
         let personnel = review_reasons(Path::new("직원_실적데이터.xlsx"), ArchiveKind::Document);
         assert!(personnel.contains(&"filename-context-may-be-confidential".to_string()));
+        assert!(personnel.contains(&"spreadsheet-content-needs-review".to_string()));
+        let neutral_spreadsheet =
+            review_reasons(Path::new("quarterly-report.xlsx"), ArchiveKind::Document);
+        assert!(neutral_spreadsheet.contains(&"spreadsheet-content-needs-review".to_string()));
     }
 
     #[test]
@@ -3239,6 +3253,11 @@ mod tests {
         let sensitive = vec!["recording-may-contain-sensitive-speech".into()];
         assert_eq!(
             destination_scope_review_reasons(CloudAccountScope::Personal, &sensitive),
+            ["personal-cloud-sensitive-context-needs-explicit-approval"]
+        );
+        let spreadsheet = vec!["spreadsheet-content-needs-review".into()];
+        assert_eq!(
+            destination_scope_review_reasons(CloudAccountScope::Personal, &spreadsheet),
             ["personal-cloud-sensitive-context-needs-explicit-approval"]
         );
         assert!(
