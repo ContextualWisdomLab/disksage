@@ -83,6 +83,8 @@ export interface OrphanWorktreeCandidate {
 export interface WorktreeReport {
   scanned_root: string;
   generated_at_ms: number;
+  elapsed_ms: number;
+  evidence_complete: boolean;
   min_age_days: number;
   search_max_depth: number;
   repository_count: number;

@@ -20,6 +20,8 @@ const DAY_MS: u64 = 86_400_000;
 #[cfg(not(coverage))]
 const GIT_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(not(coverage))]
+const GIT_WORKTREE_LIST_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(not(coverage))]
 const GIT_METADATA_READ_TIMEOUT: Duration = Duration::from_secs(2);
 #[cfg(not(coverage))]
 const GIT_METADATA_MAX_BYTES: u64 = 4_096;
@@ -112,6 +114,8 @@ pub struct OrphanWorktreeCandidate {
 pub struct WorktreeReport {
     pub scanned_root: String,
     pub generated_at_ms: u64,
+    pub elapsed_ms: u64,
+    pub evidence_complete: bool,
     pub min_age_days: u64,
     pub search_max_depth: usize,
     pub repository_count: usize,
@@ -147,7 +151,7 @@ pub struct WorktreeScanIssue {
 }
 
 #[cfg(not(coverage))]
-fn git_output(cwd: &Path, args: &[&str]) -> Result<Output, String> {
+fn git_output_with_timeout(cwd: &Path, args: &[&str], timeout: Duration) -> Result<Output, String> {
     let mut command = Command::new("git");
     command
         .arg("-c")
@@ -162,7 +166,7 @@ fn git_output(cwd: &Path, args: &[&str]) -> Result<Output, String> {
     loop {
         match child.try_wait() {
             Ok(Some(_)) => return child.wait_with_output().map_err(|error| error.to_string()),
-            Ok(None) if started.elapsed() < GIT_TIMEOUT => {
+            Ok(None) if started.elapsed() < timeout => {
                 std::thread::sleep(Duration::from_millis(10));
             }
             Ok(None) => {
@@ -170,7 +174,7 @@ fn git_output(cwd: &Path, args: &[&str]) -> Result<Output, String> {
                 std::thread::spawn(move || {
                     let _ = child.wait_with_output();
                 });
-                return Err(format!("timeout-after-{}s", GIT_TIMEOUT.as_secs()));
+                return Err(format!("timeout-after-{}ms", timeout.as_millis()));
             }
             Err(error) => {
                 let _ = child.kill();
@@ -181,6 +185,11 @@ fn git_output(cwd: &Path, args: &[&str]) -> Result<Output, String> {
             }
         }
     }
+}
+
+#[cfg(not(coverage))]
+fn git_output(cwd: &Path, args: &[&str]) -> Result<Output, String> {
+    git_output_with_timeout(cwd, args, GIT_TIMEOUT)
 }
 
 #[cfg(not(coverage))]
@@ -696,8 +705,14 @@ pub fn inventory(root: &Path, min_age_days: u64, now_ms: u64) -> WorktreeReport 
             });
             break 'repositories;
         }
-        let default_ref = local_default_ref(seed);
-        let raw = match git_output(seed, &["worktree", "list", "--porcelain"]) {
+        // Prove that the repository can enumerate linked worktrees before spending another
+        // timeout window resolving refs. A failed preflight already makes the repository
+        // fail-closed, which matters for old macOS workspaces with pathological local metadata.
+        let raw = match git_output_with_timeout(
+            seed,
+            &["worktree", "list", "--porcelain"],
+            GIT_WORKTREE_LIST_TIMEOUT,
+        ) {
             Ok(output) if output.status.success() => {
                 parse_worktree_porcelain(&String::from_utf8_lossy(&output.stdout))
             }
@@ -718,6 +733,7 @@ pub fn inventory(root: &Path, min_age_days: u64, now_ms: u64) -> WorktreeReport 
                 continue;
             }
         };
+        let default_ref = local_default_ref(seed);
         for (index, worktree) in raw.into_iter().enumerate() {
             if inventory_started.elapsed() >= INVENTORY_TIMEOUT {
                 scan_issues.push(WorktreeScanIssue {
@@ -877,9 +893,19 @@ pub fn inventory(root: &Path, min_age_days: u64, now_ms: u64) -> WorktreeReport 
                 .map(|worktree| worktree.generated_artifact_bytes),
         )
         .sum();
+    let evidence_complete = scan_issues.is_empty()
+        && worktrees
+            .iter()
+            .filter(|worktree| worktree.exists && !worktree.is_primary)
+            .all(|worktree| worktree.filesystem_scan_complete)
+        && orphaned_worktrees
+            .iter()
+            .all(|worktree| worktree.filesystem_scan_complete);
     WorktreeReport {
         scanned_root: root.to_string_lossy().into_owned(),
         generated_at_ms: now_ms,
+        elapsed_ms: inventory_started.elapsed().as_millis() as u64,
+        evidence_complete,
         min_age_days,
         search_max_depth: REPOSITORY_SEARCH_MAX_DEPTH,
         repository_count: registered_worktree_repository_count,
@@ -898,6 +924,8 @@ pub fn inventory(root: &Path, min_age_days: u64, now_ms: u64) -> WorktreeReport 
                 .into(),
             "repository-discovery-has-time-and-directory-budgets".into(),
             "repository-git-evidence-has-a-global-time-budget".into(),
+            "worktree-list-preflight-precedes-secondary-git-evidence".into(),
+            "report-evidence-complete-only-when-all-bounded-probes-finish".into(),
             "orphaned-worktree-source-trees-are-never-removal-eligible".into(),
             "generated-artifacts-are-reported-for-separate-review-only".into(),
             "dirty-locked-detached-unmerged-or-ahead-worktrees-fail-closed".into(),
@@ -1188,6 +1216,7 @@ mod tests {
         assert!(report.worktrees.is_empty());
         assert!(report.orphaned_worktrees.is_empty());
         assert!(report.scan_issues.is_empty());
+        assert!(report.evidence_complete);
         assert_eq!(report.potentially_reclaimable_bytes, 0);
         assert_eq!(report.reviewable_generated_artifact_bytes, 0);
     }

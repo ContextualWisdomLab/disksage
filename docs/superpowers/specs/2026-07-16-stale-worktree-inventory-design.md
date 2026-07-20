@@ -20,7 +20,14 @@ Identify linked Git worktrees that consume local disk but can be considered for 
 - Primary, dirty, locked, detached, recent, unmerged, ahead, and indeterminate worktrees fail closed with explicit reasons.
 - Incomplete filesystem evidence is shown as a partial estimate and always blocks removal eligibility.
 - Missing paths that Git marks prunable are reported separately and never counted as disk-reclaim candidates.
-- Bound every Git subprocess to five seconds and the repository evidence phase to 180 seconds. Timed-out children are killed and reaped off the inventory path. A broken or slow repository is reported as a scan issue and cannot become removal-eligible.
+- Run the bounded two-second `git worktree list --porcelain` preflight before resolving default
+  refs or collecting secondary Git evidence. A repository that cannot enumerate its registered
+  worktrees is already fail-closed and must not consume a second timeout window. Other Git
+  subprocesses retain their five-second bound, and the repository evidence phase retains its
+  180-second global bound. Timed-out children are killed and reaped off the inventory path.
+- Report elapsed milliseconds and an explicit evidence-completeness bit. Completeness is true only
+  when repository discovery and Git probes have no recorded issue and every existing non-primary
+  or orphan filesystem measurement finishes within its bounds.
 
 ## Orphaned worktree and generated-artifact evidence
 

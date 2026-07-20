@@ -65,6 +65,9 @@
       {fmtBytes(report.potentially_reclaimable_bytes)} · 별도 검토 가능한 재생성 산출물
       {fmtBytes(report.reviewable_generated_artifact_bytes)}
     </div>
+    <p class:warning={!report.evidence_complete} class:ok={report.evidence_complete}>
+      증거 {report.evidence_complete ? "완전" : "부분"} · {(report.elapsed_ms / 1000).toFixed(1)}초
+    </p>
     <p class="muted">저장소 검색 깊이: 선택 루트에서 최대 {report.search_max_depth}단계</p>
     <p class="warning">
       기준 브랜치는 fetch하지 않은 로컬 ref입니다. 시간 제한 또는 부분 측정은 제거 가능 판정을 차단하며,
@@ -180,6 +183,7 @@
   .artifacts li { border: 0; padding: 0; margin: 0.15rem 0; overflow-wrap: anywhere; }
   .orphaned li { border-color: #b97800; background: #fffaf0; }
   .muted { color: #777; }
+  .ok { color: #187338; }
   .warning { color: #8a5700; }
   .error { color: #b00; }
 </style>
