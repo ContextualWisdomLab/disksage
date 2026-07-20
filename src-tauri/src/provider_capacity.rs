@@ -1,12 +1,13 @@
 //! Read-only cloud-provider capacity evidence and conservative copy assessment.
 //!
 //! OneDrive and Google Drive expose account-level quota through their authenticated metadata APIs.
-//! iCloud's File Provider surface does not expose the user's account quota, so it is represented as
-//! explicitly unavailable rather than inferred from local APFS free space.
+//! On macOS, iCloud Drive exposes the signed-in personal account's server quota through Apple's
+//! read-only `/usr/bin/brctl quota` client. That native evidence is kept distinct from provider API
+//! evidence and is never inferred from local APFS free space.
 
 use crate::cloud::CloudProvider;
 
-pub const CAPACITY_SCHEMA_VERSION: u32 = 1;
+pub const CAPACITY_SCHEMA_VERSION: u32 = 2;
 pub const DEFAULT_CAPACITY_RESERVE_BYTES: u64 = 1024 * 1024 * 1024;
 
 #[cfg(not(coverage))]
@@ -22,12 +23,15 @@ const GOOGLE_DRIVE_CAPACITY_URL: &str = "https://www.googleapis.com/drive/v3/abo
 #[serde(rename_all = "kebab-case")]
 pub enum CapacityEvidenceKind {
     ProviderApi,
+    ProviderNativeStatus,
     Unavailable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CloudCapacityState {
+    /// The provider reported a bounded remaining byte count without exposing total or used bytes.
+    Available,
     Normal,
     Nearing,
     Critical,
@@ -79,9 +83,14 @@ fn update_optional_u64(hasher: &mut blake3::Hasher, value: Option<u64>) {
 
 fn evidence_fingerprint(snapshot: &CloudCapacitySnapshot, provider_binding: &str) -> String {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"disksage-cloud-capacity-v1\0");
+    hasher.update(b"disksage-cloud-capacity-v2\0");
     hasher.update(snapshot.provider.as_str().as_bytes());
     hasher.update(&[0]);
+    hasher.update(&[match snapshot.evidence_kind {
+        CapacityEvidenceKind::ProviderApi => 1,
+        CapacityEvidenceKind::ProviderNativeStatus => 2,
+        CapacityEvidenceKind::Unavailable => 3,
+    }]);
     hasher.update(provider_binding.as_bytes());
     hasher.update(&[0]);
     hasher.update(&snapshot.observed_at_ms.to_le_bytes());
@@ -95,14 +104,145 @@ fn evidence_fingerprint(snapshot: &CloudCapacitySnapshot, provider_binding: &str
         update_optional_u64(&mut hasher, value);
     }
     hasher.update(&[match snapshot.state {
-        CloudCapacityState::Normal => 1,
-        CloudCapacityState::Nearing => 2,
-        CloudCapacityState::Critical => 3,
-        CloudCapacityState::Exceeded => 4,
-        CloudCapacityState::Unlimited => 5,
-        CloudCapacityState::Unavailable => 6,
+        CloudCapacityState::Available => 1,
+        CloudCapacityState::Normal => 2,
+        CloudCapacityState::Nearing => 3,
+        CloudCapacityState::Critical => 4,
+        CloudCapacityState::Exceeded => 5,
+        CloudCapacityState::Unlimited => 6,
+        CloudCapacityState::Unavailable => 7,
     }]);
     hasher.finalize().to_hex().to_string()
+}
+
+/// Parse the locale-pinned output of Apple's read-only `brctl quota` command.
+///
+/// The command exposes only remaining bytes and account scope, not total or used bytes. Parsing is
+/// intentionally exact and ASCII-only so a future localized or reformatted response fails closed.
+pub fn parse_icloud_brctl_quota(
+    output: &str,
+    observed_at_ms: u64,
+) -> Result<CloudCapacitySnapshot, String> {
+    const MAX_OUTPUT_BYTES: usize = 4 * 1024;
+    const SUFFIX: &str = " bytes of quota remaining in personal account";
+
+    if output.is_empty() || output.len() > MAX_OUTPUT_BYTES || !output.is_ascii() {
+        return Err("icloud-native-quota-output-invalid".into());
+    }
+    let line = output.strip_suffix('\n').unwrap_or(output);
+    let line = line.strip_suffix('\r').unwrap_or(line);
+    if line.contains(['\r', '\n']) || line.trim() != line {
+        return Err("icloud-native-quota-output-invalid".into());
+    }
+    let remaining_text = line
+        .strip_suffix(SUFFIX)
+        .ok_or_else(|| "icloud-native-quota-output-invalid".to_string())?;
+    if remaining_text.is_empty()
+        || !remaining_text.bytes().all(|byte| byte.is_ascii_digit())
+        || (remaining_text.len() > 1 && remaining_text.starts_with('0'))
+    {
+        return Err("icloud-native-quota-remaining-invalid".into());
+    }
+    let remaining = remaining_text
+        .parse::<u64>()
+        .map_err(|_| "icloud-native-quota-remaining-invalid".to_string())?;
+    let mut snapshot = CloudCapacitySnapshot {
+        schema_version: CAPACITY_SCHEMA_VERSION,
+        provider: CloudProvider::Icloud,
+        evidence_kind: CapacityEvidenceKind::ProviderNativeStatus,
+        observed_at_ms,
+        total_bytes: None,
+        used_bytes: None,
+        remaining_bytes: Some(remaining),
+        trashed_bytes: None,
+        max_upload_size_bytes: None,
+        state: if remaining == 0 {
+            CloudCapacityState::Exceeded
+        } else {
+            CloudCapacityState::Available
+        },
+        evidence_fingerprint: None,
+        unavailable_reason: None,
+    };
+    snapshot.evidence_fingerprint = Some(evidence_fingerprint(
+        &snapshot,
+        "brctl-quota-v1\0account-scope:personal",
+    ));
+    Ok(snapshot)
+}
+
+#[cfg(all(target_os = "macos", not(coverage)))]
+pub fn collect_icloud_native_capacity(
+    observed_at_ms: u64,
+) -> Result<CloudCapacitySnapshot, String> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    const TIMEOUT: Duration = Duration::from_secs(5);
+    const OUTPUT_LIMIT: u64 = 128 * 1024;
+
+    let mut child = Command::new("/usr/bin/brctl")
+        .arg("quota")
+        .env("LANG", "C")
+        .env("LC_ALL", "C")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| "icloud-native-quota-command-unavailable".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "icloud-native-quota-output-missing".to_string())?;
+    let output_reader = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        stdout
+            .take(OUTPUT_LIMIT + 1)
+            .read_to_end(&mut output)
+            .map_err(|_| "icloud-native-quota-output-read-failed".to_string())?;
+        Ok::<_, String>(output)
+    });
+
+    let deadline = Instant::now() + TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = output_reader.join();
+                return Err("icloud-native-quota-command-timeout".into());
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = output_reader.join();
+                return Err("icloud-native-quota-command-wait-failed".into());
+            }
+        }
+    };
+    let output = output_reader
+        .join()
+        .map_err(|_| "icloud-native-quota-output-read-failed".to_string())??;
+    if !status.success() {
+        return Err("icloud-native-quota-command-failed".into());
+    }
+    if output.len() as u64 > OUTPUT_LIMIT {
+        return Err("icloud-native-quota-output-too-large".into());
+    }
+    let output =
+        String::from_utf8(output).map_err(|_| "icloud-native-quota-output-not-utf8".to_string())?;
+    parse_icloud_brctl_quota(&output, observed_at_ms)
+}
+
+#[cfg(all(not(target_os = "macos"), not(coverage)))]
+pub fn collect_icloud_native_capacity(
+    _observed_at_ms: u64,
+) -> Result<CloudCapacitySnapshot, String> {
+    Err("icloud-native-quota-unsupported-platform".into())
 }
 
 #[derive(serde::Deserialize)]
@@ -347,7 +487,14 @@ pub fn unavailable_capacity_from_error(
     error: &str,
 ) -> CloudCapacitySnapshot {
     let reason = if provider == CloudProvider::Icloud {
-        "icloud-quota-api-unavailable"
+        match error {
+            "icloud-native-quota-command-unavailable" => "icloud-native-quota-command-unavailable",
+            "icloud-native-quota-command-timeout" => "icloud-native-quota-command-timeout",
+            "icloud-native-quota-unsupported-platform" => {
+                "icloud-native-quota-unsupported-platform"
+            }
+            _ => "icloud-native-quota-unavailable",
+        }
     } else if matches!(
         error,
         "provider-oauth-connection-missing" | "provider-capacity-oauth-connections-required"
@@ -539,6 +686,57 @@ mod tests {
     }
 
     #[test]
+    fn parses_icloud_native_remaining_quota_without_inventing_total_usage() {
+        let snapshot = parse_icloud_brctl_quota(
+            "4338720014827 bytes of quota remaining in personal account\n",
+            25,
+        )
+        .unwrap();
+        assert_eq!(snapshot.schema_version, CAPACITY_SCHEMA_VERSION);
+        assert_eq!(snapshot.provider, CloudProvider::Icloud);
+        assert_eq!(
+            snapshot.evidence_kind,
+            CapacityEvidenceKind::ProviderNativeStatus
+        );
+        assert_eq!(snapshot.remaining_bytes, Some(4_338_720_014_827));
+        assert_eq!(snapshot.total_bytes, None);
+        assert_eq!(snapshot.used_bytes, None);
+        assert_eq!(snapshot.state, CloudCapacityState::Available);
+        assert_eq!(snapshot.evidence_fingerprint.as_ref().unwrap().len(), 64);
+
+        let assessment = assess_capacity(snapshot, 100, 100, 10);
+        assert_eq!(assessment.can_fit, Some(true));
+        assert!(assessment.blockers.is_empty());
+    }
+
+    #[test]
+    fn icloud_native_quota_parser_fails_closed_on_reformatting_or_invalid_numbers() {
+        for invalid in [
+            "",
+            "1 bytes of quota remaining in organization account\n",
+            "1,000 bytes of quota remaining in personal account\n",
+            "01 bytes of quota remaining in personal account\n",
+            "1 bytes of quota remaining in personal account\nextra",
+            " 1 bytes of quota remaining in personal account\n",
+        ] {
+            assert!(parse_icloud_brctl_quota(invalid, 1).is_err(), "{invalid:?}");
+        }
+    }
+
+    #[test]
+    fn zero_icloud_native_remaining_quota_is_exceeded() {
+        let snapshot =
+            parse_icloud_brctl_quota("0 bytes of quota remaining in personal account\n", 1)
+                .unwrap();
+        assert_eq!(snapshot.state, CloudCapacityState::Exceeded);
+        let assessment = assess_capacity(snapshot, 0, 0, 0);
+        assert_eq!(assessment.can_fit, Some(false));
+        assert!(assessment
+            .blockers
+            .contains(&"cloud-capacity-provider-state-exceeded".to_string()));
+    }
+
+    #[test]
     fn parses_onedrive_quota_and_assesses_reserved_capacity() {
         let snapshot = parse_onedrive_capacity(
             r#"{"id":"drive-id","driveType":"personal","quota":{"deleted":5,"remaining":4000,"state":"normal","total":10000,"used":6000}}"#,
@@ -710,6 +908,19 @@ mod tests {
                 assert!(!serde_json::to_string(&snapshot).unwrap().contains(error));
             }
         }
+
+        let icloud = unavailable_capacity_from_error(
+            CloudProvider::Icloud,
+            42,
+            "unexpected secret-bearing native output",
+        );
+        assert_eq!(
+            icloud.unavailable_reason.as_deref(),
+            Some("icloud-native-quota-unavailable")
+        );
+        assert!(!serde_json::to_string(&icloud)
+            .unwrap()
+            .contains("secret-bearing"));
     }
 
     #[test]

@@ -288,8 +288,9 @@ export interface CloudPlanReport {
   notices: string[];
 }
 
-export type CapacityEvidenceKind = "provider-api" | "unavailable";
+export type CapacityEvidenceKind = "provider-api" | "provider-native-status" | "unavailable";
 export type CloudCapacityState =
+  | "available"
   | "normal"
   | "nearing"
   | "critical"
@@ -321,6 +322,13 @@ export interface CloudCapacityAssessment {
   can_fit: boolean | null;
   blockers: string[];
   notices: string[];
+}
+
+export function cloudCapacityAllowsCopy(
+  assessment: CloudCapacityAssessment | null | undefined,
+): boolean {
+  return assessment?.can_fit === true
+    && assessment.snapshot.evidence_kind !== "unavailable";
 }
 
 export interface ExactDuplicateSummary {

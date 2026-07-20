@@ -251,7 +251,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             }
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive] [--min-size-mib N] [--min-age-days N] [--limit N] [--verify-capacity --oauth-connections ABSOLUTE_PATH] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
+                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive] [--min-size-mib N] [--min-age-days N] [--limit N] [--verify-capacity [--oauth-connections ABSOLUTE_PATH]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -485,11 +485,7 @@ fn collect_root_capacity(
     observed_at_ms: u64,
 ) -> Result<provider_capacity::CloudCapacitySnapshot, String> {
     if root.provider == CloudProvider::Icloud {
-        return Ok(provider_capacity::unavailable_capacity(
-            root.provider,
-            observed_at_ms,
-            "icloud-quota-api-unavailable",
-        ));
+        return provider_capacity::collect_icloud_native_capacity(observed_at_ms);
     }
     let connection_path = oauth_connections
         .ok_or_else(|| "provider-capacity-oauth-connections-required".to_string())?;
@@ -824,6 +820,12 @@ fn run() -> Result<(), String> {
             .retain(|notice| notice != "cloud-quota-unverified");
         report.notices.push(
             match assessment.can_fit {
+                Some(true)
+                    if assessment.snapshot.evidence_kind
+                        == provider_capacity::CapacityEvidenceKind::ProviderNativeStatus =>
+                {
+                    "cloud-quota-provider-native-verified"
+                }
                 Some(true) => "cloud-quota-provider-api-verified",
                 Some(false) => "cloud-quota-insufficient-or-blocked",
                 None => "cloud-quota-unavailable",
@@ -916,7 +918,7 @@ fn run() -> Result<(), String> {
         } else {
             None
         };
-        if !adopt_existing && selected.provider != CloudProvider::Icloud {
+        if !adopt_existing {
             let assessment = verified_capacity_for_bytes(
                 &selected,
                 args.oauth_connections.as_deref(),
@@ -1203,7 +1205,7 @@ mod tests {
     }
 
     #[test]
-    fn capacity_verification_allows_plan_and_copy_provider_api_only() {
+    fn capacity_verification_allows_plan_and_copy_actions() {
         let mut plan = parse_args(&["--verify-capacity".into()], Path::new("/h")).unwrap();
         plan.oauth_connections = Some(PathBuf::from("/connections.json"));
         assert!(validate_action_args(&plan).is_ok());

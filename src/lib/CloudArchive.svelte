@@ -75,8 +75,7 @@
     const exactApproval = decision?.disposition === "approved";
     const embeddedHighConfidence = candidate.production_time_confidence === "high"
       && candidate.production_time_source.startsWith("embedded:");
-    const capacityEvidenceAvailable = candidate.provider === "icloud"
-      || report?.capacity?.snapshot.evidence_kind === "provider-api";
+    const capacityEvidenceAvailable = api.cloudCapacityAllowsCopy(report?.capacity);
     return candidate.blocked_reason === null
       && (!candidate.requires_review || exactApproval)
       && (embeddedHighConfidence || exactApproval)
@@ -235,6 +234,10 @@
       "provider-oauth-refresh-failed": "공급자 인증 갱신에 실패했습니다. 연결 해제 후 다시 동의해야 할 수 있습니다.",
       "cloud-capacity-provider-api-unavailable": "공급자 용량 API를 현재 확인할 수 없습니다.",
       "icloud-quota-api-unavailable": "iCloud는 제3자 계정 quota API를 제공하지 않습니다.",
+      "icloud-native-quota-command-unavailable": "이 macOS에서 iCloud 용량 확인 명령을 사용할 수 없습니다.",
+      "icloud-native-quota-command-timeout": "iCloud 용량 확인이 시간 안에 완료되지 않았습니다.",
+      "icloud-native-quota-unsupported-platform": "iCloud 네이티브 용량 확인은 macOS에서만 지원됩니다.",
+      "icloud-native-quota-unavailable": "macOS가 iCloud 개인 계정 잔여 용량을 확인하지 못했습니다.",
     };
     return labels[reason ?? ""] ?? "원격 용량을 확인할 수 없습니다.";
   }
@@ -356,7 +359,26 @@
         클라우드 루트 탐지 문제 {rootIssues.length}건: {rootIssues.map((issue) => `${issue.provider ?? "file-provider"}/${issue.account_scope}/${issue.reason}`).join(", ")}
       </p>
     {/if}
-    {#if selectedRootDetails() && selectedRootDetails()?.provider !== "icloud"}
+    {#if selectedRootDetails()?.provider === "icloud"}
+      <div class="oauth-panel">
+        <strong>macOS iCloud 계정 용량 증거</strong>
+        <button onclick={verifyProviderCapacity} disabled={checkingCapacity}>
+          {checkingCapacity ? "iCloud 계정 확인 중…" : "iCloud 원격 잔여 용량 검증"}
+        </button>
+        {#if capacityForSelectedRoot()?.evidence_kind === "provider-native-status"}
+          <p class="capacity-ok">
+            Apple 네이티브 계정 상태 확인 완료
+            · 원격 잔여 {fmtBytes(capacityForSelectedRoot()?.remaining_bytes ?? 0)}
+          </p>
+        {:else if capacityForSelectedRoot()}
+          <p class="warning">
+            {capacityUnavailableLabel(capacityForSelectedRoot()?.unavailable_reason ?? null)}
+          </p>
+        {:else}
+          <p class="muted">관리자 권한이나 OAuth 없이 macOS의 읽기 전용 iCloud 계정 상태를 사용합니다.</p>
+        {/if}
+      </div>
+    {:else if selectedRootDetails()}
       <div class="oauth-panel">
         {#if connectionForSelectedRoot()}
           <strong>읽기 전용 OAuth descriptor 발견</strong>
@@ -428,7 +450,7 @@
     {#if report.capacity}
       {#if report.capacity.can_fit === true}
         <p class="capacity-ok">
-          공급자 API 용량 확인됨 · 요청 {fmtBytes(report.capacity.requested_bytes)} + 보존 여유
+          원격 계정 용량 확인됨 · 요청 {fmtBytes(report.capacity.requested_bytes)} + 보존 여유
           {fmtBytes(report.capacity.reserve_bytes)}
           {#if report.capacity.snapshot.remaining_bytes !== null}
             · 원격 잔여 {fmtBytes(report.capacity.snapshot.remaining_bytes)}
@@ -444,7 +466,7 @@
         <p class="warning">
           원격 quota를 검증할 수 없음: {report.capacity.snapshot.unavailable_reason ?? "cloud-capacity-unavailable"}.
           OneDrive·Google Drive는 읽기 전용 OAuth 연결 후 다시 계획해야 복사할 수 있습니다.
-          iCloud는 계정 quota API가 없어 원본을 보존한 복사와 후속 동기화 증거로만 진행합니다.
+          iCloud는 macOS 네이티브 계정 상태 확인 후 다시 계획해야 복사할 수 있습니다.
         </p>
       {/if}
     {/if}

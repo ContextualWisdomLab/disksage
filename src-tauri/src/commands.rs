@@ -562,11 +562,19 @@ pub async fn verify_cloud_provider_capacity(
     cloud::validate_cloud_root_readable(&selected)?;
     let observed_at_ms = cloud::system_now_ms();
     if selected.provider == cloud::CloudProvider::Icloud {
-        return Ok(provider_capacity::unavailable_capacity(
-            selected.provider,
-            observed_at_ms,
-            "icloud-quota-api-unavailable",
-        ));
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            provider_capacity::collect_icloud_native_capacity(observed_at_ms)
+        })
+        .await
+        .map_err(|_| "icloud-native-quota-task-failed".to_string());
+        return Ok(match result {
+            Ok(Ok(snapshot)) => snapshot,
+            Ok(Err(error)) | Err(error) => provider_capacity::unavailable_capacity_from_error(
+                cloud::CloudProvider::Icloud,
+                observed_at_ms,
+                &error,
+            ),
+        });
     }
     let provider = selected.provider;
     let connection_path = match oauth_connections_path(&app) {
@@ -643,11 +651,7 @@ fn authenticated_capacity_snapshot(
     observed_at_ms: u64,
 ) -> Result<provider_capacity::CloudCapacitySnapshot, String> {
     if selected.provider == cloud::CloudProvider::Icloud {
-        return Ok(provider_capacity::unavailable_capacity(
-            selected.provider,
-            observed_at_ms,
-            "icloud-quota-api-unavailable",
-        ));
+        return provider_capacity::collect_icloud_native_capacity(observed_at_ms);
     }
     let access_token =
         provider_oauth::refreshed_access_token(&oauth_connections_path(app)?, selected)?;
@@ -691,6 +695,12 @@ fn attach_capacity_assessment(
         .notices
         .retain(|notice| notice != "cloud-quota-unverified");
     report.notices.push(match assessment.can_fit {
+        Some(true)
+            if assessment.snapshot.evidence_kind
+                == provider_capacity::CapacityEvidenceKind::ProviderNativeStatus =>
+        {
+            "cloud-quota-provider-native-verified"
+        }
         Some(true) => "cloud-quota-provider-api-verified",
         Some(false) => "cloud-quota-insufficient-or-blocked",
         None => "cloud-quota-unavailable",
@@ -705,9 +715,6 @@ fn require_capacity_for_copy(
     candidate: &cloud::CloudCandidate,
     app: &AppHandle,
 ) -> Result<(), String> {
-    if selected.provider == cloud::CloudProvider::Icloud {
-        return Ok(());
-    }
     let snapshot = authenticated_capacity_snapshot(selected, app, cloud::system_now_ms())?;
     let assessment = provider_capacity::assess_capacity(
         snapshot,
