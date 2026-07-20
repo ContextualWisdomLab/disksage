@@ -164,14 +164,24 @@ pub fn evidence_from_file_provider_snapshot(
     })
 }
 
-fn file_provider_status_bool(output: &str, key: &str) -> Result<bool, String> {
+fn file_provider_status_value<'a>(output: &'a str, key: &str) -> Result<&'a str, String> {
     let prefix = format!("{key} = ");
-    let value = output
+    let mut values = output
         .lines()
         .map(str::trim)
-        .find_map(|line| line.strip_prefix(&prefix))
+        .filter_map(|line| line.strip_prefix(&prefix));
+    let value = values
+        .next()
         .map(|value| value.trim().trim_end_matches(';'))
         .ok_or_else(|| format!("file-provider-status-field-missing:{key}"))?;
+    if values.next().is_some() {
+        return Err(format!("file-provider-status-field-duplicate:{key}"));
+    }
+    Ok(value)
+}
+
+fn file_provider_status_bool(output: &str, key: &str) -> Result<bool, String> {
+    let value = file_provider_status_value(output, key)?;
     match value {
         "1" => Ok(true),
         "0" => Ok(false),
@@ -179,11 +189,21 @@ fn file_provider_status_bool(output: &str, key: &str) -> Result<bool, String> {
     }
 }
 
+fn file_provider_status_u64(output: &str, key: &str) -> Result<u64, String> {
+    file_provider_status_value(output, key)?
+        .parse()
+        .map_err(|_| format!("file-provider-status-field-invalid:{key}"))
+}
+
 pub fn parse_file_providerctl_snapshot(
     output: &str,
     observed_bytes: u64,
     destination_blake3: &str,
 ) -> Result<FileProviderStatusSnapshot, String> {
+    let provider_reported_bytes = file_provider_status_u64(output, "documentSize")?;
+    if provider_reported_bytes != observed_bytes {
+        return Err("file-provider-status-document-size-mismatch".into());
+    }
     Ok(FileProviderStatusSnapshot {
         is_downloaded: file_provider_status_bool(output, "isDownloaded")?,
         is_downloading: file_provider_status_bool(output, "isDownloading")?,
@@ -195,7 +215,7 @@ pub fn parse_file_providerctl_snapshot(
         is_uploading: file_provider_status_bool(output, "isUploading")?,
         is_excluded_from_sync: file_provider_status_bool(output, "isExcludedFromSync")?,
         is_sync_paused: file_provider_status_bool(output, "isSyncPaused")?,
-        observed_bytes,
+        observed_bytes: provider_reported_bytes,
         destination_blake3: destination_blake3.into(),
     })
 }
@@ -713,6 +733,7 @@ mod tests {
 
     fn uploaded_file_provider_output() -> &'static str {
         r#"
+            documentSize = 42;
             isDownloaded = 1;
             isDownloading = 0;
             isMostRecentVersionDownloaded = 1;
@@ -744,6 +765,43 @@ mod tests {
             evidence_from_file_provider_snapshot(&receipt(CloudProvider::Icloud), &snapshot, 30,)
                 .unwrap_err(),
             "third-party-file-provider-receipt-required"
+        );
+    }
+
+    #[test]
+    fn file_provider_status_binds_exactly_one_provider_reported_size() {
+        let duplicate = uploaded_file_provider_output().replace(
+            "documentSize = 42;",
+            "documentSize = 42;\n            documentSize = 42;",
+        );
+        assert_eq!(
+            parse_file_providerctl_snapshot(&duplicate, 42, "content-hash").unwrap_err(),
+            "file-provider-status-field-duplicate:documentSize"
+        );
+
+        let missing = uploaded_file_provider_output().replace("documentSize = 42;", "");
+        assert_eq!(
+            parse_file_providerctl_snapshot(&missing, 42, "content-hash").unwrap_err(),
+            "file-provider-status-field-missing:documentSize"
+        );
+
+        let changed =
+            uploaded_file_provider_output().replace("documentSize = 42", "documentSize = 41");
+        assert_eq!(
+            parse_file_providerctl_snapshot(&changed, 42, "content-hash").unwrap_err(),
+            "file-provider-status-document-size-mismatch"
+        );
+    }
+
+    #[test]
+    fn file_provider_status_rejects_duplicate_decision_flags() {
+        let duplicate = uploaded_file_provider_output().replace(
+            "isUploaded = 1;",
+            "isUploaded = 1;\n            isUploaded = 0;",
+        );
+        assert_eq!(
+            parse_file_providerctl_snapshot(&duplicate, 42, "content-hash").unwrap_err(),
+            "file-provider-status-field-duplicate:isUploaded"
         );
     }
 
