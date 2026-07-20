@@ -17,7 +17,7 @@ use crate::safety;
 #[cfg(not(coverage))]
 use crate::{
     cloud, cloud_review, cloud_transfer, dev_artifacts, dupes, provider_api_client,
-    provider_evidence, provider_oauth, provider_sync, rules,
+    provider_capacity, provider_evidence, provider_oauth, provider_sync, rules,
 };
 
 #[derive(Default)]
@@ -584,11 +584,101 @@ fn cloud_plan_for_inputs(
     Ok((selected, report))
 }
 
+#[cfg(not(coverage))]
+fn authenticated_capacity_snapshot(
+    selected: &cloud::CloudRoot,
+    app: &AppHandle,
+    observed_at_ms: u64,
+) -> Result<provider_capacity::CloudCapacitySnapshot, String> {
+    if selected.provider == cloud::CloudProvider::Icloud {
+        return Ok(provider_capacity::unavailable_capacity(
+            selected.provider,
+            observed_at_ms,
+            "icloud-quota-api-unavailable",
+        ));
+    }
+    let access_token =
+        provider_oauth::refreshed_access_token(&oauth_connections_path(app)?, selected)?;
+    provider_capacity::collect_authenticated_capacity(
+        selected.provider,
+        access_token.as_str(),
+        observed_at_ms,
+        &provider_capacity::FixedHostProviderCapacityClient::default(),
+    )
+}
+
+#[cfg(not(coverage))]
+fn attach_capacity_assessment(
+    report: &mut cloud::CloudPlanReport,
+    selected: &cloud::CloudRoot,
+    app: &AppHandle,
+) {
+    let observed_at_ms = cloud::system_now_ms();
+    let snapshot = match authenticated_capacity_snapshot(selected, app, observed_at_ms) {
+        Ok(snapshot) => snapshot,
+        Err(_) => provider_capacity::unavailable_capacity(
+            selected.provider,
+            observed_at_ms,
+            "cloud-capacity-provider-api-unavailable",
+        ),
+    };
+    let largest_candidate_bytes = report
+        .candidates
+        .iter()
+        .filter(|candidate| candidate.blocked_reason.is_none())
+        .map(|candidate| candidate.bytes)
+        .max()
+        .unwrap_or_default();
+    let assessment = provider_capacity::assess_capacity(
+        snapshot,
+        report.potentially_reclaimable_bytes,
+        largest_candidate_bytes,
+        provider_capacity::DEFAULT_CAPACITY_RESERVE_BYTES,
+    );
+    report
+        .notices
+        .retain(|notice| notice != "cloud-quota-unverified");
+    report.notices.push(match assessment.can_fit {
+        Some(true) => "cloud-quota-provider-api-verified",
+        Some(false) => "cloud-quota-insufficient-or-blocked",
+        None => "cloud-quota-unavailable",
+    }
+    .into());
+    report.capacity = Some(assessment);
+}
+
+#[cfg(not(coverage))]
+fn require_capacity_for_copy(
+    selected: &cloud::CloudRoot,
+    candidate: &cloud::CloudCandidate,
+    app: &AppHandle,
+) -> Result<(), String> {
+    if selected.provider == cloud::CloudProvider::Icloud {
+        return Ok(());
+    }
+    let snapshot = authenticated_capacity_snapshot(selected, app, cloud::system_now_ms())?;
+    let assessment = provider_capacity::assess_capacity(
+        snapshot,
+        candidate.bytes,
+        candidate.bytes,
+        provider_capacity::DEFAULT_CAPACITY_RESERVE_BYTES,
+    );
+    if assessment.can_fit == Some(true) {
+        Ok(())
+    } else {
+        Err(if assessment.blockers.is_empty() {
+            "cloud-capacity-verification-required".into()
+        } else {
+            assessment.blockers.join(",")
+        })
+    }
+}
+
 /// Read-only cloud offload plan. The selected destination must be one of the roots discovered
 /// on this machine; this command never creates a folder or moves a file.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
-pub fn plan_cloud_archive(
+pub async fn plan_cloud_archive(
     root: String,
     cloud_root: String,
     min_size_mib: u64,
@@ -596,8 +686,14 @@ pub fn plan_cloud_archive(
     limit: usize,
     app: AppHandle,
 ) -> Result<cloud::CloudPlanReport, String> {
-    cloud_plan_for_inputs(&root, &cloud_root, min_size_mib, min_age_days, limit, &app)
-        .map(|(_, report)| report)
+    tauri::async_runtime::spawn_blocking(move || {
+        let (selected, mut report) =
+            cloud_plan_for_inputs(&root, &cloud_root, min_size_mib, min_age_days, limit, &app)?;
+        attach_capacity_assessment(&mut report, &selected, &app);
+        Ok(report)
+    })
+    .await
+    .map_err(|_| "cloud-plan-task-failed".to_string())?
 }
 
 /// Rebuild the plan and append an immutable approve/hold decision for the exact evidence shown by
@@ -732,6 +828,9 @@ fn create_cloud_candidate_receipt(
     } else {
         None
     };
+    if !adopt_existing {
+        require_capacity_for_copy(&selected, candidate, app)?;
+    }
     let (receipt, receipt_path) = if adopt_existing {
         cloud_transfer::adopt_existing_cloud_copy_with_review(
             candidate,

@@ -284,6 +284,42 @@ export interface CloudPlanReport {
   candidate_bytes: number;
   potentially_reclaimable_bytes: number;
   exact_duplicates: ExactDuplicateSummary;
+  capacity?: CloudCapacityAssessment;
+  notices: string[];
+}
+
+export type CapacityEvidenceKind = "provider-api" | "unavailable";
+export type CloudCapacityState =
+  | "normal"
+  | "nearing"
+  | "critical"
+  | "exceeded"
+  | "unlimited"
+  | "unavailable";
+
+export interface CloudCapacitySnapshot {
+  schema_version: number;
+  provider: CloudProvider;
+  evidence_kind: CapacityEvidenceKind;
+  observed_at_ms: number;
+  total_bytes: number | null;
+  used_bytes: number | null;
+  remaining_bytes: number | null;
+  trashed_bytes: number | null;
+  max_upload_size_bytes: number | null;
+  state: CloudCapacityState;
+  evidence_fingerprint: string | null;
+  unavailable_reason: string | null;
+}
+
+export interface CloudCapacityAssessment {
+  snapshot: CloudCapacitySnapshot;
+  requested_bytes: number;
+  largest_candidate_bytes: number;
+  reserve_bytes: number;
+  required_bytes: number | null;
+  can_fit: boolean | null;
+  blockers: string[];
   notices: string[];
 }
 

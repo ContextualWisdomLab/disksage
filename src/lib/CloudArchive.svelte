@@ -67,9 +67,12 @@
     const exactApproval = decision?.disposition === "approved";
     const embeddedHighConfidence = candidate.production_time_confidence === "high"
       && candidate.production_time_source.startsWith("embedded:");
+    const capacityEvidenceAvailable = candidate.provider === "icloud"
+      || report?.capacity?.snapshot.evidence_kind === "provider-api";
     return candidate.blocked_reason === null
       && (!candidate.requires_review || exactApproval)
-      && (embeddedHighConfidence || exactApproval);
+      && (embeddedHighConfidence || exactApproval)
+      && capacityEvidenceAvailable;
   }
 
   function adoptEligible(candidate: api.CloudCandidate): boolean {
@@ -354,6 +357,29 @@
       {report.candidates.length}개 후보 · 총 {fmtBytes(report.candidate_bytes)} ·
       충돌 제외 잠재 회수 {fmtBytes(report.potentially_reclaimable_bytes)}
     </div>
+    {#if report.capacity}
+      {#if report.capacity.can_fit === true}
+        <p class="capacity-ok">
+          공급자 API 용량 확인됨 · 요청 {fmtBytes(report.capacity.requested_bytes)} + 보존 여유
+          {fmtBytes(report.capacity.reserve_bytes)}
+          {#if report.capacity.snapshot.remaining_bytes !== null}
+            · 원격 잔여 {fmtBytes(report.capacity.snapshot.remaining_bytes)}
+          {:else}
+            · 공급자 무제한 계정
+          {/if}
+        </p>
+      {:else if report.capacity.can_fit === false}
+        <p class="warning">
+          원격 용량 gate 실패: {report.capacity.blockers.join(", ")}
+        </p>
+      {:else}
+        <p class="warning">
+          원격 quota를 검증할 수 없음: {report.capacity.snapshot.unavailable_reason ?? "cloud-capacity-unavailable"}.
+          OneDrive·Google Drive는 읽기 전용 OAuth 연결 후 다시 계획해야 복사할 수 있습니다.
+          iCloud는 계정 quota API가 없어 원본을 보존한 복사와 후속 동기화 증거로만 진행합니다.
+        </p>
+      {/if}
+    {/if}
     {#if report.exact_duplicates.candidate_count > 0}
       <p class="warning">
         정확 중복 {report.exact_duplicates.candidate_count.toLocaleString()}개 ·
