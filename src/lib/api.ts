@@ -382,6 +382,7 @@ export interface LocalEvictionPermit {
   approved_at_ms: number;
   evidence_kind: SyncEvidenceKind;
   evidence_id: string;
+  evidence_record_id: string;
 }
 
 export interface CloudAttestationOutput {

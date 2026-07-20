@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use std::io::{Read, Write};
 use std::path::Path;
 
-const EVICTION_RECORD_VERSION: u32 = 1;
+const EVICTION_RECORD_VERSION: u32 = 2;
 const MAX_RECORD_BYTES: u64 = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -29,6 +29,7 @@ struct SourceIdentity {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CloudEvictionIntent {
     version: u32,
     intent_id: String,
@@ -46,16 +47,19 @@ struct CloudEvictionIntent {
     approved_at_ms: u64,
     evidence_kind: SyncEvidenceKind,
     evidence_id: String,
+    evidence_record_id: String,
     created_at_ms: u64,
     source_identity: SourceIdentity,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CloudEvictionCompletion {
     version: u32,
     completion_id: String,
     intent_id: String,
     receipt_id: String,
+    evidence_record_id: String,
     completed_at_ms: u64,
     reconciled_after_interruption: bool,
 }
@@ -66,6 +70,7 @@ pub struct CloudEvictionResult {
     pub receipt_id: String,
     pub intent_id: String,
     pub completion_id: String,
+    pub evidence_record_id: String,
     pub source: String,
     pub staged_source: String,
     pub intent_path: String,
@@ -80,6 +85,10 @@ fn absolute_without_parent(path: &Path) -> bool {
         && !path
             .components()
             .any(|component| matches!(component, std::path::Component::ParentDir))
+}
+
+fn valid_hex64(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn path_entry_exists(path: &Path) -> Result<bool, String> {
@@ -176,7 +185,10 @@ fn validate_permit(receipt: &CloudCopyReceipt, permit: &LocalEvictionPermit) -> 
     {
         return Err("eviction-permit-receipt-mismatch".into());
     }
-    if permit.approved_at_ms < receipt.copied_at_ms || permit.evidence_id.trim().is_empty() {
+    if permit.approved_at_ms < receipt.copied_at_ms
+        || permit.evidence_id.trim().is_empty()
+        || !valid_hex64(&permit.evidence_record_id)
+    {
         return Err("eviction-permit-invalid".into());
     }
     Ok(())
@@ -196,6 +208,7 @@ fn intent_id_for(intent: &CloudEvictionIntent) -> String {
         intent.sha256.as_str(),
         intent.quick_xor_base64.as_str(),
         intent.evidence_id.as_str(),
+        intent.evidence_record_id.as_str(),
     ] {
         hasher.update(field.as_bytes());
         hasher.update(&[0]);
@@ -224,6 +237,8 @@ fn completion_id_for(completion: &CloudEvictionCompletion) -> String {
     hasher.update(completion.intent_id.as_bytes());
     hasher.update(&[0]);
     hasher.update(completion.receipt_id.as_bytes());
+    hasher.update(&[0]);
+    hasher.update(completion.evidence_record_id.as_bytes());
     hasher.update(&completion.completed_at_ms.to_le_bytes());
     hasher.update(&[completion.reconciled_after_interruption as u8]);
     hasher.finalize().to_hex().to_string()
@@ -321,6 +336,7 @@ fn write_immutable_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<(
 fn validate_intent(
     intent: &CloudEvictionIntent,
     receipt: &CloudCopyReceipt,
+    permit: &LocalEvictionPermit,
     expected_staging_dir: &Path,
     expected_staged_source: &Path,
 ) -> Result<(), String> {
@@ -341,6 +357,13 @@ fn validate_intent(
     {
         return Err("eviction-intent-receipt-mismatch".into());
     }
+    if intent.approved_at_ms != permit.approved_at_ms
+        || intent.evidence_kind != permit.evidence_kind
+        || intent.evidence_id != permit.evidence_id
+        || intent.evidence_record_id != permit.evidence_record_id
+    {
+        return Err("eviction-intent-permit-mismatch".into());
+    }
     Ok(())
 }
 
@@ -353,7 +376,10 @@ fn validate_completion(
     {
         return Err("eviction-completion-integrity-mismatch".into());
     }
-    if completion.intent_id != intent.intent_id || completion.receipt_id != intent.receipt_id {
+    if completion.intent_id != intent.intent_id
+        || completion.receipt_id != intent.receipt_id
+        || completion.evidence_record_id != intent.evidence_record_id
+    {
         return Err("eviction-completion-intent-mismatch".into());
     }
     Ok(())
@@ -399,6 +425,7 @@ fn result_from_completion(
         receipt_id: intent.receipt_id.clone(),
         intent_id: intent.intent_id.clone(),
         completion_id: completion.completion_id.clone(),
+        evidence_record_id: intent.evidence_record_id.clone(),
         source: intent.source.clone(),
         staged_source: intent.staged_source.clone(),
         intent_path: intent_path.to_string_lossy().into_owned(),
@@ -479,7 +506,7 @@ where
 
     let intent = if path_entry_exists(&intent_path)? {
         let intent: CloudEvictionIntent = read_immutable_json(&intent_path)?;
-        validate_intent(&intent, receipt, &staging_dir, &staged_source)?;
+        validate_intent(&intent, receipt, permit, &staging_dir, &staged_source)?;
         intent
     } else {
         if path_entry_exists(&staging_dir)? {
@@ -503,6 +530,7 @@ where
             approved_at_ms: permit.approved_at_ms,
             evidence_kind: permit.evidence_kind,
             evidence_id: permit.evidence_id.clone(),
+            evidence_record_id: permit.evidence_record_id.clone(),
             created_at_ms: now_ms,
             source_identity: identity,
         };
@@ -572,6 +600,7 @@ where
         completion_id: String::new(),
         intent_id: intent.intent_id.clone(),
         receipt_id: receipt.receipt_id.clone(),
+        evidence_record_id: intent.evidence_record_id.clone(),
         completed_at_ms: now_ms,
         reconciled_after_interruption,
     };
@@ -619,6 +648,7 @@ mod tests {
         candidate_review_fingerprint, ArchiveKind, CloudCandidate, CloudRoot, MetadataEvidence,
     };
     use crate::cloud_transfer::{approve_local_eviction, prepare_cloud_copy, ProviderSyncEvidence};
+    use crate::provider_evidence::create_sync_evidence_record;
 
     fn valid_receipt(temp: &tempfile::TempDir) -> (CloudCopyReceipt, LocalEvictionPermit) {
         let source_dir = temp.path().join("source");
@@ -687,7 +717,8 @@ mod tests {
             sync_complete: true,
             remote_content: None,
         };
-        let permit = approve_local_eviction(&receipt, &evidence).unwrap();
+        let evidence_record = create_sync_evidence_record(&evidence).unwrap();
+        let permit = approve_local_eviction(&receipt, &evidence_record).unwrap();
         (receipt, permit)
     }
 
@@ -713,6 +744,7 @@ mod tests {
         .unwrap();
         assert!(result.source_trashed);
         assert!(!result.already_completed);
+        assert_eq!(result.evidence_record_id, permit.evidence_record_id);
         assert!(!Path::new(&receipt.source).exists());
         assert!(Path::new(&receipt.destination).exists());
         assert!(Path::new(&result.intent_path)
@@ -725,6 +757,29 @@ mod tests {
             .unwrap()
             .permissions()
             .readonly());
+
+        let intent: CloudEvictionIntent =
+            read_immutable_json(Path::new(&result.intent_path)).unwrap();
+        let completion: CloudEvictionCompletion =
+            read_immutable_json(Path::new(&result.completion_path)).unwrap();
+        assert_eq!(intent.evidence_record_id, permit.evidence_record_id);
+        assert_eq!(completion.evidence_record_id, permit.evidence_record_id);
+
+        let mut substituted_permit = permit.clone();
+        substituted_permit.evidence_record_id = "f".repeat(64);
+        assert_eq!(
+            evict_source_with(
+                &receipt,
+                &substituted_permit,
+                &receipt.receipt_id,
+                &records,
+                &journal,
+                201,
+                mock_trash,
+            )
+            .unwrap_err(),
+            "eviction-intent-permit-mismatch"
+        );
 
         std::fs::write(&receipt.source, b"later unrelated file").unwrap();
         let repeated = evict_source_with(

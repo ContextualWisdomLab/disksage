@@ -935,10 +935,11 @@ pub async fn attest_cloud_copy(
         };
         let (evidence_record, evidence_path) =
             provider_evidence::write_immutable_sync_evidence(&evidence_dir, &evidence)?;
-        let (permit, blockers) = match cloud_transfer::approve_local_eviction(&receipt, &evidence) {
-            Ok(permit) => (Some(permit), Vec::new()),
-            Err(blockers) => (None, blockers),
-        };
+        let (permit, blockers) =
+            match cloud_transfer::approve_local_eviction(&receipt, &evidence_record) {
+                Ok(permit) => (Some(permit), Vec::new()),
+                Err(blockers) => (None, blockers),
+            };
         Ok(CloudAttestationOutput {
             evidence,
             evidence_record,

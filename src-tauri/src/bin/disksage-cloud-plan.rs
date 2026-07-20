@@ -505,10 +505,11 @@ fn attest_receipt(
     )?;
     let (evidence_record, evidence_path) =
         provider_evidence::write_immutable_sync_evidence(evidence_dir, &evidence)?;
-    let (permit, blockers) = match cloud_transfer::approve_local_eviction(&receipt, &evidence) {
-        Ok(permit) => (Some(permit), Vec::new()),
-        Err(blockers) => (None, blockers),
-    };
+    let (permit, blockers) =
+        match cloud_transfer::approve_local_eviction(&receipt, &evidence_record) {
+            Ok(permit) => (Some(permit), Vec::new()),
+            Err(blockers) => (None, blockers),
+        };
     Ok(AttestationOutput {
         action: "attest-provider-native",
         receipt_id: receipt.receipt_id,
@@ -543,10 +544,10 @@ fn evict_native_receipt(
         home,
         confirmed_at_ms,
     )?;
-    let permit = cloud_transfer::approve_local_eviction(&receipt, &evidence)
-        .map_err(|blockers| blockers.join(","))?;
     let (evidence_record, evidence_path) =
         provider_evidence::write_immutable_sync_evidence(evidence_dir, &evidence)?;
+    let permit = cloud_transfer::approve_local_eviction(&receipt, &evidence_record)
+        .map_err(|blockers| blockers.join(","))?;
     let eviction = cloud_eviction::evict_source(
         &receipt,
         &permit,
