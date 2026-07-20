@@ -93,6 +93,13 @@
     return decision?.review_fingerprint === candidate.review_fingerprint ? decision : null;
   }
 
+  function reviewReasonLabel(reason: string): string {
+    if (reason === "embedded-date-differs-from-filename-publication-month") {
+      return "내장 생산일과 파일명 발행월이 다름";
+    }
+    return reason;
+  }
+
   async function reviewCandidate(
     candidate: api.CloudCandidate,
     disposition: api.CloudReviewDisposition,
@@ -418,7 +425,7 @@
               <div class="metadata">작성자/아티스트: {candidate.content_authors.join(", ")}</div>
             {/if}
             {#if candidate.content_context.length > 0}
-              <div class="metadata">내장 맥락: {candidate.content_context.join(" · ")}</div>
+              <div class="metadata">보존 맥락: {candidate.content_context.join(" · ")}</div>
             {/if}
             {#if candidate.duration_ms !== null}
               <div class="metadata">재생 시간: {duration(candidate.duration_ms)}</div>
@@ -531,7 +538,7 @@
               </ul>
             </details>
             {#if candidate.review_reasons.length > 0}
-              <div class="context">검토 사유: {candidate.review_reasons.join(", ")}</div>
+              <div class="context">검토 사유: {candidate.review_reasons.map(reviewReasonLabel).join(", ")}</div>
             {/if}
           </li>
         {/each}
