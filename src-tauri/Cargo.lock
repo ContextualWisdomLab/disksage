@@ -1017,6 +1017,7 @@ dependencies = [
  "jwalk",
  "keyring",
  "llama-cpp-2",
+ "memchr",
  "objc2",
  "objc2-foundation",
  "oxrdf",
@@ -1034,6 +1035,7 @@ dependencies = [
  "unicode-normalization",
  "ureq",
  "zeroize",
+ "zip",
 ]
 
 [[package]]
