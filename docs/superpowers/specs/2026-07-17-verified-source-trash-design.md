@@ -48,7 +48,12 @@ the UI, and sealed in the version 3 lineage snapshot. Changing only the destinat
 therefore invalidates an earlier operator decision. Unknown and shared scopes always require
 review. A personal destination with recording, personal-data, confidential, geolocation, opaque
 container, or sensitive dataset evidence adds
-`personal-cloud-sensitive-context-needs-explicit-approval`.
+`personal-cloud-sensitive-context-needs-explicit-approval`. An organization-scoped root proves
+only that the local account label is not a known consumer identity; it does not prove that its
+tenant is authorized for the candidate's organization. The same sensitive evidence therefore adds
+`organization-cloud-sensitive-context-needs-explicit-tenant-approval`. The exact destination path,
+including the File Provider account identity, remains bound into the review fingerprint so an
+approval for one organization root cannot authorize another.
 
 The copy gate independently requires the candidate scope to match the freshly selected cloud root
 scope. A caller cannot construct an organization-scoped candidate and copy it into a personal root.
