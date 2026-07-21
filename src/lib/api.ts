@@ -68,6 +68,62 @@ export const recentOperations = (limit = 20) =>
 export const findDuplicateFiles = (root: string) =>
   invoke<DupeGroup[]>("find_duplicate_files", { root });
 
+export interface PodmanMachineEvidence {
+  name: string;
+  state: string;
+  configured_disk_bytes: number | null;
+}
+export interface RawImageEvidence {
+  path: string;
+  logical_bytes: number;
+  allocated_bytes: number | null;
+}
+export interface GuestFilesystemEvidence {
+  total_bytes: number;
+  used_bytes: number;
+  available_bytes: number;
+}
+export interface PodmanStoreEvidence {
+  graph_root: string;
+  graph_root_allocated_bytes: number;
+  graph_root_used_bytes: number;
+  images: number;
+  containers_total: number;
+  containers_running: number;
+  containers_stopped: number;
+}
+export type PodmanRecommendedActionKind =
+  | "restore_guest_headroom"
+  | "investigate_api"
+  | "review_guest_trim"
+  | "review_stopped_containers";
+export interface PodmanRecommendedAction {
+  kind: PodmanRecommendedActionKind;
+  requires_human_approval: boolean;
+  rationale: string;
+}
+export interface PodmanReclaimPlan {
+  schema_kind: "disksage.podman-reclaim-plan";
+  schema_version: number;
+  platform: string;
+  evidence_complete: boolean;
+  elapsed_ms: number;
+  machine: PodmanMachineEvidence | null;
+  raw_image: RawImageEvidence | null;
+  guest_filesystem: GuestFilesystemEvidence | null;
+  store: PodmanStoreEvidence | null;
+  assessment: {
+    physically_reclaimable_bytes: number | null;
+    raw_allocated_minus_guest_used_bytes: number | null;
+    status: string;
+    reason_codes: string[];
+    recommended_actions: PodmanRecommendedAction[];
+  };
+  issues: string[];
+}
+export const podmanReclaimPlan = (machine?: string) =>
+  invoke<PodmanReclaimPlan>("podman_reclaim_plan", { machine: machine ?? null });
+
 export const onScanProgress = (cb: (s: ScanStats) => void) =>
   listen<ScanStats>("scan://progress", (e) => cb(e.payload));
 export const onScanDone = (cb: (s: ScanStats) => void) =>

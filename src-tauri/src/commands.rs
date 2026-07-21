@@ -132,6 +132,29 @@ pub fn clean_paths_inner(
         .collect()
 }
 
+/// Read-only Podman evidence probe. Cleanup, prune, volume removal, machine lifecycle, and TRIM
+/// remain outside this command and require a separate human-approved workflow.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn podman_reclaim_plan(
+    machine: Option<String>,
+) -> Result<crate::podman_reclaim::PodmanReclaimPlan, String> {
+    let machine =
+        machine.unwrap_or_else(|| crate::podman_reclaim::DEFAULT_PODMAN_MACHINE.to_string());
+    tauri::async_runtime::spawn_blocking(move || {
+        let podman_bin = std::env::var_os("DISKSAGE_PODMAN_BIN")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("podman"));
+        crate::podman_reclaim::probe_podman_reclaim(
+            &podman_bin,
+            &machine,
+            crate::podman_reclaim::DEFAULT_PROBE_TIMEOUT,
+        )
+    })
+    .await
+    .map_err(|error| format!("podman-probe-join:{error}"))
+}
+
 /// 저널의 move 경로 필드 "src -> dst"를 분리 (순수 함수 — 테스트 대상). 구분자 없으면 None.
 pub fn parse_move_entry(path_field: &str) -> Option<(String, String)> {
     path_field
