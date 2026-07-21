@@ -32,6 +32,7 @@ mod dataset_metadata;
 pub mod archive_git_tree;
 #[cfg_attr(coverage, allow(dead_code))]
 pub mod cloud;
+pub mod cloud_local_inventory;
 #[cfg(not(coverage))]
 pub mod cloud_eviction;
 pub mod cloud_review;
