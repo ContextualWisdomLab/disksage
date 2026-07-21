@@ -62,10 +62,10 @@
     ];
     if (summary.length === 0) return;
     const okay = await confirm(
-      `다음 ${summary.length}개 항목을 휴지통으로 보냅니다 (총 ${fmtBytes(totalSelected)}):\n\n` +
+      `다음 ${summary.length}개 항목을 휴지통으로 보냅니다 (논리 크기 합계 ${fmtBytes(totalSelected)}):\n\n` +
         summary.slice(0, 15).join("\n") +
         (summary.length > 15 ? `\n… 외 ${summary.length - 15}개` : "") +
-        "\n\n휴지통에서 언제든 복원할 수 있습니다.",
+        "\n\n휴지통에서 언제든 복원할 수 있습니다. 휴지통을 비우기 전에는 물리 공간이 회수되지 않으며, APFS 공유 블록 때문에 실제 회수량은 논리 크기보다 작을 수 있습니다.",
       { title: "DiskSage", kind: "warning" },
     );
     if (!okay) return;
@@ -138,7 +138,7 @@
 
   <div class="actions">
     <button onclick={executeClean} disabled={busy || selectionCount === 0}>
-      {busy ? "정리 중…" : `선택 항목 휴지통으로 (${fmtBytes(totalSelected)})`}
+      {busy ? "정리 중…" : `선택 항목 휴지통으로 (논리 ${fmtBytes(totalSelected)})`}
     </button>
   </div>
 

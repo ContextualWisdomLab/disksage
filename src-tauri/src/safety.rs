@@ -26,6 +26,18 @@ fn is_home_root(path: &Path, home: Option<&str>) -> bool {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn is_macos_user_temp_descendant(path: &Path) -> bool {
+    let Ok(temp_root) = std::fs::canonicalize(std::env::temp_dir()) else {
+        return false;
+    };
+    let platform_temp_parent = Path::new("/private/var/folders");
+    temp_root != platform_temp_parent
+        && temp_root.starts_with(platform_temp_parent)
+        && path != temp_root
+        && path.starts_with(temp_root)
+}
+
 /// 시스템·루트 경로 하드 거부 목록 (스펙 §7-3).
 /// 안전 계층의 최후 방어선 — 호출자가 무엇을 넘기든 여기서 걸러진다.
 pub fn is_protected(path: &Path) -> bool {
@@ -77,6 +89,13 @@ pub fn is_protected(path: &Path) -> bool {
     }
     #[cfg(unix)]
     {
+        // macOS의 사용자별 임시 디렉터리는 /private 아래로 canonicalize된다. 그 하위만
+        // 허용하되 임시 루트 자체와 그 밖의 /private 트리는 계속 보호한다. 보호 경로를
+        // 가리키는 심링크는 호출부에서 먼저 canonicalize되므로 이 예외를 우회할 수 없다.
+        #[cfg(target_os = "macos")]
+        if is_macos_user_temp_descendant(path) {
+            return false;
+        }
         // macOS는 extend로 시스템 경로를 더 넣는다 — 다른 unix에선 그 라인이 cfg-out되어 mut가
         // 미사용이므로 allow(unused_mut). Linux 게이트는 macOS 전용 라인을 컴파일하지 않아 커버 불필요.
         #[allow(unused_mut)]
@@ -467,6 +486,14 @@ mod tests {
         ] {
             assert!(is_protected(Path::new(p)), "{p} must be protected on macOS");
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn allows_only_descendants_of_the_current_macos_user_temp_root() {
+        let temp_root = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+        assert!(is_protected(&temp_root));
+        assert!(!is_protected(&temp_root.join("disksage-user-owned-fixture")));
     }
 
     #[test]
