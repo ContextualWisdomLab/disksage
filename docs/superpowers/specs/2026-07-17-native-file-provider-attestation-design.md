@@ -24,6 +24,13 @@ hydrate, evict, upload, delete, or otherwise mutate either file.
 9. If native evidence is incomplete or unavailable and the user supplied a provider object ID,
    fall back to the existing read-only OAuth API revision and checksum proof.
 
+For iCloud, the Foundation adapter binds both `NSURLUbiquitousItemIsUploadedKey` and
+`NSURLUbiquitousItemIsUploadingKey`. Even an anomalous state that reports uploaded and uploading
+at the same time fails closed. Separately, the attestation output compares its provider observation
+time with the immutable receipt copy time. An incomplete observation is `pending` for the first 24
+hours and `overdue` afterward. Timeliness is diagnostic only: it never changes `sync_complete`,
+creates a permit, retries an upload, or mutates either copy.
+
 ## Trust boundaries
 
 - Native evidence is accepted for iCloud, OneDrive, and Google Drive only when it contains no
@@ -45,6 +52,8 @@ path and rejects an item ID. Google Drive accepts a file ID only as the starting
 stable parent-chain proof to the My Drive root; ID-only checksum evidence cannot authorize source
 eviction. Both use an existing OS-keychain OAuth connection. The headless `--attest-receipt` path
 supports all three providers using native status and the same provider-specific fallback rules.
+The output and desktop UI distinguish a normal confirmation wait from an overdue unconfirmed copy,
+report the exact pending age, and continue to retain the source in both cases.
 The desktop app stores records under its application-data `cloud-provider-evidence` directory;
 the headless command requires an explicit absolute `--evidence-dir`.
 

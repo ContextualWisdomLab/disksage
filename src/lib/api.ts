@@ -425,6 +425,15 @@ export interface ProviderSyncEvidenceRecord {
   evidence: ProviderSyncEvidence;
 }
 
+export type ProviderSyncTimeliness = "complete" | "pending" | "overdue";
+
+export interface ProviderSyncTimelinessAssessment {
+  state: ProviderSyncTimeliness;
+  pending_age_ms: number;
+  overdue_after_ms: number;
+  reason_codes: string[];
+}
+
 export interface LocalEvictionPermit {
   receipt_id: string;
   provider: CloudProvider;
@@ -440,6 +449,7 @@ export interface LocalEvictionPermit {
 
 export interface CloudAttestationOutput {
   evidence: ProviderSyncEvidence;
+  assessment: ProviderSyncTimelinessAssessment;
   evidence_record: ProviderSyncEvidenceRecord;
   evidence_path: string;
   permit: LocalEvictionPermit | null;

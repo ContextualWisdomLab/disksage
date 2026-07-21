@@ -505,6 +505,15 @@
           {attesting ? "검증 중…" : "클라우드 업로드 상태·콘텐츠 확인"}
         </button>
         {#if attestation}
+          {#if attestation.assessment.state === "overdue"}
+            <p class="warning">
+              공급자 확인이 {Math.floor(attestation.assessment.pending_age_ms / 3_600_000)}시간째 완료되지 않았습니다. 원본은 계속 보존하며 iCloud/File Provider 상태를 점검해야 합니다.
+            </p>
+          {:else if attestation.assessment.state === "pending"}
+            <p class="muted">
+              공급자 확인 대기 {Math.floor(attestation.assessment.pending_age_ms / 60_000)}분. 완료 전에는 원본을 제거하지 않습니다.
+            </p>
+          {/if}
           {#if attestation.permit}
             <p class="safe">업로드 상태와 복사 콘텐츠 검증 완료. 로컬 제거 허가 증거가 생성되었지만 파일은 그대로 보존됩니다.</p>
           {:else}
