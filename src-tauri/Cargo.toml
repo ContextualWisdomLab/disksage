@@ -20,6 +20,11 @@ path = "src/bin/disksage-cloud-plan.rs"
 required-features = ["cloud-cli"]
 
 [[bin]]
+name = "disksage-cloud-local-inventory"
+path = "src/bin/disksage-cloud-local-inventory.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
 name = "disksage-archive-tree"
 path = "src/bin/disksage-archive-tree.rs"
 required-features = ["archive-cli"]
