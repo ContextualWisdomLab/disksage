@@ -35,6 +35,19 @@ filesystem-native evidence exists. Interchange output is bounded to 1,000 normal
 4,096 UTF-8 bytes per canonical path; non-UTF-8 and control-character paths fail closed instead of
 being serialized ambiguously.
 
+### Read-only Podman VM evidence
+
+```sh
+cargo run --manifest-path src-tauri/Cargo.toml --bin disksage-podman-reclaim-plan -- \
+  --machine podman-machine-default --pretty
+```
+
+This bounded Rust probe separates the guest filesystem, Podman store, raw image logical size, and
+observed host allocation. It emits `schema_kind: disksage.podman-reclaim-plan` and never prunes
+images, removes containers or volumes, changes machine state, or runs TRIM. Podman/guest reported
+space is not promoted to host physical reclaim proof; privileged or destructive follow-up remains
+human-approved and must be verified with a before/after host free-space observation.
+
 ## Status
 
 🚧 Early development. See the [design spec](docs/superpowers/specs/2026-07-10-disksage-design.md).

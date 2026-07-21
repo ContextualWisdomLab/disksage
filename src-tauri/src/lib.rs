@@ -28,6 +28,8 @@ mod web;
 #[cfg_attr(coverage, allow(dead_code))]
 mod reasoning;
 
+/// Read-only Podman guest/raw allocation evidence. Never executes cleanup or TRIM.
+pub mod podman_reclaim;
 /// Read-only, fail-closed logical/allocation/reclaimability evidence.
 pub mod reclaim;
 
@@ -64,7 +66,8 @@ pub fn run() {
             commands::summarize_unknown_bucket,
             commands::get_settings,
             commands::set_settings,
-            commands::reason_unknown_extensions
+            commands::reason_unknown_extensions,
+            commands::podman_reclaim_plan
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

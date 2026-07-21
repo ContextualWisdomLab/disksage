@@ -19,6 +19,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 name = "disksage-reclaim-plan"
 path = "src/bin/disksage-reclaim-plan.rs"
 
+[[bin]]
+name = "disksage-podman-reclaim-plan"
+path = "src/bin/disksage-podman-reclaim-plan.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
