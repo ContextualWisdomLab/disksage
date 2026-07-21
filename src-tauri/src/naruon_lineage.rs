@@ -9,6 +9,9 @@ use crate::cloud::{ArchiveKind, CloudAccountScope, CloudProvider, MetadataEviden
 use crate::cloud_review::CloudReviewDisposition;
 use crate::cloud_transfer::{CloudCopyReceipt, CloudCopyVerificationMethod, SyncEvidenceKind};
 use crate::provider_evidence::{validate_sync_evidence_record, ProviderSyncEvidenceRecord};
+#[cfg(test)]
+use crate::provider_sync::PROVIDER_SYNC_OVERDUE_AFTER_MS;
+use crate::provider_sync::{assess_provider_sync_timeliness, ProviderSyncTimeliness};
 
 pub const NARUON_FILE_LINEAGE_SCHEMA_VERSION: u32 = 1;
 pub const NARUON_FILE_LINEAGE_SCHEMA_KIND: &str = "disksage.file-lineage";
@@ -71,6 +74,10 @@ pub struct NaruonCloudCopyLineage {
     pub remote_object_id: Option<String>,
     pub remote_revision: Option<String>,
     pub remote_location_bound: Option<bool>,
+    pub sync_timeliness: Option<ProviderSyncTimeliness>,
+    pub sync_pending_age_ms: Option<u64>,
+    pub sync_overdue_after_ms: Option<u64>,
+    pub sync_reason_codes: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -179,6 +186,9 @@ pub fn export_naruon_file_lineage(
     }
     let source_filename = source_filename(&lineage.relative_path)?;
     let evidence = evidence_record.map(|record| &record.evidence);
+    let assessment = evidence
+        .map(|item| assess_provider_sync_timeliness(receipt, item))
+        .transpose()?;
     let remote_content = evidence.and_then(|item| item.remote_content.as_ref());
 
     Ok(NaruonFileLineageEnvelope {
@@ -239,6 +249,13 @@ pub fn export_naruon_file_lineage(
             remote_object_id: remote_content.map(|proof| proof.object_id.clone()),
             remote_revision: remote_content.map(|proof| proof.revision.clone()),
             remote_location_bound: remote_content.map(|proof| proof.location_bound),
+            sync_timeliness: assessment.as_ref().map(|item| item.state),
+            sync_pending_age_ms: assessment.as_ref().map(|item| item.pending_age_ms),
+            sync_overdue_after_ms: assessment.as_ref().map(|item| item.overdue_after_ms),
+            sync_reason_codes: assessment
+                .as_ref()
+                .map(|item| item.reason_codes.clone())
+                .unwrap_or_default(),
         },
     })
 }
@@ -344,6 +361,12 @@ mod tests {
         assert!(envelope.cloud_copy.provider_sync_confirmed);
         assert!(!envelope.cloud_copy.provider_write_executed);
         assert!(envelope.cloud_copy.sync_evidence_record_id.is_some());
+        assert_eq!(
+            envelope.cloud_copy.sync_timeliness,
+            Some(ProviderSyncTimeliness::Complete)
+        );
+        assert_eq!(envelope.cloud_copy.sync_pending_age_ms, Some(0));
+        assert!(envelope.cloud_copy.sync_reason_codes.is_empty());
     }
 
     #[test]
@@ -353,6 +376,34 @@ mod tests {
         assert!(!envelope.cloud_copy.provider_sync_confirmed);
         assert_eq!(envelope.cloud_copy.sync_evidence_id, None);
         assert_eq!(envelope.cloud_copy.sync_confirmed_at_ms, None);
+        assert_eq!(envelope.cloud_copy.sync_timeliness, None);
+        assert_eq!(envelope.cloud_copy.sync_pending_age_ms, None);
+        assert!(envelope.cloud_copy.sync_reason_codes.is_empty());
+    }
+
+    #[test]
+    fn export_preserves_overdue_as_diagnostic_without_confirming_sync() {
+        let receipt = receipt();
+        let mut pending = evidence(&receipt).evidence;
+        pending.confirmed_at_ms = receipt.copied_at_ms + PROVIDER_SYNC_OVERDUE_AFTER_MS;
+        pending.sync_complete = false;
+        let record = create_sync_evidence_record(&pending).unwrap();
+
+        let envelope = export_naruon_file_lineage(&receipt, Some(&record)).unwrap();
+
+        assert!(!envelope.cloud_copy.provider_sync_confirmed);
+        assert_eq!(
+            envelope.cloud_copy.sync_timeliness,
+            Some(ProviderSyncTimeliness::Overdue)
+        );
+        assert_eq!(
+            envelope.cloud_copy.sync_pending_age_ms,
+            Some(PROVIDER_SYNC_OVERDUE_AFTER_MS)
+        );
+        assert_eq!(
+            envelope.cloud_copy.sync_reason_codes,
+            ["provider-sync-confirmation-overdue"]
+        );
     }
 
     #[test]
