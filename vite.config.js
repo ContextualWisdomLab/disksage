@@ -1,7 +1,40 @@
 import { defineConfig } from "vite";
 import { sveltekit } from "@sveltejs/kit/vite";
 
-const host = process.env.TAURI_DEV_HOST;
+/** @param {string | undefined} requestedHost */
+export function resolveDevHost(requestedHost) {
+  const host = requestedHost?.trim();
+  if (!host) return undefined;
+  if (/[\\/@?#]/u.test(host)) {
+    throw new Error("TAURI_DEV_HOST must contain only a host name or IP address");
+  }
+
+  const authority = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  let parsed;
+  try {
+    parsed = new URL(`http://${authority}`);
+  } catch {
+    throw new Error("TAURI_DEV_HOST must contain only a host name or IP address");
+  }
+  if (
+    parsed.username ||
+    parsed.password ||
+    parsed.port ||
+    parsed.pathname !== "/" ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    throw new Error("TAURI_DEV_HOST must contain only a host name or IP address");
+  }
+
+  const normalized = parsed.hostname.toLowerCase();
+  if (normalized === "0.0.0.0" || normalized === "[::]" || normalized === "*") {
+    throw new Error("TAURI_DEV_HOST must not bind all network interfaces");
+  }
+  return host;
+}
+
+const host = resolveDevHost(process.env.TAURI_DEV_HOST);
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
