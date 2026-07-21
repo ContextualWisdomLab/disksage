@@ -275,6 +275,7 @@ struct AttestationOutput {
     action: &'static str,
     receipt_id: String,
     evidence: disksage_lib::cloud_transfer::ProviderSyncEvidence,
+    assessment: provider_sync::ProviderSyncTimelinessAssessment,
     evidence_record: ProviderSyncEvidenceRecord,
     evidence_path: String,
     permit: Option<LocalEvictionPermit>,
@@ -620,6 +621,7 @@ fn attest_receipt(
         home,
         confirmed_at_ms,
     )?;
+    let assessment = provider_sync::assess_provider_sync_timeliness(&receipt, &evidence)?;
     let (evidence_record, evidence_path) =
         provider_evidence::write_immutable_sync_evidence(evidence_dir, &evidence)?;
     let (permit, blockers) =
@@ -631,6 +633,7 @@ fn attest_receipt(
         action: "attest-provider-native",
         receipt_id: receipt.receipt_id,
         evidence,
+        assessment,
         evidence_record,
         evidence_path: evidence_path.to_string_lossy().into_owned(),
         permit,

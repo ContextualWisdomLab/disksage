@@ -982,6 +982,7 @@ pub fn adopt_existing_cloud_candidate(
 #[derive(serde::Serialize)]
 pub struct CloudAttestationOutput {
     pub evidence: cloud_transfer::ProviderSyncEvidence,
+    pub assessment: provider_sync::ProviderSyncTimelinessAssessment,
     pub evidence_record: provider_evidence::ProviderSyncEvidenceRecord,
     pub evidence_path: String,
     pub permit: Option<cloud_transfer::LocalEvictionPermit>,
@@ -1091,6 +1092,7 @@ pub async fn attest_cloud_copy(
                 }
             }
         };
+        let assessment = provider_sync::assess_provider_sync_timeliness(&receipt, &evidence)?;
         let (evidence_record, evidence_path) =
             provider_evidence::write_immutable_sync_evidence(&evidence_dir, &evidence)?;
         let (permit, blockers) =
@@ -1100,6 +1102,7 @@ pub async fn attest_cloud_copy(
             };
         Ok(CloudAttestationOutput {
             evidence,
+            assessment,
             evidence_record,
             evidence_path: evidence_path.to_string_lossy().into_owned(),
             permit,
