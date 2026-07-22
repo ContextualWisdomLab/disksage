@@ -3,6 +3,7 @@
   import * as api from "./api";
   import {
     candidateReviewDecision,
+    cloudDecisionReasonLabel,
     cloudReviewQueuePage,
     cloudReviewQueueStats,
     cloudReviewReasons,
@@ -137,13 +138,6 @@
 
   function matchingReviewDecision(candidate: api.CloudCandidate): api.CloudReviewDecision | null {
     return exactReviewDecision(candidate, reviewDecisions);
-  }
-
-  function reviewReasonLabel(reason: string): string {
-    if (reason === "embedded-date-differs-from-filename-publication-month") {
-      return "내장 생산일과 파일명 발행월이 다름";
-    }
-    return reason;
   }
 
   async function reviewCandidate(
@@ -671,7 +665,7 @@
             <select bind:value={reviewReason} onchange={() => reviewPage = 1}>
               <option value="">모든 사유</option>
               {#each reviewReasons as reason}
-                <option value={reason}>{reviewReasonLabel(reason)}</option>
+                <option value={reason}>{cloudDecisionReasonLabel(reason)}</option>
               {/each}
             </select>
           </label>
@@ -712,7 +706,7 @@
               <span>근거 {candidate.production_time_source} ({candidate.production_time_confidence})</span>
               <span>수정 후 {candidate.age_days.toLocaleString()}일</span>
               {#if candidate.requires_review}<em>맥락/민감정보 검토 필요</em>{/if}
-              {#if candidate.blocked_reason}<em>{candidate.blocked_reason}</em>{/if}
+              {#if candidate.blocked_reason}<em>{cloudDecisionReasonLabel(candidate.blocked_reason)}</em>{/if}
             </div>
             <div class="path" title={candidate.src}>{candidate.src}</div>
             {#if candidate.content_title}
@@ -835,7 +829,7 @@
               </ul>
             </details>
             {#if candidate.review_reasons.length > 0}
-              <div class="context">검토 사유: {candidate.review_reasons.map(reviewReasonLabel).join(", ")}</div>
+              <div class="context">검토 사유: {candidate.review_reasons.map(cloudDecisionReasonLabel).join(", ")}</div>
             {/if}
           </li>
         {/each}

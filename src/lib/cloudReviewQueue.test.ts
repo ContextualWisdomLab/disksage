@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { CloudCandidate, CloudReviewDecision } from "./api";
 import {
   candidateReviewDecision,
+  cloudDecisionReasonLabel,
   cloudReviewQueuePage,
   cloudReviewQueueState,
   cloudReviewQueueStats,
@@ -132,6 +133,15 @@ describe("cloud review queue", () => {
       candidate("a", 1, { review_reasons: ["z", "a"] }),
       candidate("b", 1, { review_reasons: ["a", "m"] }),
     ])).toEqual(["a", "m", "z"]);
+  });
+
+  it("renders known decision reasons in plain Korean and preserves unknown evidence", () => {
+    expect(cloudDecisionReasonLabel("production-date-not-from-embedded-metadata"))
+      .toBe("생산일을 내장 메타데이터에서 확인하지 못함");
+    expect(cloudDecisionReasonLabel("destination-exists"))
+      .toBe("같은 목적지 파일이 이미 있음");
+    expect(cloudDecisionReasonLabel("future-review-reason"))
+      .toBe("future-review-reason");
   });
 
   it("clamps pages and reports the visible range", () => {
