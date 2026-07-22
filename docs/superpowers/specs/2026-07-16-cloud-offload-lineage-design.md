@@ -20,7 +20,17 @@ Use DiskSage against a genuinely space-constrained machine to identify files tha
 - Surface destination collisions and exclude them from potentially reclaimable bytes.
 - Selectively stream SHA-256 and BLAKE3 only for non-blocked candidates that share an exact byte length. Exact-content clusters expose their member count and redundant bytes, bind the hashes into review evidence, and require explicit canonical-lineage selection instead of silently copying every duplicate path.
 - Require review when embedded geolocation is present, embedded production-date fields disagree, an embedded production date conflicts with a full filename date, an embedded production month differs from a filename publication month, a known template/default timestamp is detected, embedded title/author/context indicates personal or confidential material, or no embedded production date is available.
-- Provide both a Tauri UI and a headless JSON CLI.
+- Provide both a Tauri UI and a headless JSON CLI. The CLI's plan-only
+  `--decision-summary` view keeps relative paths, metadata/review fingerprints, production-time
+  source and confidence, review reasons, blockers, duplicate totals, and capacity status. It
+  omits absolute source/destination/cloud-root paths, root labels, content titles/authors, raw
+  metadata evidence values, and dataset profiles. The flag is rejected when combined with root
+  inspection, copy, adoption, attestation, eviction, review, or Naruon export actions; the full
+  `CloudPlanReport` and Naruon lineage contracts remain unchanged. A versioned BLAKE3 decision
+  batch fingerprint binds the sorted candidate metadata/review fingerprints, planner blockers,
+  destination provider/account scope, totals, and duplicate summary. Volatile generation time,
+  age, notices, and capacity state are excluded so an unchanged batch survives a fresh scan while
+  copy and eviction still require fresh capacity, provider sync, and human approval evidence.
 
 ## Safety boundary
 
