@@ -69,6 +69,11 @@ export interface GeneratedArtifact {
   path: string;
   kind: string;
   allocated_bytes: number;
+  gitignore_confirmed: boolean | null;
+  gitignore_source: string | null;
+  gitignore_line: number | null;
+  gitignore_pattern: string | null;
+  gitignore_issue: string | null;
 }
 export interface OrphanWorktreeCandidate {
   path: string;
@@ -92,6 +97,7 @@ export interface WorktreeReport {
   orphaned_worktrees: OrphanWorktreeCandidate[];
   potentially_reclaimable_bytes: number;
   reviewable_generated_artifact_bytes: number;
+  ignore_confirmed_generated_artifact_bytes: number;
   scan_issues: WorktreeScanIssue[];
   notices: string[];
 }
