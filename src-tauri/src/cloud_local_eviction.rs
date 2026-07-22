@@ -567,6 +567,13 @@ fn observe_active_use(_path: &Path) -> ActiveUseEvidence {
     }
 }
 
+/// Reuse the same bounded open-handle and process-command evidence for any source whose local
+/// bytes may be released. Unsupported or incomplete platforms remain explicit and fail closed at
+/// the caller.
+pub fn observe_path_active_use(path: &Path) -> ActiveUseEvidence {
+    observe_active_use(path)
+}
+
 #[cfg(all(target_os = "macos", not(coverage)))]
 fn foundation_bool_resource(
     url: &objc2_foundation::NSURL,
