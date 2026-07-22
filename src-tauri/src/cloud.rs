@@ -3178,6 +3178,61 @@ pub fn candidate_review_fingerprint(candidate: &CloudCandidate) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
+/// Bind a human-visible decision batch without including volatile scan time or capacity state.
+///
+/// Candidate review fingerprints already bind paths, destination, embedded metadata evidence,
+/// and review context. This batch fingerprint additionally binds the complete candidate set,
+/// planner blockers, destination scope, totals, and exact-duplicate summary. Sorting makes the
+/// result independent of report presentation order while fresh capacity is still required at
+/// copy time.
+pub const CLOUD_DECISION_BATCH_FINGERPRINT_VERSION: u32 = 1;
+
+pub fn cloud_decision_batch_fingerprint(report: &CloudPlanReport) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage-cloud-decision-batch-v1\0");
+    for value in [
+        report.cloud_root.provider.as_str().as_bytes(),
+        report.cloud_root.account_scope.as_str().as_bytes(),
+    ] {
+        hash_review_value(&mut hasher, value);
+    }
+    for value in [
+        report.candidates.len() as u64,
+        report.candidate_bytes,
+        report.potentially_reclaimable_bytes,
+        report.exact_duplicates.cluster_count as u64,
+        report.exact_duplicates.candidate_count as u64,
+        report.exact_duplicates.candidate_bytes,
+        report.exact_duplicates.redundant_bytes,
+    ] {
+        hash_review_value(&mut hasher, &value.to_le_bytes());
+    }
+
+    let mut candidates = report.candidates.iter().collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        left.metadata_fingerprint
+            .cmp(&right.metadata_fingerprint)
+            .then_with(|| left.review_fingerprint.cmp(&right.review_fingerprint))
+            .then_with(|| left.blocked_reason.cmp(&right.blocked_reason))
+    });
+    for candidate in candidates {
+        for value in [
+            candidate.metadata_fingerprint.as_bytes(),
+            candidate.review_fingerprint.as_bytes(),
+        ] {
+            hash_review_value(&mut hasher, value);
+        }
+        match &candidate.blocked_reason {
+            Some(reason) => {
+                hash_review_value(&mut hasher, b"1");
+                hash_review_value(&mut hasher, reason.as_bytes());
+            }
+            None => hash_review_value(&mut hasher, b"0"),
+        }
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
 /// Build a dry-run report. No filesystem mutation occurs.
 pub fn plan_cloud_archive(
     files: &[FileFact],

@@ -26,7 +26,11 @@ Use DiskSage against a genuinely space-constrained machine to identify files tha
   omits absolute source/destination/cloud-root paths, root labels, content titles/authors, raw
   metadata evidence values, and dataset profiles. The flag is rejected when combined with root
   inspection, copy, adoption, attestation, eviction, review, or Naruon export actions; the full
-  `CloudPlanReport` and Naruon lineage contracts remain unchanged.
+  `CloudPlanReport` and Naruon lineage contracts remain unchanged. A versioned BLAKE3 decision
+  batch fingerprint binds the sorted candidate metadata/review fingerprints, planner blockers,
+  destination provider/account scope, totals, and duplicate summary. Volatile generation time,
+  age, notices, and capacity state are excluded so an unchanged batch survives a fresh scan while
+  copy and eviction still require fresh capacity, provider sync, and human approval evidence.
 
 ## Safety boundary
 

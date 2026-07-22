@@ -560,6 +560,8 @@ fn decision_summary(report: &cloud::CloudPlanReport) -> serde_json::Value {
         "schema_version": 1,
         "output_mode": "decision-summary",
         "generated_at_ms": report.generated_at_ms,
+        "decision_batch_fingerprint_version": cloud::CLOUD_DECISION_BATCH_FINGERPRINT_VERSION,
+        "decision_batch_fingerprint": cloud::cloud_decision_batch_fingerprint(report),
         "metadata_policy": {
             "production_time_precedence": [
                 "embedded-metadata",
@@ -1348,6 +1350,17 @@ mod tests {
         let item = &summary["decisions"][0];
         assert_eq!(summary["output_mode"], "decision-summary");
         assert_eq!(summary["candidate_count"], 1);
+        assert_eq!(
+            summary["decision_batch_fingerprint_version"],
+            cloud::CLOUD_DECISION_BATCH_FINGERPRINT_VERSION
+        );
+        assert_eq!(
+            summary["decision_batch_fingerprint"]
+                .as_str()
+                .unwrap()
+                .len(),
+            64
+        );
         assert_eq!(item["relative_path"], "report.pdf");
         assert_eq!(item["decision_state"], "review-required");
         assert!(item.get("src").is_none());
@@ -1364,6 +1377,46 @@ mod tests {
         ] {
             assert!(!encoded.contains(redacted));
         }
+
+        let original_batch = cloud::cloud_decision_batch_fingerprint(&report);
+        let mut volatile_changed = report.clone();
+        volatile_changed.generated_at_ms += 1;
+        volatile_changed
+            .notices
+            .push("fresh-capacity-required".into());
+        assert_eq!(
+            cloud::cloud_decision_batch_fingerprint(&volatile_changed),
+            original_batch
+        );
+
+        let mut evidence_changed = report.clone();
+        evidence_changed.candidates[0].review_fingerprint = "c".repeat(64);
+        assert_ne!(
+            cloud::cloud_decision_batch_fingerprint(&evidence_changed),
+            original_batch
+        );
+
+        let mut blocker_changed = report.clone();
+        blocker_changed.candidates[0].blocked_reason = Some("destination-exists".into());
+        blocker_changed.potentially_reclaimable_bytes = 0;
+        assert_ne!(
+            cloud::cloud_decision_batch_fingerprint(&blocker_changed),
+            original_batch
+        );
+
+        let mut reordered = report.clone();
+        let mut second = reordered.candidates[0].clone();
+        second.metadata_fingerprint = "d".repeat(64);
+        second.review_fingerprint = "e".repeat(64);
+        reordered.candidates.push(second);
+        reordered.candidate_bytes *= 2;
+        reordered.potentially_reclaimable_bytes *= 2;
+        let ordered_batch = cloud::cloud_decision_batch_fingerprint(&reordered);
+        reordered.candidates.reverse();
+        assert_eq!(
+            cloud::cloud_decision_batch_fingerprint(&reordered),
+            ordered_batch
+        );
 
         report.candidates[0].requires_review = false;
         assert_eq!(
