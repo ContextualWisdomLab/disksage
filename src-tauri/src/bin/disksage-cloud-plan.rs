@@ -41,6 +41,7 @@ struct Args {
     list_roots: bool,
     inspect_roots: bool,
     verify_capacity: bool,
+    decision_summary: bool,
     capacity_reserve_mib: u64,
     copy_fingerprint: Option<String>,
     adopt_existing_fingerprint: Option<String>,
@@ -94,6 +95,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
         list_roots: false,
         inspect_roots: false,
         verify_capacity: false,
+        decision_summary: false,
         capacity_reserve_mib: 1024,
         copy_fingerprint: None,
         adopt_existing_fingerprint: None,
@@ -144,6 +146,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             "--list-roots" => parsed.list_roots = true,
             "--inspect-roots" => parsed.inspect_roots = true,
             "--verify-capacity" => parsed.verify_capacity = true,
+            "--decision-summary" => parsed.decision_summary = true,
             "--capacity-reserve-mib" => {
                 parsed.capacity_reserve_mib = value(args, &mut index, "--capacity-reserve-mib")?
                     .parse()
@@ -262,7 +265,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             }
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive] [--min-size-mib N] [--min-age-days N] [--limit N] [--verify-capacity [--oauth-connections ABSOLUTE_PATH]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
+                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive] [--min-size-mib N] [--min-age-days N] [--limit N] [--decision-summary] [--verify-capacity [--oauth-connections ABSOLUTE_PATH]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -428,6 +431,9 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
         + usize::from(eviction_action)
         + usize::from(review_action)
         + usize::from(args.export_naruon_lineage.is_some());
+    if args.decision_summary && actions > 0 {
+        return Err("--decision-summary는 plan 출력에만 사용할 수 있음".into());
+    }
     if actions > 1 {
         return Err(
             "root inspection, copy, adoption, attestation, eviction, review action은 동시에 사용할 수 없음".into(),
@@ -507,6 +513,85 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(not(coverage))]
+fn candidate_decision_state(candidate: &cloud::CloudCandidate) -> &'static str {
+    if candidate.blocked_reason.is_some() {
+        "blocked"
+    } else if candidate.requires_review {
+        "review-required"
+    } else {
+        "ready-for-copy-review"
+    }
+}
+
+/// Produce a bounded operator view without absolute paths or raw embedded metadata values.
+///
+/// The full plan remains the durable lineage source. This view is intentionally limited to the
+/// evidence needed to select a candidate for a separately attributed human review.
+#[cfg(not(coverage))]
+fn decision_summary(report: &cloud::CloudPlanReport) -> serde_json::Value {
+    let decisions = report
+        .candidates
+        .iter()
+        .map(|candidate| {
+            serde_json::json!({
+                "metadata_fingerprint": &candidate.metadata_fingerprint,
+                "review_fingerprint": &candidate.review_fingerprint,
+                "relative_path": &candidate.relative_path,
+                "provider": candidate.provider,
+                "destination_account_scope": candidate.destination_account_scope,
+                "kind": candidate.kind,
+                "bytes": candidate.bytes,
+                "age_days": candidate.age_days,
+                "production_time_ms": candidate.production_time_ms,
+                "production_time_source": &candidate.production_time_source,
+                "production_time_confidence": &candidate.production_time_confidence,
+                "decision_state": candidate_decision_state(candidate),
+                "requires_review": candidate.requires_review,
+                "review_reasons": &candidate.review_reasons,
+                "blocked_reason": &candidate.blocked_reason,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    serde_json::json!({
+        "schema_version": 1,
+        "output_mode": "decision-summary",
+        "generated_at_ms": report.generated_at_ms,
+        "metadata_policy": {
+            "production_time_precedence": [
+                "embedded-metadata",
+                "explicit-filename-date",
+                "filesystem-created",
+                "filesystem-modified",
+            ],
+            "filename_dates_are_auxiliary": true,
+            "summary_is_dry_run_only": true,
+            "review_fingerprints_bind_operator_decisions": true,
+            "verified_provider_sync_required_before_local_eviction": true,
+        },
+        "cloud": {
+            "provider": report.cloud_root.provider,
+            "account_scope": report.cloud_root.account_scope,
+        },
+        "candidate_count": report.candidates.len(),
+        "candidate_bytes": report.candidate_bytes,
+        "potentially_reclaimable_bytes": report.potentially_reclaimable_bytes,
+        "exact_duplicates": &report.exact_duplicates,
+        "capacity": &report.capacity,
+        "notices": &report.notices,
+        "redacted_from_summary": [
+            "absolute-source-path",
+            "absolute-destination-path",
+            "cloud-root-path-and-label",
+            "content-title-and-authors",
+            "raw-metadata-evidence-values",
+            "dataset-profile",
+        ],
+        "decisions": decisions,
+    })
 }
 
 #[cfg(not(coverage))]
@@ -1041,10 +1126,17 @@ fn run() -> Result<(), String> {
         );
         return Ok(());
     }
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?
-    );
+    if args.decision_summary {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&decision_summary(&report)).map_err(|e| e.to_string())?
+        );
+    } else {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?
+        );
+    }
     Ok(())
 }
 
@@ -1089,6 +1181,7 @@ mod tests {
         assert!(defaults.export_naruon_lineage.is_none());
         assert!(defaults.naruon_sync_evidence.is_none());
         assert!(!defaults.verify_capacity);
+        assert!(!defaults.decision_summary);
         assert_eq!(defaults.capacity_reserve_mib, 1024);
         let args = vec![
             "--root".into(),
@@ -1101,6 +1194,7 @@ mod tests {
             "2".into(),
             "--limit".into(),
             "3".into(),
+            "--decision-summary".into(),
             "--verify-capacity".into(),
             "--capacity-reserve-mib".into(),
             "2048".into(),
@@ -1113,6 +1207,7 @@ mod tests {
             (1, 2, 3)
         );
         assert!(parsed.verify_capacity);
+        assert!(parsed.decision_summary);
         assert_eq!(parsed.capacity_reserve_mib, 2048);
     }
 
@@ -1135,6 +1230,12 @@ mod tests {
         )
         .unwrap();
         assert!(validate_action_args(&both).is_err());
+        let summary_action = parse_args(
+            &["--decision-summary".into(), "--list-roots".into()],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&summary_action).is_err());
         let roots = vec![
             CloudRoot {
                 id: "/a".into(),
@@ -1187,6 +1288,90 @@ mod tests {
             ..root.clone()
         };
         assert!(select_root(&[root, canonically_equivalent_duplicate], &args).is_err());
+    }
+
+    #[test]
+    fn decision_summary_keeps_review_evidence_and_redacts_sensitive_values() {
+        let candidate = cloud::CloudCandidate {
+            metadata_fingerprint: "a".repeat(64),
+            review_fingerprint: "b".repeat(64),
+            src: "/Users/private/Downloads/report.pdf".into(),
+            dst: "/Users/private/Cloud/report.pdf".into(),
+            provider: CloudProvider::Icloud,
+            destination_account_scope: disksage_lib::cloud::CloudAccountScope::Personal,
+            kind: cloud::ArchiveKind::Document,
+            bytes: 42,
+            age_days: 7,
+            created_ms: 10,
+            modified_ms: 20,
+            production_time_ms: 5,
+            production_time_source: "embedded-pdf-creation-date".into(),
+            production_time_confidence: "high".into(),
+            source_root: "/Users/private/Downloads".into(),
+            relative_path: "report.pdf".into(),
+            source_context: "Downloads".into(),
+            requires_review: true,
+            review_reasons: vec!["metadata-review-required".into()],
+            content_title: Some("Confidential title".into()),
+            content_authors: vec!["Private Author".into()],
+            content_context: vec!["private context".into()],
+            duration_ms: None,
+            dataset_profile: None,
+            metadata_evidence: vec![cloud::MetadataEvidence {
+                field: "creation-date".into(),
+                value: "private raw value".into(),
+                source: "pdf-info".into(),
+                confidence: "high".into(),
+            }],
+            blocked_reason: None,
+        };
+        let mut report = cloud::CloudPlanReport {
+            cloud_root: CloudRoot {
+                id: "/Users/private/Cloud".into(),
+                provider: CloudProvider::Icloud,
+                account_scope: disksage_lib::cloud::CloudAccountScope::Personal,
+                label: "private@example.com".into(),
+                path: "/Users/private/Cloud".into(),
+                readable: true,
+                access_issue: None,
+            },
+            generated_at_ms: 100,
+            candidates: vec![candidate],
+            candidate_bytes: 42,
+            potentially_reclaimable_bytes: 42,
+            exact_duplicates: cloud::ExactDuplicateSummary::default(),
+            capacity: None,
+            notices: vec!["dry-run-only".into()],
+        };
+
+        let summary = decision_summary(&report);
+        let item = &summary["decisions"][0];
+        assert_eq!(summary["output_mode"], "decision-summary");
+        assert_eq!(summary["candidate_count"], 1);
+        assert_eq!(item["relative_path"], "report.pdf");
+        assert_eq!(item["decision_state"], "review-required");
+        assert!(item.get("src").is_none());
+        assert!(item.get("dst").is_none());
+        assert!(item.get("metadata_evidence").is_none());
+
+        let encoded = serde_json::to_string(&summary).unwrap();
+        for redacted in [
+            "/Users/private",
+            "private@example.com",
+            "Confidential title",
+            "Private Author",
+            "private raw value",
+        ] {
+            assert!(!encoded.contains(redacted));
+        }
+
+        report.candidates[0].requires_review = false;
+        assert_eq!(
+            candidate_decision_state(&report.candidates[0]),
+            "ready-for-copy-review"
+        );
+        report.candidates[0].blocked_reason = Some("incomplete-download".into());
+        assert_eq!(candidate_decision_state(&report.candidates[0]), "blocked");
     }
 
     #[test]
