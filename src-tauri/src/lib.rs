@@ -29,6 +29,10 @@ mod web;
 mod reasoning;
 #[cfg_attr(coverage, allow(dead_code))]
 pub mod cloud;
+pub mod cloud_transfer;
+pub mod content_digest;
+pub mod provider_api_client;
+pub mod provider_sync;
 
 // coverage 빌드에서 제외 — GUI 런타임은 헤드리스 테스트로 실행 불가
 #[cfg(not(coverage))]
@@ -65,7 +69,9 @@ pub fn run() {
             commands::set_settings,
             commands::reason_unknown_extensions,
             commands::list_cloud_roots,
-            commands::plan_cloud_archive
+            commands::plan_cloud_archive,
+            commands::copy_cloud_candidate,
+            commands::attest_cloud_copy
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

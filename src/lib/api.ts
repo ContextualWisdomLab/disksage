@@ -208,6 +208,69 @@ export interface CloudPlanReport {
   notices: string[];
 }
 
+export interface CloudCopyReceipt {
+  version: number;
+  receipt_id: string;
+  candidate_fingerprint: string;
+  provider: CloudProvider;
+  source: string;
+  destination: string;
+  bytes: number;
+  blake3: string;
+  sha256: string;
+  quick_xor_base64: string;
+  source_modified_ms: number;
+  copied_at_ms: number;
+  copy_verified: boolean;
+  provider_sync_confirmed: boolean;
+}
+
+export interface CloudCopyOutput {
+  receipt: CloudCopyReceipt;
+  receipt_path: string;
+}
+
+export type SyncEvidenceKind = "provider-api" | "provider-native-status";
+export type RemoteChecksumAlgorithm = "sha256" | "quick-xor";
+
+export interface RemoteContentProof {
+  object_id: string;
+  revision: string;
+  algorithm: RemoteChecksumAlgorithm;
+  checksum: string;
+}
+
+export interface ProviderSyncEvidence {
+  receipt_id: string;
+  provider: CloudProvider;
+  destination: string;
+  observed_bytes: number;
+  destination_blake3: string;
+  confirmed_at_ms: number;
+  kind: SyncEvidenceKind;
+  evidence_id: string;
+  sync_complete: boolean;
+  remote_content: RemoteContentProof | null;
+}
+
+export interface LocalEvictionPermit {
+  receipt_id: string;
+  provider: CloudProvider;
+  source: string;
+  destination: string;
+  bytes: number;
+  blake3: string;
+  approved_at_ms: number;
+  evidence_kind: SyncEvidenceKind;
+  evidence_id: string;
+}
+
+export interface CloudAttestationOutput {
+  evidence: ProviderSyncEvidence;
+  permit: LocalEvictionPermit | null;
+  blockers: string[];
+}
+
 export const listCloudRoots = () => invoke<CloudRoot[]>("list_cloud_roots");
 export const planCloudArchive = (
   root: string,
@@ -221,4 +284,28 @@ export const planCloudArchive = (
   minSizeMib,
   minAgeDays,
   limit,
+});
+export const copyCloudCandidate = (
+  root: string,
+  cloudRoot: string,
+  metadataFingerprint: string,
+  minSizeMib = 256,
+  minAgeDays = 90,
+  limit = 200,
+) => invoke<CloudCopyOutput>("copy_cloud_candidate", {
+  root,
+  cloudRoot,
+  metadataFingerprint,
+  minSizeMib,
+  minAgeDays,
+  limit,
+});
+export const attestCloudCopy = (
+  receiptId: string,
+  objectId: string | null = null,
+  accessToken: string | null = null,
+) => invoke<CloudAttestationOutput>("attest_cloud_copy", {
+  receiptId,
+  objectId,
+  accessToken,
 });

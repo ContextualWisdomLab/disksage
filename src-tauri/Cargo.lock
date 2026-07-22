@@ -894,9 +894,12 @@ dependencies = [
 name = "disksage"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "blake3",
  "jwalk",
  "llama-cpp-2",
+ "objc2",
+ "objc2-foundation",
  "oxrdf",
  "oxttl",
  "serde",
