@@ -76,6 +76,39 @@ jobs:
       - name: Tauri build (with embedded LLM)
         run: npm run tauri -- build --features llm-engine
 
+      # Validate the artifact users actually receive. An unsigned bundle can retain only the
+      # Mach-O linker's ad-hoc executable signature, which does not seal Info.plist/resources.
+      - name: Verify macOS DMG app signature
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          dmg_files=(src-tauri/target/release/bundle/dmg/*.dmg)
+          if [[ ${#dmg_files[@]} -ne 1 ]]; then
+            echo "Expected exactly one DMG, found ${#dmg_files[@]}" >&2
+            exit 1
+          fi
+
+          mount_dir="$RUNNER_TEMP/disksage-dmg"
+          mkdir -p "$mount_dir"
+          cleanup() {
+            hdiutil detach "$mount_dir" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          hdiutil attach "${dmg_files[0]}" -readonly -nobrowse -mountpoint "$mount_dir"
+          app_bundles=("$mount_dir"/*.app)
+          if [[ ${#app_bundles[@]} -ne 1 ]]; then
+            echo "Expected exactly one app bundle, found ${#app_bundles[@]}" >&2
+            exit 1
+          fi
+
+          test -f "${app_bundles[0]}/Contents/_CodeSignature/CodeResources"
+          codesign --verify --deep --strict --verbose=2 "${app_bundles[0]}"
+          codesign --display --verbose=4 "${app_bundles[0]}"
+
       # PR / manual: keep the bundles as inspectable artifacts, no release published.
       - name: Upload build artifacts (no publish)
         if: github.event_name != 'push'
