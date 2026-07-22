@@ -39,6 +39,24 @@ export interface CloudReviewQueuePage {
   totalItems: number;
 }
 
+function isReviewFormatControl(character: string): boolean {
+  const codepoint = character.codePointAt(0) ?? -1;
+  return codepoint === 0x00ad
+    || (codepoint >= 0x0600 && codepoint <= 0x0605)
+    || [0x061c, 0x06dd, 0x070f, 0x08e2, 0x180e, 0xfeff].includes(codepoint)
+    || (codepoint >= 0x0890 && codepoint <= 0x0891)
+    || (codepoint >= 0x200b && codepoint <= 0x200f)
+    || (codepoint >= 0x202a && codepoint <= 0x202e)
+    || (codepoint >= 0x2060 && codepoint <= 0x2064)
+    || (codepoint >= 0x2066 && codepoint <= 0x206f)
+    || (codepoint >= 0xfff9 && codepoint <= 0xfffb)
+    || [0x110bd, 0x110cd, 0xe0001].includes(codepoint)
+    || (codepoint >= 0x13430 && codepoint <= 0x1343f)
+    || (codepoint >= 0x1bca0 && codepoint <= 0x1bca3)
+    || (codepoint >= 0x1d173 && codepoint <= 0x1d17a)
+    || (codepoint >= 0xe0020 && codepoint <= 0xe007f);
+}
+
 const CLOUD_DECISION_REASON_LABELS: Readonly<Record<string, string>> = {
   "archive-contains-encrypted-entries": "압축 파일에 암호화된 항목이 있음",
   "archive-contains-recording-media": "압축 파일에 녹음·영상 파일이 있음",
@@ -102,11 +120,25 @@ export function matchingReviewDecision(
   decisions: CloudReviewDecision[],
 ): CloudReviewDecision | null {
   const decision = candidateReviewDecision(candidate, decisions);
-  const reviewedBy = decision?.reviewed_by?.trim() ?? "";
-  const rationale = decision?.rationale?.trim() ?? "";
+  const rawReviewedBy = decision?.reviewed_by ?? "";
+  const reviewedBy = rawReviewedBy.replace(/^[\s\u0085\u200b]+|[\s\u0085\u200b]+$/gu, "");
+  const humanIdentity = reviewedBy.startsWith("human:")
+    ? reviewedBy.slice("human:".length)
+    : "";
+  const rawRationale = decision?.rationale ?? "";
+  const rationale = rawRationale.replace(/^[\s\u0085\u200b]+|[\s\u0085\u200b]+$/gu, "");
   const attributedHumanDecision = decision?.version === 2
-    && reviewedBy.startsWith("human:")
-    && rationale.length > 0;
+    && /^[0-9a-f]{64}$/.test(decision.decision_id)
+    && rawReviewedBy === reviewedBy
+    && rawRationale === rationale
+    && reviewedBy.length <= 128
+    && /^[A-Za-z0-9._:@/-]+$/.test(humanIdentity)
+    && /[A-Za-z0-9]/.test(humanIdentity)
+    && Array.from(rationale).length > 0
+    && Array.from(rationale).length <= 1_000
+    && /[\p{L}\p{N}]/u.test(rationale)
+    && !/\p{Cc}/u.test(rationale)
+    && !Array.from(rationale).some(isReviewFormatControl);
   return decision?.review_fingerprint === candidate.review_fingerprint && attributedHumanDecision
     ? decision
     : null;
