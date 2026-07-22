@@ -31,6 +31,11 @@ Use DiskSage against a genuinely space-constrained machine to identify files tha
   destination provider/account scope, totals, and duplicate summary. Volatile generation time,
   age, notices, and capacity state are excluded so an unchanged batch survives a fresh scan while
   copy and eviction still require fresh capacity, provider sync, and human approval evidence.
+  The same redacted summary aggregates candidate counts and bytes by decision state, production-time
+  source/confidence, blocking reason, and review-required reason. Review-reason bytes explicitly
+  allow overlap because one candidate can require review for several independent reasons; blocker
+  and decision-state bytes remain mutually exclusive. These aggregates expose the dominant
+  evidence gap without adding absolute paths or raw metadata values.
 
 ## Safety boundary
 

@@ -4,6 +4,8 @@
 embed_plist::embed_info_plist!("../../disksage-cloud-plan.Info.plist");
 
 #[cfg(not(coverage))]
+use std::collections::BTreeMap;
+#[cfg(not(coverage))]
 use std::path::{Path, PathBuf};
 
 #[cfg(not(coverage))]
@@ -526,12 +528,102 @@ fn candidate_decision_state(candidate: &cloud::CloudCandidate) -> &'static str {
     }
 }
 
+#[cfg(not(coverage))]
+fn increment(map: &mut BTreeMap<String, u64>, key: &str, value: u64) {
+    let entry = map.entry(key.to_string()).or_default();
+    *entry = entry.saturating_add(value);
+}
+
+/// Aggregate only fixed decision labels and evidence-source labels, never paths or metadata values.
+/// Review-reason bytes can overlap because one candidate may carry several independent reasons.
+#[cfg(not(coverage))]
+fn decision_aggregates(report: &cloud::CloudPlanReport) -> serde_json::Value {
+    let mut decision_state_counts = BTreeMap::new();
+    let mut decision_state_candidate_bytes = BTreeMap::new();
+    let mut review_required_reason_counts = BTreeMap::new();
+    let mut review_required_reason_candidate_bytes = BTreeMap::new();
+    let mut blocked_reason_counts = BTreeMap::new();
+    let mut blocked_reason_candidate_bytes = BTreeMap::new();
+    let mut production_time_source_counts = BTreeMap::new();
+    let mut production_time_source_candidate_bytes = BTreeMap::new();
+    let mut production_time_confidence_counts = BTreeMap::new();
+    let mut production_time_confidence_candidate_bytes = BTreeMap::new();
+
+    for candidate in &report.candidates {
+        let state = candidate_decision_state(candidate);
+        increment(&mut decision_state_counts, state, 1);
+        increment(&mut decision_state_candidate_bytes, state, candidate.bytes);
+        increment(
+            &mut production_time_source_counts,
+            &candidate.production_time_source,
+            1,
+        );
+        increment(
+            &mut production_time_source_candidate_bytes,
+            &candidate.production_time_source,
+            candidate.bytes,
+        );
+        increment(
+            &mut production_time_confidence_counts,
+            &candidate.production_time_confidence,
+            1,
+        );
+        increment(
+            &mut production_time_confidence_candidate_bytes,
+            &candidate.production_time_confidence,
+            candidate.bytes,
+        );
+
+        if state == "review-required" {
+            for reason in &candidate.review_reasons {
+                increment(&mut review_required_reason_counts, reason, 1);
+                increment(
+                    &mut review_required_reason_candidate_bytes,
+                    reason,
+                    candidate.bytes,
+                );
+            }
+        }
+        if state == "blocked" {
+            if let Some(reason) = &candidate.blocked_reason {
+                increment(&mut blocked_reason_counts, reason, 1);
+                increment(&mut blocked_reason_candidate_bytes, reason, candidate.bytes);
+            }
+        }
+    }
+
+    serde_json::json!({
+        "decision_state": {
+            "counts": decision_state_counts,
+            "candidate_bytes": decision_state_candidate_bytes,
+        },
+        "review_required_reason": {
+            "counts": review_required_reason_counts,
+            "candidate_bytes": review_required_reason_candidate_bytes,
+            "candidate_bytes_can_overlap_across_reasons": true,
+        },
+        "blocked_reason": {
+            "counts": blocked_reason_counts,
+            "candidate_bytes": blocked_reason_candidate_bytes,
+        },
+        "production_time_source": {
+            "counts": production_time_source_counts,
+            "candidate_bytes": production_time_source_candidate_bytes,
+        },
+        "production_time_confidence": {
+            "counts": production_time_confidence_counts,
+            "candidate_bytes": production_time_confidence_candidate_bytes,
+        },
+    })
+}
+
 /// Produce a bounded operator view without absolute paths or raw embedded metadata values.
 ///
 /// The full plan remains the durable lineage source. This view is intentionally limited to the
 /// evidence needed to select a candidate for a separately attributed human review.
 #[cfg(not(coverage))]
 fn decision_summary(report: &cloud::CloudPlanReport) -> serde_json::Value {
+    let aggregates = decision_aggregates(report);
     let decisions = report
         .candidates
         .iter()
@@ -581,6 +673,7 @@ fn decision_summary(report: &cloud::CloudPlanReport) -> serde_json::Value {
         "candidate_count": report.candidates.len(),
         "candidate_bytes": report.candidate_bytes,
         "potentially_reclaimable_bytes": report.potentially_reclaimable_bytes,
+        "aggregates": aggregates,
         "exact_duplicates": &report.exact_duplicates,
         "capacity": &report.capacity,
         "notices": &report.notices,
@@ -1313,7 +1406,10 @@ mod tests {
             relative_path: "report.pdf".into(),
             source_context: "Downloads".into(),
             requires_review: true,
-            review_reasons: vec!["metadata-review-required".into()],
+            review_reasons: vec![
+                "download-origin-needs-destination-review".into(),
+                "metadata-review-required".into(),
+            ],
             content_title: Some("Confidential title".into()),
             content_authors: vec!["Private Author".into()],
             content_context: vec!["private context".into()],
@@ -1363,6 +1459,36 @@ mod tests {
         );
         assert_eq!(item["relative_path"], "report.pdf");
         assert_eq!(item["decision_state"], "review-required");
+        assert_eq!(
+            summary["aggregates"]["decision_state"]["counts"]["review-required"],
+            1
+        );
+        assert_eq!(
+            summary["aggregates"]["decision_state"]["candidate_bytes"]["review-required"],
+            42
+        );
+        assert_eq!(
+            summary["aggregates"]["review_required_reason"]["counts"]["metadata-review-required"],
+            1
+        );
+        assert_eq!(
+            summary["aggregates"]["review_required_reason"]["candidate_bytes"]
+                ["download-origin-needs-destination-review"],
+            42
+        );
+        assert_eq!(
+            summary["aggregates"]["review_required_reason"]
+                ["candidate_bytes_can_overlap_across_reasons"],
+            true
+        );
+        assert_eq!(
+            summary["aggregates"]["production_time_source"]["counts"]["embedded-pdf-creation-date"],
+            1
+        );
+        assert_eq!(
+            summary["aggregates"]["production_time_confidence"]["counts"]["high"],
+            1
+        );
         assert!(item.get("src").is_none());
         assert!(item.get("dst").is_none());
         assert!(item.get("metadata_evidence").is_none());
@@ -1377,6 +1503,41 @@ mod tests {
         ] {
             assert!(!encoded.contains(redacted));
         }
+
+        let mut mixed = report.clone();
+        let mut ready = mixed.candidates[0].clone();
+        ready.metadata_fingerprint = "c".repeat(64);
+        ready.review_fingerprint = "d".repeat(64);
+        ready.bytes = 10;
+        ready.requires_review = false;
+        ready.review_reasons.clear();
+        ready.production_time_source = "filename:path-token".into();
+        ready.production_time_confidence = "low".into();
+        let mut blocked = mixed.candidates[0].clone();
+        blocked.metadata_fingerprint = "e".repeat(64);
+        blocked.review_fingerprint = "f".repeat(64);
+        blocked.bytes = 7;
+        blocked.blocked_reason = Some("incomplete-download".into());
+        mixed.candidates.extend([ready, blocked]);
+        let aggregates = decision_aggregates(&mixed);
+        assert_eq!(aggregates["decision_state"]["counts"]["review-required"], 1);
+        assert_eq!(
+            aggregates["decision_state"]["counts"]["ready-for-copy-review"],
+            1
+        );
+        assert_eq!(aggregates["decision_state"]["counts"]["blocked"], 1);
+        assert_eq!(
+            aggregates["blocked_reason"]["counts"]["incomplete-download"],
+            1
+        );
+        assert_eq!(
+            aggregates["review_required_reason"]["counts"]["metadata-review-required"],
+            1
+        );
+        assert_eq!(
+            aggregates["production_time_source"]["counts"]["filename:path-token"],
+            1
+        );
 
         let original_batch = cloud::cloud_decision_batch_fingerprint(&report);
         let mut volatile_changed = report.clone();
