@@ -723,7 +723,7 @@ fn redacted_decision(candidate: &cloud::CloudCandidate) -> serde_json::Value {
 }
 
 #[cfg(not(coverage))]
-const REVIEW_BATCH_FINGERPRINT_VERSION: u32 = 1;
+const REVIEW_BATCH_FINGERPRINT_VERSION: u32 = 2;
 
 #[cfg(not(coverage))]
 fn review_batch_fingerprint(
@@ -738,11 +738,15 @@ fn review_batch_fingerprint(
             .then_with(|| left.review_fingerprint.cmp(&right.review_fingerprint))
     });
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"disksage-cloud-review-batch");
-    hasher.update(&[0]);
+    hasher.update(b"disksage-cloud-review-batch-v2\0");
     hasher.update(&REVIEW_BATCH_FINGERPRINT_VERSION.to_le_bytes());
-    hasher.update(cloud::cloud_decision_batch_fingerprint(report).as_bytes());
-    hasher.update(&[0]);
+    for value in [
+        report.cloud_root.provider.as_str().as_bytes(),
+        report.cloud_root.account_scope.as_str().as_bytes(),
+    ] {
+        hasher.update(&(value.len() as u64).to_le_bytes());
+        hasher.update(value);
+    }
     for reason in reasons {
         hasher.update(reason.as_bytes());
         hasher.update(&[0]);
@@ -756,8 +760,9 @@ fn review_batch_fingerprint(
     hasher.finalize().to_hex().to_string()
 }
 
-/// Produce an exact reason-set slice for inspection. The batch fingerprint is evidence only: every
-/// approve/hold decision remains individually attributed and bound to its candidate fingerprints.
+/// Produce an exact reason-set slice for inspection. The stable subset fingerprint binds only the
+/// selected evidence; the separate decision-batch fingerprint records full-plan freshness. Neither
+/// is approval: every approve/hold decision remains individually attributed and candidate-bound.
 #[cfg(not(coverage))]
 fn review_batch_summary(
     report: &cloud::CloudPlanReport,
@@ -1793,6 +1798,35 @@ mod tests {
         );
         assert_eq!(
             review_batch_summary(&report, &report.candidates[0].review_reasons).unwrap()
+                ["review_batch_fingerprint"],
+            review_batch["review_batch_fingerprint"]
+        );
+        let mut unrelated_changed = report.clone();
+        let mut unrelated = unrelated_changed.candidates[0].clone();
+        unrelated.metadata_fingerprint = "c".repeat(64);
+        unrelated.review_fingerprint = "d".repeat(64);
+        unrelated.relative_path = "other.pdf".into();
+        unrelated.src = "/Users/private/Downloads/other.pdf".into();
+        unrelated.dst = "/Users/private/Cloud/other.pdf".into();
+        unrelated.bytes = 9;
+        unrelated.review_reasons = vec!["different-reason".into()];
+        unrelated_changed.candidates.push(unrelated);
+        unrelated_changed.candidate_bytes += 9;
+        unrelated_changed.potentially_reclaimable_bytes += 9;
+        let unrelated_batch = review_batch_summary(&unrelated_changed, &reason_set).unwrap();
+        assert_ne!(
+            unrelated_batch["decision_batch_fingerprint"],
+            review_batch["decision_batch_fingerprint"]
+        );
+        assert_eq!(
+            unrelated_batch["review_batch_fingerprint"],
+            review_batch["review_batch_fingerprint"]
+        );
+
+        let mut selected_changed = report.clone();
+        selected_changed.candidates[0].review_fingerprint = "e".repeat(64);
+        assert_ne!(
+            review_batch_summary(&selected_changed, &reason_set).unwrap()
                 ["review_batch_fingerprint"],
             review_batch["review_batch_fingerprint"]
         );

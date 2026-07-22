@@ -41,9 +41,11 @@ Use DiskSage against a genuinely space-constrained machine to identify files tha
   These aggregates expose the dominant evidence gap without adding absolute paths or raw metadata
   values.
 - `--decision-summary --review-reason-set REASON|REASON` emits only the candidates whose sorted,
-  deduplicated review reasons exactly match that set. The output carries a domain-separated batch
-  fingerprint bound to the fresh decision batch plus each candidate metadata/review fingerprint and
-  size. It is inspection evidence, not a batch approval: approve/hold decisions remain individual,
+  deduplicated review reasons exactly match that set. The output carries both the full-plan decision
+  fingerprint and a domain-separated v2 subset fingerprint bound only to provider/account scope,
+  the exact reason set, and each selected candidate metadata/review fingerprint and size. Unrelated
+  probe drift can invalidate plan freshness without changing an otherwise identical review subset.
+  Both values are inspection evidence, not approval: approve/hold decisions remain individual,
   attributed, and immutable.
 - Fresh local planning batches general ExifTool probes in bounded groups of 32 with a 20-second
   command deadline and an 8 MiB retained-output ceiling. Results are mapped back only through each
