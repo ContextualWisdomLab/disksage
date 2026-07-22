@@ -40,6 +40,13 @@ Use DiskSage against a genuinely space-constrained machine to identify files tha
   delimiter-declared reason-set totals expose the smallest remaining combinations of evidence gaps.
   These aggregates expose the dominant evidence gap without adding absolute paths or raw metadata
   values.
+- `--decision-summary --review-reason-set REASON|REASON` emits only the candidates whose sorted,
+  deduplicated review reasons exactly match that set. The output carries both the full-plan decision
+  fingerprint and a domain-separated v2 subset fingerprint bound only to provider/account scope,
+  the exact reason set, and each selected candidate metadata/review fingerprint and size. Unrelated
+  probe drift can invalidate plan freshness without changing an otherwise identical review subset.
+  Both values are inspection evidence, not approval: approve/hold decisions remain individual,
+  attributed, and immutable.
 
 ## Safety boundary
 
