@@ -4,11 +4,13 @@
 embed_plist::embed_info_plist!("../../disksage-cloud-plan.Info.plist");
 
 #[cfg(not(coverage))]
-use std::io::Read;
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 #[cfg(not(coverage))]
 use std::path::{Path, PathBuf};
 #[cfg(not(coverage))]
 use std::process::{Command, Stdio};
+#[cfg(not(coverage))]
+use std::sync::{Arc, Mutex};
 #[cfg(not(coverage))]
 use std::time::{Duration, Instant};
 
@@ -16,9 +18,13 @@ use std::time::{Duration, Instant};
 use disksage_lib::cloud::{self, CloudRoot};
 #[cfg(not(coverage))]
 use disksage_lib::cloud_local_inventory::{
-    hard_timeout_inventory, inventory_cloud_local_allocations, CloudLocalAllocationInventory,
+    hard_timeout_inventory, hard_timeout_inventory_from_checkpoint,
+    inventory_cloud_local_allocations_with_checkpoints, CloudLocalAllocationInventory,
     CloudLocalInventoryOptions,
 };
+
+#[cfg(not(coverage))]
+const WORKER_REPORT_GRACE_MS: u64 = 2_000;
 
 #[cfg(not(coverage))]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,8 +193,46 @@ fn print_report(report: &CloudLocalAllocationInventory) -> Result<(), String> {
 }
 
 #[cfg(not(coverage))]
-fn worker_report(root: &CloudRoot, args: &Args) -> Result<CloudLocalAllocationInventory, String> {
-    inventory_cloud_local_allocations(root, inventory_options(args), cloud::system_now_ms())
+#[derive(Debug, serde::Serialize)]
+#[serde(tag = "kind", content = "report", rename_all = "kebab-case")]
+enum WorkerMessageRef<'a> {
+    Checkpoint(&'a CloudLocalAllocationInventory),
+    Complete(&'a CloudLocalAllocationInventory),
+}
+
+#[cfg(not(coverage))]
+#[derive(Debug, serde::Deserialize)]
+#[serde(tag = "kind", content = "report", rename_all = "kebab-case")]
+enum WorkerMessage {
+    Checkpoint(CloudLocalAllocationInventory),
+    Complete(CloudLocalAllocationInventory),
+}
+
+#[cfg(not(coverage))]
+fn write_worker_message(
+    writer: &mut impl Write,
+    message: &WorkerMessageRef<'_>,
+) -> Result<(), String> {
+    serde_json::to_writer(&mut *writer, message).map_err(|_| "inventory-worker-json-failed")?;
+    writer
+        .write_all(b"\n")
+        .map_err(|_| "inventory-worker-output-failed")?;
+    writer
+        .flush()
+        .map_err(|_| "inventory-worker-output-failed".to_string())
+}
+
+#[cfg(not(coverage))]
+fn run_worker(root: &CloudRoot, args: &Args) -> Result<(), String> {
+    let stdout = std::io::stdout();
+    let mut writer = BufWriter::new(stdout.lock());
+    let report = inventory_cloud_local_allocations_with_checkpoints(
+        root,
+        inventory_options(args),
+        cloud::system_now_ms(),
+        |checkpoint| write_worker_message(&mut writer, &WorkerMessageRef::Checkpoint(checkpoint)),
+    )?;
+    write_worker_message(&mut writer, &WorkerMessageRef::Complete(&report))
 }
 
 #[cfg(not(coverage))]
@@ -211,6 +255,45 @@ fn join_pipe(reader: std::thread::JoinHandle<Result<String, String>>) -> Result<
 }
 
 #[cfg(not(coverage))]
+fn drain_worker_stdout<R: Read + Send + 'static>(
+    reader: R,
+    latest_checkpoint: Arc<Mutex<Option<CloudLocalAllocationInventory>>>,
+) -> std::thread::JoinHandle<Result<CloudLocalAllocationInventory, String>> {
+    std::thread::spawn(move || {
+        let mut complete = None;
+        for line in BufReader::new(reader).lines() {
+            let line = line.map_err(|_| "inventory-worker-output-failed".to_string())?;
+            let message: WorkerMessage = serde_json::from_str(&line)
+                .map_err(|_| "inventory-worker-json-invalid".to_string())?;
+            match message {
+                WorkerMessage::Checkpoint(report) => {
+                    let mut latest = latest_checkpoint
+                        .lock()
+                        .map_err(|_| "inventory-worker-checkpoint-lock-failed".to_string())?;
+                    *latest = Some(report);
+                }
+                WorkerMessage::Complete(report) => complete = Some(report),
+            }
+        }
+        complete.ok_or_else(|| "inventory-worker-complete-missing".to_string())
+    })
+}
+
+#[cfg(not(coverage))]
+fn join_worker_stdout(
+    reader: std::thread::JoinHandle<Result<CloudLocalAllocationInventory, String>>,
+) -> Result<CloudLocalAllocationInventory, String> {
+    reader
+        .join()
+        .map_err(|_| "inventory-worker-output-thread-failed".to_string())?
+}
+
+#[cfg(not(coverage))]
+fn watchdog_deadline_ms(max_duration_ms: u64) -> u64 {
+    max_duration_ms.saturating_add(WORKER_REPORT_GRACE_MS)
+}
+
+#[cfg(not(coverage))]
 fn run_watchdog(
     raw: &[String],
     root: &CloudRoot,
@@ -224,11 +307,13 @@ fn run_watchdog(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|_| "inventory-worker-spawn-failed".to_string())?;
-    let stdout_reader = drain_pipe(
+    let latest_checkpoint = Arc::new(Mutex::new(None));
+    let stdout_reader = drain_worker_stdout(
         child
             .stdout
             .take()
             .ok_or_else(|| "inventory-worker-stdout-missing".to_string())?,
+        Arc::clone(&latest_checkpoint),
     );
     let stderr_reader = drain_pipe(
         child
@@ -242,7 +327,7 @@ fn run_watchdog(
             .try_wait()
             .map_err(|_| "inventory-worker-wait-failed".to_string())?
         {
-            let stdout = join_pipe(stdout_reader)?;
+            let stdout = join_worker_stdout(stdout_reader);
             let stderr = join_pipe(stderr_reader)?;
             if !status.success() {
                 let bounded: String = stderr.chars().take(4096).collect();
@@ -252,15 +337,28 @@ fn run_watchdog(
                     format!("inventory-worker-failed:{bounded}")
                 });
             }
-            return serde_json::from_str(&stdout)
-                .map_err(|_| "inventory-worker-json-invalid".to_string());
+            return stdout;
         }
-        if u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX) >= args.max_duration_ms
+        if u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+            >= watchdog_deadline_ms(args.max_duration_ms)
         {
             let _ = child.kill();
             let _ = child.wait();
-            let _ = join_pipe(stdout_reader);
+            let _ = join_worker_stdout(stdout_reader);
             let _ = join_pipe(stderr_reader);
+            let checkpoint = latest_checkpoint
+                .lock()
+                .ok()
+                .and_then(|latest| latest.clone());
+            if let Some(checkpoint) = checkpoint {
+                if let Ok(report) = hard_timeout_inventory_from_checkpoint(
+                    root,
+                    inventory_options(args),
+                    checkpoint,
+                ) {
+                    return Ok(report);
+                }
+            }
             return hard_timeout_inventory(root, inventory_options(args), cloud::system_now_ms());
         }
         std::thread::sleep(Duration::from_millis(25));
@@ -274,12 +372,10 @@ fn run() -> Result<(), String> {
     let discovery = cloud::discover_cloud_roots_report(&home_dir()?);
     let discovered = select_root(&discovery.roots, &args.cloud_root)?;
     let root = scan_root(discovered, args.relative_subpath.as_deref())?;
-    let report = if std::env::var_os("DISKSAGE_INTERNAL_INVENTORY_WORKER").is_some() {
-        worker_report(&root, &args)?
-    } else {
-        run_watchdog(&raw, &root, &args)?
-    };
-    print_report(&report)
+    if std::env::var_os("DISKSAGE_INTERNAL_INVENTORY_WORKER").is_some() {
+        return run_worker(&root, &args);
+    }
+    print_report(&run_watchdog(&raw, &root, &args)?)
 }
 
 #[cfg(not(coverage))]
@@ -394,5 +490,55 @@ mod tests {
         let payload = "x".repeat(256 * 1024);
         let reader = drain_pipe(std::io::Cursor::new(payload.clone()));
         assert_eq!(join_pipe(reader).unwrap(), payload);
+    }
+
+    #[test]
+    fn worker_stdout_reader_retains_latest_checkpoint_and_complete_report() {
+        let cloud = tempfile::tempdir().unwrap();
+        let root = CloudRoot {
+            id: "icloud:test".into(),
+            provider: CloudProvider::Icloud,
+            account_scope: CloudAccountScope::Personal,
+            label: "iCloud".into(),
+            path: cloud.path().to_string_lossy().into_owned(),
+            readable: true,
+            access_issue: None,
+        };
+        let mut checkpoint = hard_timeout_inventory(
+            &root,
+            inventory_options(&Args {
+                cloud_root: cloud.path().to_path_buf(),
+                relative_subpath: None,
+                min_allocated_mib: 32,
+                max_entries: 100,
+                max_results: 10,
+                max_depth: 2,
+                max_duration_ms: 1000,
+                max_issues: 10,
+            }),
+            1,
+        )
+        .unwrap();
+        checkpoint.stop_reasons.clear();
+        checkpoint.notices.clear();
+        checkpoint
+            .notices
+            .push("inventory-checkpoint-not-terminal".into());
+        let mut complete = checkpoint.clone();
+        complete.evidence_complete = true;
+        complete.notices.clear();
+        let mut bytes = Vec::new();
+        write_worker_message(&mut bytes, &WorkerMessageRef::Checkpoint(&checkpoint)).unwrap();
+        write_worker_message(&mut bytes, &WorkerMessageRef::Complete(&complete)).unwrap();
+        let latest = Arc::new(Mutex::new(None));
+        let reader = drain_worker_stdout(std::io::Cursor::new(bytes), Arc::clone(&latest));
+        assert_eq!(join_worker_stdout(reader).unwrap(), complete);
+        assert_eq!(*latest.lock().unwrap(), Some(checkpoint));
+    }
+
+    #[test]
+    fn watchdog_deadline_adds_bounded_report_grace() {
+        assert_eq!(watchdog_deadline_ms(60_000), 62_000);
+        assert_eq!(watchdog_deadline_ms(u64::MAX - 1), u64::MAX);
     }
 }
