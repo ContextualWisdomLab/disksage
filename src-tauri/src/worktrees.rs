@@ -8,6 +8,8 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 #[cfg(not(coverage))]
+use std::io::{Read, Write};
+#[cfg(not(coverage))]
 use std::path::Path;
 use std::path::PathBuf;
 #[cfg(not(coverage))]
@@ -25,6 +27,12 @@ const GIT_WORKTREE_LIST_TIMEOUT: Duration = Duration::from_secs(2);
 const GIT_METADATA_READ_TIMEOUT: Duration = Duration::from_secs(2);
 #[cfg(not(coverage))]
 const GIT_METADATA_MAX_BYTES: u64 = 4_096;
+#[cfg(not(coverage))]
+const GIT_COMMAND_MAX_BYTES: usize = 4 * 1024 * 1024;
+#[cfg(not(coverage))]
+const GIT_CHECK_IGNORE_MAX_INPUT_BYTES: usize = 1024 * 1024;
+#[cfg(not(coverage))]
+const GIT_CHECK_IGNORE_MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 #[cfg(not(coverage))]
 const INVENTORY_TIMEOUT: Duration = Duration::from_secs(180);
 #[cfg(not(coverage))]
@@ -126,6 +134,11 @@ pub struct GeneratedArtifact {
     pub path: String,
     pub kind: String,
     pub allocated_bytes: u64,
+    pub gitignore_confirmed: Option<bool>,
+    pub gitignore_source: Option<String>,
+    pub gitignore_line: Option<u64>,
+    pub gitignore_pattern: Option<String>,
+    pub gitignore_issue: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -153,6 +166,8 @@ pub struct WorktreeReport {
     pub orphaned_worktrees: Vec<OrphanWorktreeCandidate>,
     pub potentially_reclaimable_bytes: u64,
     pub reviewable_generated_artifact_bytes: u64,
+    #[serde(default)]
+    pub ignore_confirmed_generated_artifact_bytes: u64,
     pub scan_issues: Vec<WorktreeScanIssue>,
     pub notices: Vec<String>,
 }
@@ -182,6 +197,35 @@ pub struct WorktreeScanIssue {
 
 #[cfg(not(coverage))]
 fn git_output_with_timeout(cwd: &Path, args: &[&str], timeout: Duration) -> Result<Output, String> {
+    git_output_with_input_and_timeout(cwd, args, None, timeout, GIT_COMMAND_MAX_BYTES)
+}
+
+#[cfg(not(coverage))]
+fn read_bounded<R: Read>(mut reader: R, maximum: usize) -> Result<(Vec<u8>, bool), String> {
+    let mut retained = Vec::new();
+    let mut truncated = false;
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let count = reader
+            .read(&mut buffer)
+            .map_err(|error| format!("read:{error}"))?;
+        if count == 0 {
+            return Ok((retained, truncated));
+        }
+        let remaining = maximum.saturating_sub(retained.len());
+        retained.extend_from_slice(&buffer[..count.min(remaining)]);
+        truncated |= count > remaining;
+    }
+}
+
+#[cfg(not(coverage))]
+fn git_output_with_input_and_timeout(
+    cwd: &Path,
+    args: &[&str],
+    input: Option<Vec<u8>>,
+    timeout: Duration,
+    maximum_output_bytes: usize,
+) -> Result<Output, String> {
     let mut command = Command::new("git");
     command
         .arg("-c")
@@ -189,32 +233,66 @@ fn git_output_with_timeout(cwd: &Path, args: &[&str], timeout: Duration) -> Resu
         .arg("-C")
         .arg(cwd)
         .args(args)
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = command.spawn().map_err(|error| format!("spawn:{error}"))?;
+    let stdin_writer = input.map(|input| {
+        let mut stdin = child.stdin.take().expect("piped stdin must be present");
+        std::thread::spawn(move || {
+            stdin
+                .write_all(&input)
+                .map_err(|error| format!("stdin-write:{error}"))
+        })
+    });
+    let stdout = child.stdout.take().expect("piped stdout must be present");
+    let stderr = child.stderr.take().expect("piped stderr must be present");
+    let stdout_reader = std::thread::spawn(move || read_bounded(stdout, maximum_output_bytes));
+    let stderr_reader = std::thread::spawn(move || read_bounded(stderr, maximum_output_bytes));
     let started = Instant::now();
-    loop {
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(_)) => return child.wait_with_output().map_err(|error| error.to_string()),
+            Ok(Some(status)) => break status,
             Ok(None) if started.elapsed() < timeout => {
                 std::thread::sleep(Duration::from_millis(10));
             }
             Ok(None) => {
                 let _ = child.kill();
-                std::thread::spawn(move || {
-                    let _ = child.wait_with_output();
-                });
+                let _ = child.wait();
                 return Err(format!("timeout-after-{}ms", timeout.as_millis()));
             }
             Err(error) => {
                 let _ = child.kill();
-                std::thread::spawn(move || {
-                    let _ = child.wait_with_output();
-                });
+                let _ = child.wait();
                 return Err(format!("wait:{error}"));
             }
         }
+    };
+    if let Some(writer) = stdin_writer {
+        writer
+            .join()
+            .map_err(|_| "stdin-writer-panicked".to_string())??;
     }
+    let (stdout, stdout_truncated) = stdout_reader
+        .join()
+        .map_err(|_| "stdout-reader-panicked".to_string())??;
+    let (stderr, stderr_truncated) = stderr_reader
+        .join()
+        .map_err(|_| "stderr-reader-panicked".to_string())??;
+    if stdout_truncated || stderr_truncated {
+        return Err(format!(
+            "git-output-limit-exceeded-{maximum_output_bytes}-bytes"
+        ));
+    }
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
 }
 
 #[cfg(not(coverage))]
@@ -638,9 +716,162 @@ fn filesystem_evidence_with_limits(
             path: path.to_string_lossy().into_owned(),
             kind,
             allocated_bytes,
+            gitignore_confirmed: None,
+            gitignore_source: None,
+            gitignore_line: None,
+            gitignore_pattern: None,
+            gitignore_issue: Some("gitignore-evidence-not-collected".into()),
         })
         .collect();
     evidence
+}
+
+#[cfg(not(coverage))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GitignoreMatch {
+    source: String,
+    line: u64,
+    pattern: String,
+    path: String,
+}
+
+#[cfg(not(coverage))]
+fn parse_check_ignore_verbose_z(output: &[u8]) -> Result<Vec<GitignoreMatch>, String> {
+    if output.is_empty() {
+        return Ok(Vec::new());
+    }
+    if output.last() != Some(&0) {
+        return Err("check-ignore-output-missing-final-nul".into());
+    }
+    let fields = output[..output.len() - 1]
+        .split(|byte| *byte == 0)
+        .collect::<Vec<_>>();
+    if fields.len() % 4 != 0 {
+        return Err(format!(
+            "check-ignore-output-field-count-not-divisible-by-four-{}",
+            fields.len()
+        ));
+    }
+    fields
+        .chunks_exact(4)
+        .map(|record| {
+            let source = std::str::from_utf8(record[0])
+                .map_err(|_| "check-ignore-source-not-utf8".to_string())?;
+            let line = std::str::from_utf8(record[1])
+                .map_err(|_| "check-ignore-line-not-utf8".to_string())?
+                .parse::<u64>()
+                .map_err(|_| "check-ignore-line-not-u64".to_string())?;
+            let pattern = std::str::from_utf8(record[2])
+                .map_err(|_| "check-ignore-pattern-not-utf8".to_string())?;
+            let path = std::str::from_utf8(record[3])
+                .map_err(|_| "check-ignore-path-not-utf8".to_string())?;
+            if source.is_empty() || pattern.is_empty() || path.is_empty() {
+                return Err("check-ignore-output-has-empty-field".into());
+            }
+            Ok(GitignoreMatch {
+                source: source.into(),
+                line,
+                pattern: pattern.into(),
+                path: path.replace('\\', "/"),
+            })
+        })
+        .collect()
+}
+
+#[cfg(not(coverage))]
+fn git_relative_path(root: &Path, path: &Path) -> Result<String, String> {
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| "generated-artifact-outside-worktree".to_string())?;
+    let value = relative
+        .components()
+        .map(|component| {
+            component
+                .as_os_str()
+                .to_str()
+                .ok_or_else(|| "generated-artifact-path-not-utf8".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .join("/");
+    if value.is_empty() {
+        return Err("generated-artifact-path-empty".into());
+    }
+    Ok(value)
+}
+
+#[cfg(not(coverage))]
+fn annotate_generated_artifact_gitignore(
+    worktree_path: &Path,
+    artifacts: &mut [GeneratedArtifact],
+    budget: InventoryBudget,
+) -> Result<(), String> {
+    if artifacts.is_empty() {
+        return Ok(());
+    }
+    let mut requested = BTreeMap::<String, usize>::new();
+    let mut input = Vec::new();
+    for (index, artifact) in artifacts.iter().enumerate() {
+        let relative = git_relative_path(worktree_path, Path::new(&artifact.path))?;
+        if requested.insert(relative.clone(), index).is_some() {
+            return Err(format!("duplicate-generated-artifact-path-{relative}"));
+        }
+        input.extend_from_slice(relative.as_bytes());
+        input.push(0);
+        if input.len() > GIT_CHECK_IGNORE_MAX_INPUT_BYTES {
+            return Err(format!(
+                "check-ignore-input-limit-exceeded-{GIT_CHECK_IGNORE_MAX_INPUT_BYTES}-bytes"
+            ));
+        }
+    }
+    let timeout = budget
+        .capped(GIT_TIMEOUT)
+        .ok_or_else(|| "inventory-deadline-exhausted".to_string())?;
+    let output = git_output_with_input_and_timeout(
+        worktree_path,
+        &["check-ignore", "-v", "-z", "--stdin"],
+        Some(input),
+        timeout,
+        GIT_CHECK_IGNORE_MAX_OUTPUT_BYTES,
+    )?;
+    if !matches!(output.status.code(), Some(0 | 1)) {
+        return Err(format!(
+            "git-exit-{}:{}",
+            output.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let matches = parse_check_ignore_verbose_z(&output.stdout)?;
+    let mut matched = BTreeSet::new();
+    for evidence in matches {
+        let Some(index) = requested.get(&evidence.path).copied() else {
+            return Err(format!(
+                "check-ignore-returned-unrequested-path-{}",
+                evidence.path
+            ));
+        };
+        if !matched.insert(index) {
+            return Err(format!(
+                "check-ignore-returned-duplicate-path-{}",
+                evidence.path
+            ));
+        }
+        let artifact = &mut artifacts[index];
+        artifact.gitignore_confirmed = Some(!evidence.pattern.starts_with('!'));
+        artifact.gitignore_source = Some(evidence.source);
+        artifact.gitignore_line = Some(evidence.line);
+        artifact.gitignore_pattern = Some(evidence.pattern);
+        artifact.gitignore_issue = None;
+    }
+    for (index, artifact) in artifacts.iter_mut().enumerate() {
+        if !matched.contains(&index) {
+            artifact.gitignore_confirmed = Some(false);
+            artifact.gitignore_source = None;
+            artifact.gitignore_line = None;
+            artifact.gitignore_pattern = None;
+            artifact.gitignore_issue = None;
+        }
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -819,7 +1050,7 @@ pub fn inventory_with_timeout(
             let filesystem_scan_remaining =
                 FILESYSTEM_SCAN_TOTAL_TIMEOUT.saturating_sub(filesystem_scan_started.elapsed());
             let total_remaining = budget.remaining();
-            let filesystem_evidence = if filesystem_scanned
+            let mut filesystem_evidence = if filesystem_scanned
                 && !filesystem_scan_remaining.is_zero()
                 && !total_remaining.is_zero()
             {
@@ -833,6 +1064,26 @@ pub fn inventory_with_timeout(
             } else {
                 FilesystemEvidence::default()
             };
+            if filesystem_scanned && !filesystem_evidence.generated_artifacts.is_empty() {
+                if let Err(reason) = annotate_generated_artifact_gitignore(
+                    &worktree.path,
+                    &mut filesystem_evidence.generated_artifacts,
+                    budget,
+                ) {
+                    for artifact in &mut filesystem_evidence.generated_artifacts {
+                        artifact.gitignore_confirmed = None;
+                        artifact.gitignore_source = None;
+                        artifact.gitignore_line = None;
+                        artifact.gitignore_pattern = None;
+                        artifact.gitignore_issue = Some(reason.clone());
+                    }
+                    scan_issues.push(WorktreeScanIssue {
+                        path: worktree.path.to_string_lossy().into_owned(),
+                        operation: "check-generated-artifact-ignore".into(),
+                        reason,
+                    });
+                }
+            }
             let filesystem_scan_complete = filesystem_evidence.complete;
             let latest_file_ms = filesystem_evidence.latest_ms;
             let generated_artifact_bytes = filesystem_evidence
@@ -919,7 +1170,7 @@ pub fn inventory_with_timeout(
         let filesystem_scan_remaining =
             FILESYSTEM_SCAN_TOTAL_TIMEOUT.saturating_sub(filesystem_scan_started.elapsed());
         let total_remaining = budget.remaining();
-        let evidence = if filesystem_scan_remaining.is_zero() || total_remaining.is_zero() {
+        let mut evidence = if filesystem_scan_remaining.is_zero() || total_remaining.is_zero() {
             FilesystemEvidence::default()
         } else {
             filesystem_evidence_with_limits(
@@ -930,6 +1181,13 @@ pub fn inventory_with_timeout(
                     .min(total_remaining),
             )
         };
+        for artifact in &mut evidence.generated_artifacts {
+            artifact.gitignore_confirmed = None;
+            artifact.gitignore_source = None;
+            artifact.gitignore_line = None;
+            artifact.gitignore_pattern = None;
+            artifact.gitignore_issue = Some("git-worktree-metadata-missing".into());
+        }
         let generated_artifact_bytes = evidence
             .generated_artifacts
             .iter()
@@ -976,14 +1234,30 @@ pub fn inventory_with_timeout(
                 .map(|worktree| worktree.generated_artifact_bytes),
         )
         .sum();
+    let ignore_confirmed_generated_artifact_bytes = worktrees
+        .iter()
+        .flat_map(|worktree| &worktree.generated_artifacts)
+        .filter(|artifact| artifact.gitignore_confirmed == Some(true))
+        .map(|artifact| artifact.allocated_bytes)
+        .sum();
     let evidence_complete = scan_issues.is_empty()
         && worktrees
             .iter()
             .filter(|worktree| worktree.exists && !worktree.is_primary)
-            .all(|worktree| worktree.filesystem_scan_complete)
-        && orphaned_worktrees
-            .iter()
-            .all(|worktree| worktree.filesystem_scan_complete);
+            .all(|worktree| {
+                worktree.filesystem_scan_complete
+                    && worktree
+                        .generated_artifacts
+                        .iter()
+                        .all(|artifact| artifact.gitignore_confirmed.is_some())
+            })
+        && orphaned_worktrees.iter().all(|worktree| {
+            worktree.filesystem_scan_complete
+                && worktree
+                    .generated_artifacts
+                    .iter()
+                    .all(|artifact| artifact.gitignore_confirmed.is_some())
+        });
     WorktreeReport {
         scanned_root: root.to_string_lossy().into_owned(),
         generated_at_ms: now_ms,
@@ -996,6 +1270,7 @@ pub fn inventory_with_timeout(
         orphaned_worktrees,
         potentially_reclaimable_bytes,
         reviewable_generated_artifact_bytes,
+        ignore_confirmed_generated_artifact_bytes,
         scan_issues,
         notices: vec![
             "read-only-no-worktree-removal-or-prune".into(),
@@ -1013,6 +1288,9 @@ pub fn inventory_with_timeout(
             "report-evidence-complete-only-when-all-bounded-probes-finish".into(),
             "orphaned-worktree-source-trees-are-never-removal-eligible".into(),
             "generated-artifacts-are-reported-for-separate-review-only".into(),
+            "generated-artifact-gitignore-evidence-is-batched-and-fail-closed".into(),
+            "generated-artifact-cleanup-requires-gitignore-confirmed-and-fresh-active-use-check"
+                .into(),
             "dirty-locked-detached-unmerged-or-ahead-worktrees-fail-closed".into(),
         ],
     }
@@ -1262,6 +1540,33 @@ mod tests {
 
     #[cfg(not(coverage))]
     #[test]
+    fn parses_batched_verbose_check_ignore_records() {
+        let parsed = parse_check_ignore_verbose_z(
+            b".gitignore\012\0target/\0nested/target\0.git/info/exclude\03\0!node_modules/\0node_modules\0",
+        )
+        .unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].source, ".gitignore");
+        assert_eq!(parsed[0].line, 12);
+        assert_eq!(parsed[0].pattern, "target/");
+        assert_eq!(parsed[0].path, "nested/target");
+        assert_eq!(parsed[1].pattern, "!node_modules/");
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn malformed_verbose_check_ignore_output_fails_closed() {
+        assert_eq!(
+            parse_check_ignore_verbose_z(b".gitignore\01\0target/\0target").unwrap_err(),
+            "check-ignore-output-missing-final-nul"
+        );
+        assert!(parse_check_ignore_verbose_z(b".gitignore\01\0target/\0")
+            .unwrap_err()
+            .starts_with("check-ignore-output-field-count-not-divisible-by-four"));
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
     fn allocated_size_and_activity_ignore_git_metadata_and_symlinks() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir(tmp.path().join(".git")).unwrap();
@@ -1304,6 +1609,7 @@ mod tests {
         assert!(report.evidence_complete);
         assert_eq!(report.potentially_reclaimable_bytes, 0);
         assert_eq!(report.reviewable_generated_artifact_bytes, 0);
+        assert_eq!(report.ignore_confirmed_generated_artifact_bytes, 0);
     }
 
     #[cfg(not(coverage))]
@@ -1369,6 +1675,11 @@ mod tests {
         assert!(candidate.generated_artifact_bytes > 0);
         assert_eq!(candidate.generated_artifacts.len(), 1);
         assert_eq!(candidate.generated_artifacts[0].kind, "node_modules");
+        assert_eq!(candidate.generated_artifacts[0].gitignore_confirmed, None);
+        assert_eq!(
+            candidate.generated_artifacts[0].gitignore_issue.as_deref(),
+            Some("git-worktree-metadata-missing")
+        );
         assert!(candidate
             .review_reasons
             .contains(&"source-tree-removal-prohibited".to_string()));
@@ -1409,7 +1720,18 @@ mod tests {
         );
         git(&repository, &["config", "user.name", "DiskSage Test"]);
         std::fs::write(repository.join("tracked.txt"), b"content").unwrap();
-        git(&repository, &["add", "tracked.txt"]);
+        std::fs::write(repository.join(".gitignore"), b"target/\n").unwrap();
+        std::fs::create_dir(repository.join("node_modules")).unwrap();
+        std::fs::write(repository.join("node_modules/tracked.js"), b"tracked").unwrap();
+        git(
+            &repository,
+            &[
+                "add",
+                "tracked.txt",
+                ".gitignore",
+                "node_modules/tracked.js",
+            ],
+        );
         git(&repository, &["commit", "-m", "initial"]);
         git(&repository, &["branch", "-M", "main"]);
         git(&repository, &["branch", "old"]);
@@ -1417,6 +1739,8 @@ mod tests {
             &repository,
             &["worktree", "add", linked.to_str().unwrap(), "old"],
         );
+        std::fs::create_dir(linked.join("target")).unwrap();
+        std::fs::write(linked.join("target/output.bin"), vec![2_u8; 4096]).unwrap();
         let linked_identity = std::fs::canonicalize(&linked).unwrap();
         assert_eq!(
             common_dir_from_marker(&repository).unwrap(),
@@ -1448,5 +1772,29 @@ mod tests {
             }),
             "{report:#?}"
         );
+        let linked_report = report
+            .worktrees
+            .iter()
+            .find(|worktree| Path::new(&worktree.path) == linked_identity)
+            .unwrap();
+        let ignored = linked_report
+            .generated_artifacts
+            .iter()
+            .find(|artifact| artifact.kind == "target")
+            .unwrap();
+        assert_eq!(ignored.gitignore_confirmed, Some(true));
+        assert_eq!(ignored.gitignore_source.as_deref(), Some(".gitignore"));
+        assert_eq!(ignored.gitignore_line, Some(1));
+        assert_eq!(ignored.gitignore_pattern.as_deref(), Some("target/"));
+        assert_eq!(ignored.gitignore_issue, None);
+        let tracked = linked_report
+            .generated_artifacts
+            .iter()
+            .find(|artifact| artifact.kind == "node_modules")
+            .unwrap();
+        assert_eq!(tracked.gitignore_confirmed, Some(false));
+        assert_eq!(tracked.gitignore_source, None);
+        assert!(report.ignore_confirmed_generated_artifact_bytes > 0);
+        assert!(report.evidence_complete, "{report:#?}");
     }
 }

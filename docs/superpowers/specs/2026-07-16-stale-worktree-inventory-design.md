@@ -42,6 +42,19 @@ directories, `.next`, and `.turbo`. Ambiguous names such as `build` and `dist` a
 paths are review evidence only; this slice exposes no deletion command. Partial walks are labeled
 and never upgraded to complete evidence.
 
+For registered linked worktrees, DiskSage batches those exact artifact roots through bounded
+`git check-ignore -v -z --stdin` probes. Each artifact records a tri-state result plus the matching
+rule source, line, and pattern: `true` means a positive ignore rule matched, `false` means Git
+completed the probe but did not report the path as ignored, and `null` means the evidence could not
+be collected. Output, input, subprocess, and total-inventory budgets are bounded; malformed,
+unexpected, duplicate, oversized, failed, or timed-out evidence stays unknown and adds a scan
+issue. Orphaned worktrees cannot resolve this evidence because their Git metadata is missing.
+
+Ignore confirmation does not authorize deletion. A cleanup executor must still re-check active
+processes, open files, and process working directories immediately before removing a cache. The
+inventory remains read-only and reports ignore-confirmed bytes separately from all name-based
+generated-artifact bytes.
+
 On 2026-07-16 this policy was derived from a real 1.5 GiB orphaned Naruon worktree whose gitfile
 pointed to a missing registration. The source tree was preserved while only its 1.4 GiB
 `frontend/node_modules` directory was removed through the existing operator workflow.
@@ -49,6 +62,13 @@ pointed to a missing registration. The source tree was preserved while only its 
 ## Local validation snapshot
 
 On 2026-07-16, a read-only scan of the local Codex development root found 15 repositories with linked-worktree registration metadata and inspected 23 worktrees. All 17 non-primary worktree filesystem measurements completed. One clean, merged, zero-ahead worktree accounted for 1,345,085,440 allocated bytes, but its last activity was only two days old, so the 30-day policy blocked removal. The removal-eligible count remained zero. Slow or unavailable repository metadata still produced 40 explicit scan issues (30 bounded gitfile reads, nine bounded Git commands, and one bounded discovery pass); none were silently treated as safe. No worktree was changed.
+
+On 2026-07-22, the ignore-evidence build scanned all 11 DiskSage worktrees in 3.031 seconds with
+no scan issues and complete evidence. The current linked worktree's 98,017,280 allocated bytes of
+`node_modules` were attributed to `.gitignore` line 2, pattern `node_modules`; all reported
+generated-artifact bytes in that bounded scan were ignore-confirmed. Unit coverage also proved
+that a tracked directory with a generated-artifact name remains `false` rather than being promoted
+to ignore-confirmed evidence.
 
 ## Safety boundary
 

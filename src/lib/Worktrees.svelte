@@ -38,6 +38,20 @@
     if (value === false) return "clean";
     return "status unknown";
   }
+
+  function gitignoreLabel(artifact: api.GeneratedArtifact): string {
+    if (artifact.gitignore_confirmed === true) return "gitignore 확인";
+    if (artifact.gitignore_confirmed === false) return "Git 무시 아님";
+    return "증거 없음";
+  }
+
+  function gitignoreDetail(artifact: api.GeneratedArtifact): string {
+    if (artifact.gitignore_source && artifact.gitignore_pattern) {
+      const line = artifact.gitignore_line === null ? "?" : artifact.gitignore_line;
+      return `${artifact.gitignore_source}:${line} · ${artifact.gitignore_pattern}`;
+    }
+    return artifact.gitignore_issue ?? "일치하는 gitignore 규칙 없음";
+  }
 </script>
 
 <section>
@@ -69,7 +83,8 @@
       linked 등록 저장소 {report.repository_count}개 · 확인한 worktree {report.worktrees.length}개 ·
       고아 worktree {report.orphaned_worktrees.length}개 · 안전 조건 충족 예상 회수
       {fmtBytes(report.potentially_reclaimable_bytes)} · 별도 검토 가능한 재생성 산출물
-      {fmtBytes(report.reviewable_generated_artifact_bytes)}
+      {fmtBytes(report.reviewable_generated_artifact_bytes)} · gitignore 확인 산출물
+      {fmtBytes(report.ignore_confirmed_generated_artifact_bytes)}
     </div>
     <p class:warning={!report.evidence_complete} class:ok={report.evidence_complete}>
       증거 {report.evidence_complete ? "완전" : "부분"} · {(report.elapsed_ms / 1000).toFixed(1)}초
@@ -78,6 +93,10 @@
     <p class="warning">
       기준 브랜치는 fetch하지 않은 로컬 ref입니다. 시간 제한 또는 부분 측정은 제거 가능 판정을 차단하며,
       설정한 최대 검사 시간이 지나면 수집된 부분 결과만 표시됩니다. 실제 제거 전 원격 동기화와 재검토가 필요합니다.
+    </p>
+    <p class="warning">
+      gitignore 확인은 재생성 가능성의 한 근거일 뿐입니다. 실제 캐시 삭제 직전에는 활성 프로세스·열린 파일·현재 작업
+      디렉터리를 새로 검사해야 합니다.
     </p>
     {#if report.scan_issues.length > 0}
       <details class="issues">
@@ -122,7 +141,13 @@
                 <summary>재생성 산출물 {fmtBytes(worktree.generated_artifact_bytes)}</summary>
                 <ul>
                   {#each worktree.generated_artifacts as artifact (artifact.path)}
-                    <li title={artifact.path}>{artifact.kind} · {fmtBytes(artifact.allocated_bytes)} · {artifact.path}</li>
+                    <li title={`${artifact.path}\n${gitignoreDetail(artifact)}`}>
+                      {artifact.kind} · {fmtBytes(artifact.allocated_bytes)} ·
+                      <span class:confirmed={artifact.gitignore_confirmed === true} class="gitignore">
+                        {gitignoreLabel(artifact)}
+                      </span>
+                      · {artifact.path}
+                    </li>
                   {/each}
                 </ul>
               </details>
@@ -152,7 +177,10 @@
                 <summary>재생성 산출물 경로</summary>
                 <ul>
                   {#each worktree.generated_artifacts as artifact (artifact.path)}
-                    <li title={artifact.path}>{artifact.kind} · {fmtBytes(artifact.allocated_bytes)} · {artifact.path}</li>
+                    <li title={`${artifact.path}\n${gitignoreDetail(artifact)}`}>
+                      {artifact.kind} · {fmtBytes(artifact.allocated_bytes)} ·
+                      <span class="gitignore">{gitignoreLabel(artifact)}</span> · {artifact.path}
+                    </li>
                   {/each}
                 </ul>
               </details>
@@ -187,6 +215,8 @@
   .artifacts { color: #555; font-size: 0.75rem; margin-top: 0.35rem; }
   .artifacts ul { margin: 0.25rem 0; padding-left: 1.2rem; }
   .artifacts li { border: 0; padding: 0; margin: 0.15rem 0; overflow-wrap: anywhere; }
+  .gitignore { color: #9a5b00; font-weight: 600; }
+  .gitignore.confirmed { color: #187338; }
   .orphaned li { border-color: #b97800; background: #fffaf0; }
   .muted { color: #777; }
   .ok { color: #187338; }
