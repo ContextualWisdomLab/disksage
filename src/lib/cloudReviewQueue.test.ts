@@ -76,6 +76,123 @@ describe("cloud review queue", () => {
     expect(cloudReviewQueueState(item, [exact])).toBe("approved");
   });
 
+  it("keeps legacy or unattributed decisions out of the execution-ready state", () => {
+    const item = candidate("a", 10);
+    const legacy: CloudReviewDecision = {
+      ...decision(item, "approved"),
+      version: 1,
+      reviewed_by: undefined,
+      rationale: undefined,
+    };
+    const missingRationale: CloudReviewDecision = {
+      ...decision(item, "approved"),
+      rationale: "   ",
+    };
+    const missingHumanIdentity: CloudReviewDecision = {
+      ...decision(item, "approved"),
+      reviewed_by: "human:   ",
+    };
+    const invisibleHumanIdentity: CloudReviewDecision = {
+      ...decision(item, "approved"),
+      reviewed_by: "human:\u200b",
+    };
+    const controlHumanIdentity: CloudReviewDecision = {
+      ...decision(item, "approved"),
+      reviewed_by: "human:a\0b",
+    };
+    const oversizedHumanIdentity: CloudReviewDecision = {
+      ...decision(item, "approved"),
+      reviewed_by: `human:${"a".repeat(123)}`,
+    };
+    const oversizedRationale: CloudReviewDecision = {
+      ...decision(item, "approved"),
+      rationale: "r".repeat(1_001),
+    };
+    const nulRationale: CloudReviewDecision = {
+      ...decision(item, "approved"),
+      rationale: "reviewed\0reason",
+    };
+    const controlRationale: CloudReviewDecision = {
+      ...decision(item, "approved"),
+      rationale: "reviewed\nreason",
+    };
+    const invisibleRationale: CloudReviewDecision = {
+      ...decision(item, "approved"),
+      rationale: "\u200b",
+    };
+    const invalidDecisionId: CloudReviewDecision = {
+      ...decision(item, "approved"),
+      decision_id: "not-a-digest",
+    };
+    const wordJoinerRationale: CloudReviewDecision = {
+      ...decision(item, "approved"),
+      rationale: "\u2060",
+    };
+    const bidiRationale: CloudReviewDecision = {
+      ...decision(item, "approved"),
+      rationale: "metadata\u202ereviewed",
+    };
+    const combiningMarkRationale: CloudReviewDecision = {
+      ...decision(item, "approved"),
+      rationale: "\u0345",
+    };
+    const nelPaddedReviewer: CloudReviewDecision = {
+      ...decision(item, "approved"),
+      reviewed_by: "\u0085human:local:test",
+    };
+    const bomPaddedReviewer: CloudReviewDecision = {
+      ...decision(item, "approved"),
+      reviewed_by: "human:local:test\ufeff",
+    };
+    const nelPaddedRationale: CloudReviewDecision = {
+      ...decision(item, "approved"),
+      rationale: "\u0085metadata reviewed",
+    };
+    const bomPaddedRationale: CloudReviewDecision = {
+      ...decision(item, "approved"),
+      rationale: "metadata reviewed\ufeff",
+    };
+    expect(candidateReviewDecision(item, [legacy])).toBe(legacy);
+    expect(matchingReviewDecision(item, [legacy])).toBeNull();
+    expect(cloudReviewQueueState(item, [legacy])).toBe("unreviewed");
+    expect(matchingReviewDecision(item, [missingRationale])).toBeNull();
+    expect(cloudReviewQueueState(item, [missingRationale])).toBe("unreviewed");
+    expect(matchingReviewDecision(item, [missingHumanIdentity])).toBeNull();
+    expect(cloudReviewQueueState(item, [missingHumanIdentity])).toBe("unreviewed");
+    for (const invalid of [
+      invisibleHumanIdentity,
+      controlHumanIdentity,
+      oversizedHumanIdentity,
+      oversizedRationale,
+      nulRationale,
+      controlRationale,
+      invisibleRationale,
+      invalidDecisionId,
+      wordJoinerRationale,
+      bidiRationale,
+      combiningMarkRationale,
+      nelPaddedReviewer,
+      bomPaddedReviewer,
+      nelPaddedRationale,
+      bomPaddedRationale,
+    ]) {
+      expect(matchingReviewDecision(item, [invalid])).toBeNull();
+      expect(cloudReviewQueueState(item, [invalid])).toBe("unreviewed");
+    }
+
+    const boundaryDecision: CloudReviewDecision = {
+      ...decision(item, "approved"),
+      reviewed_by: `human:${"a".repeat(122)}`,
+      rationale: "r".repeat(1_000),
+    };
+    expect(matchingReviewDecision(item, [boundaryDecision])).toBe(boundaryDecision);
+    const thaiLetterDecision: CloudReviewDecision = {
+      ...decision(item, "approved"),
+      rationale: "\u0e33",
+    };
+    expect(matchingReviewDecision(item, [thaiLetterDecision])).toBe(thaiLetterDecision);
+  });
+
   it("summarizes actionable review progress without counting blocked candidates", () => {
     const approved = candidate("a", 10);
     const held = candidate("b", 20);
