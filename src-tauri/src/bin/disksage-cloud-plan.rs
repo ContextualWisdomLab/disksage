@@ -44,6 +44,7 @@ struct Args {
     inspect_roots: bool,
     verify_capacity: bool,
     decision_summary: bool,
+    review_reason_set: Option<Vec<String>>,
     capacity_reserve_mib: u64,
     copy_fingerprint: Option<String>,
     adopt_existing_fingerprint: Option<String>,
@@ -86,6 +87,36 @@ fn parse_provider(value: &str) -> Result<CloudProvider, String> {
 }
 
 #[cfg(not(coverage))]
+fn parse_review_reason_set(value: &str) -> Result<Vec<String>, String> {
+    if value.len() > 2_048 {
+        return Err("--review-reason-set 값이 너무 김".into());
+    }
+    let raw = value.split('|').collect::<Vec<_>>();
+    if raw.is_empty() || raw.len() > 16 {
+        return Err("--review-reason-set은 1개 이상 16개 이하 사유여야 함".into());
+    }
+    let mut reasons = Vec::with_capacity(raw.len());
+    for reason in raw {
+        if reason.is_empty()
+            || reason.len() > 128
+            || !reason
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        {
+            return Err("--review-reason-set 사유 형식이 올바르지 않음".into());
+        }
+        reasons.push(reason.to_string());
+    }
+    let original_len = reasons.len();
+    reasons.sort();
+    reasons.dedup();
+    if reasons.len() != original_len {
+        return Err("--review-reason-set에 중복 사유가 있음".into());
+    }
+    Ok(reasons)
+}
+
+#[cfg(not(coverage))]
 fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
     let mut parsed = Args {
         root: home.to_path_buf(),
@@ -98,6 +129,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
         inspect_roots: false,
         verify_capacity: false,
         decision_summary: false,
+        review_reason_set: None,
         capacity_reserve_mib: 1024,
         copy_fingerprint: None,
         adopt_existing_fingerprint: None,
@@ -149,6 +181,16 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             "--inspect-roots" => parsed.inspect_roots = true,
             "--verify-capacity" => parsed.verify_capacity = true,
             "--decision-summary" => parsed.decision_summary = true,
+            "--review-reason-set" => {
+                if parsed.review_reason_set.is_some() {
+                    return Err("--review-reason-set은 한 번만 지정할 수 있음".into());
+                }
+                parsed.review_reason_set = Some(parse_review_reason_set(&value(
+                    args,
+                    &mut index,
+                    "--review-reason-set",
+                )?)?);
+            }
             "--capacity-reserve-mib" => {
                 parsed.capacity_reserve_mib = value(args, &mut index, "--capacity-reserve-mib")?
                     .parse()
@@ -267,7 +309,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             }
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive] [--min-size-mib N] [--min-age-days N] [--limit N] [--decision-summary] [--verify-capacity [--oauth-connections ABSOLUTE_PATH]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
+                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive] [--min-size-mib N] [--min-age-days N] [--limit N] [--decision-summary [--review-reason-set REASON|REASON]] [--verify-capacity [--oauth-connections ABSOLUTE_PATH]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -435,6 +477,9 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
         + usize::from(args.export_naruon_lineage.is_some());
     if args.decision_summary && actions > 0 {
         return Err("--decision-summary는 plan 출력에만 사용할 수 있음".into());
+    }
+    if args.review_reason_set.is_some() && !args.decision_summary {
+        return Err("--review-reason-set에는 --decision-summary가 필요함".into());
     }
     if actions > 1 {
         return Err(
@@ -656,6 +701,127 @@ fn decision_aggregates(report: &cloud::CloudPlanReport) -> serde_json::Value {
     })
 }
 
+#[cfg(not(coverage))]
+fn redacted_decision(candidate: &cloud::CloudCandidate) -> serde_json::Value {
+    serde_json::json!({
+        "metadata_fingerprint": &candidate.metadata_fingerprint,
+        "review_fingerprint": &candidate.review_fingerprint,
+        "relative_path": &candidate.relative_path,
+        "provider": candidate.provider,
+        "destination_account_scope": candidate.destination_account_scope,
+        "kind": candidate.kind,
+        "bytes": candidate.bytes,
+        "age_days": candidate.age_days,
+        "production_time_ms": candidate.production_time_ms,
+        "production_time_source": &candidate.production_time_source,
+        "production_time_confidence": &candidate.production_time_confidence,
+        "decision_state": candidate_decision_state(candidate),
+        "requires_review": candidate.requires_review,
+        "review_reasons": &candidate.review_reasons,
+        "blocked_reason": &candidate.blocked_reason,
+    })
+}
+
+#[cfg(not(coverage))]
+const REVIEW_BATCH_FINGERPRINT_VERSION: u32 = 1;
+
+#[cfg(not(coverage))]
+fn review_batch_fingerprint(
+    report: &cloud::CloudPlanReport,
+    reasons: &[String],
+    candidates: &[&cloud::CloudCandidate],
+) -> String {
+    let mut ordered = candidates.to_vec();
+    ordered.sort_by(|left, right| {
+        left.metadata_fingerprint
+            .cmp(&right.metadata_fingerprint)
+            .then_with(|| left.review_fingerprint.cmp(&right.review_fingerprint))
+    });
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage-cloud-review-batch");
+    hasher.update(&[0]);
+    hasher.update(&REVIEW_BATCH_FINGERPRINT_VERSION.to_le_bytes());
+    hasher.update(cloud::cloud_decision_batch_fingerprint(report).as_bytes());
+    hasher.update(&[0]);
+    for reason in reasons {
+        hasher.update(reason.as_bytes());
+        hasher.update(&[0]);
+    }
+    hasher.update(&(ordered.len() as u64).to_le_bytes());
+    for candidate in ordered {
+        hasher.update(candidate.metadata_fingerprint.as_bytes());
+        hasher.update(candidate.review_fingerprint.as_bytes());
+        hasher.update(&candidate.bytes.to_le_bytes());
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+/// Produce an exact reason-set slice for inspection. The batch fingerprint is evidence only: every
+/// approve/hold decision remains individually attributed and bound to its candidate fingerprints.
+#[cfg(not(coverage))]
+fn review_batch_summary(
+    report: &cloud::CloudPlanReport,
+    reasons: &[String],
+) -> Result<serde_json::Value, String> {
+    let candidates = report
+        .candidates
+        .iter()
+        .filter(|candidate| {
+            candidate_decision_state(candidate) == "review-required"
+                && candidate.review_reasons.as_slice() == reasons
+        })
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return Err("현재 fresh plan에 exact review reason set이 일치하는 후보가 없음".into());
+    }
+    let candidate_bytes = candidates.iter().fold(0u64, |total, candidate| {
+        total.saturating_add(candidate.bytes)
+    });
+    let batch_fingerprint = review_batch_fingerprint(report, reasons, &candidates);
+    let decisions = candidates
+        .into_iter()
+        .map(redacted_decision)
+        .collect::<Vec<_>>();
+
+    Ok(serde_json::json!({
+        "schema_version": 1,
+        "output_mode": "review-batch-summary",
+        "generated_at_ms": report.generated_at_ms,
+        "decision_batch_fingerprint_version": cloud::CLOUD_DECISION_BATCH_FINGERPRINT_VERSION,
+        "decision_batch_fingerprint": cloud::cloud_decision_batch_fingerprint(report),
+        "review_batch_fingerprint_version": REVIEW_BATCH_FINGERPRINT_VERSION,
+        "review_batch_fingerprint": batch_fingerprint,
+        "reason_set": reasons,
+        "cloud": {
+            "provider": report.cloud_root.provider,
+            "account_scope": report.cloud_root.account_scope,
+        },
+        "candidate_count": decisions.len(),
+        "candidate_bytes": candidate_bytes,
+        "metadata_policy": {
+            "production_time_precedence": [
+                "embedded-metadata",
+                "explicit-filename-date",
+                "filesystem-created",
+                "filesystem-modified",
+            ],
+            "filename_dates_are_auxiliary": true,
+            "summary_is_dry_run_only": true,
+            "batch_fingerprint_is_not_approval": true,
+            "candidate_review_decisions_remain_individual": true,
+        },
+        "redacted_from_summary": [
+            "absolute-source-path",
+            "absolute-destination-path",
+            "cloud-root-path-and-label",
+            "content-title-and-authors",
+            "raw-metadata-evidence-values",
+            "dataset-profile",
+        ],
+        "decisions": decisions,
+    }))
+}
+
 /// Produce a bounded operator view without absolute paths or raw embedded metadata values.
 ///
 /// The full plan remains the durable lineage source. This view is intentionally limited to the
@@ -666,25 +832,7 @@ fn decision_summary(report: &cloud::CloudPlanReport) -> serde_json::Value {
     let decisions = report
         .candidates
         .iter()
-        .map(|candidate| {
-            serde_json::json!({
-                "metadata_fingerprint": &candidate.metadata_fingerprint,
-                "review_fingerprint": &candidate.review_fingerprint,
-                "relative_path": &candidate.relative_path,
-                "provider": candidate.provider,
-                "destination_account_scope": candidate.destination_account_scope,
-                "kind": candidate.kind,
-                "bytes": candidate.bytes,
-                "age_days": candidate.age_days,
-                "production_time_ms": candidate.production_time_ms,
-                "production_time_source": &candidate.production_time_source,
-                "production_time_confidence": &candidate.production_time_confidence,
-                "decision_state": candidate_decision_state(candidate),
-                "requires_review": candidate.requires_review,
-                "review_reasons": &candidate.review_reasons,
-                "blocked_reason": &candidate.blocked_reason,
-            })
-        })
+        .map(redacted_decision)
         .collect::<Vec<_>>();
 
     serde_json::json!({
@@ -1261,9 +1409,13 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
     if args.decision_summary {
+        let summary = match args.review_reason_set.as_deref() {
+            Some(reasons) => review_batch_summary(&report, reasons)?,
+            None => decision_summary(&report),
+        };
         println!(
             "{}",
-            serde_json::to_string_pretty(&decision_summary(&report)).map_err(|e| e.to_string())?
+            serde_json::to_string_pretty(&summary).map_err(|e| e.to_string())?
         );
     } else {
         println!(
@@ -1316,6 +1468,7 @@ mod tests {
         assert!(defaults.naruon_sync_evidence.is_none());
         assert!(!defaults.verify_capacity);
         assert!(!defaults.decision_summary);
+        assert!(defaults.review_reason_set.is_none());
         assert_eq!(defaults.capacity_reserve_mib, 1024);
         let args = vec![
             "--root".into(),
@@ -1329,6 +1482,8 @@ mod tests {
             "--limit".into(),
             "3".into(),
             "--decision-summary".into(),
+            "--review-reason-set".into(),
+            "metadata-review-required|download-origin-needs-destination-review".into(),
             "--verify-capacity".into(),
             "--capacity-reserve-mib".into(),
             "2048".into(),
@@ -1342,6 +1497,13 @@ mod tests {
         );
         assert!(parsed.verify_capacity);
         assert!(parsed.decision_summary);
+        assert_eq!(
+            parsed.review_reason_set,
+            Some(vec![
+                "download-origin-needs-destination-review".into(),
+                "metadata-review-required".into(),
+            ])
+        );
         assert_eq!(parsed.capacity_reserve_mib, 2048);
     }
 
@@ -1356,6 +1518,33 @@ mod tests {
         )
         .is_err());
         assert!(parse_args(&["--root".into()], Path::new("/h")).is_err());
+        for reason_set in [
+            "",
+            "duplicate|duplicate",
+            "Uppercase-not-allowed",
+            "contains_space",
+            "destination-account-scope-unknown|",
+        ] {
+            assert!(parse_args(
+                &[
+                    "--decision-summary".into(),
+                    "--review-reason-set".into(),
+                    reason_set.into(),
+                ],
+                Path::new("/h"),
+            )
+            .is_err());
+        }
+        assert!(parse_args(
+            &[
+                "--review-reason-set".into(),
+                "first-reason".into(),
+                "--review-reason-set".into(),
+                "second-reason".into(),
+            ],
+            Path::new("/h"),
+        )
+        .is_err());
         let inspect = parse_args(&["--inspect-roots".into()], Path::new("/h")).unwrap();
         assert!(inspect.inspect_roots);
         let both = parse_args(
@@ -1370,6 +1559,25 @@ mod tests {
         )
         .unwrap();
         assert!(validate_action_args(&summary_action).is_err());
+        let reason_set_without_summary = parse_args(
+            &[
+                "--review-reason-set".into(),
+                "destination-account-scope-unknown".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&reason_set_without_summary).is_err());
+        let reason_set_summary = parse_args(
+            &[
+                "--decision-summary".into(),
+                "--review-reason-set".into(),
+                "destination-account-scope-unknown".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&reason_set_summary).is_ok());
         let roots = vec![
             CloudRoot {
                 id: "/a".into(),
@@ -1561,6 +1769,45 @@ mod tests {
             assert!(!encoded.contains(redacted));
         }
 
+        let reason_set = report.candidates[0].review_reasons.clone();
+        let review_batch = review_batch_summary(&report, &reason_set).unwrap();
+        assert_eq!(review_batch["output_mode"], "review-batch-summary");
+        assert_eq!(review_batch["candidate_count"], 1);
+        assert_eq!(review_batch["candidate_bytes"], 42);
+        assert_eq!(review_batch["reason_set"], serde_json::json!(reason_set));
+        assert_eq!(review_batch["decisions"][0]["relative_path"], "report.pdf");
+        assert_eq!(
+            review_batch["review_batch_fingerprint"]
+                .as_str()
+                .unwrap()
+                .len(),
+            64
+        );
+        assert_eq!(
+            review_batch["metadata_policy"]["batch_fingerprint_is_not_approval"],
+            true
+        );
+        assert_eq!(
+            review_batch["metadata_policy"]["candidate_review_decisions_remain_individual"],
+            true
+        );
+        assert_eq!(
+            review_batch_summary(&report, &report.candidates[0].review_reasons).unwrap()
+                ["review_batch_fingerprint"],
+            review_batch["review_batch_fingerprint"]
+        );
+        let encoded_batch = serde_json::to_string(&review_batch).unwrap();
+        for redacted in [
+            "/Users/private",
+            "private@example.com",
+            "Confidential title",
+            "Private Author",
+            "private raw value",
+        ] {
+            assert!(!encoded_batch.contains(redacted));
+        }
+        assert!(review_batch_summary(&report, &["not-present".into()]).is_err());
+
         let mut mixed = report.clone();
         let mut ready = mixed.candidates[0].clone();
         ready.metadata_fingerprint = "c".repeat(64);
@@ -1619,6 +1866,11 @@ mod tests {
         assert_eq!(
             cloud::cloud_decision_batch_fingerprint(&volatile_changed),
             original_batch
+        );
+        assert_eq!(
+            review_batch_summary(&volatile_changed, &reason_set).unwrap()
+                ["review_batch_fingerprint"],
+            review_batch["review_batch_fingerprint"]
         );
 
         let mut evidence_changed = report.clone();
@@ -1831,6 +2083,18 @@ mod tests {
         args.reviewed_by = None;
         args.review_rationale = None;
         assert!(validate_action_args(&args).is_ok());
+
+        let mut reason_set = parse_args(
+            &[
+                "--review-reason-set".into(),
+                "destination-account-scope-unknown".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&reason_set).is_err());
+        reason_set.decision_summary = true;
+        assert!(validate_action_args(&reason_set).is_ok());
     }
 
     #[test]
