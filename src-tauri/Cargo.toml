@@ -25,6 +25,11 @@ path = "src/bin/disksage-cloud-local-inventory.rs"
 required-features = ["cloud-cli"]
 
 [[bin]]
+name = "disksage-icloud-local-eviction"
+path = "src/bin/disksage-icloud-local-eviction.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
 name = "disksage-archive-tree"
 path = "src/bin/disksage-archive-tree.rs"
 required-features = ["archive-cli"]
@@ -60,7 +65,7 @@ memchr = "2.8.3"
 [target.'cfg(target_os = "macos")'.dependencies]
 embed_plist = "1.2.2"
 objc2 = "0.6.4"
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSError", "NSObject", "NSString", "NSURL", "NSValue"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSError", "NSFileManager", "NSObject", "NSString", "NSURL", "NSValue"] }
 plist = "1"
 
 [dev-dependencies]
