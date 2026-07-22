@@ -5,6 +5,7 @@
 
 use std::collections::VecDeque;
 use std::fs::{self, Metadata};
+use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -14,6 +15,7 @@ const MAX_ENTRY_LIMIT: u64 = 1_000_000;
 const MAX_RESULT_LIMIT: usize = 10_000;
 const MAX_DEPTH_LIMIT: usize = 64;
 const MAX_DURATION_LIMIT_MS: u64 = 300_000;
+const MAX_ISSUE_LIMIT: usize = 1_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -23,6 +25,7 @@ pub struct CloudLocalInventoryOptions {
     pub max_results: usize,
     pub max_depth: usize,
     pub max_duration_ms: u64,
+    pub max_issues: usize,
 }
 
 impl Default for CloudLocalInventoryOptions {
@@ -33,6 +36,7 @@ impl Default for CloudLocalInventoryOptions {
             max_results: 200,
             max_depth: 4,
             max_duration_ms: 30_000,
+            max_issues: 200,
         }
     }
 }
@@ -54,6 +58,16 @@ pub struct CloudLocalAllocationCandidate {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct CloudLocalInventoryIssue {
+    /// Path relative to the selected scan root. `None` means the root itself or an unnamed entry
+    /// returned by a failed directory iterator.
+    pub relative_scope: Option<String>,
+    pub kind: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CloudLocalAllocationInventory {
     pub version: u32,
     pub cloud_root_id: String,
@@ -66,6 +80,8 @@ pub struct CloudLocalAllocationInventory {
     pub visited_files: u64,
     pub visited_directories: u64,
     pub skipped_entries: u64,
+    pub issues: Vec<CloudLocalInventoryIssue>,
+    pub issues_truncated: bool,
     pub allocated_candidate_bytes: u64,
     pub candidates: Vec<CloudLocalAllocationCandidate>,
     pub results_truncated: bool,
@@ -96,7 +112,59 @@ fn validate_options(options: CloudLocalInventoryOptions) -> Result<(), String> {
     if options.max_duration_ms == 0 || options.max_duration_ms > MAX_DURATION_LIMIT_MS {
         return Err("cloud-local-inventory-max-duration-invalid".into());
     }
+    if options.max_issues == 0 || options.max_issues > MAX_ISSUE_LIMIT {
+        return Err("cloud-local-inventory-max-issues-invalid".into());
+    }
     Ok(())
+}
+
+fn stable_io_reason(error: &Error) -> &'static str {
+    match error.kind() {
+        ErrorKind::NotFound => "not-found",
+        ErrorKind::PermissionDenied => "permission-denied",
+        ErrorKind::ConnectionRefused => "connection-refused",
+        ErrorKind::ConnectionReset => "connection-reset",
+        ErrorKind::ConnectionAborted => "connection-aborted",
+        ErrorKind::NotConnected => "not-connected",
+        ErrorKind::AddrInUse => "address-in-use",
+        ErrorKind::AddrNotAvailable => "address-unavailable",
+        ErrorKind::BrokenPipe => "broken-pipe",
+        ErrorKind::AlreadyExists => "already-exists",
+        ErrorKind::WouldBlock => "would-block",
+        ErrorKind::InvalidInput => "invalid-input",
+        ErrorKind::InvalidData => "invalid-data",
+        ErrorKind::TimedOut => "timed-out",
+        ErrorKind::WriteZero => "write-zero",
+        ErrorKind::Interrupted => "interrupted",
+        ErrorKind::Unsupported => "unsupported",
+        ErrorKind::UnexpectedEof => "unexpected-eof",
+        ErrorKind::OutOfMemory => "out-of-memory",
+        _ => "other-io-error",
+    }
+}
+
+fn relative_scope(root: &Path, path: &Path) -> Option<String> {
+    let relative = path.strip_prefix(root).ok()?;
+    (!relative.as_os_str().is_empty()).then(|| relative.to_string_lossy().into_owned())
+}
+
+fn record_issue(
+    issues: &mut Vec<CloudLocalInventoryIssue>,
+    skipped_entries: &mut u64,
+    max_issues: usize,
+    root: &Path,
+    scope: &Path,
+    kind: &str,
+    reason: &str,
+) {
+    *skipped_entries = skipped_entries.saturating_add(1);
+    if issues.len() < max_issues {
+        issues.push(CloudLocalInventoryIssue {
+            relative_scope: relative_scope(root, scope),
+            kind: kind.into(),
+            reason: reason.into(),
+        });
+    }
 }
 
 fn push_unique(values: &mut Vec<String>, value: &str) {
@@ -175,7 +243,7 @@ pub fn hard_timeout_inventory(
     notices.push("inventory-incomplete".into());
     notices.push("worker-hard-timeout".into());
     Ok(CloudLocalAllocationInventory {
-        version: 1,
+        version: 2,
         cloud_root_id: root.id.clone(),
         provider: root.provider,
         account_scope: root.account_scope,
@@ -186,6 +254,8 @@ pub fn hard_timeout_inventory(
         visited_files: 0,
         visited_directories: 0,
         skipped_entries: 0,
+        issues: Vec::new(),
+        issues_truncated: false,
         allocated_candidate_bytes: 0,
         candidates: Vec::new(),
         results_truncated: false,
@@ -216,6 +286,7 @@ fn inventory_with_elapsed(
     let mut visited_files = 0u64;
     let mut visited_directories = 0u64;
     let mut skipped_entries = 0u64;
+    let mut issues = Vec::new();
     let mut allocated_candidate_bytes = 0u64;
     let mut stop_reasons = Vec::new();
 
@@ -226,8 +297,16 @@ fn inventory_with_elapsed(
         }
         let entries = match fs::read_dir(&directory) {
             Ok(entries) => entries,
-            Err(_) => {
-                skipped_entries = skipped_entries.saturating_add(1);
+            Err(error) => {
+                record_issue(
+                    &mut issues,
+                    &mut skipped_entries,
+                    options.max_issues,
+                    &root_path,
+                    &directory,
+                    "read-directory-failed",
+                    stable_io_reason(&error),
+                );
                 push_unique(&mut stop_reasons, "entry-errors");
                 continue;
             }
@@ -244,8 +323,16 @@ fn inventory_with_elapsed(
             visited_entries = visited_entries.saturating_add(1);
             let entry = match entry {
                 Ok(entry) => entry,
-                Err(_) => {
-                    skipped_entries = skipped_entries.saturating_add(1);
+                Err(error) => {
+                    record_issue(
+                        &mut issues,
+                        &mut skipped_entries,
+                        options.max_issues,
+                        &root_path,
+                        &directory,
+                        "read-entry-failed",
+                        stable_io_reason(&error),
+                    );
                     push_unique(&mut stop_reasons, "entry-errors");
                     continue;
                 }
@@ -253,15 +340,31 @@ fn inventory_with_elapsed(
             let path = entry.path();
             let metadata = match fs::symlink_metadata(&path) {
                 Ok(metadata) => metadata,
-                Err(_) => {
-                    skipped_entries = skipped_entries.saturating_add(1);
+                Err(error) => {
+                    record_issue(
+                        &mut issues,
+                        &mut skipped_entries,
+                        options.max_issues,
+                        &root_path,
+                        &path,
+                        "read-metadata-failed",
+                        stable_io_reason(&error),
+                    );
                     push_unique(&mut stop_reasons, "entry-errors");
                     continue;
                 }
             };
             let file_type = metadata.file_type();
             if file_type.is_symlink() {
-                skipped_entries = skipped_entries.saturating_add(1);
+                record_issue(
+                    &mut issues,
+                    &mut skipped_entries,
+                    options.max_issues,
+                    &root_path,
+                    &path,
+                    "symlink-skipped",
+                    "policy-not-followed",
+                );
                 continue;
             }
             if file_type.is_dir() {
@@ -274,13 +377,29 @@ fn inventory_with_elapsed(
                 continue;
             }
             if !file_type.is_file() {
-                skipped_entries = skipped_entries.saturating_add(1);
+                record_issue(
+                    &mut issues,
+                    &mut skipped_entries,
+                    options.max_issues,
+                    &root_path,
+                    &path,
+                    "unsupported-entry-type",
+                    "policy-not-file-or-directory",
+                );
                 continue;
             }
 
             visited_files = visited_files.saturating_add(1);
             let Some(local_bytes) = allocated_bytes(&metadata) else {
-                skipped_entries = skipped_entries.saturating_add(1);
+                record_issue(
+                    &mut issues,
+                    &mut skipped_entries,
+                    options.max_issues,
+                    &root_path,
+                    &path,
+                    "allocation-evidence-unavailable",
+                    "platform-unsupported",
+                );
                 push_unique(&mut stop_reasons, "allocated-byte-evidence-unavailable");
                 continue;
             };
@@ -300,6 +419,7 @@ fn inventory_with_elapsed(
     });
     let results_truncated = candidates.len() > options.max_results;
     candidates.truncate(options.max_results);
+    let issues_truncated = skipped_entries > u64::try_from(issues.len()).unwrap_or(u64::MAX);
     let evidence_complete = stop_reasons.is_empty() && skipped_entries == 0;
     let mut notices = base_notices();
     if results_truncated {
@@ -308,9 +428,12 @@ fn inventory_with_elapsed(
     if !evidence_complete {
         notices.push("inventory-incomplete".into());
     }
+    if issues_truncated {
+        notices.push("inventory-issues-truncated".into());
+    }
 
     Ok(CloudLocalAllocationInventory {
-        version: 1,
+        version: 2,
         cloud_root_id: root.id.clone(),
         provider: root.provider,
         account_scope: root.account_scope,
@@ -321,6 +444,8 @@ fn inventory_with_elapsed(
         visited_files,
         visited_directories,
         skipped_entries,
+        issues,
+        issues_truncated,
         allocated_candidate_bytes,
         candidates,
         results_truncated,
@@ -356,6 +481,7 @@ mod tests {
             max_results: 10,
             max_depth: 4,
             max_duration_ms: 10_000,
+            max_issues: 10,
         }
     }
 
@@ -373,7 +499,7 @@ mod tests {
 
         let report = inventory_cloud_local_allocations(&root(temp.path()), options(), 123).unwrap();
 
-        assert_eq!(report.version, 1);
+        assert_eq!(report.version, 2);
         assert_eq!(report.observed_at_ms, 123);
         assert_eq!(report.visited_files, 2);
         assert!(report.allocated_candidate_bytes > 0);
@@ -438,12 +564,16 @@ mod tests {
     #[test]
     fn hard_timeout_report_is_pure_empty_and_fail_closed() {
         let report = hard_timeout_inventory(&root(Path::new("/Cloud")), options(), 99).unwrap();
+        assert_eq!(report.version, 2);
         assert_eq!(report.observed_at_ms, 99);
         assert!(!report.evidence_complete);
         assert_eq!(report.stop_reasons, vec!["hard-timeout-reached"]);
         assert_eq!(report.visited_entries, 0);
         assert_eq!(report.allocated_candidate_bytes, 0);
         assert!(report.candidates.is_empty());
+        assert!(report.issues.is_empty());
+        assert!(!report.issues_truncated);
+        assert_eq!(report.options.max_issues, 10);
         assert!(report.notices.contains(&"worker-hard-timeout".to_string()));
     }
 
@@ -496,5 +626,31 @@ mod tests {
         assert_eq!(report.visited_files, 0);
         assert!(report.candidates.is_empty());
         assert_eq!(report.skipped_entries, 1);
+        assert_eq!(report.issues.len(), 1);
+        assert_eq!(report.issues[0].kind, "symlink-skipped");
+        assert_eq!(report.issues[0].reason, "policy-not-followed");
+        assert_eq!(report.issues[0].relative_scope.as_deref(), Some("linked"));
+        assert!(!report.issues_truncated);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn issue_output_is_bounded_and_accounted_for() {
+        use std::os::unix::fs::symlink;
+
+        let cloud = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        for index in 0..3 {
+            symlink(outside.path(), cloud.path().join(format!("linked-{index}"))).unwrap();
+        }
+        let mut bounded = options();
+        bounded.max_issues = 1;
+        let report = inventory_cloud_local_allocations(&root(cloud.path()), bounded, 1).unwrap();
+        assert_eq!(report.skipped_entries, 3);
+        assert_eq!(report.issues.len(), 1);
+        assert!(report.issues_truncated);
+        assert!(report
+            .notices
+            .contains(&"inventory-issues-truncated".to_string()));
     }
 }
