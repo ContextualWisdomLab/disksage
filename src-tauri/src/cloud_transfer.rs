@@ -8,7 +8,9 @@ use crate::cloud::{
     candidate_review_fingerprint, ArchiveKind, CloudAccountScope, CloudCandidate, CloudProvider,
     CloudRoot, MetadataEvidence,
 };
-use crate::cloud_review::{validate_decision, CloudReviewDecision, CloudReviewDisposition};
+use crate::cloud_review::{
+    validate_decision, CloudReviewDecision, CloudReviewDisposition, DECISION_VERSION,
+};
 use crate::dataset_metadata::DatasetProfile;
 use crate::provider_evidence::{validate_sync_evidence_record, ProviderSyncEvidenceRecord};
 use std::path::Path;
@@ -202,6 +204,9 @@ fn candidate_blockers_for_action(
             None => blockers.push("review-required".into()),
             Some(decision) if validate_decision(decision).is_err() => {
                 blockers.push("review-decision-invalid".into());
+            }
+            Some(decision) if decision.version != DECISION_VERSION => {
+                blockers.push("review-decision-attribution-required".into());
             }
             Some(decision) if decision.candidate_fingerprint != candidate.metadata_fingerprint => {
                 blockers.push("review-decision-candidate-mismatch".into());
@@ -955,9 +960,9 @@ pub fn prepare_cloud_copy(
     prepare_cloud_copy_with_review(candidate, cloud_root, receipt_dir, copied_at_ms, None)
 }
 
-/// Copy a candidate after validating an optional operator review decision. Approval can clear only
-/// the `review-required` gate; embedded high-confidence dates and all path/provider/planner gates
-/// remain mandatory.
+/// Copy a candidate after validating an optional operator review decision. A current attributed
+/// human approval can clear the exact review and production-time-confidence gates; every
+/// path/provider/planner gate remains mandatory.
 #[cfg(not(coverage))]
 pub fn prepare_cloud_copy_with_review(
     candidate: &CloudCandidate,
@@ -1320,9 +1325,22 @@ mod tests {
         reviewed.requires_review = true;
         reviewed.review_reasons = vec!["embedded-metadata-probe-incomplete".into()];
         reviewed.review_fingerprint = crate::cloud::candidate_review_fingerprint(&reviewed);
-        let approved =
+        let legacy_approved =
             crate::cloud_review::create_decision(&reviewed, CloudReviewDisposition::Approved, 10)
                 .unwrap();
+        assert!(
+            candidate_blockers_with_review(&reviewed, &root(), Some(&legacy_approved))
+                .contains(&"review-decision-attribution-required".to_string())
+        );
+
+        let approved = crate::cloud_review::create_attributed_decision(
+            &reviewed,
+            CloudReviewDisposition::Approved,
+            11,
+            "human:local:reviewer",
+            "Metadata title, account scope, and destination reviewed.",
+        )
+        .unwrap();
         assert!(candidate_blockers_with_review(&reviewed, &root(), Some(&approved)).is_empty());
         let reviewed_lineage = lineage_snapshot(
             &reviewed,
@@ -1337,44 +1355,35 @@ mod tests {
             reviewed_lineage.review_disposition,
             Some(CloudReviewDisposition::Approved)
         );
-        assert_eq!(reviewed_lineage.reviewed_at_ms, Some(10));
+        assert_eq!(reviewed_lineage.reviewed_at_ms, Some(11));
         assert_eq!(
             reviewed_lineage.review_fingerprint,
             reviewed.review_fingerprint
         );
-
-        let attributed = crate::cloud_review::create_attributed_decision(
-            &reviewed,
-            CloudReviewDisposition::Approved,
-            11,
-            "human:local:reviewer",
-            "Metadata title, account scope, and destination reviewed.",
-        )
-        .unwrap();
-        let attributed_lineage = lineage_snapshot(
-            &reviewed,
-            Some(&attributed),
-            CloudCopyVerificationMethod::CopiedByDiskSage,
-        );
         assert_eq!(
-            attributed_lineage.reviewed_by.as_deref(),
+            reviewed_lineage.reviewed_by.as_deref(),
             Some("human:local:reviewer")
         );
         assert_eq!(
-            attributed_lineage.review_rationale.as_deref(),
+            reviewed_lineage.review_rationale.as_deref(),
             Some("Metadata title, account scope, and destination reviewed.")
         );
-        let original_fingerprint = lineage_fingerprint(&attributed_lineage).unwrap();
-        let mut changed_attribution = attributed_lineage;
+        let original_fingerprint = lineage_fingerprint(&reviewed_lineage).unwrap();
+        let mut changed_attribution = reviewed_lineage;
         changed_attribution.review_rationale = Some("Changed rationale".into());
         assert_ne!(
             original_fingerprint,
             lineage_fingerprint(&changed_attribution).unwrap()
         );
 
-        let held =
-            crate::cloud_review::create_decision(&reviewed, CloudReviewDisposition::Held, 11)
-                .unwrap();
+        let held = crate::cloud_review::create_attributed_decision(
+            &reviewed,
+            CloudReviewDisposition::Held,
+            12,
+            "human:local:reviewer",
+            "Hold until the destination account scope is confirmed.",
+        )
+        .unwrap();
         assert!(
             candidate_blockers_with_review(&reviewed, &root(), Some(&held))
                 .contains(&"review-held".to_string())
@@ -1398,9 +1407,14 @@ mod tests {
         reviewed.production_time_source = "filename:path-token".into();
         reviewed.production_time_confidence = "low".into();
         reviewed.review_fingerprint = crate::cloud::candidate_review_fingerprint(&reviewed);
-        let filename_approval =
-            crate::cloud_review::create_decision(&reviewed, CloudReviewDisposition::Approved, 12)
-                .unwrap();
+        let filename_approval = crate::cloud_review::create_attributed_decision(
+            &reviewed,
+            CloudReviewDisposition::Approved,
+            13,
+            "human:local:reviewer",
+            "Filename date is auxiliary; destination and surrounding context were reviewed.",
+        )
+        .unwrap();
         assert!(
             candidate_blockers_with_review(&reviewed, &root(), Some(&filename_approval)).is_empty()
         );
@@ -1408,9 +1422,14 @@ mod tests {
         assert!(candidate_blockers_with_review(&reviewed, &root(), None)
             .contains(&"embedded-high-confidence-date-required".to_string()));
 
-        let filename_hold =
-            crate::cloud_review::create_decision(&reviewed, CloudReviewDisposition::Held, 13)
-                .unwrap();
+        let filename_hold = crate::cloud_review::create_attributed_decision(
+            &reviewed,
+            CloudReviewDisposition::Held,
+            14,
+            "human:local:reviewer",
+            "Hold because embedded production metadata is unavailable.",
+        )
+        .unwrap();
         let held_blockers =
             candidate_blockers_with_review(&reviewed, &root(), Some(&filename_hold));
         assert!(held_blockers.contains(&"review-held".to_string()));

@@ -76,6 +76,25 @@ describe("cloud review queue", () => {
     expect(cloudReviewQueueState(item, [exact])).toBe("approved");
   });
 
+  it("keeps legacy or unattributed decisions out of the execution-ready state", () => {
+    const item = candidate("a", 10);
+    const legacy: CloudReviewDecision = {
+      ...decision(item, "approved"),
+      version: 1,
+      reviewed_by: undefined,
+      rationale: undefined,
+    };
+    const missingRationale: CloudReviewDecision = {
+      ...decision(item, "approved"),
+      rationale: "   ",
+    };
+    expect(candidateReviewDecision(item, [legacy])).toBe(legacy);
+    expect(matchingReviewDecision(item, [legacy])).toBeNull();
+    expect(cloudReviewQueueState(item, [legacy])).toBe("unreviewed");
+    expect(matchingReviewDecision(item, [missingRationale])).toBeNull();
+    expect(cloudReviewQueueState(item, [missingRationale])).toBe("unreviewed");
+  });
+
   it("summarizes actionable review progress without counting blocked candidates", () => {
     const approved = candidate("a", 10);
     const held = candidate("b", 20);

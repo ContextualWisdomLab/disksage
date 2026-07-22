@@ -102,7 +102,14 @@ export function matchingReviewDecision(
   decisions: CloudReviewDecision[],
 ): CloudReviewDecision | null {
   const decision = candidateReviewDecision(candidate, decisions);
-  return decision?.review_fingerprint === candidate.review_fingerprint ? decision : null;
+  const reviewedBy = decision?.reviewed_by?.trim() ?? "";
+  const rationale = decision?.rationale?.trim() ?? "";
+  const attributedHumanDecision = decision?.version === 2
+    && reviewedBy.startsWith("human:")
+    && rationale.length > 0;
+  return decision?.review_fingerprint === candidate.review_fingerprint && attributedHumanDecision
+    ? decision
+    : null;
 }
 
 export function cloudReviewQueueState(
