@@ -30,11 +30,12 @@ struct Args {
     max_results: usize,
     max_depth: usize,
     max_duration_ms: u64,
+    max_issues: usize,
 }
 
 #[cfg(not(coverage))]
 fn usage() -> &'static str {
-    "usage: disksage-cloud-local-inventory --cloud-root ABSOLUTE_PATH [--relative-subpath SAFE_RELATIVE_PATH] [--min-allocated-mib N] [--max-entries N] [--max-results N] [--max-depth N] [--max-duration-ms N]"
+    "usage: disksage-cloud-local-inventory --cloud-root ABSOLUTE_PATH [--relative-subpath SAFE_RELATIVE_PATH] [--min-allocated-mib N] [--max-entries N] [--max-results N] [--max-depth N] [--max-duration-ms N] [--max-issues N]"
 }
 
 #[cfg(not(coverage))]
@@ -66,6 +67,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut max_results = defaults.max_results;
     let mut max_depth = defaults.max_depth;
     let mut max_duration_ms = defaults.max_duration_ms;
+    let mut max_issues = defaults.max_issues;
     let mut index = 0usize;
     while index < args.len() {
         match args[index].as_str() {
@@ -86,6 +88,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             "--max-results" => max_results = number(args, &mut index, "--max-results")?,
             "--max-depth" => max_depth = number(args, &mut index, "--max-depth")?,
             "--max-duration-ms" => max_duration_ms = number(args, &mut index, "--max-duration-ms")?,
+            "--max-issues" => max_issues = number(args, &mut index, "--max-issues")?,
             "--help" | "-h" => return Err(usage().into()),
             unknown => return Err(format!("알 수 없는 인자: {unknown}")),
         }
@@ -113,6 +116,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         max_results,
         max_depth,
         max_duration_ms,
+        max_issues,
     })
 }
 
@@ -169,6 +173,7 @@ fn inventory_options(args: &Args) -> CloudLocalInventoryOptions {
         max_results: args.max_results,
         max_depth: args.max_depth,
         max_duration_ms: args.max_duration_ms,
+        max_issues: args.max_issues,
     }
 }
 
@@ -310,6 +315,8 @@ mod tests {
             "2".into(),
             "--max-duration-ms".into(),
             "5000".into(),
+            "--max-issues".into(),
+            "50".into(),
         ])
         .unwrap();
         assert_eq!(args.cloud_root, PathBuf::from("/Cloud"));
@@ -322,6 +329,7 @@ mod tests {
         assert_eq!(args.max_results, 25);
         assert_eq!(args.max_depth, 2);
         assert_eq!(args.max_duration_ms, 5000);
+        assert_eq!(args.max_issues, 50);
         assert!(parse_args(&[]).is_err());
         assert!(parse_args(&["--cloud-root".into(), "relative".into()]).is_err());
         assert!(parse_args(&[
