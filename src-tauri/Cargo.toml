@@ -31,6 +31,7 @@ oxrdf = "0.3.3"
 llama-cpp-2 = { version = "0.1.151", optional = true }
 sha2 = "0.11.0"
 ureq = "3.3.0"
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 tempfile = "3.27.0"
@@ -40,4 +41,3 @@ llm-engine = ["dep:llama-cpp-2"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage)", "cfg(coverage_nightly)"] }
-

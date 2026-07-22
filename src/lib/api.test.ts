@@ -50,6 +50,9 @@ describe("api wrappers", () => {
       [() => api.setSettings(true), "set_settings", { onlineMode: true }],
       [() => api.reasonUnknownExtensions(["/a.abc"]), "reason_unknown_extensions", { samples: ["/a.abc"] }],
       [() => api.getUserRules(), "user_rules"],
+      [() => api.listCloudRoots(), "list_cloud_roots"],
+      [() => api.planCloudArchive("/scan", "/cloud"), "plan_cloud_archive", { root: "/scan", cloudRoot: "/cloud", minSizeMib: 256, minAgeDays: 90, limit: 200 }],
+      [() => api.planCloudArchive("/scan", "/cloud", 10, 30, 5), "plan_cloud_archive", { root: "/scan", cloudRoot: "/cloud", minSizeMib: 10, minAgeDays: 30, limit: 5 }],
     ];
 
     for (const [call, command, payload] of cases) {

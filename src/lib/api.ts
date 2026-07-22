@@ -155,3 +155,70 @@ export const setSettings = (online_mode: boolean) => invoke<Settings>("set_setti
 export interface ExtInsight { ext: string; type_desc: string | null; suggested_class: string | null; source: string; }
 export const reasonUnknownExtensions = (samples: string[]) =>
   invoke<ExtInsight[]>("reason_unknown_extensions", { samples });
+
+export type CloudProvider = "icloud" | "onedrive" | "google-drive";
+export type ArchiveKind = "document" | "media" | "archive" | "dataset" | "backup" | "creative";
+
+export interface CloudRoot {
+  id: string;
+  provider: CloudProvider;
+  label: string;
+  path: string;
+}
+
+export interface CloudCandidate {
+  metadata_fingerprint: string;
+  src: string;
+  dst: string;
+  provider: CloudProvider;
+  kind: ArchiveKind;
+  bytes: number;
+  age_days: number;
+  created_ms: number;
+  modified_ms: number;
+  production_time_ms: number;
+  production_time_source: string;
+  production_time_confidence: string;
+  source_root: string;
+  relative_path: string;
+  source_context: string;
+  requires_review: boolean;
+  review_reasons: string[];
+  content_title: string | null;
+  content_authors: string[];
+  content_context: string[];
+  duration_ms: number | null;
+  metadata_evidence: MetadataEvidence[];
+  blocked_reason: string | null;
+}
+
+export interface MetadataEvidence {
+  field: string;
+  value: string;
+  source: string;
+  confidence: string;
+}
+
+export interface CloudPlanReport {
+  cloud_root: CloudRoot;
+  generated_at_ms: number;
+  candidates: CloudCandidate[];
+  candidate_bytes: number;
+  potentially_reclaimable_bytes: number;
+  notices: string[];
+}
+
+export const listCloudRoots = () => invoke<CloudRoot[]>("list_cloud_roots");
+export const planCloudArchive = (
+  root: string,
+  cloudRoot: string,
+  minSizeMib = 256,
+  minAgeDays = 90,
+  limit = 200,
+) => invoke<CloudPlanReport>("plan_cloud_archive", {
+  root,
+  cloudRoot,
+  minSizeMib,
+  minAgeDays,
+  limit,
+});

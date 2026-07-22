@@ -15,7 +15,7 @@ use crate::scanner::ScanResult;
 use crate::organize;
 use crate::safety;
 #[cfg(not(coverage))]
-use crate::{dev_artifacts, dupes, rules};
+use crate::{cloud, dev_artifacts, dupes, rules};
 
 #[derive(Default)]
 pub struct AppState {
@@ -418,6 +418,51 @@ fn resolve_home(app: &AppHandle) -> PathBuf {
         .or_else(|| std::env::var("HOME").ok().map(PathBuf::from))
         .or_else(|| std::env::var("USERPROFILE").ok().map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Writable local roots exposed by iCloud Drive, OneDrive, and Google Drive.
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn list_cloud_roots(app: AppHandle) -> Vec<cloud::CloudRoot> {
+    cloud::discover_cloud_roots(&resolve_home(&app))
+}
+
+/// Read-only cloud offload plan. The selected destination must be one of the roots discovered
+/// on this machine; this command never creates a folder or moves a file.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn plan_cloud_archive(
+    root: String,
+    cloud_root: String,
+    min_size_mib: u64,
+    min_age_days: u64,
+    limit: usize,
+    app: AppHandle,
+) -> Result<cloud::CloudPlanReport, String> {
+    let root_path = PathBuf::from(&root);
+    cloud::validate_source_root_readable(&root_path)?;
+    let discovered = cloud::discover_cloud_roots(&resolve_home(&app));
+    let selected = discovered
+        .iter()
+        .find(|candidate| candidate.path == cloud_root)
+        .cloned()
+        .ok_or_else(|| "탐지된 클라우드 루트가 아님".to_string())?;
+    let excluded: Vec<PathBuf> = discovered.iter().map(|r| PathBuf::from(&r.path)).collect();
+    if excluded.iter().any(|cloud| root_path.starts_with(cloud)) {
+        return Err("이미 클라우드 안에 있는 경로는 오프로드 원본으로 사용할 수 없음".into());
+    }
+    let files = cloud::collect_archive_files(&root_path, &excluded);
+    Ok(cloud::plan_cloud_archive(
+        &files,
+        &root_path,
+        &selected,
+        cloud::system_now_ms(),
+        cloud::CloudPlanOptions {
+            min_size_bytes: min_size_mib.saturating_mul(1024 * 1024),
+            min_age_days,
+            limit: limit.clamp(1, 1_000),
+        },
+    ))
 }
 
 #[cfg(not(coverage))]
