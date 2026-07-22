@@ -377,12 +377,21 @@ pub fn list_dev_artifacts(
 pub fn list_stale_worktrees(
     root: String,
     min_age_days: u64,
+    timeout_seconds: u64,
 ) -> Result<crate::worktrees::WorktreeReport, String> {
     let root = PathBuf::from(root);
     if !root.is_dir() {
         return Err(format!("스캔 루트가 디렉터리가 아님: {}", root.display()));
     }
-    Ok(crate::worktrees::inventory(&root, min_age_days, now_ms()))
+    if !(1..=600).contains(&timeout_seconds) {
+        return Err("최대 검사 시간은 1초 이상 600초 이하여야 함".into());
+    }
+    Ok(crate::worktrees::inventory_with_timeout(
+        &root,
+        min_age_days,
+        now_ms(),
+        std::time::Duration::from_secs(timeout_seconds),
+    ))
 }
 
 #[cfg(not(coverage))]
