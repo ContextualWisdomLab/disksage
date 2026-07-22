@@ -51,12 +51,15 @@ describe("api wrappers", () => {
       [() => api.reasonUnknownExtensions(["/a.abc"]), "reason_unknown_extensions", { samples: ["/a.abc"] }],
       [() => api.getUserRules(), "user_rules"],
       [() => api.listCloudRoots(), "list_cloud_roots"],
+      [() => api.listCloudProviderConnections(), "list_cloud_provider_connections"],
+      [() => api.connectCloudProvider("/cloud", "desktop-client-id"), "connect_cloud_provider", { cloudRoot: "/cloud", clientId: "desktop-client-id" }],
+      [() => api.disconnectCloudProvider("/cloud"), "disconnect_cloud_provider", { cloudRoot: "/cloud" }],
       [() => api.planCloudArchive("/scan", "/cloud"), "plan_cloud_archive", { root: "/scan", cloudRoot: "/cloud", minSizeMib: 256, minAgeDays: 90, limit: 200 }],
       [() => api.planCloudArchive("/scan", "/cloud", 10, 30, 5), "plan_cloud_archive", { root: "/scan", cloudRoot: "/cloud", minSizeMib: 10, minAgeDays: 30, limit: 5 }],
       [() => api.copyCloudCandidate("/scan", "/cloud", "a".repeat(64)), "copy_cloud_candidate", { root: "/scan", cloudRoot: "/cloud", metadataFingerprint: "a".repeat(64), minSizeMib: 256, minAgeDays: 90, limit: 200 }],
       [() => api.copyCloudCandidate("/scan", "/cloud", "b".repeat(64), 10, 30, 5), "copy_cloud_candidate", { root: "/scan", cloudRoot: "/cloud", metadataFingerprint: "b".repeat(64), minSizeMib: 10, minAgeDays: 30, limit: 5 }],
-      [() => api.attestCloudCopy("c".repeat(64)), "attest_cloud_copy", { receiptId: "c".repeat(64), objectId: null, accessToken: null }],
-      [() => api.attestCloudCopy("d".repeat(64), "remote-id", "ephemeral-token"), "attest_cloud_copy", { receiptId: "d".repeat(64), objectId: "remote-id", accessToken: "ephemeral-token" }],
+      [() => api.attestCloudCopy("c".repeat(64)), "attest_cloud_copy", { receiptId: "c".repeat(64), objectId: null }],
+      [() => api.attestCloudCopy("d".repeat(64), "remote-id"), "attest_cloud_copy", { receiptId: "d".repeat(64), objectId: "remote-id" }],
     ];
 
     for (const [call, command, payload] of cases) {

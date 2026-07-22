@@ -15,7 +15,10 @@ use crate::scanner::ScanResult;
 use crate::organize;
 use crate::safety;
 #[cfg(not(coverage))]
-use crate::{cloud, cloud_transfer, dev_artifacts, dupes, provider_api_client, provider_sync, rules};
+use crate::{
+    cloud, cloud_transfer, dev_artifacts, dupes, provider_api_client, provider_oauth,
+    provider_sync, rules,
+};
 
 #[derive(Default)]
 pub struct AppState {
@@ -428,6 +431,86 @@ pub fn list_cloud_roots(app: AppHandle) -> Vec<cloud::CloudRoot> {
 }
 
 #[cfg(not(coverage))]
+fn selected_cloud_root(app: &AppHandle, cloud_root: &str) -> Result<cloud::CloudRoot, String> {
+    cloud::discover_cloud_roots(&resolve_home(app))
+        .into_iter()
+        .find(|candidate| candidate.path == cloud_root)
+        .ok_or_else(|| "탐지된 클라우드 루트가 아님".to_string())
+}
+
+#[cfg(not(coverage))]
+fn oauth_connections_path(app: &AppHandle) -> Result<PathBuf, String> {
+    use tauri::Manager;
+    app.path()
+        .app_data_dir()
+        .map(|directory| provider_oauth::connections_path(&directory))
+        .map_err(|_| "app-data-directory-unavailable".to_string())
+}
+
+/// Return non-secret OAuth connection descriptors. Refresh tokens remain in the OS credential
+/// store and this command never reads or returns them.
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn list_cloud_provider_connections(
+    app: AppHandle,
+) -> Result<Vec<provider_oauth::OAuthConnection>, String> {
+    provider_oauth::load_connections(&oauth_connections_path(&app)?)
+}
+
+/// Start a native browser authorization-code flow with PKCE and a random loopback port. The
+/// provider refresh token is committed to the OS credential store only after state validation and
+/// a successful token exchange. Client IDs are public desktop-app identifiers, not secrets.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn connect_cloud_provider(
+    cloud_root: String,
+    client_id: String,
+    app: AppHandle,
+) -> Result<provider_oauth::OAuthConnection, String> {
+    let selected = selected_cloud_root(&app, &cloud_root)?;
+    if selected.provider == cloud::CloudProvider::Icloud {
+        return Err("icloud-oauth-not-supported".into());
+    }
+    let pending = provider_oauth::prepare_authorization(selected.provider, &client_id)?;
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_url(pending.authorization_url(), None::<&str>)
+        .map_err(|_| "oauth-system-browser-open-failed".to_string())?;
+    let connection_path = oauth_connections_path(&app)?;
+    let connected_at_ms = cloud::system_now_ms();
+    tauri::async_runtime::spawn_blocking(move || {
+        provider_oauth::finish_authorization(
+            pending,
+            &selected,
+            &connection_path,
+            connected_at_ms,
+        )
+    })
+    .await
+    .map_err(|_| "provider-oauth-task-failed".to_string())?
+}
+
+/// Remove the selected root's refresh token from the OS credential store and its non-secret local
+/// connection descriptor. This does not alter any cloud file.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn disconnect_cloud_provider(
+    cloud_root: String,
+    app: AppHandle,
+) -> Result<(), String> {
+    let selected = selected_cloud_root(&app, &cloud_root)?;
+    if selected.provider == cloud::CloudProvider::Icloud {
+        return Err("icloud-oauth-not-supported".into());
+    }
+    let connection_path = oauth_connections_path(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        provider_oauth::disconnect(&connection_path, &selected)
+    })
+    .await
+    .map_err(|_| "provider-oauth-task-failed".to_string())?
+}
+
+#[cfg(not(coverage))]
 fn cloud_plan_for_inputs(
     root: &str,
     cloud_root: &str,
@@ -548,14 +631,13 @@ pub struct CloudAttestationOutput {
     pub blockers: Vec<String>,
 }
 
-/// Read-only provider attestation. OAuth access tokens are accepted only as ephemeral command
-/// input and are never written to a receipt, log, setting, or response.
+/// Read-only provider attestation. OneDrive and Google Drive access tokens are refreshed from an OS
+/// credential-store token, used once in memory, and never accepted from or returned to the UI.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub async fn attest_cloud_copy(
     receipt_id: String,
     object_id: Option<String>,
-    access_token: Option<String>,
     app: AppHandle,
 ) -> Result<CloudAttestationOutput, String> {
     if receipt_id.len() != 64 || !receipt_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -568,6 +650,8 @@ pub async fn attest_cloud_copy(
         .map_err(|_| "app-data-directory-unavailable".to_string())?
         .join("cloud-receipts")
         .join(format!("{receipt_id}.json"));
+    let connection_path = oauth_connections_path(&app)?;
+    let cloud_roots = cloud::discover_cloud_roots(&resolve_home(&app));
     tauri::async_runtime::spawn_blocking(move || {
         let receipt = cloud_transfer::read_immutable_receipt(&receipt_path)?;
         if receipt.receipt_id != receipt_id {
@@ -577,9 +661,8 @@ pub async fn attest_cloud_copy(
         let evidence = match receipt.provider {
             cloud::CloudProvider::Icloud => {
                 if object_id.as_deref().is_some_and(|value| !value.trim().is_empty())
-                    || access_token.as_deref().is_some_and(|value| !value.trim().is_empty())
                 {
-                    return Err("icloud-provider-credentials-not-accepted".into());
+                    return Err("icloud-provider-object-id-not-accepted".into());
                 }
                 provider_sync::collect_icloud_sync_evidence(&receipt, confirmed_at_ms)?
             }
@@ -587,9 +670,18 @@ pub async fn attest_cloud_copy(
                 let object_id = object_id
                     .filter(|value| !value.trim().is_empty())
                     .ok_or_else(|| "provider-object-id-missing".to_string())?;
-                let access_token = access_token
-                    .filter(|value| !value.trim().is_empty())
-                    .ok_or_else(|| "provider-access-token-missing".to_string())?;
+                let destination = Path::new(&receipt.destination);
+                let selected_root = cloud_roots
+                    .iter()
+                    .filter(|root| {
+                        root.provider == receipt.provider
+                            && destination.starts_with(Path::new(&root.path))
+                    })
+                    .max_by_key(|root| Path::new(&root.path).components().count())
+                    .cloned()
+                    .ok_or_else(|| "receipt-cloud-root-unavailable".to_string())?;
+                let access_token =
+                    provider_oauth::refreshed_access_token(&connection_path, &selected_root)?;
                 let locator = match receipt.provider {
                     cloud::CloudProvider::Onedrive => {
                         provider_api_client::ProviderRemoteLocator::OneDriveItemId(object_id)
@@ -603,7 +695,7 @@ pub async fn attest_cloud_copy(
                 provider_api_client::collect_authenticated_provider_api_evidence(
                     &receipt,
                     &locator,
-                    &access_token,
+                    access_token.as_str(),
                     &client,
                     confirmed_at_ms,
                 )?

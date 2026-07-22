@@ -14,15 +14,15 @@
 - 🗂 **Ontology-based organizing** — files classified into an OWL taxonomy you can edit
 - 📊 **Disk inventory** — "what is on my disk?", aggregated by category, unknowns surfaced
 - 🧠 **On-device LLM advisor** — embedded llama.cpp model judges delete-safety, fully offline
-- ☁️ **Cloud offload planner** — detects iCloud Drive, OneDrive, and Google Drive; previews old/large archive candidates with embedded-metadata-first production time and source-path lineage (dry-run only)
+- ☁️ **Metadata-first cloud archive** — detects iCloud Drive, OneDrive, and Google Drive; previews old/large candidates, performs gated copy-plus-hash verification, and verifies provider metadata with native PKCE OAuth while retaining the source
 
 ## Safety first
 
-Every destructive action goes through explicit review and the OS trash — DiskSage has **no permanent-delete code path**. All operations are journaled and undoable.
+Every destructive action goes through explicit review and the OS trash — DiskSage has **no permanent-delete code path**. Cloud archiving currently exposes copy and evidence only: even a successful provider attestation returns a local-eviction permit without deleting the source. All destructive operations are journaled and undoable.
 
 ## Status
 
-🚧 Early development. See the [design spec](docs/superpowers/specs/2026-07-10-disksage-design.md).
+🚧 Early development. See the [base design](docs/superpowers/specs/2026-07-10-disksage-design.md) and [cloud OAuth security design](docs/superpowers/specs/2026-07-16-cloud-provider-oauth-pkce-design.md).
 
 ## Tech
 
