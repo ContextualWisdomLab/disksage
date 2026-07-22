@@ -28,6 +28,12 @@ const METADATA_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(not(coverage))]
 const METADATA_PROBE_OUTPUT_LIMIT: usize = 1024 * 1024;
 #[cfg(not(coverage))]
+const EXIFTOOL_BATCH_SIZE: usize = 32;
+#[cfg(not(coverage))]
+const EXIFTOOL_BATCH_TIMEOUT: Duration = Duration::from_secs(20);
+#[cfg(not(coverage))]
+const EXIFTOOL_BATCH_OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
+#[cfg(not(coverage))]
 const MAX_ZIP_METADATA_ENTRIES: usize = 10_000;
 #[cfg(not(coverage))]
 const MAX_ZIP_CONTEXT_NAMES: usize = 16;
@@ -399,14 +405,7 @@ fn push_root(
         access_issue: access_issue.clone(),
     });
     if let Some(reason) = access_issue {
-        push_discovery_issue(
-            report,
-            Some(provider),
-            account_scope,
-            &path,
-            label,
-            reason,
-        );
+        push_discovery_issue(report, Some(provider), account_scope, &path, label, reason);
     }
 }
 
@@ -641,8 +640,8 @@ pub fn discover_cloud_roots(home: &Path) -> Vec<CloudRoot> {
 fn archive_kind(path: &Path) -> Option<ArchiveKind> {
     let ext = path.extension()?.to_string_lossy().to_ascii_lowercase();
     match ext.as_str() {
-        "pdf" | "doc" | "docx" | "ppt" | "pptx" | "xls" | "xlsx" | "xlsm" | "xlsb"
-        | "odt" | "ods" | "odp" | "pages" | "numbers" | "key" | "epub" | "mobi" => {
+        "pdf" | "doc" | "docx" | "ppt" | "pptx" | "xls" | "xlsx" | "xlsm" | "xlsb" | "odt"
+        | "ods" | "odp" | "pages" | "numbers" | "key" | "epub" | "mobi" => {
             Some(ArchiveKind::Document)
         }
         "jpg" | "jpeg" | "png" | "heic" | "tif" | "tiff" | "gif" | "webp" | "raw" | "mov"
@@ -1280,60 +1279,50 @@ fn macos_file_provenance_metadata(_path: &Path) -> ContentMetadata {
 }
 
 #[cfg(not(coverage))]
-fn exiftool_metadata(path: &Path) -> ContentMetadata {
+fn configure_exiftool_command(command: &mut Command) {
+    command.args([
+        "-j",
+        "-n",
+        "-DateTimeOriginal",
+        "-CreateDate",
+        "-CreationDate",
+        "-MediaCreateDate",
+        "-TrackCreateDate",
+        "-Title",
+        "-DocumentName",
+        "-Author",
+        "-Artist",
+        "-Creator",
+        "-Subject",
+        "-Keywords",
+        "-Description",
+        "-Category",
+        "-Application",
+        "-AppVersion",
+        "-Software",
+        "-CreatorTool",
+        "-Producer",
+        "-Template",
+        "-Duration",
+        "-GPSLatitude",
+        "-GPSLongitude",
+        "-Location",
+    ]);
+}
+
+#[cfg(not(coverage))]
+fn exiftool_values_metadata(
+    values: &serde_json::Map<String, serde_json::Value>,
+) -> ContentMetadata {
     let mut metadata = ContentMetadata::default();
-    let mut command = local_command("exiftool");
-    command
-        .args([
-            "-j",
-            "-n",
-            "-DateTimeOriginal",
-            "-CreateDate",
-            "-CreationDate",
-            "-MediaCreateDate",
-            "-TrackCreateDate",
-            "-Title",
-            "-DocumentName",
-            "-Author",
-            "-Artist",
-            "-Creator",
-            "-Subject",
-            "-Keywords",
-            "-Description",
-            "-Category",
-            "-Application",
-            "-AppVersion",
-            "-Software",
-            "-CreatorTool",
-            "-Producer",
-            "-Template",
-            "-Duration",
-            "-GPSLatitude",
-            "-GPSLongitude",
-            "-Location",
-        ])
-        .arg(path);
-    let output = match run_metadata_command(command) {
-        Ok(output) => output,
-        Err(failure) => {
-            add_probe_warning(&mut metadata, "exiftool", failure);
-            return metadata;
-        }
-    };
-    let document = match serde_json::from_slice::<Vec<serde_json::Value>>(&output) {
-        Ok(document) => document,
-        Err(_) => {
-            add_probe_warning(
-                &mut metadata,
-                "exiftool",
-                MetadataProbeFailure::InvalidOutput,
-            );
-            return metadata;
-        }
-    };
-    let Some(values) = document.first().and_then(|value| value.as_object()) else {
+    if values.get("Error").is_some() {
+        add_probe_warning(
+            &mut metadata,
+            "exiftool",
+            MetadataProbeFailure::InvalidOutput,
+        );
         return metadata;
-    };
+    }
 
     for key in [
         "DateTimeOriginal",
@@ -1453,6 +1442,95 @@ fn exiftool_metadata(path: &Path) -> ContentMetadata {
         );
     }
     metadata
+}
+
+#[cfg(not(coverage))]
+fn exiftool_document_metadata(
+    output: &[u8],
+) -> Result<BTreeMap<PathBuf, ContentMetadata>, MetadataProbeFailure> {
+    let document = serde_json::from_slice::<Vec<serde_json::Value>>(output)
+        .map_err(|_| MetadataProbeFailure::InvalidOutput)?;
+    let mut by_path = BTreeMap::new();
+    for item in document {
+        let values = item
+            .as_object()
+            .ok_or(MetadataProbeFailure::InvalidOutput)?;
+        let path = values
+            .get("SourceFile")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or(MetadataProbeFailure::InvalidOutput)?;
+        if by_path
+            .insert(PathBuf::from(path), exiftool_values_metadata(values))
+            .is_some()
+        {
+            return Err(MetadataProbeFailure::InvalidOutput);
+        }
+    }
+    Ok(by_path)
+}
+
+#[cfg(not(coverage))]
+fn exiftool_metadata(path: &Path) -> ContentMetadata {
+    let mut command = local_command("exiftool");
+    configure_exiftool_command(&mut command);
+    command.arg(path);
+    let output = match run_metadata_command(command) {
+        Ok(output) => output,
+        Err(failure) => {
+            let mut metadata = ContentMetadata::default();
+            add_probe_warning(&mut metadata, "exiftool", failure);
+            return metadata;
+        }
+    };
+    match exiftool_document_metadata(&output) {
+        Ok(mut by_path) => by_path.remove(path).unwrap_or_else(|| {
+            let mut metadata = ContentMetadata::default();
+            add_probe_warning(
+                &mut metadata,
+                "exiftool",
+                MetadataProbeFailure::InvalidOutput,
+            );
+            metadata
+        }),
+        Err(failure) => {
+            let mut metadata = ContentMetadata::default();
+            add_probe_warning(&mut metadata, "exiftool", failure);
+            metadata
+        }
+    }
+}
+
+#[cfg(not(coverage))]
+fn exiftool_metadata_batch(paths: &[PathBuf]) -> BTreeMap<PathBuf, ContentMetadata> {
+    let mut by_path = BTreeMap::new();
+    for chunk in paths.chunks(EXIFTOOL_BATCH_SIZE) {
+        let mut command = local_command("exiftool");
+        configure_exiftool_command(&mut command);
+        command.args(chunk);
+        let batch = run_metadata_command_with_limits(
+            command,
+            EXIFTOOL_BATCH_TIMEOUT,
+            EXIFTOOL_BATCH_OUTPUT_LIMIT,
+        )
+        .and_then(|output| exiftool_document_metadata(&output));
+        match batch {
+            Ok(mut parsed) => {
+                for path in chunk {
+                    let metadata = parsed
+                        .remove(path)
+                        .unwrap_or_else(|| exiftool_metadata(path));
+                    by_path.insert(path.clone(), metadata);
+                }
+            }
+            Err(_) => {
+                for path in chunk {
+                    by_path.insert(path.clone(), exiftool_metadata(path));
+                }
+            }
+        }
+    }
+    by_path
 }
 
 #[cfg(not(coverage))]
@@ -2597,7 +2675,10 @@ fn dataset_content_metadata(path: &Path) -> ContentMetadata {
 }
 
 #[cfg(not(coverage))]
-fn probe_content_metadata(path: &Path) -> ContentMetadata {
+fn probe_content_metadata_with_general(
+    path: &Path,
+    prefetched_general: Option<ContentMetadata>,
+) -> ContentMetadata {
     let extension = path
         .extension()
         .map(|e| e.to_string_lossy().to_ascii_lowercase())
@@ -2606,7 +2687,7 @@ fn probe_content_metadata(path: &Path) -> ContentMetadata {
     // ExifTool can spend the full timeout trying to infer their format, so retain only the
     // lightweight acquisition/sibling-set evidence for these fail-closed candidates.
     let general = if should_probe_general_metadata(path) {
-        exiftool_metadata(path)
+        prefetched_general.unwrap_or_else(|| exiftool_metadata(path))
     } else {
         ContentMetadata::default()
     };
@@ -3062,9 +3143,9 @@ fn mark_exact_duplicate_candidates(candidates: &mut [CloudCandidate]) -> ExactDu
             let bytes_per_candidate = candidates[exact_matches[0]].bytes;
             summary.cluster_count += 1;
             summary.candidate_count += exact_matches.len();
-            summary.candidate_bytes = summary.candidate_bytes.saturating_add(
-                bytes_per_candidate.saturating_mul(exact_matches.len() as u64),
-            );
+            summary.candidate_bytes = summary
+                .candidate_bytes
+                .saturating_add(bytes_per_candidate.saturating_mul(exact_matches.len() as u64));
             summary.redundant_bytes = summary.redundant_bytes.saturating_add(
                 bytes_per_candidate.saturating_mul((exact_matches.len() - 1) as u64),
             );
@@ -3241,6 +3322,27 @@ pub fn plan_cloud_archive(
     now_ms: u64,
     options: CloudPlanOptions,
 ) -> CloudPlanReport {
+    #[cfg(not(coverage))]
+    let batched_exiftool = {
+        let paths = files
+            .iter()
+            .filter(|file| {
+                file.bytes >= options.min_size_bytes
+                    && file.modified_ms > 0
+                    && now_ms.saturating_sub(file.modified_ms) / DAY_MS >= options.min_age_days
+                    && archive_kind(&file.path).is_some()
+                    && file
+                        .path
+                        .strip_prefix(source_root)
+                        .is_ok_and(|relative| !relative.as_os_str().is_empty())
+                    && file.content_metadata == ContentMetadata::default()
+                    && file.path.is_file()
+                    && should_probe_general_metadata(&file.path)
+            })
+            .map(|file| file.path.clone())
+            .collect::<Vec<_>>();
+        exiftool_metadata_batch(&paths)
+    };
     let mut candidates = Vec::new();
     for file in files {
         if file.bytes < options.min_size_bytes || file.modified_ms == 0 {
@@ -3267,7 +3369,10 @@ pub fn plan_cloud_archive(
         // integration smoke runs, so it is kept outside the in-process line-coverage boundary.
         #[cfg(not(coverage))]
         if lineage_metadata == ContentMetadata::default() && file.path.is_file() {
-            lineage_metadata = probe_content_metadata(&file.path);
+            lineage_metadata = probe_content_metadata_with_general(
+                &file.path,
+                batched_exiftool.get(&file.path).cloned(),
+            );
         }
         let embedded_production_time_ms = lineage_metadata.production_time_ms;
         if let Some(value) = filename_ms {
@@ -3366,10 +3471,7 @@ pub fn plan_cloud_archive(
             .extension()
             .map(|extension| extension.to_string_lossy().to_ascii_lowercase())
             .unwrap_or_default();
-        if matches!(
-            extension.as_str(),
-            "xls" | "xlsx" | "xlsm" | "xlsb" | "ods"
-        ) {
+        if matches!(extension.as_str(), "xls" | "xlsx" | "xlsm" | "xlsb" | "ods") {
             match lineage_metadata.dataset_profile.as_ref() {
                 None => review_reasons.push("spreadsheet-schema-profile-missing".into()),
                 Some(profile) => {
@@ -3514,6 +3616,47 @@ mod tests {
             readable: true,
             access_issue: None,
         }
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn exiftool_batch_documents_bind_each_source_file_and_reject_duplicates() {
+        let parsed = exiftool_document_metadata(
+            br#"[
+                {"SourceFile":"/tmp/a.jpg","CreateDate":"2026:07:01 02:03:04"},
+                {"SourceFile":"/tmp/b.jpg","Title":"Field note"}
+            ]"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(
+            parsed[Path::new("/tmp/a.jpg")]
+                .production_time_source
+                .as_deref(),
+            Some("embedded:exiftool:CreateDate")
+        );
+        assert_eq!(
+            parsed[Path::new("/tmp/b.jpg")].title.as_deref(),
+            Some("Field note")
+        );
+
+        assert_eq!(
+            exiftool_document_metadata(
+                br#"[
+                    {"SourceFile":"/tmp/a.jpg"},
+                    {"SourceFile":"/tmp/a.jpg"}
+                ]"#,
+            ),
+            Err(MetadataProbeFailure::InvalidOutput)
+        );
+        let failed = exiftool_document_metadata(
+            br#"[{"SourceFile":"/tmp/error.jpg","Error":"unsupported"}]"#,
+        )
+        .unwrap();
+        assert!(failed[Path::new("/tmp/error.jpg")]
+            .evidence
+            .iter()
+            .any(|evidence| evidence.value == "exiftool:invalid-output"));
     }
 
     #[cfg(all(not(coverage), unix))]
@@ -3724,10 +3867,7 @@ mod tests {
         let report = discover_cloud_roots_report(tmp.path());
         assert!(report.roots.is_empty());
         assert_eq!(report.issues.len(), 1);
-        assert_eq!(
-            report.issues[0].provider,
-            Some(CloudProvider::GoogleDrive)
-        );
+        assert_eq!(report.issues[0].provider, Some(CloudProvider::GoogleDrive));
         assert_eq!(
             report.issues[0].account_scope,
             CloudAccountScope::Organization

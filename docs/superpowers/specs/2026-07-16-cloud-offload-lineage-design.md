@@ -45,6 +45,10 @@ Use DiskSage against a genuinely space-constrained machine to identify files tha
   fingerprint bound to the fresh decision batch plus each candidate metadata/review fingerprint and
   size. It is inspection evidence, not a batch approval: approve/hold decisions remain individual,
   attributed, and immutable.
+- Fresh local planning batches general ExifTool probes in bounded groups of 32 with a 20-second
+  command deadline and an 8 MiB retained-output ceiling. Results are mapped back only through each
+  JSON `SourceFile`; malformed, duplicate, missing, timed-out, or oversized batch evidence falls
+  back to the existing per-file bounded probe. No extracted metadata is persisted as a cache.
 
 ## Safety boundary
 
