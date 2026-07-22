@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 #[cfg(not(coverage))]
 use disksage_lib::cloud::{self, CloudPlanOptions, CloudProvider, CloudRoot};
 #[cfg(not(coverage))]
-use disksage_lib::cloud_eviction::{self, CloudEvictionResult};
+use disksage_lib::cloud_eviction::{self, CloudEvictionResult, CloudSourceEvictionApproval};
+#[cfg(not(coverage))]
+use disksage_lib::cloud_local_eviction;
 #[cfg(not(coverage))]
 use disksage_lib::cloud_review::{self, CloudReviewDecision, CloudReviewDisposition};
 #[cfg(not(coverage))]
@@ -50,6 +52,7 @@ struct Args {
     evict_receipt: Option<PathBuf>,
     confirm_receipt_id: Option<String>,
     eviction_dir: Option<PathBuf>,
+    eviction_approval_dir: Option<PathBuf>,
     journal_path: Option<PathBuf>,
     review_candidate_fingerprint: Option<String>,
     review_fingerprint: Option<String>,
@@ -102,6 +105,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
         evict_receipt: None,
         confirm_receipt_id: None,
         eviction_dir: None,
+        eviction_approval_dir: None,
         journal_path: None,
         review_candidate_fingerprint: None,
         review_fingerprint: None,
@@ -197,6 +201,13 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
                 parsed.eviction_dir =
                     Some(PathBuf::from(value(args, &mut index, "--eviction-dir")?))
             }
+            "--eviction-approval-dir" => {
+                parsed.eviction_approval_dir = Some(PathBuf::from(value(
+                    args,
+                    &mut index,
+                    "--eviction-approval-dir",
+                )?))
+            }
             "--journal-path" => {
                 parsed.journal_path =
                     Some(PathBuf::from(value(args, &mut index, "--journal-path")?))
@@ -251,7 +262,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             }
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive] [--min-size-mib N] [--min-age-days N] [--limit N] [--verify-capacity [--oauth-connections ABSOLUTE_PATH]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
+                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive] [--min-size-mib N] [--min-age-days N] [--limit N] [--verify-capacity [--oauth-connections ABSOLUTE_PATH]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -291,6 +302,8 @@ struct EvictionOutput {
     evidence_record: ProviderSyncEvidenceRecord,
     evidence_path: String,
     permit: LocalEvictionPermit,
+    approval: CloudSourceEvictionApproval,
+    approval_path: String,
     eviction: CloudEvictionResult,
 }
 
@@ -312,20 +325,28 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     if (copy_action || adoption_action) != args.receipt_dir.is_some() {
         return Err("copy/adoption fingerprint와 --receipt-dir은 함께 지정해야 함".into());
     }
-    let review_fields = [
+    let review_evidence_fields = [
         args.review_candidate_fingerprint.is_some(),
         args.review_fingerprint.is_some(),
         args.review_disposition.is_some(),
-        args.reviewed_by.is_some(),
-        args.review_rationale.is_some(),
     ];
-    if review_fields.iter().any(|value| *value) && !review_fields.iter().all(|value| *value) {
-        return Err(
-            "review fingerprint, disposition, reviewer, rationale는 모두 함께 지정해야 함".into(),
-        );
+    if review_evidence_fields.iter().any(|value| *value)
+        && !review_evidence_fields.iter().all(|value| *value)
+    {
+        return Err("review fingerprint와 disposition은 모두 함께 지정해야 함".into());
     }
-    let review_action = review_fields.iter().all(|value| *value);
-    if review_action {
+    let attribution_fields = [args.reviewed_by.is_some(), args.review_rationale.is_some()];
+    if attribution_fields.iter().any(|value| *value)
+        && !attribution_fields.iter().all(|value| *value)
+    {
+        return Err("reviewer와 rationale는 함께 지정해야 함".into());
+    }
+    let attributed = attribution_fields.iter().all(|value| *value);
+    let review_action = review_evidence_fields.iter().all(|value| *value);
+    if review_action && !attributed {
+        return Err("review action에는 reviewer와 rationale가 필요함".into());
+    }
+    if attributed {
         cloud_review::validate_review_attribution(
             args.reviewed_by
                 .as_deref()
@@ -339,14 +360,20 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
         args.evict_receipt.is_some(),
         args.confirm_receipt_id.is_some(),
         args.eviction_dir.is_some(),
+        args.eviction_approval_dir.is_some(),
         args.journal_path.is_some(),
     ];
-    if eviction_fields.iter().any(|value| *value) && !eviction_fields.iter().all(|value| *value) {
+    if eviction_fields.iter().any(|value| *value)
+        && (!eviction_fields.iter().all(|value| *value) || !attributed)
+    {
         return Err(
-            "eviction action에는 receipt, 확인 id, eviction dir, journal path가 모두 필요함".into(),
+            "eviction action에는 receipt, 확인 id, eviction dir, approval dir, journal path, reviewer, rationale가 모두 필요함".into(),
         );
     }
-    let eviction_action = eviction_fields.iter().all(|value| *value);
+    let eviction_action = eviction_fields.iter().all(|value| *value) && attributed;
+    if attributed && !review_action && !eviction_action {
+        return Err("reviewer와 rationale는 review 또는 eviction action에만 지정할 수 있음".into());
+    }
     let attestation_action = args.attest_receipt.is_some();
     if (attestation_action || eviction_action) != args.evidence_dir.is_some() {
         return Err("attestation/eviction action에는 --evidence-dir이 반드시 필요함".into());
@@ -454,6 +481,11 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     if let Some(eviction_dir) = &args.eviction_dir {
         if !eviction_dir.is_absolute() {
             return Err("--eviction-dir은 절대 경로여야 함".into());
+        }
+    }
+    if let Some(approval_dir) = &args.eviction_approval_dir {
+        if !approval_dir.is_absolute() {
+            return Err("--eviction-approval-dir은 절대 경로여야 함".into());
         }
     }
     if let Some(journal_path) = &args.journal_path {
@@ -646,8 +678,11 @@ fn evict_native_receipt(
     path: &Path,
     confirmation_receipt_id: &str,
     eviction_dir: &Path,
+    approval_dir: &Path,
     journal_path: &Path,
     evidence_dir: &Path,
+    approved_by: &str,
+    rationale: &str,
     provider_object_id: Option<&str>,
     oauth_connections: Option<&Path>,
     home: &Path,
@@ -668,9 +703,25 @@ fn evict_native_receipt(
         provider_evidence::write_immutable_sync_evidence(evidence_dir, &evidence)?;
     let permit = cloud_transfer::approve_local_eviction(&receipt, &evidence_record)
         .map_err(|blockers| blockers.join(","))?;
-    let eviction = cloud_eviction::evict_source(
+    let active_use_observed_at_ms = cloud::system_now_ms();
+    let active_use = cloud_local_eviction::observe_path_active_use(Path::new(&receipt.source));
+    let approved_at_ms = cloud::system_now_ms();
+    let approval = cloud_eviction::create_source_eviction_approval(
         &receipt,
         &permit,
+        confirmation_receipt_id,
+        approved_at_ms,
+        approved_by,
+        rationale,
+        active_use_observed_at_ms,
+        active_use,
+    )?;
+    let approval_path =
+        cloud_eviction::write_immutable_source_eviction_approval(approval_dir, &approval)?;
+    let eviction = cloud_eviction::evict_source_with_human_approval(
+        &receipt,
+        &permit,
+        &approval,
         confirmation_receipt_id,
         eviction_dir,
         journal_path,
@@ -683,6 +734,8 @@ fn evict_native_receipt(
         evidence_record,
         evidence_path: evidence_path.to_string_lossy().into_owned(),
         permit,
+        approval,
+        approval_path: approval_path.to_string_lossy().into_owned(),
         eviction,
     })
 }
@@ -743,12 +796,21 @@ fn run() -> Result<(), String> {
             args.eviction_dir
                 .as_deref()
                 .ok_or_else(|| "--eviction-dir이 필요함".to_string())?,
+            args.eviction_approval_dir
+                .as_deref()
+                .ok_or_else(|| "--eviction-approval-dir이 필요함".to_string())?,
             args.journal_path
                 .as_deref()
                 .ok_or_else(|| "--journal-path가 필요함".to_string())?,
             args.evidence_dir
                 .as_deref()
                 .ok_or_else(|| "--evidence-dir이 필요함".to_string())?,
+            args.reviewed_by
+                .as_deref()
+                .ok_or_else(|| "--reviewed-by가 필요함".to_string())?,
+            args.review_rationale
+                .as_deref()
+                .ok_or_else(|| "--review-rationale가 필요함".to_string())?,
             args.provider_object_id.as_deref(),
             args.oauth_connections.as_deref(),
             &home,
@@ -1020,6 +1082,7 @@ mod tests {
         assert!(defaults.oauth_connections.is_none());
         assert!(defaults.evidence_dir.is_none());
         assert!(defaults.evict_receipt.is_none());
+        assert!(defaults.eviction_approval_dir.is_none());
         assert!(defaults.review_candidate_fingerprint.is_none());
         assert!(defaults.reviewed_by.is_none());
         assert!(defaults.review_rationale.is_none());
@@ -1343,12 +1406,15 @@ mod tests {
         assert!(validate_action_args(&args).is_err());
         args.confirm_receipt_id = Some("a".repeat(64));
         args.eviction_dir = Some(PathBuf::from("/evictions"));
+        args.eviction_approval_dir = Some(PathBuf::from("/approvals"));
         args.journal_path = Some(PathBuf::from("relative-journal"));
         assert!(validate_action_args(&args).is_err());
         args.journal_path = Some(PathBuf::from("/journal/operations.jsonl"));
         args.evidence_dir = Some(PathBuf::from("relative-evidence"));
         assert!(validate_action_args(&args).is_err());
         args.evidence_dir = Some(PathBuf::from("/evidence"));
+        args.reviewed_by = Some("human:local:test".into());
+        args.review_rationale = Some("verified exact receipt source".into());
         assert!(validate_action_args(&args).is_ok());
 
         args.attest_receipt = Some(PathBuf::from("/receipt.json"));
@@ -1362,10 +1428,16 @@ mod tests {
                 "b".repeat(64),
                 "--eviction-dir".into(),
                 "/evictions".into(),
+                "--eviction-approval-dir".into(),
+                "/approvals".into(),
                 "--journal-path".into(),
                 "/journal/operations.jsonl".into(),
                 "--evidence-dir".into(),
                 "/evidence".into(),
+                "--reviewed-by".into(),
+                "human:local:test".into(),
+                "--review-rationale".into(),
+                "verified exact receipt source".into(),
             ],
             Path::new("/h"),
         )

@@ -21,6 +21,10 @@
   let copied: api.CloudCopyOutput | null = $state(null);
   let attesting = $state(false);
   let attestation: api.CloudAttestationOutput | null = $state(null);
+  let evicting = $state(false);
+  let evictionConfirmation = $state("");
+  let evictionRationale = $state("");
+  let eviction: api.CloudSourceEvictionOutput | null = $state(null);
   let objectId = $state("");
   let oauthClientId = $state("");
   let connecting = $state(false);
@@ -49,6 +53,9 @@
     report = null;
     copied = null;
     attestation = null;
+    eviction = null;
+    evictionConfirmation = "";
+    evictionRationale = "";
     objectId = "";
     try {
       const planned = await api.planCloudArchive(
@@ -154,6 +161,9 @@
     loadError = "";
     copied = null;
     attestation = null;
+    eviction = null;
+    evictionConfirmation = "";
+    evictionRationale = "";
     objectId = "";
     try {
       copied = await api.copyCloudCandidate(
@@ -177,6 +187,9 @@
     loadError = "";
     copied = null;
     attestation = null;
+    eviction = null;
+    evictionConfirmation = "";
+    evictionRationale = "";
     objectId = "";
     try {
       copied = await api.adoptExistingCloudCandidate(
@@ -208,6 +221,37 @@
       loadError = String(e);
     } finally {
       attesting = false;
+    }
+  }
+
+  function sourceEvictionReady(): boolean {
+    return copied !== null
+      && attestation?.permit !== null
+      && attestation?.permit !== undefined
+      && evictionConfirmation === copied.receipt.receipt_id
+      && evictionRationale.trim().length > 0
+      && !evicting;
+  }
+
+  async function evictVerifiedSource() {
+    if (!copied || !sourceEvictionReady()) return;
+    evicting = true;
+    loadError = "";
+    eviction = null;
+    try {
+      eviction = await api.trashVerifiedCloudSource(
+        copied.receipt.receipt_id,
+        evictionConfirmation,
+        evictionRationale.trim(),
+        copied.receipt.provider === "google-drive" ? objectId.trim() || null : null,
+      );
+      attestation = eviction.attestation;
+      evictionConfirmation = "";
+      evictionRationale = "";
+    } catch (e) {
+      loadError = String(e);
+    } finally {
+      evicting = false;
     }
   }
 
@@ -479,7 +523,7 @@
       </p>
     {/if}
     <p class="warning">
-      생산일 우선순위는 내장 메타데이터 → 명시적 파일명 날짜 → 파일시스템 생성 → 수정 시각입니다. 파일명 날짜와 파일시스템 시각은 저신뢰 잠정값이며, 현재 메타데이터와 목적지에 결박된 명시적 승인 없이는 복사할 수 없습니다. 이미 존재하는 클라우드 파일은 전체 콘텐츠 해시가 모두 같을 때만 채택합니다. 앱 UI는 원본을 삭제하지 않으며, 업로드 증거가 확인되어도 허가 정보만 표시합니다.
+      생산일 우선순위는 내장 메타데이터 → 명시적 파일명 날짜 → 파일시스템 생성 → 수정 시각입니다. 파일명 날짜와 파일시스템 시각은 저신뢰 잠정값이며, 현재 메타데이터와 목적지에 결박된 명시적 승인 없이는 복사할 수 없습니다. 이미 존재하는 클라우드 파일은 전체 콘텐츠 해시가 모두 같을 때만 채택합니다. 원본은 공급자 증거를 실행 순간 다시 확인하고 전체 영수증 ID와 사유를 직접 승인한 경우에만 휴지통으로 이동하며, 휴지통은 비우지 않습니다.
     </p>
     {#if copied}
       <div class="receipt">
@@ -515,7 +559,42 @@
             </p>
           {/if}
           {#if attestation.permit}
-            <p class="safe">업로드 상태와 복사 콘텐츠 검증 완료. 로컬 제거 허가 증거가 생성되었지만 파일은 그대로 보존됩니다.</p>
+            {#if eviction}
+              <p class="safe">원본을 운영체제 휴지통으로 이동했습니다. 클라우드 목적지는 유지되며 휴지통은 비우지 않았습니다.</p>
+              <p class="muted">사람 승인 {eviction.approval.approval_id} · 완료 {eviction.eviction.completion_id}</p>
+              <p class="muted">변경 불가 승인 기록: {eviction.approval_path}</p>
+            {:else}
+              <p class="safe">업로드 상태와 복사 콘텐츠 검증 완료. 로컬 제거 허가 증거가 생성되었지만 파일은 아직 그대로 보존됩니다.</p>
+              <div class="eviction-controls">
+                <p class="warning">
+                  아래 전체 영수증 ID를 직접 입력하고 이 파일만 휴지통으로 옮기는 사유를 남겨야 합니다. 실행 시 공급자 상태와 열린 파일·프로세스 참조를 다시 확인하며, 달라지면 중단합니다.
+                </p>
+                <div class="context">확인할 영수증 ID: {copied.receipt.receipt_id}</div>
+                <label>
+                  전체 영수증 ID 확인
+                  <input
+                    class="receipt-confirmation"
+                    type="text"
+                    bind:value={evictionConfirmation}
+                    autocomplete="off"
+                    spellcheck="false"
+                    disabled={evicting}
+                  />
+                </label>
+                <label>
+                  원본 휴지통 이동 사유
+                  <textarea
+                    bind:value={evictionRationale}
+                    maxlength="1000"
+                    disabled={evicting}
+                    placeholder="예: 공급자 업로드·콘텐츠 검증 완료 후 이 영수증의 로컬 원본만 휴지통으로 이동"
+                  ></textarea>
+                </label>
+                <button onclick={evictVerifiedSource} disabled={!sourceEvictionReady()}>
+                  {evicting ? "공급자·사용 중 상태 재검증 후 이동 중…" : "검증을 다시 수행하고 원본을 휴지통으로 이동"}
+                </button>
+              </div>
+            {/if}
           {:else}
             <p class="warning">아직 제거 불가: {attestation.blockers.join(", ")}</p>
           {/if}
@@ -682,6 +761,9 @@
   .client-id { width: min(40rem, 80vw); }
   .summary { margin-top: 0.8rem; font-weight: 600; }
   .receipt { margin: 0.75rem 0; padding: 0.75rem; border: 1px solid #6b8e72; border-radius: 4px; background: #f5fbf6; }
+  .eviction-controls { margin-top: 0.75rem; padding: 0.75rem; border: 1px solid #b78335; border-radius: 4px; background: #fffaf1; display: grid; gap: 0.55rem; }
+  .eviction-controls textarea { width: min(52rem, 88vw); min-height: 3.5rem; resize: vertical; }
+  .receipt-confirmation { width: min(52rem, 88vw); font-family: ui-monospace, monospace; }
   .review-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin: 0.5rem 0; }
   .review-rationale { flex-basis: 100%; }
   .review-rationale textarea { width: min(52rem, 88vw); min-height: 3.5rem; resize: vertical; }
