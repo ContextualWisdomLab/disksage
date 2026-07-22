@@ -40,6 +40,36 @@ const REPOSITORY_SEARCH_TIMEOUT: Duration = Duration::from_secs(60);
 #[cfg(not(coverage))]
 const REPOSITORY_SEARCH_MAX_DIRECTORIES: usize = 500_000;
 
+#[cfg(not(coverage))]
+#[derive(Debug, Clone, Copy)]
+struct InventoryBudget {
+    started: Instant,
+    timeout: Duration,
+}
+
+#[cfg(not(coverage))]
+impl InventoryBudget {
+    fn new(timeout: Duration) -> Self {
+        Self {
+            started: Instant::now(),
+            timeout,
+        }
+    }
+
+    fn remaining(self) -> Duration {
+        self.timeout.saturating_sub(self.started.elapsed())
+    }
+
+    fn capped(self, maximum: Duration) -> Option<Duration> {
+        let remaining = self.remaining();
+        (!remaining.is_zero()).then_some(maximum.min(remaining))
+    }
+
+    fn exhausted(self) -> bool {
+        self.remaining().is_zero()
+    }
+}
+
 const GENERATED_ARTIFACT_DIRECTORY_NAMES: &[&str] = &[
     "node_modules",
     "target",
@@ -188,13 +218,21 @@ fn git_output_with_timeout(cwd: &Path, args: &[&str], timeout: Duration) -> Resu
 }
 
 #[cfg(not(coverage))]
-fn git_output(cwd: &Path, args: &[&str]) -> Result<Output, String> {
-    git_output_with_timeout(cwd, args, GIT_TIMEOUT)
+fn git_output_with_budget(
+    cwd: &Path,
+    args: &[&str],
+    budget: InventoryBudget,
+    maximum: Duration,
+) -> Result<Output, String> {
+    let timeout = budget
+        .capped(maximum)
+        .ok_or_else(|| "inventory-deadline-exhausted".to_string())?;
+    git_output_with_timeout(cwd, args, timeout)
 }
 
 #[cfg(not(coverage))]
-fn git_text(cwd: &Path, args: &[&str]) -> Option<String> {
-    let output = git_output(cwd, args).ok()?;
+fn git_text_with_budget(cwd: &Path, args: &[&str], budget: InventoryBudget) -> Option<String> {
+    let output = git_output_with_budget(cwd, args, budget, GIT_TIMEOUT).ok()?;
     if !output.status.success() {
         return None;
     }
@@ -416,26 +454,12 @@ fn repository_seeds_with_limits(
 }
 
 #[cfg(not(coverage))]
-fn repository_seeds(
-    root: &Path,
-) -> (
-    BTreeMap<PathBuf, PathBuf>,
-    Vec<OrphanWorktreeMarker>,
-    Vec<WorktreeScanIssue>,
-) {
-    repository_seeds_with_limits(
-        root,
-        REPOSITORY_SEARCH_MAX_DEPTH,
-        REPOSITORY_SEARCH_MAX_DIRECTORIES,
-        REPOSITORY_SEARCH_TIMEOUT,
-    )
-}
-
-#[cfg(not(coverage))]
-fn local_default_ref(repository: &Path) -> Option<String> {
-    let symbolic = git_output(
+fn local_default_ref(repository: &Path, budget: InventoryBudget) -> Option<String> {
+    let symbolic = git_output_with_budget(
         repository,
         &["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
+        budget,
+        GIT_TIMEOUT,
     );
     match symbolic {
         Ok(output) if output.status.success() => {
@@ -447,7 +471,7 @@ fn local_default_ref(repository: &Path) -> Option<String> {
         Err(_) => return None,
         Ok(_) => {}
     }
-    let refs = git_text(repository, &["show-ref"])?;
+    let refs = git_text_with_budget(repository, &["show-ref"], budget)?;
     let available: BTreeSet<&str> = refs
         .lines()
         .filter_map(|line| line.split_whitespace().nth(1))
@@ -466,19 +490,30 @@ fn local_default_ref(repository: &Path) -> Option<String> {
 }
 
 #[cfg(not(coverage))]
-fn dirty_state(path: &Path) -> Option<bool> {
-    let output = git_output(
+fn dirty_state(path: &Path, budget: InventoryBudget) -> Option<bool> {
+    let output = git_output_with_budget(
         path,
         &["status", "--porcelain=v1", "--untracked-files=normal"],
+        budget,
+        GIT_TIMEOUT,
     )
     .ok()?;
     output.status.success().then(|| !output.stdout.is_empty())
 }
 
 #[cfg(not(coverage))]
-fn ahead_behind(repository: &Path, default_ref: &str, head: &str) -> Option<(u64, u64)> {
+fn ahead_behind(
+    repository: &Path,
+    default_ref: &str,
+    head: &str,
+    budget: InventoryBudget,
+) -> Option<(u64, u64)> {
     let range = format!("{default_ref}...{head}");
-    let value = git_text(repository, &["rev-list", "--left-right", "--count", &range])?;
+    let value = git_text_with_budget(
+        repository,
+        &["rev-list", "--left-right", "--count", &range],
+        budget,
+    )?;
     let mut fields = value.split_whitespace();
     let behind = fields.next()?.parse().ok()?;
     let ahead = fields.next()?.parse().ok()?;
@@ -486,10 +521,17 @@ fn ahead_behind(repository: &Path, default_ref: &str, head: &str) -> Option<(u64
 }
 
 #[cfg(not(coverage))]
-fn merged_into(repository: &Path, head: &str, default_ref: &str) -> Option<bool> {
-    let output = git_output(
+fn merged_into(
+    repository: &Path,
+    head: &str,
+    default_ref: &str,
+    budget: InventoryBudget,
+) -> Option<bool> {
+    let output = git_output_with_budget(
         repository,
         &["merge-base", "--is-ancestor", head, default_ref],
+        budget,
+        GIT_TIMEOUT,
     )
     .ok()?;
     match output.status.code() {
@@ -500,8 +542,8 @@ fn merged_into(repository: &Path, head: &str, default_ref: &str) -> Option<bool>
 }
 
 #[cfg(not(coverage))]
-fn commit_time_ms(repository: &Path, head: &str) -> u64 {
-    git_text(repository, &["show", "-s", "--format=%ct", head])
+fn commit_time_ms(repository: &Path, head: &str, budget: InventoryBudget) -> u64 {
+    git_text_with_budget(repository, &["show", "-s", "--format=%ct", head], budget)
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(0)
         .saturating_mul(1_000)
@@ -685,8 +727,32 @@ fn classify(
 /// timed metadata reads, and bounded filesystem walks remain in the normal integration boundary.
 #[cfg(not(coverage))]
 pub fn inventory(root: &Path, min_age_days: u64, now_ms: u64) -> WorktreeReport {
+    inventory_with_timeout(root, min_age_days, now_ms, INVENTORY_TIMEOUT)
+}
+
+/// Inventory with a caller-selected total runtime budget.
+///
+/// The budget covers repository discovery, Git evidence, and filesystem measurement together.
+/// When it expires, the report remains read-only and fail-closed with partial evidence plus an
+/// `inventory-repositories` scan issue.
+#[cfg(not(coverage))]
+pub fn inventory_with_timeout(
+    root: &Path,
+    min_age_days: u64,
+    now_ms: u64,
+    timeout: Duration,
+) -> WorktreeReport {
     let inventory_started = Instant::now();
-    let (repositories, orphan_markers, mut scan_issues) = repository_seeds(root);
+    let budget = InventoryBudget::new(timeout);
+    let discovery_timeout = budget
+        .capped(REPOSITORY_SEARCH_TIMEOUT)
+        .unwrap_or(Duration::ZERO);
+    let (repositories, orphan_markers, mut scan_issues) = repository_seeds_with_limits(
+        root,
+        REPOSITORY_SEARCH_MAX_DEPTH,
+        REPOSITORY_SEARCH_MAX_DIRECTORIES,
+        discovery_timeout,
+    );
     let mut worktrees = Vec::new();
     let filesystem_scan_started = Instant::now();
     let registered_worktree_repository_count = repositories
@@ -697,20 +763,21 @@ pub fn inventory(root: &Path, min_age_days: u64, now_ms: u64) -> WorktreeReport 
         if !common_dir.join("worktrees").is_dir() {
             continue;
         }
-        if inventory_started.elapsed() >= INVENTORY_TIMEOUT {
+        if budget.exhausted() {
             scan_issues.push(WorktreeScanIssue {
                 path: root.to_string_lossy().into_owned(),
                 operation: "inventory-repositories".into(),
-                reason: format!("timeout-after-{}s", INVENTORY_TIMEOUT.as_secs()),
+                reason: format!("timeout-after-{}ms", timeout.as_millis()),
             });
             break 'repositories;
         }
         // Prove that the repository can enumerate linked worktrees before spending another
         // timeout window resolving refs. A failed preflight already makes the repository
         // fail-closed, which matters for old macOS workspaces with pathological local metadata.
-        let raw = match git_output_with_timeout(
+        let raw = match git_output_with_budget(
             seed,
             &["worktree", "list", "--porcelain"],
+            budget,
             GIT_WORKTREE_LIST_TIMEOUT,
         ) {
             Ok(output) if output.status.success() => {
@@ -733,30 +800,35 @@ pub fn inventory(root: &Path, min_age_days: u64, now_ms: u64) -> WorktreeReport 
                 continue;
             }
         };
-        let default_ref = local_default_ref(seed);
+        let default_ref = local_default_ref(seed, budget);
         for (index, worktree) in raw.into_iter().enumerate() {
-            if inventory_started.elapsed() >= INVENTORY_TIMEOUT {
+            if budget.exhausted() {
                 scan_issues.push(WorktreeScanIssue {
                     path: root.to_string_lossy().into_owned(),
                     operation: "inventory-repositories".into(),
-                    reason: format!("timeout-after-{}s", INVENTORY_TIMEOUT.as_secs()),
+                    reason: format!("timeout-after-{}ms", timeout.as_millis()),
                 });
                 break 'repositories;
             }
             let is_primary = index == 0;
             let exists = worktree.path.is_dir();
             let dirty = (exists && !is_primary)
-                .then(|| dirty_state(&worktree.path))
+                .then(|| dirty_state(&worktree.path, budget))
                 .flatten();
             let filesystem_scanned = exists && !is_primary;
             let filesystem_scan_remaining =
                 FILESYSTEM_SCAN_TOTAL_TIMEOUT.saturating_sub(filesystem_scan_started.elapsed());
-            let filesystem_evidence = if filesystem_scanned && !filesystem_scan_remaining.is_zero()
+            let total_remaining = budget.remaining();
+            let filesystem_evidence = if filesystem_scanned
+                && !filesystem_scan_remaining.is_zero()
+                && !total_remaining.is_zero()
             {
                 filesystem_evidence_with_limits(
                     &worktree.path,
                     FILESYSTEM_SCAN_MAX_ENTRIES,
-                    FILESYSTEM_SCAN_TIMEOUT.min(filesystem_scan_remaining),
+                    FILESYSTEM_SCAN_TIMEOUT
+                        .min(filesystem_scan_remaining)
+                        .min(total_remaining),
                 )
             } else {
                 FilesystemEvidence::default()
@@ -768,7 +840,7 @@ pub fn inventory(root: &Path, min_age_days: u64, now_ms: u64) -> WorktreeReport 
                 .iter()
                 .map(|artifact| artifact.allocated_bytes)
                 .sum();
-            let commit_ms = commit_time_ms(seed, &worktree.head);
+            let commit_ms = commit_time_ms(seed, &worktree.head, budget);
             let last_activity_ms = latest_file_ms.max(commit_ms);
             let age_days = now_ms.saturating_sub(last_activity_ms) / DAY_MS;
             let (ahead, behind) = if is_primary {
@@ -776,7 +848,7 @@ pub fn inventory(root: &Path, min_age_days: u64, now_ms: u64) -> WorktreeReport 
             } else {
                 default_ref
                     .as_deref()
-                    .and_then(|reference| ahead_behind(seed, reference, &worktree.head))
+                    .and_then(|reference| ahead_behind(seed, reference, &worktree.head, budget))
                     .map(|(ahead, behind)| (Some(ahead), Some(behind)))
                     .unwrap_or((None, None))
             };
@@ -784,7 +856,7 @@ pub fn inventory(root: &Path, min_age_days: u64, now_ms: u64) -> WorktreeReport 
                 .then(|| {
                     default_ref
                         .as_deref()
-                        .and_then(|reference| merged_into(seed, &worktree.head, reference))
+                        .and_then(|reference| merged_into(seed, &worktree.head, reference, budget))
                 })
                 .flatten();
             let (mut removal_eligible, metadata_prune_eligible, mut review_reasons) = classify(
@@ -836,15 +908,26 @@ pub fn inventory(root: &Path, min_age_days: u64, now_ms: u64) -> WorktreeReport 
     }
     let mut orphaned_worktrees = Vec::new();
     for orphan in orphan_markers {
+        if budget.exhausted() {
+            scan_issues.push(WorktreeScanIssue {
+                path: root.to_string_lossy().into_owned(),
+                operation: "inventory-repositories".into(),
+                reason: format!("timeout-after-{}ms", timeout.as_millis()),
+            });
+            break;
+        }
         let filesystem_scan_remaining =
             FILESYSTEM_SCAN_TOTAL_TIMEOUT.saturating_sub(filesystem_scan_started.elapsed());
-        let evidence = if filesystem_scan_remaining.is_zero() {
+        let total_remaining = budget.remaining();
+        let evidence = if filesystem_scan_remaining.is_zero() || total_remaining.is_zero() {
             FilesystemEvidence::default()
         } else {
             filesystem_evidence_with_limits(
                 &orphan.path,
                 FILESYSTEM_SCAN_MAX_ENTRIES,
-                FILESYSTEM_SCAN_TIMEOUT.min(filesystem_scan_remaining),
+                FILESYSTEM_SCAN_TIMEOUT
+                    .min(filesystem_scan_remaining)
+                    .min(total_remaining),
             )
         };
         let generated_artifact_bytes = evidence
@@ -924,6 +1007,8 @@ pub fn inventory(root: &Path, min_age_days: u64, now_ms: u64) -> WorktreeReport 
                 .into(),
             "repository-discovery-has-time-and-directory-budgets".into(),
             "repository-git-evidence-has-a-global-time-budget".into(),
+            "caller-selected-total-runtime-budget-covers-discovery-git-and-filesystem-evidence"
+                .into(),
             "worktree-list-preflight-precedes-secondary-git-evidence".into(),
             "report-evidence-complete-only-when-all-bounded-probes-finish".into(),
             "orphaned-worktree-source-trees-are-never-removal-eligible".into(),
@@ -1219,6 +1304,23 @@ mod tests {
         assert!(report.evidence_complete);
         assert_eq!(report.potentially_reclaimable_bytes, 0);
         assert_eq!(report.reviewable_generated_artifact_bytes, 0);
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn caller_deadline_returns_a_fail_closed_partial_report() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("ordinary")).unwrap();
+        let report = inventory_with_timeout(tmp.path(), 30, system_now_ms(), Duration::ZERO);
+        assert!(!report.evidence_complete);
+        assert!(report.worktrees.is_empty());
+        assert!(report.scan_issues.iter().any(|issue| {
+            issue.operation == "discover-repositories" && issue.reason == "timeout-after-0s"
+        }));
+        assert!(report.notices.iter().any(|notice| {
+            notice
+                == "caller-selected-total-runtime-budget-covers-discovery-git-and-filesystem-evidence"
+        }));
     }
 
     #[cfg(not(coverage))]
