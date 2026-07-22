@@ -83,6 +83,8 @@ export interface OrphanWorktreeCandidate {
 export interface WorktreeReport {
   scanned_root: string;
   generated_at_ms: number;
+  elapsed_ms: number;
+  evidence_complete: boolean;
   min_age_days: number;
   search_max_depth: number;
   repository_count: number;
@@ -119,8 +121,8 @@ export interface DupeGroup {
 export const listCacheCandidates = () => invoke<CacheCandidate[]>("list_cache_candidates");
 export const listDevArtifacts = (root: string, minAgeDays = 30) =>
   invoke<DevArtifact[]>("list_dev_artifacts", { root, minAgeDays });
-export const listStaleWorktrees = (root: string, minAgeDays = 30) =>
-  invoke<WorktreeReport>("list_stale_worktrees", { root, minAgeDays });
+export const listStaleWorktrees = (root: string, minAgeDays = 30, timeoutSeconds = 30) =>
+  invoke<WorktreeReport>("list_stale_worktrees", { root, minAgeDays, timeoutSeconds });
 export const cleanPaths = (paths: string[]) => invoke<CleanResult[]>("clean_paths", { paths });
 export const expandCleanTargets = (dir: string) =>
   invoke<string[]>("expand_clean_targets", { dir });

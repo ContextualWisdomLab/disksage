@@ -6,6 +6,7 @@
 
   let searchRoot = $state("");
   let minAgeDays = $state(30);
+  let timeoutSeconds = $state(30);
   let busy = $state(false);
   let loadError = $state("");
   let report: api.WorktreeReport | null = $state(null);
@@ -23,6 +24,7 @@
       report = await api.listStaleWorktrees(
         searchRoot,
         Math.max(0, Math.floor(minAgeDays)),
+        Math.min(600, Math.max(1, Math.floor(timeoutSeconds))),
       );
     } catch (error) {
       loadError = String(error);
@@ -52,6 +54,10 @@
       stale 최소 일수
       <input type="number" min="0" step="1" bind:value={minAgeDays} disabled={busy} />
     </label>
+    <label>
+      최대 검사 시간(초)
+      <input type="number" min="1" max="600" step="1" bind:value={timeoutSeconds} disabled={busy} />
+    </label>
     <button onclick={inspect} disabled={busy || !searchRoot}>
       {busy ? "검사 중…" : "worktree 검사"}
     </button>
@@ -65,10 +71,13 @@
       {fmtBytes(report.potentially_reclaimable_bytes)} · 별도 검토 가능한 재생성 산출물
       {fmtBytes(report.reviewable_generated_artifact_bytes)}
     </div>
+    <p class:warning={!report.evidence_complete} class:ok={report.evidence_complete}>
+      증거 {report.evidence_complete ? "완전" : "부분"} · {(report.elapsed_ms / 1000).toFixed(1)}초
+    </p>
     <p class="muted">저장소 검색 깊이: 선택 루트에서 최대 {report.search_max_depth}단계</p>
     <p class="warning">
       기준 브랜치는 fetch하지 않은 로컬 ref입니다. 시간 제한 또는 부분 측정은 제거 가능 판정을 차단하며,
-      실제 제거 전 원격 동기화와 재검토가 필요합니다.
+      설정한 최대 검사 시간이 지나면 수집된 부분 결과만 표시됩니다. 실제 제거 전 원격 동기화와 재검토가 필요합니다.
     </p>
     {#if report.scan_issues.length > 0}
       <details class="issues">
@@ -180,6 +189,7 @@
   .artifacts li { border: 0; padding: 0; margin: 0.15rem 0; overflow-wrap: anywhere; }
   .orphaned li { border-color: #b97800; background: #fffaf0; }
   .muted { color: #777; }
+  .ok { color: #187338; }
   .warning { color: #8a5700; }
   .error { color: #b00; }
 </style>

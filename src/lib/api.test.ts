@@ -30,8 +30,16 @@ describe("api wrappers", () => {
       [() => api.listCacheCandidates(), "list_cache_candidates"],
       [() => api.listDevArtifacts("/repo"), "list_dev_artifacts", { root: "/repo", minAgeDays: 30 }],
       [() => api.listDevArtifacts("/repo", 7), "list_dev_artifacts", { root: "/repo", minAgeDays: 7 }],
-      [() => api.listStaleWorktrees("/repo"), "list_stale_worktrees", { root: "/repo", minAgeDays: 30 }],
-      [() => api.listStaleWorktrees("/repo", 90), "list_stale_worktrees", { root: "/repo", minAgeDays: 90 }],
+      [
+        () => api.listStaleWorktrees("/repo"),
+        "list_stale_worktrees",
+        { root: "/repo", minAgeDays: 30, timeoutSeconds: 30 },
+      ],
+      [
+        () => api.listStaleWorktrees("/repo", 90, 12),
+        "list_stale_worktrees",
+        { root: "/repo", minAgeDays: 90, timeoutSeconds: 12 },
+      ],
       [() => api.cleanPaths(["/tmp/a"]), "clean_paths", { paths: ["/tmp/a"] }],
       [() => api.expandCleanTargets("/tmp"), "expand_clean_targets", { dir: "/tmp" }],
       [() => api.recentOperations(), "recent_operations", { limit: 20 }],

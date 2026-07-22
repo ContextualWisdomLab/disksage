@@ -2,12 +2,15 @@
 
 #[cfg(not(coverage))]
 use std::path::{Path, PathBuf};
+#[cfg(not(coverage))]
+use std::time::Duration;
 
 #[cfg(not(coverage))]
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
     root: PathBuf,
     min_age_days: u64,
+    timeout_seconds: u64,
 }
 
 #[cfg(not(coverage))]
@@ -15,6 +18,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
     let mut parsed = Args {
         root: home.to_path_buf(),
         min_age_days: 30,
+        timeout_seconds: 30,
     };
     let mut index = 0;
     while index < args.len() {
@@ -34,8 +38,22 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
                     .parse()
                     .map_err(|_| "--min-age-days는 정수여야 함".to_string())?;
             }
+            "--timeout-seconds" => {
+                index += 1;
+                parsed.timeout_seconds = args
+                    .get(index)
+                    .ok_or_else(|| "--timeout-seconds 값이 필요함".to_string())?
+                    .parse()
+                    .map_err(|_| "--timeout-seconds는 1 이상의 정수여야 함".to_string())?;
+                if parsed.timeout_seconds == 0 {
+                    return Err("--timeout-seconds는 1 이상의 정수여야 함".into());
+                }
+            }
             "--help" | "-h" => {
-                return Err("usage: disksage-worktrees [--root PATH] [--min-age-days N]".into());
+                return Err(
+                    "usage: disksage-worktrees [--root PATH] [--min-age-days N] [--timeout-seconds N]"
+                        .into(),
+                );
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
         }
@@ -58,10 +76,11 @@ fn run() -> Result<(), String> {
             args.root.display()
         ));
     }
-    let report = disksage_lib::worktrees::inventory(
+    let report = disksage_lib::worktrees::inventory_with_timeout(
         &args.root,
         args.min_age_days,
         disksage_lib::worktrees::system_now_ms(),
+        Duration::from_secs(args.timeout_seconds),
     );
     println!(
         "{}",
@@ -98,24 +117,31 @@ mod tests {
         let defaults = parse_args(&[], Path::new("/home/test")).unwrap();
         assert_eq!(defaults.root, Path::new("/home/test"));
         assert_eq!(defaults.min_age_days, 30);
+        assert_eq!(defaults.timeout_seconds, 30);
         let parsed = parse_args(
             &[
                 "--root".into(),
                 "/repos".into(),
                 "--min-age-days".into(),
                 "90".into(),
+                "--timeout-seconds".into(),
+                "12".into(),
             ],
             Path::new("/home/test"),
         )
         .unwrap();
         assert_eq!(parsed.root, Path::new("/repos"));
         assert_eq!(parsed.min_age_days, 90);
+        assert_eq!(parsed.timeout_seconds, 12);
     }
 
     #[test]
     fn rejects_missing_invalid_and_unknown_values() {
         assert!(parse_args(&["--root".into()], Path::new("/h")).is_err());
         assert!(parse_args(&["--min-age-days".into(), "x".into()], Path::new("/h")).is_err());
+        assert!(parse_args(&["--timeout-seconds".into()], Path::new("/h")).is_err());
+        assert!(parse_args(&["--timeout-seconds".into(), "0".into()], Path::new("/h")).is_err());
+        assert!(parse_args(&["--timeout-seconds".into(), "x".into()], Path::new("/h")).is_err());
         assert!(parse_args(&["--wat".into()], Path::new("/h")).is_err());
     }
 }
