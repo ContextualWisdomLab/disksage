@@ -1,4 +1,4 @@
-//! Read-only, bounded inventory of locally allocated blocks inside one discovered cloud root.
+//! Read-only, bounded inventory of locally allocated blocks inside discovered cloud roots.
 
 #[cfg(target_os = "macos")]
 embed_plist::embed_info_plist!("../../disksage-cloud-plan.Info.plist");
@@ -29,7 +29,8 @@ const WORKER_REPORT_GRACE_MS: u64 = 2_000;
 #[cfg(not(coverage))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Args {
-    cloud_root: PathBuf,
+    cloud_root: Option<PathBuf>,
+    all_roots: bool,
     relative_subpath: Option<PathBuf>,
     min_allocated_mib: u64,
     max_entries: u64,
@@ -41,7 +42,7 @@ struct Args {
 
 #[cfg(not(coverage))]
 fn usage() -> &'static str {
-    "usage: disksage-cloud-local-inventory --cloud-root ABSOLUTE_PATH [--relative-subpath SAFE_RELATIVE_PATH] [--min-allocated-mib N] [--max-entries N] [--max-results N] [--max-depth N] [--max-duration-ms N] [--max-issues N]"
+    "usage: disksage-cloud-local-inventory (--cloud-root ABSOLUTE_PATH [--relative-subpath SAFE_RELATIVE_PATH] | --all-roots) [--min-allocated-mib N] [--max-entries N] [--max-results N] [--max-depth N] [--max-duration-ms N] [--max-issues N]"
 }
 
 #[cfg(not(coverage))]
@@ -67,6 +68,7 @@ fn number<T: std::str::FromStr>(
 fn parse_args(args: &[String]) -> Result<Args, String> {
     let defaults = CloudLocalInventoryOptions::default();
     let mut cloud_root = None;
+    let mut all_roots = false;
     let mut relative_subpath = None;
     let mut min_allocated_mib = defaults.min_allocated_bytes / (1024 * 1024);
     let mut max_entries = defaults.max_entries;
@@ -80,6 +82,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             "--cloud-root" => {
                 cloud_root = Some(PathBuf::from(value(args, &mut index, "--cloud-root")?))
             }
+            "--all-roots" => all_roots = true,
             "--relative-subpath" => {
                 relative_subpath = Some(PathBuf::from(value(
                     args,
@@ -100,8 +103,15 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         }
         index += 1;
     }
-    let cloud_root = cloud_root.ok_or_else(|| "--cloud-root 값이 필요함".to_string())?;
-    if !cloud_root.is_absolute() {
+    match (&cloud_root, all_roots) {
+        (Some(_), true) => return Err("--cloud-root와 --all-roots는 함께 사용할 수 없음".into()),
+        (None, false) => return Err("--cloud-root 또는 --all-roots 값이 필요함".into()),
+        _ => {}
+    }
+    if cloud_root
+        .as_ref()
+        .is_some_and(|cloud_root| !cloud_root.is_absolute())
+    {
         return Err("--cloud-root는 절대 경로여야 함".into());
     }
     if let Some(relative) = &relative_subpath {
@@ -114,8 +124,12 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             return Err("--relative-subpath는 안전한 상대 경로여야 함".into());
         }
     }
+    if all_roots && relative_subpath.is_some() {
+        return Err("--relative-subpath는 --all-roots와 함께 사용할 수 없음".into());
+    }
     Ok(Args {
         cloud_root,
+        all_roots,
         relative_subpath,
         min_allocated_mib,
         max_entries,
@@ -190,6 +204,155 @@ fn print_report(report: &CloudLocalAllocationInventory) -> Result<(), String> {
         serde_json::to_string_pretty(&report).map_err(|error| error.to_string())?
     );
     Ok(())
+}
+
+#[cfg(not(coverage))]
+#[derive(Debug, serde::Serialize)]
+struct CloudLocalInventoryBatchFailure {
+    cloud_root_id: String,
+    provider: cloud::CloudProvider,
+    account_scope: cloud::CloudAccountScope,
+    cloud_root: String,
+    reason: String,
+}
+
+#[cfg(not(coverage))]
+#[derive(Debug, serde::Serialize)]
+struct CloudLocalInventoryBatchReport {
+    version: u32,
+    observed_at_ms: u64,
+    discovered_roots: usize,
+    reported_roots: usize,
+    failed_roots: usize,
+    candidate_count: usize,
+    allocated_candidate_bytes: u64,
+    discovery_issues: Vec<cloud::CloudRootDiscoveryIssue>,
+    reports: Vec<CloudLocalAllocationInventory>,
+    failures: Vec<CloudLocalInventoryBatchFailure>,
+    evidence_complete: bool,
+    notices: Vec<String>,
+}
+
+#[cfg(not(coverage))]
+fn print_batch_report(report: &CloudLocalInventoryBatchReport) -> Result<(), String> {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).map_err(|error| error.to_string())?
+    );
+    Ok(())
+}
+
+#[cfg(not(coverage))]
+fn single_root_invocation(args: &Args, root: &CloudRoot) -> (Vec<String>, Args) {
+    let raw = vec![
+        "--cloud-root".into(),
+        root.path.clone(),
+        "--min-allocated-mib".into(),
+        args.min_allocated_mib.to_string(),
+        "--max-entries".into(),
+        args.max_entries.to_string(),
+        "--max-results".into(),
+        args.max_results.to_string(),
+        "--max-depth".into(),
+        args.max_depth.to_string(),
+        "--max-duration-ms".into(),
+        args.max_duration_ms.to_string(),
+        "--max-issues".into(),
+        args.max_issues.to_string(),
+    ];
+    (
+        raw,
+        Args {
+            cloud_root: Some(PathBuf::from(&root.path)),
+            all_roots: false,
+            relative_subpath: None,
+            min_allocated_mib: args.min_allocated_mib,
+            max_entries: args.max_entries,
+            max_results: args.max_results,
+            max_depth: args.max_depth,
+            max_duration_ms: args.max_duration_ms,
+            max_issues: args.max_issues,
+        },
+    )
+}
+
+#[cfg(not(coverage))]
+fn inventory_all_roots(
+    discovery: cloud::CloudRootDiscoveryReport,
+    args: &Args,
+) -> CloudLocalInventoryBatchReport {
+    let discovered_roots = discovery.roots.len();
+    let mut reports = Vec::with_capacity(discovered_roots);
+    let mut failures = Vec::new();
+    for root in discovery.roots {
+        let (raw, root_args) = single_root_invocation(args, &root);
+        match run_watchdog(&raw, &root, &root_args) {
+            Ok(report) => reports.push(report),
+            Err(reason) => failures.push(CloudLocalInventoryBatchFailure {
+                cloud_root_id: root.id,
+                provider: root.provider,
+                account_scope: root.account_scope,
+                cloud_root: root.path,
+                reason,
+            }),
+        }
+    }
+    finish_batch_report(
+        cloud::system_now_ms(),
+        discovered_roots,
+        discovery.issues,
+        reports,
+        failures,
+    )
+}
+
+#[cfg(not(coverage))]
+fn finish_batch_report(
+    observed_at_ms: u64,
+    discovered_roots: usize,
+    discovery_issues: Vec<cloud::CloudRootDiscoveryIssue>,
+    reports: Vec<CloudLocalAllocationInventory>,
+    failures: Vec<CloudLocalInventoryBatchFailure>,
+) -> CloudLocalInventoryBatchReport {
+    let candidate_count = reports.iter().map(|report| report.candidates.len()).sum();
+    let allocated_candidate_bytes = reports.iter().fold(0_u64, |total, report| {
+        total.saturating_add(report.allocated_candidate_bytes)
+    });
+    let evidence_complete = discovered_roots > 0
+        && discovery_issues.is_empty()
+        && failures.is_empty()
+        && reports.len() == discovered_roots
+        && reports.iter().all(|report| report.evidence_complete);
+    let mut notices = vec![
+        "metadata-only-content-not-opened".into(),
+        "batch-inventory-does-not-authorize-eviction".into(),
+    ];
+    if discovered_roots == 0 {
+        notices.push("no-cloud-roots-discovered".into());
+    }
+    if !discovery_issues.is_empty() {
+        notices.push("cloud-root-discovery-issues-present".into());
+    }
+    if !failures.is_empty() {
+        notices.push("one-or-more-root-inventories-failed".into());
+    }
+    if reports.iter().any(|report| !report.evidence_complete) {
+        notices.push("one-or-more-root-inventories-incomplete".into());
+    }
+    CloudLocalInventoryBatchReport {
+        version: 1,
+        observed_at_ms,
+        discovered_roots,
+        reported_roots: reports.len(),
+        failed_roots: failures.len(),
+        candidate_count,
+        allocated_candidate_bytes,
+        discovery_issues,
+        reports,
+        failures,
+        evidence_complete,
+        notices,
+    }
 }
 
 #[cfg(not(coverage))]
@@ -370,7 +533,17 @@ fn run() -> Result<(), String> {
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let args = parse_args(&raw)?;
     let discovery = cloud::discover_cloud_roots_report(&home_dir()?);
-    let discovered = select_root(&discovery.roots, &args.cloud_root)?;
+    if args.all_roots {
+        if std::env::var_os("DISKSAGE_INTERNAL_INVENTORY_WORKER").is_some() {
+            return Err("inventory-worker-all-roots-forbidden".into());
+        }
+        return print_batch_report(&inventory_all_roots(discovery, &args));
+    }
+    let requested = args
+        .cloud_root
+        .as_deref()
+        .ok_or_else(|| "--cloud-root 값이 필요함".to_string())?;
+    let discovered = select_root(&discovery.roots, requested)?;
     let root = scan_root(discovered, args.relative_subpath.as_deref())?;
     if std::env::var_os("DISKSAGE_INTERNAL_INVENTORY_WORKER").is_some() {
         return run_worker(&root, &args);
@@ -415,7 +588,8 @@ mod tests {
             "50".into(),
         ])
         .unwrap();
-        assert_eq!(args.cloud_root, PathBuf::from("/Cloud"));
+        assert_eq!(args.cloud_root, Some(PathBuf::from("/Cloud")));
+        assert!(!args.all_roots);
         assert_eq!(
             args.relative_subpath,
             Some(PathBuf::from("DiskSage Archive/2026"))
@@ -436,6 +610,18 @@ mod tests {
         ])
         .is_err());
         assert!(parse_args(&["--unknown".into()]).is_err());
+        let batch = parse_args(&["--all-roots".into()]).unwrap();
+        assert!(batch.cloud_root.is_none());
+        assert!(batch.all_roots);
+        assert!(
+            parse_args(&["--cloud-root".into(), "/Cloud".into(), "--all-roots".into(),]).is_err()
+        );
+        assert!(parse_args(&[
+            "--all-roots".into(),
+            "--relative-subpath".into(),
+            "Archive".into(),
+        ])
+        .is_err());
     }
 
     #[test]
@@ -507,7 +693,8 @@ mod tests {
         let mut checkpoint = hard_timeout_inventory(
             &root,
             inventory_options(&Args {
-                cloud_root: cloud.path().to_path_buf(),
+                cloud_root: Some(cloud.path().to_path_buf()),
+                all_roots: false,
                 relative_subpath: None,
                 min_allocated_mib: 32,
                 max_entries: 100,
@@ -540,5 +727,73 @@ mod tests {
     fn watchdog_deadline_adds_bounded_report_grace() {
         assert_eq!(watchdog_deadline_ms(60_000), 62_000);
         assert_eq!(watchdog_deadline_ms(u64::MAX - 1), u64::MAX);
+    }
+
+    #[test]
+    fn all_roots_invocation_becomes_bounded_single_root_worker_args() {
+        let root = CloudRoot {
+            id: "onedrive:test".into(),
+            provider: CloudProvider::Onedrive,
+            account_scope: CloudAccountScope::Personal,
+            label: "OneDrive".into(),
+            path: "/Cloud".into(),
+            readable: true,
+            access_issue: None,
+        };
+        let batch = parse_args(&[
+            "--all-roots".into(),
+            "--max-duration-ms".into(),
+            "1234".into(),
+        ])
+        .unwrap();
+        let (raw, child) = single_root_invocation(&batch, &root);
+        assert!(!raw.iter().any(|value| value == "--all-roots"));
+        assert_eq!(child.cloud_root, Some(PathBuf::from("/Cloud")));
+        assert!(!child.all_roots);
+        assert_eq!(child.max_duration_ms, 1234);
+        assert_eq!(parse_args(&raw).unwrap(), child);
+    }
+
+    #[test]
+    fn batch_completion_requires_roots_and_complete_discovery_and_reports() {
+        let cloud = tempfile::tempdir().unwrap();
+        let root = CloudRoot {
+            id: "google-drive:test".into(),
+            provider: CloudProvider::GoogleDrive,
+            account_scope: CloudAccountScope::Personal,
+            label: "Google Drive".into(),
+            path: cloud.path().to_string_lossy().into_owned(),
+            readable: true,
+            access_issue: None,
+        };
+        let mut report =
+            hard_timeout_inventory(&root, CloudLocalInventoryOptions::default(), 1).unwrap();
+        report.evidence_complete = true;
+        report.stop_reasons.clear();
+        let complete = finish_batch_report(2, 1, Vec::new(), vec![report.clone()], Vec::new());
+        assert!(complete.evidence_complete);
+        assert_eq!(complete.reported_roots, 1);
+        assert_eq!(complete.observed_at_ms, 2);
+
+        let missing = finish_batch_report(3, 0, Vec::new(), Vec::new(), Vec::new());
+        assert!(!missing.evidence_complete);
+        assert!(missing
+            .notices
+            .iter()
+            .any(|notice| notice == "no-cloud-roots-discovered"));
+
+        let issue = cloud::CloudRootDiscoveryIssue {
+            provider: Some(CloudProvider::GoogleDrive),
+            account_scope: CloudAccountScope::Organization,
+            label: "Google Drive account".into(),
+            path: "/Unavailable".into(),
+            reason: "read-dir-failed".into(),
+        };
+        let incomplete = finish_batch_report(4, 1, vec![issue], vec![report], Vec::new());
+        assert!(!incomplete.evidence_complete);
+        assert!(incomplete
+            .notices
+            .iter()
+            .any(|notice| notice == "cloud-root-discovery-issues-present"));
     }
 }
