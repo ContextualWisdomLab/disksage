@@ -33,6 +33,7 @@ pub mod archive_git_tree;
 #[cfg_attr(coverage, allow(dead_code))]
 pub mod cloud;
 pub mod cloud_local_inventory;
+pub mod cloud_local_eviction;
 #[cfg(not(coverage))]
 pub mod cloud_eviction;
 pub mod cloud_review;
