@@ -339,6 +339,17 @@ fn millis(time: std::io::Result<std::time::SystemTime>) -> u64 {
         .unwrap_or(0)
 }
 
+/// Fail closed before traversal when the source root cannot be opened. A metadata scan must not
+/// report an unreadable directory (for example, one denied by macOS privacy controls) as empty.
+pub fn validate_source_root_readable(root: &Path) -> Result<(), String> {
+    if !root.is_dir() {
+        return Err(format!("source-root-not-directory:{}", root.display()));
+    }
+    std::fs::read_dir(root)
+        .map(|_| ())
+        .map_err(|error| format!("source-root-unreadable:{}:{error}", root.display()))
+}
+
 /// Collect only archive-shaped regular files while pruning cloud roots and regenerable trees
 /// before descent. Symlinks/reparse points are rejected by the shared scanner guard.
 #[cfg(not(coverage))]
@@ -1596,6 +1607,19 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert!(files[0].path.ends_with("report.pdf"));
         assert!(files[0].modified_ms > 0);
+    }
+
+    #[test]
+    fn source_root_preflight_distinguishes_readable_directory_from_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        validate_source_root_readable(tmp.path()).unwrap();
+
+        let file = tmp.path().join("not-a-directory.pdf");
+        std::fs::write(&file, b"pdf").unwrap();
+        assert_eq!(
+            validate_source_root_readable(&file),
+            Err(format!("source-root-not-directory:{}", file.display()))
+        );
     }
 
     #[cfg(all(unix, not(coverage)))]
