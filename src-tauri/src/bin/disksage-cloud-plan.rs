@@ -542,6 +542,12 @@ fn decision_aggregates(report: &cloud::CloudPlanReport) -> serde_json::Value {
     let mut decision_state_candidate_bytes = BTreeMap::new();
     let mut review_required_reason_counts = BTreeMap::new();
     let mut review_required_reason_candidate_bytes = BTreeMap::new();
+    let mut review_required_sole_reason_counts = BTreeMap::new();
+    let mut review_required_sole_reason_candidate_bytes = BTreeMap::new();
+    let mut review_required_reason_count_distribution = BTreeMap::new();
+    let mut review_required_reason_count_candidate_bytes = BTreeMap::new();
+    let mut review_required_reason_set_counts = BTreeMap::new();
+    let mut review_required_reason_set_candidate_bytes = BTreeMap::new();
     let mut blocked_reason_counts = BTreeMap::new();
     let mut blocked_reason_candidate_bytes = BTreeMap::new();
     let mut production_time_source_counts = BTreeMap::new();
@@ -575,11 +581,37 @@ fn decision_aggregates(report: &cloud::CloudPlanReport) -> serde_json::Value {
         );
 
         if state == "review-required" {
+            let reason_count = candidate.review_reasons.len().to_string();
+            let reason_set = candidate.review_reasons.join("|");
+            increment(
+                &mut review_required_reason_count_distribution,
+                &reason_count,
+                1,
+            );
+            increment(
+                &mut review_required_reason_count_candidate_bytes,
+                &reason_count,
+                candidate.bytes,
+            );
+            increment(&mut review_required_reason_set_counts, &reason_set, 1);
+            increment(
+                &mut review_required_reason_set_candidate_bytes,
+                &reason_set,
+                candidate.bytes,
+            );
             for reason in &candidate.review_reasons {
                 increment(&mut review_required_reason_counts, reason, 1);
                 increment(
                     &mut review_required_reason_candidate_bytes,
                     reason,
+                    candidate.bytes,
+                );
+            }
+            if let [sole_reason] = candidate.review_reasons.as_slice() {
+                increment(&mut review_required_sole_reason_counts, sole_reason, 1);
+                increment(
+                    &mut review_required_sole_reason_candidate_bytes,
+                    sole_reason,
                     candidate.bytes,
                 );
             }
@@ -600,6 +632,13 @@ fn decision_aggregates(report: &cloud::CloudPlanReport) -> serde_json::Value {
         "review_required_reason": {
             "counts": review_required_reason_counts,
             "candidate_bytes": review_required_reason_candidate_bytes,
+            "sole_reason_counts": review_required_sole_reason_counts,
+            "sole_reason_candidate_bytes": review_required_sole_reason_candidate_bytes,
+            "reason_count_distribution": review_required_reason_count_distribution,
+            "reason_count_candidate_bytes": review_required_reason_count_candidate_bytes,
+            "reason_set_counts": review_required_reason_set_counts,
+            "reason_set_candidate_bytes": review_required_reason_set_candidate_bytes,
+            "reason_set_delimiter": "|",
             "candidate_bytes_can_overlap_across_reasons": true,
         },
         "blocked_reason": {
@@ -1481,6 +1520,24 @@ mod tests {
                 ["candidate_bytes_can_overlap_across_reasons"],
             true
         );
+        assert!(
+            summary["aggregates"]["review_required_reason"]["sole_reason_counts"]
+                ["metadata-review-required"]
+                .is_null()
+        );
+        assert_eq!(
+            summary["aggregates"]["review_required_reason"]["reason_count_distribution"]["2"],
+            1
+        );
+        assert_eq!(
+            summary["aggregates"]["review_required_reason"]["reason_set_counts"]
+                ["download-origin-needs-destination-review|metadata-review-required"],
+            1
+        );
+        assert_eq!(
+            summary["aggregates"]["review_required_reason"]["reason_set_delimiter"],
+            "|"
+        );
         assert_eq!(
             summary["aggregates"]["production_time_source"]["counts"]["embedded-pdf-creation-date"],
             1
@@ -1537,6 +1594,20 @@ mod tests {
         assert_eq!(
             aggregates["production_time_source"]["counts"]["filename:path-token"],
             1
+        );
+
+        let mut sole_reason = report.clone();
+        sole_reason.candidates[0].review_reasons = vec!["destination-account-scope-unknown".into()];
+        let sole_reason_aggregates = decision_aggregates(&sole_reason);
+        assert_eq!(
+            sole_reason_aggregates["review_required_reason"]["sole_reason_counts"]
+                ["destination-account-scope-unknown"],
+            1
+        );
+        assert_eq!(
+            sole_reason_aggregates["review_required_reason"]["sole_reason_candidate_bytes"]
+                ["destination-account-scope-unknown"],
+            42
         );
 
         let original_batch = cloud::cloud_decision_batch_fingerprint(&report);
