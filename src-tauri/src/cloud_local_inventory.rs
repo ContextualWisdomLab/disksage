@@ -16,6 +16,8 @@ const MAX_RESULT_LIMIT: usize = 10_000;
 const MAX_DEPTH_LIMIT: usize = 64;
 const MAX_DURATION_LIMIT_MS: u64 = 300_000;
 const MAX_ISSUE_LIMIT: usize = 1_000;
+const CHECKPOINT_ENTRY_INTERVAL: u64 = 256;
+const CHECKPOINT_INTERVAL_MS: u64 = 1_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -88,6 +90,34 @@ pub struct CloudLocalAllocationInventory {
     pub evidence_complete: bool,
     pub stop_reasons: Vec<String>,
     pub notices: Vec<String>,
+}
+
+#[derive(Debug, Default)]
+struct InventoryState {
+    candidates: Vec<CloudLocalAllocationCandidate>,
+    visited_entries: u64,
+    visited_files: u64,
+    visited_directories: u64,
+    skipped_entries: u64,
+    issues: Vec<CloudLocalInventoryIssue>,
+    allocated_candidate_bytes: u64,
+    stop_reasons: Vec<String>,
+}
+
+#[derive(Debug, Default)]
+struct CheckpointCadence {
+    emitted: bool,
+    visited_entries: u64,
+    skipped_entries: u64,
+    elapsed_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct InventoryContext<'a> {
+    root: &'a CloudRoot,
+    root_path: &'a Path,
+    options: CloudLocalInventoryOptions,
+    observed_at_ms: u64,
 }
 
 fn base_notices() -> Vec<String> {
@@ -173,6 +203,85 @@ fn push_unique(values: &mut Vec<String>, value: &str) {
     }
 }
 
+fn inventory_report(
+    context: InventoryContext<'_>,
+    state: &InventoryState,
+    checkpoint: bool,
+) -> CloudLocalAllocationInventory {
+    let mut candidates = state.candidates.clone();
+    candidates.sort_by(|left, right| {
+        right
+            .allocated_bytes
+            .cmp(&left.allocated_bytes)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    let results_truncated = candidates.len() > context.options.max_results;
+    candidates.truncate(context.options.max_results);
+    let issues_truncated =
+        state.skipped_entries > u64::try_from(state.issues.len()).unwrap_or(u64::MAX);
+    let evidence_complete =
+        !checkpoint && state.stop_reasons.is_empty() && state.skipped_entries == 0;
+    let mut notices = base_notices();
+    if results_truncated {
+        notices.push("candidate-output-truncated".into());
+    }
+    if checkpoint {
+        notices.push("inventory-checkpoint-not-terminal".into());
+    } else if !evidence_complete {
+        notices.push("inventory-incomplete".into());
+    }
+    if issues_truncated {
+        notices.push("inventory-issues-truncated".into());
+    }
+
+    CloudLocalAllocationInventory {
+        version: 2,
+        cloud_root_id: context.root.id.clone(),
+        provider: context.root.provider,
+        account_scope: context.root.account_scope,
+        cloud_root: context.root_path.to_string_lossy().into_owned(),
+        observed_at_ms: context.observed_at_ms,
+        options: context.options,
+        visited_entries: state.visited_entries,
+        visited_files: state.visited_files,
+        visited_directories: state.visited_directories,
+        skipped_entries: state.skipped_entries,
+        issues: state.issues.clone(),
+        issues_truncated,
+        allocated_candidate_bytes: state.allocated_candidate_bytes,
+        candidates,
+        results_truncated,
+        evidence_complete,
+        stop_reasons: state.stop_reasons.clone(),
+        notices,
+    }
+}
+
+fn maybe_emit_checkpoint(
+    context: InventoryContext<'_>,
+    state: &InventoryState,
+    cadence: &mut CheckpointCadence,
+    elapsed_ms: u64,
+    force: bool,
+    emit: &mut impl FnMut(&CloudLocalAllocationInventory) -> Result<(), String>,
+) -> Result<(), String> {
+    let entries_due = state
+        .visited_entries
+        .saturating_sub(cadence.visited_entries)
+        >= CHECKPOINT_ENTRY_INTERVAL;
+    let time_due = elapsed_ms.saturating_sub(cadence.elapsed_ms) >= CHECKPOINT_INTERVAL_MS;
+    let issue_due = state.skipped_entries != cadence.skipped_entries;
+    if !force && cadence.emitted && !entries_due && !time_due && !issue_due {
+        return Ok(());
+    }
+    emit(&inventory_report(context, state, true))?;
+    cadence.emitted = true;
+    cadence.visited_entries = state.visited_entries;
+    cadence.skipped_entries = state.skipped_entries;
+    cadence.elapsed_ms = elapsed_ms;
+    Ok(())
+}
+
 fn system_time_ms(value: std::io::Result<std::time::SystemTime>) -> Option<u64> {
     value
         .ok()?
@@ -231,6 +340,27 @@ pub fn inventory_cloud_local_allocations(
     })
 }
 
+/// Inventory with bounded in-memory progress snapshots for an external watchdog.
+///
+/// Checkpoints are non-terminal reports. Callers should retain only the latest snapshot and mark it
+/// as a hard timeout if the worker is terminated. No checkpoint is written to the filesystem.
+pub fn inventory_cloud_local_allocations_with_checkpoints(
+    root: &CloudRoot,
+    options: CloudLocalInventoryOptions,
+    observed_at_ms: u64,
+    mut emit: impl FnMut(&CloudLocalAllocationInventory) -> Result<(), String>,
+) -> Result<CloudLocalAllocationInventory, String> {
+    let started = Instant::now();
+    inventory_with_elapsed_and_checkpoints(
+        root,
+        options,
+        observed_at_ms,
+        || u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        true,
+        &mut emit,
+    )
+}
+
 /// Build a fail-closed report after an external worker watchdog terminates a blocked platform
 /// directory enumeration. No filesystem call is made here, so the timeout path itself cannot block.
 pub fn hard_timeout_inventory(
@@ -265,11 +395,64 @@ pub fn hard_timeout_inventory(
     })
 }
 
+/// Validate and convert the latest worker checkpoint into a fail-closed hard-timeout report.
+pub fn hard_timeout_inventory_from_checkpoint(
+    root: &CloudRoot,
+    options: CloudLocalInventoryOptions,
+    mut checkpoint: CloudLocalAllocationInventory,
+) -> Result<CloudLocalAllocationInventory, String> {
+    validate_options(options)?;
+    if checkpoint.version != 2
+        || checkpoint.cloud_root_id != root.id
+        || checkpoint.provider != root.provider
+        || checkpoint.account_scope != root.account_scope
+        || checkpoint.cloud_root != root.path
+        || checkpoint.options != options
+        || checkpoint.evidence_complete
+        || !checkpoint
+            .notices
+            .iter()
+            .any(|notice| notice == "inventory-checkpoint-not-terminal")
+    {
+        return Err("cloud-local-inventory-checkpoint-invalid".into());
+    }
+    checkpoint
+        .notices
+        .retain(|notice| notice != "inventory-checkpoint-not-terminal");
+    push_unique(&mut checkpoint.stop_reasons, "hard-timeout-reached");
+    push_unique(&mut checkpoint.notices, "inventory-incomplete");
+    push_unique(&mut checkpoint.notices, "worker-hard-timeout");
+    push_unique(
+        &mut checkpoint.notices,
+        "partial-inventory-recovered-from-worker-checkpoint",
+    );
+    checkpoint.evidence_complete = false;
+    Ok(checkpoint)
+}
+
 fn inventory_with_elapsed(
     root: &CloudRoot,
     options: CloudLocalInventoryOptions,
     observed_at_ms: u64,
+    elapsed_ms: impl FnMut() -> u64,
+) -> Result<CloudLocalAllocationInventory, String> {
+    inventory_with_elapsed_and_checkpoints(
+        root,
+        options,
+        observed_at_ms,
+        elapsed_ms,
+        false,
+        &mut |_| Ok(()),
+    )
+}
+
+fn inventory_with_elapsed_and_checkpoints(
+    root: &CloudRoot,
+    options: CloudLocalInventoryOptions,
+    observed_at_ms: u64,
     mut elapsed_ms: impl FnMut() -> u64,
+    checkpoints_enabled: bool,
+    emit: &mut impl FnMut(&CloudLocalAllocationInventory) -> Result<(), String>,
 ) -> Result<CloudLocalAllocationInventory, String> {
     validate_options(options)?;
     cloud::validate_cloud_root_readable(root)?;
@@ -281,59 +464,79 @@ fn inventory_with_elapsed(
     }
 
     let mut queue = VecDeque::from([(root_path.clone(), 0usize)]);
-    let mut candidates = Vec::new();
-    let mut visited_entries = 0u64;
-    let mut visited_files = 0u64;
-    let mut visited_directories = 0u64;
-    let mut skipped_entries = 0u64;
-    let mut issues = Vec::new();
-    let mut allocated_candidate_bytes = 0u64;
-    let mut stop_reasons = Vec::new();
+    let mut state = InventoryState::default();
+    let mut cadence = CheckpointCadence::default();
+    let context = InventoryContext {
+        root,
+        root_path: &root_path,
+        options,
+        observed_at_ms,
+    };
 
     'directories: while let Some((directory, depth)) = queue.pop_front() {
-        if elapsed_ms() >= options.max_duration_ms {
-            push_unique(&mut stop_reasons, "max-duration-reached");
+        let now_ms = elapsed_ms();
+        if now_ms >= options.max_duration_ms {
+            push_unique(&mut state.stop_reasons, "max-duration-reached");
             break;
+        }
+        if checkpoints_enabled {
+            let force_checkpoint = !cadence.emitted;
+            maybe_emit_checkpoint(
+                context,
+                &state,
+                &mut cadence,
+                now_ms,
+                force_checkpoint,
+                emit,
+            )?;
         }
         let entries = match fs::read_dir(&directory) {
             Ok(entries) => entries,
             Err(error) => {
                 record_issue(
-                    &mut issues,
-                    &mut skipped_entries,
+                    &mut state.issues,
+                    &mut state.skipped_entries,
                     options.max_issues,
                     &root_path,
                     &directory,
                     "read-directory-failed",
                     stable_io_reason(&error),
                 );
-                push_unique(&mut stop_reasons, "entry-errors");
+                push_unique(&mut state.stop_reasons, "entry-errors");
                 continue;
             }
         };
-        for entry in entries {
+        let mut entries = entries;
+        loop {
+            let now_ms = elapsed_ms();
+            if checkpoints_enabled {
+                maybe_emit_checkpoint(context, &state, &mut cadence, now_ms, false, emit)?;
+            }
+            let Some(entry) = entries.next() else {
+                break;
+            };
             if elapsed_ms() >= options.max_duration_ms {
-                push_unique(&mut stop_reasons, "max-duration-reached");
+                push_unique(&mut state.stop_reasons, "max-duration-reached");
                 break 'directories;
             }
-            if visited_entries >= options.max_entries {
-                push_unique(&mut stop_reasons, "max-entries-reached");
+            if state.visited_entries >= options.max_entries {
+                push_unique(&mut state.stop_reasons, "max-entries-reached");
                 break 'directories;
             }
-            visited_entries = visited_entries.saturating_add(1);
+            state.visited_entries = state.visited_entries.saturating_add(1);
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(error) => {
                     record_issue(
-                        &mut issues,
-                        &mut skipped_entries,
+                        &mut state.issues,
+                        &mut state.skipped_entries,
                         options.max_issues,
                         &root_path,
                         &directory,
                         "read-entry-failed",
                         stable_io_reason(&error),
                     );
-                    push_unique(&mut stop_reasons, "entry-errors");
+                    push_unique(&mut state.stop_reasons, "entry-errors");
                     continue;
                 }
             };
@@ -342,23 +545,23 @@ fn inventory_with_elapsed(
                 Ok(metadata) => metadata,
                 Err(error) => {
                     record_issue(
-                        &mut issues,
-                        &mut skipped_entries,
+                        &mut state.issues,
+                        &mut state.skipped_entries,
                         options.max_issues,
                         &root_path,
                         &path,
                         "read-metadata-failed",
                         stable_io_reason(&error),
                     );
-                    push_unique(&mut stop_reasons, "entry-errors");
+                    push_unique(&mut state.stop_reasons, "entry-errors");
                     continue;
                 }
             };
             let file_type = metadata.file_type();
             if file_type.is_symlink() {
                 record_issue(
-                    &mut issues,
-                    &mut skipped_entries,
+                    &mut state.issues,
+                    &mut state.skipped_entries,
                     options.max_issues,
                     &root_path,
                     &path,
@@ -368,18 +571,18 @@ fn inventory_with_elapsed(
                 continue;
             }
             if file_type.is_dir() {
-                visited_directories = visited_directories.saturating_add(1);
+                state.visited_directories = state.visited_directories.saturating_add(1);
                 if depth < options.max_depth {
                     queue.push_back((path, depth + 1));
                 } else {
-                    push_unique(&mut stop_reasons, "max-depth-reached");
+                    push_unique(&mut state.stop_reasons, "max-depth-reached");
                 }
                 continue;
             }
             if !file_type.is_file() {
                 record_issue(
-                    &mut issues,
-                    &mut skipped_entries,
+                    &mut state.issues,
+                    &mut state.skipped_entries,
                     options.max_issues,
                     &root_path,
                     &path,
@@ -389,70 +592,35 @@ fn inventory_with_elapsed(
                 continue;
             }
 
-            visited_files = visited_files.saturating_add(1);
+            state.visited_files = state.visited_files.saturating_add(1);
             let Some(local_bytes) = allocated_bytes(&metadata) else {
                 record_issue(
-                    &mut issues,
-                    &mut skipped_entries,
+                    &mut state.issues,
+                    &mut state.skipped_entries,
                     options.max_issues,
                     &root_path,
                     &path,
                     "allocation-evidence-unavailable",
                     "platform-unsupported",
                 );
-                push_unique(&mut stop_reasons, "allocated-byte-evidence-unavailable");
+                push_unique(
+                    &mut state.stop_reasons,
+                    "allocated-byte-evidence-unavailable",
+                );
                 continue;
             };
             if local_bytes == 0 || local_bytes < options.min_allocated_bytes {
                 continue;
             }
-            allocated_candidate_bytes = allocated_candidate_bytes.saturating_add(local_bytes);
-            candidates.push(candidate(&path, &metadata, local_bytes));
+            state.allocated_candidate_bytes =
+                state.allocated_candidate_bytes.saturating_add(local_bytes);
+            state
+                .candidates
+                .push(candidate(&path, &metadata, local_bytes));
         }
     }
 
-    candidates.sort_by(|left, right| {
-        right
-            .allocated_bytes
-            .cmp(&left.allocated_bytes)
-            .then_with(|| left.path.cmp(&right.path))
-    });
-    let results_truncated = candidates.len() > options.max_results;
-    candidates.truncate(options.max_results);
-    let issues_truncated = skipped_entries > u64::try_from(issues.len()).unwrap_or(u64::MAX);
-    let evidence_complete = stop_reasons.is_empty() && skipped_entries == 0;
-    let mut notices = base_notices();
-    if results_truncated {
-        notices.push("candidate-output-truncated".into());
-    }
-    if !evidence_complete {
-        notices.push("inventory-incomplete".into());
-    }
-    if issues_truncated {
-        notices.push("inventory-issues-truncated".into());
-    }
-
-    Ok(CloudLocalAllocationInventory {
-        version: 2,
-        cloud_root_id: root.id.clone(),
-        provider: root.provider,
-        account_scope: root.account_scope,
-        cloud_root: root_path.to_string_lossy().into_owned(),
-        observed_at_ms,
-        options,
-        visited_entries,
-        visited_files,
-        visited_directories,
-        skipped_entries,
-        issues,
-        issues_truncated,
-        allocated_candidate_bytes,
-        candidates,
-        results_truncated,
-        evidence_complete,
-        stop_reasons,
-        notices,
-    })
+    Ok(inventory_report(context, &state, false))
 }
 
 #[cfg(test)]
@@ -543,6 +711,20 @@ mod tests {
     }
 
     #[test]
+    fn exact_entry_limit_is_complete_when_no_additional_entry_exists() {
+        let temp = tempfile::tempdir().unwrap();
+        for index in 0..3 {
+            write_file(&temp.path().join(format!("{index}.bin")), 4096);
+        }
+        let mut exact = options();
+        exact.max_entries = 3;
+        let report = inventory_cloud_local_allocations(&root(temp.path()), exact, 1).unwrap();
+        assert_eq!(report.visited_entries, 3);
+        assert!(report.evidence_complete);
+        assert!(report.stop_reasons.is_empty());
+    }
+
+    #[test]
     fn duration_bound_is_reported_by_injected_monotonic_clock() {
         let temp = tempfile::tempdir().unwrap();
         write_file(&temp.path().join("file.bin"), 4096);
@@ -575,6 +757,72 @@ mod tests {
         assert!(!report.issues_truncated);
         assert_eq!(report.options.max_issues, 10);
         assert!(report.notices.contains(&"worker-hard-timeout".to_string()));
+    }
+
+    #[test]
+    fn checkpoints_are_nonterminal_and_recover_partial_progress() {
+        let temp = tempfile::tempdir().unwrap();
+        for index in 0..260 {
+            write_file(&temp.path().join(format!("{index:03}.bin")), 4096);
+        }
+        let root = root(temp.path());
+        let mut bounded = options();
+        bounded.max_entries = 400;
+        let mut checkpoints = Vec::new();
+        let report =
+            inventory_cloud_local_allocations_with_checkpoints(&root, bounded, 123, |checkpoint| {
+                checkpoints.push(checkpoint.clone());
+                Ok(())
+            })
+            .unwrap();
+
+        assert!(report.evidence_complete);
+        assert_eq!(report.visited_entries, 260);
+        assert!(checkpoints.len() >= 2);
+        assert_eq!(checkpoints[0].visited_entries, 0);
+        assert!(checkpoints
+            .windows(2)
+            .all(|pair| pair[0].visited_entries <= pair[1].visited_entries));
+        let checkpoint = checkpoints.last().unwrap().clone();
+        assert!(checkpoint.visited_entries >= CHECKPOINT_ENTRY_INTERVAL);
+        assert!(!checkpoint.evidence_complete);
+        assert!(checkpoint
+            .notices
+            .contains(&"inventory-checkpoint-not-terminal".to_string()));
+
+        let recovered =
+            hard_timeout_inventory_from_checkpoint(&root, bounded, checkpoint.clone()).unwrap();
+        assert_eq!(recovered.visited_entries, checkpoint.visited_entries);
+        assert_eq!(recovered.visited_files, checkpoint.visited_files);
+        assert_eq!(
+            recovered.allocated_candidate_bytes,
+            checkpoint.allocated_candidate_bytes
+        );
+        assert_eq!(recovered.candidates, checkpoint.candidates);
+        assert!(!recovered.evidence_complete);
+        assert!(recovered
+            .stop_reasons
+            .contains(&"hard-timeout-reached".to_string()));
+        assert!(recovered
+            .notices
+            .contains(&"partial-inventory-recovered-from-worker-checkpoint".to_string()));
+        assert!(!recovered
+            .notices
+            .contains(&"inventory-checkpoint-not-terminal".to_string()));
+    }
+
+    #[test]
+    fn checkpoint_recovery_rejects_scope_or_option_drift() {
+        let root = root(Path::new("/Cloud"));
+        let mut checkpoint = hard_timeout_inventory(&root, options(), 1).unwrap();
+        checkpoint.stop_reasons.clear();
+        checkpoint.notices.clear();
+        checkpoint.evidence_complete = false;
+        checkpoint.cloud_root_id = "icloud:other".into();
+        assert_eq!(
+            hard_timeout_inventory_from_checkpoint(&root, options(), checkpoint).unwrap_err(),
+            "cloud-local-inventory-checkpoint-invalid"
+        );
     }
 
     #[test]
