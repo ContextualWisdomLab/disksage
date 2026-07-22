@@ -1,6 +1,17 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import * as api from "./api";
+  import {
+    candidateReviewDecision,
+    cloudDecisionReasonLabel,
+    cloudReviewQueuePage,
+    cloudReviewQueueStats,
+    cloudReviewReasons,
+    filterCloudReviewQueue,
+    matchingReviewDecision as exactReviewDecision,
+    type CloudReviewQueueFilter,
+    type CloudReviewQueueSort,
+  } from "./cloudReviewQueue";
   import { fmtBytes } from "./fmt";
 
   let { scannedRoot }: { scannedRoot: string | null } = $props();
@@ -32,6 +43,24 @@
   let checkingCapacity = $state(false);
   let connectionCapacity: api.CloudCapacitySnapshot | null = $state(null);
   let connectionCapacityRoot = $state("");
+  let reviewFilter: CloudReviewQueueFilter = $state("unreviewed");
+  let reviewReason = $state("");
+  let reviewSort: CloudReviewQueueSort = $state("bytes-desc");
+  let reviewPage = $state(1);
+  let reviewStats = $derived.by(() =>
+    cloudReviewQueueStats(report?.candidates ?? [], reviewDecisions)
+  );
+  let reviewReasons = $derived.by(() => cloudReviewReasons(report?.candidates ?? []));
+  let filteredReviewCandidates = $derived.by(() =>
+    filterCloudReviewQueue(
+      report?.candidates ?? [],
+      reviewDecisions,
+      reviewFilter,
+      reviewReason,
+      reviewSort,
+    )
+  );
+  let reviewPageData = $derived.by(() => cloudReviewQueuePage(filteredReviewCandidates, reviewPage));
 
   onMount(async () => {
     try {
@@ -57,6 +86,10 @@
     evictionConfirmation = "";
     evictionRationale = "";
     objectId = "";
+    reviewFilter = "unreviewed";
+    reviewReason = "";
+    reviewSort = "bytes-desc";
+    reviewPage = 1;
     try {
       const planned = await api.planCloudArchive(
         scannedRoot,
@@ -100,21 +133,11 @@
   }
 
   function reviewDecision(candidate: api.CloudCandidate): api.CloudReviewDecision | null {
-    return reviewDecisions.find((decision) =>
-      decision.candidate_fingerprint === candidate.metadata_fingerprint
-    ) ?? null;
+    return candidateReviewDecision(candidate, reviewDecisions);
   }
 
   function matchingReviewDecision(candidate: api.CloudCandidate): api.CloudReviewDecision | null {
-    const decision = reviewDecision(candidate);
-    return decision?.review_fingerprint === candidate.review_fingerprint ? decision : null;
-  }
-
-  function reviewReasonLabel(reason: string): string {
-    if (reason === "embedded-date-differs-from-filename-publication-month") {
-      return "내장 생산일과 파일명 발행월이 다름";
-    }
-    return reason;
+    return exactReviewDecision(candidate, reviewDecisions);
   }
 
   async function reviewCandidate(
@@ -605,8 +628,76 @@
     {#if report.candidates.length === 0}
       <p class="muted">현재 크기·경과일·지원 파일 유형 조건에 맞는 후보가 없습니다.</p>
     {:else}
+      <div class="review-queue" aria-label="클라우드 메타데이터 검토 큐">
+        <div class="review-progress" aria-live="polite">
+          <strong>
+            검토 진행 {reviewStats.reviewed.toLocaleString()} / {reviewStats.reviewable.toLocaleString()}개
+          </strong>
+          <progress
+            max={Math.max(1, reviewStats.reviewable)}
+            value={reviewStats.reviewed}
+            aria-label={`메타데이터 검토 ${reviewStats.reviewed}개 완료, ${reviewStats.unreviewed}개 남음`}
+          ></progress>
+          <span>
+            남음 {reviewStats.unreviewed.toLocaleString()}개 · {fmtBytes(reviewStats.unreviewedBytes)}
+          </span>
+        </div>
+        <div class="review-counts">
+          <span>승인 {reviewStats.approved.toLocaleString()}</span>
+          <span>보류 {reviewStats.held.toLocaleString()}</span>
+          <span>차단 {reviewStats.blocked.toLocaleString()} · {fmtBytes(reviewStats.blockedBytes)}</span>
+          <span>자동 진행 가능 {reviewStats.ready.toLocaleString()}</span>
+        </div>
+        <div class="review-filters">
+          <label>
+            상태
+            <select bind:value={reviewFilter} onchange={() => reviewPage = 1}>
+              <option value="unreviewed">미검토</option>
+              <option value="approved">승인</option>
+              <option value="held">보류</option>
+              <option value="blocked">차단</option>
+              <option value="ready">자동 진행 가능</option>
+              <option value="all">전체</option>
+            </select>
+          </label>
+          <label>
+            검토 사유
+            <select bind:value={reviewReason} onchange={() => reviewPage = 1}>
+              <option value="">모든 사유</option>
+              {#each reviewReasons as reason}
+                <option value={reason}>{cloudDecisionReasonLabel(reason)}</option>
+              {/each}
+            </select>
+          </label>
+          <label>
+            정렬
+            <select bind:value={reviewSort} onchange={() => reviewPage = 1}>
+              <option value="bytes-desc">큰 파일 먼저</option>
+              <option value="production-asc">생산일 오래된 순</option>
+              <option value="production-desc">생산일 최신 순</option>
+            </select>
+          </label>
+        </div>
+        <div class="review-pagination" aria-live="polite">
+          <button
+            onclick={() => reviewPage = Math.max(1, reviewPageData.page - 1)}
+            disabled={reviewPageData.page <= 1}
+          >이전 20개</button>
+          <span>
+            {reviewPageData.startIndex.toLocaleString()}–{reviewPageData.endIndex.toLocaleString()} /
+            {reviewPageData.totalItems.toLocaleString()}개 · {reviewPageData.page} / {reviewPageData.totalPages}쪽
+          </span>
+          <button
+            onclick={() => reviewPage = Math.min(reviewPageData.totalPages, reviewPageData.page + 1)}
+            disabled={reviewPageData.page >= reviewPageData.totalPages}
+          >다음 20개</button>
+        </div>
+      </div>
+      {#if reviewPageData.items.length === 0}
+        <p class="muted">현재 상태·사유 필터에 맞는 후보가 없습니다.</p>
+      {:else}
       <ul class="candidates">
-        {#each report.candidates as candidate (candidate.metadata_fingerprint)}
+        {#each reviewPageData.items as candidate (candidate.metadata_fingerprint)}
           <li class:blocked={candidate.blocked_reason !== null} class:adoptable={adoptEligible(candidate)}>
             <div class="line">
               <strong>{fmtBytes(candidate.bytes)}</strong>
@@ -615,7 +706,7 @@
               <span>근거 {candidate.production_time_source} ({candidate.production_time_confidence})</span>
               <span>수정 후 {candidate.age_days.toLocaleString()}일</span>
               {#if candidate.requires_review}<em>맥락/민감정보 검토 필요</em>{/if}
-              {#if candidate.blocked_reason}<em>{candidate.blocked_reason}</em>{/if}
+              {#if candidate.blocked_reason}<em>{cloudDecisionReasonLabel(candidate.blocked_reason)}</em>{/if}
             </div>
             <div class="path" title={candidate.src}>{candidate.src}</div>
             {#if candidate.content_title}
@@ -738,11 +829,12 @@
               </ul>
             </details>
             {#if candidate.review_reasons.length > 0}
-              <div class="context">검토 사유: {candidate.review_reasons.map(reviewReasonLabel).join(", ")}</div>
+              <div class="context">검토 사유: {candidate.review_reasons.map(cloudDecisionReasonLabel).join(", ")}</div>
             {/if}
           </li>
         {/each}
       </ul>
+      {/if}
     {/if}
   {/if}
 </section>
@@ -767,6 +859,13 @@
   .review-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin: 0.5rem 0; }
   .review-rationale { flex-basis: 100%; }
   .review-rationale textarea { width: min(52rem, 88vw); min-height: 3.5rem; resize: vertical; }
+  .review-queue { margin: 0.75rem 0; padding: 0.75rem; border: 1px solid #b7c6d8; border-radius: 4px; background: #f8fafc; display: grid; gap: 0.6rem; }
+  .review-progress { display: flex; flex-wrap: wrap; align-items: center; gap: 0.65rem; }
+  .review-progress progress { width: min(24rem, 70vw); }
+  .review-counts { display: flex; flex-wrap: wrap; gap: 0.75rem; color: #59636e; font-size: 0.78rem; }
+  .review-filters { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: end; }
+  .review-filters select { max-width: min(30rem, 80vw); }
+  .review-pagination { display: flex; flex-wrap: wrap; align-items: center; gap: 0.65rem; font-size: 0.8rem; }
   .approved { color: #25643b; }
   .held { color: #8a4b16; }
   .candidates { list-style: none; margin: 0.5rem 0; padding: 0; max-height: 34rem; overflow-y: auto; }
