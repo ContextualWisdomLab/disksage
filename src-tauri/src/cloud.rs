@@ -4,8 +4,9 @@
 //! hydrates, or calls a model.  The plan preserves enough source metadata to become the first
 //! lineage record for a later verified move.
 
+use crate::content_digest::ContentDigests;
 #[cfg(not(coverage))]
-use crate::content_digest::{ContentDigests, ContentHasher};
+use crate::content_digest::ContentHasher;
 #[cfg(not(coverage))]
 use crate::dataset_metadata::profile_dataset;
 use crate::dataset_metadata::DatasetProfile;
@@ -187,6 +188,34 @@ impl Default for CloudPlanOptions {
             min_age_days: 90,
             limit: 200,
         }
+    }
+}
+
+/// Immutable, process-local evidence prepared once for one source corpus.
+///
+/// Content metadata and duplicate digests are destination-independent and expensive to collect.
+/// A snapshot lets callers derive several destination plans without re-running probes or reading
+/// source content again. Destination existence, account scope, review fingerprints, capacity, and
+/// provider sync state are deliberately not cached.
+#[derive(Debug, Clone)]
+pub struct CloudSourceSnapshot {
+    source_root: PathBuf,
+    prepared_at_ms: u64,
+    options: CloudPlanOptions,
+    files: Vec<FileFact>,
+    #[cfg(not(coverage))]
+    duplicate_digests: BTreeMap<PathBuf, Result<ContentDigests, String>>,
+    #[cfg(not(coverage))]
+    verified_regular_files: BTreeSet<PathBuf>,
+}
+
+impl CloudSourceSnapshot {
+    pub fn candidate_count(&self) -> usize {
+        self.files.len()
+    }
+
+    pub fn candidate_bytes(&self) -> u64 {
+        self.files.iter().map(|file| file.bytes).sum()
     }
 }
 
@@ -3007,15 +3036,11 @@ fn destination_scope_review_reasons(
     }
 }
 
-fn planner_blocked_reason(
+fn source_blocked_reason(
     path: &Path,
     kind: ArchiveKind,
     metadata: &ContentMetadata,
-    destination: &Path,
 ) -> Option<String> {
-    if destination.exists() {
-        return Some("destination-exists".into());
-    }
     if kind == ArchiveKind::IncompleteDownload {
         return Some("incomplete-download".into());
     }
@@ -3038,6 +3063,18 @@ fn planner_blocked_reason(
         return Some("archive-index-unreadable".into());
     }
     None
+}
+
+fn planner_blocked_reason(
+    path: &Path,
+    kind: ArchiveKind,
+    metadata: &ContentMetadata,
+    destination: &Path,
+) -> Option<String> {
+    if destination.exists() {
+        return Some("destination-exists".into());
+    }
+    source_blocked_reason(path, kind, metadata)
 }
 
 fn metadata_fingerprint(file: &FileFact, relative: &Path) -> String {
@@ -3084,6 +3121,42 @@ fn hash_duplicate_candidate(path: &Path, expected_bytes: u64) -> Result<ContentD
 }
 
 #[cfg(not(coverage))]
+fn prehash_duplicate_candidates(
+    files: &[FileFact],
+) -> BTreeMap<PathBuf, Result<ContentDigests, String>> {
+    let mut by_size: BTreeMap<u64, Vec<&FileFact>> = BTreeMap::new();
+    for file in files {
+        let Some(kind) = archive_kind(&file.path) else {
+            continue;
+        };
+        if source_blocked_reason(&file.path, kind, &file.content_metadata).is_none() {
+            by_size.entry(file.bytes).or_default().push(file);
+        }
+    }
+
+    let mut digests = BTreeMap::new();
+    for same_size in by_size.values().filter(|files| files.len() > 1) {
+        for file in same_size {
+            digests.insert(
+                file.path.clone(),
+                hash_duplicate_candidate(&file.path, file.bytes),
+            );
+        }
+    }
+    digests
+}
+
+#[cfg(not(coverage))]
+fn source_snapshot_file_unchanged(file: &FileFact) -> bool {
+    let Ok(metadata) = std::fs::metadata(&file.path) else {
+        return false;
+    };
+    metadata.is_file()
+        && metadata.len() == file.bytes
+        && millis(metadata.modified()) == file.modified_ms
+}
+
+#[cfg(not(coverage))]
 fn push_candidate_evidence(
     candidate: &mut CloudCandidate,
     field: &str,
@@ -3102,7 +3175,10 @@ fn push_candidate_evidence(
 /// Hash only non-blocked candidates that share a byte length. Exact duplicates remain movable,
 /// but require an operator to select the canonical lineage instead of silently copying every path.
 #[cfg(not(coverage))]
-fn mark_exact_duplicate_candidates(candidates: &mut [CloudCandidate]) -> ExactDuplicateSummary {
+fn mark_exact_duplicate_candidates(
+    candidates: &mut [CloudCandidate],
+    cached_digests: Option<&BTreeMap<PathBuf, Result<ContentDigests, String>>>,
+) -> ExactDuplicateSummary {
     let mut summary = ExactDuplicateSummary::default();
     let mut by_size: BTreeMap<u64, Vec<usize>> = BTreeMap::new();
     for (index, candidate) in candidates.iter().enumerate() {
@@ -3115,7 +3191,12 @@ fn mark_exact_duplicate_candidates(candidates: &mut [CloudCandidate]) -> ExactDu
         let mut by_digest: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
         for &index in same_size {
             let candidate = &candidates[index];
-            match hash_duplicate_candidate(Path::new(&candidate.src), candidate.bytes) {
+            let cached = cached_digests
+                .and_then(|digests| digests.get(Path::new(&candidate.src)))
+                .cloned();
+            match cached.unwrap_or_else(|| {
+                hash_duplicate_candidate(Path::new(&candidate.src), candidate.bytes)
+            }) {
                 Ok(digests) => by_digest
                     .entry((digests.sha256, digests.blake3))
                     .or_default()
@@ -3322,6 +3403,17 @@ pub fn plan_cloud_archive(
     now_ms: u64,
     options: CloudPlanOptions,
 ) -> CloudPlanReport {
+    let snapshot = prepare_cloud_archive_source(files, source_root, now_ms, options);
+    plan_cloud_archive_from_snapshot(&snapshot, cloud_root)
+}
+
+/// Probe destination-independent source evidence once for reuse across cloud-root plans.
+pub fn prepare_cloud_archive_source(
+    files: &[FileFact],
+    source_root: &Path,
+    now_ms: u64,
+    options: CloudPlanOptions,
+) -> CloudSourceSnapshot {
     #[cfg(not(coverage))]
     let batched_exiftool = {
         let paths = files
@@ -3343,7 +3435,10 @@ pub fn plan_cloud_archive(
             .collect::<Vec<_>>();
         exiftool_metadata_batch(&paths)
     };
-    let mut candidates = Vec::new();
+
+    let mut prepared_files = Vec::new();
+    #[cfg(not(coverage))]
+    let mut verified_regular_files = BTreeSet::new();
     for file in files {
         if file.bytes < options.min_size_bytes || file.modified_ms == 0 {
             continue;
@@ -3352,28 +3447,70 @@ pub fn plan_cloud_archive(
         if age_days < options.min_age_days {
             continue;
         }
-        let Some(kind) = archive_kind(&file.path) else {
+        if archive_kind(&file.path).is_none() {
             continue;
-        };
+        }
         let Ok(relative) = file.path.strip_prefix(source_root) else {
             continue;
         };
         if relative.as_os_str().is_empty() {
             continue;
         }
-        let filename_ms = filename_date_ms(&file.path);
-        let filename_publication_month = filename_publication_month(&file.path);
-        let mut lineage_metadata = file.content_metadata.clone();
+        let mut prepared = file.clone();
         // Coverage builds exercise the deterministic planning core. Content probing is an
         // external-process adapter (ExifTool/ffprobe/pdfinfo/unzip) covered by normal tests and
         // integration smoke runs, so it is kept outside the in-process line-coverage boundary.
         #[cfg(not(coverage))]
-        if lineage_metadata == ContentMetadata::default() && file.path.is_file() {
-            lineage_metadata = probe_content_metadata_with_general(
-                &file.path,
-                batched_exiftool.get(&file.path).cloned(),
-            );
+        if file.path.is_file() {
+            verified_regular_files.insert(file.path.clone());
+            if prepared.content_metadata == ContentMetadata::default() {
+                prepared.content_metadata = probe_content_metadata_with_general(
+                    &file.path,
+                    batched_exiftool.get(&file.path).cloned(),
+                );
+            }
         }
+        prepared_files.push(prepared);
+    }
+
+    #[cfg(not(coverage))]
+    let duplicate_digests = prehash_duplicate_candidates(&prepared_files);
+    CloudSourceSnapshot {
+        source_root: source_root.to_path_buf(),
+        prepared_at_ms: now_ms,
+        options,
+        files: prepared_files,
+        #[cfg(not(coverage))]
+        duplicate_digests,
+        #[cfg(not(coverage))]
+        verified_regular_files,
+    }
+}
+
+/// Derive one destination-specific dry-run from an immutable source snapshot.
+///
+/// Cheap source stat checks and all destination-dependent checks are repeated for every plan.
+/// Metadata probes and content hashing are not.
+pub fn plan_cloud_archive_from_snapshot(
+    snapshot: &CloudSourceSnapshot,
+    cloud_root: &CloudRoot,
+) -> CloudPlanReport {
+    let files = &snapshot.files;
+    let source_root = &snapshot.source_root;
+    let now_ms = snapshot.prepared_at_ms;
+    let options = snapshot.options;
+    let mut candidates = Vec::new();
+    for file in files {
+        let age_days = now_ms.saturating_sub(file.modified_ms) / DAY_MS;
+        let Some(kind) = archive_kind(&file.path) else {
+            continue;
+        };
+        let Ok(relative) = file.path.strip_prefix(source_root) else {
+            continue;
+        };
+        let filename_ms = filename_date_ms(&file.path);
+        let filename_publication_month = filename_publication_month(&file.path);
+        let mut lineage_metadata = file.content_metadata.clone();
         let embedded_production_time_ms = lineage_metadata.production_time_ms;
         if let Some(value) = filename_ms {
             add_evidence(
@@ -3437,7 +3574,16 @@ pub fn plan_cloud_archive(
             .join(format!("{month:02}"))
             .join(kind.folder())
             .join(relative);
-        let blocked_reason = planner_blocked_reason(&file.path, kind, &lineage_metadata, &dst);
+        #[cfg(not(coverage))]
+        let source_snapshot_stale = snapshot.verified_regular_files.contains(&file.path)
+            && !source_snapshot_file_unchanged(file);
+        #[cfg(coverage)]
+        let source_snapshot_stale = false;
+        let blocked_reason = if source_snapshot_stale {
+            Some("source-snapshot-stale".into())
+        } else {
+            planner_blocked_reason(&file.path, kind, &lineage_metadata, &dst)
+        };
         let source_context = relative
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -3561,7 +3707,8 @@ pub fn plan_cloud_archive(
         candidates.push(candidate);
     }
     #[cfg(not(coverage))]
-    let exact_duplicates = mark_exact_duplicate_candidates(&mut candidates);
+    let exact_duplicates =
+        mark_exact_duplicate_candidates(&mut candidates, Some(&snapshot.duplicate_digests));
     #[cfg(coverage)]
     let exact_duplicates = ExactDuplicateSummary::default();
     candidates.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.src.cmp(&b.src)));
@@ -3584,7 +3731,7 @@ pub fn plan_cloud_archive(
             "dry-run-only".into(),
             "cloud-quota-unverified".into(),
             "cloud-sync-unverified".into(),
-            "content-hash-pending".into(),
+            "full-transfer-content-hash-pending".into(),
         ],
     }
 }
@@ -4808,6 +4955,116 @@ mod tests {
         assert!(!unique
             .review_reasons
             .contains(&"exact-duplicate-content-needs-canonical-selection".to_string()));
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn source_snapshot_reuses_probes_and_hashes_but_refreshes_destination_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let google = tmp.path().join("google");
+        let onedrive = tmp.path().join("onedrive");
+        writable_dir(&source);
+        writable_dir(&google);
+        writable_dir(&onedrive);
+        for name in ["a.pdf", "b.pdf"] {
+            std::fs::write(source.join(name), b"same-content").unwrap();
+        }
+        let production_time_ms = date_epoch_ms(2026, 1, 2).unwrap();
+        let metadata = ContentMetadata {
+            production_time_ms: Some(production_time_ms),
+            production_time_source: Some("embedded:test:creation-date".into()),
+            production_time_confidence: Some("high".into()),
+            ..ContentMetadata::default()
+        };
+        let files = ["a.pdf", "b.pdf"]
+            .into_iter()
+            .map(|name| {
+                let path = source.join(name);
+                let file_metadata = std::fs::metadata(&path).unwrap();
+                FileFact {
+                    path,
+                    bytes: file_metadata.len(),
+                    created_ms: millis(file_metadata.created()),
+                    modified_ms: millis(file_metadata.modified()),
+                    content_metadata: metadata.clone(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let snapshot = prepare_cloud_archive_source(
+            &files,
+            &source,
+            system_now_ms() + DAY_MS,
+            CloudPlanOptions {
+                min_size_bytes: 0,
+                min_age_days: 0,
+                limit: 10,
+            },
+        );
+
+        assert_eq!(snapshot.candidate_count(), 2);
+        assert_eq!(snapshot.duplicate_digests.len(), 2);
+        let google_report =
+            plan_cloud_archive_from_snapshot(&snapshot, &root(CloudProvider::GoogleDrive, &google));
+        let onedrive_report =
+            plan_cloud_archive_from_snapshot(&snapshot, &root(CloudProvider::Onedrive, &onedrive));
+        assert_eq!(google_report.exact_duplicates.cluster_count, 1);
+        assert_eq!(
+            google_report.exact_duplicates,
+            onedrive_report.exact_duplicates
+        );
+
+        let destination = PathBuf::from(&google_report.candidates[0].dst);
+        writable_dir(destination.parent().unwrap());
+        std::fs::write(&destination, b"existing-destination").unwrap();
+        let refreshed =
+            plan_cloud_archive_from_snapshot(&snapshot, &root(CloudProvider::GoogleDrive, &google));
+        assert!(refreshed.candidates.iter().any(|candidate| {
+            candidate.dst == destination.to_string_lossy()
+                && candidate.blocked_reason.as_deref() == Some("destination-exists")
+        }));
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn source_snapshot_fails_closed_when_source_stat_changes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let cloud = tmp.path().join("cloud");
+        writable_dir(&source);
+        writable_dir(&cloud);
+        let path = source.join("report.pdf");
+        std::fs::write(&path, b"before").unwrap();
+        let file_metadata = std::fs::metadata(&path).unwrap();
+        let snapshot = prepare_cloud_archive_source(
+            &[FileFact {
+                path: path.clone(),
+                bytes: file_metadata.len(),
+                created_ms: millis(file_metadata.created()),
+                modified_ms: millis(file_metadata.modified()),
+                content_metadata: ContentMetadata {
+                    production_time_ms: Some(date_epoch_ms(2026, 1, 2).unwrap()),
+                    production_time_source: Some("embedded:test:creation-date".into()),
+                    production_time_confidence: Some("high".into()),
+                    ..ContentMetadata::default()
+                },
+            }],
+            &source,
+            system_now_ms() + DAY_MS,
+            CloudPlanOptions {
+                min_size_bytes: 0,
+                min_age_days: 0,
+                limit: 10,
+            },
+        );
+
+        std::fs::write(path, b"changed-and-longer").unwrap();
+        let report =
+            plan_cloud_archive_from_snapshot(&snapshot, &root(CloudProvider::GoogleDrive, &cloud));
+        assert_eq!(
+            report.candidates[0].blocked_reason.as_deref(),
+            Some("source-snapshot-stale")
+        );
     }
 
     #[test]

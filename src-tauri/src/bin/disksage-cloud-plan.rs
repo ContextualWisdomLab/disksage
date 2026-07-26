@@ -42,6 +42,7 @@ struct Args {
     limit: usize,
     list_roots: bool,
     inspect_roots: bool,
+    all_readable_roots: bool,
     verify_capacity: bool,
     decision_summary: bool,
     review_reason_set: Option<Vec<String>>,
@@ -127,6 +128,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
         limit: 200,
         list_roots: false,
         inspect_roots: false,
+        all_readable_roots: false,
         verify_capacity: false,
         decision_summary: false,
         review_reason_set: None,
@@ -179,6 +181,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             }
             "--list-roots" => parsed.list_roots = true,
             "--inspect-roots" => parsed.inspect_roots = true,
+            "--all-readable-roots" => parsed.all_readable_roots = true,
             "--verify-capacity" => parsed.verify_capacity = true,
             "--decision-summary" => parsed.decision_summary = true,
             "--review-reason-set" => {
@@ -309,7 +312,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             }
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive] [--min-size-mib N] [--min-age-days N] [--limit N] [--decision-summary [--review-reason-set REASON|REASON]] [--verify-capacity [--oauth-connections ABSOLUTE_PATH]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
+                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary] [--min-size-mib N] [--min-age-days N] [--limit N] [--decision-summary [--review-reason-set REASON|REASON]] [--verify-capacity [--oauth-connections ABSOLUTE_PATH]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -366,6 +369,14 @@ struct ReviewOutput {
 fn validate_action_args(args: &Args) -> Result<(), String> {
     let copy_action = args.copy_fingerprint.is_some();
     let adoption_action = args.adopt_existing_fingerprint.is_some();
+    if args.all_readable_roots && !args.decision_summary {
+        return Err("--all-readable-roots에는 --decision-summary가 필요함".into());
+    }
+    if args.all_readable_roots && (args.cloud_root.is_some() || args.provider.is_some()) {
+        return Err(
+            "--all-readable-roots는 --cloud-root 또는 --provider와 함께 사용할 수 없음".into(),
+        );
+    }
     if copy_action && adoption_action {
         return Err("copy action과 existing-copy adoption action은 동시에 사용할 수 없음".into());
     }
@@ -475,6 +486,12 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
         + usize::from(eviction_action)
         + usize::from(review_action)
         + usize::from(args.export_naruon_lineage.is_some());
+    if args.all_readable_roots && (actions > 0 || args.verify_capacity) {
+        return Err(
+            "--all-readable-roots는 mutation, root inspection 또는 capacity action과 함께 사용할 수 없음"
+                .into(),
+        );
+    }
     if args.decision_summary && actions > 0 {
         return Err("--decision-summary는 plan 출력에만 사용할 수 있음".into());
     }
@@ -1226,8 +1243,22 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
     cloud::validate_source_root_readable(&args.root)?;
-    let selected = select_root(&roots, &args)?;
-    cloud::validate_cloud_root_readable(&selected)?;
+    let selected_roots = if args.all_readable_roots {
+        let selected = roots
+            .iter()
+            .filter(|root| root.readable)
+            .cloned()
+            .collect::<Vec<_>>();
+        if selected.is_empty() {
+            return Err("재검증할 수 있는 읽기 가능 클라우드 루트가 없음".into());
+        }
+        selected
+    } else {
+        vec![select_root(&roots, &args)?]
+    };
+    for selected in &selected_roots {
+        cloud::validate_cloud_root_readable(selected)?;
+    }
     let excluded: Vec<PathBuf> = roots.iter().map(|r| PathBuf::from(&r.path)).collect();
     if excluded
         .iter()
@@ -1236,10 +1267,9 @@ fn run() -> Result<(), String> {
         return Err("이미 클라우드 안에 있는 경로는 오프로드 원본으로 사용할 수 없음".into());
     }
     let files = cloud::collect_archive_files(&args.root, &excluded);
-    let mut report = cloud::plan_cloud_archive(
+    let snapshot = cloud::prepare_cloud_archive_source(
         &files,
         &args.root,
-        &selected,
         cloud::system_now_ms(),
         CloudPlanOptions {
             min_size_bytes: args.min_size_mib.saturating_mul(1024 * 1024),
@@ -1247,6 +1277,45 @@ fn run() -> Result<(), String> {
             limit: args.limit.clamp(1, 1_000),
         },
     );
+    if args.all_readable_roots {
+        let mut summaries = Vec::with_capacity(selected_roots.len());
+        for selected in &selected_roots {
+            let report = cloud::plan_cloud_archive_from_snapshot(&snapshot, selected);
+            summaries.push(match args.review_reason_set.as_deref() {
+                Some(reasons) => review_batch_summary(&report, reasons)?,
+                None => decision_summary(&report),
+            });
+        }
+        let output = serde_json::json!({
+            "schema_version": 1,
+            "output_mode": "multicloud-decision-summary",
+            "source_snapshot": {
+                "candidate_count": snapshot.candidate_count(),
+                "candidate_bytes": snapshot.candidate_bytes(),
+                "reused_for_destination_count": selected_roots.len(),
+                "content_metadata_probed_once": true,
+                "duplicate_content_hashed_once": true,
+            },
+            "destinations": summaries,
+            "notices": [
+                "dry-run-only",
+                "destination-state-revalidated-per-plan",
+                "source-stat-revalidated-per-plan",
+                "cloud-capacity-unverified",
+                "cloud-sync-unverified",
+            ],
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&output).map_err(|error| error.to_string())?
+        );
+        return Ok(());
+    }
+    let selected = selected_roots
+        .into_iter()
+        .next()
+        .ok_or_else(|| "선택된 클라우드 루트가 없음".to_string())?;
+    let mut report = cloud::plan_cloud_archive_from_snapshot(&snapshot, &selected);
     if args.verify_capacity {
         let largest_candidate_bytes = report
             .candidates
@@ -1473,6 +1542,7 @@ mod tests {
         assert!(defaults.naruon_sync_evidence.is_none());
         assert!(!defaults.verify_capacity);
         assert!(!defaults.decision_summary);
+        assert!(!defaults.all_readable_roots);
         assert!(defaults.review_reason_set.is_none());
         assert_eq!(defaults.capacity_reserve_mib, 1024);
         let args = vec![
@@ -1510,6 +1580,42 @@ mod tests {
             ])
         );
         assert_eq!(parsed.capacity_reserve_mib, 2048);
+    }
+
+    #[test]
+    fn all_readable_roots_is_dry_run_summary_only() {
+        let valid = parse_args(
+            &["--all-readable-roots".into(), "--decision-summary".into()],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(valid.all_readable_roots);
+        assert!(validate_action_args(&valid).is_ok());
+
+        let missing_summary =
+            parse_args(&["--all-readable-roots".into()], Path::new("/h")).unwrap();
+        assert!(validate_action_args(&missing_summary).is_err());
+        let scoped = parse_args(
+            &[
+                "--all-readable-roots".into(),
+                "--decision-summary".into(),
+                "--provider".into(),
+                "icloud".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&scoped).is_err());
+        let capacity = parse_args(
+            &[
+                "--all-readable-roots".into(),
+                "--decision-summary".into(),
+                "--verify-capacity".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&capacity).is_err());
     }
 
     #[test]
