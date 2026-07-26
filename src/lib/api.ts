@@ -336,6 +336,19 @@ export interface ExactDuplicateSummary {
   candidate_count: number;
   candidate_bytes: number;
   redundant_bytes: number;
+  clusters: ExactDuplicateClusterRecommendation[];
+}
+
+export interface ExactDuplicateClusterRecommendation {
+  cluster_fingerprint: string;
+  candidate_count: number;
+  bytes_per_candidate: number;
+  redundant_bytes: number;
+  recommended_canonical_metadata_fingerprint: string;
+  recommendation_confidence: "high" | "medium" | "low";
+  recommendation_reason_codes: string[];
+  member_metadata_fingerprints: string[];
+  requires_human_confirmation: boolean;
 }
 
 export interface CloudCopyReceipt {

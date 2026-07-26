@@ -543,6 +543,10 @@
         {report.exact_duplicates.cluster_count.toLocaleString()}개 콘텐츠 클러스터 ·
         대표본 외 중복 경로 {fmtBytes(report.exact_duplicates.redundant_bytes)}.
         동일 크기 후보만 로컬 SHA-256·BLAKE3로 확인했으며, 대표 lineage를 선택하기 전에는 자동 복사하지 않습니다.
+        정본 추천은 내장 생산일·신뢰도·내장 메타데이터를 먼저 비교하고 격리·복사본 경로를
+        보조 기준으로 사용합니다. 추천 {report.exact_duplicates.clusters.length.toLocaleString()}건 모두 사람 확인이
+        필요하며, 낮은 신뢰도 추천은
+        {report.exact_duplicates.clusters.filter((cluster) => cluster.recommendation_confidence === "low").length.toLocaleString()}건입니다.
       </p>
     {/if}
     <p class="warning">

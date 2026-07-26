@@ -270,6 +270,21 @@ pub struct ExactDuplicateSummary {
     pub candidate_count: usize,
     pub candidate_bytes: u64,
     pub redundant_bytes: u64,
+    #[serde(default)]
+    pub clusters: Vec<ExactDuplicateClusterRecommendation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ExactDuplicateClusterRecommendation {
+    pub cluster_fingerprint: String,
+    pub candidate_count: usize,
+    pub bytes_per_candidate: u64,
+    pub redundant_bytes: u64,
+    pub recommended_canonical_metadata_fingerprint: String,
+    pub recommendation_confidence: String,
+    pub recommendation_reason_codes: Vec<String>,
+    pub member_metadata_fingerprints: Vec<String>,
+    pub requires_human_confirmation: bool,
 }
 
 /// Fail closed when the selected source cannot be enumerated. Filesystem metadata alone is not
@@ -3190,6 +3205,227 @@ fn push_candidate_evidence(
     });
 }
 
+fn duplicate_confidence_rank(value: &str) -> u8 {
+    match value {
+        "high" => 3,
+        "medium" => 2,
+        "low" => 1,
+        _ => 0,
+    }
+}
+
+fn embedded_metadata_richness(candidate: &CloudCandidate) -> usize {
+    usize::from(candidate.content_title.is_some())
+        + candidate.content_authors.len()
+        + candidate.content_context.len()
+        + usize::from(candidate.duration_ms.is_some())
+        + usize::from(candidate.dataset_profile.is_some())
+        + candidate
+            .metadata_evidence
+            .iter()
+            .filter(|evidence| evidence.source.starts_with("embedded:"))
+            .count()
+}
+
+fn filename_looks_like_copy(path: &str) -> bool {
+    let path = Path::new(path);
+    let stem = path
+        .file_stem()
+        .map(|value| value.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if [" copy", "-copy", "_copy", "복사본"]
+        .iter()
+        .any(|marker| stem.contains(marker))
+    {
+        return true;
+    }
+    let Some(open) = stem.rfind('(') else {
+        return false;
+    };
+    let suffix = stem[open + 1..].trim_end_matches(')').trim();
+    stem.ends_with(')') && !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn path_looks_regenerable_or_quarantined(path: &str) -> bool {
+    Path::new(path).components().any(|component| {
+        let value = component.as_os_str().to_string_lossy().to_lowercase();
+        matches!(
+            value.as_str(),
+            "quarantine"
+                | "exact-duplicates"
+                | "duplicates"
+                | ".trash"
+                | "trash"
+                | "tmp"
+                | "temp"
+                | "cache"
+        )
+    })
+}
+
+fn retain_max_by_key<T: Ord, F: Fn(usize) -> T>(indices: &mut Vec<usize>, key: F) -> bool {
+    let before = indices.len();
+    let Some(best) = indices.iter().copied().map(|index| key(index)).max() else {
+        return false;
+    };
+    indices.retain(|index| key(*index) == best);
+    indices.len() < before
+}
+
+fn retain_min_by_key<T: Ord, F: Fn(usize) -> T>(indices: &mut Vec<usize>, key: F) -> bool {
+    let before = indices.len();
+    let Some(best) = indices.iter().copied().map(|index| key(index)).min() else {
+        return false;
+    };
+    indices.retain(|index| key(*index) == best);
+    indices.len() < before
+}
+
+fn record_recommendation_stage(
+    reduced: bool,
+    remaining_len: usize,
+    reason: &str,
+    stage_confidence: &str,
+    reasons: &mut Vec<String>,
+    confidence: &mut Option<String>,
+) {
+    if reduced {
+        reasons.push(reason.to_string());
+        if remaining_len == 1 && confidence.is_none() {
+            *confidence = Some(stage_confidence.to_string());
+        }
+    }
+}
+
+fn recommend_exact_duplicate_canonical(
+    candidates: &[CloudCandidate],
+    exact_matches: &[usize],
+) -> (usize, String, Vec<String>) {
+    let mut remaining = exact_matches.to_vec();
+    let mut reasons = Vec::new();
+    let mut confidence = None;
+
+    let reduced = retain_max_by_key(&mut remaining, |index| {
+        candidates[index]
+            .production_time_source
+            .starts_with("embedded:")
+    });
+    record_recommendation_stage(
+        reduced,
+        remaining.len(),
+        "embedded-production-time-preferred",
+        "high",
+        &mut reasons,
+        &mut confidence,
+    );
+
+    let reduced = retain_max_by_key(&mut remaining, |index| {
+        duplicate_confidence_rank(&candidates[index].production_time_confidence)
+    });
+    record_recommendation_stage(
+        reduced,
+        remaining.len(),
+        "higher-production-time-confidence",
+        "high",
+        &mut reasons,
+        &mut confidence,
+    );
+
+    let reduced = retain_max_by_key(&mut remaining, |index| {
+        embedded_metadata_richness(&candidates[index])
+    });
+    record_recommendation_stage(
+        reduced,
+        remaining.len(),
+        "richer-embedded-metadata-preferred",
+        "high",
+        &mut reasons,
+        &mut confidence,
+    );
+
+    let reduced = retain_min_by_key(&mut remaining, |index| {
+        path_looks_regenerable_or_quarantined(&candidates[index].relative_path)
+    });
+    record_recommendation_stage(
+        reduced,
+        remaining.len(),
+        "non-quarantine-path-preferred",
+        "medium",
+        &mut reasons,
+        &mut confidence,
+    );
+
+    let reduced = retain_min_by_key(&mut remaining, |index| {
+        filename_looks_like_copy(&candidates[index].relative_path)
+    });
+    record_recommendation_stage(
+        reduced,
+        remaining.len(),
+        "non-copy-marked-filename-preferred",
+        "medium",
+        &mut reasons,
+        &mut confidence,
+    );
+
+    let reduced = retain_min_by_key(&mut remaining, |index| {
+        let created_ms = candidates[index].created_ms;
+        if created_ms == 0 {
+            u64::MAX
+        } else {
+            created_ms
+        }
+    });
+    record_recommendation_stage(
+        reduced,
+        remaining.len(),
+        "filesystem-created-time-tiebreaker",
+        "low",
+        &mut reasons,
+        &mut confidence,
+    );
+
+    remaining.sort_by(|left, right| {
+        candidates[*left]
+            .relative_path
+            .cmp(&candidates[*right].relative_path)
+            .then_with(|| {
+                candidates[*left]
+                    .metadata_fingerprint
+                    .cmp(&candidates[*right].metadata_fingerprint)
+            })
+    });
+    if remaining.len() > 1 {
+        reasons.push("stable-path-tiebreaker".into());
+    }
+    let recommended = remaining
+        .first()
+        .copied()
+        .unwrap_or_else(|| exact_matches[0]);
+    (
+        recommended,
+        confidence.unwrap_or_else(|| "low".into()),
+        reasons,
+    )
+}
+
+fn exact_duplicate_cluster_fingerprint(
+    sha256: &str,
+    blake3: &str,
+    bytes_per_candidate: u64,
+    member_metadata_fingerprints: &[String],
+) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage-exact-duplicate-cluster-v1\0");
+    for value in [sha256.as_bytes(), blake3.as_bytes()] {
+        hash_review_value(&mut hasher, value);
+    }
+    hash_review_value(&mut hasher, &bytes_per_candidate.to_le_bytes());
+    for fingerprint in member_metadata_fingerprints {
+        hash_review_value(&mut hasher, fingerprint.as_bytes());
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
 /// Hash only non-blocked candidates that share a byte length. Exact duplicates remain movable,
 /// but require an operator to select the canonical lineage instead of silently copying every path.
 #[cfg(not(coverage))]
@@ -3240,6 +3476,22 @@ fn mark_exact_duplicate_candidates(
             .filter(|(_, indices)| indices.len() > 1)
         {
             let bytes_per_candidate = candidates[exact_matches[0]].bytes;
+            let (recommended_index, recommendation_confidence, recommendation_reason_codes) =
+                recommend_exact_duplicate_canonical(candidates, &exact_matches);
+            let recommended_canonical_metadata_fingerprint =
+                candidates[recommended_index].metadata_fingerprint.clone();
+            let mut member_metadata_fingerprints = exact_matches
+                .iter()
+                .map(|index| candidates[*index].metadata_fingerprint.clone())
+                .collect::<Vec<_>>();
+            member_metadata_fingerprints.sort();
+            let cluster_fingerprint = exact_duplicate_cluster_fingerprint(
+                &sha256,
+                &blake3,
+                bytes_per_candidate,
+                &member_metadata_fingerprints,
+            );
+            let recommendation_reasons = recommendation_reason_codes.join(",");
             summary.cluster_count += 1;
             summary.candidate_count += exact_matches.len();
             summary.candidate_bytes = summary
@@ -3248,6 +3500,19 @@ fn mark_exact_duplicate_candidates(
             summary.redundant_bytes = summary.redundant_bytes.saturating_add(
                 bytes_per_candidate.saturating_mul((exact_matches.len() - 1) as u64),
             );
+            summary.clusters.push(ExactDuplicateClusterRecommendation {
+                cluster_fingerprint: cluster_fingerprint.clone(),
+                candidate_count: exact_matches.len(),
+                bytes_per_candidate,
+                redundant_bytes: bytes_per_candidate
+                    .saturating_mul((exact_matches.len() - 1) as u64),
+                recommended_canonical_metadata_fingerprint:
+                    recommended_canonical_metadata_fingerprint.clone(),
+                recommendation_confidence: recommendation_confidence.clone(),
+                recommendation_reason_codes: recommendation_reason_codes.clone(),
+                member_metadata_fingerprints,
+                requires_human_confirmation: true,
+            });
             let candidate_count = exact_matches.len().to_string();
             for index in exact_matches {
                 let candidate = &mut candidates[index];
@@ -3275,9 +3540,44 @@ fn mark_exact_duplicate_candidates(
                     "planner:exact-content-cluster",
                     "high",
                 );
+                push_candidate_evidence(
+                    candidate,
+                    "exact-duplicate-cluster-fingerprint",
+                    cluster_fingerprint.clone(),
+                    "planner:exact-content-cluster",
+                    "high",
+                );
+                push_candidate_evidence(
+                    candidate,
+                    "exact-duplicate-canonical-recommendation",
+                    if index == recommended_index {
+                        "preferred"
+                    } else {
+                        "redundant-copy-candidate"
+                    },
+                    "planner:metadata-lineage-ranking",
+                    &recommendation_confidence,
+                );
+                push_candidate_evidence(
+                    candidate,
+                    "exact-duplicate-canonical-recommendation-reasons",
+                    recommendation_reasons.clone(),
+                    "planner:metadata-lineage-ranking",
+                    &recommendation_confidence,
+                );
+                push_candidate_evidence(
+                    candidate,
+                    "exact-duplicate-canonical-human-confirmation-required",
+                    "true",
+                    "planner:metadata-lineage-ranking",
+                    "high",
+                );
             }
         }
     }
+    summary
+        .clusters
+        .sort_by(|left, right| left.cluster_fingerprint.cmp(&right.cluster_fingerprint));
 
     for candidate in candidates {
         candidate.review_reasons.sort();
@@ -4920,8 +5220,8 @@ mod tests {
         writable_dir(&source);
         writable_dir(&cloud);
         for (name, contents) in [
-            ("a.pdf", &b"same-content"[..]),
-            ("b.pdf", &b"same-content"[..]),
+            ("report.pdf", &b"same-content"[..]),
+            ("report (1).pdf", &b"same-content"[..]),
             ("c.pdf", &b"uniq-content"[..]),
         ] {
             std::fs::write(source.join(name), contents).unwrap();
@@ -4933,7 +5233,7 @@ mod tests {
             production_time_confidence: Some("high".into()),
             ..ContentMetadata::default()
         };
-        let files: Vec<_> = ["a.pdf", "b.pdf", "c.pdf"]
+        let files: Vec<_> = ["report.pdf", "report (1).pdf", "c.pdf"]
             .into_iter()
             .map(|name| {
                 let path = source.join(name);
@@ -4961,7 +5261,7 @@ mod tests {
         );
 
         let mut duplicate_hashes = Vec::new();
-        for name in ["a.pdf", "b.pdf"] {
+        for name in ["report.pdf", "report (1).pdf"] {
             let candidate = report
                 .candidates
                 .iter()
@@ -4989,6 +5289,34 @@ mod tests {
         assert_eq!(report.exact_duplicates.candidate_count, 2);
         assert_eq!(report.exact_duplicates.candidate_bytes, 24);
         assert_eq!(report.exact_duplicates.redundant_bytes, 12);
+        let cluster = &report.exact_duplicates.clusters[0];
+        let canonical = report
+            .candidates
+            .iter()
+            .find(|candidate| candidate.relative_path == "report.pdf")
+            .unwrap();
+        let marked_copy = report
+            .candidates
+            .iter()
+            .find(|candidate| candidate.relative_path == "report (1).pdf")
+            .unwrap();
+        assert_eq!(
+            cluster.recommended_canonical_metadata_fingerprint,
+            canonical.metadata_fingerprint
+        );
+        assert_eq!(cluster.recommendation_confidence, "medium");
+        assert!(cluster
+            .recommendation_reason_codes
+            .contains(&"non-copy-marked-filename-preferred".to_string()));
+        assert!(cluster.requires_human_confirmation);
+        assert!(canonical.metadata_evidence.iter().any(|evidence| {
+            evidence.field == "exact-duplicate-canonical-recommendation"
+                && evidence.value == "preferred"
+        }));
+        assert!(marked_copy.metadata_evidence.iter().any(|evidence| {
+            evidence.field == "exact-duplicate-canonical-recommendation"
+                && evidence.value == "redundant-copy-candidate"
+        }));
         let unique = report
             .candidates
             .iter()
@@ -4997,6 +5325,81 @@ mod tests {
         assert!(!unique
             .review_reasons
             .contains(&"exact-duplicate-content-needs-canonical-selection".to_string()));
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn canonical_recommendation_keeps_embedded_lineage_ahead_of_copy_name_heuristics() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let cloud = tmp.path().join("cloud");
+        writable_dir(&source);
+        writable_dir(&cloud);
+        for name in ["analysis.pdf", "analysis (1).pdf"] {
+            std::fs::write(source.join(name), b"same-analysis").unwrap();
+        }
+        let embedded = ContentMetadata {
+            production_time_ms: Some(date_epoch_ms(2026, 2, 3).unwrap()),
+            production_time_source: Some("embedded:test:creation-date".into()),
+            production_time_confidence: Some("high".into()),
+            title: Some("Analysis".into()),
+            evidence: vec![MetadataEvidence {
+                field: "production-date".into(),
+                value: "2026-02-03".into(),
+                source: "embedded:test:creation-date".into(),
+                confidence: "high".into(),
+            }],
+            ..ContentMetadata::default()
+        };
+        let filesystem_only = ContentMetadata::default();
+        let files = [
+            ("analysis.pdf", filesystem_only),
+            ("analysis (1).pdf", embedded),
+        ]
+        .into_iter()
+        .map(|(name, content_metadata)| {
+            let path = source.join(name);
+            let file_metadata = std::fs::metadata(&path).unwrap();
+            FileFact {
+                path,
+                bytes: file_metadata.len(),
+                created_ms: millis(file_metadata.created()),
+                modified_ms: millis(file_metadata.modified()),
+                content_metadata,
+            }
+        })
+        .collect::<Vec<_>>();
+
+        let report = plan_cloud_archive(
+            &files,
+            &source,
+            &root(CloudProvider::GoogleDrive, &cloud),
+            system_now_ms() + DAY_MS,
+            CloudPlanOptions {
+                min_size_bytes: 0,
+                min_age_days: 0,
+                limit: 10,
+            },
+        );
+
+        let cluster = &report.exact_duplicates.clusters[0];
+        let embedded_copy = report
+            .candidates
+            .iter()
+            .find(|candidate| candidate.relative_path == "analysis (1).pdf")
+            .unwrap();
+        assert_eq!(
+            cluster.recommended_canonical_metadata_fingerprint,
+            embedded_copy.metadata_fingerprint
+        );
+        assert_eq!(cluster.recommendation_confidence, "high");
+        assert!(cluster
+            .recommendation_reason_codes
+            .contains(&"embedded-production-time-preferred".to_string()));
+        assert!(embedded_copy.metadata_evidence.iter().any(|evidence| {
+            evidence.field == "exact-duplicate-canonical-recommendation"
+                && evidence.value == "preferred"
+        }));
     }
 
     #[cfg(not(coverage))]
