@@ -2839,6 +2839,15 @@ fn embedded_metadata_review_reasons(
             "계약",
             "평가",
             "실적",
+            "기업 분석",
+            "기업분석",
+            "분석 보고서",
+            "분석보고서",
+            "실사 보고서",
+            "실사보고서",
+            "company analysis",
+            "business analysis",
+            "due diligence",
             "업무망",
             "망분리",
         ],
@@ -2950,6 +2959,15 @@ fn review_reasons(path: &Path, kind: ArchiveKind) -> Vec<String> {
         "평가",
         "evaluation",
         "실적",
+        "기업 분석",
+        "기업분석",
+        "분석 보고서",
+        "분석보고서",
+        "실사 보고서",
+        "실사보고서",
+        "company analysis",
+        "business analysis",
+        "due diligence",
         "업무망",
         "망분리",
     ]
@@ -4578,6 +4596,18 @@ mod tests {
         let neutral_spreadsheet =
             review_reasons(Path::new("quarterly-report.xlsx"), ArchiveKind::Document);
         assert!(neutral_spreadsheet.contains(&"spreadsheet-content-needs-review".to_string()));
+        for confidential in [
+            "(주)엠파시 기업 분석 보고서(국문 상세)_20260510.pdf",
+            "target-company due diligence.pdf",
+        ] {
+            assert!(
+                review_reasons(Path::new(confidential), ArchiveKind::Document)
+                    .contains(&"filename-context-may-be-confidential".to_string())
+            );
+        }
+        assert!(
+            review_reasons(Path::new("public-annual-report.pdf"), ArchiveKind::Document).is_empty()
+        );
     }
 
     #[test]
@@ -4631,6 +4661,18 @@ mod tests {
         ] {
             assert!(reasons.contains(&expected.to_string()), "{expected}");
         }
+        let business_analysis = ContentMetadata {
+            title: Some("Target company due diligence".into()),
+            context: vec!["subject=기업 분석 보고서".into()],
+            ..ContentMetadata::default()
+        };
+        assert!(embedded_metadata_review_reasons(
+            Path::new("neutral-name.pdf"),
+            &business_analysis,
+            date_epoch_ms(2026, 5, 10).unwrap(),
+            date_epoch_ms(2026, 5, 11).unwrap(),
+        )
+        .contains(&"embedded-metadata-context-may-be-confidential".to_string()));
 
         let powerpoint_default = date_epoch_ms(2006, 8, 16).unwrap();
         let metadata = ContentMetadata {
