@@ -3217,7 +3217,6 @@ fn duplicate_confidence_rank(value: &str) -> u8 {
 fn embedded_metadata_richness(candidate: &CloudCandidate) -> usize {
     usize::from(candidate.content_title.is_some())
         + candidate.content_authors.len()
-        + candidate.content_context.len()
         + usize::from(candidate.duration_ms.is_some())
         + usize::from(candidate.dataset_profile.is_some())
         + candidate
@@ -3225,6 +3224,10 @@ fn embedded_metadata_richness(candidate: &CloudCandidate) -> usize {
             .iter()
             .filter(|evidence| evidence.source.starts_with("embedded:"))
             .count()
+}
+
+fn source_lineage_context_richness(candidate: &CloudCandidate) -> usize {
+    candidate.content_context.len()
 }
 
 fn filename_looks_like_copy(path: &str) -> bool {
@@ -3338,6 +3341,18 @@ fn recommend_exact_duplicate_canonical(
         reduced,
         remaining.len(),
         "richer-embedded-metadata-preferred",
+        "high",
+        &mut reasons,
+        &mut confidence,
+    );
+
+    let reduced = retain_max_by_key(&mut remaining, |index| {
+        source_lineage_context_richness(&candidates[index])
+    });
+    record_recommendation_stage(
+        reduced,
+        remaining.len(),
+        "richer-source-lineage-context-preferred",
         "high",
         &mut reasons,
         &mut confidence,
@@ -5397,6 +5412,83 @@ mod tests {
             .recommendation_reason_codes
             .contains(&"embedded-production-time-preferred".to_string()));
         assert!(embedded_copy.metadata_evidence.iter().any(|evidence| {
+            evidence.field == "exact-duplicate-canonical-recommendation"
+                && evidence.value == "preferred"
+        }));
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn canonical_recommendation_labels_source_lineage_separately_from_embedded_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let cloud = tmp.path().join("cloud");
+        writable_dir(&source);
+        writable_dir(&cloud);
+        for name in ["recording.m4a", "recording (1).m4a"] {
+            std::fs::write(source.join(name), b"same-recording").unwrap();
+        }
+        let production_time_ms = date_epoch_ms(2026, 2, 3).unwrap();
+        let common = ContentMetadata {
+            production_time_ms: Some(production_time_ms),
+            production_time_source: Some("embedded:test:creation-date".into()),
+            production_time_confidence: Some("high".into()),
+            title: Some("Recording".into()),
+            ..ContentMetadata::default()
+        };
+        let mut with_source_lineage = common.clone();
+        with_source_lineage.context = vec![
+            "download-origin-host=recorder.example".into(),
+            "download-agent=browser".into(),
+        ];
+        let files = [
+            ("recording.m4a", common),
+            ("recording (1).m4a", with_source_lineage),
+        ]
+        .into_iter()
+        .map(|(name, content_metadata)| {
+            let path = source.join(name);
+            let file_metadata = std::fs::metadata(&path).unwrap();
+            FileFact {
+                path,
+                bytes: file_metadata.len(),
+                created_ms: millis(file_metadata.created()),
+                modified_ms: millis(file_metadata.modified()),
+                content_metadata,
+            }
+        })
+        .collect::<Vec<_>>();
+
+        let report = plan_cloud_archive(
+            &files,
+            &source,
+            &root(CloudProvider::GoogleDrive, &cloud),
+            system_now_ms() + DAY_MS,
+            CloudPlanOptions {
+                min_size_bytes: 0,
+                min_age_days: 0,
+                limit: 10,
+            },
+        );
+
+        let cluster = &report.exact_duplicates.clusters[0];
+        let lineage_copy = report
+            .candidates
+            .iter()
+            .find(|candidate| candidate.relative_path == "recording (1).m4a")
+            .unwrap();
+        assert_eq!(
+            cluster.recommended_canonical_metadata_fingerprint,
+            lineage_copy.metadata_fingerprint
+        );
+        assert_eq!(cluster.recommendation_confidence, "high");
+        assert!(cluster
+            .recommendation_reason_codes
+            .contains(&"richer-source-lineage-context-preferred".to_string()));
+        assert!(!cluster
+            .recommendation_reason_codes
+            .contains(&"richer-embedded-metadata-preferred".to_string()));
+        assert!(lineage_copy.metadata_evidence.iter().any(|evidence| {
             evidence.field == "exact-duplicate-canonical-recommendation"
                 && evidence.value == "preferred"
         }));
