@@ -92,11 +92,24 @@ export interface PodmanStoreEvidence {
   containers_running: number;
   containers_stopped: number;
 }
+export interface PodmanSystemDfCategoryEvidence {
+  total: number;
+  active: number;
+  size_bytes: number;
+  reclaimable_bytes: number;
+}
+export interface PodmanSystemDfEvidence {
+  images: PodmanSystemDfCategoryEvidence;
+  containers: PodmanSystemDfCategoryEvidence;
+  local_volumes: PodmanSystemDfCategoryEvidence;
+}
 export type PodmanRecommendedActionKind =
   | "restore_guest_headroom"
   | "investigate_api"
   | "review_guest_trim"
-  | "review_stopped_containers";
+  | "review_stopped_containers"
+  | "review_unused_images"
+  | "review_unused_volumes";
 export interface PodmanRecommendedAction {
   kind: PodmanRecommendedActionKind;
   requires_human_approval: boolean;
@@ -112,8 +125,10 @@ export interface PodmanReclaimPlan {
   raw_image: RawImageEvidence | null;
   guest_filesystem: GuestFilesystemEvidence | null;
   store: PodmanStoreEvidence | null;
+  system_df: PodmanSystemDfEvidence | null;
   assessment: {
     physically_reclaimable_bytes: number | null;
+    podman_reported_reclaimable_bytes: number | null;
     raw_allocated_minus_guest_used_bytes: number | null;
     status: string;
     reason_codes: string[];

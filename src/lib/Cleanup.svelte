@@ -109,6 +109,8 @@
       case "investigate_api": return "Podman API 상태 조사";
       case "review_guest_trim": return "게스트 TRIM 전후 관측 검토";
       case "review_stopped_containers": return "중지 컨테이너 검토";
+      case "review_unused_images": return "미사용 이미지 검토";
+      case "review_unused_volumes": return "미사용 volume 검토";
     }
   }
 
@@ -178,6 +180,19 @@
         <p>
           이미지 {podmanPlan.store.images}개 · 컨테이너 {podmanPlan.store.containers_total}개
           (실행 {podmanPlan.store.containers_running}, 중지 {podmanPlan.store.containers_stopped})
+        </p>
+      {/if}
+      {#if podmanPlan.system_df}
+        <p>
+          Podman 보고 후보 · 이미지 {fmtBytes(podmanPlan.system_df.images.reclaimable_bytes)}
+          · 중지 컨테이너 {fmtBytes(podmanPlan.system_df.containers.reclaimable_bytes)}
+          · volume {fmtBytes(podmanPlan.system_df.local_volumes.reclaimable_bytes)}
+        </p>
+        <p class="note">
+          합계 {podmanPlan.assessment.podman_reported_reclaimable_bytes === null
+            ? "계산 불가"
+            : fmtBytes(podmanPlan.assessment.podman_reported_reclaimable_bytes)}는 Podman의
+          논리적 후보이며 host 물리 회수 보장이 아닙니다. 이미지와 volume은 별도로 승인합니다.
         </p>
       {/if}
       {#if podmanPlan.assessment.recommended_actions.length > 0}

@@ -48,6 +48,23 @@ pub struct PodmanStoreEvidence {
     pub containers_stopped: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PodmanSystemDfCategoryEvidence {
+    pub total: u64,
+    pub active: u64,
+    /// Podman-reported logical/shared size. This is not host physical allocation.
+    pub size_bytes: u64,
+    /// Podman-reported candidate bytes. This is not host physical reclaim proof.
+    pub reclaimable_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PodmanSystemDfEvidence {
+    pub images: PodmanSystemDfCategoryEvidence,
+    pub containers: PodmanSystemDfCategoryEvidence,
+    pub local_volumes: PodmanSystemDfCategoryEvidence,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PodmanRecommendedActionKind {
@@ -55,6 +72,8 @@ pub enum PodmanRecommendedActionKind {
     InvestigateApi,
     ReviewGuestTrim,
     ReviewStoppedContainers,
+    ReviewUnusedImages,
+    ReviewUnusedVolumes,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -68,6 +87,8 @@ pub struct PodmanRecommendedAction {
 pub struct PodmanReclaimAssessment {
     /// Intentionally unknown until a before/after host free-space observation proves reclaim.
     pub physically_reclaimable_bytes: Option<u64>,
+    /// Sum reported by `podman system df`; shared layers and the VM raw image make this non-physical.
+    pub podman_reported_reclaimable_bytes: Option<u64>,
     /// Observed allocation gap only; filesystem metadata and sparse extents make it non-proof.
     pub raw_allocated_minus_guest_used_bytes: Option<u64>,
     pub status: String,
@@ -86,6 +107,7 @@ pub struct PodmanReclaimPlan {
     pub raw_image: Option<RawImageEvidence>,
     pub guest_filesystem: Option<GuestFilesystemEvidence>,
     pub store: Option<PodmanStoreEvidence>,
+    pub system_df: Option<PodmanSystemDfEvidence>,
     pub assessment: PodmanReclaimAssessment,
     pub issues: Vec<String>,
 }
@@ -118,6 +140,20 @@ struct MachineInspectRecord {
 struct MachineConfig {
     #[serde(rename = "ImagePath")]
     image_path: PathField,
+}
+
+#[derive(Debug, Deserialize)]
+struct PodmanSystemDfRecord {
+    #[serde(rename = "Type")]
+    kind: String,
+    #[serde(rename = "Total")]
+    total: u64,
+    #[serde(rename = "Active")]
+    active: u64,
+    #[serde(rename = "RawSize")]
+    size_bytes: u64,
+    #[serde(rename = "RawReclaimable")]
+    reclaimable_bytes: u64,
 }
 
 fn valid_machine_name(value: &str) -> bool {
@@ -222,6 +258,40 @@ fn parse_podman_info(output: &str) -> Result<PodmanStoreEvidence, String> {
     })
 }
 
+fn parse_podman_system_df(output: &str) -> Result<PodmanSystemDfEvidence, String> {
+    let records: Vec<PodmanSystemDfRecord> = serde_json::from_str(output)
+        .map_err(|error| format!("invalid-podman-system-df-json:{error}"))?;
+    let mut images = None;
+    let mut containers = None;
+    let mut local_volumes = None;
+    for record in records {
+        if record.active > record.total || record.reclaimable_bytes > record.size_bytes {
+            return Err("podman-system-df-inconsistent".to_string());
+        }
+        let category = PodmanSystemDfCategoryEvidence {
+            total: record.total,
+            active: record.active,
+            size_bytes: record.size_bytes,
+            reclaimable_bytes: record.reclaimable_bytes,
+        };
+        let slot = match record.kind.as_str() {
+            "Images" => &mut images,
+            "Containers" => &mut containers,
+            "Local Volumes" => &mut local_volumes,
+            value => return Err(format!("podman-system-df-unknown-type:{value}")),
+        };
+        if slot.replace(category).is_some() {
+            return Err("podman-system-df-duplicate-type".to_string());
+        }
+    }
+    Ok(PodmanSystemDfEvidence {
+        images: images.ok_or_else(|| "podman-system-df-missing-images".to_string())?,
+        containers: containers.ok_or_else(|| "podman-system-df-missing-containers".to_string())?,
+        local_volumes: local_volumes
+            .ok_or_else(|| "podman-system-df-missing-local-volumes".to_string())?,
+    })
+}
+
 fn raw_image_evidence(path: &Path) -> Result<RawImageEvidence, String> {
     let metadata =
         fs::symlink_metadata(path).map_err(|error| format!("raw-image-metadata:{error}"))?;
@@ -304,6 +374,7 @@ fn assess(
     raw_image: Option<&RawImageEvidence>,
     guest: Option<&GuestFilesystemEvidence>,
     store: Option<&PodmanStoreEvidence>,
+    system_df: Option<&PodmanSystemDfEvidence>,
     issues: &[String],
 ) -> PodmanReclaimAssessment {
     let mut reason_codes = vec!["host-physical-reclaim-unverified".to_string()];
@@ -362,6 +433,38 @@ fn assess(
         });
     }
 
+    let podman_reported_reclaimable_bytes = system_df.and_then(|evidence| {
+        evidence
+            .images
+            .reclaimable_bytes
+            .checked_add(evidence.containers.reclaimable_bytes)?
+            .checked_add(evidence.local_volumes.reclaimable_bytes)
+    });
+    if let Some(evidence) = system_df {
+        if evidence.images.reclaimable_bytes > 0 {
+            reason_codes.push("podman-unused-images-reported".to_string());
+            recommended_actions.push(PodmanRecommendedAction {
+                kind: PodmanRecommendedActionKind::ReviewUnusedImages,
+                requires_human_approval: true,
+                rationale: format!(
+                    "Podman이 미사용 이미지 후보 {}바이트를 보고했습니다. 재다운로드 비용과 참조 상태를 검토합니다.",
+                    evidence.images.reclaimable_bytes
+                ),
+            });
+        }
+        if evidence.local_volumes.reclaimable_bytes > 0 {
+            reason_codes.push("podman-unused-volumes-reported".to_string());
+            recommended_actions.push(PodmanRecommendedAction {
+                kind: PodmanRecommendedActionKind::ReviewUnusedVolumes,
+                requires_human_approval: true,
+                rationale: format!(
+                    "Podman이 미사용 volume 후보 {}바이트를 보고했습니다. 데이터 보존 여부를 별도 승인합니다.",
+                    evidence.local_volumes.reclaimable_bytes
+                ),
+            });
+        }
+    }
+
     if !issues.is_empty() {
         reason_codes.push("partial-evidence".to_string());
     }
@@ -369,6 +472,7 @@ fn assess(
     reason_codes.dedup();
     PodmanReclaimAssessment {
         physically_reclaimable_bytes: None,
+        podman_reported_reclaimable_bytes,
         raw_allocated_minus_guest_used_bytes: gap,
         status: "unverified".to_string(),
         reason_codes,
@@ -469,27 +573,49 @@ pub fn probe_podman_reclaim(
         .ok()
     });
 
+    let system_df = inspect.as_ref().and_then(|_| {
+        command_text(
+            podman_bin,
+            &[
+                "--connection",
+                requested_machine,
+                "system",
+                "df",
+                "--format",
+                "json",
+            ],
+            timeout,
+            "podman-system-df",
+        )
+        .and_then(|output| parse_podman_system_df(&output))
+        .map_err(|error| issues.push(error))
+        .ok()
+    });
+
     let assessment = assess(
         machine.as_ref(),
         raw_image.as_ref(),
         guest_filesystem.as_ref(),
         store.as_ref(),
+        system_df.as_ref(),
         &issues,
     );
     PodmanReclaimPlan {
         schema_kind: PODMAN_RECLAIM_SCHEMA_KIND,
-        schema_version: 1,
+        schema_version: 2,
         platform: std::env::consts::OS,
         evidence_complete: issues.is_empty()
             && machine.is_some()
             && raw_image.is_some()
             && guest_filesystem.is_some()
-            && store.is_some(),
+            && store.is_some()
+            && system_df.is_some(),
         elapsed_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
         machine,
         raw_image,
         guest_filesystem,
         store,
+        system_df,
         assessment,
         issues,
     }
@@ -501,6 +627,7 @@ mod tests {
 
     const INSPECT: &str = r#"[{"ConfigDir":{"Path":"/tmp/podman"},"Name":"podman-machine-default","State":"running","Resources":{"DiskSize":100}}]"#;
     const INFO: &str = r#"{"store":{"graphRoot":"/var/home/core/.local/share/containers/storage","graphRootAllocated":106769133568,"graphRootUsed":36028432384,"imageStore":{"number":35},"containerStore":{"number":9,"running":0,"stopped":9}}}"#;
+    const SYSTEM_DF: &str = r#"[{"Type":"Images","Total":46,"Active":39,"RawSize":18998832893,"RawReclaimable":14203017596},{"Type":"Containers","Total":9,"Active":0,"RawSize":96085,"RawReclaimable":96085},{"Type":"Local Volumes","Total":69,"Active":7,"RawSize":3107287618,"RawReclaimable":2889662821}]"#;
 
     #[test]
     fn parses_machine_and_guest_evidence() {
@@ -525,8 +652,11 @@ mod tests {
     #[test]
     fn parses_store_counts_without_claiming_reclaim() {
         let store = parse_podman_info(INFO).unwrap();
+        let system_df = parse_podman_system_df(SYSTEM_DF).unwrap();
         assert_eq!(store.images, 35);
         assert_eq!(store.containers_stopped, 9);
+        assert_eq!(system_df.images.reclaimable_bytes, 14_203_017_596);
+        assert_eq!(system_df.local_volumes.active, 7);
         let guest = GuestFilesystemEvidence {
             total_bytes: 100 * GIB,
             used_bytes: 30 * GIB,
@@ -537,8 +667,19 @@ mod tests {
             logical_bytes: 100 * GIB,
             allocated_bytes: Some(70 * GIB),
         };
-        let result = assess(None, Some(&raw), Some(&guest), Some(&store), &[]);
+        let result = assess(
+            None,
+            Some(&raw),
+            Some(&guest),
+            Some(&store),
+            Some(&system_df),
+            &[],
+        );
         assert_eq!(result.physically_reclaimable_bytes, None);
+        assert_eq!(
+            result.podman_reported_reclaimable_bytes,
+            Some(17_092_776_502)
+        );
         assert_eq!(result.raw_allocated_minus_guest_used_bytes, Some(40 * GIB));
         assert!(result
             .reason_codes
@@ -565,6 +706,7 @@ mod tests {
             None,
             Some(&guest),
             None,
+            None,
             &["podman-info-timeout".into()],
         );
         assert!(result
@@ -588,6 +730,19 @@ mod tests {
     }
 
     #[test]
+    fn system_df_rejects_missing_duplicate_or_inconsistent_categories() {
+        assert!(parse_podman_system_df("[]").is_err());
+        assert!(parse_podman_system_df(
+            r#"[{"Type":"Images","Total":1,"Active":2,"RawSize":1,"RawReclaimable":0}]"#
+        )
+        .is_err());
+        assert!(parse_podman_system_df(
+            r#"[{"Type":"Images","Total":1,"Active":0,"RawSize":1,"RawReclaimable":0},{"Type":"Images","Total":1,"Active":0,"RawSize":1,"RawReclaimable":0}]"#
+        )
+        .is_err());
+    }
+
+    #[test]
     fn serialized_contract_keeps_reclaim_unknown_and_action_codes_stable() {
         let plan = PodmanReclaimPlan {
             schema_kind: PODMAN_RECLAIM_SCHEMA_KIND,
@@ -599,8 +754,10 @@ mod tests {
             raw_image: None,
             guest_filesystem: None,
             store: None,
+            system_df: None,
             assessment: PodmanReclaimAssessment {
                 physically_reclaimable_bytes: None,
+                podman_reported_reclaimable_bytes: None,
                 raw_allocated_minus_guest_used_bytes: None,
                 status: "unverified".into(),
                 reason_codes: vec!["host-physical-reclaim-unverified".into()],
