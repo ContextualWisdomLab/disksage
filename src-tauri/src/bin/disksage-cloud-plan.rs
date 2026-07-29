@@ -5,6 +5,10 @@ embed_plist::embed_info_plist!("../../disksage-cloud-plan.Info.plist");
 
 #[cfg(not(coverage))]
 use std::collections::BTreeMap;
+#[cfg(all(not(coverage), unix))]
+use std::fs::OpenOptions;
+#[cfg(all(not(coverage), unix))]
+use std::io::Write;
 #[cfg(not(coverage))]
 use std::path::{Path, PathBuf};
 
@@ -30,6 +34,8 @@ use disksage_lib::provider_evidence::{self, ProviderSyncEvidenceRecord};
 use disksage_lib::provider_oauth;
 #[cfg(not(coverage))]
 use disksage_lib::provider_sync;
+#[cfg(all(not(coverage), unix))]
+use sha2::{Digest, Sha256};
 
 #[cfg(not(coverage))]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,6 +52,7 @@ struct Args {
     verify_capacity: bool,
     decision_summary: bool,
     review_reason_set: Option<Vec<String>>,
+    private_review_output: Option<PathBuf>,
     exact_duplicate_review_prefix: Option<String>,
     exact_duplicate_kind: Option<ArchiveKind>,
     capacity_reserve_mib: u64,
@@ -162,6 +169,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
         verify_capacity: false,
         decision_summary: false,
         review_reason_set: None,
+        private_review_output: None,
         exact_duplicate_review_prefix: None,
         exact_duplicate_kind: None,
         capacity_reserve_mib: 1024,
@@ -225,6 +233,16 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
                     &mut index,
                     "--review-reason-set",
                 )?)?);
+            }
+            "--private-review-output" => {
+                if parsed.private_review_output.is_some() {
+                    return Err("--private-review-output은 한 번만 지정할 수 있음".into());
+                }
+                parsed.private_review_output = Some(PathBuf::from(value(
+                    args,
+                    &mut index,
+                    "--private-review-output",
+                )?));
             }
             "--exact-duplicate-review-prefix" => {
                 if parsed.exact_duplicate_review_prefix.is_some() {
@@ -368,7 +386,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             }
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary] [--min-size-mib N] [--min-age-days N] [--limit N] [--decision-summary [--review-reason-set REASON|REASON] | --exact-duplicate-review-prefix DIR_PREFIX --exact-duplicate-kind document|media|archive|dataset|backup|creative|incomplete-download] [--verify-capacity [--oauth-connections ABSOLUTE_PATH]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
+                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary] [--min-size-mib N] [--min-age-days N] [--limit N] [--decision-summary [--review-reason-set REASON|REASON [--private-review-output ABSOLUTE_NEW_FILE.json]] | --exact-duplicate-review-prefix DIR_PREFIX --exact-duplicate-kind document|media|archive|dataset|backup|creative|incomplete-download] [--verify-capacity [--oauth-connections ABSOLUTE_PATH]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -572,6 +590,16 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     if args.review_reason_set.is_some() && !args.decision_summary {
         return Err("--review-reason-set에는 --decision-summary가 필요함".into());
     }
+    if args.private_review_output.is_some()
+        && (!args.decision_summary || args.review_reason_set.is_none())
+    {
+        return Err(
+            "--private-review-output에는 --decision-summary와 --review-reason-set이 필요함".into(),
+        );
+    }
+    if args.private_review_output.is_some() && args.all_readable_roots {
+        return Err("--private-review-output은 단일 cloud destination에서만 사용할 수 있음".into());
+    }
     if actions > 1 {
         return Err(
             "root inspection, copy, adoption, attestation, eviction, review action은 동시에 사용할 수 없음".into(),
@@ -615,6 +643,11 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     if let Some(connection_path) = &args.oauth_connections {
         if !connection_path.is_absolute() {
             return Err("--oauth-connections는 절대 경로여야 함".into());
+        }
+    }
+    if let Some(output_path) = &args.private_review_output {
+        if !output_path.is_absolute() {
+            return Err("--private-review-output은 절대 경로여야 함".into());
         }
     }
     if let Some(receipt_path) = &args.evict_receipt {
@@ -815,6 +848,8 @@ fn redacted_decision(candidate: &cloud::CloudCandidate) -> serde_json::Value {
 
 #[cfg(not(coverage))]
 const REVIEW_BATCH_FINGERPRINT_VERSION: u32 = 2;
+#[cfg(not(coverage))]
+const PRIVATE_REVIEW_DOSSIER_MAX_BYTES: usize = 16 * 1024 * 1024;
 
 #[cfg(not(coverage))]
 fn review_batch_fingerprint(
@@ -851,14 +886,11 @@ fn review_batch_fingerprint(
     hasher.finalize().to_hex().to_string()
 }
 
-/// Produce an exact reason-set slice for inspection. The stable subset fingerprint binds only the
-/// selected evidence; the separate decision-batch fingerprint records full-plan freshness. Neither
-/// is approval: every approve/hold decision remains individually attributed and candidate-bound.
 #[cfg(not(coverage))]
-fn review_batch_summary(
-    report: &cloud::CloudPlanReport,
+fn exact_review_candidates<'a>(
+    report: &'a cloud::CloudPlanReport,
     reasons: &[String],
-) -> Result<serde_json::Value, String> {
+) -> Result<Vec<&'a cloud::CloudCandidate>, String> {
     let candidates = report
         .candidates
         .iter()
@@ -870,6 +902,18 @@ fn review_batch_summary(
     if candidates.is_empty() {
         return Err("현재 fresh plan에 exact review reason set이 일치하는 후보가 없음".into());
     }
+    Ok(candidates)
+}
+
+/// Produce an exact reason-set slice for inspection. The stable subset fingerprint binds only the
+/// selected evidence; the separate decision-batch fingerprint records full-plan freshness. Neither
+/// is approval: every approve/hold decision remains individually attributed and candidate-bound.
+#[cfg(not(coverage))]
+fn review_batch_summary(
+    report: &cloud::CloudPlanReport,
+    reasons: &[String],
+) -> Result<serde_json::Value, String> {
+    let candidates = exact_review_candidates(report, reasons)?;
     let candidate_bytes = candidates.iter().fold(0u64, |total, candidate| {
         total.saturating_add(candidate.bytes)
     });
@@ -916,6 +960,127 @@ fn review_batch_summary(
         ],
         "decisions": decisions,
     }))
+}
+
+/// Build the private, full-evidence counterpart of an exact reason-set review summary.
+///
+/// Unlike `review_batch_summary`, this value intentionally contains sensitive local paths and raw
+/// embedded metadata. It must only be written through `write_private_review_dossier`.
+#[cfg(not(coverage))]
+fn private_review_dossier(
+    report: &cloud::CloudPlanReport,
+    reasons: &[String],
+) -> Result<serde_json::Value, String> {
+    let mut candidates = exact_review_candidates(report, reasons)?;
+    candidates.sort_by(|left, right| {
+        left.metadata_fingerprint
+            .cmp(&right.metadata_fingerprint)
+            .then_with(|| left.review_fingerprint.cmp(&right.review_fingerprint))
+    });
+    let candidate_bytes = candidates.iter().fold(0u64, |total, candidate| {
+        total.saturating_add(candidate.bytes)
+    });
+    let review_batch_fingerprint = review_batch_fingerprint(report, reasons, &candidates);
+
+    Ok(serde_json::json!({
+        "schema_version": 1,
+        "output_mode": "private-review-dossier",
+        "generated_at_ms": report.generated_at_ms,
+        "contains_sensitive_local_metadata": true,
+        "decision_batch_fingerprint_version": cloud::CLOUD_DECISION_BATCH_FINGERPRINT_VERSION,
+        "decision_batch_fingerprint": cloud::cloud_decision_batch_fingerprint(report),
+        "review_batch_fingerprint_version": REVIEW_BATCH_FINGERPRINT_VERSION,
+        "review_batch_fingerprint": review_batch_fingerprint,
+        "reason_set": reasons,
+        "cloud_root": &report.cloud_root,
+        "candidate_count": candidates.len(),
+        "candidate_bytes": candidate_bytes,
+        "metadata_policy": {
+            "production_time_precedence": [
+                "embedded-metadata",
+                "explicit-filename-date",
+                "filesystem-created",
+                "filesystem-modified",
+            ],
+            "filename_dates_are_auxiliary": true,
+            "raw_metadata_values_are_review_evidence_only": true,
+            "dossier_is_not_approval": true,
+            "candidate_review_decisions_remain_individual": true,
+        },
+        "candidates": candidates,
+    }))
+}
+
+#[cfg(all(not(coverage), unix))]
+fn write_private_review_dossier(
+    path: &Path,
+    dossier: &serde_json::Value,
+) -> Result<(String, usize), String> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| "private-review-output-parent-missing".to_string())?;
+    let parent_metadata = std::fs::symlink_metadata(parent)
+        .map_err(|_| "private-review-output-parent-unavailable".to_string())?;
+    if !parent_metadata.is_dir() || parent_metadata.file_type().is_symlink() {
+        return Err("private-review-output-parent-unsafe".into());
+    }
+
+    let encoded = serde_json::to_vec_pretty(dossier)
+        .map_err(|_| "private-review-output-json-invalid".to_string())?;
+    if encoded.len() > PRIVATE_REVIEW_DOSSIER_MAX_BYTES {
+        return Err("private-review-output-too-large".into());
+    }
+
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(path)
+        .map_err(|_| "private-review-output-create-failed".to_string())?;
+    let result = (|| -> Result<(), String> {
+        file.write_all(&encoded)
+            .and_then(|_| file.sync_all())
+            .map_err(|_| "private-review-output-write-failed".to_string())?;
+        let metadata = file
+            .metadata()
+            .map_err(|_| "private-review-output-metadata-failed".to_string())?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err("private-review-output-unsafe".into());
+        }
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if metadata.permissions().mode() & 0o777 != 0o600 {
+                return Err("private-review-output-mode-invalid".into());
+            }
+            std::fs::File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|_| "private-review-output-parent-sync-failed".to_string())?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = result {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err(error);
+    }
+
+    let sha256 = Sha256::digest(&encoded)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Ok((sha256, encoded.len()))
+}
+
+#[cfg(all(not(coverage), not(unix)))]
+fn write_private_review_dossier(
+    _path: &Path,
+    _dossier: &serde_json::Value,
+) -> Result<(String, usize), String> {
+    Err("private-review-output-secure-mode-unsupported".into())
 }
 
 #[cfg(not(coverage))]
@@ -1974,10 +2139,33 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
     if args.decision_summary {
-        let summary = match args.review_reason_set.as_deref() {
+        let mut summary = match args.review_reason_set.as_deref() {
             Some(reasons) => review_batch_summary(&report, reasons)?,
             None => decision_summary(&report),
         };
+        if let Some(output_path) = &args.private_review_output {
+            let reasons = args
+                .review_reason_set
+                .as_deref()
+                .ok_or_else(|| "private review reason set이 없음".to_string())?;
+            let dossier = private_review_dossier(&report, reasons)?;
+            let (sha256, bytes) = write_private_review_dossier(output_path, &dossier)?;
+            summary
+                .as_object_mut()
+                .ok_or_else(|| "review summary JSON object가 아님".to_string())?
+                .insert(
+                    "private_review_dossier".into(),
+                    serde_json::json!({
+                        "written": true,
+                        "bytes": bytes,
+                        "sha256": sha256,
+                        "unix_mode": "0600",
+                        "create_new": true,
+                        "contains_sensitive_local_metadata": true,
+                        "is_approval": false,
+                    }),
+                );
+        }
         println!(
             "{}",
             serde_json::to_string_pretty(&summary).map_err(|e| e.to_string())?
@@ -2035,6 +2223,7 @@ mod tests {
         assert!(!defaults.decision_summary);
         assert!(!defaults.all_readable_roots);
         assert!(defaults.review_reason_set.is_none());
+        assert!(defaults.private_review_output.is_none());
         assert!(defaults.exact_duplicate_review_prefix.is_none());
         assert!(defaults.exact_duplicate_kind.is_none());
         assert_eq!(defaults.capacity_reserve_mib, 1024);
@@ -2052,6 +2241,8 @@ mod tests {
             "--decision-summary".into(),
             "--review-reason-set".into(),
             "metadata-review-required|download-origin-needs-destination-review".into(),
+            "--private-review-output".into(),
+            "/private-review.json".into(),
             "--verify-capacity".into(),
             "--capacity-reserve-mib".into(),
             "2048".into(),
@@ -2071,6 +2262,10 @@ mod tests {
                 "download-origin-needs-destination-review".into(),
                 "metadata-review-required".into(),
             ])
+        );
+        assert_eq!(
+            parsed.private_review_output,
+            Some(PathBuf::from("/private-review.json"))
         );
         assert_eq!(parsed.capacity_reserve_mib, 2048);
 
@@ -2203,6 +2398,27 @@ mod tests {
         )
         .unwrap();
         assert!(validate_action_args(&reason_set_summary).is_ok());
+        let private_review = parse_args(
+            &[
+                "--decision-summary".into(),
+                "--review-reason-set".into(),
+                "destination-account-scope-unknown".into(),
+                "--private-review-output".into(),
+                "/private/review.json".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&private_review).is_ok());
+        let mut relative_private_review = private_review.clone();
+        relative_private_review.private_review_output = Some(PathBuf::from("review.json"));
+        assert!(validate_action_args(&relative_private_review).is_err());
+        let mut missing_reason_set = private_review.clone();
+        missing_reason_set.review_reason_set = None;
+        assert!(validate_action_args(&missing_reason_set).is_err());
+        let mut multicloud_private_review = private_review;
+        multicloud_private_review.all_readable_roots = true;
+        assert!(validate_action_args(&multicloud_private_review).is_err());
         for prefix in ["", ".", "..", "nested/path", "nested\\path", "line\nbreak"] {
             assert!(parse_args(
                 &[
@@ -2501,6 +2717,53 @@ mod tests {
             assert!(!encoded_batch.contains(redacted));
         }
         assert!(review_batch_summary(&report, &["not-present".into()]).is_err());
+
+        let dossier = private_review_dossier(&report, &reason_set).unwrap();
+        assert_eq!(dossier["output_mode"], "private-review-dossier");
+        assert_eq!(
+            dossier["review_batch_fingerprint"],
+            review_batch["review_batch_fingerprint"]
+        );
+        assert_eq!(dossier["candidate_count"], 1);
+        assert_eq!(dossier["candidate_bytes"], 42);
+        assert_eq!(
+            dossier["metadata_policy"]["filename_dates_are_auxiliary"],
+            true
+        );
+        assert_eq!(
+            dossier["metadata_policy"]["candidate_review_decisions_remain_individual"],
+            true
+        );
+        let encoded_dossier = serde_json::to_string(&dossier).unwrap();
+        for private_value in [
+            "/Users/private",
+            "private@example.com",
+            "Confidential title",
+            "Private Author",
+            "private raw value",
+        ] {
+            assert!(encoded_dossier.contains(private_value));
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let private_dir = tempfile::tempdir().unwrap();
+            let private_path = private_dir.path().join("review.json");
+            let (sha256, bytes) = write_private_review_dossier(&private_path, &dossier).unwrap();
+            assert_eq!(sha256.len(), 64);
+            assert!(bytes > 0);
+            assert_eq!(std::fs::read(&private_path).unwrap().len(), bytes);
+            assert!(write_private_review_dossier(&private_path, &dossier).is_err());
+            assert_eq!(
+                std::fs::metadata(&private_path)
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
 
         let mut mixed = report.clone();
         let mut ready = mixed.candidates[0].clone();
