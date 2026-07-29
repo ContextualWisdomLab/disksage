@@ -188,6 +188,17 @@
           · 중지 컨테이너 {fmtBytes(podmanPlan.system_df.containers.reclaimable_bytes)}
           · volume {fmtBytes(podmanPlan.system_df.local_volumes.reclaimable_bytes)}
         </p>
+        {#if podmanPlan.unused_images}
+          <p>
+            exact 미사용 image record {podmanPlan.unused_images.unused_records}개
+            (untagged {podmanPlan.unused_images.unused_untagged_records},
+            tagged {podmanPlan.unused_images.unused_tagged_records})
+            · record size 합계 {fmtBytes(podmanPlan.unused_images.candidate_record_size_sum)}
+          </p>
+          <p class="note">
+            후보 집합 SHA-256 {podmanPlan.unused_images.candidate_set_sha256.slice(0, 12)}…
+          </p>
+        {/if}
         <p class="note">
           합계 {podmanPlan.assessment.podman_reported_reclaimable_bytes === null
             ? "계산 불가"

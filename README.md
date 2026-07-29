@@ -43,8 +43,10 @@ cargo run --manifest-path src-tauri/Cargo.toml --bin disksage-podman-reclaim-pla
 ```
 
 This bounded Rust probe separates the guest filesystem, Podman store, raw image logical size, and
-observed host allocation. Schema version 2 also records `podman system df` image, stopped-container,
-and local-volume candidate bytes separately. It emits
+observed host allocation. Schema version 3 records `podman system df` image, stopped-container,
+and local-volume candidate bytes separately, then cross-checks the image total against exact
+container-reference-free image records. The exact image IDs remain redacted behind a candidate-set
+SHA-256. It emits
 `schema_kind: disksage.podman-reclaim-plan` and never prunes images, removes containers or volumes,
 changes machine state, or runs TRIM. Podman/guest reported space is not promoted to host physical
 reclaim proof; image and volume decisions remain separately human-approved and must be verified

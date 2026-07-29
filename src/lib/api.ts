@@ -103,6 +103,15 @@ export interface PodmanSystemDfEvidence {
   containers: PodmanSystemDfCategoryEvidence;
   local_volumes: PodmanSystemDfCategoryEvidence;
 }
+export interface PodmanUnusedImageEvidence {
+  total_records: number;
+  referenced_records: number;
+  unused_records: number;
+  unused_untagged_records: number;
+  unused_tagged_records: number;
+  candidate_record_size_sum: number;
+  candidate_set_sha256: string;
+}
 export type PodmanRecommendedActionKind =
   | "restore_guest_headroom"
   | "investigate_api"
@@ -126,6 +135,7 @@ export interface PodmanReclaimPlan {
   guest_filesystem: GuestFilesystemEvidence | null;
   store: PodmanStoreEvidence | null;
   system_df: PodmanSystemDfEvidence | null;
+  unused_images: PodmanUnusedImageEvidence | null;
   assessment: {
     physically_reclaimable_bytes: number | null;
     podman_reported_reclaimable_bytes: number | null;
