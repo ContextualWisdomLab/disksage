@@ -1,50 +1,51 @@
 // coverage 빌드(비-테스트)에서는 run()이 빠져 모듈 내용이 테스트에서만 쓰이므로 dead_code만 허용
-#[cfg_attr(coverage, allow(dead_code))]
-mod dupes;
-#[cfg_attr(coverage, allow(dead_code))]
-mod commands;
-#[cfg_attr(coverage, allow(dead_code))]
-mod scanner;
-#[cfg_attr(coverage, allow(dead_code))]
-mod userrules;
-#[cfg_attr(coverage, allow(dead_code))]
-mod settings;
-#[cfg_attr(coverage, allow(dead_code))]
-mod safety;
-#[cfg_attr(coverage, allow(dead_code))]
-mod rules;
-#[cfg_attr(coverage, allow(dead_code))]
-mod dev_artifacts;
-#[cfg_attr(coverage, allow(dead_code))]
-mod ontology;
-#[cfg_attr(coverage, allow(dead_code))]
-mod inventory;
-#[cfg_attr(coverage, allow(dead_code))]
-mod organize;
-#[cfg_attr(coverage, allow(dead_code))]
-mod llm;
-#[cfg_attr(coverage, allow(dead_code))]
-mod web;
-#[cfg_attr(coverage, allow(dead_code))]
-mod reasoning;
-#[cfg_attr(coverage, allow(dead_code))]
-mod dataset_metadata;
 pub mod archive_git_tree;
 #[cfg_attr(coverage, allow(dead_code))]
 pub mod cloud;
-pub mod cloud_local_inventory;
-pub mod cloud_local_eviction;
 #[cfg(not(coverage))]
 pub mod cloud_eviction;
+pub mod cloud_local_eviction;
+pub mod cloud_local_inventory;
 pub mod cloud_review;
 pub mod cloud_transfer;
+#[cfg_attr(coverage, allow(dead_code))]
+mod commands;
 pub mod content_digest;
+#[cfg_attr(coverage, allow(dead_code))]
+mod dataset_metadata;
+#[cfg_attr(coverage, allow(dead_code))]
+mod dev_artifacts;
+#[cfg_attr(coverage, allow(dead_code))]
+mod dupes;
+#[cfg_attr(coverage, allow(dead_code))]
+mod inventory;
+#[cfg_attr(coverage, allow(dead_code))]
+mod llm;
+pub mod maven_cache;
 pub mod naruon_lineage;
+#[cfg_attr(coverage, allow(dead_code))]
+mod ontology;
+#[cfg_attr(coverage, allow(dead_code))]
+mod organize;
 pub mod provider_api_client;
 pub mod provider_capacity;
 pub mod provider_evidence;
 pub mod provider_oauth;
 pub mod provider_sync;
+#[cfg_attr(coverage, allow(dead_code))]
+mod reasoning;
+#[cfg_attr(coverage, allow(dead_code))]
+mod rules;
+#[cfg_attr(coverage, allow(dead_code))]
+mod safety;
+#[cfg_attr(coverage, allow(dead_code))]
+mod scanner;
+#[cfg_attr(coverage, allow(dead_code))]
+mod settings;
+#[cfg_attr(coverage, allow(dead_code))]
+mod userrules;
+#[cfg_attr(coverage, allow(dead_code))]
+mod web;
 
 // coverage 빌드에서 제외 — GUI 런타임은 헤드리스 테스트로 실행 불가
 #[cfg(not(coverage))]
