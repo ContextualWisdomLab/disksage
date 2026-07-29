@@ -117,6 +117,22 @@ fn write_new_private_json(path: &PathBuf, encoded: &[u8]) -> Result<(), String> 
         .map_err(|_| "maven-cache-audit-output-sync-failed".to_string())
 }
 
+fn output_summary(path: &PathBuf, report: &MavenCacheAuditReport) -> Result<String, String> {
+    serde_json::to_string(&serde_json::json!({
+        "schema_kind": report.schema_kind,
+        "output": path.to_string_lossy(),
+        "candidate_set_fingerprint": report.candidate_set_fingerprint,
+        "remote_recoverable_directories": report.remote_recoverable_directories,
+        "remote_recoverable_bytes": report.remote_recoverable_bytes,
+        "held_directories": report.held_directories,
+        "scan_truncated": report.scan_truncated,
+        "candidate_output_truncated": report.candidate_output_truncated,
+        "truncated": report.truncated,
+        "provider_write_executed": report.provider_write_executed,
+    }))
+    .map_err(|error| error.to_string())
+}
+
 fn run() -> Result<(), String> {
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let args = parse_args(&raw)?;
@@ -124,18 +140,7 @@ fn run() -> Result<(), String> {
     let encoded = serde_json::to_vec_pretty(&report).map_err(|error| error.to_string())?;
     if let Some(output) = &args.output {
         write_new_private_json(output, &encoded)?;
-        println!(
-            "{{\"schema_kind\":\"{}\",\"output\":\"{}\",\"candidate_set_fingerprint\":\"{}\",\"remote_recoverable_directories\":{},\"remote_recoverable_bytes\":{},\"held_directories\":{},\"scan_truncated\":{},\"candidate_output_truncated\":{},\"truncated\":{},\"provider_write_executed\":false}}",
-            report.schema_kind,
-            output.to_string_lossy(),
-            report.candidate_set_fingerprint,
-            report.remote_recoverable_directories,
-            report.remote_recoverable_bytes,
-            report.held_directories,
-            report.scan_truncated,
-            report.candidate_output_truncated,
-            report.truncated,
-        );
+        println!("{}", output_summary(output, &report)?);
     } else {
         println!("{}", String::from_utf8_lossy(&encoded));
     }
@@ -212,5 +217,20 @@ mod tests {
                 0o600
             );
         }
+    }
+
+    #[test]
+    fn output_summary_escapes_unusual_path_characters_as_valid_json() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("repository");
+        std::fs::create_dir(&root).unwrap();
+        let report = audit_maven_repository(&root, MavenCacheAuditOptions::default(), 123).unwrap();
+        let output = PathBuf::from("/tmp/audit-\"quoted\"\nline.json");
+
+        let encoded = output_summary(&output, &report).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+
+        assert_eq!(parsed["output"], output.to_string_lossy().as_ref());
+        assert_eq!(parsed["provider_write_executed"], false);
     }
 }
