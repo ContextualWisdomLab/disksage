@@ -17,6 +17,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [[bin]]
 name = "disksage-volume-snapshot"
 path = "src/bin/disksage-volume-snapshot.rs"
+required-features = ["volume-cli"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -41,6 +42,7 @@ fs4 = "1.1.0"
 tempfile = "3.27.0"
 
 [features]
+volume-cli = []
 llm-engine = ["dep:llama-cpp-2"]
 
 [lints.rust]

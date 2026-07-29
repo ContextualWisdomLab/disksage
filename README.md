@@ -25,6 +25,7 @@ DiskSage can capture a read-only, path-redacted filesystem-capacity snapshot:
 
 ```sh
 cargo run --manifest-path src-tauri/Cargo.toml \
+  --features volume-cli \
   --bin disksage-volume-snapshot -- --path /System/Volumes/Data
 ```
 
@@ -36,6 +37,7 @@ To compare a fresh observation with a previously saved snapshot:
 
 ```sh
 cargo run --manifest-path src-tauri/Cargo.toml \
+  --features volume-cli \
   --bin disksage-volume-snapshot -- \
   --path /System/Volumes/Data \
   --baseline before.json \
