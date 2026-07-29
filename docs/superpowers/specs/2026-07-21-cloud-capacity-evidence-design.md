@@ -26,6 +26,23 @@ Google Workspace pooled-storage accounts can return organization-wide limit and 
 therefore includes `google-capacity-may-reflect-pooled-organization-storage` as a notice rather than
 mislabeling the figures as necessarily personal.
 
+## Account-scope binding
+
+Capacity schema v3 carries an optional provider-authoritative account scope. Apple's exact native
+quota response binds iCloud to `personal`. Microsoft Graph maps `driveType=personal` to `personal`,
+`business` to `organization`, and `documentLibrary` to `shared`. Google Drive quota does not classify
+personal versus pooled organization storage precisely enough, so its scope remains unknown.
+
+DiskSage collects capacity before constructing the plan. When discovery reported an unknown scope,
+the provider scope refines the selected cloud root before review and decision fingerprints are
+calculated. A provider mismatch or conflict with an already-known root scope fails closed. An
+unavailable response or a provider without authoritative scope preserves the discovery result
+instead of guessing.
+
+The CLI and Tauri application use the same binding rule. A plan, its human review, and a subsequent
+copy reuse the same bounded capacity snapshot, so a second provider call cannot silently change the
+destination policy between fingerprint verification and receipt creation.
+
 ## Decision gate
 
 The default reserve is 1 GiB. A candidate is copy-eligible only when a fresh provider snapshot proves
@@ -41,8 +58,9 @@ the same exact byte-plus-reserve comparison still gates the copy. A zero remaini
 
 The plan-level assessment uses the total potentially reclaimable candidate bytes. A plan may report
 that the full batch does not fit even though a smaller individual candidate can fit; the copy command
-therefore obtains a fresh snapshot and evaluates that exact candidate immediately before copying.
-Adopting an already-present cloud object does not upload bytes and skips this capacity gate.
+therefore re-evaluates that exact candidate against the plan's freshly collected, root-bound
+snapshot immediately before copying. Adopting an already-present cloud object does not upload bytes
+and skips this capacity gate.
 
 No capacity check authorizes deletion. DiskSage still retains the source until copy hash verification,
 provider sync attestation, immutable receipt validation, and an explicit local-eviction confirmation

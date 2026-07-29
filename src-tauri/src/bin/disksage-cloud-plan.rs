@@ -13,7 +13,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 #[cfg(not(coverage))]
-use disksage_lib::cloud::{self, ArchiveKind, CloudPlanOptions, CloudProvider, CloudRoot};
+use disksage_lib::cloud::{
+    self, ArchiveKind, CloudAccountScope, CloudPlanOptions, CloudProvider, CloudRoot,
+};
 #[cfg(not(coverage))]
 use disksage_lib::cloud_eviction::{self, CloudEvictionResult, CloudSourceEvictionApproval};
 #[cfg(not(coverage))]
@@ -538,11 +540,12 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
             || adoption_action
             || attestation_action
             || eviction_action
-            || review_action
             || exact_duplicate_review
             || args.export_naruon_lineage.is_some())
     {
-        return Err("capacity verification은 plan 또는 copy action에서만 사용할 수 있음".into());
+        return Err(
+            "capacity verification은 plan, review 또는 copy action에서만 사용할 수 있음".into(),
+        );
     }
     if args
         .provider_object_id
@@ -1547,38 +1550,19 @@ fn collect_root_capacity(
 }
 
 #[cfg(not(coverage))]
-fn verified_capacity_for_bytes(
-    root: &CloudRoot,
-    oauth_connections: Option<&Path>,
-    requested_bytes: u64,
-    largest_candidate_bytes: u64,
-    reserve_mib: u64,
-) -> Result<provider_capacity::CloudCapacityAssessment, String> {
-    let reserve_bytes = reserve_mib.saturating_mul(1024 * 1024);
-    let observed_at_ms = cloud::system_now_ms();
-    let snapshot = match collect_root_capacity(root, oauth_connections, observed_at_ms) {
-        Ok(snapshot) => snapshot,
-        Err(error) => provider_capacity::unavailable_capacity_from_error(
-            root.provider,
-            observed_at_ms,
-            &error,
-        ),
-    };
-    Ok(provider_capacity::assess_capacity(
-        snapshot,
-        requested_bytes,
-        largest_candidate_bytes,
-        reserve_bytes,
-    ))
-}
-
-#[cfg(not(coverage))]
-fn attach_verified_capacity(
+fn attach_capacity_snapshot(
     report: &mut cloud::CloudPlanReport,
-    root: &CloudRoot,
-    oauth_connections: Option<&Path>,
+    snapshot: provider_capacity::CloudCapacitySnapshot,
     reserve_mib: u64,
 ) -> Result<(), String> {
+    if snapshot.provider != report.cloud_root.provider
+        || snapshot.account_scope.is_some_and(|scope| {
+            report.cloud_root.account_scope != CloudAccountScope::Unknown
+                && report.cloud_root.account_scope != scope
+        })
+    {
+        return Err("cloud-capacity-root-binding-mismatch".into());
+    }
     let largest_candidate_bytes = report
         .candidates
         .iter()
@@ -1586,13 +1570,12 @@ fn attach_verified_capacity(
         .map(|candidate| candidate.bytes)
         .max()
         .unwrap_or_default();
-    let assessment = verified_capacity_for_bytes(
-        root,
-        oauth_connections,
+    let assessment = provider_capacity::assess_capacity(
+        snapshot,
         report.potentially_reclaimable_bytes,
         largest_candidate_bytes,
-        reserve_mib,
-    )?;
+        reserve_mib.saturating_mul(1024 * 1024),
+    );
     report
         .notices
         .retain(|notice| notice != "cloud-quota-unverified");
@@ -1612,6 +1595,36 @@ fn attach_verified_capacity(
     );
     report.capacity = Some(assessment);
     Ok(())
+}
+
+#[cfg(not(coverage))]
+fn plan_with_optional_capacity(
+    source: &cloud::CloudSourceSnapshot,
+    root: &CloudRoot,
+    verify_capacity: bool,
+    oauth_connections: Option<&Path>,
+    reserve_mib: u64,
+) -> Result<(CloudRoot, cloud::CloudPlanReport), String> {
+    if !verify_capacity {
+        return Ok((
+            root.clone(),
+            cloud::plan_cloud_archive_from_snapshot(source, root),
+        ));
+    }
+    let observed_at_ms = cloud::system_now_ms();
+    let capacity_snapshot = match collect_root_capacity(root, oauth_connections, observed_at_ms) {
+        Ok(snapshot) => snapshot,
+        Err(error) => provider_capacity::unavailable_capacity_from_error(
+            root.provider,
+            observed_at_ms,
+            &error,
+        ),
+    };
+    let refined_root =
+        provider_capacity::root_with_verified_capacity_scope(root, &capacity_snapshot)?;
+    let mut report = cloud::plan_cloud_archive_from_snapshot(source, &refined_root);
+    attach_capacity_snapshot(&mut report, capacity_snapshot, reserve_mib)?;
+    Ok((refined_root, report))
 }
 
 #[cfg(not(coverage))]
@@ -1938,15 +1951,13 @@ fn run() -> Result<(), String> {
     if args.all_readable_roots {
         let mut summaries = Vec::with_capacity(selected_roots.len());
         for selected in &selected_roots {
-            let mut report = cloud::plan_cloud_archive_from_snapshot(&snapshot, selected);
-            if args.verify_capacity {
-                attach_verified_capacity(
-                    &mut report,
-                    selected,
-                    args.oauth_connections.as_deref(),
-                    args.capacity_reserve_mib,
-                )?;
-            }
+            let (_, report) = plan_with_optional_capacity(
+                &snapshot,
+                selected,
+                args.verify_capacity,
+                args.oauth_connections.as_deref(),
+                args.capacity_reserve_mib,
+            )?;
             summaries.push(match args.review_reason_set.as_deref() {
                 Some(reasons) => review_batch_summary(&report, reasons)?,
                 None => decision_summary(&report),
@@ -1986,15 +1997,14 @@ fn run() -> Result<(), String> {
         .into_iter()
         .next()
         .ok_or_else(|| "선택된 클라우드 루트가 없음".to_string())?;
-    let mut report = cloud::plan_cloud_archive_from_snapshot(&snapshot, &selected);
-    if args.verify_capacity {
-        attach_verified_capacity(
-            &mut report,
-            &selected,
-            args.oauth_connections.as_deref(),
-            args.capacity_reserve_mib,
-        )?;
-    }
+    let capacity_required_for_plan = args.verify_capacity || args.copy_fingerprint.is_some();
+    let (selected, report) = plan_with_optional_capacity(
+        &snapshot,
+        &selected,
+        capacity_required_for_plan,
+        args.oauth_connections.as_deref(),
+        args.capacity_reserve_mib,
+    )?;
     if let (Some(redundant_prefix), Some(kind)) = (
         args.exact_duplicate_review_prefix.as_deref(),
         args.exact_duplicate_kind,
@@ -2091,13 +2101,17 @@ fn run() -> Result<(), String> {
             None
         };
         if !adopt_existing {
-            let assessment = verified_capacity_for_bytes(
-                &selected,
-                args.oauth_connections.as_deref(),
+            let capacity_snapshot = report
+                .capacity
+                .as_ref()
+                .map(|assessment| assessment.snapshot.clone())
+                .ok_or_else(|| "cloud-capacity-verification-required".to_string())?;
+            let assessment = provider_capacity::assess_capacity(
+                capacity_snapshot,
                 candidate.bytes,
                 candidate.bytes,
-                args.capacity_reserve_mib,
-            )?;
+                args.capacity_reserve_mib.saturating_mul(1024 * 1024),
+            );
             if assessment.can_fit != Some(true) {
                 return Err(if assessment.blockers.is_empty() {
                     "cloud-capacity-verification-required".into()
@@ -3168,6 +3182,27 @@ mod tests {
         copy.oauth_connections = Some(PathBuf::from("/connections.json"));
         assert!(validate_action_args(&copy).is_ok());
 
+        let review = parse_args(
+            &[
+                "--verify-capacity".into(),
+                "--review-candidate-fingerprint".into(),
+                "c".repeat(64),
+                "--review-fingerprint".into(),
+                "d".repeat(64),
+                "--review-disposition".into(),
+                "approved".into(),
+                "--reviewed-by".into(),
+                "human:test".into(),
+                "--review-rationale".into(),
+                "provider scope and embedded metadata reviewed".into(),
+                "--review-dir".into(),
+                "/reviews".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&review).is_ok());
+
         let mut adoption = copy.clone();
         adoption.copy_fingerprint = None;
         adoption.adopt_existing_fingerprint = Some("b".repeat(64));
@@ -3189,7 +3224,16 @@ mod tests {
             access_issue: None,
         };
 
-        let assessment = verified_capacity_for_bytes(&root, None, 10, 10, 1).unwrap();
+        let observed_at_ms = cloud::system_now_ms();
+        let snapshot = match collect_root_capacity(&root, None, observed_at_ms) {
+            Ok(snapshot) => snapshot,
+            Err(error) => provider_capacity::unavailable_capacity_from_error(
+                root.provider,
+                observed_at_ms,
+                &error,
+            ),
+        };
+        let assessment = provider_capacity::assess_capacity(snapshot, 10, 10, 1024 * 1024);
 
         assert_eq!(assessment.can_fit, None);
         assert_eq!(
@@ -3224,7 +3268,12 @@ mod tests {
             notices: vec!["dry-run-only".into(), "cloud-quota-unverified".into()],
         };
 
-        attach_verified_capacity(&mut report, &root, None, 1024).unwrap();
+        let snapshot = provider_capacity::unavailable_capacity_from_error(
+            CloudProvider::Onedrive,
+            1,
+            "provider-capacity-oauth-connections-required",
+        );
+        attach_capacity_snapshot(&mut report, snapshot, 1024).unwrap();
 
         let assessment = report.capacity.unwrap();
         assert_eq!(assessment.can_fit, None);
