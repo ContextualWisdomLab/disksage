@@ -550,10 +550,9 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
         + usize::from(eviction_action)
         + usize::from(review_action)
         + usize::from(args.export_naruon_lineage.is_some());
-    if args.all_readable_roots && (actions > 0 || args.verify_capacity) {
+    if args.all_readable_roots && actions > 0 {
         return Err(
-            "--all-readable-roots는 mutation, root inspection 또는 capacity action과 함께 사용할 수 없음"
-                .into(),
+            "--all-readable-roots는 mutation 또는 root inspection과 함께 사용할 수 없음".into(),
         );
     }
     if exact_duplicate_review
@@ -1409,6 +1408,48 @@ fn verified_capacity_for_bytes(
 }
 
 #[cfg(not(coverage))]
+fn attach_verified_capacity(
+    report: &mut cloud::CloudPlanReport,
+    root: &CloudRoot,
+    oauth_connections: Option<&Path>,
+    reserve_mib: u64,
+) -> Result<(), String> {
+    let largest_candidate_bytes = report
+        .candidates
+        .iter()
+        .filter(|candidate| candidate.blocked_reason.is_none())
+        .map(|candidate| candidate.bytes)
+        .max()
+        .unwrap_or_default();
+    let assessment = verified_capacity_for_bytes(
+        root,
+        oauth_connections,
+        report.potentially_reclaimable_bytes,
+        largest_candidate_bytes,
+        reserve_mib,
+    )?;
+    report
+        .notices
+        .retain(|notice| notice != "cloud-quota-unverified");
+    report.notices.push(
+        match assessment.can_fit {
+            Some(true)
+                if assessment.snapshot.evidence_kind
+                    == provider_capacity::CapacityEvidenceKind::ProviderNativeStatus =>
+            {
+                "cloud-quota-provider-native-verified"
+            }
+            Some(true) => "cloud-quota-provider-api-verified",
+            Some(false) => "cloud-quota-insufficient-or-blocked",
+            None => "cloud-quota-unavailable",
+        }
+        .into(),
+    );
+    report.capacity = Some(assessment);
+    Ok(())
+}
+
+#[cfg(not(coverage))]
 fn collect_receipt_sync_evidence(
     receipt: &CloudCopyReceipt,
     provider_object_id: Option<&str>,
@@ -1732,12 +1773,25 @@ fn run() -> Result<(), String> {
     if args.all_readable_roots {
         let mut summaries = Vec::with_capacity(selected_roots.len());
         for selected in &selected_roots {
-            let report = cloud::plan_cloud_archive_from_snapshot(&snapshot, selected);
+            let mut report = cloud::plan_cloud_archive_from_snapshot(&snapshot, selected);
+            if args.verify_capacity {
+                attach_verified_capacity(
+                    &mut report,
+                    selected,
+                    args.oauth_connections.as_deref(),
+                    args.capacity_reserve_mib,
+                )?;
+            }
             summaries.push(match args.review_reason_set.as_deref() {
                 Some(reasons) => review_batch_summary(&report, reasons)?,
                 None => decision_summary(&report),
             });
         }
+        let capacity_notice = if args.verify_capacity {
+            "cloud-capacity-assessed-per-destination"
+        } else {
+            "cloud-capacity-unverified"
+        };
         let output = serde_json::json!({
             "schema_version": 1,
             "output_mode": "multicloud-decision-summary",
@@ -1753,7 +1807,7 @@ fn run() -> Result<(), String> {
                 "dry-run-only",
                 "destination-state-revalidated-per-plan",
                 "source-stat-revalidated-per-plan",
-                "cloud-capacity-unverified",
+                capacity_notice,
                 "cloud-sync-unverified",
             ],
         });
@@ -1769,38 +1823,12 @@ fn run() -> Result<(), String> {
         .ok_or_else(|| "선택된 클라우드 루트가 없음".to_string())?;
     let mut report = cloud::plan_cloud_archive_from_snapshot(&snapshot, &selected);
     if args.verify_capacity {
-        let largest_candidate_bytes = report
-            .candidates
-            .iter()
-            .filter(|candidate| candidate.blocked_reason.is_none())
-            .map(|candidate| candidate.bytes)
-            .max()
-            .unwrap_or_default();
-        let assessment = verified_capacity_for_bytes(
+        attach_verified_capacity(
+            &mut report,
             &selected,
             args.oauth_connections.as_deref(),
-            report.potentially_reclaimable_bytes,
-            largest_candidate_bytes,
             args.capacity_reserve_mib,
         )?;
-        report
-            .notices
-            .retain(|notice| notice != "cloud-quota-unverified");
-        report.notices.push(
-            match assessment.can_fit {
-                Some(true)
-                    if assessment.snapshot.evidence_kind
-                        == provider_capacity::CapacityEvidenceKind::ProviderNativeStatus =>
-                {
-                    "cloud-quota-provider-native-verified"
-                }
-                Some(true) => "cloud-quota-provider-api-verified",
-                Some(false) => "cloud-quota-insufficient-or-blocked",
-                None => "cloud-quota-unavailable",
-            }
-            .into(),
-        );
-        report.capacity = Some(assessment);
     }
     if let (Some(redundant_prefix), Some(kind)) = (
         args.exact_duplicate_review_prefix.as_deref(),
@@ -2068,7 +2096,7 @@ mod tests {
     }
 
     #[test]
-    fn all_readable_roots_is_dry_run_summary_only() {
+    fn all_readable_roots_is_dry_run_summary_with_optional_capacity() {
         let valid = parse_args(
             &["--all-readable-roots".into(), "--decision-summary".into()],
             Path::new("/h"),
@@ -2100,7 +2128,8 @@ mod tests {
             Path::new("/h"),
         )
         .unwrap();
-        assert!(validate_action_args(&capacity).is_err());
+        assert!(capacity.verify_capacity);
+        assert!(validate_action_args(&capacity).is_ok());
     }
 
     #[test]
@@ -2908,6 +2937,46 @@ mod tests {
             assessment.blockers,
             ["provider-oauth-connection-missing".to_string()]
         );
+    }
+
+    #[test]
+    fn capacity_attachment_marks_each_non_oauth_destination_unavailable() {
+        let root = CloudRoot {
+            id: "onedrive:test".into(),
+            provider: CloudProvider::Onedrive,
+            account_scope: disksage_lib::cloud::CloudAccountScope::Personal,
+            label: "OneDrive".into(),
+            path: "/Cloud/OneDrive".into(),
+            readable: true,
+            access_issue: None,
+        };
+        let mut report = cloud::CloudPlanReport {
+            cloud_root: root.clone(),
+            generated_at_ms: 1,
+            candidates: Vec::new(),
+            candidate_bytes: 0,
+            potentially_reclaimable_bytes: 0,
+            exact_duplicates: cloud::ExactDuplicateSummary::default(),
+            capacity: None,
+            notices: vec!["dry-run-only".into(), "cloud-quota-unverified".into()],
+        };
+
+        attach_verified_capacity(&mut report, &root, None, 1024).unwrap();
+
+        let assessment = report.capacity.unwrap();
+        assert_eq!(assessment.can_fit, None);
+        assert_eq!(
+            assessment.blockers,
+            ["provider-oauth-connection-missing".to_string()]
+        );
+        assert!(!report
+            .notices
+            .iter()
+            .any(|notice| notice == "cloud-quota-unverified"));
+        assert!(report
+            .notices
+            .iter()
+            .any(|notice| notice == "cloud-quota-unavailable"));
     }
 
     #[test]
