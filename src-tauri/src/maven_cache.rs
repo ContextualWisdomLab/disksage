@@ -60,6 +60,24 @@ pub struct MavenCacheAuditReport {
     pub provider_write_executed: bool,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MavenCachePruneReport {
+    pub schema_kind: String,
+    pub repository_root: String,
+    pub generated_at_ms: u64,
+    pub expected_candidate_set_fingerprint: String,
+    pub observed_candidate_set_fingerprint: String,
+    pub candidate_directories: u64,
+    pub candidate_bytes: u64,
+    pub removed_directories: u64,
+    pub removed_bytes: u64,
+    pub skipped_directories: u64,
+    pub skip_reason_counts: BTreeMap<String, u64>,
+    pub apply_requested: bool,
+    pub filesystem_mutation_executed: bool,
+    pub complete: bool,
+}
+
 #[derive(Debug)]
 struct MarkerDiscovery {
     marker_directories: Vec<PathBuf>,
@@ -517,6 +535,120 @@ pub fn audit_maven_repository(
     })
 }
 
+fn valid_candidate_set_fingerprint(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn candidate_path(root: &Path, relative: &str) -> Result<PathBuf, String> {
+    let relative = Path::new(relative);
+    if relative.components().next().is_none()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err("maven-cache-prune-relative-path-invalid".into());
+    }
+    Ok(root.join(relative))
+}
+
+pub fn prune_maven_repository(
+    root: &Path,
+    expected_candidate_set_fingerprint: &str,
+    apply: bool,
+    max_entries: u64,
+    generated_at_ms: u64,
+) -> Result<MavenCachePruneReport, String> {
+    if !valid_candidate_set_fingerprint(expected_candidate_set_fingerprint) {
+        return Err("maven-cache-prune-expected-fingerprint-invalid".into());
+    }
+    if max_entries == 0 {
+        return Err("maven-cache-prune-max-entries-invalid".into());
+    }
+
+    let audit = audit_maven_repository(
+        root,
+        MavenCacheAuditOptions {
+            max_entries,
+            max_candidates: usize::MAX,
+            max_issues: 200,
+        },
+        generated_at_ms,
+    )?;
+    if audit.scan_truncated || audit.candidate_output_truncated || audit.truncated {
+        return Err("maven-cache-prune-audit-truncated".into());
+    }
+    if audit.candidate_set_fingerprint != expected_candidate_set_fingerprint {
+        return Err("maven-cache-prune-candidate-set-mismatch".into());
+    }
+
+    let candidate_directories = audit.remote_recoverable_directories;
+    let candidate_bytes = audit.remote_recoverable_bytes;
+    let mut report = MavenCachePruneReport {
+        schema_kind: "disksage.maven-cache-prune/v1".into(),
+        repository_root: audit.repository_root.clone(),
+        generated_at_ms,
+        expected_candidate_set_fingerprint: expected_candidate_set_fingerprint.into(),
+        observed_candidate_set_fingerprint: audit.candidate_set_fingerprint,
+        candidate_directories,
+        candidate_bytes,
+        removed_directories: 0,
+        removed_bytes: 0,
+        skipped_directories: 0,
+        skip_reason_counts: BTreeMap::new(),
+        apply_requested: apply,
+        filesystem_mutation_executed: false,
+        complete: !apply,
+    };
+    if !apply {
+        return Ok(report);
+    }
+
+    let canonical_root =
+        fs::canonicalize(root).map_err(|_| "maven-cache-prune-root-unavailable".to_string())?;
+    if canonical_root.to_string_lossy() != audit.repository_root {
+        return Err("maven-cache-prune-root-changed".into());
+    }
+
+    for candidate in audit.candidates {
+        let path = candidate_path(&canonical_root, &candidate.relative_path)?;
+        let current = audit_marker_directory(&canonical_root, &path).candidate;
+        let unchanged = current.as_ref().is_some_and(|value| {
+            value.relative_path == candidate.relative_path
+                && value.bytes == candidate.bytes
+                && value.candidate_fingerprint == candidate.candidate_fingerprint
+        });
+        if !unchanged {
+            report.skipped_directories = report.skipped_directories.saturating_add(1);
+            *report
+                .skip_reason_counts
+                .entry("candidate-changed-before-remove".into())
+                .or_insert(0) += 1;
+            continue;
+        }
+        match fs::remove_dir_all(&path) {
+            Ok(()) => {
+                report.removed_directories = report.removed_directories.saturating_add(1);
+                report.removed_bytes = report.removed_bytes.saturating_add(candidate.bytes);
+                report.filesystem_mutation_executed = true;
+            }
+            Err(_) => {
+                report.skipped_directories = report.skipped_directories.saturating_add(1);
+                *report
+                    .skip_reason_counts
+                    .entry("candidate-remove-failed".into())
+                    .or_insert(0) += 1;
+            }
+        }
+    }
+    report.complete = report.removed_directories == candidate_directories
+        && report.removed_bytes == candidate_bytes
+        && report.skipped_directories == 0;
+    Ok(report)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -667,5 +799,50 @@ mod tests {
         assert!(!report.candidate_output_truncated);
         assert!(report.truncated);
         assert_eq!(report.remote_recoverable_directories, 0);
+    }
+
+    #[test]
+    fn prune_dry_run_requires_exact_fingerprint_and_does_not_mutate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("repository");
+        let version = version_dir(&root, "org/example/demo/1.0.0");
+        remote_artifact(&version, "demo-1.0.0", "central", 64);
+        let audit = audit_maven_repository(&root, MavenCacheAuditOptions::default(), 123).unwrap();
+
+        let report =
+            prune_maven_repository(&root, &audit.candidate_set_fingerprint, false, 10_000, 456)
+                .unwrap();
+
+        assert_eq!(report.candidate_directories, 1);
+        assert_eq!(report.removed_directories, 0);
+        assert!(!report.filesystem_mutation_executed);
+        assert!(report.complete);
+        assert!(version.exists());
+        assert!(prune_maven_repository(&root, "not-a-fingerprint", false, 10_000, 456).is_err());
+        assert!(prune_maven_repository(&root, &"0".repeat(64), false, 10_000, 456).is_err());
+    }
+
+    #[test]
+    fn prune_apply_removes_only_revalidated_remote_candidates() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("repository");
+        let remote = version_dir(&root, "org/example/remote/1.0.0");
+        remote_artifact(&remote, "remote-1.0.0", "central", 64);
+        let local = version_dir(&root, "org/example/local/1.0.0");
+        fs::write(local.join("local-1.0.0.jar"), b"local").unwrap();
+        fs::write(local.join("_remote.repositories"), "local-1.0.0.jar>=\n").unwrap();
+        let audit = audit_maven_repository(&root, MavenCacheAuditOptions::default(), 123).unwrap();
+
+        let report =
+            prune_maven_repository(&root, &audit.candidate_set_fingerprint, true, 10_000, 456)
+                .unwrap();
+
+        assert_eq!(report.candidate_directories, 1);
+        assert_eq!(report.removed_directories, 1);
+        assert_eq!(report.skipped_directories, 0);
+        assert!(report.filesystem_mutation_executed);
+        assert!(report.complete);
+        assert!(!remote.exists());
+        assert!(local.exists());
     }
 }
