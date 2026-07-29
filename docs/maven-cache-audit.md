@@ -27,6 +27,12 @@ entry-limit truncation are fail-closed holds. Candidate fingerprints bind the
 relative path, file names, sizes, modification times, and repository
 attributions observed during the audit.
 
+Each candidate also reports `observed_oldest_modified_ms` and
+`observed_latest_modified_ms` across the regular files in that version
+directory. These filesystem timestamps are cache-write/acquisition evidence
+only. They are not production dates, access times, or proof that a dependency
+is unused, so a later cleanup policy must not authorize deletion from age alone.
+
 `scan_truncated` means the repository walk hit its entry bound and therefore
 emits no reclaim candidates. `candidate_output_truncated` means the complete
 aggregate was calculated but only the largest bounded candidate rows are

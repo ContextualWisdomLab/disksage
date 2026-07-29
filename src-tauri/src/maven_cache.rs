@@ -28,6 +28,8 @@ pub struct MavenCacheCandidate {
     pub bytes: u64,
     pub artifact_files: u64,
     pub repository_ids: Vec<String>,
+    pub observed_oldest_modified_ms: u64,
+    pub observed_latest_modified_ms: u64,
     pub candidate_fingerprint: String,
 }
 
@@ -400,11 +402,23 @@ fn audit_marker_directory(root: &Path, directory: &Path) -> DirectoryAudit {
     }
 
     observations.sort_by(|left, right| left.name.cmp(&right.name));
+    let observed_oldest_modified_ms = observations
+        .iter()
+        .map(|observation| observation.modified_ms)
+        .min()
+        .unwrap_or(0);
+    let observed_latest_modified_ms = observations
+        .iter()
+        .map(|observation| observation.modified_ms)
+        .max()
+        .unwrap_or(0);
     let candidate = MavenCacheCandidate {
         relative_path: relative.clone(),
         bytes,
         artifact_files: payload_names.len() as u64,
         repository_ids: repository_ids.into_iter().collect(),
+        observed_oldest_modified_ms,
+        observed_latest_modified_ms,
         candidate_fingerprint: candidate_fingerprint(&relative, &observations, &attributions),
     };
     DirectoryAudit {
@@ -541,6 +555,11 @@ mod tests {
         assert_eq!(report.candidates[0].relative_path, "org/example/demo/1.0.0");
         assert_eq!(report.candidates[0].repository_ids, vec!["central"]);
         assert_eq!(report.candidates[0].artifact_files, 2);
+        assert!(report.candidates[0].observed_oldest_modified_ms > 0);
+        assert!(
+            report.candidates[0].observed_latest_modified_ms
+                >= report.candidates[0].observed_oldest_modified_ms
+        );
         assert_eq!(report.candidates[0].candidate_fingerprint.len(), 64);
         assert_eq!(report.candidate_set_fingerprint.len(), 64);
         assert!(!report.provider_write_executed);
