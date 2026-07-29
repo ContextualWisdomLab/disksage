@@ -998,7 +998,7 @@ fn add_filename_publication_month(metadata: &mut ContentMetadata, year: i32, mon
     );
 }
 
-fn date_value(epoch_ms: u64) -> String {
+pub(crate) fn date_value(epoch_ms: u64) -> String {
     let (year, month, day) = date_parts(epoch_ms);
     format!("{year:04}-{month:02}-{day:02}")
 }

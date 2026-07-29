@@ -47,6 +47,7 @@ pub mod provider_capacity;
 pub mod provider_evidence;
 pub mod provider_oauth;
 pub mod provider_sync;
+pub mod semantic_catalog;
 
 // coverage 빌드에서 제외 — GUI 런타임은 헤드리스 테스트로 실행 불가
 #[cfg(not(coverage))]

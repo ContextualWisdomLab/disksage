@@ -38,6 +38,8 @@ use disksage_lib::provider_evidence::{self, ProviderSyncEvidenceRecord};
 use disksage_lib::provider_oauth;
 #[cfg(not(coverage))]
 use disksage_lib::provider_sync;
+#[cfg(not(coverage))]
+use disksage_lib::semantic_catalog;
 #[cfg(all(not(coverage), unix))]
 use sha2::{Digest, Sha256};
 
@@ -81,6 +83,7 @@ struct Args {
     export_naruon_lineage: Option<PathBuf>,
     naruon_sync_evidence: Option<PathBuf>,
     export_naruon_capacity: bool,
+    export_semantic_catalog: bool,
 }
 
 #[cfg(not(coverage))]
@@ -199,6 +202,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
         export_naruon_lineage: None,
         naruon_sync_evidence: None,
         export_naruon_capacity: false,
+        export_semantic_catalog: false,
     };
     let mut index = 0;
     while index < args.len() {
@@ -391,9 +395,10 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
                 )?))
             }
             "--export-naruon-capacity" => parsed.export_naruon_capacity = true,
+            "--export-semantic-catalog" => parsed.export_semantic_catalog = true,
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary] [--min-size-mib N] [--min-age-days N] [--limit N] [--decision-summary [--review-reason-set REASON|REASON [--private-review-output ABSOLUTE_NEW_FILE.json]] | --exact-duplicate-review-prefix DIR_PREFIX --exact-duplicate-kind document|media|archive|dataset|backup|creative|incomplete-download] [--verify-capacity [--oauth-connections ABSOLUTE_PATH] [--export-naruon-capacity]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
+                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary] [--min-size-mib N] [--min-age-days N] [--limit N] [--decision-summary [--review-reason-set REASON|REASON [--private-review-output ABSOLUTE_NEW_FILE.json]] | --exact-duplicate-review-prefix DIR_PREFIX --exact-duplicate-kind document|media|archive|dataset|backup|creative|incomplete-download | --export-semantic-catalog] [--verify-capacity [--oauth-connections ABSOLUTE_PATH] [--export-naruon-capacity]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -579,7 +584,8 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
         + usize::from(eviction_action)
         + usize::from(review_action)
         + usize::from(args.export_naruon_lineage.is_some())
-        + usize::from(args.export_naruon_capacity);
+        + usize::from(args.export_naruon_capacity)
+        + usize::from(args.export_semantic_catalog);
     if args.all_readable_roots && actions > 0 {
         return Err(
             "--all-readable-roots는 mutation 또는 root inspection과 함께 사용할 수 없음".into(),
@@ -2022,6 +2028,14 @@ fn run() -> Result<(), String> {
         );
         return Ok(());
     }
+    if args.export_semantic_catalog {
+        let batch = semantic_catalog::export_semantic_catalog_candidate_batch(&report)?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&batch).map_err(|error| error.to_string())?
+        );
+        return Ok(());
+    }
     if let (Some(redundant_prefix), Some(kind)) = (
         args.exact_duplicate_review_prefix.as_deref(),
         args.exact_duplicate_kind,
@@ -2250,6 +2264,7 @@ mod tests {
         assert!(defaults.review_rationale.is_none());
         assert!(defaults.export_naruon_lineage.is_none());
         assert!(!defaults.export_naruon_capacity);
+        assert!(!defaults.export_semantic_catalog);
         assert!(defaults.naruon_sync_evidence.is_none());
         assert!(!defaults.verify_capacity);
         assert!(!defaults.decision_summary);
@@ -3413,6 +3428,47 @@ mod tests {
         )
         .unwrap();
         assert!(validate_action_args(&multiple).is_err());
+    }
+
+    #[test]
+    fn semantic_catalog_export_is_single_destination_dry_run_only() {
+        let export = parse_args(
+            &[
+                "--export-semantic-catalog".into(),
+                "--provider".into(),
+                "icloud".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(export.export_semantic_catalog);
+        assert!(validate_action_args(&export).is_ok());
+
+        let mut conflicting = export.clone();
+        conflicting.copy_fingerprint = Some("a".repeat(64));
+        conflicting.receipt_dir = Some(PathBuf::from("/receipts"));
+        assert!(validate_action_args(&conflicting).is_err());
+
+        let multiple = parse_args(
+            &[
+                "--export-semantic-catalog".into(),
+                "--all-readable-roots".into(),
+                "--decision-summary".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&multiple).is_err());
+
+        let summary = parse_args(
+            &[
+                "--export-semantic-catalog".into(),
+                "--decision-summary".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&summary).is_err());
     }
 
     #[test]
