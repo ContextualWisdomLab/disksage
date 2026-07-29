@@ -267,17 +267,6 @@ fn audit_marker_directory(root: &Path, directory: &Path) -> DirectoryAudit {
         }
     };
     let marker = directory.join("_remote.repositories");
-    let (attributions, repository_ids) = match parse_remote_marker(&marker) {
-        Ok(value) => value,
-        Err(reason) => {
-            return DirectoryAudit {
-                bytes: 0,
-                candidate: None,
-                held_reason: Some("invalid-remote-marker".into()),
-                issue_reason: Some(reason),
-            };
-        }
-    };
     let mut entries: Vec<_> = match fs::read_dir(directory) {
         Ok(entries) => match entries.collect::<Result<Vec<_>, _>>() {
             Ok(entries) => entries,
@@ -357,6 +346,17 @@ fn audit_marker_directory(root: &Path, directory: &Path) -> DirectoryAudit {
         }
     }
 
+    let (attributions, repository_ids) = match parse_remote_marker(&marker) {
+        Ok(value) => value,
+        Err(reason) => {
+            return DirectoryAudit {
+                bytes,
+                candidate: None,
+                held_reason: Some("invalid-remote-marker".into()),
+                issue_reason: Some(reason),
+            };
+        }
+    };
     let version_name = directory
         .file_name()
         .and_then(|value| value.to_str())
@@ -570,6 +570,29 @@ mod tests {
         assert_eq!(report.held_reason_counts["untracked-payload"], 1);
         assert_eq!(report.held_reason_counts["snapshot-version"], 1);
         assert!(report.candidates.is_empty());
+    }
+
+    #[test]
+    fn counts_regular_file_bytes_when_remote_marker_is_invalid() {
+        let tmp = tempfile::tempdir().unwrap();
+        let invalid = version_dir(tmp.path(), "org/example/invalid/1.0.0");
+        fs::write(invalid.join("invalid-1.0.0.jar"), vec![1u8; 4096]).unwrap();
+        fs::write(invalid.join("_remote.repositories"), "malformed").unwrap();
+        let expected_bytes = fs::metadata(invalid.join("invalid-1.0.0.jar"))
+            .unwrap()
+            .len()
+            + fs::metadata(invalid.join("_remote.repositories"))
+                .unwrap()
+                .len();
+
+        let report =
+            audit_maven_repository(tmp.path(), MavenCacheAuditOptions::default(), 456).unwrap();
+
+        assert_eq!(report.remote_recoverable_directories, 0);
+        assert_eq!(report.held_directories, 1);
+        assert_eq!(report.held_bytes, expected_bytes);
+        assert_eq!(report.held_reason_counts["invalid-remote-marker"], 1);
+        assert_eq!(report.issues[0].reason, "remote-marker-line-invalid");
     }
 
     #[test]
