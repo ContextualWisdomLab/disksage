@@ -14,6 +14,10 @@ edition = "2021"
 name = "disksage_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[[bin]]
+name = "disksage-volume-snapshot"
+path = "src/bin/disksage-volume-snapshot.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -31,6 +35,7 @@ oxrdf = "0.3.3"
 llama-cpp-2 = { version = "0.1.151", optional = true }
 sha2 = "0.11.0"
 ureq = "3.3.0"
+fs4 = "1.1.0"
 
 [dev-dependencies]
 tempfile = "3.27.0"
@@ -40,4 +45,3 @@ llm-engine = ["dep:llama-cpp-2"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage)", "cfg(coverage_nightly)"] }
-
