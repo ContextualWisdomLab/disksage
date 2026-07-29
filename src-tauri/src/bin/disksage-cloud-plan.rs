@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 #[cfg(not(coverage))]
-use disksage_lib::cloud::{self, CloudPlanOptions, CloudProvider, CloudRoot};
+use disksage_lib::cloud::{self, ArchiveKind, CloudPlanOptions, CloudProvider, CloudRoot};
 #[cfg(not(coverage))]
 use disksage_lib::cloud_eviction::{self, CloudEvictionResult, CloudSourceEvictionApproval};
 #[cfg(not(coverage))]
@@ -46,6 +46,8 @@ struct Args {
     verify_capacity: bool,
     decision_summary: bool,
     review_reason_set: Option<Vec<String>>,
+    exact_duplicate_review_prefix: Option<String>,
+    exact_duplicate_kind: Option<ArchiveKind>,
     capacity_reserve_mib: u64,
     copy_fingerprint: Option<String>,
     adopt_existing_fingerprint: Option<String>,
@@ -118,6 +120,34 @@ fn parse_review_reason_set(value: &str) -> Result<Vec<String>, String> {
 }
 
 #[cfg(not(coverage))]
+fn parse_exact_duplicate_review_prefix(value: &str) -> Result<String, String> {
+    if value.is_empty()
+        || value.len() > 255
+        || matches!(value, "." | "..")
+        || value
+            .chars()
+            .any(|character| character.is_control() || matches!(character, '/' | '\\'))
+    {
+        return Err("--exact-duplicate-review-prefix는 단일 디렉터리 이름 prefix여야 함".into());
+    }
+    Ok(value.to_string())
+}
+
+#[cfg(not(coverage))]
+fn parse_archive_kind(value: &str) -> Result<ArchiveKind, String> {
+    match value {
+        "document" => Ok(ArchiveKind::Document),
+        "media" => Ok(ArchiveKind::Media),
+        "archive" => Ok(ArchiveKind::Archive),
+        "dataset" => Ok(ArchiveKind::Dataset),
+        "backup" => Ok(ArchiveKind::Backup),
+        "creative" => Ok(ArchiveKind::Creative),
+        "incomplete-download" => Ok(ArchiveKind::IncompleteDownload),
+        _ => Err(format!("지원하지 않는 exact duplicate kind: {value}")),
+    }
+}
+
+#[cfg(not(coverage))]
 fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
     let mut parsed = Args {
         root: home.to_path_buf(),
@@ -132,6 +162,8 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
         verify_capacity: false,
         decision_summary: false,
         review_reason_set: None,
+        exact_duplicate_review_prefix: None,
+        exact_duplicate_kind: None,
         capacity_reserve_mib: 1024,
         copy_fingerprint: None,
         adopt_existing_fingerprint: None,
@@ -192,6 +224,30 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
                     args,
                     &mut index,
                     "--review-reason-set",
+                )?)?);
+            }
+            "--exact-duplicate-review-prefix" => {
+                if parsed.exact_duplicate_review_prefix.is_some() {
+                    return Err(
+                        "--exact-duplicate-review-prefix는 한 번만 지정할 수 있음".into(),
+                    );
+                }
+                parsed.exact_duplicate_review_prefix = Some(
+                    parse_exact_duplicate_review_prefix(&value(
+                        args,
+                        &mut index,
+                        "--exact-duplicate-review-prefix",
+                    )?)?,
+                );
+            }
+            "--exact-duplicate-kind" => {
+                if parsed.exact_duplicate_kind.is_some() {
+                    return Err("--exact-duplicate-kind는 한 번만 지정할 수 있음".into());
+                }
+                parsed.exact_duplicate_kind = Some(parse_archive_kind(&value(
+                    args,
+                    &mut index,
+                    "--exact-duplicate-kind",
                 )?)?);
             }
             "--capacity-reserve-mib" => {
@@ -312,7 +368,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             }
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary] [--min-size-mib N] [--min-age-days N] [--limit N] [--decision-summary [--review-reason-set REASON|REASON]] [--verify-capacity [--oauth-connections ABSOLUTE_PATH]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
+                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary] [--min-size-mib N] [--min-age-days N] [--limit N] [--decision-summary [--review-reason-set REASON|REASON] | --exact-duplicate-review-prefix DIR_PREFIX --exact-duplicate-kind document|media|archive|dataset|backup|creative|incomplete-download] [--verify-capacity [--oauth-connections ABSOLUTE_PATH]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -369,6 +425,13 @@ struct ReviewOutput {
 fn validate_action_args(args: &Args) -> Result<(), String> {
     let copy_action = args.copy_fingerprint.is_some();
     let adoption_action = args.adopt_existing_fingerprint.is_some();
+    let exact_duplicate_review =
+        args.exact_duplicate_review_prefix.is_some() || args.exact_duplicate_kind.is_some();
+    if args.exact_duplicate_review_prefix.is_some() != args.exact_duplicate_kind.is_some() {
+        return Err(
+            "--exact-duplicate-review-prefix와 --exact-duplicate-kind는 함께 지정해야 함".into(),
+        );
+    }
     if args.all_readable_roots && !args.decision_summary {
         return Err("--all-readable-roots에는 --decision-summary가 필요함".into());
     }
@@ -458,6 +521,7 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
             || attestation_action
             || eviction_action
             || review_action
+            || exact_duplicate_review
             || args.export_naruon_lineage.is_some())
     {
         return Err("capacity verification은 plan 또는 copy action에서만 사용할 수 있음".into());
@@ -489,6 +553,17 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     if args.all_readable_roots && (actions > 0 || args.verify_capacity) {
         return Err(
             "--all-readable-roots는 mutation, root inspection 또는 capacity action과 함께 사용할 수 없음"
+                .into(),
+        );
+    }
+    if exact_duplicate_review
+        && (actions > 0
+            || args.all_readable_roots
+            || args.decision_summary
+            || args.review_reason_set.is_some())
+    {
+        return Err(
+            "exact duplicate review batch는 다른 action 또는 summary mode와 함께 사용할 수 없음"
                 .into(),
         );
     }
@@ -841,6 +916,383 @@ fn review_batch_summary(
             "dataset-profile",
         ],
         "decisions": decisions,
+    }))
+}
+
+#[cfg(not(coverage))]
+const EXACT_DUPLICATE_REVIEW_BATCH_FINGERPRINT_VERSION: u32 = 1;
+
+#[cfg(not(coverage))]
+#[derive(Debug, Clone, serde::Serialize)]
+struct RedactedMetadataEvidence {
+    field: String,
+    source: String,
+    confidence: String,
+}
+
+#[cfg(not(coverage))]
+#[derive(Debug, Clone, serde::Serialize)]
+struct ExactDuplicateReviewMember {
+    metadata_fingerprint: String,
+    review_fingerprint: String,
+    relative_path: String,
+    kind: ArchiveKind,
+    bytes: u64,
+    production_time_ms: u64,
+    production_time_source: String,
+    production_time_confidence: String,
+    production_evidence: Vec<RedactedMetadataEvidence>,
+    source_lineage_evidence_fields: Vec<String>,
+    canonical_recommendation: &'static str,
+    review_reasons: Vec<String>,
+}
+
+#[cfg(not(coverage))]
+#[derive(Debug, Clone, serde::Serialize)]
+struct ExactDuplicateReviewCluster {
+    cluster_fingerprint: String,
+    content_sha256: String,
+    bytes_per_candidate: u64,
+    candidate_count: usize,
+    redundant_bytes: u64,
+    recommendation_confidence: String,
+    recommendation_reason_codes: Vec<String>,
+    canonical: ExactDuplicateReviewMember,
+    redundant_copies: Vec<ExactDuplicateReviewMember>,
+    requires_human_confirmation: bool,
+}
+
+#[cfg(not(coverage))]
+fn archive_kind_label(kind: ArchiveKind) -> &'static str {
+    match kind {
+        ArchiveKind::Document => "document",
+        ArchiveKind::Media => "media",
+        ArchiveKind::Archive => "archive",
+        ArchiveKind::Dataset => "dataset",
+        ArchiveKind::Backup => "backup",
+        ArchiveKind::Creative => "creative",
+        ArchiveKind::IncompleteDownload => "incomplete-download",
+    }
+}
+
+#[cfg(not(coverage))]
+fn normal_relative_components(path: &str) -> Option<Vec<String>> {
+    let mut values = Vec::new();
+    for component in Path::new(path).components() {
+        let std::path::Component::Normal(value) = component else {
+            return None;
+        };
+        values.push(value.to_str()?.to_string());
+    }
+    (!values.is_empty()).then_some(values)
+}
+
+#[cfg(not(coverage))]
+fn exact_duplicate_content_sha256(candidate: &cloud::CloudCandidate) -> Result<String, String> {
+    let mut values = candidate
+        .metadata_evidence
+        .iter()
+        .filter(|evidence| evidence.field == "exact-duplicate-content-sha256")
+        .map(|evidence| evidence.value.clone())
+        .collect::<Vec<_>>();
+    values.sort();
+    values.dedup();
+    match values.as_slice() {
+        [value]
+            if value.len() == 64
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()) =>
+        {
+            Ok(value.clone())
+        }
+        [] => Err("exact-duplicate-content-sha256-missing".into()),
+        _ => Err("exact-duplicate-content-sha256-invalid-or-conflicting".into()),
+    }
+}
+
+#[cfg(not(coverage))]
+fn exact_duplicate_review_member(
+    candidate: &cloud::CloudCandidate,
+    canonical: bool,
+) -> ExactDuplicateReviewMember {
+    let mut production_evidence = candidate
+        .metadata_evidence
+        .iter()
+        .filter(|evidence| {
+            matches!(
+                evidence.field.as_str(),
+                "production-date"
+                    | "filename-date-hint"
+                    | "filesystem-created-date"
+                    | "filesystem-modified-date"
+            )
+        })
+        .map(|evidence| RedactedMetadataEvidence {
+            field: evidence.field.clone(),
+            source: evidence.source.clone(),
+            confidence: evidence.confidence.clone(),
+        })
+        .collect::<Vec<_>>();
+    production_evidence.sort_by(|left, right| {
+        left.field
+            .cmp(&right.field)
+            .then_with(|| left.source.cmp(&right.source))
+            .then_with(|| left.confidence.cmp(&right.confidence))
+    });
+    production_evidence.dedup_by(|left, right| {
+        left.field == right.field
+            && left.source == right.source
+            && left.confidence == right.confidence
+    });
+
+    let mut source_lineage_evidence_fields = candidate
+        .content_context
+        .iter()
+        .filter_map(|context| context.split_once('=').map(|(field, _)| field.to_string()))
+        .collect::<Vec<_>>();
+    source_lineage_evidence_fields.sort();
+    source_lineage_evidence_fields.dedup();
+
+    ExactDuplicateReviewMember {
+        metadata_fingerprint: candidate.metadata_fingerprint.clone(),
+        review_fingerprint: candidate.review_fingerprint.clone(),
+        relative_path: candidate.relative_path.clone(),
+        kind: candidate.kind,
+        bytes: candidate.bytes,
+        production_time_ms: candidate.production_time_ms,
+        production_time_source: candidate.production_time_source.clone(),
+        production_time_confidence: candidate.production_time_confidence.clone(),
+        production_evidence,
+        source_lineage_evidence_fields,
+        canonical_recommendation: if canonical {
+            "preferred"
+        } else {
+            "redundant-copy-candidate"
+        },
+        review_reasons: candidate.review_reasons.clone(),
+    }
+}
+
+#[cfg(not(coverage))]
+fn hash_exact_duplicate_review_value(hasher: &mut blake3::Hasher, value: &[u8]) {
+    hasher.update(&(value.len() as u64).to_le_bytes());
+    hasher.update(value);
+}
+
+#[cfg(not(coverage))]
+fn exact_duplicate_review_batch_fingerprint(
+    prefix: &str,
+    kind: ArchiveKind,
+    clusters: &[ExactDuplicateReviewCluster],
+) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage-exact-duplicate-review-batch-v1\0");
+    hasher.update(&EXACT_DUPLICATE_REVIEW_BATCH_FINGERPRINT_VERSION.to_le_bytes());
+    hash_exact_duplicate_review_value(&mut hasher, prefix.as_bytes());
+    hash_exact_duplicate_review_value(&mut hasher, archive_kind_label(kind).as_bytes());
+    hash_exact_duplicate_review_value(&mut hasher, &(clusters.len() as u64).to_le_bytes());
+    for cluster in clusters {
+        for value in [
+            cluster.cluster_fingerprint.as_bytes(),
+            cluster.content_sha256.as_bytes(),
+            cluster.canonical.metadata_fingerprint.as_bytes(),
+            cluster.canonical.review_fingerprint.as_bytes(),
+            cluster.canonical.relative_path.as_bytes(),
+        ] {
+            hash_exact_duplicate_review_value(&mut hasher, value);
+        }
+        hash_exact_duplicate_review_value(&mut hasher, &cluster.bytes_per_candidate.to_le_bytes());
+        hash_exact_duplicate_review_value(&mut hasher, &cluster.redundant_bytes.to_le_bytes());
+        for member in &cluster.redundant_copies {
+            for value in [
+                member.metadata_fingerprint.as_bytes(),
+                member.review_fingerprint.as_bytes(),
+                member.relative_path.as_bytes(),
+            ] {
+                hash_exact_duplicate_review_value(&mut hasher, value);
+            }
+            hash_exact_duplicate_review_value(&mut hasher, &member.bytes.to_le_bytes());
+        }
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+/// Emit a conservative, source-local review slice for exact duplicates.
+///
+/// The selected canonical copy must be a direct child of the source root. Every redundant member
+/// must be nested beneath a first path component that begins with the operator-supplied prefix.
+/// The output is evidence for a later human decision; it cannot authorize or execute Trash.
+#[cfg(not(coverage))]
+fn exact_duplicate_review_batch(
+    report: &cloud::CloudPlanReport,
+    redundant_prefix: &str,
+    kind: ArchiveKind,
+) -> Result<serde_json::Value, String> {
+    let mut selected = Vec::new();
+    for cluster in &report.exact_duplicates.clusters {
+        if cluster.recommendation_confidence != "high"
+            || cluster.recommendation_reason_codes.as_slice()
+                != ["richer-source-lineage-context-preferred"]
+        {
+            continue;
+        }
+        if !cluster.requires_human_confirmation
+            || cluster.candidate_count < 2
+            || cluster.member_metadata_fingerprints.len() != cluster.candidate_count
+            || cluster.redundant_bytes
+                != cluster
+                    .bytes_per_candidate
+                    .saturating_mul((cluster.candidate_count - 1) as u64)
+        {
+            return Err("exact-duplicate-review-cluster-contract-invalid".into());
+        }
+
+        let mut members = Vec::with_capacity(cluster.member_metadata_fingerprints.len());
+        for fingerprint in &cluster.member_metadata_fingerprints {
+            let matches = report
+                .candidates
+                .iter()
+                .filter(|candidate| candidate.metadata_fingerprint == *fingerprint)
+                .collect::<Vec<_>>();
+            match matches.as_slice() {
+                [only] => members.push(*only),
+                [] => {
+                    return Err(format!(
+                        "exact-duplicate-review-candidate-missing-from-bounded-plan:{fingerprint}"
+                    ));
+                }
+                _ => {
+                    return Err(format!(
+                        "exact-duplicate-review-candidate-fingerprint-ambiguous:{fingerprint}"
+                    ));
+                }
+            }
+        }
+        if members
+            .iter()
+            .any(|candidate| candidate.bytes != cluster.bytes_per_candidate)
+        {
+            return Err("exact-duplicate-review-member-size-mismatch".into());
+        }
+        let canonical = members
+            .iter()
+            .copied()
+            .filter(|candidate| {
+                candidate.metadata_fingerprint == cluster.recommended_canonical_metadata_fingerprint
+            })
+            .collect::<Vec<_>>();
+        let canonical = match canonical.as_slice() {
+            [only] => *only,
+            _ => return Err("exact-duplicate-review-canonical-not-unique".into()),
+        };
+        if canonical.kind != kind
+            || normal_relative_components(&canonical.relative_path)
+                .is_none_or(|components| components.len() != 1)
+        {
+            continue;
+        }
+
+        let mut redundant = members
+            .into_iter()
+            .filter(|candidate| candidate.metadata_fingerprint != canonical.metadata_fingerprint)
+            .collect::<Vec<_>>();
+        if redundant.is_empty() || redundant.iter().any(|candidate| candidate.kind != kind) {
+            continue;
+        }
+        let all_under_prefix = redundant.iter().all(|candidate| {
+            normal_relative_components(&candidate.relative_path).is_some_and(|components| {
+                components.len() > 1 && components[0].starts_with(redundant_prefix)
+            })
+        });
+        if !all_under_prefix {
+            continue;
+        }
+        redundant.sort_by(|left, right| {
+            left.relative_path
+                .cmp(&right.relative_path)
+                .then_with(|| left.metadata_fingerprint.cmp(&right.metadata_fingerprint))
+        });
+
+        let content_sha256 = exact_duplicate_content_sha256(canonical)?;
+        for member in &redundant {
+            if exact_duplicate_content_sha256(member)? != content_sha256 {
+                return Err("exact-duplicate-review-content-sha256-mismatch".into());
+            }
+        }
+        selected.push(ExactDuplicateReviewCluster {
+            cluster_fingerprint: cluster.cluster_fingerprint.clone(),
+            content_sha256,
+            bytes_per_candidate: cluster.bytes_per_candidate,
+            candidate_count: cluster.candidate_count,
+            redundant_bytes: cluster.redundant_bytes,
+            recommendation_confidence: cluster.recommendation_confidence.clone(),
+            recommendation_reason_codes: cluster.recommendation_reason_codes.clone(),
+            canonical: exact_duplicate_review_member(canonical, true),
+            redundant_copies: redundant
+                .into_iter()
+                .map(|candidate| exact_duplicate_review_member(candidate, false))
+                .collect(),
+            requires_human_confirmation: true,
+        });
+    }
+    if selected.is_empty() {
+        return Err("현재 fresh plan에 제한 조건을 만족하는 exact duplicate가 없음".into());
+    }
+    selected.sort_by(|left, right| left.cluster_fingerprint.cmp(&right.cluster_fingerprint));
+    let batch_fingerprint =
+        exact_duplicate_review_batch_fingerprint(redundant_prefix, kind, &selected);
+    let redundant_copy_count = selected
+        .iter()
+        .map(|cluster| cluster.redundant_copies.len())
+        .sum::<usize>();
+    let redundant_bytes = selected.iter().fold(0u64, |total, cluster| {
+        total.saturating_add(cluster.redundant_bytes)
+    });
+
+    Ok(serde_json::json!({
+        "schema_version": 1,
+        "output_mode": "exact-duplicate-review-batch",
+        "generated_at_ms": report.generated_at_ms,
+        "exact_duplicate_review_batch_fingerprint_version":
+            EXACT_DUPLICATE_REVIEW_BATCH_FINGERPRINT_VERSION,
+        "exact_duplicate_review_batch_fingerprint": batch_fingerprint,
+        "selection": {
+            "recommendation_confidence": "high",
+            "recommendation_reason_codes_exact": [
+                "richer-source-lineage-context-preferred",
+            ],
+            "canonical_location": "direct-child-of-source-root",
+            "redundant_first_component_prefix": redundant_prefix,
+            "kind": kind,
+        },
+        "metadata_policy": {
+            "production_time_precedence": [
+                "embedded-metadata",
+                "explicit-filename-date",
+                "filesystem-created",
+                "filesystem-modified",
+            ],
+            "filename_dates_are_auxiliary": true,
+            "summary_is_dry_run_only": true,
+            "batch_fingerprint_is_not_approval": true,
+            "human_confirmation_required_for_every_cluster": true,
+            "trash_execution_is_not_available_in_this_output_mode": true,
+        },
+        "redacted_from_summary": [
+            "absolute-source-path",
+            "absolute-destination-path",
+            "cloud-root-path-and-label",
+            "content-title-and-authors",
+            "raw-metadata-evidence-values",
+            "source-lineage-evidence-values",
+            "dataset-profile",
+        ],
+        "cluster_count": selected.len(),
+        "candidate_count": selected.len().saturating_add(redundant_copy_count),
+        "redundant_copy_count": redundant_copy_count,
+        "redundant_bytes": redundant_bytes,
+        "clusters": selected,
     }))
 }
 
@@ -1350,6 +1802,17 @@ fn run() -> Result<(), String> {
         );
         report.capacity = Some(assessment);
     }
+    if let (Some(redundant_prefix), Some(kind)) = (
+        args.exact_duplicate_review_prefix.as_deref(),
+        args.exact_duplicate_kind,
+    ) {
+        let output = exact_duplicate_review_batch(&report, redundant_prefix, kind)?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&output).map_err(|error| error.to_string())?
+        );
+        return Ok(());
+    }
     if let Some(candidate_fingerprint) = &args.review_candidate_fingerprint {
         let review_fingerprint = args
             .review_fingerprint
@@ -1544,6 +2007,8 @@ mod tests {
         assert!(!defaults.decision_summary);
         assert!(!defaults.all_readable_roots);
         assert!(defaults.review_reason_set.is_none());
+        assert!(defaults.exact_duplicate_review_prefix.is_none());
+        assert!(defaults.exact_duplicate_kind.is_none());
         assert_eq!(defaults.capacity_reserve_mib, 1024);
         let args = vec![
             "--root".into(),
@@ -1580,6 +2045,26 @@ mod tests {
             ])
         );
         assert_eq!(parsed.capacity_reserve_mib, 2048);
+
+        let duplicate_review = parse_args(
+            &[
+                "--exact-duplicate-review-prefix".into(),
+                "smart_bundle_".into(),
+                "--exact-duplicate-kind".into(),
+                "document".into(),
+            ],
+            Path::new("/home/test"),
+        )
+        .unwrap();
+        assert_eq!(
+            duplicate_review.exact_duplicate_review_prefix.as_deref(),
+            Some("smart_bundle_")
+        );
+        assert_eq!(
+            duplicate_review.exact_duplicate_kind,
+            Some(ArchiveKind::Document)
+        );
+        assert!(validate_action_args(&duplicate_review).is_ok());
     }
 
     #[test]
@@ -1689,6 +2174,46 @@ mod tests {
         )
         .unwrap();
         assert!(validate_action_args(&reason_set_summary).is_ok());
+        for prefix in ["", ".", "..", "nested/path", "nested\\path", "line\nbreak"] {
+            assert!(parse_args(
+                &[
+                    "--exact-duplicate-review-prefix".into(),
+                    prefix.into(),
+                    "--exact-duplicate-kind".into(),
+                    "document".into(),
+                ],
+                Path::new("/h"),
+            )
+            .is_err());
+        }
+        assert!(parse_args(
+            &[
+                "--exact-duplicate-review-prefix".into(),
+                "bundle_".into(),
+                "--exact-duplicate-kind".into(),
+                "unknown".into(),
+            ],
+            Path::new("/h"),
+        )
+        .is_err());
+        let missing_duplicate_kind = parse_args(
+            &["--exact-duplicate-review-prefix".into(), "bundle_".into()],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&missing_duplicate_kind).is_err());
+        let duplicate_summary_conflict = parse_args(
+            &[
+                "--exact-duplicate-review-prefix".into(),
+                "bundle_".into(),
+                "--exact-duplicate-kind".into(),
+                "document".into(),
+                "--decision-summary".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&duplicate_summary_conflict).is_err());
         let roots = vec![
             CloudRoot {
                 id: "/a".into(),
@@ -2049,6 +2574,193 @@ mod tests {
         );
         report.candidates[0].blocked_reason = Some("incomplete-download".into());
         assert_eq!(candidate_decision_state(&report.candidates[0]), "blocked");
+    }
+
+    #[test]
+    fn exact_duplicate_review_batch_binds_only_root_canonical_and_nested_prefix_copies() {
+        let content_sha256 = "1".repeat(64);
+        let member = |metadata_fingerprint: &str,
+                      review_fingerprint: &str,
+                      relative_path: &str,
+                      context: Vec<String>| {
+            cloud::CloudCandidate {
+                metadata_fingerprint: metadata_fingerprint.repeat(64),
+                review_fingerprint: review_fingerprint.repeat(64),
+                src: format!("/Users/private/Downloads/{relative_path}"),
+                dst: format!("/Users/private/Cloud/{relative_path}"),
+                provider: CloudProvider::Icloud,
+                destination_account_scope: disksage_lib::cloud::CloudAccountScope::Personal,
+                kind: ArchiveKind::Document,
+                bytes: 42,
+                age_days: 7,
+                created_ms: 10,
+                modified_ms: 20,
+                production_time_ms: 30,
+                production_time_source: "embedded:exiftool:CreateDate".into(),
+                production_time_confidence: "high".into(),
+                source_root: "/Users/private/Downloads".into(),
+                relative_path: relative_path.into(),
+                source_context: "private-source-context".into(),
+                requires_review: true,
+                review_reasons: vec![
+                    "download-origin-needs-destination-review".into(),
+                    "exact-duplicate-content-needs-canonical-selection".into(),
+                ],
+                content_title: Some("Private title".into()),
+                content_authors: vec!["Private author".into()],
+                content_context: context,
+                duration_ms: None,
+                dataset_profile: None,
+                metadata_evidence: vec![
+                    cloud::MetadataEvidence {
+                        field: "production-date".into(),
+                        value: "private-production-value".into(),
+                        source: "embedded:exiftool:CreateDate".into(),
+                        confidence: "high".into(),
+                    },
+                    cloud::MetadataEvidence {
+                        field: "exact-duplicate-content-sha256".into(),
+                        value: content_sha256.clone(),
+                        source: "local:content-hash".into(),
+                        confidence: "high".into(),
+                    },
+                ],
+                blocked_reason: None,
+            }
+        };
+        let canonical = member(
+            "a",
+            "b",
+            "report.docx",
+            vec![
+                "download-origin-host=private.example".into(),
+                "download-agent=Edge".into(),
+            ],
+        );
+        let redundant = member(
+            "c",
+            "d",
+            "smart_bundle_v1/report.docx",
+            vec!["download-agent=Bandizip".into()],
+        );
+        let report = cloud::CloudPlanReport {
+            cloud_root: CloudRoot {
+                id: "/Users/private/Cloud".into(),
+                provider: CloudProvider::Icloud,
+                account_scope: disksage_lib::cloud::CloudAccountScope::Personal,
+                label: "private@example.com".into(),
+                path: "/Users/private/Cloud".into(),
+                readable: true,
+                access_issue: None,
+            },
+            generated_at_ms: 100,
+            candidates: vec![canonical, redundant],
+            candidate_bytes: 84,
+            potentially_reclaimable_bytes: 84,
+            exact_duplicates: cloud::ExactDuplicateSummary {
+                cluster_count: 1,
+                candidate_count: 2,
+                candidate_bytes: 84,
+                redundant_bytes: 42,
+                clusters: vec![cloud::ExactDuplicateClusterRecommendation {
+                    cluster_fingerprint: "e".repeat(64),
+                    candidate_count: 2,
+                    bytes_per_candidate: 42,
+                    redundant_bytes: 42,
+                    recommended_canonical_metadata_fingerprint: "a".repeat(64),
+                    recommendation_confidence: "high".into(),
+                    recommendation_reason_codes: vec![
+                        "richer-source-lineage-context-preferred".into()
+                    ],
+                    member_metadata_fingerprints: vec!["a".repeat(64), "c".repeat(64)],
+                    requires_human_confirmation: true,
+                }],
+            },
+            capacity: None,
+            notices: vec!["dry-run-only".into()],
+        };
+
+        let batch =
+            exact_duplicate_review_batch(&report, "smart_bundle_", ArchiveKind::Document).unwrap();
+        assert_eq!(batch["output_mode"], "exact-duplicate-review-batch");
+        assert_eq!(batch["cluster_count"], 1);
+        assert_eq!(batch["candidate_count"], 2);
+        assert_eq!(batch["redundant_copy_count"], 1);
+        assert_eq!(batch["redundant_bytes"], 42);
+        assert_eq!(batch["clusters"][0]["content_sha256"], content_sha256);
+        assert_eq!(
+            batch["clusters"][0]["canonical"]["relative_path"],
+            "report.docx"
+        );
+        assert_eq!(
+            batch["clusters"][0]["redundant_copies"][0]["relative_path"],
+            "smart_bundle_v1/report.docx"
+        );
+        assert_eq!(
+            batch["clusters"][0]["canonical"]["source_lineage_evidence_fields"],
+            serde_json::json!(["download-agent", "download-origin-host"])
+        );
+        assert_eq!(
+            batch["exact_duplicate_review_batch_fingerprint"]
+                .as_str()
+                .unwrap()
+                .len(),
+            64
+        );
+        assert_eq!(
+            batch["metadata_policy"]["batch_fingerprint_is_not_approval"],
+            true
+        );
+        assert_eq!(
+            batch["metadata_policy"]["trash_execution_is_not_available_in_this_output_mode"],
+            true
+        );
+
+        let encoded = serde_json::to_string(&batch).unwrap();
+        for redacted in [
+            "/Users/private",
+            "private@example.com",
+            "private.example",
+            "Private title",
+            "Private author",
+            "private-production-value",
+            "private-source-context",
+            "Bandizip",
+            "Edge",
+        ] {
+            assert!(!encoded.contains(redacted));
+        }
+
+        let repeated =
+            exact_duplicate_review_batch(&report, "smart_bundle_", ArchiveKind::Document).unwrap();
+        assert_eq!(
+            repeated["exact_duplicate_review_batch_fingerprint"],
+            batch["exact_duplicate_review_batch_fingerprint"]
+        );
+        assert!(exact_duplicate_review_batch(&report, "other_", ArchiveKind::Document).is_err());
+        assert!(
+            exact_duplicate_review_batch(&report, "smart_bundle_", ArchiveKind::Media).is_err()
+        );
+
+        let mut evidence_changed = report.clone();
+        evidence_changed.candidates[1].review_fingerprint = "f".repeat(64);
+        assert_ne!(
+            exact_duplicate_review_batch(
+                &evidence_changed,
+                "smart_bundle_",
+                ArchiveKind::Document,
+            )
+            .unwrap()["exact_duplicate_review_batch_fingerprint"],
+            batch["exact_duplicate_review_batch_fingerprint"]
+        );
+
+        let mut incomplete = report;
+        incomplete.candidates.pop();
+        assert!(
+            exact_duplicate_review_batch(&incomplete, "smart_bundle_", ArchiveKind::Document)
+                .unwrap_err()
+                .contains("missing-from-bounded-plan")
+        );
     }
 
     #[test]
