@@ -70,6 +70,7 @@ struct Args {
     capacity_readiness_summary: bool,
     review_reason_set: Option<Vec<String>>,
     private_review_output: Option<PathBuf>,
+    private_full_review_output: Option<PathBuf>,
     exact_duplicate_review_prefix: Option<String>,
     exact_duplicate_kind: Option<ArchiveKind>,
     capacity_reserve_mib: u64,
@@ -195,6 +196,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
         capacity_readiness_summary: false,
         review_reason_set: None,
         private_review_output: None,
+        private_full_review_output: None,
         exact_duplicate_review_prefix: None,
         exact_duplicate_kind: None,
         capacity_reserve_mib: 1024,
@@ -276,6 +278,20 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
                     &mut index,
                     "--private-review-output",
                 )?));
+            }
+            "--private-full-review-output" => {
+                if parsed.private_full_review_output.is_some() {
+                    return Err(
+                        "--private-full-review-output은 한 번만 지정할 수 있음"
+                            .into(),
+                    );
+                }
+                parsed.private_full_review_output =
+                    Some(PathBuf::from(value(
+                        args,
+                        &mut index,
+                        "--private-full-review-output",
+                    )?));
             }
             "--exact-duplicate-review-prefix" => {
                 if parsed.exact_duplicate_review_prefix.is_some() {
@@ -477,7 +493,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             "--export-semantic-catalog" => parsed.export_semantic_catalog = true,
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary [--capacity-readiness-summary --verify-capacity]] [--min-size-mib N] [--min-age-days N] [--limit N] [--decision-summary [--review-reason-set REASON|REASON [--private-review-output ABSOLUTE_NEW_FILE.json]] | --exact-duplicate-review-prefix DIR_PREFIX --exact-duplicate-kind document|media|archive|dataset|backup|creative|incomplete-download | --export-semantic-catalog | --export-naruon-duplicate-canonical-review AUDIT_LINEAGE.json [--duplicate-canonical-review-output ABSOLUTE_NEW_FILE.json] [--duplicate-canonical-review-dossier-output ABSOLUTE_NEW_FILE.json]] [--verify-capacity [--oauth-connections ABSOLUTE_PATH] [--export-naruon-capacity]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
+                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary [--capacity-readiness-summary --verify-capacity]] [--min-size-mib N] [--min-age-days N] [--limit N] [--decision-summary [--private-full-review-output ABSOLUTE_NEW_FILE.json | --review-reason-set REASON|REASON [--private-review-output ABSOLUTE_NEW_FILE.json]] | --exact-duplicate-review-prefix DIR_PREFIX --exact-duplicate-kind document|media|archive|dataset|backup|creative|incomplete-download | --export-semantic-catalog | --export-naruon-duplicate-canonical-review AUDIT_LINEAGE.json [--duplicate-canonical-review-output ABSOLUTE_NEW_FILE.json] [--duplicate-canonical-review-dossier-output ABSOLUTE_NEW_FILE.json]] [--verify-capacity [--oauth-connections ABSOLUTE_PATH] [--export-naruon-capacity]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -753,6 +769,22 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     if args.private_review_output.is_some() && args.all_readable_roots {
         return Err("--private-review-output은 단일 cloud destination에서만 사용할 수 있음".into());
     }
+    if args.private_full_review_output.is_some()
+        && (!args.decision_summary
+            || args.review_reason_set.is_some()
+            || args.private_review_output.is_some())
+    {
+        return Err(
+            "--private-full-review-output은 전체 --decision-summary에서만 단독으로 사용할 수 있음"
+                .into(),
+        );
+    }
+    if args.private_full_review_output.is_some() && args.all_readable_roots {
+        return Err(
+            "--private-full-review-output은 단일 cloud destination에서만 사용할 수 있음"
+                .into(),
+        );
+    }
     if actions > 1 {
         return Err(
             "root inspection, copy, adoption, attestation, eviction, review action은 동시에 사용할 수 없음".into(),
@@ -801,6 +833,11 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     if let Some(output_path) = &args.private_review_output {
         if !output_path.is_absolute() {
             return Err("--private-review-output은 절대 경로여야 함".into());
+        }
+    }
+    if let Some(output_path) = &args.private_full_review_output {
+        if !output_path.is_absolute() {
+            return Err("--private-full-review-output은 절대 경로여야 함".into());
         }
     }
     if let Some(receipt_path) = &args.evict_receipt {
@@ -1237,6 +1274,129 @@ fn private_review_dossier(
         },
         "candidates": candidates,
     }))
+}
+
+/// Build one bounded local-only dossier for every candidate in the fresh single-destination plan.
+///
+/// Blocked candidates remain present so an operator can understand incomplete downloads,
+/// multipart sets, unreadable archives, and destination conflicts without confusing those states
+/// with review approval. The dossier is sensitive and must use the mode-0600 create-new writer.
+#[cfg(not(coverage))]
+fn private_full_review_dossier(report: &cloud::CloudPlanReport) -> serde_json::Value {
+    let mut candidates = report.candidates.iter().collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        left.metadata_fingerprint
+            .cmp(&right.metadata_fingerprint)
+            .then_with(|| left.review_fingerprint.cmp(&right.review_fingerprint))
+    });
+    let review_required_count = candidates
+        .iter()
+        .filter(|candidate| candidate_decision_state(candidate) == "review-required")
+        .count();
+    let blocked_count = candidates
+        .iter()
+        .filter(|candidate| candidate_decision_state(candidate) == "blocked")
+        .count();
+
+    serde_json::json!({
+        "schema_version": 1,
+        "output_mode": "private-full-review-dossier",
+        "generated_at_ms": report.generated_at_ms,
+        "contains_sensitive_local_metadata": true,
+        "decision_batch_fingerprint_version": cloud::CLOUD_DECISION_BATCH_FINGERPRINT_VERSION,
+        "decision_batch_fingerprint": cloud::cloud_decision_batch_fingerprint(report),
+        "dossier_scope": "all-fresh-plan-candidates-including-blocked",
+        "cloud_root": &report.cloud_root,
+        "candidate_count": candidates.len(),
+        "candidate_bytes": report.candidate_bytes,
+        "potentially_reclaimable_bytes": report.potentially_reclaimable_bytes,
+        "review_required_count": review_required_count,
+        "blocked_count": blocked_count,
+        "aggregates": decision_aggregates(report),
+        "exact_duplicates": &report.exact_duplicates,
+        "capacity": &report.capacity,
+        "notices": &report.notices,
+        "metadata_policy": {
+            "production_time_precedence": [
+                "embedded-metadata",
+                "explicit-filename-date",
+                "filesystem-created",
+                "filesystem-modified",
+            ],
+            "filename_dates_are_auxiliary": true,
+            "raw_metadata_values_are_review_evidence_only": true,
+            "blocked_candidates_are_not_approval_eligible": true,
+            "dossier_is_not_approval": true,
+            "candidate_review_decisions_remain_individual": true,
+        },
+        "provider_sync_attested": false,
+        "cloud_write_performed": false,
+        "source_eviction_authorized": false,
+        "candidates": candidates,
+    })
+}
+
+/// Return only path-free aggregates and the integrity metadata of the separately written dossier.
+#[cfg(not(coverage))]
+fn private_full_review_summary(
+    report: &cloud::CloudPlanReport,
+    dossier_sha256: &str,
+    dossier_bytes: usize,
+) -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": 1,
+        "output_mode": "private-full-review-summary",
+        "generated_at_ms": report.generated_at_ms,
+        "decision_batch_fingerprint_version": cloud::CLOUD_DECISION_BATCH_FINGERPRINT_VERSION,
+        "decision_batch_fingerprint": cloud::cloud_decision_batch_fingerprint(report),
+        "cloud": {
+            "provider": report.cloud_root.provider,
+            "account_scope": report.cloud_root.account_scope,
+        },
+        "candidate_count": report.candidates.len(),
+        "candidate_bytes": report.candidate_bytes,
+        "potentially_reclaimable_bytes": report.potentially_reclaimable_bytes,
+        "aggregates": decision_aggregates(report),
+        "capacity": &report.capacity,
+        "notices": &report.notices,
+        "metadata_policy": {
+            "production_time_precedence": [
+                "embedded-metadata",
+                "explicit-filename-date",
+                "filesystem-created",
+                "filesystem-modified",
+            ],
+            "filename_dates_are_auxiliary": true,
+            "summary_is_dry_run_only": true,
+            "blocked_candidates_are_not_approval_eligible": true,
+            "candidate_review_decisions_remain_individual": true,
+        },
+        "private_full_review_dossier": {
+            "written": true,
+            "bytes": dossier_bytes,
+            "sha256": dossier_sha256,
+            "unix_mode": "0600",
+            "create_new": true,
+            "contains_sensitive_local_metadata": true,
+            "checksum_is_not_signature": true,
+            "is_approval": false,
+        },
+        "redacted_from_summary": [
+            "absolute-source-path",
+            "absolute-destination-path",
+            "relative-source-name",
+            "cloud-root-path-and-label",
+            "content-title-and-authors",
+            "raw-metadata-evidence-values",
+            "dataset-profile",
+            "exact-duplicate-members",
+        ],
+        "paths_redacted": true,
+        "relative_names_redacted": true,
+        "provider_sync_attested": false,
+        "cloud_write_performed": false,
+        "source_eviction_authorized": false,
+    })
 }
 
 #[cfg(all(not(coverage), unix))]
@@ -2560,9 +2720,15 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
     if args.decision_summary {
-        let mut summary = match args.review_reason_set.as_deref() {
-            Some(reasons) => review_batch_summary(&report, reasons)?,
-            None => decision_summary(&report),
+        let mut summary = if let Some(output_path) = &args.private_full_review_output {
+            let dossier = private_full_review_dossier(&report);
+            let (sha256, bytes) = write_private_review_dossier(output_path, &dossier)?;
+            private_full_review_summary(&report, &sha256, bytes)
+        } else {
+            match args.review_reason_set.as_deref() {
+                Some(reasons) => review_batch_summary(&report, reasons)?,
+                None => decision_summary(&report),
+            }
         };
         if let Some(output_path) = &args.private_review_output {
             let reasons = args
@@ -2657,6 +2823,7 @@ mod tests {
         assert!(!defaults.all_readable_roots);
         assert!(defaults.review_reason_set.is_none());
         assert!(defaults.private_review_output.is_none());
+        assert!(defaults.private_full_review_output.is_none());
         assert!(defaults.exact_duplicate_review_prefix.is_none());
         assert!(defaults.exact_duplicate_kind.is_none());
         assert_eq!(defaults.capacity_reserve_mib, 1024);
@@ -2903,6 +3070,27 @@ mod tests {
         let mut multicloud_private_review = private_review;
         multicloud_private_review.all_readable_roots = true;
         assert!(validate_action_args(&multicloud_private_review).is_err());
+        let private_full_review = parse_args(
+            &[
+                "--decision-summary".into(),
+                "--private-full-review-output".into(),
+                "/private/full-review.json".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&private_full_review).is_ok());
+        let mut relative_private_full_review = private_full_review.clone();
+        relative_private_full_review.private_full_review_output =
+            Some(PathBuf::from("full-review.json"));
+        assert!(validate_action_args(&relative_private_full_review).is_err());
+        let mut reason_scoped_private_full_review = private_full_review.clone();
+        reason_scoped_private_full_review.review_reason_set =
+            Some(vec!["destination-account-scope-unknown".into()]);
+        assert!(validate_action_args(&reason_scoped_private_full_review).is_err());
+        let mut multicloud_private_full_review = private_full_review;
+        multicloud_private_full_review.all_readable_roots = true;
+        assert!(validate_action_args(&multicloud_private_full_review).is_err());
         let dossier_without_export = parse_args(
             &[
                 "--duplicate-canonical-review-dossier-output".into(),
@@ -3261,6 +3449,62 @@ mod tests {
             "private raw value",
         ] {
             assert!(encoded_dossier.contains(private_value));
+        }
+
+        let mut full_report = report.clone();
+        let mut blocked_candidate = full_report.candidates[0].clone();
+        blocked_candidate.metadata_fingerprint = "c".repeat(64);
+        blocked_candidate.review_fingerprint = "d".repeat(64);
+        blocked_candidate.bytes = 7;
+        blocked_candidate.blocked_reason = Some("destination-exists".into());
+        full_report.candidates.push(blocked_candidate);
+        full_report.candidate_bytes += 7;
+
+        let full_dossier = private_full_review_dossier(&full_report);
+        assert_eq!(
+            full_dossier["output_mode"],
+            "private-full-review-dossier"
+        );
+        assert_eq!(full_dossier["candidate_count"], 2);
+        assert_eq!(full_dossier["review_required_count"], 1);
+        assert_eq!(full_dossier["blocked_count"], 1);
+        assert_eq!(
+            full_dossier["metadata_policy"]["blocked_candidates_are_not_approval_eligible"],
+            true
+        );
+        let encoded_full_dossier = serde_json::to_string(&full_dossier).unwrap();
+        for private_value in [
+            "/Users/private",
+            "private@example.com",
+            "Confidential title",
+            "Private Author",
+            "private raw value",
+        ] {
+            assert!(encoded_full_dossier.contains(private_value));
+        }
+
+        let full_summary =
+            private_full_review_summary(&full_report, &"f".repeat(64), 123);
+        assert_eq!(
+            full_summary["output_mode"],
+            "private-full-review-summary"
+        );
+        assert_eq!(full_summary["paths_redacted"], true);
+        assert_eq!(full_summary["relative_names_redacted"], true);
+        assert_eq!(
+            full_summary["private_full_review_dossier"]["checksum_is_not_signature"],
+            true
+        );
+        let encoded_full_summary = serde_json::to_string(&full_summary).unwrap();
+        for private_value in [
+            "/Users/private",
+            "report.pdf",
+            "private@example.com",
+            "Confidential title",
+            "Private Author",
+            "private raw value",
+        ] {
+            assert!(!encoded_full_summary.contains(private_value));
         }
 
         #[cfg(unix)]
