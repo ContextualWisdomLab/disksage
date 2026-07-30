@@ -20,6 +20,7 @@
 - 🩺 **Incomplete-download recovery validation** — decodes bounded PNG payloads and streams bounded whole-file or embedded ZIP ranges to EOF with entry CRC checks, without extraction, rename, or discard
 - 🧬 **Incomplete-download materialization plan** — binds fresh audit and recovery fingerprints to exact non-overlapping byte ranges, SHA-256/BLAKE3 content lineage, and content-addressed filename suggestions while withholding destination selection and write approval
 - ☁️ **Destination-bound recovery approval plan** — binds validated output units to one discovered cloud root, relative destination, fresh provider capacity evidence, collision checks, and one exact human-approval fingerprint without creating any output
+- 🌿 **Stale Git worktree audit** — resolves an exact retention-reference OID set, preserves every exact retained tip plus primary/current/dirty/unmerged/locked/prunable/active worktree, measures bounded allocated bytes, and emits a path-redacted fingerprint and exact approval phrase without pruning or removing anything
 
 ## Safety first
 
@@ -101,6 +102,25 @@ cargo run --features cloud-cli --bin disksage-incomplete-download-materialize --
   --rationale "Approved exact provider, account, units, bytes, and destination plan" \
   --live-icloud-capacity \
   --execute
+```
+
+Stale-worktree auditing is read-only. It does not fetch or assume that local remote-tracking
+references are current, so operators should refresh every selected reference before auditing.
+`--reference-ref` is repeatable: use the integration branch and every current open-PR exact head.
+An exact retained tip is always preserved. A different secondary worktree is a removal candidate
+only when its HEAD is already contained in at least one resolved retention OID, its tracked and
+untracked state is clean, its bounded allocated-byte scan is complete, it is neither locked nor
+prunable, and no active CWD or recursive `lsof` consumer is observed. Local paths, branch names,
+and reference names appear only in an optional create-new mode-0600 report. The public approval
+phrase is plan evidence; this command has no remove, prune, branch-delete, or filesystem mutation
+path.
+
+```sh
+cargo run --features cloud-cli --bin disksage-git-worktree-audit -- \
+  --repository-root /absolute/repository/worktree \
+  --reference-ref origin/develop \
+  --reference-ref CURRENT_OPEN_PR_HEAD_OID \
+  --private-output /absolute/private/new-git-worktree-audit.json
 ```
 
 ## Status
