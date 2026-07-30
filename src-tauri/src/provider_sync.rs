@@ -167,16 +167,98 @@ pub struct FileProviderStatusSnapshot {
 }
 
 impl FileProviderStatusSnapshot {
-    fn is_local_current(&self) -> bool {
+    pub fn is_local_current(&self) -> bool {
         self.is_downloaded && !self.is_downloading && self.is_most_recent_version_downloaded
     }
 
-    fn is_sync_complete(&self) -> bool {
+    pub fn is_sync_complete(&self) -> bool {
         self.is_local_current()
             && self.is_uploaded
             && !self.is_uploading
             && !self.is_excluded_from_sync
             && !self.is_sync_paused
+    }
+}
+
+/// Path-free, non-authoritative preflight for one macOS File Provider item.
+///
+/// This intentionally does not hash file content or create a provider sync attestation. It allows
+/// callers to distinguish an unavailable File Provider service from an item that is merely pending
+/// upload before a copy/adoption receipt exists.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileProviderStatusAudit {
+    pub schema_version: u32,
+    pub observed_at_ms: u64,
+    pub target_fingerprint: String,
+    pub regular_file: bool,
+    pub symlink: bool,
+    pub local_bytes: Option<u64>,
+    pub allocated_bytes: Option<u64>,
+    pub status_available: bool,
+    pub error_code: Option<String>,
+    pub provider_reported_bytes: Option<u64>,
+    pub is_downloaded: Option<bool>,
+    pub is_downloading: Option<bool>,
+    pub is_most_recent_version_downloaded: Option<bool>,
+    pub is_uploaded: Option<bool>,
+    pub is_uploading: Option<bool>,
+    pub is_excluded_from_sync: Option<bool>,
+    pub is_sync_paused: Option<bool>,
+    pub local_current: Option<bool>,
+    pub provider_native_sync_complete: Option<bool>,
+    pub local_content_read: bool,
+    pub content_hash_verified: bool,
+    pub remote_capacity_verified: bool,
+    pub remote_content_verified: bool,
+    pub approval_issued: bool,
+    pub mutation_performed: bool,
+}
+
+fn file_provider_target_fingerprint(path: &std::path::Path) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage:file-provider-status-target:v1");
+    hasher.update(&[0]);
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        hasher.update(path.as_os_str().as_bytes());
+    }
+    #[cfg(not(unix))]
+    hasher.update(path.as_os_str().to_string_lossy().as_bytes());
+    hasher.finalize().to_hex().to_string()
+}
+
+fn empty_file_provider_status_audit(
+    path: &std::path::Path,
+    observed_at_ms: u64,
+) -> FileProviderStatusAudit {
+    FileProviderStatusAudit {
+        schema_version: 1,
+        observed_at_ms,
+        target_fingerprint: file_provider_target_fingerprint(path),
+        regular_file: false,
+        symlink: false,
+        local_bytes: None,
+        allocated_bytes: None,
+        status_available: false,
+        error_code: None,
+        provider_reported_bytes: None,
+        is_downloaded: None,
+        is_downloading: None,
+        is_most_recent_version_downloaded: None,
+        is_uploaded: None,
+        is_uploading: None,
+        is_excluded_from_sync: None,
+        is_sync_paused: None,
+        local_current: None,
+        provider_native_sync_complete: None,
+        local_content_read: false,
+        content_hash_verified: false,
+        remote_capacity_verified: false,
+        remote_content_verified: false,
+        approval_issued: false,
+        mutation_performed: false,
     }
 }
 
@@ -570,6 +652,25 @@ fn hash_file(path: &std::path::Path) -> Result<String, String> {
     Ok(hasher.finalize().to_hex().to_string())
 }
 
+fn classify_file_providerctl_failure(stderr: &[u8]) -> &'static str {
+    let message = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    if message.contains("reentrancy avoided")
+        || (message.contains("com.apple.fileprovider") && message.contains("error 141"))
+    {
+        "file-provider-service-reentrancy-avoided"
+    } else if message.contains("com.apple.fileprovider")
+        && (message.contains("connection init failed")
+            || message.contains("connection to service")
+            || message.contains("invalidated"))
+    {
+        "file-provider-service-unavailable"
+    } else if message.contains("itemforurl") || message.contains("item not found") {
+        "file-provider-item-unavailable"
+    } else {
+        "file-provider-status-command-failed"
+    }
+}
+
 #[cfg(all(target_os = "macos", not(coverage)))]
 fn file_providerctl_status(path: &str) -> Result<String, String> {
     use std::io::Read;
@@ -583,7 +684,7 @@ fn file_providerctl_status(path: &str) -> Result<String, String> {
         .arg("evaluate")
         .arg(path)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|_| "file-provider-status-command-unavailable".to_string())?;
     let deadline = Instant::now() + TIMEOUT;
@@ -613,13 +714,125 @@ fn file_providerctl_status(path: &str) -> Result<String, String> {
         .take(OUTPUT_LIMIT + 1)
         .read_to_end(&mut output)
         .map_err(|_| "file-provider-status-output-read-failed".to_string())?;
+    let mut error_output = Vec::new();
+    child
+        .stderr
+        .take()
+        .ok_or_else(|| "file-provider-status-error-output-missing".to_string())?
+        .take(OUTPUT_LIMIT + 1)
+        .read_to_end(&mut error_output)
+        .map_err(|_| "file-provider-status-error-output-read-failed".to_string())?;
+    if error_output.len() as u64 > OUTPUT_LIMIT {
+        return Err("file-provider-status-error-output-too-large".into());
+    }
     if !status.success() {
-        return Err("file-provider-status-command-failed".into());
+        return Err(classify_file_providerctl_failure(&error_output).into());
     }
     if output.len() as u64 > OUTPUT_LIMIT {
         return Err("file-provider-status-output-too-large".into());
     }
     String::from_utf8(output).map_err(|_| "file-provider-status-output-not-utf8".into())
+}
+
+/// Audit one File Provider item without reading its content or issuing sync/eviction authority.
+#[cfg(all(target_os = "macos", not(coverage)))]
+pub fn audit_file_provider_status(
+    path: &std::path::Path,
+    observed_at_ms: u64,
+) -> FileProviderStatusAudit {
+    use std::os::unix::fs::MetadataExt;
+
+    let mut audit = empty_file_provider_status_audit(path, observed_at_ms);
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(_) => {
+            audit.error_code = Some("file-provider-target-metadata-unavailable".into());
+            return audit;
+        }
+    };
+    audit.symlink = metadata.file_type().is_symlink();
+    audit.regular_file = metadata.is_file() && !audit.symlink;
+    if !audit.regular_file {
+        audit.error_code = Some("file-provider-target-must-be-regular-file".into());
+        return audit;
+    }
+    audit.local_bytes = Some(metadata.len());
+    audit.allocated_bytes = Some(metadata.blocks().saturating_mul(512));
+    let before_modified = match metadata.modified() {
+        Ok(modified) => modified,
+        Err(_) => {
+            audit.error_code = Some("file-provider-target-modified-time-unavailable".into());
+            return audit;
+        }
+    };
+    let path = match path.to_str() {
+        Some(path) => path,
+        None => {
+            audit.error_code = Some("file-provider-target-not-unicode".into());
+            return audit;
+        }
+    };
+    let output = match file_providerctl_status(path) {
+        Ok(output) => output,
+        Err(error) => {
+            audit.error_code = Some(error);
+            return audit;
+        }
+    };
+    let snapshot = match parse_file_providerctl_snapshot(&output, metadata.len(), "not-read") {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            audit.error_code = Some(error);
+            return audit;
+        }
+    };
+    let after = match std::fs::symlink_metadata(path) {
+        Ok(after) => after,
+        Err(_) => {
+            audit.error_code = Some("file-provider-target-changed-during-audit".into());
+            return audit;
+        }
+    };
+    let after_modified = match after.modified() {
+        Ok(modified) => modified,
+        Err(_) => {
+            audit.error_code = Some("file-provider-target-changed-during-audit".into());
+            return audit;
+        }
+    };
+    if after.file_type().is_symlink()
+        || !after.is_file()
+        || after.len() != metadata.len()
+        || after.dev() != metadata.dev()
+        || after.ino() != metadata.ino()
+        || after_modified != before_modified
+    {
+        audit.error_code = Some("file-provider-target-changed-during-audit".into());
+        return audit;
+    }
+
+    audit.status_available = true;
+    audit.provider_reported_bytes = Some(snapshot.observed_bytes);
+    audit.is_downloaded = Some(snapshot.is_downloaded);
+    audit.is_downloading = Some(snapshot.is_downloading);
+    audit.is_most_recent_version_downloaded = Some(snapshot.is_most_recent_version_downloaded);
+    audit.is_uploaded = Some(snapshot.is_uploaded);
+    audit.is_uploading = Some(snapshot.is_uploading);
+    audit.is_excluded_from_sync = Some(snapshot.is_excluded_from_sync);
+    audit.is_sync_paused = Some(snapshot.is_sync_paused);
+    audit.local_current = Some(snapshot.is_local_current());
+    audit.provider_native_sync_complete = Some(snapshot.is_sync_complete());
+    audit
+}
+
+#[cfg(any(not(target_os = "macos"), coverage))]
+pub fn audit_file_provider_status(
+    path: &std::path::Path,
+    observed_at_ms: u64,
+) -> FileProviderStatusAudit {
+    let mut audit = empty_file_provider_status_audit(path, observed_at_ms);
+    audit.error_code = Some("file-provider-native-status-unsupported-platform".into());
+    audit
 }
 
 /// Read macOS File Provider status for a OneDrive or Google Drive destination and bind it to the
@@ -909,6 +1122,57 @@ mod tests {
             isExcludedFromSync = 0;
             isSyncPaused = 0;
         "#
+    }
+
+    #[test]
+    fn file_provider_command_failures_are_path_free_and_actionable() {
+        let reentrancy = br#"
+            Error: Error Domain=NSCocoaErrorDomain Code=4099
+            The connection to service named com.apple.FileProvider was invalidated:
+            Connection init failed at lookup with error 141 - Reentrancy avoided.
+            /Users/example/OneDrive/private.pdf
+        "#;
+        assert_eq!(
+            classify_file_providerctl_failure(reentrancy),
+            "file-provider-service-reentrancy-avoided"
+        );
+        assert_eq!(
+            classify_file_providerctl_failure(
+                b"connection to service named com.apple.FileProvider was invalidated"
+            ),
+            "file-provider-service-unavailable"
+        );
+        assert_eq!(
+            classify_file_providerctl_failure(b"itemForURL failed because item not found"),
+            "file-provider-item-unavailable"
+        );
+        assert_eq!(
+            classify_file_providerctl_failure(b"unrelated subsystem returned error 141"),
+            "file-provider-status-command-failed"
+        );
+        assert_eq!(
+            classify_file_providerctl_failure(b"unexpected provider failure at /private/path"),
+            "file-provider-status-command-failed"
+        );
+    }
+
+    #[test]
+    fn file_provider_preflight_shape_never_serializes_the_target_path_or_authority() {
+        let audit = empty_file_provider_status_audit(
+            std::path::Path::new("/Users/example/OneDrive/private.pdf"),
+            42,
+        );
+        let encoded = serde_json::to_string(&audit).unwrap();
+
+        assert_eq!(audit.target_fingerprint.len(), 64);
+        assert!(!encoded.contains("/Users/"));
+        assert!(!encoded.contains("private.pdf"));
+        assert!(!audit.local_content_read);
+        assert!(!audit.content_hash_verified);
+        assert!(!audit.remote_capacity_verified);
+        assert!(!audit.remote_content_verified);
+        assert!(!audit.approval_issued);
+        assert!(!audit.mutation_performed);
     }
 
     #[test]
