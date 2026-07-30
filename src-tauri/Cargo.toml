@@ -30,6 +30,11 @@ path = "src/bin/disksage-icloud-local-eviction.rs"
 required-features = ["cloud-cli"]
 
 [[bin]]
+name = "disksage-multipart-archive-audit"
+path = "src/bin/disksage-multipart-archive-audit.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
 name = "disksage-archive-tree"
 path = "src/bin/disksage-archive-tree.rs"
 required-features = ["archive-cli"]

@@ -40,6 +40,7 @@ pub mod cloud_review;
 pub mod cloud_transfer;
 pub mod content_digest;
 pub mod maven_cache;
+pub mod multipart_archive;
 pub mod naruon_capacity;
 pub mod naruon_lineage;
 pub mod provider_api_client;
