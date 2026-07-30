@@ -3167,12 +3167,10 @@ fn prehash_duplicate_candidates(
 ) -> BTreeMap<PathBuf, Result<ContentDigests, String>> {
     let mut by_size: BTreeMap<u64, Vec<&FileFact>> = BTreeMap::new();
     for file in files {
-        let Some(kind) = archive_kind(&file.path) else {
+        if archive_kind(&file.path).is_none() {
             continue;
-        };
-        if source_blocked_reason(&file.path, kind, &file.content_metadata).is_none() {
-            by_size.entry(file.bytes).or_default().push(file);
         }
+        by_size.entry(file.bytes).or_default().push(file);
     }
 
     let mut digests = BTreeMap::new();
@@ -3449,8 +3447,9 @@ fn exact_duplicate_cluster_fingerprint(
     hasher.finalize().to_hex().to_string()
 }
 
-/// Hash only non-blocked candidates that share a byte length. Exact duplicates remain movable,
-/// but require an operator to select the canonical lineage instead of silently copying every path.
+/// Group every source candidate that shares a byte length, independently of destination or
+/// transfer blockers. A blocked candidate must not be copied, but it still participates in
+/// source-local duplicate evidence and canonical-lineage review.
 #[cfg(not(coverage))]
 fn mark_exact_duplicate_candidates(
     candidates: &mut [CloudCandidate],
@@ -3459,9 +3458,7 @@ fn mark_exact_duplicate_candidates(
     let mut summary = ExactDuplicateSummary::default();
     let mut by_size: BTreeMap<u64, Vec<usize>> = BTreeMap::new();
     for (index, candidate) in candidates.iter().enumerate() {
-        if candidate.blocked_reason.is_none() {
-            by_size.entry(candidate.bytes).or_default().push(index);
-        }
+        by_size.entry(candidate.bytes).or_default().push(index);
     }
 
     for same_size in by_size.values().filter(|indices| indices.len() > 1) {
@@ -5352,6 +5349,58 @@ mod tests {
 
     #[cfg(not(coverage))]
     #[test]
+    fn duplicate_evidence_includes_transfer_blocked_incomplete_downloads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let cloud = tmp.path().join("cloud");
+        writable_dir(&source);
+        writable_dir(&cloud);
+        for name in ["partial-a.zip.crdownload", "partial-b.zip.crdownload"] {
+            std::fs::write(source.join(name), b"same-incomplete-content").unwrap();
+        }
+        let files = ["partial-a.zip.crdownload", "partial-b.zip.crdownload"]
+            .into_iter()
+            .map(|name| {
+                let path = source.join(name);
+                let metadata = std::fs::metadata(&path).unwrap();
+                FileFact {
+                    path,
+                    bytes: metadata.len(),
+                    created_ms: millis(metadata.created()),
+                    modified_ms: millis(metadata.modified()),
+                    content_metadata: ContentMetadata::default(),
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let report = plan_cloud_archive(
+            &files,
+            &source,
+            &root(CloudProvider::GoogleDrive, &cloud),
+            system_now_ms() + DAY_MS,
+            CloudPlanOptions {
+                min_size_bytes: 0,
+                min_age_days: 0,
+                limit: 10,
+            },
+        );
+
+        assert_eq!(report.exact_duplicates.cluster_count, 1);
+        assert_eq!(report.exact_duplicates.candidate_count, 2);
+        for candidate in &report.candidates {
+            assert_eq!(
+                candidate.blocked_reason.as_deref(),
+                Some("incomplete-download")
+            );
+            assert!(candidate
+                .review_reasons
+                .contains(&"exact-duplicate-content-needs-canonical-selection".to_string()));
+            assert!(!Path::new(&candidate.dst).exists());
+        }
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
     fn canonical_recommendation_keeps_embedded_lineage_ahead_of_copy_name_heuristics() {
         let tmp = tempfile::tempdir().unwrap();
         let source = tmp.path().join("source");
@@ -5568,6 +5617,7 @@ mod tests {
             candidate.dst == destination.to_string_lossy()
                 && candidate.blocked_reason.as_deref() == Some("destination-exists")
         }));
+        assert_eq!(refreshed.exact_duplicates, google_report.exact_duplicates);
     }
 
     #[cfg(not(coverage))]
