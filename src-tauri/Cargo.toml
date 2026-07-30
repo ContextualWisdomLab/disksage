@@ -103,6 +103,11 @@ name = "disksage-archive-tree"
 path = "src/bin/disksage-archive-tree.rs"
 required-features = ["archive-cli"]
 
+[[bin]]
+name = "disksage-archive-inclusion-audit"
+path = "src/bin/disksage-archive-inclusion-audit.rs"
+required-features = ["archive-cli"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

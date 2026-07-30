@@ -1,8 +1,8 @@
 use std::cmp::Ordering;
-use std::collections::{btree_map::Entry, BTreeMap};
+use std::collections::{btree_map::Entry, BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use sha1::{Digest as Sha1Digest, Sha1};
 use sha2::{Digest as Sha2Digest, Sha256};
@@ -11,11 +11,16 @@ use unicode_normalization::UnicodeNormalization;
 const REPORT_VERSION: u32 = 1;
 const COMPARISON_REPORT_VERSION: u32 = 1;
 const COMPARISON_SCHEMA_KIND: &str = "disksage.archive-content-inclusion";
+const BATCH_REPORT_VERSION: u32 = 1;
+const BATCH_SCHEMA_KIND: &str = "disksage.archive-content-inclusion-batch";
 const MAX_ZIP_ENTRIES: usize = 100_000;
 const MAX_PATH_BYTES: usize = 4_096;
 const MAX_UNCOMPRESSED_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+const MAX_COMPRESSED_ARCHIVE_BYTES: u64 = 32 * 1024 * 1024 * 1024;
 const MAX_CASE_COLLISION_GROUPS: usize = 1_000;
 const MAX_COMPARISON_PATH_SAMPLES: usize = 1_000;
+const MAX_BATCH_ARCHIVES: usize = 512;
+const MAX_BATCH_PAIRS: usize = 131_072;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ArchiveGitTreeReport {
@@ -65,6 +70,115 @@ pub struct ArchiveContentInclusionReport {
     pub comparison_fingerprint_sha256: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArchiveContentBatchOptions {
+    pub max_archives: usize,
+    pub max_pairs: usize,
+}
+
+impl Default for ArchiveContentBatchOptions {
+    fn default() -> Self {
+        Self {
+            max_archives: 128,
+            max_pairs: 8_192,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ArchiveContentBatchArchive {
+    pub archive_id: String,
+    pub archive: String,
+    pub compressed_bytes: u64,
+    pub raw_archive_sha256: String,
+    pub file_count: usize,
+    pub uncompressed_bytes: u64,
+    pub root_prefix: String,
+    pub manifest_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ArchiveContentBatchIssue {
+    pub archive_id: String,
+    pub archive: String,
+    pub reason: String,
+}
+
+/// Bounded, read-only comparison of ZIP manifests loaded exactly once per archive.
+///
+/// `reclaim_review_*` fields are review evidence only. They do not assert that an archive's
+/// container metadata, acquisition context, signatures, or production lineage are redundant.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ArchiveContentInclusionBatchReport {
+    pub version: u32,
+    pub schema_kind: &'static str,
+    pub generated_at_ms: u64,
+    pub root_mode: String,
+    pub archive_input_count: usize,
+    pub archive_valid_count: usize,
+    pub issue_count: usize,
+    pub pair_comparison_count: usize,
+    pub inclusion_relation_count: usize,
+    pub strict_inclusion_relation_count: usize,
+    pub identical_relation_count: usize,
+    pub reclaim_review_candidate_count: usize,
+    pub reclaim_review_compressed_bytes: u64,
+    pub evidence_complete: bool,
+    pub batch_fingerprint_sha256: String,
+    pub archives: Vec<ArchiveContentBatchArchive>,
+    pub issues: Vec<ArchiveContentBatchIssue>,
+    pub relations: Vec<ArchiveContentInclusionReport>,
+    pub notices: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct NaruonArchiveContentIdentity {
+    pub archive_id: String,
+    pub raw_archive_sha256: String,
+    pub manifest_sha256: String,
+    pub compressed_bytes: u64,
+    pub file_count: usize,
+    pub uncompressed_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct NaruonArchiveInclusionRelation {
+    pub subset: NaruonArchiveContentIdentity,
+    pub superset: NaruonArchiveContentIdentity,
+    pub comparison_fingerprint_sha256: String,
+    pub archives_identical: bool,
+    pub additional_file_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct NaruonArchiveInclusionIssue {
+    pub archive_id: String,
+    pub reason: String,
+}
+
+/// Path-free archive inclusion lineage contract suitable for a Naruon receiver.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct NaruonArchiveInclusionLineageEnvelope {
+    pub schema_version: u32,
+    pub schema_kind: &'static str,
+    pub generated_at_ms: u64,
+    pub batch_fingerprint_sha256: String,
+    pub lineage_fingerprint_sha256: String,
+    pub root_mode: String,
+    pub evidence_complete: bool,
+    pub relation_count: usize,
+    pub reclaim_review_candidate_count: usize,
+    pub reclaim_review_compressed_bytes: u64,
+    pub relations: Vec<NaruonArchiveInclusionRelation>,
+    pub issues: Vec<NaruonArchiveInclusionIssue>,
+    pub content_evidence: Vec<String>,
+    pub local_paths_included: bool,
+    pub filename_dates_used: bool,
+    pub filesystem_timestamps_used: bool,
+    pub deletion_authorized: bool,
+    pub cloud_write_executed: bool,
+}
+
 /// Choose whether the archive's first path component is a transport wrapper or logical content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArchiveTreeRootMode {
@@ -95,6 +209,12 @@ struct ArchiveManifest {
     report: ArchiveGitTreeReport,
     root_mode: ArchiveTreeRootMode,
     entries: BTreeMap<String, ArchiveFileEvidence>,
+}
+
+#[derive(Debug)]
+struct LoadedBatchArchive {
+    manifest: ArchiveManifest,
+    archive: ArchiveContentBatchArchive,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -285,6 +405,22 @@ fn hex_sha256(value: &[u8; 32]) -> String {
     value.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+fn raw_file_sha256(path: &Path) -> Result<[u8; 32], String> {
+    let mut file = File::open(path).map_err(|_| "archive-raw-open-failed".to_string())?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 1024 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|_| "archive-raw-read-failed".to_string())?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher.finalize().into())
+}
+
 fn update_len_prefixed(hasher: &mut Sha256, value: &[u8]) {
     hasher.update((value.len() as u64).to_le_bytes());
     hasher.update(value);
@@ -317,6 +453,86 @@ fn comparison_fingerprint(
     hasher.update(b"superset\0");
     hasher.update(superset_manifest_sha256);
     hasher.finalize().into()
+}
+
+fn archive_id(
+    path: &str,
+    raw_archive_digest: &[u8; 32],
+    manifest_digest: Option<&[u8; 32]>,
+    compressed_bytes: u64,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"disksage.archive-content-batch-archive\0v1\0");
+    update_len_prefixed(&mut hasher, path.as_bytes());
+    hasher.update(raw_archive_digest);
+    hasher.update(compressed_bytes.to_le_bytes());
+    match manifest_digest {
+        Some(digest) => {
+            hasher.update(b"manifest\0");
+            hasher.update(digest);
+        }
+        None => hasher.update(b"manifest-unavailable\0"),
+    }
+    hex_sha256(&hasher.finalize().into())
+}
+
+fn unavailable_archive_id(path: &str, compressed_bytes: u64) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"disksage.archive-content-batch-unavailable\0v1\0");
+    update_len_prefixed(&mut hasher, path.as_bytes());
+    hasher.update(compressed_bytes.to_le_bytes());
+    hex_sha256(&hasher.finalize().into())
+}
+
+fn batch_fingerprint(
+    root_mode: ArchiveTreeRootMode,
+    archives: &[ArchiveContentBatchArchive],
+    issues: &[ArchiveContentBatchIssue],
+    relations: &[ArchiveContentInclusionReport],
+) -> String {
+    let ids: BTreeMap<&str, &str> = archives
+        .iter()
+        .map(|archive| (archive.archive.as_str(), archive.archive_id.as_str()))
+        .collect();
+    let mut hasher = Sha256::new();
+    hasher.update(b"disksage.archive-content-inclusion-batch\0v1\0");
+    update_len_prefixed(&mut hasher, root_mode.label().as_bytes());
+    hasher.update((archives.len() as u64).to_le_bytes());
+    for archive in archives {
+        update_len_prefixed(&mut hasher, archive.archive_id.as_bytes());
+        update_len_prefixed(&mut hasher, archive.raw_archive_sha256.as_bytes());
+        update_len_prefixed(&mut hasher, archive.manifest_sha256.as_bytes());
+        hasher.update(archive.compressed_bytes.to_le_bytes());
+        hasher.update((archive.file_count as u64).to_le_bytes());
+        hasher.update(archive.uncompressed_bytes.to_le_bytes());
+    }
+    hasher.update((issues.len() as u64).to_le_bytes());
+    for issue in issues {
+        update_len_prefixed(&mut hasher, issue.archive_id.as_bytes());
+        update_len_prefixed(&mut hasher, issue.reason.as_bytes());
+    }
+    hasher.update((relations.len() as u64).to_le_bytes());
+    for relation in relations {
+        update_len_prefixed(
+            &mut hasher,
+            ids.get(relation.subset_archive.as_str())
+                .copied()
+                .unwrap_or_default()
+                .as_bytes(),
+        );
+        update_len_prefixed(
+            &mut hasher,
+            ids.get(relation.superset_archive.as_str())
+                .copied()
+                .unwrap_or_default()
+                .as_bytes(),
+        );
+        update_len_prefixed(
+            &mut hasher,
+            relation.comparison_fingerprint_sha256.as_bytes(),
+        );
+    }
+    hex_sha256(&hasher.finalize().into())
 }
 
 fn push_bounded(paths: &mut Vec<String>, path: &str) {
@@ -363,7 +579,7 @@ fn inspect_zip_manifest_with_mode(
     let file = File::open(archive_path).map_err(|_| "archive-open-failed".to_string())?;
     let mut archive =
         zip::ZipArchive::new(file).map_err(|_| "archive-central-directory-invalid".to_string())?;
-    if archive.len() == 0 || archive.len() > MAX_ZIP_ENTRIES {
+    if archive.is_empty() || archive.len() > MAX_ZIP_ENTRIES {
         return Err("archive-entry-count-out-of-bounds".into());
     }
 
@@ -501,18 +717,13 @@ fn inspect_zip_manifest_with_mode(
     })
 }
 
-/// Prove that every logical file in `subset_archive_path` is present in `superset_archive_path`.
-///
-/// Both archives are parsed under the same root mode. File contents are streamed directly from the
-/// ZIP readers and never extracted. Ambiguous case/Unicode-normalization collisions fail closed so
-/// the result can be used as evidence for later operator-approved cleanup on macOS.
-pub fn compare_zip_content_inclusion(
-    subset_archive_path: &Path,
-    superset_archive_path: &Path,
-    root_mode: ArchiveTreeRootMode,
+fn compare_manifests(
+    subset: &ArchiveManifest,
+    superset: &ArchiveManifest,
 ) -> Result<ArchiveContentInclusionReport, String> {
-    let subset = inspect_zip_manifest_with_mode(subset_archive_path, None, root_mode)?;
-    let superset = inspect_zip_manifest_with_mode(superset_archive_path, None, root_mode)?;
+    if subset.root_mode != superset.root_mode {
+        return Err("archive-root-mode-mismatch".into());
+    }
     if !subset.report.case_collision_groups.is_empty()
         || !superset.report.case_collision_groups.is_empty()
     {
@@ -554,10 +765,10 @@ pub fn compare_zip_content_inclusion(
     let paths_truncated = missing_file_count > missing_paths.len()
         || changed_file_count > changed_paths.len()
         || additional_file_count > additional_paths.len();
-    let subset_manifest_digest = manifest_sha256(&subset);
-    let superset_manifest_digest = manifest_sha256(&superset);
+    let subset_manifest_digest = manifest_sha256(subset);
+    let superset_manifest_digest = manifest_sha256(superset);
     let fingerprint = comparison_fingerprint(
-        root_mode,
+        subset.root_mode,
         &subset_manifest_digest,
         &superset_manifest_digest,
     );
@@ -565,11 +776,11 @@ pub fn compare_zip_content_inclusion(
     Ok(ArchiveContentInclusionReport {
         version: COMPARISON_REPORT_VERSION,
         schema_kind: COMPARISON_SCHEMA_KIND,
-        subset_archive: subset.report.archive,
-        superset_archive: superset.report.archive,
-        root_mode: root_mode.label().to_string(),
-        subset_root_prefix: subset.report.root_prefix,
-        superset_root_prefix: superset.report.root_prefix,
+        subset_archive: subset.report.archive.clone(),
+        superset_archive: superset.report.archive.clone(),
+        root_mode: subset.root_mode.label().to_string(),
+        subset_root_prefix: subset.report.root_prefix.clone(),
+        superset_root_prefix: superset.report.root_prefix.clone(),
         subset_file_count: subset.report.file_count,
         superset_file_count: superset.report.file_count,
         subset_uncompressed_bytes: subset.report.uncompressed_bytes,
@@ -587,6 +798,345 @@ pub fn compare_zip_content_inclusion(
         subset_manifest_sha256: hex_sha256(&subset_manifest_digest),
         superset_manifest_sha256: hex_sha256(&superset_manifest_digest),
         comparison_fingerprint_sha256: hex_sha256(&fingerprint),
+    })
+}
+
+/// Prove that every logical file in `subset_archive_path` is present in `superset_archive_path`.
+///
+/// Both archives are parsed under the same root mode. File contents are streamed directly from the
+/// ZIP readers and never extracted. Ambiguous case/Unicode-normalization collisions fail closed so
+/// the result can be used as evidence for later operator-approved cleanup on macOS.
+pub fn compare_zip_content_inclusion(
+    subset_archive_path: &Path,
+    superset_archive_path: &Path,
+    root_mode: ArchiveTreeRootMode,
+) -> Result<ArchiveContentInclusionReport, String> {
+    let subset = inspect_zip_manifest_with_mode(subset_archive_path, None, root_mode)?;
+    let superset = inspect_zip_manifest_with_mode(superset_archive_path, None, root_mode)?;
+    compare_manifests(&subset, &superset)
+}
+
+/// Load each ZIP manifest once and compare every content-feasible unordered pair.
+///
+/// A relation is emitted only when every subset path, normalized Git mode, uncompressed length,
+/// and SHA-256 matches the superset. Invalid or case-ambiguous archives remain explicit issues and
+/// make `evidence_complete` false. This function performs no extraction or filesystem mutation.
+pub fn audit_zip_content_inclusion_batch(
+    archive_paths: &[PathBuf],
+    root_mode: ArchiveTreeRootMode,
+    options: ArchiveContentBatchOptions,
+    generated_at_ms: u64,
+) -> Result<ArchiveContentInclusionBatchReport, String> {
+    if archive_paths.len() < 2 {
+        return Err("archive-batch-requires-two-archives".into());
+    }
+    if options.max_archives < 2
+        || options.max_archives > MAX_BATCH_ARCHIVES
+        || options.max_pairs == 0
+        || options.max_pairs > MAX_BATCH_PAIRS
+        || archive_paths.len() > options.max_archives
+    {
+        return Err("archive-batch-limit-invalid".into());
+    }
+
+    let mut canonical_paths = Vec::with_capacity(archive_paths.len());
+    let mut seen = BTreeSet::new();
+    for path in archive_paths {
+        let canonical = std::fs::canonicalize(path)
+            .map_err(|_| "archive-batch-path-unavailable".to_string())?;
+        let metadata = std::fs::symlink_metadata(&canonical)
+            .map_err(|_| "archive-batch-path-unavailable".to_string())?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err("archive-batch-path-not-regular-file".into());
+        }
+        let display = canonical
+            .to_str()
+            .ok_or_else(|| "archive-batch-path-not-utf8".to_string())?
+            .to_string();
+        if !seen.insert(display.clone()) {
+            return Err("archive-batch-path-duplicate".into());
+        }
+        canonical_paths.push((canonical, display, metadata.len()));
+    }
+    canonical_paths.sort_by(|left, right| left.1.cmp(&right.1));
+
+    let mut loaded = Vec::new();
+    let mut issues = Vec::new();
+    for (path, display, compressed_bytes) in canonical_paths {
+        if compressed_bytes > MAX_COMPRESSED_ARCHIVE_BYTES {
+            issues.push(ArchiveContentBatchIssue {
+                archive_id: unavailable_archive_id(&display, compressed_bytes),
+                archive: display,
+                reason: "archive-compressed-size-out-of-bounds".into(),
+            });
+            continue;
+        }
+        let raw_digest = match raw_file_sha256(&path) {
+            Ok(digest) => digest,
+            Err(reason) => {
+                issues.push(ArchiveContentBatchIssue {
+                    archive_id: unavailable_archive_id(&display, compressed_bytes),
+                    archive: display,
+                    reason,
+                });
+                continue;
+            }
+        };
+        match inspect_zip_manifest_with_mode(&path, None, root_mode) {
+            Ok(manifest) if manifest.report.case_collision_groups.is_empty() => {
+                let digest = manifest_sha256(&manifest);
+                let archive = ArchiveContentBatchArchive {
+                    archive_id: archive_id(&display, &raw_digest, Some(&digest), compressed_bytes),
+                    archive: display,
+                    compressed_bytes,
+                    raw_archive_sha256: hex_sha256(&raw_digest),
+                    file_count: manifest.report.file_count,
+                    uncompressed_bytes: manifest.report.uncompressed_bytes,
+                    root_prefix: manifest.report.root_prefix.clone(),
+                    manifest_sha256: hex_sha256(&digest),
+                };
+                loaded.push(LoadedBatchArchive { manifest, archive });
+            }
+            Ok(_) => issues.push(ArchiveContentBatchIssue {
+                archive_id: archive_id(&display, &raw_digest, None, compressed_bytes),
+                archive: display,
+                reason: "archive-case-collision-ambiguous".into(),
+            }),
+            Err(reason) => issues.push(ArchiveContentBatchIssue {
+                archive_id: archive_id(&display, &raw_digest, None, compressed_bytes),
+                archive: display,
+                reason,
+            }),
+        }
+    }
+
+    let mut pair_comparison_count = 0usize;
+    let mut relations = Vec::new();
+    for left in 0..loaded.len() {
+        for right in (left + 1)..loaded.len() {
+            let left_manifest = &loaded[left].manifest;
+            let right_manifest = &loaded[right].manifest;
+            let left_can_be_subset = left_manifest.report.file_count
+                <= right_manifest.report.file_count
+                && left_manifest.report.uncompressed_bytes
+                    <= right_manifest.report.uncompressed_bytes;
+            let right_can_be_subset = right_manifest.report.file_count
+                <= left_manifest.report.file_count
+                && right_manifest.report.uncompressed_bytes
+                    <= left_manifest.report.uncompressed_bytes;
+            let (subset, superset) = match (left_can_be_subset, right_can_be_subset) {
+                (true, false) => (left_manifest, right_manifest),
+                (false, true) => (right_manifest, left_manifest),
+                (true, true) => (left_manifest, right_manifest),
+                (false, false) => continue,
+            };
+            pair_comparison_count += 1;
+            if pair_comparison_count > options.max_pairs {
+                return Err("archive-batch-pair-limit".into());
+            }
+            let comparison = compare_manifests(subset, superset)?;
+            if comparison.subset_content_included {
+                relations.push(comparison);
+            }
+        }
+    }
+    relations.sort_by(|left, right| {
+        left.subset_archive
+            .cmp(&right.subset_archive)
+            .then_with(|| left.superset_archive.cmp(&right.superset_archive))
+    });
+
+    let archive_bytes: BTreeMap<&str, u64> = loaded
+        .iter()
+        .map(|item| (item.archive.archive.as_str(), item.archive.compressed_bytes))
+        .collect();
+    let reclaim_review_candidates: BTreeSet<&str> = relations
+        .iter()
+        .map(|relation| relation.subset_archive.as_str())
+        .collect();
+    let reclaim_review_compressed_bytes =
+        reclaim_review_candidates.iter().fold(0u64, |total, path| {
+            total.saturating_add(archive_bytes.get(path).copied().unwrap_or_default())
+        });
+    let identical_relation_count = relations
+        .iter()
+        .filter(|relation| relation.archives_identical)
+        .count();
+    let strict_inclusion_relation_count = relations.len() - identical_relation_count;
+    let archives: Vec<_> = loaded.into_iter().map(|item| item.archive).collect();
+    let fingerprint = batch_fingerprint(root_mode, &archives, &issues, &relations);
+
+    Ok(ArchiveContentInclusionBatchReport {
+        version: BATCH_REPORT_VERSION,
+        schema_kind: BATCH_SCHEMA_KIND,
+        generated_at_ms,
+        root_mode: root_mode.label().into(),
+        archive_input_count: archive_paths.len(),
+        archive_valid_count: archives.len(),
+        issue_count: issues.len(),
+        pair_comparison_count,
+        inclusion_relation_count: relations.len(),
+        strict_inclusion_relation_count,
+        identical_relation_count,
+        reclaim_review_candidate_count: reclaim_review_candidates.len(),
+        reclaim_review_compressed_bytes,
+        evidence_complete: issues.is_empty(),
+        batch_fingerprint_sha256: fingerprint,
+        archives,
+        issues,
+        relations,
+        notices: vec![
+            "read-only; ZIP entries streamed once per archive and never extracted".into(),
+            "inclusion requires exact path, normalized Git mode, uncompressed length, and SHA-256"
+                .into(),
+            "reclaim-review candidates are not deletion approval".into(),
+            "container metadata, signatures, acquisition context, and production lineage require separate review"
+                .into(),
+            "filename dates and filesystem timestamps are not used as content-inclusion evidence"
+                .into(),
+        ],
+    })
+}
+
+fn valid_lower_hex64(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn naruon_archive_identity(
+    archive: &ArchiveContentBatchArchive,
+) -> Result<NaruonArchiveContentIdentity, String> {
+    if !valid_lower_hex64(&archive.archive_id)
+        || !valid_lower_hex64(&archive.raw_archive_sha256)
+        || !valid_lower_hex64(&archive.manifest_sha256)
+    {
+        return Err("naruon-archive-content-identity-invalid".into());
+    }
+    Ok(NaruonArchiveContentIdentity {
+        archive_id: archive.archive_id.clone(),
+        raw_archive_sha256: archive.raw_archive_sha256.clone(),
+        manifest_sha256: archive.manifest_sha256.clone(),
+        compressed_bytes: archive.compressed_bytes,
+        file_count: archive.file_count,
+        uncompressed_bytes: archive.uncompressed_bytes,
+    })
+}
+
+fn naruon_lineage_fingerprint(
+    report: &ArchiveContentInclusionBatchReport,
+    relations: &[NaruonArchiveInclusionRelation],
+    issues: &[NaruonArchiveInclusionIssue],
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"disksage.naruon.archive-content-inclusion\0v1\0");
+    hasher.update(report.generated_at_ms.to_le_bytes());
+    update_len_prefixed(&mut hasher, report.batch_fingerprint_sha256.as_bytes());
+    hasher.update((relations.len() as u64).to_le_bytes());
+    for relation in relations {
+        update_len_prefixed(&mut hasher, relation.subset.archive_id.as_bytes());
+        update_len_prefixed(&mut hasher, relation.superset.archive_id.as_bytes());
+        update_len_prefixed(
+            &mut hasher,
+            relation.comparison_fingerprint_sha256.as_bytes(),
+        );
+    }
+    hasher.update((issues.len() as u64).to_le_bytes());
+    for issue in issues {
+        update_len_prefixed(&mut hasher, issue.archive_id.as_bytes());
+        update_len_prefixed(&mut hasher, issue.reason.as_bytes());
+    }
+    hex_sha256(&hasher.finalize().into())
+}
+
+/// Export a bounded, path-free archive inclusion contract for a Naruon receiver.
+///
+/// Raw ZIP SHA-256 distinguishes different containers while the manifest SHA-256 binds logical
+/// uncompressed content. This export contains no local path or filename and grants no cleanup or
+/// cloud-write authority.
+pub fn export_naruon_archive_inclusion_lineage(
+    report: &ArchiveContentInclusionBatchReport,
+) -> Result<NaruonArchiveInclusionLineageEnvelope, String> {
+    if report.version != BATCH_REPORT_VERSION
+        || report.schema_kind != BATCH_SCHEMA_KIND
+        || report.archive_input_count != report.archive_valid_count + report.issue_count
+        || report.archive_valid_count != report.archives.len()
+        || report.issue_count != report.issues.len()
+        || report.inclusion_relation_count != report.relations.len()
+        || !valid_lower_hex64(&report.batch_fingerprint_sha256)
+    {
+        return Err("naruon-archive-batch-shape-invalid".into());
+    }
+    let archives: BTreeMap<&str, &ArchiveContentBatchArchive> = report
+        .archives
+        .iter()
+        .map(|archive| (archive.archive.as_str(), archive))
+        .collect();
+    let mut relations = Vec::with_capacity(report.relations.len());
+    for relation in &report.relations {
+        if !relation.subset_content_included
+            || !valid_lower_hex64(&relation.comparison_fingerprint_sha256)
+        {
+            return Err("naruon-archive-relation-invalid".into());
+        }
+        let subset = archives
+            .get(relation.subset_archive.as_str())
+            .ok_or_else(|| "naruon-archive-relation-binding-missing".to_string())?;
+        let superset = archives
+            .get(relation.superset_archive.as_str())
+            .ok_or_else(|| "naruon-archive-relation-binding-missing".to_string())?;
+        relations.push(NaruonArchiveInclusionRelation {
+            subset: naruon_archive_identity(subset)?,
+            superset: naruon_archive_identity(superset)?,
+            comparison_fingerprint_sha256: relation.comparison_fingerprint_sha256.clone(),
+            archives_identical: relation.archives_identical,
+            additional_file_count: relation.additional_file_count,
+        });
+    }
+    let issues = report
+        .issues
+        .iter()
+        .map(|issue| {
+            if !valid_lower_hex64(&issue.archive_id)
+                || issue.reason.is_empty()
+                || issue.reason.chars().any(char::is_control)
+            {
+                return Err("naruon-archive-issue-invalid".to_string());
+            }
+            Ok(NaruonArchiveInclusionIssue {
+                archive_id: issue.archive_id.clone(),
+                reason: issue.reason.clone(),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let lineage_fingerprint_sha256 = naruon_lineage_fingerprint(report, &relations, &issues);
+
+    Ok(NaruonArchiveInclusionLineageEnvelope {
+        schema_version: 1,
+        schema_kind: "disksage.naruon.archive-content-inclusion",
+        generated_at_ms: report.generated_at_ms,
+        batch_fingerprint_sha256: report.batch_fingerprint_sha256.clone(),
+        lineage_fingerprint_sha256,
+        root_mode: report.root_mode.clone(),
+        evidence_complete: report.evidence_complete,
+        relation_count: relations.len(),
+        reclaim_review_candidate_count: report.reclaim_review_candidate_count,
+        reclaim_review_compressed_bytes: report.reclaim_review_compressed_bytes,
+        relations,
+        issues,
+        content_evidence: vec![
+            "raw-archive-sha256".into(),
+            "validated-logical-path".into(),
+            "normalized-git-mode".into(),
+            "uncompressed-byte-length".into(),
+            "uncompressed-content-sha256".into(),
+        ],
+        local_paths_included: false,
+        filename_dates_used: false,
+        filesystem_timestamps_used: false,
+        deletion_authorized: false,
+        cloud_write_executed: false,
     })
 }
 
@@ -902,6 +1452,215 @@ mod tests {
             )
             .unwrap_err(),
             "archive-case-collision-ambiguous"
+        );
+    }
+
+    #[test]
+    fn batch_loads_each_archive_once_and_finds_strict_inclusion() {
+        let subset = generic_fixture(&[(
+            "a.txt",
+            b"alpha\n",
+            0o100644,
+            zip::CompressionMethod::Stored,
+        )]);
+        let superset = generic_fixture(&[
+            (
+                "a.txt",
+                b"alpha\n",
+                0o100644,
+                zip::CompressionMethod::Deflated,
+            ),
+            ("b.txt", b"beta\n", 0o100644, zip::CompressionMethod::Stored),
+        ]);
+        let paths = vec![
+            subset.path().join("fixture.zip"),
+            superset.path().join("fixture.zip"),
+        ];
+
+        let report = audit_zip_content_inclusion_batch(
+            &paths,
+            ArchiveTreeRootMode::KeepTopLevel,
+            ArchiveContentBatchOptions::default(),
+            42,
+        )
+        .unwrap();
+
+        assert_eq!(report.schema_kind, BATCH_SCHEMA_KIND);
+        assert_eq!(report.generated_at_ms, 42);
+        assert_eq!(report.archive_valid_count, 2);
+        assert_eq!(report.pair_comparison_count, 1);
+        assert_eq!(report.inclusion_relation_count, 1);
+        assert_eq!(report.strict_inclusion_relation_count, 1);
+        assert_eq!(report.identical_relation_count, 0);
+        assert_eq!(report.reclaim_review_candidate_count, 1);
+        assert!(report.reclaim_review_compressed_bytes > 0);
+        assert!(report.evidence_complete);
+        assert_eq!(report.batch_fingerprint_sha256.len(), 64);
+        assert!(report.relations[0].subset_content_included);
+        assert!(report
+            .archives
+            .iter()
+            .all(|archive| archive.raw_archive_sha256.len() == 64));
+
+        let naruon = export_naruon_archive_inclusion_lineage(&report).unwrap();
+        let encoded = serde_json::to_string(&naruon).unwrap();
+        assert_eq!(
+            naruon.schema_kind,
+            "disksage.naruon.archive-content-inclusion"
+        );
+        assert_eq!(naruon.relation_count, 1);
+        assert_eq!(naruon.lineage_fingerprint_sha256.len(), 64);
+        assert!(!naruon.local_paths_included);
+        assert!(!naruon.filename_dates_used);
+        assert!(!naruon.filesystem_timestamps_used);
+        assert!(!naruon.deletion_authorized);
+        assert!(!naruon.cloud_write_executed);
+        assert!(!encoded.contains("fixture.zip"));
+        assert!(!encoded.contains(subset.path().to_string_lossy().as_ref()));
+        assert!(!encoded.contains(superset.path().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn batch_deduplicates_identical_reclaim_candidates_and_stabilizes_fingerprint() {
+        let first = generic_fixture(&[(
+            "same.txt",
+            b"same\n",
+            0o100644,
+            zip::CompressionMethod::Stored,
+        )]);
+        let second = generic_fixture(&[(
+            "same.txt",
+            b"same\n",
+            0o100644,
+            zip::CompressionMethod::Deflated,
+        )]);
+        let third = generic_fixture(&[(
+            "same.txt",
+            b"same\n",
+            0o100644,
+            zip::CompressionMethod::Stored,
+        )]);
+        let paths = vec![
+            first.path().join("fixture.zip"),
+            second.path().join("fixture.zip"),
+            third.path().join("fixture.zip"),
+        ];
+
+        let first_report = audit_zip_content_inclusion_batch(
+            &paths,
+            ArchiveTreeRootMode::KeepTopLevel,
+            ArchiveContentBatchOptions::default(),
+            1,
+        )
+        .unwrap();
+        let second_report = audit_zip_content_inclusion_batch(
+            &paths,
+            ArchiveTreeRootMode::KeepTopLevel,
+            ArchiveContentBatchOptions::default(),
+            2,
+        )
+        .unwrap();
+
+        assert_eq!(first_report.pair_comparison_count, 3);
+        assert_eq!(first_report.identical_relation_count, 3);
+        assert_eq!(first_report.reclaim_review_candidate_count, 2);
+        let naruon = export_naruon_archive_inclusion_lineage(&first_report).unwrap();
+        assert!(naruon
+            .relations
+            .iter()
+            .all(|relation| relation.subset.archive_id != relation.superset.archive_id));
+        assert_eq!(
+            first_report.batch_fingerprint_sha256,
+            second_report.batch_fingerprint_sha256
+        );
+    }
+
+    #[test]
+    fn batch_keeps_invalid_zip_as_explicit_evidence_gap() {
+        let invalid = tempfile::tempdir().unwrap();
+        let invalid_path = invalid.path().join("invalid.zip");
+        std::fs::write(&invalid_path, b"not a zip").unwrap();
+        let subset = generic_fixture(&[("a.txt", b"a", 0o100644, zip::CompressionMethod::Stored)]);
+        let superset = generic_fixture(&[
+            ("a.txt", b"a", 0o100644, zip::CompressionMethod::Stored),
+            ("b.txt", b"b", 0o100644, zip::CompressionMethod::Stored),
+        ]);
+
+        let report = audit_zip_content_inclusion_batch(
+            &[
+                invalid_path,
+                subset.path().join("fixture.zip"),
+                superset.path().join("fixture.zip"),
+            ],
+            ArchiveTreeRootMode::KeepTopLevel,
+            ArchiveContentBatchOptions::default(),
+            3,
+        )
+        .unwrap();
+
+        assert_eq!(report.archive_input_count, 3);
+        assert_eq!(report.archive_valid_count, 2);
+        assert_eq!(report.issue_count, 1);
+        assert!(!report.evidence_complete);
+        assert_eq!(report.inclusion_relation_count, 1);
+        assert_eq!(report.issues[0].reason, "archive-central-directory-invalid");
+        let naruon = export_naruon_archive_inclusion_lineage(&report).unwrap();
+        assert!(!naruon.evidence_complete);
+        assert_eq!(naruon.issues.len(), 1);
+        assert_eq!(naruon.issues[0].reason, "archive-central-directory-invalid");
+    }
+
+    #[test]
+    fn batch_limits_fail_closed_before_partial_success_is_reported() {
+        let first = generic_fixture(&[(
+            "same.txt",
+            b"same",
+            0o100644,
+            zip::CompressionMethod::Stored,
+        )]);
+        let second = generic_fixture(&[(
+            "same.txt",
+            b"same",
+            0o100644,
+            zip::CompressionMethod::Stored,
+        )]);
+        let third = generic_fixture(&[(
+            "same.txt",
+            b"same",
+            0o100644,
+            zip::CompressionMethod::Stored,
+        )]);
+        let paths = vec![
+            first.path().join("fixture.zip"),
+            second.path().join("fixture.zip"),
+            third.path().join("fixture.zip"),
+        ];
+
+        assert_eq!(
+            audit_zip_content_inclusion_batch(
+                &paths,
+                ArchiveTreeRootMode::KeepTopLevel,
+                ArchiveContentBatchOptions {
+                    max_archives: 2,
+                    max_pairs: 10,
+                },
+                0,
+            )
+            .unwrap_err(),
+            "archive-batch-limit-invalid"
+        );
+        assert_eq!(
+            audit_zip_content_inclusion_batch(
+                &paths,
+                ArchiveTreeRootMode::KeepTopLevel,
+                ArchiveContentBatchOptions {
+                    max_archives: 3,
+                    max_pairs: 2,
+                },
+                0,
+            )
+            .unwrap_err(),
+            "archive-batch-pair-limit"
         );
     }
 

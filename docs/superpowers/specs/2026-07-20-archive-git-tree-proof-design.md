@@ -35,11 +35,27 @@ subset entry is present and identical.
 The proof contains paths, counts, byte totals, modes, and object digests. It does not retain file
 contents, call a network service, mutate the ZIP, or authorize deletion.
 
+For a local directory containing multiple archives, `disksage-archive-inclusion-audit` discovers
+regular `.zip` files without following symlinks, loads and hashes each bounded archive once, and
+compares only pairs whose file counts and uncompressed byte totals permit inclusion. Its public
+summary redacts local paths and archive names. An optional create-new mode-0600 report retains
+exact paths for human review. The batch fingerprint binds every raw ZIP SHA-256, logical manifest
+SHA-256, byte count, issue, and proved relation.
+
+The same command emits a path-free `disksage.naruon.archive-content-inclusion` envelope. Naruon
+receives a pseudonymous local-instance fingerprint plus raw-container and logical-manifest
+identities, exact relation fingerprints, counts, and evidence gaps, but no local path or filename.
+The envelope explicitly records that filename dates and filesystem timestamps were not used, and
+that neither deletion nor cloud write is authorized.
+
 ## Safety limits
 
 - At most 100,000 ZIP entries.
 - At most 4,096 bytes per path.
 - At most 16 GiB declared uncompressed file bytes.
+- At most 32 GiB compressed bytes per archive in a batch.
+- Batch limits default to 128 archives, 8,192 feasible pairs, and 200,000 discovery entries;
+  hard library caps are 512 archives and 131,072 pairs.
 - More than 1,000 case-collision groups fails closed rather than truncating evidence.
 - ZIP-to-ZIP inclusion rejects any case or Unicode-normalization collision as ambiguous; it does
   not claim that a colliding manifest can be safely materialized on macOS.
