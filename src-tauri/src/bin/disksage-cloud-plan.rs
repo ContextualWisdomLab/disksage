@@ -89,6 +89,7 @@ struct Args {
     export_naruon_capacity: bool,
     export_naruon_duplicate_canonical_review: Option<PathBuf>,
     duplicate_canonical_review_output: Option<PathBuf>,
+    duplicate_canonical_review_dossier_output: Option<PathBuf>,
     export_semantic_catalog: bool,
 }
 
@@ -210,6 +211,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
         export_naruon_capacity: false,
         export_naruon_duplicate_canonical_review: None,
         duplicate_canonical_review_output: None,
+        duplicate_canonical_review_dossier_output: None,
         export_semantic_catalog: false,
     };
     let mut index = 0;
@@ -428,10 +430,24 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
                     "--duplicate-canonical-review-output",
                 )?));
             }
+            "--duplicate-canonical-review-dossier-output" => {
+                if parsed.duplicate_canonical_review_dossier_output.is_some() {
+                    return Err(
+                        "--duplicate-canonical-review-dossier-output은 한 번만 지정할 수 있음"
+                            .into(),
+                    );
+                }
+                parsed.duplicate_canonical_review_dossier_output =
+                    Some(PathBuf::from(value(
+                        args,
+                        &mut index,
+                        "--duplicate-canonical-review-dossier-output",
+                    )?));
+            }
             "--export-semantic-catalog" => parsed.export_semantic_catalog = true,
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary] [--min-size-mib N] [--min-age-days N] [--limit N] [--decision-summary [--review-reason-set REASON|REASON [--private-review-output ABSOLUTE_NEW_FILE.json]] | --exact-duplicate-review-prefix DIR_PREFIX --exact-duplicate-kind document|media|archive|dataset|backup|creative|incomplete-download | --export-semantic-catalog | --export-naruon-duplicate-canonical-review AUDIT_LINEAGE.json [--duplicate-canonical-review-output ABSOLUTE_NEW_FILE.json]] [--verify-capacity [--oauth-connections ABSOLUTE_PATH] [--export-naruon-capacity]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
+                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary] [--min-size-mib N] [--min-age-days N] [--limit N] [--decision-summary [--review-reason-set REASON|REASON [--private-review-output ABSOLUTE_NEW_FILE.json]] | --exact-duplicate-review-prefix DIR_PREFIX --exact-duplicate-kind document|media|archive|dataset|backup|creative|incomplete-download | --export-semantic-catalog | --export-naruon-duplicate-canonical-review AUDIT_LINEAGE.json [--duplicate-canonical-review-output ABSOLUTE_NEW_FILE.json] [--duplicate-canonical-review-dossier-output ABSOLUTE_NEW_FILE.json]] [--verify-capacity [--oauth-connections ABSOLUTE_PATH] [--export-naruon-capacity]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -619,6 +635,14 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
                 .into(),
         );
     }
+    if args.duplicate_canonical_review_dossier_output.is_some()
+        && !duplicate_canonical_review
+    {
+        return Err(
+            "--duplicate-canonical-review-dossier-output에는 --export-naruon-duplicate-canonical-review가 필요함"
+                .into(),
+        );
+    }
     let actions = usize::from(args.list_roots)
         + usize::from(args.inspect_roots)
         + usize::from(copy_action)
@@ -747,6 +771,10 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
         (
             "--duplicate-canonical-review-output",
             &args.duplicate_canonical_review_output,
+        ),
+        (
+            "--duplicate-canonical-review-dossier-output",
+            &args.duplicate_canonical_review_dossier_output,
         ),
     ] {
         if path.as_ref().is_some_and(|path| !path.is_absolute()) {
@@ -2110,6 +2138,15 @@ fn run() -> Result<(), String> {
                 .map_err(|_| "duplicate-canonical-review-json-invalid".to_string())?;
             write_private_review_dossier(output_path, &value)?;
         }
+        if let Some(output_path) = &args.duplicate_canonical_review_dossier_output {
+            let dossier =
+                naruon_duplicate_canonical_review::export_local_duplicate_canonical_review_dossier(
+                    &report, &envelope,
+                )?;
+            let value = serde_json::to_value(&dossier)
+                .map_err(|_| "duplicate-canonical-review-dossier-json-invalid".to_string())?;
+            write_private_review_dossier(output_path, &value)?;
+        }
         println!(
             "{}",
             serde_json::to_string_pretty(&envelope).map_err(|error| error.to_string())?
@@ -2348,6 +2385,9 @@ mod tests {
             .export_naruon_duplicate_canonical_review
             .is_none());
         assert!(defaults.duplicate_canonical_review_output.is_none());
+        assert!(defaults
+            .duplicate_canonical_review_dossier_output
+            .is_none());
         assert!(!defaults.export_semantic_catalog);
         assert!(defaults.naruon_sync_evidence.is_none());
         assert!(!defaults.verify_capacity);
@@ -2426,6 +2466,8 @@ mod tests {
                 "/audit-lineage.json".into(),
                 "--duplicate-canonical-review-output".into(),
                 "/canonical-review.json".into(),
+                "--duplicate-canonical-review-dossier-output".into(),
+                "/canonical-review-dossier.json".into(),
             ],
             Path::new("/home/test"),
         )
@@ -2437,6 +2479,10 @@ mod tests {
         assert_eq!(
             canonical_review.duplicate_canonical_review_output,
             Some(PathBuf::from("/canonical-review.json"))
+        );
+        assert_eq!(
+            canonical_review.duplicate_canonical_review_dossier_output,
+            Some(PathBuf::from("/canonical-review-dossier.json"))
         );
         assert!(validate_action_args(&canonical_review).is_ok());
     }
@@ -2570,6 +2616,26 @@ mod tests {
         let mut multicloud_private_review = private_review;
         multicloud_private_review.all_readable_roots = true;
         assert!(validate_action_args(&multicloud_private_review).is_err());
+        let dossier_without_export = parse_args(
+            &[
+                "--duplicate-canonical-review-dossier-output".into(),
+                "/private/dossier.json".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&dossier_without_export).is_err());
+        let relative_dossier = parse_args(
+            &[
+                "--export-naruon-duplicate-canonical-review".into(),
+                "/audit-lineage.json".into(),
+                "--duplicate-canonical-review-dossier-output".into(),
+                "dossier.json".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&relative_dossier).is_err());
         for prefix in ["", ".", "..", "nested/path", "nested\\path", "line\nbreak"] {
             assert!(parse_args(
                 &[

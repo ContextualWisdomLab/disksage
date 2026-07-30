@@ -10,7 +10,10 @@ use std::fmt::Write;
 
 use sha2::{Digest, Sha256};
 
-use crate::cloud::{CloudCandidate, CloudPlanReport, ExactDuplicateClusterRecommendation};
+use crate::cloud::{
+    ArchiveKind, CloudCandidate, CloudPlanReport, ExactDuplicateClusterRecommendation,
+    MetadataEvidence,
+};
 use crate::naruon_duplicate_audit_lineage::{
     duplicate_audit_lineage_id, NaruonDuplicateAuditLineageEnvelope,
 };
@@ -22,6 +25,7 @@ pub const NARUON_DUPLICATE_CANONICAL_REVIEW_SCHEMA_KIND: &str =
 const MEMBER_REF_DOMAIN: &[u8] = b"disksage-duplicate-canonical-member-ref-v1\0";
 const CLUSTER_REF_DOMAIN: &[u8] = b"disksage-duplicate-canonical-cluster-ref-v1\0";
 const LINEAGE_ID_DOMAIN: &[u8] = b"disksage-duplicate-canonical-review-lineage-id-v1\0";
+const DOSSIER_ID_DOMAIN: &[u8] = b"disksage-local-duplicate-canonical-review-dossier-id-v1\0";
 
 const PRODUCTION_TIME_PRECEDENCE: [&str; 4] = [
     "embedded_metadata",
@@ -125,6 +129,75 @@ pub struct NaruonDuplicateCanonicalReviewEnvelope {
     pub human_confirmation_required_for_every_cluster: bool,
     pub mutation_performed: bool,
     pub redaction: NaruonDuplicateCanonicalRedaction,
+}
+
+pub const LOCAL_DUPLICATE_CANONICAL_REVIEW_DOSSIER_SCHEMA_VERSION: u32 = 1;
+pub const LOCAL_DUPLICATE_CANONICAL_REVIEW_DOSSIER_SCHEMA_KIND: &str =
+    "disksage.local-duplicate-canonical-review-dossier";
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalDuplicateCanonicalReviewMember {
+    pub member_ref: String,
+    pub metadata_fingerprint: String,
+    pub absolute_source_path: String,
+    pub relative_path: String,
+    pub source_context: String,
+    pub archive_kind: ArchiveKind,
+    pub bytes: u64,
+    pub created_ms: u64,
+    pub modified_ms: u64,
+    pub production_time_ms: u64,
+    pub production_time_source: String,
+    pub production_time_confidence: String,
+    pub content_title: Option<String>,
+    pub content_authors: Vec<String>,
+    pub content_context: Vec<String>,
+    pub duration_ms: Option<u64>,
+    pub dataset_profile_present: bool,
+    pub review_reasons: Vec<String>,
+    pub metadata_evidence: Vec<MetadataEvidence>,
+    pub transfer_blocked_reason: Option<String>,
+    pub filesystem_stable_at_export: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalDuplicateCanonicalReviewCluster {
+    pub cluster_ref: String,
+    pub bytes_per_candidate: u64,
+    pub candidate_count: usize,
+    pub redundant_bytes: u64,
+    pub recommendation_confidence: String,
+    pub recommendation_reason_codes: Vec<String>,
+    pub recommended_canonical: LocalDuplicateCanonicalReviewMember,
+    pub alternatives: Vec<LocalDuplicateCanonicalReviewMember>,
+    pub requires_human_confirmation: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalDuplicateCanonicalReviewDossier {
+    pub schema_version: u32,
+    pub schema_kind: String,
+    pub dossier_id: String,
+    pub exported_at_ms: u64,
+    pub observed_at_ms: u64,
+    pub canonical_review_lineage_id: String,
+    pub duplicate_audit_lineage_id: String,
+    pub source_root: String,
+    pub production_time_precedence: Vec<String>,
+    pub filename_dates_are_auxiliary: bool,
+    pub cluster_count: usize,
+    pub candidate_count: usize,
+    pub candidate_bytes: u64,
+    pub redundant_bytes: u64,
+    pub clusters: Vec<LocalDuplicateCanonicalReviewCluster>,
+    pub local_sensitive_metadata: bool,
+    pub naruon_submission_allowed: bool,
+    pub automatic_discard_allowed: bool,
+    pub human_confirmation_required_for_every_cluster: bool,
+    pub mutation_performed: bool,
 }
 
 fn encode_hex(bytes: impl IntoIterator<Item = u8>) -> String {
@@ -524,6 +597,23 @@ pub fn duplicate_canonical_review_lineage_id(
     encode_hex(hasher.finalize())
 }
 
+pub fn local_duplicate_canonical_review_dossier_id(
+    dossier: &LocalDuplicateCanonicalReviewDossier,
+) -> String {
+    let mut canonical = serde_json::to_value(dossier)
+        .expect("serializing the local duplicate canonical review dossier cannot fail");
+    canonical
+        .as_object_mut()
+        .expect("the local duplicate canonical review dossier is an object")
+        .remove("dossier_id");
+    let canonical = serde_json::to_vec(&canonical)
+        .expect("serializing canonical local duplicate review dossier cannot fail");
+    let mut hasher = Sha256::new();
+    hasher.update(DOSSIER_ID_DOMAIN);
+    hasher.update(canonical);
+    encode_hex(hasher.finalize())
+}
+
 pub fn export_naruon_duplicate_canonical_review(
     report: &CloudPlanReport,
     audit: &NaruonDuplicateAuditLineageEnvelope,
@@ -631,6 +721,200 @@ pub fn export_naruon_duplicate_canonical_review(
     Ok(envelope)
 }
 
+fn filesystem_millis(value: std::io::Result<std::time::SystemTime>) -> u64 {
+    value
+        .ok()
+        .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|value| value.as_millis() as u64)
+        .unwrap_or_default()
+}
+
+fn local_review_member(
+    candidate: &CloudCandidate,
+    cluster_fingerprint: &str,
+) -> Result<LocalDuplicateCanonicalReviewMember, String> {
+    let metadata = std::fs::symlink_metadata(&candidate.src)
+        .map_err(|_| "duplicate-canonical-dossier-source-unavailable".to_string())?;
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.len() != candidate.bytes
+        || filesystem_millis(metadata.modified()) != candidate.modified_ms
+    {
+        return Err("duplicate-canonical-dossier-source-stability-invalid".into());
+    }
+    Ok(LocalDuplicateCanonicalReviewMember {
+        member_ref: opaque_ref(
+            MEMBER_REF_DOMAIN,
+            cluster_fingerprint,
+            Some(&candidate.metadata_fingerprint),
+        ),
+        metadata_fingerprint: candidate.metadata_fingerprint.clone(),
+        absolute_source_path: candidate.src.clone(),
+        relative_path: candidate.relative_path.clone(),
+        source_context: candidate.source_context.clone(),
+        archive_kind: candidate.kind,
+        bytes: candidate.bytes,
+        created_ms: candidate.created_ms,
+        modified_ms: candidate.modified_ms,
+        production_time_ms: candidate.production_time_ms,
+        production_time_source: candidate.production_time_source.clone(),
+        production_time_confidence: candidate.production_time_confidence.clone(),
+        content_title: candidate.content_title.clone(),
+        content_authors: candidate.content_authors.clone(),
+        content_context: candidate.content_context.clone(),
+        duration_ms: candidate.duration_ms,
+        dataset_profile_present: candidate.dataset_profile.is_some(),
+        review_reasons: candidate.review_reasons.clone(),
+        metadata_evidence: candidate.metadata_evidence.clone(),
+        transfer_blocked_reason: candidate.blocked_reason.clone(),
+        filesystem_stable_at_export: true,
+    })
+}
+
+/// Export the path-bearing local companion for a redacted canonical-review envelope.
+///
+/// The caller must write this value with create-new mode 0600. The dossier must never be sent to
+/// Naruon or treated as approval; it exists only so a local human can inspect the evidence behind
+/// opaque member references.
+pub fn export_local_duplicate_canonical_review_dossier(
+    report: &CloudPlanReport,
+    envelope: &NaruonDuplicateCanonicalReviewEnvelope,
+) -> Result<LocalDuplicateCanonicalReviewDossier, String> {
+    if envelope.lineage_id != duplicate_canonical_review_lineage_id(envelope)
+        || envelope.observed_at_ms != report.generated_at_ms
+        || envelope.cluster_count != report.exact_duplicates.cluster_count
+        || envelope.candidate_count != report.exact_duplicates.candidate_count
+        || envelope.candidate_bytes != report.exact_duplicates.candidate_bytes
+        || envelope.redundant_bytes != report.exact_duplicates.redundant_bytes
+        || envelope.automatic_discard_allowed
+        || !envelope.human_confirmation_required_for_every_cluster
+        || envelope.mutation_performed
+    {
+        return Err("duplicate-canonical-dossier-lineage-mismatch".into());
+    }
+
+    let source_roots = report
+        .candidates
+        .iter()
+        .map(|candidate| candidate.source_root.as_str())
+        .collect::<BTreeSet<_>>();
+    let source_root = match source_roots.iter().copied().collect::<Vec<_>>().as_slice() {
+        [only] if std::path::Path::new(only).is_absolute() => (*only).to_string(),
+        _ => return Err("duplicate-canonical-dossier-source-root-invalid".into()),
+    };
+    let candidates = report
+        .candidates
+        .iter()
+        .map(|candidate| (candidate.metadata_fingerprint.as_str(), candidate))
+        .collect::<BTreeMap<_, _>>();
+    if candidates.len() != report.candidates.len() {
+        return Err("duplicate-canonical-dossier-candidate-fingerprint-duplicate".into());
+    }
+    let public_clusters = envelope
+        .clusters
+        .iter()
+        .map(|cluster| (cluster.cluster_ref.as_str(), cluster))
+        .collect::<BTreeMap<_, _>>();
+    if public_clusters.len() != envelope.clusters.len() {
+        return Err("duplicate-canonical-dossier-cluster-ref-duplicate".into());
+    }
+
+    let mut clusters = Vec::with_capacity(report.exact_duplicates.clusters.len());
+    for private_cluster in &report.exact_duplicates.clusters {
+        let cluster_ref = opaque_ref(
+            CLUSTER_REF_DOMAIN,
+            &private_cluster.cluster_fingerprint,
+            None,
+        );
+        let public_cluster = public_clusters
+            .get(cluster_ref.as_str())
+            .copied()
+            .ok_or_else(|| "duplicate-canonical-dossier-public-cluster-missing".to_string())?;
+        let mut members = private_cluster
+            .member_metadata_fingerprints
+            .iter()
+            .map(|fingerprint| {
+                candidates
+                    .get(fingerprint.as_str())
+                    .copied()
+                    .ok_or_else(|| "duplicate-canonical-dossier-member-missing".to_string())
+                    .and_then(|candidate| {
+                        local_review_member(candidate, &private_cluster.cluster_fingerprint)
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        members.sort_by(|left, right| left.member_ref.cmp(&right.member_ref));
+        if members
+            .iter()
+            .map(|member| member.member_ref.as_str())
+            .collect::<Vec<_>>()
+            != public_cluster
+                .members
+                .iter()
+                .map(|member| member.member_ref.as_str())
+                .collect::<Vec<_>>()
+        {
+            return Err("duplicate-canonical-dossier-member-binding-mismatch".into());
+        }
+        let canonical_index = members
+            .iter()
+            .position(|member| member.member_ref == public_cluster.recommended_canonical_member_ref)
+            .ok_or_else(|| "duplicate-canonical-dossier-canonical-missing".to_string())?;
+        let canonical = members.remove(canonical_index);
+        clusters.push(LocalDuplicateCanonicalReviewCluster {
+            cluster_ref,
+            bytes_per_candidate: public_cluster.bytes_per_candidate,
+            candidate_count: public_cluster.candidate_count,
+            redundant_bytes: public_cluster.redundant_bytes,
+            recommendation_confidence: public_cluster.recommendation_confidence.clone(),
+            recommendation_reason_codes: public_cluster.recommendation_reason_codes.clone(),
+            recommended_canonical: canonical,
+            alternatives: members,
+            requires_human_confirmation: true,
+        });
+    }
+    clusters.sort_by(|left, right| left.cluster_ref.cmp(&right.cluster_ref));
+    if clusters.len() != envelope.cluster_count
+        || clusters
+            .iter()
+            .map(|cluster| 1usize.saturating_add(cluster.alternatives.len()))
+            .sum::<usize>()
+            != envelope.candidate_count
+        || clusters
+            .iter()
+            .map(|cluster| cluster.redundant_bytes)
+            .sum::<u64>()
+            != envelope.redundant_bytes
+    {
+        return Err("duplicate-canonical-dossier-arithmetic-mismatch".into());
+    }
+
+    let mut dossier = LocalDuplicateCanonicalReviewDossier {
+        schema_version: LOCAL_DUPLICATE_CANONICAL_REVIEW_DOSSIER_SCHEMA_VERSION,
+        schema_kind: LOCAL_DUPLICATE_CANONICAL_REVIEW_DOSSIER_SCHEMA_KIND.into(),
+        dossier_id: String::new(),
+        exported_at_ms: envelope.exported_at_ms,
+        observed_at_ms: envelope.observed_at_ms,
+        canonical_review_lineage_id: envelope.lineage_id.clone(),
+        duplicate_audit_lineage_id: envelope.audit_binding.duplicate_audit_lineage_id.clone(),
+        source_root,
+        production_time_precedence: PRODUCTION_TIME_PRECEDENCE.map(str::to_string).to_vec(),
+        filename_dates_are_auxiliary: true,
+        cluster_count: envelope.cluster_count,
+        candidate_count: envelope.candidate_count,
+        candidate_bytes: envelope.candidate_bytes,
+        redundant_bytes: envelope.redundant_bytes,
+        clusters,
+        local_sensitive_metadata: true,
+        naruon_submission_allowed: false,
+        automatic_discard_allowed: false,
+        human_confirmation_required_for_every_cluster: true,
+        mutation_performed: false,
+    };
+    dossier.dossier_id = local_duplicate_canonical_review_dossier_id(&dossier);
+    Ok(dossier)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -732,6 +1016,8 @@ mod tests {
         )
         .unwrap();
         let encoded = serde_json::to_string(&envelope).unwrap();
+        let dossier = export_local_duplicate_canonical_review_dossier(&report, &envelope).unwrap();
+        let dossier_encoded = serde_json::to_string(&dossier).unwrap();
 
         assert_eq!(envelope.cluster_count, 1);
         assert_eq!(envelope.candidate_count, 2);
@@ -751,6 +1037,33 @@ mod tests {
         assert!(!encoded.contains("private date"));
         assert!(!encoded.contains("private account"));
         assert!(!encoded.contains(&source.to_string_lossy().into_owned()));
+        assert_eq!(
+            dossier.dossier_id,
+            local_duplicate_canonical_review_dossier_id(&dossier)
+        );
+        assert_eq!(dossier.canonical_review_lineage_id, envelope.lineage_id);
+        assert_eq!(dossier.duplicate_audit_lineage_id, audit_lineage.lineage_id);
+        assert!(dossier.local_sensitive_metadata);
+        assert!(!dossier.naruon_submission_allowed);
+        assert!(!dossier.automatic_discard_allowed);
+        assert!(dossier.human_confirmation_required_for_every_cluster);
+        assert!(!dossier.mutation_performed);
+        assert!(dossier_encoded.contains("original.pdf"));
+        assert!(dossier_encoded.contains("private title"));
+        assert!(dossier_encoded.contains("private date"));
+        assert!(!dossier_encoded.contains("private account"));
+        assert!(dossier
+            .clusters
+            .iter()
+            .flat_map(|cluster| std::iter::once(&cluster.recommended_canonical)
+                .chain(cluster.alternatives.iter()))
+            .all(|member| member.filesystem_stable_at_export));
+
+        std::fs::write(source.join("original.pdf"), b"changed after plan").unwrap();
+        assert_eq!(
+            export_local_duplicate_canonical_review_dossier(&report, &envelope).unwrap_err(),
+            "duplicate-canonical-dossier-source-stability-invalid"
+        );
     }
 
     #[test]
