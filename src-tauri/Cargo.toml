@@ -55,6 +55,11 @@ path = "src/bin/disksage-incomplete-download-destination-plan.rs"
 required-features = ["cloud-cli"]
 
 [[bin]]
+name = "disksage-incomplete-download-materialize"
+path = "src/bin/disksage-incomplete-download-materialize.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
 name = "disksage-archive-tree"
 path = "src/bin/disksage-archive-tree.rs"
 required-features = ["archive-cli"]

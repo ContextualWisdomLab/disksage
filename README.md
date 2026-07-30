@@ -82,6 +82,27 @@ cargo run --features cloud-cli --bin disksage-incomplete-download-destination-pl
   --private-output /absolute/private/new-incomplete-download-destination-plan.json
 ```
 
+Materialization is a separate mutating command. It refuses to run without the exact destination
+plan fingerprint, attributed human approval, an explicit `--execute` flag, fresh provider capacity,
+and a private receipt directory outside both source and cloud roots. It regenerates and compares
+the full source lineage, stages every range with create-new names, verifies all planned digests,
+then promotes each verified inode with a no-clobber create-new hard link before removing its
+staging name. Failures roll back files created by that invocation. It never renames, discards,
+trashes, or deletes a source, and the resulting receipt does not claim provider sync or authorize
+local-source eviction.
+
+```sh
+cargo run --features cloud-cli --bin disksage-incomplete-download-materialize -- \
+  --source-root /absolute/source \
+  --destination-plan /absolute/private/destination-plan.json \
+  --confirm-plan-fingerprint LOWERCASE_HEX64 \
+  --receipt-dir /absolute/private/receipts \
+  --approved-by human:reviewer \
+  --rationale "Approved exact provider, account, units, bytes, and destination plan" \
+  --live-icloud-capacity \
+  --execute
+```
+
 ## Status
 
 🚧 Early development. See the [base design](docs/superpowers/specs/2026-07-10-disksage-design.md), [dataset metadata profile design](docs/superpowers/specs/2026-07-16-dataset-metadata-profile-design.md), [cloud OAuth security design](docs/superpowers/specs/2026-07-16-cloud-provider-oauth-pkce-design.md), [cloud capacity evidence design](docs/superpowers/specs/2026-07-21-cloud-capacity-evidence-design.md), [redacted Naruon capacity export design](docs/superpowers/specs/2026-07-29-naruon-cloud-capacity-export-design.md), and [semantic catalog pre-copy export design](docs/superpowers/specs/2026-07-29-semantic-catalog-export-design.md).
