@@ -345,7 +345,6 @@ fn candidate_fingerprint(
     allocated_bytes: u64,
     filesystem_created_ms: u64,
     filesystem_modified_ms: u64,
-    modified_age_days: u64,
     state: IncompleteDownloadState,
     active_use: &ActiveUseEvidence,
     evidence_issues: &[String],
@@ -363,7 +362,11 @@ fn candidate_fingerprint(
     final_sibling_bytes: Option<u64>,
 ) -> String {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"disksage-incomplete-download-candidate-v1\0");
+    // Bind stable source evidence and the policy-relevant state transition, not the derived
+    // whole-day age. `filesystem_modified_ms` already binds source drift, while `state` changes
+    // when the configured staleness threshold is crossed. Hashing `modified_age_days` would make
+    // an otherwise identical approved plan expire every day after it was already stale.
+    hasher.update(b"disksage-incomplete-download-candidate-v2\0");
     for value in [
         source_root,
         relative_path,
@@ -380,7 +383,6 @@ fn candidate_fingerprint(
         allocated_bytes,
         filesystem_created_ms,
         filesystem_modified_ms,
-        modified_age_days,
         structural_zip_candidate_count,
         zip_eocd_count,
         final_sibling_bytes.unwrap_or_default(),
@@ -467,7 +469,6 @@ fn build_item(
         allocated_bytes,
         filesystem_created_ms,
         filesystem_modified_ms,
-        modified_age_days,
         state,
         &active_use,
         &evidence_issues,
@@ -686,7 +687,6 @@ pub(crate) fn incomplete_download_audit_integrity_valid(
                 item.allocated_bytes,
                 item.filesystem_created_ms,
                 item.filesystem_modified_ms,
-                item.modified_age_days,
                 item.state,
                 &item.active_use,
                 &item.evidence_issues,
@@ -1221,6 +1221,61 @@ mod tests {
         );
         assert_ne!(idle.candidate_fingerprint, active.candidate_fingerprint);
         assert_ne!(idle.candidate_fingerprint, typed.candidate_fingerprint);
+    }
+
+    #[test]
+    fn candidate_fingerprint_ignores_age_drift_within_state_but_binds_threshold_crossing() {
+        let build_at = |observed_at_ms, filesystem_modified_ms| {
+            build_item(
+                "/source",
+                "same.crdownload".into(),
+                100,
+                100,
+                10,
+                filesystem_modified_ms,
+                observed_at_ms,
+                DEFAULT_STALE_AFTER_DAYS,
+                active_use(true, false),
+                Vec::new(),
+                Some("image/png".into()),
+                Some("png".into()),
+                Vec::new(),
+                0,
+                Vec::new(),
+                vec!["2026-01-01".into()],
+                vec!["Browser".into()],
+                vec!["example.invalid".into()],
+                false,
+                None,
+                None,
+            )
+        };
+
+        let modified_ms = 20;
+        let stale_day_70 = build_at(modified_ms + 70 * DAY_MS, modified_ms);
+        let stale_day_71 = build_at(modified_ms + 71 * DAY_MS, modified_ms);
+        assert_eq!(stale_day_70.modified_age_days, 70);
+        assert_eq!(stale_day_71.modified_age_days, 71);
+        assert_eq!(stale_day_70.state, stale_day_71.state);
+        assert_eq!(
+            stale_day_70.candidate_fingerprint,
+            stale_day_71.candidate_fingerprint
+        );
+
+        let recent_day_29 = build_at(modified_ms + 29 * DAY_MS, modified_ms);
+        let stale_day_30 = build_at(modified_ms + 30 * DAY_MS, modified_ms);
+        assert_ne!(recent_day_29.state, stale_day_30.state);
+        assert_ne!(
+            recent_day_29.candidate_fingerprint,
+            stale_day_30.candidate_fingerprint
+        );
+
+        let changed_modified_ms = modified_ms + 1;
+        let changed_source = build_at(changed_modified_ms + 70 * DAY_MS, changed_modified_ms);
+        assert_ne!(
+            stale_day_70.candidate_fingerprint,
+            changed_source.candidate_fingerprint
+        );
     }
 
     #[test]
