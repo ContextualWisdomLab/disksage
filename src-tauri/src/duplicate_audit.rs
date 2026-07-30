@@ -294,6 +294,180 @@ fn report_fingerprint(
     hasher.finalize().to_hex().to_string()
 }
 
+fn options_from_snapshot(snapshot: &DuplicateAuditOptionsSnapshot) -> DuplicateAuditOptions {
+    DuplicateAuditOptions {
+        min_file_bytes: snapshot.min_file_bytes,
+        prefix_bytes: snapshot.prefix_bytes,
+        max_entries: snapshot.max_entries,
+        max_duration_ms: snapshot.max_duration_ms,
+        max_files_to_hash: snapshot.max_files_to_hash,
+        max_size_groups: snapshot.max_size_groups,
+        max_hash_bytes: snapshot.max_hash_bytes,
+    }
+}
+
+fn is_lower_hex_64(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn content_digests_well_formed(digests: &ContentDigests) -> bool {
+    is_lower_hex_64(&digests.blake3)
+        && is_lower_hex_64(&digests.sha256)
+        && digests.quick_xor_base64.len() == 28
+        && digests.quick_xor_base64.ends_with('=')
+        && digests
+            .quick_xor_base64
+            .bytes()
+            .take(27)
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'+' || byte == b'/')
+}
+
+/// Recompute the private report bindings before exporting or acting on duplicate evidence.
+///
+/// This check is deliberately filesystem-independent: it proves that the immutable report is
+/// internally bound to its private paths, file identities, digests, options, and arithmetic. A
+/// later execution flow must still revalidate the source files immediately before any mutation.
+pub fn duplicate_audit_report_integrity_valid(report: &DuplicateAuditReport) -> bool {
+    if report.version != DUPLICATE_AUDIT_VERSION
+        || report.schema_kind != DUPLICATE_AUDIT_SCHEMA_KIND
+        || report.observed_at_ms == 0
+        || report.source_root.is_empty()
+        || report.source_scope_fingerprint
+            != source_scope_fingerprint(Path::new(&report.source_root))
+        || report.automatic_discard_allowed
+        || !report.human_context_review_required
+        || report.mutation_performed
+        || report.filename_date_used_as_production_time
+        || report.filesystem_times_used_as_production_time
+    {
+        return false;
+    }
+
+    let options = options_from_snapshot(&report.options);
+    if options.validate().is_err()
+        || report.eligible_file_count > report.entries_seen
+        || report.equal_size_candidate_file_count > report.eligible_file_count
+        || report.hashed_file_count > report.equal_size_candidate_file_count
+        || report.duplicate_path_count > report.hashed_file_count
+        || report.duplicate_unique_file_count > report.duplicate_path_count
+    {
+        return false;
+    }
+
+    let evidence_gap_count = report
+        .issue_counts
+        .values()
+        .try_fold(0usize, |total, count| {
+            usize::try_from(*count)
+                .ok()
+                .and_then(|count| total.checked_add(count))
+        });
+    if evidence_gap_count != Some(report.evidence_gap_count)
+        || report.evidence_complete != report.issue_counts.is_empty()
+        || (!report.evidence_complete && !report.groups.is_empty())
+    {
+        return false;
+    }
+
+    let mut group_fingerprints = BTreeSet::new();
+    let mut path_fingerprints = BTreeSet::new();
+    for group in &report.groups {
+        if !group_fingerprints.insert(group.group_fingerprint.as_str())
+            || !is_lower_hex_64(&group.group_fingerprint)
+            || !content_digests_well_formed(&group.content_digests)
+            || group.path_count != group.files.len()
+            || group.path_count < 2
+            || group.unique_file_count < 2
+            || group.unique_file_count > group.path_count
+            || group.hardlink_alias_count
+                != group.path_count.saturating_sub(group.unique_file_count)
+            || group.logical_bytes_per_file == 0
+        {
+            return false;
+        }
+
+        let mut allocated_by_identity = BTreeMap::new();
+        let mut identities = BTreeSet::new();
+        for file in &group.files {
+            let expected_relative = Path::new(&file.path)
+                .strip_prefix(Path::new(&report.source_root))
+                .ok()
+                .filter(|relative| !relative.as_os_str().is_empty())
+                .map(|relative| relative.to_string_lossy().into_owned());
+            if expected_relative.as_deref() != Some(file.relative_path.as_str())
+                || file.path_fingerprint
+                    != path_fingerprint(&report.source_scope_fingerprint, &file.relative_path)
+                || !path_fingerprints.insert(file.path_fingerprint.as_str())
+                || file.logical_bytes != group.logical_bytes_per_file
+            {
+                return false;
+            }
+            identities.insert((file.device, file.inode));
+            allocated_by_identity
+                .entry((file.device, file.inode))
+                .or_insert(file.allocated_bytes);
+        }
+        if identities.len() != group.unique_file_count {
+            return false;
+        }
+        let expected_reclaimable_logical = group
+            .logical_bytes_per_file
+            .checked_mul((group.unique_file_count as u64).saturating_sub(1));
+        let allocated_total = allocated_by_identity
+            .values()
+            .try_fold(0u64, |total, value| total.checked_add(*value));
+        let allocated_preserved = allocated_by_identity.values().copied().min().unwrap_or(0);
+        let expected_allocated =
+            allocated_total.map(|total| total.saturating_sub(allocated_preserved));
+        if expected_reclaimable_logical != Some(group.reclaimable_logical_bytes)
+            || expected_allocated != Some(group.reclaimable_allocated_upper_bound_bytes)
+            || group.group_fingerprint
+                != group_fingerprint(
+                    &report.source_scope_fingerprint,
+                    &group.content_digests,
+                    &group.files,
+                )
+        {
+            return false;
+        }
+    }
+
+    let duplicate_path_count = report
+        .groups
+        .iter()
+        .try_fold(0usize, |total, group| total.checked_add(group.path_count));
+    let duplicate_unique_file_count = report.groups.iter().try_fold(0usize, |total, group| {
+        total.checked_add(group.unique_file_count)
+    });
+    let hardlink_alias_count = report.groups.iter().try_fold(0usize, |total, group| {
+        total.checked_add(group.hardlink_alias_count)
+    });
+    let reclaimable_logical_bytes = report.groups.iter().try_fold(0u64, |total, group| {
+        total.checked_add(group.reclaimable_logical_bytes)
+    });
+    let reclaimable_allocated_upper_bound_bytes =
+        report.groups.iter().try_fold(0u64, |total, group| {
+            total.checked_add(group.reclaimable_allocated_upper_bound_bytes)
+        });
+    report.duplicate_group_count == report.groups.len()
+        && Some(report.duplicate_path_count) == duplicate_path_count
+        && Some(report.duplicate_unique_file_count) == duplicate_unique_file_count
+        && Some(report.hardlink_alias_count) == hardlink_alias_count
+        && reclaimable_logical_bytes == Some(report.reclaimable_logical_bytes)
+        && reclaimable_allocated_upper_bound_bytes
+            == Some(report.reclaimable_allocated_upper_bound_bytes)
+        && report.report_fingerprint
+            == report_fingerprint(
+                &report.source_scope_fingerprint,
+                &options,
+                report.evidence_complete,
+                &report.groups,
+            )
+}
+
 fn canonical_real_directory(path: &Path) -> Result<PathBuf, String> {
     if !path.is_absolute()
         || path
