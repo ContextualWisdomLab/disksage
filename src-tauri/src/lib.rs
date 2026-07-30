@@ -47,6 +47,7 @@ pub mod incomplete_download_recovery;
 pub mod maven_cache;
 pub mod multipart_archive;
 pub mod naruon_capacity;
+pub mod naruon_incomplete_download_lineage;
 pub mod naruon_lineage;
 pub mod provider_api_client;
 pub mod provider_capacity;

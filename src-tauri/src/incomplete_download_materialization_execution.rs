@@ -350,7 +350,11 @@ pub fn incomplete_download_materialization_receipt_integrity_valid(
         || receipt.fresh_capacity.can_fit != Some(true)
         || !receipt.fresh_capacity.blockers.is_empty()
         || receipt.fresh_capacity.snapshot.provider != receipt.provider
-        || receipt.fresh_capacity.snapshot.account_scope != Some(receipt.account_scope)
+        || receipt
+            .fresh_capacity
+            .snapshot
+            .account_scope
+            .is_some_and(|scope| scope != receipt.account_scope)
         || receipt.fresh_capacity.snapshot.observed_at_ms > receipt.executed_at_ms
         || receipt
             .executed_at_ms
@@ -926,7 +930,14 @@ mod tests {
     use crate::incomplete_download_recovery::{
         validate_incomplete_download_recovery, RecoveryValidationLimits,
     };
-    use crate::provider_capacity::{parse_icloud_brctl_quota, DEFAULT_CAPACITY_RESERVE_BYTES};
+    use crate::naruon_incomplete_download_lineage::{
+        export_naruon_incomplete_download_materialization_lineage,
+        NARUON_INCOMPLETE_DOWNLOAD_LINEAGE_SCHEMA_KIND,
+    };
+    use crate::provider_capacity::{
+        assess_capacity, parse_google_drive_capacity, parse_icloud_brctl_quota,
+        DEFAULT_CAPACITY_RESERVE_BYTES,
+    };
 
     fn zip_bytes(payload: &[u8]) -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -1083,6 +1094,132 @@ mod tests {
         let mut tampered = receipt.clone();
         tampered.materialized_bytes += 1;
         assert!(!incomplete_download_materialization_receipt_integrity_valid(&tampered));
+    }
+
+    #[test]
+    fn exports_path_free_naruon_lineage_from_exact_execution_evidence() {
+        let _active_use_guard = MATERIALIZATION_ACTIVE_USE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let source = tempfile::tempdir().unwrap();
+        let cloud = tempfile::tempdir().unwrap();
+        let receipts = tempfile::tempdir().unwrap();
+        let source_path = source.path().join("private-name.zip.crdownload");
+        write_zip(&source_path, b"validated lineage payload");
+        let (materialization, plan, approval, capacity) = fixtures(source.path(), cloud.path());
+        let (receipt, _) = execute_incomplete_download_materialization(
+            source.path(),
+            &materialization,
+            &plan,
+            &approval,
+            &plan.destination_plan_fingerprint,
+            capacity,
+            receipts.path(),
+            approval.approved_at_ms + 1,
+        )
+        .unwrap();
+
+        let envelope = export_naruon_incomplete_download_materialization_lineage(
+            &receipt,
+            &materialization,
+            &plan,
+            &approval,
+        )
+        .unwrap();
+        assert_eq!(
+            envelope.schema_kind,
+            NARUON_INCOMPLETE_DOWNLOAD_LINEAGE_SCHEMA_KIND
+        );
+        assert_eq!(envelope.receipt_id, receipt.receipt_id);
+        assert_eq!(envelope.source_file_count, 1);
+        assert_eq!(envelope.unit_count, 1);
+        assert_eq!(
+            envelope.units[0].source_candidate_fingerprint,
+            materialization.units[0].candidate_fingerprint
+        );
+        assert_eq!(
+            envelope.units[0].content_digests,
+            receipt.units[0].content_digests
+        );
+        assert!(!envelope.production_time.assigned);
+        assert!(!envelope.provider_write_executed);
+        assert!(!envelope.provider_sync_confirmed);
+        assert!(!envelope.source_eviction_authorized);
+
+        let encoded = serde_json::to_string(&envelope).unwrap();
+        let private_values = [
+            "private-name.zip.crdownload".to_string(),
+            source.path().to_string_lossy().into_owned(),
+            cloud.path().to_string_lossy().into_owned(),
+            plan.destination_subdirectory.clone(),
+            approval.approved_by.clone(),
+            approval.rationale.clone(),
+        ];
+        for private_value in private_values {
+            assert!(!encoded.contains(&private_value));
+        }
+        assert!(encoded.contains(&receipt.units[0].content_digests.sha256));
+
+        let mut wrong_approval = approval.clone();
+        wrong_approval.approved_by = "human:other".into();
+        assert!(export_naruon_incomplete_download_materialization_lineage(
+            &receipt,
+            &materialization,
+            &plan,
+            &wrong_approval,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn receipt_accepts_google_capacity_without_provider_reported_account_scope() {
+        let _active_use_guard = MATERIALIZATION_ACTIVE_USE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let source = tempfile::tempdir().unwrap();
+        let cloud = tempfile::tempdir().unwrap();
+        let receipts = tempfile::tempdir().unwrap();
+        write_zip(
+            &source.path().join("google-scope.zip.crdownload"),
+            b"google capacity scope payload",
+        );
+        let (materialization, plan, approval, capacity) = fixtures(source.path(), cloud.path());
+        let (mut receipt, _) = execute_incomplete_download_materialization(
+            source.path(),
+            &materialization,
+            &plan,
+            &approval,
+            &plan.destination_plan_fingerprint,
+            capacity,
+            receipts.path(),
+            approval.approved_at_ms + 1,
+        )
+        .unwrap();
+
+        let snapshot = parse_google_drive_capacity(
+            r#"{"user":{"permissionId":"opaque"},"storageQuota":{"limit":"10000000000","usage":"1","usageInDrive":"1","usageInDriveTrash":"0"},"maxUploadSize":"10000000000"}"#,
+            receipt.executed_at_ms,
+        )
+        .unwrap();
+        assert_eq!(snapshot.account_scope, None);
+        receipt.provider = CloudProvider::GoogleDrive;
+        receipt.fresh_capacity = assess_capacity(
+            snapshot,
+            receipt.materialized_bytes,
+            receipt
+                .units
+                .iter()
+                .map(|unit| unit.output_bytes)
+                .max()
+                .unwrap(),
+            receipt.fresh_capacity.reserve_bytes,
+        );
+        receipt.receipt_id.clear();
+        receipt.receipt_id = receipt_id_for(&receipt).unwrap();
+
+        assert!(incomplete_download_materialization_receipt_integrity_valid(
+            &receipt
+        ));
     }
 
     #[test]

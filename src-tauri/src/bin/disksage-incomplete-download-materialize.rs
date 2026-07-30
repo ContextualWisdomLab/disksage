@@ -16,6 +16,7 @@ use disksage_lib::incomplete_download_materialization_execution::{
 use disksage_lib::incomplete_download_recovery::{
     validate_incomplete_download_recovery, RecoveryValidationLimits,
 };
+use disksage_lib::naruon_incomplete_download_lineage::export_naruon_incomplete_download_materialization_lineage;
 use disksage_lib::provider_capacity::{
     collect_icloud_native_capacity, collect_live_root_capacity, CloudCapacitySnapshot,
 };
@@ -40,6 +41,7 @@ struct Args {
     live_provider_capacity: bool,
     oauth_connections: Option<PathBuf>,
     capacity_snapshot: Option<PathBuf>,
+    output_naruon_lineage: bool,
     execute: bool,
 }
 
@@ -68,6 +70,7 @@ fn usage() -> String {
          (--live-icloud-capacity | \
           --live-provider-capacity [--oauth-connections ABSOLUTE.json] | \
           --capacity-snapshot ABSOLUTE.json) \
+         [--output-naruon-lineage] \
          [--max-entries 1..={DEFAULT_MAX_ENTRIES}] \
          [--stale-after-days 1..={MAX_STALE_AFTER_DAYS}]"
     )
@@ -86,6 +89,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     let mut live_provider_capacity = false;
     let mut oauth_connections = None;
     let mut capacity_snapshot = None;
+    let mut output_naruon_lineage = false;
     let mut execute = false;
     let mut index = 0usize;
     while index < raw.len() {
@@ -178,6 +182,12 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 }
                 capacity_snapshot = Some(PathBuf::from(value(&mut index, "--capacity-snapshot")?));
             }
+            "--output-naruon-lineage" => {
+                if output_naruon_lineage {
+                    return Err("--output-naruon-lineage는 한 번만 지정할 수 있음".into());
+                }
+                output_naruon_lineage = true;
+            }
             "--execute" => {
                 if execute {
                     return Err("--execute는 한 번만 지정할 수 있음".into());
@@ -255,6 +265,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
         live_provider_capacity,
         oauth_connections,
         capacity_snapshot,
+        output_naruon_lineage,
         execute,
     })
 }
@@ -402,13 +413,21 @@ fn run() -> Result<(), String> {
         &args.receipt_dir,
         system_now_ms(),
     )?;
-    println!(
-        "{}",
+    let output = if args.output_naruon_lineage {
+        serde_json::to_string_pretty(&export_naruon_incomplete_download_materialization_lineage(
+            &receipt,
+            &materialization,
+            &plan,
+            &approval,
+        )?)
+        .map_err(|error| error.to_string())?
+    } else {
         serde_json::to_string_pretty(&summarize_incomplete_download_materialization_receipt(
-            &receipt
+            &receipt,
         ))
         .map_err(|error| error.to_string())?
-    );
+    };
+    println!("{output}");
     Ok(())
 }
 
@@ -453,6 +472,7 @@ mod tests {
         assert!(parsed.execute);
         assert!(parsed.live_icloud_capacity);
         assert!(!parsed.live_provider_capacity);
+        assert!(!parsed.output_naruon_lineage);
         assert_eq!(parsed.confirmed_plan_fingerprint, "a".repeat(64));
     }
 
@@ -472,6 +492,13 @@ mod tests {
             Some(PathBuf::from("/private/oauth-connections.json"))
         );
         assert!(parsed.capacity_snapshot.is_none());
+
+        let mut with_lineage = required();
+        with_lineage.extend([
+            "--live-icloud-capacity".into(),
+            "--output-naruon-lineage".into(),
+        ]);
+        assert!(parse_args(&with_lineage).unwrap().output_naruon_lineage);
     }
 
     #[test]
