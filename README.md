@@ -26,6 +26,11 @@
 
 Every destructive action goes through explicit review and the OS trash — DiskSage has **no permanent-delete code path**. A receipt-bound source can move to Trash only after fresh provider attestation, exact receipt confirmation, attributed human approval, and bounded active-use checks. iCloud local-copy eviction retains the cloud item and requires an exact native-status plan fingerprint. All destructive operations produce immutable evidence records.
 
+The separately gated stale-Git-worktree command removes only a fresh, clean, retained, idle
+development worktree through Git itself, preserves its branch, and writes a durable journal so the
+checkout can be recreated. It is not a general user-file permanent-delete path and is not
+described as an automatic undo.
+
 For one exact multi-item iCloud local-cache approval, the Rust batch coordinator re-plans every
 manifest item before the first mutation, reports unavailable inputs without exposing their paths,
 and stops after the first failed or unverified result:
@@ -138,6 +143,28 @@ cargo run --features cloud-cli --bin disksage-git-worktree-audit -- \
   --reference-ref origin/develop \
   --reference-ref CURRENT_OPEN_PR_HEAD_OID \
   --private-output /absolute/private/new-git-worktree-audit.json
+```
+
+Removal is a separate command and remains read-only unless `--execute` is present. Execution
+requires the exact public approval phrase and removal-plan fingerprint from a fresh audit, an
+attributed `human:` reviewer, a bounded rationale, an approval timestamp, and a create-new journal
+outside the repository. The command re-audits the exact remaining candidate set before every
+removal, invokes `git worktree remove` without `--force`, and stops on the first drift or command
+failure. It never deletes a branch and never runs `git worktree prune`. Observed allocated bytes
+are evidence from the plan, not a claim of verified APFS reclamation.
+
+```sh
+cargo run --features cloud-cli --bin disksage-git-worktree-remove -- \
+  --repository-root /absolute/repository/worktree \
+  --reference-ref origin/develop \
+  --reference-ref CURRENT_OPEN_PR_HEAD_OID \
+  --execute \
+  --confirm-plan-fingerprint LOWERCASE_HEX64 \
+  --approval-phrase "DiskSage stale worktree COUNT BYTES 승인 LOWERCASE_HEX64" \
+  --approved-by human:reviewer \
+  --rationale "Reviewed the exact clean, retained, idle worktree plan" \
+  --approved-at-ms UNIX_EPOCH_MILLISECONDS \
+  --journal /absolute/private/new-worktree-removal.jsonl
 ```
 
 ## Status

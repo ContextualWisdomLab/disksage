@@ -1050,14 +1050,23 @@ pub fn audit_git_worktrees(
     )?;
     let raw_worktrees = list_worktrees(&repository_root, options)?;
     let actor_cwd = canonical_actor_cwd();
-    let common_dir_string = common_dir.to_string_lossy().into_owned();
+    let common_dir_string = common_dir
+        .to_str()
+        .ok_or_else(|| "git-common-dir-not-utf8".to_string())?
+        .to_owned();
+    let repository_root_string = repository_root
+        .to_str()
+        .ok_or_else(|| "git-worktree-repository-root-not-utf8".to_string())?
+        .to_owned();
     let audit_origin = repository_root.clone();
     let mut entries = Vec::with_capacity(raw_worktrees.len());
     let mut issues = Vec::new();
 
     for (index, raw) in raw_worktrees.into_iter().enumerate() {
         let path_result = canonical_real_directory(&raw.path);
-        let path_valid = path_result.is_ok();
+        let path_valid = path_result
+            .as_ref()
+            .is_ok_and(|path| path.to_str().is_some());
         let canonical_path = path_result.as_ref().unwrap_or(&raw.path);
         let path_string = canonical_path.to_string_lossy().into_owned();
         let audit_origin_entry = path_result.as_ref().is_ok_and(|path| path == &audit_origin);
@@ -1192,7 +1201,7 @@ pub fn audit_git_worktrees(
     Ok(GitWorktreeAuditReport {
         schema_kind: GIT_WORKTREE_AUDIT_SCHEMA_KIND.into(),
         version: 2,
-        repository_root: repository_root.to_string_lossy().into_owned(),
+        repository_root: repository_root_string,
         common_dir: common_dir_string,
         generated_at_ms,
         retention_references,

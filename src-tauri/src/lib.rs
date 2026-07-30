@@ -49,6 +49,7 @@ pub mod incomplete_download_materialization_destination;
 pub mod incomplete_download_materialization_execution;
 pub mod incomplete_download_recovery;
 pub mod git_worktree;
+pub mod git_worktree_removal;
 pub mod maven_cache;
 pub mod multipart_archive;
 pub mod naruon_capacity;
