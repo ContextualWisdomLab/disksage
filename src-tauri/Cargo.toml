@@ -70,6 +70,11 @@ path = "src/bin/disksage-naruon-duplicate-audit-lineage.rs"
 required-features = ["cloud-cli"]
 
 [[bin]]
+name = "disksage-duplicate-canonical-review"
+path = "src/bin/disksage-duplicate-canonical-review.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
 name = "disksage-archive-tree"
 path = "src/bin/disksage-archive-tree.rs"
 required-features = ["archive-cli"]

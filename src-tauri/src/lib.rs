@@ -40,6 +40,7 @@ pub mod cloud_review;
 pub mod cloud_transfer;
 pub mod content_digest;
 pub mod duplicate_audit;
+pub mod duplicate_canonical_decision;
 pub mod incomplete_download;
 pub mod incomplete_download_materialization;
 pub mod incomplete_download_materialization_destination;
