@@ -51,6 +51,7 @@ pub mod git_worktree;
 pub mod maven_cache;
 pub mod multipart_archive;
 pub mod naruon_capacity;
+pub mod naruon_cloud_copy_readiness;
 pub mod naruon_lineage;
 pub mod provider_api_client;
 pub mod provider_capacity;
