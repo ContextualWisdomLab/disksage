@@ -19,6 +19,7 @@
 - ⏳ **Incomplete-download audit** — inventories `.crdownload` files by bounded magic bytes, embedded ZIP structure, acquisition context, filesystem-modified staleness, final-sibling presence, and bounded active-use evidence without treating download time or filename dates as production dates
 - 🩺 **Incomplete-download recovery validation** — decodes bounded PNG payloads and streams bounded whole-file or embedded ZIP ranges to EOF with entry CRC checks, without extraction, rename, or discard
 - 🧬 **Incomplete-download materialization plan** — binds fresh audit and recovery fingerprints to exact non-overlapping byte ranges, SHA-256/BLAKE3 content lineage, and content-addressed filename suggestions while withholding destination selection and write approval
+- ☁️ **Destination-bound recovery approval plan** — binds validated output units to one discovered cloud root, relative destination, fresh provider capacity evidence, collision checks, and one exact human-approval fingerprint without creating any output
 
 ## Safety first
 
@@ -66,6 +67,19 @@ cargo run --features cloud-cli --bin disksage-incomplete-download-materializatio
   --root /absolute/source \
   --stale-after-days 30 \
   --private-output /absolute/private/new-incomplete-download-materialization.json
+```
+
+The next read-only stage can bind that plan to an existing discovered cloud root and a relative
+destination. It verifies provider capacity and destination collisions, but still creates no
+directory or output. Paths and proposed names remain only in the optional mode-0600 private report.
+
+```sh
+cargo run --features cloud-cli --bin disksage-incomplete-download-destination-plan -- \
+  --source-root /absolute/source \
+  --cloud-root /absolute/existing/cloud/root \
+  --destination-subdirectory DiskSage/Recovered/IncompleteDownloads \
+  --live-icloud-capacity \
+  --private-output /absolute/private/new-incomplete-download-destination-plan.json
 ```
 
 ## Status

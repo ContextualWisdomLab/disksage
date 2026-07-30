@@ -21,6 +21,10 @@ use std::path::{Component, Path, PathBuf};
 pub const INCOMPLETE_DOWNLOAD_MATERIALIZATION_VERSION: u32 = 1;
 const IO_BUFFER_BYTES: usize = 64 * 1024;
 
+#[cfg(all(test, not(coverage)))]
+pub(crate) static MATERIALIZATION_ACTIVE_USE_TEST_LOCK: std::sync::Mutex<()> =
+    std::sync::Mutex::new(());
+
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
 )]
@@ -328,17 +332,18 @@ fn build_unit(
 }
 
 fn plan_fingerprint(
-    audit: &IncompleteDownloadAuditReport,
-    recovery: &IncompleteDownloadRecoveryReport,
+    source_scope_fingerprint: &str,
+    audit_fingerprint: &str,
+    validation_fingerprint: &str,
     evidence_complete: bool,
     units: &[IncompleteDownloadMaterializationUnit],
 ) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"disksage-incomplete-download-materialization-plan-v1\0");
     for value in [
-        audit.source_scope_fingerprint.as_str(),
-        audit.audit_fingerprint.as_str(),
-        recovery.validation_fingerprint.as_str(),
+        source_scope_fingerprint,
+        audit_fingerprint,
+        validation_fingerprint,
     ] {
         hasher.update(value.as_bytes());
         hasher.update(&[0]);
@@ -527,7 +532,13 @@ pub fn plan_incomplete_download_materialization(
         .filter(|unit| unit.kind == MaterializationUnitKind::EmbeddedZipRange)
         .count();
     let evidence_complete = true;
-    let fingerprint = plan_fingerprint(audit, recovery, evidence_complete, &units);
+    let fingerprint = plan_fingerprint(
+        &audit.source_scope_fingerprint,
+        &audit.audit_fingerprint,
+        &recovery.validation_fingerprint,
+        evidence_complete,
+        &units,
+    );
 
     Ok(IncompleteDownloadMaterializationReport {
         schema_version: INCOMPLETE_DOWNLOAD_MATERIALIZATION_VERSION,
@@ -598,6 +609,158 @@ pub fn summarize_incomplete_download_materialization(
     }
 }
 
+fn valid_quick_xor_base64(value: &str) -> bool {
+    value.len() == 28
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'='))
+}
+
+pub(crate) fn incomplete_download_materialization_integrity_valid(
+    report: &IncompleteDownloadMaterializationReport,
+) -> bool {
+    if report.schema_version != INCOMPLETE_DOWNLOAD_MATERIALIZATION_VERSION
+        || !report.evidence_complete
+        || report.destination_selected
+        || !report.requires_human_destination_review
+        || report.exact_materialization_approval_available
+        || report.approval_issued
+        || report.mutation_performed
+        || ![
+            report.source_scope_fingerprint.as_str(),
+            report.audit_fingerprint.as_str(),
+            report.validation_fingerprint.as_str(),
+            report.plan_fingerprint.as_str(),
+        ]
+        .iter()
+        .all(|value| valid_hex64(value))
+        || report.unit_count != report.units.len()
+        || report.units.is_empty()
+    {
+        return false;
+    }
+
+    let mut source_files = BTreeSet::new();
+    let mut unit_fingerprints = BTreeSet::new();
+    let mut suggested_filenames = BTreeSet::new();
+    let mut previous: Option<&IncompleteDownloadMaterializationUnit> = None;
+    for unit in &report.units {
+        if let Some(left) = previous {
+            let left_key = (
+                &left.candidate_fingerprint,
+                left.range_start,
+                left.range_end,
+                left.kind,
+            );
+            let right_key = (
+                &unit.candidate_fingerprint,
+                unit.range_start,
+                unit.range_end,
+                unit.kind,
+            );
+            if left_key >= right_key
+                || (left.candidate_fingerprint == unit.candidate_fingerprint
+                    && unit.range_start < left.range_end)
+            {
+                return false;
+            }
+        }
+        previous = Some(unit);
+
+        let relative_source = Path::new(&unit.source_relative_path);
+        let (expected_mime, expected_extension) = unit.kind.output();
+        let range_matches_kind = match unit.kind {
+            MaterializationUnitKind::FullPngFile | MaterializationUnitKind::FullZipFile => {
+                unit.range_start == 0 && unit.range_end == unit.source_logical_bytes
+            }
+            MaterializationUnitKind::EmbeddedZipRange => {
+                !(unit.range_start == 0 && unit.range_end == unit.source_logical_bytes)
+            }
+        };
+        if !valid_hex64(&unit.candidate_fingerprint)
+            || relative_source.as_os_str().is_empty()
+            || relative_source.is_absolute()
+            || relative_source
+                .components()
+                .any(|component| !matches!(component, Component::Normal(_)))
+            || !valid_hex64(&unit.content_digests.blake3)
+            || !valid_hex64(&unit.content_digests.sha256)
+            || !valid_quick_xor_base64(&unit.content_digests.quick_xor_base64)
+            || unit.range_end.checked_sub(unit.range_start) != Some(unit.output_bytes)
+            || unit.output_bytes == 0
+            || unit.range_end > unit.source_logical_bytes
+            || !range_matches_kind
+            || unit.output_mime_type != expected_mime
+            || unit.output_extension != expected_extension
+            || !unit.active_use_evidence_complete
+            || unit.source_active
+            || !unit.source_stable
+            || unit.destination_selected
+            || !unit.requires_human_destination_review
+            || unit.approval_issued
+            || unit.write_performed
+        {
+            return false;
+        }
+        let expected_fingerprint = unit_fingerprint(
+            &unit.candidate_fingerprint,
+            &unit.source_relative_path,
+            unit.source_logical_bytes,
+            unit.source_filesystem_created_ms,
+            unit.source_filesystem_modified_ms,
+            unit.kind,
+            unit.range_start,
+            unit.range_end,
+            &unit.content_digests,
+        );
+        let expected_name = format!(
+            "recovered-{}-{}.{}",
+            &unit.content_digests.sha256[..12],
+            &expected_fingerprint[..12],
+            expected_extension
+        );
+        if unit.unit_fingerprint != expected_fingerprint
+            || unit.suggested_filename != expected_name
+            || !unit_fingerprints.insert(unit.unit_fingerprint.as_str())
+            || !suggested_filenames.insert(unit.suggested_filename.as_str())
+        {
+            return false;
+        }
+        source_files.insert(unit.candidate_fingerprint.as_str());
+    }
+
+    report.source_file_count == source_files.len()
+        && report.full_file_unit_count
+            == report
+                .units
+                .iter()
+                .filter(|unit| {
+                    matches!(
+                        unit.kind,
+                        MaterializationUnitKind::FullPngFile | MaterializationUnitKind::FullZipFile
+                    )
+                })
+                .count()
+        && report.embedded_zip_range_unit_count
+            == report
+                .units
+                .iter()
+                .filter(|unit| unit.kind == MaterializationUnitKind::EmbeddedZipRange)
+                .count()
+        && report.planned_output_bytes
+            == report
+                .units
+                .iter()
+                .fold(0u64, |total, unit| total.saturating_add(unit.output_bytes))
+        && plan_fingerprint(
+            &report.source_scope_fingerprint,
+            &report.audit_fingerprint,
+            &report.validation_fingerprint,
+            report.evidence_complete,
+            &report.units,
+        ) == report.plan_fingerprint
+}
+
 #[cfg(all(test, not(coverage)))]
 mod tests {
     use super::*;
@@ -655,6 +818,9 @@ mod tests {
 
     #[test]
     fn plans_content_addressed_full_zip_without_writes() {
+        let _active_use_guard = MATERIALIZATION_ACTIVE_USE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("whole.zip.crdownload");
         let bytes = write_zip(&path, b"validated payload");
@@ -694,6 +860,9 @@ mod tests {
 
     #[test]
     fn rejects_tampered_lineage_reports() {
+        let _active_use_guard = MATERIALIZATION_ACTIVE_USE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let temp = tempfile::tempdir().unwrap();
         write_zip(
             &temp.path().join("tampered.zip.crdownload"),
@@ -716,6 +885,9 @@ mod tests {
 
     #[test]
     fn rejects_source_change_after_recovery_validation() {
+        let _active_use_guard = MATERIALIZATION_ACTIVE_USE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("changed.zip.crdownload");
         write_zip(&path, b"validated payload");

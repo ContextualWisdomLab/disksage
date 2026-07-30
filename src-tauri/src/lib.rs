@@ -41,6 +41,7 @@ pub mod cloud_transfer;
 pub mod content_digest;
 pub mod incomplete_download;
 pub mod incomplete_download_materialization;
+pub mod incomplete_download_materialization_destination;
 pub mod incomplete_download_recovery;
 pub mod maven_cache;
 pub mod multipart_archive;
