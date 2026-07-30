@@ -484,6 +484,20 @@ pub fn list_cloud_provider_connections(
     provider_oauth::load_connections(&oauth_connections_path(&app)?)
 }
 
+/// Inspect only the non-secret OAuth descriptor document.
+///
+/// This command never opens the OS credential store, contacts a provider, or requests filesystem
+/// content access. Credential and remote quota checks remain explicit user actions.
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn inspect_cloud_provider_connections(
+    app: AppHandle,
+) -> Result<provider_oauth::OAuthConnectionInspection, String> {
+    Ok(provider_oauth::inspect_connections(&oauth_connections_path(
+        &app,
+    )?))
+}
+
 /// Return only the latest non-secret approve/hold decision for each candidate fingerprint.
 #[cfg(not(coverage))]
 #[tauri::command]

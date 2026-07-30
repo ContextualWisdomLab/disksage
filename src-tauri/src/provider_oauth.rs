@@ -20,6 +20,7 @@ use std::net::{TcpListener, TcpStream};
 use std::time::{Duration, Instant};
 
 const CONNECTION_DOCUMENT_VERSION: u32 = 1;
+const CONNECTION_INSPECTION_SCHEMA_VERSION: u32 = 1;
 const MAX_CONNECTION_DOCUMENT_BYTES: u64 = 256 * 1024;
 const MAX_CONNECTIONS: usize = 32;
 const MAX_CLIENT_ID_BYTES: usize = 512;
@@ -53,6 +54,30 @@ pub struct OAuthConnection {
     pub client_id: String,
     pub scope: String,
     pub connected_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OAuthConnectionDocumentStatus {
+    Absent,
+    Valid,
+    Invalid,
+    Unavailable,
+}
+
+/// Non-secret, local-only inspection of the OAuth descriptor document.
+///
+/// This deliberately does not open the OS credential store or contact a provider. A valid
+/// descriptor proves only that DiskSage remembers a connection shape; the explicit capacity
+/// verification command remains responsible for revalidating Keychain access and the remote API.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OAuthConnectionInspection {
+    pub schema_version: u32,
+    pub document_status: OAuthConnectionDocumentStatus,
+    pub connections: Vec<OAuthConnection>,
+    pub unavailable_reason: Option<String>,
+    pub credential_store_checked: bool,
+    pub provider_api_checked: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -328,6 +353,52 @@ pub fn load_connections(path: &Path) -> Result<Vec<OAuthConnection>, String> {
         validate_connection(connection)?;
     }
     Ok(document.connections)
+}
+
+pub fn inspect_connections(path: &Path) -> OAuthConnectionInspection {
+    let report = |document_status, connections, unavailable_reason| OAuthConnectionInspection {
+        schema_version: CONNECTION_INSPECTION_SCHEMA_VERSION,
+        document_status,
+        connections,
+        unavailable_reason,
+        credential_store_checked: false,
+        provider_api_checked: false,
+    };
+    match std::fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            report(OAuthConnectionDocumentStatus::Absent, Vec::new(), None)
+        }
+        Err(_) => report(
+            OAuthConnectionDocumentStatus::Unavailable,
+            Vec::new(),
+            Some("oauth-connection-document-unavailable".into()),
+        ),
+        Ok(_) => match load_connections(path) {
+            Ok(connections) => report(
+                OAuthConnectionDocumentStatus::Valid,
+                connections,
+                None,
+            ),
+            Err(error)
+                if matches!(
+                    error.as_str(),
+                    "oauth-connection-document-unavailable"
+                        | "oauth-connection-document-unreadable"
+                ) =>
+            {
+                report(
+                    OAuthConnectionDocumentStatus::Unavailable,
+                    Vec::new(),
+                    Some(error),
+                )
+            }
+            Err(_) => report(
+                OAuthConnectionDocumentStatus::Invalid,
+                Vec::new(),
+                Some("oauth-connection-document-invalid".into()),
+            ),
+        },
+    }
 }
 
 fn save_connections(path: &Path, connections: &[OAuthConnection]) -> Result<(), String> {
@@ -1120,6 +1191,48 @@ mod tests {
         assert!(save_connections(&path, &[tampered]).is_err());
         std::fs::write(&path, b"not-json").unwrap();
         assert!(load_connections(&path).is_err());
+    }
+
+    #[test]
+    fn connection_inspection_is_local_only_and_preserves_fail_closed_states() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("connections.json");
+
+        let absent = inspect_connections(&path);
+        assert_eq!(
+            absent.document_status,
+            OAuthConnectionDocumentStatus::Absent
+        );
+        assert!(absent.connections.is_empty());
+        assert_eq!(absent.unavailable_reason, None);
+        assert!(!absent.credential_store_checked);
+        assert!(!absent.provider_api_checked);
+
+        let saved = connection(CloudProvider::Onedrive);
+        save_connections(&path, std::slice::from_ref(&saved)).unwrap();
+        let valid = inspect_connections(&path);
+        assert_eq!(
+            valid.document_status,
+            OAuthConnectionDocumentStatus::Valid
+        );
+        assert_eq!(valid.connections, vec![saved]);
+        assert_eq!(valid.unavailable_reason, None);
+        assert!(!valid.credential_store_checked);
+        assert!(!valid.provider_api_checked);
+
+        std::fs::write(&path, b"not-json").unwrap();
+        let invalid = inspect_connections(&path);
+        assert_eq!(
+            invalid.document_status,
+            OAuthConnectionDocumentStatus::Invalid
+        );
+        assert!(invalid.connections.is_empty());
+        assert_eq!(
+            invalid.unavailable_reason.as_deref(),
+            Some("oauth-connection-document-invalid")
+        );
+        assert!(!invalid.credential_store_checked);
+        assert!(!invalid.provider_api_checked);
     }
 
     fn unicode_root(provider: CloudProvider, decomposed: bool) -> CloudRoot {

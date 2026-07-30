@@ -19,6 +19,7 @@
   let roots: api.CloudRoot[] = $state([]);
   let rootIssues: api.CloudRootDiscoveryIssue[] = $state([]);
   let connections: api.OAuthConnection[] = $state([]);
+  let connectionInspection: api.OAuthConnectionInspection | null = $state(null);
   let reviewDecisions: api.CloudReviewDecision[] = $state([]);
   let reviewRationales: Record<string, string> = $state({});
   let selectedRoot = $state("");
@@ -67,7 +68,8 @@
       const discovery = await api.inspectCloudRoots();
       roots = discovery.roots;
       rootIssues = discovery.issues;
-      connections = await api.listCloudProviderConnections();
+      connectionInspection = await api.inspectCloudProviderConnections();
+      connections = connectionInspection.connections;
       reviewDecisions = await api.listCloudReviewDecisions();
       selectedRoot = roots.find((root) => root.readable)?.path ?? "";
     } catch (e) {
@@ -309,6 +311,13 @@
     return labels[reason ?? ""] ?? "원격 용량을 확인할 수 없습니다.";
   }
 
+  function connectionDocumentIssueLabel(reason: string | null): string {
+    return reason === "oauth-connection-document-unavailable"
+      || reason === "oauth-connection-document-unreadable"
+      ? "로컬 연결 descriptor 문서를 읽을 수 없습니다."
+      : "로컬 연결 descriptor 문서가 손상되었거나 안전 검증에 실패했습니다.";
+  }
+
   async function verifyProviderCapacity() {
     const root = selectedRootDetails();
     if (!root) return;
@@ -335,6 +344,14 @@
         ...connections.filter((entry) => entry.connection_id !== connection.connection_id),
         connection,
       ];
+      connectionInspection = {
+        schema_version: 1,
+        document_status: "valid",
+        connections,
+        unavailable_reason: null,
+        credential_store_checked: false,
+        provider_api_checked: false,
+      };
       oauthClientId = "";
       connectionCapacity = await api.verifyCloudProviderCapacity(root.path);
       connectionCapacityRoot = root.path;
@@ -354,6 +371,14 @@
     try {
       await api.disconnectCloudProvider(root.path);
       connections = connections.filter((entry) => entry.connection_id !== connection.connection_id);
+      connectionInspection = {
+        schema_version: 1,
+        document_status: "valid",
+        connections,
+        unavailable_reason: null,
+        credential_store_checked: false,
+        provider_api_checked: false,
+      };
       connectionCapacity = null;
       connectionCapacityRoot = "";
     } catch (e) {
@@ -447,7 +472,15 @@
       </div>
     {:else if selectedRootDetails()}
       <div class="oauth-panel">
-        {#if connectionForSelectedRoot()}
+        <p class="muted">
+          로컬 descriptor 상태만 확인했습니다. 이 점검은 Keychain·공급자 네트워크·파일 콘텐츠 권한을 사용하지 않습니다.
+        </p>
+        {#if connectionInspection?.document_status === "invalid" || connectionInspection?.document_status === "unavailable"}
+          <p class="warning">
+            {connectionDocumentIssueLabel(connectionInspection.unavailable_reason)}
+            안전을 위해 OAuth 연결과 원격 용량 검증을 중지했습니다.
+          </p>
+        {:else if connectionForSelectedRoot()}
           <strong>읽기 전용 OAuth descriptor 발견</strong>
           <span class="context">범위: {connectionForSelectedRoot()?.scope}</span>
           <button
@@ -478,6 +511,11 @@
             </p>
           {/if}
         {:else}
+          <strong>
+            {connectionInspection?.document_status === "absent"
+              ? "저장된 OAuth 연결 없음"
+              : "선택한 클라우드 루트의 OAuth 연결 없음"}
+          </strong>
           <label>
             {selectedRootDetails()?.provider === "onedrive" ? "Microsoft Desktop OAuth Client ID" : "Google Desktop OAuth Client ID"}
             <input

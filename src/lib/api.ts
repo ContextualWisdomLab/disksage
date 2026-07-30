@@ -200,6 +200,17 @@ export interface OAuthConnection {
   connected_at_ms: number;
 }
 
+export type OAuthConnectionDocumentStatus = "absent" | "valid" | "invalid" | "unavailable";
+
+export interface OAuthConnectionInspection {
+  schema_version: number;
+  document_status: OAuthConnectionDocumentStatus;
+  connections: OAuthConnection[];
+  unavailable_reason: string | null;
+  credential_store_checked: boolean;
+  provider_api_checked: boolean;
+}
+
 export function cloudRootIdentityMatches(
   connection: OAuthConnection,
   root: CloudRoot,
@@ -519,6 +530,8 @@ export const inspectCloudRoots = () =>
   invoke<CloudRootDiscoveryReport>("inspect_cloud_roots");
 export const listCloudProviderConnections = () =>
   invoke<OAuthConnection[]>("list_cloud_provider_connections");
+export const inspectCloudProviderConnections = () =>
+  invoke<OAuthConnectionInspection>("inspect_cloud_provider_connections");
 export const verifyCloudProviderCapacity = (cloudRoot: string) =>
   invoke<CloudCapacitySnapshot>("verify_cloud_provider_capacity", { cloudRoot });
 export const listCloudReviewDecisions = () =>

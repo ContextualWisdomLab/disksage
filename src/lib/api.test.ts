@@ -52,6 +52,7 @@ describe("api wrappers", () => {
       [() => api.getUserRules(), "user_rules"],
       [() => api.listCloudRoots(), "list_cloud_roots"],
       [() => api.listCloudProviderConnections(), "list_cloud_provider_connections"],
+      [() => api.inspectCloudProviderConnections(), "inspect_cloud_provider_connections"],
       [() => api.verifyCloudProviderCapacity("/cloud"), "verify_cloud_provider_capacity", { cloudRoot: "/cloud" }],
       [() => api.connectCloudProvider("/cloud", "desktop-client-id"), "connect_cloud_provider", { cloudRoot: "/cloud", clientId: "desktop-client-id" }],
       [() => api.disconnectCloudProvider("/cloud"), "disconnect_cloud_provider", { cloudRoot: "/cloud" }],
