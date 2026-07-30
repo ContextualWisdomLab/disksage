@@ -61,6 +61,7 @@ struct Args {
     all_readable_roots: bool,
     verify_capacity: bool,
     decision_summary: bool,
+    capacity_readiness_summary: bool,
     review_reason_set: Option<Vec<String>>,
     private_review_output: Option<PathBuf>,
     exact_duplicate_review_prefix: Option<String>,
@@ -183,6 +184,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
         all_readable_roots: false,
         verify_capacity: false,
         decision_summary: false,
+        capacity_readiness_summary: false,
         review_reason_set: None,
         private_review_output: None,
         exact_duplicate_review_prefix: None,
@@ -244,6 +246,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             "--all-readable-roots" => parsed.all_readable_roots = true,
             "--verify-capacity" => parsed.verify_capacity = true,
             "--decision-summary" => parsed.decision_summary = true,
+            "--capacity-readiness-summary" => parsed.capacity_readiness_summary = true,
             "--review-reason-set" => {
                 if parsed.review_reason_set.is_some() {
                     return Err("--review-reason-set은 한 번만 지정할 수 있음".into());
@@ -447,7 +450,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             "--export-semantic-catalog" => parsed.export_semantic_catalog = true,
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary] [--min-size-mib N] [--min-age-days N] [--limit N] [--decision-summary [--review-reason-set REASON|REASON [--private-review-output ABSOLUTE_NEW_FILE.json]] | --exact-duplicate-review-prefix DIR_PREFIX --exact-duplicate-kind document|media|archive|dataset|backup|creative|incomplete-download | --export-semantic-catalog | --export-naruon-duplicate-canonical-review AUDIT_LINEAGE.json [--duplicate-canonical-review-output ABSOLUTE_NEW_FILE.json] [--duplicate-canonical-review-dossier-output ABSOLUTE_NEW_FILE.json]] [--verify-capacity [--oauth-connections ABSOLUTE_PATH] [--export-naruon-capacity]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
+                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary [--capacity-readiness-summary --verify-capacity]] [--min-size-mib N] [--min-age-days N] [--limit N] [--decision-summary [--review-reason-set REASON|REASON [--private-review-output ABSOLUTE_NEW_FILE.json]] | --exact-duplicate-review-prefix DIR_PREFIX --exact-duplicate-kind document|media|archive|dataset|backup|creative|incomplete-download | --export-semantic-catalog | --export-naruon-duplicate-canonical-review AUDIT_LINEAGE.json [--duplicate-canonical-review-output ABSOLUTE_NEW_FILE.json] [--duplicate-canonical-review-dossier-output ABSOLUTE_NEW_FILE.json]] [--verify-capacity [--oauth-connections ABSOLUTE_PATH] [--export-naruon-capacity]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -516,6 +519,19 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     }
     if args.all_readable_roots && !args.decision_summary {
         return Err("--all-readable-roots에는 --decision-summary가 필요함".into());
+    }
+    if args.capacity_readiness_summary
+        && (!args.all_readable_roots || !args.decision_summary || !args.verify_capacity)
+    {
+        return Err(
+            "--capacity-readiness-summary에는 --all-readable-roots, --decision-summary, --verify-capacity가 필요함"
+                .into(),
+        );
+    }
+    if args.capacity_readiness_summary && args.review_reason_set.is_some() {
+        return Err(
+            "--capacity-readiness-summary는 파일별 review batch와 함께 사용할 수 없음".into(),
+        );
     }
     if args.all_readable_roots && (args.cloud_root.is_some() || args.provider.is_some()) {
         return Err(
@@ -1632,6 +1648,40 @@ fn decision_summary(report: &cloud::CloudPlanReport) -> serde_json::Value {
     })
 }
 
+/// Produce a public, path-free capacity view.
+///
+/// A decision summary deliberately keeps relative names so a human can review individual files.
+/// Capacity readiness only needs aggregates, so it drops those decisions and their approval
+/// fingerprints as well.
+#[cfg(not(coverage))]
+fn capacity_readiness_destination_summary(report: &cloud::CloudPlanReport) -> serde_json::Value {
+    let mut summary = decision_summary(report);
+    let object = summary
+        .as_object_mut()
+        .expect("decision summary is always a JSON object");
+    object.insert(
+        "output_mode".into(),
+        serde_json::Value::String("capacity-readiness-destination-summary".into()),
+    );
+    object.remove("decisions");
+    object.remove("decision_batch_fingerprint");
+    object.remove("decision_batch_fingerprint_version");
+    object.insert("paths_redacted".into(), serde_json::Value::Bool(true));
+    object.insert(
+        "relative_names_redacted".into(),
+        serde_json::Value::Bool(true),
+    );
+    summary
+}
+
+#[cfg(not(coverage))]
+fn has_verified_capacity(report: &cloud::CloudPlanReport) -> bool {
+    report.capacity.as_ref().is_some_and(|assessment| {
+        assessment.snapshot.evidence_kind != provider_capacity::CapacityEvidenceKind::Unavailable
+            && assessment.can_fit.is_some()
+    })
+}
+
 #[cfg(not(coverage))]
 fn receipt_cloud_root(receipt: &CloudCopyReceipt, home: &Path) -> Result<CloudRoot, String> {
     let destination = Path::new(&receipt.destination);
@@ -2054,6 +2104,7 @@ fn run() -> Result<(), String> {
     );
     if args.all_readable_roots {
         let mut summaries = Vec::with_capacity(selected_roots.len());
+        let mut capacity_verified_destination_count = 0usize;
         for selected in &selected_roots {
             let (_, report) = plan_with_optional_capacity(
                 &snapshot,
@@ -2062,9 +2113,14 @@ fn run() -> Result<(), String> {
                 args.oauth_connections.as_deref(),
                 args.capacity_reserve_mib,
             )?;
-            summaries.push(match args.review_reason_set.as_deref() {
-                Some(reasons) => review_batch_summary(&report, reasons)?,
-                None => decision_summary(&report),
+            capacity_verified_destination_count += usize::from(has_verified_capacity(&report));
+            summaries.push(if args.capacity_readiness_summary {
+                capacity_readiness_destination_summary(&report)
+            } else {
+                match args.review_reason_set.as_deref() {
+                    Some(reasons) => review_batch_summary(&report, reasons)?,
+                    None => decision_summary(&report),
+                }
             });
         }
         let capacity_notice = if args.verify_capacity {
@@ -2072,25 +2128,65 @@ fn run() -> Result<(), String> {
         } else {
             "cloud-capacity-unverified"
         };
-        let output = serde_json::json!({
-            "schema_version": 1,
-            "output_mode": "multicloud-decision-summary",
-            "source_snapshot": {
-                "candidate_count": snapshot.candidate_count(),
-                "candidate_bytes": snapshot.candidate_bytes(),
-                "reused_for_destination_count": selected_roots.len(),
-                "content_metadata_probed_once": true,
-                "duplicate_content_hashed_once": true,
-            },
-            "destinations": summaries,
-            "notices": [
-                "dry-run-only",
-                "destination-state-revalidated-per-plan",
-                "source-stat-revalidated-per-plan",
-                capacity_notice,
-                "cloud-sync-unverified",
-            ],
-        });
+        let output = if args.capacity_readiness_summary {
+            serde_json::json!({
+                "schema_version": 2,
+                "output_mode": "multicloud-capacity-readiness-summary",
+                "source_snapshot": {
+                    "candidate_count": snapshot.candidate_count(),
+                    "candidate_bytes": snapshot.candidate_bytes(),
+                    "reused_for_destination_count": selected_roots.len(),
+                    "content_metadata_probed_once": true,
+                    "duplicate_content_hashed_once": true,
+                },
+                "metadata_policy": {
+                    "production_time_precedence": [
+                        "embedded-metadata",
+                        "explicit-filename-date",
+                        "filesystem-created",
+                        "filesystem-modified",
+                    ],
+                    "filename_dates_are_auxiliary": true,
+                },
+                "destinations": summaries,
+                "capacity_verified_destination_count": capacity_verified_destination_count,
+                "remote_capacity_verified_for_all_destinations":
+                    capacity_verified_destination_count == selected_roots.len(),
+                "paths_redacted": true,
+                "relative_names_redacted": true,
+                "provider_sync_attested": false,
+                "mutation_performed": false,
+                "cloud_write_performed": false,
+                "source_eviction_authorized": false,
+                "notices": [
+                    "dry-run-only",
+                    "destination-state-revalidated-per-plan",
+                    "source-stat-revalidated-per-plan",
+                    capacity_notice,
+                    "cloud-sync-unverified",
+                ],
+            })
+        } else {
+            serde_json::json!({
+                "schema_version": 1,
+                "output_mode": "multicloud-decision-summary",
+                "source_snapshot": {
+                    "candidate_count": snapshot.candidate_count(),
+                    "candidate_bytes": snapshot.candidate_bytes(),
+                    "reused_for_destination_count": selected_roots.len(),
+                    "content_metadata_probed_once": true,
+                    "duplicate_content_hashed_once": true,
+                },
+                "destinations": summaries,
+                "notices": [
+                    "dry-run-only",
+                    "destination-state-revalidated-per-plan",
+                    "source-stat-revalidated-per-plan",
+                    capacity_notice,
+                    "cloud-sync-unverified",
+                ],
+            })
+        };
         println!(
             "{}",
             serde_json::to_string_pretty(&output).map_err(|error| error.to_string())?
@@ -2392,6 +2488,7 @@ mod tests {
         assert!(defaults.naruon_sync_evidence.is_none());
         assert!(!defaults.verify_capacity);
         assert!(!defaults.decision_summary);
+        assert!(!defaults.capacity_readiness_summary);
         assert!(!defaults.all_readable_roots);
         assert!(defaults.review_reason_set.is_none());
         assert!(defaults.private_review_output.is_none());
@@ -2522,6 +2619,31 @@ mod tests {
         .unwrap();
         assert!(capacity.verify_capacity);
         assert!(validate_action_args(&capacity).is_ok());
+
+        let public_capacity = parse_args(
+            &[
+                "--all-readable-roots".into(),
+                "--decision-summary".into(),
+                "--verify-capacity".into(),
+                "--capacity-readiness-summary".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(public_capacity.capacity_readiness_summary);
+        assert!(validate_action_args(&public_capacity).is_ok());
+
+        for missing_dependencies in [
+            vec!["--capacity-readiness-summary".into()],
+            vec![
+                "--capacity-readiness-summary".into(),
+                "--all-readable-roots".into(),
+                "--decision-summary".into(),
+            ],
+        ] {
+            let invalid = parse_args(&missing_dependencies, Path::new("/h")).unwrap();
+            assert!(validate_action_args(&invalid).is_err());
+        }
     }
 
     #[test]
@@ -2855,6 +2977,20 @@ mod tests {
         assert!(item.get("src").is_none());
         assert!(item.get("dst").is_none());
         assert!(item.get("metadata_evidence").is_none());
+
+        let public_capacity = capacity_readiness_destination_summary(&report);
+        assert_eq!(
+            public_capacity["output_mode"],
+            "capacity-readiness-destination-summary"
+        );
+        assert_eq!(public_capacity["paths_redacted"], true);
+        assert_eq!(public_capacity["relative_names_redacted"], true);
+        assert!(public_capacity.get("decisions").is_none());
+        assert!(public_capacity.get("decision_batch_fingerprint").is_none());
+        assert!(public_capacity
+            .get("decision_batch_fingerprint_version")
+            .is_none());
+        assert!(!has_verified_capacity(&report));
 
         let encoded = serde_json::to_string(&summary).unwrap();
         for redacted in [
