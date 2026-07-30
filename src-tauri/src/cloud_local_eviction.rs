@@ -613,6 +613,7 @@ pub fn observe_path_active_use(path: &Path) -> ActiveUseEvidence {
 fn foundation_bool_resource(
     url: &objc2_foundation::NSURL,
     key: &objc2_foundation::NSURLResourceKey,
+    field: &str,
 ) -> Result<bool, String> {
     use objc2::runtime::AnyObject;
     use objc2_foundation::NSNumber;
@@ -622,16 +623,17 @@ fn foundation_bool_resource(
     unsafe { url.getResourceValue_forKey_error(&mut value, key) }
         .map_err(|error| error.localizedDescription().to_string())?;
     value
-        .ok_or_else(|| "icloud-resource-value-missing".to_string())?
+        .ok_or_else(|| format!("icloud-resource-value-missing:{field}"))?
         .downcast::<NSNumber>()
         .map(|number| number.as_bool())
-        .map_err(|_| "icloud-resource-value-not-boolean".to_string())
+        .map_err(|_| format!("icloud-resource-value-not-boolean:{field}"))
 }
 
 #[cfg(all(target_os = "macos", not(coverage)))]
 fn foundation_string_resource(
     url: &objc2_foundation::NSURL,
     key: &objc2_foundation::NSURLResourceKey,
+    field: &str,
 ) -> Result<objc2::rc::Retained<objc2_foundation::NSString>, String> {
     use objc2::runtime::AnyObject;
     use objc2_foundation::NSString;
@@ -641,9 +643,9 @@ fn foundation_string_resource(
     unsafe { url.getResourceValue_forKey_error(&mut value, key) }
         .map_err(|error| error.localizedDescription().to_string())?;
     value
-        .ok_or_else(|| "icloud-resource-value-missing".to_string())?
+        .ok_or_else(|| format!("icloud-resource-value-missing:{field}"))?
         .downcast::<NSString>()
-        .map_err(|_| "icloud-resource-value-not-string".to_string())
+        .map_err(|_| format!("icloud-resource-value-not-string:{field}"))
 }
 
 #[cfg(all(target_os = "macos", not(coverage)))]
@@ -663,24 +665,52 @@ fn observe_icloud_state(path: &Path) -> Result<IcloudLocalState, String> {
         let url = NSURL::fileURLWithPath(&NSString::from_str(path));
         // SAFETY: These are Foundation-exported process-lifetime resource-key constants.
         unsafe {
-            let status = foundation_string_resource(&url, NSURLUbiquitousItemDownloadingStatusKey)?;
+            let is_ubiquitous =
+                foundation_bool_resource(&url, NSURLIsUbiquitousItemKey, "is-ubiquitous")?;
+            if !is_ubiquitous {
+                return Ok(IcloudLocalState {
+                    is_ubiquitous: false,
+                    is_uploaded: false,
+                    is_uploading: false,
+                    is_downloading: false,
+                    downloading_status_current: false,
+                    has_unresolved_conflicts: false,
+                    is_excluded_from_sync: false,
+                });
+            }
+            let status = foundation_string_resource(
+                &url,
+                NSURLUbiquitousItemDownloadingStatusKey,
+                "downloading-status",
+            )?;
             Ok(IcloudLocalState {
-                is_ubiquitous: foundation_bool_resource(&url, NSURLIsUbiquitousItemKey)?,
-                is_uploaded: foundation_bool_resource(&url, NSURLUbiquitousItemIsUploadedKey)?,
-                is_uploading: foundation_bool_resource(&url, NSURLUbiquitousItemIsUploadingKey)?,
+                is_ubiquitous,
+                is_uploaded: foundation_bool_resource(
+                    &url,
+                    NSURLUbiquitousItemIsUploadedKey,
+                    "is-uploaded",
+                )?,
+                is_uploading: foundation_bool_resource(
+                    &url,
+                    NSURLUbiquitousItemIsUploadingKey,
+                    "is-uploading",
+                )?,
                 is_downloading: foundation_bool_resource(
                     &url,
                     NSURLUbiquitousItemIsDownloadingKey,
+                    "is-downloading",
                 )?,
                 downloading_status_current: status
                     .isEqualToString(NSURLUbiquitousItemDownloadingStatusCurrent),
                 has_unresolved_conflicts: foundation_bool_resource(
                     &url,
                     NSURLUbiquitousItemHasUnresolvedConflictsKey,
+                    "has-unresolved-conflicts",
                 )?,
                 is_excluded_from_sync: foundation_bool_resource(
                     &url,
                     NSURLUbiquitousItemIsExcludedFromSyncKey,
+                    "is-excluded-from-sync",
                 )?,
             })
         }

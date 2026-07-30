@@ -15,11 +15,13 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
+const MAX_INVENTORY_REPORT_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Args {
     cloud_root: PathBuf,
-    manifest: PathBuf,
+    manifest: Option<PathBuf>,
+    inventory_report: Option<PathBuf>,
     execute: bool,
     approved_batch_fingerprint: Option<String>,
     confirm_batch_fingerprint: Option<String>,
@@ -30,7 +32,8 @@ struct Args {
 
 fn usage() -> &'static str {
     "usage: disksage-icloud-local-eviction-batch --cloud-root ABSOLUTE_PATH \
-     --manifest ABSOLUTE_JSON [--execute --approved-batch-fingerprint HEX64 \
+     (--manifest ABSOLUTE_JSON | --inventory-report ABSOLUTE_PRIVATE_JSON) \
+     [--execute --approved-batch-fingerprint HEX64 \
      --confirm-batch-fingerprint HEX64 --approved-by human:IDENTITY \
      --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]"
 }
@@ -45,6 +48,7 @@ fn value(args: &[String], index: &mut usize, flag: &str) -> Result<String, Strin
 fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut cloud_root = None;
     let mut manifest = None;
+    let mut inventory_report = None;
     let mut execute = false;
     let mut approved_batch_fingerprint = None;
     let mut confirm_batch_fingerprint = None;
@@ -58,6 +62,13 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                 cloud_root = Some(PathBuf::from(value(args, &mut index, "--cloud-root")?))
             }
             "--manifest" => manifest = Some(PathBuf::from(value(args, &mut index, "--manifest")?)),
+            "--inventory-report" => {
+                inventory_report = Some(PathBuf::from(value(
+                    args,
+                    &mut index,
+                    "--inventory-report",
+                )?))
+            }
             "--execute" => execute = true,
             "--approved-batch-fingerprint" => {
                 approved_batch_fingerprint =
@@ -78,9 +89,16 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         index += 1;
     }
     let cloud_root = cloud_root.ok_or_else(|| "--cloud-root 값이 필요함".to_string())?;
-    let manifest = manifest.ok_or_else(|| "--manifest 값이 필요함".to_string())?;
-    if !cloud_root.is_absolute() || !manifest.is_absolute() {
-        return Err("cloud root와 manifest는 절대 경로여야 함".into());
+    if manifest.is_some() == inventory_report.is_some() {
+        return Err("--manifest와 --inventory-report 중 정확히 하나가 필요함".into());
+    }
+    if !cloud_root.is_absolute()
+        || manifest.as_ref().is_some_and(|path| !path.is_absolute())
+        || inventory_report
+            .as_ref()
+            .is_some_and(|path| !path.is_absolute())
+    {
+        return Err("cloud root와 입력 보고서는 절대 경로여야 함".into());
     }
     let execution_fields = [
         approved_batch_fingerprint.is_some(),
@@ -107,6 +125,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     Ok(Args {
         cloud_root,
         manifest,
+        inventory_report,
         execute,
         approved_batch_fingerprint,
         confirm_batch_fingerprint,
@@ -180,6 +199,45 @@ struct InputManifestItem {
     path: PathBuf,
 }
 
+#[derive(Debug, Deserialize)]
+struct InputInventoryBatchReport {
+    version: u32,
+    candidate_count: usize,
+    allocated_candidate_bytes: u64,
+    reports: Vec<InputInventoryRootReport>,
+    contains_sensitive_local_paths: bool,
+    local_only: bool,
+    remote_capacity_verified: bool,
+    provider_sync_attested: bool,
+    source_eviction_authorized: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct InputInventoryRootReport {
+    provider: CloudProvider,
+    account_scope: CloudAccountScope,
+    cloud_root: String,
+    evidence_complete: bool,
+    results_truncated: bool,
+    allocated_candidate_bytes: u64,
+    candidates: Vec<InputInventoryCandidate>,
+}
+
+#[derive(Debug, Deserialize)]
+struct InputInventoryCandidate {
+    path: PathBuf,
+    logical_bytes: u64,
+    allocated_bytes: u64,
+    provider_sync_attested: bool,
+}
+
+#[derive(Debug)]
+struct InventoryPathSelection {
+    paths: Vec<PathBuf>,
+    evidence_complete: bool,
+    results_truncated: bool,
+}
+
 fn read_manifest_paths(path: &Path) -> Result<Vec<PathBuf>, String> {
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|_| "icloud-local-eviction-batch-manifest-unavailable".to_string())?;
@@ -215,6 +273,130 @@ fn read_manifest_paths(path: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(paths)
 }
 
+fn read_inventory_report_paths(
+    path: &Path,
+    root: &CloudRoot,
+) -> Result<InventoryPathSelection, String> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|_| "icloud-local-eviction-inventory-report-unavailable".to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("icloud-local-eviction-inventory-report-must-be-regular-file".into());
+    }
+    if metadata.len() == 0 || metadata.len() > MAX_INVENTORY_REPORT_BYTES {
+        return Err("icloud-local-eviction-inventory-report-size-invalid".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err("icloud-local-eviction-inventory-report-permissions-too-open".into());
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        return Err("icloud-local-eviction-inventory-report-secure-mode-unsupported".into());
+    }
+
+    let file = std::fs::File::open(path)
+        .map_err(|_| "icloud-local-eviction-inventory-report-open-failed".to_string())?;
+    let mut encoded = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
+    file.take(MAX_INVENTORY_REPORT_BYTES + 1)
+        .read_to_end(&mut encoded)
+        .map_err(|_| "icloud-local-eviction-inventory-report-read-failed".to_string())?;
+    if u64::try_from(encoded.len()).unwrap_or(u64::MAX) > MAX_INVENTORY_REPORT_BYTES {
+        return Err("icloud-local-eviction-inventory-report-size-invalid".into());
+    }
+    let report: InputInventoryBatchReport = serde_json::from_slice(&encoded)
+        .map_err(|_| "icloud-local-eviction-inventory-report-json-invalid".to_string())?;
+    if report.version != 2
+        || !report.contains_sensitive_local_paths
+        || !report.local_only
+        || report.remote_capacity_verified
+        || report.provider_sync_attested
+        || report.source_eviction_authorized
+        || report.reports.is_empty()
+        || report.reports.len() > 64
+    {
+        return Err("icloud-local-eviction-inventory-report-contract-invalid".into());
+    }
+
+    let mut candidate_count = 0usize;
+    let mut allocated_candidate_bytes = 0u64;
+    for root_report in &report.reports {
+        let root_allocated_bytes = root_report
+            .candidates
+            .iter()
+            .try_fold(0u64, |total, candidate| {
+                total.checked_add(candidate.allocated_bytes)
+            })
+            .ok_or_else(|| {
+                "icloud-local-eviction-inventory-report-allocation-overflow".to_string()
+            })?;
+        if root_allocated_bytes != root_report.allocated_candidate_bytes {
+            return Err("icloud-local-eviction-inventory-report-root-total-mismatch".into());
+        }
+        candidate_count = candidate_count
+            .checked_add(root_report.candidates.len())
+            .ok_or_else(|| {
+                "icloud-local-eviction-inventory-report-candidate-overflow".to_string()
+            })?;
+        allocated_candidate_bytes = allocated_candidate_bytes
+            .checked_add(root_report.allocated_candidate_bytes)
+            .ok_or_else(|| {
+                "icloud-local-eviction-inventory-report-allocation-overflow".to_string()
+            })?;
+    }
+    if candidate_count != report.candidate_count
+        || allocated_candidate_bytes != report.allocated_candidate_bytes
+    {
+        return Err("icloud-local-eviction-inventory-report-batch-total-mismatch".into());
+    }
+
+    let matches = report
+        .reports
+        .iter()
+        .filter(|root_report| {
+            root_report.provider == CloudProvider::Icloud
+                && root_report.account_scope == root.account_scope
+                && cloud::cloud_root_path_matches(
+                    Path::new(&root_report.cloud_root),
+                    Path::new(&root.path),
+                )
+        })
+        .collect::<Vec<_>>();
+    let selected = match matches.as_slice() {
+        [only] => *only,
+        [] => return Err("icloud-local-eviction-inventory-report-root-missing".into()),
+        _ => return Err("icloud-local-eviction-inventory-report-root-ambiguous".into()),
+    };
+    if selected.candidates.is_empty() || selected.candidates.len() > MAX_BATCH_ITEMS {
+        return Err("icloud-local-eviction-inventory-report-item-count-invalid".into());
+    }
+    let cloud_root = Path::new(&root.path);
+    if selected.candidates.iter().any(|candidate| {
+        candidate.logical_bytes == 0
+            || candidate.allocated_bytes == 0
+            || candidate.provider_sync_attested
+            || !candidate.path.is_absolute()
+            || !candidate.path.starts_with(cloud_root)
+            || candidate
+                .path
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+    }) {
+        return Err("icloud-local-eviction-inventory-report-candidate-invalid".into());
+    }
+    Ok(InventoryPathSelection {
+        paths: selected
+            .candidates
+            .iter()
+            .map(|candidate| candidate.path.clone())
+            .collect(),
+        evidence_complete: selected.evidence_complete,
+        results_truncated: selected.results_truncated,
+    })
+}
+
 #[derive(Debug, serde::Serialize)]
 struct RedactedBatchPlan {
     version: u32,
@@ -229,11 +411,19 @@ struct RedactedBatchPlan {
     batch_fingerprint: String,
     eligible_after_human_approval: bool,
     blockers: Vec<String>,
+    item_blocker_counts: BTreeMap<String, u32>,
     unavailable_error_counts: BTreeMap<String, u32>,
     notices: Vec<String>,
 }
 
 fn redact_plan(plan: &IcloudLocalEvictionBatchPlan) -> RedactedBatchPlan {
+    let mut item_blocker_counts = BTreeMap::new();
+    for item in &plan.items {
+        for blocker in &item.plan.blockers {
+            let count = item_blocker_counts.entry(blocker.clone()).or_insert(0u32);
+            *count = count.saturating_add(1);
+        }
+    }
     let mut unavailable_error_counts = BTreeMap::new();
     for unavailable in &plan.unavailable {
         let count = unavailable_error_counts
@@ -254,6 +444,7 @@ fn redact_plan(plan: &IcloudLocalEvictionBatchPlan) -> RedactedBatchPlan {
         batch_fingerprint: plan.batch_fingerprint.clone(),
         eligible_after_human_approval: plan.eligible_after_human_approval,
         blockers: plan.blockers.clone(),
+        item_blocker_counts,
         unavailable_error_counts,
         notices: plan.notices.clone(),
     }
@@ -262,6 +453,11 @@ fn redact_plan(plan: &IcloudLocalEvictionBatchPlan) -> RedactedBatchPlan {
 #[derive(Debug, serde::Serialize)]
 struct PlanOutput {
     action: &'static str,
+    input_source: &'static str,
+    input_inventory_evidence_complete: Option<bool>,
+    input_inventory_results_truncated: Option<bool>,
+    remote_capacity_verified: bool,
+    source_eviction_authorized: bool,
     mutation_executed: bool,
     individual_paths_redacted: bool,
     plan: RedactedBatchPlan,
@@ -317,6 +513,7 @@ fn redact_result(result: &IcloudLocalEvictionBatchResult) -> RedactedBatchResult
 #[derive(Debug, serde::Serialize)]
 struct ExecuteOutput {
     action: &'static str,
+    input_source: &'static str,
     mutation_executed: bool,
     individual_paths_redacted: bool,
     batch_approval_id: String,
@@ -336,16 +533,36 @@ fn run() -> Result<(), String> {
     let args = parse_args(&raw)?;
     let roots = cloud::discover_cloud_roots(&home_dir()?);
     let root = select_root(&roots, &args.cloud_root)?.clone();
+    let (input_path, input_source) = match (&args.manifest, &args.inventory_report) {
+        (Some(path), None) => (path.as_path(), "manifest"),
+        (None, Some(path)) => (path.as_path(), "private-local-inventory-report"),
+        _ => return Err("icloud-local-eviction-batch-input-shape-invalid".into()),
+    };
     validate_control_locations(
         Path::new(&root.path),
-        &args.manifest,
+        input_path,
         args.record_dir.as_deref(),
     )?;
-    let paths = read_manifest_paths(&args.manifest)?;
+    let (paths, inventory_evidence_complete, inventory_results_truncated) =
+        if args.inventory_report.is_some() {
+            let selection = read_inventory_report_paths(input_path, &root)?;
+            (
+                selection.paths,
+                Some(selection.evidence_complete),
+                Some(selection.results_truncated),
+            )
+        } else {
+            (read_manifest_paths(input_path)?, None, None)
+        };
     let plan = plan_icloud_local_eviction_batch(&root, &paths, cloud::system_now_ms())?;
     if !args.execute {
         return print_json(&PlanOutput {
             action: "plan-icloud-local-eviction-batch",
+            input_source,
+            input_inventory_evidence_complete: inventory_evidence_complete,
+            input_inventory_results_truncated: inventory_results_truncated,
+            remote_capacity_verified: false,
+            source_eviction_authorized: false,
             mutation_executed: false,
             individual_paths_redacted: true,
             plan: redact_plan(&plan),
@@ -394,6 +611,7 @@ fn run() -> Result<(), String> {
     )?;
     print_json(&ExecuteOutput {
         action: "evict-icloud-local-copy-batch",
+        input_source,
         mutation_executed: result.attempted_count > 0,
         individual_paths_redacted: true,
         batch_approval_id: approval.approval_id,
@@ -461,6 +679,19 @@ mod tests {
             TEST_RECORD_DIR.into(),
         ]);
         assert!(parse_args(&complete).unwrap().execute);
+
+        let inventory = vec![
+            "--cloud-root".into(),
+            TEST_CLOUD_ROOT.into(),
+            "--inventory-report".into(),
+            TEST_MANIFEST.into(),
+        ];
+        let parsed = parse_args(&inventory).unwrap();
+        assert!(parsed.manifest.is_none());
+        assert_eq!(parsed.inventory_report, Some(PathBuf::from(TEST_MANIFEST)));
+        let mut both = inventory;
+        both.extend(["--manifest".into(), TEST_MANIFEST.into()]);
+        assert!(parse_args(&both).is_err());
     }
 
     #[test]
@@ -502,6 +733,63 @@ mod tests {
         assert_eq!(
             read_manifest_paths(&link).unwrap_err(),
             "icloud-local-eviction-batch-manifest-must-be-regular-file"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_inventory_report_is_mode_bound_and_selects_icloud_paths() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let cloud_root = temp.path().join("icloud");
+        std::fs::create_dir(&cloud_root).unwrap();
+        let candidate = cloud_root.join("candidate.bin");
+        let report_path = temp.path().join("private.json");
+        let report = serde_json::json!({
+            "version": 2,
+            "candidate_count": 1,
+            "allocated_candidate_bytes": 4096,
+            "reports": [{
+                "provider": "icloud",
+                "account_scope": "personal",
+                "cloud_root": cloud_root,
+                "evidence_complete": false,
+                "results_truncated": false,
+                "allocated_candidate_bytes": 4096,
+                "candidates": [{
+                    "path": candidate,
+                    "logical_bytes": 8192,
+                    "allocated_bytes": 4096,
+                    "provider_sync_attested": false
+                }]
+            }],
+            "contains_sensitive_local_paths": true,
+            "local_only": true,
+            "remote_capacity_verified": false,
+            "provider_sync_attested": false,
+            "source_eviction_authorized": false
+        });
+        std::fs::write(&report_path, serde_json::to_vec(&report).unwrap()).unwrap();
+        std::fs::set_permissions(&report_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let root = CloudRoot {
+            id: "icloud:test".into(),
+            provider: CloudProvider::Icloud,
+            account_scope: CloudAccountScope::Personal,
+            label: "iCloud".into(),
+            path: cloud_root.to_string_lossy().into_owned(),
+            readable: true,
+            access_issue: None,
+        };
+        let selection = read_inventory_report_paths(&report_path, &root).unwrap();
+        assert_eq!(selection.paths, [candidate]);
+        assert!(!selection.evidence_complete);
+        assert!(!selection.results_truncated);
+
+        std::fs::set_permissions(&report_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            read_inventory_report_paths(&report_path, &root).unwrap_err(),
+            "icloud-local-eviction-inventory-report-permissions-too-open"
         );
     }
 
