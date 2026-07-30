@@ -843,6 +843,12 @@ fn increment(map: &mut BTreeMap<String, u64>, key: &str, value: u64) {
 fn decision_aggregates(report: &cloud::CloudPlanReport) -> serde_json::Value {
     let mut decision_state_counts = BTreeMap::new();
     let mut decision_state_candidate_bytes = BTreeMap::new();
+    let mut archive_kind_counts = BTreeMap::new();
+    let mut archive_kind_candidate_bytes = BTreeMap::new();
+    let mut production_month_counts = BTreeMap::new();
+    let mut production_month_candidate_bytes = BTreeMap::new();
+    let mut destination_bucket_counts = BTreeMap::new();
+    let mut destination_bucket_candidate_bytes = BTreeMap::new();
     let mut review_required_reason_counts = BTreeMap::new();
     let mut review_required_reason_candidate_bytes = BTreeMap::new();
     let mut review_required_sole_reason_counts = BTreeMap::new();
@@ -860,8 +866,30 @@ fn decision_aggregates(report: &cloud::CloudPlanReport) -> serde_json::Value {
 
     for candidate in &report.candidates {
         let state = candidate_decision_state(candidate);
+        let kind = archive_kind_label(candidate.kind);
+        let (year, month, _) = cloud::production_date_parts(candidate.production_time_ms);
+        let production_month = format!("{year:04}-{month:02}");
+        let destination_bucket = format!("{year:04}/{month:02}/{kind}");
         increment(&mut decision_state_counts, state, 1);
         increment(&mut decision_state_candidate_bytes, state, candidate.bytes);
+        increment(&mut archive_kind_counts, kind, 1);
+        increment(
+            &mut archive_kind_candidate_bytes,
+            kind,
+            candidate.bytes,
+        );
+        increment(&mut production_month_counts, &production_month, 1);
+        increment(
+            &mut production_month_candidate_bytes,
+            &production_month,
+            candidate.bytes,
+        );
+        increment(&mut destination_bucket_counts, &destination_bucket, 1);
+        increment(
+            &mut destination_bucket_candidate_bytes,
+            &destination_bucket,
+            candidate.bytes,
+        );
         increment(
             &mut production_time_source_counts,
             &candidate.production_time_source,
@@ -931,6 +959,21 @@ fn decision_aggregates(report: &cloud::CloudPlanReport) -> serde_json::Value {
         "decision_state": {
             "counts": decision_state_counts,
             "candidate_bytes": decision_state_candidate_bytes,
+        },
+        "archive_kind": {
+            "counts": archive_kind_counts,
+            "candidate_bytes": archive_kind_candidate_bytes,
+        },
+        "production_month": {
+            "counts": production_month_counts,
+            "candidate_bytes": production_month_candidate_bytes,
+            "timezone": "UTC",
+        },
+        "destination_bucket": {
+            "counts": destination_bucket_counts,
+            "candidate_bytes": destination_bucket_candidate_bytes,
+            "relative_layout": "{YYYY}/{MM}/{kind}",
+            "source_relative_path_redacted": true,
         },
         "review_required_reason": {
             "counts": review_required_reason_counts,
@@ -1624,6 +1667,9 @@ fn decision_summary(report: &cloud::CloudPlanReport) -> serde_json::Value {
             "summary_is_dry_run_only": true,
             "review_fingerprints_bind_operator_decisions": true,
             "verified_provider_sync_required_before_local_eviction": true,
+            "destination_layout":
+                "DiskSage Archive/{YYYY}/{MM}/{kind}/{source-relative-path}",
+            "placement_aggregates_are_path_free": true,
         },
         "cloud": {
             "provider": report.cloud_root.provider,
@@ -3151,6 +3197,28 @@ mod tests {
         assert_eq!(
             aggregates["production_time_source"]["counts"]["filename:path-token"],
             1
+        );
+        assert_eq!(aggregates["archive_kind"]["counts"]["document"], 3);
+        assert_eq!(
+            aggregates["archive_kind"]["candidate_bytes"]["document"],
+            59
+        );
+        assert_eq!(aggregates["production_month"]["counts"]["1970-01"], 3);
+        assert_eq!(
+            aggregates["production_month"]["candidate_bytes"]["1970-01"],
+            59
+        );
+        assert_eq!(
+            aggregates["destination_bucket"]["counts"]["1970/01/document"],
+            3
+        );
+        assert_eq!(
+            aggregates["destination_bucket"]["candidate_bytes"]["1970/01/document"],
+            59
+        );
+        assert_eq!(
+            aggregates["destination_bucket"]["source_relative_path_redacted"],
+            true
         );
 
         let mut sole_reason = report.clone();

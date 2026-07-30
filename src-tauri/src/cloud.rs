@@ -814,6 +814,14 @@ fn date_parts(epoch_ms: u64) -> (i32, u32, u32) {
     civil_from_days((epoch_ms / DAY_MS) as i64)
 }
 
+/// Return the UTC Gregorian production date used by the archive destination layout.
+///
+/// Keeping this conversion in the deterministic Rust core lets redacted operator summaries
+/// describe the exact year/month placement without parsing private destination paths.
+pub fn production_date_parts(epoch_ms: u64) -> (i32, u32, u32) {
+    date_parts(epoch_ms)
+}
+
 fn days_from_civil(year: i32, month: u32, day: u32) -> i64 {
     let mut year = i64::from(year);
     let month = i64::from(month);
@@ -4399,7 +4407,12 @@ mod tests {
     #[test]
     fn civil_date_math_handles_epoch_and_leap_day() {
         assert_eq!(date_parts(0), (1970, 1, 1));
+        assert_eq!(production_date_parts(0), (1970, 1, 1));
         assert_eq!(date_parts(1_582_934_400_000), (2020, 2, 29));
+        assert_eq!(
+            production_date_parts(1_582_934_400_000),
+            (2020, 2, 29)
+        );
         assert_eq!(civil_from_days(-719_468), (0, 3, 1));
         assert_eq!(
             date_parts(date_epoch_ms(2024, 2, 29).unwrap()),
