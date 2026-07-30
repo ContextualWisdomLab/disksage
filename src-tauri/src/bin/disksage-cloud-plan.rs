@@ -33,6 +33,8 @@ use disksage_lib::provider_api_client::{self, FixedHostProviderMetadataClient};
 #[cfg(not(coverage))]
 use disksage_lib::provider_capacity::{self, FixedHostProviderCapacityClient};
 #[cfg(not(coverage))]
+use disksage_lib::provider_client_runtime;
+#[cfg(not(coverage))]
 use disksage_lib::provider_evidence::{self, ProviderSyncEvidenceRecord};
 #[cfg(not(coverage))]
 use disksage_lib::provider_oauth;
@@ -1621,10 +1623,13 @@ fn plan_with_optional_capacity(
     reserve_mib: u64,
 ) -> Result<(CloudRoot, cloud::CloudPlanReport), String> {
     if !verify_capacity {
-        return Ok((
-            root.clone(),
-            cloud::plan_cloud_archive_from_snapshot(source, root),
-        ));
+        let mut report = cloud::plan_cloud_archive_from_snapshot(source, root);
+        let runtime = provider_client_runtime::collect_provider_client_runtime(
+            root.provider,
+            cloud::system_now_ms(),
+        );
+        provider_client_runtime::attach_runtime_notice(&mut report.notices, &runtime);
+        return Ok((root.clone(), report));
     }
     let observed_at_ms = cloud::system_now_ms();
     let capacity_snapshot = match collect_root_capacity(root, oauth_connections, observed_at_ms) {
@@ -1639,6 +1644,11 @@ fn plan_with_optional_capacity(
         provider_capacity::root_with_verified_capacity_scope(root, &capacity_snapshot)?;
     let mut report = cloud::plan_cloud_archive_from_snapshot(source, &refined_root);
     attach_capacity_snapshot(&mut report, capacity_snapshot, reserve_mib)?;
+    let runtime = provider_client_runtime::collect_provider_client_runtime(
+        refined_root.provider,
+        cloud::system_now_ms(),
+    );
+    provider_client_runtime::attach_runtime_notice(&mut report.notices, &runtime);
     Ok((refined_root, report))
 }
 
@@ -2132,6 +2142,10 @@ fn run() -> Result<(), String> {
             None
         };
         if !adopt_existing {
+            provider_client_runtime::require_provider_client_runtime(
+                selected.provider,
+                cloud::system_now_ms(),
+            )?;
             let capacity_snapshot = report
                 .capacity
                 .as_ref()

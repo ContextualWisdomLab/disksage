@@ -84,6 +84,11 @@ required-features = ["archive-cli"]
 name = "disksage-reclaim-plan"
 path = "src/bin/disksage-reclaim-plan.rs"
 
+[[bin]]
+name = "disksage-provider-client-runtime"
+path = "src/bin/disksage-provider-client-runtime.rs"
+required-features = ["cloud-cli"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
