@@ -71,6 +71,11 @@ path = "src/bin/disksage-git-worktree-audit.rs"
 required-features = ["cloud-cli"]
 
 [[bin]]
+name = "disksage-icloud-sync-health"
+path = "src/bin/disksage-icloud-sync-health.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
 name = "disksage-archive-tree"
 path = "src/bin/disksage-archive-tree.rs"
 required-features = ["archive-cli"]

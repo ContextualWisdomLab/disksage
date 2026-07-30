@@ -41,6 +41,7 @@ pub mod cloud_eviction;
 pub mod cloud_review;
 pub mod cloud_transfer;
 pub mod content_digest;
+pub mod icloud_sync_health;
 pub mod incomplete_download;
 pub mod incomplete_download_materialization;
 pub mod incomplete_download_materialization_destination;
