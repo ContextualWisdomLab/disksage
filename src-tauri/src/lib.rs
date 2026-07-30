@@ -49,6 +49,7 @@ pub mod maven_cache;
 pub mod multipart_archive;
 pub mod naruon_capacity;
 pub mod naruon_duplicate_audit_lineage;
+pub mod naruon_duplicate_canonical_review;
 pub mod naruon_incomplete_download_lineage;
 pub mod naruon_lineage;
 pub mod provider_api_client;

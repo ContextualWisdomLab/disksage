@@ -27,6 +27,10 @@ use disksage_lib::cloud_transfer::{self, CloudCopyReceipt, LocalEvictionPermit};
 #[cfg(not(coverage))]
 use disksage_lib::naruon_capacity;
 #[cfg(not(coverage))]
+use disksage_lib::naruon_duplicate_audit_lineage::NaruonDuplicateAuditLineageEnvelope;
+#[cfg(not(coverage))]
+use disksage_lib::naruon_duplicate_canonical_review;
+#[cfg(not(coverage))]
 use disksage_lib::naruon_lineage;
 #[cfg(not(coverage))]
 use disksage_lib::provider_api_client::{self, FixedHostProviderMetadataClient};
@@ -83,6 +87,8 @@ struct Args {
     export_naruon_lineage: Option<PathBuf>,
     naruon_sync_evidence: Option<PathBuf>,
     export_naruon_capacity: bool,
+    export_naruon_duplicate_canonical_review: Option<PathBuf>,
+    duplicate_canonical_review_output: Option<PathBuf>,
     export_semantic_catalog: bool,
 }
 
@@ -202,6 +208,8 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
         export_naruon_lineage: None,
         naruon_sync_evidence: None,
         export_naruon_capacity: false,
+        export_naruon_duplicate_canonical_review: None,
+        duplicate_canonical_review_output: None,
         export_semantic_catalog: false,
     };
     let mut index = 0;
@@ -395,10 +403,35 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
                 )?))
             }
             "--export-naruon-capacity" => parsed.export_naruon_capacity = true,
+            "--export-naruon-duplicate-canonical-review" => {
+                if parsed.export_naruon_duplicate_canonical_review.is_some() {
+                    return Err(
+                        "--export-naruon-duplicate-canonical-review는 한 번만 지정할 수 있음"
+                            .into(),
+                    );
+                }
+                parsed.export_naruon_duplicate_canonical_review = Some(PathBuf::from(value(
+                    args,
+                    &mut index,
+                    "--export-naruon-duplicate-canonical-review",
+                )?));
+            }
+            "--duplicate-canonical-review-output" => {
+                if parsed.duplicate_canonical_review_output.is_some() {
+                    return Err(
+                        "--duplicate-canonical-review-output은 한 번만 지정할 수 있음".into(),
+                    );
+                }
+                parsed.duplicate_canonical_review_output = Some(PathBuf::from(value(
+                    args,
+                    &mut index,
+                    "--duplicate-canonical-review-output",
+                )?));
+            }
             "--export-semantic-catalog" => parsed.export_semantic_catalog = true,
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary] [--min-size-mib N] [--min-age-days N] [--limit N] [--decision-summary [--review-reason-set REASON|REASON [--private-review-output ABSOLUTE_NEW_FILE.json]] | --exact-duplicate-review-prefix DIR_PREFIX --exact-duplicate-kind document|media|archive|dataset|backup|creative|incomplete-download | --export-semantic-catalog] [--verify-capacity [--oauth-connections ABSOLUTE_PATH] [--export-naruon-capacity]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
+                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary] [--min-size-mib N] [--min-age-days N] [--limit N] [--decision-summary [--review-reason-set REASON|REASON [--private-review-output ABSOLUTE_NEW_FILE.json]] | --exact-duplicate-review-prefix DIR_PREFIX --exact-duplicate-kind document|media|archive|dataset|backup|creative|incomplete-download | --export-semantic-catalog | --export-naruon-duplicate-canonical-review AUDIT_LINEAGE.json [--duplicate-canonical-review-output ABSOLUTE_NEW_FILE.json]] [--verify-capacity [--oauth-connections ABSOLUTE_PATH] [--export-naruon-capacity]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -457,6 +490,9 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     let adoption_action = args.adopt_existing_fingerprint.is_some();
     let exact_duplicate_review =
         args.exact_duplicate_review_prefix.is_some() || args.exact_duplicate_kind.is_some();
+    let duplicate_canonical_review = args
+        .export_naruon_duplicate_canonical_review
+        .is_some();
     if args.exact_duplicate_review_prefix.is_some() != args.exact_duplicate_kind.is_some() {
         return Err(
             "--exact-duplicate-review-prefix와 --exact-duplicate-kind는 함께 지정해야 함".into(),
@@ -551,6 +587,7 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
             || attestation_action
             || eviction_action
             || exact_duplicate_review
+            || duplicate_canonical_review
             || args.export_naruon_lineage.is_some())
     {
         return Err(
@@ -576,6 +613,12 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     if args.export_naruon_capacity && !args.verify_capacity {
         return Err("--export-naruon-capacity에는 --verify-capacity가 필요함".into());
     }
+    if args.duplicate_canonical_review_output.is_some() && !duplicate_canonical_review {
+        return Err(
+            "--duplicate-canonical-review-output에는 --export-naruon-duplicate-canonical-review가 필요함"
+                .into(),
+        );
+    }
     let actions = usize::from(args.list_roots)
         + usize::from(args.inspect_roots)
         + usize::from(copy_action)
@@ -585,6 +628,7 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
         + usize::from(review_action)
         + usize::from(args.export_naruon_lineage.is_some())
         + usize::from(args.export_naruon_capacity)
+        + usize::from(duplicate_canonical_review)
         + usize::from(args.export_semantic_catalog);
     if args.all_readable_roots && actions > 0 {
         return Err(
@@ -696,12 +740,40 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     for (flag, path) in [
         ("--export-naruon-lineage", &args.export_naruon_lineage),
         ("--naruon-sync-evidence", &args.naruon_sync_evidence),
+        (
+            "--export-naruon-duplicate-canonical-review",
+            &args.export_naruon_duplicate_canonical_review,
+        ),
+        (
+            "--duplicate-canonical-review-output",
+            &args.duplicate_canonical_review_output,
+        ),
     ] {
         if path.as_ref().is_some_and(|path| !path.is_absolute()) {
             return Err(format!("{flag}는 절대 경로여야 함"));
         }
     }
     Ok(())
+}
+
+#[cfg(not(coverage))]
+fn read_duplicate_audit_lineage(
+    path: &Path,
+) -> Result<NaruonDuplicateAuditLineageEnvelope, String> {
+    const MAX_BYTES: u64 = 2 * 1024 * 1024;
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|_| "duplicate-canonical-audit-lineage-unavailable".to_string())?;
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.len() == 0
+        || metadata.len() > MAX_BYTES
+    {
+        return Err("duplicate-canonical-audit-lineage-unsafe-or-unbounded".into());
+    }
+    let bytes = std::fs::read(path)
+        .map_err(|_| "duplicate-canonical-audit-lineage-read-failed".to_string())?;
+    serde_json::from_slice(&bytes)
+        .map_err(|_| "duplicate-canonical-audit-lineage-json-invalid".to_string())
 }
 
 #[cfg(not(coverage))]
@@ -2025,6 +2097,25 @@ fn run() -> Result<(), String> {
         );
         return Ok(());
     }
+    if let Some(audit_path) = &args.export_naruon_duplicate_canonical_review {
+        let audit = read_duplicate_audit_lineage(audit_path)?;
+        let envelope =
+            naruon_duplicate_canonical_review::export_naruon_duplicate_canonical_review(
+                &report,
+                &audit,
+                cloud::system_now_ms(),
+            )?;
+        if let Some(output_path) = &args.duplicate_canonical_review_output {
+            let value = serde_json::to_value(&envelope)
+                .map_err(|_| "duplicate-canonical-review-json-invalid".to_string())?;
+            write_private_review_dossier(output_path, &value)?;
+        }
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&envelope).map_err(|error| error.to_string())?
+        );
+        return Ok(());
+    }
     if let (Some(redundant_prefix), Some(kind)) = (
         args.exact_duplicate_review_prefix.as_deref(),
         args.exact_duplicate_kind,
@@ -2253,6 +2344,10 @@ mod tests {
         assert!(defaults.review_rationale.is_none());
         assert!(defaults.export_naruon_lineage.is_none());
         assert!(!defaults.export_naruon_capacity);
+        assert!(defaults
+            .export_naruon_duplicate_canonical_review
+            .is_none());
+        assert!(defaults.duplicate_canonical_review_output.is_none());
         assert!(!defaults.export_semantic_catalog);
         assert!(defaults.naruon_sync_evidence.is_none());
         assert!(!defaults.verify_capacity);
@@ -2324,6 +2419,26 @@ mod tests {
             Some(ArchiveKind::Document)
         );
         assert!(validate_action_args(&duplicate_review).is_ok());
+
+        let canonical_review = parse_args(
+            &[
+                "--export-naruon-duplicate-canonical-review".into(),
+                "/audit-lineage.json".into(),
+                "--duplicate-canonical-review-output".into(),
+                "/canonical-review.json".into(),
+            ],
+            Path::new("/home/test"),
+        )
+        .unwrap();
+        assert_eq!(
+            canonical_review.export_naruon_duplicate_canonical_review,
+            Some(PathBuf::from("/audit-lineage.json"))
+        );
+        assert_eq!(
+            canonical_review.duplicate_canonical_review_output,
+            Some(PathBuf::from("/canonical-review.json"))
+        );
+        assert!(validate_action_args(&canonical_review).is_ok());
     }
 
     #[test]
