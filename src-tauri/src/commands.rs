@@ -17,7 +17,8 @@ use crate::safety;
 #[cfg(not(coverage))]
 use crate::{
     cloud, cloud_eviction, cloud_local_eviction, cloud_review, cloud_transfer, dev_artifacts, dupes,
-    provider_api_client, provider_capacity, provider_evidence, provider_oauth, provider_sync, rules,
+    provider_api_client, provider_capacity, provider_client_runtime, provider_evidence,
+    provider_oauth, provider_sync, rules,
 };
 
 #[derive(Default)]
@@ -621,6 +622,22 @@ pub async fn verify_cloud_provider_capacity(
     Ok(snapshot)
 }
 
+/// Inspect the selected provider's local runtime prerequisite without returning process names,
+/// local paths, account identifiers, or any remote-capacity/synchronization claim.
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn inspect_cloud_provider_client_runtime(
+    cloud_root: String,
+    app: AppHandle,
+) -> Result<provider_client_runtime::ProviderClientRuntimeSnapshot, String> {
+    let selected = selected_cloud_root(&app, &cloud_root)?;
+    cloud::validate_cloud_root_readable(&selected)?;
+    Ok(provider_client_runtime::collect_provider_client_runtime(
+        selected.provider,
+        cloud::system_now_ms(),
+    ))
+}
+
 #[cfg(not(coverage))]
 fn cloud_plan_for_inputs(
     root: &str,
@@ -667,6 +684,11 @@ fn cloud_plan_for_inputs(
         },
     );
     attach_capacity_assessment(&mut report, capacity_snapshot)?;
+    let runtime = provider_client_runtime::collect_provider_client_runtime(
+        selected.provider,
+        cloud::system_now_ms(),
+    );
+    provider_client_runtime::attach_runtime_notice(&mut report.notices, &runtime);
     Ok((selected, report))
 }
 
@@ -910,6 +932,10 @@ fn create_cloud_candidate_receipt(
         None
     };
     if !adopt_existing {
+        provider_client_runtime::require_provider_client_runtime(
+            selected.provider,
+            cloud::system_now_ms(),
+        )?;
         let snapshot = report
             .capacity
             .as_ref()

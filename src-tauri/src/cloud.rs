@@ -4076,6 +4076,7 @@ pub fn plan_cloud_archive_from_snapshot(
         notices: vec![
             "dry-run-only".into(),
             "cloud-quota-unverified".into(),
+            "provider-client-runtime-unverified".into(),
             "cloud-sync-unverified".into(),
             "full-transfer-content-hash-pending".into(),
         ],
@@ -5845,7 +5846,10 @@ mod tests {
             },
         );
         assert!(report.candidates.is_empty());
-        assert_eq!(report.notices.len(), 4);
+        assert_eq!(report.notices.len(), 5);
+        assert!(report
+            .notices
+            .contains(&"provider-client-runtime-unverified".to_string()));
     }
 
     #[test]

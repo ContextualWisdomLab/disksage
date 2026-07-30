@@ -60,6 +60,7 @@ pub mod naruon_incomplete_download_lineage;
 pub mod naruon_lineage;
 pub mod provider_api_client;
 pub mod provider_capacity;
+pub mod provider_client_runtime;
 pub mod provider_evidence;
 pub mod provider_oauth;
 pub mod provider_sync;
@@ -105,6 +106,7 @@ pub fn run() {
             commands::list_cloud_provider_connections,
             commands::inspect_cloud_provider_connections,
             commands::verify_cloud_provider_capacity,
+            commands::inspect_cloud_provider_client_runtime,
             commands::list_cloud_review_decisions,
             commands::connect_cloud_provider,
             commands::disconnect_cloud_provider,

@@ -104,6 +104,11 @@ path = "src/bin/disksage-archive-tree.rs"
 required-features = ["archive-cli"]
 
 [[bin]]
+name = "disksage-provider-client-runtime"
+path = "src/bin/disksage-provider-client-runtime.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
 name = "disksage-archive-inclusion-audit"
 path = "src/bin/disksage-archive-inclusion-audit.rs"
 required-features = ["archive-cli"]
