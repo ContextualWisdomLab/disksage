@@ -23,7 +23,24 @@
 
 ## Safety first
 
-Every destructive action goes through explicit review and the OS trash — DiskSage has **no permanent-delete code path**. Cloud archiving currently exposes copy and evidence only: even a successful provider attestation returns a local-eviction permit without deleting the source. All destructive operations are journaled and undoable.
+Every destructive action goes through explicit review and the OS trash — DiskSage has **no permanent-delete code path**. A receipt-bound source can move to Trash only after fresh provider attestation, exact receipt confirmation, attributed human approval, and bounded active-use checks. iCloud local-copy eviction retains the cloud item and requires an exact native-status plan fingerprint. All destructive operations produce immutable evidence records.
+
+For one exact multi-item iCloud local-cache approval, the Rust batch coordinator re-plans every
+manifest item before the first mutation, reports unavailable inputs without exposing their paths,
+and stops after the first failed or unverified result:
+
+```sh
+cargo run --manifest-path src-tauri/Cargo.toml --features cloud-cli \
+  --bin disksage-icloud-local-eviction-batch -- \
+  --cloud-root "/absolute/iCloud/root" \
+  --manifest "/absolute/local/private-plan.json"
+```
+
+The default JSON output is path-redacted. Execution additionally requires `--execute`, the exact
+batch fingerprint in both `--approved-batch-fingerprint` and `--confirm-batch-fingerprint`,
+`--approved-by human:IDENTITY`, a non-empty `--rationale`, and an existing local `--record-dir`
+outside cloud storage. All selected paths are re-planned and all individual approval records are
+created before the first eviction request; a create-new checkpoint follows every attempt.
 
 The headless split-archive audit is read-only. A contiguous sequence does not invent proof that its
 last observed member is the terminal part, and a missing-part result is never automatic deletion
