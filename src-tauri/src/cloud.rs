@@ -2764,6 +2764,14 @@ fn probe_content_metadata_with_general(
     )
 }
 
+/// Reuse the cloud planner's bounded embedded/acquisition metadata probes in read-only audit
+/// commands. The returned acquisition date remains context evidence and is never promoted to a
+/// production date.
+#[cfg(not(coverage))]
+pub(crate) fn probe_content_metadata_for_audit(path: &Path) -> ContentMetadata {
+    probe_content_metadata_with_general(path, None)
+}
+
 fn should_probe_general_metadata(path: &Path) -> bool {
     archive_kind(path) != Some(ArchiveKind::IncompleteDownload)
         && multipart_archive_part(path).is_none()

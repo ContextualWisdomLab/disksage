@@ -39,6 +39,7 @@ pub mod cloud_eviction;
 pub mod cloud_review;
 pub mod cloud_transfer;
 pub mod content_digest;
+pub mod incomplete_download;
 pub mod maven_cache;
 pub mod multipart_archive;
 pub mod naruon_capacity;
@@ -48,6 +49,7 @@ pub mod provider_capacity;
 pub mod provider_evidence;
 pub mod provider_oauth;
 pub mod provider_sync;
+pub mod private_evidence;
 pub mod semantic_catalog;
 
 // coverage 빌드에서 제외 — GUI 런타임은 헤드리스 테스트로 실행 불가

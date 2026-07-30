@@ -1,5 +1,6 @@
-use disksage_lib::multipart_archive::{
-    collect_multipart_archive_audit, summarize_multipart_audit, DEFAULT_MAX_ENTRIES,
+use disksage_lib::incomplete_download::{
+    collect_incomplete_download_audit, summarize_incomplete_download_audit, DEFAULT_MAX_ENTRIES,
+    DEFAULT_STALE_AFTER_DAYS, MAX_STALE_AFTER_DAYS,
 };
 use disksage_lib::private_evidence::write_private_json_create_new;
 use std::path::{Component, Path, PathBuf};
@@ -8,12 +9,21 @@ use std::path::{Component, Path, PathBuf};
 struct Args {
     root: PathBuf,
     max_entries: usize,
+    stale_after_days: u64,
     private_output: Option<PathBuf>,
+}
+
+fn absolute_without_parent(path: &Path) -> bool {
+    path.is_absolute()
+        && !path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
 }
 
 fn parse_args(raw: &[String]) -> Result<Args, String> {
     let mut root = None;
     let mut max_entries = DEFAULT_MAX_ENTRIES;
+    let mut stale_after_days = DEFAULT_STALE_AFTER_DAYS;
     let mut private_output = None;
     let mut index = 0usize;
     while index < raw.len() {
@@ -41,6 +51,17 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 }
                 max_entries = parsed;
             }
+            "--stale-after-days" => {
+                let parsed = value(&mut index, "--stale-after-days")?
+                    .parse::<u64>()
+                    .map_err(|_| "--stale-after-days는 양의 정수여야 함".to_string())?;
+                if !(1..=MAX_STALE_AFTER_DAYS).contains(&parsed) {
+                    return Err(format!(
+                        "--stale-after-days는 1..={MAX_STALE_AFTER_DAYS} 범위여야 함"
+                    ));
+                }
+                stale_after_days = parsed;
+            }
             "--private-output" => {
                 if private_output.is_some() {
                     return Err("--private-output은 한 번만 지정할 수 있음".into());
@@ -49,8 +70,9 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
             }
             "--help" | "-h" => {
                 return Err(format!(
-                    "usage: disksage-multipart-archive-audit --root ABSOLUTE_PATH \
+                    "usage: disksage-incomplete-download-audit --root ABSOLUTE_PATH \
                      [--max-entries 1..={DEFAULT_MAX_ENTRIES}] \
+                     [--stale-after-days 1..={MAX_STALE_AFTER_DAYS}] \
                      [--private-output ABSOLUTE_NEW_FILE.json]"
                 ));
             }
@@ -70,15 +92,9 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     Ok(Args {
         root,
         max_entries,
+        stale_after_days,
         private_output,
     })
-}
-
-fn absolute_without_parent(path: &Path) -> bool {
-    path.is_absolute()
-        && !path
-            .components()
-            .any(|component| matches!(component, Component::ParentDir))
 }
 
 fn system_now_ms() -> u64 {
@@ -90,16 +106,20 @@ fn system_now_ms() -> u64 {
 
 #[cfg(not(coverage))]
 fn run() -> Result<(), String> {
-    let raw = std::env::args().skip(1).collect::<Vec<_>>();
-    let args = parse_args(&raw)?;
-    let report = collect_multipart_archive_audit(&args.root, system_now_ms(), args.max_entries)?;
-    let mut summary =
-        serde_json::to_value(summarize_multipart_audit(&report)).map_err(|e| e.to_string())?;
+    let args = parse_args(&std::env::args().skip(1).collect::<Vec<_>>())?;
+    let report = collect_incomplete_download_audit(
+        &args.root,
+        system_now_ms(),
+        args.max_entries,
+        args.stale_after_days,
+    )?;
+    let mut summary = serde_json::to_value(summarize_incomplete_download_audit(&report))
+        .map_err(|error| error.to_string())?;
     if let Some(path) = &args.private_output {
         let receipt = write_private_json_create_new(&args.root, path, &report)?;
         summary
             .as_object_mut()
-            .ok_or_else(|| "multipart audit summary JSON object가 아님".to_string())?
+            .ok_or_else(|| "incomplete download audit summary JSON object가 아님".to_string())?
             .insert(
                 "private_output".into(),
                 serde_json::to_value(receipt).map_err(|error| error.to_string())?,
@@ -115,7 +135,7 @@ fn run() -> Result<(), String> {
 #[cfg(not(coverage))]
 fn main() {
     if let Err(error) = run() {
-        eprintln!("DiskSage multipart archive audit: {error}");
+        eprintln!("DiskSage incomplete download audit: {error}");
         std::process::exit(2);
     }
 }
@@ -134,12 +154,15 @@ mod tests {
             "/source".into(),
             "--max-entries".into(),
             "42".into(),
+            "--stale-after-days".into(),
+            "60".into(),
             "--private-output".into(),
             "/private/audit.json".into(),
         ])
         .unwrap();
         assert_eq!(args.root, PathBuf::from("/source"));
         assert_eq!(args.max_entries, 42);
+        assert_eq!(args.stale_after_days, 60);
         assert_eq!(
             args.private_output,
             Some(PathBuf::from("/private/audit.json"))
@@ -147,7 +170,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_relative_duplicate_and_unbounded_arguments() {
+    fn rejects_relative_duplicate_missing_and_unbounded_arguments() {
         for raw in [
             vec![],
             vec!["--root".into(), "relative".into()],
@@ -159,8 +182,8 @@ mod tests {
                 "/a".into(),
             ],
             vec![
-                "--max-entries".into(),
-                (DEFAULT_MAX_ENTRIES + 1).to_string(),
+                "--stale-after-days".into(),
+                "0".into(),
                 "--root".into(),
                 "/a".into(),
             ],
@@ -169,30 +192,5 @@ mod tests {
         ] {
             assert!(parse_args(&raw).is_err(), "{raw:?}");
         }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn private_output_is_create_new_mode_0600_and_outside_source() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let source = tempfile::tempdir().unwrap();
-        let private = tempfile::tempdir().unwrap();
-        let path = private.path().join("audit.json");
-        let value = serde_json::json!({"private": true});
-        let receipt = write_private_json_create_new(source.path(), &path, &value).unwrap();
-        assert_eq!(receipt.sha256.len(), 64);
-        assert!(receipt.bytes > 0);
-        assert_eq!(
-            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
-        assert!(write_private_json_create_new(source.path(), &path, &value).is_err());
-        assert!(write_private_json_create_new(
-            source.path(),
-            &source.path().join("inside.json"),
-            &value
-        )
-        .is_err());
     }
 }

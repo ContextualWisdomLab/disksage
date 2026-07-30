@@ -16,6 +16,7 @@
 - 🧠 **On-device LLM advisor** — embedded llama.cpp model judges delete-safety, fully offline
 - ☁️ **Metadata-first cloud archive** — detects iCloud Drive, OneDrive, and Google Drive; inspects embedded file metadata, bounded dataset schemas, Rust-parsed ZIP indexes, and incomplete-download archive fragments without extracting payloads; exports a bounded path-free pre-copy preview contract for semantic-data-portal; verifies macOS iCloud quota through Apple's read-only native account client and revalidates authoritative OneDrive/Google account capacity through read-only OAuth with a conservative reserve; performs gated copy-plus-hash verification; verifies macOS File Provider status first with native PKCE OAuth checksum plus exact OneDrive path or Google My Drive parent-chain fallback; and distinguishes normal provider-confirmation waits from overdue unconfirmed copies while retaining the source
 - 🧩 **Split-archive set audit** — groups `.zip.partNNN` siblings, proves internal gaps and duplicate indices, totals discard-review bytes, and emits a stable path-redacted fingerprint while keeping exact paths in an optional create-new mode-0600 private dossier
+- ⏳ **Incomplete-download audit** — inventories `.crdownload` files by bounded magic bytes, embedded ZIP structure, acquisition context, filesystem-modified staleness, final-sibling presence, and bounded active-use evidence without treating download time or filename dates as production dates
 
 ## Safety first
 
@@ -29,6 +30,17 @@ authority:
 cargo run --features cloud-cli --bin disksage-multipart-archive-audit -- \
   --root /absolute/source \
   --private-output /absolute/private/new-audit.json
+```
+
+Incomplete-download auditing is also read-only. Its default 30-day threshold is only a review
+signal: detected payload types can still be incomplete, and undetected payloads may still be
+partially recoverable.
+
+```sh
+cargo run --features cloud-cli --bin disksage-incomplete-download-audit -- \
+  --root /absolute/source \
+  --stale-after-days 30 \
+  --private-output /absolute/private/new-incomplete-download-audit.json
 ```
 
 ## Status
