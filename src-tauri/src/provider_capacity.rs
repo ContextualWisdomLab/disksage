@@ -179,7 +179,10 @@ pub fn collect_icloud_native_capacity(
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
 
-    const TIMEOUT: Duration = Duration::from_secs(5);
+    // A cold File Provider session after login or reboot can take more than five seconds to
+    // return otherwise valid quota evidence. Keep the native probe bounded, but allow enough time
+    // for that read-only initialization path before failing closed.
+    const TIMEOUT: Duration = Duration::from_secs(15);
     const OUTPUT_LIMIT: u64 = 128 * 1024;
 
     let mut child = Command::new("/usr/bin/brctl")
