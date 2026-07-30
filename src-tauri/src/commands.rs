@@ -17,8 +17,8 @@ use crate::safety;
 #[cfg(not(coverage))]
 use crate::{
     cloud, cloud_eviction, cloud_local_eviction, cloud_review, cloud_transfer, dev_artifacts, dupes,
-    provider_api_client, provider_capacity, provider_client_runtime, provider_evidence,
-    provider_oauth, provider_sync, rules,
+    icloud_sync_health, provider_api_client, provider_capacity, provider_client_runtime,
+    provider_evidence, provider_oauth, provider_sync, rules,
 };
 
 #[derive(Default)]
@@ -624,6 +624,21 @@ pub fn inspect_cloud_provider_client_runtime(
     ))
 }
 
+/// Inspect the local, path-free iCloud upload-queue prerequisite for adding a new copy.
+///
+/// This reads only an immutable CloudDocs database snapshot. It does not contact iCloud, verify
+/// remote capacity, attest per-item upload, or authorize source eviction.
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn inspect_icloud_new_copy_admission(
+    app: AppHandle,
+) -> Result<icloud_sync_health::IcloudSyncHealthReport, String> {
+    icloud_sync_health::inspect_new_copy_admission(
+        &resolve_home(&app),
+        cloud::system_now_ms(),
+    )
+}
+
 #[cfg(not(coverage))]
 fn cloud_plan_for_inputs(
     root: &str,
@@ -675,6 +690,17 @@ fn cloud_plan_for_inputs(
         cloud::system_now_ms(),
     );
     provider_client_runtime::attach_runtime_notice(&mut report.notices, &runtime);
+    if selected.provider == cloud::CloudProvider::Icloud {
+        let health = icloud_sync_health::inspect_new_copy_admission(
+            &resolve_home(app),
+            cloud::system_now_ms(),
+        )
+        .ok();
+        icloud_sync_health::attach_new_copy_admission_notice(
+            &mut report.notices,
+            health.as_ref(),
+        );
+    }
     Ok((selected, report))
 }
 
@@ -922,6 +948,14 @@ fn create_cloud_candidate_receipt(
             selected.provider,
             cloud::system_now_ms(),
         )?;
+        if selected.provider == cloud::CloudProvider::Icloud {
+            let health = icloud_sync_health::inspect_new_copy_admission(
+                &resolve_home(app),
+                cloud::system_now_ms(),
+            )
+            .map_err(|_| "icloud-new-copy-admission-evidence-unavailable".to_string())?;
+            icloud_sync_health::require_new_copy_admission(&health)?;
+        }
         let snapshot = report
             .capacity
             .as_ref()
