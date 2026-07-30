@@ -1,6 +1,8 @@
 use base64::Engine;
 use sha2::Digest;
 use std::fmt::Write;
+use std::io::Read;
+use std::path::Path;
 
 const QUICK_XOR_WIDTH_BITS: usize = 160;
 const QUICK_XOR_SHIFT: usize = 11;
@@ -114,9 +116,28 @@ pub fn digest_bytes(bytes: &[u8]) -> ContentDigests {
     hasher.finalize()
 }
 
+pub fn digest_reader(mut reader: impl Read) -> std::io::Result<ContentDigests> {
+    let mut hasher = ContentHasher::default();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher.finalize())
+}
+
+pub fn digest_file(path: &Path) -> Result<ContentDigests, String> {
+    let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+    digest_reader(file).map_err(|error| error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
 
     #[test]
     fn quick_xor_matches_microsoft_reference_vectors() {
@@ -152,5 +173,14 @@ mod tests {
             "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
         );
         assert_eq!(digests.blake3, blake3::hash(b"hello").to_hex().to_string());
+    }
+
+    #[test]
+    fn reader_digest_matches_byte_digest() {
+        let input: Vec<u8> = (0..200_000).map(|value| (value % 251) as u8).collect();
+        assert_eq!(
+            digest_reader(Cursor::new(&input)).unwrap(),
+            digest_bytes(&input)
+        );
     }
 }

@@ -60,6 +60,11 @@ path = "src/bin/disksage-incomplete-download-materialize.rs"
 required-features = ["cloud-cli"]
 
 [[bin]]
+name = "disksage-duplicate-audit"
+path = "src/bin/disksage-duplicate-audit.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
 name = "disksage-archive-tree"
 path = "src/bin/disksage-archive-tree.rs"
 required-features = ["archive-cli"]
