@@ -29,6 +29,8 @@ use disksage_lib::icloud_sync_health;
 #[cfg(not(coverage))]
 use disksage_lib::naruon_capacity;
 #[cfg(not(coverage))]
+use disksage_lib::naruon_cloud_copy_readiness;
+#[cfg(not(coverage))]
 use disksage_lib::naruon_duplicate_audit_lineage::NaruonDuplicateAuditLineageEnvelope;
 #[cfg(not(coverage))]
 use disksage_lib::naruon_duplicate_canonical_review;
@@ -92,6 +94,8 @@ struct Args {
     export_naruon_lineage: Option<PathBuf>,
     naruon_sync_evidence: Option<PathBuf>,
     export_naruon_capacity: bool,
+    export_naruon_copy_readiness: bool,
+    naruon_copy_readiness_output: Option<PathBuf>,
     export_naruon_duplicate_canonical_review: Option<PathBuf>,
     duplicate_canonical_review_output: Option<PathBuf>,
     duplicate_canonical_review_dossier_output: Option<PathBuf>,
@@ -215,6 +219,8 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
         export_naruon_lineage: None,
         naruon_sync_evidence: None,
         export_naruon_capacity: false,
+        export_naruon_copy_readiness: false,
+        naruon_copy_readiness_output: None,
         export_naruon_duplicate_canonical_review: None,
         duplicate_canonical_review_output: None,
         duplicate_canonical_review_dossier_output: None,
@@ -412,6 +418,23 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
                 )?))
             }
             "--export-naruon-capacity" => parsed.export_naruon_capacity = true,
+            "--export-naruon-copy-readiness" => {
+                parsed.export_naruon_copy_readiness = true
+            }
+            "--naruon-copy-readiness-output" => {
+                if parsed.naruon_copy_readiness_output.is_some() {
+                    return Err(
+                        "--naruon-copy-readiness-output은 한 번만 지정할 수 있음"
+                            .into(),
+                    );
+                }
+                parsed.naruon_copy_readiness_output =
+                    Some(PathBuf::from(value(
+                        args,
+                        &mut index,
+                        "--naruon-copy-readiness-output",
+                    )?));
+            }
             "--export-naruon-duplicate-canonical-review" => {
                 if parsed.export_naruon_duplicate_canonical_review.is_some() {
                     return Err(
@@ -649,6 +672,29 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     if args.export_naruon_capacity && !args.verify_capacity {
         return Err("--export-naruon-capacity에는 --verify-capacity가 필요함".into());
     }
+    if args.export_naruon_copy_readiness && !args.verify_capacity {
+        return Err(
+            "--export-naruon-copy-readiness에는 --verify-capacity가 필요함"
+                .into(),
+        );
+    }
+    if args.naruon_copy_readiness_output.is_some()
+        && !args.export_naruon_copy_readiness
+    {
+        return Err(
+            "--naruon-copy-readiness-output에는 --export-naruon-copy-readiness가 필요함"
+                .into(),
+        );
+    }
+    if args
+        .naruon_copy_readiness_output
+        .as_ref()
+        .is_some_and(|path| !path.is_absolute())
+    {
+        return Err(
+            "--naruon-copy-readiness-output은 절대 경로여야 함".into(),
+        );
+    }
     if args.duplicate_canonical_review_output.is_some() && !duplicate_canonical_review {
         return Err(
             "--duplicate-canonical-review-output에는 --export-naruon-duplicate-canonical-review가 필요함"
@@ -672,6 +718,7 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
         + usize::from(review_action)
         + usize::from(args.export_naruon_lineage.is_some())
         + usize::from(args.export_naruon_capacity)
+        + usize::from(args.export_naruon_copy_readiness)
         + usize::from(duplicate_canonical_review)
         + usize::from(args.export_semantic_catalog);
     if args.all_readable_roots && actions > 0 {
@@ -2283,6 +2330,40 @@ fn run() -> Result<(), String> {
         );
         return Ok(());
     }
+    if args.export_naruon_copy_readiness {
+        let observed_at_ms = cloud::system_now_ms();
+        let runtime = provider_client_runtime::collect_provider_client_runtime(
+            selected.provider,
+            observed_at_ms,
+        );
+        let icloud_health = if selected.provider == CloudProvider::Icloud {
+            icloud_sync_health::inspect_new_copy_admission(
+                &home,
+                observed_at_ms,
+            )
+            .ok()
+        } else {
+            None
+        };
+        let envelope =
+            naruon_cloud_copy_readiness::export_naruon_cloud_copy_readiness(
+                &report,
+                &runtime,
+                icloud_health.as_ref(),
+            )?;
+        if let Some(output_path) = &args.naruon_copy_readiness_output {
+            let value = serde_json::to_value(&envelope).map_err(|_| {
+                "naruon-copy-readiness-output-json-invalid".to_string()
+            })?;
+            write_private_review_dossier(output_path, &value)?;
+        }
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&envelope)
+                .map_err(|error| error.to_string())?
+        );
+        return Ok(());
+    }
     if args.export_semantic_catalog {
         let batch = semantic_catalog::export_semantic_catalog_candidate_batch(&report)?;
         println!(
@@ -2559,6 +2640,8 @@ mod tests {
         assert!(defaults.review_rationale.is_none());
         assert!(defaults.export_naruon_lineage.is_none());
         assert!(!defaults.export_naruon_capacity);
+        assert!(!defaults.export_naruon_copy_readiness);
+        assert!(defaults.naruon_copy_readiness_output.is_none());
         assert!(defaults
             .export_naruon_duplicate_canonical_review
             .is_none());
@@ -3838,6 +3921,61 @@ mod tests {
         )
         .unwrap();
         assert!(validate_action_args(&multiple).is_err());
+    }
+
+    #[test]
+    fn naruon_copy_readiness_export_is_fresh_single_destination_and_safe_output() {
+        let export = parse_args(
+            &[
+                "--verify-capacity".into(),
+                "--export-naruon-copy-readiness".into(),
+                "--naruon-copy-readiness-output".into(),
+                "/artifacts/readiness.json".into(),
+                "--provider".into(),
+                "onedrive".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(export.export_naruon_copy_readiness);
+        assert_eq!(
+            export.naruon_copy_readiness_output,
+            Some(PathBuf::from("/artifacts/readiness.json"))
+        );
+        assert!(validate_action_args(&export).is_ok());
+
+        let missing_capacity = parse_args(
+            &["--export-naruon-copy-readiness".into()],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&missing_capacity).is_err());
+
+        let output_only = parse_args(
+            &[
+                "--naruon-copy-readiness-output".into(),
+                "/artifacts/readiness.json".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&output_only).is_err());
+
+        let relative_output = parse_args(
+            &[
+                "--verify-capacity".into(),
+                "--export-naruon-copy-readiness".into(),
+                "--naruon-copy-readiness-output".into(),
+                "readiness.json".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&relative_output).is_err());
+
+        let mut conflicting = export;
+        conflicting.export_naruon_capacity = true;
+        assert!(validate_action_args(&conflicting).is_err());
     }
 
     #[test]
