@@ -821,6 +821,102 @@ fn validation_fingerprint(
     hasher.finalize().to_hex().to_string()
 }
 
+pub(crate) fn incomplete_download_recovery_integrity_valid(
+    audit: &IncompleteDownloadAuditReport,
+    report: &IncompleteDownloadRecoveryReport,
+) -> bool {
+    if report.schema_version != INCOMPLETE_DOWNLOAD_RECOVERY_VERSION
+        || report.mutation_performed
+        || report.source_root != audit.source_root
+        || report.source_scope_fingerprint != audit.source_scope_fingerprint
+        || report.audit_fingerprint != audit.audit_fingerprint
+        || report.audit_evidence_complete != audit.evidence_complete
+        || report
+            .items
+            .windows(2)
+            .any(|items| items[0].candidate_fingerprint >= items[1].candidate_fingerprint)
+    {
+        return false;
+    }
+
+    let audit_candidates = audit
+        .items
+        .iter()
+        .filter(|item| item.recovery_candidate)
+        .collect::<Vec<_>>();
+    if audit_candidates.len() != report.items.len()
+        || audit_candidates
+            .iter()
+            .zip(&report.items)
+            .any(|(audit_item, recovery_item)| {
+                audit_item.candidate_fingerprint != recovery_item.candidate_fingerprint
+                    || audit_item.relative_path != recovery_item.relative_path
+                    || audit_item.logical_bytes != recovery_item.logical_bytes
+                    || audit_item.state != recovery_item.state
+                    || audit_item.detected_mime_type != recovery_item.detected_mime_type
+            })
+    {
+        return false;
+    }
+
+    let totals = |status: RecoveryItemStatus| {
+        let items = report.items.iter().filter(|item| item.status == status);
+        (
+            items.clone().count(),
+            items.fold(0u64, |total, item| total.saturating_add(item.logical_bytes)),
+        )
+    };
+    let (fully_validated_file_count, fully_validated_file_bytes) =
+        totals(RecoveryItemStatus::FullyValidated);
+    let (partially_validated_file_count, _) = totals(RecoveryItemStatus::PartiallyValidated);
+    let (invalid_count, _) = totals(RecoveryItemStatus::Invalid);
+    let (limit_exceeded_count, _) = totals(RecoveryItemStatus::LimitExceeded);
+    let (unsupported_count, _) = totals(RecoveryItemStatus::Unsupported);
+    let skipped_count = report
+        .items
+        .iter()
+        .filter(|item| {
+            matches!(
+                item.status,
+                RecoveryItemStatus::SkippedActive
+                    | RecoveryItemStatus::SkippedEvidenceIncomplete
+                    | RecoveryItemStatus::ChangedDuringValidation
+            )
+        })
+        .count();
+    let evidence_complete = audit.evidence_complete
+        && report
+            .items
+            .iter()
+            .all(|item| item.evidence_complete && item.validation_stable);
+
+    report.candidate_count == report.items.len()
+        && report.candidate_bytes
+            == report
+                .items
+                .iter()
+                .fold(0u64, |total, item| total.saturating_add(item.logical_bytes))
+        && report.fully_validated_file_count == fully_validated_file_count
+        && report.fully_validated_file_bytes == fully_validated_file_bytes
+        && report.partially_validated_file_count == partially_validated_file_count
+        && report.validated_recoverable_bytes
+            == report.items.iter().fold(0u64, |total, item| {
+                total.saturating_add(item.validated_recoverable_bytes)
+            })
+        && report.invalid_count == invalid_count
+        && report.limit_exceeded_count == limit_exceeded_count
+        && report.unsupported_count == unsupported_count
+        && report.skipped_count == skipped_count
+        && report.evidence_complete == evidence_complete
+        && validation_fingerprint(
+            audit,
+            report.limits,
+            report.evidence_complete,
+            &report.issue_counts,
+            &report.items,
+        ) == report.validation_fingerprint
+}
+
 /// Validate recoverable content in a fresh incomplete-download audit without writing, extracting,
 /// renaming, or deleting any candidate. ZIP entries are streamed to EOF so the zip crate's default
 /// CRC reader checks each entry. PNG frames are decoded within an explicit output-memory bound.

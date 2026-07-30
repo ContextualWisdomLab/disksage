@@ -657,6 +657,67 @@ fn audit_fingerprint(
     hasher.finalize().to_hex().to_string()
 }
 
+pub(crate) fn incomplete_download_audit_integrity_valid(
+    report: &IncompleteDownloadAuditReport,
+) -> bool {
+    if report.schema_version != INCOMPLETE_DOWNLOAD_AUDIT_VERSION
+        || report.mutation_performed
+        || report.source_scope_fingerprint
+            != source_scope_fingerprint(&report.source_root, report.stale_after_days)
+        || report.file_count != report.items.len()
+        || report.logical_bytes
+            != report
+                .items
+                .iter()
+                .fold(0u64, |total, item| total.saturating_add(item.logical_bytes))
+        || report.allocated_bytes
+            != report.items.iter().fold(0u64, |total, item| {
+                total.saturating_add(item.allocated_bytes)
+            })
+        || report
+            .items
+            .windows(2)
+            .any(|items| items[0].candidate_fingerprint >= items[1].candidate_fingerprint)
+        || report.items.iter().any(|item| {
+            candidate_fingerprint(
+                &report.source_root,
+                &item.relative_path,
+                item.logical_bytes,
+                item.allocated_bytes,
+                item.filesystem_created_ms,
+                item.filesystem_modified_ms,
+                item.modified_age_days,
+                item.state,
+                &item.active_use,
+                &item.evidence_issues,
+                item.detected_mime_type.as_deref(),
+                item.detected_extension.as_deref(),
+                item.structural_zip_candidate_count,
+                &item.structural_zip_candidates,
+                item.zip_eocd_count,
+                &item.zip_eocd_offsets,
+                &item.download_acquired_dates,
+                &item.download_agents,
+                &item.download_origin_hosts,
+                item.production_time_evidence_present,
+                item.final_sibling_relative_path.as_deref(),
+                item.final_sibling_bytes,
+            ) != item.candidate_fingerprint
+        })
+    {
+        return false;
+    }
+
+    audit_fingerprint(
+        &report.source_root,
+        report.stale_after_days,
+        report.evidence_complete,
+        report.entries_seen,
+        &report.issue_counts,
+        &report.items,
+    ) == report.audit_fingerprint
+}
+
 fn build_report(
     source_root: String,
     observed_at_ms: u64,

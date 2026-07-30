@@ -18,6 +18,7 @@
 - 🧩 **Split-archive set audit** — groups `.zip.partNNN` siblings, proves internal gaps and duplicate indices, totals discard-review bytes, and emits a stable path-redacted fingerprint while keeping exact paths in an optional create-new mode-0600 private dossier
 - ⏳ **Incomplete-download audit** — inventories `.crdownload` files by bounded magic bytes, embedded ZIP structure, acquisition context, filesystem-modified staleness, final-sibling presence, and bounded active-use evidence without treating download time or filename dates as production dates
 - 🩺 **Incomplete-download recovery validation** — decodes bounded PNG payloads and streams bounded whole-file or embedded ZIP ranges to EOF with entry CRC checks, without extraction, rename, or discard
+- 🧬 **Incomplete-download materialization plan** — binds fresh audit and recovery fingerprints to exact non-overlapping byte ranges, SHA-256/BLAKE3 content lineage, and content-addressed filename suggestions while withholding destination selection and write approval
 
 ## Safety first
 
@@ -53,6 +54,18 @@ cargo run --features cloud-cli --bin disksage-incomplete-download-recovery -- \
   --root /absolute/source \
   --stale-after-days 30 \
   --private-output /absolute/private/new-incomplete-download-recovery.json
+```
+
+Materialization planning repeats the fresh audit and recovery validation, hashes every validated
+range, and remains destination-independent. Exact paths, offsets, digests, and suggested filenames
+appear only in the optional create-new mode-0600 private report. The public summary cannot authorize
+output creation because no destination has been selected.
+
+```sh
+cargo run --features cloud-cli --bin disksage-incomplete-download-materialization -- \
+  --root /absolute/source \
+  --stale-after-days 30 \
+  --private-output /absolute/private/new-incomplete-download-materialization.json
 ```
 
 ## Status
