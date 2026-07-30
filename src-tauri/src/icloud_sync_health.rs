@@ -83,6 +83,12 @@ pub struct IcloudSyncHealthReport {
     pub managed_database_allocated_bytes: u64,
     pub upload_queue: IcloudUploadQueueSummary,
     pub sync_backlog_present: bool,
+    /// Admission state for adding a new local item to iCloud Drive.
+    ///
+    /// This is intentionally narrower than sync completion: a clear global queue only permits a
+    /// new copy to proceed to the independent capacity, review, and integrity gates.
+    pub new_copy_admission_state: String,
+    pub new_copy_admission_blockers: Vec<String>,
     pub blockers: Vec<String>,
     pub notices: Vec<String>,
     pub paths_redacted: bool,
@@ -281,25 +287,31 @@ fn build_report(
         || upload_queue.out_of_quota_count > 0
         || upload_queue.other_state_count > 0
         || upload_queue.item_error_count > 0;
-    let mut blockers = Vec::new();
+    let mut new_copy_admission_blockers = Vec::new();
     if upload_queue.scheduled_waiting_count > 0 {
-        blockers.push("icloud-upload-queue-nonempty".into());
+        new_copy_admission_blockers.push("icloud-upload-queue-nonempty".into());
     }
     if upload_queue.scheduled_active_count > 0 {
-        blockers.push("icloud-upload-in-flight".into());
+        new_copy_admission_blockers.push("icloud-upload-in-flight".into());
     }
     if upload_queue.blocked_on_sync_up_count > 0 {
-        blockers.push("icloud-upload-blocked-on-sync-up".into());
+        new_copy_admission_blockers.push("icloud-upload-blocked-on-sync-up".into());
     }
     if upload_queue.out_of_quota_count > 0 {
-        blockers.push("icloud-upload-out-of-quota".into());
+        new_copy_admission_blockers.push("icloud-upload-out-of-quota".into());
     }
     if upload_queue.other_state_count > 0 {
-        blockers.push("icloud-upload-queue-state-unclassified".into());
+        new_copy_admission_blockers.push("icloud-upload-queue-state-unclassified".into());
     }
     if upload_queue.item_error_count > 0 {
-        blockers.push("icloud-local-sync-item-error-present".into());
+        new_copy_admission_blockers.push("icloud-local-sync-item-error-present".into());
     }
+    let new_copy_admission_state = if new_copy_admission_blockers.is_empty() {
+        "clear"
+    } else {
+        "blocked"
+    };
+    let mut blockers = new_copy_admission_blockers.clone();
     blockers.push("provider-native-per-item-sync-attestation-required-before-eviction".into());
     Ok(IcloudSyncHealthReport {
         schema_version: 1,
@@ -314,6 +326,8 @@ fn build_report(
         managed_database_allocated_bytes,
         upload_queue,
         sync_backlog_present,
+        new_copy_admission_state: new_copy_admission_state.into(),
+        new_copy_admission_blockers,
         blockers,
         notices: vec![
             "read-only-immutable-main-database-snapshot".into(),
@@ -334,6 +348,54 @@ fn build_report(
         local_eviction_authorized: false,
         mutation_performed: false,
     })
+}
+
+/// Require a quiet local iCloud upload queue before adding another local copy.
+///
+/// This gate does not claim remote capacity or synchronization. The source remains retained and a
+/// copied item still needs provider-native per-item evidence before any later local eviction.
+pub fn require_new_copy_admission(report: &IcloudSyncHealthReport) -> Result<(), String> {
+    if report.new_copy_admission_state == "clear" && report.new_copy_admission_blockers.is_empty() {
+        Ok(())
+    } else if report.new_copy_admission_blockers.is_empty() {
+        Err("icloud-new-copy-admission-invalid".into())
+    } else {
+        Err(report.new_copy_admission_blockers.join(","))
+    }
+}
+
+pub fn attach_new_copy_admission_notice(
+    notices: &mut Vec<String>,
+    report: Option<&IcloudSyncHealthReport>,
+) {
+    notices.retain(|notice| {
+        !matches!(
+            notice.as_str(),
+            "icloud-new-copy-admission-clear"
+                | "icloud-new-copy-admission-blocked"
+                | "icloud-new-copy-admission-evidence-unavailable"
+        )
+    });
+    notices.push(
+        match report {
+            Some(report)
+                if report.new_copy_admission_state == "clear"
+                    && report.new_copy_admission_blockers.is_empty() =>
+            {
+                "icloud-new-copy-admission-clear"
+            }
+            Some(_) => "icloud-new-copy-admission-blocked",
+            None => "icloud-new-copy-admission-evidence-unavailable",
+        }
+        .into(),
+    );
+}
+
+pub fn inspect_new_copy_admission(
+    home: &Path,
+    observed_at_ms: u64,
+) -> Result<IcloudSyncHealthReport, String> {
+    probe_icloud_sync_health(&default_cloud_docs_db_dir(home), observed_at_ms)
 }
 
 pub fn probe_icloud_sync_health(
@@ -417,6 +479,7 @@ mod tests {
         }];
         let report = build_report(2, files, parse_queue_rows(queue_output()).unwrap()).unwrap();
         assert!(report.sync_backlog_present);
+        assert_eq!(report.new_copy_admission_state, "blocked");
         assert_eq!(report.managed_database_allocated_bytes, 128);
         assert!(!report.provider_sync_attested);
         assert!(!report.local_eviction_authorized);
@@ -438,6 +501,13 @@ mod tests {
         assert!(report
             .blockers
             .contains(&"icloud-local-sync-item-error-present".to_string()));
+        assert!(report
+            .new_copy_admission_blockers
+            .contains(&"icloud-upload-queue-nonempty".to_string()));
+        assert_eq!(
+            require_new_copy_admission(&report).unwrap_err(),
+            report.new_copy_admission_blockers.join(",")
+        );
         let encoded = serde_json::to_string(&report).unwrap();
         assert!(!encoded.contains("/Users/"));
     }
@@ -446,6 +516,9 @@ mod tests {
     fn quiet_global_queue_still_requires_per_item_attestation() {
         let report = build_report(1, vec![], IcloudUploadQueueSummary::default()).unwrap();
         assert!(!report.sync_backlog_present);
+        assert_eq!(report.new_copy_admission_state, "clear");
+        assert!(report.new_copy_admission_blockers.is_empty());
+        assert!(require_new_copy_admission(&report).is_ok());
         assert_eq!(
             report.blockers,
             ["provider-native-per-item-sync-attestation-required-before-eviction"]
@@ -468,6 +541,45 @@ mod tests {
         assert_eq!(
             default_cloud_docs_db_dir(Path::new("/home/test")),
             PathBuf::from("/home/test/Library/Application Support/CloudDocs/session/db")
+        );
+    }
+
+    #[test]
+    fn admission_notice_is_replaced_without_disturbing_other_plan_notices() {
+        let blocked = build_report(1, vec![], parse_queue_rows(queue_output()).unwrap()).unwrap();
+        let clear = build_report(2, vec![], IcloudUploadQueueSummary::default()).unwrap();
+        let mut notices = vec![
+            "dry-run-only".into(),
+            "icloud-new-copy-admission-evidence-unavailable".into(),
+            "cloud-sync-unverified".into(),
+        ];
+
+        attach_new_copy_admission_notice(&mut notices, Some(&blocked));
+        assert_eq!(
+            notices,
+            [
+                "dry-run-only",
+                "cloud-sync-unverified",
+                "icloud-new-copy-admission-blocked"
+            ]
+        );
+        attach_new_copy_admission_notice(&mut notices, Some(&clear));
+        assert_eq!(
+            notices,
+            [
+                "dry-run-only",
+                "cloud-sync-unverified",
+                "icloud-new-copy-admission-clear"
+            ]
+        );
+        attach_new_copy_admission_notice(&mut notices, None);
+        assert_eq!(
+            notices,
+            [
+                "dry-run-only",
+                "cloud-sync-unverified",
+                "icloud-new-copy-admission-evidence-unavailable"
+            ]
         );
     }
 }

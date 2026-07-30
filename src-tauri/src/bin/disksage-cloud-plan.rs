@@ -25,6 +25,8 @@ use disksage_lib::cloud_review::{self, CloudReviewDecision, CloudReviewDispositi
 #[cfg(not(coverage))]
 use disksage_lib::cloud_transfer::{self, CloudCopyReceipt, LocalEvictionPermit};
 #[cfg(not(coverage))]
+use disksage_lib::icloud_sync_health;
+#[cfg(not(coverage))]
 use disksage_lib::naruon_capacity;
 #[cfg(not(coverage))]
 use disksage_lib::naruon_duplicate_audit_lineage::NaruonDuplicateAuditLineageEnvelope;
@@ -1806,14 +1808,11 @@ fn plan_with_optional_capacity(
     verify_capacity: bool,
     oauth_connections: Option<&Path>,
     reserve_mib: u64,
+    home: &Path,
 ) -> Result<(CloudRoot, cloud::CloudPlanReport), String> {
     if !verify_capacity {
         let mut report = cloud::plan_cloud_archive_from_snapshot(source, root);
-        let runtime = provider_client_runtime::collect_provider_client_runtime(
-            root.provider,
-            cloud::system_now_ms(),
-        );
-        provider_client_runtime::attach_runtime_notice(&mut report.notices, &runtime);
+        attach_local_copy_prerequisites(&mut report, home);
         return Ok((root.clone(), report));
     }
     let observed_at_ms = cloud::system_now_ms();
@@ -1829,12 +1828,25 @@ fn plan_with_optional_capacity(
         provider_capacity::root_with_verified_capacity_scope(root, &capacity_snapshot)?;
     let mut report = cloud::plan_cloud_archive_from_snapshot(source, &refined_root);
     attach_capacity_snapshot(&mut report, capacity_snapshot, reserve_mib)?;
+    attach_local_copy_prerequisites(&mut report, home);
+    Ok((refined_root, report))
+}
+
+#[cfg(not(coverage))]
+fn attach_local_copy_prerequisites(report: &mut cloud::CloudPlanReport, home: &Path) {
     let runtime = provider_client_runtime::collect_provider_client_runtime(
-        refined_root.provider,
+        report.cloud_root.provider,
         cloud::system_now_ms(),
     );
     provider_client_runtime::attach_runtime_notice(&mut report.notices, &runtime);
-    Ok((refined_root, report))
+    if report.cloud_root.provider == CloudProvider::Icloud {
+        let health =
+            icloud_sync_health::inspect_new_copy_admission(home, cloud::system_now_ms()).ok();
+        icloud_sync_health::attach_new_copy_admission_notice(
+            &mut report.notices,
+            health.as_ref(),
+        );
+    }
 }
 
 #[cfg(not(coverage))]
@@ -2168,6 +2180,7 @@ fn run() -> Result<(), String> {
                 args.verify_capacity,
                 args.oauth_connections.as_deref(),
                 args.capacity_reserve_mib,
+                &home,
             )?;
             capacity_verified_destination_count += usize::from(has_verified_capacity(&report));
             summaries.push(if args.capacity_readiness_summary {
@@ -2260,6 +2273,7 @@ fn run() -> Result<(), String> {
         capacity_required_for_plan,
         args.oauth_connections.as_deref(),
         args.capacity_reserve_mib,
+        &home,
     )?;
     if args.export_naruon_capacity {
         let envelope = naruon_capacity::export_naruon_cloud_capacity_assessment(&report)?;
@@ -2405,6 +2419,14 @@ fn run() -> Result<(), String> {
                 selected.provider,
                 cloud::system_now_ms(),
             )?;
+            if selected.provider == CloudProvider::Icloud {
+                let health = icloud_sync_health::inspect_new_copy_admission(
+                    &home,
+                    cloud::system_now_ms(),
+                )
+                .map_err(|_| "icloud-new-copy-admission-evidence-unavailable".to_string())?;
+                icloud_sync_health::require_new_copy_admission(&health)?;
+            }
             let capacity_snapshot = report
                 .capacity
                 .as_ref()
