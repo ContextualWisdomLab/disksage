@@ -533,6 +533,16 @@ fn size_evidence(path: &Path, max_entries: u64, timeout_ms: u64) -> GitWorktreeS
     }
 }
 
+/// Measure one already-validated directory tree with the same bounded, symlink-safe accounting
+/// used by the worktree audit.
+pub fn bounded_size_evidence(
+    path: &Path,
+    max_entries: u64,
+    timeout_ms: u64,
+) -> GitWorktreeSizeEvidence {
+    size_evidence(path, max_entries, timeout_ms)
+}
+
 fn skipped_active_use(reason: &str) -> GitWorktreeActiveUseEvidence {
     GitWorktreeActiveUseEvidence {
         method: "lsof-recursive-pid".into(),

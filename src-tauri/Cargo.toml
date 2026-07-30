@@ -94,6 +94,11 @@ path = "src/bin/disksage-git-worktree-remove.rs"
 required-features = ["cloud-cli"]
 
 [[bin]]
+name = "disksage-git-worktree-artifact-audit"
+path = "src/bin/disksage-git-worktree-artifact-audit.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
 name = "disksage-archive-tree"
 path = "src/bin/disksage-archive-tree.rs"
 required-features = ["archive-cli"]
