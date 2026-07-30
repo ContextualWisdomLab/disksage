@@ -15,6 +15,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 #[cfg(not(coverage))]
+use sha2::{Digest, Sha256};
+
+#[cfg(not(coverage))]
 use disksage_lib::cloud::{self, CloudRoot};
 #[cfg(not(coverage))]
 use disksage_lib::cloud_local_inventory::{
@@ -38,11 +41,12 @@ struct Args {
     max_depth: usize,
     max_duration_ms: u64,
     max_issues: usize,
+    private_output: Option<PathBuf>,
 }
 
 #[cfg(not(coverage))]
 fn usage() -> &'static str {
-    "usage: disksage-cloud-local-inventory (--cloud-root ABSOLUTE_PATH [--relative-subpath SAFE_RELATIVE_PATH] | --all-roots) [--min-allocated-mib N] [--max-entries N] [--max-results N] [--max-depth N] [--max-duration-ms N] [--max-issues N]"
+    "usage: disksage-cloud-local-inventory (--cloud-root ABSOLUTE_PATH [--relative-subpath SAFE_RELATIVE_PATH] | --all-roots [--private-output ABSOLUTE_NEW_FILE.json]) [--min-allocated-mib N] [--max-entries N] [--max-results N] [--max-depth N] [--max-duration-ms N] [--max-issues N]"
 }
 
 #[cfg(not(coverage))]
@@ -76,6 +80,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut max_depth = defaults.max_depth;
     let mut max_duration_ms = defaults.max_duration_ms;
     let mut max_issues = defaults.max_issues;
+    let mut private_output = None;
     let mut index = 0usize;
     while index < args.len() {
         match args[index].as_str() {
@@ -98,6 +103,12 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             "--max-depth" => max_depth = number(args, &mut index, "--max-depth")?,
             "--max-duration-ms" => max_duration_ms = number(args, &mut index, "--max-duration-ms")?,
             "--max-issues" => max_issues = number(args, &mut index, "--max-issues")?,
+            "--private-output" => {
+                if private_output.is_some() {
+                    return Err("--private-output은 한 번만 지정할 수 있음".into());
+                }
+                private_output = Some(PathBuf::from(value(args, &mut index, "--private-output")?));
+            }
             "--help" | "-h" => return Err(usage().into()),
             unknown => return Err(format!("알 수 없는 인자: {unknown}")),
         }
@@ -127,6 +138,15 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     if all_roots && relative_subpath.is_some() {
         return Err("--relative-subpath는 --all-roots와 함께 사용할 수 없음".into());
     }
+    if private_output.is_some() && !all_roots {
+        return Err("--private-output은 --all-roots와 함께 지정해야 함".into());
+    }
+    if private_output
+        .as_ref()
+        .is_some_and(|path| !path.is_absolute())
+    {
+        return Err("--private-output은 절대 경로여야 함".into());
+    }
     Ok(Args {
         cloud_root,
         all_roots,
@@ -137,6 +157,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         max_depth,
         max_duration_ms,
         max_issues,
+        private_output,
     })
 }
 
@@ -231,15 +252,334 @@ struct CloudLocalInventoryBatchReport {
     failures: Vec<CloudLocalInventoryBatchFailure>,
     evidence_complete: bool,
     notices: Vec<String>,
+    contains_sensitive_local_paths: bool,
+    local_only: bool,
+    remote_capacity_verified: bool,
+    provider_sync_attested: bool,
+    source_eviction_authorized: bool,
 }
 
 #[cfg(not(coverage))]
-fn print_batch_report(report: &CloudLocalInventoryBatchReport) -> Result<(), String> {
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+struct CloudLocalInventoryPrivateReceipt {
+    sha256: String,
+    bytes: usize,
+    unix_mode: String,
+    create_new: bool,
+    contains_sensitive_local_paths: bool,
+}
+
+#[cfg(not(coverage))]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+struct CloudLocalInventoryDiscoveryIssueSummary {
+    provider: Option<cloud::CloudProvider>,
+    account_scope: cloud::CloudAccountScope,
+    reason_code: String,
+}
+
+#[cfg(not(coverage))]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+struct CloudLocalInventoryRootSummary {
+    root_ref: String,
+    provider: cloud::CloudProvider,
+    account_scope: cloud::CloudAccountScope,
+    inventory_succeeded: bool,
+    inventory_complete: bool,
+    visited_entries: u64,
+    visited_files: u64,
+    visited_directories: u64,
+    skipped_entries: u64,
+    issue_count: usize,
+    issues_truncated: bool,
+    candidate_count: usize,
+    allocated_candidate_bytes: u64,
+    results_truncated: bool,
+    stop_reasons: Vec<String>,
+    local_allocation_evidence_only: bool,
+    remote_capacity_verified: bool,
+    provider_sync_attested: bool,
+    source_eviction_ready: bool,
+}
+
+#[cfg(not(coverage))]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+struct CloudLocalInventoryFailureSummary {
+    root_ref: String,
+    provider: cloud::CloudProvider,
+    account_scope: cloud::CloudAccountScope,
+    reason_code: String,
+}
+
+#[cfg(not(coverage))]
+#[derive(Debug, serde::Serialize)]
+struct CloudLocalInventoryBatchSummary {
+    version: u32,
+    output_mode: String,
+    observed_at_ms: u64,
+    discovered_roots: usize,
+    reported_roots: usize,
+    failed_roots: usize,
+    candidate_count: usize,
+    allocated_candidate_bytes: u64,
+    discovery_issues: Vec<CloudLocalInventoryDiscoveryIssueSummary>,
+    roots: Vec<CloudLocalInventoryRootSummary>,
+    failures: Vec<CloudLocalInventoryFailureSummary>,
+    evidence_complete: bool,
+    paths_redacted: bool,
+    local_allocation_is_not_remote_capacity: bool,
+    provider_sync_attested: bool,
+    source_eviction_authorized: bool,
+    mutation_performed: bool,
+    cloud_write_performed: bool,
+    private_report: Option<CloudLocalInventoryPrivateReceipt>,
+    notices: Vec<String>,
+}
+
+#[cfg(not(coverage))]
+fn print_batch_summary(report: &CloudLocalInventoryBatchSummary) -> Result<(), String> {
     println!(
         "{}",
         serde_json::to_string_pretty(&report).map_err(|error| error.to_string())?
     );
     Ok(())
+}
+
+#[cfg(not(coverage))]
+fn root_ref(
+    provider: cloud::CloudProvider,
+    account_scope: cloud::CloudAccountScope,
+    root_id: &str,
+    root_path: &str,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"disksage-cloud-local-inventory-root-ref-v1\0");
+    for value in [
+        provider.as_str(),
+        account_scope.as_str(),
+        root_id,
+        root_path,
+    ] {
+        hasher.update((value.len() as u64).to_le_bytes());
+        hasher.update(value.as_bytes());
+    }
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+#[cfg(not(coverage))]
+fn stable_reason_code(reason: &str) -> String {
+    let code = reason.split(':').next().unwrap_or_default();
+    if !code.is_empty()
+        && code.len() <= 96
+        && code
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    {
+        code.into()
+    } else {
+        "inventory-failed".into()
+    }
+}
+
+#[cfg(not(coverage))]
+fn redact_batch_report(
+    report: &CloudLocalInventoryBatchReport,
+    private_report: Option<CloudLocalInventoryPrivateReceipt>,
+) -> CloudLocalInventoryBatchSummary {
+    let mut roots = report
+        .reports
+        .iter()
+        .map(|root| CloudLocalInventoryRootSummary {
+            root_ref: root_ref(
+                root.provider,
+                root.account_scope,
+                &root.cloud_root_id,
+                &root.cloud_root,
+            ),
+            provider: root.provider,
+            account_scope: root.account_scope,
+            inventory_succeeded: true,
+            inventory_complete: root.evidence_complete,
+            visited_entries: root.visited_entries,
+            visited_files: root.visited_files,
+            visited_directories: root.visited_directories,
+            skipped_entries: root.skipped_entries,
+            issue_count: root.issues.len(),
+            issues_truncated: root.issues_truncated,
+            candidate_count: root.candidates.len(),
+            allocated_candidate_bytes: root.allocated_candidate_bytes,
+            results_truncated: root.results_truncated,
+            stop_reasons: root.stop_reasons.clone(),
+            local_allocation_evidence_only: true,
+            remote_capacity_verified: false,
+            provider_sync_attested: false,
+            source_eviction_ready: false,
+        })
+        .collect::<Vec<_>>();
+    roots.sort_by(|left, right| left.root_ref.cmp(&right.root_ref));
+    let mut failures = report
+        .failures
+        .iter()
+        .map(|failure| CloudLocalInventoryFailureSummary {
+            root_ref: root_ref(
+                failure.provider,
+                failure.account_scope,
+                &failure.cloud_root_id,
+                &failure.cloud_root,
+            ),
+            provider: failure.provider,
+            account_scope: failure.account_scope,
+            reason_code: stable_reason_code(&failure.reason),
+        })
+        .collect::<Vec<_>>();
+    failures.sort_by(|left, right| left.root_ref.cmp(&right.root_ref));
+    let mut discovery_issues = report
+        .discovery_issues
+        .iter()
+        .map(|issue| CloudLocalInventoryDiscoveryIssueSummary {
+            provider: issue.provider,
+            account_scope: issue.account_scope,
+            reason_code: stable_reason_code(&issue.reason),
+        })
+        .collect::<Vec<_>>();
+    discovery_issues.sort_by(|left, right| {
+        left.provider
+            .map(cloud::CloudProvider::as_str)
+            .cmp(&right.provider.map(cloud::CloudProvider::as_str))
+            .then_with(|| {
+                left.account_scope
+                    .as_str()
+                    .cmp(right.account_scope.as_str())
+            })
+            .then_with(|| left.reason_code.cmp(&right.reason_code))
+    });
+    let mut notices = report.notices.clone();
+    notices.extend([
+        "paths-and-account-labels-redacted".into(),
+        "local-allocation-is-not-remote-capacity".into(),
+        "provider-sync-not-attested".into(),
+        "source-eviction-not-authorized".into(),
+        "no-cloud-write".into(),
+    ]);
+    notices.sort();
+    notices.dedup();
+    CloudLocalInventoryBatchSummary {
+        version: 1,
+        output_mode: "multicloud-local-readiness-summary".into(),
+        observed_at_ms: report.observed_at_ms,
+        discovered_roots: report.discovered_roots,
+        reported_roots: report.reported_roots,
+        failed_roots: report.failed_roots,
+        candidate_count: report.candidate_count,
+        allocated_candidate_bytes: report.allocated_candidate_bytes,
+        discovery_issues,
+        roots,
+        failures,
+        evidence_complete: report.evidence_complete,
+        paths_redacted: true,
+        local_allocation_is_not_remote_capacity: true,
+        provider_sync_attested: false,
+        source_eviction_authorized: false,
+        mutation_performed: false,
+        cloud_write_performed: false,
+        private_report,
+        notices,
+    }
+}
+
+#[cfg(all(not(coverage), unix))]
+fn write_private_batch_report(
+    path: &Path,
+    report: &CloudLocalInventoryBatchReport,
+) -> Result<CloudLocalInventoryPrivateReceipt, String> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    const MAX_PRIVATE_REPORT_BYTES: usize = 16 * 1024 * 1024;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| "cloud-local-inventory-private-parent-missing".to_string())?;
+    let parent_metadata = std::fs::symlink_metadata(parent)
+        .map_err(|_| "cloud-local-inventory-private-parent-unavailable".to_string())?;
+    if !parent_metadata.is_dir() || parent_metadata.file_type().is_symlink() {
+        return Err("cloud-local-inventory-private-parent-unsafe".into());
+    }
+    let canonical_parent = std::fs::canonicalize(parent)
+        .map_err(|_| "cloud-local-inventory-private-parent-unavailable".to_string())?;
+    for root in report
+        .reports
+        .iter()
+        .map(|item| item.cloud_root.as_str())
+        .chain(report.failures.iter().map(|item| item.cloud_root.as_str()))
+        .chain(
+            report
+                .discovery_issues
+                .iter()
+                .map(|item| item.path.as_str()),
+        )
+    {
+        if std::fs::canonicalize(root)
+            .ok()
+            .is_some_and(|root| canonical_parent.starts_with(root))
+        {
+            return Err("cloud-local-inventory-private-output-inside-cloud-root".into());
+        }
+    }
+    let encoded = serde_json::to_vec_pretty(report)
+        .map_err(|_| "cloud-local-inventory-private-json-invalid".to_string())?;
+    if encoded.len() > MAX_PRIVATE_REPORT_BYTES {
+        return Err("cloud-local-inventory-private-too-large".into());
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|_| "cloud-local-inventory-private-create-failed".to_string())?;
+    let result = (|| -> Result<(), String> {
+        file.write_all(&encoded)
+            .and_then(|_| file.sync_all())
+            .map_err(|_| "cloud-local-inventory-private-write-failed".to_string())?;
+        let metadata = file
+            .metadata()
+            .map_err(|_| "cloud-local-inventory-private-metadata-failed".to_string())?;
+        if !metadata.is_file()
+            || metadata.file_type().is_symlink()
+            || metadata.permissions().mode() & 0o777 != 0o600
+        {
+            return Err("cloud-local-inventory-private-mode-invalid".into());
+        }
+        std::fs::File::open(&canonical_parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|_| "cloud-local-inventory-private-parent-sync-failed".to_string())
+    })();
+    if let Err(error) = result {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err(error);
+    }
+    let sha256 = Sha256::digest(&encoded)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    Ok(CloudLocalInventoryPrivateReceipt {
+        sha256,
+        bytes: encoded.len(),
+        unix_mode: "0600".into(),
+        create_new: true,
+        contains_sensitive_local_paths: true,
+    })
+}
+
+#[cfg(all(not(coverage), not(unix)))]
+fn write_private_batch_report(
+    _path: &Path,
+    _report: &CloudLocalInventoryBatchReport,
+) -> Result<CloudLocalInventoryPrivateReceipt, String> {
+    Err("cloud-local-inventory-private-secure-mode-unsupported".into())
 }
 
 #[cfg(not(coverage))]
@@ -272,6 +612,7 @@ fn single_root_invocation(args: &Args, root: &CloudRoot) -> (Vec<String>, Args) 
             max_depth: args.max_depth,
             max_duration_ms: args.max_duration_ms,
             max_issues: args.max_issues,
+            private_output: None,
         },
     )
 }
@@ -340,7 +681,7 @@ fn finish_batch_report(
         notices.push("one-or-more-root-inventories-incomplete".into());
     }
     CloudLocalInventoryBatchReport {
-        version: 1,
+        version: 2,
         observed_at_ms,
         discovered_roots,
         reported_roots: reports.len(),
@@ -352,6 +693,11 @@ fn finish_batch_report(
         failures,
         evidence_complete,
         notices,
+        contains_sensitive_local_paths: true,
+        local_only: true,
+        remote_capacity_verified: false,
+        provider_sync_attested: false,
+        source_eviction_authorized: false,
     }
 }
 
@@ -537,7 +883,13 @@ fn run() -> Result<(), String> {
         if std::env::var_os("DISKSAGE_INTERNAL_INVENTORY_WORKER").is_some() {
             return Err("inventory-worker-all-roots-forbidden".into());
         }
-        return print_batch_report(&inventory_all_roots(discovery, &args));
+        let report = inventory_all_roots(discovery, &args);
+        let private_receipt = args
+            .private_output
+            .as_deref()
+            .map(|path| write_private_batch_report(path, &report))
+            .transpose()?;
+        return print_batch_summary(&redact_batch_report(&report, private_receipt));
     }
     let requested = args
         .cloud_root
@@ -600,6 +952,7 @@ mod tests {
         assert_eq!(args.max_depth, 2);
         assert_eq!(args.max_duration_ms, 5000);
         assert_eq!(args.max_issues, 50);
+        assert!(args.private_output.is_none());
         assert!(parse_args(&[]).is_err());
         assert!(parse_args(&["--cloud-root".into(), "relative".into()]).is_err());
         assert!(parse_args(&[
@@ -613,6 +966,17 @@ mod tests {
         let batch = parse_args(&["--all-roots".into()]).unwrap();
         assert!(batch.cloud_root.is_none());
         assert!(batch.all_roots);
+        assert!(batch.private_output.is_none());
+        let private_batch = parse_args(&[
+            "--all-roots".into(),
+            "--private-output".into(),
+            "/private/report.json".into(),
+        ])
+        .unwrap();
+        assert_eq!(
+            private_batch.private_output,
+            Some(PathBuf::from("/private/report.json"))
+        );
         assert!(
             parse_args(&["--cloud-root".into(), "/Cloud".into(), "--all-roots".into(),]).is_err()
         );
@@ -620,6 +984,19 @@ mod tests {
             "--all-roots".into(),
             "--relative-subpath".into(),
             "Archive".into(),
+        ])
+        .is_err());
+        assert!(parse_args(&[
+            "--cloud-root".into(),
+            "/Cloud".into(),
+            "--private-output".into(),
+            "/private/report.json".into(),
+        ])
+        .is_err());
+        assert!(parse_args(&[
+            "--all-roots".into(),
+            "--private-output".into(),
+            "relative.json".into(),
         ])
         .is_err());
     }
@@ -702,6 +1079,7 @@ mod tests {
                 max_depth: 2,
                 max_duration_ms: 1000,
                 max_issues: 10,
+                private_output: None,
             }),
             1,
         )
@@ -774,6 +1152,25 @@ mod tests {
         assert!(complete.evidence_complete);
         assert_eq!(complete.reported_roots, 1);
         assert_eq!(complete.observed_at_ms, 2);
+        assert!(complete.contains_sensitive_local_paths);
+        assert!(!complete.remote_capacity_verified);
+        assert!(!complete.provider_sync_attested);
+        assert!(!complete.source_eviction_authorized);
+
+        let summary = redact_batch_report(&complete, None);
+        assert!(summary.paths_redacted);
+        assert_eq!(summary.roots.len(), 1);
+        assert_eq!(summary.roots[0].root_ref.len(), 64);
+        assert!(summary.roots[0].inventory_succeeded);
+        assert!(!summary.roots[0].remote_capacity_verified);
+        assert!(!summary.roots[0].provider_sync_attested);
+        assert!(!summary.roots[0].source_eviction_ready);
+        assert!(!summary.source_eviction_authorized);
+        assert!(!summary.mutation_performed);
+        assert!(!summary.cloud_write_performed);
+        let encoded = serde_json::to_string(&summary).unwrap();
+        assert!(!encoded.contains(cloud.path().to_string_lossy().as_ref()));
+        assert!(!encoded.contains("google-drive:test"));
 
         let missing = finish_batch_report(3, 0, Vec::new(), Vec::new(), Vec::new());
         assert!(!missing.evidence_complete);
@@ -795,5 +1192,42 @@ mod tests {
             .notices
             .iter()
             .any(|notice| notice == "cloud-root-discovery-issues-present"));
+        let redacted = serde_json::to_string(&redact_batch_report(&incomplete, None)).unwrap();
+        assert!(!redacted.contains("/Unavailable"));
+        assert!(!redacted.contains("Google Drive account"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_batch_report_is_create_new_mode_0600_and_outside_cloud_roots() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let cloud = tempfile::tempdir().unwrap();
+        let private = tempfile::tempdir().unwrap();
+        let root = CloudRoot {
+            id: "icloud:private".into(),
+            provider: CloudProvider::Icloud,
+            account_scope: CloudAccountScope::Personal,
+            label: "iCloud".into(),
+            path: cloud.path().to_string_lossy().into_owned(),
+            readable: true,
+            access_issue: None,
+        };
+        let report =
+            hard_timeout_inventory(&root, CloudLocalInventoryOptions::default(), 1).unwrap();
+        let batch = finish_batch_report(2, 1, Vec::new(), vec![report], Vec::new());
+        let path = private.path().join("batch.json");
+        let receipt = write_private_batch_report(&path, &batch).unwrap();
+        assert_eq!(receipt.sha256.len(), 64);
+        assert!(receipt.bytes > 0);
+        assert_eq!(receipt.unix_mode, "0600");
+        assert!(receipt.create_new);
+        assert!(receipt.contains_sensitive_local_paths);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(write_private_batch_report(&path, &batch).is_err());
+        assert!(write_private_batch_report(&cloud.path().join("inside.json"), &batch).is_err());
     }
 }
