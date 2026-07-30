@@ -6,6 +6,8 @@
 //! evidence and is never inferred from local APFS free space.
 
 use crate::cloud::{CloudAccountScope, CloudProvider, CloudRoot};
+#[cfg(not(coverage))]
+use std::path::Path;
 
 pub const CAPACITY_SCHEMA_VERSION: u32 = 3;
 pub const DEFAULT_CAPACITY_RESERVE_BYTES: u64 = 1024 * 1024 * 1024;
@@ -719,6 +721,32 @@ pub fn collect_authenticated_capacity(
     }
 }
 
+/// Collect fresh provider-authoritative capacity for one already-discovered cloud root.
+///
+/// iCloud uses the signed-in macOS File Provider account and ignores the optional OAuth
+/// connection document. OneDrive and Google Drive require a DiskSage OAuth connection whose root
+/// identity is revalidated before a short-lived access token is obtained. Tokens are never
+/// returned by this API.
+#[cfg(not(coverage))]
+pub fn collect_live_root_capacity(
+    root: &CloudRoot,
+    oauth_connections: Option<&Path>,
+    observed_at_ms: u64,
+) -> Result<CloudCapacitySnapshot, String> {
+    if root.provider == CloudProvider::Icloud {
+        return collect_icloud_native_capacity(observed_at_ms);
+    }
+    let connection_path = oauth_connections
+        .ok_or_else(|| "provider-capacity-oauth-connections-required".to_string())?;
+    let access_token = crate::provider_oauth::refreshed_access_token(connection_path, root)?;
+    collect_authenticated_capacity(
+        root.provider,
+        access_token.as_str(),
+        observed_at_ms,
+        &FixedHostProviderCapacityClient::default(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -736,6 +764,24 @@ mod tests {
         assert_eq!(
             provider_capacity_url(CloudProvider::Icloud).unwrap_err(),
             "icloud-quota-api-unavailable"
+        );
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn live_non_icloud_capacity_requires_a_bound_oauth_connection_document() {
+        let root = CloudRoot {
+            id: "onedrive:test".into(),
+            provider: CloudProvider::Onedrive,
+            account_scope: CloudAccountScope::Personal,
+            label: "OneDrive".into(),
+            path: "/Cloud/OneDrive".into(),
+            readable: true,
+            access_issue: None,
+        };
+        assert_eq!(
+            collect_live_root_capacity(&root, None, 1).unwrap_err(),
+            "provider-capacity-oauth-connections-required"
         );
     }
 

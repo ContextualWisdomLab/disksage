@@ -1,4 +1,6 @@
-use disksage_lib::cloud::{discover_cloud_roots_report, CloudAccountScope, CloudProvider};
+use disksage_lib::cloud::{
+    discover_cloud_roots_report, CloudAccountScope, CloudProvider, CloudRoot,
+};
 use disksage_lib::incomplete_download::{
     collect_incomplete_download_audit, DEFAULT_MAX_ENTRIES, DEFAULT_STALE_AFTER_DAYS,
     MAX_STALE_AFTER_DAYS,
@@ -14,7 +16,9 @@ use disksage_lib::incomplete_download_materialization_execution::{
 use disksage_lib::incomplete_download_recovery::{
     validate_incomplete_download_recovery, RecoveryValidationLimits,
 };
-use disksage_lib::provider_capacity::{collect_icloud_native_capacity, CloudCapacitySnapshot};
+use disksage_lib::provider_capacity::{
+    collect_icloud_native_capacity, collect_live_root_capacity, CloudCapacitySnapshot,
+};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
@@ -33,6 +37,8 @@ struct Args {
     max_entries: usize,
     stale_after_days: u64,
     live_icloud_capacity: bool,
+    live_provider_capacity: bool,
+    oauth_connections: Option<PathBuf>,
     capacity_snapshot: Option<PathBuf>,
     execute: bool,
 }
@@ -59,7 +65,9 @@ fn usage() -> String {
          --confirm-plan-fingerprint HEX64 \
          --receipt-dir ABSOLUTE_PRIVATE_DIRECTORY \
          --approved-by human:ID --rationale TEXT --execute \
-         (--live-icloud-capacity | --capacity-snapshot ABSOLUTE.json) \
+         (--live-icloud-capacity | \
+          --live-provider-capacity [--oauth-connections ABSOLUTE.json] | \
+          --capacity-snapshot ABSOLUTE.json) \
          [--max-entries 1..={DEFAULT_MAX_ENTRIES}] \
          [--stale-after-days 1..={MAX_STALE_AFTER_DAYS}]"
     )
@@ -75,6 +83,8 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     let mut max_entries = DEFAULT_MAX_ENTRIES;
     let mut stale_after_days = DEFAULT_STALE_AFTER_DAYS;
     let mut live_icloud_capacity = false;
+    let mut live_provider_capacity = false;
+    let mut oauth_connections = None;
     let mut capacity_snapshot = None;
     let mut execute = false;
     let mut index = 0usize;
@@ -150,6 +160,18 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 }
                 live_icloud_capacity = true;
             }
+            "--live-provider-capacity" => {
+                if live_provider_capacity {
+                    return Err("--live-provider-capacity는 한 번만 지정할 수 있음".into());
+                }
+                live_provider_capacity = true;
+            }
+            "--oauth-connections" => {
+                if oauth_connections.is_some() {
+                    return Err("--oauth-connections는 한 번만 지정할 수 있음".into());
+                }
+                oauth_connections = Some(PathBuf::from(value(&mut index, "--oauth-connections")?));
+            }
             "--capacity-snapshot" => {
                 if capacity_snapshot.is_some() {
                     return Err("--capacity-snapshot은 한 번만 지정할 수 있음".into());
@@ -200,12 +222,24 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     if !execute {
         return Err("--execute 명시가 필요함".into());
     }
-    if live_icloud_capacity == capacity_snapshot.is_some() {
-        return Err("--live-icloud-capacity와 --capacity-snapshot 중 정확히 하나가 필요함".into());
+    let capacity_modes = usize::from(live_icloud_capacity)
+        + usize::from(live_provider_capacity)
+        + usize::from(capacity_snapshot.is_some());
+    if capacity_modes != 1 {
+        return Err("live iCloud, live provider, capacity snapshot 중 정확히 하나가 필요함".into());
     }
-    if let Some(path) = &capacity_snapshot {
+    if oauth_connections.is_some() && !live_provider_capacity {
+        return Err("--oauth-connections에는 --live-provider-capacity가 필요함".into());
+    }
+    for (flag, path) in [
+        ("--capacity-snapshot", capacity_snapshot.as_ref()),
+        ("--oauth-connections", oauth_connections.as_ref()),
+    ] {
+        let Some(path) = path else {
+            continue;
+        };
         if !absolute_without_parent(path) {
-            return Err("--capacity-snapshot은 상위 탐색이 없는 절대 경로여야 함".into());
+            return Err(format!("{flag}은 상위 탐색이 없는 절대 경로여야 함"));
         }
     }
     Ok(Args {
@@ -218,6 +252,8 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
         max_entries,
         stale_after_days,
         live_icloud_capacity,
+        live_provider_capacity,
+        oauth_connections,
         capacity_snapshot,
         execute,
     })
@@ -276,10 +312,10 @@ fn read_capacity_snapshot(path: &Path) -> Result<CloudCapacitySnapshot, String> 
 fn verify_discovered_cloud_root(
     home: &Path,
     plan: &IncompleteDownloadDestinationPlan,
-) -> Result<(), String> {
+) -> Result<CloudRoot, String> {
     let canonical_plan_root = std::fs::canonicalize(&plan.cloud_root)
         .map_err(|_| "materialization-execution-cloud-root-unavailable".to_string())?;
-    let matches = discover_cloud_roots_report(home)
+    let mut matches = discover_cloud_roots_report(home)
         .roots
         .into_iter()
         .filter(|root| {
@@ -289,11 +325,11 @@ fn verify_discovered_cloud_root(
                     || root.account_scope == plan.account_scope)
                 && std::fs::canonicalize(&root.path).is_ok_and(|path| path == canonical_plan_root)
         })
-        .count();
-    if matches != 1 {
+        .collect::<Vec<_>>();
+    if matches.len() != 1 {
         return Err("materialization-execution-cloud-root-not-uniquely-discovered".into());
     }
-    Ok(())
+    Ok(matches.remove(0))
 }
 
 #[cfg(not(coverage))]
@@ -310,7 +346,7 @@ fn run() -> Result<(), String> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or_else(|| "home-directory-unavailable".to_string())?;
-    verify_discovered_cloud_root(&home, &plan)?;
+    let cloud_root = verify_discovered_cloud_root(&home, &plan)?;
 
     let capacity_observed_at_ms = system_now_ms();
     let capacity =
@@ -319,6 +355,12 @@ fn run() -> Result<(), String> {
                 return Err("live-icloud-capacity-requires-icloud-plan".into());
             }
             collect_icloud_native_capacity(capacity_observed_at_ms)?
+        } else if args.live_provider_capacity {
+            collect_live_root_capacity(
+                &cloud_root,
+                args.oauth_connections.as_deref(),
+                capacity_observed_at_ms,
+            )?
         } else {
             read_capacity_snapshot(args.capacity_snapshot.as_deref().ok_or_else(|| {
                 "materialization-execution-capacity-snapshot-missing".to_string()
@@ -410,7 +452,26 @@ mod tests {
         let parsed = parse_args(&raw).unwrap();
         assert!(parsed.execute);
         assert!(parsed.live_icloud_capacity);
+        assert!(!parsed.live_provider_capacity);
         assert_eq!(parsed.confirmed_plan_fingerprint, "a".repeat(64));
+    }
+
+    #[test]
+    fn parses_live_multicloud_execution_capacity_with_oauth_document() {
+        let mut raw = required();
+        raw.extend([
+            "--live-provider-capacity".into(),
+            "--oauth-connections".into(),
+            "/private/oauth-connections.json".into(),
+        ]);
+        let parsed = parse_args(&raw).unwrap();
+        assert!(!parsed.live_icloud_capacity);
+        assert!(parsed.live_provider_capacity);
+        assert_eq!(
+            parsed.oauth_connections,
+            Some(PathBuf::from("/private/oauth-connections.json"))
+        );
+        assert!(parsed.capacity_snapshot.is_none());
     }
 
     #[test]
@@ -436,5 +497,21 @@ mod tests {
         bad_attribution[position] = "agent:test".into();
         bad_attribution.push("--live-icloud-capacity".into());
         assert!(parse_args(&bad_attribution).is_err());
+
+        let mut oauth_without_live_provider = required();
+        oauth_without_live_provider.extend([
+            "--live-icloud-capacity".into(),
+            "--oauth-connections".into(),
+            "/private/oauth-connections.json".into(),
+        ]);
+        assert!(parse_args(&oauth_without_live_provider).is_err());
+
+        let mut relative_oauth = required();
+        relative_oauth.extend([
+            "--live-provider-capacity".into(),
+            "--oauth-connections".into(),
+            "relative.json".into(),
+        ]);
+        assert!(parse_args(&relative_oauth).is_err());
     }
 }

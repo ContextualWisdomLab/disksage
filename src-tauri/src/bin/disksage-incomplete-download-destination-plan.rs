@@ -12,7 +12,8 @@ use disksage_lib::incomplete_download_recovery::{
 };
 use disksage_lib::private_evidence::write_private_json_create_new;
 use disksage_lib::provider_capacity::{
-    collect_icloud_native_capacity, CloudCapacitySnapshot, DEFAULT_CAPACITY_RESERVE_BYTES,
+    collect_icloud_native_capacity, collect_live_root_capacity, CloudCapacitySnapshot,
+    DEFAULT_CAPACITY_RESERVE_BYTES,
 };
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
@@ -29,6 +30,8 @@ struct Args {
     stale_after_days: u64,
     reserve_mib: u64,
     live_icloud_capacity: bool,
+    live_provider_capacity: bool,
+    oauth_connections: Option<PathBuf>,
     capacity_snapshot: Option<PathBuf>,
     private_output: Option<PathBuf>,
 }
@@ -53,7 +56,9 @@ fn usage() -> String {
         "usage: disksage-incomplete-download-destination-plan \
          --source-root ABSOLUTE_PATH --cloud-root ABSOLUTE_PATH \
          --destination-subdirectory RELATIVE_PATH \
-         (--live-icloud-capacity | --capacity-snapshot ABSOLUTE.json) \
+         (--live-icloud-capacity | \
+          --live-provider-capacity [--oauth-connections ABSOLUTE.json] | \
+          --capacity-snapshot ABSOLUTE.json) \
          [--max-entries 1..={DEFAULT_MAX_ENTRIES}] \
          [--stale-after-days 1..={MAX_STALE_AFTER_DAYS}] \
          [--capacity-reserve-mib 0..={MAX_CAPACITY_RESERVE_MIB}] \
@@ -69,6 +74,8 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     let mut stale_after_days = DEFAULT_STALE_AFTER_DAYS;
     let mut reserve_mib = DEFAULT_CAPACITY_RESERVE_BYTES / (1024 * 1024);
     let mut live_icloud_capacity = false;
+    let mut live_provider_capacity = false;
+    let mut oauth_connections = None;
     let mut capacity_snapshot = None;
     let mut private_output = None;
     let mut index = 0usize;
@@ -140,6 +147,18 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 }
                 live_icloud_capacity = true;
             }
+            "--live-provider-capacity" => {
+                if live_provider_capacity {
+                    return Err("--live-provider-capacity는 한 번만 지정할 수 있음".into());
+                }
+                live_provider_capacity = true;
+            }
+            "--oauth-connections" => {
+                if oauth_connections.is_some() {
+                    return Err("--oauth-connections는 한 번만 지정할 수 있음".into());
+                }
+                oauth_connections = Some(PathBuf::from(value(&mut index, "--oauth-connections")?));
+            }
             "--capacity-snapshot" => {
                 if capacity_snapshot.is_some() {
                     return Err("--capacity-snapshot은 한 번만 지정할 수 있음".into());
@@ -171,12 +190,24 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     if !safe_relative_directory(&destination_subdirectory) {
         return Err("--destination-subdirectory는 안전한 상대 경로여야 함".into());
     }
-    if live_icloud_capacity == capacity_snapshot.is_some() {
-        return Err("--live-icloud-capacity와 --capacity-snapshot 중 정확히 하나가 필요함".into());
+    let capacity_modes = usize::from(live_icloud_capacity)
+        + usize::from(live_provider_capacity)
+        + usize::from(capacity_snapshot.is_some());
+    if capacity_modes != 1 {
+        return Err("live iCloud, live provider, capacity snapshot 중 정확히 하나가 필요함".into());
     }
-    if let Some(path) = &capacity_snapshot {
+    if oauth_connections.is_some() && !live_provider_capacity {
+        return Err("--oauth-connections에는 --live-provider-capacity가 필요함".into());
+    }
+    for (flag, path) in [
+        ("--capacity-snapshot", capacity_snapshot.as_ref()),
+        ("--oauth-connections", oauth_connections.as_ref()),
+    ] {
+        let Some(path) = path else {
+            continue;
+        };
         if !absolute_without_parent(path) {
-            return Err("--capacity-snapshot은 상위 탐색이 없는 절대 경로여야 함".into());
+            return Err(format!("{flag}은 상위 탐색이 없는 절대 경로여야 함"));
         }
     }
     if let Some(path) = &private_output {
@@ -192,6 +223,8 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
         stale_after_days,
         reserve_mib,
         live_icloud_capacity,
+        live_provider_capacity,
+        oauth_connections,
         capacity_snapshot,
         private_output,
     })
@@ -267,6 +300,12 @@ fn run() -> Result<(), String> {
             return Err("live-icloud-capacity-requires-icloud-root".into());
         }
         collect_icloud_native_capacity(capacity_observed_at_ms)?
+    } else if args.live_provider_capacity {
+        collect_live_root_capacity(
+            &cloud_root,
+            args.oauth_connections.as_deref(),
+            capacity_observed_at_ms,
+        )?
     } else {
         read_capacity_snapshot(
             args.capacity_snapshot
@@ -370,9 +409,28 @@ mod tests {
             PathBuf::from("DiskSage/Recovered")
         );
         assert!(args.live_icloud_capacity);
+        assert!(!args.live_provider_capacity);
         assert_eq!(args.max_entries, 42);
         assert_eq!(args.stale_after_days, 60);
         assert_eq!(args.reserve_mib, 2048);
+    }
+
+    #[test]
+    fn parses_live_multicloud_capacity_with_bounded_oauth_document() {
+        let mut raw = required_prefix();
+        raw.extend([
+            "--live-provider-capacity".into(),
+            "--oauth-connections".into(),
+            "/private/oauth-connections.json".into(),
+        ]);
+        let args = parse_args(&raw).unwrap();
+        assert!(!args.live_icloud_capacity);
+        assert!(args.live_provider_capacity);
+        assert_eq!(
+            args.oauth_connections,
+            Some(PathBuf::from("/private/oauth-connections.json"))
+        );
+        assert!(args.capacity_snapshot.is_none());
     }
 
     #[test]
@@ -396,6 +454,18 @@ mod tests {
             "--max-entries".into(),
             "0".into(),
         ]);
+        let mut oauth_without_live_provider = required_prefix();
+        oauth_without_live_provider.extend([
+            "--live-icloud-capacity".into(),
+            "--oauth-connections".into(),
+            "/private/oauth-connections.json".into(),
+        ]);
+        let mut relative_oauth = required_prefix();
+        relative_oauth.extend([
+            "--live-provider-capacity".into(),
+            "--oauth-connections".into(),
+            "relative.json".into(),
+        ]);
         for raw in [
             Vec::new(),
             std::mem::take(&mut no_capacity),
@@ -403,6 +473,8 @@ mod tests {
             unsafe_destination,
             relative_source,
             unbounded,
+            oauth_without_live_provider,
+            relative_oauth,
         ] {
             assert!(parse_args(&raw).is_err(), "{raw:?}");
         }

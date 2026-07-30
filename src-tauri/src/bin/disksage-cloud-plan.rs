@@ -31,7 +31,7 @@ use disksage_lib::naruon_lineage;
 #[cfg(not(coverage))]
 use disksage_lib::provider_api_client::{self, FixedHostProviderMetadataClient};
 #[cfg(not(coverage))]
-use disksage_lib::provider_capacity::{self, FixedHostProviderCapacityClient};
+use disksage_lib::provider_capacity;
 #[cfg(not(coverage))]
 use disksage_lib::provider_evidence::{self, ProviderSyncEvidenceRecord};
 #[cfg(not(coverage))]
@@ -1550,18 +1550,7 @@ fn collect_root_capacity(
     oauth_connections: Option<&Path>,
     observed_at_ms: u64,
 ) -> Result<provider_capacity::CloudCapacitySnapshot, String> {
-    if root.provider == CloudProvider::Icloud {
-        return provider_capacity::collect_icloud_native_capacity(observed_at_ms);
-    }
-    let connection_path = oauth_connections
-        .ok_or_else(|| "provider-capacity-oauth-connections-required".to_string())?;
-    let access_token = provider_oauth::refreshed_access_token(connection_path, root)?;
-    provider_capacity::collect_authenticated_capacity(
-        root.provider,
-        access_token.as_str(),
-        observed_at_ms,
-        &FixedHostProviderCapacityClient::default(),
-    )
+    provider_capacity::collect_live_root_capacity(root, oauth_connections, observed_at_ms)
 }
 
 #[cfg(not(coverage))]
