@@ -76,6 +76,25 @@ describe("cloud review queue", () => {
     expect(cloudReviewQueueState(item, [exact])).toBe("approved");
   });
 
+  it("requires an integrity-bound tenant authority attestation for organization-sensitive approval", () => {
+    const item = candidate("a", 10, {
+      destination_account_scope: "organization",
+      review_reasons: [
+        "organization-cloud-sensitive-context-needs-explicit-tenant-approval",
+      ],
+    });
+    const unconfirmed = decision(item, "approved");
+    const confirmed = {
+      ...unconfirmed,
+      rationale:
+        "[organization-tenant-authority-confirmed] Authorized tenant and destination reviewed.",
+    };
+    expect(matchingReviewDecision(item, [unconfirmed])).toBeNull();
+    expect(cloudReviewQueueState(item, [unconfirmed])).toBe("unreviewed");
+    expect(matchingReviewDecision(item, [confirmed])).toBe(confirmed);
+    expect(cloudReviewQueueState(item, [confirmed])).toBe("approved");
+  });
+
   it("keeps legacy or unattributed decisions out of the execution-ready state", () => {
     const item = candidate("a", 10);
     const legacy: CloudReviewDecision = {

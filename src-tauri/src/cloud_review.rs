@@ -12,6 +12,8 @@ const LEGACY_DECISION_VERSION: u32 = 1;
 pub const DECISION_VERSION: u32 = 2;
 const MAX_REVIEWED_BY_CHARS: usize = 128;
 const MAX_RATIONALE_CHARS: usize = 1_000;
+pub const ORGANIZATION_TENANT_AUTHORITY_ATTESTATION: &str =
+    "[organization-tenant-authority-confirmed]";
 #[cfg(not(coverage))]
 const MAX_DECISION_BYTES: u64 = 8 * 1024;
 #[cfg(not(coverage))]
@@ -134,6 +136,16 @@ pub fn validate_review_attribution(reviewed_by: &str, rationale: &str) -> Result
         return Err("cloud-review-decision-attribution-invalid".into());
     }
     Ok(())
+}
+
+pub fn organization_tenant_authority_attested(decision: &CloudReviewDecision) -> bool {
+    decision.disposition == CloudReviewDisposition::Approved
+        && decision
+            .rationale
+            .strip_prefix(ORGANIZATION_TENANT_AUTHORITY_ATTESTATION)
+            .is_some_and(|rest| {
+                rest.starts_with(' ') && rest[1..].chars().any(is_review_letter_or_number)
+            })
 }
 
 pub(crate) fn validate_decision(decision: &CloudReviewDecision) -> Result<(), String> {
@@ -502,6 +514,17 @@ mod tests {
         assert_eq!(decision.version, DECISION_VERSION);
         assert_eq!(decision.reviewed_by, "human:local:reviewer");
         assert!(validate_decision(&decision).is_ok());
+        assert!(!organization_tenant_authority_attested(&decision));
+
+        let tenant_attested = create_attributed_decision(
+            &candidate,
+            CloudReviewDisposition::Approved,
+            10,
+            "human:local:reviewer",
+            "[organization-tenant-authority-confirmed] Authorized tenant and destination reviewed.",
+        )
+        .unwrap();
+        assert!(organization_tenant_authority_attested(&tenant_attested));
 
         let normalized = create_attributed_decision(
             &candidate,

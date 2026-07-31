@@ -75,6 +75,9 @@ pub enum CloudAccountScope {
     Unknown,
 }
 
+pub const ORGANIZATION_TENANT_AUTHORITY_REVIEW_REASON: &str =
+    "organization-cloud-sensitive-context-needs-explicit-tenant-approval";
+
 impl CloudAccountScope {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -3178,7 +3181,7 @@ fn destination_scope_review_reasons(
             vec!["personal-cloud-sensitive-context-needs-explicit-approval".into()]
         }
         CloudAccountScope::Organization if sensitive_context => {
-            vec!["organization-cloud-sensitive-context-needs-explicit-tenant-approval".into()]
+            vec![ORGANIZATION_TENANT_AUTHORITY_REVIEW_REASON.into()]
         }
         CloudAccountScope::Personal | CloudAccountScope::Organization => Vec::new(),
     }
