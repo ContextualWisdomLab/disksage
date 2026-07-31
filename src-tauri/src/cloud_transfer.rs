@@ -6,10 +6,11 @@
 
 use crate::cloud::{
     candidate_review_fingerprint, ArchiveKind, CloudAccountScope, CloudCandidate, CloudProvider,
-    CloudRoot, MetadataEvidence,
+    CloudRoot, MetadataEvidence, ORGANIZATION_TENANT_AUTHORITY_REVIEW_REASON,
 };
 use crate::cloud_review::{
-    validate_decision, CloudReviewDecision, CloudReviewDisposition, DECISION_VERSION,
+    organization_tenant_authority_attested, validate_decision, CloudReviewDecision,
+    CloudReviewDisposition, DECISION_VERSION,
 };
 use crate::dataset_metadata::DatasetProfile;
 use crate::provider_evidence::{validate_sync_evidence_record, ProviderSyncEvidenceRecord};
@@ -188,6 +189,12 @@ fn candidate_blockers_for_action(
     let root = Path::new(&cloud_root.path);
     let mut blockers = Vec::new();
     let mut exact_review_approved = false;
+    let organization_tenant_authority_required = candidate.destination_account_scope
+        == CloudAccountScope::Organization
+        && candidate
+            .review_reasons
+            .iter()
+            .any(|reason| reason == ORGANIZATION_TENANT_AUTHORITY_REVIEW_REASON);
 
     if candidate.review_fingerprint.len() != 64
         || !candidate
@@ -216,6 +223,12 @@ fn candidate_blockers_for_action(
             }
             Some(decision) if decision.disposition == CloudReviewDisposition::Held => {
                 blockers.push("review-held".into());
+            }
+            Some(decision)
+                if organization_tenant_authority_required
+                    && !organization_tenant_authority_attested(decision) =>
+            {
+                blockers.push("organization-tenant-authority-attestation-required".into());
             }
             Some(_) => exact_review_approved = true,
         }
@@ -1368,6 +1381,41 @@ mod tests {
             reviewed_lineage.review_rationale.as_deref(),
             Some("Metadata title, account scope, and destination reviewed.")
         );
+
+        let mut organization_sensitive = reviewed.clone();
+        organization_sensitive
+            .review_reasons
+            .push(ORGANIZATION_TENANT_AUTHORITY_REVIEW_REASON.into());
+        refresh_review_fingerprint(&mut organization_sensitive);
+        let unconfirmed_tenant = crate::cloud_review::create_attributed_decision(
+            &organization_sensitive,
+            CloudReviewDisposition::Approved,
+            12,
+            "human:local:reviewer",
+            "Metadata and destination reviewed.",
+        )
+        .unwrap();
+        assert!(candidate_blockers_with_review(
+            &organization_sensitive,
+            &root(),
+            Some(&unconfirmed_tenant)
+        )
+        .contains(&"organization-tenant-authority-attestation-required".to_string()));
+        let confirmed_tenant = crate::cloud_review::create_attributed_decision(
+            &organization_sensitive,
+            CloudReviewDisposition::Approved,
+            13,
+            "human:local:reviewer",
+            "[organization-tenant-authority-confirmed] Authorized tenant and destination reviewed.",
+        )
+        .unwrap();
+        assert!(candidate_blockers_with_review(
+            &organization_sensitive,
+            &root(),
+            Some(&confirmed_tenant)
+        )
+        .is_empty());
+
         let original_fingerprint = lineage_fingerprint(&reviewed_lineage).unwrap();
         let mut changed_attribution = reviewed_lineage;
         changed_attribution.review_rationale = Some("Changed rationale".into());
