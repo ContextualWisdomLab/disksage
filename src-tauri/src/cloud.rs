@@ -1847,14 +1847,28 @@ fn pdf_date(value: &str) -> Option<u64> {
         "Dec" => 12,
         _ => return date_from_text(value),
     };
-    date_epoch_ms(parts[4].parse().ok()?, month, parts[2].parse().ok()?)
+    let year = parts[4].parse().ok()?;
+    let day = parts[2].parse().ok()?;
+    let offset = match parts.get(5).copied() {
+        Some("UTC" | "GMT") => Some("+00:00"),
+        Some("KST" | "JST") => Some("+09:00"),
+        _ => None,
+    };
+    offset
+        .and_then(|offset| {
+            timestamp_from_text(&format!(
+                "{year:04}-{month:02}-{day:02}T{}{offset}",
+                parts[3]
+            ))
+        })
+        .or_else(|| date_epoch_ms(year, month, day))
 }
 
 #[cfg(not(coverage))]
 fn pdfinfo_metadata(path: &Path) -> ContentMetadata {
     let mut metadata = ContentMetadata::default();
     let mut command = local_command("pdfinfo");
-    command.arg(path);
+    command.env("LC_ALL", "C").env("TZ", "UTC").arg(path);
     let output = match run_metadata_command(command) {
         Ok(output) => output,
         Err(failure) => {
@@ -4898,6 +4912,14 @@ mod tests {
         assert_eq!(
             date_parts(pdf_date("Wed Mar 4 10:49:07 2026 KST").unwrap()),
             (2026, 3, 4)
+        );
+        assert_eq!(
+            pdf_date("Fri Apr 17 15:35:47 2026 KST"),
+            timestamp_from_text("2026-04-17T15:35:47+09:00")
+        );
+        assert_eq!(
+            pdf_date("Fri Apr 17 06:35:47 2026 UTC"),
+            timestamp_from_text("2026-04-17T06:35:47+00:00")
         );
         let xml = r#"<cp:coreProperties><dc:title>Quarterly report</dc:title><dcterms:created xsi:type="dcterms:W3CDTF">2026-02-03T12:00:00Z</dcterms:created></cp:coreProperties>"#;
         assert_eq!(xml_value(xml, "title").as_deref(), Some("Quarterly report"));
