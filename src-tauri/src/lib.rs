@@ -28,7 +28,35 @@ mod web;
 #[cfg_attr(coverage, allow(dead_code))]
 mod reasoning;
 #[cfg_attr(coverage, allow(dead_code))]
-pub mod worktrees;
+mod dataset_metadata;
+pub mod archive_git_tree;
+#[cfg_attr(coverage, allow(dead_code))]
+pub mod cloud;
+pub mod cloud_local_inventory;
+pub mod cloud_local_eviction;
+#[cfg(not(coverage))]
+pub mod cloud_eviction;
+pub mod cloud_review;
+pub mod cloud_transfer;
+pub mod content_digest;
+pub mod incomplete_download;
+pub mod incomplete_download_materialization;
+pub mod incomplete_download_materialization_destination;
+pub mod incomplete_download_materialization_execution;
+pub mod incomplete_download_recovery;
+pub mod git_worktree;
+pub mod maven_cache;
+pub mod multipart_archive;
+pub mod naruon_capacity;
+pub mod naruon_lineage;
+pub mod provider_api_client;
+pub mod provider_capacity;
+pub mod provider_evidence;
+pub mod provider_oauth;
+pub mod provider_sync;
+pub mod private_evidence;
+pub mod semantic_catalog;
+pub mod volume_pressure;
 
 // coverage 빌드에서 제외 — GUI 런타임은 헤드리스 테스트로 실행 불가
 #[cfg(not(coverage))]
@@ -46,7 +74,6 @@ pub fn run() {
             commands::top_files,
             commands::list_cache_candidates,
             commands::list_dev_artifacts,
-            commands::list_stale_worktrees,
             commands::clean_paths,
             commands::recent_operations,
             commands::expand_clean_targets,
@@ -64,7 +91,20 @@ pub fn run() {
             commands::summarize_unknown_bucket,
             commands::get_settings,
             commands::set_settings,
-            commands::reason_unknown_extensions
+            commands::reason_unknown_extensions,
+            commands::list_cloud_roots,
+            commands::inspect_cloud_roots,
+            commands::list_cloud_provider_connections,
+            commands::verify_cloud_provider_capacity,
+            commands::list_cloud_review_decisions,
+            commands::connect_cloud_provider,
+            commands::disconnect_cloud_provider,
+            commands::plan_cloud_archive,
+            commands::review_cloud_candidate,
+            commands::copy_cloud_candidate,
+            commands::adopt_existing_cloud_candidate,
+            commands::attest_cloud_copy,
+            commands::trash_verified_cloud_source
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

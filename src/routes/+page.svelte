@@ -8,7 +8,7 @@
   import Duplicates from "$lib/Duplicates.svelte";
   import Inventory from "$lib/Inventory.svelte";
   import Organize from "$lib/Organize.svelte";
-  import Worktrees from "$lib/Worktrees.svelte";
+  import CloudArchive from "$lib/CloudArchive.svelte";
 
   let roots: string[] = $state([]);
   let selectedRoot = $state("");
@@ -120,9 +120,9 @@
 
   <Cleanup scannedRoot={crumbs.length > 0 ? crumbs[0] : null} />
 
-  <Worktrees scannedRoot={crumbs.length > 0 ? crumbs[0] : null} />
-
   <Inventory scannedRoot={crumbs.length > 0 ? crumbs[0] : null} />
+
+  <CloudArchive scannedRoot={crumbs.length > 0 ? crumbs[0] : null} />
 
   <Organize scannedRoot={crumbs.length > 0 ? crumbs[0] : null} />
 

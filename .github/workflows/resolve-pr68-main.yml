@@ -1,0 +1,248 @@
+name: Resolve PR 68 against current main
+
+on:
+  push:
+    branches:
+      - feat/worktree-ignore-evidence
+    paths:
+      - .github/workflows/resolve-pr68-main.yml
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out resolved feature branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: feat/worktree-ignore-evidence
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Integrate worktree inventory surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str, marker: str) -> None:
+              target = Path(path)
+              text = target.read_text()
+              if marker in text:
+                  return
+              if old not in text:
+                  raise SystemExit(f"anchor missing in {path}: {old[:80]!r}")
+              target.write_text(text.replace(old, new, 1))
+
+          worktree_command = '''#[cfg(not(coverage))]
+          #[tauri::command(async)]
+          pub fn list_stale_worktrees(
+              root: String,
+              min_age_days: u64,
+              timeout_seconds: u64,
+          ) -> Result<crate::worktrees::WorktreeReport, String> {
+              let root = PathBuf::from(root);
+              if !root.is_dir() {
+                  return Err(format!("스캔 루트가 디렉터리가 아님: {}", root.display()));
+              }
+              if !(1..=600).contains(&timeout_seconds) {
+                  return Err("최대 검사 시간은 1초 이상 600초 이하여야 함".into());
+              }
+              Ok(crate::worktrees::inventory_with_timeout(
+                  &root,
+                  min_age_days,
+                  now_ms(),
+                  std::time::Duration::from_secs(timeout_seconds),
+              ))
+          }
+
+          '''
+          replace_once(
+              "src-tauri/src/commands.rs",
+              "#[cfg(not(coverage))]\n#[tauri::command]\npub fn clean_paths",
+              worktree_command + "#[cfg(not(coverage))]\n#[tauri::command]\npub fn clean_paths",
+              "pub fn list_stale_worktrees(",
+          )
+
+          replace_once(
+              "src-tauri/src/lib.rs",
+              "mod dataset_metadata;\n",
+              "mod dataset_metadata;\n#[cfg_attr(coverage, allow(dead_code))]\npub mod worktrees;\n",
+              "pub mod worktrees;",
+          )
+          replace_once(
+              "src-tauri/src/lib.rs",
+              "            commands::list_dev_artifacts,\n",
+              "            commands::list_dev_artifacts,\n            commands::list_stale_worktrees,\n",
+              "commands::list_stale_worktrees,",
+          )
+
+          api_types = '''export interface WorktreeCandidate {
+            repository_common_dir: string;
+            path: string;
+            head: string;
+            branch: string | null;
+            default_ref: string | null;
+            is_primary: boolean;
+            detached: boolean;
+            exists: boolean;
+            dirty: boolean | null;
+            locked_reason: string | null;
+            prunable_reason: string | null;
+            ahead: number | null;
+            behind: number | null;
+            merged_into_default: boolean | null;
+            last_activity_ms: number;
+            age_days: number;
+            allocated_bytes: number;
+            generated_artifact_bytes: number;
+            generated_artifacts: GeneratedArtifact[];
+            filesystem_scanned: boolean;
+            filesystem_scan_complete: boolean;
+            removal_eligible: boolean;
+            metadata_prune_eligible: boolean;
+            review_reasons: string[];
+          }
+          export interface GeneratedArtifact {
+            path: string;
+            kind: string;
+            allocated_bytes: number;
+            gitignore_confirmed: boolean | null;
+            gitignore_source: string | null;
+            gitignore_line: number | null;
+            gitignore_pattern: string | null;
+            gitignore_issue: string | null;
+          }
+          export interface OrphanWorktreeCandidate {
+            path: string;
+            missing_git_dir: string;
+            allocated_bytes: number;
+            generated_artifact_bytes: number;
+            generated_artifacts: GeneratedArtifact[];
+            filesystem_scan_complete: boolean;
+            removal_eligible: false;
+            review_reasons: string[];
+          }
+          export interface WorktreeReport {
+            scanned_root: string;
+            generated_at_ms: number;
+            elapsed_ms: number;
+            evidence_complete: boolean;
+            min_age_days: number;
+            search_max_depth: number;
+            repository_count: number;
+            worktrees: WorktreeCandidate[];
+            orphaned_worktrees: OrphanWorktreeCandidate[];
+            potentially_reclaimable_bytes: number;
+            reviewable_generated_artifact_bytes: number;
+            ignore_confirmed_generated_artifact_bytes: number;
+            scan_issues: WorktreeScanIssue[];
+            notices: string[];
+          }
+          export interface WorktreeScanIssue {
+            path: string;
+            operation: string;
+            reason: string;
+          }
+          '''
+          replace_once(
+              "src/lib/api.ts",
+              "export interface DevArtifact {\n  path: string;\n  kind: string;\n  bytes: number;\n  age_days: number;\n}\n",
+              "export interface DevArtifact {\n  path: string;\n  kind: string;\n  bytes: number;\n  age_days: number;\n}\n" + api_types,
+              "export interface WorktreeCandidate",
+          )
+          replace_once(
+              "src/lib/api.ts",
+              "export const listDevArtifacts = (root: string, minAgeDays = 30) =>\n  invoke<DevArtifact[]>(\"list_dev_artifacts\", { root, minAgeDays });\n",
+              "export const listDevArtifacts = (root: string, minAgeDays = 30) =>\n  invoke<DevArtifact[]>(\"list_dev_artifacts\", { root, minAgeDays });\nexport const listStaleWorktrees = (root: string, minAgeDays = 30, timeoutSeconds = 30) =>\n  invoke<WorktreeReport>(\"list_stale_worktrees\", { root, minAgeDays, timeoutSeconds });\n",
+              "export const listStaleWorktrees",
+          )
+
+          api_cases = '''      [
+                () => api.listStaleWorktrees("/repo"),
+                "list_stale_worktrees",
+                { root: "/repo", minAgeDays: 30, timeoutSeconds: 30 },
+              ],
+              [
+                () => api.listStaleWorktrees("/repo", 90, 12),
+                "list_stale_worktrees",
+                { root: "/repo", minAgeDays: 90, timeoutSeconds: 12 },
+              ],
+          '''
+          replace_once(
+              "src/lib/api.test.ts",
+              "      [() => api.listDevArtifacts(\"/repo\", 7), \"list_dev_artifacts\", { root: \"/repo\", minAgeDays: 7 }],\n",
+              "      [() => api.listDevArtifacts(\"/repo\", 7), \"list_dev_artifacts\", { root: \"/repo\", minAgeDays: 7 }],\n" + api_cases,
+              "api.listStaleWorktrees(\"/repo\")",
+          )
+
+          replace_once(
+              "src/routes/+page.svelte",
+              '  import Organize from "$lib/Organize.svelte";\n',
+              '  import Organize from "$lib/Organize.svelte";\n  import Worktrees from "$lib/Worktrees.svelte";\n',
+              'import Worktrees from "$lib/Worktrees.svelte";',
+          )
+          replace_once(
+              "src/routes/+page.svelte",
+              "  <Cleanup scannedRoot={crumbs.length > 0 ? crumbs[0] : null} />\n",
+              "  <Cleanup scannedRoot={crumbs.length > 0 ? crumbs[0] : null} />\n\n  <Worktrees scannedRoot={crumbs.length > 0 ? crumbs[0] : null} />\n",
+              "  <Worktrees scannedRoot=",
+          )
+
+          replace_once(
+              "vite.config.js",
+              'import { sveltekit } from "@sveltejs/kit/vite";\n',
+              'import { sveltekit } from "@sveltejs/kit/vite";\nimport { safeTauriDevHost } from "./src/lib/viteHost.ts";\n',
+              'import { safeTauriDevHost }',
+          )
+          replace_once(
+              "vite.config.js",
+              "const host = process.env.TAURI_DEV_HOST;",
+              "const host = safeTauriDevHost(process.env.TAURI_DEV_HOST);",
+              "const host = safeTauriDevHost(",
+          )
+          replace_once(
+              "vite.config.js",
+              "    host: host || false,",
+              "    host,",
+              "    host,\n    hmr:",
+          )
+          replace_once(
+              "tsconfig.json",
+              '    "allowJs": true,\n',
+              '    "allowJs": true,\n    "allowImportingTsExtensions": true,\n',
+              '"allowImportingTsExtensions": true',
+          )
+          replace_once(
+              "vitest.config.ts",
+              '        "src/lib/verdictBadge.ts",\n',
+              '        "src/lib/verdictBadge.ts",\n        "src/lib/viteHost.ts",\n',
+              '"src/lib/viteHost.ts"',
+          )
+          PY
+
+          rm .github/workflows/resolve-pr68-main.yml
+          cargo fmt --manifest-path src-tauri/Cargo.toml --all
+          git add -A
+          git diff --cached --check
+
+      - name: Validate focused Rust and frontend behavior
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --lib worktrees::tests
+          npm ci
+          npm test
+          npm run check
+          npm run build
+
+      - name: Commit and push integrated branch
+        run: |
+          git commit -m "merge main into feat/worktree-ignore-evidence"
+          git push origin HEAD:feat/worktree-ignore-evidence
