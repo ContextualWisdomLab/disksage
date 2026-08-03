@@ -109,6 +109,11 @@ path = "src/bin/disksage-provider-client-runtime.rs"
 required-features = ["cloud-cli"]
 
 [[bin]]
+name = "disksage-naruon-copy-readiness-verify"
+path = "src/bin/disksage-naruon-copy-readiness-verify.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
 name = "disksage-file-provider-status-audit"
 path = "src/bin/disksage-file-provider-status-audit.rs"
 required-features = ["cloud-cli"]

@@ -43,6 +43,7 @@ pub enum CloudCapacityState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CloudCapacitySnapshot {
     pub schema_version: u32,
     pub provider: CloudProvider,
@@ -65,6 +66,7 @@ pub struct CloudCapacitySnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CloudCapacityAssessment {
     pub snapshot: CloudCapacitySnapshot,
     pub requested_bytes: u64,

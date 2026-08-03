@@ -21,7 +21,7 @@ const PROCESS_OUTPUT_LIMIT: u64 = 64 * 1024;
 #[cfg(not(coverage))]
 const PROCESS_TIMEOUT: Duration = Duration::from_secs(3);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProviderClientRuntimeEvidenceKind {
     SystemFileProvider,
@@ -39,7 +39,7 @@ impl ProviderClientRuntimeEvidenceKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProviderClientRuntimeState {
     ManagedBySystem,
@@ -59,10 +59,11 @@ impl ProviderClientRuntimeState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProviderClientRuntimeSnapshot {
     pub version: u32,
-    pub schema_kind: &'static str,
+    pub schema_kind: String,
     pub provider: CloudProvider,
     pub observed_at_ms: u64,
     pub evidence_kind: ProviderClientRuntimeEvidenceKind,
@@ -123,7 +124,7 @@ fn system_managed_snapshot(
 ) -> ProviderClientRuntimeSnapshot {
     finish_snapshot(ProviderClientRuntimeSnapshot {
         version: SNAPSHOT_VERSION,
-        schema_kind: SNAPSHOT_SCHEMA_KIND,
+        schema_kind: SNAPSHOT_SCHEMA_KIND.into(),
         provider,
         observed_at_ms,
         evidence_kind: ProviderClientRuntimeEvidenceKind::SystemFileProvider,
@@ -151,7 +152,7 @@ fn unavailable_snapshot(
 ) -> ProviderClientRuntimeSnapshot {
     finish_snapshot(ProviderClientRuntimeSnapshot {
         version: SNAPSHOT_VERSION,
-        schema_kind: SNAPSHOT_SCHEMA_KIND,
+        schema_kind: SNAPSHOT_SCHEMA_KIND.into(),
         provider,
         observed_at_ms,
         evidence_kind: ProviderClientRuntimeEvidenceKind::Unavailable,
@@ -213,7 +214,7 @@ pub fn assess_provider_client_runtime(
         .any(|name| process_name_matches(provider, name));
     finish_snapshot(ProviderClientRuntimeSnapshot {
         version: SNAPSHOT_VERSION,
-        schema_kind: SNAPSHOT_SCHEMA_KIND,
+        schema_kind: SNAPSHOT_SCHEMA_KIND.into(),
         provider,
         observed_at_ms,
         evidence_kind: ProviderClientRuntimeEvidenceKind::BoundedProcessList,
