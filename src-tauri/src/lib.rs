@@ -55,6 +55,8 @@ pub mod provider_evidence;
 pub mod provider_oauth;
 pub mod provider_sync;
 pub mod private_evidence;
+/// Read-only, fail-closed logical/allocation/reclaimability evidence.
+pub mod reclaim;
 pub mod semantic_catalog;
 pub mod volume_pressure;
 

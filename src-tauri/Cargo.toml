@@ -75,6 +75,10 @@ name = "disksage-archive-tree"
 path = "src/bin/disksage-archive-tree.rs"
 required-features = ["archive-cli"]
 
+[[bin]]
+name = "disksage-reclaim-plan"
+path = "src/bin/disksage-reclaim-plan.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
