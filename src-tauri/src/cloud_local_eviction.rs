@@ -1128,6 +1128,75 @@ pub fn execute_icloud_local_eviction(
     Ok(build_result(approved_plan, approval, requested_at_ms, post))
 }
 
+/// Prepare the private approval/result directory without allowing an app-data symlink or a
+/// not-yet-created app-data path to redirect the first directory creation into the cloud root.
+pub fn prepare_immutable_record_directory(
+    app_data_dir: &Path,
+    cloud_root: &Path,
+    directory_name: &str,
+) -> Result<PathBuf, String> {
+    let mut name_components = Path::new(directory_name).components();
+    if !absolute_without_parent(app_data_dir)
+        || !absolute_without_parent(cloud_root)
+        || !matches!(
+            name_components.next(),
+            Some(std::path::Component::Normal(_))
+        )
+        || name_components.next().is_some()
+    {
+        return Err("icloud-local-eviction-record-path-invalid".into());
+    }
+
+    let canonical_cloud_root = std::fs::canonicalize(cloud_root)
+        .map_err(|_| "icloud-local-eviction-cloud-root-unavailable".to_string())?;
+    let existing_ancestor = app_data_dir
+        .ancestors()
+        .find(|candidate| candidate.exists())
+        .ok_or_else(|| "icloud-local-eviction-record-parent-unavailable".to_string())?;
+    let canonical_existing_ancestor = std::fs::canonicalize(existing_ancestor)
+        .map_err(|_| "icloud-local-eviction-record-parent-unavailable".to_string())?;
+    let missing_suffix = app_data_dir
+        .strip_prefix(existing_ancestor)
+        .map_err(|_| "icloud-local-eviction-record-parent-unavailable".to_string())?;
+    let prospective_app_data_dir = canonical_existing_ancestor.join(missing_suffix);
+    if prospective_app_data_dir.starts_with(&canonical_cloud_root) {
+        return Err("icloud-local-eviction-record-dir-overlaps-cloud-data".into());
+    }
+
+    std::fs::create_dir_all(app_data_dir)
+        .map_err(|_| "icloud-local-eviction-record-parent-create-failed".to_string())?;
+    let canonical_app_data_dir = std::fs::canonicalize(app_data_dir)
+        .map_err(|_| "icloud-local-eviction-record-parent-unavailable".to_string())?;
+    if canonical_app_data_dir.starts_with(&canonical_cloud_root) {
+        return Err("icloud-local-eviction-record-dir-overlaps-cloud-data".into());
+    }
+
+    let record_dir = app_data_dir.join(directory_name);
+    match std::fs::symlink_metadata(&record_dir) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err("icloud-local-eviction-record-dir-not-real-directory".into());
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir(&record_dir)
+                .map_err(|_| "icloud-local-eviction-record-dir-create-failed".to_string())?;
+        }
+        Err(_) => return Err("icloud-local-eviction-record-dir-unavailable".into()),
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&record_dir, std::fs::Permissions::from_mode(0o700))
+            .map_err(|_| "icloud-local-eviction-record-dir-permissions-failed".to_string())?;
+    }
+    let canonical_record_dir = std::fs::canonicalize(&record_dir)
+        .map_err(|_| "icloud-local-eviction-record-dir-unavailable".to_string())?;
+    if canonical_record_dir.starts_with(&canonical_cloud_root) {
+        return Err("icloud-local-eviction-record-dir-overlaps-cloud-data".into());
+    }
+    Ok(record_dir)
+}
+
 /// Persist an approval or result as a create-new, read-only JSON record.
 pub fn write_immutable_record<T: Serialize>(
     record_dir: &Path,
@@ -1610,5 +1679,77 @@ mod tests {
         assert!(std::fs::metadata(&path).unwrap().permissions().readonly());
         assert!(write_immutable_record(temp.path(), "plan.json", &plan).is_err());
         assert!(write_immutable_record(temp.path(), "../escape.json", &plan).is_err());
+    }
+
+    #[test]
+    fn record_directory_supports_safe_first_use_outside_cloud() {
+        let temp = tempfile::tempdir().unwrap();
+        let cloud = temp.path().join("cloud");
+        let app_data = temp.path().join("state").join("new-app-data");
+        std::fs::create_dir(&cloud).unwrap();
+
+        let record_dir =
+            prepare_immutable_record_directory(&app_data, &cloud, "icloud-local-evictions")
+                .unwrap();
+
+        assert_eq!(record_dir, app_data.join("icloud-local-evictions"));
+        assert!(record_dir.is_dir());
+        assert!(!record_dir.starts_with(&cloud));
+    }
+
+    #[test]
+    fn record_directory_rejects_prospective_cloud_parent_before_creation() {
+        let temp = tempfile::tempdir().unwrap();
+        let cloud = temp.path().join("cloud");
+        let app_data = cloud.join("new-app-data");
+        std::fs::create_dir(&cloud).unwrap();
+
+        assert_eq!(
+            prepare_immutable_record_directory(&app_data, &cloud, "icloud-local-evictions")
+                .unwrap_err(),
+            "icloud-local-eviction-record-dir-overlaps-cloud-data"
+        );
+        assert!(!app_data.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn record_directory_rejects_symlinked_parent_to_cloud_before_creation() {
+        let temp = tempfile::tempdir().unwrap();
+        let cloud = temp.path().join("cloud");
+        let linked_cloud = temp.path().join("linked-cloud");
+        std::fs::create_dir(&cloud).unwrap();
+        std::os::unix::fs::symlink(&cloud, &linked_cloud).unwrap();
+        let app_data = linked_cloud.join("new-app-data");
+
+        assert_eq!(
+            prepare_immutable_record_directory(&app_data, &cloud, "icloud-local-evictions")
+                .unwrap_err(),
+            "icloud-local-eviction-record-dir-overlaps-cloud-data"
+        );
+        assert!(!cloud.join("new-app-data").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn record_directory_rejects_symlink_without_following_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let cloud = temp.path().join("cloud");
+        let app_data = temp.path().join("app-data");
+        let redirect = temp.path().join("redirect");
+        std::fs::create_dir(&cloud).unwrap();
+        std::fs::create_dir(&app_data).unwrap();
+        std::fs::create_dir(&redirect).unwrap();
+        std::os::unix::fs::symlink(&redirect, app_data.join("icloud-local-evictions")).unwrap();
+
+        assert_eq!(
+            prepare_immutable_record_directory(&app_data, &cloud, "icloud-local-evictions")
+                .unwrap_err(),
+            "icloud-local-eviction-record-dir-not-real-directory"
+        );
+        assert!(!std::fs::metadata(&redirect)
+            .unwrap()
+            .permissions()
+            .readonly());
     }
 }
