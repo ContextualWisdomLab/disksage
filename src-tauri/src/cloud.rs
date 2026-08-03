@@ -177,7 +177,7 @@ pub struct MetadataEvidence {
     pub confidence: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CloudPlanOptions {
     pub min_size_bytes: u64,
     pub min_age_days: u64,
@@ -258,6 +258,8 @@ pub struct CloudCandidate {
 pub struct CloudPlanReport {
     pub cloud_root: CloudRoot,
     pub generated_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_selection_policy: Option<CloudPlanOptions>,
     pub candidates: Vec<CloudCandidate>,
     pub candidate_bytes: u64,
     pub potentially_reclaimable_bytes: u64,
@@ -3808,15 +3810,15 @@ pub fn candidate_review_fingerprint(candidate: &CloudCandidate) -> String {
 /// Bind a human-visible decision batch without including volatile scan time or capacity state.
 ///
 /// Candidate review fingerprints already bind paths, destination, embedded metadata evidence,
-/// and review context. This batch fingerprint additionally binds the complete candidate set,
-/// planner blockers, destination scope, totals, and exact-duplicate summary. Sorting makes the
-/// result independent of report presentation order while fresh capacity is still required at
-/// copy time.
-pub const CLOUD_DECISION_BATCH_FINGERPRINT_VERSION: u32 = 1;
+/// and review context. This batch fingerprint additionally binds the source selection policy,
+/// complete candidate set, planner blockers, destination scope, totals, and exact-duplicate
+/// summary. Sorting makes the result independent of report presentation order while fresh capacity
+/// is still required at copy time.
+pub const CLOUD_DECISION_BATCH_FINGERPRINT_VERSION: u32 = 2;
 
 pub fn cloud_decision_batch_fingerprint(report: &CloudPlanReport) -> String {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"disksage-cloud-decision-batch-v1\0");
+    hasher.update(b"disksage-cloud-decision-batch-v2\0");
     for value in [
         report.cloud_root.provider.as_str().as_bytes(),
         report.cloud_root.account_scope.as_str().as_bytes(),
@@ -3833,6 +3835,19 @@ pub fn cloud_decision_batch_fingerprint(report: &CloudPlanReport) -> String {
         report.exact_duplicates.redundant_bytes,
     ] {
         hash_review_value(&mut hasher, &value.to_le_bytes());
+    }
+    match report.source_selection_policy {
+        Some(policy) => {
+            hash_review_value(&mut hasher, b"1");
+            for value in [
+                policy.min_size_bytes,
+                policy.min_age_days,
+                u64::try_from(policy.limit).unwrap_or(u64::MAX),
+            ] {
+                hash_review_value(&mut hasher, &value.to_le_bytes());
+            }
+        }
+        None => hash_review_value(&mut hasher, b"0"),
     }
 
     let mut candidates = report.candidates.iter().collect::<Vec<_>>();
@@ -4187,6 +4202,7 @@ pub fn plan_cloud_archive_from_snapshot(
     CloudPlanReport {
         cloud_root: cloud_root.clone(),
         generated_at_ms: now_ms,
+        source_selection_policy: Some(options),
         candidates,
         candidate_bytes,
         potentially_reclaimable_bytes,

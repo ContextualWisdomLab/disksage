@@ -253,6 +253,7 @@ mod tests {
                 access_issue: None,
             },
             generated_at_ms: 30,
+            source_selection_policy: Some(crate::cloud::CloudPlanOptions::default()),
             candidates: Vec::new(),
             candidate_bytes: 100,
             potentially_reclaimable_bytes: 100,
