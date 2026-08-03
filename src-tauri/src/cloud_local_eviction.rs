@@ -840,9 +840,21 @@ fn observe_file_provider_icloud_state(
 
 #[cfg(all(target_os = "macos", not(coverage)))]
 fn observe_icloud_state(path: &Path, observed_bytes: u64) -> Result<IcloudLocalState, String> {
-    observe_file_provider_icloud_state(path, observed_bytes)
-        .or_else(|_| observe_foundation_icloud_state(path))
-        .map_err(|_| "icloud-state-observation-unavailable".to_string())
+    match observe_file_provider_icloud_state(path, observed_bytes) {
+        Ok(state) => Ok(state),
+        Err(error) if file_provider_command_allows_foundation_fallback(&error) => {
+            observe_foundation_icloud_state(path)
+                .map_err(|_| "icloud-state-observation-unavailable".to_string())
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn file_provider_command_allows_foundation_fallback(error: &str) -> bool {
+    matches!(
+        error,
+        "file-provider-status-command-unavailable" | "file-provider-status-command-failed"
+    )
 }
 
 #[cfg(any(not(target_os = "macos"), coverage))]
@@ -1198,6 +1210,25 @@ mod tests {
             allows_eviction: None,
             provider_reported_bytes: None,
             item_identifier_fingerprint: None,
+        }
+    }
+
+    #[test]
+    fn foundation_fallback_is_limited_to_unavailable_provider_commands() {
+        for error in [
+            "file-provider-status-command-unavailable",
+            "file-provider-status-command-failed",
+        ] {
+            assert!(file_provider_command_allows_foundation_fallback(error));
+        }
+        for error in [
+            "file-provider-status-command-timeout",
+            "file-provider-status-output-too-large",
+            "file-provider-status-field-missing:isUploaded",
+            "file-provider-status-document-size-mismatch",
+            "icloud-item-not-ubiquitous",
+        ] {
+            assert!(!file_provider_command_allows_foundation_fallback(error));
         }
     }
 
