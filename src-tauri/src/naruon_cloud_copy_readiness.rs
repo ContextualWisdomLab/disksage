@@ -6,6 +6,8 @@
 //! value, and it never grants cloud-write or source-eviction authority.
 
 use std::collections::BTreeMap;
+use std::io::Read;
+use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
@@ -17,6 +19,7 @@ use crate::provider_capacity::{self, CapacityEvidenceKind, CloudCapacityAssessme
 use crate::provider_client_runtime::{self, ProviderClientRuntimeSnapshot};
 
 pub const NARUON_CLOUD_COPY_READINESS_SCHEMA_VERSION: u32 = 3;
+pub const NARUON_CLOUD_COPY_READINESS_MAX_INPUT_BYTES: u64 = 1024 * 1024;
 const NARUON_CLOUD_COPY_READINESS_SCHEMA_KIND: &str = "disksage.naruon.cloud-copy-readiness";
 const FINGERPRINT_CANONICALIZATION: &str = "lexicographic-json-object-keys-utf8-no-whitespace";
 const RUNTIME_BLOCKERS: [&str; 2] = [
@@ -33,7 +36,7 @@ const ICLOUD_ADMISSION_BLOCKERS: [&str; 7] = [
     "icloud-new-copy-admission-evidence-unavailable",
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CloudCopyReadinessState {
     NoCandidates,
@@ -42,13 +45,15 @@ pub enum CloudCopyReadinessState {
     ReadyWithoutNewReview,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CountBytes {
     pub count: u64,
     pub bytes: u64,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProductionTimeEvidenceSummary {
     pub embedded_metadata: CountBytes,
     pub explicit_filename_date: CountBytes,
@@ -57,7 +62,8 @@ pub struct ProductionTimeEvidenceSummary {
     pub unclassified: CountBytes,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IcloudNewCopyAdmissionSummary {
     pub observed_at_ms: u64,
     pub state: String,
@@ -81,7 +87,8 @@ pub struct IcloudNewCopyAdmissionSummary {
     pub database_snapshot_includes_wal: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NaruonCloudCopyReadinessEnvelope {
     pub schema_kind: String,
     pub schema_version: u32,
@@ -119,6 +126,70 @@ pub struct NaruonCloudCopyReadinessEnvelope {
     pub provider_sync_attested: bool,
     pub cloud_write_executed: bool,
     pub source_eviction_authorized: bool,
+}
+
+/// Read and validate one path-free readiness envelope without following a symlink.
+///
+/// The bounded input and stable error codes make this suitable for an offline Naruon handoff.
+/// This entrypoint is read-only and grants neither cloud-write nor source-eviction authority.
+pub fn read_and_validate_naruon_cloud_copy_readiness(
+    path: &Path,
+) -> Result<NaruonCloudCopyReadinessEnvelope, String> {
+    if !path.is_absolute() {
+        return Err("naruon-copy-readiness-input-path-not-absolute".into());
+    }
+    let before = std::fs::symlink_metadata(path)
+        .map_err(|_| "naruon-copy-readiness-input-metadata-unavailable".to_string())?;
+    if !before.file_type().is_file() {
+        return Err("naruon-copy-readiness-input-not-regular-file".into());
+    }
+    if before.len() == 0 || before.len() > NARUON_CLOUD_COPY_READINESS_MAX_INPUT_BYTES {
+        return Err("naruon-copy-readiness-input-size-invalid".into());
+    }
+
+    let file = std::fs::File::open(path)
+        .map_err(|_| "naruon-copy-readiness-input-open-failed".to_string())?;
+    let opened = file
+        .metadata()
+        .map_err(|_| "naruon-copy-readiness-input-metadata-unavailable".to_string())?;
+    if !opened.is_file() || opened.len() != before.len() {
+        return Err("naruon-copy-readiness-input-changed".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if opened.dev() != before.dev() || opened.ino() != before.ino() {
+            return Err("naruon-copy-readiness-input-changed".into());
+        }
+    }
+
+    let mut bytes = Vec::with_capacity(
+        usize::try_from(before.len())
+            .map_err(|_| "naruon-copy-readiness-input-size-invalid".to_string())?,
+    );
+    file.take(NARUON_CLOUD_COPY_READINESS_MAX_INPUT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "naruon-copy-readiness-input-read-failed".to_string())?;
+    if u64::try_from(bytes.len()).ok() != Some(before.len()) {
+        return Err("naruon-copy-readiness-input-changed".into());
+    }
+    let after = std::fs::symlink_metadata(path)
+        .map_err(|_| "naruon-copy-readiness-input-changed".to_string())?;
+    if !after.file_type().is_file() || after.len() != before.len() {
+        return Err("naruon-copy-readiness-input-changed".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if after.dev() != before.dev() || after.ino() != before.ino() {
+            return Err("naruon-copy-readiness-input-changed".into());
+        }
+    }
+
+    let envelope: NaruonCloudCopyReadinessEnvelope = serde_json::from_slice(&bytes)
+        .map_err(|_| "naruon-copy-readiness-json-invalid".to_string())?;
+    validate_naruon_cloud_copy_readiness(&envelope)?;
+    Ok(envelope)
 }
 
 fn is_lower_hex_64(value: &str) -> bool {
@@ -1205,6 +1276,68 @@ mod tests {
             validate_naruon_cloud_copy_readiness(&forged_icloud_authority).unwrap_err(),
             "naruon-copy-readiness-icloud-shape-invalid"
         );
+    }
+
+    #[test]
+    fn offline_reader_accepts_valid_envelope_and_rejects_untrusted_inputs() {
+        let report = report(CloudProvider::Onedrive);
+        let runtime = assess_provider_client_runtime(
+            CloudProvider::Onedrive,
+            Some(b"OneDrive Sync Service\n"),
+            25,
+        );
+        let envelope = export_naruon_cloud_copy_readiness(&report, &runtime, None).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let valid_path = directory.path().join("valid.json");
+        std::fs::write(&valid_path, serde_json::to_vec(&envelope).unwrap()).unwrap();
+
+        assert_eq!(
+            read_and_validate_naruon_cloud_copy_readiness(&valid_path).unwrap(),
+            envelope
+        );
+        assert_eq!(
+            read_and_validate_naruon_cloud_copy_readiness(Path::new("relative.json")).unwrap_err(),
+            "naruon-copy-readiness-input-path-not-absolute"
+        );
+
+        let mut unknown = serde_json::to_value(&envelope).unwrap();
+        unknown["provider_runtime"]["unexpected"] = serde_json::json!(true);
+        let unknown_path = directory.path().join("unknown.json");
+        std::fs::write(&unknown_path, serde_json::to_vec(&unknown).unwrap()).unwrap();
+        assert_eq!(
+            read_and_validate_naruon_cloud_copy_readiness(&unknown_path).unwrap_err(),
+            "naruon-copy-readiness-json-invalid"
+        );
+
+        let mut forged = envelope.clone();
+        forged.readiness_fingerprint_sha256 = "0".repeat(64);
+        let forged_path = directory.path().join("forged.json");
+        std::fs::write(&forged_path, serde_json::to_vec(&forged).unwrap()).unwrap();
+        assert_eq!(
+            read_and_validate_naruon_cloud_copy_readiness(&forged_path).unwrap_err(),
+            "naruon-copy-readiness-fingerprint-invalid"
+        );
+
+        let oversized_path = directory.path().join("oversized.json");
+        std::fs::write(
+            &oversized_path,
+            vec![b' '; (NARUON_CLOUD_COPY_READINESS_MAX_INPUT_BYTES + 1) as usize],
+        )
+        .unwrap();
+        assert_eq!(
+            read_and_validate_naruon_cloud_copy_readiness(&oversized_path).unwrap_err(),
+            "naruon-copy-readiness-input-size-invalid"
+        );
+
+        #[cfg(unix)]
+        {
+            let symlink_path = directory.path().join("symlink.json");
+            std::os::unix::fs::symlink(&valid_path, &symlink_path).unwrap();
+            assert_eq!(
+                read_and_validate_naruon_cloud_copy_readiness(&symlink_path).unwrap_err(),
+                "naruon-copy-readiness-input-not-regular-file"
+            );
+        }
     }
 
     #[test]
