@@ -898,7 +898,6 @@ fn redacted_decision(candidate: &cloud::CloudCandidate) -> serde_json::Value {
     serde_json::json!({
         "metadata_fingerprint": &candidate.metadata_fingerprint,
         "review_fingerprint": &candidate.review_fingerprint,
-        "relative_path": &candidate.relative_path,
         "provider": candidate.provider,
         "destination_account_scope": candidate.destination_account_scope,
         "kind": candidate.kind,
@@ -992,7 +991,7 @@ fn review_batch_summary(
         .collect::<Vec<_>>();
 
     Ok(serde_json::json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "output_mode": "review-batch-summary",
         "generated_at_ms": report.generated_at_ms,
         "source_selection_policy": report.source_selection_policy,
@@ -1022,6 +1021,7 @@ fn review_batch_summary(
         "redacted_from_summary": [
             "absolute-source-path",
             "absolute-destination-path",
+            "relative-source-path-and-file-name",
             "cloud-root-path-and-label",
             "content-title-and-authors",
             "raw-metadata-evidence-values",
@@ -1530,7 +1530,7 @@ fn exact_duplicate_review_batch(
     }))
 }
 
-/// Produce a bounded operator view without absolute paths or raw embedded metadata values.
+/// Produce a bounded operator view without paths, file names, or raw embedded metadata values.
 ///
 /// The full plan remains the durable lineage source. This view is intentionally limited to the
 /// evidence needed to select a candidate for a separately attributed human review.
@@ -1544,7 +1544,7 @@ fn decision_summary(report: &cloud::CloudPlanReport) -> serde_json::Value {
         .collect::<Vec<_>>();
 
     serde_json::json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "output_mode": "decision-summary",
         "generated_at_ms": report.generated_at_ms,
         "source_selection_policy": report.source_selection_policy,
@@ -1576,6 +1576,7 @@ fn decision_summary(report: &cloud::CloudPlanReport) -> serde_json::Value {
         "redacted_from_summary": [
             "absolute-source-path",
             "absolute-destination-path",
+            "relative-source-path-and-file-name",
             "cloud-root-path-and-label",
             "content-title-and-authors",
             "raw-metadata-evidence-values",
@@ -2056,7 +2057,7 @@ fn run() -> Result<(), String> {
             "cloud-capacity-unverified"
         };
         let output = serde_json::json!({
-            "schema_version": 1,
+            "schema_version": 2,
             "output_mode": "multicloud-decision-summary",
             "source_snapshot": {
                 "candidate_count": snapshot.candidate_count(),
@@ -2682,7 +2683,7 @@ mod tests {
     }
 
     #[test]
-    fn decision_summary_keeps_review_evidence_and_redacts_sensitive_values() {
+    fn decision_summary_keeps_review_evidence_and_redacts_paths_and_sensitive_values() {
         let candidate = cloud::CloudCandidate {
             metadata_fingerprint: "a".repeat(64),
             review_fingerprint: "b".repeat(64),
@@ -2746,6 +2747,11 @@ mod tests {
         let summary = decision_summary(&report);
         let item = &summary["decisions"][0];
         assert_eq!(summary["output_mode"], "decision-summary");
+        assert_eq!(summary["schema_version"], 2);
+        assert!(summary["redacted_from_summary"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("relative-source-path-and-file-name")));
         assert_eq!(summary["candidate_count"], 1);
         assert_eq!(
             summary["source_selection_policy"]["min_size_bytes"],
@@ -2764,7 +2770,7 @@ mod tests {
                 .len(),
             64
         );
-        assert_eq!(item["relative_path"], "report.pdf");
+        assert!(item.get("relative_path").is_none());
         assert_eq!(item["decision_state"], "review-required");
         assert_eq!(
             summary["aggregates"]["decision_state"]["counts"]["review-required"],
@@ -2825,6 +2831,7 @@ mod tests {
             "Confidential title",
             "Private Author",
             "private raw value",
+            "report.pdf",
         ] {
             assert!(!encoded.contains(redacted));
         }
@@ -2832,10 +2839,18 @@ mod tests {
         let reason_set = report.candidates[0].review_reasons.clone();
         let review_batch = review_batch_summary(&report, &reason_set).unwrap();
         assert_eq!(review_batch["output_mode"], "review-batch-summary");
+        assert_eq!(review_batch["schema_version"], 2);
+        assert!(review_batch["redacted_from_summary"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("relative-source-path-and-file-name")));
         assert_eq!(review_batch["candidate_count"], 1);
         assert_eq!(review_batch["candidate_bytes"], 42);
         assert_eq!(review_batch["reason_set"], serde_json::json!(reason_set));
-        assert_eq!(review_batch["decisions"][0]["relative_path"], "report.pdf");
+        assert!(review_batch["decisions"][0].get("relative_path").is_none());
+        assert!(!serde_json::to_string(&review_batch)
+            .unwrap()
+            .contains("report.pdf"));
         assert_eq!(
             review_batch["review_batch_fingerprint"]
                 .as_str()

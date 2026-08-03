@@ -2,8 +2,9 @@
 
 ## Problem
 
-The headless decision summary is intentionally safe to share: it omits absolute paths, content
-titles and authors, raw embedded metadata values, source context values, and dataset profiles.
+The headless decision summary is intentionally safe to share: it omits absolute and relative
+paths, file names, content titles and authors, raw embedded metadata values, source context values,
+and dataset profiles.
 Those fields are nevertheless required for a real human production-time and destination-context
 review. Printing the full `CloudPlanReport` to a terminal provides the fields, but it also makes
 accidental log and transcript disclosure likely.
