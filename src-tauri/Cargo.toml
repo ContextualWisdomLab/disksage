@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
+default-run = "disksage"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -13,6 +14,11 @@ edition = "2021"
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "disksage_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "disksage-volume-snapshot"
+path = "src/bin/disksage-volume-snapshot.rs"
+required-features = ["volume-cli"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -31,13 +37,15 @@ oxrdf = "0.3.3"
 llama-cpp-2 = { version = "0.1.151", optional = true }
 sha2 = "0.11.0"
 ureq = "3.3.0"
+fs4 = "1.1.0"
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 tempfile = "3.27.0"
 
 [features]
+volume-cli = []
 llm-engine = ["dep:llama-cpp-2"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage)", "cfg(coverage_nightly)"] }
-
