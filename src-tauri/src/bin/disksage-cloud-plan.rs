@@ -424,7 +424,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             "--export-semantic-catalog" => parsed.export_semantic_catalog = true,
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary] [--min-size-mib N] [--min-age-days N] [--limit N] [--decision-summary [--review-reason-set REASON|REASON [--private-review-output ABSOLUTE_NEW_FILE.json]] | --exact-duplicate-review-prefix DIR_PREFIX --exact-duplicate-kind document|media|archive|dataset|backup|creative|incomplete-download | --export-semantic-catalog] [--verify-capacity [--oauth-connections ABSOLUTE_PATH] [--export-naruon-capacity]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
+                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary] [--min-size-mib N] [--min-age-days N] [--limit N] [--decision-summary [--review-reason-set REASON|REASON [--private-review-output ABSOLUTE_NEW_FILE.json]] | --exact-duplicate-review-prefix DIR_PREFIX --exact-duplicate-kind document|media|archive|dataset|backup|creative|incomplete-download | --export-naruon-copy-readiness --verify-capacity [--naruon-copy-readiness-output ABSOLUTE_NEW_FILE.json] | --export-semantic-catalog] [--verify-capacity [--oauth-connections ABSOLUTE_PATH] [--export-naruon-capacity]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -995,6 +995,7 @@ fn review_batch_summary(
         "schema_version": 1,
         "output_mode": "review-batch-summary",
         "generated_at_ms": report.generated_at_ms,
+        "source_selection_policy": report.source_selection_policy,
         "decision_batch_fingerprint_version": cloud::CLOUD_DECISION_BATCH_FINGERPRINT_VERSION,
         "decision_batch_fingerprint": cloud::cloud_decision_batch_fingerprint(report),
         "review_batch_fingerprint_version": REVIEW_BATCH_FINGERPRINT_VERSION,
@@ -1055,6 +1056,7 @@ fn private_review_dossier(
         "output_mode": "private-review-dossier",
         "generated_at_ms": report.generated_at_ms,
         "contains_sensitive_local_metadata": true,
+        "source_selection_policy": report.source_selection_policy,
         "decision_batch_fingerprint_version": cloud::CLOUD_DECISION_BATCH_FINGERPRINT_VERSION,
         "decision_batch_fingerprint": cloud::cloud_decision_batch_fingerprint(report),
         "review_batch_fingerprint_version": REVIEW_BATCH_FINGERPRINT_VERSION,
@@ -1545,6 +1547,7 @@ fn decision_summary(report: &cloud::CloudPlanReport) -> serde_json::Value {
         "schema_version": 1,
         "output_mode": "decision-summary",
         "generated_at_ms": report.generated_at_ms,
+        "source_selection_policy": report.source_selection_policy,
         "decision_batch_fingerprint_version": cloud::CLOUD_DECISION_BATCH_FINGERPRINT_VERSION,
         "decision_batch_fingerprint": cloud::cloud_decision_batch_fingerprint(report),
         "metadata_policy": {
@@ -2727,6 +2730,11 @@ mod tests {
                 access_issue: None,
             },
             generated_at_ms: 100,
+            source_selection_policy: Some(cloud::CloudPlanOptions {
+                min_size_bytes: 90 * 1024 * 1024,
+                min_age_days: 30,
+                limit: 200,
+            }),
             candidates: vec![candidate],
             candidate_bytes: 42,
             potentially_reclaimable_bytes: 42,
@@ -2739,6 +2747,12 @@ mod tests {
         let item = &summary["decisions"][0];
         assert_eq!(summary["output_mode"], "decision-summary");
         assert_eq!(summary["candidate_count"], 1);
+        assert_eq!(
+            summary["source_selection_policy"]["min_size_bytes"],
+            90 * 1024 * 1024
+        );
+        assert_eq!(summary["source_selection_policy"]["min_age_days"], 30);
+        assert_eq!(summary["source_selection_policy"]["limit"], 200);
         assert_eq!(
             summary["decision_batch_fingerprint_version"],
             cloud::CLOUD_DECISION_BATCH_FINGERPRINT_VERSION
@@ -3002,6 +3016,17 @@ mod tests {
             original_batch
         );
 
+        let mut selection_changed = report.clone();
+        selection_changed
+            .source_selection_policy
+            .as_mut()
+            .unwrap()
+            .min_size_bytes += 1;
+        assert_ne!(
+            cloud::cloud_decision_batch_fingerprint(&selection_changed),
+            original_batch
+        );
+
         let mut blocker_changed = report.clone();
         blocker_changed.candidates[0].blocked_reason = Some("destination-exists".into());
         blocker_changed.potentially_reclaimable_bytes = 0;
@@ -3111,6 +3136,7 @@ mod tests {
                 access_issue: None,
             },
             generated_at_ms: 100,
+            source_selection_policy: Some(cloud::CloudPlanOptions::default()),
             candidates: vec![canonical, redundant],
             candidate_bytes: 84,
             potentially_reclaimable_bytes: 84,
@@ -3313,6 +3339,8 @@ mod tests {
 
         let help = parse_args(&["--help".into()], Path::new("/h")).unwrap_err();
         assert!(help.contains("--reviewed-by human:ID"));
+        assert!(help.contains("--export-naruon-copy-readiness --verify-capacity"));
+        assert!(help.contains("--naruon-copy-readiness-output ABSOLUTE_NEW_FILE.json"));
 
         assert!(parse_args(
             &["--review-disposition".into(), "maybe".into(),],
@@ -3411,6 +3439,7 @@ mod tests {
         let mut report = cloud::CloudPlanReport {
             cloud_root: root.clone(),
             generated_at_ms: 1,
+            source_selection_policy: Some(cloud::CloudPlanOptions::default()),
             candidates: Vec::new(),
             candidate_bytes: 0,
             potentially_reclaimable_bytes: 0,
