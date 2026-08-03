@@ -14,6 +14,7 @@
 - 🗂 **Ontology-based organizing** — files classified into an OWL taxonomy you can edit
 - 📊 **Disk inventory** — "what is on my disk?", aggregated by category, unknowns surfaced
 - 🧠 **On-device LLM advisor** — embedded llama.cpp model judges delete-safety, fully offline
+- ☁️ **Cloud offload planner** — detects iCloud Drive, OneDrive, and Google Drive; previews old/large archive candidates with embedded-metadata-first production time and source-path lineage (dry-run only)
 
 ## Safety first
 
