@@ -457,6 +457,139 @@ fn selected_cloud_root(app: &AppHandle, cloud_root: &str) -> Result<cloud::Cloud
     }
 }
 
+/// Build a read-only, exact-file iCloud local-cache eviction plan for display in the app.
+/// File content is not opened and no local or cloud mutation occurs.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn plan_icloud_local_copy_eviction(
+    cloud_root: String,
+    path: String,
+    app: AppHandle,
+) -> Result<cloud_local_eviction::IcloudLocalEvictionPlan, String> {
+    let selected = selected_cloud_root(&app, &cloud_root)?;
+    if selected.provider != cloud::CloudProvider::Icloud {
+        return Err("icloud-local-eviction-root-required".into());
+    }
+    cloud::validate_cloud_root_readable(&selected)?;
+    let path = PathBuf::from(path);
+    tauri::async_runtime::spawn_blocking(move || {
+        cloud_local_eviction::plan_icloud_local_eviction(&selected, &path, cloud::system_now_ms())
+    })
+    .await
+    .map_err(|_| "icloud-local-eviction-plan-task-failed".to_string())?
+}
+
+#[cfg(not(coverage))]
+#[derive(serde::Serialize)]
+pub struct IcloudLocalCopyEvictionOutput {
+    pub action: &'static str,
+    pub plan: cloud_local_eviction::IcloudLocalEvictionPlan,
+    pub approval: cloud_local_eviction::IcloudLocalEvictionApproval,
+    pub approval_path: String,
+    pub result: cloud_local_eviction::IcloudLocalEvictionResult,
+    pub result_path: Option<String>,
+    pub result_record_error: Option<String>,
+}
+
+/// Rebuild and approve the exact plan, request removal of only the local iCloud copy, then retain
+/// immutable approval/result records. The cloud object is never deleted by this command.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn evict_icloud_local_copy(
+    cloud_root: String,
+    path: String,
+    approved_plan_fingerprint: String,
+    confirm_plan_fingerprint: String,
+    rationale: String,
+    app: AppHandle,
+) -> Result<IcloudLocalCopyEvictionOutput, String> {
+    if approved_plan_fingerprint != confirm_plan_fingerprint {
+        return Err("icloud-local-eviction-double-confirmation-mismatch".into());
+    }
+    let selected = selected_cloud_root(&app, &cloud_root)?;
+    if selected.provider != cloud::CloudProvider::Icloud {
+        return Err("icloud-local-eviction-root-required".into());
+    }
+    cloud::validate_cloud_root_readable(&selected)?;
+    let path = PathBuf::from(path);
+    use tauri::Manager;
+    let record_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "app-data-directory-unavailable".to_string())?
+        .join("icloud-local-evictions");
+    if record_dir.starts_with(Path::new(&selected.path)) || path.starts_with(&record_dir) {
+        return Err("icloud-local-eviction-record-dir-overlaps-cloud-data".into());
+    }
+    let approved_by = local_human_reviewer();
+    tauri::async_runtime::spawn_blocking(move || {
+        std::fs::create_dir_all(&record_dir)
+            .map_err(|_| "icloud-local-eviction-record-dir-create-failed".to_string())?;
+        let record_metadata = std::fs::symlink_metadata(&record_dir)
+            .map_err(|_| "icloud-local-eviction-record-dir-unavailable".to_string())?;
+        if record_metadata.file_type().is_symlink() || !record_metadata.is_dir() {
+            return Err("icloud-local-eviction-record-dir-not-real-directory".into());
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&record_dir, std::fs::Permissions::from_mode(0o700))
+                .map_err(|_| "icloud-local-eviction-record-dir-permissions-failed".to_string())?;
+        }
+        let canonical_record_dir = std::fs::canonicalize(&record_dir)
+            .map_err(|_| "icloud-local-eviction-record-dir-unavailable".to_string())?;
+        let canonical_cloud_root = std::fs::canonicalize(&selected.path)
+            .map_err(|_| "icloud-local-eviction-cloud-root-unavailable".to_string())?;
+        if canonical_record_dir.starts_with(&canonical_cloud_root) {
+            return Err("icloud-local-eviction-record-dir-overlaps-cloud-data".into());
+        }
+        let plan = cloud_local_eviction::plan_icloud_local_eviction(
+            &selected,
+            &path,
+            cloud::system_now_ms(),
+        )?;
+        let approval = cloud_local_eviction::approve_icloud_local_eviction(
+            &plan,
+            &approved_plan_fingerprint,
+            cloud::system_now_ms(),
+            &approved_by,
+            &rationale,
+        )?;
+        let approval_path = cloud_local_eviction::write_immutable_record(
+            &record_dir,
+            &format!("{}.approval.json", approval.approval_id),
+            &approval,
+        )?;
+        let result = cloud_local_eviction::execute_icloud_local_eviction(
+            &selected,
+            &plan,
+            &approval,
+            &confirm_plan_fingerprint,
+            cloud::system_now_ms(),
+        )?;
+        let result_record = cloud_local_eviction::write_immutable_record(
+            &record_dir,
+            &format!("{}.result.json", result.result_id),
+            &result,
+        );
+        let (result_path, result_record_error) = match result_record {
+            Ok(path) => (Some(path.to_string_lossy().into_owned()), None),
+            Err(error) => (None, Some(error)),
+        };
+        Ok(IcloudLocalCopyEvictionOutput {
+            action: "evict-icloud-local-copy",
+            plan,
+            approval,
+            approval_path: approval_path.to_string_lossy().into_owned(),
+            result,
+            result_path,
+            result_record_error,
+        })
+    })
+    .await
+    .map_err(|_| "icloud-local-eviction-task-failed".to_string())?
+}
+
 #[cfg(not(coverage))]
 fn oauth_connections_path(app: &AppHandle) -> Result<PathBuf, String> {
     use tauri::Manager;

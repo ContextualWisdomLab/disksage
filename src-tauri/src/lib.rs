@@ -105,6 +105,8 @@ pub fn run() {
             commands::reason_unknown_extensions,
             commands::list_cloud_roots,
             commands::inspect_cloud_roots,
+            commands::plan_icloud_local_copy_eviction,
+            commands::evict_icloud_local_copy,
             commands::list_cloud_provider_connections,
             commands::verify_cloud_provider_capacity,
             commands::inspect_cloud_provider_client_runtime,
