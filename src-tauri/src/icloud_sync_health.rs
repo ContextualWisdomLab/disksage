@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -16,12 +17,17 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::os::unix::fs::MetadataExt;
 
 const SQLITE3_PATH: &str = "/usr/bin/sqlite3";
+#[cfg(target_os = "macos")]
+const CP_PATH: &str = "/bin/cp";
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const SNAPSHOT_COPY_TIMEOUT: Duration = Duration::from_secs(5);
+const SNAPSHOT_ATTEMPTS: usize = 3;
 const MAX_STDOUT_BYTES: usize = 16 * 1024;
 const MAX_STDERR_BYTES: usize = 4 * 1024;
 const ITEM_ERROR_AGE_NOTICE_MS: u64 = 86_400_000;
+static SNAPSHOT_NONCE: AtomicU64 = AtomicU64::new(0);
 
-pub const ICLOUD_SYNC_HEALTH_SCHEMA_VERSION: u32 = 2;
+pub const ICLOUD_SYNC_HEALTH_SCHEMA_VERSION: u32 = 3;
 
 const QUEUE_QUERY: &str = r#"
 PRAGMA query_only=ON;
@@ -92,6 +98,8 @@ pub struct IcloudSyncHealthReport {
     pub evidence_kind: String,
     pub evidence_complete: bool,
     pub database_snapshot_includes_wal: bool,
+    /// Writes are never permitted against Apple's managed source database or its sidecars.
+    /// SQLite may create or update sidecars only beside the private temporary snapshot.
     pub database_sidecar_write_permitted: bool,
     pub managed_database_files: Vec<ManagedDatabaseFileEvidence>,
     pub managed_database_allocated_bytes: u64,
@@ -181,15 +189,58 @@ fn sqlite_uri(client_db: &Path) -> Result<String, String> {
     Ok(format!("file:{text}?immutable=1&mode=ro"))
 }
 
-fn run_queue_probe(client_db: &Path) -> Result<String, String> {
+fn temporary_snapshot_uri(client_db: &Path) -> Result<String, String> {
+    if !client_db.is_absolute() {
+        return Err("icloud-sync-health-client-db-not-absolute".into());
+    }
+    let text = client_db
+        .to_str()
+        .ok_or_else(|| "icloud-sync-health-client-db-not-unicode".to_string())?;
+    if text
+        .chars()
+        .any(|character| matches!(character, '?' | '#' | '\0'))
+    {
+        return Err("icloud-sync-health-client-db-uri-unsafe".into());
+    }
+    Ok(format!("file:{text}?mode=rw"))
+}
+
+fn run_bounded_child(mut child: std::process::Child, timeout: Duration) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(_)) => return Err("icloud-sync-health-child-failed".into()),
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(20)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("icloud-sync-health-child-timeout".into());
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("icloud-sync-health-child-wait-failed".into());
+            }
+        }
+    }
+}
+
+fn run_queue_probe_with_uri(
+    client_db_uri: String,
+    source_immutable: bool,
+) -> Result<String, String> {
     let sqlite_metadata = fs::symlink_metadata(SQLITE3_PATH)
         .map_err(|_| "icloud-sync-health-sqlite3-unavailable".to_string())?;
     if sqlite_metadata.file_type().is_symlink() || !sqlite_metadata.is_file() {
         return Err("icloud-sync-health-sqlite3-not-regular-file".into());
     }
-    let mut child = Command::new(SQLITE3_PATH)
-        .arg("-readonly")
-        .arg(sqlite_uri(client_db)?)
+    let mut command = Command::new(SQLITE3_PATH);
+    if source_immutable {
+        command.arg("-readonly");
+    }
+    let mut child = command
+        .arg(client_db_uri)
         .arg(QUEUE_QUERY)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -226,6 +277,164 @@ fn run_queue_probe(client_db: &Path) -> Result<String, String> {
         return Err("icloud-sync-health-query-stderr-present".into());
     }
     String::from_utf8(output.stdout).map_err(|_| "icloud-sync-health-query-output-not-utf8".into())
+}
+
+fn run_queue_probe(client_db: &Path) -> Result<String, String> {
+    run_queue_probe_with_uri(sqlite_uri(client_db)?, true)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SourceFileIdentity {
+    logical_bytes: u64,
+    modified_ms: Option<u64>,
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+    #[cfg(unix)]
+    modified_seconds: i64,
+    #[cfg(unix)]
+    modified_nanoseconds: i64,
+}
+
+fn source_file_identity(path: &Path, required: bool) -> Result<Option<SourceFileIdentity>, String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if !required && error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("icloud-sync-health-snapshot-source-unavailable".into()),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("icloud-sync-health-snapshot-source-unsafe".into());
+    }
+    Ok(Some(SourceFileIdentity {
+        logical_bytes: metadata.len(),
+        modified_ms: metadata.modified().ok().and_then(system_time_ms),
+        #[cfg(unix)]
+        device: metadata.dev(),
+        #[cfg(unix)]
+        inode: metadata.ino(),
+        #[cfg(unix)]
+        modified_seconds: metadata.mtime(),
+        #[cfg(unix)]
+        modified_nanoseconds: metadata.mtime_nsec(),
+    }))
+}
+
+struct TemporarySnapshotDirectory {
+    path: PathBuf,
+}
+
+impl Drop for TemporarySnapshotDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+fn create_temporary_snapshot_directory() -> Result<TemporarySnapshotDirectory, String> {
+    let root = std::env::temp_dir();
+    if !root.is_absolute() {
+        return Err("icloud-sync-health-snapshot-temp-root-not-absolute".into());
+    }
+    let metadata = fs::symlink_metadata(&root)
+        .map_err(|_| "icloud-sync-health-snapshot-temp-root-unavailable".to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("icloud-sync-health-snapshot-temp-root-unsafe".into());
+    }
+    for _ in 0..16 {
+        let nonce = SNAPSHOT_NONCE.fetch_add(1, Ordering::Relaxed);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| "icloud-sync-health-snapshot-clock-invalid".to_string())?
+            .as_nanos();
+        let path = root.join(format!(
+            "disksage-icloud-health-{}-{now}-{nonce}",
+            std::process::id()
+        ));
+        #[cfg(unix)]
+        let created = {
+            use std::os::unix::fs::DirBuilderExt;
+            let mut builder = fs::DirBuilder::new();
+            builder.mode(0o700);
+            builder.create(&path)
+        };
+        #[cfg(not(unix))]
+        let created = fs::create_dir(&path);
+        match created {
+            Ok(()) => return Ok(TemporarySnapshotDirectory { path }),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return Err("icloud-sync-health-snapshot-temp-create-failed".into()),
+        }
+    }
+    Err("icloud-sync-health-snapshot-temp-collision".into())
+}
+
+#[cfg(target_os = "macos")]
+fn clone_snapshot_file(source: &Path, destination: &Path) -> Result<(), String> {
+    let cp_metadata = fs::symlink_metadata(CP_PATH)
+        .map_err(|_| "icloud-sync-health-clone-command-unavailable".to_string())?;
+    if cp_metadata.file_type().is_symlink() || !cp_metadata.is_file() {
+        return Err("icloud-sync-health-clone-command-unsafe".into());
+    }
+    let child = Command::new(CP_PATH)
+        .arg("-c")
+        .arg(source)
+        .arg(destination)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| "icloud-sync-health-clone-command-spawn-failed".to_string())?;
+    run_bounded_child(child, SNAPSHOT_COPY_TIMEOUT)
+        .map_err(|_| "icloud-sync-health-clone-command-failed".to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn clone_snapshot_file(source: &Path, destination: &Path) -> Result<(), String> {
+    fs::copy(source, destination)
+        .map(|_| ())
+        .map_err(|_| "icloud-sync-health-snapshot-copy-failed".into())
+}
+
+struct ClientDatabaseSnapshot {
+    _directory: TemporarySnapshotDirectory,
+    client_db: PathBuf,
+    includes_wal: bool,
+}
+
+fn clone_client_database_snapshot(db_dir: &Path) -> Result<ClientDatabaseSnapshot, String> {
+    let source_db = db_dir.join("client.db");
+    let source_wal = db_dir.join("client.db-wal");
+    for _ in 0..SNAPSHOT_ATTEMPTS {
+        let before_db = source_file_identity(&source_db, true)?;
+        let before_wal = source_file_identity(&source_wal, false)?;
+        let directory = create_temporary_snapshot_directory()?;
+        let client_db = directory.path.join("client.db");
+        clone_snapshot_file(&source_db, &client_db)?;
+        if before_wal.is_some() {
+            clone_snapshot_file(&source_wal, &directory.path.join("client.db-wal"))?;
+        }
+        let after_db = source_file_identity(&source_db, true)?;
+        let after_wal = source_file_identity(&source_wal, false)?;
+        if before_db == after_db && before_wal == after_wal {
+            source_file_identity(&client_db, true)?;
+            if before_wal.is_some() {
+                source_file_identity(&directory.path.join("client.db-wal"), true)?;
+            }
+            return Ok(ClientDatabaseSnapshot {
+                _directory: directory,
+                client_db,
+                includes_wal: before_wal.is_some(),
+            });
+        }
+    }
+    Err("icloud-sync-health-snapshot-source-unstable".into())
+}
+
+fn run_consistent_snapshot_queue_probe(db_dir: &Path) -> Result<(String, bool), String> {
+    let snapshot = clone_client_database_snapshot(db_dir)?;
+    let includes_wal = snapshot.includes_wal;
+    let output = run_queue_probe_with_uri(temporary_snapshot_uri(&snapshot.client_db)?, false)?;
+    Ok((output, includes_wal))
 }
 
 fn parse_queue_rows(output: &str) -> Result<IcloudUploadQueueSummary, String> {
@@ -302,6 +511,8 @@ fn build_report(
     observed_at_ms: u64,
     managed_database_files: Vec<ManagedDatabaseFileEvidence>,
     upload_queue: IcloudUploadQueueSummary,
+    evidence_complete: bool,
+    database_snapshot_includes_wal: bool,
 ) -> Result<IcloudSyncHealthReport, String> {
     let managed_database_allocated_bytes =
         managed_database_files
@@ -317,6 +528,9 @@ fn build_report(
         || upload_queue.other_state_count > 0
         || upload_queue.item_error_count > 0;
     let mut new_copy_admission_blockers = Vec::new();
+    if !evidence_complete {
+        new_copy_admission_blockers.push("icloud-sync-health-evidence-incomplete".into());
+    }
     if upload_queue.scheduled_waiting_count > 0 {
         new_copy_admission_blockers.push("icloud-upload-queue-nonempty".into());
     }
@@ -342,17 +556,35 @@ fn build_report(
     };
     let mut blockers = new_copy_admission_blockers.clone();
     blockers.push("provider-native-per-item-sync-attestation-required-before-eviction".into());
-    let mut notices = vec![
-        "read-only-immutable-main-database-snapshot".into(),
-        "sqlite-wal-not-applied-to-avoid-sidecar-writes".into(),
-        "snapshot-may-lag-active-cloud-docs-state".into(),
+    let mut notices = if evidence_complete {
+        vec![
+            "read-only-source-copy-on-write-snapshot".into(),
+            "source-snapshot-identities-stable".into(),
+            if database_snapshot_includes_wal {
+                "source-sqlite-wal-included"
+            } else {
+                "source-sqlite-wal-absent"
+            }
+            .into(),
+            "source-database-sidecar-write-prohibited".into(),
+            "temporary-snapshot-sidecar-write-permitted".into(),
+            "temporary-snapshot-removed-after-query".into(),
+        ]
+    } else {
+        vec![
+            "read-only-immutable-main-database-snapshot".into(),
+            "sqlite-wal-not-applied-to-avoid-sidecar-writes".into(),
+            "snapshot-may-lag-active-cloud-docs-state".into(),
+        ]
+    };
+    notices.extend([
         "cloud-docs-private-schema-is-supplementary-evidence".into(),
         "queue-bytes-are-transfer-size-not-remote-capacity".into(),
         "global-queue-state-is-not-per-item-upload-attestation".into(),
         "paths-and-filenames-redacted".into(),
         "no-cloud-write".into(),
         "no-local-eviction".into(),
-    ];
+    ]);
     if upload_queue.item_error_octagon_not_signed_in_count > 0 {
         notices.push("icloud-item-error-octagon-not-signed-in".into());
     }
@@ -372,8 +604,8 @@ fn build_report(
         observed_at_ms,
         provider: "icloud".into(),
         evidence_kind: "supplementary-local-cloud-docs-private-schema".into(),
-        evidence_complete: false,
-        database_snapshot_includes_wal: false,
+        evidence_complete,
+        database_snapshot_includes_wal,
         database_sidecar_write_permitted: false,
         managed_database_files,
         managed_database_allocated_bytes,
@@ -398,7 +630,11 @@ fn build_report(
 /// This gate does not claim remote capacity or synchronization. The source remains retained and a
 /// copied item still needs provider-native per-item evidence before any later local eviction.
 pub fn require_new_copy_admission(report: &IcloudSyncHealthReport) -> Result<(), String> {
-    if report.new_copy_admission_state == "clear" && report.new_copy_admission_blockers.is_empty() {
+    if !report.evidence_complete {
+        Err("icloud-sync-health-evidence-incomplete".into())
+    } else if report.new_copy_admission_state == "clear"
+        && report.new_copy_admission_blockers.is_empty()
+    {
         Ok(())
     } else if report.new_copy_admission_blockers.is_empty() {
         Err("icloud-new-copy-admission-invalid".into())
@@ -422,7 +658,8 @@ pub fn attach_new_copy_admission_notice(
     notices.push(
         match report {
             Some(report)
-                if report.new_copy_admission_state == "clear"
+                if report.evidence_complete
+                    && report.new_copy_admission_state == "clear"
                     && report.new_copy_admission_blockers.is_empty() =>
             {
                 "icloud-new-copy-admission-clear"
@@ -465,9 +702,30 @@ pub fn probe_icloud_sync_health(
         .iter()
         .map(|(role, required)| database_file_evidence(db_dir, role, *required))
         .collect::<Result<Vec<_>, _>>()?;
-    let client_db = db_dir.join("client.db");
-    let upload_queue = parse_queue_rows(&run_queue_probe(&client_db)?)?;
-    build_report(observed_at_ms, managed_database_files, upload_queue)
+    match run_consistent_snapshot_queue_probe(db_dir) {
+        Ok((output, includes_wal)) => build_report(
+            observed_at_ms,
+            managed_database_files,
+            parse_queue_rows(&output)?,
+            true,
+            includes_wal,
+        ),
+        Err(_) => {
+            let client_db = db_dir.join("client.db");
+            let upload_queue = parse_queue_rows(&run_queue_probe(&client_db)?)?;
+            let mut report = build_report(
+                observed_at_ms,
+                managed_database_files,
+                upload_queue,
+                false,
+                false,
+            )?;
+            report
+                .notices
+                .push("consistent-copy-on-write-snapshot-unavailable".into());
+            Ok(report)
+        }
+    }
 }
 
 pub fn default_cloud_docs_db_dir(home: &Path) -> PathBuf {
@@ -534,6 +792,8 @@ mod tests {
             ITEM_ERROR_AGE_NOTICE_MS + 1000,
             files,
             parse_queue_rows(queue_output()).unwrap(),
+            false,
+            false,
         )
         .unwrap();
         assert!(report.sync_backlog_present);
@@ -563,6 +823,9 @@ mod tests {
             .new_copy_admission_blockers
             .contains(&"icloud-upload-queue-nonempty".to_string()));
         assert!(report
+            .new_copy_admission_blockers
+            .contains(&"icloud-sync-health-evidence-incomplete".to_string()));
+        assert!(report
             .notices
             .contains(&"icloud-item-error-octagon-not-signed-in".to_string()));
         assert!(report
@@ -570,7 +833,7 @@ mod tests {
             .contains(&"icloud-item-error-older-than-24h".to_string()));
         assert_eq!(
             require_new_copy_admission(&report).unwrap_err(),
-            report.new_copy_admission_blockers.join(",")
+            "icloud-sync-health-evidence-incomplete"
         );
         let encoded = serde_json::to_string(&report).unwrap();
         assert!(!encoded.contains("/Users/"));
@@ -578,7 +841,8 @@ mod tests {
 
     #[test]
     fn quiet_global_queue_still_requires_per_item_attestation() {
-        let report = build_report(1, vec![], IcloudUploadQueueSummary::default()).unwrap();
+        let report =
+            build_report(1, vec![], IcloudUploadQueueSummary::default(), true, true).unwrap();
         assert!(!report.sync_backlog_present);
         assert_eq!(report.new_copy_admission_state, "clear");
         assert!(report.new_copy_admission_blockers.is_empty());
@@ -588,6 +852,12 @@ mod tests {
             ["provider-native-per-item-sync-attestation-required-before-eviction"]
         );
         assert!(!report.local_eviction_authorized);
+        assert!(report.evidence_complete);
+        assert!(report.database_snapshot_includes_wal);
+        assert!(!report.database_sidecar_write_permitted);
+        assert!(report
+            .notices
+            .contains(&"source-sqlite-wal-included".to_string()));
     }
 
     #[test]
@@ -597,6 +867,10 @@ mod tests {
         assert_eq!(
             sqlite_uri(Path::new("/tmp/client.db")).unwrap(),
             "file:/tmp/client.db?immutable=1&mode=ro"
+        );
+        assert_eq!(
+            temporary_snapshot_uri(Path::new("/tmp/client.db")).unwrap(),
+            "file:/tmp/client.db?mode=rw"
         );
     }
 
@@ -608,10 +882,37 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn copy_on_write_snapshot_clones_main_and_wal_then_removes_temporary_files() {
+        let source = tempfile::tempdir().unwrap();
+        fs::write(source.path().join("client.db"), b"main-database").unwrap();
+        fs::write(source.path().join("client.db-wal"), b"wal-records").unwrap();
+
+        let snapshot = clone_client_database_snapshot(source.path()).unwrap();
+        let temporary_root = snapshot._directory.path.clone();
+        assert!(snapshot.includes_wal);
+        assert_eq!(fs::read(&snapshot.client_db).unwrap(), b"main-database");
+        assert_eq!(
+            fs::read(temporary_root.join("client.db-wal")).unwrap(),
+            b"wal-records"
+        );
+        drop(snapshot);
+        assert!(!temporary_root.exists());
+    }
+
     #[test]
     fn admission_notice_is_replaced_without_disturbing_other_plan_notices() {
-        let blocked = build_report(1, vec![], parse_queue_rows(queue_output()).unwrap()).unwrap();
-        let clear = build_report(2, vec![], IcloudUploadQueueSummary::default()).unwrap();
+        let blocked = build_report(
+            1,
+            vec![],
+            parse_queue_rows(queue_output()).unwrap(),
+            false,
+            false,
+        )
+        .unwrap();
+        let clear =
+            build_report(2, vec![], IcloudUploadQueueSummary::default(), true, false).unwrap();
         let mut notices = vec![
             "dry-run-only".into(),
             "icloud-new-copy-admission-evidence-unavailable".into(),
