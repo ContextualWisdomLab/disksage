@@ -178,6 +178,7 @@ pub struct MetadataEvidence {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CloudPlanOptions {
     pub min_size_bytes: u64,
     pub min_age_days: u64,

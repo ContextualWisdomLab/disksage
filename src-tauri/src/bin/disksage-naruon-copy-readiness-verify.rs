@@ -1,0 +1,103 @@
+//! Offline, path-redacted verification of one Naruon cloud-copy readiness envelope.
+
+use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
+
+use disksage_lib::naruon_cloud_copy_readiness::{
+    self, CloudCopyReadinessState, NaruonCloudCopyReadinessEnvelope,
+};
+
+const USAGE: &str = "usage: disksage-naruon-copy-readiness-verify ABSOLUTE_READINESS.json";
+
+#[derive(Debug, serde::Serialize)]
+struct VerificationSummary {
+    ok: bool,
+    schema_kind: String,
+    schema_version: u32,
+    provider: disksage_lib::cloud::CloudProvider,
+    readiness_state: CloudCopyReadinessState,
+    candidate_count: u64,
+    candidate_bytes: u64,
+    readiness_fingerprint_sha256: String,
+    local_paths_included: bool,
+    relative_names_included: bool,
+    raw_metadata_values_included: bool,
+    cloud_write_executed: bool,
+    source_eviction_authorized: bool,
+}
+
+fn parse_args(args: &[OsString]) -> Result<PathBuf, String> {
+    if args.len() != 1 || args[0] == OsStr::new("-h") || args[0] == OsStr::new("--help") {
+        return Err("naruon-copy-readiness-verifier-usage-invalid".into());
+    }
+    let path = PathBuf::from(&args[0]);
+    if !path.is_absolute() {
+        return Err("naruon-copy-readiness-input-path-not-absolute".into());
+    }
+    Ok(path)
+}
+
+fn verification_summary(envelope: NaruonCloudCopyReadinessEnvelope) -> VerificationSummary {
+    VerificationSummary {
+        ok: true,
+        schema_kind: envelope.schema_kind,
+        schema_version: envelope.schema_version,
+        provider: envelope.provider,
+        readiness_state: envelope.readiness_state,
+        candidate_count: envelope.candidate_count,
+        candidate_bytes: envelope.candidate_bytes,
+        readiness_fingerprint_sha256: envelope.readiness_fingerprint_sha256,
+        local_paths_included: envelope.local_paths_included,
+        relative_names_included: envelope.relative_names_included,
+        raw_metadata_values_included: envelope.raw_metadata_values_included,
+        cloud_write_executed: envelope.cloud_write_executed,
+        source_eviction_authorized: envelope.source_eviction_authorized,
+    }
+}
+
+fn verify(path: &Path) -> Result<VerificationSummary, String> {
+    naruon_cloud_copy_readiness::read_and_validate_naruon_cloud_copy_readiness(path)
+        .map(verification_summary)
+}
+
+fn print_json(value: &impl serde::Serialize) {
+    let encoded = serde_json::to_string(value).unwrap_or_else(|_| {
+        "{\"ok\":false,\"error_code\":\"naruon-copy-readiness-verifier-json-failed\"}".into()
+    });
+    println!("{encoded}");
+}
+
+fn main() {
+    let args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    let path = match parse_args(&args) {
+        Ok(path) => path,
+        Err(error_code) => {
+            print_json(&serde_json::json!({ "ok": false, "error_code": error_code }));
+            eprintln!("{USAGE}");
+            std::process::exit(64);
+        }
+    };
+    match verify(&path) {
+        Ok(summary) => print_json(&summary),
+        Err(error_code) => {
+            print_json(&serde_json::json!({ "ok": false, "error_code": error_code }));
+            std::process::exit(65);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parser_requires_exactly_one_absolute_path() {
+        assert!(parse_args(&[]).is_err());
+        assert!(parse_args(&["relative.json".into()]).is_err());
+        assert!(parse_args(&["/one.json".into(), "/two.json".into()]).is_err());
+        assert_eq!(
+            parse_args(&["/readiness.json".into()]).unwrap(),
+            Path::new("/readiness.json")
+        );
+    }
+}

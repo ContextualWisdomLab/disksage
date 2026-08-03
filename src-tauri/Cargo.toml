@@ -89,6 +89,11 @@ name = "disksage-provider-client-runtime"
 path = "src/bin/disksage-provider-client-runtime.rs"
 required-features = ["cloud-cli"]
 
+[[bin]]
+name = "disksage-naruon-copy-readiness-verify"
+path = "src/bin/disksage-naruon-copy-readiness-verify.rs"
+required-features = ["cloud-cli"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
