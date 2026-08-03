@@ -90,6 +90,11 @@ path = "src/bin/disksage-provider-client-runtime.rs"
 required-features = ["cloud-cli"]
 
 [[bin]]
+name = "disksage-provider-oauth"
+path = "src/bin/disksage-provider-oauth.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
 name = "disksage-naruon-copy-readiness-verify"
 path = "src/bin/disksage-naruon-copy-readiness-verify.rs"
 required-features = ["cloud-cli"]

@@ -55,6 +55,34 @@ DiskSage displays this before consent. It does not silently fall back to a broad
   the descriptor back if credential deletion fails. It does not claim to revoke Microsoft or Google
   server-side consent.
 
+## Headless lifecycle CLI
+
+`disksage-provider-oauth` exposes the same Rust PKCE and credential lifecycle outside the Tauri
+webview so an operator can prepare a headless `disksage-cloud-plan` run without pasting a bearer or
+refresh token. The default descriptor path is the DiskSage application-data path; an explicit
+`--connections` value must be absolute and can be shared with `disksage-cloud-plan`.
+
+```bash
+cargo run --locked --features cloud-cli --bin disksage-provider-oauth -- --list
+
+cargo run --locked --features cloud-cli --bin disksage-provider-oauth -- \
+  --connect --cloud-root /absolute/provider/root --client-id PUBLIC_DESKTOP_CLIENT_ID
+
+cargo run --locked --features cloud-cli --bin disksage-provider-oauth -- \
+  --verify-capacity --cloud-root /absolute/provider/root
+
+cargo run --locked --features cloud-cli --bin disksage-provider-oauth -- \
+  --disconnect --cloud-root /absolute/provider/root
+```
+
+Root selection is limited to a unique, currently readable root discovered by DiskSage. `--list`
+does not read Keychain or create a descriptor document. `--connect` and `--disconnect` report their
+local descriptor and credential-store effects explicitly. `--verify-capacity` may persist a rotated
+refresh token, but its JSON contains only a connection ID and bounded provider-capacity evidence.
+Every action declares that no cloud file write or source eviction occurred. `--manual-browser`
+prints the public authorization URL and waits on the already-bound loopback callback for a session
+where automatic browser launch is unavailable.
+
 ## Provider setup
 
 ### Microsoft
