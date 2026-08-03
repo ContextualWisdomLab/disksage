@@ -26,11 +26,13 @@ The export includes:
   precedence;
 - filesystem creation/modification fallback timestamps and all bounded metadata evidence;
 - review fingerprints, reason codes, attributed decision, and rationale;
-- copy receipt, destination, provider/account scope, and optional provider-sync evidence IDs.
+- copy receipt, destination, provider/account scope, optional provider-sync evidence IDs, and the
+  evidence-bound `complete`, `pending`, or `overdue` diagnostic with its fixed 24-hour threshold.
 
 `provider_write_executed` is always `false`. A verified local copy into a File Provider directory
 and a later provider status observation do not prove that DiskSage executed a provider API write.
 `local_copy_verified` and `provider_sync_confirmed` remain separate facts.
+An overdue diagnostic never changes `provider_sync_confirmed` or authorizes source eviction.
 
 The CLI action is read-only:
 
@@ -45,10 +47,10 @@ evict, move, or delete any file.
 ## Integration boundary
 
 This change adds no Naruon database column. Naruon's RFC 822 lineage contract remains untouched;
-a later Naruon ingestion endpoint can validate `schema_kind` and `schema_version` before storing a
-general-file envelope. If Naruon later needs multiple acquisitions or chain-of-custody relations,
-promote the JSON contract to child records and verify the migration privately with pg-erd-cloud,
-as PR #1089 already prescribes.
+the general-file validation endpoint checks `schema_kind`, `schema_version`, and internal claim
+consistency without persisting or reflecting the envelope. If Naruon later needs multiple
+acquisitions or chain-of-custody relations, promote the JSON contract to child records and verify
+the migration privately with pg-erd-cloud, as PR #1089 already prescribes.
 
 The export is deterministic validation and serialization in Rust. No Noema agent, local or
 external LLM, LLM-as-a-Judge, fast-mlsirm, semantic-data-portal, ontology, or Figma asset is needed.

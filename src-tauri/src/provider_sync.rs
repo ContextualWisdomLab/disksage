@@ -8,6 +8,73 @@ use crate::cloud_transfer::{
 use crate::cloud_transfer::LEGACY_RECEIPT_VERSION;
 
 const ICLOUD_UPLOADED_KEY: &str = "NSURLUbiquitousItemIsUploadedKey";
+const ICLOUD_UPLOADING_KEY: &str = "NSURLUbiquitousItemIsUploadingKey";
+pub const PROVIDER_SYNC_OVERDUE_AFTER_MS: u64 = 24 * 60 * 60 * 1_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProviderSyncTimeliness {
+    Complete,
+    Pending,
+    Overdue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderSyncTimelinessAssessment {
+    pub state: ProviderSyncTimeliness,
+    pub pending_age_ms: u64,
+    pub overdue_after_ms: u64,
+    pub reason_codes: Vec<String>,
+}
+
+/// Classify how long provider-native confirmation has remained incomplete.
+///
+/// This is diagnostic only: `Overdue` never turns negative evidence into an eviction permit.
+/// Receipt/evidence identity and time ordering are validated before the elapsed duration is used.
+pub fn assess_provider_sync_timeliness(
+    receipt: &CloudCopyReceipt,
+    evidence: &ProviderSyncEvidence,
+) -> Result<ProviderSyncTimelinessAssessment, String> {
+    if evidence.receipt_id != receipt.receipt_id
+        || evidence.provider != receipt.provider
+        || evidence.destination != receipt.destination
+        || evidence.observed_bytes != receipt.bytes
+        || evidence.destination_blake3 != receipt.blake3
+    {
+        return Err("provider-sync-timeliness-evidence-mismatch".into());
+    }
+    if evidence.confirmed_at_ms < receipt.copied_at_ms {
+        return Err("provider-sync-timeliness-time-order-invalid".into());
+    }
+    if evidence.sync_complete {
+        return Ok(ProviderSyncTimelinessAssessment {
+            state: ProviderSyncTimeliness::Complete,
+            pending_age_ms: 0,
+            overdue_after_ms: PROVIDER_SYNC_OVERDUE_AFTER_MS,
+            reason_codes: Vec::new(),
+        });
+    }
+
+    let pending_age_ms = evidence.confirmed_at_ms - receipt.copied_at_ms;
+    let (state, reason) = if pending_age_ms >= PROVIDER_SYNC_OVERDUE_AFTER_MS {
+        (
+            ProviderSyncTimeliness::Overdue,
+            "provider-sync-confirmation-overdue",
+        )
+    } else {
+        (
+            ProviderSyncTimeliness::Pending,
+            "provider-sync-confirmation-pending",
+        )
+    };
+    Ok(ProviderSyncTimelinessAssessment {
+        state,
+        pending_age_ms,
+        overdue_after_ms: PROVIDER_SYNC_OVERDUE_AFTER_MS,
+        reason_codes: vec![reason.into()],
+    })
+}
 
 /// Minimal, provider-native facts collected for one destination.
 ///
@@ -17,6 +84,7 @@ const ICLOUD_UPLOADED_KEY: &str = "NSURLUbiquitousItemIsUploadedKey";
 pub struct IcloudStatusSnapshot {
     pub is_ubiquitous: bool,
     pub is_uploaded: bool,
+    pub is_uploading: bool,
     pub is_current: bool,
     pub observed_bytes: u64,
     pub destination_blake3: String,
@@ -31,9 +99,12 @@ fn icloud_evidence_id(
     hasher.update(receipt.receipt_id.as_bytes());
     hasher.update(&[0]);
     hasher.update(ICLOUD_UPLOADED_KEY.as_bytes());
+    hasher.update(&[0]);
+    hasher.update(ICLOUD_UPLOADING_KEY.as_bytes());
     hasher.update(&[
         snapshot.is_ubiquitous as u8,
         snapshot.is_uploaded as u8,
+        snapshot.is_uploading as u8,
         snapshot.is_current as u8,
     ]);
     hasher.update(&snapshot.observed_bytes.to_le_bytes());
@@ -58,7 +129,10 @@ pub fn evidence_from_icloud_snapshot(
     if receipt.destination.trim().is_empty() {
         return Err("destination-missing".into());
     }
-    let sync_complete = snapshot.is_ubiquitous && snapshot.is_uploaded && snapshot.is_current;
+    let sync_complete = snapshot.is_ubiquitous
+        && snapshot.is_uploaded
+        && !snapshot.is_uploading
+        && snapshot.is_current;
     Ok(ProviderSyncEvidence {
         receipt_id: receipt.receipt_id.clone(),
         provider: CloudProvider::Icloud,
@@ -164,14 +238,24 @@ pub fn evidence_from_file_provider_snapshot(
     })
 }
 
-fn file_provider_status_bool(output: &str, key: &str) -> Result<bool, String> {
+fn file_provider_status_value<'a>(output: &'a str, key: &str) -> Result<&'a str, String> {
     let prefix = format!("{key} = ");
-    let value = output
+    let mut values = output
         .lines()
         .map(str::trim)
-        .find_map(|line| line.strip_prefix(&prefix))
+        .filter_map(|line| line.strip_prefix(&prefix));
+    let value = values
+        .next()
         .map(|value| value.trim().trim_end_matches(';'))
         .ok_or_else(|| format!("file-provider-status-field-missing:{key}"))?;
+    if values.next().is_some() {
+        return Err(format!("file-provider-status-field-duplicate:{key}"));
+    }
+    Ok(value)
+}
+
+fn file_provider_status_bool(output: &str, key: &str) -> Result<bool, String> {
+    let value = file_provider_status_value(output, key)?;
     match value {
         "1" => Ok(true),
         "0" => Ok(false),
@@ -179,11 +263,21 @@ fn file_provider_status_bool(output: &str, key: &str) -> Result<bool, String> {
     }
 }
 
+fn file_provider_status_u64(output: &str, key: &str) -> Result<u64, String> {
+    file_provider_status_value(output, key)?
+        .parse()
+        .map_err(|_| format!("file-provider-status-field-invalid:{key}"))
+}
+
 pub fn parse_file_providerctl_snapshot(
     output: &str,
     observed_bytes: u64,
     destination_blake3: &str,
 ) -> Result<FileProviderStatusSnapshot, String> {
+    let provider_reported_bytes = file_provider_status_u64(output, "documentSize")?;
+    if provider_reported_bytes != observed_bytes {
+        return Err("file-provider-status-document-size-mismatch".into());
+    }
     Ok(FileProviderStatusSnapshot {
         is_downloaded: file_provider_status_bool(output, "isDownloaded")?,
         is_downloading: file_provider_status_bool(output, "isDownloading")?,
@@ -195,7 +289,7 @@ pub fn parse_file_providerctl_snapshot(
         is_uploading: file_provider_status_bool(output, "isUploading")?,
         is_excluded_from_sync: file_provider_status_bool(output, "isExcludedFromSync")?,
         is_sync_paused: file_provider_status_bool(output, "isSyncPaused")?,
-        observed_bytes,
+        observed_bytes: provider_reported_bytes,
         destination_blake3: destination_blake3.into(),
     })
 }
@@ -439,11 +533,12 @@ fn foundation_string_resource(
 }
 
 #[cfg(all(target_os = "macos", not(coverage)))]
-fn foundation_icloud_status(path: &str) -> Result<(bool, bool, bool), String> {
+fn foundation_icloud_status(path: &str) -> Result<(bool, bool, bool, bool), String> {
     use objc2::rc::autoreleasepool;
     use objc2_foundation::{
         NSString, NSURLIsUbiquitousItemKey, NSURLUbiquitousItemDownloadingStatusCurrent,
-        NSURLUbiquitousItemDownloadingStatusKey, NSURLUbiquitousItemIsUploadedKey, NSURL,
+        NSURLUbiquitousItemDownloadingStatusKey, NSURLUbiquitousItemIsUploadedKey,
+        NSURLUbiquitousItemIsUploadingKey, NSURL,
     };
 
     autoreleasepool(|_| {
@@ -453,13 +548,14 @@ fn foundation_icloud_status(path: &str) -> Result<(bool, bool, bool), String> {
         unsafe {
             let is_ubiquitous = foundation_bool_resource(&url, NSURLIsUbiquitousItemKey)?;
             if !is_ubiquitous {
-                return Ok((false, false, false));
+                return Ok((false, false, false, false));
             }
             let downloading_status =
                 foundation_string_resource(&url, NSURLUbiquitousItemDownloadingStatusKey)?;
             Ok((
                 is_ubiquitous,
                 foundation_bool_resource(&url, NSURLUbiquitousItemIsUploadedKey)?,
+                foundation_bool_resource(&url, NSURLUbiquitousItemIsUploadingKey)?,
                 downloading_status.isEqualToString(NSURLUbiquitousItemDownloadingStatusCurrent),
             ))
         }
@@ -615,7 +711,7 @@ pub fn collect_icloud_sync_evidence(
     let path = destination
         .to_str()
         .ok_or_else(|| "icloud-destination-not-unicode".to_string())?;
-    let (before_ubiquitous, _, before_current) = foundation_icloud_status(path)?;
+    let (before_ubiquitous, _, _, before_current) = foundation_icloud_status(path)?;
     if !before_ubiquitous {
         return Err("icloud-destination-not-ubiquitous".into());
     }
@@ -629,7 +725,7 @@ pub fn collect_icloud_sync_evidence(
     if metadata.len() != receipt.bytes || destination_hash != receipt.blake3 {
         return Err("icloud-destination-content-mismatch".into());
     }
-    let (is_ubiquitous, is_uploaded, is_current) = foundation_icloud_status(path)?;
+    let (is_ubiquitous, is_uploaded, is_uploading, is_current) = foundation_icloud_status(path)?;
     if !is_ubiquitous || !is_current {
         return Err("icloud-destination-status-changed-during-check".into());
     }
@@ -646,6 +742,7 @@ pub fn collect_icloud_sync_evidence(
     let snapshot = IcloudStatusSnapshot {
         is_ubiquitous,
         is_uploaded,
+        is_uploading,
         is_current,
         observed_bytes: after.len(),
         destination_blake3: destination_hash,
@@ -693,6 +790,7 @@ mod tests {
         let snapshot = IcloudStatusSnapshot {
             is_ubiquitous: true,
             is_uploaded: true,
+            is_uploading: false,
             is_current: true,
             observed_bytes: 42,
             destination_blake3: "content-hash".into(),
@@ -711,8 +809,98 @@ mod tests {
         assert_eq!(evidence.remote_content, None);
     }
 
+    #[test]
+    fn timeliness_distinguishes_complete_pending_and_overdue_without_approving() {
+        let receipt = receipt(CloudProvider::Icloud);
+        let mut snapshot = IcloudStatusSnapshot {
+            is_ubiquitous: true,
+            is_uploaded: false,
+            is_uploading: true,
+            is_current: true,
+            observed_bytes: 42,
+            destination_blake3: "content-hash".into(),
+        };
+        let pending = evidence_from_icloud_snapshot(
+            &receipt,
+            &snapshot,
+            receipt.copied_at_ms + PROVIDER_SYNC_OVERDUE_AFTER_MS - 1,
+        )
+        .unwrap();
+        let pending_assessment = assess_provider_sync_timeliness(&receipt, &pending).unwrap();
+        assert_eq!(pending_assessment.state, ProviderSyncTimeliness::Pending);
+        assert_eq!(
+            pending_assessment.reason_codes,
+            ["provider-sync-confirmation-pending"]
+        );
+        assert!(!pending.sync_complete);
+
+        let overdue = evidence_from_icloud_snapshot(
+            &receipt,
+            &snapshot,
+            receipt.copied_at_ms + PROVIDER_SYNC_OVERDUE_AFTER_MS,
+        )
+        .unwrap();
+        let overdue_assessment = assess_provider_sync_timeliness(&receipt, &overdue).unwrap();
+        assert_eq!(overdue_assessment.state, ProviderSyncTimeliness::Overdue);
+        assert_eq!(
+            overdue_assessment.pending_age_ms,
+            PROVIDER_SYNC_OVERDUE_AFTER_MS
+        );
+        assert_eq!(
+            overdue_assessment.reason_codes,
+            ["provider-sync-confirmation-overdue"]
+        );
+        assert!(!overdue.sync_complete);
+
+        snapshot.is_uploaded = true;
+        snapshot.is_uploading = false;
+        let complete = evidence_from_icloud_snapshot(
+            &receipt,
+            &snapshot,
+            receipt.copied_at_ms + PROVIDER_SYNC_OVERDUE_AFTER_MS * 2,
+        )
+        .unwrap();
+        let complete_assessment = assess_provider_sync_timeliness(&receipt, &complete).unwrap();
+        assert_eq!(complete_assessment.state, ProviderSyncTimeliness::Complete);
+        assert_eq!(complete_assessment.pending_age_ms, 0);
+        assert!(complete_assessment.reason_codes.is_empty());
+    }
+
+    #[test]
+    fn timeliness_rejects_mismatched_or_time_reversed_evidence() {
+        let receipt = receipt(CloudProvider::Icloud);
+        let snapshot = IcloudStatusSnapshot {
+            is_ubiquitous: true,
+            is_uploaded: false,
+            is_uploading: true,
+            is_current: true,
+            observed_bytes: 42,
+            destination_blake3: "content-hash".into(),
+        };
+        let mut evidence = evidence_from_icloud_snapshot(&receipt, &snapshot, 30).unwrap();
+        evidence.receipt_id = "different".into();
+        assert_eq!(
+            assess_provider_sync_timeliness(&receipt, &evidence).unwrap_err(),
+            "provider-sync-timeliness-evidence-mismatch"
+        );
+
+        let mut evidence = evidence_from_icloud_snapshot(&receipt, &snapshot, 30).unwrap();
+        evidence.observed_bytes += 1;
+        assert_eq!(
+            assess_provider_sync_timeliness(&receipt, &evidence).unwrap_err(),
+            "provider-sync-timeliness-evidence-mismatch"
+        );
+
+        let evidence = evidence_from_icloud_snapshot(&receipt, &snapshot, 19).unwrap();
+        assert_eq!(
+            assess_provider_sync_timeliness(&receipt, &evidence).unwrap_err(),
+            "provider-sync-timeliness-time-order-invalid"
+        );
+    }
+
     fn uploaded_file_provider_output() -> &'static str {
         r#"
+            documentSize = 42;
             isDownloaded = 1;
             isDownloading = 0;
             isMostRecentVersionDownloaded = 1;
@@ -744,6 +932,43 @@ mod tests {
             evidence_from_file_provider_snapshot(&receipt(CloudProvider::Icloud), &snapshot, 30,)
                 .unwrap_err(),
             "third-party-file-provider-receipt-required"
+        );
+    }
+
+    #[test]
+    fn file_provider_status_binds_exactly_one_provider_reported_size() {
+        let duplicate = uploaded_file_provider_output().replace(
+            "documentSize = 42;",
+            "documentSize = 42;\n            documentSize = 42;",
+        );
+        assert_eq!(
+            parse_file_providerctl_snapshot(&duplicate, 42, "content-hash").unwrap_err(),
+            "file-provider-status-field-duplicate:documentSize"
+        );
+
+        let missing = uploaded_file_provider_output().replace("documentSize = 42;", "");
+        assert_eq!(
+            parse_file_providerctl_snapshot(&missing, 42, "content-hash").unwrap_err(),
+            "file-provider-status-field-missing:documentSize"
+        );
+
+        let changed =
+            uploaded_file_provider_output().replace("documentSize = 42", "documentSize = 41");
+        assert_eq!(
+            parse_file_providerctl_snapshot(&changed, 42, "content-hash").unwrap_err(),
+            "file-provider-status-document-size-mismatch"
+        );
+    }
+
+    #[test]
+    fn file_provider_status_rejects_duplicate_decision_flags() {
+        let duplicate = uploaded_file_provider_output().replace(
+            "isUploaded = 1;",
+            "isUploaded = 1;\n            isUploaded = 0;",
+        );
+        assert_eq!(
+            parse_file_providerctl_snapshot(&duplicate, 42, "content-hash").unwrap_err(),
+            "file-provider-status-field-duplicate:isUploaded"
         );
     }
 
@@ -952,12 +1177,13 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_non_ubiquitous_or_non_current_status_fails_closed() {
+    fn incomplete_uploading_non_ubiquitous_or_non_current_status_fails_closed() {
         let receipt = receipt(CloudProvider::Icloud);
         for snapshot in [
             IcloudStatusSnapshot {
                 is_ubiquitous: true,
                 is_uploaded: false,
+                is_uploading: true,
                 is_current: true,
                 observed_bytes: 42,
                 destination_blake3: "content-hash".into(),
@@ -965,6 +1191,7 @@ mod tests {
             IcloudStatusSnapshot {
                 is_ubiquitous: false,
                 is_uploaded: true,
+                is_uploading: false,
                 is_current: true,
                 observed_bytes: 42,
                 destination_blake3: "content-hash".into(),
@@ -972,6 +1199,15 @@ mod tests {
             IcloudStatusSnapshot {
                 is_ubiquitous: true,
                 is_uploaded: true,
+                is_uploading: true,
+                is_current: true,
+                observed_bytes: 42,
+                destination_blake3: "content-hash".into(),
+            },
+            IcloudStatusSnapshot {
+                is_ubiquitous: true,
+                is_uploaded: true,
+                is_uploading: false,
                 is_current: false,
                 observed_bytes: 42,
                 destination_blake3: "content-hash".into(),
@@ -990,6 +1226,7 @@ mod tests {
                 &IcloudStatusSnapshot {
                     is_ubiquitous: true,
                     is_uploaded: true,
+                    is_uploading: false,
                     is_current: true,
                     observed_bytes: 42,
                     destination_blake3: "content-hash".into(),
@@ -1008,6 +1245,7 @@ mod tests {
                 &IcloudStatusSnapshot {
                     is_ubiquitous: true,
                     is_uploaded: true,
+                    is_uploading: false,
                     is_current: true,
                     observed_bytes: 42,
                     destination_blake3: "content-hash".into(),
@@ -1048,8 +1286,9 @@ mod tests {
 
         let path = std::env::var("DISKSAGE_ICLOUD_LIVE_PATH").unwrap();
         let metadata = std::fs::symlink_metadata(&path).unwrap();
-        let (is_ubiquitous, is_uploaded, is_current) = foundation_icloud_status(&path).unwrap();
-        assert!(is_ubiquitous && is_uploaded && is_current);
+        let (is_ubiquitous, is_uploaded, is_uploading, is_current) =
+            foundation_icloud_status(&path).unwrap();
+        assert!(is_ubiquitous && is_uploaded && !is_uploading && is_current);
         let content_hash = hash_file(std::path::Path::new(&path)).unwrap();
         let mut live_receipt = receipt(CloudProvider::Icloud);
         live_receipt.destination = path;

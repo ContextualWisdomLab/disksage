@@ -336,6 +336,19 @@ export interface ExactDuplicateSummary {
   candidate_count: number;
   candidate_bytes: number;
   redundant_bytes: number;
+  clusters: ExactDuplicateClusterRecommendation[];
+}
+
+export interface ExactDuplicateClusterRecommendation {
+  cluster_fingerprint: string;
+  candidate_count: number;
+  bytes_per_candidate: number;
+  redundant_bytes: number;
+  recommended_canonical_metadata_fingerprint: string;
+  recommendation_confidence: "high" | "medium" | "low";
+  recommendation_reason_codes: string[];
+  member_metadata_fingerprints: string[];
+  requires_human_confirmation: boolean;
 }
 
 export interface CloudCopyReceipt {
@@ -425,6 +438,15 @@ export interface ProviderSyncEvidenceRecord {
   evidence: ProviderSyncEvidence;
 }
 
+export type ProviderSyncTimeliness = "complete" | "pending" | "overdue";
+
+export interface ProviderSyncTimelinessAssessment {
+  state: ProviderSyncTimeliness;
+  pending_age_ms: number;
+  overdue_after_ms: number;
+  reason_codes: string[];
+}
+
 export interface LocalEvictionPermit {
   receipt_id: string;
   provider: CloudProvider;
@@ -440,10 +462,56 @@ export interface LocalEvictionPermit {
 
 export interface CloudAttestationOutput {
   evidence: ProviderSyncEvidence;
+  assessment: ProviderSyncTimelinessAssessment;
   evidence_record: ProviderSyncEvidenceRecord;
   evidence_path: string;
   permit: LocalEvictionPermit | null;
   blockers: string[];
+}
+
+export interface ActiveUseEvidence {
+  method: "lsof-fp+ps-command";
+  evidence_complete: boolean;
+  active: boolean;
+  observed_pids: number[];
+  results_truncated: boolean;
+  error: string | null;
+}
+
+export interface CloudSourceEvictionApproval {
+  version: number;
+  approval_id: string;
+  receipt_id: string;
+  evidence_record_id: string;
+  approved_at_ms: number;
+  approved_by: string;
+  rationale: string;
+  active_use_observed_at_ms: number;
+  active_use: ActiveUseEvidence;
+}
+
+export interface CloudEvictionResult {
+  action: "trash-verified-cloud-source";
+  receipt_id: string;
+  intent_id: string;
+  completion_id: string;
+  evidence_record_id: string;
+  approval_id: string | null;
+  source: string;
+  staged_source: string;
+  intent_path: string;
+  completion_path: string;
+  source_trashed: boolean;
+  reconciled_after_interruption: boolean;
+  already_completed: boolean;
+}
+
+export interface CloudSourceEvictionOutput {
+  action: "attest-approve-and-trash-verified-cloud-source";
+  attestation: CloudAttestationOutput;
+  approval: CloudSourceEvictionApproval;
+  approval_path: string;
+  eviction: CloudEvictionResult;
 }
 
 export const listCloudRoots = () => invoke<CloudRoot[]>("list_cloud_roots");
@@ -528,5 +596,16 @@ export const attestCloudCopy = (
   objectId: string | null = null,
 ) => invoke<CloudAttestationOutput>("attest_cloud_copy", {
   receiptId,
+  objectId,
+});
+export const trashVerifiedCloudSource = (
+  receiptId: string,
+  confirmationReceiptId: string,
+  rationale: string,
+  objectId: string | null = null,
+) => invoke<CloudSourceEvictionOutput>("trash_verified_cloud_source", {
+  receiptId,
+  confirmationReceiptId,
+  rationale,
   objectId,
 });

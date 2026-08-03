@@ -20,7 +20,37 @@ Use DiskSage against a genuinely space-constrained machine to identify files tha
 - Surface destination collisions and exclude them from potentially reclaimable bytes.
 - Selectively stream SHA-256 and BLAKE3 only for non-blocked candidates that share an exact byte length. Exact-content clusters expose their member count and redundant bytes, bind the hashes into review evidence, and require explicit canonical-lineage selection instead of silently copying every duplicate path.
 - Require review when embedded geolocation is present, embedded production-date fields disagree, an embedded production date conflicts with a full filename date, an embedded production month differs from a filename publication month, a known template/default timestamp is detected, embedded title/author/context indicates personal or confidential material, or no embedded production date is available.
-- Provide both a Tauri UI and a headless JSON CLI.
+- Provide both a Tauri UI and a headless JSON CLI. The CLI's plan-only
+  `--decision-summary` view keeps relative paths, metadata/review fingerprints, production-time
+  source and confidence, review reasons, blockers, duplicate totals, and capacity status. It
+  omits absolute source/destination/cloud-root paths, root labels, content titles/authors, raw
+  metadata evidence values, and dataset profiles. The flag is rejected when combined with root
+  inspection, copy, adoption, attestation, eviction, review, or Naruon export actions; the full
+  `CloudPlanReport` and Naruon lineage contracts remain unchanged. A versioned BLAKE3 decision
+  batch fingerprint binds the sorted candidate metadata/review fingerprints, planner blockers,
+  destination provider/account scope, totals, and duplicate summary. Volatile generation time,
+  age, notices, and capacity state are excluded so an unchanged batch survives a fresh scan while
+  copy and eviction still require fresh capacity, provider sync, and human approval evidence.
+  The same redacted summary aggregates candidate counts and bytes by decision state, production-time
+  source/confidence, blocking reason, and review-required reason. Review-reason bytes explicitly
+  allow overlap because one candidate can require review for several independent reasons; blocker
+  and decision-state bytes remain mutually exclusive. Separate sole-reason counts and bytes show
+  which candidates would reach the copy-review gate if that one evidence gap were resolved, without
+  treating the counterfactual as an approval. A reason-count distribution and deterministic,
+  delimiter-declared reason-set totals expose the smallest remaining combinations of evidence gaps.
+  These aggregates expose the dominant evidence gap without adding absolute paths or raw metadata
+  values.
+- `--decision-summary --review-reason-set REASON|REASON` emits only the candidates whose sorted,
+  deduplicated review reasons exactly match that set. The output carries both the full-plan decision
+  fingerprint and a domain-separated v2 subset fingerprint bound only to provider/account scope,
+  the exact reason set, and each selected candidate metadata/review fingerprint and size. Unrelated
+  probe drift can invalidate plan freshness without changing an otherwise identical review subset.
+  Both values are inspection evidence, not approval: approve/hold decisions remain individual,
+  attributed, and immutable.
+- Fresh local planning batches general ExifTool probes in bounded groups of 32 with a 20-second
+  command deadline and an 8 MiB retained-output ceiling. Results are mapped back only through each
+  JSON `SourceFile`; malformed, duplicate, missing, timed-out, or oversized batch evidence falls
+  back to the existing per-file bounded probe. No extracted metadata is persisted as a cache.
 
 ## Safety boundary
 

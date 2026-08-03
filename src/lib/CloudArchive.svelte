@@ -1,6 +1,17 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import * as api from "./api";
+  import {
+    candidateReviewDecision,
+    cloudDecisionReasonLabel,
+    cloudReviewQueuePage,
+    cloudReviewQueueStats,
+    cloudReviewReasons,
+    filterCloudReviewQueue,
+    matchingReviewDecision as exactReviewDecision,
+    type CloudReviewQueueFilter,
+    type CloudReviewQueueSort,
+  } from "./cloudReviewQueue";
   import { fmtBytes } from "./fmt";
 
   let { scannedRoot }: { scannedRoot: string | null } = $props();
@@ -21,6 +32,10 @@
   let copied: api.CloudCopyOutput | null = $state(null);
   let attesting = $state(false);
   let attestation: api.CloudAttestationOutput | null = $state(null);
+  let evicting = $state(false);
+  let evictionConfirmation = $state("");
+  let evictionRationale = $state("");
+  let eviction: api.CloudSourceEvictionOutput | null = $state(null);
   let objectId = $state("");
   let oauthClientId = $state("");
   let connecting = $state(false);
@@ -28,6 +43,24 @@
   let checkingCapacity = $state(false);
   let connectionCapacity: api.CloudCapacitySnapshot | null = $state(null);
   let connectionCapacityRoot = $state("");
+  let reviewFilter: CloudReviewQueueFilter = $state("unreviewed");
+  let reviewReason = $state("");
+  let reviewSort: CloudReviewQueueSort = $state("bytes-desc");
+  let reviewPage = $state(1);
+  let reviewStats = $derived.by(() =>
+    cloudReviewQueueStats(report?.candidates ?? [], reviewDecisions)
+  );
+  let reviewReasons = $derived.by(() => cloudReviewReasons(report?.candidates ?? []));
+  let filteredReviewCandidates = $derived.by(() =>
+    filterCloudReviewQueue(
+      report?.candidates ?? [],
+      reviewDecisions,
+      reviewFilter,
+      reviewReason,
+      reviewSort,
+    )
+  );
+  let reviewPageData = $derived.by(() => cloudReviewQueuePage(filteredReviewCandidates, reviewPage));
 
   onMount(async () => {
     try {
@@ -49,7 +82,14 @@
     report = null;
     copied = null;
     attestation = null;
+    eviction = null;
+    evictionConfirmation = "";
+    evictionRationale = "";
     objectId = "";
+    reviewFilter = "unreviewed";
+    reviewReason = "";
+    reviewSort = "bytes-desc";
+    reviewPage = 1;
     try {
       const planned = await api.planCloudArchive(
         scannedRoot,
@@ -93,21 +133,11 @@
   }
 
   function reviewDecision(candidate: api.CloudCandidate): api.CloudReviewDecision | null {
-    return reviewDecisions.find((decision) =>
-      decision.candidate_fingerprint === candidate.metadata_fingerprint
-    ) ?? null;
+    return candidateReviewDecision(candidate, reviewDecisions);
   }
 
   function matchingReviewDecision(candidate: api.CloudCandidate): api.CloudReviewDecision | null {
-    const decision = reviewDecision(candidate);
-    return decision?.review_fingerprint === candidate.review_fingerprint ? decision : null;
-  }
-
-  function reviewReasonLabel(reason: string): string {
-    if (reason === "embedded-date-differs-from-filename-publication-month") {
-      return "내장 생산일과 파일명 발행월이 다름";
-    }
-    return reason;
+    return exactReviewDecision(candidate, reviewDecisions);
   }
 
   async function reviewCandidate(
@@ -154,6 +184,9 @@
     loadError = "";
     copied = null;
     attestation = null;
+    eviction = null;
+    evictionConfirmation = "";
+    evictionRationale = "";
     objectId = "";
     try {
       copied = await api.copyCloudCandidate(
@@ -177,6 +210,9 @@
     loadError = "";
     copied = null;
     attestation = null;
+    eviction = null;
+    evictionConfirmation = "";
+    evictionRationale = "";
     objectId = "";
     try {
       copied = await api.adoptExistingCloudCandidate(
@@ -208,6 +244,37 @@
       loadError = String(e);
     } finally {
       attesting = false;
+    }
+  }
+
+  function sourceEvictionReady(): boolean {
+    return copied !== null
+      && attestation?.permit !== null
+      && attestation?.permit !== undefined
+      && evictionConfirmation === copied.receipt.receipt_id
+      && evictionRationale.trim().length > 0
+      && !evicting;
+  }
+
+  async function evictVerifiedSource() {
+    if (!copied || !sourceEvictionReady()) return;
+    evicting = true;
+    loadError = "";
+    eviction = null;
+    try {
+      eviction = await api.trashVerifiedCloudSource(
+        copied.receipt.receipt_id,
+        evictionConfirmation,
+        evictionRationale.trim(),
+        copied.receipt.provider === "google-drive" ? objectId.trim() || null : null,
+      );
+      attestation = eviction.attestation;
+      evictionConfirmation = "";
+      evictionRationale = "";
+    } catch (e) {
+      loadError = String(e);
+    } finally {
+      evicting = false;
     }
   }
 
@@ -476,10 +543,14 @@
         {report.exact_duplicates.cluster_count.toLocaleString()}개 콘텐츠 클러스터 ·
         대표본 외 중복 경로 {fmtBytes(report.exact_duplicates.redundant_bytes)}.
         동일 크기 후보만 로컬 SHA-256·BLAKE3로 확인했으며, 대표 lineage를 선택하기 전에는 자동 복사하지 않습니다.
+        정본 추천은 내장 생산일·신뢰도·내장 메타데이터를 먼저 비교하고, 다운로드·압축해제
+        출처 맥락과 격리·복사본 경로를 별도 보조 기준으로 사용합니다. 추천
+        {report.exact_duplicates.clusters.length.toLocaleString()}건 모두 사람 확인이 필요하며, 낮은 신뢰도 추천은
+        {report.exact_duplicates.clusters.filter((cluster) => cluster.recommendation_confidence === "low").length.toLocaleString()}건입니다.
       </p>
     {/if}
     <p class="warning">
-      생산일 우선순위는 내장 메타데이터 → 명시적 파일명 날짜 → 파일시스템 생성 → 수정 시각입니다. 파일명 날짜와 파일시스템 시각은 저신뢰 잠정값이며, 현재 메타데이터와 목적지에 결박된 명시적 승인 없이는 복사할 수 없습니다. 이미 존재하는 클라우드 파일은 전체 콘텐츠 해시가 모두 같을 때만 채택합니다. 앱 UI는 원본을 삭제하지 않으며, 업로드 증거가 확인되어도 허가 정보만 표시합니다.
+      생산일 우선순위는 내장 메타데이터 → 명시적 파일명 날짜 → 파일시스템 생성 → 수정 시각입니다. 파일명 날짜와 파일시스템 시각은 저신뢰 잠정값이며, 현재 메타데이터와 목적지에 결박된 명시적 승인 없이는 복사할 수 없습니다. 이미 존재하는 클라우드 파일은 전체 콘텐츠 해시가 모두 같을 때만 채택합니다. 원본은 공급자 증거를 실행 순간 다시 확인하고 전체 영수증 ID와 사유를 직접 승인한 경우에만 휴지통으로 이동하며, 휴지통은 비우지 않습니다.
     </p>
     {#if copied}
       <div class="receipt">
@@ -505,8 +576,52 @@
           {attesting ? "검증 중…" : "클라우드 업로드 상태·콘텐츠 확인"}
         </button>
         {#if attestation}
+          {#if attestation.assessment.state === "overdue"}
+            <p class="warning">
+              공급자 확인이 {Math.floor(attestation.assessment.pending_age_ms / 3_600_000)}시간째 완료되지 않았습니다. 원본은 계속 보존하며 iCloud/File Provider 상태를 점검해야 합니다.
+            </p>
+          {:else if attestation.assessment.state === "pending"}
+            <p class="muted">
+              공급자 확인 대기 {Math.floor(attestation.assessment.pending_age_ms / 60_000)}분. 완료 전에는 원본을 제거하지 않습니다.
+            </p>
+          {/if}
           {#if attestation.permit}
-            <p class="safe">업로드 상태와 복사 콘텐츠 검증 완료. 로컬 제거 허가 증거가 생성되었지만 파일은 그대로 보존됩니다.</p>
+            {#if eviction}
+              <p class="safe">원본을 운영체제 휴지통으로 이동했습니다. 클라우드 목적지는 유지되며 휴지통은 비우지 않았습니다.</p>
+              <p class="muted">사람 승인 {eviction.approval.approval_id} · 완료 {eviction.eviction.completion_id}</p>
+              <p class="muted">변경 불가 승인 기록: {eviction.approval_path}</p>
+            {:else}
+              <p class="safe">업로드 상태와 복사 콘텐츠 검증 완료. 로컬 제거 허가 증거가 생성되었지만 파일은 아직 그대로 보존됩니다.</p>
+              <div class="eviction-controls">
+                <p class="warning">
+                  아래 전체 영수증 ID를 직접 입력하고 이 파일만 휴지통으로 옮기는 사유를 남겨야 합니다. 실행 시 공급자 상태와 열린 파일·프로세스 참조를 다시 확인하며, 달라지면 중단합니다.
+                </p>
+                <div class="context">확인할 영수증 ID: {copied.receipt.receipt_id}</div>
+                <label>
+                  전체 영수증 ID 확인
+                  <input
+                    class="receipt-confirmation"
+                    type="text"
+                    bind:value={evictionConfirmation}
+                    autocomplete="off"
+                    spellcheck="false"
+                    disabled={evicting}
+                  />
+                </label>
+                <label>
+                  원본 휴지통 이동 사유
+                  <textarea
+                    bind:value={evictionRationale}
+                    maxlength="1000"
+                    disabled={evicting}
+                    placeholder="예: 공급자 업로드·콘텐츠 검증 완료 후 이 영수증의 로컬 원본만 휴지통으로 이동"
+                  ></textarea>
+                </label>
+                <button onclick={evictVerifiedSource} disabled={!sourceEvictionReady()}>
+                  {evicting ? "공급자·사용 중 상태 재검증 후 이동 중…" : "검증을 다시 수행하고 원본을 휴지통으로 이동"}
+                </button>
+              </div>
+            {/if}
           {:else}
             <p class="warning">아직 제거 불가: {attestation.blockers.join(", ")}</p>
           {/if}
@@ -517,8 +632,76 @@
     {#if report.candidates.length === 0}
       <p class="muted">현재 크기·경과일·지원 파일 유형 조건에 맞는 후보가 없습니다.</p>
     {:else}
+      <div class="review-queue" aria-label="클라우드 메타데이터 검토 큐">
+        <div class="review-progress" aria-live="polite">
+          <strong>
+            검토 진행 {reviewStats.reviewed.toLocaleString()} / {reviewStats.reviewable.toLocaleString()}개
+          </strong>
+          <progress
+            max={Math.max(1, reviewStats.reviewable)}
+            value={reviewStats.reviewed}
+            aria-label={`메타데이터 검토 ${reviewStats.reviewed}개 완료, ${reviewStats.unreviewed}개 남음`}
+          ></progress>
+          <span>
+            남음 {reviewStats.unreviewed.toLocaleString()}개 · {fmtBytes(reviewStats.unreviewedBytes)}
+          </span>
+        </div>
+        <div class="review-counts">
+          <span>승인 {reviewStats.approved.toLocaleString()}</span>
+          <span>보류 {reviewStats.held.toLocaleString()}</span>
+          <span>차단 {reviewStats.blocked.toLocaleString()} · {fmtBytes(reviewStats.blockedBytes)}</span>
+          <span>자동 진행 가능 {reviewStats.ready.toLocaleString()}</span>
+        </div>
+        <div class="review-filters">
+          <label>
+            상태
+            <select bind:value={reviewFilter} onchange={() => reviewPage = 1}>
+              <option value="unreviewed">미검토</option>
+              <option value="approved">승인</option>
+              <option value="held">보류</option>
+              <option value="blocked">차단</option>
+              <option value="ready">자동 진행 가능</option>
+              <option value="all">전체</option>
+            </select>
+          </label>
+          <label>
+            검토 사유
+            <select bind:value={reviewReason} onchange={() => reviewPage = 1}>
+              <option value="">모든 사유</option>
+              {#each reviewReasons as reason}
+                <option value={reason}>{cloudDecisionReasonLabel(reason)}</option>
+              {/each}
+            </select>
+          </label>
+          <label>
+            정렬
+            <select bind:value={reviewSort} onchange={() => reviewPage = 1}>
+              <option value="bytes-desc">큰 파일 먼저</option>
+              <option value="production-asc">생산일 오래된 순</option>
+              <option value="production-desc">생산일 최신 순</option>
+            </select>
+          </label>
+        </div>
+        <div class="review-pagination" aria-live="polite">
+          <button
+            onclick={() => reviewPage = Math.max(1, reviewPageData.page - 1)}
+            disabled={reviewPageData.page <= 1}
+          >이전 20개</button>
+          <span>
+            {reviewPageData.startIndex.toLocaleString()}–{reviewPageData.endIndex.toLocaleString()} /
+            {reviewPageData.totalItems.toLocaleString()}개 · {reviewPageData.page} / {reviewPageData.totalPages}쪽
+          </span>
+          <button
+            onclick={() => reviewPage = Math.min(reviewPageData.totalPages, reviewPageData.page + 1)}
+            disabled={reviewPageData.page >= reviewPageData.totalPages}
+          >다음 20개</button>
+        </div>
+      </div>
+      {#if reviewPageData.items.length === 0}
+        <p class="muted">현재 상태·사유 필터에 맞는 후보가 없습니다.</p>
+      {:else}
       <ul class="candidates">
-        {#each report.candidates as candidate (candidate.metadata_fingerprint)}
+        {#each reviewPageData.items as candidate (candidate.metadata_fingerprint)}
           <li class:blocked={candidate.blocked_reason !== null} class:adoptable={adoptEligible(candidate)}>
             <div class="line">
               <strong>{fmtBytes(candidate.bytes)}</strong>
@@ -527,7 +710,7 @@
               <span>근거 {candidate.production_time_source} ({candidate.production_time_confidence})</span>
               <span>수정 후 {candidate.age_days.toLocaleString()}일</span>
               {#if candidate.requires_review}<em>맥락/민감정보 검토 필요</em>{/if}
-              {#if candidate.blocked_reason}<em>{candidate.blocked_reason}</em>{/if}
+              {#if candidate.blocked_reason}<em>{cloudDecisionReasonLabel(candidate.blocked_reason)}</em>{/if}
             </div>
             <div class="path" title={candidate.src}>{candidate.src}</div>
             {#if candidate.content_title}
@@ -650,11 +833,12 @@
               </ul>
             </details>
             {#if candidate.review_reasons.length > 0}
-              <div class="context">검토 사유: {candidate.review_reasons.map(reviewReasonLabel).join(", ")}</div>
+              <div class="context">검토 사유: {candidate.review_reasons.map(cloudDecisionReasonLabel).join(", ")}</div>
             {/if}
           </li>
         {/each}
       </ul>
+      {/if}
     {/if}
   {/if}
 </section>
@@ -673,9 +857,19 @@
   .client-id { width: min(40rem, 80vw); }
   .summary { margin-top: 0.8rem; font-weight: 600; }
   .receipt { margin: 0.75rem 0; padding: 0.75rem; border: 1px solid #6b8e72; border-radius: 4px; background: #f5fbf6; }
+  .eviction-controls { margin-top: 0.75rem; padding: 0.75rem; border: 1px solid #b78335; border-radius: 4px; background: #fffaf1; display: grid; gap: 0.55rem; }
+  .eviction-controls textarea { width: min(52rem, 88vw); min-height: 3.5rem; resize: vertical; }
+  .receipt-confirmation { width: min(52rem, 88vw); font-family: ui-monospace, monospace; }
   .review-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin: 0.5rem 0; }
   .review-rationale { flex-basis: 100%; }
   .review-rationale textarea { width: min(52rem, 88vw); min-height: 3.5rem; resize: vertical; }
+  .review-queue { margin: 0.75rem 0; padding: 0.75rem; border: 1px solid #b7c6d8; border-radius: 4px; background: #f8fafc; display: grid; gap: 0.6rem; }
+  .review-progress { display: flex; flex-wrap: wrap; align-items: center; gap: 0.65rem; }
+  .review-progress progress { width: min(24rem, 70vw); }
+  .review-counts { display: flex; flex-wrap: wrap; gap: 0.75rem; color: #59636e; font-size: 0.78rem; }
+  .review-filters { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: end; }
+  .review-filters select { max-width: min(30rem, 80vw); }
+  .review-pagination { display: flex; flex-wrap: wrap; align-items: center; gap: 0.65rem; font-size: 0.8rem; }
   .approved { color: #25643b; }
   .held { color: #8a4b16; }
   .candidates { list-style: none; margin: 0.5rem 0; padding: 0; max-height: 34rem; overflow-y: auto; }
