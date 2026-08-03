@@ -9,14 +9,14 @@ use std::collections::BTreeMap;
 
 use sha2::{Digest, Sha256};
 
-use crate::cloud::{CloudPlanReport, CloudProvider};
+use crate::cloud::{CloudPlanOptions, CloudPlanReport, CloudProvider};
 use crate::cloud_transfer;
 use crate::icloud_sync_health::IcloudSyncHealthReport;
 use crate::naruon_capacity;
 use crate::provider_capacity::{self, CapacityEvidenceKind, CloudCapacityAssessment};
 use crate::provider_client_runtime::{self, ProviderClientRuntimeSnapshot};
 
-pub const NARUON_CLOUD_COPY_READINESS_SCHEMA_VERSION: u32 = 1;
+pub const NARUON_CLOUD_COPY_READINESS_SCHEMA_VERSION: u32 = 2;
 const NARUON_CLOUD_COPY_READINESS_SCHEMA_KIND: &str = "disksage.naruon.cloud-copy-readiness";
 const FINGERPRINT_CANONICALIZATION: &str = "lexicographic-json-object-keys-utf8-no-whitespace";
 const RUNTIME_BLOCKERS: [&str; 2] = [
@@ -86,6 +86,7 @@ pub struct NaruonCloudCopyReadinessEnvelope {
     pub decision_batch_fingerprint: String,
     pub provider: CloudProvider,
     pub destination_account_scope: crate::cloud::CloudAccountScope,
+    pub source_selection_policy: CloudPlanOptions,
     pub candidate_count: u64,
     pub candidate_bytes: u64,
     pub potentially_reclaimable_bytes: u64,
@@ -446,6 +447,9 @@ pub fn export_naruon_cloud_copy_readiness(
         decision_batch_fingerprint: crate::cloud::cloud_decision_batch_fingerprint(report),
         provider: report.cloud_root.provider,
         destination_account_scope: report.cloud_root.account_scope,
+        source_selection_policy: report
+            .source_selection_policy
+            .ok_or_else(|| "naruon-copy-readiness-selection-policy-missing".to_string())?,
         candidate_count,
         candidate_bytes: report.candidate_bytes,
         potentially_reclaimable_bytes: report.potentially_reclaimable_bytes,
@@ -514,6 +518,12 @@ pub fn validate_naruon_cloud_copy_readiness(
             ]
     {
         return Err("naruon-copy-readiness-policy-claim-invalid".into());
+    }
+    if envelope.source_selection_policy.min_size_bytes == 0
+        || envelope.source_selection_policy.limit == 0
+        || envelope.source_selection_policy.limit > 1_000
+    {
+        return Err("naruon-copy-readiness-selection-policy-invalid".into());
     }
     provider_client_runtime::validate_provider_client_runtime_snapshot(&envelope.provider_runtime)?;
     naruon_capacity::validate_cloud_capacity_assessment(&envelope.capacity)?;
@@ -879,6 +889,11 @@ mod tests {
                 access_issue: None,
             },
             generated_at_ms: 20,
+            source_selection_policy: Some(CloudPlanOptions {
+                min_size_bytes: 90 * 1024 * 1024,
+                min_age_days: 30,
+                limit: 200,
+            }),
             candidates: vec![embedded, filesystem],
             candidate_bytes: 84,
             potentially_reclaimable_bytes: 84,
@@ -959,6 +974,14 @@ mod tests {
             export_naruon_cloud_copy_readiness(&onedrive_report, &runtime, None).unwrap();
 
         assert_eq!(envelope.candidate_count, 2);
+        assert_eq!(
+            envelope.source_selection_policy,
+            CloudPlanOptions {
+                min_size_bytes: 90 * 1024 * 1024,
+                min_age_days: 30,
+                limit: 200,
+            }
+        );
         assert_eq!(
             envelope.production_time_evidence.embedded_metadata,
             CountBytes {

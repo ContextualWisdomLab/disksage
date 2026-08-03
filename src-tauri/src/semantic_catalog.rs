@@ -462,6 +462,7 @@ mod tests {
                 access_issue: None,
             },
             generated_at_ms: 1_784_900_000_000,
+            source_selection_policy: Some(crate::cloud::CloudPlanOptions::default()),
             candidate_bytes: candidates.iter().map(|candidate| candidate.bytes).sum(),
             potentially_reclaimable_bytes: candidates
                 .iter()
