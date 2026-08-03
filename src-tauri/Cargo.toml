@@ -20,6 +20,61 @@ name = "disksage-volume-snapshot"
 path = "src/bin/disksage-volume-snapshot.rs"
 required-features = ["volume-cli"]
 
+[[bin]]
+name = "disksage-cloud-plan"
+path = "src/bin/disksage-cloud-plan.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
+name = "disksage-cloud-local-inventory"
+path = "src/bin/disksage-cloud-local-inventory.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
+name = "disksage-icloud-local-eviction"
+path = "src/bin/disksage-icloud-local-eviction.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
+name = "disksage-multipart-archive-audit"
+path = "src/bin/disksage-multipart-archive-audit.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
+name = "disksage-incomplete-download-audit"
+path = "src/bin/disksage-incomplete-download-audit.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
+name = "disksage-incomplete-download-recovery"
+path = "src/bin/disksage-incomplete-download-recovery.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
+name = "disksage-incomplete-download-materialization"
+path = "src/bin/disksage-incomplete-download-materialization.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
+name = "disksage-incomplete-download-destination-plan"
+path = "src/bin/disksage-incomplete-download-destination-plan.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
+name = "disksage-incomplete-download-materialize"
+path = "src/bin/disksage-incomplete-download-materialize.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
+name = "disksage-git-worktree-audit"
+path = "src/bin/disksage-git-worktree-audit.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
+name = "disksage-archive-tree"
+path = "src/bin/disksage-archive-tree.rs"
+required-features = ["archive-cli"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -32,19 +87,39 @@ serde_json = "1"
 jwalk = "0.8"
 trash = "5.2.6"
 blake3 = "1.8.5"
+base64 = "0.22.1"
 oxttl = "0.2.3"
 oxrdf = "0.3.3"
 llama-cpp-2 = { version = "0.1.151", optional = true }
 sha2 = "0.11.0"
+sha1 = "0.10.6"
 ureq = "3.3.0"
 fs4 = "1.1.0"
 unicode-normalization = "0.1"
+unicode-general-category = "1.1.0"
+csv = "1.4.0"
+calamine = "0.36.0"
+getrandom = "0.3.4"
+keyring = "4.1.5"
+zeroize = { version = "1.9.0", features = ["derive"] }
+zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+memchr = "2.8.3"
+infer = "0.19.0"
+png = "0.17.16"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+embed_plist = "1.2.2"
+objc2 = "0.6.4"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSError", "NSFileManager", "NSObject", "NSString", "NSURL", "NSValue"] }
+plist = "1"
 
 [dev-dependencies]
 tempfile = "3.27.0"
 
 [features]
 volume-cli = []
+archive-cli = []
+cloud-cli = []
 llm-engine = ["dep:llama-cpp-2"]
 
 [lints.rust]
