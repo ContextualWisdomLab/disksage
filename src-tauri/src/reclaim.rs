@@ -6,6 +6,8 @@
 //! allocated blocks only as an observation and leaves physical reclaimability unknown until it is
 //! measured after the complete destructive lifecycle.
 
+#![deny(missing_docs)]
+
 use serde::Serialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -13,14 +15,23 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+/// Stable discriminator emitted by every reclaim-plan JSON document.
 pub const RECLAIM_PLAN_SCHEMA_KIND: &str = "disksage.reclaim-plan";
+/// Maximum number of normalized top-level roots accepted by one plan.
 pub const MAX_RECLAIM_PATHS: usize = 1_000;
+/// Maximum UTF-8 byte length accepted for one evidence path.
 pub const MAX_RECLAIM_PATH_UTF8_BYTES: usize = 4_096;
 
+/// Destructive lifecycle whose consequences the read-only plan is estimating.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlannedOperation {
+    /// Move the selected paths to the operating-system Trash.
     Trash,
+    /// Permanently remove the selected paths after an independent approval boundary.
+    ///
+    /// This variant changes only explanatory reason codes. This module never deletes or mutates a
+    /// path.
     Delete,
 }
 
@@ -38,47 +49,77 @@ impl FromStr for PlannedOperation {
     }
 }
 
+/// Filesystem object type observed at a normalized top-level root.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RootKind {
+    /// A regular-file root.
     File,
+    /// A directory root traversed without following symbolic links.
     Directory,
 }
 
+/// Confidence state for the physical-reclaimability claim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReclaimabilityStatus {
+    /// No post-operation free-space or filesystem-native reclaim proof exists.
     Unverified,
 }
 
+/// Byte evidence for one path or for the complete normalized selection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReclaimEstimate {
+    /// Sum of regular-file lengths after normalized-root traversal.
     pub logical_bytes: u64,
     /// Observed allocated blocks after deduplicating observable hard-link identities.
-    /// Copy-on-write shared extents remain counted once per inode, so this is not reclaim proof.
+    ///
+    /// Copy-on-write shared extents remain counted once per inode, so this value is not proof of
+    /// capacity that an operation will return to the filesystem.
     pub allocated_bytes: Option<u64>,
-    /// Intentionally unknown before an operation and a provider/filesystem free-space observation.
+    /// Verified bytes returned to free capacity after the complete destructive lifecycle.
+    ///
+    /// The planner intentionally emits `None`; only post-operation free-space evidence or a
+    /// filesystem-native proof may populate this claim in a separate receipt contract.
     pub physically_reclaimable_bytes: Option<u64>,
+    /// Current confidence state for `physically_reclaimable_bytes`.
     pub status: ReclaimabilityStatus,
+    /// Stable machine-readable explanations for uncertainty and accounting limits.
     pub reason_codes: Vec<String>,
 }
 
+/// Evidence and traversal counters for one normalized top-level root.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PathReclaimEstimate {
+    /// Exact canonical local path shown to the operator who requested the plan.
+    ///
+    /// This field is local private evidence. Callers must redact or omit it before telemetry,
+    /// analytics, remote logging, support bundles, or cross-account export.
     pub path: String,
+    /// Filesystem object type observed at the root.
     pub kind: RootKind,
+    /// Number of regular files observed under the root.
     pub files: u64,
+    /// Number of directories observed under the root, including a directory root itself.
     pub dirs: u64,
+    /// Number of entries excluded or unreadable during the bounded traversal.
     pub skipped: u64,
+    /// Logical, allocation, and physical-reclaimability evidence for this root.
     pub estimate: ReclaimEstimate,
 }
 
+/// Read-only reclaim evidence for a normalized, deduplicated path selection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReclaimPlan {
+    /// Stable schema discriminator.
     pub schema_kind: &'static str,
+    /// Schema revision for compatibility checks.
     pub schema_version: u32,
+    /// Destructive lifecycle whose consequences were considered.
     pub operation: PlannedOperation,
+    /// Per-root evidence in deterministic normalized-root order.
     pub paths: Vec<PathReclaimEstimate>,
+    /// Aggregate evidence across all normalized roots.
     pub totals: ReclaimEstimate,
 }
 
@@ -157,7 +198,11 @@ fn record_allocated_bytes(
     *total = None;
 }
 
-fn reason_codes(operation: PlannedOperation, allocation_available: bool) -> Vec<String> {
+fn reason_codes(
+    operation: PlannedOperation,
+    allocation_available: bool,
+    skipped_entries: u64,
+) -> Vec<String> {
     let mut reasons = vec![
         "physical-reclaimability-unverified".to_string(),
         "shared-extents-or-clones-unproven".to_string(),
@@ -166,6 +211,9 @@ fn reason_codes(operation: PlannedOperation, allocation_available: bool) -> Vec<
         reasons.push("allocated-bytes-are-not-reclaimability-proof".to_string());
     } else {
         reasons.push("allocated-size-unavailable".to_string());
+    }
+    if skipped_entries > 0 {
+        reasons.push("evidence-incomplete-skipped-entries".to_string());
     }
     if operation == PlannedOperation::Trash {
         reasons.push("trash-retains-bytes-until-emptied".to_string());
@@ -179,7 +227,7 @@ fn estimate(acc: &Accumulator, operation: PlannedOperation) -> ReclaimEstimate {
         allocated_bytes: acc.allocated_bytes,
         physically_reclaimable_bytes: None,
         status: ReclaimabilityStatus::Unverified,
-        reason_codes: reason_codes(operation, acc.allocated_bytes.is_some()),
+        reason_codes: reason_codes(operation, acc.allocated_bytes.is_some(), acc.skipped),
     }
 }
 
@@ -485,7 +533,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn filtered_symbolic_links_are_reported_as_skipped() {
+    fn filtered_symbolic_links_are_reported_as_incomplete_evidence() {
         let temp = tempfile::tempdir().unwrap();
         let target = temp.path().join("target.bin");
         let link = temp.path().join("link.bin");
@@ -497,5 +545,13 @@ mod tests {
         assert_eq!(plan.paths[0].files, 1);
         assert_eq!(plan.paths[0].dirs, 1);
         assert_eq!(plan.paths[0].skipped, 1);
+        assert!(plan.paths[0]
+            .estimate
+            .reason_codes
+            .contains(&"evidence-incomplete-skipped-entries".to_string()));
+        assert!(plan
+            .totals
+            .reason_codes
+            .contains(&"evidence-incomplete-skipped-entries".to_string()));
     }
 }
