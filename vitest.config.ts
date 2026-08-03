@@ -15,6 +15,15 @@ export default defineConfig({
         "src/lib/verdictBadge.ts",
       ],
       reporter: ["text", "json", "json-summary"],
+      // ponytail: 위 include 5개 순수 로직 파일은 헤드리스로 완전 검증 가능하므로
+      // 네 지표 모두 100%로 고정한다. 이 게이트는 scope를 넓히지 않는다 —
+      // Svelte 컴포넌트는 여전히 cargo test + 수동 체크리스트로 검증한다.
+      thresholds: {
+        statements: 100,
+        branches: 100,
+        functions: 100,
+        lines: 100,
+      },
     },
   },
 });
