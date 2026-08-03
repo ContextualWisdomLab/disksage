@@ -64,6 +64,7 @@ struct Args {
     decision_summary: bool,
     review_reason_set: Option<Vec<String>>,
     private_review_output: Option<PathBuf>,
+    private_candidate_inspection_output: Option<PathBuf>,
     exact_duplicate_review_prefix: Option<String>,
     exact_duplicate_kind: Option<ArchiveKind>,
     capacity_reserve_mib: u64,
@@ -185,6 +186,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
         decision_summary: false,
         review_reason_set: None,
         private_review_output: None,
+        private_candidate_inspection_output: None,
         exact_duplicate_review_prefix: None,
         exact_duplicate_kind: None,
         capacity_reserve_mib: 1024,
@@ -261,6 +263,19 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
                     args,
                     &mut index,
                     "--private-review-output",
+                )?));
+            }
+            "--private-candidate-inspection-output" => {
+                if parsed.private_candidate_inspection_output.is_some() {
+                    return Err(
+                        "--private-candidate-inspection-output은 한 번만 지정할 수 있음"
+                            .into(),
+                    );
+                }
+                parsed.private_candidate_inspection_output = Some(PathBuf::from(value(
+                    args,
+                    &mut index,
+                    "--private-candidate-inspection-output",
                 )?));
             }
             "--exact-duplicate-review-prefix" => {
@@ -424,7 +439,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             "--export-semantic-catalog" => parsed.export_semantic_catalog = true,
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary] [--min-size-mib N] [--min-age-days N] [--limit N] [--decision-summary [--review-reason-set REASON|REASON [--private-review-output ABSOLUTE_NEW_FILE.json]] | --exact-duplicate-review-prefix DIR_PREFIX --exact-duplicate-kind document|media|archive|dataset|backup|creative|incomplete-download | --export-naruon-copy-readiness --verify-capacity [--naruon-copy-readiness-output ABSOLUTE_NEW_FILE.json] | --export-semantic-catalog] [--verify-capacity [--oauth-connections ABSOLUTE_PATH] [--export-naruon-capacity]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
+                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary] [--min-size-mib N] [--min-age-days N] [--limit N] [--decision-summary [--private-candidate-inspection-output ABSOLUTE_NEW_FILE.json | --review-reason-set REASON|REASON [--private-review-output ABSOLUTE_NEW_FILE.json]] | --exact-duplicate-review-prefix DIR_PREFIX --exact-duplicate-kind document|media|archive|dataset|backup|creative|incomplete-download | --export-naruon-copy-readiness --verify-capacity [--naruon-copy-readiness-output ABSOLUTE_NEW_FILE.json] | --export-semantic-catalog] [--verify-capacity [--oauth-connections ABSOLUTE_PATH] [--export-naruon-capacity]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -668,6 +683,23 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     if args.private_review_output.is_some() && args.all_readable_roots {
         return Err("--private-review-output은 단일 cloud destination에서만 사용할 수 있음".into());
     }
+    if args.private_candidate_inspection_output.is_some() && !args.decision_summary {
+        return Err("--private-candidate-inspection-output에는 --decision-summary가 필요함".into());
+    }
+    if args.private_candidate_inspection_output.is_some()
+        && (args.review_reason_set.is_some() || args.private_review_output.is_some())
+    {
+        return Err(
+            "--private-candidate-inspection-output은 exact review subset 출력과 함께 사용할 수 없음"
+                .into(),
+        );
+    }
+    if args.private_candidate_inspection_output.is_some() && args.all_readable_roots {
+        return Err(
+            "--private-candidate-inspection-output은 단일 cloud destination에서만 사용할 수 있음"
+                .into(),
+        );
+    }
     if actions > 1 {
         return Err(
             "root inspection, copy, adoption, attestation, eviction, review action은 동시에 사용할 수 없음".into(),
@@ -716,6 +748,11 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     if let Some(output_path) = &args.private_review_output {
         if !output_path.is_absolute() {
             return Err("--private-review-output은 절대 경로여야 함".into());
+        }
+    }
+    if let Some(output_path) = &args.private_candidate_inspection_output {
+        if !output_path.is_absolute() {
+            return Err("--private-candidate-inspection-output은 절대 경로여야 함".into());
         }
     }
     if let Some(receipt_path) = &args.evict_receipt {
@@ -1079,6 +1116,81 @@ fn private_review_dossier(
         },
         "candidates": candidates,
     }))
+}
+
+#[cfg(not(coverage))]
+#[derive(serde::Serialize)]
+struct PrivateCandidateInspection<'a> {
+    decision_state: &'static str,
+    #[serde(flatten)]
+    candidate: &'a cloud::CloudCandidate,
+}
+
+/// Build a private, full-evidence inspection dossier for every candidate in one fresh plan.
+///
+/// This intentionally includes blocked candidates because their paths and embedded metadata still
+/// need human inspection even though they cannot enter the review or copy gates. The dossier is
+/// evidence only: it does not create review decisions, authorize a copy, or authorize eviction.
+#[cfg(not(coverage))]
+fn private_candidate_inspection_dossier(report: &cloud::CloudPlanReport) -> serde_json::Value {
+    let mut candidates = report.candidates.iter().collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        left.metadata_fingerprint
+            .cmp(&right.metadata_fingerprint)
+            .then_with(|| left.review_fingerprint.cmp(&right.review_fingerprint))
+    });
+    let candidate_bytes = candidates.iter().fold(0u64, |total, candidate| {
+        total.saturating_add(candidate.bytes)
+    });
+    let mut decision_state_counts = BTreeMap::<&'static str, u64>::new();
+    let mut decision_state_bytes = BTreeMap::<&'static str, u64>::new();
+    let inspections = candidates
+        .into_iter()
+        .map(|candidate| {
+            let decision_state = candidate_decision_state(candidate);
+            *decision_state_counts.entry(decision_state).or_insert(0) += 1;
+            let bytes = decision_state_bytes.entry(decision_state).or_insert(0);
+            *bytes = bytes.saturating_add(candidate.bytes);
+            PrivateCandidateInspection {
+                decision_state,
+                candidate,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    serde_json::json!({
+        "schema_version": 1,
+        "output_mode": "private-candidate-inspection-dossier",
+        "generated_at_ms": report.generated_at_ms,
+        "contains_sensitive_local_metadata": true,
+        "inspection_scope": "all-current-plan-candidates",
+        "source_selection_policy": report.source_selection_policy,
+        "decision_batch_fingerprint_version": cloud::CLOUD_DECISION_BATCH_FINGERPRINT_VERSION,
+        "decision_batch_fingerprint": cloud::cloud_decision_batch_fingerprint(report),
+        "cloud_root": &report.cloud_root,
+        "candidate_count": inspections.len(),
+        "candidate_bytes": candidate_bytes,
+        "decision_state": {
+            "counts": decision_state_counts,
+            "candidate_bytes": decision_state_bytes,
+        },
+        "metadata_policy": {
+            "production_time_precedence": [
+                "embedded-metadata",
+                "explicit-filename-date",
+                "filesystem-created",
+                "filesystem-modified",
+            ],
+            "filename_dates_are_auxiliary": true,
+            "raw_metadata_values_are_review_evidence_only": true,
+            "inspection_includes_blocked_candidates": true,
+            "dossier_is_not_approval": true,
+            "candidate_review_decisions_remain_individual": true,
+        },
+        "cloud_write_executed": false,
+        "source_eviction_authorized": false,
+        "candidates": inspections,
+    })
 }
 
 #[cfg(all(not(coverage), unix))]
@@ -2308,6 +2420,28 @@ fn run() -> Result<(), String> {
             Some(reasons) => review_batch_summary(&report, reasons)?,
             None => decision_summary(&report),
         };
+        if let Some(output_path) = &args.private_candidate_inspection_output {
+            let dossier = private_candidate_inspection_dossier(&report);
+            let (sha256, bytes) = write_private_review_dossier(output_path, &dossier)?;
+            summary
+                .as_object_mut()
+                .ok_or_else(|| "decision summary JSON object가 아님".to_string())?
+                .insert(
+                    "private_candidate_inspection_dossier".into(),
+                    serde_json::json!({
+                        "written": true,
+                        "bytes": bytes,
+                        "sha256": sha256,
+                        "unix_mode": "0600",
+                        "create_new": true,
+                        "contains_sensitive_local_metadata": true,
+                        "includes_blocked_candidates": true,
+                        "is_approval": false,
+                        "cloud_write_executed": false,
+                        "source_eviction_authorized": false,
+                    }),
+                );
+        }
         if let Some(output_path) = &args.private_review_output {
             let reasons = args
                 .review_reason_set
@@ -2393,6 +2527,7 @@ mod tests {
         assert!(!defaults.all_readable_roots);
         assert!(defaults.review_reason_set.is_none());
         assert!(defaults.private_review_output.is_none());
+        assert!(defaults.private_candidate_inspection_output.is_none());
         assert!(defaults.exact_duplicate_review_prefix.is_none());
         assert!(defaults.exact_duplicate_kind.is_none());
         assert_eq!(defaults.capacity_reserve_mib, 1024);
@@ -2437,6 +2572,21 @@ mod tests {
             Some(PathBuf::from("/private-review.json"))
         );
         assert_eq!(parsed.capacity_reserve_mib, 2048);
+
+        let inspection = parse_args(
+            &[
+                "--decision-summary".into(),
+                "--private-candidate-inspection-output".into(),
+                "/private-inspection.json".into(),
+            ],
+            Path::new("/home/test"),
+        )
+        .unwrap();
+        assert_eq!(
+            inspection.private_candidate_inspection_output,
+            Some(PathBuf::from("/private-inspection.json"))
+        );
+        assert!(validate_action_args(&inspection).is_ok());
 
         let duplicate_review = parse_args(
             &[
@@ -2588,6 +2738,30 @@ mod tests {
         let mut multicloud_private_review = private_review;
         multicloud_private_review.all_readable_roots = true;
         assert!(validate_action_args(&multicloud_private_review).is_err());
+        let private_inspection = parse_args(
+            &[
+                "--decision-summary".into(),
+                "--private-candidate-inspection-output".into(),
+                "/private/inspection.json".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&private_inspection).is_ok());
+        let mut missing_inspection_summary = private_inspection.clone();
+        missing_inspection_summary.decision_summary = false;
+        assert!(validate_action_args(&missing_inspection_summary).is_err());
+        let mut relative_private_inspection = private_inspection.clone();
+        relative_private_inspection.private_candidate_inspection_output =
+            Some(PathBuf::from("inspection.json"));
+        assert!(validate_action_args(&relative_private_inspection).is_err());
+        let mut exact_subset_conflict = private_inspection.clone();
+        exact_subset_conflict.review_reason_set =
+            Some(vec!["destination-account-scope-unknown".into()]);
+        assert!(validate_action_args(&exact_subset_conflict).is_err());
+        let mut multicloud_private_inspection = private_inspection;
+        multicloud_private_inspection.all_readable_roots = true;
+        assert!(validate_action_args(&multicloud_private_inspection).is_err());
         for prefix in ["", ".", "..", "nested/path", "nested\\path", "line\nbreak"] {
             assert!(parse_args(
                 &[
@@ -2938,6 +3112,48 @@ mod tests {
         ] {
             assert!(encoded_dossier.contains(private_value));
         }
+
+        let mut inspection_report = report.clone();
+        let mut blocked = inspection_report.candidates[0].clone();
+        blocked.metadata_fingerprint = "1".repeat(64);
+        blocked.review_fingerprint = "2".repeat(64);
+        blocked.relative_path = "blocked-private.zip".into();
+        blocked.src = "/Users/private/Downloads/blocked-private.zip".into();
+        blocked.dst = "/Users/private/Cloud/blocked-private.zip".into();
+        blocked.blocked_reason = Some("opaque-container-content-uninspected".into());
+        inspection_report.candidates.push(blocked);
+        inspection_report.candidate_bytes = 84;
+        let inspection = private_candidate_inspection_dossier(&inspection_report);
+        assert_eq!(
+            inspection["output_mode"],
+            "private-candidate-inspection-dossier"
+        );
+        assert_eq!(
+            inspection["inspection_scope"],
+            "all-current-plan-candidates"
+        );
+        assert_eq!(inspection["candidate_count"], 2);
+        assert_eq!(inspection["candidate_bytes"], 84);
+        assert_eq!(inspection["decision_state"]["counts"]["blocked"], 1);
+        assert_eq!(inspection["decision_state"]["counts"]["review-required"], 1);
+        assert_eq!(
+            inspection["metadata_policy"]["inspection_includes_blocked_candidates"],
+            true
+        );
+        assert_eq!(
+            inspection["metadata_policy"]["dossier_is_not_approval"],
+            true
+        );
+        assert_eq!(inspection["cloud_write_executed"], false);
+        assert_eq!(inspection["source_eviction_authorized"], false);
+        assert!(inspection["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|candidate| {
+                candidate["decision_state"] == "blocked"
+                    && candidate["relative_path"] == "blocked-private.zip"
+            }));
 
         #[cfg(unix)]
         {
@@ -3356,6 +3572,7 @@ mod tests {
         assert!(help.contains("--reviewed-by human:ID"));
         assert!(help.contains("--export-naruon-copy-readiness --verify-capacity"));
         assert!(help.contains("--naruon-copy-readiness-output ABSOLUTE_NEW_FILE.json"));
+        assert!(help.contains("--private-candidate-inspection-output ABSOLUTE_NEW_FILE.json"));
 
         assert!(parse_args(
             &["--review-disposition".into(), "maybe".into(),],
