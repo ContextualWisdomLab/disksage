@@ -7,6 +7,7 @@
 
 use crate::cloud::{CloudAccountScope, CloudProvider, CloudRoot};
 use serde::Serialize;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::Metadata;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -439,18 +440,52 @@ fn process_command_matches_target(command: &str, path: &Path) -> bool {
 #[cfg(all(unix, not(coverage)))]
 fn parse_process_command_references(output: &[u8], path: &Path, own_pid: u32) -> Vec<u32> {
     let text = String::from_utf8_lossy(output);
-    let mut pids = Vec::new();
+    let mut records = Vec::new();
     for line in text.lines() {
         let line = line.trim_start();
-        let split_at = line.find(char::is_whitespace).unwrap_or(line.len());
-        let (pid_text, command) = line.split_at(split_at);
+        let pid_end = line.find(char::is_whitespace).unwrap_or(line.len());
+        let (pid_text, remainder) = line.split_at(pid_end);
         let Ok(pid) = pid_text.parse::<u32>() else {
             continue;
         };
-        if pid != own_pid && process_command_matches_target(command.trim_start(), path) {
-            pids.push(pid);
-        }
+        let remainder = remainder.trim_start();
+        let parent_pid_end = remainder
+            .find(char::is_whitespace)
+            .unwrap_or(remainder.len());
+        let (parent_pid_text, command) = remainder.split_at(parent_pid_end);
+        let Ok(parent_pid) = parent_pid_text.parse::<u32>() else {
+            continue;
+        };
+        records.push((pid, parent_pid, command.trim_start()));
     }
+
+    // A watchdog or timeout wrapper commonly includes the full child command (and therefore the
+    // target path) in its own argv. It supervises the planner but does not itself use the file.
+    // Exclude the planner and its complete ancestor chain while retaining unrelated processes that
+    // independently reference the same target.
+    let parent_by_pid: BTreeMap<u32, u32> = records
+        .iter()
+        .map(|(pid, parent_pid, _)| (*pid, *parent_pid))
+        .collect();
+    let mut planner_lineage = BTreeSet::new();
+    let mut lineage_pid = own_pid;
+    while planner_lineage.insert(lineage_pid) {
+        let Some(parent_pid) = parent_by_pid.get(&lineage_pid).copied() else {
+            break;
+        };
+        if parent_pid == 0 || parent_pid == lineage_pid {
+            break;
+        }
+        lineage_pid = parent_pid;
+    }
+
+    let mut pids: Vec<u32> = records
+        .into_iter()
+        .filter_map(|(pid, _, command)| {
+            (!planner_lineage.contains(&pid) && process_command_matches_target(command, path))
+                .then_some(pid)
+        })
+        .collect();
     pids.sort_unstable();
     pids.dedup();
     pids
@@ -459,7 +494,7 @@ fn parse_process_command_references(output: &[u8], path: &Path, own_pid: u32) ->
 #[cfg(all(unix, not(coverage)))]
 fn observe_process_command_use(path: &Path) -> ActiveUseEvidence {
     let mut child = match Command::new("ps")
-        .args(["-axo", "pid=,command="])
+        .args(["-axo", "pid=,ppid=,command="])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -565,6 +600,13 @@ fn observe_active_use(_path: &Path) -> ActiveUseEvidence {
         results_truncated: false,
         error: Some("active-use-check-unsupported-platform".into()),
     }
+}
+
+/// Reuse the same bounded open-handle and process-command evidence for any source whose local
+/// bytes may be released. Unsupported or incomplete platforms remain explicit and fail closed at
+/// the caller.
+pub fn observe_path_active_use(path: &Path) -> ActiveUseEvidence {
+    observe_active_use(path)
 }
 
 #[cfg(all(target_os = "macos", not(coverage)))]
@@ -1093,12 +1135,26 @@ mod tests {
     #[test]
     fn process_command_reference_parser_detects_relative_path_and_excludes_self() {
         let path = Path::new("/Cloud/SONY ICD-TX650/FOLDER01/231031_2308.wav");
-        let output = b"  101 python audio_library.py /Cloud/SONY ICD-TX650/FOLDER01/other.wav\n\
-  202 python audio_library.py --path FOLDER01/231031_2308.wav --keep-local\n\
-  303 checker --path /Cloud/SONY ICD-TX650/FOLDER01/231031_2308.wav\n";
+        let output = b"  101 1 python audio_library.py /Cloud/SONY ICD-TX650/FOLDER01/other.wav\n\
+  202 1 python audio_library.py --path FOLDER01/231031_2308.wav --keep-local\n\
+  303 1 checker --path /Cloud/SONY ICD-TX650/FOLDER01/231031_2308.wav\n";
         assert_eq!(
             parse_process_command_references(output, path, 303),
             vec![202]
+        );
+    }
+
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
+    fn process_command_reference_parser_excludes_path_bearing_supervisor_lineage() {
+        let path = Path::new("/Cloud/large-upload.zip");
+        let output =
+            b"  500 1 gtimeout 8 disksage-icloud-local-eviction --path /Cloud/large-upload.zip\n\
+  501 500 disksage-icloud-local-eviction --path /Cloud/large-upload.zip\n\
+  502 1 preview-worker --input /Cloud/large-upload.zip\n";
+        assert_eq!(
+            parse_process_command_references(output, path, 501),
+            vec![502]
         );
     }
 

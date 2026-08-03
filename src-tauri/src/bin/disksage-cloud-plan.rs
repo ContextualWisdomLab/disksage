@@ -4,16 +4,28 @@
 embed_plist::embed_info_plist!("../../disksage-cloud-plan.Info.plist");
 
 #[cfg(not(coverage))]
+use std::collections::BTreeMap;
+#[cfg(all(not(coverage), unix))]
+use std::fs::OpenOptions;
+#[cfg(all(not(coverage), unix))]
+use std::io::Write;
+#[cfg(not(coverage))]
 use std::path::{Path, PathBuf};
 
 #[cfg(not(coverage))]
-use disksage_lib::cloud::{self, CloudPlanOptions, CloudProvider, CloudRoot};
+use disksage_lib::cloud::{
+    self, ArchiveKind, CloudAccountScope, CloudPlanOptions, CloudProvider, CloudRoot,
+};
 #[cfg(not(coverage))]
-use disksage_lib::cloud_eviction::{self, CloudEvictionResult};
+use disksage_lib::cloud_eviction::{self, CloudEvictionResult, CloudSourceEvictionApproval};
+#[cfg(not(coverage))]
+use disksage_lib::cloud_local_eviction;
 #[cfg(not(coverage))]
 use disksage_lib::cloud_review::{self, CloudReviewDecision, CloudReviewDisposition};
 #[cfg(not(coverage))]
 use disksage_lib::cloud_transfer::{self, CloudCopyReceipt, LocalEvictionPermit};
+#[cfg(not(coverage))]
+use disksage_lib::naruon_capacity;
 #[cfg(not(coverage))]
 use disksage_lib::naruon_lineage;
 #[cfg(not(coverage))]
@@ -26,6 +38,10 @@ use disksage_lib::provider_evidence::{self, ProviderSyncEvidenceRecord};
 use disksage_lib::provider_oauth;
 #[cfg(not(coverage))]
 use disksage_lib::provider_sync;
+#[cfg(not(coverage))]
+use disksage_lib::semantic_catalog;
+#[cfg(all(not(coverage), unix))]
+use sha2::{Digest, Sha256};
 
 #[cfg(not(coverage))]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,7 +54,13 @@ struct Args {
     limit: usize,
     list_roots: bool,
     inspect_roots: bool,
+    all_readable_roots: bool,
     verify_capacity: bool,
+    decision_summary: bool,
+    review_reason_set: Option<Vec<String>>,
+    private_review_output: Option<PathBuf>,
+    exact_duplicate_review_prefix: Option<String>,
+    exact_duplicate_kind: Option<ArchiveKind>,
     capacity_reserve_mib: u64,
     copy_fingerprint: Option<String>,
     adopt_existing_fingerprint: Option<String>,
@@ -50,6 +72,7 @@ struct Args {
     evict_receipt: Option<PathBuf>,
     confirm_receipt_id: Option<String>,
     eviction_dir: Option<PathBuf>,
+    eviction_approval_dir: Option<PathBuf>,
     journal_path: Option<PathBuf>,
     review_candidate_fingerprint: Option<String>,
     review_fingerprint: Option<String>,
@@ -59,6 +82,8 @@ struct Args {
     review_dir: Option<PathBuf>,
     export_naruon_lineage: Option<PathBuf>,
     naruon_sync_evidence: Option<PathBuf>,
+    export_naruon_capacity: bool,
+    export_semantic_catalog: bool,
 }
 
 #[cfg(not(coverage))]
@@ -80,6 +105,64 @@ fn parse_provider(value: &str) -> Result<CloudProvider, String> {
 }
 
 #[cfg(not(coverage))]
+fn parse_review_reason_set(value: &str) -> Result<Vec<String>, String> {
+    if value.len() > 2_048 {
+        return Err("--review-reason-set 값이 너무 김".into());
+    }
+    let raw = value.split('|').collect::<Vec<_>>();
+    if raw.is_empty() || raw.len() > 16 {
+        return Err("--review-reason-set은 1개 이상 16개 이하 사유여야 함".into());
+    }
+    let mut reasons = Vec::with_capacity(raw.len());
+    for reason in raw {
+        if reason.is_empty()
+            || reason.len() > 128
+            || !reason
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        {
+            return Err("--review-reason-set 사유 형식이 올바르지 않음".into());
+        }
+        reasons.push(reason.to_string());
+    }
+    let original_len = reasons.len();
+    reasons.sort();
+    reasons.dedup();
+    if reasons.len() != original_len {
+        return Err("--review-reason-set에 중복 사유가 있음".into());
+    }
+    Ok(reasons)
+}
+
+#[cfg(not(coverage))]
+fn parse_exact_duplicate_review_prefix(value: &str) -> Result<String, String> {
+    if value.is_empty()
+        || value.len() > 255
+        || matches!(value, "." | "..")
+        || value
+            .chars()
+            .any(|character| character.is_control() || matches!(character, '/' | '\\'))
+    {
+        return Err("--exact-duplicate-review-prefix는 단일 디렉터리 이름 prefix여야 함".into());
+    }
+    Ok(value.to_string())
+}
+
+#[cfg(not(coverage))]
+fn parse_archive_kind(value: &str) -> Result<ArchiveKind, String> {
+    match value {
+        "document" => Ok(ArchiveKind::Document),
+        "media" => Ok(ArchiveKind::Media),
+        "archive" => Ok(ArchiveKind::Archive),
+        "dataset" => Ok(ArchiveKind::Dataset),
+        "backup" => Ok(ArchiveKind::Backup),
+        "creative" => Ok(ArchiveKind::Creative),
+        "incomplete-download" => Ok(ArchiveKind::IncompleteDownload),
+        _ => Err(format!("지원하지 않는 exact duplicate kind: {value}")),
+    }
+}
+
+#[cfg(not(coverage))]
 fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
     let mut parsed = Args {
         root: home.to_path_buf(),
@@ -90,7 +173,13 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
         limit: 200,
         list_roots: false,
         inspect_roots: false,
+        all_readable_roots: false,
         verify_capacity: false,
+        decision_summary: false,
+        review_reason_set: None,
+        private_review_output: None,
+        exact_duplicate_review_prefix: None,
+        exact_duplicate_kind: None,
         capacity_reserve_mib: 1024,
         copy_fingerprint: None,
         adopt_existing_fingerprint: None,
@@ -102,6 +191,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
         evict_receipt: None,
         confirm_receipt_id: None,
         eviction_dir: None,
+        eviction_approval_dir: None,
         journal_path: None,
         review_candidate_fingerprint: None,
         review_fingerprint: None,
@@ -111,6 +201,8 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
         review_dir: None,
         export_naruon_lineage: None,
         naruon_sync_evidence: None,
+        export_naruon_capacity: false,
+        export_semantic_catalog: false,
     };
     let mut index = 0;
     while index < args.len() {
@@ -139,7 +231,53 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             }
             "--list-roots" => parsed.list_roots = true,
             "--inspect-roots" => parsed.inspect_roots = true,
+            "--all-readable-roots" => parsed.all_readable_roots = true,
             "--verify-capacity" => parsed.verify_capacity = true,
+            "--decision-summary" => parsed.decision_summary = true,
+            "--review-reason-set" => {
+                if parsed.review_reason_set.is_some() {
+                    return Err("--review-reason-set은 한 번만 지정할 수 있음".into());
+                }
+                parsed.review_reason_set = Some(parse_review_reason_set(&value(
+                    args,
+                    &mut index,
+                    "--review-reason-set",
+                )?)?);
+            }
+            "--private-review-output" => {
+                if parsed.private_review_output.is_some() {
+                    return Err("--private-review-output은 한 번만 지정할 수 있음".into());
+                }
+                parsed.private_review_output = Some(PathBuf::from(value(
+                    args,
+                    &mut index,
+                    "--private-review-output",
+                )?));
+            }
+            "--exact-duplicate-review-prefix" => {
+                if parsed.exact_duplicate_review_prefix.is_some() {
+                    return Err(
+                        "--exact-duplicate-review-prefix는 한 번만 지정할 수 있음".into(),
+                    );
+                }
+                parsed.exact_duplicate_review_prefix = Some(
+                    parse_exact_duplicate_review_prefix(&value(
+                        args,
+                        &mut index,
+                        "--exact-duplicate-review-prefix",
+                    )?)?,
+                );
+            }
+            "--exact-duplicate-kind" => {
+                if parsed.exact_duplicate_kind.is_some() {
+                    return Err("--exact-duplicate-kind는 한 번만 지정할 수 있음".into());
+                }
+                parsed.exact_duplicate_kind = Some(parse_archive_kind(&value(
+                    args,
+                    &mut index,
+                    "--exact-duplicate-kind",
+                )?)?);
+            }
             "--capacity-reserve-mib" => {
                 parsed.capacity_reserve_mib = value(args, &mut index, "--capacity-reserve-mib")?
                     .parse()
@@ -197,6 +335,13 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
                 parsed.eviction_dir =
                     Some(PathBuf::from(value(args, &mut index, "--eviction-dir")?))
             }
+            "--eviction-approval-dir" => {
+                parsed.eviction_approval_dir = Some(PathBuf::from(value(
+                    args,
+                    &mut index,
+                    "--eviction-approval-dir",
+                )?))
+            }
             "--journal-path" => {
                 parsed.journal_path =
                     Some(PathBuf::from(value(args, &mut index, "--journal-path")?))
@@ -249,9 +394,11 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
                     "--naruon-sync-evidence",
                 )?))
             }
+            "--export-naruon-capacity" => parsed.export_naruon_capacity = true,
+            "--export-semantic-catalog" => parsed.export_semantic_catalog = true,
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive] [--min-size-mib N] [--min-age-days N] [--limit N] [--verify-capacity [--oauth-connections ABSOLUTE_PATH]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
+                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary] [--min-size-mib N] [--min-age-days N] [--limit N] [--decision-summary [--review-reason-set REASON|REASON [--private-review-output ABSOLUTE_NEW_FILE.json]] | --exact-duplicate-review-prefix DIR_PREFIX --exact-duplicate-kind document|media|archive|dataset|backup|creative|incomplete-download | --export-semantic-catalog] [--verify-capacity [--oauth-connections ABSOLUTE_PATH] [--export-naruon-capacity]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -291,6 +438,8 @@ struct EvictionOutput {
     evidence_record: ProviderSyncEvidenceRecord,
     evidence_path: String,
     permit: LocalEvictionPermit,
+    approval: CloudSourceEvictionApproval,
+    approval_path: String,
     eviction: CloudEvictionResult,
 }
 
@@ -306,26 +455,49 @@ struct ReviewOutput {
 fn validate_action_args(args: &Args) -> Result<(), String> {
     let copy_action = args.copy_fingerprint.is_some();
     let adoption_action = args.adopt_existing_fingerprint.is_some();
+    let exact_duplicate_review =
+        args.exact_duplicate_review_prefix.is_some() || args.exact_duplicate_kind.is_some();
+    if args.exact_duplicate_review_prefix.is_some() != args.exact_duplicate_kind.is_some() {
+        return Err(
+            "--exact-duplicate-review-prefix와 --exact-duplicate-kind는 함께 지정해야 함".into(),
+        );
+    }
+    if args.all_readable_roots && !args.decision_summary {
+        return Err("--all-readable-roots에는 --decision-summary가 필요함".into());
+    }
+    if args.all_readable_roots && (args.cloud_root.is_some() || args.provider.is_some()) {
+        return Err(
+            "--all-readable-roots는 --cloud-root 또는 --provider와 함께 사용할 수 없음".into(),
+        );
+    }
     if copy_action && adoption_action {
         return Err("copy action과 existing-copy adoption action은 동시에 사용할 수 없음".into());
     }
     if (copy_action || adoption_action) != args.receipt_dir.is_some() {
         return Err("copy/adoption fingerprint와 --receipt-dir은 함께 지정해야 함".into());
     }
-    let review_fields = [
+    let review_evidence_fields = [
         args.review_candidate_fingerprint.is_some(),
         args.review_fingerprint.is_some(),
         args.review_disposition.is_some(),
-        args.reviewed_by.is_some(),
-        args.review_rationale.is_some(),
     ];
-    if review_fields.iter().any(|value| *value) && !review_fields.iter().all(|value| *value) {
-        return Err(
-            "review fingerprint, disposition, reviewer, rationale는 모두 함께 지정해야 함".into(),
-        );
+    if review_evidence_fields.iter().any(|value| *value)
+        && !review_evidence_fields.iter().all(|value| *value)
+    {
+        return Err("review fingerprint와 disposition은 모두 함께 지정해야 함".into());
     }
-    let review_action = review_fields.iter().all(|value| *value);
-    if review_action {
+    let attribution_fields = [args.reviewed_by.is_some(), args.review_rationale.is_some()];
+    if attribution_fields.iter().any(|value| *value)
+        && !attribution_fields.iter().all(|value| *value)
+    {
+        return Err("reviewer와 rationale는 함께 지정해야 함".into());
+    }
+    let attributed = attribution_fields.iter().all(|value| *value);
+    let review_action = review_evidence_fields.iter().all(|value| *value);
+    if review_action && !attributed {
+        return Err("review action에는 reviewer와 rationale가 필요함".into());
+    }
+    if attributed {
         cloud_review::validate_review_attribution(
             args.reviewed_by
                 .as_deref()
@@ -339,14 +511,20 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
         args.evict_receipt.is_some(),
         args.confirm_receipt_id.is_some(),
         args.eviction_dir.is_some(),
+        args.eviction_approval_dir.is_some(),
         args.journal_path.is_some(),
     ];
-    if eviction_fields.iter().any(|value| *value) && !eviction_fields.iter().all(|value| *value) {
+    if eviction_fields.iter().any(|value| *value)
+        && (!eviction_fields.iter().all(|value| *value) || !attributed)
+    {
         return Err(
-            "eviction action에는 receipt, 확인 id, eviction dir, journal path가 모두 필요함".into(),
+            "eviction action에는 receipt, 확인 id, eviction dir, approval dir, journal path, reviewer, rationale가 모두 필요함".into(),
         );
     }
-    let eviction_action = eviction_fields.iter().all(|value| *value);
+    let eviction_action = eviction_fields.iter().all(|value| *value) && attributed;
+    if attributed && !review_action && !eviction_action {
+        return Err("reviewer와 rationale는 review 또는 eviction action에만 지정할 수 있음".into());
+    }
     let attestation_action = args.attest_receipt.is_some();
     if (attestation_action || eviction_action) != args.evidence_dir.is_some() {
         return Err("attestation/eviction action에는 --evidence-dir이 반드시 필요함".into());
@@ -372,10 +550,12 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
             || adoption_action
             || attestation_action
             || eviction_action
-            || review_action
+            || exact_duplicate_review
             || args.export_naruon_lineage.is_some())
     {
-        return Err("capacity verification은 plan 또는 copy action에서만 사용할 수 있음".into());
+        return Err(
+            "capacity verification은 plan, review 또는 copy action에서만 사용할 수 있음".into(),
+        );
     }
     if args
         .provider_object_id
@@ -393,6 +573,9 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     if args.naruon_sync_evidence.is_some() && args.export_naruon_lineage.is_none() {
         return Err("--naruon-sync-evidence에는 --export-naruon-lineage가 필요함".into());
     }
+    if args.export_naruon_capacity && !args.verify_capacity {
+        return Err("--export-naruon-capacity에는 --verify-capacity가 필요함".into());
+    }
     let actions = usize::from(args.list_roots)
         + usize::from(args.inspect_roots)
         + usize::from(copy_action)
@@ -400,7 +583,41 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
         + usize::from(args.attest_receipt.is_some())
         + usize::from(eviction_action)
         + usize::from(review_action)
-        + usize::from(args.export_naruon_lineage.is_some());
+        + usize::from(args.export_naruon_lineage.is_some())
+        + usize::from(args.export_naruon_capacity)
+        + usize::from(args.export_semantic_catalog);
+    if args.all_readable_roots && actions > 0 {
+        return Err(
+            "--all-readable-roots는 mutation 또는 root inspection과 함께 사용할 수 없음".into(),
+        );
+    }
+    if exact_duplicate_review
+        && (actions > 0
+            || args.all_readable_roots
+            || args.decision_summary
+            || args.review_reason_set.is_some())
+    {
+        return Err(
+            "exact duplicate review batch는 다른 action 또는 summary mode와 함께 사용할 수 없음"
+                .into(),
+        );
+    }
+    if args.decision_summary && actions > 0 {
+        return Err("--decision-summary는 plan 출력에만 사용할 수 있음".into());
+    }
+    if args.review_reason_set.is_some() && !args.decision_summary {
+        return Err("--review-reason-set에는 --decision-summary가 필요함".into());
+    }
+    if args.private_review_output.is_some()
+        && (!args.decision_summary || args.review_reason_set.is_none())
+    {
+        return Err(
+            "--private-review-output에는 --decision-summary와 --review-reason-set이 필요함".into(),
+        );
+    }
+    if args.private_review_output.is_some() && args.all_readable_roots {
+        return Err("--private-review-output은 단일 cloud destination에서만 사용할 수 있음".into());
+    }
     if actions > 1 {
         return Err(
             "root inspection, copy, adoption, attestation, eviction, review action은 동시에 사용할 수 없음".into(),
@@ -446,6 +663,11 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
             return Err("--oauth-connections는 절대 경로여야 함".into());
         }
     }
+    if let Some(output_path) = &args.private_review_output {
+        if !output_path.is_absolute() {
+            return Err("--private-review-output은 절대 경로여야 함".into());
+        }
+    }
     if let Some(receipt_path) = &args.evict_receipt {
         if !receipt_path.is_absolute() {
             return Err("--evict-receipt는 절대 경로여야 함".into());
@@ -454,6 +676,11 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     if let Some(eviction_dir) = &args.eviction_dir {
         if !eviction_dir.is_absolute() {
             return Err("--eviction-dir은 절대 경로여야 함".into());
+        }
+    }
+    if let Some(approval_dir) = &args.eviction_approval_dir {
+        if !approval_dir.is_absolute() {
+            return Err("--eviction-approval-dir은 절대 경로여야 함".into());
         }
     }
     if let Some(journal_path) = &args.journal_path {
@@ -475,6 +702,834 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(not(coverage))]
+fn candidate_decision_state(candidate: &cloud::CloudCandidate) -> &'static str {
+    if candidate.blocked_reason.is_some() {
+        "blocked"
+    } else if candidate.requires_review {
+        "review-required"
+    } else {
+        "ready-for-copy-review"
+    }
+}
+
+#[cfg(not(coverage))]
+fn increment(map: &mut BTreeMap<String, u64>, key: &str, value: u64) {
+    let entry = map.entry(key.to_string()).or_default();
+    *entry = entry.saturating_add(value);
+}
+
+/// Aggregate only fixed decision labels and evidence-source labels, never paths or metadata values.
+/// Review-reason bytes can overlap because one candidate may carry several independent reasons.
+#[cfg(not(coverage))]
+fn decision_aggregates(report: &cloud::CloudPlanReport) -> serde_json::Value {
+    let mut decision_state_counts = BTreeMap::new();
+    let mut decision_state_candidate_bytes = BTreeMap::new();
+    let mut review_required_reason_counts = BTreeMap::new();
+    let mut review_required_reason_candidate_bytes = BTreeMap::new();
+    let mut review_required_sole_reason_counts = BTreeMap::new();
+    let mut review_required_sole_reason_candidate_bytes = BTreeMap::new();
+    let mut review_required_reason_count_distribution = BTreeMap::new();
+    let mut review_required_reason_count_candidate_bytes = BTreeMap::new();
+    let mut review_required_reason_set_counts = BTreeMap::new();
+    let mut review_required_reason_set_candidate_bytes = BTreeMap::new();
+    let mut blocked_reason_counts = BTreeMap::new();
+    let mut blocked_reason_candidate_bytes = BTreeMap::new();
+    let mut production_time_source_counts = BTreeMap::new();
+    let mut production_time_source_candidate_bytes = BTreeMap::new();
+    let mut production_time_confidence_counts = BTreeMap::new();
+    let mut production_time_confidence_candidate_bytes = BTreeMap::new();
+
+    for candidate in &report.candidates {
+        let state = candidate_decision_state(candidate);
+        increment(&mut decision_state_counts, state, 1);
+        increment(&mut decision_state_candidate_bytes, state, candidate.bytes);
+        increment(
+            &mut production_time_source_counts,
+            &candidate.production_time_source,
+            1,
+        );
+        increment(
+            &mut production_time_source_candidate_bytes,
+            &candidate.production_time_source,
+            candidate.bytes,
+        );
+        increment(
+            &mut production_time_confidence_counts,
+            &candidate.production_time_confidence,
+            1,
+        );
+        increment(
+            &mut production_time_confidence_candidate_bytes,
+            &candidate.production_time_confidence,
+            candidate.bytes,
+        );
+
+        if state == "review-required" {
+            let reason_count = candidate.review_reasons.len().to_string();
+            let reason_set = candidate.review_reasons.join("|");
+            increment(
+                &mut review_required_reason_count_distribution,
+                &reason_count,
+                1,
+            );
+            increment(
+                &mut review_required_reason_count_candidate_bytes,
+                &reason_count,
+                candidate.bytes,
+            );
+            increment(&mut review_required_reason_set_counts, &reason_set, 1);
+            increment(
+                &mut review_required_reason_set_candidate_bytes,
+                &reason_set,
+                candidate.bytes,
+            );
+            for reason in &candidate.review_reasons {
+                increment(&mut review_required_reason_counts, reason, 1);
+                increment(
+                    &mut review_required_reason_candidate_bytes,
+                    reason,
+                    candidate.bytes,
+                );
+            }
+            if let [sole_reason] = candidate.review_reasons.as_slice() {
+                increment(&mut review_required_sole_reason_counts, sole_reason, 1);
+                increment(
+                    &mut review_required_sole_reason_candidate_bytes,
+                    sole_reason,
+                    candidate.bytes,
+                );
+            }
+        }
+        if state == "blocked" {
+            if let Some(reason) = &candidate.blocked_reason {
+                increment(&mut blocked_reason_counts, reason, 1);
+                increment(&mut blocked_reason_candidate_bytes, reason, candidate.bytes);
+            }
+        }
+    }
+
+    serde_json::json!({
+        "decision_state": {
+            "counts": decision_state_counts,
+            "candidate_bytes": decision_state_candidate_bytes,
+        },
+        "review_required_reason": {
+            "counts": review_required_reason_counts,
+            "candidate_bytes": review_required_reason_candidate_bytes,
+            "sole_reason_counts": review_required_sole_reason_counts,
+            "sole_reason_candidate_bytes": review_required_sole_reason_candidate_bytes,
+            "reason_count_distribution": review_required_reason_count_distribution,
+            "reason_count_candidate_bytes": review_required_reason_count_candidate_bytes,
+            "reason_set_counts": review_required_reason_set_counts,
+            "reason_set_candidate_bytes": review_required_reason_set_candidate_bytes,
+            "reason_set_delimiter": "|",
+            "candidate_bytes_can_overlap_across_reasons": true,
+        },
+        "blocked_reason": {
+            "counts": blocked_reason_counts,
+            "candidate_bytes": blocked_reason_candidate_bytes,
+        },
+        "production_time_source": {
+            "counts": production_time_source_counts,
+            "candidate_bytes": production_time_source_candidate_bytes,
+        },
+        "production_time_confidence": {
+            "counts": production_time_confidence_counts,
+            "candidate_bytes": production_time_confidence_candidate_bytes,
+        },
+    })
+}
+
+#[cfg(not(coverage))]
+fn redacted_decision(candidate: &cloud::CloudCandidate) -> serde_json::Value {
+    serde_json::json!({
+        "metadata_fingerprint": &candidate.metadata_fingerprint,
+        "review_fingerprint": &candidate.review_fingerprint,
+        "relative_path": &candidate.relative_path,
+        "provider": candidate.provider,
+        "destination_account_scope": candidate.destination_account_scope,
+        "kind": candidate.kind,
+        "bytes": candidate.bytes,
+        "age_days": candidate.age_days,
+        "production_time_ms": candidate.production_time_ms,
+        "production_time_source": &candidate.production_time_source,
+        "production_time_confidence": &candidate.production_time_confidence,
+        "decision_state": candidate_decision_state(candidate),
+        "requires_review": candidate.requires_review,
+        "review_reasons": &candidate.review_reasons,
+        "blocked_reason": &candidate.blocked_reason,
+    })
+}
+
+#[cfg(not(coverage))]
+const REVIEW_BATCH_FINGERPRINT_VERSION: u32 = 2;
+#[cfg(not(coverage))]
+const PRIVATE_REVIEW_DOSSIER_MAX_BYTES: usize = 16 * 1024 * 1024;
+
+#[cfg(not(coverage))]
+fn review_batch_fingerprint(
+    report: &cloud::CloudPlanReport,
+    reasons: &[String],
+    candidates: &[&cloud::CloudCandidate],
+) -> String {
+    let mut ordered = candidates.to_vec();
+    ordered.sort_by(|left, right| {
+        left.metadata_fingerprint
+            .cmp(&right.metadata_fingerprint)
+            .then_with(|| left.review_fingerprint.cmp(&right.review_fingerprint))
+    });
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage-cloud-review-batch-v2\0");
+    hasher.update(&REVIEW_BATCH_FINGERPRINT_VERSION.to_le_bytes());
+    for value in [
+        report.cloud_root.provider.as_str().as_bytes(),
+        report.cloud_root.account_scope.as_str().as_bytes(),
+    ] {
+        hasher.update(&(value.len() as u64).to_le_bytes());
+        hasher.update(value);
+    }
+    for reason in reasons {
+        hasher.update(reason.as_bytes());
+        hasher.update(&[0]);
+    }
+    hasher.update(&(ordered.len() as u64).to_le_bytes());
+    for candidate in ordered {
+        hasher.update(candidate.metadata_fingerprint.as_bytes());
+        hasher.update(candidate.review_fingerprint.as_bytes());
+        hasher.update(&candidate.bytes.to_le_bytes());
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+#[cfg(not(coverage))]
+fn exact_review_candidates<'a>(
+    report: &'a cloud::CloudPlanReport,
+    reasons: &[String],
+) -> Result<Vec<&'a cloud::CloudCandidate>, String> {
+    let candidates = report
+        .candidates
+        .iter()
+        .filter(|candidate| {
+            candidate_decision_state(candidate) == "review-required"
+                && candidate.review_reasons.as_slice() == reasons
+        })
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return Err("현재 fresh plan에 exact review reason set이 일치하는 후보가 없음".into());
+    }
+    Ok(candidates)
+}
+
+/// Produce an exact reason-set slice for inspection. The stable subset fingerprint binds only the
+/// selected evidence; the separate decision-batch fingerprint records full-plan freshness. Neither
+/// is approval: every approve/hold decision remains individually attributed and candidate-bound.
+#[cfg(not(coverage))]
+fn review_batch_summary(
+    report: &cloud::CloudPlanReport,
+    reasons: &[String],
+) -> Result<serde_json::Value, String> {
+    let candidates = exact_review_candidates(report, reasons)?;
+    let candidate_bytes = candidates.iter().fold(0u64, |total, candidate| {
+        total.saturating_add(candidate.bytes)
+    });
+    let batch_fingerprint = review_batch_fingerprint(report, reasons, &candidates);
+    let decisions = candidates
+        .into_iter()
+        .map(redacted_decision)
+        .collect::<Vec<_>>();
+
+    Ok(serde_json::json!({
+        "schema_version": 1,
+        "output_mode": "review-batch-summary",
+        "generated_at_ms": report.generated_at_ms,
+        "decision_batch_fingerprint_version": cloud::CLOUD_DECISION_BATCH_FINGERPRINT_VERSION,
+        "decision_batch_fingerprint": cloud::cloud_decision_batch_fingerprint(report),
+        "review_batch_fingerprint_version": REVIEW_BATCH_FINGERPRINT_VERSION,
+        "review_batch_fingerprint": batch_fingerprint,
+        "reason_set": reasons,
+        "cloud": {
+            "provider": report.cloud_root.provider,
+            "account_scope": report.cloud_root.account_scope,
+        },
+        "candidate_count": decisions.len(),
+        "candidate_bytes": candidate_bytes,
+        "metadata_policy": {
+            "production_time_precedence": [
+                "embedded-metadata",
+                "explicit-filename-date",
+                "filesystem-created",
+                "filesystem-modified",
+            ],
+            "filename_dates_are_auxiliary": true,
+            "summary_is_dry_run_only": true,
+            "batch_fingerprint_is_not_approval": true,
+            "candidate_review_decisions_remain_individual": true,
+        },
+        "redacted_from_summary": [
+            "absolute-source-path",
+            "absolute-destination-path",
+            "cloud-root-path-and-label",
+            "content-title-and-authors",
+            "raw-metadata-evidence-values",
+            "dataset-profile",
+        ],
+        "decisions": decisions,
+    }))
+}
+
+/// Build the private, full-evidence counterpart of an exact reason-set review summary.
+///
+/// Unlike `review_batch_summary`, this value intentionally contains sensitive local paths and raw
+/// embedded metadata. It must only be written through `write_private_review_dossier`.
+#[cfg(not(coverage))]
+fn private_review_dossier(
+    report: &cloud::CloudPlanReport,
+    reasons: &[String],
+) -> Result<serde_json::Value, String> {
+    let mut candidates = exact_review_candidates(report, reasons)?;
+    candidates.sort_by(|left, right| {
+        left.metadata_fingerprint
+            .cmp(&right.metadata_fingerprint)
+            .then_with(|| left.review_fingerprint.cmp(&right.review_fingerprint))
+    });
+    let candidate_bytes = candidates.iter().fold(0u64, |total, candidate| {
+        total.saturating_add(candidate.bytes)
+    });
+    let review_batch_fingerprint = review_batch_fingerprint(report, reasons, &candidates);
+
+    Ok(serde_json::json!({
+        "schema_version": 1,
+        "output_mode": "private-review-dossier",
+        "generated_at_ms": report.generated_at_ms,
+        "contains_sensitive_local_metadata": true,
+        "decision_batch_fingerprint_version": cloud::CLOUD_DECISION_BATCH_FINGERPRINT_VERSION,
+        "decision_batch_fingerprint": cloud::cloud_decision_batch_fingerprint(report),
+        "review_batch_fingerprint_version": REVIEW_BATCH_FINGERPRINT_VERSION,
+        "review_batch_fingerprint": review_batch_fingerprint,
+        "reason_set": reasons,
+        "cloud_root": &report.cloud_root,
+        "candidate_count": candidates.len(),
+        "candidate_bytes": candidate_bytes,
+        "metadata_policy": {
+            "production_time_precedence": [
+                "embedded-metadata",
+                "explicit-filename-date",
+                "filesystem-created",
+                "filesystem-modified",
+            ],
+            "filename_dates_are_auxiliary": true,
+            "raw_metadata_values_are_review_evidence_only": true,
+            "dossier_is_not_approval": true,
+            "candidate_review_decisions_remain_individual": true,
+        },
+        "candidates": candidates,
+    }))
+}
+
+#[cfg(all(not(coverage), unix))]
+fn write_private_review_dossier(
+    path: &Path,
+    dossier: &serde_json::Value,
+) -> Result<(String, usize), String> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| "private-review-output-parent-missing".to_string())?;
+    let parent_metadata = std::fs::symlink_metadata(parent)
+        .map_err(|_| "private-review-output-parent-unavailable".to_string())?;
+    if !parent_metadata.is_dir() || parent_metadata.file_type().is_symlink() {
+        return Err("private-review-output-parent-unsafe".into());
+    }
+
+    let encoded = serde_json::to_vec_pretty(dossier)
+        .map_err(|_| "private-review-output-json-invalid".to_string())?;
+    if encoded.len() > PRIVATE_REVIEW_DOSSIER_MAX_BYTES {
+        return Err("private-review-output-too-large".into());
+    }
+
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(path)
+        .map_err(|_| "private-review-output-create-failed".to_string())?;
+    let result = (|| -> Result<(), String> {
+        file.write_all(&encoded)
+            .and_then(|_| file.sync_all())
+            .map_err(|_| "private-review-output-write-failed".to_string())?;
+        let metadata = file
+            .metadata()
+            .map_err(|_| "private-review-output-metadata-failed".to_string())?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err("private-review-output-unsafe".into());
+        }
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if metadata.permissions().mode() & 0o777 != 0o600 {
+                return Err("private-review-output-mode-invalid".into());
+            }
+            std::fs::File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|_| "private-review-output-parent-sync-failed".to_string())?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = result {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err(error);
+    }
+
+    let sha256 = Sha256::digest(&encoded)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Ok((sha256, encoded.len()))
+}
+
+#[cfg(all(not(coverage), not(unix)))]
+fn write_private_review_dossier(
+    _path: &Path,
+    _dossier: &serde_json::Value,
+) -> Result<(String, usize), String> {
+    Err("private-review-output-secure-mode-unsupported".into())
+}
+
+#[cfg(not(coverage))]
+const EXACT_DUPLICATE_REVIEW_BATCH_FINGERPRINT_VERSION: u32 = 1;
+
+#[cfg(not(coverage))]
+#[derive(Debug, Clone, serde::Serialize)]
+struct RedactedMetadataEvidence {
+    field: String,
+    source: String,
+    confidence: String,
+}
+
+#[cfg(not(coverage))]
+#[derive(Debug, Clone, serde::Serialize)]
+struct ExactDuplicateReviewMember {
+    metadata_fingerprint: String,
+    review_fingerprint: String,
+    relative_path: String,
+    kind: ArchiveKind,
+    bytes: u64,
+    production_time_ms: u64,
+    production_time_source: String,
+    production_time_confidence: String,
+    production_evidence: Vec<RedactedMetadataEvidence>,
+    source_lineage_evidence_fields: Vec<String>,
+    canonical_recommendation: &'static str,
+    review_reasons: Vec<String>,
+}
+
+#[cfg(not(coverage))]
+#[derive(Debug, Clone, serde::Serialize)]
+struct ExactDuplicateReviewCluster {
+    cluster_fingerprint: String,
+    content_sha256: String,
+    bytes_per_candidate: u64,
+    candidate_count: usize,
+    redundant_bytes: u64,
+    recommendation_confidence: String,
+    recommendation_reason_codes: Vec<String>,
+    canonical: ExactDuplicateReviewMember,
+    redundant_copies: Vec<ExactDuplicateReviewMember>,
+    requires_human_confirmation: bool,
+}
+
+#[cfg(not(coverage))]
+fn archive_kind_label(kind: ArchiveKind) -> &'static str {
+    match kind {
+        ArchiveKind::Document => "document",
+        ArchiveKind::Media => "media",
+        ArchiveKind::Archive => "archive",
+        ArchiveKind::Dataset => "dataset",
+        ArchiveKind::Backup => "backup",
+        ArchiveKind::Creative => "creative",
+        ArchiveKind::IncompleteDownload => "incomplete-download",
+    }
+}
+
+#[cfg(not(coverage))]
+fn normal_relative_components(path: &str) -> Option<Vec<String>> {
+    let mut values = Vec::new();
+    for component in Path::new(path).components() {
+        let std::path::Component::Normal(value) = component else {
+            return None;
+        };
+        values.push(value.to_str()?.to_string());
+    }
+    (!values.is_empty()).then_some(values)
+}
+
+#[cfg(not(coverage))]
+fn exact_duplicate_content_sha256(candidate: &cloud::CloudCandidate) -> Result<String, String> {
+    let mut values = candidate
+        .metadata_evidence
+        .iter()
+        .filter(|evidence| evidence.field == "exact-duplicate-content-sha256")
+        .map(|evidence| evidence.value.clone())
+        .collect::<Vec<_>>();
+    values.sort();
+    values.dedup();
+    match values.as_slice() {
+        [value]
+            if value.len() == 64
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()) =>
+        {
+            Ok(value.clone())
+        }
+        [] => Err("exact-duplicate-content-sha256-missing".into()),
+        _ => Err("exact-duplicate-content-sha256-invalid-or-conflicting".into()),
+    }
+}
+
+#[cfg(not(coverage))]
+fn exact_duplicate_review_member(
+    candidate: &cloud::CloudCandidate,
+    canonical: bool,
+) -> ExactDuplicateReviewMember {
+    let mut production_evidence = candidate
+        .metadata_evidence
+        .iter()
+        .filter(|evidence| {
+            matches!(
+                evidence.field.as_str(),
+                "production-date"
+                    | "filename-date-hint"
+                    | "filesystem-created-date"
+                    | "filesystem-modified-date"
+            )
+        })
+        .map(|evidence| RedactedMetadataEvidence {
+            field: evidence.field.clone(),
+            source: evidence.source.clone(),
+            confidence: evidence.confidence.clone(),
+        })
+        .collect::<Vec<_>>();
+    production_evidence.sort_by(|left, right| {
+        left.field
+            .cmp(&right.field)
+            .then_with(|| left.source.cmp(&right.source))
+            .then_with(|| left.confidence.cmp(&right.confidence))
+    });
+    production_evidence.dedup_by(|left, right| {
+        left.field == right.field
+            && left.source == right.source
+            && left.confidence == right.confidence
+    });
+
+    let mut source_lineage_evidence_fields = candidate
+        .content_context
+        .iter()
+        .filter_map(|context| context.split_once('=').map(|(field, _)| field.to_string()))
+        .collect::<Vec<_>>();
+    source_lineage_evidence_fields.sort();
+    source_lineage_evidence_fields.dedup();
+
+    ExactDuplicateReviewMember {
+        metadata_fingerprint: candidate.metadata_fingerprint.clone(),
+        review_fingerprint: candidate.review_fingerprint.clone(),
+        relative_path: candidate.relative_path.clone(),
+        kind: candidate.kind,
+        bytes: candidate.bytes,
+        production_time_ms: candidate.production_time_ms,
+        production_time_source: candidate.production_time_source.clone(),
+        production_time_confidence: candidate.production_time_confidence.clone(),
+        production_evidence,
+        source_lineage_evidence_fields,
+        canonical_recommendation: if canonical {
+            "preferred"
+        } else {
+            "redundant-copy-candidate"
+        },
+        review_reasons: candidate.review_reasons.clone(),
+    }
+}
+
+#[cfg(not(coverage))]
+fn hash_exact_duplicate_review_value(hasher: &mut blake3::Hasher, value: &[u8]) {
+    hasher.update(&(value.len() as u64).to_le_bytes());
+    hasher.update(value);
+}
+
+#[cfg(not(coverage))]
+fn exact_duplicate_review_batch_fingerprint(
+    prefix: &str,
+    kind: ArchiveKind,
+    clusters: &[ExactDuplicateReviewCluster],
+) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage-exact-duplicate-review-batch-v1\0");
+    hasher.update(&EXACT_DUPLICATE_REVIEW_BATCH_FINGERPRINT_VERSION.to_le_bytes());
+    hash_exact_duplicate_review_value(&mut hasher, prefix.as_bytes());
+    hash_exact_duplicate_review_value(&mut hasher, archive_kind_label(kind).as_bytes());
+    hash_exact_duplicate_review_value(&mut hasher, &(clusters.len() as u64).to_le_bytes());
+    for cluster in clusters {
+        for value in [
+            cluster.cluster_fingerprint.as_bytes(),
+            cluster.content_sha256.as_bytes(),
+            cluster.canonical.metadata_fingerprint.as_bytes(),
+            cluster.canonical.review_fingerprint.as_bytes(),
+            cluster.canonical.relative_path.as_bytes(),
+        ] {
+            hash_exact_duplicate_review_value(&mut hasher, value);
+        }
+        hash_exact_duplicate_review_value(&mut hasher, &cluster.bytes_per_candidate.to_le_bytes());
+        hash_exact_duplicate_review_value(&mut hasher, &cluster.redundant_bytes.to_le_bytes());
+        for member in &cluster.redundant_copies {
+            for value in [
+                member.metadata_fingerprint.as_bytes(),
+                member.review_fingerprint.as_bytes(),
+                member.relative_path.as_bytes(),
+            ] {
+                hash_exact_duplicate_review_value(&mut hasher, value);
+            }
+            hash_exact_duplicate_review_value(&mut hasher, &member.bytes.to_le_bytes());
+        }
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+/// Emit a conservative, source-local review slice for exact duplicates.
+///
+/// The selected canonical copy must be a direct child of the source root. Every redundant member
+/// must be nested beneath a first path component that begins with the operator-supplied prefix.
+/// The output is evidence for a later human decision; it cannot authorize or execute Trash.
+#[cfg(not(coverage))]
+fn exact_duplicate_review_batch(
+    report: &cloud::CloudPlanReport,
+    redundant_prefix: &str,
+    kind: ArchiveKind,
+) -> Result<serde_json::Value, String> {
+    let mut selected = Vec::new();
+    for cluster in &report.exact_duplicates.clusters {
+        if cluster.recommendation_confidence != "high"
+            || cluster.recommendation_reason_codes.as_slice()
+                != ["richer-source-lineage-context-preferred"]
+        {
+            continue;
+        }
+        if !cluster.requires_human_confirmation
+            || cluster.candidate_count < 2
+            || cluster.member_metadata_fingerprints.len() != cluster.candidate_count
+            || cluster.redundant_bytes
+                != cluster
+                    .bytes_per_candidate
+                    .saturating_mul((cluster.candidate_count - 1) as u64)
+        {
+            return Err("exact-duplicate-review-cluster-contract-invalid".into());
+        }
+
+        let mut members = Vec::with_capacity(cluster.member_metadata_fingerprints.len());
+        for fingerprint in &cluster.member_metadata_fingerprints {
+            let matches = report
+                .candidates
+                .iter()
+                .filter(|candidate| candidate.metadata_fingerprint == *fingerprint)
+                .collect::<Vec<_>>();
+            match matches.as_slice() {
+                [only] => members.push(*only),
+                [] => {
+                    return Err(format!(
+                        "exact-duplicate-review-candidate-missing-from-bounded-plan:{fingerprint}"
+                    ));
+                }
+                _ => {
+                    return Err(format!(
+                        "exact-duplicate-review-candidate-fingerprint-ambiguous:{fingerprint}"
+                    ));
+                }
+            }
+        }
+        if members
+            .iter()
+            .any(|candidate| candidate.bytes != cluster.bytes_per_candidate)
+        {
+            return Err("exact-duplicate-review-member-size-mismatch".into());
+        }
+        let canonical = members
+            .iter()
+            .copied()
+            .filter(|candidate| {
+                candidate.metadata_fingerprint == cluster.recommended_canonical_metadata_fingerprint
+            })
+            .collect::<Vec<_>>();
+        let canonical = match canonical.as_slice() {
+            [only] => *only,
+            _ => return Err("exact-duplicate-review-canonical-not-unique".into()),
+        };
+        if canonical.kind != kind
+            || normal_relative_components(&canonical.relative_path)
+                .is_none_or(|components| components.len() != 1)
+        {
+            continue;
+        }
+
+        let mut redundant = members
+            .into_iter()
+            .filter(|candidate| candidate.metadata_fingerprint != canonical.metadata_fingerprint)
+            .collect::<Vec<_>>();
+        if redundant.is_empty() || redundant.iter().any(|candidate| candidate.kind != kind) {
+            continue;
+        }
+        let all_under_prefix = redundant.iter().all(|candidate| {
+            normal_relative_components(&candidate.relative_path).is_some_and(|components| {
+                components.len() > 1 && components[0].starts_with(redundant_prefix)
+            })
+        });
+        if !all_under_prefix {
+            continue;
+        }
+        redundant.sort_by(|left, right| {
+            left.relative_path
+                .cmp(&right.relative_path)
+                .then_with(|| left.metadata_fingerprint.cmp(&right.metadata_fingerprint))
+        });
+
+        let content_sha256 = exact_duplicate_content_sha256(canonical)?;
+        for member in &redundant {
+            if exact_duplicate_content_sha256(member)? != content_sha256 {
+                return Err("exact-duplicate-review-content-sha256-mismatch".into());
+            }
+        }
+        selected.push(ExactDuplicateReviewCluster {
+            cluster_fingerprint: cluster.cluster_fingerprint.clone(),
+            content_sha256,
+            bytes_per_candidate: cluster.bytes_per_candidate,
+            candidate_count: cluster.candidate_count,
+            redundant_bytes: cluster.redundant_bytes,
+            recommendation_confidence: cluster.recommendation_confidence.clone(),
+            recommendation_reason_codes: cluster.recommendation_reason_codes.clone(),
+            canonical: exact_duplicate_review_member(canonical, true),
+            redundant_copies: redundant
+                .into_iter()
+                .map(|candidate| exact_duplicate_review_member(candidate, false))
+                .collect(),
+            requires_human_confirmation: true,
+        });
+    }
+    if selected.is_empty() {
+        return Err("현재 fresh plan에 제한 조건을 만족하는 exact duplicate가 없음".into());
+    }
+    selected.sort_by(|left, right| left.cluster_fingerprint.cmp(&right.cluster_fingerprint));
+    let batch_fingerprint =
+        exact_duplicate_review_batch_fingerprint(redundant_prefix, kind, &selected);
+    let redundant_copy_count = selected
+        .iter()
+        .map(|cluster| cluster.redundant_copies.len())
+        .sum::<usize>();
+    let redundant_bytes = selected.iter().fold(0u64, |total, cluster| {
+        total.saturating_add(cluster.redundant_bytes)
+    });
+
+    Ok(serde_json::json!({
+        "schema_version": 1,
+        "output_mode": "exact-duplicate-review-batch",
+        "generated_at_ms": report.generated_at_ms,
+        "exact_duplicate_review_batch_fingerprint_version":
+            EXACT_DUPLICATE_REVIEW_BATCH_FINGERPRINT_VERSION,
+        "exact_duplicate_review_batch_fingerprint": batch_fingerprint,
+        "selection": {
+            "recommendation_confidence": "high",
+            "recommendation_reason_codes_exact": [
+                "richer-source-lineage-context-preferred",
+            ],
+            "canonical_location": "direct-child-of-source-root",
+            "redundant_first_component_prefix": redundant_prefix,
+            "kind": kind,
+        },
+        "metadata_policy": {
+            "production_time_precedence": [
+                "embedded-metadata",
+                "explicit-filename-date",
+                "filesystem-created",
+                "filesystem-modified",
+            ],
+            "filename_dates_are_auxiliary": true,
+            "summary_is_dry_run_only": true,
+            "batch_fingerprint_is_not_approval": true,
+            "human_confirmation_required_for_every_cluster": true,
+            "trash_execution_is_not_available_in_this_output_mode": true,
+        },
+        "redacted_from_summary": [
+            "absolute-source-path",
+            "absolute-destination-path",
+            "cloud-root-path-and-label",
+            "content-title-and-authors",
+            "raw-metadata-evidence-values",
+            "source-lineage-evidence-values",
+            "dataset-profile",
+        ],
+        "cluster_count": selected.len(),
+        "candidate_count": selected.len().saturating_add(redundant_copy_count),
+        "redundant_copy_count": redundant_copy_count,
+        "redundant_bytes": redundant_bytes,
+        "clusters": selected,
+    }))
+}
+
+/// Produce a bounded operator view without absolute paths or raw embedded metadata values.
+///
+/// The full plan remains the durable lineage source. This view is intentionally limited to the
+/// evidence needed to select a candidate for a separately attributed human review.
+#[cfg(not(coverage))]
+fn decision_summary(report: &cloud::CloudPlanReport) -> serde_json::Value {
+    let aggregates = decision_aggregates(report);
+    let decisions = report
+        .candidates
+        .iter()
+        .map(redacted_decision)
+        .collect::<Vec<_>>();
+
+    serde_json::json!({
+        "schema_version": 1,
+        "output_mode": "decision-summary",
+        "generated_at_ms": report.generated_at_ms,
+        "decision_batch_fingerprint_version": cloud::CLOUD_DECISION_BATCH_FINGERPRINT_VERSION,
+        "decision_batch_fingerprint": cloud::cloud_decision_batch_fingerprint(report),
+        "metadata_policy": {
+            "production_time_precedence": [
+                "embedded-metadata",
+                "explicit-filename-date",
+                "filesystem-created",
+                "filesystem-modified",
+            ],
+            "filename_dates_are_auxiliary": true,
+            "summary_is_dry_run_only": true,
+            "review_fingerprints_bind_operator_decisions": true,
+            "verified_provider_sync_required_before_local_eviction": true,
+        },
+        "cloud": {
+            "provider": report.cloud_root.provider,
+            "account_scope": report.cloud_root.account_scope,
+        },
+        "candidate_count": report.candidates.len(),
+        "candidate_bytes": report.candidate_bytes,
+        "potentially_reclaimable_bytes": report.potentially_reclaimable_bytes,
+        "aggregates": aggregates,
+        "exact_duplicates": &report.exact_duplicates,
+        "capacity": &report.capacity,
+        "notices": &report.notices,
+        "redacted_from_summary": [
+            "absolute-source-path",
+            "absolute-destination-path",
+            "cloud-root-path-and-label",
+            "content-title-and-authors",
+            "raw-metadata-evidence-values",
+            "dataset-profile",
+        ],
+        "decisions": decisions,
+    })
 }
 
 #[cfg(not(coverage))]
@@ -510,16 +1565,69 @@ fn collect_root_capacity(
 }
 
 #[cfg(not(coverage))]
-fn verified_capacity_for_bytes(
-    root: &CloudRoot,
-    oauth_connections: Option<&Path>,
-    requested_bytes: u64,
-    largest_candidate_bytes: u64,
+fn attach_capacity_snapshot(
+    report: &mut cloud::CloudPlanReport,
+    snapshot: provider_capacity::CloudCapacitySnapshot,
     reserve_mib: u64,
-) -> Result<provider_capacity::CloudCapacityAssessment, String> {
-    let reserve_bytes = reserve_mib.saturating_mul(1024 * 1024);
+) -> Result<(), String> {
+    if snapshot.provider != report.cloud_root.provider
+        || snapshot.account_scope.is_some_and(|scope| {
+            report.cloud_root.account_scope != CloudAccountScope::Unknown
+                && report.cloud_root.account_scope != scope
+        })
+    {
+        return Err("cloud-capacity-root-binding-mismatch".into());
+    }
+    let largest_candidate_bytes = report
+        .candidates
+        .iter()
+        .filter(|candidate| candidate.blocked_reason.is_none())
+        .map(|candidate| candidate.bytes)
+        .max()
+        .unwrap_or_default();
+    let assessment = provider_capacity::assess_capacity(
+        snapshot,
+        report.potentially_reclaimable_bytes,
+        largest_candidate_bytes,
+        reserve_mib.saturating_mul(1024 * 1024),
+    );
+    report
+        .notices
+        .retain(|notice| notice != "cloud-quota-unverified");
+    report.notices.push(
+        match assessment.can_fit {
+            Some(true)
+                if assessment.snapshot.evidence_kind
+                    == provider_capacity::CapacityEvidenceKind::ProviderNativeStatus =>
+            {
+                "cloud-quota-provider-native-verified"
+            }
+            Some(true) => "cloud-quota-provider-api-verified",
+            Some(false) => "cloud-quota-insufficient-or-blocked",
+            None => "cloud-quota-unavailable",
+        }
+        .into(),
+    );
+    report.capacity = Some(assessment);
+    Ok(())
+}
+
+#[cfg(not(coverage))]
+fn plan_with_optional_capacity(
+    source: &cloud::CloudSourceSnapshot,
+    root: &CloudRoot,
+    verify_capacity: bool,
+    oauth_connections: Option<&Path>,
+    reserve_mib: u64,
+) -> Result<(CloudRoot, cloud::CloudPlanReport), String> {
+    if !verify_capacity {
+        return Ok((
+            root.clone(),
+            cloud::plan_cloud_archive_from_snapshot(source, root),
+        ));
+    }
     let observed_at_ms = cloud::system_now_ms();
-    let snapshot = match collect_root_capacity(root, oauth_connections, observed_at_ms) {
+    let capacity_snapshot = match collect_root_capacity(root, oauth_connections, observed_at_ms) {
         Ok(snapshot) => snapshot,
         Err(error) => provider_capacity::unavailable_capacity_from_error(
             root.provider,
@@ -527,12 +1635,11 @@ fn verified_capacity_for_bytes(
             &error,
         ),
     };
-    Ok(provider_capacity::assess_capacity(
-        snapshot,
-        requested_bytes,
-        largest_candidate_bytes,
-        reserve_bytes,
-    ))
+    let refined_root =
+        provider_capacity::root_with_verified_capacity_scope(root, &capacity_snapshot)?;
+    let mut report = cloud::plan_cloud_archive_from_snapshot(source, &refined_root);
+    attach_capacity_snapshot(&mut report, capacity_snapshot, reserve_mib)?;
+    Ok((refined_root, report))
 }
 
 #[cfg(not(coverage))]
@@ -646,8 +1753,11 @@ fn evict_native_receipt(
     path: &Path,
     confirmation_receipt_id: &str,
     eviction_dir: &Path,
+    approval_dir: &Path,
     journal_path: &Path,
     evidence_dir: &Path,
+    approved_by: &str,
+    rationale: &str,
     provider_object_id: Option<&str>,
     oauth_connections: Option<&Path>,
     home: &Path,
@@ -668,9 +1778,25 @@ fn evict_native_receipt(
         provider_evidence::write_immutable_sync_evidence(evidence_dir, &evidence)?;
     let permit = cloud_transfer::approve_local_eviction(&receipt, &evidence_record)
         .map_err(|blockers| blockers.join(","))?;
-    let eviction = cloud_eviction::evict_source(
+    let active_use_observed_at_ms = cloud::system_now_ms();
+    let active_use = cloud_local_eviction::observe_path_active_use(Path::new(&receipt.source));
+    let approved_at_ms = cloud::system_now_ms();
+    let approval = cloud_eviction::create_source_eviction_approval(
         &receipt,
         &permit,
+        confirmation_receipt_id,
+        approved_at_ms,
+        approved_by,
+        rationale,
+        active_use_observed_at_ms,
+        active_use,
+    )?;
+    let approval_path =
+        cloud_eviction::write_immutable_source_eviction_approval(approval_dir, &approval)?;
+    let eviction = cloud_eviction::evict_source_with_human_approval(
+        &receipt,
+        &permit,
+        &approval,
         confirmation_receipt_id,
         eviction_dir,
         journal_path,
@@ -683,6 +1809,8 @@ fn evict_native_receipt(
         evidence_record,
         evidence_path: evidence_path.to_string_lossy().into_owned(),
         permit,
+        approval,
+        approval_path: approval_path.to_string_lossy().into_owned(),
         eviction,
     })
 }
@@ -743,12 +1871,21 @@ fn run() -> Result<(), String> {
             args.eviction_dir
                 .as_deref()
                 .ok_or_else(|| "--eviction-dir이 필요함".to_string())?,
+            args.eviction_approval_dir
+                .as_deref()
+                .ok_or_else(|| "--eviction-approval-dir이 필요함".to_string())?,
             args.journal_path
                 .as_deref()
                 .ok_or_else(|| "--journal-path가 필요함".to_string())?,
             args.evidence_dir
                 .as_deref()
                 .ok_or_else(|| "--evidence-dir이 필요함".to_string())?,
+            args.reviewed_by
+                .as_deref()
+                .ok_or_else(|| "--reviewed-by가 필요함".to_string())?,
+            args.review_rationale
+                .as_deref()
+                .ok_or_else(|| "--review-rationale가 필요함".to_string())?,
             args.provider_object_id.as_deref(),
             args.oauth_connections.as_deref(),
             &home,
@@ -792,8 +1929,22 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
     cloud::validate_source_root_readable(&args.root)?;
-    let selected = select_root(&roots, &args)?;
-    cloud::validate_cloud_root_readable(&selected)?;
+    let selected_roots = if args.all_readable_roots {
+        let selected = roots
+            .iter()
+            .filter(|root| root.readable)
+            .cloned()
+            .collect::<Vec<_>>();
+        if selected.is_empty() {
+            return Err("재검증할 수 있는 읽기 가능 클라우드 루트가 없음".into());
+        }
+        selected
+    } else {
+        vec![select_root(&roots, &args)?]
+    };
+    for selected in &selected_roots {
+        cloud::validate_cloud_root_readable(selected)?;
+    }
     let excluded: Vec<PathBuf> = roots.iter().map(|r| PathBuf::from(&r.path)).collect();
     if excluded
         .iter()
@@ -802,10 +1953,9 @@ fn run() -> Result<(), String> {
         return Err("이미 클라우드 안에 있는 경로는 오프로드 원본으로 사용할 수 없음".into());
     }
     let files = cloud::collect_archive_files(&args.root, &excluded);
-    let mut report = cloud::plan_cloud_archive(
+    let snapshot = cloud::prepare_cloud_archive_source(
         &files,
         &args.root,
-        &selected,
         cloud::system_now_ms(),
         CloudPlanOptions {
             min_size_bytes: args.min_size_mib.saturating_mul(1024 * 1024),
@@ -813,39 +1963,89 @@ fn run() -> Result<(), String> {
             limit: args.limit.clamp(1, 1_000),
         },
     );
-    if args.verify_capacity {
-        let largest_candidate_bytes = report
-            .candidates
-            .iter()
-            .filter(|candidate| candidate.blocked_reason.is_none())
-            .map(|candidate| candidate.bytes)
-            .max()
-            .unwrap_or_default();
-        let assessment = verified_capacity_for_bytes(
-            &selected,
-            args.oauth_connections.as_deref(),
-            report.potentially_reclaimable_bytes,
-            largest_candidate_bytes,
-            args.capacity_reserve_mib,
-        )?;
-        report
-            .notices
-            .retain(|notice| notice != "cloud-quota-unverified");
-        report.notices.push(
-            match assessment.can_fit {
-                Some(true)
-                    if assessment.snapshot.evidence_kind
-                        == provider_capacity::CapacityEvidenceKind::ProviderNativeStatus =>
-                {
-                    "cloud-quota-provider-native-verified"
-                }
-                Some(true) => "cloud-quota-provider-api-verified",
-                Some(false) => "cloud-quota-insufficient-or-blocked",
-                None => "cloud-quota-unavailable",
-            }
-            .into(),
+    if args.all_readable_roots {
+        let mut summaries = Vec::with_capacity(selected_roots.len());
+        for selected in &selected_roots {
+            let (_, report) = plan_with_optional_capacity(
+                &snapshot,
+                selected,
+                args.verify_capacity,
+                args.oauth_connections.as_deref(),
+                args.capacity_reserve_mib,
+            )?;
+            summaries.push(match args.review_reason_set.as_deref() {
+                Some(reasons) => review_batch_summary(&report, reasons)?,
+                None => decision_summary(&report),
+            });
+        }
+        let capacity_notice = if args.verify_capacity {
+            "cloud-capacity-assessed-per-destination"
+        } else {
+            "cloud-capacity-unverified"
+        };
+        let output = serde_json::json!({
+            "schema_version": 1,
+            "output_mode": "multicloud-decision-summary",
+            "source_snapshot": {
+                "candidate_count": snapshot.candidate_count(),
+                "candidate_bytes": snapshot.candidate_bytes(),
+                "reused_for_destination_count": selected_roots.len(),
+                "content_metadata_probed_once": true,
+                "duplicate_content_hashed_once": true,
+            },
+            "destinations": summaries,
+            "notices": [
+                "dry-run-only",
+                "destination-state-revalidated-per-plan",
+                "source-stat-revalidated-per-plan",
+                capacity_notice,
+                "cloud-sync-unverified",
+            ],
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&output).map_err(|error| error.to_string())?
         );
-        report.capacity = Some(assessment);
+        return Ok(());
+    }
+    let selected = selected_roots
+        .into_iter()
+        .next()
+        .ok_or_else(|| "선택된 클라우드 루트가 없음".to_string())?;
+    let capacity_required_for_plan = args.verify_capacity || args.copy_fingerprint.is_some();
+    let (selected, report) = plan_with_optional_capacity(
+        &snapshot,
+        &selected,
+        capacity_required_for_plan,
+        args.oauth_connections.as_deref(),
+        args.capacity_reserve_mib,
+    )?;
+    if args.export_naruon_capacity {
+        let envelope = naruon_capacity::export_naruon_cloud_capacity_assessment(&report)?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&envelope).map_err(|error| error.to_string())?
+        );
+        return Ok(());
+    }
+    if args.export_semantic_catalog {
+        let batch = semantic_catalog::export_semantic_catalog_candidate_batch(&report)?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&batch).map_err(|error| error.to_string())?
+        );
+        return Ok(());
+    }
+    if let (Some(redundant_prefix), Some(kind)) = (
+        args.exact_duplicate_review_prefix.as_deref(),
+        args.exact_duplicate_kind,
+    ) {
+        let output = exact_duplicate_review_batch(&report, redundant_prefix, kind)?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&output).map_err(|error| error.to_string())?
+        );
+        return Ok(());
     }
     if let Some(candidate_fingerprint) = &args.review_candidate_fingerprint {
         let review_fingerprint = args
@@ -932,13 +2132,17 @@ fn run() -> Result<(), String> {
             None
         };
         if !adopt_existing {
-            let assessment = verified_capacity_for_bytes(
-                &selected,
-                args.oauth_connections.as_deref(),
+            let capacity_snapshot = report
+                .capacity
+                .as_ref()
+                .map(|assessment| assessment.snapshot.clone())
+                .ok_or_else(|| "cloud-capacity-verification-required".to_string())?;
+            let assessment = provider_capacity::assess_capacity(
+                capacity_snapshot,
                 candidate.bytes,
                 candidate.bytes,
-                args.capacity_reserve_mib,
-            )?;
+                args.capacity_reserve_mib.saturating_mul(1024 * 1024),
+            );
             if assessment.can_fit != Some(true) {
                 return Err(if assessment.blockers.is_empty() {
                     "cloud-capacity-verification-required".into()
@@ -979,10 +2183,44 @@ fn run() -> Result<(), String> {
         );
         return Ok(());
     }
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?
-    );
+    if args.decision_summary {
+        let mut summary = match args.review_reason_set.as_deref() {
+            Some(reasons) => review_batch_summary(&report, reasons)?,
+            None => decision_summary(&report),
+        };
+        if let Some(output_path) = &args.private_review_output {
+            let reasons = args
+                .review_reason_set
+                .as_deref()
+                .ok_or_else(|| "private review reason set이 없음".to_string())?;
+            let dossier = private_review_dossier(&report, reasons)?;
+            let (sha256, bytes) = write_private_review_dossier(output_path, &dossier)?;
+            summary
+                .as_object_mut()
+                .ok_or_else(|| "review summary JSON object가 아님".to_string())?
+                .insert(
+                    "private_review_dossier".into(),
+                    serde_json::json!({
+                        "written": true,
+                        "bytes": bytes,
+                        "sha256": sha256,
+                        "unix_mode": "0600",
+                        "create_new": true,
+                        "contains_sensitive_local_metadata": true,
+                        "is_approval": false,
+                    }),
+                );
+        }
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&summary).map_err(|e| e.to_string())?
+        );
+    } else {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?
+        );
+    }
     Ok(())
 }
 
@@ -1020,12 +2258,21 @@ mod tests {
         assert!(defaults.oauth_connections.is_none());
         assert!(defaults.evidence_dir.is_none());
         assert!(defaults.evict_receipt.is_none());
+        assert!(defaults.eviction_approval_dir.is_none());
         assert!(defaults.review_candidate_fingerprint.is_none());
         assert!(defaults.reviewed_by.is_none());
         assert!(defaults.review_rationale.is_none());
         assert!(defaults.export_naruon_lineage.is_none());
+        assert!(!defaults.export_naruon_capacity);
+        assert!(!defaults.export_semantic_catalog);
         assert!(defaults.naruon_sync_evidence.is_none());
         assert!(!defaults.verify_capacity);
+        assert!(!defaults.decision_summary);
+        assert!(!defaults.all_readable_roots);
+        assert!(defaults.review_reason_set.is_none());
+        assert!(defaults.private_review_output.is_none());
+        assert!(defaults.exact_duplicate_review_prefix.is_none());
+        assert!(defaults.exact_duplicate_kind.is_none());
         assert_eq!(defaults.capacity_reserve_mib, 1024);
         let args = vec![
             "--root".into(),
@@ -1038,6 +2285,11 @@ mod tests {
             "2".into(),
             "--limit".into(),
             "3".into(),
+            "--decision-summary".into(),
+            "--review-reason-set".into(),
+            "metadata-review-required|download-origin-needs-destination-review".into(),
+            "--private-review-output".into(),
+            "/private-review.json".into(),
             "--verify-capacity".into(),
             "--capacity-reserve-mib".into(),
             "2048".into(),
@@ -1050,7 +2302,76 @@ mod tests {
             (1, 2, 3)
         );
         assert!(parsed.verify_capacity);
+        assert!(parsed.decision_summary);
+        assert_eq!(
+            parsed.review_reason_set,
+            Some(vec![
+                "download-origin-needs-destination-review".into(),
+                "metadata-review-required".into(),
+            ])
+        );
+        assert_eq!(
+            parsed.private_review_output,
+            Some(PathBuf::from("/private-review.json"))
+        );
         assert_eq!(parsed.capacity_reserve_mib, 2048);
+
+        let duplicate_review = parse_args(
+            &[
+                "--exact-duplicate-review-prefix".into(),
+                "smart_bundle_".into(),
+                "--exact-duplicate-kind".into(),
+                "document".into(),
+            ],
+            Path::new("/home/test"),
+        )
+        .unwrap();
+        assert_eq!(
+            duplicate_review.exact_duplicate_review_prefix.as_deref(),
+            Some("smart_bundle_")
+        );
+        assert_eq!(
+            duplicate_review.exact_duplicate_kind,
+            Some(ArchiveKind::Document)
+        );
+        assert!(validate_action_args(&duplicate_review).is_ok());
+    }
+
+    #[test]
+    fn all_readable_roots_is_dry_run_summary_with_optional_capacity() {
+        let valid = parse_args(
+            &["--all-readable-roots".into(), "--decision-summary".into()],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(valid.all_readable_roots);
+        assert!(validate_action_args(&valid).is_ok());
+
+        let missing_summary =
+            parse_args(&["--all-readable-roots".into()], Path::new("/h")).unwrap();
+        assert!(validate_action_args(&missing_summary).is_err());
+        let scoped = parse_args(
+            &[
+                "--all-readable-roots".into(),
+                "--decision-summary".into(),
+                "--provider".into(),
+                "icloud".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&scoped).is_err());
+        let capacity = parse_args(
+            &[
+                "--all-readable-roots".into(),
+                "--decision-summary".into(),
+                "--verify-capacity".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(capacity.verify_capacity);
+        assert!(validate_action_args(&capacity).is_ok());
     }
 
     #[test]
@@ -1064,6 +2385,33 @@ mod tests {
         )
         .is_err());
         assert!(parse_args(&["--root".into()], Path::new("/h")).is_err());
+        for reason_set in [
+            "",
+            "duplicate|duplicate",
+            "Uppercase-not-allowed",
+            "contains_space",
+            "destination-account-scope-unknown|",
+        ] {
+            assert!(parse_args(
+                &[
+                    "--decision-summary".into(),
+                    "--review-reason-set".into(),
+                    reason_set.into(),
+                ],
+                Path::new("/h"),
+            )
+            .is_err());
+        }
+        assert!(parse_args(
+            &[
+                "--review-reason-set".into(),
+                "first-reason".into(),
+                "--review-reason-set".into(),
+                "second-reason".into(),
+            ],
+            Path::new("/h"),
+        )
+        .is_err());
         let inspect = parse_args(&["--inspect-roots".into()], Path::new("/h")).unwrap();
         assert!(inspect.inspect_roots);
         let both = parse_args(
@@ -1072,6 +2420,92 @@ mod tests {
         )
         .unwrap();
         assert!(validate_action_args(&both).is_err());
+        let summary_action = parse_args(
+            &["--decision-summary".into(), "--list-roots".into()],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&summary_action).is_err());
+        let reason_set_without_summary = parse_args(
+            &[
+                "--review-reason-set".into(),
+                "destination-account-scope-unknown".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&reason_set_without_summary).is_err());
+        let reason_set_summary = parse_args(
+            &[
+                "--decision-summary".into(),
+                "--review-reason-set".into(),
+                "destination-account-scope-unknown".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&reason_set_summary).is_ok());
+        let private_review = parse_args(
+            &[
+                "--decision-summary".into(),
+                "--review-reason-set".into(),
+                "destination-account-scope-unknown".into(),
+                "--private-review-output".into(),
+                "/private/review.json".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&private_review).is_ok());
+        let mut relative_private_review = private_review.clone();
+        relative_private_review.private_review_output = Some(PathBuf::from("review.json"));
+        assert!(validate_action_args(&relative_private_review).is_err());
+        let mut missing_reason_set = private_review.clone();
+        missing_reason_set.review_reason_set = None;
+        assert!(validate_action_args(&missing_reason_set).is_err());
+        let mut multicloud_private_review = private_review;
+        multicloud_private_review.all_readable_roots = true;
+        assert!(validate_action_args(&multicloud_private_review).is_err());
+        for prefix in ["", ".", "..", "nested/path", "nested\\path", "line\nbreak"] {
+            assert!(parse_args(
+                &[
+                    "--exact-duplicate-review-prefix".into(),
+                    prefix.into(),
+                    "--exact-duplicate-kind".into(),
+                    "document".into(),
+                ],
+                Path::new("/h"),
+            )
+            .is_err());
+        }
+        assert!(parse_args(
+            &[
+                "--exact-duplicate-review-prefix".into(),
+                "bundle_".into(),
+                "--exact-duplicate-kind".into(),
+                "unknown".into(),
+            ],
+            Path::new("/h"),
+        )
+        .is_err());
+        let missing_duplicate_kind = parse_args(
+            &["--exact-duplicate-review-prefix".into(), "bundle_".into()],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&missing_duplicate_kind).is_err());
+        let duplicate_summary_conflict = parse_args(
+            &[
+                "--exact-duplicate-review-prefix".into(),
+                "bundle_".into(),
+                "--exact-duplicate-kind".into(),
+                "document".into(),
+                "--decision-summary".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&duplicate_summary_conflict).is_err());
         let roots = vec![
             CloudRoot {
                 id: "/a".into(),
@@ -1124,6 +2558,548 @@ mod tests {
             ..root.clone()
         };
         assert!(select_root(&[root, canonically_equivalent_duplicate], &args).is_err());
+    }
+
+    #[test]
+    fn decision_summary_keeps_review_evidence_and_redacts_sensitive_values() {
+        let candidate = cloud::CloudCandidate {
+            metadata_fingerprint: "a".repeat(64),
+            review_fingerprint: "b".repeat(64),
+            src: "/Users/private/Downloads/report.pdf".into(),
+            dst: "/Users/private/Cloud/report.pdf".into(),
+            provider: CloudProvider::Icloud,
+            destination_account_scope: disksage_lib::cloud::CloudAccountScope::Personal,
+            kind: cloud::ArchiveKind::Document,
+            bytes: 42,
+            age_days: 7,
+            created_ms: 10,
+            modified_ms: 20,
+            production_time_ms: 5,
+            production_time_source: "embedded-pdf-creation-date".into(),
+            production_time_confidence: "high".into(),
+            source_root: "/Users/private/Downloads".into(),
+            relative_path: "report.pdf".into(),
+            source_context: "Downloads".into(),
+            requires_review: true,
+            review_reasons: vec![
+                "download-origin-needs-destination-review".into(),
+                "metadata-review-required".into(),
+            ],
+            content_title: Some("Confidential title".into()),
+            content_authors: vec!["Private Author".into()],
+            content_context: vec!["private context".into()],
+            duration_ms: None,
+            dataset_profile: None,
+            metadata_evidence: vec![cloud::MetadataEvidence {
+                field: "creation-date".into(),
+                value: "private raw value".into(),
+                source: "pdf-info".into(),
+                confidence: "high".into(),
+            }],
+            blocked_reason: None,
+        };
+        let mut report = cloud::CloudPlanReport {
+            cloud_root: CloudRoot {
+                id: "/Users/private/Cloud".into(),
+                provider: CloudProvider::Icloud,
+                account_scope: disksage_lib::cloud::CloudAccountScope::Personal,
+                label: "private@example.com".into(),
+                path: "/Users/private/Cloud".into(),
+                readable: true,
+                access_issue: None,
+            },
+            generated_at_ms: 100,
+            candidates: vec![candidate],
+            candidate_bytes: 42,
+            potentially_reclaimable_bytes: 42,
+            exact_duplicates: cloud::ExactDuplicateSummary::default(),
+            capacity: None,
+            notices: vec!["dry-run-only".into()],
+        };
+
+        let summary = decision_summary(&report);
+        let item = &summary["decisions"][0];
+        assert_eq!(summary["output_mode"], "decision-summary");
+        assert_eq!(summary["candidate_count"], 1);
+        assert_eq!(
+            summary["decision_batch_fingerprint_version"],
+            cloud::CLOUD_DECISION_BATCH_FINGERPRINT_VERSION
+        );
+        assert_eq!(
+            summary["decision_batch_fingerprint"]
+                .as_str()
+                .unwrap()
+                .len(),
+            64
+        );
+        assert_eq!(item["relative_path"], "report.pdf");
+        assert_eq!(item["decision_state"], "review-required");
+        assert_eq!(
+            summary["aggregates"]["decision_state"]["counts"]["review-required"],
+            1
+        );
+        assert_eq!(
+            summary["aggregates"]["decision_state"]["candidate_bytes"]["review-required"],
+            42
+        );
+        assert_eq!(
+            summary["aggregates"]["review_required_reason"]["counts"]["metadata-review-required"],
+            1
+        );
+        assert_eq!(
+            summary["aggregates"]["review_required_reason"]["candidate_bytes"]
+                ["download-origin-needs-destination-review"],
+            42
+        );
+        assert_eq!(
+            summary["aggregates"]["review_required_reason"]
+                ["candidate_bytes_can_overlap_across_reasons"],
+            true
+        );
+        assert!(
+            summary["aggregates"]["review_required_reason"]["sole_reason_counts"]
+                ["metadata-review-required"]
+                .is_null()
+        );
+        assert_eq!(
+            summary["aggregates"]["review_required_reason"]["reason_count_distribution"]["2"],
+            1
+        );
+        assert_eq!(
+            summary["aggregates"]["review_required_reason"]["reason_set_counts"]
+                ["download-origin-needs-destination-review|metadata-review-required"],
+            1
+        );
+        assert_eq!(
+            summary["aggregates"]["review_required_reason"]["reason_set_delimiter"],
+            "|"
+        );
+        assert_eq!(
+            summary["aggregates"]["production_time_source"]["counts"]["embedded-pdf-creation-date"],
+            1
+        );
+        assert_eq!(
+            summary["aggregates"]["production_time_confidence"]["counts"]["high"],
+            1
+        );
+        assert!(item.get("src").is_none());
+        assert!(item.get("dst").is_none());
+        assert!(item.get("metadata_evidence").is_none());
+
+        let encoded = serde_json::to_string(&summary).unwrap();
+        for redacted in [
+            "/Users/private",
+            "private@example.com",
+            "Confidential title",
+            "Private Author",
+            "private raw value",
+        ] {
+            assert!(!encoded.contains(redacted));
+        }
+
+        let reason_set = report.candidates[0].review_reasons.clone();
+        let review_batch = review_batch_summary(&report, &reason_set).unwrap();
+        assert_eq!(review_batch["output_mode"], "review-batch-summary");
+        assert_eq!(review_batch["candidate_count"], 1);
+        assert_eq!(review_batch["candidate_bytes"], 42);
+        assert_eq!(review_batch["reason_set"], serde_json::json!(reason_set));
+        assert_eq!(review_batch["decisions"][0]["relative_path"], "report.pdf");
+        assert_eq!(
+            review_batch["review_batch_fingerprint"]
+                .as_str()
+                .unwrap()
+                .len(),
+            64
+        );
+        assert_eq!(
+            review_batch["metadata_policy"]["batch_fingerprint_is_not_approval"],
+            true
+        );
+        assert_eq!(
+            review_batch["metadata_policy"]["candidate_review_decisions_remain_individual"],
+            true
+        );
+        assert_eq!(
+            review_batch_summary(&report, &report.candidates[0].review_reasons).unwrap()
+                ["review_batch_fingerprint"],
+            review_batch["review_batch_fingerprint"]
+        );
+        let mut unrelated_changed = report.clone();
+        let mut unrelated = unrelated_changed.candidates[0].clone();
+        unrelated.metadata_fingerprint = "c".repeat(64);
+        unrelated.review_fingerprint = "d".repeat(64);
+        unrelated.relative_path = "other.pdf".into();
+        unrelated.src = "/Users/private/Downloads/other.pdf".into();
+        unrelated.dst = "/Users/private/Cloud/other.pdf".into();
+        unrelated.bytes = 9;
+        unrelated.review_reasons = vec!["different-reason".into()];
+        unrelated_changed.candidates.push(unrelated);
+        unrelated_changed.candidate_bytes += 9;
+        unrelated_changed.potentially_reclaimable_bytes += 9;
+        let unrelated_batch = review_batch_summary(&unrelated_changed, &reason_set).unwrap();
+        assert_ne!(
+            unrelated_batch["decision_batch_fingerprint"],
+            review_batch["decision_batch_fingerprint"]
+        );
+        assert_eq!(
+            unrelated_batch["review_batch_fingerprint"],
+            review_batch["review_batch_fingerprint"]
+        );
+
+        let mut selected_changed = report.clone();
+        selected_changed.candidates[0].review_fingerprint = "e".repeat(64);
+        assert_ne!(
+            review_batch_summary(&selected_changed, &reason_set).unwrap()
+                ["review_batch_fingerprint"],
+            review_batch["review_batch_fingerprint"]
+        );
+        let encoded_batch = serde_json::to_string(&review_batch).unwrap();
+        for redacted in [
+            "/Users/private",
+            "private@example.com",
+            "Confidential title",
+            "Private Author",
+            "private raw value",
+        ] {
+            assert!(!encoded_batch.contains(redacted));
+        }
+        assert!(review_batch_summary(&report, &["not-present".into()]).is_err());
+
+        let dossier = private_review_dossier(&report, &reason_set).unwrap();
+        assert_eq!(dossier["output_mode"], "private-review-dossier");
+        assert_eq!(
+            dossier["review_batch_fingerprint"],
+            review_batch["review_batch_fingerprint"]
+        );
+        assert_eq!(dossier["candidate_count"], 1);
+        assert_eq!(dossier["candidate_bytes"], 42);
+        assert_eq!(
+            dossier["metadata_policy"]["filename_dates_are_auxiliary"],
+            true
+        );
+        assert_eq!(
+            dossier["metadata_policy"]["candidate_review_decisions_remain_individual"],
+            true
+        );
+        let encoded_dossier = serde_json::to_string(&dossier).unwrap();
+        for private_value in [
+            "/Users/private",
+            "private@example.com",
+            "Confidential title",
+            "Private Author",
+            "private raw value",
+        ] {
+            assert!(encoded_dossier.contains(private_value));
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let private_dir = tempfile::tempdir().unwrap();
+            let private_path = private_dir.path().join("review.json");
+            let (sha256, bytes) = write_private_review_dossier(&private_path, &dossier).unwrap();
+            assert_eq!(sha256.len(), 64);
+            assert!(bytes > 0);
+            assert_eq!(std::fs::read(&private_path).unwrap().len(), bytes);
+            assert!(write_private_review_dossier(&private_path, &dossier).is_err());
+            assert_eq!(
+                std::fs::metadata(&private_path)
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+
+        let mut mixed = report.clone();
+        let mut ready = mixed.candidates[0].clone();
+        ready.metadata_fingerprint = "c".repeat(64);
+        ready.review_fingerprint = "d".repeat(64);
+        ready.bytes = 10;
+        ready.requires_review = false;
+        ready.review_reasons.clear();
+        ready.production_time_source = "filename:path-token".into();
+        ready.production_time_confidence = "low".into();
+        let mut blocked = mixed.candidates[0].clone();
+        blocked.metadata_fingerprint = "e".repeat(64);
+        blocked.review_fingerprint = "f".repeat(64);
+        blocked.bytes = 7;
+        blocked.blocked_reason = Some("incomplete-download".into());
+        mixed.candidates.extend([ready, blocked]);
+        let aggregates = decision_aggregates(&mixed);
+        assert_eq!(aggregates["decision_state"]["counts"]["review-required"], 1);
+        assert_eq!(
+            aggregates["decision_state"]["counts"]["ready-for-copy-review"],
+            1
+        );
+        assert_eq!(aggregates["decision_state"]["counts"]["blocked"], 1);
+        assert_eq!(
+            aggregates["blocked_reason"]["counts"]["incomplete-download"],
+            1
+        );
+        assert_eq!(
+            aggregates["review_required_reason"]["counts"]["metadata-review-required"],
+            1
+        );
+        assert_eq!(
+            aggregates["production_time_source"]["counts"]["filename:path-token"],
+            1
+        );
+
+        let mut sole_reason = report.clone();
+        sole_reason.candidates[0].review_reasons = vec!["destination-account-scope-unknown".into()];
+        let sole_reason_aggregates = decision_aggregates(&sole_reason);
+        assert_eq!(
+            sole_reason_aggregates["review_required_reason"]["sole_reason_counts"]
+                ["destination-account-scope-unknown"],
+            1
+        );
+        assert_eq!(
+            sole_reason_aggregates["review_required_reason"]["sole_reason_candidate_bytes"]
+                ["destination-account-scope-unknown"],
+            42
+        );
+
+        let original_batch = cloud::cloud_decision_batch_fingerprint(&report);
+        let mut volatile_changed = report.clone();
+        volatile_changed.generated_at_ms += 1;
+        volatile_changed
+            .notices
+            .push("fresh-capacity-required".into());
+        assert_eq!(
+            cloud::cloud_decision_batch_fingerprint(&volatile_changed),
+            original_batch
+        );
+        assert_eq!(
+            review_batch_summary(&volatile_changed, &reason_set).unwrap()
+                ["review_batch_fingerprint"],
+            review_batch["review_batch_fingerprint"]
+        );
+
+        let mut evidence_changed = report.clone();
+        evidence_changed.candidates[0].review_fingerprint = "c".repeat(64);
+        assert_ne!(
+            cloud::cloud_decision_batch_fingerprint(&evidence_changed),
+            original_batch
+        );
+
+        let mut blocker_changed = report.clone();
+        blocker_changed.candidates[0].blocked_reason = Some("destination-exists".into());
+        blocker_changed.potentially_reclaimable_bytes = 0;
+        assert_ne!(
+            cloud::cloud_decision_batch_fingerprint(&blocker_changed),
+            original_batch
+        );
+
+        let mut reordered = report.clone();
+        let mut second = reordered.candidates[0].clone();
+        second.metadata_fingerprint = "d".repeat(64);
+        second.review_fingerprint = "e".repeat(64);
+        reordered.candidates.push(second);
+        reordered.candidate_bytes *= 2;
+        reordered.potentially_reclaimable_bytes *= 2;
+        let ordered_batch = cloud::cloud_decision_batch_fingerprint(&reordered);
+        reordered.candidates.reverse();
+        assert_eq!(
+            cloud::cloud_decision_batch_fingerprint(&reordered),
+            ordered_batch
+        );
+
+        report.candidates[0].requires_review = false;
+        assert_eq!(
+            candidate_decision_state(&report.candidates[0]),
+            "ready-for-copy-review"
+        );
+        report.candidates[0].blocked_reason = Some("incomplete-download".into());
+        assert_eq!(candidate_decision_state(&report.candidates[0]), "blocked");
+    }
+
+    #[test]
+    fn exact_duplicate_review_batch_binds_only_root_canonical_and_nested_prefix_copies() {
+        let content_sha256 = "1".repeat(64);
+        let member = |metadata_fingerprint: &str,
+                      review_fingerprint: &str,
+                      relative_path: &str,
+                      context: Vec<String>| {
+            cloud::CloudCandidate {
+                metadata_fingerprint: metadata_fingerprint.repeat(64),
+                review_fingerprint: review_fingerprint.repeat(64),
+                src: format!("/Users/private/Downloads/{relative_path}"),
+                dst: format!("/Users/private/Cloud/{relative_path}"),
+                provider: CloudProvider::Icloud,
+                destination_account_scope: disksage_lib::cloud::CloudAccountScope::Personal,
+                kind: ArchiveKind::Document,
+                bytes: 42,
+                age_days: 7,
+                created_ms: 10,
+                modified_ms: 20,
+                production_time_ms: 30,
+                production_time_source: "embedded:exiftool:CreateDate".into(),
+                production_time_confidence: "high".into(),
+                source_root: "/Users/private/Downloads".into(),
+                relative_path: relative_path.into(),
+                source_context: "private-source-context".into(),
+                requires_review: true,
+                review_reasons: vec![
+                    "download-origin-needs-destination-review".into(),
+                    "exact-duplicate-content-needs-canonical-selection".into(),
+                ],
+                content_title: Some("Private title".into()),
+                content_authors: vec!["Private author".into()],
+                content_context: context,
+                duration_ms: None,
+                dataset_profile: None,
+                metadata_evidence: vec![
+                    cloud::MetadataEvidence {
+                        field: "production-date".into(),
+                        value: "private-production-value".into(),
+                        source: "embedded:exiftool:CreateDate".into(),
+                        confidence: "high".into(),
+                    },
+                    cloud::MetadataEvidence {
+                        field: "exact-duplicate-content-sha256".into(),
+                        value: content_sha256.clone(),
+                        source: "local:content-hash".into(),
+                        confidence: "high".into(),
+                    },
+                ],
+                blocked_reason: None,
+            }
+        };
+        let canonical = member(
+            "a",
+            "b",
+            "report.docx",
+            vec![
+                "download-origin-host=private.example".into(),
+                "download-agent=Edge".into(),
+            ],
+        );
+        let redundant = member(
+            "c",
+            "d",
+            "smart_bundle_v1/report.docx",
+            vec!["download-agent=Bandizip".into()],
+        );
+        let report = cloud::CloudPlanReport {
+            cloud_root: CloudRoot {
+                id: "/Users/private/Cloud".into(),
+                provider: CloudProvider::Icloud,
+                account_scope: disksage_lib::cloud::CloudAccountScope::Personal,
+                label: "private@example.com".into(),
+                path: "/Users/private/Cloud".into(),
+                readable: true,
+                access_issue: None,
+            },
+            generated_at_ms: 100,
+            candidates: vec![canonical, redundant],
+            candidate_bytes: 84,
+            potentially_reclaimable_bytes: 84,
+            exact_duplicates: cloud::ExactDuplicateSummary {
+                cluster_count: 1,
+                candidate_count: 2,
+                candidate_bytes: 84,
+                redundant_bytes: 42,
+                clusters: vec![cloud::ExactDuplicateClusterRecommendation {
+                    cluster_fingerprint: "e".repeat(64),
+                    candidate_count: 2,
+                    bytes_per_candidate: 42,
+                    redundant_bytes: 42,
+                    recommended_canonical_metadata_fingerprint: "a".repeat(64),
+                    recommendation_confidence: "high".into(),
+                    recommendation_reason_codes: vec![
+                        "richer-source-lineage-context-preferred".into()
+                    ],
+                    member_metadata_fingerprints: vec!["a".repeat(64), "c".repeat(64)],
+                    requires_human_confirmation: true,
+                }],
+            },
+            capacity: None,
+            notices: vec!["dry-run-only".into()],
+        };
+
+        let batch =
+            exact_duplicate_review_batch(&report, "smart_bundle_", ArchiveKind::Document).unwrap();
+        assert_eq!(batch["output_mode"], "exact-duplicate-review-batch");
+        assert_eq!(batch["cluster_count"], 1);
+        assert_eq!(batch["candidate_count"], 2);
+        assert_eq!(batch["redundant_copy_count"], 1);
+        assert_eq!(batch["redundant_bytes"], 42);
+        assert_eq!(batch["clusters"][0]["content_sha256"], content_sha256);
+        assert_eq!(
+            batch["clusters"][0]["canonical"]["relative_path"],
+            "report.docx"
+        );
+        assert_eq!(
+            batch["clusters"][0]["redundant_copies"][0]["relative_path"],
+            "smart_bundle_v1/report.docx"
+        );
+        assert_eq!(
+            batch["clusters"][0]["canonical"]["source_lineage_evidence_fields"],
+            serde_json::json!(["download-agent", "download-origin-host"])
+        );
+        assert_eq!(
+            batch["exact_duplicate_review_batch_fingerprint"]
+                .as_str()
+                .unwrap()
+                .len(),
+            64
+        );
+        assert_eq!(
+            batch["metadata_policy"]["batch_fingerprint_is_not_approval"],
+            true
+        );
+        assert_eq!(
+            batch["metadata_policy"]["trash_execution_is_not_available_in_this_output_mode"],
+            true
+        );
+
+        let encoded = serde_json::to_string(&batch).unwrap();
+        for redacted in [
+            "/Users/private",
+            "private@example.com",
+            "private.example",
+            "Private title",
+            "Private author",
+            "private-production-value",
+            "private-source-context",
+            "Bandizip",
+            "Edge",
+        ] {
+            assert!(!encoded.contains(redacted));
+        }
+
+        let repeated =
+            exact_duplicate_review_batch(&report, "smart_bundle_", ArchiveKind::Document).unwrap();
+        assert_eq!(
+            repeated["exact_duplicate_review_batch_fingerprint"],
+            batch["exact_duplicate_review_batch_fingerprint"]
+        );
+        assert!(exact_duplicate_review_batch(&report, "other_", ArchiveKind::Document).is_err());
+        assert!(
+            exact_duplicate_review_batch(&report, "smart_bundle_", ArchiveKind::Media).is_err()
+        );
+
+        let mut evidence_changed = report.clone();
+        evidence_changed.candidates[1].review_fingerprint = "f".repeat(64);
+        assert_ne!(
+            exact_duplicate_review_batch(
+                &evidence_changed,
+                "smart_bundle_",
+                ArchiveKind::Document,
+            )
+            .unwrap()["exact_duplicate_review_batch_fingerprint"],
+            batch["exact_duplicate_review_batch_fingerprint"]
+        );
+
+        let mut incomplete = report;
+        incomplete.candidates.pop();
+        assert!(
+            exact_duplicate_review_batch(&incomplete, "smart_bundle_", ArchiveKind::Document)
+                .unwrap_err()
+                .contains("missing-from-bounded-plan")
+        );
     }
 
     #[test]
@@ -1239,6 +3215,27 @@ mod tests {
         copy.oauth_connections = Some(PathBuf::from("/connections.json"));
         assert!(validate_action_args(&copy).is_ok());
 
+        let review = parse_args(
+            &[
+                "--verify-capacity".into(),
+                "--review-candidate-fingerprint".into(),
+                "c".repeat(64),
+                "--review-fingerprint".into(),
+                "d".repeat(64),
+                "--review-disposition".into(),
+                "approved".into(),
+                "--reviewed-by".into(),
+                "human:test".into(),
+                "--review-rationale".into(),
+                "provider scope and embedded metadata reviewed".into(),
+                "--review-dir".into(),
+                "/reviews".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&review).is_ok());
+
         let mut adoption = copy.clone();
         adoption.copy_fingerprint = None;
         adoption.adopt_existing_fingerprint = Some("b".repeat(64));
@@ -1260,7 +3257,16 @@ mod tests {
             access_issue: None,
         };
 
-        let assessment = verified_capacity_for_bytes(&root, None, 10, 10, 1).unwrap();
+        let observed_at_ms = cloud::system_now_ms();
+        let snapshot = match collect_root_capacity(&root, None, observed_at_ms) {
+            Ok(snapshot) => snapshot,
+            Err(error) => provider_capacity::unavailable_capacity_from_error(
+                root.provider,
+                observed_at_ms,
+                &error,
+            ),
+        };
+        let assessment = provider_capacity::assess_capacity(snapshot, 10, 10, 1024 * 1024);
 
         assert_eq!(assessment.can_fit, None);
         assert_eq!(
@@ -1271,6 +3277,51 @@ mod tests {
             assessment.blockers,
             ["provider-oauth-connection-missing".to_string()]
         );
+    }
+
+    #[test]
+    fn capacity_attachment_marks_each_non_oauth_destination_unavailable() {
+        let root = CloudRoot {
+            id: "onedrive:test".into(),
+            provider: CloudProvider::Onedrive,
+            account_scope: disksage_lib::cloud::CloudAccountScope::Personal,
+            label: "OneDrive".into(),
+            path: "/Cloud/OneDrive".into(),
+            readable: true,
+            access_issue: None,
+        };
+        let mut report = cloud::CloudPlanReport {
+            cloud_root: root.clone(),
+            generated_at_ms: 1,
+            candidates: Vec::new(),
+            candidate_bytes: 0,
+            potentially_reclaimable_bytes: 0,
+            exact_duplicates: cloud::ExactDuplicateSummary::default(),
+            capacity: None,
+            notices: vec!["dry-run-only".into(), "cloud-quota-unverified".into()],
+        };
+
+        let snapshot = provider_capacity::unavailable_capacity_from_error(
+            CloudProvider::Onedrive,
+            1,
+            "provider-capacity-oauth-connections-required",
+        );
+        attach_capacity_snapshot(&mut report, snapshot, 1024).unwrap();
+
+        let assessment = report.capacity.unwrap();
+        assert_eq!(assessment.can_fit, None);
+        assert_eq!(
+            assessment.blockers,
+            ["provider-oauth-connection-missing".to_string()]
+        );
+        assert!(!report
+            .notices
+            .iter()
+            .any(|notice| notice == "cloud-quota-unverified"));
+        assert!(report
+            .notices
+            .iter()
+            .any(|notice| notice == "cloud-quota-unavailable"));
     }
 
     #[test]
@@ -1298,6 +3349,18 @@ mod tests {
         args.reviewed_by = None;
         args.review_rationale = None;
         assert!(validate_action_args(&args).is_ok());
+
+        let mut reason_set = parse_args(
+            &[
+                "--review-reason-set".into(),
+                "destination-account-scope-unknown".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&reason_set).is_err());
+        reason_set.decision_summary = true;
+        assert!(validate_action_args(&reason_set).is_ok());
     }
 
     #[test]
@@ -1337,18 +3400,93 @@ mod tests {
     }
 
     #[test]
+    fn naruon_capacity_export_requires_fresh_single_destination_capacity() {
+        let export = parse_args(
+            &[
+                "--verify-capacity".into(),
+                "--export-naruon-capacity".into(),
+                "--provider".into(),
+                "icloud".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(export.export_naruon_capacity);
+        assert!(validate_action_args(&export).is_ok());
+
+        let missing_capacity =
+            parse_args(&["--export-naruon-capacity".into()], Path::new("/h")).unwrap();
+        assert!(validate_action_args(&missing_capacity).is_err());
+
+        let multiple = parse_args(
+            &[
+                "--verify-capacity".into(),
+                "--export-naruon-capacity".into(),
+                "--all-readable-roots".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&multiple).is_err());
+    }
+
+    #[test]
+    fn semantic_catalog_export_is_single_destination_dry_run_only() {
+        let export = parse_args(
+            &[
+                "--export-semantic-catalog".into(),
+                "--provider".into(),
+                "icloud".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(export.export_semantic_catalog);
+        assert!(validate_action_args(&export).is_ok());
+
+        let mut conflicting = export.clone();
+        conflicting.copy_fingerprint = Some("a".repeat(64));
+        conflicting.receipt_dir = Some(PathBuf::from("/receipts"));
+        assert!(validate_action_args(&conflicting).is_err());
+
+        let multiple = parse_args(
+            &[
+                "--export-semantic-catalog".into(),
+                "--all-readable-roots".into(),
+                "--decision-summary".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&multiple).is_err());
+
+        let summary = parse_args(
+            &[
+                "--export-semantic-catalog".into(),
+                "--decision-summary".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&summary).is_err());
+    }
+
+    #[test]
     fn action_validation_requires_explicit_complete_eviction_arguments() {
         let mut args = parse_args(&[], Path::new("/h")).unwrap();
         args.evict_receipt = Some(PathBuf::from("/receipts/a.json"));
         assert!(validate_action_args(&args).is_err());
         args.confirm_receipt_id = Some("a".repeat(64));
         args.eviction_dir = Some(PathBuf::from("/evictions"));
+        args.eviction_approval_dir = Some(PathBuf::from("/approvals"));
         args.journal_path = Some(PathBuf::from("relative-journal"));
         assert!(validate_action_args(&args).is_err());
         args.journal_path = Some(PathBuf::from("/journal/operations.jsonl"));
         args.evidence_dir = Some(PathBuf::from("relative-evidence"));
         assert!(validate_action_args(&args).is_err());
         args.evidence_dir = Some(PathBuf::from("/evidence"));
+        args.reviewed_by = Some("human:local:test".into());
+        args.review_rationale = Some("verified exact receipt source".into());
         assert!(validate_action_args(&args).is_ok());
 
         args.attest_receipt = Some(PathBuf::from("/receipt.json"));
@@ -1362,10 +3500,16 @@ mod tests {
                 "b".repeat(64),
                 "--eviction-dir".into(),
                 "/evictions".into(),
+                "--eviction-approval-dir".into(),
+                "/approvals".into(),
                 "--journal-path".into(),
                 "/journal/operations.jsonl".into(),
                 "--evidence-dir".into(),
                 "/evidence".into(),
+                "--reviewed-by".into(),
+                "human:local:test".into(),
+                "--review-rationale".into(),
+                "verified exact receipt source".into(),
             ],
             Path::new("/h"),
         )

@@ -5,9 +5,9 @@
 //! read-only `/usr/bin/brctl quota` client. That native evidence is kept distinct from provider API
 //! evidence and is never inferred from local APFS free space.
 
-use crate::cloud::CloudProvider;
+use crate::cloud::{CloudAccountScope, CloudProvider, CloudRoot};
 
-pub const CAPACITY_SCHEMA_VERSION: u32 = 2;
+pub const CAPACITY_SCHEMA_VERSION: u32 = 3;
 pub const DEFAULT_CAPACITY_RESERVE_BYTES: u64 = 1024 * 1024 * 1024;
 
 #[cfg(not(coverage))]
@@ -44,6 +44,12 @@ pub enum CloudCapacityState {
 pub struct CloudCapacitySnapshot {
     pub schema_version: u32,
     pub provider: CloudProvider,
+    /// Provider-authoritative account scope when the bounded capacity response exposes it.
+    ///
+    /// `None` means the capacity evidence cannot classify the destination account and callers
+    /// must preserve the discovery-time scope instead of guessing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_scope: Option<CloudAccountScope>,
     pub evidence_kind: CapacityEvidenceKind,
     pub observed_at_ms: u64,
     pub total_bytes: Option<u64>,
@@ -68,6 +74,32 @@ pub struct CloudCapacityAssessment {
     pub notices: Vec<String>,
 }
 
+/// Bind provider-authoritative account scope to a discovered cloud root before planning.
+///
+/// A provider that does not expose account scope leaves the discovery-time root unchanged. A
+/// provider mismatch or conflicting non-unknown scope fails closed so review fingerprints and
+/// copy receipts cannot silently switch destination policy.
+pub fn root_with_verified_capacity_scope(
+    root: &CloudRoot,
+    snapshot: &CloudCapacitySnapshot,
+) -> Result<CloudRoot, String> {
+    if snapshot.provider != root.provider {
+        return Err("cloud-capacity-provider-mismatch".into());
+    }
+    let Some(verified_scope) = snapshot.account_scope else {
+        return Ok(root.clone());
+    };
+    match root.account_scope {
+        CloudAccountScope::Unknown => {
+            let mut refined = root.clone();
+            refined.account_scope = verified_scope;
+            Ok(refined)
+        }
+        existing if existing == verified_scope => Ok(root.clone()),
+        _ => Err("cloud-capacity-account-scope-conflict".into()),
+    }
+}
+
 pub fn provider_capacity_url(provider: CloudProvider) -> Result<&'static str, String> {
     match provider {
         CloudProvider::Onedrive => Ok(ONEDRIVE_CAPACITY_URL),
@@ -83,8 +115,17 @@ fn update_optional_u64(hasher: &mut blake3::Hasher, value: Option<u64>) {
 
 fn evidence_fingerprint(snapshot: &CloudCapacitySnapshot, provider_binding: &str) -> String {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"disksage-cloud-capacity-v2\0");
+    hasher.update(b"disksage-cloud-capacity-v3\0");
     hasher.update(snapshot.provider.as_str().as_bytes());
+    hasher.update(&[0]);
+    hasher.update(&[snapshot.account_scope.is_some() as u8]);
+    hasher.update(
+        snapshot
+            .account_scope
+            .unwrap_or(CloudAccountScope::Unknown)
+            .as_str()
+            .as_bytes(),
+    );
     hasher.update(&[0]);
     hasher.update(&[match snapshot.evidence_kind {
         CapacityEvidenceKind::ProviderApi => 1,
@@ -149,6 +190,7 @@ pub fn parse_icloud_brctl_quota(
     let mut snapshot = CloudCapacitySnapshot {
         schema_version: CAPACITY_SCHEMA_VERSION,
         provider: CloudProvider::Icloud,
+        account_scope: Some(CloudAccountScope::Personal),
         evidence_kind: CapacityEvidenceKind::ProviderNativeStatus,
         observed_at_ms,
         total_bytes: None,
@@ -179,7 +221,10 @@ pub fn collect_icloud_native_capacity(
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
 
-    const TIMEOUT: Duration = Duration::from_secs(5);
+    // A cold File Provider session after login or reboot can take more than five seconds to
+    // return otherwise valid quota evidence. Keep the native probe bounded, but allow enough time
+    // for that read-only initialization path before failing closed.
+    const TIMEOUT: Duration = Duration::from_secs(15);
     const OUTPUT_LIMIT: u64 = 128 * 1024;
 
     let mut child = Command::new("/usr/bin/brctl")
@@ -290,6 +335,12 @@ pub fn parse_onedrive_capacity(
         .drive_type
         .filter(|value| matches!(value.as_str(), "personal" | "business" | "documentLibrary"))
         .ok_or_else(|| "onedrive-capacity-drive-type-invalid".to_string())?;
+    let account_scope = match drive_type.as_str() {
+        "personal" => CloudAccountScope::Personal,
+        "business" => CloudAccountScope::Organization,
+        "documentLibrary" => CloudAccountScope::Shared,
+        _ => return Err("onedrive-capacity-drive-type-invalid".into()),
+    };
     let quota = response
         .quota
         .ok_or_else(|| "onedrive-quota-missing".to_string())?;
@@ -314,6 +365,7 @@ pub fn parse_onedrive_capacity(
     let mut snapshot = CloudCapacitySnapshot {
         schema_version: CAPACITY_SCHEMA_VERSION,
         provider: CloudProvider::Onedrive,
+        account_scope: Some(account_scope),
         evidence_kind: CapacityEvidenceKind::ProviderApi,
         observed_at_ms,
         total_bytes: Some(total),
@@ -438,6 +490,7 @@ pub fn parse_google_drive_capacity(
     let mut snapshot = CloudCapacitySnapshot {
         schema_version: CAPACITY_SCHEMA_VERSION,
         provider: CloudProvider::GoogleDrive,
+        account_scope: None,
         evidence_kind: CapacityEvidenceKind::ProviderApi,
         observed_at_ms,
         total_bytes: total,
@@ -464,6 +517,7 @@ pub fn unavailable_capacity(
     CloudCapacitySnapshot {
         schema_version: CAPACITY_SCHEMA_VERSION,
         provider,
+        account_scope: None,
         evidence_kind: CapacityEvidenceKind::Unavailable,
         observed_at_ms,
         total_bytes: None,
@@ -686,6 +740,39 @@ mod tests {
     }
 
     #[test]
+    fn provider_capacity_scope_refines_unknown_root_and_rejects_mismatches() {
+        let root = CloudRoot {
+            id: "icloud:test".into(),
+            provider: CloudProvider::Icloud,
+            account_scope: CloudAccountScope::Unknown,
+            label: "iCloud Drive".into(),
+            path: "/Cloud/iCloud".into(),
+            readable: true,
+            access_issue: None,
+        };
+        let snapshot =
+            parse_icloud_brctl_quota("100 bytes of quota remaining in personal account\n", 1)
+                .unwrap();
+
+        let refined = root_with_verified_capacity_scope(&root, &snapshot).unwrap();
+        assert_eq!(refined.account_scope, CloudAccountScope::Personal);
+
+        let mut conflicting = root.clone();
+        conflicting.account_scope = CloudAccountScope::Organization;
+        assert_eq!(
+            root_with_verified_capacity_scope(&conflicting, &snapshot).unwrap_err(),
+            "cloud-capacity-account-scope-conflict"
+        );
+
+        let mut wrong_provider = snapshot;
+        wrong_provider.provider = CloudProvider::Onedrive;
+        assert_eq!(
+            root_with_verified_capacity_scope(&root, &wrong_provider).unwrap_err(),
+            "cloud-capacity-provider-mismatch"
+        );
+    }
+
+    #[test]
     fn parses_icloud_native_remaining_quota_without_inventing_total_usage() {
         let snapshot = parse_icloud_brctl_quota(
             "4338720014827 bytes of quota remaining in personal account\n",
@@ -694,6 +781,7 @@ mod tests {
         .unwrap();
         assert_eq!(snapshot.schema_version, CAPACITY_SCHEMA_VERSION);
         assert_eq!(snapshot.provider, CloudProvider::Icloud);
+        assert_eq!(snapshot.account_scope, Some(CloudAccountScope::Personal));
         assert_eq!(
             snapshot.evidence_kind,
             CapacityEvidenceKind::ProviderNativeStatus
@@ -743,6 +831,7 @@ mod tests {
             30,
         )
         .unwrap();
+        assert_eq!(snapshot.account_scope, Some(CloudAccountScope::Personal));
         assert_eq!(snapshot.remaining_bytes, Some(4_000));
         assert_eq!(snapshot.state, CloudCapacityState::Normal);
         assert_eq!(snapshot.evidence_fingerprint.as_ref().unwrap().len(), 64);
@@ -757,6 +846,22 @@ mod tests {
         assert!(full
             .blockers
             .contains(&"cloud-capacity-insufficient-with-reserve".to_string()));
+
+        let organization = parse_onedrive_capacity(
+            r#"{"id":"business-drive","driveType":"business","quota":{"remaining":4000,"state":"normal","total":10000,"used":6000}}"#,
+            31,
+        )
+        .unwrap();
+        assert_eq!(
+            organization.account_scope,
+            Some(CloudAccountScope::Organization)
+        );
+        let shared = parse_onedrive_capacity(
+            r#"{"id":"library-drive","driveType":"documentLibrary","quota":{"remaining":4000,"state":"normal","total":10000,"used":6000}}"#,
+            32,
+        )
+        .unwrap();
+        assert_eq!(shared.account_scope, Some(CloudAccountScope::Shared));
     }
 
     #[test]
@@ -785,6 +890,7 @@ mod tests {
             40,
         )
         .unwrap();
+        assert_eq!(limited.account_scope, None);
         assert_eq!(limited.used_bytes, Some(9_951));
         assert_eq!(limited.remaining_bytes, Some(49));
         assert_eq!(limited.state, CloudCapacityState::Critical);
@@ -863,6 +969,7 @@ mod tests {
             1,
         );
         assert_eq!(unavailable.can_fit, None);
+        assert_eq!(unavailable.snapshot.account_scope, None);
         assert_eq!(
             unavailable.blockers,
             ["icloud-quota-api-unavailable".to_string()]

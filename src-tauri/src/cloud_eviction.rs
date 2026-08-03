@@ -6,6 +6,8 @@
 //! delegate to the application's only trash operation.
 
 use crate::cloud::CloudProvider;
+use crate::cloud_local_eviction::{observe_path_active_use, ActiveUseEvidence};
+use crate::cloud_review;
 use crate::cloud_transfer::{
     receipt_blockers, CloudCopyReceipt, LocalEvictionPermit, SyncEvidenceKind,
 };
@@ -16,7 +18,22 @@ use std::io::{Read, Write};
 use std::path::Path;
 
 const EVICTION_RECORD_VERSION: u32 = 2;
+const SOURCE_EVICTION_APPROVAL_VERSION: u32 = 1;
 const MAX_RECORD_BYTES: u64 = 64 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CloudSourceEvictionApproval {
+    pub version: u32,
+    pub approval_id: String,
+    pub receipt_id: String,
+    pub evidence_record_id: String,
+    pub approved_at_ms: u64,
+    pub approved_by: String,
+    pub rationale: String,
+    pub active_use_observed_at_ms: u64,
+    pub active_use: ActiveUseEvidence,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct SourceIdentity {
@@ -48,6 +65,8 @@ struct CloudEvictionIntent {
     evidence_kind: SyncEvidenceKind,
     evidence_id: String,
     evidence_record_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    human_approval: Option<CloudSourceEvictionApproval>,
     created_at_ms: u64,
     source_identity: SourceIdentity,
 }
@@ -71,6 +90,7 @@ pub struct CloudEvictionResult {
     pub intent_id: String,
     pub completion_id: String,
     pub evidence_record_id: String,
+    pub approval_id: Option<String>,
     pub source: String,
     pub staged_source: String,
     pub intent_path: String,
@@ -89,6 +109,104 @@ fn absolute_without_parent(path: &Path) -> bool {
 
 fn valid_hex64(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn approval_active_use_is_safe(evidence: &ActiveUseEvidence) -> bool {
+    evidence.method == "lsof-fp+ps-command"
+        && evidence.evidence_complete
+        && !evidence.active
+        && evidence.observed_pids.is_empty()
+        && !evidence.results_truncated
+        && evidence.error.is_none()
+}
+
+fn source_eviction_approval_id_for(approval: &CloudSourceEvictionApproval) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage-cloud-source-eviction-approval-v1\0");
+    for value in [
+        approval.receipt_id.as_str(),
+        approval.evidence_record_id.as_str(),
+        approval.approved_by.as_str(),
+        approval.rationale.as_str(),
+        approval.active_use.method.as_str(),
+        approval.active_use.error.as_deref().unwrap_or_default(),
+    ] {
+        hasher.update(value.as_bytes());
+        hasher.update(&[0]);
+    }
+    hasher.update(&approval.approved_at_ms.to_le_bytes());
+    hasher.update(&approval.active_use_observed_at_ms.to_le_bytes());
+    hasher.update(&[
+        approval.active_use.evidence_complete as u8,
+        approval.active_use.active as u8,
+        approval.active_use.results_truncated as u8,
+        approval.active_use.error.is_some() as u8,
+    ]);
+    for pid in &approval.active_use.observed_pids {
+        hasher.update(&pid.to_le_bytes());
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+fn validate_source_eviction_approval(
+    receipt: &CloudCopyReceipt,
+    permit: &LocalEvictionPermit,
+    approval: &CloudSourceEvictionApproval,
+) -> Result<(), String> {
+    validate_permit(receipt, permit)?;
+    if approval.version != SOURCE_EVICTION_APPROVAL_VERSION
+        || approval.receipt_id != receipt.receipt_id
+        || approval.evidence_record_id != permit.evidence_record_id
+        || approval.approved_at_ms < permit.approved_at_ms
+        || approval.active_use_observed_at_ms < permit.approved_at_ms
+        || approval.active_use_observed_at_ms > approval.approved_at_ms
+        || !approval_active_use_is_safe(&approval.active_use)
+        || approval.approval_id != source_eviction_approval_id_for(approval)
+    {
+        return Err("source-eviction-human-approval-invalid".into());
+    }
+    cloud_review::validate_review_attribution(&approval.approved_by, &approval.rationale)
+        .map_err(|_| "source-eviction-human-approval-attribution-invalid".to_string())?;
+    Ok(())
+}
+
+pub fn create_source_eviction_approval(
+    receipt: &CloudCopyReceipt,
+    permit: &LocalEvictionPermit,
+    confirmation_receipt_id: &str,
+    approved_at_ms: u64,
+    approved_by: &str,
+    rationale: &str,
+    active_use_observed_at_ms: u64,
+    active_use: ActiveUseEvidence,
+) -> Result<CloudSourceEvictionApproval, String> {
+    if confirmation_receipt_id != receipt.receipt_id {
+        return Err("eviction-confirmation-receipt-id-mismatch".into());
+    }
+    validate_permit(receipt, permit)?;
+    let approved_by = approved_by.trim();
+    let rationale = rationale.trim();
+    cloud_review::validate_review_attribution(approved_by, rationale)
+        .map_err(|_| "source-eviction-human-approval-attribution-invalid".to_string())?;
+    if !approval_active_use_is_safe(&active_use)
+        || active_use_observed_at_ms < permit.approved_at_ms
+        || active_use_observed_at_ms > approved_at_ms
+    {
+        return Err("source-eviction-active-use-evidence-invalid".into());
+    }
+    let mut approval = CloudSourceEvictionApproval {
+        version: SOURCE_EVICTION_APPROVAL_VERSION,
+        approval_id: String::new(),
+        receipt_id: receipt.receipt_id.clone(),
+        evidence_record_id: permit.evidence_record_id.clone(),
+        approved_at_ms,
+        approved_by: approved_by.into(),
+        rationale: rationale.into(),
+        active_use_observed_at_ms,
+        active_use,
+    };
+    approval.approval_id = source_eviction_approval_id_for(&approval);
+    Ok(approval)
 }
 
 fn path_entry_exists(path: &Path) -> Result<bool, String> {
@@ -221,6 +339,11 @@ fn intent_id_for(intent: &CloudEvictionIntent) -> String {
         SyncEvidenceKind::ProviderNativeStatus => b"provider-native-status",
     });
     hasher.update(&intent.created_at_ms.to_le_bytes());
+    if let Some(approval) = &intent.human_approval {
+        hasher.update(b"human-approval-v1\0");
+        hasher.update(approval.approval_id.as_bytes());
+        hasher.update(&[0]);
+    }
     hasher.update(&intent.source_identity.bytes.to_le_bytes());
     hasher.update(&intent.source_identity.modified_ms.to_le_bytes());
     #[cfg(unix)]
@@ -337,6 +460,7 @@ fn validate_intent(
     intent: &CloudEvictionIntent,
     receipt: &CloudCopyReceipt,
     permit: &LocalEvictionPermit,
+    human_approval: Option<&CloudSourceEvictionApproval>,
     expected_staging_dir: &Path,
     expected_staged_source: &Path,
 ) -> Result<(), String> {
@@ -363,6 +487,12 @@ fn validate_intent(
         || intent.evidence_record_id != permit.evidence_record_id
     {
         return Err("eviction-intent-permit-mismatch".into());
+    }
+    if intent.human_approval.as_ref() != human_approval {
+        return Err("eviction-intent-human-approval-mismatch".into());
+    }
+    if let Some(approval) = human_approval {
+        validate_source_eviction_approval(receipt, permit, approval)?;
     }
     Ok(())
 }
@@ -426,6 +556,10 @@ fn result_from_completion(
         intent_id: intent.intent_id.clone(),
         completion_id: completion.completion_id.clone(),
         evidence_record_id: intent.evidence_record_id.clone(),
+        approval_id: intent
+            .human_approval
+            .as_ref()
+            .map(|approval| approval.approval_id.clone()),
         source: intent.source.clone(),
         staged_source: intent.staged_source.clone(),
         intent_path: intent_path.to_string_lossy().into_owned(),
@@ -452,9 +586,10 @@ fn unexpected_staging_entries(staging_dir: &Path, staged_source: &Path) -> Resul
     Ok(false)
 }
 
-fn evict_source_with<F>(
+fn evict_source_with_context<F>(
     receipt: &CloudCopyReceipt,
     permit: &LocalEvictionPermit,
+    human_approval: Option<&CloudSourceEvictionApproval>,
     confirmation_receipt_id: &str,
     eviction_dir: &Path,
     journal_path: &Path,
@@ -465,6 +600,9 @@ where
     F: Fn(&Path, u64, &Path, u64) -> Result<(), String>,
 {
     validate_permit(receipt, permit)?;
+    if let Some(approval) = human_approval {
+        validate_source_eviction_approval(receipt, permit, approval)?;
+    }
     if confirmation_receipt_id != receipt.receipt_id {
         return Err("eviction-confirmation-receipt-id-mismatch".into());
     }
@@ -506,7 +644,14 @@ where
 
     let intent = if path_entry_exists(&intent_path)? {
         let intent: CloudEvictionIntent = read_immutable_json(&intent_path)?;
-        validate_intent(&intent, receipt, permit, &staging_dir, &staged_source)?;
+        validate_intent(
+            &intent,
+            receipt,
+            permit,
+            human_approval,
+            &staging_dir,
+            &staged_source,
+        )?;
         intent
     } else {
         if path_entry_exists(&staging_dir)? {
@@ -531,6 +676,7 @@ where
             evidence_kind: permit.evidence_kind,
             evidence_id: permit.evidence_id.clone(),
             evidence_record_id: permit.evidence_record_id.clone(),
+            human_approval: human_approval.cloned(),
             created_at_ms: now_ms,
             source_identity: identity,
         };
@@ -563,6 +709,11 @@ where
     let reconciled_after_interruption = !source_exists && !staged_exists;
     if source_exists {
         verify_source(source, receipt, Some(&intent.source_identity))?;
+        if human_approval.is_some()
+            && !approval_active_use_is_safe(&observe_path_active_use(source))
+        {
+            return Err("source-eviction-live-active-use-blocked".into());
+        }
         if !path_entry_exists(&staging_dir)? {
             std::fs::create_dir(&staging_dir).map_err(|error| error.to_string())?;
             #[cfg(unix)]
@@ -589,6 +740,15 @@ where
     }
     if !reconciled_after_interruption {
         verify_source(&staged_source, receipt, Some(&intent.source_identity))?;
+        if human_approval.is_some()
+            && !approval_active_use_is_safe(&observe_path_active_use(&staged_source))
+        {
+            if !path_entry_exists(source)? {
+                std::fs::rename(&staged_source, source).map_err(|error| error.to_string())?;
+                std::fs::remove_dir(&staging_dir).map_err(|error| error.to_string())?;
+            }
+            return Err("source-eviction-live-active-use-blocked".into());
+        }
         trash_move(&staging_dir, receipt.bytes, journal_path, now_ms)?;
         if path_entry_exists(source)? || path_entry_exists(&staging_dir)? {
             return Err("eviction-trash-did-not-remove-staging".into());
@@ -616,21 +776,74 @@ where
     ))
 }
 
-/// Move a receipt-bound local source to the operating-system Trash.
-///
-/// This is the only public eviction entrypoint. The caller must recollect provider-native evidence
-/// and derive `permit` immediately before calling it. No permanent deletion primitive is used.
-pub fn evict_source(
+#[cfg(test)]
+fn evict_source_with<F>(
     receipt: &CloudCopyReceipt,
     permit: &LocalEvictionPermit,
     confirmation_receipt_id: &str,
     eviction_dir: &Path,
     journal_path: &Path,
     now_ms: u64,
-) -> Result<CloudEvictionResult, String> {
-    evict_source_with(
+    trash_move: F,
+) -> Result<CloudEvictionResult, String>
+where
+    F: Fn(&Path, u64, &Path, u64) -> Result<(), String>,
+{
+    evict_source_with_context(
         receipt,
         permit,
+        None,
+        confirmation_receipt_id,
+        eviction_dir,
+        journal_path,
+        now_ms,
+        trash_move,
+    )
+}
+
+pub fn write_immutable_source_eviction_approval(
+    approval_dir: &Path,
+    approval: &CloudSourceEvictionApproval,
+) -> Result<std::path::PathBuf, String> {
+    if approval.version != SOURCE_EVICTION_APPROVAL_VERSION
+        || !valid_hex64(&approval.approval_id)
+        || !valid_hex64(&approval.receipt_id)
+        || !valid_hex64(&approval.evidence_record_id)
+        || approval.approval_id != source_eviction_approval_id_for(approval)
+        || approval.active_use_observed_at_ms > approval.approved_at_ms
+        || !approval_active_use_is_safe(&approval.active_use)
+    {
+        return Err("source-eviction-human-approval-invalid".into());
+    }
+    cloud_review::validate_review_attribution(&approval.approved_by, &approval.rationale)
+        .map_err(|_| "source-eviction-human-approval-attribution-invalid".to_string())?;
+    ensure_record_directory(approval_dir)?;
+    let path = approval_dir.join(format!("{}.approval.json", approval.approval_id));
+    write_immutable_json(&path, approval)?;
+    Ok(path)
+}
+
+/// Move a receipt-bound source to Trash only after an attributed, receipt-confirmed human
+/// approval and two bounded active-use observations. The approval captures the first observation;
+/// this entrypoint recollects it immediately before staging so a newly opened file fails closed.
+pub fn evict_source_with_human_approval(
+    receipt: &CloudCopyReceipt,
+    permit: &LocalEvictionPermit,
+    approval: &CloudSourceEvictionApproval,
+    confirmation_receipt_id: &str,
+    eviction_dir: &Path,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Result<CloudEvictionResult, String> {
+    validate_source_eviction_approval(receipt, permit, approval)?;
+    let live_active_use = observe_path_active_use(Path::new(&receipt.source));
+    if !approval_active_use_is_safe(&live_active_use) {
+        return Err("source-eviction-live-active-use-blocked".into());
+    }
+    evict_source_with_context(
+        receipt,
+        permit,
+        Some(approval),
         confirmation_receipt_id,
         eviction_dir,
         journal_path,
@@ -724,6 +937,113 @@ mod tests {
 
     fn mock_trash(path: &Path, _: u64, _: &Path, _: u64) -> Result<(), String> {
         std::fs::remove_dir_all(path).map_err(|error| error.to_string())
+    }
+
+    fn idle_active_use() -> ActiveUseEvidence {
+        ActiveUseEvidence {
+            method: "lsof-fp+ps-command".into(),
+            evidence_complete: true,
+            active: false,
+            observed_pids: Vec::new(),
+            results_truncated: false,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn attributed_human_approval_is_immutable_and_bound_into_intent() {
+        let temp = tempfile::tempdir().unwrap();
+        let (receipt, permit) = valid_receipt(&temp);
+        let approval = create_source_eviction_approval(
+            &receipt,
+            &permit,
+            &receipt.receipt_id,
+            160,
+            "human:local:test",
+            "verified cloud copy; move only this source to Trash",
+            150,
+            idle_active_use(),
+        )
+        .unwrap();
+        let approval_path =
+            write_immutable_source_eviction_approval(&temp.path().join("approvals"), &approval)
+                .unwrap();
+        assert!(approval_path.metadata().unwrap().permissions().readonly());
+
+        let result = evict_source_with_context(
+            &receipt,
+            &permit,
+            Some(&approval),
+            &receipt.receipt_id,
+            &temp.path().join("evictions"),
+            &temp.path().join("journal/operations.jsonl"),
+            200,
+            mock_trash,
+        )
+        .unwrap();
+        assert_eq!(
+            result.approval_id.as_deref(),
+            Some(approval.approval_id.as_str())
+        );
+        let intent: CloudEvictionIntent =
+            read_immutable_json(Path::new(&result.intent_path)).unwrap();
+        assert_eq!(intent.human_approval, Some(approval.clone()));
+
+        let mut future_evidence = approval.clone();
+        future_evidence.active_use_observed_at_ms = future_evidence.approved_at_ms + 1;
+        future_evidence.approval_id = source_eviction_approval_id_for(&future_evidence);
+        assert_eq!(
+            write_immutable_source_eviction_approval(
+                &temp.path().join("invalid-approvals"),
+                &future_evidence,
+            )
+            .unwrap_err(),
+            "source-eviction-human-approval-invalid"
+        );
+
+        let mut tampered = approval;
+        tampered.rationale.push_str(" changed");
+        assert_eq!(
+            validate_source_eviction_approval(&receipt, &permit, &tampered).unwrap_err(),
+            "source-eviction-human-approval-invalid"
+        );
+    }
+
+    #[test]
+    fn human_approval_rejects_active_or_unattributed_execution() {
+        let temp = tempfile::tempdir().unwrap();
+        let (receipt, permit) = valid_receipt(&temp);
+        let mut active = idle_active_use();
+        active.active = true;
+        active.observed_pids = vec![42];
+        assert_eq!(
+            create_source_eviction_approval(
+                &receipt,
+                &permit,
+                &receipt.receipt_id,
+                160,
+                "human:local:test",
+                "specific source approval",
+                150,
+                active,
+            )
+            .unwrap_err(),
+            "source-eviction-active-use-evidence-invalid"
+        );
+        assert_eq!(
+            create_source_eviction_approval(
+                &receipt,
+                &permit,
+                &receipt.receipt_id,
+                160,
+                "agent:test",
+                "specific source approval",
+                150,
+                idle_active_use(),
+            )
+            .unwrap_err(),
+            "source-eviction-human-approval-attribution-invalid"
+        );
     }
 
     #[test]

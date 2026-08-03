@@ -16,8 +16,8 @@ use crate::organize;
 use crate::safety;
 #[cfg(not(coverage))]
 use crate::{
-    cloud, cloud_review, cloud_transfer, dev_artifacts, dupes, provider_api_client,
-    provider_capacity, provider_evidence, provider_oauth, provider_sync, rules,
+    cloud, cloud_eviction, cloud_local_eviction, cloud_review, cloud_transfer, dev_artifacts, dupes,
+    provider_api_client, provider_capacity, provider_evidence, provider_oauth, provider_sync, rules,
 };
 
 #[derive(Default)]
@@ -630,17 +630,29 @@ fn cloud_plan_for_inputs(
         return Err("이미 클라우드 안에 있는 경로는 오프로드 원본으로 사용할 수 없음".into());
     }
     let files = cloud::collect_archive_files(&root_path, &excluded);
-    let report = cloud::plan_cloud_archive(
+    let observed_at_ms = cloud::system_now_ms();
+    let capacity_snapshot = match authenticated_capacity_snapshot(&selected, app, observed_at_ms) {
+        Ok(snapshot) => snapshot,
+        Err(error) => provider_capacity::unavailable_capacity_from_error(
+            selected.provider,
+            observed_at_ms,
+            &error,
+        ),
+    };
+    let selected =
+        provider_capacity::root_with_verified_capacity_scope(&selected, &capacity_snapshot)?;
+    let mut report = cloud::plan_cloud_archive(
         &files,
         &root_path,
         &selected,
-        cloud::system_now_ms(),
+        observed_at_ms,
         cloud::CloudPlanOptions {
             min_size_bytes: min_size_mib.saturating_mul(1024 * 1024),
             min_age_days,
             limit: limit.clamp(1, 1_000),
         },
     );
+    attach_capacity_assessment(&mut report, capacity_snapshot)?;
     Ok((selected, report))
 }
 
@@ -666,18 +678,16 @@ fn authenticated_capacity_snapshot(
 #[cfg(not(coverage))]
 fn attach_capacity_assessment(
     report: &mut cloud::CloudPlanReport,
-    selected: &cloud::CloudRoot,
-    app: &AppHandle,
-) {
-    let observed_at_ms = cloud::system_now_ms();
-    let snapshot = match authenticated_capacity_snapshot(selected, app, observed_at_ms) {
-        Ok(snapshot) => snapshot,
-        Err(error) => provider_capacity::unavailable_capacity_from_error(
-            selected.provider,
-            observed_at_ms,
-            &error,
-        ),
-    };
+    snapshot: provider_capacity::CloudCapacitySnapshot,
+) -> Result<(), String> {
+    if snapshot.provider != report.cloud_root.provider
+        || snapshot.account_scope.is_some_and(|scope| {
+            report.cloud_root.account_scope != cloud::CloudAccountScope::Unknown
+                && report.cloud_root.account_scope != scope
+        })
+    {
+        return Err("cloud-capacity-root-binding-mismatch".into());
+    }
     let largest_candidate_bytes = report
         .candidates
         .iter()
@@ -707,17 +717,16 @@ fn attach_capacity_assessment(
     }
     .into());
     report.capacity = Some(assessment);
+    Ok(())
 }
 
 #[cfg(not(coverage))]
 fn require_capacity_for_copy(
-    selected: &cloud::CloudRoot,
     candidate: &cloud::CloudCandidate,
-    app: &AppHandle,
+    snapshot: &provider_capacity::CloudCapacitySnapshot,
 ) -> Result<(), String> {
-    let snapshot = authenticated_capacity_snapshot(selected, app, cloud::system_now_ms())?;
     let assessment = provider_capacity::assess_capacity(
-        snapshot,
+        snapshot.clone(),
         candidate.bytes,
         candidate.bytes,
         provider_capacity::DEFAULT_CAPACITY_RESERVE_BYTES,
@@ -746,9 +755,8 @@ pub async fn plan_cloud_archive(
     app: AppHandle,
 ) -> Result<cloud::CloudPlanReport, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let (selected, mut report) =
+        let (_, report) =
             cloud_plan_for_inputs(&root, &cloud_root, min_size_mib, min_age_days, limit, &app)?;
-        attach_capacity_assessment(&mut report, &selected, &app);
         Ok(report)
     })
     .await
@@ -888,7 +896,11 @@ fn create_cloud_candidate_receipt(
         None
     };
     if !adopt_existing {
-        require_capacity_for_copy(&selected, candidate, app)?;
+        let snapshot = report
+            .capacity
+            .as_ref()
+            .ok_or_else(|| "cloud-capacity-verification-required".to_string())?;
+        require_capacity_for_copy(candidate, &snapshot.snapshot)?;
     }
     let (receipt, receipt_path) = if adopt_existing {
         cloud_transfer::adopt_existing_cloud_copy_with_review(
@@ -989,6 +1001,103 @@ pub struct CloudAttestationOutput {
     pub blockers: Vec<String>,
 }
 
+#[cfg(not(coverage))]
+fn collect_cloud_attestation_for_receipt(
+    receipt: &cloud_transfer::CloudCopyReceipt,
+    object_id: Option<String>,
+    evidence_dir: &Path,
+    connection_path: &Path,
+    cloud_roots: &[cloud::CloudRoot],
+) -> Result<CloudAttestationOutput, String> {
+    let confirmed_at_ms = cloud::system_now_ms();
+    let evidence = match receipt.provider {
+        cloud::CloudProvider::Icloud => {
+            if object_id
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+            {
+                return Err("icloud-provider-object-id-not-accepted".into());
+            }
+            provider_sync::collect_icloud_sync_evidence(receipt, confirmed_at_ms)?
+        }
+        cloud::CloudProvider::Onedrive | cloud::CloudProvider::GoogleDrive => {
+            let destination = Path::new(&receipt.destination);
+            let selected_root = cloud_roots
+                .iter()
+                .filter(|root| {
+                    root.provider == receipt.provider
+                        && destination.starts_with(Path::new(&root.path))
+                })
+                .max_by_key(|root| Path::new(&root.path).components().count())
+                .cloned()
+                .ok_or_else(|| "receipt-cloud-root-unavailable".to_string())?;
+            let object_id = object_id.filter(|value| !value.trim().is_empty());
+            let fallback_requested =
+                receipt.provider == cloud::CloudProvider::Onedrive || object_id.is_some();
+            match provider_sync::collect_file_provider_sync_evidence(receipt, confirmed_at_ms) {
+                Ok(evidence) if evidence.sync_complete || !fallback_requested => evidence,
+                Err(error) if !fallback_requested => return Err(error),
+                Ok(_) | Err(_) => {
+                    let access_token =
+                        provider_oauth::refreshed_access_token(connection_path, &selected_root)?;
+                    let client = provider_api_client::FixedHostProviderMetadataClient::default();
+                    match receipt.provider {
+                        cloud::CloudProvider::Onedrive => {
+                            if object_id.is_some() {
+                                return Err("onedrive-provider-object-id-not-accepted".into());
+                            }
+                            let locator = provider_api_client::onedrive_path_locator(
+                                Path::new(&selected_root.path),
+                                Path::new(&receipt.destination),
+                            )?;
+                            provider_api_client::collect_authenticated_provider_api_evidence_from_source(
+                                receipt,
+                                &locator,
+                                access_token.as_str(),
+                                &client,
+                                confirmed_at_ms,
+                            )?
+                        }
+                        cloud::CloudProvider::GoogleDrive => {
+                            let locator = provider_api_client::google_drive_path_locator(
+                                Path::new(&selected_root.path),
+                                Path::new(&receipt.destination),
+                                object_id
+                                    .as_deref()
+                                    .ok_or_else(|| "provider-object-id-missing".to_string())?,
+                            )?;
+                            provider_api_client::collect_authenticated_google_drive_path_evidence_from_source(
+                                receipt,
+                                &locator,
+                                access_token.as_str(),
+                                &client,
+                                confirmed_at_ms,
+                            )?
+                        }
+                        cloud::CloudProvider::Icloud => unreachable!(),
+                    }
+                }
+            }
+        }
+    };
+    let assessment = provider_sync::assess_provider_sync_timeliness(receipt, &evidence)?;
+    let (evidence_record, evidence_path) =
+        provider_evidence::write_immutable_sync_evidence(evidence_dir, &evidence)?;
+    let (permit, blockers) = match cloud_transfer::approve_local_eviction(receipt, &evidence_record)
+    {
+        Ok(permit) => (Some(permit), Vec::new()),
+        Err(blockers) => (None, blockers),
+    };
+    Ok(CloudAttestationOutput {
+        evidence,
+        assessment,
+        evidence_record,
+        evidence_path: evidence_path.to_string_lossy().into_owned(),
+        permit,
+        blockers,
+    })
+}
+
 /// Read-only provider attestation. OneDrive and Google Drive access tokens are refreshed from an OS
 /// credential-store token, used once in memory, and never accepted from or returned to the UI.
 #[cfg(not(coverage))]
@@ -1017,100 +1126,113 @@ pub async fn attest_cloud_copy(
         if receipt.receipt_id != receipt_id {
             return Err("receipt-id-mismatch".into());
         }
-        let confirmed_at_ms = cloud::system_now_ms();
-        let evidence = match receipt.provider {
-            cloud::CloudProvider::Icloud => {
-                if object_id
-                    .as_deref()
-                    .is_some_and(|value| !value.trim().is_empty())
-                {
-                    return Err("icloud-provider-object-id-not-accepted".into());
-                }
-                provider_sync::collect_icloud_sync_evidence(&receipt, confirmed_at_ms)?
-            }
-            cloud::CloudProvider::Onedrive | cloud::CloudProvider::GoogleDrive => {
-                let destination = Path::new(&receipt.destination);
-                let selected_root = cloud_roots
-                    .iter()
-                    .filter(|root| {
-                        root.provider == receipt.provider
-                            && destination.starts_with(Path::new(&root.path))
-                    })
-                    .max_by_key(|root| Path::new(&root.path).components().count())
-                    .cloned()
-                    .ok_or_else(|| "receipt-cloud-root-unavailable".to_string())?;
-                let object_id = object_id.filter(|value| !value.trim().is_empty());
-                let fallback_requested = receipt.provider == cloud::CloudProvider::Onedrive
-                    || object_id.is_some();
-                match provider_sync::collect_file_provider_sync_evidence(&receipt, confirmed_at_ms)
-                {
-                    Ok(evidence) if evidence.sync_complete || !fallback_requested => evidence,
-                    Err(error) if !fallback_requested => return Err(error),
-                    Ok(_) | Err(_) => {
-                        let access_token = provider_oauth::refreshed_access_token(
-                            &connection_path,
-                            &selected_root,
-                        )?;
-                        let client =
-                            provider_api_client::FixedHostProviderMetadataClient::default();
-                        match receipt.provider {
-                            cloud::CloudProvider::Onedrive => {
-                                if object_id.is_some() {
-                                    return Err("onedrive-provider-object-id-not-accepted".into());
-                                }
-                                let locator = provider_api_client::onedrive_path_locator(
-                                    Path::new(&selected_root.path),
-                                    Path::new(&receipt.destination),
-                                )?;
-                                provider_api_client::collect_authenticated_provider_api_evidence_from_source(
-                                    &receipt,
-                                    &locator,
-                                    access_token.as_str(),
-                                    &client,
-                                    confirmed_at_ms,
-                                )?
-                            }
-                            cloud::CloudProvider::GoogleDrive => {
-                                let locator = provider_api_client::google_drive_path_locator(
-                                    Path::new(&selected_root.path),
-                                    Path::new(&receipt.destination),
-                                    object_id
-                                        .as_deref()
-                                        .ok_or_else(|| "provider-object-id-missing".to_string())?,
-                                )?;
-                                provider_api_client::collect_authenticated_google_drive_path_evidence_from_source(
-                                    &receipt,
-                                    &locator,
-                                    access_token.as_str(),
-                                    &client,
-                                    confirmed_at_ms,
-                                )?
-                            }
-                            cloud::CloudProvider::Icloud => unreachable!(),
-                        }
-                    }
-                }
-            }
-        };
-        let assessment = provider_sync::assess_provider_sync_timeliness(&receipt, &evidence)?;
-        let (evidence_record, evidence_path) =
-            provider_evidence::write_immutable_sync_evidence(&evidence_dir, &evidence)?;
-        let (permit, blockers) =
-            match cloud_transfer::approve_local_eviction(&receipt, &evidence_record) {
-                Ok(permit) => (Some(permit), Vec::new()),
-                Err(blockers) => (None, blockers),
-            };
-        Ok(CloudAttestationOutput {
-            evidence,
-            assessment,
-            evidence_record,
-            evidence_path: evidence_path.to_string_lossy().into_owned(),
-            permit,
-            blockers,
-        })
+        collect_cloud_attestation_for_receipt(
+            &receipt,
+            object_id,
+            &evidence_dir,
+            &connection_path,
+            &cloud_roots,
+        )
     })
     .await
     .map_err(|_| "cloud-attestation-task-failed".to_string())?
+}
+
+#[cfg(not(coverage))]
+#[derive(serde::Serialize)]
+pub struct CloudSourceEvictionOutput {
+    pub action: &'static str,
+    pub attestation: CloudAttestationOutput,
+    pub approval: cloud_eviction::CloudSourceEvictionApproval,
+    pub approval_path: String,
+    pub eviction: cloud_eviction::CloudEvictionResult,
+}
+
+/// Recollect provider evidence and active-use evidence, bind an attributed human approval to the
+/// exact immutable receipt, then move only that verified source to the operating-system Trash.
+/// The cloud destination is never deleted and the Trash is never emptied by this command.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn trash_verified_cloud_source(
+    receipt_id: String,
+    confirmation_receipt_id: String,
+    rationale: String,
+    object_id: Option<String>,
+    app: AppHandle,
+) -> Result<CloudSourceEvictionOutput, String> {
+    for value in [&receipt_id, &confirmation_receipt_id] {
+        if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("receipt-id-invalid".into());
+        }
+    }
+    use tauri::Manager;
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "app-data-directory-unavailable".to_string())?;
+    let receipt_path = app_data_dir
+        .join("cloud-receipts")
+        .join(format!("{receipt_id}.json"));
+    let evidence_dir = app_data_dir.join("cloud-provider-evidence");
+    let approval_dir = app_data_dir.join("cloud-source-eviction-approvals");
+    let eviction_dir = app_data_dir.join("cloud-source-evictions");
+    let journal_path = journal_file_path(&app)?;
+    let connection_path = oauth_connections_path(&app)?;
+    let cloud_roots = cloud::discover_cloud_roots(&resolve_home(&app));
+    let approved_by = local_human_reviewer();
+    tauri::async_runtime::spawn_blocking(move || {
+        let receipt = cloud_transfer::read_immutable_receipt(&receipt_path)?;
+        if receipt.receipt_id != receipt_id {
+            return Err("receipt-id-mismatch".into());
+        }
+        let attestation = collect_cloud_attestation_for_receipt(
+            &receipt,
+            object_id,
+            &evidence_dir,
+            &connection_path,
+            &cloud_roots,
+        )?;
+        let permit = attestation.permit.as_ref().ok_or_else(|| {
+            if attestation.blockers.is_empty() {
+                "source-eviction-permit-unavailable".to_string()
+            } else {
+                attestation.blockers.join(",")
+            }
+        })?;
+        let active_use_observed_at_ms = cloud::system_now_ms();
+        let active_use = cloud_local_eviction::observe_path_active_use(Path::new(&receipt.source));
+        let approved_at_ms = cloud::system_now_ms();
+        let approval = cloud_eviction::create_source_eviction_approval(
+            &receipt,
+            permit,
+            &confirmation_receipt_id,
+            approved_at_ms,
+            &approved_by,
+            &rationale,
+            active_use_observed_at_ms,
+            active_use,
+        )?;
+        let approval_path =
+            cloud_eviction::write_immutable_source_eviction_approval(&approval_dir, &approval)?;
+        let eviction = cloud_eviction::evict_source_with_human_approval(
+            &receipt,
+            permit,
+            &approval,
+            &confirmation_receipt_id,
+            &eviction_dir,
+            &journal_path,
+            cloud::system_now_ms(),
+        )?;
+        Ok(CloudSourceEvictionOutput {
+            action: "attest-approve-and-trash-verified-cloud-source",
+            attestation,
+            approval,
+            approval_path: approval_path.to_string_lossy().into_owned(),
+            eviction,
+        })
+    })
+    .await
+    .map_err(|_| "cloud-source-eviction-task-failed".to_string())?
 }
 
 #[cfg(not(coverage))]

@@ -39,12 +39,24 @@ pub mod cloud_eviction;
 pub mod cloud_review;
 pub mod cloud_transfer;
 pub mod content_digest;
+pub mod incomplete_download;
+pub mod incomplete_download_materialization;
+pub mod incomplete_download_materialization_destination;
+pub mod incomplete_download_materialization_execution;
+pub mod incomplete_download_recovery;
+pub mod git_worktree;
+pub mod maven_cache;
+pub mod multipart_archive;
+pub mod naruon_capacity;
 pub mod naruon_lineage;
 pub mod provider_api_client;
 pub mod provider_capacity;
 pub mod provider_evidence;
 pub mod provider_oauth;
 pub mod provider_sync;
+pub mod private_evidence;
+pub mod semantic_catalog;
+pub mod volume_pressure;
 
 // coverage 빌드에서 제외 — GUI 런타임은 헤드리스 테스트로 실행 불가
 #[cfg(not(coverage))]
@@ -91,7 +103,8 @@ pub fn run() {
             commands::review_cloud_candidate,
             commands::copy_cloud_candidate,
             commands::adopt_existing_cloud_candidate,
-            commands::attest_cloud_copy
+            commands::attest_cloud_copy,
+            commands::trash_verified_cloud_source
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
