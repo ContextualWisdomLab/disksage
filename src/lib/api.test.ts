@@ -51,8 +51,20 @@ describe("api wrappers", () => {
       [() => api.reasonUnknownExtensions(["/a.abc"]), "reason_unknown_extensions", { samples: ["/a.abc"] }],
       [() => api.getUserRules(), "user_rules"],
       [() => api.listCloudRoots(), "list_cloud_roots"],
+      [() => api.listCloudProviderConnections(), "list_cloud_provider_connections"],
+      [() => api.verifyCloudProviderCapacity("/cloud"), "verify_cloud_provider_capacity", { cloudRoot: "/cloud" }],
+      [() => api.connectCloudProvider("/cloud", "desktop-client-id"), "connect_cloud_provider", { cloudRoot: "/cloud", clientId: "desktop-client-id" }],
+      [() => api.disconnectCloudProvider("/cloud"), "disconnect_cloud_provider", { cloudRoot: "/cloud" }],
       [() => api.planCloudArchive("/scan", "/cloud"), "plan_cloud_archive", { root: "/scan", cloudRoot: "/cloud", minSizeMib: 256, minAgeDays: 90, limit: 200 }],
       [() => api.planCloudArchive("/scan", "/cloud", 10, 30, 5), "plan_cloud_archive", { root: "/scan", cloudRoot: "/cloud", minSizeMib: 10, minAgeDays: 30, limit: 5 }],
+      [() => api.copyCloudCandidate("/scan", "/cloud", "a".repeat(64)), "copy_cloud_candidate", { root: "/scan", cloudRoot: "/cloud", metadataFingerprint: "a".repeat(64), minSizeMib: 256, minAgeDays: 90, limit: 200 }],
+      [() => api.copyCloudCandidate("/scan", "/cloud", "b".repeat(64), 10, 30, 5), "copy_cloud_candidate", { root: "/scan", cloudRoot: "/cloud", metadataFingerprint: "b".repeat(64), minSizeMib: 10, minAgeDays: 30, limit: 5 }],
+      [() => api.adoptExistingCloudCandidate("/scan", "/cloud", "e".repeat(64)), "adopt_existing_cloud_candidate", { root: "/scan", cloudRoot: "/cloud", metadataFingerprint: "e".repeat(64), minSizeMib: 256, minAgeDays: 90, limit: 200 }],
+      [() => api.adoptExistingCloudCandidate("/scan", "/cloud", "f".repeat(64), 10, 30, 5), "adopt_existing_cloud_candidate", { root: "/scan", cloudRoot: "/cloud", metadataFingerprint: "f".repeat(64), minSizeMib: 10, minAgeDays: 30, limit: 5 }],
+      [() => api.attestCloudCopy("c".repeat(64)), "attest_cloud_copy", { receiptId: "c".repeat(64), objectId: null }],
+      [() => api.attestCloudCopy("d".repeat(64), "remote-id"), "attest_cloud_copy", { receiptId: "d".repeat(64), objectId: "remote-id" }],
+      [() => api.trashVerifiedCloudSource("e".repeat(64), "e".repeat(64), "verified exact source"), "trash_verified_cloud_source", { receiptId: "e".repeat(64), confirmationReceiptId: "e".repeat(64), rationale: "verified exact source", objectId: null }],
+      [() => api.trashVerifiedCloudSource("f".repeat(64), "f".repeat(64), "verified exact source", "remote-id"), "trash_verified_cloud_source", { receiptId: "f".repeat(64), confirmationReceiptId: "f".repeat(64), rationale: "verified exact source", objectId: "remote-id" }],
     ];
 
     for (const [call, command, payload] of cases) {
@@ -83,5 +95,86 @@ describe("api wrappers", () => {
     expect(mocks.listen).toHaveBeenNthCalledWith(2, "scan://done", expect.any(Function));
     expect(progressCb).toHaveBeenCalledWith(progress);
     expect(doneCb).toHaveBeenCalledWith(done);
+  });
+});
+
+describe("cloud root identity", () => {
+  const root: api.CloudRoot = {
+    id: "/Cloud/내 드라이브",
+    provider: "google-drive",
+    account_scope: "organization",
+    label: "Google Drive",
+    path: "/Cloud/내 드라이브",
+    readable: true,
+    access_issue: null,
+  };
+
+  const connection: api.OAuthConnection = {
+    connection_id: "a".repeat(64),
+    provider: "google-drive",
+    cloud_root_id: root.id.normalize("NFD"),
+    cloud_root_path: root.path.normalize("NFD"),
+    client_id: "desktop-client-id",
+    scope: "https://www.googleapis.com/auth/drive.metadata.readonly",
+    connected_at_ms: 1,
+  };
+
+  it("matches NFC and NFD spellings of the same File Provider root", () => {
+    expect(connection.cloud_root_path).not.toBe(root.path);
+    expect(api.cloudRootIdentityMatches(connection, root)).toBe(true);
+  });
+
+  it("rejects a different provider, root id, or path", () => {
+    expect(api.cloudRootIdentityMatches({ ...connection, provider: "onedrive" }, root)).toBe(false);
+    expect(api.cloudRootIdentityMatches({ ...connection, cloud_root_id: "/Cloud/other" }, root)).toBe(false);
+    expect(api.cloudRootIdentityMatches({ ...connection, cloud_root_path: "/Cloud/other" }, root)).toBe(false);
+  });
+});
+
+describe("cloud capacity copy gate", () => {
+  const snapshot: api.CloudCapacitySnapshot = {
+    schema_version: 2,
+    provider: "icloud",
+    evidence_kind: "provider-native-status",
+    observed_at_ms: 1,
+    total_bytes: null,
+    used_bytes: null,
+    remaining_bytes: 2_000,
+    trashed_bytes: null,
+    max_upload_size_bytes: null,
+    state: "available",
+    evidence_fingerprint: "a".repeat(64),
+    unavailable_reason: null,
+  };
+  const assessment: api.CloudCapacityAssessment = {
+    snapshot,
+    requested_bytes: 100,
+    largest_candidate_bytes: 100,
+    reserve_bytes: 1_000,
+    required_bytes: 1_100,
+    can_fit: true,
+    blockers: [],
+    notices: [],
+  };
+
+  it("accepts provider-native iCloud evidence when the byte gate fits", () => {
+    expect(api.cloudCapacityAllowsCopy(assessment)).toBe(true);
+  });
+
+  it("rejects unavailable or failed capacity evidence for every provider", () => {
+    expect(api.cloudCapacityAllowsCopy(undefined)).toBe(false);
+    expect(api.cloudCapacityAllowsCopy({ ...assessment, can_fit: false })).toBe(false);
+    expect(api.cloudCapacityAllowsCopy({
+      ...assessment,
+      can_fit: null,
+      snapshot: {
+        ...snapshot,
+        evidence_kind: "unavailable",
+        state: "unavailable",
+        remaining_bytes: null,
+        evidence_fingerprint: null,
+        unavailable_reason: "icloud-native-quota-unavailable",
+      },
+    })).toBe(false);
   });
 });

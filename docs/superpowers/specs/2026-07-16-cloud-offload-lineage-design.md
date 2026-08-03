@@ -6,19 +6,51 @@ Use DiskSage against a genuinely space-constrained machine to identify files tha
 
 ## Scope
 
-- Discover writable local roots for all three providers. Google Drive writable children are separate destinations because the account root is read-only on macOS.
+- Discover permission-writable local roots for all three providers. Google Drive writable children are separate destinations because the account root is read-only on macOS. Record a bounded readability snapshot and a stable non-sensitive access issue for every surfaced root; an unreadable root remains visible for diagnosis but is disabled in the UI and revalidated immediately before planning or OAuth use. A separate discovery report preserves failures above the destination level, such as a Google account root whose children cannot be enumerated, while the legacy root-list response remains backward compatible.
+- On macOS, keep the Tauri GUI (`disksage`) and headless planner (`disksage-cloud-plan`) as distinct binaries and embed purpose strings for Downloads and File Provider access. The headless binary is behind the explicit `cloud-cli` Cargo feature so Tauri's `--bins` build cannot substitute it for the GUI executable; CI tests it separately. Permission remains user-mediated; DiskSage never edits TCC or bypasses a denial.
 - Scan locally in Rust while pruning provider roots, symlinks, hidden trees, OS `Library`/`System` trees, and regenerable developer artifacts.
 - Consider only a conservative allowlist of document, media, archive, dataset, backup, and creative file extensions.
 - Default to files at least 256 MiB and not modified for 90 days.
 - Extract content metadata from media containers (`ffprobe`), PDF document info (`pdfinfo`), and OOXML/ODF core properties (`unzip`), when the corresponding local SDK is available.
-- Fail closed before traversal when the selected source root cannot be opened. A privacy/TCC denial must be reported as `source-root-unreadable`, never as a successful empty metadata scan.
-- Resolve production time in this order: embedded content metadata, explicit date in the filename, filesystem creation time, then filesystem modification time. Within embedded metadata, prefer high-confidence recording/capture/document-creation fields over medium-confidence dates inferred from titles. Preserve every observed value and its source/confidence as lineage evidence rather than discarding conflicts.
+- Resolve production time in this order: embedded content metadata, an explicit full date token in the filename, filesystem creation time, then filesystem modification time. A filename date is only a low-confidence provisional value: it never outranks embedded metadata and cannot authorize a copy without an evidence-bound review. A Korean publication marker such as `26년 1월호` is not a full production date: preserve it only as `filename-publication-month=2026-01` context and `filename:publication-month` low-confidence evidence, never fabricate a day or use it for destination placement. Within embedded metadata, prefer high-confidence recording/capture/document-creation fields over medium-confidence dates inferred from titles. Preserve every observed value and its source/confidence as lineage evidence rather than discarding conflicts. Embedded does not automatically mean trustworthy: known OOXML template defaults, an embedded date after the filesystem modification date, and metadata-derived personal or confidential context require review.
 - Preserve lineage fields: source root, original relative path and parent context, created and modified timestamps, content title/authors/duration, production timestamp source, all metadata evidence, planned provider/destination, and a stable metadata fingerprint.
 - Plan the destination as `DiskSage Archive/<production year>/<month>/<kind>/<original relative path>`.
+- Match selected provider roots by exact or canonical filesystem identity, with NFC-equivalent UTF-8 as a bounded fallback so macOS File Provider's decomposed names remain selectable; ambiguous matches fail closed.
 - Mark datasets and backups for explicit review.
 - Surface destination collisions and exclude them from potentially reclaimable bytes.
-- Require review when embedded geolocation is present, embedded production-date fields disagree, an embedded production date conflicts with a filename date, or no embedded production date is available.
-- Provide both a Tauri UI and a headless JSON CLI.
+- Selectively stream SHA-256 and BLAKE3 only for non-blocked candidates that share an exact byte length. Exact-content clusters expose their member count and redundant bytes, bind the hashes into review evidence, and require explicit canonical-lineage selection instead of silently copying every duplicate path.
+- Require review when embedded geolocation is present, embedded production-date fields disagree, an embedded production date conflicts with a full filename date, an embedded production month differs from a filename publication month, a known template/default timestamp is detected, embedded title/author/context indicates personal or confidential material, or no embedded production date is available.
+- Provide both a Tauri UI and a headless JSON CLI. The CLI's plan-only
+  `--decision-summary` view keeps relative paths, metadata/review fingerprints, production-time
+  source and confidence, review reasons, blockers, duplicate totals, and capacity status. It
+  omits absolute source/destination/cloud-root paths, root labels, content titles/authors, raw
+  metadata evidence values, and dataset profiles. The flag is rejected when combined with root
+  inspection, copy, adoption, attestation, eviction, review, or Naruon export actions; the full
+  `CloudPlanReport` and Naruon lineage contracts remain unchanged. A versioned BLAKE3 decision
+  batch fingerprint binds the sorted candidate metadata/review fingerprints, planner blockers,
+  destination provider/account scope, totals, and duplicate summary. Volatile generation time,
+  age, notices, and capacity state are excluded so an unchanged batch survives a fresh scan while
+  copy and eviction still require fresh capacity, provider sync, and human approval evidence.
+  The same redacted summary aggregates candidate counts and bytes by decision state, production-time
+  source/confidence, blocking reason, and review-required reason. Review-reason bytes explicitly
+  allow overlap because one candidate can require review for several independent reasons; blocker
+  and decision-state bytes remain mutually exclusive. Separate sole-reason counts and bytes show
+  which candidates would reach the copy-review gate if that one evidence gap were resolved, without
+  treating the counterfactual as an approval. A reason-count distribution and deterministic,
+  delimiter-declared reason-set totals expose the smallest remaining combinations of evidence gaps.
+  These aggregates expose the dominant evidence gap without adding absolute paths or raw metadata
+  values.
+- `--decision-summary --review-reason-set REASON|REASON` emits only the candidates whose sorted,
+  deduplicated review reasons exactly match that set. The output carries both the full-plan decision
+  fingerprint and a domain-separated v2 subset fingerprint bound only to provider/account scope,
+  the exact reason set, and each selected candidate metadata/review fingerprint and size. Unrelated
+  probe drift can invalidate plan freshness without changing an otherwise identical review subset.
+  Both values are inspection evidence, not approval: approve/hold decisions remain individual,
+  attributed, and immutable.
+- Fresh local planning batches general ExifTool probes in bounded groups of 32 with a 20-second
+  command deadline and an 8 MiB retained-output ceiling. Results are mapped back only through each
+  JSON `SourceFile`; malformed, duplicate, missing, timed-out, or oversized batch evidence falls
+  back to the existing per-file bounded probe. No extracted metadata is persisted as a cache.
 
 ## Safety boundary
 

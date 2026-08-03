@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>com.contextualwisdomlab.disksage.cloud-plan</string>
+  <key>CFBundleName</key>
+  <string>DiskSage Cloud Plan</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>NSDownloadsFolderUsageDescription</key>
+  <string>DiskSage는 클라우드 보관 계획을 만들기 전에 Downloads 파일의 메타데이터와 크기를 읽습니다.</string>
+  <key>NSFileProviderDomainUsageDescription</key>
+  <string>DiskSage는 선택한 iCloud, OneDrive, Google Drive 대상의 접근 및 동기화 상태를 검증합니다.</string>
+</dict>
+</plist>

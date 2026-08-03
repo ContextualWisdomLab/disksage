@@ -157,20 +157,65 @@ export const reasonUnknownExtensions = (samples: string[]) =>
   invoke<ExtInsight[]>("reason_unknown_extensions", { samples });
 
 export type CloudProvider = "icloud" | "onedrive" | "google-drive";
-export type ArchiveKind = "document" | "media" | "archive" | "dataset" | "backup" | "creative";
+export type CloudAccountScope = "personal" | "organization" | "shared" | "unknown";
+export type ArchiveKind =
+  | "document"
+  | "media"
+  | "archive"
+  | "dataset"
+  | "backup"
+  | "creative"
+  | "incomplete-download";
 
 export interface CloudRoot {
   id: string;
   provider: CloudProvider;
+  account_scope: CloudAccountScope;
   label: string;
   path: string;
+  readable: boolean;
+  access_issue: string | null;
+}
+
+export interface CloudRootDiscoveryIssue {
+  provider: CloudProvider | null;
+  account_scope: CloudAccountScope;
+  label: string;
+  path: string;
+  reason: string;
+}
+
+export interface CloudRootDiscoveryReport {
+  roots: CloudRoot[];
+  issues: CloudRootDiscoveryIssue[];
+}
+
+export interface OAuthConnection {
+  connection_id: string;
+  provider: CloudProvider;
+  cloud_root_id: string;
+  cloud_root_path: string;
+  client_id: string;
+  scope: string;
+  connected_at_ms: number;
+}
+
+export function cloudRootIdentityMatches(
+  connection: OAuthConnection,
+  root: CloudRoot,
+): boolean {
+  return connection.provider === root.provider
+    && connection.cloud_root_id.normalize("NFC") === root.id.normalize("NFC")
+    && connection.cloud_root_path.normalize("NFC") === root.path.normalize("NFC");
 }
 
 export interface CloudCandidate {
   metadata_fingerprint: string;
+  review_fingerprint: string;
   src: string;
   dst: string;
   provider: CloudProvider;
+  destination_account_scope: CloudAccountScope;
   kind: ArchiveKind;
   bytes: number;
   age_days: number;
@@ -188,8 +233,41 @@ export interface CloudCandidate {
   content_authors: string[];
   content_context: string[];
   duration_ms: number | null;
+  dataset_profile: DatasetProfile | null;
   metadata_evidence: MetadataEvidence[];
   blocked_reason: string | null;
+}
+
+export type CloudReviewDisposition = "approved" | "held";
+
+export interface CloudReviewDecision {
+  version: number;
+  decision_id: string;
+  candidate_fingerprint: string;
+  review_fingerprint: string;
+  disposition: CloudReviewDisposition;
+  reviewed_at_ms: number;
+  reviewed_by?: string;
+  rationale?: string;
+}
+
+export interface DatasetColumnProfile {
+  name: string;
+  inferred_type: string;
+  observed_values: number;
+  missing_values: number;
+  sensitive_name: boolean;
+}
+
+export interface DatasetProfile {
+  format: string;
+  sampled_rows: number;
+  sampled_worksheets: number;
+  worksheet_names: string[];
+  profile_complete: boolean;
+  sample_truncated: boolean;
+  columns: DatasetColumnProfile[];
+  quality_warnings: string[];
 }
 
 export interface MetadataEvidence {
@@ -205,10 +283,250 @@ export interface CloudPlanReport {
   candidates: CloudCandidate[];
   candidate_bytes: number;
   potentially_reclaimable_bytes: number;
+  exact_duplicates: ExactDuplicateSummary;
+  capacity?: CloudCapacityAssessment;
   notices: string[];
 }
 
+export type CapacityEvidenceKind = "provider-api" | "provider-native-status" | "unavailable";
+export type CloudCapacityState =
+  | "available"
+  | "normal"
+  | "nearing"
+  | "critical"
+  | "exceeded"
+  | "unlimited"
+  | "unavailable";
+
+export interface CloudCapacitySnapshot {
+  schema_version: number;
+  provider: CloudProvider;
+  evidence_kind: CapacityEvidenceKind;
+  observed_at_ms: number;
+  total_bytes: number | null;
+  used_bytes: number | null;
+  remaining_bytes: number | null;
+  trashed_bytes: number | null;
+  max_upload_size_bytes: number | null;
+  state: CloudCapacityState;
+  evidence_fingerprint: string | null;
+  unavailable_reason: string | null;
+}
+
+export interface CloudCapacityAssessment {
+  snapshot: CloudCapacitySnapshot;
+  requested_bytes: number;
+  largest_candidate_bytes: number;
+  reserve_bytes: number;
+  required_bytes: number | null;
+  can_fit: boolean | null;
+  blockers: string[];
+  notices: string[];
+}
+
+export function cloudCapacityAllowsCopy(
+  assessment: CloudCapacityAssessment | null | undefined,
+): boolean {
+  return assessment?.can_fit === true
+    && assessment.snapshot.evidence_kind !== "unavailable";
+}
+
+export interface ExactDuplicateSummary {
+  cluster_count: number;
+  candidate_count: number;
+  candidate_bytes: number;
+  redundant_bytes: number;
+  clusters: ExactDuplicateClusterRecommendation[];
+}
+
+export interface ExactDuplicateClusterRecommendation {
+  cluster_fingerprint: string;
+  candidate_count: number;
+  bytes_per_candidate: number;
+  redundant_bytes: number;
+  recommended_canonical_metadata_fingerprint: string;
+  recommendation_confidence: "high" | "medium" | "low";
+  recommendation_reason_codes: string[];
+  member_metadata_fingerprints: string[];
+  requires_human_confirmation: boolean;
+}
+
+export interface CloudCopyReceipt {
+  version: number;
+  receipt_id: string;
+  candidate_fingerprint: string;
+  provider: CloudProvider;
+  source: string;
+  destination: string;
+  bytes: number;
+  blake3: string;
+  sha256: string;
+  quick_xor_base64: string;
+  source_modified_ms: number;
+  copied_at_ms: number;
+  copy_verified: boolean;
+  provider_sync_confirmed: boolean;
+  lineage_fingerprint?: string;
+  lineage?: CloudLineageSnapshot;
+}
+
+export type CloudCopyVerificationMethod = "copied-by-disk-sage" | "adopted-existing";
+
+export interface CloudLineageSnapshot {
+  candidate_fingerprint: string;
+  review_fingerprint: string;
+  copy_verification_method?: CloudCopyVerificationMethod;
+  review_decision_id: string | null;
+  review_disposition: CloudReviewDisposition | null;
+  reviewed_at_ms: number | null;
+  reviewed_by?: string;
+  review_rationale?: string;
+  destination_account_scope: CloudAccountScope;
+  kind: ArchiveKind;
+  created_ms: number;
+  modified_ms: number;
+  production_time_ms: number;
+  production_time_source: string;
+  production_time_confidence: string;
+  source_root: string;
+  relative_path: string;
+  source_context: string;
+  requires_review: boolean;
+  review_reasons: string[];
+  content_title: string | null;
+  content_authors: string[];
+  content_context: string[];
+  duration_ms: number | null;
+  dataset_profile: DatasetProfile | null;
+  metadata_evidence: MetadataEvidence[];
+}
+
+export interface CloudCopyOutput {
+  action: "copy-only" | "adopt-existing-copy";
+  receipt: CloudCopyReceipt;
+  receipt_path: string;
+}
+
+export type SyncEvidenceKind = "provider-api" | "provider-native-status";
+export type RemoteChecksumAlgorithm = "sha256" | "quick-xor";
+
+export interface RemoteContentProof {
+  object_id: string;
+  revision: string;
+  algorithm: RemoteChecksumAlgorithm;
+  checksum: string;
+  location_bound: boolean;
+  location_proof?: string;
+}
+
+export interface ProviderSyncEvidence {
+  receipt_id: string;
+  provider: CloudProvider;
+  destination: string;
+  observed_bytes: number;
+  destination_blake3: string;
+  confirmed_at_ms: number;
+  kind: SyncEvidenceKind;
+  evidence_id: string;
+  sync_complete: boolean;
+  remote_content: RemoteContentProof | null;
+}
+
+export interface ProviderSyncEvidenceRecord {
+  version: number;
+  record_id: string;
+  evidence: ProviderSyncEvidence;
+}
+
+export type ProviderSyncTimeliness = "complete" | "pending" | "overdue";
+
+export interface ProviderSyncTimelinessAssessment {
+  state: ProviderSyncTimeliness;
+  pending_age_ms: number;
+  overdue_after_ms: number;
+  reason_codes: string[];
+}
+
+export interface LocalEvictionPermit {
+  receipt_id: string;
+  provider: CloudProvider;
+  source: string;
+  destination: string;
+  bytes: number;
+  blake3: string;
+  approved_at_ms: number;
+  evidence_kind: SyncEvidenceKind;
+  evidence_id: string;
+  evidence_record_id: string;
+}
+
+export interface CloudAttestationOutput {
+  evidence: ProviderSyncEvidence;
+  assessment: ProviderSyncTimelinessAssessment;
+  evidence_record: ProviderSyncEvidenceRecord;
+  evidence_path: string;
+  permit: LocalEvictionPermit | null;
+  blockers: string[];
+}
+
+export interface ActiveUseEvidence {
+  method: "lsof-fp+ps-command";
+  evidence_complete: boolean;
+  active: boolean;
+  observed_pids: number[];
+  results_truncated: boolean;
+  error: string | null;
+}
+
+export interface CloudSourceEvictionApproval {
+  version: number;
+  approval_id: string;
+  receipt_id: string;
+  evidence_record_id: string;
+  approved_at_ms: number;
+  approved_by: string;
+  rationale: string;
+  active_use_observed_at_ms: number;
+  active_use: ActiveUseEvidence;
+}
+
+export interface CloudEvictionResult {
+  action: "trash-verified-cloud-source";
+  receipt_id: string;
+  intent_id: string;
+  completion_id: string;
+  evidence_record_id: string;
+  approval_id: string | null;
+  source: string;
+  staged_source: string;
+  intent_path: string;
+  completion_path: string;
+  source_trashed: boolean;
+  reconciled_after_interruption: boolean;
+  already_completed: boolean;
+}
+
+export interface CloudSourceEvictionOutput {
+  action: "attest-approve-and-trash-verified-cloud-source";
+  attestation: CloudAttestationOutput;
+  approval: CloudSourceEvictionApproval;
+  approval_path: string;
+  eviction: CloudEvictionResult;
+}
+
 export const listCloudRoots = () => invoke<CloudRoot[]>("list_cloud_roots");
+export const inspectCloudRoots = () =>
+  invoke<CloudRootDiscoveryReport>("inspect_cloud_roots");
+export const listCloudProviderConnections = () =>
+  invoke<OAuthConnection[]>("list_cloud_provider_connections");
+export const verifyCloudProviderCapacity = (cloudRoot: string) =>
+  invoke<CloudCapacitySnapshot>("verify_cloud_provider_capacity", { cloudRoot });
+export const listCloudReviewDecisions = () =>
+  invoke<CloudReviewDecision[]>("list_cloud_review_decisions");
+export const connectCloudProvider = (cloudRoot: string, clientId: string) =>
+  invoke<OAuthConnection>("connect_cloud_provider", { cloudRoot, clientId });
+export const disconnectCloudProvider = (cloudRoot: string) =>
+  invoke<void>("disconnect_cloud_provider", { cloudRoot });
 export const planCloudArchive = (
   root: string,
   cloudRoot: string,
@@ -221,4 +539,73 @@ export const planCloudArchive = (
   minSizeMib,
   minAgeDays,
   limit,
+});
+export const reviewCloudCandidate = (
+  root: string,
+  cloudRoot: string,
+  metadataFingerprint: string,
+  reviewFingerprint: string,
+  disposition: CloudReviewDisposition,
+  rationale: string,
+  minSizeMib = 256,
+  minAgeDays = 90,
+  limit = 200,
+) => invoke<CloudReviewDecision>("review_cloud_candidate", {
+  root,
+  cloudRoot,
+  metadataFingerprint,
+  reviewFingerprint,
+  disposition,
+  rationale,
+  minSizeMib,
+  minAgeDays,
+  limit,
+});
+export const copyCloudCandidate = (
+  root: string,
+  cloudRoot: string,
+  metadataFingerprint: string,
+  minSizeMib = 256,
+  minAgeDays = 90,
+  limit = 200,
+) => invoke<CloudCopyOutput>("copy_cloud_candidate", {
+  root,
+  cloudRoot,
+  metadataFingerprint,
+  minSizeMib,
+  minAgeDays,
+  limit,
+});
+export const adoptExistingCloudCandidate = (
+  root: string,
+  cloudRoot: string,
+  metadataFingerprint: string,
+  minSizeMib = 256,
+  minAgeDays = 90,
+  limit = 200,
+) => invoke<CloudCopyOutput>("adopt_existing_cloud_candidate", {
+  root,
+  cloudRoot,
+  metadataFingerprint,
+  minSizeMib,
+  minAgeDays,
+  limit,
+});
+export const attestCloudCopy = (
+  receiptId: string,
+  objectId: string | null = null,
+) => invoke<CloudAttestationOutput>("attest_cloud_copy", {
+  receiptId,
+  objectId,
+});
+export const trashVerifiedCloudSource = (
+  receiptId: string,
+  confirmationReceiptId: string,
+  rationale: string,
+  objectId: string | null = null,
+) => invoke<CloudSourceEvictionOutput>("trash_verified_cloud_source", {
+  receiptId,
+  confirmationReceiptId,
+  rationale,
+  objectId,
 });
