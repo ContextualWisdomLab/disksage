@@ -6,7 +6,9 @@
 use std::path::{Component, Path};
 
 use crate::cloud::{ArchiveKind, CloudAccountScope, CloudProvider, MetadataEvidence};
-use crate::cloud_review::CloudReviewDisposition;
+use crate::cloud_review::{
+    validate_decision, CloudReviewDecision, CloudReviewDisposition, DECISION_VERSION,
+};
 use crate::cloud_transfer::{CloudCopyReceipt, CloudCopyVerificationMethod, SyncEvidenceKind};
 use crate::provider_evidence::{validate_sync_evidence_record, ProviderSyncEvidenceRecord};
 #[cfg(test)]
@@ -148,6 +150,58 @@ fn validate_receipt_shape(receipt: &CloudCopyReceipt) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_review_lineage(
+    lineage: &crate::cloud_transfer::CloudLineageSnapshot,
+    copied_at_ms: u64,
+) -> Result<(), String> {
+    if !lineage.requires_review {
+        let has_review = lineage.review_decision_id.is_some()
+            || lineage.review_disposition.is_some()
+            || lineage.reviewed_at_ms.is_some()
+            || lineage.reviewed_by.is_some()
+            || lineage.review_rationale.is_some()
+            || !lineage.review_reasons.is_empty();
+        return if has_review {
+            Err("naruon-lineage-review-decision-unexpected".into())
+        } else {
+            Ok(())
+        };
+    }
+    if lineage.review_reasons.is_empty() {
+        return Err("naruon-lineage-review-reasons-missing".into());
+    }
+    let decision = CloudReviewDecision {
+        version: DECISION_VERSION,
+        decision_id: lineage
+            .review_decision_id
+            .clone()
+            .ok_or_else(|| "naruon-lineage-review-decision-invalid".to_string())?,
+        candidate_fingerprint: lineage.candidate_fingerprint.clone(),
+        review_fingerprint: lineage.review_fingerprint.clone(),
+        disposition: lineage
+            .review_disposition
+            .ok_or_else(|| "naruon-lineage-review-decision-invalid".to_string())?,
+        reviewed_at_ms: lineage
+            .reviewed_at_ms
+            .ok_or_else(|| "naruon-lineage-review-decision-invalid".to_string())?,
+        reviewed_by: lineage
+            .reviewed_by
+            .clone()
+            .ok_or_else(|| "naruon-lineage-review-decision-invalid".to_string())?,
+        rationale: lineage
+            .review_rationale
+            .clone()
+            .ok_or_else(|| "naruon-lineage-review-decision-invalid".to_string())?,
+    };
+    if decision.disposition != CloudReviewDisposition::Approved
+        || decision.reviewed_at_ms > copied_at_ms
+        || validate_decision(&decision).is_err()
+    {
+        return Err("naruon-lineage-review-decision-invalid".into());
+    }
+    Ok(())
+}
+
 fn validate_evidence_binding(
     receipt: &CloudCopyReceipt,
     record: &ProviderSyncEvidenceRecord,
@@ -184,6 +238,7 @@ pub fn export_naruon_file_lineage(
     {
         return Err("naruon-lineage-candidate-binding-mismatch".into());
     }
+    validate_review_lineage(lineage, receipt.copied_at_ms)?;
     let source_filename = source_filename(&lineage.relative_path)?;
     let evidence = evidence_record.map(|record| &record.evidence);
     let assessment = evidence
@@ -263,22 +318,80 @@ pub fn export_naruon_file_lineage(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cloud::{ArchiveKind, CloudAccountScope, CloudProvider, MetadataEvidence};
+    #[cfg(not(coverage))]
+    use crate::cloud::CloudRoot;
+    use crate::cloud::{
+        candidate_review_fingerprint, ArchiveKind, CloudAccountScope, CloudCandidate,
+        CloudProvider, MetadataEvidence,
+    };
+    use crate::cloud_review::create_attributed_decision;
+    #[cfg(not(coverage))]
+    use crate::cloud_transfer::prepare_cloud_copy_with_review;
     use crate::cloud_transfer::{
         CloudCopyReceipt, CloudCopyVerificationMethod, CloudLineageSnapshot, ProviderSyncEvidence,
         SyncEvidenceKind, RECEIPT_VERSION,
     };
     use crate::provider_evidence::create_sync_evidence_record;
 
+    fn reviewed_candidate() -> CloudCandidate {
+        let mut candidate = CloudCandidate {
+            metadata_fingerprint: "b".repeat(64),
+            review_fingerprint: String::new(),
+            src: "/source/report.pdf".into(),
+            dst: "/cloud/report.pdf".into(),
+            provider: CloudProvider::GoogleDrive,
+            destination_account_scope: CloudAccountScope::Organization,
+            kind: ArchiveKind::Document,
+            bytes: 42,
+            age_days: 90,
+            created_ms: 10,
+            modified_ms: 20,
+            production_time_ms: 5,
+            production_time_source: "embedded:exiftool:CreateDate".into(),
+            production_time_confidence: "high".into(),
+            source_root: "/source".into(),
+            relative_path: "reports/report.pdf".into(),
+            source_context: "download".into(),
+            requires_review: true,
+            review_reasons: vec!["sensitive-document".into()],
+            content_title: Some("Report".into()),
+            content_authors: vec!["Author".into()],
+            content_context: vec!["Context".into()],
+            duration_ms: None,
+            dataset_profile: None,
+            metadata_evidence: vec![MetadataEvidence {
+                field: "production-date".into(),
+                value: "2026-01-01".into(),
+                source: "embedded:exiftool:CreateDate".into(),
+                confidence: "high".into(),
+            }],
+            blocked_reason: None,
+        };
+        candidate.review_fingerprint = candidate_review_fingerprint(&candidate);
+        candidate
+    }
+
     fn receipt() -> CloudCopyReceipt {
+        let candidate = reviewed_candidate();
+        let reviewed_at_ms = 25;
+        let reviewed_by = "human:local:test";
+        let review_rationale = "embedded metadata checked";
+        let decision = create_attributed_decision(
+            &candidate,
+            CloudReviewDisposition::Approved,
+            reviewed_at_ms,
+            reviewed_by,
+            review_rationale,
+        )
+        .unwrap();
         CloudCopyReceipt {
             version: RECEIPT_VERSION,
             receipt_id: "a".repeat(64),
-            candidate_fingerprint: "b".repeat(64),
-            provider: CloudProvider::GoogleDrive,
-            source: "/source/report.pdf".into(),
-            destination: "/cloud/report.pdf".into(),
-            bytes: 42,
+            candidate_fingerprint: candidate.metadata_fingerprint.clone(),
+            provider: candidate.provider,
+            source: candidate.src.clone(),
+            destination: candidate.dst.clone(),
+            bytes: candidate.bytes,
             blake3: "c".repeat(64),
             sha256: "d".repeat(64),
             quick_xor_base64: "quick-xor".into(),
@@ -288,39 +401,88 @@ mod tests {
             provider_sync_confirmed: false,
             lineage_fingerprint: Some("e".repeat(64)),
             lineage: Some(CloudLineageSnapshot {
-                candidate_fingerprint: "b".repeat(64),
-                review_fingerprint: "f".repeat(64),
+                candidate_fingerprint: decision.candidate_fingerprint,
+                review_fingerprint: decision.review_fingerprint,
                 copy_verification_method: CloudCopyVerificationMethod::CopiedByDiskSage,
-                review_decision_id: Some("decision-1".into()),
-                review_disposition: Some(CloudReviewDisposition::Approved),
-                reviewed_at_ms: Some(25),
-                reviewed_by: Some("human:local:test".into()),
-                review_rationale: Some("embedded metadata checked".into()),
-                destination_account_scope: CloudAccountScope::Organization,
-                kind: ArchiveKind::Document,
-                created_ms: 10,
-                modified_ms: 20,
-                production_time_ms: 5,
-                production_time_source: "embedded:exiftool:CreateDate".into(),
-                production_time_confidence: "high".into(),
-                source_root: "/source".into(),
-                relative_path: "reports/report.pdf".into(),
-                source_context: "download".into(),
-                requires_review: true,
-                review_reasons: vec!["sensitive-document".into()],
-                content_title: Some("Report".into()),
-                content_authors: vec!["Author".into()],
-                content_context: vec!["Context".into()],
-                duration_ms: None,
-                dataset_profile: None,
-                metadata_evidence: vec![MetadataEvidence {
-                    field: "production_time".into(),
-                    value: "2026-01-01".into(),
-                    source: "exiftool:CreateDate".into(),
-                    confidence: "high".into(),
-                }],
+                review_decision_id: Some(decision.decision_id),
+                review_disposition: Some(decision.disposition),
+                reviewed_at_ms: Some(decision.reviewed_at_ms),
+                reviewed_by: Some(decision.reviewed_by),
+                review_rationale: Some(decision.rationale),
+                destination_account_scope: candidate.destination_account_scope,
+                kind: candidate.kind,
+                created_ms: candidate.created_ms,
+                modified_ms: candidate.modified_ms,
+                production_time_ms: candidate.production_time_ms,
+                production_time_source: candidate.production_time_source,
+                production_time_confidence: candidate.production_time_confidence,
+                source_root: candidate.source_root,
+                relative_path: candidate.relative_path,
+                source_context: candidate.source_context,
+                requires_review: candidate.requires_review,
+                review_reasons: candidate.review_reasons,
+                content_title: candidate.content_title,
+                content_authors: candidate.content_authors,
+                content_context: candidate.content_context,
+                duration_ms: candidate.duration_ms,
+                dataset_profile: candidate.dataset_profile,
+                metadata_evidence: candidate.metadata_evidence,
             }),
         }
+    }
+
+    #[cfg(not(coverage))]
+    fn produced_receipt() -> CloudCopyReceipt {
+        let tmp = tempfile::tempdir().unwrap();
+        let source_root = tmp.path().join("source");
+        let source = source_root.join("reports/report.pdf");
+        let cloud = tmp.path().join("cloud");
+        let destination = cloud.join("DiskSage Archive/reports/report.pdf");
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(&cloud).unwrap();
+        std::fs::write(&source, b"metadata-first-lineage").unwrap();
+        let metadata = std::fs::metadata(&source).unwrap();
+        let modified_ms = metadata
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        let mut candidate = reviewed_candidate();
+        candidate.src = source.to_string_lossy().into_owned();
+        candidate.dst = destination.to_string_lossy().into_owned();
+        candidate.source_root = source_root.to_string_lossy().into_owned();
+        candidate.bytes = metadata.len();
+        candidate.modified_ms = modified_ms;
+        candidate.review_fingerprint = candidate_review_fingerprint(&candidate);
+        let decision = create_attributed_decision(
+            &candidate,
+            CloudReviewDisposition::Approved,
+            25,
+            "human:local:test",
+            "embedded metadata checked",
+        )
+        .unwrap();
+        let root = CloudRoot {
+            id: "google-drive:test".into(),
+            provider: CloudProvider::GoogleDrive,
+            account_scope: CloudAccountScope::Organization,
+            label: "Google Drive".into(),
+            path: cloud.to_string_lossy().into_owned(),
+            readable: true,
+            access_issue: None,
+        };
+
+        prepare_cloud_copy_with_review(
+            &candidate,
+            &root,
+            &tmp.path().join("receipts"),
+            30,
+            Some(&decision),
+        )
+        .unwrap()
+        .0
     }
 
     fn evidence(receipt: &CloudCopyReceipt) -> ProviderSyncEvidenceRecord {
@@ -348,6 +510,19 @@ mod tests {
         assert_eq!(envelope.schema_kind, "disksage.file-lineage");
         assert_eq!(envelope.source_filename, "report.pdf");
         assert_eq!(envelope.raw_content_sha256, "d".repeat(64));
+        assert_eq!(envelope.metadata_evidence[0].field, "production-date");
+        assert_eq!(
+            envelope.metadata_evidence[0].source,
+            envelope.production_time.selected_source
+        );
+        assert_eq!(
+            envelope.review.decision_id.as_deref().map(str::len),
+            Some(64)
+        );
+        assert_eq!(
+            envelope.review.reviewed_by.as_deref(),
+            Some("human:local:test")
+        );
         assert_eq!(
             envelope.production_time.evidence_precedence,
             [
@@ -367,6 +542,31 @@ mod tests {
         );
         assert_eq!(envelope.cloud_copy.sync_pending_age_ms, Some(0));
         assert!(envelope.cloud_copy.sync_reason_codes.is_empty());
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn export_accepts_real_attributed_copy_receipt() {
+        let receipt = produced_receipt();
+        let envelope = export_naruon_file_lineage(&receipt, None).unwrap();
+
+        assert_eq!(envelope.raw_content_sha256, receipt.sha256);
+        assert_eq!(envelope.metadata_evidence[0].field, "production-date");
+        assert_eq!(
+            envelope.metadata_evidence[0].source,
+            envelope.production_time.selected_source
+        );
+        assert_eq!(
+            envelope.review.decision_id,
+            receipt
+                .lineage
+                .as_ref()
+                .and_then(|lineage| lineage.review_decision_id.clone())
+        );
+        assert_eq!(
+            envelope.review.reviewed_by.as_deref(),
+            Some("human:local:test")
+        );
     }
 
     #[test]
@@ -420,6 +620,13 @@ mod tests {
         assert_eq!(
             export_naruon_file_lineage(&bad_digest, None).unwrap_err(),
             "naruon-lineage-receipt-digest-invalid"
+        );
+
+        let mut invalid_review = receipt();
+        invalid_review.lineage.as_mut().unwrap().review_decision_id = Some("decision-1".into());
+        assert_eq!(
+            export_naruon_file_lineage(&invalid_review, None).unwrap_err(),
+            "naruon-lineage-review-decision-invalid"
         );
 
         let receipt = receipt();

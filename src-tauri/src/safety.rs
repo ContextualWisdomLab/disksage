@@ -325,6 +325,31 @@ fn finalize_verified_copy(dst: &Path, verified: bool) -> std::io::Result<()> {
     }
 }
 
+/// 검증된 크로스 볼륨 목적지에 원본의 메타데이터(권한 + mtime/atime)를 복원한다.
+/// `io::copy`는 바이트만 옮겨 목적지의 mtime을 now로, mode를 umask 기본값(보통 0644)으로
+/// 리셋한다. 이는 앱이 자체 판단에 쓰는 mtime 신호(organize의 age_days, dev_artifacts의
+/// min_age_days, LLM 삭제-안전 프롬프트의 age)를 손상시키고, 실행 비트나 0600 같은 보안-민감
+/// 권한까지 되돌린다. 같은 볼륨 경로(hard_link)는 같은 inode라 메타데이터가 그대로 보존되므로,
+/// 두 경로를 메타데이터 측면에서 일치시키기 위한 복원이다.
+/// std만 사용한다(`File::set_times`는 1.75+ 안정) — 새 의존성도, unsafe FFI도 없다.
+/// 실패 시 io::Error를 전파해 호출측이 목적지를 정리하고 원본을 손상 없이 남기게 한다(fail-closed).
+fn preserve_source_metadata(src: &Path, dst: &Path) -> std::io::Result<()> {
+    let src_md = std::fs::metadata(src)?;
+    // mtime(+가능하면 atime)을 **먼저** 복원한다. 목적지는 복사 직후 쓰기 가능(0644)이라 write
+    // 핸들을 얻을 수 있다. 권한을 먼저 복원하면 원본이 읽기 전용(예: 0400)일 때 목적지도 0400이
+    // 되어 set_times용 write 오픈이 실패하므로, 순서를 뒤집으면 읽기 전용 파일의 크로스 볼륨
+    // 이동 자체가 막힌다. atime은 noatime 마운트 등에서 못 읽을 수 있어 있을 때만 함께 설정한다.
+    let mut times = std::fs::FileTimes::new().set_modified(src_md.modified()?);
+    if let Ok(accessed) = src_md.accessed() {
+        times = times.set_accessed(accessed);
+    }
+    std::fs::OpenOptions::new().write(true).open(dst)?.set_times(times)?;
+    // 권한은 **마지막**에 복원한다(원본이 읽기 전용이어도 위 set_times가 이미 끝난 뒤라 안전).
+    // set_permissions는 mtime이 아니라 ctime만 바꾸므로 방금 설정한 mtime을 훼손하지 않는다.
+    std::fs::set_permissions(dst, src_md.permissions())?;
+    Ok(())
+}
+
 // 크로스 볼륨 복사+검증(내부 io, ? 전파). 복사 도중 실패하든 검증에서 실패하든, 우리가 만든
 // 목적지라면 정리하고 io::Error — 어느 실패든 원본은 절대 건드리지 않는다.
 fn copy_verified_io(src: &Path, dst: &Path) -> std::io::Result<()> {
@@ -339,7 +364,15 @@ fn copy_verified_io(src: &Path, dst: &Path) -> std::io::Result<()> {
             return Err(e);
         }
     };
-    finalize_verified_copy(dst, hashes_match(&src_hash, &dst_hash, src_len, dst_len))
+    finalize_verified_copy(dst, hashes_match(&src_hash, &dst_hash, src_len, dst_len))?;
+    // 내용 검증 성공 후(원본은 아직 존재) 원본 메타데이터를 목적지에 복원한 뒤에야 호출측이
+    // 원본을 휴지통으로 보낸다. 복원 실패는 fail-closed: 우리가 만든 목적지를 정리하고 에러를
+    // 전파해, 원본이 메타데이터가 손상된 사본으로 대체되는 일을 막는다.
+    if let Err(e) = preserve_source_metadata(src, dst) {
+        let _ = std::fs::remove_file(dst);
+        return Err(e);
+    }
+    Ok(())
 }
 
 /// 분기 결정(same_vol)을 파라미터로 받아 양 경로를 플랫폼 무관하게 테스트 가능하게 한다.
@@ -793,6 +826,52 @@ mod tests {
         let items: Vec<_> = trash::os_limited::list().unwrap().into_iter()
             .filter(|i| i.name.to_string_lossy().contains("disksage-xvol-fixture")).collect();
         trash::os_limited::purge_all(items).unwrap();
+    }
+
+    // 회귀: 크로스 볼륨 이동이 mtime과 mode를 보존하는지(내용만이 아니라 메타데이터도). 같은 볼륨
+    // 경로(hard_link)는 같은 inode라 자동 보존되지만, 크로스 볼륨은 io::copy가 바이트만 옮겨
+    // mtime을 now로, mode를 0644로 리셋했었다 — 앱의 age 신호(organize/dev_artifacts/prompt)와
+    // 0600 권한이 소리 없이 손상되던 버그. same_vol=false 강제라 실제 두 볼륨은 필요 없다.
+    #[test]
+    #[cfg(unix)]
+    fn do_move_cross_volume_preserves_mtime_and_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let jp = tmp.path().join("j.jsonl");
+        let src = tmp.path().join("disksage-xvol-meta-fixture.bin");
+        let dst = tmp.path().join("moved-disksage-xvol-meta-fixture.bin");
+        std::fs::write(&src, vec![7u8; 32]).unwrap();
+        // 원본에 앱의 age 신호가 의존하는 과거 mtime과 비-기본 권한(0600)을 부여
+        std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let past = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_577_836_800); // 2020-01-01
+        std::fs::OpenOptions::new().write(true).open(&src).unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(past))
+            .unwrap();
+        let want_mtime = std::fs::metadata(&src).unwrap().modified().unwrap();
+
+        do_move(&src, &dst, false, &jp, 3).unwrap();
+
+        assert!(!src.exists(), "원본은 휴지통으로");
+        let dst_md = std::fs::metadata(&dst).unwrap();
+        // mtime이 now로 손상되지 않고 원본(2020) 그대로여야 한다.
+        assert_eq!(dst_md.modified().unwrap(), want_mtime, "크로스 볼륨 이동은 mtime을 보존해야 함");
+        // 권한도 0600 그대로(0644로 되돌아가지 않아야 함).
+        assert_eq!(dst_md.permissions().mode() & 0o777, 0o600, "크로스 볼륨 이동은 mode를 보존해야 함");
+
+        let items: Vec<_> = trash::os_limited::list().unwrap().into_iter()
+            .filter(|i| i.name.to_string_lossy().contains("disksage-xvol-meta-fixture")).collect();
+        trash::os_limited::purge_all(items).unwrap();
+    }
+
+    // 원본 메타데이터를 못 읽으면(사라진 원본 등) fail-closed로 io::Error를 전파한다 — 이 에러가
+    // copy_verified_io에서 목적지를 정리하고 원본을 건드리지 않게 만든다.
+    #[test]
+    fn preserve_source_metadata_errors_on_missing_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("gone.bin");
+        let dst = tmp.path().join("dst.bin");
+        std::fs::write(&dst, b"x").unwrap();
+        assert!(preserve_source_metadata(&missing, &dst).is_err());
     }
 
     #[test]

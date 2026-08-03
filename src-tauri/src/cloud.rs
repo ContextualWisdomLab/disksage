@@ -4,8 +4,9 @@
 //! hydrates, or calls a model.  The plan preserves enough source metadata to become the first
 //! lineage record for a later verified move.
 
+use crate::content_digest::ContentDigests;
 #[cfg(not(coverage))]
-use crate::content_digest::{ContentDigests, ContentHasher};
+use crate::content_digest::ContentHasher;
 #[cfg(not(coverage))]
 use crate::dataset_metadata::profile_dataset;
 use crate::dataset_metadata::DatasetProfile;
@@ -27,6 +28,12 @@ const DAY_MS: u64 = 86_400_000;
 const METADATA_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(not(coverage))]
 const METADATA_PROBE_OUTPUT_LIMIT: usize = 1024 * 1024;
+#[cfg(not(coverage))]
+const EXIFTOOL_BATCH_SIZE: usize = 32;
+#[cfg(not(coverage))]
+const EXIFTOOL_BATCH_TIMEOUT: Duration = Duration::from_secs(20);
+#[cfg(not(coverage))]
+const EXIFTOOL_BATCH_OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
 #[cfg(not(coverage))]
 const MAX_ZIP_METADATA_ENTRIES: usize = 10_000;
 #[cfg(not(coverage))]
@@ -184,6 +191,34 @@ impl Default for CloudPlanOptions {
     }
 }
 
+/// Immutable, process-local evidence prepared once for one source corpus.
+///
+/// Content metadata and duplicate digests are destination-independent and expensive to collect.
+/// A snapshot lets callers derive several destination plans without re-running probes or reading
+/// source content again. Destination existence, account scope, review fingerprints, capacity, and
+/// provider sync state are deliberately not cached.
+#[derive(Debug, Clone)]
+pub struct CloudSourceSnapshot {
+    source_root: PathBuf,
+    prepared_at_ms: u64,
+    options: CloudPlanOptions,
+    files: Vec<FileFact>,
+    #[cfg(not(coverage))]
+    duplicate_digests: BTreeMap<PathBuf, Result<ContentDigests, String>>,
+    #[cfg(not(coverage))]
+    verified_regular_files: BTreeSet<PathBuf>,
+}
+
+impl CloudSourceSnapshot {
+    pub fn candidate_count(&self) -> usize {
+        self.files.len()
+    }
+
+    pub fn candidate_bytes(&self) -> u64 {
+        self.files.iter().map(|file| file.bytes).sum()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CloudCandidate {
     /// Stable metadata fingerprint. This is not a content hash.
@@ -235,6 +270,21 @@ pub struct ExactDuplicateSummary {
     pub candidate_count: usize,
     pub candidate_bytes: u64,
     pub redundant_bytes: u64,
+    #[serde(default)]
+    pub clusters: Vec<ExactDuplicateClusterRecommendation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ExactDuplicateClusterRecommendation {
+    pub cluster_fingerprint: String,
+    pub candidate_count: usize,
+    pub bytes_per_candidate: u64,
+    pub redundant_bytes: u64,
+    pub recommended_canonical_metadata_fingerprint: String,
+    pub recommendation_confidence: String,
+    pub recommendation_reason_codes: Vec<String>,
+    pub member_metadata_fingerprints: Vec<String>,
+    pub requires_human_confirmation: bool,
 }
 
 /// Fail closed when the selected source cannot be enumerated. Filesystem metadata alone is not
@@ -399,14 +449,7 @@ fn push_root(
         access_issue: access_issue.clone(),
     });
     if let Some(reason) = access_issue {
-        push_discovery_issue(
-            report,
-            Some(provider),
-            account_scope,
-            &path,
-            label,
-            reason,
-        );
+        push_discovery_issue(report, Some(provider), account_scope, &path, label, reason);
     }
 }
 
@@ -641,8 +684,8 @@ pub fn discover_cloud_roots(home: &Path) -> Vec<CloudRoot> {
 fn archive_kind(path: &Path) -> Option<ArchiveKind> {
     let ext = path.extension()?.to_string_lossy().to_ascii_lowercase();
     match ext.as_str() {
-        "pdf" | "doc" | "docx" | "ppt" | "pptx" | "xls" | "xlsx" | "xlsm" | "xlsb"
-        | "odt" | "ods" | "odp" | "pages" | "numbers" | "key" | "epub" | "mobi" => {
+        "pdf" | "doc" | "docx" | "ppt" | "pptx" | "xls" | "xlsx" | "xlsm" | "xlsb" | "odt"
+        | "ods" | "odp" | "pages" | "numbers" | "key" | "epub" | "mobi" => {
             Some(ArchiveKind::Document)
         }
         "jpg" | "jpeg" | "png" | "heic" | "tif" | "tiff" | "gif" | "webp" | "raw" | "mov"
@@ -955,7 +998,7 @@ fn add_filename_publication_month(metadata: &mut ContentMetadata, year: i32, mon
     );
 }
 
-fn date_value(epoch_ms: u64) -> String {
+pub(crate) fn date_value(epoch_ms: u64) -> String {
     let (year, month, day) = date_parts(epoch_ms);
     format!("{year:04}-{month:02}-{day:02}")
 }
@@ -1280,60 +1323,50 @@ fn macos_file_provenance_metadata(_path: &Path) -> ContentMetadata {
 }
 
 #[cfg(not(coverage))]
-fn exiftool_metadata(path: &Path) -> ContentMetadata {
+fn configure_exiftool_command(command: &mut Command) {
+    command.args([
+        "-j",
+        "-n",
+        "-DateTimeOriginal",
+        "-CreateDate",
+        "-CreationDate",
+        "-MediaCreateDate",
+        "-TrackCreateDate",
+        "-Title",
+        "-DocumentName",
+        "-Author",
+        "-Artist",
+        "-Creator",
+        "-Subject",
+        "-Keywords",
+        "-Description",
+        "-Category",
+        "-Application",
+        "-AppVersion",
+        "-Software",
+        "-CreatorTool",
+        "-Producer",
+        "-Template",
+        "-Duration",
+        "-GPSLatitude",
+        "-GPSLongitude",
+        "-Location",
+    ]);
+}
+
+#[cfg(not(coverage))]
+fn exiftool_values_metadata(
+    values: &serde_json::Map<String, serde_json::Value>,
+) -> ContentMetadata {
     let mut metadata = ContentMetadata::default();
-    let mut command = local_command("exiftool");
-    command
-        .args([
-            "-j",
-            "-n",
-            "-DateTimeOriginal",
-            "-CreateDate",
-            "-CreationDate",
-            "-MediaCreateDate",
-            "-TrackCreateDate",
-            "-Title",
-            "-DocumentName",
-            "-Author",
-            "-Artist",
-            "-Creator",
-            "-Subject",
-            "-Keywords",
-            "-Description",
-            "-Category",
-            "-Application",
-            "-AppVersion",
-            "-Software",
-            "-CreatorTool",
-            "-Producer",
-            "-Template",
-            "-Duration",
-            "-GPSLatitude",
-            "-GPSLongitude",
-            "-Location",
-        ])
-        .arg(path);
-    let output = match run_metadata_command(command) {
-        Ok(output) => output,
-        Err(failure) => {
-            add_probe_warning(&mut metadata, "exiftool", failure);
-            return metadata;
-        }
-    };
-    let document = match serde_json::from_slice::<Vec<serde_json::Value>>(&output) {
-        Ok(document) => document,
-        Err(_) => {
-            add_probe_warning(
-                &mut metadata,
-                "exiftool",
-                MetadataProbeFailure::InvalidOutput,
-            );
-            return metadata;
-        }
-    };
-    let Some(values) = document.first().and_then(|value| value.as_object()) else {
+    if values.get("Error").is_some() {
+        add_probe_warning(
+            &mut metadata,
+            "exiftool",
+            MetadataProbeFailure::InvalidOutput,
+        );
         return metadata;
-    };
+    }
 
     for key in [
         "DateTimeOriginal",
@@ -1453,6 +1486,95 @@ fn exiftool_metadata(path: &Path) -> ContentMetadata {
         );
     }
     metadata
+}
+
+#[cfg(not(coverage))]
+fn exiftool_document_metadata(
+    output: &[u8],
+) -> Result<BTreeMap<PathBuf, ContentMetadata>, MetadataProbeFailure> {
+    let document = serde_json::from_slice::<Vec<serde_json::Value>>(output)
+        .map_err(|_| MetadataProbeFailure::InvalidOutput)?;
+    let mut by_path = BTreeMap::new();
+    for item in document {
+        let values = item
+            .as_object()
+            .ok_or(MetadataProbeFailure::InvalidOutput)?;
+        let path = values
+            .get("SourceFile")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or(MetadataProbeFailure::InvalidOutput)?;
+        if by_path
+            .insert(PathBuf::from(path), exiftool_values_metadata(values))
+            .is_some()
+        {
+            return Err(MetadataProbeFailure::InvalidOutput);
+        }
+    }
+    Ok(by_path)
+}
+
+#[cfg(not(coverage))]
+fn exiftool_metadata(path: &Path) -> ContentMetadata {
+    let mut command = local_command("exiftool");
+    configure_exiftool_command(&mut command);
+    command.arg(path);
+    let output = match run_metadata_command(command) {
+        Ok(output) => output,
+        Err(failure) => {
+            let mut metadata = ContentMetadata::default();
+            add_probe_warning(&mut metadata, "exiftool", failure);
+            return metadata;
+        }
+    };
+    match exiftool_document_metadata(&output) {
+        Ok(mut by_path) => by_path.remove(path).unwrap_or_else(|| {
+            let mut metadata = ContentMetadata::default();
+            add_probe_warning(
+                &mut metadata,
+                "exiftool",
+                MetadataProbeFailure::InvalidOutput,
+            );
+            metadata
+        }),
+        Err(failure) => {
+            let mut metadata = ContentMetadata::default();
+            add_probe_warning(&mut metadata, "exiftool", failure);
+            metadata
+        }
+    }
+}
+
+#[cfg(not(coverage))]
+fn exiftool_metadata_batch(paths: &[PathBuf]) -> BTreeMap<PathBuf, ContentMetadata> {
+    let mut by_path = BTreeMap::new();
+    for chunk in paths.chunks(EXIFTOOL_BATCH_SIZE) {
+        let mut command = local_command("exiftool");
+        configure_exiftool_command(&mut command);
+        command.args(chunk);
+        let batch = run_metadata_command_with_limits(
+            command,
+            EXIFTOOL_BATCH_TIMEOUT,
+            EXIFTOOL_BATCH_OUTPUT_LIMIT,
+        )
+        .and_then(|output| exiftool_document_metadata(&output));
+        match batch {
+            Ok(mut parsed) => {
+                for path in chunk {
+                    let metadata = parsed
+                        .remove(path)
+                        .unwrap_or_else(|| exiftool_metadata(path));
+                    by_path.insert(path.clone(), metadata);
+                }
+            }
+            Err(_) => {
+                for path in chunk {
+                    by_path.insert(path.clone(), exiftool_metadata(path));
+                }
+            }
+        }
+    }
+    by_path
 }
 
 #[cfg(not(coverage))]
@@ -2597,7 +2719,10 @@ fn dataset_content_metadata(path: &Path) -> ContentMetadata {
 }
 
 #[cfg(not(coverage))]
-fn probe_content_metadata(path: &Path) -> ContentMetadata {
+fn probe_content_metadata_with_general(
+    path: &Path,
+    prefetched_general: Option<ContentMetadata>,
+) -> ContentMetadata {
     let extension = path
         .extension()
         .map(|e| e.to_string_lossy().to_ascii_lowercase())
@@ -2606,7 +2731,7 @@ fn probe_content_metadata(path: &Path) -> ContentMetadata {
     // ExifTool can spend the full timeout trying to infer their format, so retain only the
     // lightweight acquisition/sibling-set evidence for these fail-closed candidates.
     let general = if should_probe_general_metadata(path) {
-        exiftool_metadata(path)
+        prefetched_general.unwrap_or_else(|| exiftool_metadata(path))
     } else {
         ContentMetadata::default()
     };
@@ -2637,6 +2762,14 @@ fn probe_content_metadata(path: &Path) -> ContentMetadata {
         merge_metadata(general, format_specific),
         macos_file_provenance_metadata(path),
     )
+}
+
+/// Reuse the cloud planner's bounded embedded/acquisition metadata probes in read-only audit
+/// commands. The returned acquisition date remains context evidence and is never promoted to a
+/// production date.
+#[cfg(not(coverage))]
+pub(crate) fn probe_content_metadata_for_audit(path: &Path) -> ContentMetadata {
+    probe_content_metadata_with_general(path, None)
 }
 
 fn should_probe_general_metadata(path: &Path) -> bool {
@@ -2758,6 +2891,15 @@ fn embedded_metadata_review_reasons(
             "계약",
             "평가",
             "실적",
+            "기업 분석",
+            "기업분석",
+            "분석 보고서",
+            "분석보고서",
+            "실사 보고서",
+            "실사보고서",
+            "company analysis",
+            "business analysis",
+            "due diligence",
             "업무망",
             "망분리",
         ],
@@ -2869,6 +3011,15 @@ fn review_reasons(path: &Path, kind: ArchiveKind) -> Vec<String> {
         "평가",
         "evaluation",
         "실적",
+        "기업 분석",
+        "기업분석",
+        "분석 보고서",
+        "분석보고서",
+        "실사 보고서",
+        "실사보고서",
+        "company analysis",
+        "business analysis",
+        "due diligence",
         "업무망",
         "망분리",
     ]
@@ -2926,15 +3077,11 @@ fn destination_scope_review_reasons(
     }
 }
 
-fn planner_blocked_reason(
+fn source_blocked_reason(
     path: &Path,
     kind: ArchiveKind,
     metadata: &ContentMetadata,
-    destination: &Path,
 ) -> Option<String> {
-    if destination.exists() {
-        return Some("destination-exists".into());
-    }
     if kind == ArchiveKind::IncompleteDownload {
         return Some("incomplete-download".into());
     }
@@ -2957,6 +3104,18 @@ fn planner_blocked_reason(
         return Some("archive-index-unreadable".into());
     }
     None
+}
+
+fn planner_blocked_reason(
+    path: &Path,
+    kind: ArchiveKind,
+    metadata: &ContentMetadata,
+    destination: &Path,
+) -> Option<String> {
+    if destination.exists() {
+        return Some("destination-exists".into());
+    }
+    source_blocked_reason(path, kind, metadata)
 }
 
 fn metadata_fingerprint(file: &FileFact, relative: &Path) -> String {
@@ -3003,6 +3162,42 @@ fn hash_duplicate_candidate(path: &Path, expected_bytes: u64) -> Result<ContentD
 }
 
 #[cfg(not(coverage))]
+fn prehash_duplicate_candidates(
+    files: &[FileFact],
+) -> BTreeMap<PathBuf, Result<ContentDigests, String>> {
+    let mut by_size: BTreeMap<u64, Vec<&FileFact>> = BTreeMap::new();
+    for file in files {
+        let Some(kind) = archive_kind(&file.path) else {
+            continue;
+        };
+        if source_blocked_reason(&file.path, kind, &file.content_metadata).is_none() {
+            by_size.entry(file.bytes).or_default().push(file);
+        }
+    }
+
+    let mut digests = BTreeMap::new();
+    for same_size in by_size.values().filter(|files| files.len() > 1) {
+        for file in same_size {
+            digests.insert(
+                file.path.clone(),
+                hash_duplicate_candidate(&file.path, file.bytes),
+            );
+        }
+    }
+    digests
+}
+
+#[cfg(not(coverage))]
+fn source_snapshot_file_unchanged(file: &FileFact) -> bool {
+    let Ok(metadata) = std::fs::metadata(&file.path) else {
+        return false;
+    };
+    metadata.is_file()
+        && metadata.len() == file.bytes
+        && millis(metadata.modified()) == file.modified_ms
+}
+
+#[cfg(not(coverage))]
 fn push_candidate_evidence(
     candidate: &mut CloudCandidate,
     field: &str,
@@ -3018,10 +3213,249 @@ fn push_candidate_evidence(
     });
 }
 
+fn duplicate_confidence_rank(value: &str) -> u8 {
+    match value {
+        "high" => 3,
+        "medium" => 2,
+        "low" => 1,
+        _ => 0,
+    }
+}
+
+fn embedded_metadata_richness(candidate: &CloudCandidate) -> usize {
+    usize::from(candidate.content_title.is_some())
+        + candidate.content_authors.len()
+        + usize::from(candidate.duration_ms.is_some())
+        + usize::from(candidate.dataset_profile.is_some())
+        + candidate
+            .metadata_evidence
+            .iter()
+            .filter(|evidence| evidence.source.starts_with("embedded:"))
+            .count()
+}
+
+fn source_lineage_context_richness(candidate: &CloudCandidate) -> usize {
+    candidate.content_context.len()
+}
+
+fn filename_looks_like_copy(path: &str) -> bool {
+    let path = Path::new(path);
+    let stem = path
+        .file_stem()
+        .map(|value| value.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if [" copy", "-copy", "_copy", "복사본"]
+        .iter()
+        .any(|marker| stem.contains(marker))
+    {
+        return true;
+    }
+    let Some(open) = stem.rfind('(') else {
+        return false;
+    };
+    let suffix = stem[open + 1..].trim_end_matches(')').trim();
+    stem.ends_with(')') && !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn path_looks_regenerable_or_quarantined(path: &str) -> bool {
+    Path::new(path).components().any(|component| {
+        let value = component.as_os_str().to_string_lossy().to_lowercase();
+        matches!(
+            value.as_str(),
+            "quarantine"
+                | "exact-duplicates"
+                | "duplicates"
+                | ".trash"
+                | "trash"
+                | "tmp"
+                | "temp"
+                | "cache"
+        )
+    })
+}
+
+fn retain_max_by_key<T: Ord, F: Fn(usize) -> T>(indices: &mut Vec<usize>, key: F) -> bool {
+    let before = indices.len();
+    let Some(best) = indices.iter().copied().map(|index| key(index)).max() else {
+        return false;
+    };
+    indices.retain(|index| key(*index) == best);
+    indices.len() < before
+}
+
+fn retain_min_by_key<T: Ord, F: Fn(usize) -> T>(indices: &mut Vec<usize>, key: F) -> bool {
+    let before = indices.len();
+    let Some(best) = indices.iter().copied().map(|index| key(index)).min() else {
+        return false;
+    };
+    indices.retain(|index| key(*index) == best);
+    indices.len() < before
+}
+
+fn record_recommendation_stage(
+    reduced: bool,
+    remaining_len: usize,
+    reason: &str,
+    stage_confidence: &str,
+    reasons: &mut Vec<String>,
+    confidence: &mut Option<String>,
+) {
+    if reduced {
+        reasons.push(reason.to_string());
+        if remaining_len == 1 && confidence.is_none() {
+            *confidence = Some(stage_confidence.to_string());
+        }
+    }
+}
+
+fn recommend_exact_duplicate_canonical(
+    candidates: &[CloudCandidate],
+    exact_matches: &[usize],
+) -> (usize, String, Vec<String>) {
+    let mut remaining = exact_matches.to_vec();
+    let mut reasons = Vec::new();
+    let mut confidence = None;
+
+    let reduced = retain_max_by_key(&mut remaining, |index| {
+        candidates[index]
+            .production_time_source
+            .starts_with("embedded:")
+    });
+    record_recommendation_stage(
+        reduced,
+        remaining.len(),
+        "embedded-production-time-preferred",
+        "high",
+        &mut reasons,
+        &mut confidence,
+    );
+
+    let reduced = retain_max_by_key(&mut remaining, |index| {
+        duplicate_confidence_rank(&candidates[index].production_time_confidence)
+    });
+    record_recommendation_stage(
+        reduced,
+        remaining.len(),
+        "higher-production-time-confidence",
+        "high",
+        &mut reasons,
+        &mut confidence,
+    );
+
+    let reduced = retain_max_by_key(&mut remaining, |index| {
+        embedded_metadata_richness(&candidates[index])
+    });
+    record_recommendation_stage(
+        reduced,
+        remaining.len(),
+        "richer-embedded-metadata-preferred",
+        "high",
+        &mut reasons,
+        &mut confidence,
+    );
+
+    let reduced = retain_max_by_key(&mut remaining, |index| {
+        source_lineage_context_richness(&candidates[index])
+    });
+    record_recommendation_stage(
+        reduced,
+        remaining.len(),
+        "richer-source-lineage-context-preferred",
+        "high",
+        &mut reasons,
+        &mut confidence,
+    );
+
+    let reduced = retain_min_by_key(&mut remaining, |index| {
+        path_looks_regenerable_or_quarantined(&candidates[index].relative_path)
+    });
+    record_recommendation_stage(
+        reduced,
+        remaining.len(),
+        "non-quarantine-path-preferred",
+        "medium",
+        &mut reasons,
+        &mut confidence,
+    );
+
+    let reduced = retain_min_by_key(&mut remaining, |index| {
+        filename_looks_like_copy(&candidates[index].relative_path)
+    });
+    record_recommendation_stage(
+        reduced,
+        remaining.len(),
+        "non-copy-marked-filename-preferred",
+        "medium",
+        &mut reasons,
+        &mut confidence,
+    );
+
+    let reduced = retain_min_by_key(&mut remaining, |index| {
+        let created_ms = candidates[index].created_ms;
+        if created_ms == 0 {
+            u64::MAX
+        } else {
+            created_ms
+        }
+    });
+    record_recommendation_stage(
+        reduced,
+        remaining.len(),
+        "filesystem-created-time-tiebreaker",
+        "low",
+        &mut reasons,
+        &mut confidence,
+    );
+
+    remaining.sort_by(|left, right| {
+        candidates[*left]
+            .relative_path
+            .cmp(&candidates[*right].relative_path)
+            .then_with(|| {
+                candidates[*left]
+                    .metadata_fingerprint
+                    .cmp(&candidates[*right].metadata_fingerprint)
+            })
+    });
+    if remaining.len() > 1 {
+        reasons.push("stable-path-tiebreaker".into());
+    }
+    let recommended = remaining
+        .first()
+        .copied()
+        .unwrap_or_else(|| exact_matches[0]);
+    (
+        recommended,
+        confidence.unwrap_or_else(|| "low".into()),
+        reasons,
+    )
+}
+
+fn exact_duplicate_cluster_fingerprint(
+    sha256: &str,
+    blake3: &str,
+    bytes_per_candidate: u64,
+    member_metadata_fingerprints: &[String],
+) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage-exact-duplicate-cluster-v1\0");
+    for value in [sha256.as_bytes(), blake3.as_bytes()] {
+        hash_review_value(&mut hasher, value);
+    }
+    hash_review_value(&mut hasher, &bytes_per_candidate.to_le_bytes());
+    for fingerprint in member_metadata_fingerprints {
+        hash_review_value(&mut hasher, fingerprint.as_bytes());
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
 /// Hash only non-blocked candidates that share a byte length. Exact duplicates remain movable,
 /// but require an operator to select the canonical lineage instead of silently copying every path.
 #[cfg(not(coverage))]
-fn mark_exact_duplicate_candidates(candidates: &mut [CloudCandidate]) -> ExactDuplicateSummary {
+fn mark_exact_duplicate_candidates(
+    candidates: &mut [CloudCandidate],
+    cached_digests: Option<&BTreeMap<PathBuf, Result<ContentDigests, String>>>,
+) -> ExactDuplicateSummary {
     let mut summary = ExactDuplicateSummary::default();
     let mut by_size: BTreeMap<u64, Vec<usize>> = BTreeMap::new();
     for (index, candidate) in candidates.iter().enumerate() {
@@ -3034,7 +3468,12 @@ fn mark_exact_duplicate_candidates(candidates: &mut [CloudCandidate]) -> ExactDu
         let mut by_digest: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
         for &index in same_size {
             let candidate = &candidates[index];
-            match hash_duplicate_candidate(Path::new(&candidate.src), candidate.bytes) {
+            let cached = cached_digests
+                .and_then(|digests| digests.get(Path::new(&candidate.src)))
+                .cloned();
+            match cached.unwrap_or_else(|| {
+                hash_duplicate_candidate(Path::new(&candidate.src), candidate.bytes)
+            }) {
                 Ok(digests) => by_digest
                     .entry((digests.sha256, digests.blake3))
                     .or_default()
@@ -3060,14 +3499,43 @@ fn mark_exact_duplicate_candidates(candidates: &mut [CloudCandidate]) -> ExactDu
             .filter(|(_, indices)| indices.len() > 1)
         {
             let bytes_per_candidate = candidates[exact_matches[0]].bytes;
+            let (recommended_index, recommendation_confidence, recommendation_reason_codes) =
+                recommend_exact_duplicate_canonical(candidates, &exact_matches);
+            let recommended_canonical_metadata_fingerprint =
+                candidates[recommended_index].metadata_fingerprint.clone();
+            let mut member_metadata_fingerprints = exact_matches
+                .iter()
+                .map(|index| candidates[*index].metadata_fingerprint.clone())
+                .collect::<Vec<_>>();
+            member_metadata_fingerprints.sort();
+            let cluster_fingerprint = exact_duplicate_cluster_fingerprint(
+                &sha256,
+                &blake3,
+                bytes_per_candidate,
+                &member_metadata_fingerprints,
+            );
+            let recommendation_reasons = recommendation_reason_codes.join(",");
             summary.cluster_count += 1;
             summary.candidate_count += exact_matches.len();
-            summary.candidate_bytes = summary.candidate_bytes.saturating_add(
-                bytes_per_candidate.saturating_mul(exact_matches.len() as u64),
-            );
+            summary.candidate_bytes = summary
+                .candidate_bytes
+                .saturating_add(bytes_per_candidate.saturating_mul(exact_matches.len() as u64));
             summary.redundant_bytes = summary.redundant_bytes.saturating_add(
                 bytes_per_candidate.saturating_mul((exact_matches.len() - 1) as u64),
             );
+            summary.clusters.push(ExactDuplicateClusterRecommendation {
+                cluster_fingerprint: cluster_fingerprint.clone(),
+                candidate_count: exact_matches.len(),
+                bytes_per_candidate,
+                redundant_bytes: bytes_per_candidate
+                    .saturating_mul((exact_matches.len() - 1) as u64),
+                recommended_canonical_metadata_fingerprint:
+                    recommended_canonical_metadata_fingerprint.clone(),
+                recommendation_confidence: recommendation_confidence.clone(),
+                recommendation_reason_codes: recommendation_reason_codes.clone(),
+                member_metadata_fingerprints,
+                requires_human_confirmation: true,
+            });
             let candidate_count = exact_matches.len().to_string();
             for index in exact_matches {
                 let candidate = &mut candidates[index];
@@ -3095,9 +3563,44 @@ fn mark_exact_duplicate_candidates(candidates: &mut [CloudCandidate]) -> ExactDu
                     "planner:exact-content-cluster",
                     "high",
                 );
+                push_candidate_evidence(
+                    candidate,
+                    "exact-duplicate-cluster-fingerprint",
+                    cluster_fingerprint.clone(),
+                    "planner:exact-content-cluster",
+                    "high",
+                );
+                push_candidate_evidence(
+                    candidate,
+                    "exact-duplicate-canonical-recommendation",
+                    if index == recommended_index {
+                        "preferred"
+                    } else {
+                        "redundant-copy-candidate"
+                    },
+                    "planner:metadata-lineage-ranking",
+                    &recommendation_confidence,
+                );
+                push_candidate_evidence(
+                    candidate,
+                    "exact-duplicate-canonical-recommendation-reasons",
+                    recommendation_reasons.clone(),
+                    "planner:metadata-lineage-ranking",
+                    &recommendation_confidence,
+                );
+                push_candidate_evidence(
+                    candidate,
+                    "exact-duplicate-canonical-human-confirmation-required",
+                    "true",
+                    "planner:metadata-lineage-ranking",
+                    "high",
+                );
             }
         }
     }
+    summary
+        .clusters
+        .sort_by(|left, right| left.cluster_fingerprint.cmp(&right.cluster_fingerprint));
 
     for candidate in candidates {
         candidate.review_reasons.sort();
@@ -3178,6 +3681,61 @@ pub fn candidate_review_fingerprint(candidate: &CloudCandidate) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
+/// Bind a human-visible decision batch without including volatile scan time or capacity state.
+///
+/// Candidate review fingerprints already bind paths, destination, embedded metadata evidence,
+/// and review context. This batch fingerprint additionally binds the complete candidate set,
+/// planner blockers, destination scope, totals, and exact-duplicate summary. Sorting makes the
+/// result independent of report presentation order while fresh capacity is still required at
+/// copy time.
+pub const CLOUD_DECISION_BATCH_FINGERPRINT_VERSION: u32 = 1;
+
+pub fn cloud_decision_batch_fingerprint(report: &CloudPlanReport) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage-cloud-decision-batch-v1\0");
+    for value in [
+        report.cloud_root.provider.as_str().as_bytes(),
+        report.cloud_root.account_scope.as_str().as_bytes(),
+    ] {
+        hash_review_value(&mut hasher, value);
+    }
+    for value in [
+        report.candidates.len() as u64,
+        report.candidate_bytes,
+        report.potentially_reclaimable_bytes,
+        report.exact_duplicates.cluster_count as u64,
+        report.exact_duplicates.candidate_count as u64,
+        report.exact_duplicates.candidate_bytes,
+        report.exact_duplicates.redundant_bytes,
+    ] {
+        hash_review_value(&mut hasher, &value.to_le_bytes());
+    }
+
+    let mut candidates = report.candidates.iter().collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        left.metadata_fingerprint
+            .cmp(&right.metadata_fingerprint)
+            .then_with(|| left.review_fingerprint.cmp(&right.review_fingerprint))
+            .then_with(|| left.blocked_reason.cmp(&right.blocked_reason))
+    });
+    for candidate in candidates {
+        for value in [
+            candidate.metadata_fingerprint.as_bytes(),
+            candidate.review_fingerprint.as_bytes(),
+        ] {
+            hash_review_value(&mut hasher, value);
+        }
+        match &candidate.blocked_reason {
+            Some(reason) => {
+                hash_review_value(&mut hasher, b"1");
+                hash_review_value(&mut hasher, reason.as_bytes());
+            }
+            None => hash_review_value(&mut hasher, b"0"),
+        }
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
 /// Build a dry-run report. No filesystem mutation occurs.
 pub fn plan_cloud_archive(
     files: &[FileFact],
@@ -3186,7 +3744,42 @@ pub fn plan_cloud_archive(
     now_ms: u64,
     options: CloudPlanOptions,
 ) -> CloudPlanReport {
-    let mut candidates = Vec::new();
+    let snapshot = prepare_cloud_archive_source(files, source_root, now_ms, options);
+    plan_cloud_archive_from_snapshot(&snapshot, cloud_root)
+}
+
+/// Probe destination-independent source evidence once for reuse across cloud-root plans.
+pub fn prepare_cloud_archive_source(
+    files: &[FileFact],
+    source_root: &Path,
+    now_ms: u64,
+    options: CloudPlanOptions,
+) -> CloudSourceSnapshot {
+    #[cfg(not(coverage))]
+    let batched_exiftool = {
+        let paths = files
+            .iter()
+            .filter(|file| {
+                file.bytes >= options.min_size_bytes
+                    && file.modified_ms > 0
+                    && now_ms.saturating_sub(file.modified_ms) / DAY_MS >= options.min_age_days
+                    && archive_kind(&file.path).is_some()
+                    && file
+                        .path
+                        .strip_prefix(source_root)
+                        .is_ok_and(|relative| !relative.as_os_str().is_empty())
+                    && file.content_metadata == ContentMetadata::default()
+                    && file.path.is_file()
+                    && should_probe_general_metadata(&file.path)
+            })
+            .map(|file| file.path.clone())
+            .collect::<Vec<_>>();
+        exiftool_metadata_batch(&paths)
+    };
+
+    let mut prepared_files = Vec::new();
+    #[cfg(not(coverage))]
+    let mut verified_regular_files = BTreeSet::new();
     for file in files {
         if file.bytes < options.min_size_bytes || file.modified_ms == 0 {
             continue;
@@ -3195,25 +3788,70 @@ pub fn plan_cloud_archive(
         if age_days < options.min_age_days {
             continue;
         }
-        let Some(kind) = archive_kind(&file.path) else {
+        if archive_kind(&file.path).is_none() {
             continue;
-        };
+        }
         let Ok(relative) = file.path.strip_prefix(source_root) else {
             continue;
         };
         if relative.as_os_str().is_empty() {
             continue;
         }
-        let filename_ms = filename_date_ms(&file.path);
-        let filename_publication_month = filename_publication_month(&file.path);
-        let mut lineage_metadata = file.content_metadata.clone();
+        let mut prepared = file.clone();
         // Coverage builds exercise the deterministic planning core. Content probing is an
         // external-process adapter (ExifTool/ffprobe/pdfinfo/unzip) covered by normal tests and
         // integration smoke runs, so it is kept outside the in-process line-coverage boundary.
         #[cfg(not(coverage))]
-        if lineage_metadata == ContentMetadata::default() && file.path.is_file() {
-            lineage_metadata = probe_content_metadata(&file.path);
+        if file.path.is_file() {
+            verified_regular_files.insert(file.path.clone());
+            if prepared.content_metadata == ContentMetadata::default() {
+                prepared.content_metadata = probe_content_metadata_with_general(
+                    &file.path,
+                    batched_exiftool.get(&file.path).cloned(),
+                );
+            }
         }
+        prepared_files.push(prepared);
+    }
+
+    #[cfg(not(coverage))]
+    let duplicate_digests = prehash_duplicate_candidates(&prepared_files);
+    CloudSourceSnapshot {
+        source_root: source_root.to_path_buf(),
+        prepared_at_ms: now_ms,
+        options,
+        files: prepared_files,
+        #[cfg(not(coverage))]
+        duplicate_digests,
+        #[cfg(not(coverage))]
+        verified_regular_files,
+    }
+}
+
+/// Derive one destination-specific dry-run from an immutable source snapshot.
+///
+/// Cheap source stat checks and all destination-dependent checks are repeated for every plan.
+/// Metadata probes and content hashing are not.
+pub fn plan_cloud_archive_from_snapshot(
+    snapshot: &CloudSourceSnapshot,
+    cloud_root: &CloudRoot,
+) -> CloudPlanReport {
+    let files = &snapshot.files;
+    let source_root = &snapshot.source_root;
+    let now_ms = snapshot.prepared_at_ms;
+    let options = snapshot.options;
+    let mut candidates = Vec::new();
+    for file in files {
+        let age_days = now_ms.saturating_sub(file.modified_ms) / DAY_MS;
+        let Some(kind) = archive_kind(&file.path) else {
+            continue;
+        };
+        let Ok(relative) = file.path.strip_prefix(source_root) else {
+            continue;
+        };
+        let filename_ms = filename_date_ms(&file.path);
+        let filename_publication_month = filename_publication_month(&file.path);
+        let mut lineage_metadata = file.content_metadata.clone();
         let embedded_production_time_ms = lineage_metadata.production_time_ms;
         if let Some(value) = filename_ms {
             add_evidence(
@@ -3277,7 +3915,16 @@ pub fn plan_cloud_archive(
             .join(format!("{month:02}"))
             .join(kind.folder())
             .join(relative);
-        let blocked_reason = planner_blocked_reason(&file.path, kind, &lineage_metadata, &dst);
+        #[cfg(not(coverage))]
+        let source_snapshot_stale = snapshot.verified_regular_files.contains(&file.path)
+            && !source_snapshot_file_unchanged(file);
+        #[cfg(coverage)]
+        let source_snapshot_stale = false;
+        let blocked_reason = if source_snapshot_stale {
+            Some("source-snapshot-stale".into())
+        } else {
+            planner_blocked_reason(&file.path, kind, &lineage_metadata, &dst)
+        };
         let source_context = relative
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -3311,10 +3958,7 @@ pub fn plan_cloud_archive(
             .extension()
             .map(|extension| extension.to_string_lossy().to_ascii_lowercase())
             .unwrap_or_default();
-        if matches!(
-            extension.as_str(),
-            "xls" | "xlsx" | "xlsm" | "xlsb" | "ods"
-        ) {
+        if matches!(extension.as_str(), "xls" | "xlsx" | "xlsm" | "xlsb" | "ods") {
             match lineage_metadata.dataset_profile.as_ref() {
                 None => review_reasons.push("spreadsheet-schema-profile-missing".into()),
                 Some(profile) => {
@@ -3404,7 +4048,8 @@ pub fn plan_cloud_archive(
         candidates.push(candidate);
     }
     #[cfg(not(coverage))]
-    let exact_duplicates = mark_exact_duplicate_candidates(&mut candidates);
+    let exact_duplicates =
+        mark_exact_duplicate_candidates(&mut candidates, Some(&snapshot.duplicate_digests));
     #[cfg(coverage)]
     let exact_duplicates = ExactDuplicateSummary::default();
     candidates.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.src.cmp(&b.src)));
@@ -3427,7 +4072,7 @@ pub fn plan_cloud_archive(
             "dry-run-only".into(),
             "cloud-quota-unverified".into(),
             "cloud-sync-unverified".into(),
-            "content-hash-pending".into(),
+            "full-transfer-content-hash-pending".into(),
         ],
     }
 }
@@ -3459,6 +4104,47 @@ mod tests {
             readable: true,
             access_issue: None,
         }
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn exiftool_batch_documents_bind_each_source_file_and_reject_duplicates() {
+        let parsed = exiftool_document_metadata(
+            br#"[
+                {"SourceFile":"/tmp/a.jpg","CreateDate":"2026:07:01 02:03:04"},
+                {"SourceFile":"/tmp/b.jpg","Title":"Field note"}
+            ]"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(
+            parsed[Path::new("/tmp/a.jpg")]
+                .production_time_source
+                .as_deref(),
+            Some("embedded:exiftool:CreateDate")
+        );
+        assert_eq!(
+            parsed[Path::new("/tmp/b.jpg")].title.as_deref(),
+            Some("Field note")
+        );
+
+        assert_eq!(
+            exiftool_document_metadata(
+                br#"[
+                    {"SourceFile":"/tmp/a.jpg"},
+                    {"SourceFile":"/tmp/a.jpg"}
+                ]"#,
+            ),
+            Err(MetadataProbeFailure::InvalidOutput)
+        );
+        let failed = exiftool_document_metadata(
+            br#"[{"SourceFile":"/tmp/error.jpg","Error":"unsupported"}]"#,
+        )
+        .unwrap();
+        assert!(failed[Path::new("/tmp/error.jpg")]
+            .evidence
+            .iter()
+            .any(|evidence| evidence.value == "exiftool:invalid-output"));
     }
 
     #[cfg(all(not(coverage), unix))]
@@ -3669,10 +4355,7 @@ mod tests {
         let report = discover_cloud_roots_report(tmp.path());
         assert!(report.roots.is_empty());
         assert_eq!(report.issues.len(), 1);
-        assert_eq!(
-            report.issues[0].provider,
-            Some(CloudProvider::GoogleDrive)
-        );
+        assert_eq!(report.issues[0].provider, Some(CloudProvider::GoogleDrive));
         assert_eq!(
             report.issues[0].account_scope,
             CloudAccountScope::Organization
@@ -4383,6 +5066,18 @@ mod tests {
         let neutral_spreadsheet =
             review_reasons(Path::new("quarterly-report.xlsx"), ArchiveKind::Document);
         assert!(neutral_spreadsheet.contains(&"spreadsheet-content-needs-review".to_string()));
+        for confidential in [
+            "(주)엠파시 기업 분석 보고서(국문 상세)_20260510.pdf",
+            "target-company due diligence.pdf",
+        ] {
+            assert!(
+                review_reasons(Path::new(confidential), ArchiveKind::Document)
+                    .contains(&"filename-context-may-be-confidential".to_string())
+            );
+        }
+        assert!(
+            review_reasons(Path::new("public-annual-report.pdf"), ArchiveKind::Document).is_empty()
+        );
     }
 
     #[test]
@@ -4436,6 +5131,18 @@ mod tests {
         ] {
             assert!(reasons.contains(&expected.to_string()), "{expected}");
         }
+        let business_analysis = ContentMetadata {
+            title: Some("Target company due diligence".into()),
+            context: vec!["subject=기업 분석 보고서".into()],
+            ..ContentMetadata::default()
+        };
+        assert!(embedded_metadata_review_reasons(
+            Path::new("neutral-name.pdf"),
+            &business_analysis,
+            date_epoch_ms(2026, 5, 10).unwrap(),
+            date_epoch_ms(2026, 5, 11).unwrap(),
+        )
+        .contains(&"embedded-metadata-context-may-be-confidential".to_string()));
 
         let powerpoint_default = date_epoch_ms(2006, 8, 16).unwrap();
         let metadata = ContentMetadata {
@@ -4536,8 +5243,8 @@ mod tests {
         writable_dir(&source);
         writable_dir(&cloud);
         for (name, contents) in [
-            ("a.pdf", &b"same-content"[..]),
-            ("b.pdf", &b"same-content"[..]),
+            ("report.pdf", &b"same-content"[..]),
+            ("report (1).pdf", &b"same-content"[..]),
             ("c.pdf", &b"uniq-content"[..]),
         ] {
             std::fs::write(source.join(name), contents).unwrap();
@@ -4549,7 +5256,7 @@ mod tests {
             production_time_confidence: Some("high".into()),
             ..ContentMetadata::default()
         };
-        let files: Vec<_> = ["a.pdf", "b.pdf", "c.pdf"]
+        let files: Vec<_> = ["report.pdf", "report (1).pdf", "c.pdf"]
             .into_iter()
             .map(|name| {
                 let path = source.join(name);
@@ -4577,7 +5284,7 @@ mod tests {
         );
 
         let mut duplicate_hashes = Vec::new();
-        for name in ["a.pdf", "b.pdf"] {
+        for name in ["report.pdf", "report (1).pdf"] {
             let candidate = report
                 .candidates
                 .iter()
@@ -4605,6 +5312,34 @@ mod tests {
         assert_eq!(report.exact_duplicates.candidate_count, 2);
         assert_eq!(report.exact_duplicates.candidate_bytes, 24);
         assert_eq!(report.exact_duplicates.redundant_bytes, 12);
+        let cluster = &report.exact_duplicates.clusters[0];
+        let canonical = report
+            .candidates
+            .iter()
+            .find(|candidate| candidate.relative_path == "report.pdf")
+            .unwrap();
+        let marked_copy = report
+            .candidates
+            .iter()
+            .find(|candidate| candidate.relative_path == "report (1).pdf")
+            .unwrap();
+        assert_eq!(
+            cluster.recommended_canonical_metadata_fingerprint,
+            canonical.metadata_fingerprint
+        );
+        assert_eq!(cluster.recommendation_confidence, "medium");
+        assert!(cluster
+            .recommendation_reason_codes
+            .contains(&"non-copy-marked-filename-preferred".to_string()));
+        assert!(cluster.requires_human_confirmation);
+        assert!(canonical.metadata_evidence.iter().any(|evidence| {
+            evidence.field == "exact-duplicate-canonical-recommendation"
+                && evidence.value == "preferred"
+        }));
+        assert!(marked_copy.metadata_evidence.iter().any(|evidence| {
+            evidence.field == "exact-duplicate-canonical-recommendation"
+                && evidence.value == "redundant-copy-candidate"
+        }));
         let unique = report
             .candidates
             .iter()
@@ -4613,6 +5348,268 @@ mod tests {
         assert!(!unique
             .review_reasons
             .contains(&"exact-duplicate-content-needs-canonical-selection".to_string()));
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn canonical_recommendation_keeps_embedded_lineage_ahead_of_copy_name_heuristics() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let cloud = tmp.path().join("cloud");
+        writable_dir(&source);
+        writable_dir(&cloud);
+        for name in ["analysis.pdf", "analysis (1).pdf"] {
+            std::fs::write(source.join(name), b"same-analysis").unwrap();
+        }
+        let embedded = ContentMetadata {
+            production_time_ms: Some(date_epoch_ms(2026, 2, 3).unwrap()),
+            production_time_source: Some("embedded:test:creation-date".into()),
+            production_time_confidence: Some("high".into()),
+            title: Some("Analysis".into()),
+            evidence: vec![MetadataEvidence {
+                field: "production-date".into(),
+                value: "2026-02-03".into(),
+                source: "embedded:test:creation-date".into(),
+                confidence: "high".into(),
+            }],
+            ..ContentMetadata::default()
+        };
+        let filesystem_only = ContentMetadata::default();
+        let files = [
+            ("analysis.pdf", filesystem_only),
+            ("analysis (1).pdf", embedded),
+        ]
+        .into_iter()
+        .map(|(name, content_metadata)| {
+            let path = source.join(name);
+            let file_metadata = std::fs::metadata(&path).unwrap();
+            FileFact {
+                path,
+                bytes: file_metadata.len(),
+                created_ms: millis(file_metadata.created()),
+                modified_ms: millis(file_metadata.modified()),
+                content_metadata,
+            }
+        })
+        .collect::<Vec<_>>();
+
+        let report = plan_cloud_archive(
+            &files,
+            &source,
+            &root(CloudProvider::GoogleDrive, &cloud),
+            system_now_ms() + DAY_MS,
+            CloudPlanOptions {
+                min_size_bytes: 0,
+                min_age_days: 0,
+                limit: 10,
+            },
+        );
+
+        let cluster = &report.exact_duplicates.clusters[0];
+        let embedded_copy = report
+            .candidates
+            .iter()
+            .find(|candidate| candidate.relative_path == "analysis (1).pdf")
+            .unwrap();
+        assert_eq!(
+            cluster.recommended_canonical_metadata_fingerprint,
+            embedded_copy.metadata_fingerprint
+        );
+        assert_eq!(cluster.recommendation_confidence, "high");
+        assert!(cluster
+            .recommendation_reason_codes
+            .contains(&"embedded-production-time-preferred".to_string()));
+        assert!(embedded_copy.metadata_evidence.iter().any(|evidence| {
+            evidence.field == "exact-duplicate-canonical-recommendation"
+                && evidence.value == "preferred"
+        }));
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn canonical_recommendation_labels_source_lineage_separately_from_embedded_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let cloud = tmp.path().join("cloud");
+        writable_dir(&source);
+        writable_dir(&cloud);
+        for name in ["recording.m4a", "recording (1).m4a"] {
+            std::fs::write(source.join(name), b"same-recording").unwrap();
+        }
+        let production_time_ms = date_epoch_ms(2026, 2, 3).unwrap();
+        let common = ContentMetadata {
+            production_time_ms: Some(production_time_ms),
+            production_time_source: Some("embedded:test:creation-date".into()),
+            production_time_confidence: Some("high".into()),
+            title: Some("Recording".into()),
+            ..ContentMetadata::default()
+        };
+        let mut with_source_lineage = common.clone();
+        with_source_lineage.context = vec![
+            "download-origin-host=recorder.example".into(),
+            "download-agent=browser".into(),
+        ];
+        let files = [
+            ("recording.m4a", common),
+            ("recording (1).m4a", with_source_lineage),
+        ]
+        .into_iter()
+        .map(|(name, content_metadata)| {
+            let path = source.join(name);
+            let file_metadata = std::fs::metadata(&path).unwrap();
+            FileFact {
+                path,
+                bytes: file_metadata.len(),
+                created_ms: millis(file_metadata.created()),
+                modified_ms: millis(file_metadata.modified()),
+                content_metadata,
+            }
+        })
+        .collect::<Vec<_>>();
+
+        let report = plan_cloud_archive(
+            &files,
+            &source,
+            &root(CloudProvider::GoogleDrive, &cloud),
+            system_now_ms() + DAY_MS,
+            CloudPlanOptions {
+                min_size_bytes: 0,
+                min_age_days: 0,
+                limit: 10,
+            },
+        );
+
+        let cluster = &report.exact_duplicates.clusters[0];
+        let lineage_copy = report
+            .candidates
+            .iter()
+            .find(|candidate| candidate.relative_path == "recording (1).m4a")
+            .unwrap();
+        assert_eq!(
+            cluster.recommended_canonical_metadata_fingerprint,
+            lineage_copy.metadata_fingerprint
+        );
+        assert_eq!(cluster.recommendation_confidence, "high");
+        assert!(cluster
+            .recommendation_reason_codes
+            .contains(&"richer-source-lineage-context-preferred".to_string()));
+        assert!(!cluster
+            .recommendation_reason_codes
+            .contains(&"richer-embedded-metadata-preferred".to_string()));
+        assert!(lineage_copy.metadata_evidence.iter().any(|evidence| {
+            evidence.field == "exact-duplicate-canonical-recommendation"
+                && evidence.value == "preferred"
+        }));
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn source_snapshot_reuses_probes_and_hashes_but_refreshes_destination_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let google = tmp.path().join("google");
+        let onedrive = tmp.path().join("onedrive");
+        writable_dir(&source);
+        writable_dir(&google);
+        writable_dir(&onedrive);
+        for name in ["a.pdf", "b.pdf"] {
+            std::fs::write(source.join(name), b"same-content").unwrap();
+        }
+        let production_time_ms = date_epoch_ms(2026, 1, 2).unwrap();
+        let metadata = ContentMetadata {
+            production_time_ms: Some(production_time_ms),
+            production_time_source: Some("embedded:test:creation-date".into()),
+            production_time_confidence: Some("high".into()),
+            ..ContentMetadata::default()
+        };
+        let files = ["a.pdf", "b.pdf"]
+            .into_iter()
+            .map(|name| {
+                let path = source.join(name);
+                let file_metadata = std::fs::metadata(&path).unwrap();
+                FileFact {
+                    path,
+                    bytes: file_metadata.len(),
+                    created_ms: millis(file_metadata.created()),
+                    modified_ms: millis(file_metadata.modified()),
+                    content_metadata: metadata.clone(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let snapshot = prepare_cloud_archive_source(
+            &files,
+            &source,
+            system_now_ms() + DAY_MS,
+            CloudPlanOptions {
+                min_size_bytes: 0,
+                min_age_days: 0,
+                limit: 10,
+            },
+        );
+
+        assert_eq!(snapshot.candidate_count(), 2);
+        assert_eq!(snapshot.duplicate_digests.len(), 2);
+        let google_report =
+            plan_cloud_archive_from_snapshot(&snapshot, &root(CloudProvider::GoogleDrive, &google));
+        let onedrive_report =
+            plan_cloud_archive_from_snapshot(&snapshot, &root(CloudProvider::Onedrive, &onedrive));
+        assert_eq!(google_report.exact_duplicates.cluster_count, 1);
+        assert_eq!(
+            google_report.exact_duplicates,
+            onedrive_report.exact_duplicates
+        );
+
+        let destination = PathBuf::from(&google_report.candidates[0].dst);
+        writable_dir(destination.parent().unwrap());
+        std::fs::write(&destination, b"existing-destination").unwrap();
+        let refreshed =
+            plan_cloud_archive_from_snapshot(&snapshot, &root(CloudProvider::GoogleDrive, &google));
+        assert!(refreshed.candidates.iter().any(|candidate| {
+            candidate.dst == destination.to_string_lossy()
+                && candidate.blocked_reason.as_deref() == Some("destination-exists")
+        }));
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn source_snapshot_fails_closed_when_source_stat_changes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let cloud = tmp.path().join("cloud");
+        writable_dir(&source);
+        writable_dir(&cloud);
+        let path = source.join("report.pdf");
+        std::fs::write(&path, b"before").unwrap();
+        let file_metadata = std::fs::metadata(&path).unwrap();
+        let snapshot = prepare_cloud_archive_source(
+            &[FileFact {
+                path: path.clone(),
+                bytes: file_metadata.len(),
+                created_ms: millis(file_metadata.created()),
+                modified_ms: millis(file_metadata.modified()),
+                content_metadata: ContentMetadata {
+                    production_time_ms: Some(date_epoch_ms(2026, 1, 2).unwrap()),
+                    production_time_source: Some("embedded:test:creation-date".into()),
+                    production_time_confidence: Some("high".into()),
+                    ..ContentMetadata::default()
+                },
+            }],
+            &source,
+            system_now_ms() + DAY_MS,
+            CloudPlanOptions {
+                min_size_bytes: 0,
+                min_age_days: 0,
+                limit: 10,
+            },
+        );
+
+        std::fs::write(path, b"changed-and-longer").unwrap();
+        let report =
+            plan_cloud_archive_from_snapshot(&snapshot, &root(CloudProvider::GoogleDrive, &cloud));
+        assert_eq!(
+            report.candidates[0].blocked_reason.as_deref(),
+            Some("source-snapshot-stale")
+        );
     }
 
     #[test]

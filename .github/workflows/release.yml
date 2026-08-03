@@ -36,13 +36,25 @@ jobs:
             bundles: |
               src-tauri/target/release/bundle/deb/*.deb
               src-tauri/target/release/bundle/appimage/*.AppImage
+              src-tauri/target/release/disksage-cloud-plan-linux-x86_64
+              src-tauri/target/release/disksage-cloud-plan-linux-x86_64.sha256
+            cloud_cli_source: src-tauri/target/release/disksage-cloud-plan
+            cloud_cli_asset: src-tauri/target/release/disksage-cloud-plan-linux-x86_64
           - os: windows-latest
             bundles: |
               src-tauri/target/release/bundle/msi/*.msi
               src-tauri/target/release/bundle/nsis/*.exe
+              src-tauri/target/release/disksage-cloud-plan-windows-x86_64.exe
+              src-tauri/target/release/disksage-cloud-plan-windows-x86_64.exe.sha256
+            cloud_cli_source: src-tauri/target/release/disksage-cloud-plan.exe
+            cloud_cli_asset: src-tauri/target/release/disksage-cloud-plan-windows-x86_64.exe
           - os: macos-latest
             bundles: |
               src-tauri/target/release/bundle/dmg/*.dmg
+              src-tauri/target/release/disksage-cloud-plan-macos-arm64
+              src-tauri/target/release/disksage-cloud-plan-macos-arm64.sha256
+            cloud_cli_source: src-tauri/target/release/disksage-cloud-plan
+            cloud_cli_asset: src-tauri/target/release/disksage-cloud-plan-macos-arm64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -75,6 +87,64 @@ jobs:
       # llama.cpp engine (CPU in M6; GPU backends are a follow-up) and produces the OS bundles.
       - name: Tauri build (with embedded LLM)
         run: npm run tauri -- build --features llm-engine
+
+      # The operational cloud planner is intentionally shipped separately from the GUI so a
+      # cleanup run can reuse an exact-head binary without rebuilding a multi-GiB local target.
+      - name: Build cloud planning CLI
+        run: cargo build --manifest-path src-tauri/Cargo.toml --release --features cloud-cli --bin disksage-cloud-plan
+
+      - name: Stage and verify cloud planning CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_path="${{ matrix.cloud_cli_source }}"
+          asset_path="${{ matrix.cloud_cli_asset }}"
+          cp "$source_path" "$asset_path"
+
+          help_output="$("$asset_path" --help 2>&1 || true)"
+          grep -F "usage: disksage-cloud-plan" <<<"$help_output"
+
+          asset_dir="$(dirname "$asset_path")"
+          asset_name="$(basename "$asset_path")"
+          if command -v sha256sum >/dev/null 2>&1; then
+            (cd "$asset_dir" && sha256sum "$asset_name") >"$asset_path.sha256"
+          else
+            (cd "$asset_dir" && shasum -a 256 "$asset_name") >"$asset_path.sha256"
+          fi
+          test -s "$asset_path.sha256"
+
+      # Validate the artifact users actually receive. An unsigned bundle can retain only the
+      # Mach-O linker's ad-hoc executable signature, which does not seal Info.plist/resources.
+      - name: Verify macOS DMG app signature
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          dmg_files=(src-tauri/target/release/bundle/dmg/*.dmg)
+          if [[ ${#dmg_files[@]} -ne 1 ]]; then
+            echo "Expected exactly one DMG, found ${#dmg_files[@]}" >&2
+            exit 1
+          fi
+
+          mount_dir="$RUNNER_TEMP/disksage-dmg"
+          mkdir -p "$mount_dir"
+          cleanup() {
+            hdiutil detach "$mount_dir" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          hdiutil attach "${dmg_files[0]}" -readonly -nobrowse -mountpoint "$mount_dir"
+          app_bundles=("$mount_dir"/*.app)
+          if [[ ${#app_bundles[@]} -ne 1 ]]; then
+            echo "Expected exactly one app bundle, found ${#app_bundles[@]}" >&2
+            exit 1
+          fi
+
+          test -f "${app_bundles[0]}/Contents/_CodeSignature/CodeResources"
+          codesign --verify --deep --strict --verbose=2 "${app_bundles[0]}"
+          codesign --display --verbose=4 "${app_bundles[0]}"
 
       # PR / manual: keep the bundles as inspectable artifacts, no release published.
       - name: Upload build artifacts (no publish)

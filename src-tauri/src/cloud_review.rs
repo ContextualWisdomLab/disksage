@@ -6,6 +6,7 @@
 use crate::cloud::{candidate_review_fingerprint, CloudCandidate};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use unicode_general_category::{get_general_category, GeneralCategory};
 
 const LEGACY_DECISION_VERSION: u32 = 1;
 pub const DECISION_VERSION: u32 = 2;
@@ -69,18 +70,59 @@ fn decision_id_for(
     hasher.finalize().to_hex().to_string()
 }
 
+fn trim_review_text(value: &str) -> &str {
+    value.trim_matches(|character: char| {
+        character.is_whitespace() || matches!(character, '\u{200b}' | '\u{feff}')
+    })
+}
+
 fn valid_reviewed_by(value: &str) -> bool {
-    let value = value.trim();
-    value.starts_with("human:")
+    let trimmed = trim_review_text(value);
+    if value != trimmed {
+        return false;
+    }
+    let value = trimmed;
+    let valid_identity = value.strip_prefix("human:").is_some_and(|identity| {
+        identity.bytes().any(|byte| byte.is_ascii_alphanumeric())
+            && identity.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric()
+                    || matches!(byte, b'-' | b'_' | b'.' | b':' | b'@' | b'/')
+            })
+    });
+    valid_identity
         && value.chars().count() <= MAX_REVIEWED_BY_CHARS
         && !value.chars().any(char::is_control)
 }
 
+fn is_review_format_control(character: char) -> bool {
+    get_general_category(character) == GeneralCategory::Format
+}
+
+fn is_review_letter_or_number(character: char) -> bool {
+    matches!(
+        get_general_category(character),
+        GeneralCategory::DecimalNumber
+            | GeneralCategory::LetterNumber
+            | GeneralCategory::LowercaseLetter
+            | GeneralCategory::ModifierLetter
+            | GeneralCategory::OtherLetter
+            | GeneralCategory::OtherNumber
+            | GeneralCategory::TitlecaseLetter
+            | GeneralCategory::UppercaseLetter
+    )
+}
+
 fn valid_rationale(value: &str) -> bool {
-    let value = value.trim();
+    let trimmed = trim_review_text(value);
+    if value != trimmed {
+        return false;
+    }
+    let value = trimmed;
     !value.is_empty()
         && value.chars().count() <= MAX_RATIONALE_CHARS
-        && !value.chars().any(|character| character == '\0')
+        && value.chars().any(is_review_letter_or_number)
+        && !value.chars().any(char::is_control)
+        && !value.chars().any(is_review_format_control)
 }
 
 /// Validate the integrity-bound human attribution before an expensive cloud plan is evaluated.
@@ -185,8 +227,8 @@ pub fn create_attributed_decision(
     if candidate.review_fingerprint != candidate_review_fingerprint(candidate) {
         return Err("cloud-review-fingerprint-mismatch".into());
     }
-    let reviewed_by = reviewed_by.trim();
-    let rationale = rationale.trim();
+    let reviewed_by = trim_review_text(reviewed_by);
+    let rationale = trim_review_text(rationale);
     validate_review_attribution(reviewed_by, rationale)?;
     let decision_id = decision_id_for(
         DECISION_VERSION,
@@ -461,11 +503,49 @@ mod tests {
         assert_eq!(decision.reviewed_by, "human:local:reviewer");
         assert!(validate_decision(&decision).is_ok());
 
+        let normalized = create_attributed_decision(
+            &candidate,
+            CloudReviewDisposition::Approved,
+            10,
+            "\u{85}\u{feff}human:local:reviewer\u{feff}\u{85}",
+            "\u{feff}\u{85}metadata reviewed\u{85}\u{feff}",
+        )
+        .unwrap();
+        assert_eq!(normalized.reviewed_by, "human:local:reviewer");
+        assert_eq!(normalized.rationale, "metadata reviewed");
+        assert!(validate_decision(&normalized).is_ok());
+
+        let boundary_reviewer = format!("human:{}", "a".repeat(122));
+        let boundary_rationale = "r".repeat(1_000);
+        assert!(create_attributed_decision(
+            &candidate,
+            CloudReviewDisposition::Approved,
+            10,
+            &boundary_reviewer,
+            &boundary_rationale,
+        )
+        .is_ok());
+
         let mut tampered = decision;
         tampered.rationale.push_str(" changed");
         assert_eq!(
             validate_decision(&tampered).unwrap_err(),
             "cloud-review-decision-integrity-mismatch"
+        );
+        let mut noncanonical = normalized;
+        noncanonical.reviewed_by.push('\u{feff}');
+        noncanonical.decision_id = decision_id_for(
+            noncanonical.version,
+            &noncanonical.candidate_fingerprint,
+            &noncanonical.review_fingerprint,
+            noncanonical.disposition,
+            noncanonical.reviewed_at_ms,
+            &noncanonical.reviewed_by,
+            &noncanonical.rationale,
+        );
+        assert_eq!(
+            validate_decision(&noncanonical).unwrap_err(),
+            "cloud-review-decision-attribution-invalid"
         );
         assert!(create_attributed_decision(
             &candidate,
@@ -473,6 +553,96 @@ mod tests {
             10,
             "",
             "reason"
+        )
+        .is_err());
+        assert!(create_attributed_decision(
+            &candidate,
+            CloudReviewDisposition::Approved,
+            10,
+            "human:   ",
+            "reason"
+        )
+        .is_err());
+        assert!(create_attributed_decision(
+            &candidate,
+            CloudReviewDisposition::Approved,
+            10,
+            "human:\u{200b}",
+            "reason"
+        )
+        .is_err());
+        assert!(create_attributed_decision(
+            &candidate,
+            CloudReviewDisposition::Approved,
+            10,
+            "human:local:test",
+            "\u{200b}"
+        )
+        .is_err());
+        assert!(create_attributed_decision(
+            &candidate,
+            CloudReviewDisposition::Approved,
+            10,
+            "human:local:test",
+            "\u{2060}"
+        )
+        .is_err());
+        assert!(create_attributed_decision(
+            &candidate,
+            CloudReviewDisposition::Approved,
+            10,
+            "human:local:test",
+            "metadata\u{202e}reviewed"
+        )
+        .is_err());
+        assert!(create_attributed_decision(
+            &candidate,
+            CloudReviewDisposition::Approved,
+            10,
+            "human:local:test",
+            "\u{0345}"
+        )
+        .is_err());
+        assert!(create_attributed_decision(
+            &candidate,
+            CloudReviewDisposition::Approved,
+            10,
+            "human:local:test",
+            "\u{0e33}"
+        )
+        .is_ok());
+        let oversized_reviewer = format!("human:{}", "a".repeat(123));
+        assert!(create_attributed_decision(
+            &candidate,
+            CloudReviewDisposition::Approved,
+            10,
+            &oversized_reviewer,
+            "reason"
+        )
+        .is_err());
+        let oversized_rationale = "r".repeat(1_001);
+        assert!(create_attributed_decision(
+            &candidate,
+            CloudReviewDisposition::Approved,
+            10,
+            "human:local:test",
+            &oversized_rationale
+        )
+        .is_err());
+        assert!(create_attributed_decision(
+            &candidate,
+            CloudReviewDisposition::Approved,
+            10,
+            "human:local:test",
+            "reviewed\0reason"
+        )
+        .is_err());
+        assert!(create_attributed_decision(
+            &candidate,
+            CloudReviewDisposition::Approved,
+            10,
+            "human:local:test",
+            "reviewed\nreason"
         )
         .is_err());
         assert!(create_attributed_decision(

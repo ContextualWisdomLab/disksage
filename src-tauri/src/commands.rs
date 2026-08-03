@@ -630,17 +630,29 @@ fn cloud_plan_for_inputs(
         return Err("이미 클라우드 안에 있는 경로는 오프로드 원본으로 사용할 수 없음".into());
     }
     let files = cloud::collect_archive_files(&root_path, &excluded);
-    let report = cloud::plan_cloud_archive(
+    let observed_at_ms = cloud::system_now_ms();
+    let capacity_snapshot = match authenticated_capacity_snapshot(&selected, app, observed_at_ms) {
+        Ok(snapshot) => snapshot,
+        Err(error) => provider_capacity::unavailable_capacity_from_error(
+            selected.provider,
+            observed_at_ms,
+            &error,
+        ),
+    };
+    let selected =
+        provider_capacity::root_with_verified_capacity_scope(&selected, &capacity_snapshot)?;
+    let mut report = cloud::plan_cloud_archive(
         &files,
         &root_path,
         &selected,
-        cloud::system_now_ms(),
+        observed_at_ms,
         cloud::CloudPlanOptions {
             min_size_bytes: min_size_mib.saturating_mul(1024 * 1024),
             min_age_days,
             limit: limit.clamp(1, 1_000),
         },
     );
+    attach_capacity_assessment(&mut report, capacity_snapshot)?;
     Ok((selected, report))
 }
 
@@ -666,18 +678,16 @@ fn authenticated_capacity_snapshot(
 #[cfg(not(coverage))]
 fn attach_capacity_assessment(
     report: &mut cloud::CloudPlanReport,
-    selected: &cloud::CloudRoot,
-    app: &AppHandle,
-) {
-    let observed_at_ms = cloud::system_now_ms();
-    let snapshot = match authenticated_capacity_snapshot(selected, app, observed_at_ms) {
-        Ok(snapshot) => snapshot,
-        Err(error) => provider_capacity::unavailable_capacity_from_error(
-            selected.provider,
-            observed_at_ms,
-            &error,
-        ),
-    };
+    snapshot: provider_capacity::CloudCapacitySnapshot,
+) -> Result<(), String> {
+    if snapshot.provider != report.cloud_root.provider
+        || snapshot.account_scope.is_some_and(|scope| {
+            report.cloud_root.account_scope != cloud::CloudAccountScope::Unknown
+                && report.cloud_root.account_scope != scope
+        })
+    {
+        return Err("cloud-capacity-root-binding-mismatch".into());
+    }
     let largest_candidate_bytes = report
         .candidates
         .iter()
@@ -707,17 +717,16 @@ fn attach_capacity_assessment(
     }
     .into());
     report.capacity = Some(assessment);
+    Ok(())
 }
 
 #[cfg(not(coverage))]
 fn require_capacity_for_copy(
-    selected: &cloud::CloudRoot,
     candidate: &cloud::CloudCandidate,
-    app: &AppHandle,
+    snapshot: &provider_capacity::CloudCapacitySnapshot,
 ) -> Result<(), String> {
-    let snapshot = authenticated_capacity_snapshot(selected, app, cloud::system_now_ms())?;
     let assessment = provider_capacity::assess_capacity(
-        snapshot,
+        snapshot.clone(),
         candidate.bytes,
         candidate.bytes,
         provider_capacity::DEFAULT_CAPACITY_RESERVE_BYTES,
@@ -746,9 +755,8 @@ pub async fn plan_cloud_archive(
     app: AppHandle,
 ) -> Result<cloud::CloudPlanReport, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let (selected, mut report) =
+        let (_, report) =
             cloud_plan_for_inputs(&root, &cloud_root, min_size_mib, min_age_days, limit, &app)?;
-        attach_capacity_assessment(&mut report, &selected, &app);
         Ok(report)
     })
     .await
@@ -888,7 +896,11 @@ fn create_cloud_candidate_receipt(
         None
     };
     if !adopt_existing {
-        require_capacity_for_copy(&selected, candidate, app)?;
+        let snapshot = report
+            .capacity
+            .as_ref()
+            .ok_or_else(|| "cloud-capacity-verification-required".to_string())?;
+        require_capacity_for_copy(candidate, &snapshot.snapshot)?;
     }
     let (receipt, receipt_path) = if adopt_existing {
         cloud_transfer::adopt_existing_cloud_copy_with_review(
