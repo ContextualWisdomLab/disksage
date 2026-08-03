@@ -123,6 +123,37 @@ cargo run --features cloud-cli --bin disksage-git-worktree-audit -- \
   --private-output /absolute/private/new-git-worktree-audit.json
 ```
 
+## Local volume evidence CLI
+
+DiskSage can capture a read-only, path-redacted filesystem-capacity snapshot:
+
+```sh
+cargo run --manifest-path src-tauri/Cargo.toml \
+  --features volume-cli \
+  --bin disksage-volume-snapshot -- --path /System/Volumes/Data
+```
+
+The JSON reports native `total`, `free`, and user-available bytes, allocation granularity,
+available-space basis points, and a deterministic pressure band. It includes a SHA-256 evidence
+fingerprint but never emits the queried path, mount name, account identifier, or file content.
+
+To compare a fresh observation with a previously saved snapshot:
+
+```sh
+cargo run --manifest-path src-tauri/Cargo.toml \
+  --features volume-cli \
+  --bin disksage-volume-snapshot -- \
+  --path /System/Volumes/Data \
+  --baseline before.json \
+  --logical-removed-bytes 3806089216
+```
+
+The comparison binds both complete snapshots and the calculated deltas. A logical removal count is
+recorded as operator evidence only: `physical_reclaim_bytes` remains `null` and attribution remains
+`unproven`, because APFS, sync providers, swap, builds, and other concurrent writers can change free
+space during the same interval. Baselines are limited to a regular, non-symlink JSON file of at most
+64 KiB.
+
 ## Status
 
 🚧 Early development. See the [base design](docs/superpowers/specs/2026-07-10-disksage-design.md), [dataset metadata profile design](docs/superpowers/specs/2026-07-16-dataset-metadata-profile-design.md), [cloud OAuth security design](docs/superpowers/specs/2026-07-16-cloud-provider-oauth-pkce-design.md), [cloud capacity evidence design](docs/superpowers/specs/2026-07-21-cloud-capacity-evidence-design.md), [redacted Naruon capacity export design](docs/superpowers/specs/2026-07-29-naruon-cloud-capacity-export-design.md), and [semantic catalog pre-copy export design](docs/superpowers/specs/2026-07-29-semantic-catalog-export-design.md).
