@@ -11,12 +11,12 @@ use sha2::{Digest, Sha256};
 
 use crate::cloud::{CloudPlanOptions, CloudPlanReport, CloudProvider};
 use crate::cloud_transfer;
-use crate::icloud_sync_health::IcloudSyncHealthReport;
+use crate::icloud_sync_health::{IcloudSyncHealthReport, ICLOUD_SYNC_HEALTH_SCHEMA_VERSION};
 use crate::naruon_capacity;
 use crate::provider_capacity::{self, CapacityEvidenceKind, CloudCapacityAssessment};
 use crate::provider_client_runtime::{self, ProviderClientRuntimeSnapshot};
 
-pub const NARUON_CLOUD_COPY_READINESS_SCHEMA_VERSION: u32 = 2;
+pub const NARUON_CLOUD_COPY_READINESS_SCHEMA_VERSION: u32 = 3;
 const NARUON_CLOUD_COPY_READINESS_SCHEMA_KIND: &str = "disksage.naruon.cloud-copy-readiness";
 const FINGERPRINT_CANONICALIZATION: &str = "lexicographic-json-object-keys-utf8-no-whitespace";
 const RUNTIME_BLOCKERS: [&str; 2] = [
@@ -72,6 +72,10 @@ pub struct IcloudNewCopyAdmissionSummary {
     pub out_of_quota_bytes: u64,
     pub other_state_count: u64,
     pub item_error_count: u64,
+    pub item_error_octagon_not_signed_in_count: u64,
+    pub item_error_unclassified_count: u64,
+    pub newest_item_error_timestamp_ms: Option<u64>,
+    pub newest_item_error_age_ms: Option<u64>,
     pub blockers: Vec<String>,
     pub evidence_complete: bool,
     pub database_snapshot_includes_wal: bool,
@@ -202,7 +206,7 @@ fn validate_icloud_health(
     let Some(report) = report else {
         return Ok((None, Some(false)));
     };
-    if report.schema_version != 1
+    if report.schema_version != ICLOUD_SYNC_HEALTH_SCHEMA_VERSION
         || report.provider != "icloud"
         || report.output_mode != "icloud-local-sync-health"
         || report.evidence_kind != "supplementary-local-cloud-docs-private-schema"
@@ -239,6 +243,12 @@ fn validate_icloud_health(
                 .scheduled_waiting_bytes
                 .checked_add(report.upload_queue.scheduled_active_bytes)
                 .ok_or_else(|| "naruon-copy-readiness-icloud-bytes-overflow".to_string())?
+        || report.upload_queue.item_error_count
+            != report
+                .upload_queue
+                .item_error_octagon_not_signed_in_count
+                .checked_add(report.upload_queue.item_error_unclassified_count)
+                .ok_or_else(|| "naruon-copy-readiness-icloud-item-error-overflow".to_string())?
     {
         return Err("naruon-copy-readiness-icloud-shape-invalid".into());
     }
@@ -257,6 +267,15 @@ fn validate_icloud_health(
             out_of_quota_bytes: report.upload_queue.out_of_quota_bytes,
             other_state_count: report.upload_queue.other_state_count,
             item_error_count: report.upload_queue.item_error_count,
+            item_error_octagon_not_signed_in_count: report
+                .upload_queue
+                .item_error_octagon_not_signed_in_count,
+            item_error_unclassified_count: report.upload_queue.item_error_unclassified_count,
+            newest_item_error_timestamp_ms: report.upload_queue.newest_item_error_timestamp_ms,
+            newest_item_error_age_ms: report
+                .upload_queue
+                .newest_item_error_timestamp_ms
+                .and_then(|timestamp| report.observed_at_ms.checked_sub(timestamp)),
             blockers: report.new_copy_admission_blockers.clone(),
             evidence_complete: report.evidence_complete,
             database_snapshot_includes_wal: report.database_snapshot_includes_wal,
@@ -795,6 +814,15 @@ fn validate_icloud_admission_summary(
         || (summary.scheduled_waiting_count == 0 && summary.scheduled_waiting_bytes != 0)
         || (summary.scheduled_active_count == 0 && summary.scheduled_active_bytes != 0)
         || (summary.out_of_quota_count == 0 && summary.out_of_quota_bytes != 0)
+        || summary.item_error_count
+            != summary
+                .item_error_octagon_not_signed_in_count
+                .checked_add(summary.item_error_unclassified_count)
+                .ok_or_else(|| "naruon-copy-readiness-icloud-item-error-overflow".to_string())?
+        || summary.newest_item_error_age_ms
+            != summary
+                .newest_item_error_timestamp_ms
+                .and_then(|timestamp| summary.observed_at_ms.checked_sub(timestamp))
         || summary.state != expected_state
         || summary.blockers != expected
     {
@@ -915,18 +943,24 @@ mod tests {
                 scheduled_waiting_bytes: 20,
                 scheduled_count: 2,
                 scheduled_bytes: 20,
+                item_error_count: 1,
+                item_error_octagon_not_signed_in_count: 1,
+                newest_item_error_timestamp_ms: Some(10),
                 ..IcloudUploadQueueSummary::default()
             }
         } else {
             IcloudUploadQueueSummary::default()
         };
         let blockers = if blocked {
-            vec!["icloud-upload-queue-nonempty".into()]
+            vec![
+                "icloud-upload-queue-nonempty".into(),
+                "icloud-local-sync-item-error-present".into(),
+            ]
         } else {
             Vec::new()
         };
         IcloudSyncHealthReport {
-            schema_version: 1,
+            schema_version: ICLOUD_SYNC_HEALTH_SCHEMA_VERSION,
             output_mode: "icloud-local-sync-health".into(),
             observed_at_ms: 30,
             provider: "icloud".into(),
@@ -1050,6 +1084,11 @@ mod tests {
         let health = icloud_health(true);
         let blocked = export_naruon_cloud_copy_readiness(&report, &runtime, Some(&health)).unwrap();
         assert_eq!(blocked.icloud_new_copy_admission_met, Some(false));
+        let admission = blocked.icloud_new_copy_admission.as_ref().unwrap();
+        assert_eq!(admission.item_error_octagon_not_signed_in_count, 1);
+        assert_eq!(admission.item_error_unclassified_count, 0);
+        assert_eq!(admission.newest_item_error_timestamp_ms, Some(10));
+        assert_eq!(admission.newest_item_error_age_ms, Some(20));
         assert!(blocked
             .candidate_blocker_counts
             .contains_key("icloud-upload-queue-nonempty"));
@@ -1194,7 +1233,7 @@ mod tests {
         assert_eq!(envelope.readiness_fingerprint_sha256, expected);
         assert_eq!(
             envelope.readiness_fingerprint_sha256,
-            "3d07355c2ce73fe514447e873d59d1a6015e7fa269d83313ef011d62a7c10855"
+            "5871e39720cdb3d48c688af24fb94d22738c414a3f1a9697ccd84ea1896c325d"
         );
     }
 }
