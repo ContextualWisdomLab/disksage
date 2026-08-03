@@ -148,6 +148,45 @@ pub fn evidence_from_icloud_snapshot(
 }
 
 const FILE_PROVIDER_CTL_EVALUATE: &str = "fileproviderctl:evaluate";
+const FILE_PROVIDER_ITEM_IDENTIFIER_MAX_BYTES: usize = 4 * 1024;
+pub const FILE_PROVIDER_CAPABILITY_ALLOWS_EVICTING: u64 = 1 << 6;
+
+/// Content and policy facts returned by one bounded `fileproviderctl evaluate` observation.
+///
+/// The raw provider item identifier is deliberately not retained. Its fingerprint is sufficient
+/// to detect identity drift without putting an opaque provider identifier in reports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileProviderItemStatus {
+    pub is_downloaded: bool,
+    pub is_downloading: bool,
+    pub is_most_recent_version_downloaded: bool,
+    pub is_uploaded: bool,
+    pub is_uploading: bool,
+    pub has_unresolved_conflicts: bool,
+    pub is_excluded_from_sync: bool,
+    pub is_sync_paused: bool,
+    pub is_trashed: bool,
+    pub capabilities: u64,
+    pub allows_eviction: bool,
+    pub observed_bytes: u64,
+    pub item_identifier_fingerprint: String,
+}
+
+impl FileProviderItemStatus {
+    pub fn is_local_current(&self) -> bool {
+        self.is_downloaded && !self.is_downloading && self.is_most_recent_version_downloaded
+    }
+
+    pub fn is_sync_complete(&self) -> bool {
+        self.is_local_current()
+            && self.is_uploaded
+            && !self.is_uploading
+            && !self.has_unresolved_conflicts
+            && !self.is_excluded_from_sync
+            && !self.is_sync_paused
+            && !self.is_trashed
+    }
+}
 
 /// Provider-neutral facts exposed by macOS File Provider for third-party cloud roots.
 ///
@@ -155,28 +194,18 @@ const FILE_PROVIDER_CTL_EVALUATE: &str = "fileproviderctl:evaluate";
 /// deterministic and unit-testable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileProviderStatusSnapshot {
-    pub is_downloaded: bool,
-    pub is_downloading: bool,
-    pub is_most_recent_version_downloaded: bool,
-    pub is_uploaded: bool,
-    pub is_uploading: bool,
-    pub is_excluded_from_sync: bool,
-    pub is_sync_paused: bool,
+    pub item: FileProviderItemStatus,
     pub observed_bytes: u64,
     pub destination_blake3: String,
 }
 
 impl FileProviderStatusSnapshot {
     fn is_local_current(&self) -> bool {
-        self.is_downloaded && !self.is_downloading && self.is_most_recent_version_downloaded
+        self.item.is_local_current()
     }
 
     fn is_sync_complete(&self) -> bool {
-        self.is_local_current()
-            && self.is_uploaded
-            && !self.is_uploading
-            && !self.is_excluded_from_sync
-            && !self.is_sync_paused
+        self.item.is_sync_complete()
     }
 }
 
@@ -196,14 +225,19 @@ fn file_provider_evidence_id(
         hasher.update(&[0]);
     }
     hasher.update(&[
-        snapshot.is_downloaded as u8,
-        snapshot.is_downloading as u8,
-        snapshot.is_most_recent_version_downloaded as u8,
-        snapshot.is_uploaded as u8,
-        snapshot.is_uploading as u8,
-        snapshot.is_excluded_from_sync as u8,
-        snapshot.is_sync_paused as u8,
+        snapshot.item.is_downloaded as u8,
+        snapshot.item.is_downloading as u8,
+        snapshot.item.is_most_recent_version_downloaded as u8,
+        snapshot.item.is_uploaded as u8,
+        snapshot.item.is_uploading as u8,
+        snapshot.item.has_unresolved_conflicts as u8,
+        snapshot.item.is_excluded_from_sync as u8,
+        snapshot.item.is_sync_paused as u8,
+        snapshot.item.is_trashed as u8,
+        snapshot.item.allows_eviction as u8,
     ]);
+    hasher.update(&snapshot.item.capabilities.to_le_bytes());
+    hasher.update(snapshot.item.item_identifier_fingerprint.as_bytes());
     hasher.update(&snapshot.observed_bytes.to_le_bytes());
     hasher.update(&confirmed_at_ms.to_le_bytes());
     format!("file-provider:{}", hasher.finalize().to_hex())
@@ -269,16 +303,28 @@ fn file_provider_status_u64(output: &str, key: &str) -> Result<u64, String> {
         .map_err(|_| format!("file-provider-status-field-invalid:{key}"))
 }
 
-pub fn parse_file_providerctl_snapshot(
+fn file_provider_identifier_fingerprint(output: &str) -> Result<String, String> {
+    let identifier = file_provider_status_value(output, "itemIdentifier")?.trim();
+    if identifier.is_empty() || identifier.len() > FILE_PROVIDER_ITEM_IDENTIFIER_MAX_BYTES {
+        return Err("file-provider-status-field-invalid:itemIdentifier".into());
+    }
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage-file-provider-item-identifier-v1\0");
+    hasher.update(identifier.as_bytes());
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
+/// Parse the status needed for sync and local-cache decisions without retaining the raw item ID.
+pub fn parse_file_providerctl_item_status(
     output: &str,
     observed_bytes: u64,
-    destination_blake3: &str,
-) -> Result<FileProviderStatusSnapshot, String> {
+) -> Result<FileProviderItemStatus, String> {
     let provider_reported_bytes = file_provider_status_u64(output, "documentSize")?;
     if provider_reported_bytes != observed_bytes {
         return Err("file-provider-status-document-size-mismatch".into());
     }
-    Ok(FileProviderStatusSnapshot {
+    let capabilities = file_provider_status_u64(output, "capabilities")?;
+    Ok(FileProviderItemStatus {
         is_downloaded: file_provider_status_bool(output, "isDownloaded")?,
         is_downloading: file_provider_status_bool(output, "isDownloading")?,
         is_most_recent_version_downloaded: file_provider_status_bool(
@@ -287,9 +333,26 @@ pub fn parse_file_providerctl_snapshot(
         )?,
         is_uploaded: file_provider_status_bool(output, "isUploaded")?,
         is_uploading: file_provider_status_bool(output, "isUploading")?,
+        has_unresolved_conflicts: file_provider_status_bool(output, "hasUnresolvedConflicts")?,
         is_excluded_from_sync: file_provider_status_bool(output, "isExcludedFromSync")?,
         is_sync_paused: file_provider_status_bool(output, "isSyncPaused")?,
+        is_trashed: file_provider_status_bool(output, "isTrashed")?,
+        capabilities,
+        allows_eviction: capabilities & FILE_PROVIDER_CAPABILITY_ALLOWS_EVICTING != 0,
         observed_bytes: provider_reported_bytes,
+        item_identifier_fingerprint: file_provider_identifier_fingerprint(output)?,
+    })
+}
+
+pub fn parse_file_providerctl_snapshot(
+    output: &str,
+    observed_bytes: u64,
+    destination_blake3: &str,
+) -> Result<FileProviderStatusSnapshot, String> {
+    let item = parse_file_providerctl_item_status(output, observed_bytes)?;
+    Ok(FileProviderStatusSnapshot {
+        observed_bytes: item.observed_bytes,
+        item,
         destination_blake3: destination_blake3.into(),
     })
 }
@@ -571,7 +634,7 @@ fn hash_file(path: &std::path::Path) -> Result<String, String> {
 }
 
 #[cfg(all(target_os = "macos", not(coverage)))]
-fn file_providerctl_status(path: &str) -> Result<String, String> {
+pub(crate) fn file_providerctl_status(path: &str) -> Result<String, String> {
     use std::io::Read;
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
@@ -586,6 +649,17 @@ fn file_providerctl_status(path: &str) -> Result<String, String> {
         .stderr(Stdio::null())
         .spawn()
         .map_err(|_| "file-provider-status-command-unavailable".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "file-provider-status-output-missing".to_string())?;
+    let output_reader = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        stdout
+            .take(OUTPUT_LIMIT + 1)
+            .read_to_end(&mut output)
+            .map(|_| output)
+    });
     let deadline = Instant::now() + TIMEOUT;
     let status = loop {
         match child.try_wait() {
@@ -605,19 +679,15 @@ fn file_providerctl_status(path: &str) -> Result<String, String> {
             }
         }
     };
-    let mut output = Vec::new();
-    child
-        .stdout
-        .take()
-        .ok_or_else(|| "file-provider-status-output-missing".to_string())?
-        .take(OUTPUT_LIMIT + 1)
-        .read_to_end(&mut output)
+    let output = output_reader
+        .join()
+        .map_err(|_| "file-provider-status-output-reader-panicked".to_string())?
         .map_err(|_| "file-provider-status-output-read-failed".to_string())?;
-    if !status.success() {
-        return Err("file-provider-status-command-failed".into());
-    }
     if output.len() as u64 > OUTPUT_LIMIT {
         return Err("file-provider-status-output-too-large".into());
+    }
+    if !status.success() {
+        return Err("file-provider-status-command-failed".into());
     }
     String::from_utf8(output).map_err(|_| "file-provider-status-output-not-utf8".into())
 }
@@ -900,7 +970,9 @@ mod tests {
 
     fn uploaded_file_provider_output() -> &'static str {
         r#"
+            capabilities = 805306495;
             documentSize = 42;
+            hasUnresolvedConflicts = 0;
             isDownloaded = 1;
             isDownloading = 0;
             isMostRecentVersionDownloaded = 1;
@@ -908,6 +980,8 @@ mod tests {
             isUploading = 0;
             isExcludedFromSync = 0;
             isSyncPaused = 0;
+            isTrashed = 0;
+            itemIdentifier = opaque-provider-item;
         "#
     }
 
@@ -918,6 +992,8 @@ mod tests {
                 .unwrap();
         assert!(snapshot.is_local_current());
         assert!(snapshot.is_sync_complete());
+        assert!(snapshot.item.allows_eviction);
+        assert_eq!(snapshot.item.item_identifier_fingerprint.len(), 64);
 
         for provider in [CloudProvider::Onedrive, CloudProvider::GoogleDrive] {
             let evidence =
@@ -973,6 +1049,35 @@ mod tests {
     }
 
     #[test]
+    fn file_provider_item_identity_and_capabilities_are_strict_and_redacted() {
+        let status =
+            parse_file_providerctl_item_status(uploaded_file_provider_output(), 42).unwrap();
+        assert_eq!(status.capabilities, 805_306_495);
+        assert!(status.allows_eviction);
+        assert!(!status
+            .item_identifier_fingerprint
+            .contains("opaque-provider-item"));
+
+        let no_eviction =
+            uploaded_file_provider_output().replace("capabilities = 805306495", "capabilities = 0");
+        assert!(
+            !parse_file_providerctl_item_status(&no_eviction, 42)
+                .unwrap()
+                .allows_eviction
+        );
+
+        for invalid in [
+            uploaded_file_provider_output().replace("itemIdentifier = opaque-provider-item;", ""),
+            uploaded_file_provider_output().replace(
+                "itemIdentifier = opaque-provider-item;",
+                "itemIdentifier = first;\n            itemIdentifier = second;",
+            ),
+        ] {
+            assert!(parse_file_providerctl_item_status(&invalid, 42).is_err());
+        }
+    }
+
+    #[test]
     fn file_provider_status_fails_closed_on_upload_locality_or_policy_flags() {
         for (field, replacement) in [
             ("isDownloaded = 1", "isDownloaded = 0"),
@@ -983,8 +1088,10 @@ mod tests {
             ),
             ("isUploaded = 1", "isUploaded = 0"),
             ("isUploading = 0", "isUploading = 1"),
+            ("hasUnresolvedConflicts = 0", "hasUnresolvedConflicts = 1"),
             ("isExcludedFromSync = 0", "isExcludedFromSync = 1"),
             ("isSyncPaused = 0", "isSyncPaused = 1"),
+            ("isTrashed = 0", "isTrashed = 1"),
         ] {
             let output = uploaded_file_provider_output().replace(field, replacement);
             let snapshot = parse_file_providerctl_snapshot(&output, 42, "content-hash").unwrap();

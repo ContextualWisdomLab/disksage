@@ -3,7 +3,9 @@
 //! Planning is read-only and never opens file content. Execution is macOS-only, requires a
 //! fingerprint-bound human approval, revalidates native iCloud state and active handles, calls
 //! Foundation's local-only ubiquitous-item eviction API, and reports allocation reduction
-//! separately from the API request.
+//! separately from the API request. Modern macOS File Provider status is observed through a
+//! bounded, read-only diagnostic command because ubiquitous URL resource values are absent for
+//! some File Provider-backed iCloud paths.
 
 use crate::cloud::{CloudAccountScope, CloudProvider, CloudRoot};
 use serde::Serialize;
@@ -14,16 +16,33 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-pub const ICLOUD_LOCAL_EVICTION_VERSION: u32 = 1;
+pub const ICLOUD_LOCAL_EVICTION_VERSION: u32 = 2;
 const ACTIVE_USE_TIMEOUT_MS: u64 = 5_000;
 const MAX_ACTIVE_USE_OUTPUT_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_ACTIVE_PIDS: usize = 64;
 const MAX_RATIONALE_BYTES: usize = 1_024;
 const POST_EVICTION_WAIT_MS: u64 = 5_000;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum IcloudStateObservationMethod {
+    FileProviderCtlEvaluate,
+    FoundationUbiquitousResourceValues,
+}
+
+impl IcloudStateObservationMethod {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::FileProviderCtlEvaluate => "fileproviderctl-evaluate",
+            Self::FoundationUbiquitousResourceValues => "foundation-ubiquitous-resource-values",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IcloudLocalState {
+    pub observation_method: IcloudStateObservationMethod,
     pub is_ubiquitous: bool,
     pub is_uploaded: bool,
     pub is_uploading: bool,
@@ -31,6 +50,11 @@ pub struct IcloudLocalState {
     pub downloading_status_current: bool,
     pub has_unresolved_conflicts: bool,
     pub is_excluded_from_sync: bool,
+    pub is_sync_paused: Option<bool>,
+    pub is_trashed: Option<bool>,
+    pub allows_eviction: Option<bool>,
+    pub provider_reported_bytes: Option<u64>,
+    pub item_identifier_fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -202,6 +226,39 @@ fn hash_bool(hasher: &mut blake3::Hasher, value: bool) {
     hasher.update(&[u8::from(value)]);
 }
 
+fn hash_optional_bool(hasher: &mut blake3::Hasher, value: Option<bool>) {
+    match value {
+        None => hasher.update(&[0]),
+        Some(false) => hasher.update(&[1]),
+        Some(true) => hasher.update(&[2]),
+    };
+}
+
+fn hash_optional_u64(hasher: &mut blake3::Hasher, value: Option<u64>) {
+    match value {
+        None => {
+            hasher.update(&[0]);
+        }
+        Some(value) => {
+            hasher.update(&[1]);
+            hasher.update(&value.to_le_bytes());
+        }
+    };
+}
+
+fn hash_optional_string(hasher: &mut blake3::Hasher, value: Option<&str>) {
+    match value {
+        None => {
+            hasher.update(&[0]);
+        }
+        Some(value) => {
+            hasher.update(&[1]);
+            hasher.update(value.as_bytes());
+            hasher.update(&[0]);
+        }
+    };
+}
+
 fn plan_fingerprint(
     root: &CloudRoot,
     path: &Path,
@@ -210,13 +267,14 @@ fn plan_fingerprint(
     active_use: &ActiveUseEvidence,
 ) -> String {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"disksage-icloud-local-eviction-plan-v1\0");
+    hasher.update(b"disksage-icloud-local-eviction-plan-v2\0");
     for value in [
         root.id.as_bytes(),
         root.provider.as_str().as_bytes(),
         root.account_scope.as_str().as_bytes(),
         root.path.as_bytes(),
         path.to_string_lossy().as_bytes(),
+        state.observation_method.as_str().as_bytes(),
         active_use.method.as_bytes(),
     ] {
         hasher.update(value);
@@ -239,6 +297,15 @@ fn plan_fingerprint(
     ] {
         hash_bool(&mut hasher, value);
     }
+    for value in [
+        state.is_sync_paused,
+        state.is_trashed,
+        state.allows_eviction,
+    ] {
+        hash_optional_bool(&mut hasher, value);
+    }
+    hash_optional_u64(&mut hasher, state.provider_reported_bytes);
+    hash_optional_string(&mut hasher, state.item_identifier_fingerprint.as_deref());
     for pid in &active_use.observed_pids {
         hasher.update(&pid.to_le_bytes());
     }
@@ -277,6 +344,39 @@ fn build_plan(
     }
     if state.is_excluded_from_sync {
         push_unique(&mut blockers, "icloud-item-excluded-from-sync");
+    }
+    if state.observation_method == IcloudStateObservationMethod::FileProviderCtlEvaluate {
+        if state.is_sync_paused != Some(false) {
+            push_unique(
+                &mut blockers,
+                "icloud-file-provider-sync-paused-or-unconfirmed",
+            );
+        }
+        if state.is_trashed != Some(false) {
+            push_unique(
+                &mut blockers,
+                "icloud-file-provider-item-trashed-or-unconfirmed",
+            );
+        }
+        if state.allows_eviction != Some(true) {
+            push_unique(
+                &mut blockers,
+                "icloud-file-provider-eviction-capability-unconfirmed",
+            );
+        }
+        if state.provider_reported_bytes != Some(file.logical_bytes) {
+            push_unique(&mut blockers, "icloud-file-provider-document-size-mismatch");
+        }
+        if !state
+            .item_identifier_fingerprint
+            .as_deref()
+            .is_some_and(valid_hex64)
+        {
+            push_unique(
+                &mut blockers,
+                "icloud-file-provider-item-identity-unconfirmed",
+            );
+        }
     }
     if !active_use.evidence_complete {
         push_unique(&mut blockers, "active-use-evidence-incomplete");
@@ -647,7 +747,7 @@ fn foundation_string_resource(
 }
 
 #[cfg(all(target_os = "macos", not(coverage)))]
-fn observe_icloud_state(path: &Path) -> Result<IcloudLocalState, String> {
+fn observe_foundation_icloud_state(path: &Path) -> Result<IcloudLocalState, String> {
     use objc2::rc::autoreleasepool;
     use objc2_foundation::{
         NSString, NSURLIsUbiquitousItemKey, NSURLUbiquitousItemDownloadingStatusCurrent,
@@ -665,6 +765,8 @@ fn observe_icloud_state(path: &Path) -> Result<IcloudLocalState, String> {
         unsafe {
             let status = foundation_string_resource(&url, NSURLUbiquitousItemDownloadingStatusKey)?;
             Ok(IcloudLocalState {
+                observation_method:
+                    IcloudStateObservationMethod::FoundationUbiquitousResourceValues,
                 is_ubiquitous: foundation_bool_resource(&url, NSURLIsUbiquitousItemKey)?,
                 is_uploaded: foundation_bool_resource(&url, NSURLUbiquitousItemIsUploadedKey)?,
                 is_uploading: foundation_bool_resource(&url, NSURLUbiquitousItemIsUploadingKey)?,
@@ -682,13 +784,69 @@ fn observe_icloud_state(path: &Path) -> Result<IcloudLocalState, String> {
                     &url,
                     NSURLUbiquitousItemIsExcludedFromSyncKey,
                 )?,
+                is_sync_paused: None,
+                is_trashed: None,
+                allows_eviction: None,
+                provider_reported_bytes: None,
+                item_identifier_fingerprint: None,
             })
         }
     })
 }
 
+fn file_provider_icloud_state(
+    is_ubiquitous: bool,
+    status: &crate::provider_sync::FileProviderItemStatus,
+) -> IcloudLocalState {
+    IcloudLocalState {
+        observation_method: IcloudStateObservationMethod::FileProviderCtlEvaluate,
+        is_ubiquitous,
+        is_uploaded: status.is_uploaded,
+        is_uploading: status.is_uploading,
+        is_downloading: status.is_downloading,
+        downloading_status_current: status.is_local_current(),
+        has_unresolved_conflicts: status.has_unresolved_conflicts,
+        is_excluded_from_sync: status.is_excluded_from_sync,
+        is_sync_paused: Some(status.is_sync_paused),
+        is_trashed: Some(status.is_trashed),
+        allows_eviction: Some(status.allows_eviction),
+        provider_reported_bytes: Some(status.observed_bytes),
+        item_identifier_fingerprint: Some(status.item_identifier_fingerprint.clone()),
+    }
+}
+
+#[cfg(all(target_os = "macos", not(coverage)))]
+fn observe_file_provider_icloud_state(
+    path: &Path,
+    observed_bytes: u64,
+) -> Result<IcloudLocalState, String> {
+    use objc2::rc::autoreleasepool;
+    use objc2_foundation::{NSFileManager, NSString, NSURL};
+
+    let path = path
+        .to_str()
+        .ok_or_else(|| "icloud-local-eviction-path-not-unicode".to_string())?;
+    let is_ubiquitous = autoreleasepool(|_| {
+        let url = NSURL::fileURLWithPath(&NSString::from_str(path));
+        Ok::<bool, String>(NSFileManager::defaultManager().isUbiquitousItemAtURL(&url))
+    })?;
+    if !is_ubiquitous {
+        return Err("icloud-item-not-ubiquitous".into());
+    }
+    let output = crate::provider_sync::file_providerctl_status(path)?;
+    let status = crate::provider_sync::parse_file_providerctl_item_status(&output, observed_bytes)?;
+    Ok(file_provider_icloud_state(is_ubiquitous, &status))
+}
+
+#[cfg(all(target_os = "macos", not(coverage)))]
+fn observe_icloud_state(path: &Path, observed_bytes: u64) -> Result<IcloudLocalState, String> {
+    observe_file_provider_icloud_state(path, observed_bytes)
+        .or_else(|_| observe_foundation_icloud_state(path))
+        .map_err(|_| "icloud-state-observation-unavailable".to_string())
+}
+
 #[cfg(any(not(target_os = "macos"), coverage))]
-fn observe_icloud_state(_path: &Path) -> Result<IcloudLocalState, String> {
+fn observe_icloud_state(_path: &Path, _observed_bytes: u64) -> Result<IcloudLocalState, String> {
     Err("icloud-local-eviction-unsupported-platform".into())
 }
 
@@ -700,7 +858,7 @@ pub fn plan_icloud_local_eviction(
     observed_at_ms: u64,
 ) -> Result<IcloudLocalEvictionPlan, String> {
     let file = observe_local_file(root, path)?;
-    let state = observe_icloud_state(path)?;
+    let state = observe_icloud_state(path, file.logical_bytes)?;
     let active_use = observe_active_use(path);
     Ok(build_plan(
         root,
@@ -831,7 +989,7 @@ fn observe_post_eviction(path: &Path) -> PostEvictionObservation {
             allocated_bytes: 0,
         };
     };
-    let is_ubiquitous = observe_icloud_state(path)
+    let is_ubiquitous = observe_icloud_state(path, metadata.len())
         .map(|state| state.is_ubiquitous)
         .unwrap_or(false);
     PostEvictionObservation {
@@ -1027,6 +1185,7 @@ mod tests {
 
     fn state() -> IcloudLocalState {
         IcloudLocalState {
+            observation_method: IcloudStateObservationMethod::FoundationUbiquitousResourceValues,
             is_ubiquitous: true,
             is_uploaded: true,
             is_uploading: false,
@@ -1034,7 +1193,33 @@ mod tests {
             downloading_status_current: true,
             has_unresolved_conflicts: false,
             is_excluded_from_sync: false,
+            is_sync_paused: None,
+            is_trashed: None,
+            allows_eviction: None,
+            provider_reported_bytes: None,
+            item_identifier_fingerprint: None,
         }
+    }
+
+    fn file_provider_state() -> IcloudLocalState {
+        file_provider_icloud_state(
+            true,
+            &crate::provider_sync::FileProviderItemStatus {
+                is_downloaded: true,
+                is_downloading: false,
+                is_most_recent_version_downloaded: true,
+                is_uploaded: true,
+                is_uploading: false,
+                has_unresolved_conflicts: false,
+                is_excluded_from_sync: false,
+                is_sync_paused: false,
+                is_trashed: false,
+                capabilities: 805_306_495,
+                allows_eviction: true,
+                observed_bytes: 100,
+                item_identifier_fingerprint: "a".repeat(64),
+            },
+        )
     }
 
     fn idle() -> ActiveUseEvidence {
@@ -1108,6 +1293,74 @@ mod tests {
             "active-file-use-detected",
         ] {
             assert!(plan.blockers.contains(&blocker.to_string()));
+        }
+    }
+
+    #[test]
+    fn file_provider_policy_and_identity_must_be_complete() {
+        let temp = tempfile::tempdir().unwrap();
+        let eligible = build_plan(
+            &root(temp.path()),
+            &temp.path().join("file.bin"),
+            file(),
+            file_provider_state(),
+            idle(),
+            20,
+        );
+        assert!(eligible.eligible_after_human_approval);
+
+        for (state, blocker) in [
+            (
+                {
+                    let mut state = file_provider_state();
+                    state.is_sync_paused = Some(true);
+                    state
+                },
+                "icloud-file-provider-sync-paused-or-unconfirmed",
+            ),
+            (
+                {
+                    let mut state = file_provider_state();
+                    state.is_trashed = Some(true);
+                    state
+                },
+                "icloud-file-provider-item-trashed-or-unconfirmed",
+            ),
+            (
+                {
+                    let mut state = file_provider_state();
+                    state.allows_eviction = Some(false);
+                    state
+                },
+                "icloud-file-provider-eviction-capability-unconfirmed",
+            ),
+            (
+                {
+                    let mut state = file_provider_state();
+                    state.provider_reported_bytes = Some(99);
+                    state
+                },
+                "icloud-file-provider-document-size-mismatch",
+            ),
+            (
+                {
+                    let mut state = file_provider_state();
+                    state.item_identifier_fingerprint = None;
+                    state
+                },
+                "icloud-file-provider-item-identity-unconfirmed",
+            ),
+        ] {
+            let plan = build_plan(
+                &root(temp.path()),
+                &temp.path().join("file.bin"),
+                file(),
+                state,
+                idle(),
+                20,
+            );
+            assert!(!plan.eligible_after_human_approval, "{blocker}");
+            assert!(plan.blockers.contains(&blocker.to_string()), "{blocker}");
         }
     }
 
