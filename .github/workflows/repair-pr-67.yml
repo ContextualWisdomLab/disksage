@@ -37,10 +37,11 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev
 
-      - name: Apply bounded review fixes
+      - name: Apply bounded review fixes and regressions
         shell: python
         run: |
           from pathlib import Path
+          from textwrap import dedent
 
           def replace_once(text: str, old: str, new: str, label: str) -> str:
               count = text.count(old)
@@ -64,36 +65,41 @@ jobs:
           )
           if "fn issue_checkpoints_require_a_bounded_skipped_entry_delta()" not in module:
               marker = "\n    #[test]\n    fn inventories_allocated_files_without_claiming_sync_or_lineage() {"
-              test = '''
-    #[test]
-    fn issue_checkpoints_require_a_bounded_skipped_entry_delta() {
-        let root = root(Path::new("/Cloud"));
-        let context = InventoryContext {
-            root: &root,
-            root_path: Path::new("/Cloud"),
-            options: options(),
-            observed_at_ms: 1,
-        };
-        let mut state = InventoryState::default();
-        let mut cadence = CheckpointCadence {
-            emitted: true,
-            ..CheckpointCadence::default()
-        };
-        let mut emitted = 0usize;
-        let mut emit = |_report: &CloudLocalAllocationInventory| {
-            emitted += 1;
-            Ok(())
-        };
+              test = dedent(
+                  """
 
-        state.skipped_entries = CHECKPOINT_ISSUE_INTERVAL - 1;
-        maybe_emit_checkpoint(context, &state, &mut cadence, 0, false, &mut emit).unwrap();
-        assert_eq!(emitted, 0);
+                      #[test]
+                      fn issue_checkpoints_require_a_bounded_skipped_entry_delta() {
+                          let root = root(Path::new("/Cloud"));
+                          let context = InventoryContext {
+                              root: &root,
+                              root_path: Path::new("/Cloud"),
+                              options: options(),
+                              observed_at_ms: 1,
+                          };
+                          let mut state = InventoryState::default();
+                          let mut cadence = CheckpointCadence {
+                              emitted: true,
+                              ..CheckpointCadence::default()
+                          };
+                          let mut emitted = 0usize;
+                          let mut emit = |_report: &CloudLocalAllocationInventory| {
+                              emitted += 1;
+                              Ok(())
+                          };
 
-        state.skipped_entries = CHECKPOINT_ISSUE_INTERVAL;
-        maybe_emit_checkpoint(context, &state, &mut cadence, 0, false, &mut emit).unwrap();
-        assert_eq!(emitted, 1);
-    }
-'''
+                          state.skipped_entries = CHECKPOINT_ISSUE_INTERVAL - 1;
+                          maybe_emit_checkpoint(context, &state, &mut cadence, 0, false, &mut emit)
+                              .unwrap();
+                          assert_eq!(emitted, 0);
+
+                          state.skipped_entries = CHECKPOINT_ISSUE_INTERVAL;
+                          maybe_emit_checkpoint(context, &state, &mut cadence, 0, false, &mut emit)
+                              .unwrap();
+                          assert_eq!(emitted, 1);
+                      }
+                  """
+              )
               module = replace_once(module, marker, test + marker, "module test insertion")
           module_path.write_text(module, encoding="utf-8")
 
@@ -101,24 +107,27 @@ jobs:
           cli = cli_path.read_text(encoding="utf-8")
           if "fn stable_batch_failure_reason(" not in cli:
               marker = "\n#[cfg(not(coverage))]\nfn inventory_all_roots("
-              helper = '''
-#[cfg(not(coverage))]
-fn stable_batch_failure_reason(reason: &str) -> String {
-    let code = reason.split(':').next().unwrap_or_default();
-    if !code.is_empty()
-        && code.len() <= 128
-        && code.chars().all(|character| {
-            character.is_ascii_lowercase()
-                || character.is_ascii_digit()
-                || character == '-'
-        })
-    {
-        code.to_string()
-    } else {
-        "cloud-local-inventory-root-failed".into()
-    }
-}
-'''
+              helper = dedent(
+                  """
+
+                      #[cfg(not(coverage))]
+                      fn stable_batch_failure_reason(reason: &str) -> String {
+                          let code = reason.split(':').next().unwrap_or_default();
+                          if !code.is_empty()
+                              && code.len() <= 128
+                              && code.chars().all(|character| {
+                                  character.is_ascii_lowercase()
+                                      || character.is_ascii_digit()
+                                      || character == '-'
+                              })
+                          {
+                              code.to_string()
+                          } else {
+                              "cloud-local-inventory-root-failed".into()
+                          }
+                      }
+                  """
+              )
               cli = replace_once(cli, marker, helper + marker, "batch helper insertion")
           cli = replace_once(
               cli,
@@ -128,21 +137,24 @@ fn stable_batch_failure_reason(reason: &str) -> String {
           )
           if "fn batch_failure_reason_discards_worker_stderr_details()" not in cli:
               marker = "\n    #[test]\n    fn batch_completion_requires_roots_and_complete_discovery_and_reports() {"
-              test = '''
-    #[test]
-    fn batch_failure_reason_discards_worker_stderr_details() {
-        assert_eq!(
-            stable_batch_failure_reason(
-                "inventory-worker-failed:/Users/private/customer-file: panic"
-            ),
-            "inventory-worker-failed"
-        );
-        assert_eq!(
-            stable_batch_failure_reason("INVALID:/secret"),
-            "cloud-local-inventory-root-failed"
-        );
-    }
-'''
+              test = dedent(
+                  """
+
+                      #[test]
+                      fn batch_failure_reason_discards_worker_stderr_details() {
+                          assert_eq!(
+                              stable_batch_failure_reason(
+                                  "inventory-worker-failed:/Users/private/customer-file: panic"
+                              ),
+                              "inventory-worker-failed"
+                          );
+                          assert_eq!(
+                              stable_batch_failure_reason("INVALID:/secret"),
+                              "cloud-local-inventory-root-failed"
+                          );
+                      }
+                  """
+              )
               cli = replace_once(cli, marker, test + marker, "CLI test insertion")
           cli_path.write_text(cli, encoding="utf-8")
 
