@@ -1698,6 +1698,184 @@ fn decision_summary(report: &cloud::CloudPlanReport) -> serde_json::Value {
     })
 }
 
+/// Summarize the concrete lineage-preserving destination manifest without exposing any path or
+/// embedded metadata value. Counts and bytes are deterministic for the decision batch.
+#[cfg(not(coverage))]
+fn organization_manifest_summary(report: &cloud::CloudPlanReport) -> serde_json::Value {
+    let mut kind_counts = BTreeMap::new();
+    let mut kind_bytes = BTreeMap::new();
+    let mut production_month_counts = BTreeMap::new();
+    let mut production_month_bytes = BTreeMap::new();
+    let mut context_coverage_counts = BTreeMap::new();
+    let mut context_coverage_bytes = BTreeMap::new();
+    let mut destination_collision_count = 0_u64;
+    let mut destination_collision_bytes = 0_u64;
+
+    for candidate in &report.candidates {
+        let kind = archive_kind_label(candidate.kind);
+        increment(&mut kind_counts, kind, 1);
+        increment(&mut kind_bytes, kind, candidate.bytes);
+
+        let (year, month) = cloud::production_year_month(candidate.production_time_ms);
+        let production_month = format!("{year:04}-{month:02}");
+        increment(&mut production_month_counts, &production_month, 1);
+        increment(
+            &mut production_month_bytes,
+            &production_month,
+            candidate.bytes,
+        );
+
+        for (label, present) in [
+            ("content-title-present", candidate.content_title.is_some()),
+            (
+                "content-authors-present",
+                !candidate.content_authors.is_empty(),
+            ),
+            (
+                "content-context-present",
+                !candidate.content_context.is_empty(),
+            ),
+            (
+                "nested-source-context-preserved",
+                candidate.source_context != ".",
+            ),
+            (
+                "embedded-metadata-present",
+                candidate
+                    .metadata_evidence
+                    .iter()
+                    .any(|evidence| evidence.source.starts_with("embedded:")),
+            ),
+        ] {
+            if present {
+                increment(&mut context_coverage_counts, label, 1);
+                increment(&mut context_coverage_bytes, label, candidate.bytes);
+            }
+        }
+
+        if candidate.blocked_reason.as_deref() == Some("destination-exists") {
+            destination_collision_count = destination_collision_count.saturating_add(1);
+            destination_collision_bytes =
+                destination_collision_bytes.saturating_add(candidate.bytes);
+        }
+    }
+
+    serde_json::json!({
+        "layout_policy":
+            "DiskSage Archive/{production-year}/{production-month}/{archive-kind}/{source-relative-path}",
+        "production_time_drives_year_and_month": true,
+        "source_relative_path_preserved_for_lineage": true,
+        "bound_to_decision_batch_fingerprint": true,
+        "candidate_groups": {
+            "archive_kind": {
+                "counts": kind_counts,
+                "candidate_bytes": kind_bytes,
+            },
+            "production_month": {
+                "counts": production_month_counts,
+                "candidate_bytes": production_month_bytes,
+            },
+        },
+        "context_evidence_coverage": {
+            "counts": context_coverage_counts,
+            "candidate_bytes": context_coverage_bytes,
+            "candidate_bytes_can_overlap_across_evidence_kinds": true,
+        },
+        "destination_collision_preflight": {
+            "counts": destination_collision_count,
+            "candidate_bytes": destination_collision_bytes,
+            "collision_policy": "block-do-not-overwrite",
+        },
+        "manifest_is_dry_run_only": true,
+        "human_review_required_before_copy": true,
+    })
+}
+
+/// Produce a small, path-free overview for comparing destinations before opening a private
+/// candidate dossier. Unlike `decision_summary`, this deliberately omits per-candidate
+/// fingerprints, combinatorial reason sets, and duplicate-cluster membership.
+#[cfg(not(coverage))]
+fn compact_decision_summary(report: &cloud::CloudPlanReport) -> serde_json::Value {
+    let aggregates = decision_aggregates(report);
+    let review_required = &aggregates["review_required_reason"];
+    let organization_manifest = organization_manifest_summary(report);
+
+    serde_json::json!({
+        "schema_version": 2,
+        "output_mode": "compact-decision-summary",
+        "generated_at_ms": report.generated_at_ms,
+        "source_selection_policy": report.source_selection_policy,
+        "decision_batch_fingerprint_version": cloud::CLOUD_DECISION_BATCH_FINGERPRINT_VERSION,
+        "decision_batch_fingerprint": cloud::cloud_decision_batch_fingerprint(report),
+        "metadata_policy": {
+            "production_time_precedence": [
+                "embedded-metadata",
+                "explicit-filename-date",
+                "filesystem-created",
+                "filesystem-modified",
+            ],
+            "filename_dates_are_auxiliary": true,
+            "summary_is_dry_run_only": true,
+            "batch_fingerprint_is_not_approval": true,
+            "private_candidate_review_required_before_copy": true,
+            "verified_provider_sync_required_before_local_eviction": true,
+        },
+        "cloud": {
+            "provider": report.cloud_root.provider,
+            "account_scope": report.cloud_root.account_scope,
+        },
+        "candidate_count": report.candidates.len(),
+        "candidate_bytes": report.candidate_bytes,
+        "potentially_reclaimable_bytes": report.potentially_reclaimable_bytes,
+        "aggregates": {
+            "decision_state": aggregates["decision_state"].clone(),
+            "review_required_reason": {
+                "counts": review_required["counts"].clone(),
+                "candidate_bytes": review_required["candidate_bytes"].clone(),
+                "sole_reason_counts": review_required["sole_reason_counts"].clone(),
+                "sole_reason_candidate_bytes":
+                    review_required["sole_reason_candidate_bytes"].clone(),
+                "candidate_bytes_can_overlap_across_reasons": true,
+            },
+            "blocked_reason": aggregates["blocked_reason"].clone(),
+            "production_time_source": aggregates["production_time_source"].clone(),
+            "production_time_confidence":
+                aggregates["production_time_confidence"].clone(),
+        },
+        "exact_duplicates": {
+            "cluster_count": report.exact_duplicates.cluster_count,
+            "candidate_count": report.exact_duplicates.candidate_count,
+            "candidate_bytes": report.exact_duplicates.candidate_bytes,
+            "redundant_bytes": report.exact_duplicates.redundant_bytes,
+            "cluster_members_omitted": true,
+            "human_confirmation_required": true,
+        },
+        "organization_manifest": organization_manifest,
+        "capacity": &report.capacity,
+        "notices": &report.notices,
+        "next_step": {
+            "detailed_redacted_queue": "--decision-summary",
+            "private_exact_reason_dossier":
+                "--decision-summary --review-reason-set REASON|REASON --private-review-output ABSOLUTE_NEW_FILE.json",
+        },
+        "redacted_from_summary": [
+            "absolute-source-path",
+            "absolute-destination-path",
+            "relative-source-path-and-file-name",
+            "cloud-root-path-and-label",
+            "content-title-and-authors",
+            "raw-metadata-evidence-values",
+            "dataset-profile",
+            "candidate-metadata-and-review-fingerprints",
+            "review-reason-set-combinations",
+            "exact-duplicate-cluster-members",
+        ],
+        "candidate_details_included": false,
+        "cloud_write_executed": false,
+        "source_eviction_authorized": false,
+    })
+}
+
 #[cfg(not(coverage))]
 fn receipt_cloud_root(receipt: &CloudCopyReceipt, home: &Path) -> Result<CloudRoot, String> {
     let destination = Path::new(&receipt.destination);
@@ -2160,7 +2338,7 @@ fn run() -> Result<(), String> {
             )?;
             summaries.push(match args.review_reason_set.as_deref() {
                 Some(reasons) => review_batch_summary(&report, reasons)?,
-                None => decision_summary(&report),
+                None => compact_decision_summary(&report),
             });
         }
         let capacity_notice = if args.verify_capacity {
@@ -3008,6 +3186,89 @@ mod tests {
             "report.pdf",
         ] {
             assert!(!encoded.contains(redacted));
+        }
+
+        let mut compact_report = report.clone();
+        compact_report.exact_duplicates = cloud::ExactDuplicateSummary {
+            cluster_count: 1,
+            candidate_count: 2,
+            candidate_bytes: 84,
+            redundant_bytes: 42,
+            clusters: vec![cloud::ExactDuplicateClusterRecommendation {
+                cluster_fingerprint: "c".repeat(64),
+                candidate_count: 2,
+                bytes_per_candidate: 42,
+                redundant_bytes: 42,
+                recommended_canonical_metadata_fingerprint: "d".repeat(64),
+                recommendation_confidence: "high".into(),
+                recommendation_reason_codes: vec!["richer-source-lineage-context-preferred".into()],
+                member_metadata_fingerprints: vec!["d".repeat(64), "e".repeat(64)],
+                requires_human_confirmation: true,
+            }],
+        };
+        let compact = compact_decision_summary(&compact_report);
+        assert_eq!(compact["output_mode"], "compact-decision-summary");
+        assert_eq!(compact["schema_version"], 2);
+        assert_eq!(compact["candidate_details_included"], false);
+        assert_eq!(compact["cloud_write_executed"], false);
+        assert_eq!(compact["source_eviction_authorized"], false);
+        assert_eq!(compact["exact_duplicates"]["cluster_count"], 1);
+        assert_eq!(compact["exact_duplicates"]["redundant_bytes"], 42);
+        assert_eq!(compact["exact_duplicates"]["cluster_members_omitted"], true);
+        assert_eq!(
+            compact["organization_manifest"]["candidate_groups"]["archive_kind"]["counts"]
+                ["document"],
+            1
+        );
+        assert_eq!(
+            compact["organization_manifest"]["candidate_groups"]["production_month"]["counts"]
+                ["1970-01"],
+            1
+        );
+        assert_eq!(
+            compact["organization_manifest"]["context_evidence_coverage"]["counts"]
+                ["content-context-present"],
+            1
+        );
+        assert_eq!(
+            compact["organization_manifest"]["context_evidence_coverage"]["counts"]
+                ["nested-source-context-preserved"],
+            1
+        );
+        assert_eq!(
+            compact["organization_manifest"]["destination_collision_preflight"]["counts"],
+            0
+        );
+        assert_eq!(
+            compact["organization_manifest"]["source_relative_path_preserved_for_lineage"],
+            true
+        );
+        assert!(compact.get("decisions").is_none());
+        assert!(compact["exact_duplicates"].get("clusters").is_none());
+        assert!(compact["aggregates"]["review_required_reason"]
+            .get("reason_set_counts")
+            .is_none());
+        assert_eq!(
+            compact["aggregates"]["review_required_reason"]["counts"]["metadata-review-required"],
+            1
+        );
+        assert_eq!(
+            compact["decision_batch_fingerprint"],
+            cloud::cloud_decision_batch_fingerprint(&compact_report)
+        );
+        let encoded_compact = serde_json::to_string(&compact).unwrap();
+        for redacted in [
+            "/Users/private".to_string(),
+            "private@example.com".to_string(),
+            "Confidential title".to_string(),
+            "Private Author".to_string(),
+            "private raw value".to_string(),
+            "report.pdf".to_string(),
+            "c".repeat(64),
+            "d".repeat(64),
+            "e".repeat(64),
+        ] {
+            assert!(!encoded_compact.contains(&redacted));
         }
 
         let reason_set = report.candidates[0].review_reasons.clone();

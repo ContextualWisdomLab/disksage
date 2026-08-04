@@ -9,7 +9,7 @@
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -19,6 +19,8 @@ pub const GIT_WORKTREE_AUDIT_SCHEMA_KIND: &str = "disksage.git-worktree-audit/v2
 const MAX_COMMAND_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_REFERENCE_BYTES: usize = 1_024;
 const MAX_REACHABLE_COMMITS: usize = 100_000;
+const GIT_WORKTREE_REMOVAL_VERSION: u32 = 1;
+const MAX_RATIONALE_BYTES: usize = 1_000;
 const POLL_INTERVAL_MS: u64 = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -152,6 +154,62 @@ pub struct GitWorktreeAuditPublicSummary {
     pub local_paths_redacted: bool,
     pub branch_names_redacted: bool,
     pub metadata_semantics: Vec<String>,
+    pub notices: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GitWorktreeRemovalApproval {
+    pub version: u32,
+    pub approval_id: String,
+    pub removal_plan_fingerprint: String,
+    pub retention_reference_set_fingerprint: String,
+    pub removal_candidate_count: usize,
+    pub removal_candidate_allocated_bytes: u64,
+    pub exact_approval_phrase: String,
+    pub approved_at_ms: u64,
+    pub approved_by: String,
+    pub rationale: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GitWorktreeRemovalItemResult {
+    pub path: String,
+    pub path_fingerprint: String,
+    pub entry_fingerprint: String,
+    pub head: String,
+    pub branch: Option<String>,
+    pub allocated_bytes_upper_bound: u64,
+    pub removal_attempted: bool,
+    pub removal_command_succeeded: bool,
+    pub path_absence_verified: bool,
+    pub registration_absence_verified: bool,
+    pub branch_retained: Option<bool>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GitWorktreeRemovalResult {
+    pub version: u32,
+    pub result_id: String,
+    pub approval_id: String,
+    pub removal_plan_fingerprint: String,
+    pub retention_reference_set_fingerprint: String,
+    pub requested_at_ms: u64,
+    pub completed_at_ms: u64,
+    pub planned_candidate_count: usize,
+    pub attempted_count: usize,
+    pub removed_count: usize,
+    pub planned_allocated_bytes_upper_bound: u64,
+    pub removed_allocated_bytes_upper_bound: u64,
+    pub items: Vec<GitWorktreeRemovalItemResult>,
+    pub stopped_reason: Option<String>,
+    pub branch_delete_executed: bool,
+    pub git_prune_executed: bool,
+    pub filesystem_mutation_executed: bool,
+    pub verification_complete: bool,
     pub notices: Vec<String>,
 }
 
@@ -1252,12 +1310,743 @@ pub fn public_summary(report: &GitWorktreeAuditReport) -> GitWorktreeAuditPublic
     }
 }
 
+fn valid_hex64(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn exact_removal_approval_phrase(
+    candidate_count: usize,
+    allocated_bytes: u64,
+    plan_fingerprint: &str,
+) -> String {
+    format!("DiskSage stale worktree {candidate_count} {allocated_bytes} 승인 {plan_fingerprint}")
+}
+
+fn validate_audit_for_removal(report: &GitWorktreeAuditReport) -> Result<(), String> {
+    if report.schema_kind != GIT_WORKTREE_AUDIT_SCHEMA_KIND
+        || report.version != 2
+        || report.filesystem_mutation_executed
+        || !Path::new(&report.repository_root).is_absolute()
+        || !Path::new(&report.common_dir).is_absolute()
+        || !valid_hex64(&report.retention_reference_set_fingerprint)
+        || !valid_hex64(&report.removal_plan_fingerprint)
+    {
+        return Err("git-worktree-removal-audit-integrity-invalid".into());
+    }
+    if retention_reference_set_fingerprint(&report.retention_references)
+        != report.retention_reference_set_fingerprint
+    {
+        return Err("git-worktree-removal-reference-binding-mismatch".into());
+    }
+
+    let mut candidates = 0usize;
+    let mut preserved = 0usize;
+    let mut evidence_gaps = 0usize;
+    let mut allocated_bytes = 0u64;
+    for entry in &report.entries {
+        if entry.path_fingerprint != path_fingerprint(&report.common_dir, &entry.path)
+            || entry.entry_fingerprint
+                != entry_fingerprint(
+                    &report.common_dir,
+                    &report.retention_reference_set_fingerprint,
+                    entry,
+                )
+        {
+            return Err("git-worktree-removal-entry-integrity-mismatch".into());
+        }
+        match entry.disposition {
+            GitWorktreeDisposition::RemovalCandidate => {
+                candidates = candidates.saturating_add(1);
+                allocated_bytes = allocated_bytes.saturating_add(entry.size.allocated_bytes);
+                if !entry.blockers.is_empty()
+                    || entry.primary
+                    || entry.audit_origin
+                    || entry.bare
+                    || entry.locked
+                    || entry.prunable
+                    || entry.status_clean != Some(true)
+                    || entry.status_entry_count != Some(0)
+                    || entry.contained_in_reference != Some(true)
+                    || entry.head_is_retained_tip
+                    || entry.actor_cwd_inside != Some(false)
+                    || !entry.size.evidence_complete
+                    || !entry.active_use.assessed
+                    || !entry.active_use.evidence_complete
+                    || entry.active_use.active
+                {
+                    return Err("git-worktree-removal-candidate-integrity-invalid".into());
+                }
+            }
+            GitWorktreeDisposition::Preserve => preserved = preserved.saturating_add(1),
+            GitWorktreeDisposition::EvidenceGap => evidence_gaps = evidence_gaps.saturating_add(1),
+        }
+    }
+    if report.worktree_count != report.entries.len()
+        || report.removal_candidate_count != candidates
+        || report.removal_candidate_allocated_bytes != allocated_bytes
+        || report.preserved_count != preserved
+        || report.evidence_gap_count != evidence_gaps
+        || report.evidence_complete != (report.issues.is_empty() && evidence_gaps == 0)
+        || removal_plan_fingerprint(
+            &report.common_dir,
+            &report.retention_reference_set_fingerprint,
+            &report.entries,
+        ) != report.removal_plan_fingerprint
+    {
+        return Err("git-worktree-removal-audit-summary-mismatch".into());
+    }
+    if candidates == 0 || !report.evidence_complete {
+        return Err("git-worktree-removal-audit-not-executable".into());
+    }
+    let expected = exact_removal_approval_phrase(
+        candidates,
+        allocated_bytes,
+        &report.removal_plan_fingerprint,
+    );
+    if report.exact_approval_phrase.as_deref() != Some(expected.as_str()) {
+        return Err("git-worktree-removal-approval-phrase-mismatch".into());
+    }
+    Ok(())
+}
+
+fn removal_approval_id_for(
+    report: &GitWorktreeAuditReport,
+    approved_at_ms: u64,
+    approved_by: &str,
+    rationale: &str,
+) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage.git-worktree-removal-approval\0v1\0");
+    for value in [
+        report.removal_plan_fingerprint.as_str(),
+        report.retention_reference_set_fingerprint.as_str(),
+        report.exact_approval_phrase.as_deref().unwrap_or_default(),
+        approved_by,
+        rationale,
+    ] {
+        hash_field(&mut hasher, value);
+    }
+    hasher.update(&(report.removal_candidate_count as u64).to_le_bytes());
+    hasher.update(&report.removal_candidate_allocated_bytes.to_le_bytes());
+    hasher.update(&approved_at_ms.to_le_bytes());
+    hasher.finalize().to_hex().to_string()
+}
+
+/// Bind an attributed human decision to one exact, complete audit. This performs no mutation.
+pub fn approve_stale_worktree_removal(
+    report: &GitWorktreeAuditReport,
+    confirmation_exact_approval_phrase: &str,
+    approved_at_ms: u64,
+    approved_by: &str,
+    rationale: &str,
+) -> Result<GitWorktreeRemovalApproval, String> {
+    validate_audit_for_removal(report)?;
+    let expected = report
+        .exact_approval_phrase
+        .as_deref()
+        .ok_or_else(|| "git-worktree-removal-approval-phrase-missing".to_string())?;
+    if confirmation_exact_approval_phrase != expected {
+        return Err("git-worktree-removal-exact-approval-required".into());
+    }
+    if approved_at_ms < report.generated_at_ms {
+        return Err("git-worktree-removal-approval-predates-audit".into());
+    }
+    if rationale.trim().len() > MAX_RATIONALE_BYTES {
+        return Err("git-worktree-removal-rationale-too-long".into());
+    }
+    crate::cloud_review::validate_review_attribution(approved_by, rationale)
+        .map_err(|_| "git-worktree-removal-human-attribution-invalid".to_string())?;
+    let approved_by = approved_by.trim();
+    let rationale = rationale.trim();
+    Ok(GitWorktreeRemovalApproval {
+        version: GIT_WORKTREE_REMOVAL_VERSION,
+        approval_id: removal_approval_id_for(report, approved_at_ms, approved_by, rationale),
+        removal_plan_fingerprint: report.removal_plan_fingerprint.clone(),
+        retention_reference_set_fingerprint: report.retention_reference_set_fingerprint.clone(),
+        removal_candidate_count: report.removal_candidate_count,
+        removal_candidate_allocated_bytes: report.removal_candidate_allocated_bytes,
+        exact_approval_phrase: expected.into(),
+        approved_at_ms,
+        approved_by: approved_by.into(),
+        rationale: rationale.into(),
+    })
+}
+
+fn validate_removal_approval(
+    report: &GitWorktreeAuditReport,
+    approval: &GitWorktreeRemovalApproval,
+    confirmation_exact_approval_phrase: &str,
+) -> Result<(), String> {
+    validate_audit_for_removal(report)?;
+    if approval.version != GIT_WORKTREE_REMOVAL_VERSION
+        || !valid_hex64(&approval.approval_id)
+        || approval.removal_plan_fingerprint != report.removal_plan_fingerprint
+        || approval.retention_reference_set_fingerprint
+            != report.retention_reference_set_fingerprint
+        || approval.removal_candidate_count != report.removal_candidate_count
+        || approval.removal_candidate_allocated_bytes != report.removal_candidate_allocated_bytes
+        || approval.exact_approval_phrase
+            != report.exact_approval_phrase.as_deref().unwrap_or_default()
+        || approval.exact_approval_phrase != confirmation_exact_approval_phrase
+        || approval.approved_at_ms < report.generated_at_ms
+        || approval.approval_id
+            != removal_approval_id_for(
+                report,
+                approval.approved_at_ms,
+                &approval.approved_by,
+                &approval.rationale,
+            )
+    {
+        return Err("git-worktree-removal-approval-integrity-mismatch".into());
+    }
+    crate::cloud_review::validate_review_attribution(&approval.approved_by, &approval.rationale)
+        .map_err(|_| "git-worktree-removal-human-attribution-invalid".to_string())
+}
+
+fn live_audit_matches_approved(
+    approved: &GitWorktreeAuditReport,
+    live: &GitWorktreeAuditReport,
+) -> Result<(), String> {
+    validate_audit_for_removal(live)?;
+    if live.common_dir != approved.common_dir
+        || live.repository_root != approved.repository_root
+        || live.retention_reference_set_fingerprint != approved.retention_reference_set_fingerprint
+        || live.removal_plan_fingerprint != approved.removal_plan_fingerprint
+        || live.removal_candidate_count != approved.removal_candidate_count
+        || live.removal_candidate_allocated_bytes != approved.removal_candidate_allocated_bytes
+    {
+        return Err("git-worktree-removal-live-plan-drift".into());
+    }
+    Ok(())
+}
+
+fn branch_retained(repository_root: &Path, branch: &str, timeout_ms: u64) -> Result<bool, String> {
+    validate_reference(branch)?;
+    let result = run_git(
+        repository_root,
+        &[
+            OsString::from("show-ref"),
+            OsString::from("--verify"),
+            OsString::from("--quiet"),
+            OsString::from("--"),
+            OsString::from(branch),
+        ],
+        timeout_ms,
+        "git-worktree-branch-retention",
+    )?;
+    Ok(result.status_code == Some(0))
+}
+
+fn registration_absent(
+    repository_root: &Path,
+    removed_path: &Path,
+    options: GitWorktreeAuditOptions,
+) -> Result<bool, String> {
+    let worktrees = list_worktrees(repository_root, options)?;
+    Ok(!worktrees.iter().any(|entry| {
+        entry.path == removed_path
+            || canonical_real_directory(&entry.path)
+                .ok()
+                .as_deref()
+                .is_some_and(|path| path == removed_path)
+    }))
+}
+
+fn current_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
+}
+
+fn removal_result_id_for(result: &GitWorktreeRemovalResult) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage.git-worktree-removal-result\0v1\0");
+    for value in [
+        result.approval_id.as_str(),
+        result.removal_plan_fingerprint.as_str(),
+        result.retention_reference_set_fingerprint.as_str(),
+        result.stopped_reason.as_deref().unwrap_or_default(),
+    ] {
+        hash_field(&mut hasher, value);
+    }
+    hasher.update(&result.requested_at_ms.to_le_bytes());
+    hasher.update(&result.completed_at_ms.to_le_bytes());
+    for item in &result.items {
+        hash_field(&mut hasher, &item.entry_fingerprint);
+        hasher.update(&[
+            u8::from(item.removal_attempted),
+            u8::from(item.removal_command_succeeded),
+            u8::from(item.path_absence_verified),
+            u8::from(item.registration_absence_verified),
+            u8::from(item.branch_retained == Some(true)),
+        ]);
+        hash_field(&mut hasher, item.error.as_deref().unwrap_or_default());
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+fn pending_item(candidate: &GitWorktreeAuditEntry) -> GitWorktreeRemovalItemResult {
+    GitWorktreeRemovalItemResult {
+        path: candidate.path.clone(),
+        path_fingerprint: candidate.path_fingerprint.clone(),
+        entry_fingerprint: candidate.entry_fingerprint.clone(),
+        head: candidate.head.clone(),
+        branch: candidate.branch.clone(),
+        allocated_bytes_upper_bound: candidate.size.allocated_bytes,
+        removal_attempted: false,
+        removal_command_succeeded: false,
+        path_absence_verified: false,
+        registration_absence_verified: false,
+        branch_retained: None,
+        error: None,
+    }
+}
+
+/// Re-audit the full plan and each individual candidate before invoking non-force Git worktree
+/// removal. No prune or branch-deletion command is reachable from this function.
+pub fn execute_stale_worktree_removal(
+    approved_report: &GitWorktreeAuditReport,
+    approval: &GitWorktreeRemovalApproval,
+    confirmation_exact_approval_phrase: &str,
+    options: GitWorktreeAuditOptions,
+    requested_at_ms: u64,
+) -> Result<GitWorktreeRemovalResult, String> {
+    validate_options(options)?;
+    validate_removal_approval(
+        approved_report,
+        approval,
+        confirmation_exact_approval_phrase,
+    )?;
+    if requested_at_ms < approval.approved_at_ms {
+        return Err("git-worktree-removal-request-predates-approval".into());
+    }
+    let repository_root = PathBuf::from(&approved_report.repository_root);
+    let reference_names: Vec<_> = approved_report
+        .retention_references
+        .iter()
+        .map(|binding| binding.reference_ref.clone())
+        .collect();
+    let initial_live =
+        audit_git_worktrees(&repository_root, &reference_names, options, requested_at_ms)?;
+    live_audit_matches_approved(approved_report, &initial_live)?;
+
+    let mut candidates: Vec<_> = initial_live
+        .entries
+        .iter()
+        .filter(|entry| entry.disposition == GitWorktreeDisposition::RemovalCandidate)
+        .cloned()
+        .collect();
+    candidates.sort_by(|left, right| left.path.cmp(&right.path));
+    let mut items = Vec::with_capacity(candidates.len());
+    let mut stopped_reason = None;
+
+    for (index, candidate) in candidates.iter().enumerate() {
+        let live = if index == 0 {
+            initial_live.clone()
+        } else {
+            match audit_git_worktrees(
+                &repository_root,
+                &reference_names,
+                options,
+                current_unix_ms(),
+            ) {
+                Ok(report) => report,
+                Err(error) => {
+                    let mut item = pending_item(candidate);
+                    item.error = Some(error);
+                    items.push(item);
+                    stopped_reason = Some("git-worktree-removal-live-reaudit-failed".into());
+                    break;
+                }
+            }
+        };
+        if live.retention_reference_set_fingerprint
+            != approved_report.retention_reference_set_fingerprint
+        {
+            let mut item = pending_item(candidate);
+            item.error = Some("git-worktree-removal-reference-drift".into());
+            items.push(item);
+            stopped_reason = Some("git-worktree-removal-reference-drift".into());
+            break;
+        }
+        let live_candidate = live.entries.iter().find(|entry| {
+            entry.path_fingerprint == candidate.path_fingerprint
+                && entry.disposition == GitWorktreeDisposition::RemovalCandidate
+        });
+        if !live_candidate.is_some_and(|entry| {
+            entry.path == candidate.path
+                && entry.head == candidate.head
+                && entry.entry_fingerprint == candidate.entry_fingerprint
+        }) {
+            let mut item = pending_item(candidate);
+            item.error = Some("git-worktree-removal-candidate-drift".into());
+            items.push(item);
+            stopped_reason = Some("git-worktree-removal-candidate-drift".into());
+            break;
+        }
+
+        let mut item = pending_item(candidate);
+        item.removal_attempted = true;
+        let removal = run_git(
+            &repository_root,
+            &[
+                OsString::from("worktree"),
+                OsString::from("remove"),
+                OsString::from("--"),
+                OsString::from(&candidate.path),
+            ],
+            options.command_timeout_ms,
+            "git-worktree-remove",
+        );
+        let command_succeeded = removal
+            .as_ref()
+            .is_ok_and(|result| result.status_code == Some(0));
+        item.removal_command_succeeded = command_succeeded;
+        if !command_succeeded {
+            item.error = Some(match removal {
+                Ok(_) => "git-worktree-remove-command-failed".into(),
+                Err(error) => error,
+            });
+            items.push(item);
+            stopped_reason = Some("git-worktree-removal-command-failed".into());
+            break;
+        }
+
+        item.path_absence_verified = matches!(
+            fs::symlink_metadata(&candidate.path),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound
+        );
+        item.registration_absence_verified =
+            registration_absent(&repository_root, Path::new(&candidate.path), options)
+                .unwrap_or(false);
+        item.branch_retained = candidate.branch.as_deref().map(|branch| {
+            branch_retained(&repository_root, branch, options.command_timeout_ms).unwrap_or(false)
+        });
+        let verified = item.path_absence_verified
+            && item.registration_absence_verified
+            && item.branch_retained != Some(false);
+        if !verified {
+            item.error = Some("git-worktree-removal-post-verification-failed".into());
+            stopped_reason = Some("git-worktree-removal-post-verification-failed".into());
+        }
+        items.push(item);
+        if stopped_reason.is_some() {
+            break;
+        }
+    }
+
+    let attempted_count = items.iter().filter(|item| item.removal_attempted).count();
+    let removed_count = items
+        .iter()
+        .filter(|item| {
+            item.removal_command_succeeded
+                && item.path_absence_verified
+                && item.registration_absence_verified
+                && item.branch_retained != Some(false)
+        })
+        .count();
+    let removed_allocated_bytes_upper_bound = items
+        .iter()
+        .filter(|item| {
+            item.removal_command_succeeded
+                && item.path_absence_verified
+                && item.registration_absence_verified
+                && item.branch_retained != Some(false)
+        })
+        .fold(0u64, |total, item| {
+            total.saturating_add(item.allocated_bytes_upper_bound)
+        });
+    let verification_complete = stopped_reason.is_none()
+        && removed_count == approved_report.removal_candidate_count
+        && items.len() == approved_report.removal_candidate_count;
+    let completed_at_ms = current_unix_ms().max(requested_at_ms);
+    let mut result = GitWorktreeRemovalResult {
+        version: GIT_WORKTREE_REMOVAL_VERSION,
+        result_id: String::new(),
+        approval_id: approval.approval_id.clone(),
+        removal_plan_fingerprint: approved_report.removal_plan_fingerprint.clone(),
+        retention_reference_set_fingerprint: approved_report
+            .retention_reference_set_fingerprint
+            .clone(),
+        requested_at_ms,
+        completed_at_ms,
+        planned_candidate_count: approved_report.removal_candidate_count,
+        attempted_count,
+        removed_count,
+        planned_allocated_bytes_upper_bound: approved_report.removal_candidate_allocated_bytes,
+        removed_allocated_bytes_upper_bound,
+        items,
+        stopped_reason,
+        branch_delete_executed: false,
+        git_prune_executed: false,
+        filesystem_mutation_executed: attempted_count > 0,
+        verification_complete,
+        notices: vec![
+            "non-force-git-worktree-remove-only".into(),
+            "no-git-worktree-prune".into(),
+            "no-branch-delete".into(),
+            "allocated-bytes-is-pre-removal-upper-bound".into(),
+            "partial-results-stop-fail-closed".into(),
+            "no-user-file-or-cloud-provider-mutation".into(),
+        ],
+    };
+    result.result_id = removal_result_id_for(&result);
+    Ok(result)
+}
+
+fn path_overlaps(left: &Path, right: &Path) -> bool {
+    left.starts_with(right) || right.starts_with(left)
+}
+
+fn absolute_without_parent(path: &Path) -> bool {
+    path.is_absolute()
+        && !path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+}
+
+/// Prepare private immutable-record storage outside the repository, common Git directory, and all
+/// audited worktrees, including when the app-data directory does not exist yet.
+pub fn prepare_worktree_record_directory(
+    app_data_dir: &Path,
+    report: &GitWorktreeAuditReport,
+    directory_name: &str,
+) -> Result<PathBuf, String> {
+    validate_audit_for_removal(report)?;
+    let mut components = Path::new(directory_name).components();
+    if !absolute_without_parent(app_data_dir)
+        || !matches!(components.next(), Some(std::path::Component::Normal(_)))
+        || components.next().is_some()
+    {
+        return Err("git-worktree-removal-record-path-invalid".into());
+    }
+    let mut forbidden = vec![
+        PathBuf::from(&report.repository_root),
+        PathBuf::from(&report.common_dir),
+    ];
+    forbidden.extend(
+        report
+            .entries
+            .iter()
+            .map(|entry| PathBuf::from(&entry.path)),
+    );
+
+    let existing_ancestor = app_data_dir
+        .ancestors()
+        .find(|candidate| candidate.exists())
+        .ok_or_else(|| "git-worktree-removal-record-parent-unavailable".to_string())?;
+    let canonical_existing_ancestor = fs::canonicalize(existing_ancestor)
+        .map_err(|_| "git-worktree-removal-record-parent-unavailable".to_string())?;
+    let missing_suffix = app_data_dir
+        .strip_prefix(existing_ancestor)
+        .map_err(|_| "git-worktree-removal-record-parent-unavailable".to_string())?;
+    let prospective_record_dir = canonical_existing_ancestor
+        .join(missing_suffix)
+        .join(directory_name);
+    if forbidden
+        .iter()
+        .any(|path| path_overlaps(&prospective_record_dir, path))
+    {
+        return Err("git-worktree-removal-record-dir-overlaps-repository".into());
+    }
+
+    fs::create_dir_all(app_data_dir)
+        .map_err(|_| "git-worktree-removal-record-parent-create-failed".to_string())?;
+    let canonical_app_data_dir = fs::canonicalize(app_data_dir)
+        .map_err(|_| "git-worktree-removal-record-parent-unavailable".to_string())?;
+    let record_dir = canonical_app_data_dir.join(directory_name);
+    match fs::symlink_metadata(&record_dir) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err("git-worktree-removal-record-dir-not-real-directory".into());
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir(&record_dir)
+                .map_err(|_| "git-worktree-removal-record-dir-create-failed".to_string())?;
+        }
+        Err(_) => return Err("git-worktree-removal-record-dir-unavailable".into()),
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&record_dir, fs::Permissions::from_mode(0o700))
+            .map_err(|_| "git-worktree-removal-record-dir-permissions-failed".to_string())?;
+    }
+    let canonical_record_dir = fs::canonicalize(&record_dir)
+        .map_err(|_| "git-worktree-removal-record-dir-unavailable".to_string())?;
+    if forbidden
+        .iter()
+        .any(|path| path_overlaps(&canonical_record_dir, path))
+    {
+        return Err("git-worktree-removal-record-dir-overlaps-repository".into());
+    }
+    Ok(canonical_record_dir)
+}
+
+/// Persist an approval or result using create-new semantics and make the completed file read-only.
+pub fn write_immutable_worktree_record<T: serde::Serialize>(
+    record_dir: &Path,
+    filename: &str,
+    value: &T,
+) -> Result<PathBuf, String> {
+    if !absolute_without_parent(record_dir)
+        || filename.is_empty()
+        || filename.contains('/')
+        || filename.contains('\\')
+        || !filename.ends_with(".json")
+    {
+        return Err("git-worktree-removal-record-path-invalid".into());
+    }
+    let directory = fs::symlink_metadata(record_dir)
+        .map_err(|_| "git-worktree-removal-record-dir-unavailable".to_string())?;
+    if directory.file_type().is_symlink() || !directory.is_dir() {
+        return Err("git-worktree-removal-record-dir-not-real-directory".into());
+    }
+    let path = record_dir.join(filename);
+    let encoded = serde_json::to_vec_pretty(value)
+        .map_err(|_| "git-worktree-removal-record-serialization-failed".to_string())?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(&path)
+        .map_err(|_| "git-worktree-removal-record-create-failed".to_string())?;
+    file.write_all(&encoded)
+        .and_then(|_| file.write_all(b"\n"))
+        .and_then(|_| file.sync_all())
+        .map_err(|_| "git-worktree-removal-record-write-failed".to_string())?;
+    let mut permissions = file
+        .metadata()
+        .map_err(|_| "git-worktree-removal-record-metadata-failed".to_string())?
+        .permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(&path, permissions)
+        .map_err(|_| "git-worktree-removal-record-permissions-failed".to_string())?;
+    Ok(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn oid(character: char) -> String {
         std::iter::repeat_n(character, 40).collect()
+    }
+
+    fn executable_report() -> GitWorktreeAuditReport {
+        let common_dir = "/tmp/repository/.git".to_string();
+        let references = vec![GitWorktreeReferenceBinding {
+            reference_ref: "main".into(),
+            reference_oid: oid('a'),
+        }];
+        let reference_fingerprint = retention_reference_set_fingerprint(&references);
+        let mut entry = GitWorktreeAuditEntry {
+            path: "/tmp/secondary".into(),
+            path_fingerprint: path_fingerprint(&common_dir, "/tmp/secondary"),
+            head: oid('b'),
+            branch: Some("refs/heads/merged".into()),
+            detached: false,
+            bare: false,
+            primary: false,
+            audit_origin: false,
+            locked: false,
+            lock_reason: None,
+            prunable: false,
+            prunable_reason: None,
+            status_clean: Some(true),
+            status_entry_count: Some(0),
+            contained_in_reference: Some(true),
+            head_is_retained_tip: false,
+            actor_cwd_inside: Some(false),
+            size: GitWorktreeSizeEvidence {
+                method: "bounded-filesystem-st-blocks-sum".into(),
+                evidence_complete: true,
+                allocated_bytes: 4_096,
+                logical_bytes: 100,
+                visited_entries: 3,
+                error: None,
+            },
+            active_use: GitWorktreeActiveUseEvidence {
+                method: "lsof-recursive-pid".into(),
+                assessed: true,
+                evidence_complete: true,
+                active: false,
+                observed_pids: Vec::new(),
+                results_truncated: false,
+                error: None,
+            },
+            disposition: GitWorktreeDisposition::RemovalCandidate,
+            blockers: Vec::new(),
+            entry_fingerprint: String::new(),
+        };
+        entry.entry_fingerprint = entry_fingerprint(&common_dir, &reference_fingerprint, &entry);
+        let entries = vec![entry];
+        let plan_fingerprint =
+            removal_plan_fingerprint(&common_dir, &reference_fingerprint, &entries);
+        GitWorktreeAuditReport {
+            schema_kind: GIT_WORKTREE_AUDIT_SCHEMA_KIND.into(),
+            version: 2,
+            repository_root: "/tmp/repository".into(),
+            common_dir,
+            generated_at_ms: 10,
+            retention_references: references,
+            retention_reference_set_fingerprint: reference_fingerprint,
+            retention_reachable_commit_count: 2,
+            worktree_count: 1,
+            removal_candidate_count: 1,
+            removal_candidate_allocated_bytes: 4_096,
+            preserved_count: 0,
+            evidence_gap_count: 0,
+            evidence_complete: true,
+            removal_plan_fingerprint: plan_fingerprint.clone(),
+            exact_approval_phrase: Some(exact_removal_approval_phrase(1, 4_096, &plan_fingerprint)),
+            entries,
+            issues: Vec::new(),
+            filesystem_mutation_executed: false,
+        }
+    }
+
+    #[cfg(all(unix, not(coverage)))]
+    fn git(cwd: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .env("GIT_AUTHOR_NAME", "DiskSage Test")
+            .env("GIT_AUTHOR_EMAIL", "disksage@example.invalid")
+            .env("GIT_COMMITTER_NAME", "DiskSage Test")
+            .env("GIT_COMMITTER_EMAIL", "disksage@example.invalid")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(all(unix, not(coverage)))]
+    fn temporary_repository() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        let repository = temp.path().join("repository");
+        let secondary = temp.path().join("secondary");
+        fs::create_dir(&repository).unwrap();
+        git(&repository, &["init", "-b", "main"]);
+        fs::write(repository.join("evidence.txt"), b"first\n").unwrap();
+        git(&repository, &["add", "evidence.txt"]);
+        git(&repository, &["commit", "-m", "first"]);
+        fs::write(repository.join("evidence.txt"), b"second\n").unwrap();
+        git(&repository, &["commit", "-am", "second"]);
+        git(&repository, &["branch", "merged", "HEAD~1"]);
+        git(
+            &repository,
+            &["worktree", "add", secondary.to_str().unwrap(), "merged"],
+        );
+        (temp, repository, secondary)
     }
 
     #[test]
@@ -1449,5 +2238,172 @@ mod tests {
         validate_reference("origin/develop").unwrap();
         assert!(validate_reference("--all").is_err());
         assert!(validate_reference("bad\nref").is_err());
+    }
+
+    #[test]
+    fn approval_requires_exact_phrase_human_attribution_and_intact_audit() {
+        let report = executable_report();
+        let phrase = report.exact_approval_phrase.clone().unwrap();
+        let approval = approve_stale_worktree_removal(
+            &report,
+            &phrase,
+            11,
+            "human:local:test",
+            "merged worktree reviewed for removal",
+        )
+        .unwrap();
+        assert!(valid_hex64(&approval.approval_id));
+        assert!(approve_stale_worktree_removal(
+            &report,
+            &format!("{phrase} "),
+            11,
+            "human:local:test",
+            "merged worktree reviewed for removal",
+        )
+        .is_err());
+        assert!(approve_stale_worktree_removal(
+            &report,
+            &phrase,
+            11,
+            "agent:test",
+            "merged worktree reviewed for removal",
+        )
+        .is_err());
+
+        let mut tampered = report;
+        tampered.removal_candidate_allocated_bytes += 1;
+        assert!(approve_stale_worktree_removal(
+            &tampered,
+            &phrase,
+            11,
+            "human:local:test",
+            "merged worktree reviewed for removal",
+        )
+        .is_err());
+    }
+
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
+    fn execution_removes_only_clean_merged_worktree_and_retains_branch() {
+        let (_temp, repository, secondary) = temporary_repository();
+        let generated_at = current_unix_ms();
+        let report = audit_git_worktrees(
+            &repository,
+            &["main".into()],
+            GitWorktreeAuditOptions::default(),
+            generated_at,
+        )
+        .unwrap();
+        assert_eq!(report.removal_candidate_count, 1, "{report:#?}");
+        assert_eq!(
+            report
+                .entries
+                .iter()
+                .filter(|entry| Path::new(&entry.path) == fs::canonicalize(&secondary).unwrap())
+                .count(),
+            1
+        );
+        let phrase = report.exact_approval_phrase.clone().unwrap();
+        let approval = approve_stale_worktree_removal(
+            &report,
+            &phrase,
+            generated_at + 1,
+            "human:local:test",
+            "temporary merged worktree reviewed for removal",
+        )
+        .unwrap();
+        let result = execute_stale_worktree_removal(
+            &report,
+            &approval,
+            &phrase,
+            GitWorktreeAuditOptions::default(),
+            generated_at + 2,
+        )
+        .unwrap();
+        assert!(result.verification_complete);
+        assert_eq!(result.removed_count, 1);
+        assert!(!result.branch_delete_executed);
+        assert!(!result.git_prune_executed);
+        assert!(!secondary.exists());
+        git(&repository, &["show-ref", "--verify", "refs/heads/merged"]);
+    }
+
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
+    fn execution_fails_closed_when_candidate_becomes_dirty() {
+        let (_temp, repository, secondary) = temporary_repository();
+        let generated_at = current_unix_ms();
+        let report = audit_git_worktrees(
+            &repository,
+            &["main".into()],
+            GitWorktreeAuditOptions::default(),
+            generated_at,
+        )
+        .unwrap();
+        let phrase = report.exact_approval_phrase.clone().unwrap();
+        let approval = approve_stale_worktree_removal(
+            &report,
+            &phrase,
+            generated_at + 1,
+            "human:local:test",
+            "temporary merged worktree reviewed for removal",
+        )
+        .unwrap();
+        fs::write(secondary.join("untracked.txt"), b"do not remove\n").unwrap();
+        let error = execute_stale_worktree_removal(
+            &report,
+            &approval,
+            &phrase,
+            GitWorktreeAuditOptions::default(),
+            generated_at + 2,
+        )
+        .unwrap_err();
+        assert!(error.starts_with("git-worktree-removal-"));
+        assert!(secondary.exists());
+        git(&repository, &["show-ref", "--verify", "refs/heads/merged"]);
+    }
+
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
+    fn immutable_records_are_create_new_and_cannot_be_redirected_into_repository() {
+        use std::os::unix::fs::symlink;
+
+        let (temp, repository, _secondary) = temporary_repository();
+        let generated_at = current_unix_ms();
+        let report = audit_git_worktrees(
+            &repository,
+            &["main".into()],
+            GitWorktreeAuditOptions::default(),
+            generated_at,
+        )
+        .unwrap();
+        let phrase = report.exact_approval_phrase.clone().unwrap();
+        let approval = approve_stale_worktree_removal(
+            &report,
+            &phrase,
+            generated_at + 1,
+            "human:local:test",
+            "immutable approval record storage reviewed",
+        )
+        .unwrap();
+
+        let app_data = temp.path().join("app-data");
+        let record_dir =
+            prepare_worktree_record_directory(&app_data, &report, "git-worktree-removals").unwrap();
+        let filename = format!("{}.approval.json", approval.approval_id);
+        let record = write_immutable_worktree_record(&record_dir, &filename, &approval).unwrap();
+        assert!(record.metadata().unwrap().permissions().readonly());
+        assert!(write_immutable_worktree_record(&record_dir, &filename, &approval).is_err());
+        assert!(write_immutable_worktree_record(&record_dir, "../escape.json", &approval).is_err());
+
+        let redirected_app_data = temp.path().join("redirected-app-data");
+        symlink(&repository, &redirected_app_data).unwrap();
+        let error = prepare_worktree_record_directory(
+            &redirected_app_data,
+            &report,
+            "git-worktree-removals",
+        )
+        .unwrap_err();
+        assert_eq!(error, "git-worktree-removal-record-dir-overlaps-repository");
     }
 }
