@@ -252,6 +252,26 @@ fn item_plan_is_safe(plan: &IcloudLocalEvictionPlan) -> bool {
         && plan.icloud_state.downloading_status_current
         && !plan.icloud_state.has_unresolved_conflicts
         && !plan.icloud_state.is_excluded_from_sync
+        && match plan.icloud_state.observation_method {
+            crate::cloud_local_eviction::IcloudStateObservationMethod::FileProviderCtlEvaluate => {
+                plan.icloud_state.is_sync_paused == Some(false)
+                    && plan.icloud_state.is_trashed == Some(false)
+                    && plan.icloud_state.allows_eviction == Some(true)
+                    && plan.icloud_state.provider_reported_bytes == Some(plan.logical_bytes)
+                    && plan
+                        .icloud_state
+                        .item_identifier_fingerprint
+                        .as_deref()
+                        .is_some_and(valid_hex64)
+            }
+            crate::cloud_local_eviction::IcloudStateObservationMethod::FoundationUbiquitousResourceValues => {
+                plan.icloud_state.is_sync_paused.is_none()
+                    && plan.icloud_state.is_trashed.is_none()
+                    && plan.icloud_state.allows_eviction.is_none()
+                    && plan.icloud_state.provider_reported_bytes.is_none()
+                    && plan.icloud_state.item_identifier_fingerprint.is_none()
+            }
+        }
 }
 
 fn expected_notices() -> Vec<String> {
@@ -738,7 +758,9 @@ fn execute_icloud_local_eviction_batch_with_now(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cloud_local_eviction::{ActiveUseEvidence, IcloudLocalState};
+    use crate::cloud_local_eviction::{
+        ActiveUseEvidence, IcloudLocalState, IcloudStateObservationMethod,
+    };
     use std::cell::Cell;
 
     #[cfg(windows)]
@@ -774,6 +796,7 @@ mod tests {
             filesystem_modified_ms: 10,
             observed_at_ms: 20,
             icloud_state: IcloudLocalState {
+                observation_method: IcloudStateObservationMethod::FileProviderCtlEvaluate,
                 is_ubiquitous: true,
                 is_uploaded: true,
                 is_uploading: false,
@@ -781,6 +804,11 @@ mod tests {
                 downloading_status_current: true,
                 has_unresolved_conflicts: false,
                 is_excluded_from_sync: false,
+                is_sync_paused: Some(false),
+                is_trashed: Some(false),
+                allows_eviction: Some(true),
+                provider_reported_bytes: Some(1_000 + u64::try_from(index).unwrap()),
+                item_identifier_fingerprint: Some(format!("{:064x}", index + 1)),
             },
             active_use: ActiveUseEvidence {
                 method: "test".into(),
@@ -842,6 +870,32 @@ mod tests {
             validate_batch_plan(&root(), &plan).unwrap_err(),
             "icloud-local-eviction-batch-plan-integrity-mismatch"
         );
+    }
+
+    #[test]
+    fn batch_item_safety_enforces_file_provider_evidence() {
+        let safe = safe_plan(0);
+        assert!(item_plan_is_safe(&safe));
+
+        let mut unsafe_plan = safe.clone();
+        unsafe_plan.icloud_state.is_sync_paused = None;
+        assert!(!item_plan_is_safe(&unsafe_plan));
+
+        let mut unsafe_plan = safe.clone();
+        unsafe_plan.icloud_state.is_trashed = Some(true);
+        assert!(!item_plan_is_safe(&unsafe_plan));
+
+        let mut unsafe_plan = safe.clone();
+        unsafe_plan.icloud_state.allows_eviction = Some(false);
+        assert!(!item_plan_is_safe(&unsafe_plan));
+
+        let mut unsafe_plan = safe.clone();
+        unsafe_plan.icloud_state.provider_reported_bytes = Some(safe.logical_bytes + 1);
+        assert!(!item_plan_is_safe(&unsafe_plan));
+
+        let mut unsafe_plan = safe;
+        unsafe_plan.icloud_state.item_identifier_fingerprint = None;
+        assert!(!item_plan_is_safe(&unsafe_plan));
     }
 
     #[test]
