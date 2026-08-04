@@ -570,6 +570,32 @@ pub fn execute_icloud_local_eviction_batch(
     record_dir: &Path,
     requested_at_ms: u64,
 ) -> Result<IcloudLocalEvictionBatchResult, String> {
+    execute_icloud_local_eviction_batch_with_now(
+        root,
+        plan,
+        approval,
+        confirmation_batch_fingerprint,
+        record_dir,
+        requested_at_ms,
+        crate::cloud::system_now_ms,
+    )
+}
+
+#[cfg(not(coverage))]
+fn fresh_item_requested_at_ms(now_ms: &mut impl FnMut() -> u64) -> u64 {
+    now_ms()
+}
+
+#[cfg(not(coverage))]
+fn execute_icloud_local_eviction_batch_with_now(
+    root: &CloudRoot,
+    plan: &IcloudLocalEvictionBatchPlan,
+    approval: &IcloudLocalEvictionBatchApproval,
+    confirmation_batch_fingerprint: &str,
+    record_dir: &Path,
+    requested_at_ms: u64,
+    mut now_ms: impl FnMut() -> u64,
+) -> Result<IcloudLocalEvictionBatchResult, String> {
     validate_batch_approval(root, plan, approval, confirmation_batch_fingerprint)?;
     let _live = preflight_with(root, plan, requested_at_ms, plan_icloud_local_eviction)?;
 
@@ -940,5 +966,17 @@ mod tests {
         assert_ne!(result.result_id, before);
         assert!(result.execution_complete);
         assert!(result.verification_complete);
+    }
+
+    #[test]
+    fn item_execution_timestamps_read_the_clock_for_each_item() {
+        let next = std::cell::Cell::new(40_u64);
+        let mut now_ms = || {
+            let current = next.get();
+            next.set(current + 7);
+            current
+        };
+        assert_eq!(fresh_item_requested_at_ms(&mut now_ms), 40);
+        assert_eq!(fresh_item_requested_at_ms(&mut now_ms), 47);
     }
 }

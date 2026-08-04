@@ -15,6 +15,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
+const HELP_REQUESTED: &str = "icloud-local-eviction-batch-help-requested";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Args {
@@ -72,8 +73,8 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             "--record-dir" => {
                 record_dir = Some(PathBuf::from(value(args, &mut index, "--record-dir")?))
             }
-            "--help" | "-h" => return Err(usage().into()),
-            unknown => return Err(format!("알 수 없는 인자: {unknown}")),
+            "--help" | "-h" => return Err(HELP_REQUESTED.into()),
+            _unknown => return Err("알 수 없는 인자".into()),
         }
         index += 1;
     }
@@ -403,6 +404,10 @@ fn run() -> Result<(), String> {
 
 fn main() {
     if let Err(error) = run() {
+        if error == HELP_REQUESTED {
+            println!("{}", usage());
+            return;
+        }
         eprintln!("{error}");
         std::process::exit(2);
     }
@@ -461,6 +466,15 @@ mod tests {
             TEST_RECORD_DIR.into(),
         ]);
         assert!(parse_args(&complete).unwrap().execute);
+    }
+
+    #[test]
+    fn parser_distinguishes_help_and_redacts_unknown_values() {
+        assert_eq!(parse_args(&["--help".into()]).unwrap_err(), HELP_REQUESTED);
+        let sensitive = "/Users/private/customer-file";
+        let error = parse_args(&[sensitive.into()]).unwrap_err();
+        assert_eq!(error, "알 수 없는 인자");
+        assert!(!error.contains(sensitive));
     }
 
     #[test]
