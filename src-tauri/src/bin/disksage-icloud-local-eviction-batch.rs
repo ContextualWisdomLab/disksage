@@ -417,7 +417,7 @@ fn main() {
 mod tests {
     use super::*;
     use disksage_lib::cloud_local_eviction::{
-        ActiveUseEvidence, IcloudLocalEvictionPlan, IcloudLocalState,
+        ActiveUseEvidence, IcloudLocalEvictionPlan, IcloudLocalState, IcloudStateObservationMethod,
     };
     use disksage_lib::cloud_local_eviction_batch::{
         IcloudLocalEvictionBatchItem, IcloudLocalEvictionBatchUnavailable,
@@ -573,6 +573,7 @@ mod tests {
                     filesystem_modified_ms: 1,
                     observed_at_ms: 1,
                     icloud_state: IcloudLocalState {
+                        observation_method: IcloudStateObservationMethod::FileProviderCtlEvaluate,
                         is_ubiquitous: true,
                         is_uploaded: true,
                         is_uploading: false,
@@ -580,6 +581,11 @@ mod tests {
                         downloading_status_current: true,
                         has_unresolved_conflicts: false,
                         is_excluded_from_sync: false,
+                        is_sync_paused: Some(false),
+                        is_trashed: Some(false),
+                        allows_eviction: Some(true),
+                        provider_reported_bytes: Some(10),
+                        item_identifier_fingerprint: Some("c".repeat(64)),
                     },
                     active_use: ActiveUseEvidence {
                         method: "test".into(),
