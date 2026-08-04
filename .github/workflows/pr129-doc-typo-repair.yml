@@ -1,0 +1,79 @@
+name: Repair PR 129 documentation typo
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr129-doc-typo-repair-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.head_ref == 'fix/icloud-batch-postmerge-verification' &&
+      github.actor != 'github-actions[bot]'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact audited parent and trigger-only delta
+        env:
+          EXPECTED_PARENT: cf67201e49da26b6a1e6c51beacd42c67894c609
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "${EXPECTED_PARENT}"
+          test "$(git diff --name-only HEAD^ HEAD)" = ".github/workflows/pr129-doc-typo-repair.yml"
+
+      - name: Repair the exact documentation typo
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("src-tauri/src/cloud_local_eviction_batch.rs")
+          source = path.read_text(encoding="utf-8")
+          old = "Whether every planned item completed verification and immutable eordering."
+          new = "Whether every planned item completed verification and immutable recording."
+          if source.count(old) != 1:
+              raise SystemExit(f"expected one exact typo, found {source.count(old)}")
+          path.write_text(source.replace(old, new, 1), encoding="utf-8")
+
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
+      - name: Validate formatting and focused behavior
+        run: |
+          rustfmt --check src-tauri/src/cloud_local_eviction_batch.rs
+          cargo test --manifest-path src-tauri/Cargo.toml --lib cloud_local_eviction_batch::tests
+          git diff --check
+          grep -F "immutable recording." src-tauri/src/cloud_local_eviction_batch.rs
+          ! grep -F "eordering" src-tauri/src/cloud_local_eviction_batch.rs
+
+      - name: Commit validated repair and remove workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ORIGINAL_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin fix/icloud-batch-postmerge-verification
+          test "$(git rev-parse origin/fix/icloud-batch-postmerge-verification)" = "${ORIGINAL_HEAD}"
+          rm .github/workflows/pr129-doc-typo-repair.yml
+          test "$(git diff --name-only | sort)" = $'.github/workflows/pr129-doc-typo-repair.yml\nsrc-tauri/src/cloud_local_eviction_batch.rs'
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src-tauri/src/cloud_local_eviction_batch.rs .github/workflows/pr129-doc-typo-repair.yml
+          git diff --cached --check
+          git commit -m "docs: correct iCloud batch verification wording"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push --force-with-lease=refs/heads/fix/icloud-batch-postmerge-verification:${ORIGINAL_HEAD} \
+            origin HEAD:refs/heads/fix/icloud-batch-postmerge-verification
