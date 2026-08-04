@@ -19,13 +19,12 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
-      - name: Derive normalized repair digest without executing repaired code
+      - name: Verify normalized repair source without executing repaired code
         run: |
           set -euo pipefail
           echo '46f143c8a01193d0189046fe70a98b1948a46be79bbf504ca520a401b69047c3  .github/scripts/repair_pr_89.py' | sha256sum --check --strict
           python .github/scripts/normalize_pr129.py
-          sha256sum .github/scripts/repair_pr_89.py
-          exit 1
+          echo '46962fff01de02d31f9b9f4c80f804a9726cb4d28a43552235aa2d684fbc9819  .github/scripts/repair_pr_89.py' | sha256sum --check --strict
       - name: Install Tauri system dependencies
         run: |
           sudo apt-get update
@@ -96,83 +95,3 @@ jobs:
           path: repair-artifact
           if-no-files-found: error
           retention-days: 1
-
-  publish:
-    needs: validate
-    if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.ref == 'fix/icloud-batch-postmerge-verification' &&
-      github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      actions: read
-      contents: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Download and verify same-run evidence
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ARTIFACT_NAME: pr129-icloud-batch-repair-${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          work="$(mktemp -d)"
-          trap 'rm -rf "$work"' EXIT
-          curl --fail-with-body --silent --show-error \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H 'Accept: application/vnd.github+json' \
-            -H 'X-GitHub-Api-Version: 2022-11-28' \
-            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
-            > "$work/artifacts.json"
-          test "$(jq --arg name "$ARTIFACT_NAME" '[.artifacts[] | select(.name == $name and .expired == false)] | length' "$work/artifacts.json")" = 1
-          artifact_id="$(jq -r --arg name "$ARTIFACT_NAME" '.artifacts[] | select(.name == $name and .expired == false) | .id' "$work/artifacts.json")"
-          artifact_digest="$(jq -r --arg name "$ARTIFACT_NAME" '.artifacts[] | select(.name == $name and .expired == false) | .digest' "$work/artifacts.json")"
-          test "${artifact_digest#sha256:}" != "$artifact_digest"
-          curl --fail-with-body --silent --show-error --location \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H 'Accept: application/vnd.github+json' \
-            -H 'X-GitHub-Api-Version: 2022-11-28' \
-            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" \
-            --output "$work/artifact.zip"
-          test "$(sha256sum "$work/artifact.zip" | cut -d' ' -f1)" = "${artifact_digest#sha256:}"
-          mkdir "$work/evidence"
-          unzip -q "$work/artifact.zip" -d "$work/evidence"
-          (
-            cd "$work/evidence"
-            sha256sum --check --strict SHA256SUMS
-          )
-          cp "$work/evidence/src-tauri/src/cloud_local_eviction_batch.rs" \
-            src-tauri/src/cloud_local_eviction_batch.rs
-          cp "$work/evidence/src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs" \
-            src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs
-          expected="src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs
-          src-tauri/src/cloud_local_eviction_batch.rs"
-          test "$(git diff --name-only | sort)" = "$expected"
-          git diff --check
-      - name: Publish only verified source to unchanged head
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SOURCE_HEAD: ${{ github.event.pull_request.head.sha }}
-          SOURCE_BRANCH: ${{ github.event.pull_request.head.ref }}
-        run: |
-          set -euo pipefail
-          git fetch origin "refs/heads/${SOURCE_BRANCH}:refs/remotes/origin/${SOURCE_BRANCH}"
-          test "$(git rev-parse "refs/remotes/origin/${SOURCE_BRANCH}")" = "$SOURCE_HEAD"
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add \
-            src-tauri/src/cloud_local_eviction_batch.rs \
-            src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs
-          git diff --cached --check
-          git commit -m 'fix: verify iCloud batch execution safeguards'
-          remote_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git push \
-            --force-with-lease="refs/heads/${SOURCE_BRANCH}:${SOURCE_HEAD}" \
-            "$remote_url" \
-            "HEAD:refs/heads/${SOURCE_BRANCH}"
