@@ -671,14 +671,8 @@ fn execute_icloud_local_eviction_batch_with_now(
     };
     refresh_result_summary(&mut batch_result, requested_at_ms);
 
-    for (offset, (item, individual)) in plan
-        .items
-        .iter()
-        .zip(individual_approvals.iter())
-        .enumerate()
-    {
-        let item_requested_at_ms =
-            requested_at_ms.saturating_add(u64::try_from(offset).unwrap_or(u64::MAX));
+    for (item, individual) in plan.items.iter().zip(individual_approvals.iter()) {
+        let item_requested_at_ms = fresh_item_requested_at_ms(&mut now_ms);
         let execution = execute_icloud_local_eviction(
             root,
             &item.plan,
