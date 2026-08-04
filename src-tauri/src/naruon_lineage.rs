@@ -13,13 +13,16 @@ use crate::cloud_review::{
     organization_tenant_authority_attested, validate_decision, CloudReviewDecision,
     CloudReviewDisposition, DECISION_VERSION,
 };
-use crate::cloud_transfer::{CloudCopyReceipt, CloudCopyVerificationMethod, SyncEvidenceKind};
+use crate::cloud_transfer::{
+    validate_receipt_copy_approval, CloudCopyApprovalAction, CloudCopyReceipt,
+    CloudCopyVerificationMethod, SyncEvidenceKind,
+};
 use crate::provider_evidence::{validate_sync_evidence_record, ProviderSyncEvidenceRecord};
 #[cfg(test)]
 use crate::provider_sync::PROVIDER_SYNC_OVERDUE_AFTER_MS;
 use crate::provider_sync::{assess_provider_sync_timeliness, ProviderSyncTimeliness};
 
-pub const NARUON_FILE_LINEAGE_SCHEMA_VERSION: u32 = 1;
+pub const NARUON_FILE_LINEAGE_SCHEMA_VERSION: u32 = 2;
 pub const NARUON_FILE_LINEAGE_SCHEMA_KIND: &str = "disksage.file-lineage";
 
 const EVIDENCE_PRECEDENCE: [&str; 4] = [
@@ -69,6 +72,11 @@ pub struct NaruonCloudCopyLineage {
     pub destination: String,
     pub copied_at_ms: u64,
     pub copy_verification_method: CloudCopyVerificationMethod,
+    pub copy_approval_id: Option<String>,
+    pub copy_approval_action: Option<CloudCopyApprovalAction>,
+    pub copy_approved_at_ms: Option<u64>,
+    pub copy_approved_by: Option<String>,
+    pub copy_approval_rationale: Option<String>,
     pub local_copy_verified: bool,
     /// DiskSage's local File Provider copy is not proof that a provider API write executed.
     pub provider_write_executed: bool,
@@ -235,6 +243,8 @@ pub fn export_naruon_file_lineage(
     evidence_record: Option<&ProviderSyncEvidenceRecord>,
 ) -> Result<NaruonFileLineageEnvelope, String> {
     validate_receipt_shape(receipt)?;
+    validate_receipt_copy_approval(receipt)
+        .map_err(|_| "naruon-lineage-copy-approval-invalid".to_string())?;
     if let Some(record) = evidence_record {
         validate_evidence_binding(receipt, record)?;
     }
@@ -303,6 +313,26 @@ pub fn export_naruon_file_lineage(
             destination: receipt.destination.clone(),
             copied_at_ms: receipt.copied_at_ms,
             copy_verification_method: lineage.copy_verification_method,
+            copy_approval_id: lineage
+                .copy_approval
+                .as_ref()
+                .map(|approval| approval.approval_id.clone()),
+            copy_approval_action: lineage
+                .copy_approval
+                .as_ref()
+                .map(|approval| approval.action),
+            copy_approved_at_ms: lineage
+                .copy_approval
+                .as_ref()
+                .map(|approval| approval.approved_at_ms),
+            copy_approved_by: lineage
+                .copy_approval
+                .as_ref()
+                .map(|approval| approval.approved_by.clone()),
+            copy_approval_rationale: lineage
+                .copy_approval
+                .as_ref()
+                .map(|approval| approval.rationale.clone()),
             local_copy_verified: receipt.copy_verified,
             provider_write_executed: false,
             provider_sync_confirmed: evidence.is_some_and(|item| item.sync_complete),
@@ -338,7 +368,7 @@ mod tests {
     use crate::cloud_transfer::prepare_cloud_copy_with_review;
     use crate::cloud_transfer::{
         CloudCopyReceipt, CloudCopyVerificationMethod, CloudLineageSnapshot, ProviderSyncEvidence,
-        SyncEvidenceKind, RECEIPT_VERSION,
+        SyncEvidenceKind, PRE_APPROVAL_RECEIPT_VERSION, RECEIPT_VERSION,
     };
     use crate::provider_evidence::create_sync_evidence_record;
 
@@ -394,7 +424,7 @@ mod tests {
         )
         .unwrap();
         CloudCopyReceipt {
-            version: RECEIPT_VERSION,
+            version: PRE_APPROVAL_RECEIPT_VERSION,
             receipt_id: "a".repeat(64),
             candidate_fingerprint: candidate.metadata_fingerprint.clone(),
             provider: candidate.provider,
@@ -436,6 +466,7 @@ mod tests {
                 duration_ms: candidate.duration_ms,
                 dataset_profile: candidate.dataset_profile,
                 metadata_evidence: candidate.metadata_evidence,
+                copy_approval: None,
             }),
         }
     }
@@ -515,7 +546,7 @@ mod tests {
         let receipt = receipt();
         let envelope = export_naruon_file_lineage(&receipt, Some(&evidence(&receipt))).unwrap();
 
-        assert_eq!(envelope.schema_version, 1);
+        assert_eq!(envelope.schema_version, 2);
         assert_eq!(envelope.schema_kind, "disksage.file-lineage");
         assert_eq!(envelope.source_filename, "report.pdf");
         assert_eq!(envelope.raw_content_sha256, "d".repeat(64));
@@ -542,6 +573,7 @@ mod tests {
             ]
         );
         assert!(envelope.cloud_copy.local_copy_verified);
+        assert_eq!(envelope.cloud_copy.copy_approval_id, None);
         assert!(envelope.cloud_copy.provider_sync_confirmed);
         assert!(!envelope.cloud_copy.provider_write_executed);
         assert!(envelope.cloud_copy.sync_evidence_record_id.is_some());
@@ -590,6 +622,36 @@ mod tests {
             envelope.review.reviewed_by.as_deref(),
             Some("human:local:test")
         );
+        assert_eq!(
+            envelope.cloud_copy.copy_approval_action,
+            Some(CloudCopyApprovalAction::CopyOnly)
+        );
+        assert_eq!(
+            envelope.cloud_copy.copy_approved_by.as_deref(),
+            Some("human:test")
+        );
+        assert_eq!(
+            envelope
+                .cloud_copy
+                .copy_approval_id
+                .as_deref()
+                .map(str::len),
+            Some(64)
+        );
+
+        let mut tampered = receipt;
+        tampered
+            .lineage
+            .as_mut()
+            .unwrap()
+            .copy_approval
+            .as_mut()
+            .unwrap()
+            .rationale = "tampered".into();
+        assert_eq!(
+            export_naruon_file_lineage(&tampered, None).unwrap_err(),
+            "naruon-lineage-copy-approval-invalid"
+        );
     }
 
     #[test]
@@ -631,6 +693,13 @@ mod tests {
 
     #[test]
     fn export_rejects_missing_lineage_bad_digest_and_mismatched_evidence() {
+        let mut missing_current_approval = receipt();
+        missing_current_approval.version = RECEIPT_VERSION;
+        assert_eq!(
+            export_naruon_file_lineage(&missing_current_approval, None).unwrap_err(),
+            "naruon-lineage-copy-approval-invalid"
+        );
+
         let mut missing = receipt();
         missing.lineage = None;
         assert_eq!(

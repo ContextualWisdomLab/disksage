@@ -580,6 +580,22 @@ export interface CloudCopyReceipt {
 }
 
 export type CloudCopyVerificationMethod = "copied-by-disk-sage" | "adopted-existing";
+export type CloudCopyApprovalAction = "copy-only" | "adopt-existing-copy";
+
+export interface CloudCopyApproval {
+  version: number;
+  approval_id: string;
+  action: CloudCopyApprovalAction;
+  candidate_fingerprint: string;
+  review_fingerprint: string;
+  provider: CloudProvider;
+  destination_account_scope: CloudAccountScope;
+  cloud_root_id: string;
+  approved_at_ms: number;
+  approved_by: string;
+  rationale: string;
+  exact_confirmation_phrase: string;
+}
 
 export interface CloudLineageSnapshot {
   candidate_fingerprint: string;
@@ -608,6 +624,7 @@ export interface CloudLineageSnapshot {
   duration_ms: number | null;
   dataset_profile: DatasetProfile | null;
   metadata_evidence: MetadataEvidence[];
+  copy_approval?: CloudCopyApproval;
 }
 
 export interface CloudCopyOutput {
@@ -809,6 +826,8 @@ export const copyCloudCandidate = (
   root: string,
   cloudRoot: string,
   metadataFingerprint: string,
+  exactConfirmationPhrase: string,
+  approvalRationale: string,
   minSizeMib = 256,
   minAgeDays = 90,
   limit = 200,
@@ -816,6 +835,8 @@ export const copyCloudCandidate = (
   root,
   cloudRoot,
   metadataFingerprint,
+  exactConfirmationPhrase,
+  approvalRationale,
   minSizeMib,
   minAgeDays,
   limit,
@@ -824,6 +845,8 @@ export const adoptExistingCloudCandidate = (
   root: string,
   cloudRoot: string,
   metadataFingerprint: string,
+  exactConfirmationPhrase: string,
+  approvalRationale: string,
   minSizeMib = 256,
   minAgeDays = 90,
   limit = 200,
@@ -831,10 +854,17 @@ export const adoptExistingCloudCandidate = (
   root,
   cloudRoot,
   metadataFingerprint,
+  exactConfirmationPhrase,
+  approvalRationale,
   minSizeMib,
   minAgeDays,
   limit,
 });
+
+export const cloudCopyApprovalPhrase = (
+  candidate: Pick<CloudCandidate, "review_fingerprint">,
+  action: CloudCopyApprovalAction,
+) => `DiskSage cloud ${action} ${candidate.review_fingerprint} 승인`;
 export const attestCloudCopy = (
   receiptId: string,
   objectId: string | null = null,

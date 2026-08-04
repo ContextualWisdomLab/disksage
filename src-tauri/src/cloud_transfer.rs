@@ -9,8 +9,8 @@ use crate::cloud::{
     CloudRoot, MetadataEvidence, ORGANIZATION_TENANT_AUTHORITY_REVIEW_REASON,
 };
 use crate::cloud_review::{
-    organization_tenant_authority_attested, validate_decision, CloudReviewDecision,
-    CloudReviewDisposition, DECISION_VERSION,
+    organization_tenant_authority_attested, validate_decision, validate_review_attribution,
+    CloudReviewDecision, CloudReviewDisposition, DECISION_VERSION,
 };
 use crate::dataset_metadata::DatasetProfile;
 use crate::provider_evidence::{validate_sync_evidence_record, ProviderSyncEvidenceRecord};
@@ -24,7 +24,10 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 
 pub const LEGACY_RECEIPT_VERSION: u32 = 2;
-pub const RECEIPT_VERSION: u32 = 3;
+pub const PRE_APPROVAL_RECEIPT_VERSION: u32 = 3;
+pub const RECEIPT_VERSION: u32 = 4;
+pub const CLOUD_COPY_APPROVAL_VERSION: u32 = 1;
+pub const MAX_CLOUD_COPY_APPROVAL_AGE_MS: u64 = 15 * 60 * 1000;
 #[cfg(not(coverage))]
 const MAX_RECEIPT_BYTES: u64 = 64 * 1024;
 
@@ -54,6 +57,51 @@ impl CloudCopyVerificationMethod {
     fn is_copied_by_disksage(&self) -> bool {
         *self == Self::CopiedByDiskSage
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CloudCopyApprovalAction {
+    CopyOnly,
+    AdoptExistingCopy,
+}
+
+impl CloudCopyApprovalAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CopyOnly => "copy-only",
+            Self::AdoptExistingCopy => "adopt-existing-copy",
+        }
+    }
+
+    fn verification_method(self) -> CloudCopyVerificationMethod {
+        match self {
+            Self::CopyOnly => CloudCopyVerificationMethod::CopiedByDiskSage,
+            Self::AdoptExistingCopy => CloudCopyVerificationMethod::AdoptedExisting,
+        }
+    }
+}
+
+/// A fresh, human-attributed authorization for one exact candidate, destination, and action.
+///
+/// The candidate review fingerprint binds the source, destination, provider/account scope,
+/// production-time evidence, and displayed metadata. A generic confirmation such as `승인` can
+/// never satisfy `exact_confirmation_phrase`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CloudCopyApproval {
+    pub version: u32,
+    pub approval_id: String,
+    pub action: CloudCopyApprovalAction,
+    pub candidate_fingerprint: String,
+    pub review_fingerprint: String,
+    pub provider: CloudProvider,
+    pub destination_account_scope: CloudAccountScope,
+    pub cloud_root_id: String,
+    pub approved_at_ms: u64,
+    pub approved_by: String,
+    pub rationale: String,
+    pub exact_confirmation_phrase: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -109,6 +157,8 @@ pub struct CloudLineageSnapshot {
     pub duration_ms: Option<u64>,
     pub dataset_profile: Option<DatasetProfile>,
     pub metadata_evidence: Vec<MetadataEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copy_approval: Option<CloudCopyApproval>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -168,6 +218,145 @@ fn absolute_without_parent(path: &Path) -> bool {
         && !path
             .components()
             .any(|component| matches!(component, std::path::Component::ParentDir))
+}
+
+fn valid_fingerprint(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn hash_copy_approval_value(hasher: &mut blake3::Hasher, value: &[u8]) {
+    hasher.update(&(value.len() as u64).to_le_bytes());
+    hasher.update(value);
+}
+
+fn copy_approval_id_for(approval: &CloudCopyApproval) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage-cloud-copy-approval-v1\0");
+    hasher.update(&approval.version.to_le_bytes());
+    for value in [
+        approval.action.as_str().as_bytes(),
+        approval.candidate_fingerprint.as_bytes(),
+        approval.review_fingerprint.as_bytes(),
+        approval.provider.as_str().as_bytes(),
+        approval.destination_account_scope.as_str().as_bytes(),
+        approval.cloud_root_id.as_bytes(),
+        approval.approved_by.as_bytes(),
+        approval.rationale.as_bytes(),
+        approval.exact_confirmation_phrase.as_bytes(),
+    ] {
+        hash_copy_approval_value(&mut hasher, value);
+    }
+    hash_copy_approval_value(&mut hasher, &approval.approved_at_ms.to_le_bytes());
+    hasher.finalize().to_hex().to_string()
+}
+
+pub fn cloud_copy_approval_phrase(
+    candidate: &CloudCandidate,
+    action: CloudCopyApprovalAction,
+) -> String {
+    format!(
+        "DiskSage cloud {} {} 승인",
+        action.as_str(),
+        candidate.review_fingerprint
+    )
+}
+
+fn validate_cloud_copy_approval_integrity(approval: &CloudCopyApproval) -> Result<(), String> {
+    if approval.version != CLOUD_COPY_APPROVAL_VERSION {
+        return Err("cloud-copy-approval-version-unsupported".into());
+    }
+    if !valid_fingerprint(&approval.approval_id)
+        || !valid_fingerprint(&approval.candidate_fingerprint)
+        || !valid_fingerprint(&approval.review_fingerprint)
+    {
+        return Err("cloud-copy-approval-fingerprint-invalid".into());
+    }
+    validate_review_attribution(&approval.approved_by, &approval.rationale)
+        .map_err(|_| "cloud-copy-approval-attribution-invalid".to_string())?;
+    if approval.approved_at_ms == 0 {
+        return Err("cloud-copy-approval-time-invalid".into());
+    }
+    if approval.cloud_root_id.trim().is_empty() {
+        return Err("cloud-copy-approval-root-id-missing".into());
+    }
+    if approval.approval_id != copy_approval_id_for(approval) {
+        return Err("cloud-copy-approval-integrity-mismatch".into());
+    }
+    Ok(())
+}
+
+pub fn create_cloud_copy_approval(
+    candidate: &CloudCandidate,
+    cloud_root: &CloudRoot,
+    action: CloudCopyApprovalAction,
+    approved_at_ms: u64,
+    approved_by: &str,
+    rationale: &str,
+    exact_confirmation_phrase: &str,
+) -> Result<CloudCopyApproval, String> {
+    if candidate.review_fingerprint != candidate_review_fingerprint(candidate)
+        || !valid_fingerprint(&candidate.metadata_fingerprint)
+        || !valid_fingerprint(&candidate.review_fingerprint)
+    {
+        return Err("cloud-copy-approval-candidate-stale".into());
+    }
+    if candidate.provider != cloud_root.provider
+        || candidate.destination_account_scope != cloud_root.account_scope
+    {
+        return Err("cloud-copy-approval-destination-mismatch".into());
+    }
+    let expected_phrase = cloud_copy_approval_phrase(candidate, action);
+    if exact_confirmation_phrase != expected_phrase {
+        return Err("cloud-copy-exact-confirmation-phrase-mismatch".into());
+    }
+    validate_review_attribution(approved_by, rationale)
+        .map_err(|_| "cloud-copy-approval-attribution-invalid".to_string())?;
+    let mut approval = CloudCopyApproval {
+        version: CLOUD_COPY_APPROVAL_VERSION,
+        approval_id: String::new(),
+        action,
+        candidate_fingerprint: candidate.metadata_fingerprint.clone(),
+        review_fingerprint: candidate.review_fingerprint.clone(),
+        provider: candidate.provider,
+        destination_account_scope: candidate.destination_account_scope,
+        cloud_root_id: cloud_root.id.clone(),
+        approved_at_ms,
+        approved_by: approved_by.to_string(),
+        rationale: rationale.to_string(),
+        exact_confirmation_phrase: exact_confirmation_phrase.to_string(),
+    };
+    approval.approval_id = copy_approval_id_for(&approval);
+    validate_cloud_copy_approval_integrity(&approval)?;
+    Ok(approval)
+}
+
+fn validate_cloud_copy_approval_for_action(
+    approval: &CloudCopyApproval,
+    candidate: &CloudCandidate,
+    cloud_root: &CloudRoot,
+    action: CloudCopyApprovalAction,
+    action_at_ms: u64,
+) -> Result<(), String> {
+    validate_cloud_copy_approval_integrity(approval)?;
+    if approval.action != action
+        || approval.candidate_fingerprint != candidate.metadata_fingerprint
+        || approval.review_fingerprint != candidate.review_fingerprint
+        || approval.provider != candidate.provider
+        || approval.destination_account_scope != candidate.destination_account_scope
+        || approval.cloud_root_id != cloud_root.id
+        || approval.exact_confirmation_phrase != cloud_copy_approval_phrase(candidate, action)
+    {
+        return Err("cloud-copy-approval-context-mismatch".into());
+    }
+    if approval.approved_at_ms > action_at_ms
+        || action_at_ms.saturating_sub(approval.approved_at_ms) > MAX_CLOUD_COPY_APPROVAL_AGE_MS
+    {
+        return Err("cloud-copy-approval-stale".into());
+    }
+    Ok(())
 }
 
 fn embedded_high_confidence(candidate: &CloudCandidate) -> bool {
@@ -343,7 +532,7 @@ fn receipt_id_for(
     hasher.update(&source_modified_ms.to_le_bytes());
     hasher.update(&copied_at_ms.to_le_bytes());
     hasher.update(&[copy_verified as u8, provider_sync_confirmed as u8]);
-    if version >= RECEIPT_VERSION {
+    if version >= PRE_APPROVAL_RECEIPT_VERSION {
         hasher.update(b"\0lineage\0");
         hasher.update(lineage_fingerprint.unwrap_or_default().as_bytes());
     }
@@ -354,6 +543,7 @@ fn lineage_snapshot(
     candidate: &CloudCandidate,
     review_decision: Option<&CloudReviewDecision>,
     copy_verification_method: CloudCopyVerificationMethod,
+    copy_approval: Option<&CloudCopyApproval>,
 ) -> CloudLineageSnapshot {
     CloudLineageSnapshot {
         candidate_fingerprint: candidate.metadata_fingerprint.clone(),
@@ -386,6 +576,7 @@ fn lineage_snapshot(
         duration_ms: candidate.duration_ms,
         dataset_profile: candidate.dataset_profile.clone(),
         metadata_evidence: candidate.metadata_evidence.clone(),
+        copy_approval: copy_approval.cloned(),
     }
 }
 
@@ -419,13 +610,49 @@ fn receipt_integrity_valid(receipt: &CloudCopyReceipt) -> bool {
         )
 }
 
+/// Validate the exact action approval embedded in a receipt without probing either path.
+/// Version 3 receipts predate this approval and remain readable; version 4 requires it.
+pub fn validate_receipt_copy_approval(receipt: &CloudCopyReceipt) -> Result<(), String> {
+    let lineage = receipt
+        .lineage
+        .as_ref()
+        .ok_or_else(|| "receipt-lineage-copy-approval-lineage-missing".to_string())?;
+    let approval = match lineage.copy_approval.as_ref() {
+        Some(approval) => approval,
+        None if receipt.version == PRE_APPROVAL_RECEIPT_VERSION => return Ok(()),
+        None => return Err("receipt-lineage-copy-approval-missing".into()),
+    };
+    let expected_phrase = format!(
+        "DiskSage cloud {} {} 승인",
+        approval.action.as_str(),
+        lineage.review_fingerprint
+    );
+    if validate_cloud_copy_approval_integrity(approval).is_err()
+        || approval.candidate_fingerprint != receipt.candidate_fingerprint
+        || approval.review_fingerprint != lineage.review_fingerprint
+        || approval.provider != receipt.provider
+        || approval.destination_account_scope != lineage.destination_account_scope
+        || approval.action.verification_method() != lineage.copy_verification_method
+        || approval.exact_confirmation_phrase != expected_phrase
+        || approval.approved_at_ms > receipt.copied_at_ms
+        || receipt.copied_at_ms.saturating_sub(approval.approved_at_ms)
+            > MAX_CLOUD_COPY_APPROVAL_AGE_MS
+    {
+        return Err("receipt-lineage-copy-approval-mismatch".into());
+    }
+    Ok(())
+}
+
 /// Validate a persisted copy receipt before any provider-specific filesystem or API probe.
 ///
 /// This function is read-only and deliberately excludes provider evidence. It prevents callers
 /// from trusting receipt-controlled paths before the receipt's structure and integrity pass.
 pub fn receipt_blockers(receipt: &CloudCopyReceipt) -> Vec<String> {
     let mut blockers = Vec::new();
-    if !matches!(receipt.version, LEGACY_RECEIPT_VERSION | RECEIPT_VERSION) {
+    if !matches!(
+        receipt.version,
+        LEGACY_RECEIPT_VERSION | PRE_APPROVAL_RECEIPT_VERSION | RECEIPT_VERSION
+    ) {
         blockers.push("receipt-version-unsupported".into());
     }
     match receipt.version {
@@ -434,50 +661,55 @@ pub fn receipt_blockers(receipt: &CloudCopyReceipt) -> Vec<String> {
                 blockers.push("legacy-receipt-lineage-unexpected".into());
             }
         }
-        RECEIPT_VERSION => match (&receipt.lineage, &receipt.lineage_fingerprint) {
-            (Some(lineage), Some(fingerprint)) => {
-                if lineage.candidate_fingerprint != receipt.candidate_fingerprint {
-                    blockers.push("receipt-lineage-candidate-mismatch".into());
+        PRE_APPROVAL_RECEIPT_VERSION | RECEIPT_VERSION => {
+            match (&receipt.lineage, &receipt.lineage_fingerprint) {
+                (Some(lineage), Some(fingerprint)) => {
+                    if lineage.candidate_fingerprint != receipt.candidate_fingerprint {
+                        blockers.push("receipt-lineage-candidate-mismatch".into());
+                    }
+                    if lineage.modified_ms != receipt.source_modified_ms {
+                        blockers.push("receipt-lineage-modified-time-mismatch".into());
+                    }
+                    if lineage.review_fingerprint.len() != 64
+                        || !lineage
+                            .review_fingerprint
+                            .bytes()
+                            .all(|byte| byte.is_ascii_hexdigit())
+                    {
+                        blockers.push("receipt-lineage-review-fingerprint-invalid".into());
+                    }
+                    let complete_review = lineage.review_decision_id.is_some()
+                        && lineage.review_disposition.is_some()
+                        && lineage.reviewed_at_ms.is_some();
+                    let empty_review = lineage.review_decision_id.is_none()
+                        && lineage.review_disposition.is_none()
+                        && lineage.reviewed_at_ms.is_none();
+                    let complete_attribution =
+                        lineage.reviewed_by.is_some() && lineage.review_rationale.is_some();
+                    let empty_attribution =
+                        lineage.reviewed_by.is_none() && lineage.review_rationale.is_none();
+                    if (lineage.requires_review && !complete_review)
+                        || (!lineage.requires_review && !empty_review)
+                        || (!complete_attribution && !empty_attribution)
+                    {
+                        blockers.push("receipt-lineage-review-decision-mismatch".into());
+                    }
+                    if let Err(blocker) = validate_receipt_copy_approval(receipt) {
+                        blockers.push(blocker);
+                    }
+                    let lineage_matches = lineage_fingerprint(lineage)
+                        .map(|observed| observed == *fingerprint)
+                        .unwrap_or(false);
+                    if fingerprint.len() != 64
+                        || !fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit())
+                        || !lineage_matches
+                    {
+                        blockers.push("receipt-lineage-integrity-mismatch".into());
+                    }
                 }
-                if lineage.modified_ms != receipt.source_modified_ms {
-                    blockers.push("receipt-lineage-modified-time-mismatch".into());
-                }
-                if lineage.review_fingerprint.len() != 64
-                    || !lineage
-                        .review_fingerprint
-                        .bytes()
-                        .all(|byte| byte.is_ascii_hexdigit())
-                {
-                    blockers.push("receipt-lineage-review-fingerprint-invalid".into());
-                }
-                let complete_review = lineage.review_decision_id.is_some()
-                    && lineage.review_disposition.is_some()
-                    && lineage.reviewed_at_ms.is_some();
-                let empty_review = lineage.review_decision_id.is_none()
-                    && lineage.review_disposition.is_none()
-                    && lineage.reviewed_at_ms.is_none();
-                let complete_attribution =
-                    lineage.reviewed_by.is_some() && lineage.review_rationale.is_some();
-                let empty_attribution =
-                    lineage.reviewed_by.is_none() && lineage.review_rationale.is_none();
-                if (lineage.requires_review && !complete_review)
-                    || (!lineage.requires_review && !empty_review)
-                    || (!complete_attribution && !empty_attribution)
-                {
-                    blockers.push("receipt-lineage-review-decision-mismatch".into());
-                }
-                let lineage_matches = lineage_fingerprint(lineage)
-                    .map(|observed| observed == *fingerprint)
-                    .unwrap_or(false);
-                if fingerprint.len() != 64
-                    || !fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit())
-                    || !lineage_matches
-                {
-                    blockers.push("receipt-lineage-integrity-mismatch".into());
-                }
+                _ => blockers.push("receipt-lineage-missing".into()),
             }
-            _ => blockers.push("receipt-lineage-missing".into()),
-        },
+        }
         _ => {}
     }
     if !receipt_integrity_valid(receipt) {
@@ -918,11 +1150,17 @@ fn write_immutable_receipt(
 fn build_verified_receipt(
     candidate: &CloudCandidate,
     review_decision: Option<&CloudReviewDecision>,
+    copy_approval: &CloudCopyApproval,
     hashes: ContentDigests,
     verified_at_ms: u64,
     copy_verification_method: CloudCopyVerificationMethod,
 ) -> Result<CloudCopyReceipt, String> {
-    let lineage = lineage_snapshot(candidate, review_decision, copy_verification_method);
+    let lineage = lineage_snapshot(
+        candidate,
+        review_decision,
+        copy_verification_method,
+        Some(copy_approval),
+    );
     let lineage_fingerprint = lineage_fingerprint(&lineage)?;
     let mut receipt = CloudCopyReceipt {
         version: RECEIPT_VERSION,
@@ -961,29 +1199,24 @@ fn build_verified_receipt(
     Ok(receipt)
 }
 
-/// Copy a pre-approved candidate into its cloud root and persist an immutable verification
-/// receipt. The source is never removed, even when receipt persistence fails.
+/// Copy a candidate only after validating both the optional metadata review decision and a fresh,
+/// exact, human-attributed copy approval. Every path/provider/planner gate remains mandatory.
 #[cfg(not(coverage))]
-pub fn prepare_cloud_copy(
-    candidate: &CloudCandidate,
-    cloud_root: &CloudRoot,
-    receipt_dir: &Path,
-    copied_at_ms: u64,
-) -> Result<(CloudCopyReceipt, PathBuf), String> {
-    prepare_cloud_copy_with_review(candidate, cloud_root, receipt_dir, copied_at_ms, None)
-}
-
-/// Copy a candidate after validating an optional operator review decision. A current attributed
-/// human approval can clear the exact review and production-time-confidence gates; every
-/// path/provider/planner gate remains mandatory.
-#[cfg(not(coverage))]
-pub fn prepare_cloud_copy_with_review(
+pub fn prepare_cloud_copy_with_approval(
     candidate: &CloudCandidate,
     cloud_root: &CloudRoot,
     receipt_dir: &Path,
     copied_at_ms: u64,
     review_decision: Option<&CloudReviewDecision>,
+    copy_approval: &CloudCopyApproval,
 ) -> Result<(CloudCopyReceipt, PathBuf), String> {
+    validate_cloud_copy_approval_for_action(
+        copy_approval,
+        candidate,
+        cloud_root,
+        CloudCopyApprovalAction::CopyOnly,
+        copied_at_ms,
+    )?;
     let blockers = candidate_blockers_with_review(candidate, cloud_root, review_decision);
     if !blockers.is_empty() {
         return Err(blockers.join(","));
@@ -992,6 +1225,7 @@ pub fn prepare_cloud_copy_with_review(
     let receipt = build_verified_receipt(
         candidate,
         review_decision,
+        copy_approval,
         hashes,
         copied_at_ms,
         CloudCopyVerificationMethod::CopiedByDiskSage,
@@ -1005,27 +1239,23 @@ pub fn prepare_cloud_copy_with_review(
     }
 }
 
-/// Verify and adopt a destination that already exists under the selected cloud root. Neither file
-/// is modified or removed. A receipt is issued only when the fresh planner reported exactly
-/// `destination-exists` and all three content digests match.
+/// Verify and adopt an existing destination only after the same exact human action approval.
 #[cfg(not(coverage))]
-pub fn adopt_existing_cloud_copy(
-    candidate: &CloudCandidate,
-    cloud_root: &CloudRoot,
-    receipt_dir: &Path,
-    verified_at_ms: u64,
-) -> Result<(CloudCopyReceipt, PathBuf), String> {
-    adopt_existing_cloud_copy_with_review(candidate, cloud_root, receipt_dir, verified_at_ms, None)
-}
-
-#[cfg(not(coverage))]
-pub fn adopt_existing_cloud_copy_with_review(
+pub fn adopt_existing_cloud_copy_with_approval(
     candidate: &CloudCandidate,
     cloud_root: &CloudRoot,
     receipt_dir: &Path,
     verified_at_ms: u64,
     review_decision: Option<&CloudReviewDecision>,
+    copy_approval: &CloudCopyApproval,
 ) -> Result<(CloudCopyReceipt, PathBuf), String> {
+    validate_cloud_copy_approval_for_action(
+        copy_approval,
+        candidate,
+        cloud_root,
+        CloudCopyApprovalAction::AdoptExistingCopy,
+        verified_at_ms,
+    )?;
     let blockers =
         existing_copy_candidate_blockers_with_review(candidate, cloud_root, review_decision);
     if !blockers.is_empty() {
@@ -1035,12 +1265,88 @@ pub fn adopt_existing_cloud_copy_with_review(
     let receipt = build_verified_receipt(
         candidate,
         review_decision,
+        copy_approval,
         hashes,
         verified_at_ms,
         CloudCopyVerificationMethod::AdoptedExisting,
     )?;
     let path = write_immutable_receipt(&receipt, receipt_dir)?;
     Ok((receipt, path))
+}
+
+#[cfg(all(test, not(coverage)))]
+fn test_copy_approval(
+    candidate: &CloudCandidate,
+    cloud_root: &CloudRoot,
+    action: CloudCopyApprovalAction,
+    approved_at_ms: u64,
+) -> Result<CloudCopyApproval, String> {
+    create_cloud_copy_approval(
+        candidate,
+        cloud_root,
+        action,
+        approved_at_ms,
+        "human:test",
+        "test-authorized exact candidate action",
+        &cloud_copy_approval_phrase(candidate, action),
+    )
+}
+
+#[cfg(all(test, not(coverage)))]
+pub fn prepare_cloud_copy(
+    candidate: &CloudCandidate,
+    cloud_root: &CloudRoot,
+    receipt_dir: &Path,
+    copied_at_ms: u64,
+) -> Result<(CloudCopyReceipt, PathBuf), String> {
+    prepare_cloud_copy_with_review(candidate, cloud_root, receipt_dir, copied_at_ms, None)
+}
+
+#[cfg(all(test, not(coverage)))]
+pub fn prepare_cloud_copy_with_review(
+    candidate: &CloudCandidate,
+    cloud_root: &CloudRoot,
+    receipt_dir: &Path,
+    copied_at_ms: u64,
+    review_decision: Option<&CloudReviewDecision>,
+) -> Result<(CloudCopyReceipt, PathBuf), String> {
+    let approval = test_copy_approval(
+        candidate,
+        cloud_root,
+        CloudCopyApprovalAction::CopyOnly,
+        copied_at_ms,
+    )?;
+    prepare_cloud_copy_with_approval(
+        candidate,
+        cloud_root,
+        receipt_dir,
+        copied_at_ms,
+        review_decision,
+        &approval,
+    )
+}
+
+#[cfg(all(test, not(coverage)))]
+pub fn adopt_existing_cloud_copy(
+    candidate: &CloudCandidate,
+    cloud_root: &CloudRoot,
+    receipt_dir: &Path,
+    verified_at_ms: u64,
+) -> Result<(CloudCopyReceipt, PathBuf), String> {
+    let approval = test_copy_approval(
+        candidate,
+        cloud_root,
+        CloudCopyApprovalAction::AdoptExistingCopy,
+        verified_at_ms,
+    )?;
+    adopt_existing_cloud_copy_with_approval(
+        candidate,
+        cloud_root,
+        receipt_dir,
+        verified_at_ms,
+        None,
+        &approval,
+    )
 }
 
 #[cfg(test)]
@@ -1133,10 +1439,14 @@ mod tests {
 
     fn receipt() -> CloudCopyReceipt {
         let candidate = candidate();
+        let approval =
+            test_copy_approval(&candidate, &root(), CloudCopyApprovalAction::CopyOnly, 100)
+                .unwrap();
         let lineage = lineage_snapshot(
             &candidate,
             None,
             CloudCopyVerificationMethod::CopiedByDiskSage,
+            Some(&approval),
         );
         let lineage_fingerprint = lineage_fingerprint(&lineage).unwrap();
         let mut receipt = CloudCopyReceipt {
@@ -1179,6 +1489,11 @@ mod tests {
     fn receipt_for(provider: CloudProvider) -> CloudCopyReceipt {
         let mut provider_receipt = receipt();
         provider_receipt.provider = provider;
+        let lineage = provider_receipt.lineage.as_mut().unwrap();
+        let approval = lineage.copy_approval.as_mut().unwrap();
+        approval.provider = provider;
+        approval.approval_id = copy_approval_id_for(approval);
+        provider_receipt.lineage_fingerprint = Some(lineage_fingerprint(lineage).unwrap());
         provider_receipt.receipt_id = receipt_id_for(
             provider_receipt.version,
             &provider_receipt.candidate_fingerprint,
@@ -1196,6 +1511,31 @@ mod tests {
             provider_receipt.lineage_fingerprint.as_deref(),
         );
         provider_receipt
+    }
+
+    fn pre_approval_receipt() -> CloudCopyReceipt {
+        let mut previous = receipt();
+        previous.version = PRE_APPROVAL_RECEIPT_VERSION;
+        previous.lineage.as_mut().unwrap().copy_approval = None;
+        previous.lineage_fingerprint =
+            Some(lineage_fingerprint(previous.lineage.as_ref().unwrap()).unwrap());
+        previous.receipt_id = receipt_id_for(
+            previous.version,
+            &previous.candidate_fingerprint,
+            previous.provider,
+            &previous.source,
+            &previous.destination,
+            previous.bytes,
+            &previous.blake3,
+            &previous.sha256,
+            &previous.quick_xor_base64,
+            previous.source_modified_ms,
+            previous.copied_at_ms,
+            previous.copy_verified,
+            previous.provider_sync_confirmed,
+            previous.lineage_fingerprint.as_deref(),
+        );
+        previous
     }
 
     fn legacy_receipt() -> CloudCopyReceipt {
@@ -1292,7 +1632,81 @@ mod tests {
     }
 
     #[test]
-    fn receipt_lineage_is_integrity_bound_and_legacy_v2_remains_valid() {
+    fn copy_approval_requires_exact_phrase_human_attribution_context_and_freshness() {
+        let candidate = candidate();
+        let root = root();
+        let action = CloudCopyApprovalAction::CopyOnly;
+        assert_eq!(
+            create_cloud_copy_approval(
+                &candidate,
+                &root,
+                action,
+                100,
+                "human:test",
+                "Exact source and cloud destination reviewed.",
+                "승인",
+            )
+            .unwrap_err(),
+            "cloud-copy-exact-confirmation-phrase-mismatch"
+        );
+        let phrase = cloud_copy_approval_phrase(&candidate, action);
+        let approval = create_cloud_copy_approval(
+            &candidate,
+            &root,
+            action,
+            100,
+            "human:test",
+            "Exact source and cloud destination reviewed.",
+            &phrase,
+        )
+        .unwrap();
+        assert!(validate_cloud_copy_approval_for_action(
+            &approval,
+            &candidate,
+            &root,
+            action,
+            100 + MAX_CLOUD_COPY_APPROVAL_AGE_MS,
+        )
+        .is_ok());
+        assert_eq!(
+            validate_cloud_copy_approval_for_action(
+                &approval,
+                &candidate,
+                &root,
+                action,
+                101 + MAX_CLOUD_COPY_APPROVAL_AGE_MS,
+            )
+            .unwrap_err(),
+            "cloud-copy-approval-stale"
+        );
+        let mut wrong_root = root.clone();
+        wrong_root.id = "icloud:other".into();
+        assert_eq!(
+            validate_cloud_copy_approval_for_action(
+                &approval,
+                &candidate,
+                &wrong_root,
+                action,
+                100,
+            )
+            .unwrap_err(),
+            "cloud-copy-approval-context-mismatch"
+        );
+        assert_eq!(
+            validate_cloud_copy_approval_for_action(
+                &approval,
+                &candidate,
+                &root,
+                CloudCopyApprovalAction::AdoptExistingCopy,
+                100,
+            )
+            .unwrap_err(),
+            "cloud-copy-approval-context-mismatch"
+        );
+    }
+
+    #[test]
+    fn receipt_lineage_is_integrity_bound_and_older_receipts_remain_valid() {
         let current = receipt();
         assert!(receipt_blockers(&current).is_empty());
         let lineage = current.lineage.as_ref().unwrap();
@@ -1319,9 +1733,35 @@ mod tests {
         assert!(receipt_blockers(&inconsistent_time)
             .contains(&"receipt-lineage-modified-time-mismatch".to_string()));
 
+        let mut approval_missing = current.clone();
+        approval_missing.lineage.as_mut().unwrap().copy_approval = None;
+        approval_missing.lineage_fingerprint =
+            Some(lineage_fingerprint(approval_missing.lineage.as_ref().unwrap()).unwrap());
+        approval_missing.receipt_id = receipt_id_for(
+            approval_missing.version,
+            &approval_missing.candidate_fingerprint,
+            approval_missing.provider,
+            &approval_missing.source,
+            &approval_missing.destination,
+            approval_missing.bytes,
+            &approval_missing.blake3,
+            &approval_missing.sha256,
+            &approval_missing.quick_xor_base64,
+            approval_missing.source_modified_ms,
+            approval_missing.copied_at_ms,
+            approval_missing.copy_verified,
+            approval_missing.provider_sync_confirmed,
+            approval_missing.lineage_fingerprint.as_deref(),
+        );
+        assert!(receipt_blockers(&approval_missing)
+            .contains(&"receipt-lineage-copy-approval-missing".to_string()));
+
         let mut missing = current;
         missing.lineage = None;
         assert!(receipt_blockers(&missing).contains(&"receipt-lineage-missing".to_string()));
+
+        let previous = pre_approval_receipt();
+        assert!(receipt_blockers(&previous).is_empty());
 
         let legacy = legacy_receipt();
         assert!(receipt_blockers(&legacy).is_empty());
@@ -1359,6 +1799,7 @@ mod tests {
             &reviewed,
             Some(&approved),
             CloudCopyVerificationMethod::CopiedByDiskSage,
+            None,
         );
         assert_eq!(
             reviewed_lineage.review_decision_id.as_deref(),
@@ -1736,6 +2177,13 @@ mod tests {
         );
         assert_eq!(lineage.metadata_evidence, test_candidate.metadata_evidence);
         assert_eq!(lineage.review_decision_id, None);
+        let approval = lineage.copy_approval.as_ref().unwrap();
+        assert_eq!(approval.action, CloudCopyApprovalAction::CopyOnly);
+        assert_eq!(
+            approval.review_fingerprint,
+            test_candidate.review_fingerprint
+        );
+        assert_eq!(approval.approved_by, "human:test");
 
         let wrong_name = receipt_dir.join("wrong-name.json");
         std::fs::copy(&receipt_path, &wrong_name).unwrap();
@@ -2018,10 +2466,18 @@ mod tests {
             access_issue: None,
         };
         let content_hash = hash_file(&source).unwrap();
+        let approval = test_copy_approval(
+            &test_candidate,
+            &test_root,
+            CloudCopyApprovalAction::CopyOnly,
+            123,
+        )
+        .unwrap();
         let lineage = lineage_snapshot(
             &test_candidate,
             None,
             CloudCopyVerificationMethod::CopiedByDiskSage,
+            Some(&approval),
         );
         let lineage_fingerprint = lineage_fingerprint(&lineage).unwrap();
         let receipt_id = receipt_id_for(

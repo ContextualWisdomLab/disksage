@@ -1129,6 +1129,8 @@ fn create_cloud_candidate_receipt(
     min_size_mib: u64,
     min_age_days: u64,
     limit: usize,
+    exact_confirmation_phrase: &str,
+    approval_rationale: &str,
     app: &AppHandle,
     adopt_existing: bool,
 ) -> Result<CloudCopyOutput, String> {
@@ -1168,6 +1170,21 @@ fn create_cloud_candidate_receipt(
     } else {
         None
     };
+    let action = if adopt_existing {
+        cloud_transfer::CloudCopyApprovalAction::AdoptExistingCopy
+    } else {
+        cloud_transfer::CloudCopyApprovalAction::CopyOnly
+    };
+    let action_at_ms = cloud::system_now_ms();
+    let copy_approval = cloud_transfer::create_cloud_copy_approval(
+        candidate,
+        &selected,
+        action,
+        action_at_ms,
+        &local_human_reviewer(),
+        approval_rationale.trim(),
+        exact_confirmation_phrase,
+    )?;
     if !adopt_existing {
         provider_client_runtime::require_provider_client_runtime(
             selected.provider,
@@ -1188,20 +1205,22 @@ fn create_cloud_candidate_receipt(
         require_capacity_for_copy(candidate, &snapshot.snapshot)?;
     }
     let (receipt, receipt_path) = if adopt_existing {
-        cloud_transfer::adopt_existing_cloud_copy_with_review(
+        cloud_transfer::adopt_existing_cloud_copy_with_approval(
             candidate,
             &selected,
             &receipt_dir,
-            cloud::system_now_ms(),
+            action_at_ms,
             review_decision.as_ref(),
+            &copy_approval,
         )?
     } else {
-        cloud_transfer::prepare_cloud_copy_with_review(
+        cloud_transfer::prepare_cloud_copy_with_approval(
             candidate,
             &selected,
             &receipt_dir,
-            cloud::system_now_ms(),
+            action_at_ms,
             review_decision.as_ref(),
+            &copy_approval,
         )?
     };
     Ok(CloudCopyOutput {
@@ -1226,6 +1245,8 @@ pub fn copy_cloud_candidate(
     min_size_mib: u64,
     min_age_days: u64,
     limit: usize,
+    exact_confirmation_phrase: String,
+    approval_rationale: String,
     app: AppHandle,
     state: State<AppState>,
 ) -> Result<CloudCopyOutput, String> {
@@ -1240,6 +1261,8 @@ pub fn copy_cloud_candidate(
         min_size_mib,
         min_age_days,
         limit,
+        &exact_confirmation_phrase,
+        &approval_rationale,
         &app,
         false,
     )
@@ -1256,6 +1279,8 @@ pub fn adopt_existing_cloud_candidate(
     min_size_mib: u64,
     min_age_days: u64,
     limit: usize,
+    exact_confirmation_phrase: String,
+    approval_rationale: String,
     app: AppHandle,
     state: State<AppState>,
 ) -> Result<CloudCopyOutput, String> {
@@ -1270,6 +1295,8 @@ pub fn adopt_existing_cloud_candidate(
         min_size_mib,
         min_age_days,
         limit,
+        &exact_confirmation_phrase,
+        &approval_rationale,
         &app,
         true,
     )
