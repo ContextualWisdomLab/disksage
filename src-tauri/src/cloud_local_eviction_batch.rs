@@ -167,7 +167,7 @@ pub struct IcloudLocalEvictionBatchResult {
     pub observed_allocation_reduction_bytes: u64,
     /// Whether every planned item was attempted and every request succeeded.
     pub execution_complete: bool,
-    /// Whether every planned item completed verification and immutable eordering.
+    /// Whether every planned item completed verification and immutable recording.
     pub verification_complete: bool,
     /// Whether fail-closed processing stopped before the batch completed.
     pub halted: bool,
