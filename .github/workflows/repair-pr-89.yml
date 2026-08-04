@@ -224,10 +224,11 @@ jobs:
               batch = batch[:closing] + insertion + batch[closing:]
           batch_path.write_text(batch, encoding="utf-8")
 
-      - name: Format and validate the exact candidate
+      - name: Refresh the lockfile once, then validate locked exact candidate
         run: |
           rustfmt src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs
           rustfmt src-tauri/src/cloud_local_eviction_batch.rs
+          cargo check --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-icloud-local-eviction-batch
           git diff --check
           cargo test --locked --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-icloud-local-eviction-batch
           cargo test --locked --manifest-path src-tauri/Cargo.toml --lib cloud_local_eviction_batch::tests
@@ -242,7 +243,7 @@ jobs:
           rm .github/workflows/repair-pr-89.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs src-tauri/src/cloud_local_eviction_batch.rs .github/workflows/repair-pr-89.yml
+          git add src-tauri/Cargo.lock src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs src-tauri/src/cloud_local_eviction_batch.rs .github/workflows/repair-pr-89.yml
           git diff --cached --check
           git commit -m "fix: address batch eviction review findings"
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
