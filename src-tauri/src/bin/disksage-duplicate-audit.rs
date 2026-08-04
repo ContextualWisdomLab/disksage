@@ -31,7 +31,9 @@ fn absolute_without_parent(path: &Path) -> bool {
 fn parse_args(raw: &[String]) -> Result<Args, String> {
     let mut root = None;
     let mut min_bytes = DEFAULT_MIN_BYTES;
+    let mut min_bytes_seen = false;
     let mut max_entries = DEFAULT_MAX_ENTRIES;
+    let mut max_entries_seen = false;
     let mut private_output = None;
     let mut index = 0usize;
     while index < raw.len() {
@@ -49,6 +51,10 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 root = Some(PathBuf::from(value(&mut index, "--root")?));
             }
             "--min-bytes" => {
+                if min_bytes_seen {
+                    return Err("--min-bytes는 한 번만 지정할 수 있음".into());
+                }
+                min_bytes_seen = true;
                 let parsed = value(&mut index, "--min-bytes")?
                     .parse::<u64>()
                     .map_err(|_| "--min-bytes는 양의 정수여야 함".to_string())?;
@@ -58,6 +64,10 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 min_bytes = parsed;
             }
             "--max-entries" => {
+                if max_entries_seen {
+                    return Err("--max-entries는 한 번만 지정할 수 있음".into());
+                }
+                max_entries_seen = true;
                 let parsed = value(&mut index, "--max-entries")?
                     .parse::<usize>()
                     .map_err(|_| "--max-entries는 양의 정수여야 함".to_string())?;
@@ -73,7 +83,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 private_output = Some(PathBuf::from(value(&mut index, "--private-output")?));
             }
             "--help" | "-h" => return Err(usage()),
-            flag => return Err(format!("알 수 없는 인자: {flag}")),
+            _ => return Err("알 수 없는 인자".into()),
         }
         index += 1;
     }
@@ -191,6 +201,22 @@ mod tests {
             vec![
                 "--root".into(),
                 "/a".into(),
+                "--min-bytes".into(),
+                "1".into(),
+                "--min-bytes".into(),
+                "2".into(),
+            ],
+            vec![
+                "--root".into(),
+                "/a".into(),
+                "--max-entries".into(),
+                "1".into(),
+                "--max-entries".into(),
+                "2".into(),
+            ],
+            vec![
+                "--root".into(),
+                "/a".into(),
                 "--private-output".into(),
                 "relative.json".into(),
             ],
@@ -198,6 +224,14 @@ mod tests {
         ] {
             assert!(parse_args(&raw).is_err(), "{raw:?}");
         }
+    }
+
+    #[test]
+    fn unknown_argument_does_not_echo_sensitive_value() {
+        let secret = "secret-token-user-pasted-by-mistake";
+        let error = parse_args(&[secret.into()]).unwrap_err();
+        assert_eq!(error, "알 수 없는 인자");
+        assert!(!error.contains(secret));
     }
 
     #[test]
