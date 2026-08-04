@@ -91,7 +91,8 @@ jobs:
       - name: Apply execution repair
         run: python .github/scripts/repair_pr_89.py core
       - name: Prove execution-seam tests pass
-        run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli cloud_local_eviction_batch::tests::
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli cloud_local_eviction_batch::tests::
       - name: Prove diagnostic regression test fails before CLI repair
         run: |
           set +e
