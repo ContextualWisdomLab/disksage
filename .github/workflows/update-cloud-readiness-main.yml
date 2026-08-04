@@ -8,16 +8,19 @@ on:
       - .github/workflows/update-cloud-readiness-main.yml
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: update-cloud-readiness-main-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  update:
+  update-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -25,18 +28,95 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Merge current main and remove one-shot workflow
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Merge current main without dropping either product slice
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git fetch --no-tags origin main
+          if ! git merge --no-ff --no-commit origin/main; then
+            mapfile -t conflicts < <(git diff --name-only --diff-filter=U)
+            printf 'merge conflicts: %s\n' "${conflicts[*]}"
+            for path in "${conflicts[@]}"; do
+              case "${path}" in
+                src-tauri/Cargo.toml|src-tauri/src/lib.rs)
+                  git checkout --ours -- "${path}"
+                  ;;
+                *)
+                  echo "unexpected merge conflict: ${path}" >&2
+                  git merge --abort
+                  exit 1
+                  ;;
+              esac
+            done
+            python - <<'PY'
+          from pathlib import Path
+
+          cargo_path = Path("src-tauri/Cargo.toml")
+          cargo = cargo_path.read_text(encoding="utf-8")
+          reclaim_bin = '''[[bin]]
+          name = "disksage-reclaim-plan"
+          path = "src/bin/disksage-reclaim-plan.rs"
+
+          '''
+          if 'name = "disksage-reclaim-plan"' not in cargo:
+              marker = '[build-dependencies]\n'
+              if marker not in cargo:
+                  raise SystemExit("Cargo.toml build-dependencies marker missing")
+              cargo = cargo.replace(marker, reclaim_bin + marker, 1)
+              cargo_path.write_text(cargo, encoding="utf-8")
+
+          lib_path = Path("src-tauri/src/lib.rs")
+          lib = lib_path.read_text(encoding="utf-8")
+          reclaim_module = '''/// Read-only, fail-closed logical/allocation/reclaimability evidence.
+          pub mod reclaim;
+          '''
+          if 'pub mod reclaim;' not in lib:
+              marker = 'pub mod semantic_catalog;\n'
+              if marker not in lib:
+                  raise SystemExit("lib.rs semantic catalog marker missing")
+              lib = lib.replace(marker, reclaim_module + marker, 1)
+              lib_path.write_text(lib, encoding="utf-8")
+          PY
+            git add src-tauri/Cargo.toml src-tauri/src/lib.rs
+          fi
+          git commit --no-edit
+          rm .github/workflows/update-cloud-readiness-main.yml
+          git add .github/workflows/update-cloud-readiness-main.yml
+          git commit --amend --no-edit
+
+      - name: Validate the integrated exact head
+        run: |
+          set -euo pipefail
+          rustfmt --check \
+            src-tauri/src/icloud_sync_health.rs \
+            src-tauri/src/provider_client_runtime.rs \
+            src-tauri/src/bin/disksage-icloud-sync-health.rs \
+            src-tauri/src/bin/disksage-provider-client-runtime.rs
+          cargo test --manifest-path src-tauri/Cargo.toml --lib icloud_sync_health::tests
+          cargo test --manifest-path src-tauri/Cargo.toml --lib provider_client_runtime::tests
+          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-icloud-sync-health
+          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-provider-client-runtime
+          cargo check --manifest-path src-tauri/Cargo.toml --locked --features cloud-cli --lib --bins
+          npm ci
+          npm run check
+          npm test -- --run
+          npm run build
+          git diff HEAD^1 --check
+
+      - name: Publish the validated merge
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch --no-tags origin main
-          git merge --no-ff --no-edit origin/main
-          rm .github/workflows/update-cloud-readiness-main.yml
-          git add -A
-          git commit --amend --no-edit
-          git diff HEAD^1 --check
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push origin HEAD:feat/cloud-readiness-foundation-mainline
