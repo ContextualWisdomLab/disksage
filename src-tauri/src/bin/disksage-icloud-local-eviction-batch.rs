@@ -151,8 +151,11 @@ fn validate_control_locations(
             record_dir,
             "icloud-local-eviction-batch-record-dir-unavailable",
         )?;
-        if record_dir.starts_with(&cloud_root) || paths_overlap(&record_dir, &manifest) {
-            return Err("icloud-local-eviction-batch-record-dir-overlap".into());
+        if record_dir.starts_with(&cloud_root) {
+            return Err("icloud-local-eviction-batch-record-dir-inside-cloud-data".into());
+        }
+        if paths_overlap(&record_dir, &manifest) {
+            return Err("icloud-local-eviction-batch-record-dir-overlaps-manifest".into());
         }
     }
     Ok(())
@@ -164,9 +167,9 @@ fn select_root<'a>(roots: &'a [CloudRoot], requested: &Path) -> Result<&'a Cloud
         .filter(|root| cloud::cloud_root_path_matches(Path::new(&root.path), requested))
         .collect();
     match matches.as_slice() {
-        [only] if only.provider == CloudProvider::Icloud => Ok(*only),
-        [..] if matches.len() == 1 => Err("iCloud root가 필요함".into()),
         [] => Err("요청한 경로가 현재 탐지된 클라우드 루트와 일치하지 않음".into()),
+        [only] if only.provider == CloudProvider::Icloud => Ok(*only),
+        [_] => Err("iCloud root가 필요함".into()),
         _ => Err("요청한 경로와 일치하는 클라우드 루트가 여러 개임".into()),
     }
 }
@@ -502,6 +505,36 @@ mod tests {
         let empty = temp.path().join("empty.json");
         std::fs::write(&empty, br#"{"plans":[]}"#).unwrap();
         assert!(read_manifest_paths(&empty).is_err());
+
+        let too_many = temp.path().join("too-many.json");
+        let items: Vec<_> = (0..=MAX_BATCH_ITEMS)
+            .map(|index| {
+                serde_json::json!({
+                    "path": PathBuf::from(TEST_CLOUD_ROOT).join(format!("f{index}"))
+                })
+            })
+            .collect();
+        std::fs::write(
+            &too_many,
+            serde_json::to_vec(&serde_json::json!({ "plans": items })).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            read_manifest_paths(&too_many).unwrap_err(),
+            "icloud-local-eviction-batch-manifest-item-count-invalid"
+        );
+
+        let oversized = temp.path().join("oversized.json");
+        let padding = "x".repeat(usize::try_from(MAX_MANIFEST_BYTES).unwrap() + 1);
+        std::fs::write(
+            &oversized,
+            serde_json::to_vec(&serde_json::json!({ "pad": padding, "plans": [] })).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            read_manifest_paths(&oversized).unwrap_err(),
+            "icloud-local-eviction-batch-manifest-size-invalid"
+        );
     }
 
     #[cfg(unix)]
@@ -543,7 +576,11 @@ mod tests {
         assert_eq!(
             validate_control_locations(&cloud, &local_manifest, Some(&alias.join("records")))
                 .unwrap_err(),
-            "icloud-local-eviction-batch-record-dir-overlap"
+            "icloud-local-eviction-batch-record-dir-inside-cloud-data"
+        );
+        assert_eq!(
+            validate_control_locations(&cloud, &local_manifest, Some(temp.path())).unwrap_err(),
+            "icloud-local-eviction-batch-record-dir-overlaps-manifest"
         );
     }
 

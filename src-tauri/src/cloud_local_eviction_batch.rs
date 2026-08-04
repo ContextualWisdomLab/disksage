@@ -12,7 +12,8 @@
 use crate::cloud::{CloudAccountScope, CloudProvider, CloudRoot};
 use crate::cloud_local_eviction::{
     approve_icloud_local_eviction, execute_icloud_local_eviction, plan_icloud_local_eviction,
-    write_immutable_record, IcloudLocalEvictionPlan,
+    write_immutable_record, IcloudLocalEvictionApproval, IcloudLocalEvictionPlan,
+    IcloudLocalEvictionResult,
 };
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -582,6 +583,31 @@ fn checkpoint_name(approval_id: &str, attempted_count: u32) -> String {
 /// attempted item is followed by a create-new batch checkpoint; a rerun therefore fails before a
 /// mutation instead of silently reusing an earlier approval record.
 #[cfg(not(coverage))]
+trait BatchRecordWriter {
+    fn write<T: serde::Serialize>(
+        &mut self,
+        record_dir: &Path,
+        name: &str,
+        value: &T,
+    ) -> Result<(), String>;
+}
+
+#[cfg(not(coverage))]
+struct ImmutableBatchRecordWriter;
+
+#[cfg(not(coverage))]
+impl BatchRecordWriter for ImmutableBatchRecordWriter {
+    fn write<T: serde::Serialize>(
+        &mut self,
+        record_dir: &Path,
+        name: &str,
+        value: &T,
+    ) -> Result<(), String> {
+        write_immutable_record(record_dir, name, value).map(|_| ())
+    }
+}
+
+#[cfg(not(coverage))]
 pub fn execute_icloud_local_eviction_batch(
     root: &CloudRoot,
     plan: &IcloudLocalEvictionBatchPlan,
@@ -590,13 +616,17 @@ pub fn execute_icloud_local_eviction_batch(
     record_dir: &Path,
     requested_at_ms: u64,
 ) -> Result<IcloudLocalEvictionBatchResult, String> {
-    execute_icloud_local_eviction_batch_with_now(
+    let mut recorder = ImmutableBatchRecordWriter;
+    execute_icloud_local_eviction_batch_with(
         root,
         plan,
         approval,
         confirmation_batch_fingerprint,
         record_dir,
         requested_at_ms,
+        plan_icloud_local_eviction,
+        execute_icloud_local_eviction,
+        &mut recorder,
         crate::cloud::system_now_ms,
     )
 }
@@ -607,24 +637,40 @@ fn fresh_item_requested_at_ms(now_ms: &mut impl FnMut() -> u64) -> u64 {
 }
 
 #[cfg(not(coverage))]
-fn execute_icloud_local_eviction_batch_with_now(
+fn execute_icloud_local_eviction_batch_with<P, E, R, N>(
     root: &CloudRoot,
     plan: &IcloudLocalEvictionBatchPlan,
     approval: &IcloudLocalEvictionBatchApproval,
     confirmation_batch_fingerprint: &str,
     record_dir: &Path,
     requested_at_ms: u64,
-    mut now_ms: impl FnMut() -> u64,
-) -> Result<IcloudLocalEvictionBatchResult, String> {
+    mut planner: P,
+    mut executor: E,
+    recorder: &mut R,
+    mut now_ms: N,
+) -> Result<IcloudLocalEvictionBatchResult, String>
+where
+    P: FnMut(&CloudRoot, &Path, u64) -> Result<IcloudLocalEvictionPlan, String>,
+    E: FnMut(
+        &CloudRoot,
+        &IcloudLocalEvictionPlan,
+        &IcloudLocalEvictionApproval,
+        &str,
+        u64,
+    ) -> Result<IcloudLocalEvictionResult, String>,
+    R: BatchRecordWriter,
+    N: FnMut() -> u64,
+{
     validate_batch_approval(root, plan, approval, confirmation_batch_fingerprint)?;
-    let _live = preflight_with(root, plan, requested_at_ms, plan_icloud_local_eviction)?;
+    let _live = preflight_with(root, plan, requested_at_ms, &mut planner)?;
 
-    write_immutable_record(
-        record_dir,
-        &format!("{}.batch-approval.json", approval.approval_id),
-        approval,
-    )
-    .map_err(|_| "icloud-local-eviction-batch-approval-record-failed".to_string())?;
+    recorder
+        .write(
+            record_dir,
+            &format!("{}.batch-approval.json", approval.approval_id),
+            approval,
+        )
+        .map_err(|_| "icloud-local-eviction-batch-approval-record-failed".to_string())?;
 
     let mut individual_approvals = Vec::with_capacity(plan.items.len());
     for item in &plan.items {
@@ -635,12 +681,13 @@ fn execute_icloud_local_eviction_batch_with_now(
             &approval.approved_by,
             &approval.rationale,
         )?;
-        write_immutable_record(
-            record_dir,
-            &format!("{}.approval.json", individual.approval_id),
-            &individual,
-        )
-        .map_err(|_| "icloud-local-eviction-batch-item-approval-record-failed".to_string())?;
+        recorder
+            .write(
+                record_dir,
+                &format!("{}.approval.json", individual.approval_id),
+                &individual,
+            )
+            .map_err(|_| "icloud-local-eviction-batch-item-approval-record-failed".to_string())?;
         individual_approvals.push(individual);
     }
 
@@ -673,7 +720,7 @@ fn execute_icloud_local_eviction_batch_with_now(
 
     for (item, individual) in plan.items.iter().zip(individual_approvals.iter()) {
         let item_requested_at_ms = fresh_item_requested_at_ms(&mut now_ms);
-        let execution = execute_icloud_local_eviction(
+        let execution = executor(
             root,
             &item.plan,
             individual,
@@ -682,7 +729,7 @@ fn execute_icloud_local_eviction_batch_with_now(
         );
         match execution {
             Ok(result) => {
-                let result_record = write_immutable_record(
+                let result_record = recorder.write(
                     record_dir,
                     &format!("{}.result.json", result.result_id),
                     &result,
@@ -736,12 +783,13 @@ fn execute_icloud_local_eviction_batch_with_now(
             }
         }
         refresh_result_summary(&mut batch_result, item_requested_at_ms);
-        write_immutable_record(
-            record_dir,
-            &checkpoint_name(&approval.approval_id, batch_result.attempted_count),
-            &batch_result,
-        )
-        .map_err(|_| "icloud-local-eviction-batch-checkpoint-record-failed".to_string())?;
+        recorder
+            .write(
+                record_dir,
+                &checkpoint_name(&approval.approval_id, batch_result.attempted_count),
+                &batch_result,
+            )
+            .map_err(|_| "icloud-local-eviction-batch-checkpoint-record-failed".to_string())?;
         if batch_result.halted {
             break;
         }
@@ -1014,6 +1062,185 @@ mod tests {
         assert_ne!(result.result_id, before);
         assert!(result.execution_complete);
         assert!(result.verification_complete);
+    }
+
+    #[derive(Default)]
+    struct TestBatchRecorder {
+        record_names: Vec<String>,
+        fail_result_record: bool,
+    }
+
+    impl BatchRecordWriter for TestBatchRecorder {
+        fn write<T: serde::Serialize>(
+            &mut self,
+            _record_dir: &Path,
+            name: &str,
+            _value: &T,
+        ) -> Result<(), String> {
+            self.record_names.push(name.to_string());
+            if self.fail_result_record && name.ends_with(".result.json") {
+                Err("test-result-record-failure".into())
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    fn plan_index(path: &Path) -> usize {
+        path.file_stem()
+            .unwrap()
+            .to_string_lossy()
+            .trim_start_matches("file-")
+            .parse()
+            .unwrap()
+    }
+
+    fn approved_batch(
+        item_count: usize,
+    ) -> (
+        IcloudLocalEvictionBatchPlan,
+        IcloudLocalEvictionBatchApproval,
+    ) {
+        let paths: Vec<_> = (0..item_count).map(path).collect();
+        let plan = plan_batch_with(&root(), &paths, 20, |_, path, _| {
+            Ok(safe_plan(plan_index(path)))
+        })
+        .unwrap();
+        let approval = approve_icloud_local_eviction_batch(
+            &plan,
+            &root(),
+            &plan.batch_fingerprint,
+            21,
+            "human:operator",
+            "Exact batch reviewed",
+        )
+        .unwrap();
+        (plan, approval)
+    }
+
+    fn successful_result(
+        plan: &IcloudLocalEvictionPlan,
+        approval: &IcloudLocalEvictionApproval,
+        requested_at_ms: u64,
+    ) -> IcloudLocalEvictionResult {
+        IcloudLocalEvictionResult {
+            version: crate::cloud_local_eviction::ICLOUD_LOCAL_EVICTION_VERSION,
+            result_id: format!("{requested_at_ms:064x}"),
+            plan_fingerprint: plan.plan_fingerprint.clone(),
+            approval_id: approval.approval_id.clone(),
+            path: plan.path.clone(),
+            requested_at_ms,
+            allocated_bytes_before: plan.allocated_bytes,
+            allocated_bytes_after: 0,
+            observed_allocation_reduction_bytes: plan.allocated_bytes,
+            eviction_request_succeeded: true,
+            cloud_item_path_retained: true,
+            is_ubiquitous_after: true,
+            local_allocation_reduction_verified: true,
+            verification_complete: true,
+            verification_blockers: Vec::new(),
+            notices: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn execution_stops_after_first_failed_item_and_records_each_checkpoint() {
+        let root = root();
+        let (plan, approval) = approved_batch(3);
+        let calls = Cell::new(0usize);
+        let clock = Cell::new(100_u64);
+        let mut requested_times = Vec::new();
+        let mut recorder = TestBatchRecorder::default();
+
+        let result = execute_icloud_local_eviction_batch_with(
+            &root,
+            &plan,
+            &approval,
+            &plan.batch_fingerprint,
+            Path::new("/records"),
+            30,
+            |_, path, _| Ok(safe_plan(plan_index(path))),
+            |_, live_plan, individual, _, requested_at_ms| {
+                let call = calls.get();
+                calls.set(call + 1);
+                requested_times.push(requested_at_ms);
+                if call == 1 {
+                    Err("test-item-execution-failed".into())
+                } else {
+                    Ok(successful_result(live_plan, individual, requested_at_ms))
+                }
+            },
+            &mut recorder,
+            || {
+                let current = clock.get();
+                clock.set(current + 100);
+                current
+            },
+        )
+        .unwrap();
+
+        assert_eq!(calls.get(), 2);
+        assert_eq!(requested_times, vec![100, 200]);
+        assert_eq!(result.attempted_count, 2);
+        assert!(result.halted);
+        assert_eq!(
+            result.halt_reason.as_deref(),
+            Some("icloud-local-eviction-batch-item-execution-failed")
+        );
+        let checkpoints: Vec<_> = recorder
+            .record_names
+            .iter()
+            .filter(|name| name.ends_with(".batch-result.json"))
+            .collect();
+        assert_eq!(checkpoints.len(), 2);
+        assert!(recorder.record_names.windows(2).any(
+            |pair| pair[0].ends_with(".result.json") && pair[1].ends_with(".batch-result.json")
+        ));
+    }
+
+    #[test]
+    fn result_record_failure_halts_with_incomplete_verification_and_checkpoint() {
+        let root = root();
+        let (plan, approval) = approved_batch(1);
+        let mut recorder = TestBatchRecorder {
+            fail_result_record: true,
+            ..TestBatchRecorder::default()
+        };
+
+        let result = execute_icloud_local_eviction_batch_with(
+            &root,
+            &plan,
+            &approval,
+            &plan.batch_fingerprint,
+            Path::new("/records"),
+            30,
+            |_, path, _| Ok(safe_plan(plan_index(path))),
+            |_, live_plan, individual, _, requested_at_ms| {
+                Ok(successful_result(live_plan, individual, requested_at_ms))
+            },
+            &mut recorder,
+            || 100,
+        )
+        .unwrap();
+
+        assert!(result.halted);
+        assert!(!result.verification_complete);
+        assert_eq!(
+            result.halt_reason.as_deref(),
+            Some("icloud-local-eviction-batch-item-result-record-failed")
+        );
+        assert_eq!(
+            result.item_outcomes[0].error_code.as_deref(),
+            Some("icloud-local-eviction-batch-item-result-record-failed")
+        );
+        assert_eq!(
+            recorder
+                .record_names
+                .iter()
+                .filter(|name| name.ends_with(".batch-result.json"))
+                .count(),
+            1
+        );
     }
 
     #[test]
