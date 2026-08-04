@@ -53,6 +53,8 @@ pub mod maven_cache;
 pub mod multipart_archive;
 pub mod naruon_capacity;
 pub mod naruon_lineage;
+/// Read-only, fail-closed Podman VM/store reclaim evidence.
+pub mod podman_reclaim;
 pub mod provider_api_client;
 pub mod provider_capacity;
 pub mod provider_client_runtime;
