@@ -190,6 +190,82 @@ export interface CloudRootDiscoveryReport {
   issues: CloudRootDiscoveryIssue[];
 }
 
+export type IcloudStateObservationMethod =
+  | "file-provider-ctl-evaluate"
+  | "foundation-ubiquitous-resource-values";
+
+export interface IcloudLocalState {
+  observation_method: IcloudStateObservationMethod;
+  is_ubiquitous: boolean;
+  is_uploaded: boolean;
+  is_uploading: boolean;
+  is_downloading: boolean;
+  downloading_status_current: boolean;
+  has_unresolved_conflicts: boolean;
+  is_excluded_from_sync: boolean;
+  is_sync_paused: boolean | null;
+  is_trashed: boolean | null;
+  allows_eviction: boolean | null;
+  provider_reported_bytes: number | null;
+  item_identifier_fingerprint: string | null;
+}
+
+export interface IcloudLocalEvictionPlan {
+  version: number;
+  provider: "icloud";
+  account_scope: CloudAccountScope;
+  cloud_root: string;
+  path: string;
+  logical_bytes: number;
+  allocated_bytes: number;
+  filesystem_modified_ms: number;
+  observed_at_ms: number;
+  icloud_state: IcloudLocalState;
+  active_use: ActiveUseEvidence;
+  plan_fingerprint: string;
+  eligible_after_human_approval: boolean;
+  blockers: string[];
+  notices: string[];
+}
+
+export interface IcloudLocalEvictionApproval {
+  version: number;
+  approval_id: string;
+  plan_fingerprint: string;
+  approved_at_ms: number;
+  approved_by: string;
+  rationale: string;
+}
+
+export interface IcloudLocalEvictionResult {
+  version: number;
+  result_id: string;
+  plan_fingerprint: string;
+  approval_id: string;
+  path: string;
+  requested_at_ms: number;
+  allocated_bytes_before: number;
+  allocated_bytes_after: number;
+  observed_allocation_reduction_bytes: number;
+  eviction_request_succeeded: boolean;
+  cloud_item_path_retained: boolean;
+  is_ubiquitous_after: boolean;
+  local_allocation_reduction_verified: boolean;
+  verification_complete: boolean;
+  verification_blockers: string[];
+  notices: string[];
+}
+
+export interface IcloudLocalCopyEvictionOutput {
+  action: "evict-icloud-local-copy";
+  plan: IcloudLocalEvictionPlan;
+  approval: IcloudLocalEvictionApproval;
+  approval_path: string;
+  result: IcloudLocalEvictionResult;
+  result_path: string | null;
+  result_record_error: string | null;
+}
+
 export interface OAuthConnection {
   connection_id: string;
   provider: CloudProvider;
@@ -517,6 +593,21 @@ export interface CloudSourceEvictionOutput {
 export const listCloudRoots = () => invoke<CloudRoot[]>("list_cloud_roots");
 export const inspectCloudRoots = () =>
   invoke<CloudRootDiscoveryReport>("inspect_cloud_roots");
+export const planIcloudLocalCopyEviction = (cloudRoot: string, path: string) =>
+  invoke<IcloudLocalEvictionPlan>("plan_icloud_local_copy_eviction", { cloudRoot, path });
+export const evictIcloudLocalCopy = (
+  cloudRoot: string,
+  path: string,
+  approvedPlanFingerprint: string,
+  confirmPlanFingerprint: string,
+  rationale: string,
+) => invoke<IcloudLocalCopyEvictionOutput>("evict_icloud_local_copy", {
+  cloudRoot,
+  path,
+  approvedPlanFingerprint,
+  confirmPlanFingerprint,
+  rationale,
+});
 export const listCloudProviderConnections = () =>
   invoke<OAuthConnection[]>("list_cloud_provider_connections");
 export const verifyCloudProviderCapacity = (cloudRoot: string) =>

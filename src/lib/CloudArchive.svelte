@@ -15,6 +15,7 @@
     type CloudReviewQueueSort,
   } from "./cloudReviewQueue";
   import { fmtBytes } from "./fmt";
+  import IcloudLocalEviction from "./IcloudLocalEviction.svelte";
 
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
@@ -459,6 +460,9 @@
         {:else}
           <p class="muted">관리자 권한이나 OAuth 없이 macOS의 읽기 전용 iCloud 계정 상태를 사용합니다.</p>
         {/if}
+        {#key selectedRoot}
+          <IcloudLocalEviction cloudRoot={selectedRoot} />
+        {/key}
       </div>
     {:else if selectedRootDetails()}
       <div class="oauth-panel">
