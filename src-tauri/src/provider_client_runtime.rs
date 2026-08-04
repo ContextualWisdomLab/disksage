@@ -21,7 +21,7 @@ const PROCESS_OUTPUT_LIMIT: u64 = 64 * 1024;
 #[cfg(not(coverage))]
 const PROCESS_TIMEOUT: Duration = Duration::from_secs(3);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProviderClientRuntimeEvidenceKind {
     SystemFileProvider,
@@ -39,7 +39,7 @@ impl ProviderClientRuntimeEvidenceKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProviderClientRuntimeState {
     ManagedBySystem,
@@ -59,10 +59,11 @@ impl ProviderClientRuntimeState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProviderClientRuntimeSnapshot {
     pub version: u32,
-    pub schema_kind: &'static str,
+    pub schema_kind: String,
     pub provider: CloudProvider,
     pub observed_at_ms: u64,
     pub evidence_kind: ProviderClientRuntimeEvidenceKind,
@@ -123,7 +124,7 @@ fn system_managed_snapshot(
 ) -> ProviderClientRuntimeSnapshot {
     finish_snapshot(ProviderClientRuntimeSnapshot {
         version: SNAPSHOT_VERSION,
-        schema_kind: SNAPSHOT_SCHEMA_KIND,
+        schema_kind: SNAPSHOT_SCHEMA_KIND.into(),
         provider,
         observed_at_ms,
         evidence_kind: ProviderClientRuntimeEvidenceKind::SystemFileProvider,
@@ -151,7 +152,7 @@ fn unavailable_snapshot(
 ) -> ProviderClientRuntimeSnapshot {
     finish_snapshot(ProviderClientRuntimeSnapshot {
         version: SNAPSHOT_VERSION,
-        schema_kind: SNAPSHOT_SCHEMA_KIND,
+        schema_kind: SNAPSHOT_SCHEMA_KIND.into(),
         provider,
         observed_at_ms,
         evidence_kind: ProviderClientRuntimeEvidenceKind::Unavailable,
@@ -213,7 +214,7 @@ pub fn assess_provider_client_runtime(
         .any(|name| process_name_matches(provider, name));
     finish_snapshot(ProviderClientRuntimeSnapshot {
         version: SNAPSHOT_VERSION,
-        schema_kind: SNAPSHOT_SCHEMA_KIND,
+        schema_kind: SNAPSHOT_SCHEMA_KIND.into(),
         provider,
         observed_at_ms,
         evidence_kind: ProviderClientRuntimeEvidenceKind::BoundedProcessList,
@@ -324,6 +325,7 @@ pub fn require_provider_client_runtime(
 pub fn require_provider_client_runtime_snapshot(
     snapshot: &ProviderClientRuntimeSnapshot,
 ) -> Result<(), String> {
+    validate_provider_client_runtime_snapshot(snapshot)?;
     if snapshot.copy_prerequisite_met {
         Ok(())
     } else {
@@ -332,6 +334,89 @@ pub fn require_provider_client_runtime_snapshot(
             .clone()
             .unwrap_or_else(|| "provider-client-runtime-verification-required".into()))
     }
+}
+
+pub fn validate_provider_client_runtime_snapshot(
+    snapshot: &ProviderClientRuntimeSnapshot,
+) -> Result<(), String> {
+    if snapshot.version != SNAPSHOT_VERSION || snapshot.schema_kind != SNAPSHOT_SCHEMA_KIND {
+        return Err("provider-client-runtime-schema-invalid".into());
+    }
+    if snapshot.raw_process_names_included
+        || snapshot.local_paths_included
+        || snapshot.remote_capacity_verified
+        || snapshot.remote_sync_attested
+        || snapshot.cloud_write_executed
+    {
+        return Err("provider-client-runtime-claim-invalid".into());
+    }
+    let shape_valid = match snapshot.state {
+        ProviderClientRuntimeState::ManagedBySystem => {
+            snapshot.provider == CloudProvider::Icloud
+                && snapshot.evidence_kind == ProviderClientRuntimeEvidenceKind::SystemFileProvider
+                && snapshot.process_observation_complete
+                && snapshot.runtime_observed == Some(true)
+                && snapshot.copy_prerequisite_met
+                && snapshot.blocker.is_none()
+        }
+        ProviderClientRuntimeState::Running => {
+            snapshot.provider != CloudProvider::Icloud
+                && snapshot.evidence_kind == ProviderClientRuntimeEvidenceKind::BoundedProcessList
+                && snapshot.process_observation_complete
+                && snapshot.runtime_observed == Some(true)
+                && snapshot.copy_prerequisite_met
+                && snapshot.blocker.is_none()
+        }
+        ProviderClientRuntimeState::NotObserved => {
+            snapshot.provider != CloudProvider::Icloud
+                && snapshot.evidence_kind == ProviderClientRuntimeEvidenceKind::BoundedProcessList
+                && snapshot.process_observation_complete
+                && snapshot.runtime_observed == Some(false)
+                && !snapshot.copy_prerequisite_met
+                && snapshot.blocker.as_deref() == Some("provider-client-runtime-not-observed")
+        }
+        ProviderClientRuntimeState::EvidenceUnavailable => {
+            snapshot.provider != CloudProvider::Icloud
+                && snapshot.evidence_kind == ProviderClientRuntimeEvidenceKind::Unavailable
+                && !snapshot.process_observation_complete
+                && snapshot.runtime_observed.is_none()
+                && !snapshot.copy_prerequisite_met
+                && snapshot.blocker.as_deref()
+                    == Some("provider-client-runtime-evidence-unavailable")
+        }
+    };
+    if !shape_valid {
+        return Err("provider-client-runtime-shape-invalid".into());
+    }
+    let expected_notices = match snapshot.state {
+        ProviderClientRuntimeState::ManagedBySystem => vec![
+            "provider-client-runtime-prerequisite-only".to_string(),
+            "remote-capacity-and-sync-still-required".to_string(),
+        ],
+        ProviderClientRuntimeState::Running | ProviderClientRuntimeState::NotObserved => vec![
+            "provider-client-runtime-prerequisite-only".to_string(),
+            "process-presence-does-not-prove-account-authentication".to_string(),
+            "remote-capacity-and-sync-still-required".to_string(),
+        ],
+        ProviderClientRuntimeState::EvidenceUnavailable => vec![
+            "provider-client-runtime-prerequisite-only".to_string(),
+            "absence-of-evidence-is-not-process-absence".to_string(),
+            "remote-capacity-and-sync-still-required".to_string(),
+        ],
+    };
+    if snapshot.notices != expected_notices {
+        return Err("provider-client-runtime-notices-invalid".into());
+    }
+    if snapshot.snapshot_fingerprint_sha256.len() != 64
+        || !snapshot
+            .snapshot_fingerprint_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || snapshot.snapshot_fingerprint_sha256 != snapshot_fingerprint(snapshot)
+    {
+        return Err("provider-client-runtime-fingerprint-invalid".into());
+    }
+    Ok(())
 }
 
 pub fn attach_runtime_notice(notices: &mut Vec<String>, snapshot: &ProviderClientRuntimeSnapshot) {
@@ -480,6 +565,45 @@ mod tests {
         assert_eq!(
             require_provider_client_runtime_snapshot(&unavailable).unwrap_err(),
             "provider-client-runtime-evidence-unavailable"
+        );
+    }
+
+    #[test]
+    fn validation_rejects_forged_runtime_shape_claims_and_fingerprint() {
+        let valid =
+            assess_provider_client_runtime(CloudProvider::GoogleDrive, Some(b"Google Drive\n"), 1);
+        assert!(validate_provider_client_runtime_snapshot(&valid).is_ok());
+
+        let mut forged_claim = valid.clone();
+        forged_claim.remote_sync_attested = true;
+        assert_eq!(
+            validate_provider_client_runtime_snapshot(&forged_claim).unwrap_err(),
+            "provider-client-runtime-claim-invalid"
+        );
+
+        let mut forged_shape = valid.clone();
+        forged_shape.runtime_observed = Some(false);
+        assert_eq!(
+            validate_provider_client_runtime_snapshot(&forged_shape).unwrap_err(),
+            "provider-client-runtime-shape-invalid"
+        );
+
+        let mut forged_fingerprint = valid;
+        forged_fingerprint.snapshot_fingerprint_sha256 = "0".repeat(64);
+        assert_eq!(
+            validate_provider_client_runtime_snapshot(&forged_fingerprint).unwrap_err(),
+            "provider-client-runtime-fingerprint-invalid"
+        );
+
+        let mut forged_notices = assess_provider_client_runtime(
+            CloudProvider::Onedrive,
+            Some(b"OneDrive Sync Service\n"),
+            42,
+        );
+        forged_notices.notices.pop();
+        assert_eq!(
+            validate_provider_client_runtime_snapshot(&forged_notices).unwrap_err(),
+            "provider-client-runtime-notices-invalid"
         );
     }
 }

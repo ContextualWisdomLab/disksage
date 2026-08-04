@@ -25,7 +25,7 @@ pub fn export_naruon_cloud_capacity_assessment(
         .capacity
         .as_ref()
         .ok_or_else(|| "naruon-capacity-assessment-missing".to_string())?;
-    validate_snapshot(&capacity.snapshot)?;
+    validate_cloud_capacity_assessment(capacity)?;
     if capacity.snapshot.provider != report.cloud_root.provider {
         return Err("naruon-capacity-provider-mismatch".into());
     }
@@ -49,16 +49,6 @@ pub fn export_naruon_cloud_capacity_assessment(
     {
         return Err("naruon-capacity-plan-binding-mismatch".into());
     }
-    let expected = provider_capacity::assess_capacity(
-        capacity.snapshot.clone(),
-        capacity.requested_bytes,
-        capacity.largest_candidate_bytes,
-        capacity.reserve_bytes,
-    );
-    if *capacity != expected {
-        return Err("naruon-capacity-assessment-inconsistent".into());
-    }
-
     Ok(NaruonCloudCapacityEnvelope {
         schema_kind: "disksage.cloud-capacity-assessment".into(),
         schema_version: NARUON_CLOUD_CAPACITY_SCHEMA_VERSION,
@@ -68,6 +58,22 @@ pub fn export_naruon_cloud_capacity_assessment(
         destination_account_scope: report.cloud_root.account_scope,
         capacity: capacity.clone(),
     })
+}
+
+pub fn validate_cloud_capacity_assessment(
+    capacity: &CloudCapacityAssessment,
+) -> Result<(), String> {
+    validate_snapshot(&capacity.snapshot)?;
+    let expected = provider_capacity::assess_capacity(
+        capacity.snapshot.clone(),
+        capacity.requested_bytes,
+        capacity.largest_candidate_bytes,
+        capacity.reserve_bytes,
+    );
+    if *capacity != expected {
+        return Err("naruon-capacity-assessment-inconsistent".into());
+    }
+    Ok(())
 }
 
 fn is_lower_hex_64(value: &str) -> bool {
@@ -247,6 +253,7 @@ mod tests {
                 access_issue: None,
             },
             generated_at_ms: 30,
+            source_selection_policy: Some(crate::cloud::CloudPlanOptions::default()),
             candidates: Vec::new(),
             candidate_bytes: 100,
             potentially_reclaimable_bytes: 100,
