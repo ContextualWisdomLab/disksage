@@ -266,6 +266,139 @@ export interface IcloudLocalCopyEvictionOutput {
   result_record_error: string | null;
 }
 
+export type GitWorktreeDisposition = "removal-candidate" | "preserve" | "evidence-gap";
+
+export interface GitWorktreeSizeEvidence {
+  method: string;
+  evidence_complete: boolean;
+  allocated_bytes: number;
+  logical_bytes: number;
+  visited_entries: number;
+  error: string | null;
+}
+
+export interface GitWorktreeActiveUseEvidence {
+  method: string;
+  assessed: boolean;
+  evidence_complete: boolean;
+  active: boolean;
+  observed_pids: number[];
+  results_truncated: boolean;
+  error: string | null;
+}
+
+export interface GitWorktreeAuditEntry {
+  path: string;
+  path_fingerprint: string;
+  head: string;
+  branch: string | null;
+  detached: boolean;
+  bare: boolean;
+  primary: boolean;
+  audit_origin: boolean;
+  locked: boolean;
+  lock_reason: string | null;
+  prunable: boolean;
+  prunable_reason: string | null;
+  status_clean: boolean | null;
+  status_entry_count: number | null;
+  contained_in_reference: boolean | null;
+  head_is_retained_tip: boolean;
+  actor_cwd_inside: boolean | null;
+  size: GitWorktreeSizeEvidence;
+  active_use: GitWorktreeActiveUseEvidence;
+  disposition: GitWorktreeDisposition;
+  blockers: string[];
+  entry_fingerprint: string;
+}
+
+export interface GitWorktreeReferenceBinding {
+  reference_ref: string;
+  reference_oid: string;
+}
+
+export interface GitWorktreeAuditReport {
+  schema_kind: "disksage.git-worktree-audit/v2";
+  version: number;
+  repository_root: string;
+  common_dir: string;
+  generated_at_ms: number;
+  retention_references: GitWorktreeReferenceBinding[];
+  retention_reference_set_fingerprint: string;
+  retention_reachable_commit_count: number;
+  worktree_count: number;
+  removal_candidate_count: number;
+  removal_candidate_allocated_bytes: number;
+  preserved_count: number;
+  evidence_gap_count: number;
+  evidence_complete: boolean;
+  removal_plan_fingerprint: string;
+  exact_approval_phrase: string | null;
+  entries: GitWorktreeAuditEntry[];
+  issues: string[];
+  filesystem_mutation_executed: false;
+}
+
+export interface GitWorktreeRemovalApproval {
+  version: number;
+  approval_id: string;
+  removal_plan_fingerprint: string;
+  retention_reference_set_fingerprint: string;
+  removal_candidate_count: number;
+  removal_candidate_allocated_bytes: number;
+  exact_approval_phrase: string;
+  approved_at_ms: number;
+  approved_by: string;
+  rationale: string;
+}
+
+export interface GitWorktreeRemovalItemResult {
+  path: string;
+  path_fingerprint: string;
+  entry_fingerprint: string;
+  head: string;
+  branch: string | null;
+  allocated_bytes_upper_bound: number;
+  removal_attempted: boolean;
+  removal_command_succeeded: boolean;
+  path_absence_verified: boolean;
+  registration_absence_verified: boolean;
+  branch_retained: boolean | null;
+  error: string | null;
+}
+
+export interface GitWorktreeRemovalResult {
+  version: number;
+  result_id: string;
+  approval_id: string;
+  removal_plan_fingerprint: string;
+  retention_reference_set_fingerprint: string;
+  requested_at_ms: number;
+  completed_at_ms: number;
+  planned_candidate_count: number;
+  attempted_count: number;
+  removed_count: number;
+  planned_allocated_bytes_upper_bound: number;
+  removed_allocated_bytes_upper_bound: number;
+  items: GitWorktreeRemovalItemResult[];
+  stopped_reason: string | null;
+  branch_delete_executed: false;
+  git_prune_executed: false;
+  filesystem_mutation_executed: boolean;
+  verification_complete: boolean;
+  notices: string[];
+}
+
+export interface StaleGitWorktreeRemovalOutput {
+  action: "remove-stale-git-worktrees";
+  report: GitWorktreeAuditReport;
+  approval: GitWorktreeRemovalApproval;
+  approval_path: string;
+  result: GitWorktreeRemovalResult;
+  result_path: string | null;
+  result_record_error: string | null;
+}
+
 export interface OAuthConnection {
   connection_id: string;
   provider: CloudProvider;
@@ -606,6 +739,26 @@ export const evictIcloudLocalCopy = (
   path,
   approvedPlanFingerprint,
   confirmPlanFingerprint,
+  rationale,
+});
+export const planStaleGitWorktrees = (
+  repositoryRoot: string,
+  retentionReferences: string[],
+) => invoke<GitWorktreeAuditReport>("plan_stale_git_worktrees", {
+  repositoryRoot,
+  retentionReferences,
+});
+export const removeStaleGitWorktrees = (
+  repositoryRoot: string,
+  retentionReferences: string[],
+  approvedRemovalPlanFingerprint: string,
+  confirmationExactApprovalPhrase: string,
+  rationale: string,
+) => invoke<StaleGitWorktreeRemovalOutput>("remove_stale_git_worktrees", {
+  repositoryRoot,
+  retentionReferences,
+  approvedRemovalPlanFingerprint,
+  confirmationExactApprovalPhrase,
   rationale,
 });
 export const listCloudProviderConnections = () =>
