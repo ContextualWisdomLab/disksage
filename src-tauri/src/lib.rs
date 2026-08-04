@@ -11,6 +11,8 @@ mod userrules;
 mod settings;
 #[cfg_attr(coverage, allow(dead_code))]
 mod safety;
+#[cfg(all(test, target_os = "macos"))]
+mod macos_temp_guard_tests;
 #[cfg_attr(coverage, allow(dead_code))]
 mod rules;
 #[cfg_attr(coverage, allow(dead_code))]
@@ -55,6 +57,8 @@ pub mod provider_evidence;
 pub mod provider_oauth;
 pub mod provider_sync;
 pub mod private_evidence;
+/// Read-only, fail-closed logical/allocation/reclaimability evidence.
+pub mod reclaim;
 pub mod semantic_catalog;
 pub mod volume_pressure;
 
