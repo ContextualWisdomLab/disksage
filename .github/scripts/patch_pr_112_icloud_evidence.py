@@ -1,7 +1,7 @@
 """Patch PR 112 so incomplete iCloud queue evidence always blocks readiness."""
 
 from pathlib import Path
-+import sys
+import sys
 
 
 PATH = Path("src-tauri/src/naruon_cloud_copy_readiness.rs")
@@ -145,14 +145,28 @@ def apply_fix(text: str) -> str:
     )
     text = replace_once(
         text,
+        '''    let expected_state = if expected.is_empty() {
+        "clear"
+    } else {
+        "blocked"
+    };''',
+        '''    if !summary.evidence_complete || !summary.database_snapshot_includes_wal {
+        expected.push("icloud-new-copy-admission-evidence-unavailable".to_string());
+    }
+    let expected_state = if expected.is_empty() {
+        "clear"
+    } else {
+        "blocked"
+    };''',
+        "summary incomplete-evidence blocker",
+    )
+    text = replace_once(
+        text,
         '''    if summary.scheduled_count != scheduled_count
         || summary.scheduled_bytes != scheduled_bytes
         || summary.evidence_complete
         || summary.database_snapshot_includes_wal''',
-        '''    if !summary.evidence_complete || !summary.database_snapshot_includes_wal {
-        expected.push("icloud-new-copy-admission-evidence-unavailable".to_string());
-    }
-    if summary.scheduled_count != scheduled_count
+        '''    if summary.scheduled_count != scheduled_count
         || summary.scheduled_bytes != scheduled_bytes
         || summary.evidence_complete != summary.database_snapshot_includes_wal''',
         "summary completeness validation",
