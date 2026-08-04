@@ -75,6 +75,9 @@ pub enum CloudAccountScope {
     Unknown,
 }
 
+pub const ORGANIZATION_TENANT_AUTHORITY_REVIEW_REASON: &str =
+    "organization-cloud-sensitive-context-needs-explicit-tenant-approval";
+
 impl CloudAccountScope {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -1003,6 +1006,16 @@ pub(crate) fn date_value(epoch_ms: u64) -> String {
     format!("{year:04}-{month:02}-{day:02}")
 }
 
+fn timestamp_value(epoch_ms: u64) -> String {
+    let (year, month, day) = date_parts(epoch_ms);
+    let time_ms = epoch_ms % DAY_MS;
+    let hour = time_ms / 3_600_000;
+    let minute = (time_ms % 3_600_000) / 60_000;
+    let second = (time_ms % 60_000) / 1_000;
+    let millisecond = time_ms % 1_000;
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millisecond:03}Z")
+}
+
 fn add_evidence(
     metadata: &mut ContentMetadata,
     field: &str,
@@ -1031,6 +1044,15 @@ fn set_production_time(
         source,
         confidence,
     );
+    if epoch_ms % DAY_MS != 0 {
+        add_evidence(
+            metadata,
+            "production-timestamp",
+            timestamp_value(epoch_ms),
+            source,
+            confidence,
+        );
+    }
     let confidence_rank = |value: Option<&str>| match value {
         Some("high") => 3,
         Some("medium") => 2,
@@ -1066,10 +1088,88 @@ fn decoded_hex_ascii(value: &str) -> Option<String> {
     (bytes.len() * 2 == compact.len()).then(|| String::from_utf8_lossy(&bytes).into_owned())
 }
 
+fn timestamp_from_text(value: &str) -> Option<u64> {
+    let bytes = value.trim().as_bytes();
+    if bytes.len() < 20
+        || !matches!(bytes.get(4), Some(b':' | b'-'))
+        || !matches!(bytes.get(7), Some(b':' | b'-'))
+        || !matches!(bytes.get(10), Some(b' ' | b'T'))
+        || bytes.get(13) != Some(&b':')
+        || bytes.get(16) != Some(&b':')
+    {
+        return None;
+    }
+
+    let year = digits(bytes, 0, 4)? as i32;
+    let month = digits(bytes, 5, 2)?;
+    let day = digits(bytes, 8, 2)?;
+    let hour = digits(bytes, 11, 2)?;
+    let minute = digits(bytes, 14, 2)?;
+    let second = digits(bytes, 17, 2)?;
+    if !valid_date(year, month, day) || hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+
+    let mut index = 19;
+    let mut millisecond = 0_u64;
+    if bytes.get(index) == Some(&b'.') {
+        index += 1;
+        let fraction_start = index;
+        while bytes.get(index).is_some_and(u8::is_ascii_digit) {
+            if index - fraction_start < 3 {
+                millisecond = millisecond
+                    .saturating_mul(10)
+                    .saturating_add(u64::from(bytes[index] - b'0'));
+            }
+            index += 1;
+        }
+        let fraction_digits = index - fraction_start;
+        if fraction_digits == 0 {
+            return None;
+        }
+        if fraction_digits == 1 {
+            millisecond *= 100;
+        } else if fraction_digits == 2 {
+            millisecond *= 10;
+        }
+    }
+
+    let offset_seconds = match bytes.get(index) {
+        Some(b'Z' | b'z') if index + 1 == bytes.len() => 0_i64,
+        Some(sign @ (b'+' | b'-'))
+            if index + 6 == bytes.len() && bytes.get(index + 3) == Some(&b':') =>
+        {
+            let offset_hour = digits(bytes, index + 1, 2)?;
+            let offset_minute = digits(bytes, index + 4, 2)?;
+            if offset_hour > 14 || offset_minute > 59 || (offset_hour == 14 && offset_minute != 0) {
+                return None;
+            }
+            let magnitude = i64::from(offset_hour * 3_600 + offset_minute * 60);
+            if *sign == b'+' {
+                magnitude
+            } else {
+                -magnitude
+            }
+        }
+        _ => return None,
+    };
+
+    let local_seconds = days_from_civil(year, month, day)
+        .checked_mul(86_400)?
+        .checked_add(i64::from(hour * 3_600 + minute * 60 + second))?;
+    let utc_seconds = local_seconds.checked_sub(offset_seconds)?;
+    u64::try_from(utc_seconds)
+        .ok()?
+        .checked_mul(1_000)?
+        .checked_add(millisecond)
+}
+
 fn date_from_text(value: &str) -> Option<u64> {
-    filename_date_ms(Path::new(value)).or_else(|| {
-        let normalized = value.replace(':', "-");
-        filename_date_ms(Path::new(&normalized))
+    timestamp_from_text(value).or_else(|| {
+        filename_date_ms(Path::new(value)).or_else(|| {
+            let normalized = value.replace(':', "-");
+            filename_date_ms(Path::new(&normalized))
+        })
     })
 }
 
@@ -1376,7 +1476,17 @@ fn exiftool_values_metadata(
         "CreationDate",
     ] {
         for value in json_strings(values.get(key)) {
+            let precise_timestamp = timestamp_from_text(&value);
             if let Some(epoch_ms) = date_from_text(&value) {
+                if precise_timestamp.is_some() {
+                    add_evidence(
+                        &mut metadata,
+                        "production-timestamp-raw",
+                        &value,
+                        &format!("embedded:exiftool:{key}"),
+                        "high",
+                    );
+                }
                 set_production_time(
                     &mut metadata,
                     epoch_ms,
@@ -1729,14 +1839,28 @@ fn pdf_date(value: &str) -> Option<u64> {
         "Dec" => 12,
         _ => return date_from_text(value),
     };
-    date_epoch_ms(parts[4].parse().ok()?, month, parts[2].parse().ok()?)
+    let year = parts[4].parse().ok()?;
+    let day = parts[2].parse().ok()?;
+    let offset = match parts.get(5).copied() {
+        Some("UTC" | "GMT") => Some("+00:00"),
+        Some("KST" | "JST") => Some("+09:00"),
+        _ => None,
+    };
+    offset
+        .and_then(|offset| {
+            timestamp_from_text(&format!(
+                "{year:04}-{month:02}-{day:02}T{}{offset}",
+                parts[3]
+            ))
+        })
+        .or_else(|| date_epoch_ms(year, month, day))
 }
 
 #[cfg(not(coverage))]
 fn pdfinfo_metadata(path: &Path) -> ContentMetadata {
     let mut metadata = ContentMetadata::default();
     let mut command = local_command("pdfinfo");
-    command.arg(path);
+    command.env("LC_ALL", "C").env("TZ", "UTC").arg(path);
     let output = match run_metadata_command(command) {
         Ok(output) => output,
         Err(failure) => {
@@ -3071,7 +3195,7 @@ fn destination_scope_review_reasons(
             vec!["personal-cloud-sensitive-context-needs-explicit-approval".into()]
         }
         CloudAccountScope::Organization if sensitive_context => {
-            vec!["organization-cloud-sensitive-context-needs-explicit-tenant-approval".into()]
+            vec![ORGANIZATION_TENANT_AUTHORITY_REVIEW_REASON.into()]
         }
         CloudAccountScope::Personal | CloudAccountScope::Organization => Vec::new(),
     }
@@ -4413,6 +4537,32 @@ mod tests {
     }
 
     #[test]
+    fn embedded_timestamp_parser_preserves_explicit_offset_and_fraction() {
+        let day = date_epoch_ms(2026, 4, 17).unwrap();
+        let utc_063547 = day + (6 * 3_600 + 35 * 60 + 47) * 1_000;
+        assert_eq!(
+            date_from_text("2026:04:17 15:35:47+09:00"),
+            Some(utc_063547)
+        );
+        assert_eq!(
+            date_from_text("2026-04-17T06:35:47.123Z"),
+            Some(utc_063547 + 123)
+        );
+        assert_eq!(
+            date_from_text("2026-04-17T01:02:03-05:30"),
+            Some(day + (6 * 3_600 + 32 * 60 + 3) * 1_000)
+        );
+        assert_eq!(
+            date_from_text("2026:04:17 15:35:47"),
+            Some(day),
+            "offset-free metadata remains date-only instead of assuming a timezone"
+        );
+        assert_eq!(timestamp_value(utc_063547), "2026-04-17T06:35:47.000Z");
+        assert_eq!(timestamp_from_text("2026-04-17T24:00:00Z"), None);
+        assert_eq!(timestamp_from_text("2026-04-17T00:00:00+14:01"), None);
+    }
+
+    #[test]
     fn source_root_preflight_distinguishes_readable_directory_from_file() {
         let temp = tempfile::tempdir().unwrap();
         assert_eq!(validate_source_root_readable(temp.path()), Ok(()));
@@ -4752,6 +4902,14 @@ mod tests {
         assert_eq!(
             date_parts(pdf_date("Wed Mar 4 10:49:07 2026 KST").unwrap()),
             (2026, 3, 4)
+        );
+        assert_eq!(
+            pdf_date("Fri Apr 17 15:35:47 2026 KST"),
+            timestamp_from_text("2026-04-17T15:35:47+09:00")
+        );
+        assert_eq!(
+            pdf_date("Fri Apr 17 06:35:47 2026 UTC"),
+            timestamp_from_text("2026-04-17T06:35:47+00:00")
         );
         let xml = r#"<cp:coreProperties><dc:title>Quarterly report</dc:title><dcterms:created xsi:type="dcterms:W3CDTF">2026-02-03T12:00:00Z</dcterms:created></cp:coreProperties>"#;
         assert_eq!(xml_value(xml, "title").as_deref(), Some("Quarterly report"));
