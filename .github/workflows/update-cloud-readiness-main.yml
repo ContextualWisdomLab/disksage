@@ -1,9 +1,12 @@
 name: Update cloud readiness foundation from main
 
 on:
-  push:
+  pull_request:
     branches:
-      - feat/cloud-readiness-foundation-mainline
+      - main
+    types:
+      - synchronize
+      - ready_for_review
     paths:
       - .github/workflows/update-cloud-readiness-main.yml
 
@@ -11,7 +14,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: update-cloud-readiness-main-${{ github.ref }}
+  group: update-cloud-readiness-main-${{ github.event.pull_request.number }}
   cancel-in-progress: false
 
 jobs:
@@ -38,8 +41,11 @@ jobs:
             librsvg2-dev
 
       - name: Merge current main without dropping either product slice
+        env:
+          ORIGINAL_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${ORIGINAL_HEAD}"
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git fetch --no-tags origin main
