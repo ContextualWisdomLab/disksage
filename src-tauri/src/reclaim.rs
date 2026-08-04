@@ -262,6 +262,7 @@ fn normalize_roots(raw_paths: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     if raw_paths.is_empty() {
         return Err("at least one path is required".to_string());
     }
+    validate_root_count(raw_paths)?;
 
     let mut paths = Vec::with_capacity(raw_paths.len());
     for raw in raw_paths {
@@ -519,6 +520,12 @@ mod tests {
             .map(|index| PathBuf::from(format!("root-{index}")))
             .collect();
         assert!(validate_root_count(&roots).is_err());
+
+        let raw_roots = vec![PathBuf::from("missing-root"); MAX_RECLAIM_PATHS + 1];
+        assert_eq!(
+            normalize_roots(&raw_roots).unwrap_err(),
+            format!("reclaim plans support at most {MAX_RECLAIM_PATHS} normalized roots")
+        );
     }
 
     #[cfg(unix)]
