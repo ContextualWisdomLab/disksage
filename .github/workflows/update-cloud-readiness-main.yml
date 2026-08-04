@@ -1,3 +1,4 @@
+# One-shot exact-head integration workflow; removes itself after a successful validated merge.
 name: Update cloud readiness foundation from main
 
 on:
