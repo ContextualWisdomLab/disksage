@@ -28,9 +28,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify exact audited parent
+      - name: Verify exact audited parent and trigger-only delta
         env:
-          EXPECTED_PARENT: 412e2e36d628303ff4dcf3997fe7926dd14cc23b
+          EXPECTED_PARENT: d1f419d3d59fa9c79a3b6407aa4e85a714b7b257
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD^)" = "${EXPECTED_PARENT}"
@@ -50,352 +50,41 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - name: Add beginner-readable public API documentation
+      - name: Apply the audited documentation repair from the immutable parent
         shell: python
         run: |
-          from pathlib import Path
-          import re
+          import subprocess
+          import sys
 
-          source_path = Path("src-tauri/src/cloud_local_eviction_batch.rs")
-          source = source_path.read_text(encoding="utf-8")
+          workflow_path = ".github/workflows/pr129-public-docs-repair.yml"
+          previous = subprocess.check_output(
+              ["git", "show", f"HEAD^:{workflow_path}"], text=True
+          ).splitlines()
+          marker = "      - name: Add beginner-readable public API documentation"
+          try:
+              marker_index = previous.index(marker)
+              run_index = next(
+                  index
+                  for index in range(marker_index + 1, len(previous))
+                  if previous[index] == "        run: |"
+              )
+          except (ValueError, StopIteration) as error:
+              raise SystemExit("audited documentation repair script was not found") from error
 
-          def replace_once(old: str, new: str, label: str) -> None:
-              global source
-              count = source.count(old)
-              if count != 1:
-                  raise SystemExit(f"{label}: expected one exact anchor, found {count}")
-              source = source.replace(old, new, 1)
-
-          replace_once(
-              """pub const ICLOUD_LOCAL_EVICTION_BATCH_VERSION: u32 = 1;
-pub const MAX_BATCH_ITEMS: usize = 128;
-""",
-              """/// Version number serialized into every iCloud local-eviction batch record.
-///
-/// Readers must reject unsupported versions rather than guessing how to interpret a record.
-pub const ICLOUD_LOCAL_EVICTION_BATCH_VERSION: u32 = 1;
-
-/// Maximum number of manifest entries accepted in one iCloud local-eviction batch.
-///
-/// The bound limits memory use, review scope, and the amount of work authorized by one approval.
-pub const MAX_BATCH_ITEMS: usize = 128;
-""",
-              "public constants",
-          )
-
-          old_types = """#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct IcloudLocalEvictionBatchItem {
-    pub input_index: u32,
-    pub plan: IcloudLocalEvictionPlan,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct IcloudLocalEvictionBatchUnavailable {
-    pub input_index: u32,
-    pub error_code: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct IcloudLocalEvictionBatchPlan {
-    pub version: u32,
-    pub provider: CloudProvider,
-    pub account_scope: CloudAccountScope,
-    pub cloud_root: String,
-    pub observed_at_ms: u64,
-    pub input_count: u32,
-    pub planned_count: u32,
-    pub unavailable_count: u32,
-    pub total_logical_bytes: u64,
-    pub total_allocated_bytes: u64,
-    pub items: Vec<IcloudLocalEvictionBatchItem>,
-    pub unavailable: Vec<IcloudLocalEvictionBatchUnavailable>,
-    pub batch_fingerprint: String,
-    pub eligible_after_human_approval: bool,
-    pub blockers: Vec<String>,
-    pub notices: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct IcloudLocalEvictionBatchApproval {
-    pub version: u32,
-    pub approval_id: String,
-    pub batch_fingerprint: String,
-    pub approved_at_ms: u64,
-    pub approved_by: String,
-    pub rationale: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct IcloudLocalEvictionBatchItemOutcome {
-    pub input_index: u32,
-    pub plan_fingerprint: String,
-    pub approval_id: String,
-    pub result_id: Option<String>,
-    pub eviction_request_succeeded: bool,
-    pub verification_complete: bool,
-    pub observed_allocation_reduction_bytes: u64,
-    pub error_code: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct IcloudLocalEvictionBatchResult {
-    pub version: u32,
-    pub result_id: String,
-    pub batch_fingerprint: String,
-    pub approval_id: String,
-    pub started_at_ms: u64,
-    pub completed_at_ms: u64,
-    pub input_count: u32,
-    pub planned_count: u32,
-    pub unavailable_count: u32,
-    pub attempted_count: u32,
-    pub succeeded_count: u32,
-    pub verified_count: u32,
-    pub total_allocated_bytes_before: u64,
-    pub observed_allocation_reduction_bytes: u64,
-    pub execution_complete: bool,
-    pub verification_complete: bool,
-    pub halted: bool,
-    pub halt_reason: Option<String>,
-    pub item_outcomes: Vec<IcloudLocalEvictionBatchItemOutcome>,
-    pub notices: Vec<String>,
-}
-"""
-
-          new_types = """/// One manifest entry that was successfully converted into a safe, read-only eviction plan.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct IcloudLocalEvictionBatchItem {
-    /// Zero-based position of the entry in the caller's original manifest.
-    pub input_index: u32,
-    /// Evidence-bound single-item plan that must be revalidated before execution.
-    pub plan: IcloudLocalEvictionPlan,
-}
-
-/// One manifest entry that could not be planned and therefore cannot be executed.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct IcloudLocalEvictionBatchUnavailable {
-    /// Zero-based position of the unavailable entry in the original manifest.
-    pub input_index: u32,
-    /// Bounded, path-free diagnostic code suitable for logs and external records.
-    pub error_code: String,
-}
-
-/// Complete read-only evidence describing exactly what a human may approve for local eviction.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct IcloudLocalEvictionBatchPlan {
-    /// Serialized schema version for fail-closed compatibility checks.
-    pub version: u32,
-    /// Cloud provider that owns every planned item; this must be iCloud.
-    pub provider: CloudProvider,
-    /// Account boundary within which every planned item was discovered.
-    pub account_scope: CloudAccountScope,
-    /// Canonical cloud-root path against which all item paths were validated.
-    pub cloud_root: String,
-    /// Unix timestamp in milliseconds when the read-only evidence was collected.
-    pub observed_at_ms: u64,
-    /// Number of entries supplied by the caller, including unavailable entries.
-    pub input_count: u32,
-    /// Number of entries that produced safe single-item plans.
-    pub planned_count: u32,
-    /// Number of entries excluded because planning could not produce complete evidence.
-    pub unavailable_count: u32,
-    /// Sum of logical byte sizes reported by all planned items.
-    pub total_logical_bytes: u64,
-    /// Sum of currently allocated local bytes reported by all planned items.
-    pub total_allocated_bytes: u64,
-    /// Ordered, executable plans bound to their original manifest positions.
-    pub items: Vec<IcloudLocalEvictionBatchItem>,
-    /// Ordered unavailable entries represented without disclosing their paths.
-    pub unavailable: Vec<IcloudLocalEvictionBatchUnavailable>,
-    /// BLAKE3 digest binding the exact plan shape, identities, byte totals, and exclusions.
-    pub batch_fingerprint: String,
-    /// Whether the plan may proceed after an exact, attributed human approval.
-    pub eligible_after_human_approval: bool,
-    /// Fail-closed reasons that currently prevent execution.
-    pub blockers: Vec<String>,
-    /// Operator-facing limitations that remain true even when the plan is eligible.
-    pub notices: Vec<String>,
-}
-
-/// Attributed human approval bound cryptographically to one exact batch plan.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct IcloudLocalEvictionBatchApproval {
-    /// Serialized schema version for fail-closed compatibility checks.
-    pub version: u32,
-    /// BLAKE3 identifier derived from the approved plan, reviewer, rationale, and time.
-    pub approval_id: String,
-    /// Exact batch-plan fingerprint reviewed by the human approver.
-    pub batch_fingerprint: String,
-    /// Unix timestamp in milliseconds when the approval was recorded.
-    pub approved_at_ms: u64,
-    /// Human identity in the required `human:<identifier>` form.
-    pub approved_by: String,
-    /// Non-empty explanation of why this exact batch was approved.
-    pub rationale: String,
-}
-
-/// Outcome recorded for one attempted item in an executed batch.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct IcloudLocalEvictionBatchItemOutcome {
-    /// Original zero-based manifest position of the attempted item.
-    pub input_index: u32,
-    /// Fingerprint of the single-item plan used for the attempt.
-    pub plan_fingerprint: String,
-    /// Identifier of the derived single-item human approval.
-    pub approval_id: String,
-    /// Immutable execution-result identifier, or `None` when execution produced no result.
-    pub result_id: Option<String>,
-    /// Whether the operating-system eviction request itself reported success.
-    pub eviction_request_succeeded: bool,
-    /// Whether post-request verification and immutable result recording both completed.
-    pub verification_complete: bool,
-    /// Local allocation reduction observed for this item, without claiming volume-wide free space.
-    pub observed_allocation_reduction_bytes: u64,
-    /// Bounded failure code when the attempt or its evidence record was incomplete.
-    pub error_code: Option<String>,
-}
-
-/// Immutable batch-level execution summary and checkpoint state.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct IcloudLocalEvictionBatchResult {
-    /// Serialized schema version for fail-closed compatibility checks.
-    pub version: u32,
-    /// BLAKE3 identifier derived from the complete current result state.
-    pub result_id: String,
-    /// Exact batch-plan fingerprint authorized for this execution.
-    pub batch_fingerprint: String,
-    /// Identifier of the human approval authorizing the batch.
-    pub approval_id: String,
-    /// Unix timestamp in milliseconds when batch execution began.
-    pub started_at_ms: u64,
-    /// Unix timestamp in milliseconds represented by the latest checkpoint.
-    pub completed_at_ms: u64,
-    /// Number of entries originally supplied in the manifest.
-    pub input_count: u32,
-    /// Number of entries eligible for attempted execution.
-    pub planned_count: u32,
-    /// Number of entries excluded during planning.
-    pub unavailable_count: u32,
-    /// Number of items for which an execution attempt has been recorded.
-    pub attempted_count: u32,
-    /// Number of attempts whose operating-system request reported success.
-    pub succeeded_count: u32,
-    /// Number of attempts with complete post-request verification and evidence recording.
-    pub verified_count: u32,
-    /// Total locally allocated bytes reported by the approved plan before execution.
-    pub total_allocated_bytes_before: u64,
-    /// Sum of item-level local allocation reductions observed so far.
-    pub observed_allocation_reduction_bytes: u64,
-    /// Whether every planned item was attempted and every request succeeded.
-    pub execution_complete: bool,
-    /// Whether every planned item also completed verification and immutable recording.
-    pub verification_complete: bool,
-    /// Whether fail-closed processing stopped before the batch completed.
-    pub halted: bool,
-    /// Stable reason code explaining why processing stopped, when applicable.
-    pub halt_reason: Option<String>,
-    /// Ordered outcome records for the items attempted before completion or halt.
-    pub item_outcomes: Vec<IcloudLocalEvictionBatchItemOutcome>,
-    /// Operator-facing limitations that remain true for this result.
-    pub notices: Vec<String>,
-}
-"""
-          replace_once(old_types, new_types, "public batch record types")
-
-          replace_once(
-              """/// Bind one attributed human decision to an exact eligible batch. This function is pure.
-pub fn approve_icloud_local_eviction_batch(
-""",
-              """/// Create an attributed human approval for one exact eligible batch plan.
-///
-/// This pure function validates the plan, reviewer identity, rationale, and timestamps. It never
-/// reads file content and never changes local or cloud data.
-pub fn approve_icloud_local_eviction_batch(
-""",
-              "approval function documentation",
-          )
-
-          replace_once(
-              """/// Execute one fully preflighted batch.
-///
-/// All current plans and all immutable individual approval records are prepared before the first
-/// eviction request. Execution stops after the first error or incomplete verification. Each
-/// attempted item is followed by a create-new batch checkpoint; a rerun therefore fails before a
-/// mutation instead of silently reusing an earlier approval record.
-#[cfg(not(coverage))]
-trait BatchRecordWriter {
-""",
-              """/// Internal test seam for writing immutable approval, result, and checkpoint records.
-///
-/// Production callers cannot inject this dependency; the public coordinator always uses
-/// `ImmutableBatchRecordWriter` and create-new storage semantics.
-#[cfg(not(coverage))]
-trait BatchRecordWriter {
-""",
-              "private record-writer documentation",
-          )
-
-          replace_once(
-              """#[cfg(not(coverage))]
-pub fn execute_icloud_local_eviction_batch(
-""",
-              """/// Execute one approved batch after revalidating every planned item.
-///
-/// The coordinator prepares all current plans and immutable individual approvals before the first
-/// eviction request. It then processes items sequentially, writes a create-new checkpoint after
-/// every attempt, and stops after the first error or incomplete verification. A rerun cannot
-/// silently reuse an earlier approval or checkpoint record.
-///
-/// # Errors
-///
-/// Returns a stable error code when plan or approval integrity fails, preflight evidence changes,
-/// or an immutable approval, result, or checkpoint record cannot be written.
-#[cfg(not(coverage))]
-pub fn execute_icloud_local_eviction_batch(
-""",
-              "public execute documentation",
-          )
-
-          source_path.write_text(source, encoding="utf-8")
-
-          production = source.split("#[cfg(test)]", 1)[0].splitlines()
-
-          def previous_doc(index: int) -> bool:
-              cursor = index - 1
-              while cursor >= 0 and (
-                  not production[cursor].strip()
-                  or production[cursor].lstrip().startswith("#[")
-              ):
-                  cursor -= 1
-              return cursor >= 0 and production[cursor].lstrip().startswith("///")
-
-          missing = []
-          inside_public_struct = False
-          for index, line in enumerate(production):
-              stripped = line.strip()
-              if re.match(r"^pub (?:const|struct|fn)\b", stripped) and not previous_doc(index):
-                  missing.append(f"line {index + 1}: {stripped}")
-              if stripped.startswith("pub struct "):
-                  inside_public_struct = True
-              elif inside_public_struct and stripped == "}":
-                  inside_public_struct = False
-              elif inside_public_struct and re.match(r"^pub [a-zA-Z_][a-zA-Z0-9_]*:", stripped):
-                  if index == 0 or not production[index - 1].lstrip().startswith("///"):
-                      missing.append(f"line {index + 1}: {stripped}")
-          if missing:
-              raise SystemExit("missing public documentation:\n" + "\n".join(missing))
+          script_lines = []
+          for line in previous[run_index + 1 :]:
+              if line.startswith("      - name:"):
+                  break
+              if line.startswith("          "):
+                  script_lines.append(line[10:])
+              elif not line.strip():
+                  script_lines.append("")
+              else:
+                  raise SystemExit(f"unexpected indentation in audited script: {line!r}")
+          script = "\n".join(script_lines) + "\n"
+          if "source_path.write_text(source, encoding=\"utf-8\")" not in script:
+              raise SystemExit("audited script integrity marker is absent")
+          exec(compile(script, f"{workflow_path}@HEAD^", "exec"), {"__name__": "__main__"})
 
       - name: Format and validate focused Rust behavior
         run: |
@@ -412,6 +101,7 @@ pub fn execute_icloud_local_eviction_batch(
           set -euo pipefail
           test "$(git rev-parse origin/fix/icloud-batch-postmerge-verification)" = "${ORIGINAL_HEAD}"
           rm .github/workflows/pr129-public-docs-repair.yml
+          test "$(git diff --name-only | sort)" = $'.github/workflows/pr129-public-docs-repair.yml\nsrc-tauri/src/cloud_local_eviction_batch.rs'
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add src-tauri/src/cloud_local_eviction_batch.rs \
