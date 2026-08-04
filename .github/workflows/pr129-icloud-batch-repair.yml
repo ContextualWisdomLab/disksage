@@ -65,7 +65,16 @@ jobs:
           grep -F 'icloud-local-eviction-batch-record-dir-inside-cloud-data' /tmp/icloud-batch-cli-red.log
       - name: Apply CLI diagnostic repair
         run: python .github/scripts/repair_pr_89.py cli
-      - name: Verify focused CLI boundaries
+      - name: Format repaired Rust sources
+        run: |
+          rustfmt --edition 2021 \
+            src-tauri/src/cloud_local_eviction_batch.rs \
+            src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs
+      - name: Reverify formatted execution safeguards and checkpoints
+        run: >-
+          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli
+          cloud_local_eviction_batch::tests::
+      - name: Reverify formatted CLI boundaries
         run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-icloud-local-eviction-batch
       - name: Verify repaired Rust formatting
         run: |
