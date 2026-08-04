@@ -41,6 +41,7 @@ pub mod cloud_eviction;
 pub mod cloud_review;
 pub mod cloud_transfer;
 pub mod content_digest;
+pub mod icloud_sync_health;
 pub mod incomplete_download;
 pub mod incomplete_download_materialization;
 pub mod incomplete_download_materialization_destination;
@@ -53,6 +54,7 @@ pub mod naruon_capacity;
 pub mod naruon_lineage;
 pub mod provider_api_client;
 pub mod provider_capacity;
+pub mod provider_client_runtime;
 pub mod provider_evidence;
 pub mod provider_oauth;
 pub mod provider_sync;
@@ -100,6 +102,8 @@ pub fn run() {
             commands::inspect_cloud_roots,
             commands::list_cloud_provider_connections,
             commands::verify_cloud_provider_capacity,
+            commands::inspect_cloud_provider_client_runtime,
+            commands::inspect_icloud_new_copy_admission,
             commands::list_cloud_review_decisions,
             commands::connect_cloud_provider,
             commands::disconnect_cloud_provider,

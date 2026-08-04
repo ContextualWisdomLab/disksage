@@ -1,0 +1,170 @@
+//! Headless, path-free report for the local macOS CloudDocs sync queue.
+
+use disksage_lib::icloud_sync_health::{default_cloud_docs_db_dir, probe_icloud_sync_health};
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Args {
+    db_dir: PathBuf,
+    output: Option<PathBuf>,
+}
+
+fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
+    let mut parsed = Args {
+        db_dir: default_cloud_docs_db_dir(home),
+        output: None,
+    };
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--db-dir" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| "--db-dir requires an absolute path".to_string())?;
+                parsed.db_dir = PathBuf::from(value);
+            }
+            "--output" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| "--output requires an absolute new file".to_string())?;
+                let output = PathBuf::from(value);
+                if !output.is_absolute() {
+                    return Err("--output must be absolute".into());
+                }
+                if parsed.output.replace(output).is_some() {
+                    return Err("--output may be supplied once".into());
+                }
+            }
+            "--help" | "-h" => {
+                return Err(
+                    "usage: disksage-icloud-sync-health [--db-dir ABSOLUTE_CLOUDDOCS_DB_DIR] [--output ABSOLUTE_NEW_FILE.json]".into(),
+                );
+            }
+            flag => return Err(format!("unknown argument: {flag}")),
+        }
+        index += 1;
+    }
+    if !parsed.db_dir.is_absolute() {
+        return Err("--db-dir must be absolute".into());
+    }
+    Ok(parsed)
+}
+
+fn now_ms() -> Result<u64, String> {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "system-clock-before-unix-epoch".to_string())?;
+    u64::try_from(duration.as_millis()).map_err(|_| "system-time-overflow".into())
+}
+
+fn write_create_new(path: &Path, encoded: &[u8]) -> Result<(), String> {
+    #[cfg(unix)]
+    let mut file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+            .map_err(|_| "icloud-sync-health-output-create-failed".to_string())?
+    };
+    #[cfg(not(unix))]
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|_| "icloud-sync-health-output-create-failed".to_string())?;
+    file.write_all(encoded)
+        .and_then(|_| file.sync_all())
+        .map_err(|_| "icloud-sync-health-output-write-failed".to_string())
+}
+
+fn run() -> Result<(), String> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| "HOME is unavailable".to_string())?;
+    let args = parse_args(&std::env::args().skip(1).collect::<Vec<_>>(), &home)?;
+    let report = probe_icloud_sync_health(&args.db_dir, now_ms()?)?;
+    let encoded = serde_json::to_vec_pretty(&report)
+        .map_err(|_| "icloud-sync-health-json-invalid".to_string())?;
+    if let Some(path) = args.output.as_deref() {
+        write_create_new(path, &encoded)?;
+    }
+    println!(
+        "{}",
+        std::str::from_utf8(&encoded).map_err(|_| "icloud-sync-health-json-invalid".to_string())?
+    );
+    Ok(())
+}
+
+fn main() {
+    if let Err(error) = run() {
+        eprintln!("DiskSage iCloud sync health: {error}");
+        std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parser_defaults_to_cloud_docs_and_accepts_absolute_override() {
+        let defaults = parse_args(&[], Path::new("/home/test")).unwrap();
+        assert_eq!(
+            defaults.db_dir,
+            PathBuf::from("/home/test/Library/Application Support/CloudDocs/session/db")
+        );
+        assert!(defaults.output.is_none());
+        let explicit = parse_args(
+            &["--db-dir".into(), "/private/db".into()],
+            Path::new("/home/test"),
+        )
+        .unwrap();
+        assert_eq!(explicit.db_dir, PathBuf::from("/private/db"));
+        let output = parse_args(
+            &["--output".into(), "/private/new.json".into()],
+            Path::new("/home/test"),
+        )
+        .unwrap();
+        assert_eq!(output.output, Some(PathBuf::from("/private/new.json")));
+    }
+
+    #[test]
+    fn parser_rejects_unknown_missing_and_relative_values() {
+        assert!(parse_args(&["--wat".into()], Path::new("/home/test")).is_err());
+        assert!(parse_args(&["--db-dir".into()], Path::new("/home/test")).is_err());
+        assert!(parse_args(
+            &["--db-dir".into(), "relative".into()],
+            Path::new("/home/test")
+        )
+        .is_err());
+        assert!(parse_args(
+            &["--output".into(), "relative.json".into()],
+            Path::new("/home/test")
+        )
+        .is_err());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn output_is_create_new_mode_0600() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("health.json");
+        write_create_new(&path, b"{}").unwrap();
+
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(write_create_new(&path, b"changed").is_err());
+        assert_eq!(std::fs::read(path).unwrap(), b"{}");
+    }
+}
