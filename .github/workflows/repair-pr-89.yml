@@ -37,10 +37,11 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev
 
-      - name: Apply bounded review fixes
+      - name: Apply bounded review fixes and regressions
         shell: python
         run: |
           from pathlib import Path
+          from textwrap import dedent
 
           def replace_once(text: str, old: str, new: str, label: str) -> str:
               count = text.count(old)
@@ -62,116 +63,142 @@ jobs:
               '            "--help" | "-h" => return Err(HELP_REQUESTED.into()),\n            _unknown => return Err("알 수 없는 인자".into()),',
               "argument handling",
           )
-          cli = replace_once(
-              cli,
-              '''fn main() {
-    if let Err(error) = run() {
-        eprintln!("{error}");
-        std::process::exit(2);
-    }
-}''',
-              '''fn main() {
-    if let Err(error) = run() {
-        if error == HELP_REQUESTED {
-            println!("{}", usage());
-            return;
-        }
-        eprintln!("{error}");
-        std::process::exit(2);
-    }
-}''',
-              "main help handling",
-          )
+          old_main = dedent(
+              """
+                  fn main() {
+                      if let Err(error) = run() {
+                          eprintln!("{error}");
+                          std::process::exit(2);
+                      }
+                  }
+              """
+          ).strip()
+          new_main = dedent(
+              """
+                  fn main() {
+                      if let Err(error) = run() {
+                          if error == HELP_REQUESTED {
+                              println!("{}", usage());
+                              return;
+                          }
+                          eprintln!("{error}");
+                          std::process::exit(2);
+                      }
+                  }
+              """
+          ).strip()
+          cli = replace_once(cli, old_main, new_main, "main help handling")
           if "fn parser_distinguishes_help_and_redacts_unknown_values()" not in cli:
               marker = "\n    #[test]\n    fn manifest_reader_is_bounded_and_accepts_extra_evidence_fields() {"
-              test = '''
-    #[test]
-    fn parser_distinguishes_help_and_redacts_unknown_values() {
-        assert_eq!(parse_args(&["--help".into()]).unwrap_err(), HELP_REQUESTED);
-        let sensitive = "/Users/private/customer-file";
-        let error = parse_args(&[sensitive.into()]).unwrap_err();
-        assert_eq!(error, "알 수 없는 인자");
-        assert!(!error.contains(sensitive));
-    }
-'''
+              test = dedent(
+                  """
+
+                      #[test]
+                      fn parser_distinguishes_help_and_redacts_unknown_values() {
+                          assert_eq!(parse_args(&["--help".into()]).unwrap_err(), HELP_REQUESTED);
+                          let sensitive = "/Users/private/customer-file";
+                          let error = parse_args(&[sensitive.into()]).unwrap_err();
+                          assert_eq!(error, "알 수 없는 인자");
+                          assert!(!error.contains(sensitive));
+                      }
+                  """
+              )
               cli = replace_once(cli, marker, test + marker, "CLI test insertion")
           cli_path.write_text(cli, encoding="utf-8")
 
           batch_path = Path("src-tauri/src/cloud_local_eviction_batch.rs")
           batch = batch_path.read_text(encoding="utf-8")
-          old_signature = '''#[cfg(not(coverage))]
-pub fn execute_icloud_local_eviction_batch(
-    root: &CloudRoot,
-    plan: &IcloudLocalEvictionBatchPlan,
-    approval: &IcloudLocalEvictionBatchApproval,
-    confirmation_batch_fingerprint: &str,
-    record_dir: &Path,
-    requested_at_ms: u64,
-) -> Result<IcloudLocalEvictionBatchResult, String> {
-    validate_batch_approval(root, plan, approval, confirmation_batch_fingerprint)?;'''
-          new_signature = '''#[cfg(not(coverage))]
-pub fn execute_icloud_local_eviction_batch(
-    root: &CloudRoot,
-    plan: &IcloudLocalEvictionBatchPlan,
-    approval: &IcloudLocalEvictionBatchApproval,
-    confirmation_batch_fingerprint: &str,
-    record_dir: &Path,
-    requested_at_ms: u64,
-) -> Result<IcloudLocalEvictionBatchResult, String> {
-    execute_icloud_local_eviction_batch_with_now(
-        root,
-        plan,
-        approval,
-        confirmation_batch_fingerprint,
-        record_dir,
-        requested_at_ms,
-        crate::cloud::system_now_ms,
-    )
-}
+          old_signature = dedent(
+              """
+                  #[cfg(not(coverage))]
+                  pub fn execute_icloud_local_eviction_batch(
+                      root: &CloudRoot,
+                      plan: &IcloudLocalEvictionBatchPlan,
+                      approval: &IcloudLocalEvictionBatchApproval,
+                      confirmation_batch_fingerprint: &str,
+                      record_dir: &Path,
+                      requested_at_ms: u64,
+                  ) -> Result<IcloudLocalEvictionBatchResult, String> {
+                      validate_batch_approval(root, plan, approval, confirmation_batch_fingerprint)?;
+              """
+          ).rstrip()
+          new_signature = dedent(
+              """
+                  #[cfg(not(coverage))]
+                  pub fn execute_icloud_local_eviction_batch(
+                      root: &CloudRoot,
+                      plan: &IcloudLocalEvictionBatchPlan,
+                      approval: &IcloudLocalEvictionBatchApproval,
+                      confirmation_batch_fingerprint: &str,
+                      record_dir: &Path,
+                      requested_at_ms: u64,
+                  ) -> Result<IcloudLocalEvictionBatchResult, String> {
+                      execute_icloud_local_eviction_batch_with_now(
+                          root,
+                          plan,
+                          approval,
+                          confirmation_batch_fingerprint,
+                          record_dir,
+                          requested_at_ms,
+                          crate::cloud::system_now_ms,
+                      )
+                  }
 
-#[cfg(not(coverage))]
-fn fresh_item_requested_at_ms(now_ms: &mut impl FnMut() -> u64) -> u64 {
-    now_ms()
-}
+                  #[cfg(not(coverage))]
+                  fn fresh_item_requested_at_ms(now_ms: &mut impl FnMut() -> u64) -> u64 {
+                      now_ms()
+                  }
 
-#[cfg(not(coverage))]
-fn execute_icloud_local_eviction_batch_with_now(
-    root: &CloudRoot,
-    plan: &IcloudLocalEvictionBatchPlan,
-    approval: &IcloudLocalEvictionBatchApproval,
-    confirmation_batch_fingerprint: &str,
-    record_dir: &Path,
-    requested_at_ms: u64,
-    mut now_ms: impl FnMut() -> u64,
-) -> Result<IcloudLocalEvictionBatchResult, String> {
-    validate_batch_approval(root, plan, approval, confirmation_batch_fingerprint)?;'''
+                  #[cfg(not(coverage))]
+                  fn execute_icloud_local_eviction_batch_with_now(
+                      root: &CloudRoot,
+                      plan: &IcloudLocalEvictionBatchPlan,
+                      approval: &IcloudLocalEvictionBatchApproval,
+                      confirmation_batch_fingerprint: &str,
+                      record_dir: &Path,
+                      requested_at_ms: u64,
+                      mut now_ms: impl FnMut() -> u64,
+                  ) -> Result<IcloudLocalEvictionBatchResult, String> {
+                      validate_batch_approval(root, plan, approval, confirmation_batch_fingerprint)?;
+              """
+          ).rstrip()
           batch = replace_once(batch, old_signature, new_signature, "batch execution wrapper")
-          old_loop = '''    for (offset, (item, individual)) in plan
-        .items
-        .iter()
-        .zip(individual_approvals.iter())
-        .enumerate()
-    {
-        let item_requested_at_ms =
-            requested_at_ms.saturating_add(u64::try_from(offset).unwrap_or(u64::MAX));'''
-          new_loop = '''    for (item, individual) in plan.items.iter().zip(individual_approvals.iter()) {
-        let item_requested_at_ms = fresh_item_requested_at_ms(&mut now_ms);'''
+          old_loop = dedent(
+              """
+                      for (offset, (item, individual)) in plan
+                          .items
+                          .iter()
+                          .zip(individual_approvals.iter())
+                          .enumerate()
+                      {
+                          let item_requested_at_ms =
+                              requested_at_ms.saturating_add(u64::try_from(offset).unwrap_or(u64::MAX));
+              """
+          ).rstrip()
+          new_loop = dedent(
+              """
+                      for (item, individual) in plan.items.iter().zip(individual_approvals.iter()) {
+                          let item_requested_at_ms = fresh_item_requested_at_ms(&mut now_ms);
+              """
+          ).rstrip()
           batch = replace_once(batch, old_loop, new_loop, "per-item timestamp")
           if "fn item_execution_timestamps_read_the_clock_for_each_item()" not in batch:
-              insertion = '''
+              insertion = dedent(
+                  """
 
-    #[test]
-    fn item_execution_timestamps_read_the_clock_for_each_item() {
-        let next = std::cell::Cell::new(40_u64);
-        let mut now_ms = || {
-            let current = next.get();
-            next.set(current + 7);
-            current
-        };
-        assert_eq!(fresh_item_requested_at_ms(&mut now_ms), 40);
-        assert_eq!(fresh_item_requested_at_ms(&mut now_ms), 47);
-    }
-'''
+                      #[test]
+                      fn item_execution_timestamps_read_the_clock_for_each_item() {
+                          let next = std::cell::Cell::new(40_u64);
+                          let mut now_ms = || {
+                              let current = next.get();
+                              next.set(current + 7);
+                              current
+                          };
+                          assert_eq!(fresh_item_requested_at_ms(&mut now_ms), 40);
+                          assert_eq!(fresh_item_requested_at_ms(&mut now_ms), 47);
+                      }
+                  """
+              )
               closing = batch.rfind("\n}")
               if closing < 0:
                   raise SystemExit("test module closing brace not found")
