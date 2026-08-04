@@ -17,8 +17,8 @@ use crate::safety;
 #[cfg(not(coverage))]
 use crate::{
     cloud, cloud_eviction, cloud_local_eviction, cloud_review, cloud_transfer, dev_artifacts, dupes,
-    icloud_sync_health, provider_api_client, provider_capacity, provider_client_runtime,
-    provider_evidence, provider_oauth, provider_sync, rules,
+    git_worktree, icloud_sync_health, provider_api_client, provider_capacity,
+    provider_client_runtime, provider_evidence, provider_oauth, provider_sync, rules,
 };
 
 #[derive(Default)]
@@ -573,6 +573,113 @@ pub async fn evict_icloud_local_copy(
     })
     .await
     .map_err(|_| "icloud-local-eviction-task-failed".to_string())?
+}
+
+/// Build a read-only, reference-bound audit of all worktrees in one Git common directory.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn plan_stale_git_worktrees(
+    repository_root: String,
+    retention_references: Vec<String>,
+) -> Result<git_worktree::GitWorktreeAuditReport, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git_worktree::audit_git_worktrees(
+            Path::new(&repository_root),
+            &retention_references,
+            git_worktree::GitWorktreeAuditOptions::default(),
+            cloud::system_now_ms(),
+        )
+    })
+    .await
+    .map_err(|_| "git-worktree-audit-task-failed".to_string())?
+}
+
+#[cfg(not(coverage))]
+#[derive(serde::Serialize)]
+pub struct StaleGitWorktreeRemovalOutput {
+    pub action: &'static str,
+    pub report: git_worktree::GitWorktreeAuditReport,
+    pub approval: git_worktree::GitWorktreeRemovalApproval,
+    pub approval_path: String,
+    pub result: git_worktree::GitWorktreeRemovalResult,
+    pub result_path: Option<String>,
+    pub result_record_error: Option<String>,
+}
+
+/// Rebuild the exact audit, bind an attributed human approval, and remove only worktrees that
+/// remain clean, merged, idle, and fingerprint-identical. Branch deletion and prune are excluded.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn remove_stale_git_worktrees(
+    repository_root: String,
+    retention_references: Vec<String>,
+    approved_removal_plan_fingerprint: String,
+    confirmation_exact_approval_phrase: String,
+    rationale: String,
+    app: AppHandle,
+) -> Result<StaleGitWorktreeRemovalOutput, String> {
+    use tauri::Manager;
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "app-data-directory-unavailable".to_string())?;
+    let approved_by = local_human_reviewer();
+    tauri::async_runtime::spawn_blocking(move || {
+        let options = git_worktree::GitWorktreeAuditOptions::default();
+        let report = git_worktree::audit_git_worktrees(
+            Path::new(&repository_root),
+            &retention_references,
+            options,
+            cloud::system_now_ms(),
+        )?;
+        if report.removal_plan_fingerprint != approved_removal_plan_fingerprint {
+            return Err("git-worktree-removal-plan-fingerprint-mismatch".into());
+        }
+        let approval = git_worktree::approve_stale_worktree_removal(
+            &report,
+            &confirmation_exact_approval_phrase,
+            cloud::system_now_ms(),
+            &approved_by,
+            &rationale,
+        )?;
+        let record_dir = git_worktree::prepare_worktree_record_directory(
+            &app_data_dir,
+            &report,
+            "git-worktree-removals",
+        )?;
+        let approval_path = git_worktree::write_immutable_worktree_record(
+            &record_dir,
+            &format!("{}.approval.json", approval.approval_id),
+            &approval,
+        )?;
+        let result = git_worktree::execute_stale_worktree_removal(
+            &report,
+            &approval,
+            &confirmation_exact_approval_phrase,
+            options,
+            cloud::system_now_ms(),
+        )?;
+        let result_record = git_worktree::write_immutable_worktree_record(
+            &record_dir,
+            &format!("{}.result.json", result.result_id),
+            &result,
+        );
+        let (result_path, result_record_error) = match result_record {
+            Ok(path) => (Some(path.to_string_lossy().into_owned()), None),
+            Err(error) => (None, Some(error)),
+        };
+        Ok(StaleGitWorktreeRemovalOutput {
+            action: "remove-stale-git-worktrees",
+            report,
+            approval,
+            approval_path: approval_path.to_string_lossy().into_owned(),
+            result,
+            result_path,
+            result_record_error,
+        })
+    })
+    .await
+    .map_err(|_| "git-worktree-removal-task-failed".to_string())?
 }
 
 #[cfg(not(coverage))]

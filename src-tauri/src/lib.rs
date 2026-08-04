@@ -107,6 +107,8 @@ pub fn run() {
             commands::inspect_cloud_roots,
             commands::plan_icloud_local_copy_eviction,
             commands::evict_icloud_local_copy,
+            commands::plan_stale_git_worktrees,
+            commands::remove_stale_git_worktrees,
             commands::list_cloud_provider_connections,
             commands::verify_cloud_provider_capacity,
             commands::inspect_cloud_provider_client_runtime,

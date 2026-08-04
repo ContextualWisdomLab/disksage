@@ -3,6 +3,7 @@
   import { fmtBytes } from "./fmt";
   import { verdictBadge } from "./verdictBadge";
   import { confirm } from "@tauri-apps/plugin-dialog";
+  import GitWorktreeCleanup from "./GitWorktreeCleanup.svelte";
 
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
@@ -155,6 +156,8 @@
       </ul>
     {/if}
   {/if}
+
+  <GitWorktreeCleanup {scannedRoot} />
 </section>
 
 <style>
