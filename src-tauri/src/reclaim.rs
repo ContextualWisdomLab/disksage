@@ -21,6 +21,18 @@ pub const RECLAIM_PLAN_SCHEMA_KIND: &str = "disksage.reclaim-plan";
 pub const MAX_RECLAIM_PATHS: usize = 1_000;
 /// Maximum UTF-8 byte length accepted for one evidence path.
 pub const MAX_RECLAIM_PATH_UTF8_BYTES: usize = 4_096;
+/// Indicates that no post-operation physical-capacity proof exists.
+pub const REASON_PHYSICAL_UNVERIFIED: &str = "physical-reclaimability-unverified";
+/// Indicates that copy-on-write or other shared extents remain unproven.
+pub const REASON_SHARED_EXTENTS: &str = "shared-extents-or-clones-unproven";
+/// Indicates that observed allocated blocks are not a reclaimability proof.
+pub const REASON_ALLOCATED_NOT_PROOF: &str = "allocated-bytes-are-not-reclaimability-proof";
+/// Indicates that the platform did not expose allocated-block accounting.
+pub const REASON_ALLOCATED_UNAVAILABLE: &str = "allocated-size-unavailable";
+/// Indicates that one or more entries could not be included in complete evidence.
+pub const REASON_EVIDENCE_INCOMPLETE: &str = "evidence-incomplete-skipped-entries";
+/// Indicates that moving an item to Trash does not immediately return its blocks.
+pub const REASON_TRASH_RETAINS: &str = "trash-retains-bytes-until-emptied";
 
 /// Destructive lifecycle whose consequences the read-only plan is estimating.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -123,12 +135,15 @@ pub struct ReclaimPlan {
     pub totals: ReclaimEstimate,
 }
 
+/// Platform-native identity used to deduplicate hard-linked filesystem objects.
 #[cfg(unix)]
 type FileIdentity = (u64, u64);
 
+/// Placeholder identity on platforms without Unix device-and-inode accounting.
 #[cfg(not(unix))]
 type FileIdentity = ();
 
+/// Mutable counters collected while scanning one root or the complete selection.
 #[derive(Debug)]
 struct Accumulator {
     logical_bytes: u64,
@@ -140,6 +155,7 @@ struct Accumulator {
 }
 
 impl Accumulator {
+    /// Creates an empty accumulator with platform-appropriate allocation support.
     fn new() -> Self {
         Self {
             logical_bytes: 0,
@@ -151,28 +167,33 @@ impl Accumulator {
         }
     }
 
+    /// Adds one regular file while deduplicating its observable allocation identity.
     fn record_file(&mut self, metadata: &std::fs::Metadata) {
         self.files = self.files.saturating_add(1);
         self.logical_bytes = self.logical_bytes.saturating_add(metadata.len());
         record_allocated_bytes(metadata, &mut self.seen_files, &mut self.allocated_bytes);
     }
 
+    /// Adds one directory's allocation metadata and directory counter.
     fn record_dir(&mut self, metadata: &std::fs::Metadata) {
         self.dirs = self.dirs.saturating_add(1);
         record_allocated_bytes(metadata, &mut self.seen_files, &mut self.allocated_bytes);
     }
 }
 
+/// Initializes allocated-byte accounting on Unix platforms.
 #[cfg(unix)]
 fn initial_allocated_bytes() -> Option<u64> {
     Some(0)
 }
 
+/// Marks allocated-byte accounting unavailable on non-Unix platforms.
 #[cfg(not(unix))]
 fn initial_allocated_bytes() -> Option<u64> {
     None
 }
 
+/// Adds Unix allocated blocks once for each device-and-inode identity.
 #[cfg(unix)]
 fn record_allocated_bytes(
     metadata: &std::fs::Metadata,
@@ -189,6 +210,7 @@ fn record_allocated_bytes(
     }
 }
 
+/// Keeps allocated-byte accounting unavailable when the platform lacks a supported identity.
 #[cfg(not(unix))]
 fn record_allocated_bytes(
     _metadata: &std::fs::Metadata,
@@ -198,29 +220,31 @@ fn record_allocated_bytes(
     *total = None;
 }
 
+/// Builds the stable reason-code set for one reclaim estimate.
 fn reason_codes(
     operation: PlannedOperation,
     allocation_available: bool,
     skipped_entries: u64,
 ) -> Vec<String> {
     let mut reasons = vec![
-        "physical-reclaimability-unverified".to_string(),
-        "shared-extents-or-clones-unproven".to_string(),
+        REASON_PHYSICAL_UNVERIFIED.to_string(),
+        REASON_SHARED_EXTENTS.to_string(),
     ];
     if allocation_available {
-        reasons.push("allocated-bytes-are-not-reclaimability-proof".to_string());
+        reasons.push(REASON_ALLOCATED_NOT_PROOF.to_string());
     } else {
-        reasons.push("allocated-size-unavailable".to_string());
+        reasons.push(REASON_ALLOCATED_UNAVAILABLE.to_string());
     }
     if skipped_entries > 0 {
-        reasons.push("evidence-incomplete-skipped-entries".to_string());
+        reasons.push(REASON_EVIDENCE_INCOMPLETE.to_string());
     }
     if operation == PlannedOperation::Trash {
-        reasons.push("trash-retains-bytes-until-emptied".to_string());
+        reasons.push(REASON_TRASH_RETAINS.to_string());
     }
     reasons
 }
 
+/// Converts scan counters into the immutable external estimate contract.
 fn estimate(acc: &Accumulator, operation: PlannedOperation) -> ReclaimEstimate {
     ReclaimEstimate {
         logical_bytes: acc.logical_bytes,
@@ -231,6 +255,7 @@ fn estimate(acc: &Accumulator, operation: PlannedOperation) -> ReclaimEstimate {
     }
 }
 
+/// Validates and returns a bounded UTF-8 path for local private evidence.
 fn validated_evidence_path(path: &Path) -> Result<String, String> {
     let value = path
         .to_str()
@@ -249,6 +274,7 @@ fn validated_evidence_path(path: &Path) -> Result<String, String> {
     Ok(value.to_string())
 }
 
+/// Rejects selections whose root count exceeds the bounded planning contract.
 fn validate_root_count(roots: &[PathBuf]) -> Result<(), String> {
     if roots.len() > MAX_RECLAIM_PATHS {
         return Err(format!(
@@ -258,6 +284,7 @@ fn validate_root_count(roots: &[PathBuf]) -> Result<(), String> {
     Ok(())
 }
 
+/// Canonicalizes, deduplicates, and removes roots already covered by a parent directory.
 fn normalize_roots(raw_paths: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     if raw_paths.is_empty() {
         return Err("at least one path is required".to_string());
@@ -301,6 +328,7 @@ fn normalize_roots(raw_paths: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     Ok(roots)
 }
 
+/// Records a file in both its root-local and selection-wide accumulators.
 fn record_for_both(
     metadata: &std::fs::Metadata,
     local: &mut Accumulator,
@@ -310,6 +338,7 @@ fn record_for_both(
     totals.record_file(metadata);
 }
 
+/// Records a directory in both its root-local and selection-wide accumulators.
 fn record_dir_for_both(
     metadata: &std::fs::Metadata,
     local: &mut Accumulator,
@@ -319,6 +348,7 @@ fn record_dir_for_both(
     totals.record_dir(metadata);
 }
 
+/// Scans one normalized root without following links or mutating filesystem contents.
 fn scan_root(
     root: &Path,
     operation: PlannedOperation,
@@ -456,7 +486,11 @@ mod tests {
         assert!(plan
             .totals
             .reason_codes
-            .contains(&"shared-extents-or-clones-unproven".to_string()));
+            .contains(&REASON_SHARED_EXTENTS.to_string()));
+        assert!(!plan
+            .totals
+            .reason_codes
+            .contains(&REASON_TRASH_RETAINS.to_string()));
         #[cfg(unix)]
         assert!(plan.totals.allocated_bytes.unwrap() > 0);
 
@@ -479,7 +513,7 @@ mod tests {
         assert!(plan
             .totals
             .reason_codes
-            .contains(&"trash-retains-bytes-until-emptied".to_string()));
+            .contains(&REASON_TRASH_RETAINS.to_string()));
     }
 
     #[cfg(unix)]
@@ -515,6 +549,12 @@ mod tests {
         let too_long = PathBuf::from("x".repeat(MAX_RECLAIM_PATH_UTF8_BYTES + 1));
         assert!(validated_evidence_path(&too_long).is_err());
         assert!(validated_evidence_path(Path::new("safe\nunsafe")).is_err());
+        assert!(validated_evidence_path(Path::new("")).is_err());
+
+        let at_limit: Vec<PathBuf> = (0..MAX_RECLAIM_PATHS)
+            .map(|index| PathBuf::from(format!("root-{index}")))
+            .collect();
+        assert!(validate_root_count(&at_limit).is_ok());
 
         let roots: Vec<PathBuf> = (0..=MAX_RECLAIM_PATHS)
             .map(|index| PathBuf::from(format!("root-{index}")))
@@ -555,10 +595,10 @@ mod tests {
         assert!(plan.paths[0]
             .estimate
             .reason_codes
-            .contains(&"evidence-incomplete-skipped-entries".to_string()));
+            .contains(&REASON_EVIDENCE_INCOMPLETE.to_string()));
         assert!(plan
             .totals
             .reason_codes
-            .contains(&"evidence-incomplete-skipped-entries".to_string()));
+            .contains(&REASON_EVIDENCE_INCOMPLETE.to_string()));
     }
 }
