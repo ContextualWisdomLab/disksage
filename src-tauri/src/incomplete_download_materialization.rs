@@ -869,7 +869,14 @@ mod tests {
             b"validated payload",
         );
         let (audit, mut recovery) = fresh_reports(temp.path());
-        recovery.validation_fingerprint.replace_range(..1, "0");
+        let replacement = if recovery.validation_fingerprint.starts_with('0') {
+            "1"
+        } else {
+            "0"
+        };
+        recovery
+            .validation_fingerprint
+            .replace_range(..1, replacement);
 
         assert_eq!(
             plan_incomplete_download_materialization(
