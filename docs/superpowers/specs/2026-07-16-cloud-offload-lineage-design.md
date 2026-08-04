@@ -21,12 +21,12 @@ Use DiskSage against a genuinely space-constrained machine to identify files tha
 - Selectively stream SHA-256 and BLAKE3 only for non-blocked candidates that share an exact byte length. Exact-content clusters expose their member count and redundant bytes, bind the hashes into review evidence, and require explicit canonical-lineage selection instead of silently copying every duplicate path.
 - Require review when embedded geolocation is present, embedded production-date fields disagree, an embedded production date conflicts with a full filename date, an embedded production month differs from a filename publication month, a known template/default timestamp is detected, embedded title/author/context indicates personal or confidential material, or no embedded production date is available.
 - Provide both a Tauri UI and a headless JSON CLI. The CLI's plan-only
-  `--decision-summary` view keeps relative paths, metadata/review fingerprints, production-time
-  source and confidence, review reasons, blockers, duplicate totals, and capacity status. It
-  omits absolute source/destination/cloud-root paths, root labels, content titles/authors, raw
-  metadata evidence values, and dataset profiles. The flag is rejected when combined with root
-  inspection, copy, adoption, attestation, eviction, review, or Naruon export actions; the full
-  `CloudPlanReport` and Naruon lineage contracts remain unchanged. A versioned BLAKE3 decision
+  `--decision-summary` view keeps metadata/review fingerprints, production-time source and
+  confidence, review reasons, blockers, duplicate totals, and capacity status. It omits absolute
+  source/destination/cloud-root paths, relative source paths and file names, root labels, content
+  titles/authors, raw metadata evidence values, and dataset profiles. The flag is rejected when
+  combined with root inspection, copy, adoption, attestation, eviction, review, or Naruon export
+  actions; the full `CloudPlanReport` and Naruon lineage contracts remain unchanged. A versioned BLAKE3 decision
   batch fingerprint binds the sorted candidate metadata/review fingerprints, planner blockers,
   destination provider/account scope, totals, and duplicate summary. Volatile generation time,
   age, notices, and capacity state are excluded so an unchanged batch survives a fresh scan while
@@ -47,6 +47,12 @@ Use DiskSage against a genuinely space-constrained machine to identify files tha
   probe drift can invalidate plan freshness without changing an otherwise identical review subset.
   Both values are inspection evidence, not approval: approve/hold decisions remain individual,
   attributed, and immutable.
+- `--decision-summary --private-candidate-inspection-output ABSOLUTE_NEW_FILE.json` writes a
+  create-new mode-`0600` private dossier for every candidate in the fresh single-destination plan,
+  including blocked candidates that cannot enter an exact review batch. Standard output stays
+  redacted. The private dossier exposes paths and raw embedded metadata only for local inspection,
+  labels each decision state, preserves the production-time precedence, and explicitly authorizes
+  neither cloud writes nor source eviction.
 - Fresh local planning batches general ExifTool probes in bounded groups of 32 with a 20-second
   command deadline and an 8 MiB retained-output ceiling. Results are mapped back only through each
   JSON `SourceFile`; malformed, duplicate, missing, timed-out, or oversized batch evidence falls

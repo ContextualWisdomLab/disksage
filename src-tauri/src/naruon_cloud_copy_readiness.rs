@@ -18,7 +18,7 @@ use crate::naruon_capacity;
 use crate::provider_capacity::{self, CapacityEvidenceKind, CloudCapacityAssessment};
 use crate::provider_client_runtime::{self, ProviderClientRuntimeSnapshot};
 
-pub const NARUON_CLOUD_COPY_READINESS_SCHEMA_VERSION: u32 = 3;
+pub const NARUON_CLOUD_COPY_READINESS_SCHEMA_VERSION: u32 = 4;
 pub const NARUON_CLOUD_COPY_READINESS_MAX_INPUT_BYTES: u64 = 1024 * 1024;
 const NARUON_CLOUD_COPY_READINESS_SCHEMA_KIND: &str = "disksage.naruon.cloud-copy-readiness";
 const FINGERPRINT_CANONICALIZATION: &str = "lexicographic-json-object-keys-utf8-no-whitespace";
@@ -26,7 +26,8 @@ const RUNTIME_BLOCKERS: [&str; 2] = [
     "provider-client-runtime-not-observed",
     "provider-client-runtime-evidence-unavailable",
 ];
-const ICLOUD_ADMISSION_BLOCKERS: [&str; 7] = [
+const ICLOUD_ADMISSION_BLOCKERS: [&str; 8] = [
+    "icloud-sync-health-evidence-incomplete",
     "icloud-upload-queue-nonempty",
     "icloud-upload-in-flight",
     "icloud-upload-blocked-on-sync-up",
@@ -243,6 +244,9 @@ fn production_summary_target<'a>(
 
 fn expected_icloud_admission_blockers(report: &IcloudSyncHealthReport) -> Vec<String> {
     let mut blockers = Vec::new();
+    if !report.evidence_complete {
+        blockers.push("icloud-sync-health-evidence-incomplete".into());
+    }
     if report.upload_queue.scheduled_waiting_count > 0 {
         blockers.push("icloud-upload-queue-nonempty".into());
     }
@@ -289,7 +293,7 @@ fn validate_icloud_health(
         || report.local_eviction_authorized
         || report.mutation_performed
         || report.database_sidecar_write_permitted
-        || report.evidence_complete != report.database_snapshot_includes_wal
+        || (!report.evidence_complete && report.database_snapshot_includes_wal)
     {
         return Err("naruon-copy-readiness-icloud-claim-invalid".into());
     }
@@ -323,7 +327,7 @@ fn validate_icloud_health(
         return Err("naruon-copy-readiness-icloud-shape-invalid".into());
     }
     let mut exported_blockers = reported_blockers;
-    if !report.evidence_complete || !report.database_snapshot_includes_wal {
+    if !report.evidence_complete {
         exported_blockers.push("icloud-new-copy-admission-evidence-unavailable".into());
     }
     let exported_state = if exported_blockers.is_empty() {
@@ -864,6 +868,9 @@ fn validate_icloud_admission_summary(
         .checked_add(summary.scheduled_active_bytes)
         .ok_or_else(|| "naruon-copy-readiness-icloud-bytes-overflow".to_string())?;
     let mut expected = Vec::new();
+    if !summary.evidence_complete {
+        expected.push("icloud-sync-health-evidence-incomplete".to_string());
+    }
     if summary.scheduled_waiting_count > 0 {
         expected.push("icloud-upload-queue-nonempty".to_string());
     }
@@ -882,7 +889,7 @@ fn validate_icloud_admission_summary(
     if summary.item_error_count > 0 {
         expected.push("icloud-local-sync-item-error-present".to_string());
     }
-    if !summary.evidence_complete || !summary.database_snapshot_includes_wal {
+    if !summary.evidence_complete {
         expected.push("icloud-new-copy-admission-evidence-unavailable".to_string());
     }
     let expected_state = if expected.is_empty() {
@@ -892,7 +899,7 @@ fn validate_icloud_admission_summary(
     };
     if summary.scheduled_count != scheduled_count
         || summary.scheduled_bytes != scheduled_bytes
-        || summary.evidence_complete != summary.database_snapshot_includes_wal
+        || (!summary.evidence_complete && summary.database_snapshot_includes_wal)
         || (summary.scheduled_waiting_count == 0 && summary.scheduled_waiting_bytes != 0)
         || (summary.scheduled_active_count == 0 && summary.scheduled_active_bytes != 0)
         || (summary.out_of_quota_count == 0 && summary.out_of_quota_bytes != 0)
@@ -1047,8 +1054,8 @@ mod tests {
             observed_at_ms: 30,
             provider: "icloud".into(),
             evidence_kind: "supplementary-local-cloud-docs-private-schema".into(),
-            evidence_complete: false,
-            database_snapshot_includes_wal: false,
+            evidence_complete: true,
+            database_snapshot_includes_wal: true,
             database_sidecar_write_permitted: false,
             managed_database_files: vec![ManagedDatabaseFileEvidence {
                 role: "client.db".into(),
@@ -1180,13 +1187,36 @@ mod tests {
         assert!(missing
             .candidate_blocker_counts
             .contains_key("icloud-new-copy-admission-evidence-unavailable"));
+
+        let clear_health = icloud_health(false);
+        let clear =
+            export_naruon_cloud_copy_readiness(&report, &runtime, Some(&clear_health)).unwrap();
+        assert_eq!(clear.icloud_new_copy_admission_met, Some(true));
+
+        let mut incomplete_health = clear_health;
+        incomplete_health.evidence_complete = false;
+        incomplete_health.database_snapshot_includes_wal = false;
+        incomplete_health.new_copy_admission_state = "blocked".into();
+        incomplete_health.new_copy_admission_blockers =
+            vec!["icloud-sync-health-evidence-incomplete".into()];
+        let incomplete =
+            export_naruon_cloud_copy_readiness(&report, &runtime, Some(&incomplete_health))
+                .unwrap();
+        assert_eq!(incomplete.icloud_new_copy_admission_met, Some(false));
+        assert!(incomplete
+            .candidate_blocker_counts
+            .contains_key("icloud-sync-health-evidence-incomplete"));
     }
 
     #[test]
     fn incomplete_icloud_snapshot_never_authorizes_new_copy() {
         let report = report(CloudProvider::Icloud);
         let runtime = assess_provider_client_runtime(CloudProvider::Icloud, None, 25);
-        let health = icloud_health(false);
+        let mut health = icloud_health(false);
+        health.evidence_complete = false;
+        health.database_snapshot_includes_wal = false;
+        health.new_copy_admission_state = "blocked".into();
+        health.new_copy_admission_blockers = vec!["icloud-sync-health-evidence-incomplete".into()];
 
         let envelope =
             export_naruon_cloud_copy_readiness(&report, &runtime, Some(&health)).unwrap();
@@ -1196,7 +1226,10 @@ mod tests {
         assert_eq!(admission.state, "blocked");
         assert_eq!(
             admission.blockers,
-            vec!["icloud-new-copy-admission-evidence-unavailable"]
+            vec![
+                "icloud-sync-health-evidence-incomplete",
+                "icloud-new-copy-admission-evidence-unavailable",
+            ]
         );
         assert!(!admission.evidence_complete);
         assert!(!admission.database_snapshot_includes_wal);
@@ -1206,25 +1239,30 @@ mod tests {
     }
 
     #[test]
-    fn complete_wal_consistent_icloud_snapshot_can_clear_only_the_admission_gate() {
+    fn complete_consistent_icloud_snapshot_can_clear_with_or_without_a_wal_file() {
         let report = report(CloudProvider::Icloud);
         let runtime = assess_provider_client_runtime(CloudProvider::Icloud, None, 25);
-        let mut health = icloud_health(false);
-        health.evidence_complete = true;
-        health.database_snapshot_includes_wal = true;
+        for database_snapshot_includes_wal in [true, false] {
+            let mut health = icloud_health(false);
+            health.evidence_complete = true;
+            health.database_snapshot_includes_wal = database_snapshot_includes_wal;
 
-        let envelope =
-            export_naruon_cloud_copy_readiness(&report, &runtime, Some(&health)).unwrap();
-        let admission = envelope.icloud_new_copy_admission.as_ref().unwrap();
+            let envelope =
+                export_naruon_cloud_copy_readiness(&report, &runtime, Some(&health)).unwrap();
+            let admission = envelope.icloud_new_copy_admission.as_ref().unwrap();
 
-        assert_eq!(envelope.icloud_new_copy_admission_met, Some(true));
-        assert_eq!(admission.state, "clear");
-        assert!(admission.blockers.is_empty());
-        assert!(admission.evidence_complete);
-        assert!(admission.database_snapshot_includes_wal);
-        assert!(!envelope
-            .candidate_blocker_counts
-            .contains_key("icloud-new-copy-admission-evidence-unavailable"));
+            assert_eq!(envelope.icloud_new_copy_admission_met, Some(true));
+            assert_eq!(admission.state, "clear");
+            assert!(admission.blockers.is_empty());
+            assert!(admission.evidence_complete);
+            assert_eq!(
+                admission.database_snapshot_includes_wal,
+                database_snapshot_includes_wal
+            );
+            assert!(!envelope
+                .candidate_blocker_counts
+                .contains_key("icloud-new-copy-admission-evidence-unavailable"));
+        }
     }
 
     #[test]
@@ -1326,7 +1364,7 @@ mod tests {
             .icloud_new_copy_admission
             .as_mut()
             .unwrap()
-            .evidence_complete = true;
+            .evidence_complete = false;
         resign(&mut forged_icloud_authority);
         assert_eq!(
             validate_naruon_cloud_copy_readiness(&forged_icloud_authority).unwrap_err(),
@@ -1422,7 +1460,7 @@ mod tests {
         assert_eq!(envelope.readiness_fingerprint_sha256, expected);
         assert_eq!(
             envelope.readiness_fingerprint_sha256,
-            "5871e39720cdb3d48c688af24fb94d22738c414a3f1a9697ccd84ea1896c325d"
+            "78cc208c28f677f1ca9074e8490d5dda4b66a297aec1d6c2f0c94cdd32c809b0"
         );
     }
 }

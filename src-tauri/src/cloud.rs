@@ -876,7 +876,7 @@ fn token_boundary(bytes: &[u8], start: usize, end: usize) -> bool {
 /// Extract common date tokens from a filename as a low-confidence provisional date hint.
 /// Embedded metadata always wins, and this hint can never authorize a copy without review.
 /// Supported shapes: YYYY-MM-DD, YYYY_MM_DD, YYYY.MM.DD, YYYYMMDD, and YYMMDD.
-fn filename_date_ms(path: &Path) -> Option<u64> {
+pub(crate) fn filename_date_ms(path: &Path) -> Option<u64> {
     let normalized: String = path.file_name()?.to_string_lossy().nfc().collect();
     let bytes = normalized.as_bytes();
     for start in 0..bytes.len() {
