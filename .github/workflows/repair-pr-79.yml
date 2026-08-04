@@ -1,0 +1,83 @@
+name: Repair PR 79 checkout hardening
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+    paths:
+      - .github/workflows/repair-pr-79.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repair-pr-79-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    if: github.event.pull_request.head.ref == 'dependabot/github_actions/actions/checkout-7.0.1' && github.actor != 'github-actions[bot]'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: dependabot/github_actions/actions/checkout-7.0.1
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Apply least-privilege checkout configuration
+        shell: python
+        run: |
+          from pathlib import Path
+
+          marker = '      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4\n'
+          replacement = (
+              '      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n'
+              '        with:\n'
+              '          persist-credentials: false\n'
+          )
+          for relative_path in (
+              '.github/workflows/release.yml',
+              '.github/workflows/test.yml',
+          ):
+              path = Path(relative_path)
+              content = path.read_text(encoding='utf-8')
+              count = content.count(marker)
+              if count != 2:
+                  raise SystemExit(f'{relative_path}: expected two checkout markers, found {count}')
+              path.write_text(content.replace(marker, replacement), encoding='utf-8')
+
+      - name: Validate workflow diff
+        run: |
+          git diff --check
+          python - <<'PY'
+          from pathlib import Path
+          for path in (Path('.github/workflows/release.yml'), Path('.github/workflows/test.yml')):
+              text = path.read_text(encoding='utf-8')
+              assert text.count('actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1') == 2
+              assert text.count('persist-credentials: false') >= 2
+          PY
+
+      - name: Publish the validated workflow hardening
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ORIGINAL_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          rm .github/workflows/repair-pr-79.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .github/workflows/release.yml .github/workflows/test.yml .github/workflows/repair-pr-79.yml
+          git diff --cached --check
+          git commit -m 'fix: disable checkout credential persistence'
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push --force-with-lease=refs/heads/dependabot/github_actions/actions/checkout-7.0.1:${ORIGINAL_HEAD} \
+            origin HEAD:refs/heads/dependabot/github_actions/actions/checkout-7.0.1
