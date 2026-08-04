@@ -1,20 +1,28 @@
 name: Repair merged iCloud batch review findings
 
 on:
-  push:
-    branches:
-      - fix/icloud-batch-postmerge-verification
+  pull_request:
+    branches: [main]
+    types: [synchronize, ready_for_review]
+    paths:
+      - .github/workflows/repair-pr-89.yml
+      - .github/scripts/repair_pr_89.py
+      - src-tauri/src/cloud_local_eviction_batch.rs
+      - src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs
 
 permissions:
   contents: read
 
 concurrency:
-  group: repair-icloud-batch-postmerge-${{ github.ref }}
+  group: repair-icloud-batch-postmerge-${{ github.event.pull_request.number }}
   cancel-in-progress: false
 
 jobs:
   validate:
-    if: github.repository == 'ContextualWisdomLab/disksage' && github.ref == 'refs/heads/fix/icloud-batch-postmerge-verification'
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fix/icloud-batch-postmerge-verification' &&
+      github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     outputs:
@@ -22,7 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
       - name: Verify immutable repair source
         run: echo '46f143c8a01193d0189046fe70a98b1948a46be79bbf504ca520a401b69047c3  .github/scripts/repair_pr_89.py' | sha256sum --check --strict
@@ -78,7 +86,9 @@ jobs:
 
   publish:
     needs: validate
-    if: github.repository == 'ContextualWisdomLab/disksage' && github.ref == 'refs/heads/fix/icloud-batch-postmerge-verification'
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fix/icloud-batch-postmerge-verification'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -86,8 +96,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+          persist-credentials: false
       - name: Verify immutable repair source
         run: echo '46f143c8a01193d0189046fe70a98b1948a46be79bbf504ca520a401b69047c3  .github/scripts/repair_pr_89.py' | sha256sum --check --strict
       - name: Reproduce the validated source result without executing repository code
@@ -95,13 +106,17 @@ jobs:
       - name: Verify reproduced digest and unchanged branch head
         env:
           EXPECTED_DIGEST: ${{ needs.validate.outputs.patched_digest }}
+          SOURCE_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           actual="$({ printf '%s\0' 'src-tauri/src/cloud_local_eviction_batch.rs'; cat src-tauri/src/cloud_local_eviction_batch.rs; printf '%s\0' 'src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs'; cat src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs; } | sha256sum | cut -d' ' -f1)"
           test "$actual" = "$EXPECTED_DIGEST"
-          git fetch origin "refs/heads/${GITHUB_REF_NAME}:refs/remotes/origin/${GITHUB_REF_NAME}"
-          test "$(git rev-parse "refs/remotes/origin/${GITHUB_REF_NAME}")" = "$GITHUB_SHA"
+          git fetch origin refs/heads/fix/icloud-batch-postmerge-verification:refs/remotes/origin/fix/icloud-batch-postmerge-verification
+          test "$(git rev-parse refs/remotes/origin/fix/icloud-batch-postmerge-verification)" = "$SOURCE_HEAD"
           git diff --check
       - name: Publish exact repair and remove one-shot machinery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           rm .github/workflows/repair-pr-89.yml .github/scripts/repair_pr_89.py
           git config user.name 'github-actions[bot]'
@@ -111,4 +126,8 @@ jobs:
             .github/workflows/repair-pr-89.yml \
             .github/scripts/repair_pr_89.py
           git commit -m 'fix: verify iCloud batch execution safeguards'
-          git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
+          remote_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push \
+            --force-with-lease="refs/heads/fix/icloud-batch-postmerge-verification:${SOURCE_HEAD}" \
+            "$remote_url" \
+            HEAD:refs/heads/fix/icloud-batch-postmerge-verification
