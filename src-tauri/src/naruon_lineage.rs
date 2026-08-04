@@ -5,9 +5,13 @@
 
 use std::path::{Component, Path};
 
-use crate::cloud::{ArchiveKind, CloudAccountScope, CloudProvider, MetadataEvidence};
+use crate::cloud::{
+    ArchiveKind, CloudAccountScope, CloudProvider, MetadataEvidence,
+    ORGANIZATION_TENANT_AUTHORITY_REVIEW_REASON,
+};
 use crate::cloud_review::{
-    validate_decision, CloudReviewDecision, CloudReviewDisposition, DECISION_VERSION,
+    organization_tenant_authority_attested, validate_decision, CloudReviewDecision,
+    CloudReviewDisposition, DECISION_VERSION,
 };
 use crate::cloud_transfer::{CloudCopyReceipt, CloudCopyVerificationMethod, SyncEvidenceKind};
 use crate::provider_evidence::{validate_sync_evidence_record, ProviderSyncEvidenceRecord};
@@ -196,6 +200,11 @@ fn validate_review_lineage(
     if decision.disposition != CloudReviewDisposition::Approved
         || decision.reviewed_at_ms > copied_at_ms
         || validate_decision(&decision).is_err()
+        || (lineage
+            .review_reasons
+            .iter()
+            .any(|reason| reason == ORGANIZATION_TENANT_AUTHORITY_REVIEW_REASON)
+            && !organization_tenant_authority_attested(&decision))
     {
         return Err("naruon-lineage-review-decision-invalid".into());
     }
@@ -542,6 +551,20 @@ mod tests {
         );
         assert_eq!(envelope.cloud_copy.sync_pending_age_ms, Some(0));
         assert!(envelope.cloud_copy.sync_reason_codes.is_empty());
+    }
+
+    #[test]
+    fn organization_sensitive_lineage_requires_tenant_authority_attestation() {
+        let current = receipt();
+        let mut lineage = current.lineage.unwrap();
+        lineage
+            .review_reasons
+            .push(ORGANIZATION_TENANT_AUTHORITY_REVIEW_REASON.into());
+
+        assert_eq!(
+            validate_review_lineage(&lineage, current.copied_at_ms).unwrap_err(),
+            "naruon-lineage-review-decision-invalid"
+        );
     }
 
     #[cfg(not(coverage))]
