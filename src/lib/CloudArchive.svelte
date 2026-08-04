@@ -9,6 +9,8 @@
     cloudReviewReasons,
     filterCloudReviewQueue,
     matchingReviewDecision as exactReviewDecision,
+    ORGANIZATION_TENANT_AUTHORITY_ATTESTATION,
+    organizationTenantAuthorityRequired,
     type CloudReviewQueueFilter,
     type CloudReviewQueueSort,
   } from "./cloudReviewQueue";
@@ -21,6 +23,7 @@
   let connections: api.OAuthConnection[] = $state([]);
   let reviewDecisions: api.CloudReviewDecision[] = $state([]);
   let reviewRationales: Record<string, string> = $state({});
+  let reviewTenantAuthorities: Record<string, boolean> = $state({});
   let selectedRoot = $state("");
   let minSizeMib = $state(256);
   let minAgeDays = $state(90);
@@ -147,6 +150,14 @@
     if (!scannedRoot || !selectedRoot || !candidate.requires_review) return;
     const rationale = (reviewRationales[candidate.metadata_fingerprint] ?? "").trim();
     if (!rationale) return;
+    const tenantAuthorityRequired = organizationTenantAuthorityRequired(candidate);
+    const tenantAuthorityConfirmed =
+      reviewTenantAuthorities[candidate.metadata_fingerprint] ?? false;
+    if (disposition === "approved" && tenantAuthorityRequired && !tenantAuthorityConfirmed) return;
+    const boundRationale =
+      disposition === "approved" && tenantAuthorityRequired
+        ? `${ORGANIZATION_TENANT_AUTHORITY_ATTESTATION} ${rationale}`
+        : rationale;
     reviewingFingerprint = candidate.metadata_fingerprint;
     loadError = "";
     try {
@@ -156,7 +167,7 @@
         candidate.metadata_fingerprint,
         candidate.review_fingerprint,
         disposition,
-        rationale,
+        boundRationale,
         Math.max(1, Math.floor(minSizeMib)),
         Math.max(0, Math.floor(minAgeDays)),
         200,
@@ -170,6 +181,10 @@
       reviewRationales = {
         ...reviewRationales,
         [candidate.metadata_fingerprint]: "",
+      };
+      reviewTenantAuthorities = {
+        ...reviewTenantAuthorities,
+        [candidate.metadata_fingerprint]: false,
       };
     } catch (e) {
       loadError = String(e);
@@ -794,9 +809,28 @@
                     disabled={reviewingFingerprint !== ""}
                   ></textarea>
                 </label>
+                {#if organizationTenantAuthorityRequired(candidate)}
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={reviewTenantAuthorities[candidate.metadata_fingerprint] ?? false}
+                      onchange={(event) => {
+                        reviewTenantAuthorities = {
+                          ...reviewTenantAuthorities,
+                          [candidate.metadata_fingerprint]: event.currentTarget.checked,
+                        };
+                      }}
+                      disabled={reviewingFingerprint !== ""}
+                    />
+                    이 조직 테넌트가 해당 민감 자료를 보관할 권한이 있음을 확인했습니다.
+                  </label>
+                {/if}
                 <button
                   onclick={() => reviewCandidate(candidate, "approved")}
-                  disabled={reviewingFingerprint !== "" || !(reviewRationales[candidate.metadata_fingerprint] ?? "").trim()}
+                  disabled={reviewingFingerprint !== ""
+                    || !(reviewRationales[candidate.metadata_fingerprint] ?? "").trim()
+                    || (organizationTenantAuthorityRequired(candidate)
+                      && !(reviewTenantAuthorities[candidate.metadata_fingerprint] ?? false))}
                 >
                   {reviewingFingerprint === candidate.metadata_fingerprint ? "기록 중…" : "메타데이터 검토 승인"}
                 </button>
