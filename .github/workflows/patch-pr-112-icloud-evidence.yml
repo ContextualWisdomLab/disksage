@@ -6,6 +6,7 @@ on:
       - feat/naruon-cloud-copy-readiness-mainline-v2
     paths:
       - .github/workflows/patch-pr-112-icloud-evidence.yml
+      - .github/scripts/patch_pr_112_icloud_evidence.py
 
 permissions:
   contents: read
