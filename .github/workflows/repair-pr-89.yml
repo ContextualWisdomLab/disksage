@@ -1,0 +1,166 @@
+name: Repair PR 89 review findings
+
+on:
+  push:
+    branches:
+      - feat/icloud-local-eviction-batch
+    paths:
+      - .github/workflows/repair-pr-89.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-pr-89-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/icloud-local-eviction-batch
+          fetch-depth: 0
+
+      - name: Apply bounded review fixes
+        shell: python
+        run: |
+          from pathlib import Path
+
+          cli_path = Path("src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs")
+          cli = cli_path.read_text(encoding="utf-8")
+          cli = cli.replace(
+              'const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;\n',
+              'const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;\nconst HELP_REQUESTED: &str = "icloud-local-eviction-batch-help-requested";\n',
+              1,
+          )
+          old_args = '''            "--help" | "-h" => return Err(usage().into()),
+                      unknown => return Err(format!("알 수 없는 인자: {unknown}")),'''
+          new_args = '''            "--help" | "-h" => return Err(HELP_REQUESTED.into()),
+                      _unknown => return Err("알 수 없는 인자".into()),'''
+          if old_args not in cli:
+              raise SystemExit("argument-handling marker not found")
+          cli = cli.replace(old_args, new_args, 1)
+          old_main = '''fn main() {
+              if let Err(error) = run() {
+                  eprintln!("{error}");
+                  std::process::exit(2);
+              }
+          }'''
+          new_main = '''fn main() {
+              if let Err(error) = run() {
+                  if error == HELP_REQUESTED {
+                      println!("{}", usage());
+                      return;
+                  }
+                  eprintln!("{error}");
+                  std::process::exit(2);
+              }
+          }'''
+          if old_main not in cli:
+              raise SystemExit("main marker not found")
+          cli = cli.replace(old_main, new_main, 1)
+          test_marker = '''    #[test]
+              fn manifest_reader_is_bounded_and_accepts_extra_evidence_fields() {'''
+          test_insert = '''    #[test]
+              fn parser_distinguishes_help_and_redacts_unknown_values() {
+                  assert_eq!(
+                      parse_args(&["--help".into()]).unwrap_err(),
+                      HELP_REQUESTED
+                  );
+                  let sensitive = "/Users/private/customer-file";
+                  let error = parse_args(&[sensitive.into()]).unwrap_err();
+                  assert_eq!(error, "알 수 없는 인자");
+                  assert!(!error.contains(sensitive));
+              }
+
+              #[test]
+              fn manifest_reader_is_bounded_and_accepts_extra_evidence_fields() {'''
+          if test_marker not in cli:
+              raise SystemExit("test insertion marker not found")
+          cli = cli.replace(test_marker, test_insert, 1)
+          cli_path.write_text(cli, encoding="utf-8")
+
+          batch_path = Path("src-tauri/src/cloud_local_eviction_batch.rs")
+          batch = batch_path.read_text(encoding="utf-8")
+          old_signature = '''#[cfg(not(coverage))]
+          pub fn execute_icloud_local_eviction_batch(
+              root: &CloudRoot,
+              plan: &IcloudLocalEvictionBatchPlan,
+              approval: &IcloudLocalEvictionBatchApproval,
+              confirmation_batch_fingerprint: &str,
+              record_dir: &Path,
+              requested_at_ms: u64,
+          ) -> Result<IcloudLocalEvictionBatchResult, String> {
+              validate_batch_approval(root, plan, approval, confirmation_batch_fingerprint)?;'''
+          new_signature = '''#[cfg(not(coverage))]
+          pub fn execute_icloud_local_eviction_batch(
+              root: &CloudRoot,
+              plan: &IcloudLocalEvictionBatchPlan,
+              approval: &IcloudLocalEvictionBatchApproval,
+              confirmation_batch_fingerprint: &str,
+              record_dir: &Path,
+              requested_at_ms: u64,
+          ) -> Result<IcloudLocalEvictionBatchResult, String> {
+              execute_icloud_local_eviction_batch_with_now(
+                  root,
+                  plan,
+                  approval,
+                  confirmation_batch_fingerprint,
+                  record_dir,
+                  requested_at_ms,
+                  crate::cloud::system_now_ms,
+              )
+          }
+
+          #[cfg(not(coverage))]
+          fn execute_icloud_local_eviction_batch_with_now(
+              root: &CloudRoot,
+              plan: &IcloudLocalEvictionBatchPlan,
+              approval: &IcloudLocalEvictionBatchApproval,
+              confirmation_batch_fingerprint: &str,
+              record_dir: &Path,
+              requested_at_ms: u64,
+              mut now_ms: impl FnMut() -> u64,
+          ) -> Result<IcloudLocalEvictionBatchResult, String> {
+              validate_batch_approval(root, plan, approval, confirmation_batch_fingerprint)?;'''
+          if old_signature not in batch:
+              raise SystemExit("batch signature marker not found")
+          batch = batch.replace(old_signature, new_signature, 1)
+          old_loop = '''    for (offset, (item, individual)) in plan
+                  .items
+                  .iter()
+                  .zip(individual_approvals.iter())
+                  .enumerate()
+              {
+                  let item_requested_at_ms =
+                      requested_at_ms.saturating_add(u64::try_from(offset).unwrap_or(u64::MAX));'''
+          new_loop = '''    for (item, individual) in plan.items.iter().zip(individual_approvals.iter()) {
+                  let item_requested_at_ms = now_ms();'''
+          if old_loop not in batch:
+              raise SystemExit("batch loop marker not found")
+          batch = batch.replace(old_loop, new_loop, 1)
+          batch_path.write_text(batch, encoding="utf-8")
+
+      - name: Format changed Rust files
+        run: |
+          rustfmt src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs
+          rustfmt src-tauri/src/cloud_local_eviction_batch.rs
+
+      - name: Run focused validation
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-icloud-local-eviction-batch
+          cargo test --manifest-path src-tauri/Cargo.toml --lib cloud_local_eviction_batch::tests
+          cargo check --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-icloud-local-eviction-batch
+
+      - name: Commit validated repair and remove workflow
+        run: |
+          rm .github/workflows/repair-pr-89.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs src-tauri/src/cloud_local_eviction_batch.rs .github/workflows/repair-pr-89.yml
+          git commit -m "fix: address batch eviction review findings"
+          git push origin HEAD:feat/icloud-local-eviction-batch
