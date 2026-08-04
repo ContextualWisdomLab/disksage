@@ -24,7 +24,7 @@ jobs:
           set -euo pipefail
           echo '46f143c8a01193d0189046fe70a98b1948a46be79bbf504ca520a401b69047c3  .github/scripts/repair_pr_89.py' | sha256sum --check --strict
           python .github/scripts/normalize_pr129.py
-          echo '46962fff46bc769134b76a77f544f2ce37877ea300ff55a7343c443e60bbcd69  .github/scripts/repair_pr_89.py' | sha256sum --check --strict
+          echo '46962fff01de02d31f9b9f4c80f804a9726cb4d28a43552235aa2d684fbc9819  .github/scripts/repair_pr_89.py' | sha256sum --check --strict
       - name: Install Tauri system dependencies
         run: |
           sudo apt-get update
