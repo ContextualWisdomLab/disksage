@@ -32,6 +32,11 @@ path = "src/bin/disksage-cloud-local-inventory.rs"
 required-features = ["cloud-cli"]
 
 [[bin]]
+name = "disksage-duplicate-audit"
+path = "src/bin/disksage-duplicate-audit.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
 name = "disksage-icloud-local-eviction"
 path = "src/bin/disksage-icloud-local-eviction.rs"
 required-features = ["cloud-cli"]
