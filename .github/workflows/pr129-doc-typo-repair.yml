@@ -30,7 +30,7 @@ jobs:
 
       - name: Verify exact audited parent and trigger-only delta
         env:
-          EXPECTED_PARENT: cf67201e49da26b6a1e6c51beacd42c67894c609
+          EXPECTED_PARENT: 49cdd0be1b3e2da08934b592f164d17f9bb1921e
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD^)" = "${EXPECTED_PARENT}"
@@ -49,12 +49,23 @@ jobs:
               raise SystemExit(f"expected one exact typo, found {source.count(old)}")
           path.write_text(source.replace(old, new, 1), encoding="utf-8")
 
+      - name: Install Tauri system dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
 
       - name: Validate formatting and focused behavior
         run: |
+          set -euo pipefail
           rustfmt --check src-tauri/src/cloud_local_eviction_batch.rs
-          cargo test --manifest-path src-tauri/Cargo.toml --lib cloud_local_eviction_batch::tests
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib cloud_local_eviction_batch::tests
           git diff --check
           grep -F "immutable recording." src-tauri/src/cloud_local_eviction_batch.rs
           ! grep -F "eordering" src-tauri/src/cloud_local_eviction_batch.rs
