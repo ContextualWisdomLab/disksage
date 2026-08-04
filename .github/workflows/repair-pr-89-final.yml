@@ -1,0 +1,649 @@
+name: Repair remaining PR 89 review findings
+
+on:
+  push:
+    branches:
+      - feat/icloud-local-eviction-batch
+    paths:
+      - .github/workflows/repair-pr-89-final.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repair-pr-89-final-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: feat/icloud-local-eviction-batch
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Apply remaining review fixes and regression tests
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one marker, found {count}")
+              return text.replace(old, new, 1)
+
+          cli_path = Path("src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs")
+          cli = cli_path.read_text(encoding="utf-8")
+          cli = replace_once(
+              cli,
+              '''        if record_dir.starts_with(&cloud_root) || paths_overlap(&record_dir, &manifest) {
+                      return Err("icloud-local-eviction-batch-record-dir-overlap".into());
+                  }''',
+              '''        if record_dir.starts_with(&cloud_root) {
+                      return Err(
+                          "icloud-local-eviction-batch-record-dir-inside-cloud-data".into(),
+                      );
+                  }
+                  if paths_overlap(&record_dir, &manifest) {
+                      return Err(
+                          "icloud-local-eviction-batch-record-dir-overlaps-manifest".into(),
+                      );
+                  }''',
+              "record directory error split",
+          )
+          cli = replace_once(
+              cli,
+              '''    match matches.as_slice() {
+                      [only] if only.provider == CloudProvider::Icloud => Ok(*only),
+                      [..] if matches.len() == 1 => Err("iCloud root가 필요함".into()),
+                      [] => Err("요청한 경로가 현재 탐지된 클라우드 루트와 일치하지 않음".into()),
+                      _ => Err("요청한 경로와 일치하는 클라우드 루트가 여러 개임".into()),
+                  }''',
+              '''    match matches.as_slice() {
+                      [] => Err("요청한 경로가 현재 탐지된 클라우드 루트와 일치하지 않음".into()),
+                      [only] if only.provider == CloudProvider::Icloud => Ok(*only),
+                      [_] => Err("iCloud root가 필요함".into()),
+                      _ => Err("요청한 경로와 일치하는 클라우드 루트가 여러 개임".into()),
+                  }''',
+              "explicit root selection patterns",
+          )
+          manifest_test_old = '''        let empty = temp.path().join("empty.json");
+                  std::fs::write(&empty, br#"{\"plans\":[]}"#).unwrap();
+                  assert!(read_manifest_paths(&empty).is_err());
+              }'''
+          manifest_test_new = '''        let empty = temp.path().join("empty.json");
+                  std::fs::write(&empty, br#"{\"plans\":[]}"#).unwrap();
+                  assert!(read_manifest_paths(&empty).is_err());
+
+                  let too_many = temp.path().join("too-many.json");
+                  let items: Vec<_> = (0..=MAX_BATCH_ITEMS)
+                      .map(|index| {
+                          serde_json::json!({
+                              "path": PathBuf::from(TEST_CLOUD_ROOT).join(format!("f{index}"))
+                          })
+                      })
+                      .collect();
+                  std::fs::write(
+                      &too_many,
+                      serde_json::to_vec(&serde_json::json!({ "plans": items })).unwrap(),
+                  )
+                  .unwrap();
+                  assert_eq!(
+                      read_manifest_paths(&too_many).unwrap_err(),
+                      "icloud-local-eviction-batch-manifest-item-count-invalid"
+                  );
+
+                  let oversized = temp.path().join("oversized.json");
+                  let padding = "x".repeat(usize::try_from(MAX_MANIFEST_BYTES).unwrap() + 1);
+                  std::fs::write(
+                      &oversized,
+                      serde_json::to_vec(&serde_json::json!({
+                          "padding": padding,
+                          "plans": [{ "path": PathBuf::from(TEST_CLOUD_ROOT).join("a") }]
+                      }))
+                      .unwrap(),
+                  )
+                  .unwrap();
+                  assert_eq!(
+                      read_manifest_paths(&oversized).unwrap_err(),
+                      "icloud-local-eviction-batch-manifest-size-invalid"
+                  );
+              }'''
+          cli = replace_once(cli, manifest_test_old, manifest_test_new, "manifest bounds tests")
+          cli = replace_once(
+              cli,
+              '''            "icloud-local-eviction-batch-record-dir-overlap"
+                  );''',
+              '''            "icloud-local-eviction-batch-record-dir-inside-cloud-data"
+                  );
+
+                  let controls = temp.path().join("controls");
+                  std::fs::create_dir_all(&controls).unwrap();
+                  let nested_manifest = controls.join("manifest.json");
+                  std::fs::write(
+                      &nested_manifest,
+                      br#"{\"plans\":[{\"path\":\"/cloud/a\"}]}"#,
+                  )
+                  .unwrap();
+                  assert_eq!(
+                      validate_control_locations(&cloud, &nested_manifest, Some(&controls))
+                          .unwrap_err(),
+                      "icloud-local-eviction-batch-record-dir-overlaps-manifest"
+                  );''',
+              "control location expectations",
+          )
+          cli_path.write_text(cli, encoding="utf-8")
+
+          core_path = Path("src-tauri/src/cloud_local_eviction_batch.rs")
+          core = core_path.read_text(encoding="utf-8")
+          core = replace_once(
+              core,
+              '''    approve_icloud_local_eviction, execute_icloud_local_eviction, plan_icloud_local_eviction,
+                  write_immutable_record, IcloudLocalEvictionPlan,
+              };''',
+              '''    approve_icloud_local_eviction, execute_icloud_local_eviction, plan_icloud_local_eviction,
+                  write_immutable_record, IcloudLocalEvictionApproval, IcloudLocalEvictionPlan,
+                  IcloudLocalEvictionResult,
+              };''',
+              "eviction type imports",
+          )
+
+          execution_pattern = re.compile(
+              r'''#\[cfg\(not\(coverage\)\)\]\nfn fresh_item_requested_at_ms.*?\n}\n\n#\[cfg\(test\)\]\nmod tests \{''',
+              re.S,
+          )
+          execution_replacement = r'''fn fresh_item_requested_at_ms(now_ms: &mut impl FnMut() -> u64) -> u64 {
+              now_ms()
+          }
+
+          fn execute_items_with<Execute, RecordResult, RecordCheckpoint, Now>(
+              root: &CloudRoot,
+              plan: &IcloudLocalEvictionBatchPlan,
+              approval: &IcloudLocalEvictionBatchApproval,
+              individual_approvals: &[IcloudLocalEvictionApproval],
+              requested_at_ms: u64,
+              mut now_ms: Now,
+              mut execute_item: Execute,
+              mut record_item_result: RecordResult,
+              mut record_checkpoint: RecordCheckpoint,
+          ) -> Result<IcloudLocalEvictionBatchResult, String>
+          where
+              Execute: FnMut(
+                  &CloudRoot,
+                  &IcloudLocalEvictionPlan,
+                  &IcloudLocalEvictionApproval,
+                  &str,
+                  u64,
+              ) -> Result<IcloudLocalEvictionResult, String>,
+              RecordResult: FnMut(&IcloudLocalEvictionResult) -> Result<(), String>,
+              RecordCheckpoint:
+                  FnMut(&str, &IcloudLocalEvictionBatchResult) -> Result<(), String>,
+              Now: FnMut() -> u64,
+          {
+              if individual_approvals.len() != plan.items.len() {
+                  return Err("icloud-local-eviction-batch-item-approval-count-mismatch".into());
+              }
+
+              let mut batch_result = IcloudLocalEvictionBatchResult {
+                  version: ICLOUD_LOCAL_EVICTION_BATCH_VERSION,
+                  result_id: String::new(),
+                  batch_fingerprint: plan.batch_fingerprint.clone(),
+                  approval_id: approval.approval_id.clone(),
+                  started_at_ms: requested_at_ms,
+                  completed_at_ms: requested_at_ms,
+                  input_count: plan.input_count,
+                  planned_count: plan.planned_count,
+                  unavailable_count: plan.unavailable_count,
+                  attempted_count: 0,
+                  succeeded_count: 0,
+                  verified_count: 0,
+                  total_allocated_bytes_before: plan.total_allocated_bytes,
+                  observed_allocation_reduction_bytes: 0,
+                  execution_complete: false,
+                  verification_complete: false,
+                  halted: false,
+                  halt_reason: None,
+                  item_outcomes: Vec::with_capacity(plan.items.len()),
+                  notices: vec![
+                      "batch-result-does-not-delete-cloud-object".into(),
+                      "physical-volume-reclaim-remains-unattributed".into(),
+                  ],
+              };
+              refresh_result_summary(&mut batch_result, requested_at_ms);
+
+              for (item, individual) in plan.items.iter().zip(individual_approvals.iter()) {
+                  let item_requested_at_ms = fresh_item_requested_at_ms(&mut now_ms);
+                  let execution = execute_item(
+                      root,
+                      &item.plan,
+                      individual,
+                      &item.plan.plan_fingerprint,
+                      item_requested_at_ms,
+                  );
+                  match execution {
+                      Ok(result) => {
+                          let record_failed = record_item_result(&result).is_err();
+                          batch_result
+                              .item_outcomes
+                              .push(IcloudLocalEvictionBatchItemOutcome {
+                                  input_index: item.input_index,
+                                  plan_fingerprint: item.plan.plan_fingerprint.clone(),
+                                  approval_id: individual.approval_id.clone(),
+                                  result_id: Some(result.result_id),
+                                  eviction_request_succeeded: result.eviction_request_succeeded,
+                                  verification_complete: result.verification_complete && !record_failed,
+                                  observed_allocation_reduction_bytes: result
+                                      .observed_allocation_reduction_bytes,
+                                  error_code: record_failed.then(|| {
+                                      "icloud-local-eviction-batch-item-result-record-failed".into()
+                                  }),
+                              });
+                          if record_failed
+                              || !result.eviction_request_succeeded
+                              || !result.verification_complete
+                          {
+                              batch_result.halted = true;
+                              batch_result.halt_reason = Some(if record_failed {
+                                  "icloud-local-eviction-batch-item-result-record-failed".into()
+                              } else if !result.eviction_request_succeeded {
+                                  "icloud-local-eviction-batch-item-request-failed".into()
+                              } else {
+                                  "icloud-local-eviction-batch-item-verification-incomplete".into()
+                              });
+                          }
+                      }
+                      Err(error) => {
+                          batch_result
+                              .item_outcomes
+                              .push(IcloudLocalEvictionBatchItemOutcome {
+                                  input_index: item.input_index,
+                                  plan_fingerprint: item.plan.plan_fingerprint.clone(),
+                                  approval_id: individual.approval_id.clone(),
+                                  result_id: None,
+                                  eviction_request_succeeded: false,
+                                  verification_complete: false,
+                                  observed_allocation_reduction_bytes: 0,
+                                  error_code: Some(bounded_error_code(&error)),
+                              });
+                          batch_result.halted = true;
+                          batch_result.halt_reason =
+                              Some("icloud-local-eviction-batch-item-execution-failed".into());
+                      }
+                  }
+                  refresh_result_summary(&mut batch_result, item_requested_at_ms);
+                  let checkpoint =
+                      checkpoint_name(&approval.approval_id, batch_result.attempted_count);
+                  record_checkpoint(&checkpoint, &batch_result).map_err(|_| {
+                      "icloud-local-eviction-batch-checkpoint-record-failed".to_string()
+                  })?;
+                  if batch_result.halted {
+                      break;
+                  }
+              }
+              Ok(batch_result)
+          }
+
+          #[cfg(not(coverage))]
+          fn execute_icloud_local_eviction_batch_with_now(
+              root: &CloudRoot,
+              plan: &IcloudLocalEvictionBatchPlan,
+              approval: &IcloudLocalEvictionBatchApproval,
+              confirmation_batch_fingerprint: &str,
+              record_dir: &Path,
+              requested_at_ms: u64,
+              now_ms: impl FnMut() -> u64,
+          ) -> Result<IcloudLocalEvictionBatchResult, String> {
+              validate_batch_approval(root, plan, approval, confirmation_batch_fingerprint)?;
+              let _live = preflight_with(root, plan, requested_at_ms, plan_icloud_local_eviction)?;
+
+              write_immutable_record(
+                  record_dir,
+                  &format!("{}.batch-approval.json", approval.approval_id),
+                  approval,
+              )
+              .map_err(|_| "icloud-local-eviction-batch-approval-record-failed".to_string())?;
+
+              let mut individual_approvals = Vec::with_capacity(plan.items.len());
+              for item in &plan.items {
+                  let individual = approve_icloud_local_eviction(
+                      &item.plan,
+                      &item.plan.plan_fingerprint,
+                      approval.approved_at_ms,
+                      &approval.approved_by,
+                      &approval.rationale,
+                  )?;
+                  write_immutable_record(
+                      record_dir,
+                      &format!("{}.approval.json", individual.approval_id),
+                      &individual,
+                  )
+                  .map_err(|_| {
+                      "icloud-local-eviction-batch-item-approval-record-failed".to_string()
+                  })?;
+                  individual_approvals.push(individual);
+              }
+
+              execute_items_with(
+                  root,
+                  plan,
+                  approval,
+                  &individual_approvals,
+                  requested_at_ms,
+                  now_ms,
+                  execute_icloud_local_eviction,
+                  |result| {
+                      write_immutable_record(
+                          record_dir,
+                          &format!("{}.result.json", result.result_id),
+                          result,
+                      )
+                      .map_err(|_| {
+                          "icloud-local-eviction-batch-item-result-record-failed".to_string()
+                      })
+                  },
+                  |name, result| {
+                      write_immutable_record(record_dir, name, result).map_err(|_| {
+                          "icloud-local-eviction-batch-checkpoint-record-failed".to_string()
+                      })
+                  },
+              )
+          }
+
+          #[cfg(test)]
+          mod tests {'''
+          core, count = execution_pattern.subn(execution_replacement, core, count=1)
+          if count != 1:
+              raise SystemExit(f"execution section: expected one match, found {count}")
+
+          old_timestamp_test = '''    #[test]
+              fn item_execution_timestamps_read_the_clock_for_each_item() {
+                  let next = std::cell::Cell::new(40_u64);
+                  let mut now_ms = || {
+                      let current = next.get();
+                      next.set(current + 7);
+                      current
+                  };
+                  assert_eq!(fresh_item_requested_at_ms(&mut now_ms), 40);
+                  assert_eq!(fresh_item_requested_at_ms(&mut now_ms), 47);
+              }'''
+          new_execution_tests = '''    fn individual_approvals(
+                  plan: &IcloudLocalEvictionBatchPlan,
+              ) -> Vec<IcloudLocalEvictionApproval> {
+                  plan.items
+                      .iter()
+                      .map(|item| {
+                          approve_icloud_local_eviction(
+                              &item.plan,
+                              &item.plan.plan_fingerprint,
+                              21,
+                              "human:operator",
+                              "Exact batch reviewed",
+                          )
+                          .unwrap()
+                      })
+                      .collect()
+              }
+
+              fn successful_item_result(
+                  plan: &IcloudLocalEvictionPlan,
+                  approval: &IcloudLocalEvictionApproval,
+                  requested_at_ms: u64,
+              ) -> IcloudLocalEvictionResult {
+                  IcloudLocalEvictionResult {
+                      version: crate::cloud_local_eviction::ICLOUD_LOCAL_EVICTION_VERSION,
+                      result_id: format!("{:064x}", requested_at_ms.saturating_add(1)),
+                      plan_fingerprint: plan.plan_fingerprint.clone(),
+                      approval_id: approval.approval_id.clone(),
+                      path: plan.path.clone(),
+                      requested_at_ms,
+                      allocated_bytes_before: plan.allocated_bytes,
+                      allocated_bytes_after: 0,
+                      observed_allocation_reduction_bytes: plan.allocated_bytes,
+                      eviction_request_succeeded: true,
+                      cloud_item_path_retained: true,
+                      is_ubiquitous_after: true,
+                      local_allocation_reduction_verified: true,
+                      verification_complete: true,
+                      verification_blockers: Vec::new(),
+                      notices: Vec::new(),
+                  }
+              }
+
+              #[test]
+              fn execution_seam_stops_after_first_failure_and_checkpoints_each_attempt() {
+                  let plan = plan_batch_with(&root(), &[path(0), path(1), path(2)], 20, |_, path, _| {
+                      let name = path.file_stem().unwrap().to_string_lossy();
+                      let index = name.trim_start_matches("file-").parse::<usize>().unwrap();
+                      Ok(safe_plan(index))
+                  })
+                  .unwrap();
+                  let approval = approve_icloud_local_eviction_batch(
+                      &plan,
+                      &root(),
+                      &plan.batch_fingerprint,
+                      21,
+                      "human:operator",
+                      "Exact batch reviewed",
+                  )
+                  .unwrap();
+                  let individual = individual_approvals(&plan);
+                  let calls = Cell::new(0usize);
+                  let timestamps = std::cell::RefCell::new(Vec::new());
+                  let checkpoints = std::cell::RefCell::new(Vec::new());
+                  let next = Cell::new(40_u64);
+
+                  let result = execute_items_with(
+                      &root(),
+                      &plan,
+                      &approval,
+                      &individual,
+                      30,
+                      || {
+                          let current = next.get();
+                          next.set(current + 7);
+                          current
+                      },
+                      |_, item_plan, item_approval, _, requested_at_ms| {
+                          let call = calls.get();
+                          calls.set(call + 1);
+                          timestamps.borrow_mut().push(requested_at_ms);
+                          if call == 1 {
+                              Err("sensitive execution detail".into())
+                          } else {
+                              Ok(successful_item_result(
+                                  item_plan,
+                                  item_approval,
+                                  requested_at_ms,
+                              ))
+                          }
+                      },
+                      |_| Ok(()),
+                      |name, checkpoint| {
+                          checkpoints
+                              .borrow_mut()
+                              .push((name.to_string(), checkpoint.attempted_count));
+                          Ok(())
+                      },
+                  )
+                  .unwrap();
+
+                  assert_eq!(calls.get(), 2);
+                  assert_eq!(*timestamps.borrow(), vec![40, 47]);
+                  assert_eq!(
+                      checkpoints
+                          .borrow()
+                          .iter()
+                          .map(|(_, attempted)| *attempted)
+                          .collect::<Vec<_>>(),
+                      vec![1, 2]
+                  );
+                  assert!(result.halted);
+                  assert_eq!(
+                      result.halt_reason.as_deref(),
+                      Some("icloud-local-eviction-batch-item-execution-failed")
+                  );
+                  assert_eq!(result.attempted_count, 2);
+                  assert_eq!(result.item_outcomes.len(), 2);
+              }
+
+              #[test]
+              fn execution_seam_records_one_checkpoint_per_successful_item() {
+                  let plan = plan_batch_with(&root(), &[path(0), path(1), path(2)], 20, |_, path, _| {
+                      let name = path.file_stem().unwrap().to_string_lossy();
+                      let index = name.trim_start_matches("file-").parse::<usize>().unwrap();
+                      Ok(safe_plan(index))
+                  })
+                  .unwrap();
+                  let approval = approve_icloud_local_eviction_batch(
+                      &plan,
+                      &root(),
+                      &plan.batch_fingerprint,
+                      21,
+                      "human:operator",
+                      "Exact batch reviewed",
+                  )
+                  .unwrap();
+                  let individual = individual_approvals(&plan);
+                  let recorded_results = Cell::new(0usize);
+                  let checkpoints = std::cell::RefCell::new(Vec::new());
+                  let next = Cell::new(100_u64);
+
+                  let result = execute_items_with(
+                      &root(),
+                      &plan,
+                      &approval,
+                      &individual,
+                      30,
+                      || {
+                          let current = next.get();
+                          next.set(current + 1);
+                          current
+                      },
+                      |_, item_plan, item_approval, _, requested_at_ms| {
+                          Ok(successful_item_result(
+                              item_plan,
+                              item_approval,
+                              requested_at_ms,
+                          ))
+                      },
+                      |_| {
+                          recorded_results.set(recorded_results.get() + 1);
+                          Ok(())
+                      },
+                      |name, checkpoint| {
+                          checkpoints
+                              .borrow_mut()
+                              .push((name.to_string(), checkpoint.attempted_count));
+                          Ok(())
+                      },
+                  )
+                  .unwrap();
+
+                  assert_eq!(recorded_results.get(), 3);
+                  assert_eq!(checkpoints.borrow().len(), 3);
+                  assert_eq!(result.attempted_count, 3);
+                  assert!(result.execution_complete);
+                  assert!(result.verification_complete);
+              }
+
+              #[test]
+              fn execution_seam_fails_closed_when_result_recording_fails() {
+                  let plan = plan_batch_with(&root(), &[path(0)], 20, |_, _, _| Ok(safe_plan(0)))
+                      .unwrap();
+                  let approval = approve_icloud_local_eviction_batch(
+                      &plan,
+                      &root(),
+                      &plan.batch_fingerprint,
+                      21,
+                      "human:operator",
+                      "Exact batch reviewed",
+                  )
+                  .unwrap();
+                  let individual = individual_approvals(&plan);
+                  let checkpoints = Cell::new(0usize);
+
+                  let result = execute_items_with(
+                      &root(),
+                      &plan,
+                      &approval,
+                      &individual,
+                      30,
+                      || 40,
+                      |_, item_plan, item_approval, _, requested_at_ms| {
+                          Ok(successful_item_result(
+                              item_plan,
+                              item_approval,
+                              requested_at_ms,
+                          ))
+                      },
+                      |_| Err("record storage unavailable".into()),
+                      |_, _| {
+                          checkpoints.set(checkpoints.get() + 1);
+                          Ok(())
+                      },
+                  )
+                  .unwrap();
+
+                  assert_eq!(checkpoints.get(), 1);
+                  assert!(result.halted);
+                  assert!(!result.verification_complete);
+                  assert_eq!(
+                      result.halt_reason.as_deref(),
+                      Some("icloud-local-eviction-batch-item-result-record-failed")
+                  );
+                  assert_eq!(
+                      result.item_outcomes[0].error_code.as_deref(),
+                      Some("icloud-local-eviction-batch-item-result-record-failed")
+                  );
+                  assert!(!result.item_outcomes[0].verification_complete);
+              }'''
+          core = replace_once(core, old_timestamp_test, new_execution_tests, "execution seam tests")
+          core_path.write_text(core, encoding="utf-8")
+
+      - name: Format changed Rust files
+        run: |
+          rustfmt src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs
+          rustfmt src-tauri/src/cloud_local_eviction_batch.rs
+
+      - name: Run focused validation
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-icloud-local-eviction-batch
+          cargo test --manifest-path src-tauri/Cargo.toml --lib cloud_local_eviction_batch::tests
+          cargo check --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-icloud-local-eviction-batch
+          git diff --check
+
+      - name: Commit validated repair and remove workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ORIGINAL_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse origin/feat/icloud-local-eviction-batch)" = "${ORIGINAL_HEAD}"
+          rm .github/workflows/repair-pr-89-final.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs \
+            src-tauri/src/cloud_local_eviction_batch.rs \
+            .github/workflows/repair-pr-89-final.yml
+          git diff --cached --check
+          git commit -m "fix: complete iCloud batch execution review coverage"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push --force-with-lease=refs/heads/feat/icloud-local-eviction-batch:${ORIGINAL_HEAD} \
+            origin HEAD:refs/heads/feat/icloud-local-eviction-batch
