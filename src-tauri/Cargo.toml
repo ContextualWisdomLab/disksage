@@ -71,6 +71,11 @@ path = "src/bin/disksage-git-worktree-audit.rs"
 required-features = ["cloud-cli"]
 
 [[bin]]
+name = "disksage-icloud-sync-health"
+path = "src/bin/disksage-icloud-sync-health.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
 name = "disksage-archive-tree"
 path = "src/bin/disksage-archive-tree.rs"
 required-features = ["archive-cli"]
@@ -78,6 +83,11 @@ required-features = ["archive-cli"]
 [[bin]]
 name = "disksage-reclaim-plan"
 path = "src/bin/disksage-reclaim-plan.rs"
+
+[[bin]]
+name = "disksage-provider-client-runtime"
+path = "src/bin/disksage-provider-client-runtime.rs"
+required-features = ["cloud-cli"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
