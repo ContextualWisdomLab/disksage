@@ -1,9 +1,14 @@
 name: Repair PR 67 review findings
 
 on:
-  push:
+  pull_request:
     branches:
-      - feat/multicloud-local-inventory-batch
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
     paths:
       - .github/workflows/repair-pr-67.yml
 
@@ -11,12 +16,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: repair-pr-67-${{ github.ref }}
+  group: repair-pr-67-${{ github.event.pull_request.number }}
   cancel-in-progress: false
 
 jobs:
   repair:
-    if: github.actor != 'github-actions[bot]'
+    if: github.event.pull_request.head.ref == 'feat/multicloud-local-inventory-batch' && github.actor != 'github-actions[bot]'
     permissions:
       contents: write
     runs-on: ubuntu-latest
