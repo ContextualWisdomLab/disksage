@@ -1,3 +1,8 @@
+//! Command-line entry point for read-only reclaim evidence planning.
+//!
+//! The parser preserves operating-system paths without forcing Unicode conversion. The command
+//! produces local evidence only and never moves, deletes, or otherwise mutates supplied paths.
+
 use disksage_lib::reclaim::{plan_reclaim, PlannedOperation};
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -5,19 +10,27 @@ use std::path::PathBuf;
 const USAGE: &str = "Usage: disksage-reclaim-plan [--operation trash|delete] [--pretty] PATH...\n\
 Builds read-only logical/allocation evidence. It never moves or deletes files.";
 
+/// Parsed arguments for one reclaim-plan execution.
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
+    /// Destructive lifecycle whose potential consequences are being described.
     operation: PlannedOperation,
+    /// Whether the JSON result should use human-readable indentation.
     pretty: bool,
+    /// Filesystem roots to inspect without mutation.
     paths: Vec<PathBuf>,
 }
 
+/// Terminal result of command-line parsing.
 #[derive(Debug, PartialEq, Eq)]
 enum ParseResult {
+    /// Continue with a normal evidence-planning execution.
     Run(Args),
+    /// Print usage and exit successfully without scanning any path.
     Help,
 }
 
+/// Parses bounded options while preserving non-option values as native operating-system strings.
 fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResult, String> {
     let mut operation = PlannedOperation::Trash;
     let mut pretty = false;
@@ -55,6 +68,7 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
     }))
 }
 
+/// Executes one parsed argument stream and writes either usage or a JSON evidence document.
 fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), String> {
     let args = match parse_args(raw_args)? {
         ParseResult::Help => {
@@ -74,10 +88,12 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
     Ok(())
 }
 
+/// Executes the process argument stream without lossy Unicode conversion.
 fn run() -> Result<(), String> {
     run_with_args(std::env::args_os().skip(1))
 }
 
+/// Reports a stable error to stderr and uses exit code 2 for invalid requests.
 fn main() {
     if let Err(error) = run() {
         eprintln!("disksage-reclaim-plan: {error}");
