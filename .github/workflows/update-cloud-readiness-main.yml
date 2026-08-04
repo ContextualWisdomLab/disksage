@@ -2,6 +2,11 @@
 name: Update cloud readiness foundation from main
 
 on:
+  push:
+    branches:
+      - feat/cloud-readiness-foundation-mainline
+    paths:
+      - .github/workflows/update-cloud-readiness-main.yml
   pull_request:
     branches:
       - main
@@ -17,12 +22,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: update-cloud-readiness-main-${{ github.event.pull_request.number }}
+  group: update-cloud-readiness-main-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   update-and-validate:
-    if: github.event.pull_request.head.ref == 'feat/cloud-readiness-foundation-mainline' && github.actor != 'github-actions[bot]'
+    if: github.actor != 'github-actions[bot]'
     permissions:
       contents: write
     runs-on: ubuntu-latest
@@ -47,9 +52,22 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev
 
+      - name: Resolve triggering head
+        id: trigger
+        env:
+          PUSH_HEAD: ${{ github.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            echo "head=${PR_HEAD}" >> "${GITHUB_OUTPUT}"
+          else
+            echo "head=${PUSH_HEAD}" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Merge current main without dropping either product slice
         env:
-          ORIGINAL_HEAD: ${{ github.event.pull_request.head.sha }}
+          ORIGINAL_HEAD: ${{ steps.trigger.outputs.head }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "${ORIGINAL_HEAD}"
@@ -134,7 +152,7 @@ jobs:
       - name: Publish the validated merge
         env:
           GH_TOKEN: ${{ github.token }}
-          ORIGINAL_HEAD: ${{ github.event.pull_request.head.sha }}
+          ORIGINAL_HEAD: ${{ steps.trigger.outputs.head }}
         run: |
           set -euo pipefail
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
