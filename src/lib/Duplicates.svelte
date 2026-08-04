@@ -67,8 +67,8 @@
       return;
     }
     const okay = await confirm(
-      `${paths.length}개 중복 파일을 휴지통으로 보냅니다 (${fmtBytes(reclaimable)} 확보).\n` +
-        `각 그룹의 사본 1개는 보존됩니다. 휴지통에서 복원할 수 있습니다.`,
+      `${paths.length}개 중복 파일을 휴지통으로 보냅니다 (논리 크기 ${fmtBytes(reclaimable)}, 실제 회수량 미검증).\n` +
+        `각 그룹의 사본 1개는 보존됩니다. 휴지통을 비우기 전에는 물리 공간이 회수되지 않으며, APFS 공유 블록 때문에 실제 회수량은 더 작을 수 있습니다.`,
       { title: "DiskSage", kind: "warning" },
     );
     if (!okay) return;
@@ -99,7 +99,7 @@
   {#each groups as g (g.hash)}
     <div class="group">
       <div class="ghead">
-        {g.paths.length}개 사본 · 각 {fmtBytes(g.size)} · 낭비 {fmtBytes(g.size * (g.paths.length - 1))}
+        {g.paths.length}개 사본 · 각 {fmtBytes(g.size)} · 중복 논리 크기 {fmtBytes(g.size * (g.paths.length - 1))}
       </div>
       <ul>
         {#each g.paths as p (p)}
@@ -127,7 +127,7 @@
   {#if groups.length > 0}
     <div class="actions">
       <button onclick={deleteSelected} disabled={busy || toDelete.size === 0}>
-        선택 중복 휴지통으로 ({fmtBytes(reclaimable)})
+        선택 중복 휴지통으로 (논리 {fmtBytes(reclaimable)})
       </button>
     </div>
   {/if}
