@@ -67,14 +67,17 @@ jobs:
         run: python .github/scripts/repair_pr_89.py cli
       - name: Verify focused CLI boundaries
         run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-icloud-local-eviction-batch
-      - name: Verify formatting and stage immutable evidence
-        shell: bash
+      - name: Verify repaired Rust formatting
         run: |
-          set -euo pipefail
           rustfmt --edition 2021 --check \
             src-tauri/src/cloud_local_eviction_batch.rs \
             src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs
-          git diff --check
+      - name: Verify repaired whitespace
+        run: git diff --check
+      - name: Stage immutable evidence
+        shell: bash
+        run: |
+          set -euo pipefail
           stage=repair-artifact
           mkdir -p "$stage/src-tauri/src/bin"
           cp src-tauri/src/cloud_local_eviction_batch.rs "$stage/src-tauri/src/cloud_local_eviction_batch.rs"
