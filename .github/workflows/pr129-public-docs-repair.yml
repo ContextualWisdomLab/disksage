@@ -1,22 +1,22 @@
 name: Repair PR 129 public API documentation
 
 on:
-  push:
-    branches:
-      - fix/icloud-batch-postmerge-verification
-    paths:
-      - .github/workflows/pr129-public-docs-repair.yml
+  pull_request:
+    types: [synchronize]
 
 permissions:
   contents: read
 
 concurrency:
-  group: pr129-public-docs-repair-${{ github.ref }}
+  group: pr129-public-docs-repair-${{ github.event.pull_request.head.sha }}
   cancel-in-progress: false
 
 jobs:
   repair:
-    if: github.actor != 'github-actions[bot]'
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.head_ref == 'fix/icloud-batch-postmerge-verification' &&
+      github.actor != 'github-actions[bot]'
     permissions:
       contents: write
     runs-on: ubuntu-latest
@@ -24,13 +24,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: fix/icloud-batch-postmerge-verification
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Verify exact audited parent and trigger-only delta
         env:
-          EXPECTED_PARENT: d1f419d3d59fa9c79a3b6407aa4e85a714b7b257
+          EXPECTED_PARENT: 21643699e82864849c32dd1006f9f641a29000bb
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD^)" = "${EXPECTED_PARENT}"
@@ -50,29 +50,32 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - name: Apply the audited documentation repair from the immutable parent
+      - name: Apply immutable audited documentation repair
         shell: python
+        env:
+          AUDITED_REPAIR_COMMIT: d1f419d3d59fa9c79a3b6407aa4e85a714b7b257
         run: |
+          import os
           import subprocess
-          import sys
 
           workflow_path = ".github/workflows/pr129-public-docs-repair.yml"
-          previous = subprocess.check_output(
-              ["git", "show", f"HEAD^:{workflow_path}"], text=True
+          audited_commit = os.environ["AUDITED_REPAIR_COMMIT"]
+          audited = subprocess.check_output(
+              ["git", "show", f"{audited_commit}:{workflow_path}"], text=True
           ).splitlines()
           marker = "      - name: Add beginner-readable public API documentation"
           try:
-              marker_index = previous.index(marker)
+              marker_index = audited.index(marker)
               run_index = next(
                   index
-                  for index in range(marker_index + 1, len(previous))
-                  if previous[index] == "        run: |"
+                  for index in range(marker_index + 1, len(audited))
+                  if audited[index] == "        run: |"
               )
           except (ValueError, StopIteration) as error:
               raise SystemExit("audited documentation repair script was not found") from error
 
           script_lines = []
-          for line in previous[run_index + 1 :]:
+          for line in audited[run_index + 1 :]:
               if line.startswith("      - name:"):
                   break
               if line.startswith("          "):
@@ -82,9 +85,17 @@ jobs:
               else:
                   raise SystemExit(f"unexpected indentation in audited script: {line!r}")
           script = "\n".join(script_lines) + "\n"
-          if "source_path.write_text(source, encoding=\"utf-8\")" not in script:
+          integrity_markers = (
+              'source_path = Path("src-tauri/src/cloud_local_eviction_batch.rs")',
+              'source_path.write_text(source, encoding="utf-8")',
+              'missing public documentation:',
+          )
+          if any(marker not in script for marker in integrity_markers):
               raise SystemExit("audited script integrity marker is absent")
-          exec(compile(script, f"{workflow_path}@HEAD^", "exec"), {"__name__": "__main__"})
+          exec(
+              compile(script, f"{workflow_path}@{audited_commit}", "exec"),
+              {"__name__": "__main__"},
+          )
 
       - name: Format and validate focused Rust behavior
         run: |
@@ -96,9 +107,10 @@ jobs:
       - name: Commit exact validated documentation and remove workflow
         env:
           GH_TOKEN: ${{ github.token }}
-          ORIGINAL_HEAD: ${{ github.sha }}
+          ORIGINAL_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
+          git fetch origin fix/icloud-batch-postmerge-verification
           test "$(git rev-parse origin/fix/icloud-batch-postmerge-verification)" = "${ORIGINAL_HEAD}"
           rm .github/workflows/pr129-public-docs-repair.yml
           test "$(git diff --name-only | sort)" = $'.github/workflows/pr129-public-docs-repair.yml\nsrc-tauri/src/cloud_local_eviction_batch.rs'
