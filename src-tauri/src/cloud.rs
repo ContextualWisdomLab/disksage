@@ -46,6 +46,10 @@ const INCOMPLETE_DOWNLOAD_SCAN_CHUNK_BYTES: usize = 1024 * 1024;
 const MAX_INCOMPLETE_DOWNLOAD_SCAN_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 #[cfg(not(coverage))]
 const MAX_INCOMPLETE_DOWNLOAD_EOCD_OFFSETS: usize = 64;
+#[cfg(not(coverage))]
+const MAX_EMAIL_HEADER_BYTES: usize = 1024 * 1024;
+#[cfg(not(coverage))]
+const MAX_AUDACITY_SCHEMA_PROBE_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -694,6 +698,7 @@ fn archive_kind(path: &Path) -> Option<ArchiveKind> {
         | "ods" | "odp" | "pages" | "numbers" | "key" | "epub" | "mobi" => {
             Some(ArchiveKind::Document)
         }
+        "eml" => Some(ArchiveKind::Document),
         "jpg" | "jpeg" | "png" | "heic" | "tif" | "tiff" | "gif" | "webp" | "raw" | "mov"
         | "mp4" | "m4v" | "mkv" | "avi" | "wav" | "mp3" | "m4a" | "flac" | "aiff" => {
             Some(ArchiveKind::Media)
@@ -704,7 +709,7 @@ fn archive_kind(path: &Path) -> Option<ArchiveKind> {
         "csv" | "tsv" | "parquet" | "feather" | "arrow" | "sav" | "sas7bdat" | "dta" | "rdata"
         | "rds" | "sqlite" | "sqlite3" | "db" | "sql" | "jsonl" => Some(ArchiveKind::Dataset),
         "bak" | "backup" | "vhd" | "vhdx" | "qcow2" | "img" => Some(ArchiveKind::Backup),
-        "psd" | "ai" | "indd" | "sketch" | "fig" | "blend" => Some(ArchiveKind::Creative),
+        "psd" | "ai" | "indd" | "sketch" | "fig" | "blend" | "aup3" => Some(ArchiveKind::Creative),
         "crdownload" => Some(ArchiveKind::IncompleteDownload),
         _ if multipart_archive_part(path).is_some() => Some(ArchiveKind::Archive),
         _ => None,
@@ -818,6 +823,13 @@ fn civil_from_days(days_since_epoch: i64) -> (i32, u32, u32) {
 
 fn date_parts(epoch_ms: u64) -> (i32, u32, u32) {
     civil_from_days((epoch_ms / DAY_MS) as i64)
+}
+
+/// Stable UTC production year/month used by path-free organization summaries.
+/// The cloud destination builder uses the same underlying date decomposition.
+pub fn production_year_month(epoch_ms: u64) -> (i32, u32) {
+    let (year, month, _) = date_parts(epoch_ms);
+    (year, month)
 }
 
 fn days_from_civil(year: i32, month: u32, day: u32) -> i64 {
@@ -2736,6 +2748,217 @@ fn multipart_archive_metadata(path: &Path) -> ContentMetadata {
     metadata
 }
 
+#[cfg(not(coverage))]
+fn read_bounded_prefix(path: &Path, limit: usize) -> Result<(Vec<u8>, bool), String> {
+    let file = std::fs::File::open(path).map_err(|_| "open-failed".to_string())?;
+    let mut bytes = Vec::with_capacity(limit.min(64 * 1024).saturating_add(1));
+    file.take(limit.saturating_add(1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "read-failed".to_string())?;
+    let truncated = bytes.len() > limit;
+    bytes.truncate(limit);
+    Ok((bytes, truncated))
+}
+
+#[cfg(not(coverage))]
+fn email_header_end(bytes: &[u8]) -> Option<usize> {
+    bytes
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|index| index + 4)
+        .or_else(|| {
+            bytes
+                .windows(2)
+                .position(|window| window == b"\n\n")
+                .map(|index| index + 2)
+        })
+}
+
+/// Read only the bounded RFC 5322 header block. Message bodies and attachments are deliberately
+/// not parsed because the planner needs lineage metadata, not message contents.
+#[cfg(not(coverage))]
+fn email_metadata(path: &Path) -> ContentMetadata {
+    let mut metadata = ContentMetadata::default();
+    let source = "embedded:rfc5322-header";
+    let (bytes, truncated) = match read_bounded_prefix(path, MAX_EMAIL_HEADER_BYTES) {
+        Ok(value) => value,
+        Err(reason) => {
+            add_evidence(
+                &mut metadata,
+                "metadata-probe-warning",
+                format!("email-header:{reason}"),
+                "local:metadata-probe:rust-rfc5322",
+                "high",
+            );
+            return metadata;
+        }
+    };
+    let Some(header_end) = email_header_end(&bytes) else {
+        add_evidence(
+            &mut metadata,
+            "metadata-probe-warning",
+            if truncated {
+                "email-header:bounded-header-terminator-not-found"
+            } else {
+                "email-header:header-terminator-not-found"
+            },
+            "local:metadata-probe:rust-rfc5322",
+            "high",
+        );
+        return metadata;
+    };
+    let Some(message) = mail_parser::MessageParser::default().parse_headers(&bytes[..header_end])
+    else {
+        add_evidence(
+            &mut metadata,
+            "metadata-probe-warning",
+            "email-header:rfc5322-parse-failed",
+            "local:metadata-probe:rust-rfc5322",
+            "high",
+        );
+        return metadata;
+    };
+
+    add_evidence(
+        &mut metadata,
+        "email-header-bytes-inspected",
+        header_end.to_string(),
+        "local:metadata-probe:bounded-rfc5322-header",
+        "high",
+    );
+    add_evidence(
+        &mut metadata,
+        "email-body-inspected",
+        "false",
+        "local:metadata-probe:bounded-rfc5322-header",
+        "high",
+    );
+    if let Some(date) = message.date() {
+        if let Ok(seconds) = u64::try_from(date.to_timestamp()) {
+            if let Some(epoch_ms) = seconds.checked_mul(1_000) {
+                set_production_time(&mut metadata, epoch_ms, "embedded:rfc5322:date", "high");
+            }
+        }
+    }
+    if let Some(subject) = message
+        .subject()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let bounded = subject.chars().take(500).collect::<String>();
+        metadata.title = Some(bounded.clone());
+        push_context(&mut metadata, "email-subject", &bounded, source);
+    }
+    if let Some(thread) = message
+        .thread_name()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        push_context(&mut metadata, "email-thread", thread, source);
+    }
+    if let Some(author) = message
+        .return_address()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let bounded = author.chars().take(320).collect::<String>();
+        metadata.authors.push(bounded.clone());
+        add_evidence(&mut metadata, "email-author", bounded, source, "high");
+    }
+    for (field, value) in [
+        ("email-message-id", message.message_id()),
+        ("email-in-reply-to", message.header_raw("In-Reply-To")),
+        ("email-references", message.header_raw("References")),
+    ] {
+        if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
+            add_evidence(
+                &mut metadata,
+                field,
+                value.chars().take(500).collect::<String>(),
+                source,
+                "high",
+            );
+        }
+    }
+    metadata
+}
+
+#[cfg(not(coverage))]
+fn contains_ascii_case_insensitive(bytes: &[u8], needle: &[u8]) -> bool {
+    bytes
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle))
+}
+
+/// Audacity 3 projects are SQLite containers. Their schema proves application context but does
+/// not carry a trustworthy creation date, so the production-time fallback remains review-only.
+#[cfg(not(coverage))]
+fn audacity_project_metadata(path: &Path) -> ContentMetadata {
+    let mut metadata = ContentMetadata::default();
+    let (bytes, _) = match read_bounded_prefix(path, MAX_AUDACITY_SCHEMA_PROBE_BYTES) {
+        Ok(value) => value,
+        Err(reason) => {
+            add_evidence(
+                &mut metadata,
+                "metadata-probe-warning",
+                format!("audacity-aup3:{reason}"),
+                "local:metadata-probe:rust-aup3",
+                "high",
+            );
+            return metadata;
+        }
+    };
+    if !bytes.starts_with(b"SQLite format 3\0") {
+        add_evidence(
+            &mut metadata,
+            "metadata-probe-warning",
+            "audacity-aup3:sqlite-header-missing",
+            "local:metadata-probe:rust-aup3",
+            "high",
+        );
+        return metadata;
+    }
+    add_evidence(
+        &mut metadata,
+        "container-format",
+        "audacity-aup3-sqlite3",
+        "embedded:audacity:sqlite-header",
+        "high",
+    );
+    push_context(
+        &mut metadata,
+        "creating-application",
+        "Audacity",
+        "embedded:audacity:sqlite-header",
+    );
+    for table in ["project", "autosave", "sampleblocks"] {
+        let signature = format!("CREATE TABLE {table}");
+        if contains_ascii_case_insensitive(&bytes, signature.as_bytes()) {
+            add_evidence(
+                &mut metadata,
+                "audacity-schema-table",
+                table,
+                "embedded:audacity:sqlite-schema",
+                "high",
+            );
+        }
+    }
+    if !metadata
+        .evidence
+        .iter()
+        .any(|evidence| evidence.field == "audacity-schema-table" && evidence.value == "project")
+    {
+        add_evidence(
+            &mut metadata,
+            "metadata-probe-warning",
+            "audacity-aup3:project-schema-signature-missing",
+            "local:metadata-probe:rust-aup3",
+            "medium",
+        );
+    }
+    metadata
+}
+
 fn merge_metadata(mut primary: ContentMetadata, secondary: ContentMetadata) -> ContentMetadata {
     let confidence_rank = |value: Option<&str>| match value {
         Some("high") => 3,
@@ -2868,6 +3091,8 @@ fn probe_content_metadata_with_general(
         }
         "pdf" => pdfinfo_metadata(path),
         "zip" => zip_archive_metadata(path),
+        "eml" => email_metadata(path),
+        "aup3" => audacity_project_metadata(path),
         "crdownload" => incomplete_download_metadata(path),
         "xlsx" | "xlsm" => merge_metadata(
             zipped_document_metadata(path, "docProps/core.xml"),
@@ -2900,8 +3125,13 @@ pub(crate) fn probe_content_metadata_for_audit(path: &Path) -> ContentMetadata {
 }
 
 fn should_probe_general_metadata(path: &Path) -> bool {
+    let extension = path
+        .extension()
+        .map(|extension| extension.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
     archive_kind(path) != Some(ArchiveKind::IncompleteDownload)
         && multipart_archive_part(path).is_none()
+        && !matches!(extension.as_str(), "eml" | "aup3")
 }
 
 fn looks_like_coordinates(name: &str) -> bool {
@@ -3101,6 +3331,12 @@ fn review_reasons(path: &Path, kind: ArchiveKind) -> Vec<String> {
     if matches!(extension.as_str(), "wav" | "mp3" | "m4a" | "flac" | "aiff") {
         reasons.push("recording-may-contain-sensitive-speech".into());
     }
+    if extension == "eml" {
+        reasons.push("email-content-needs-review".into());
+    }
+    if extension == "aup3" {
+        reasons.push("audacity-project-recording-content-needs-review".into());
+    }
     let name: String = path
         .file_name()
         .map(|n| n.to_string_lossy().nfc().collect::<String>().to_lowercase())
@@ -3181,6 +3417,8 @@ fn destination_scope_review_reasons(
                 | "structured-data-may-contain-personal-data"
                 | "spreadsheet-content-needs-review"
                 | "recording-may-contain-sensitive-speech"
+                | "email-content-needs-review"
+                | "audacity-project-recording-content-needs-review"
                 | "filename-context-may-be-confidential"
                 | "filename-contains-geolocation"
                 | "embedded-metadata-may-contain-personal-context"
@@ -4722,6 +4960,104 @@ mod tests {
 
     #[cfg(not(coverage))]
     #[test]
+    fn email_metadata_reads_header_lineage_without_opening_the_body() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("message.eml");
+        std::fs::write(
+            &path,
+            concat!(
+                "Date: Mon, 3 Aug 2026 12:34:56 +0900\r\n",
+                "From: Example Author <author@example.com>\r\n",
+                "To: recipient@example.com\r\n",
+                "Subject: Re: Metadata lineage\r\n",
+                "Message-ID: <message-1@example.com>\r\n",
+                "In-Reply-To: <message-0@example.com>\r\n",
+                "References: <message-0@example.com>\r\n",
+                "\r\n",
+                "BODY_MARKER_MUST_NOT_BE_METADATA\r\n",
+            ),
+        )
+        .unwrap();
+
+        let metadata = email_metadata(&path);
+        assert_eq!(
+            metadata.production_time_source.as_deref(),
+            Some("embedded:rfc5322:date")
+        );
+        assert_eq!(metadata.production_time_confidence.as_deref(), Some("high"));
+        assert_eq!(
+            date_parts(metadata.production_time_ms.unwrap()),
+            (2026, 8, 3)
+        );
+        assert_eq!(metadata.title.as_deref(), Some("Re: Metadata lineage"));
+        assert_eq!(metadata.authors, ["author@example.com"]);
+        assert!(metadata
+            .context
+            .iter()
+            .any(|value| value == "email-thread=Metadata lineage"));
+        assert!(metadata.evidence.iter().any(|evidence| {
+            evidence.field == "email-message-id" && evidence.value == "message-1@example.com"
+        }));
+        assert!(metadata.evidence.iter().any(|evidence| {
+            evidence.field == "email-body-inspected" && evidence.value == "false"
+        }));
+        assert!(!metadata
+            .evidence
+            .iter()
+            .any(|evidence| evidence.value.contains("BODY_MARKER_MUST_NOT_BE_METADATA")));
+        let reasons = review_reasons(&path, ArchiveKind::Document);
+        assert!(reasons.contains(&"email-content-needs-review".to_string()));
+        assert!(
+            destination_scope_review_reasons(CloudAccountScope::Personal, &reasons)
+                .contains(&"personal-cloud-sensitive-context-needs-explicit-approval".to_string())
+        );
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn email_metadata_fails_closed_when_bounded_header_has_no_terminator() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("oversized.eml");
+        std::fs::write(&path, vec![b'x'; MAX_EMAIL_HEADER_BYTES + 1]).unwrap();
+        let metadata = email_metadata(&path);
+        assert!(metadata.evidence.iter().any(|evidence| {
+            evidence.field == "metadata-probe-warning"
+                && evidence.value == "email-header:bounded-header-terminator-not-found"
+        }));
+        assert!(metadata.production_time_ms.is_none());
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn audacity_project_metadata_records_schema_context_without_fabricating_a_date() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("recording.aup3");
+        let mut bytes = b"SQLite format 3\0".to_vec();
+        bytes.extend_from_slice(
+            b" CREATE TABLE project(id INTEGER PRIMARY KEY, dict BLOB, doc BLOB); \
+               CREATE TABLE sampleblocks(blockid INTEGER PRIMARY KEY, samples BLOB); ",
+        );
+        std::fs::write(&path, bytes).unwrap();
+
+        let metadata = audacity_project_metadata(&path);
+        assert!(metadata.production_time_ms.is_none());
+        assert!(metadata.evidence.iter().any(|evidence| {
+            evidence.field == "container-format" && evidence.value == "audacity-aup3-sqlite3"
+        }));
+        assert!(metadata.evidence.iter().any(|evidence| {
+            evidence.field == "audacity-schema-table" && evidence.value == "project"
+        }));
+        assert!(metadata
+            .context
+            .contains(&"creating-application=Audacity".to_string()));
+        let reasons = review_reasons(&path, ArchiveKind::Creative);
+        assert!(reasons.contains(&"audacity-project-recording-content-needs-review".to_string()));
+        assert!(!should_probe_general_metadata(&path));
+        assert!(!should_probe_general_metadata(Path::new("message.eml")));
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
     fn zip_archive_metadata_reads_lineage_and_content_classes_without_extracting() {
         use zip::write::SimpleFileOptions;
         use zip::{CompressionMethod, DateTime, ZipWriter};
@@ -6083,11 +6419,13 @@ mod tests {
         assert_eq!(CloudProvider::GoogleDrive.as_str(), "google-drive");
         for (ext, expected) in [
             ("x.pdf", ArchiveKind::Document),
+            ("x.eml", ArchiveKind::Document),
             ("x.mp4", ArchiveKind::Media),
             ("x.zip", ArchiveKind::Archive),
             ("x.csv", ArchiveKind::Dataset),
             ("x.bak", ArchiveKind::Backup),
             ("x.psd", ArchiveKind::Creative),
+            ("x.aup3", ArchiveKind::Creative),
             ("x.crdownload", ArchiveKind::IncompleteDownload),
             ("x.zip.part004", ArchiveKind::Archive),
         ] {

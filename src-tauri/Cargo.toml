@@ -145,6 +145,7 @@ zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2
 memchr = "2.8.3"
 infer = "0.19.0"
 png = "0.17.16"
+mail-parser = "0.11.5"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 embed_plist = "1.2.2"
