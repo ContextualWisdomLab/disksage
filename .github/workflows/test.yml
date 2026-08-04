@@ -71,7 +71,7 @@ jobs:
           persist-credentials: false
       - name: Verify immutable repair source
         run: echo '46f143c8a01193d0189046fe70a98b1948a46be79bbf504ca520a401b69047c3  .github/scripts/repair_pr_89.py' | sha256sum --check --strict
-      - name: Normalize the two audited raw-string anchors
+      - name: Normalize the audited repair anchors
         shell: bash
         run: |
           python - <<'PY'
@@ -79,14 +79,27 @@ jobs:
 
           path = Path('.github/scripts/repair_pr_89.py')
           text = path.read_text(encoding='utf-8')
-          old = r'br#"{\\"plans\\":[]}"#'
-          new = r'br#"{\"plans\":[]}"#'
-          count = text.count(old)
-          if count != 2:
-              raise SystemExit(f'expected two raw-string anchors, found {count}')
-          text = text.replace(old, new)
-          if old in text or text.count(new) != 2:
+
+          old_raw = r'br#"{\\"plans\\":[]}"#'
+          new_raw = r'br#"{\"plans\":[]}"#'
+          raw_count = text.count(old_raw)
+          if raw_count != 2:
+              raise SystemExit(f'expected two raw-string anchors, found {raw_count}')
+          text = text.replace(old_raw, new_raw)
+          if old_raw in text or text.count(new_raw) != 2:
               raise SystemExit('raw-string anchor normalization was not exact')
+
+          old_writer = r'        write_immutable_record(record_dir, name, value)\n'
+          new_writer = r'        write_immutable_record(record_dir, name, value).map(|_| ())\n'
+          writer_count = text.count(old_writer)
+          if writer_count != 1:
+              raise SystemExit(
+                  f'expected one immutable-writer return anchor, found {writer_count}'
+              )
+          text = text.replace(old_writer, new_writer)
+          if old_writer in text or text.count(new_writer) != 1:
+              raise SystemExit('immutable-writer return normalization was not exact')
+
           path.write_text(text, encoding='utf-8')
           PY
       - name: Install Tauri system dependencies
