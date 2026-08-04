@@ -1,94 +1,60 @@
-name: Apply remaining PR 89 timestamp fix
+name: Bootstrap final PR 89 repair
 
 on:
-  pull_request:
-    branches: [main]
-    types: [synchronize, ready_for_review]
+  push:
+    branches:
+      - feat/icloud-local-eviction-batch
     paths:
       - .github/workflows/repair-pr-89-timestamp.yml
-      - src-tauri/src/cloud_local_eviction_batch.rs
 
 permissions:
   contents: read
 
 concurrency:
-  group: repair-pr-89-timestamp-${{ github.event.pull_request.number }}
+  group: bootstrap-pr-89-final-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  repair:
-    if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.ref == 'feat/icloud-local-eviction-batch' &&
-      github.actor != 'github-actions[bot]'
+  bootstrap:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
     permissions:
       contents: write
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Install Tauri system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev
-
-      - name: Replace synthetic item timestamps with the injected live clock
+      - name: Arm the existing validated final repair workflow
         shell: python
         run: |
           from pathlib import Path
 
-          path = Path("src-tauri/src/cloud_local_eviction_batch.rs")
-          text = path.read_text(encoding="utf-8")
-          old = '''    for (offset, (item, individual)) in plan
-                  .items
-                  .iter()
-                  .zip(individual_approvals.iter())
-                  .enumerate()
-              {
-                  let item_requested_at_ms =
-                      requested_at_ms.saturating_add(u64::try_from(offset).unwrap_or(u64::MAX));'''
-          new = '''    for (item, individual) in plan.items.iter().zip(individual_approvals.iter()) {
-                  let item_requested_at_ms = fresh_item_requested_at_ms(&mut now_ms);'''
+          path = Path('.github/workflows/repair-pr-89-final.yml')
+          text = path.read_text(encoding='utf-8')
+          old = "    if: github.actor != 'github-actions[bot]'\n"
+          new = "    if: github.actor == 'github-actions[bot]'\n"
           if text.count(old) != 1:
-              raise SystemExit("synthetic timestamp marker missing or duplicated")
+              raise SystemExit('final repair actor guard missing or duplicated')
           text = text.replace(old, new, 1)
-          path.write_text(text, encoding="utf-8")
-
-      - name: Format and validate the focused batch coordinator
-        run: |
-          set -euo pipefail
-          rustfmt src-tauri/src/cloud_local_eviction_batch.rs
-          cargo test --manifest-path src-tauri/Cargo.toml --lib cloud_local_eviction_batch::tests
-          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-icloud-local-eviction-batch
-          cargo check --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-icloud-local-eviction-batch
-          git diff --check
-
-      - name: Publish only the validated fix
+          text += "\n# Armed by the exact-head bootstrap workflow.\n"
+          path.write_text(text, encoding='utf-8')
+          Path('.github/workflows/repair-pr-89-timestamp.yml').unlink()
+      - name: Publish only the workflow handoff
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_HEAD: ${{ github.event.pull_request.head.sha }}
+          SOURCE_HEAD: ${{ github.sha }}
         shell: bash
         run: |
           set -euo pipefail
-          rm -f \
-            .github/workflows/repair-pr-89-final.yml \
-            .github/workflows/repair-pr-89-timestamp.yml
+          unexpected="$({ git status --porcelain | awk '{print $2}' | grep -vE '^(\.github/workflows/repair-pr-89-final\.yml|\.github/workflows/repair-pr-89-timestamp\.yml)$'; } || true)"
+          test -z "$unexpected"
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add src-tauri/src/cloud_local_eviction_batch.rs \
-            .github/workflows/repair-pr-89-final.yml \
-            .github/workflows/repair-pr-89-timestamp.yml
+          git add .github/workflows/repair-pr-89-final.yml .github/workflows/repair-pr-89-timestamp.yml
           git diff --cached --check
-          git commit -m "fix: record actual iCloud batch item execution times"
+          git commit -m "ci: arm the final PR 89 review repair"
           remote_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push \
             --force-with-lease="refs/heads/feat/icloud-local-eviction-batch:${SOURCE_HEAD}" \
