@@ -2,11 +2,8 @@ name: Repair PR 67 review findings
 
 on:
   pull_request:
-    branches:
-      - main
-    types:
-      - synchronize
-      - ready_for_review
+    branches: [main]
+    types: [synchronize, ready_for_review]
     paths:
       - .github/workflows/repair-pr-67.yml
 
@@ -45,116 +42,108 @@ jobs:
         run: |
           from pathlib import Path
 
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one marker, found {count}")
+              return text.replace(old, new, 1)
+
           module_path = Path("src-tauri/src/cloud_local_inventory.rs")
           module = module_path.read_text(encoding="utf-8")
-          module = module.replace(
+          module = replace_once(
+              module,
               "const CHECKPOINT_ENTRY_INTERVAL: u64 = 256;\nconst CHECKPOINT_INTERVAL_MS: u64 = 1_000;",
               "const CHECKPOINT_ENTRY_INTERVAL: u64 = 256;\nconst CHECKPOINT_ISSUE_INTERVAL: u64 = 32;\nconst CHECKPOINT_INTERVAL_MS: u64 = 1_000;",
-              1,
+              "checkpoint constant",
           )
-          old_issue_due = "    let issue_due = state.skipped_entries != cadence.skipped_entries;"
-          new_issue_due = "    let issue_due = state\n        .skipped_entries\n        .saturating_sub(cadence.skipped_entries)\n        >= CHECKPOINT_ISSUE_INTERVAL;"
-          if old_issue_due not in module:
-              raise SystemExit("checkpoint marker not found")
-          module = module.replace(old_issue_due, new_issue_due, 1)
-          test_marker = '''    #[test]
-          fn inventories_allocated_files_without_claiming_sync_or_lineage() {'''
-          test_insert = '''    #[test]
-          fn issue_checkpoints_require_a_bounded_skipped_entry_delta() {
-              let root = root(Path::new("/Cloud"));
-              let context = InventoryContext {
-                  root: &root,
-                  root_path: Path::new("/Cloud"),
-                  options: options(),
-                  observed_at_ms: 1,
-              };
-              let mut state = InventoryState::default();
-              let mut cadence = CheckpointCadence {
-                  emitted: true,
-                  ..CheckpointCadence::default()
-              };
-              let mut emitted = 0usize;
-              let mut emit = |_report: &CloudLocalAllocationInventory| {
-                  emitted += 1;
-                  Ok(())
-              };
+          module = replace_once(
+              module,
+              "    let issue_due = state.skipped_entries != cadence.skipped_entries;",
+              "    let issue_due = state\n        .skipped_entries\n        .saturating_sub(cadence.skipped_entries)\n        >= CHECKPOINT_ISSUE_INTERVAL;",
+              "checkpoint cadence",
+          )
+          if "fn issue_checkpoints_require_a_bounded_skipped_entry_delta()" not in module:
+              marker = "\n    #[test]\n    fn inventories_allocated_files_without_claiming_sync_or_lineage() {"
+              test = '''
+    #[test]
+    fn issue_checkpoints_require_a_bounded_skipped_entry_delta() {
+        let root = root(Path::new("/Cloud"));
+        let context = InventoryContext {
+            root: &root,
+            root_path: Path::new("/Cloud"),
+            options: options(),
+            observed_at_ms: 1,
+        };
+        let mut state = InventoryState::default();
+        let mut cadence = CheckpointCadence {
+            emitted: true,
+            ..CheckpointCadence::default()
+        };
+        let mut emitted = 0usize;
+        let mut emit = |_report: &CloudLocalAllocationInventory| {
+            emitted += 1;
+            Ok(())
+        };
 
-              state.skipped_entries = CHECKPOINT_ISSUE_INTERVAL - 1;
-              maybe_emit_checkpoint(context, &state, &mut cadence, 0, false, &mut emit)
-                  .unwrap();
-              assert_eq!(emitted, 0);
+        state.skipped_entries = CHECKPOINT_ISSUE_INTERVAL - 1;
+        maybe_emit_checkpoint(context, &state, &mut cadence, 0, false, &mut emit).unwrap();
+        assert_eq!(emitted, 0);
 
-              state.skipped_entries = CHECKPOINT_ISSUE_INTERVAL;
-              maybe_emit_checkpoint(context, &state, &mut cadence, 0, false, &mut emit)
-                  .unwrap();
-              assert_eq!(emitted, 1);
-          }
-
-          #[test]
-          fn inventories_allocated_files_without_claiming_sync_or_lineage() {'''
-          if test_marker not in module:
-              raise SystemExit("module test marker not found")
-          module = module.replace(test_marker, test_insert, 1)
+        state.skipped_entries = CHECKPOINT_ISSUE_INTERVAL;
+        maybe_emit_checkpoint(context, &state, &mut cadence, 0, false, &mut emit).unwrap();
+        assert_eq!(emitted, 1);
+    }
+'''
+              module = replace_once(module, marker, test + marker, "module test insertion")
           module_path.write_text(module, encoding="utf-8")
 
           cli_path = Path("src-tauri/src/bin/disksage-cloud-local-inventory.rs")
           cli = cli_path.read_text(encoding="utf-8")
-          helper_marker = '''#[cfg(not(coverage))]
-          fn inventory_all_roots(
-              discovery: cloud::CloudRootDiscoveryReport,
-              args: &Args,
-          ) -> CloudLocalInventoryBatchReport {'''
-          helper_insert = '''#[cfg(not(coverage))]
-          fn stable_batch_failure_reason(reason: &str) -> String {
-              let code = reason.split(':').next().unwrap_or_default();
-              if !code.is_empty()
-                  && code.len() <= 128
-                  && code.chars().all(|character| {
-                      character.is_ascii_lowercase()
-                          || character.is_ascii_digit()
-                          || character == '-'
-                  })
-              {
-                  code.to_string()
-              } else {
-                  "cloud-local-inventory-root-failed".into()
-              }
-          }
-
-          #[cfg(not(coverage))]
-          fn inventory_all_roots(
-              discovery: cloud::CloudRootDiscoveryReport,
-              args: &Args,
-          ) -> CloudLocalInventoryBatchReport {'''
-          if helper_marker not in cli:
-              raise SystemExit("batch helper marker not found")
-          cli = cli.replace(helper_marker, helper_insert, 1)
-          old_reason = "                reason,"
-          new_reason = "                reason: stable_batch_failure_reason(&reason),"
-          if old_reason not in cli:
-              raise SystemExit("batch reason marker not found")
-          cli = cli.replace(old_reason, new_reason, 1)
-          cli_test_marker = '''    #[test]
-          fn batch_completion_requires_roots_and_complete_discovery_and_reports() {'''
-          cli_test_insert = '''    #[test]
-          fn batch_failure_reason_discards_worker_stderr_details() {
-              assert_eq!(
-                  stable_batch_failure_reason(
-                      "inventory-worker-failed:/Users/private/customer-file: panic"
-                  ),
-                  "inventory-worker-failed"
-              );
-              assert_eq!(
-                  stable_batch_failure_reason("INVALID:/secret"),
-                  "cloud-local-inventory-root-failed"
-              );
-          }
-
-          #[test]
-          fn batch_completion_requires_roots_and_complete_discovery_and_reports() {'''
-          if cli_test_marker not in cli:
-              raise SystemExit("CLI test marker not found")
-          cli = cli.replace(cli_test_marker, cli_test_insert, 1)
+          if "fn stable_batch_failure_reason(" not in cli:
+              marker = "\n#[cfg(not(coverage))]\nfn inventory_all_roots("
+              helper = '''
+#[cfg(not(coverage))]
+fn stable_batch_failure_reason(reason: &str) -> String {
+    let code = reason.split(':').next().unwrap_or_default();
+    if !code.is_empty()
+        && code.len() <= 128
+        && code.chars().all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || character == '-'
+        })
+    {
+        code.to_string()
+    } else {
+        "cloud-local-inventory-root-failed".into()
+    }
+}
+'''
+              cli = replace_once(cli, marker, helper + marker, "batch helper insertion")
+          cli = replace_once(
+              cli,
+              "                reason,",
+              "                reason: stable_batch_failure_reason(&reason),",
+              "batch failure reason",
+          )
+          if "fn batch_failure_reason_discards_worker_stderr_details()" not in cli:
+              marker = "\n    #[test]\n    fn batch_completion_requires_roots_and_complete_discovery_and_reports() {"
+              test = '''
+    #[test]
+    fn batch_failure_reason_discards_worker_stderr_details() {
+        assert_eq!(
+            stable_batch_failure_reason(
+                "inventory-worker-failed:/Users/private/customer-file: panic"
+            ),
+            "inventory-worker-failed"
+        );
+        assert_eq!(
+            stable_batch_failure_reason("INVALID:/secret"),
+            "cloud-local-inventory-root-failed"
+        );
+    }
+'''
+              cli = replace_once(cli, marker, test + marker, "CLI test insertion")
           cli_path.write_text(cli, encoding="utf-8")
 
       - name: Format changed Rust files
