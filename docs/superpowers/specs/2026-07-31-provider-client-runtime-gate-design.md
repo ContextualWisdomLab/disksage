@@ -14,10 +14,14 @@ copy integrity, provider sync attestation, and local-source eviction approval.
 ## Bounded local evidence
 
 DiskSage runs the fixed macOS command `/bin/ps -Ac -o comm=` with no shell,
-null stdin and stderr, a three-second timeout, and a 64 KiB output cap. It
-compares trimmed process names only against exact, built-in OneDrive and Google
-Drive client names. Substrings and command-line arguments do not count. iCloud
-is recorded separately as a system-managed File Provider.
+null stdin and stderr, a three-second timeout, and a 64 KiB output cap. Standard
+output is drained concurrently while the child runs, retaining at most the cap
+plus one sentinel byte so a full pipe cannot deadlock the process and oversized
+evidence fails closed. Timeout and wait-error paths kill and reap the child and
+join the reader before returning. DiskSage compares trimmed process names only
+against exact, built-in OneDrive and Google Drive client names. Substrings and
+command-line arguments do not count. iCloud is recorded separately as a
+system-managed File Provider.
 
 The emitted version 1 snapshot contains:
 
