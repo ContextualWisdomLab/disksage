@@ -54,3 +54,125 @@ jobs:
           workspaces: src-tauri
       - name: Build with llm-engine (compiles real llama.cpp CPU + engine.rs FFI)
         run: cargo test --manifest-path src-tauri/Cargo.toml --features llm-engine --lib --no-run
+
+  # BEGIN TEMPORARY PR 129 ICLOUD BATCH REPAIR
+  validate-icloud-batch-repair:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fix/icloud-batch-postmerge-verification'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    outputs:
+      patched_digest: ${{ steps.digest.outputs.value }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Verify immutable repair source
+        run: echo '46f143c8a01193d0189046fe70a98b1948a46be79bbf504ca520a401b69047c3  .github/scripts/repair_pr_89.py' | sha256sum --check --strict
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - name: Add regression tests first
+        run: python .github/scripts/repair_pr_89.py tests
+      - name: Prove execution-seam tests fail before production repair
+        run: |
+          set +e
+          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli \
+            cloud_local_eviction_batch::tests::execution_stops_after_first_failed_item_and_records_each_checkpoint \
+            > /tmp/icloud-batch-core-red.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/icloud-batch-core-red.log
+          test "$status" -ne 0
+          grep -Eq 'BatchRecordWriter|execute_icloud_local_eviction_batch_with' /tmp/icloud-batch-core-red.log
+      - name: Apply execution repair
+        run: python .github/scripts/repair_pr_89.py core
+      - name: Prove execution-seam tests pass
+        run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli cloud_local_eviction_batch::tests::
+      - name: Prove diagnostic regression test fails before CLI repair
+        run: |
+          set +e
+          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli \
+            --bin disksage-icloud-local-eviction-batch \
+            control_locations_reject_symlinked_cloud_ancestors \
+            > /tmp/icloud-batch-cli-red.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/icloud-batch-cli-red.log
+          test "$status" -ne 0
+          grep -F 'icloud-local-eviction-batch-record-dir-inside-cloud-data' /tmp/icloud-batch-cli-red.log
+      - name: Apply CLI diagnostic repair
+        run: python .github/scripts/repair_pr_89.py cli
+      - name: Verify focused CLI and manifest boundaries
+        run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-icloud-local-eviction-batch
+      - name: Verify formatting and whitespace
+        run: |
+          rustfmt --edition 2021 --check \
+            src-tauri/src/cloud_local_eviction_batch.rs \
+            src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs
+          git diff --check
+      - name: Bind the validated source result
+        id: digest
+        run: |
+          value="$({ printf '%s\0' 'src-tauri/src/cloud_local_eviction_batch.rs'; cat src-tauri/src/cloud_local_eviction_batch.rs; printf '%s\0' 'src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs'; cat src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs; } | sha256sum | cut -d' ' -f1)"
+          echo "value=$value" >> "$GITHUB_OUTPUT"
+
+  publish-icloud-batch-repair:
+    needs: validate-icloud-batch-repair
+    if: >-
+      needs.validate-icloud-batch-repair.result == 'success' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fix/icloud-batch-postmerge-verification'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify immutable repair source
+        run: echo '46f143c8a01193d0189046fe70a98b1948a46be79bbf504ca520a401b69047c3  .github/scripts/repair_pr_89.py' | sha256sum --check --strict
+      - name: Reproduce the validated source result without executing repository code
+        run: python .github/scripts/repair_pr_89.py all
+      - name: Verify reproduced digest and unchanged branch head
+        env:
+          EXPECTED_DIGEST: ${{ needs.validate-icloud-batch-repair.outputs.patched_digest }}
+          SOURCE_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          actual="$({ printf '%s\0' 'src-tauri/src/cloud_local_eviction_batch.rs'; cat src-tauri/src/cloud_local_eviction_batch.rs; printf '%s\0' 'src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs'; cat src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs; } | sha256sum | cut -d' ' -f1)"
+          test "$actual" = "$EXPECTED_DIGEST"
+          git fetch origin refs/heads/fix/icloud-batch-postmerge-verification:refs/remotes/origin/fix/icloud-batch-postmerge-verification
+          test "$(git rev-parse refs/remotes/origin/fix/icloud-batch-postmerge-verification)" = "$SOURCE_HEAD"
+          git diff --check
+      - name: Publish exact repair and remove one-shot machinery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          awk '/^  # BEGIN TEMPORARY PR 129 ICLOUD BATCH REPAIR$/ { exit } { print }' \
+            .github/workflows/test.yml > "$RUNNER_TEMP/test.yml"
+          mv "$RUNNER_TEMP/test.yml" .github/workflows/test.yml
+          rm .github/workflows/repair-pr-89.yml .github/scripts/repair_pr_89.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src-tauri/src/cloud_local_eviction_batch.rs \
+            src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs \
+            .github/workflows/test.yml \
+            .github/workflows/repair-pr-89.yml \
+            .github/scripts/repair_pr_89.py
+          git diff --cached --check
+          git commit -m 'fix: verify iCloud batch execution safeguards'
+          remote_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push \
+            --force-with-lease="refs/heads/fix/icloud-batch-postmerge-verification:${SOURCE_HEAD}" \
+            "$remote_url" \
+            HEAD:refs/heads/fix/icloud-batch-postmerge-verification
