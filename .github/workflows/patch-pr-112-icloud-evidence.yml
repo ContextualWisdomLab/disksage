@@ -1,0 +1,155 @@
+name: Apply validated PR 112 fail-closed iCloud readiness repair
+
+on:
+  push:
+    branches:
+      - feat/naruon-cloud-copy-readiness-mainline-v2
+    paths:
+      - .github/workflows/patch-pr-112-icloud-evidence.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: patch-pr-112-icloud-evidence-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Normalize and compile the bounded patcher
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed -i 's/^+import sys$/import sys/' .github/scripts/patch_pr_112_icloud_evidence.py
+          python -m py_compile .github/scripts/patch_pr_112_icloud_evidence.py
+      - name: Add regression tests before production changes
+        run: python .github/scripts/patch_pr_112_icloud_evidence.py tests
+      - name: Prove incomplete evidence currently fails open
+        shell: bash
+        run: |
+          set +e
+          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli \
+            naruon_cloud_copy_readiness::tests::incomplete_icloud_snapshot_never_authorizes_new_copy \
+            > "$RUNNER_TEMP/icloud-readiness-red.log" 2>&1
+          status=$?
+          set -e
+          cat "$RUNNER_TEMP/icloud-readiness-red.log"
+          test "$status" -ne 0
+          grep -F 'incomplete_icloud_snapshot_never_authorizes_new_copy' \
+            "$RUNNER_TEMP/icloud-readiness-red.log"
+      - name: Apply the fail-closed evidence repair
+        run: python .github/scripts/patch_pr_112_icloud_evidence.py fix
+      - name: Format and verify focused Rust contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustfmt --edition 2021 src-tauri/src/naruon_cloud_copy_readiness.rs
+          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli \
+            naruon_cloud_copy_readiness::tests::
+          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli \
+            --bin disksage-naruon-copy-readiness-verify
+          git diff --check
+      - name: Stage exact validated source evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage=repair-artifact
+          mkdir -p "$stage/src-tauri/src"
+          cp src-tauri/src/naruon_cloud_copy_readiness.rs \
+            "$stage/src-tauri/src/naruon_cloud_copy_readiness.rs"
+          (
+            cd "$stage"
+            sha256sum src-tauri/src/naruon_cloud_copy_readiness.rs > SHA256SUMS
+            sha256sum --check --strict SHA256SUMS
+          )
+      - name: Upload exact validated source evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pr-112-icloud-evidence-${{ github.sha }}
+          path: repair-artifact
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: validate
+    if: needs.validate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download and verify the same-run artifact
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_NAME: pr-112-icloud-evidence-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          curl --fail-with-body --silent --show-error \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
+            > "$work/artifacts.json"
+          count="$(jq --arg name "$ARTIFACT_NAME" '[.artifacts[] | select(.name == $name and .expired == false)] | length' "$work/artifacts.json")"
+          test "$count" = 1
+          artifact_id="$(jq -r --arg name "$ARTIFACT_NAME" '.artifacts[] | select(.name == $name and .expired == false) | .id' "$work/artifacts.json")"
+          artifact_digest="$(jq -r --arg name "$ARTIFACT_NAME" '.artifacts[] | select(.name == $name and .expired == false) | .digest' "$work/artifacts.json")"
+          test "${artifact_digest#sha256:}" != "$artifact_digest"
+          curl --fail-with-body --silent --show-error --location \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" \
+            --output "$work/artifact.zip"
+          test "$(sha256sum "$work/artifact.zip" | cut -d' ' -f1)" = "${artifact_digest#sha256:}"
+          mkdir "$work/evidence"
+          unzip -q "$work/artifact.zip" -d "$work/evidence"
+          (
+            cd "$work/evidence"
+            sha256sum --check --strict SHA256SUMS
+          )
+          cp "$work/evidence/src-tauri/src/naruon_cloud_copy_readiness.rs" \
+            src-tauri/src/naruon_cloud_copy_readiness.rs
+          git diff --check
+      - name: Commit only the validated source and remove temporary machinery
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_HEAD: ${{ github.sha }}
+          SOURCE_BRANCH: feat/naruon-cloud-copy-readiness-mainline-v2
+        run: |
+          set -euo pipefail
+          git fetch origin "refs/heads/${SOURCE_BRANCH}:refs/remotes/origin/${SOURCE_BRANCH}"
+          test "$(git rev-parse "refs/remotes/origin/${SOURCE_BRANCH}")" = "$SOURCE_HEAD"
+          rm \
+            .github/scripts/patch_pr_112_icloud_evidence.py \
+            .github/workflows/patch-pr-112-icloud-evidence.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            src-tauri/src/naruon_cloud_copy_readiness.rs \
+            .github/scripts/patch_pr_112_icloud_evidence.py \
+            .github/workflows/patch-pr-112-icloud-evidence.yml
+          git diff --cached --check
+          git commit -m 'fix: block incomplete iCloud readiness evidence'
+          remote_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push \
+            --force-with-lease="refs/heads/${SOURCE_BRANCH}:${SOURCE_HEAD}" \
+            "$remote_url" \
+            "HEAD:refs/heads/${SOURCE_BRANCH}"
