@@ -104,6 +104,40 @@ jobs:
           if old_writer in text or text.count(new_writer) != 1:
               raise SystemExit('immutable-writer return normalization was not exact')
 
+          stale_loop_repair = """    replace_once(
+              CORE,
+              '''    for (offset, (item, individual)) in plan\\n        .items\\n        .iter()\\n        .zip(individual_approvals.iter())\\n        .enumerate()\\n    {\\n''',
+              '''    for (item, individual) in plan.items.iter().zip(individual_approvals.iter()) {\\n''',
+          )
+"""
+          loop_count = text.count(stale_loop_repair)
+          if loop_count != 1:
+              raise SystemExit(f'expected one stale loop repair, found {loop_count}')
+          text = text.replace(stale_loop_repair, '', 1)
+
+          stale_timestamp_repair = """    replace_once(
+              CORE,
+              '''        let item_requested_at_ms =\\n            requested_at_ms.saturating_add(u64::try_from(offset).unwrap_or(u64::MAX));\\n        let execution = execute_icloud_local_eviction(\\n''',
+              '''        let item_requested_at_ms = fresh_item_requested_at_ms(&mut now_ms);\\n        let execution = executor(\\n''',
+          )
+"""
+          current_executor_repair = """    replace_once(
+              CORE,
+              '''        let execution = execute_icloud_local_eviction(\\n''',
+              '''        let execution = executor(\\n''',
+          )
+"""
+          timestamp_count = text.count(stale_timestamp_repair)
+          if timestamp_count != 1:
+              raise SystemExit(
+                  f'expected one stale timestamp repair, found {timestamp_count}'
+              )
+          text = text.replace(stale_timestamp_repair, current_executor_repair, 1)
+          if stale_loop_repair in text or stale_timestamp_repair in text:
+              raise SystemExit('stale repair normalization was not exact')
+          if text.count(current_executor_repair) != 1:
+              raise SystemExit('executor repair normalization was not exact')
+
           path.write_text(text, encoding='utf-8')
           PY
       - name: Install Tauri system dependencies
