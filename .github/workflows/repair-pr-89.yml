@@ -1,9 +1,9 @@
 name: Repair PR 89 review findings
 
 on:
-  push:
-    branches:
-      - feat/icloud-local-eviction-batch
+  pull_request:
+    branches: [main]
+    types: [synchronize, ready_for_review]
     paths:
       - .github/workflows/repair-pr-89.yml
 
@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: repair-pr-89-${{ github.ref }}
+  group: repair-pr-89-${{ github.event.pull_request.number }}
   cancel-in-progress: false
 
 jobs:
