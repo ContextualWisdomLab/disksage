@@ -1,0 +1,62 @@
+name: Bootstrap final PR 89 repair
+
+on:
+  push:
+    branches:
+      - feat/icloud-local-eviction-batch
+    paths:
+      - .github/workflows/repair-pr-89-timestamp.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bootstrap-pr-89-final-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Arm the existing validated final repair workflow
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('.github/workflows/repair-pr-89-final.yml')
+          text = path.read_text(encoding='utf-8')
+          old = "    if: github.actor != 'github-actions[bot]'\n"
+          new = "    if: github.actor == 'github-actions[bot]'\n"
+          if text.count(old) != 1:
+              raise SystemExit('final repair actor guard missing or duplicated')
+          text = text.replace(old, new, 1)
+          text += "\n# Armed by the exact-head bootstrap workflow.\n"
+          path.write_text(text, encoding='utf-8')
+          Path('.github/workflows/repair-pr-89-timestamp.yml').unlink()
+      - name: Publish only the workflow handoff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_HEAD: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          unexpected="$({ git status --porcelain | awk '{print $2}' | grep -vE '^(\.github/workflows/repair-pr-89-final\.yml|\.github/workflows/repair-pr-89-timestamp\.yml)$'; } || true)"
+          test -z "$unexpected"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .github/workflows/repair-pr-89-final.yml .github/workflows/repair-pr-89-timestamp.yml
+          git diff --cached --check
+          git commit -m "ci: arm the final PR 89 review repair"
+          remote_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push \
+            --force-with-lease="refs/heads/feat/icloud-local-eviction-batch:${SOURCE_HEAD}" \
+            "$remote_url" \
+            HEAD:refs/heads/feat/icloud-local-eviction-batch
