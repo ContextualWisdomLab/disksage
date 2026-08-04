@@ -1,5 +1,10 @@
 import type { CloudCandidate, CloudReviewDecision } from "./api";
 
+export const ORGANIZATION_TENANT_AUTHORITY_ATTESTATION =
+  "[organization-tenant-authority-confirmed]";
+const ORGANIZATION_TENANT_AUTHORITY_REVIEW_REASON =
+  "organization-cloud-sensitive-context-needs-explicit-tenant-approval";
+
 export const CLOUD_REVIEW_PAGE_SIZE = 20;
 
 export type CloudReviewQueueFilter =
@@ -37,6 +42,11 @@ export interface CloudReviewQueuePage {
   startIndex: number;
   endIndex: number;
   totalItems: number;
+}
+
+export function organizationTenantAuthorityRequired(candidate: CloudCandidate): boolean {
+  return candidate.destination_account_scope === "organization"
+    && candidate.review_reasons.includes(ORGANIZATION_TENANT_AUTHORITY_REVIEW_REASON);
 }
 
 function isReviewFormatControl(character: string): boolean {
@@ -127,6 +137,9 @@ export function matchingReviewDecision(
     : "";
   const rawRationale = decision?.rationale ?? "";
   const rationale = rawRationale.replace(/^[\s\u0085\u200b]+|[\s\u0085\u200b]+$/gu, "");
+  const tenantAuthorityAttested = decision?.disposition !== "approved"
+    || !organizationTenantAuthorityRequired(candidate)
+    || rationale.startsWith(`${ORGANIZATION_TENANT_AUTHORITY_ATTESTATION} `);
   const attributedHumanDecision = decision?.version === 2
     && /^[0-9a-f]{64}$/.test(decision.decision_id)
     && rawReviewedBy === reviewedBy
@@ -138,7 +151,8 @@ export function matchingReviewDecision(
     && Array.from(rationale).length <= 1_000
     && /[\p{L}\p{N}]/u.test(rationale)
     && !/\p{Cc}/u.test(rationale)
-    && !Array.from(rationale).some(isReviewFormatControl);
+    && !Array.from(rationale).some(isReviewFormatControl)
+    && tenantAuthorityAttested;
   return decision?.review_fingerprint === candidate.review_fingerprint && attributedHumanDecision
     ? decision
     : null;
