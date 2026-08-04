@@ -19,6 +19,9 @@ const SQLITE3_PATH: &str = "/usr/bin/sqlite3";
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_STDOUT_BYTES: usize = 16 * 1024;
 const MAX_STDERR_BYTES: usize = 4 * 1024;
+const ITEM_ERROR_AGE_NOTICE_MS: u64 = 86_400_000;
+
+pub const ICLOUD_SYNC_HEALTH_SCHEMA_VERSION: u32 = 2;
 
 const QUEUE_QUERY: &str = r#"
 PRAGMA query_only=ON;
@@ -42,6 +45,14 @@ FROM client_uploads INDEXED BY "client_uploads/throttle_state"
 WHERE throttle_state NOT IN (0,1,31,32);
 SELECT 'item_error', count(*), 0
 FROM item_errors;
+SELECT 'item_error_octagon_not_signed_in', count(*),
+       coalesce(max(cast(strftime('%s', error_timestamp) as integer) * 1000),0)
+FROM item_errors
+WHERE error_domain='com.apple.security.octagon' AND error_code=25;
+SELECT 'item_error_unclassified', count(*),
+       coalesce(max(cast(strftime('%s', error_timestamp) as integer) * 1000),0)
+FROM item_errors
+WHERE NOT (error_domain='com.apple.security.octagon' AND error_code=25);
 "#;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,6 +76,9 @@ pub struct IcloudUploadQueueSummary {
     pub garbage_collection_count: u64,
     pub other_state_count: u64,
     pub item_error_count: u64,
+    pub item_error_octagon_not_signed_in_count: u64,
+    pub item_error_unclassified_count: u64,
+    pub newest_item_error_timestamp_ms: Option<u64>,
     pub scheduled_count: u64,
     pub scheduled_bytes: u64,
 }
@@ -244,9 +258,21 @@ fn parse_queue_rows(output: &str) -> Result<IcloudUploadQueueSummary, String> {
     let (garbage_collection_count, _) = take("gc")?;
     let (other_state_count, _) = take("other_state")?;
     let (item_error_count, _) = take("item_error")?;
-    if rows.len() != 7 {
+    let (item_error_octagon_not_signed_in_count, octagon_newest_ms) =
+        take("item_error_octagon_not_signed_in")?;
+    let (item_error_unclassified_count, unclassified_newest_ms) = take("item_error_unclassified")?;
+    if rows.len() != 9 {
         return Err("icloud-sync-health-query-row-unexpected".into());
     }
+    let classified_item_error_count = item_error_octagon_not_signed_in_count
+        .checked_add(item_error_unclassified_count)
+        .ok_or_else(|| "icloud-sync-health-item-error-count-overflow".to_string())?;
+    if classified_item_error_count != item_error_count {
+        return Err("icloud-sync-health-item-error-classification-mismatch".into());
+    }
+    let newest_item_error_timestamp_ms = octagon_newest_ms.max(unclassified_newest_ms);
+    let newest_item_error_timestamp_ms =
+        (newest_item_error_timestamp_ms > 0).then_some(newest_item_error_timestamp_ms);
     let scheduled_count = scheduled_waiting_count
         .checked_add(scheduled_active_count)
         .ok_or_else(|| "icloud-sync-health-scheduled-count-overflow".to_string())?;
@@ -264,6 +290,9 @@ fn parse_queue_rows(output: &str) -> Result<IcloudUploadQueueSummary, String> {
         garbage_collection_count,
         other_state_count,
         item_error_count,
+        item_error_octagon_not_signed_in_count,
+        item_error_unclassified_count,
+        newest_item_error_timestamp_ms,
         scheduled_count,
         scheduled_bytes,
     })
@@ -313,8 +342,32 @@ fn build_report(
     };
     let mut blockers = new_copy_admission_blockers.clone();
     blockers.push("provider-native-per-item-sync-attestation-required-before-eviction".into());
+    let mut notices = vec![
+        "read-only-immutable-main-database-snapshot".into(),
+        "sqlite-wal-not-applied-to-avoid-sidecar-writes".into(),
+        "snapshot-may-lag-active-cloud-docs-state".into(),
+        "cloud-docs-private-schema-is-supplementary-evidence".into(),
+        "queue-bytes-are-transfer-size-not-remote-capacity".into(),
+        "global-queue-state-is-not-per-item-upload-attestation".into(),
+        "paths-and-filenames-redacted".into(),
+        "no-cloud-write".into(),
+        "no-local-eviction".into(),
+    ];
+    if upload_queue.item_error_octagon_not_signed_in_count > 0 {
+        notices.push("icloud-item-error-octagon-not-signed-in".into());
+    }
+    if upload_queue.item_error_unclassified_count > 0 {
+        notices.push("icloud-item-error-unclassified".into());
+    }
+    if upload_queue
+        .newest_item_error_timestamp_ms
+        .and_then(|timestamp| observed_at_ms.checked_sub(timestamp))
+        .is_some_and(|age_ms| age_ms >= ITEM_ERROR_AGE_NOTICE_MS)
+    {
+        notices.push("icloud-item-error-older-than-24h".into());
+    }
     Ok(IcloudSyncHealthReport {
-        schema_version: 1,
+        schema_version: ICLOUD_SYNC_HEALTH_SCHEMA_VERSION,
         output_mode: "icloud-local-sync-health".into(),
         observed_at_ms,
         provider: "icloud".into(),
@@ -329,17 +382,7 @@ fn build_report(
         new_copy_admission_state: new_copy_admission_state.into(),
         new_copy_admission_blockers,
         blockers,
-        notices: vec![
-            "read-only-immutable-main-database-snapshot".into(),
-            "sqlite-wal-not-applied-to-avoid-sidecar-writes".into(),
-            "snapshot-may-lag-active-cloud-docs-state".into(),
-            "cloud-docs-private-schema-is-supplementary-evidence".into(),
-            "queue-bytes-are-transfer-size-not-remote-capacity".into(),
-            "global-queue-state-is-not-per-item-upload-attestation".into(),
-            "paths-and-filenames-redacted".into(),
-            "no-cloud-write".into(),
-            "no-local-eviction".into(),
-        ],
+        notices,
         paths_redacted: true,
         user_filenames_read: false,
         user_file_contents_read: false,
@@ -446,7 +489,9 @@ mod tests {
          out_of_quota|0|0\n\
          gc|18595|0\n\
          other_state|1|0\n\
-         item_error|1|0\n"
+         item_error|1|0\n\
+         item_error_octagon_not_signed_in|1|1000\n\
+         item_error_unclassified|0|0\n"
     }
 
     #[test]
@@ -459,6 +504,9 @@ mod tests {
         assert_eq!(queue.garbage_collection_count, 18_595);
         assert_eq!(queue.other_state_count, 1);
         assert_eq!(queue.item_error_count, 1);
+        assert_eq!(queue.item_error_octagon_not_signed_in_count, 1);
+        assert_eq!(queue.item_error_unclassified_count, 0);
+        assert_eq!(queue.newest_item_error_timestamp_ms, Some(1000));
     }
 
     #[test]
@@ -466,6 +514,11 @@ mod tests {
         assert!(parse_queue_rows("scheduled_waiting|1|2\n").is_err());
         assert!(parse_queue_rows(&format!("{}scheduled_waiting|1|2\n", queue_output())).is_err());
         assert!(parse_queue_rows(&format!("{}other|1|2\n", queue_output())).is_err());
+        assert!(parse_queue_rows(&queue_output().replace(
+            "item_error_octagon_not_signed_in|1|1000",
+            "item_error_octagon_not_signed_in|0|0"
+        ))
+        .is_err());
     }
 
     #[test]
@@ -477,7 +530,12 @@ mod tests {
             allocated_bytes: 128,
             modified_ms: Some(1),
         }];
-        let report = build_report(2, files, parse_queue_rows(queue_output()).unwrap()).unwrap();
+        let report = build_report(
+            ITEM_ERROR_AGE_NOTICE_MS + 1000,
+            files,
+            parse_queue_rows(queue_output()).unwrap(),
+        )
+        .unwrap();
         assert!(report.sync_backlog_present);
         assert_eq!(report.new_copy_admission_state, "blocked");
         assert_eq!(report.managed_database_allocated_bytes, 128);
@@ -504,6 +562,12 @@ mod tests {
         assert!(report
             .new_copy_admission_blockers
             .contains(&"icloud-upload-queue-nonempty".to_string()));
+        assert!(report
+            .notices
+            .contains(&"icloud-item-error-octagon-not-signed-in".to_string()));
+        assert!(report
+            .notices
+            .contains(&"icloud-item-error-older-than-24h".to_string()));
         assert_eq!(
             require_new_copy_admission(&report).unwrap_err(),
             report.new_copy_admission_blockers.join(",")

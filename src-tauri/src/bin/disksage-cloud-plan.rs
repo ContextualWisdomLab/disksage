@@ -29,6 +29,7 @@ use disksage_lib::icloud_sync_health;
 #[cfg(not(coverage))]
 use disksage_lib::naruon_capacity;
 #[cfg(not(coverage))]
+use disksage_lib::naruon_cloud_copy_readiness;
 use disksage_lib::naruon_lineage;
 #[cfg(not(coverage))]
 use disksage_lib::provider_api_client::{self, FixedHostProviderMetadataClient};
@@ -87,6 +88,8 @@ struct Args {
     export_naruon_lineage: Option<PathBuf>,
     naruon_sync_evidence: Option<PathBuf>,
     export_naruon_capacity: bool,
+    export_naruon_copy_readiness: bool,
+    naruon_copy_readiness_output: Option<PathBuf>,
     export_semantic_catalog: bool,
 }
 
@@ -206,6 +209,8 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
         export_naruon_lineage: None,
         naruon_sync_evidence: None,
         export_naruon_capacity: false,
+        export_naruon_copy_readiness: false,
+        naruon_copy_readiness_output: None,
         export_semantic_catalog: false,
     };
     let mut index = 0;
@@ -399,10 +404,27 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
                 )?))
             }
             "--export-naruon-capacity" => parsed.export_naruon_capacity = true,
+            "--export-naruon-copy-readiness" => {
+                parsed.export_naruon_copy_readiness = true
+            }
+            "--naruon-copy-readiness-output" => {
+                if parsed.naruon_copy_readiness_output.is_some() {
+                    return Err(
+                        "--naruon-copy-readiness-output은 한 번만 지정할 수 있음"
+                            .into(),
+                    );
+                }
+                parsed.naruon_copy_readiness_output =
+                    Some(PathBuf::from(value(
+                        args,
+                        &mut index,
+                        "--naruon-copy-readiness-output",
+                    )?));
+            }
             "--export-semantic-catalog" => parsed.export_semantic_catalog = true,
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary] [--min-size-mib N] [--min-age-days N] [--limit N] [--decision-summary [--review-reason-set REASON|REASON [--private-review-output ABSOLUTE_NEW_FILE.json]] | --exact-duplicate-review-prefix DIR_PREFIX --exact-duplicate-kind document|media|archive|dataset|backup|creative|incomplete-download | --export-semantic-catalog] [--verify-capacity [--oauth-connections ABSOLUTE_PATH] [--export-naruon-capacity]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
+                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary] [--min-size-mib N] [--min-age-days N] [--limit N] [--decision-summary [--review-reason-set REASON|REASON [--private-review-output ABSOLUTE_NEW_FILE.json]] | --exact-duplicate-review-prefix DIR_PREFIX --exact-duplicate-kind document|media|archive|dataset|backup|creative|incomplete-download | --export-naruon-copy-readiness --verify-capacity [--naruon-copy-readiness-output ABSOLUTE_NEW_FILE.json] | --export-semantic-catalog] [--verify-capacity [--oauth-connections ABSOLUTE_PATH] [--export-naruon-capacity]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -580,6 +602,29 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     if args.export_naruon_capacity && !args.verify_capacity {
         return Err("--export-naruon-capacity에는 --verify-capacity가 필요함".into());
     }
+    if args.export_naruon_copy_readiness && !args.verify_capacity {
+        return Err(
+            "--export-naruon-copy-readiness에는 --verify-capacity가 필요함"
+                .into(),
+        );
+    }
+    if args.naruon_copy_readiness_output.is_some()
+        && !args.export_naruon_copy_readiness
+    {
+        return Err(
+            "--naruon-copy-readiness-output에는 --export-naruon-copy-readiness가 필요함"
+                .into(),
+        );
+    }
+    if args
+        .naruon_copy_readiness_output
+        .as_ref()
+        .is_some_and(|path| !path.is_absolute())
+    {
+        return Err(
+            "--naruon-copy-readiness-output은 절대 경로여야 함".into(),
+        );
+    }
     let actions = usize::from(args.list_roots)
         + usize::from(args.inspect_roots)
         + usize::from(copy_action)
@@ -589,6 +634,7 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
         + usize::from(review_action)
         + usize::from(args.export_naruon_lineage.is_some())
         + usize::from(args.export_naruon_capacity)
+        + usize::from(args.export_naruon_copy_readiness)
         + usize::from(args.export_semantic_catalog);
     if args.all_readable_roots && actions > 0 {
         return Err(
@@ -949,6 +995,7 @@ fn review_batch_summary(
         "schema_version": 1,
         "output_mode": "review-batch-summary",
         "generated_at_ms": report.generated_at_ms,
+        "source_selection_policy": report.source_selection_policy,
         "decision_batch_fingerprint_version": cloud::CLOUD_DECISION_BATCH_FINGERPRINT_VERSION,
         "decision_batch_fingerprint": cloud::cloud_decision_batch_fingerprint(report),
         "review_batch_fingerprint_version": REVIEW_BATCH_FINGERPRINT_VERSION,
@@ -1009,6 +1056,7 @@ fn private_review_dossier(
         "output_mode": "private-review-dossier",
         "generated_at_ms": report.generated_at_ms,
         "contains_sensitive_local_metadata": true,
+        "source_selection_policy": report.source_selection_policy,
         "decision_batch_fingerprint_version": cloud::CLOUD_DECISION_BATCH_FINGERPRINT_VERSION,
         "decision_batch_fingerprint": cloud::cloud_decision_batch_fingerprint(report),
         "review_batch_fingerprint_version": REVIEW_BATCH_FINGERPRINT_VERSION,
@@ -1499,6 +1547,7 @@ fn decision_summary(report: &cloud::CloudPlanReport) -> serde_json::Value {
         "schema_version": 1,
         "output_mode": "decision-summary",
         "generated_at_ms": report.generated_at_ms,
+        "source_selection_policy": report.source_selection_policy,
         "decision_batch_fingerprint_version": cloud::CLOUD_DECISION_BATCH_FINGERPRINT_VERSION,
         "decision_batch_fingerprint": cloud::cloud_decision_batch_fingerprint(report),
         "metadata_policy": {
@@ -2052,6 +2101,40 @@ fn run() -> Result<(), String> {
         );
         return Ok(());
     }
+    if args.export_naruon_copy_readiness {
+        let observed_at_ms = cloud::system_now_ms();
+        let runtime = provider_client_runtime::collect_provider_client_runtime(
+            selected.provider,
+            observed_at_ms,
+        );
+        let icloud_health = if selected.provider == CloudProvider::Icloud {
+            icloud_sync_health::inspect_new_copy_admission(
+                &home,
+                observed_at_ms,
+            )
+            .ok()
+        } else {
+            None
+        };
+        let envelope =
+            naruon_cloud_copy_readiness::export_naruon_cloud_copy_readiness(
+                &report,
+                &runtime,
+                icloud_health.as_ref(),
+            )?;
+        if let Some(output_path) = &args.naruon_copy_readiness_output {
+            let value = serde_json::to_value(&envelope).map_err(|_| {
+                "naruon-copy-readiness-output-json-invalid".to_string()
+            })?;
+            write_private_review_dossier(output_path, &value)?;
+        }
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&envelope)
+                .map_err(|error| error.to_string())?
+        );
+        return Ok(());
+    }
     if args.export_semantic_catalog {
         let batch = semantic_catalog::export_semantic_catalog_candidate_batch(&report)?;
         println!(
@@ -2300,6 +2383,8 @@ mod tests {
         assert!(defaults.review_rationale.is_none());
         assert!(defaults.export_naruon_lineage.is_none());
         assert!(!defaults.export_naruon_capacity);
+        assert!(!defaults.export_naruon_copy_readiness);
+        assert!(defaults.naruon_copy_readiness_output.is_none());
         assert!(!defaults.export_semantic_catalog);
         assert!(defaults.naruon_sync_evidence.is_none());
         assert!(!defaults.verify_capacity);
@@ -2645,6 +2730,11 @@ mod tests {
                 access_issue: None,
             },
             generated_at_ms: 100,
+            source_selection_policy: Some(cloud::CloudPlanOptions {
+                min_size_bytes: 90 * 1024 * 1024,
+                min_age_days: 30,
+                limit: 200,
+            }),
             candidates: vec![candidate],
             candidate_bytes: 42,
             potentially_reclaimable_bytes: 42,
@@ -2657,6 +2747,12 @@ mod tests {
         let item = &summary["decisions"][0];
         assert_eq!(summary["output_mode"], "decision-summary");
         assert_eq!(summary["candidate_count"], 1);
+        assert_eq!(
+            summary["source_selection_policy"]["min_size_bytes"],
+            90 * 1024 * 1024
+        );
+        assert_eq!(summary["source_selection_policy"]["min_age_days"], 30);
+        assert_eq!(summary["source_selection_policy"]["limit"], 200);
         assert_eq!(
             summary["decision_batch_fingerprint_version"],
             cloud::CLOUD_DECISION_BATCH_FINGERPRINT_VERSION
@@ -2920,6 +3016,17 @@ mod tests {
             original_batch
         );
 
+        let mut selection_changed = report.clone();
+        selection_changed
+            .source_selection_policy
+            .as_mut()
+            .unwrap()
+            .min_size_bytes += 1;
+        assert_ne!(
+            cloud::cloud_decision_batch_fingerprint(&selection_changed),
+            original_batch
+        );
+
         let mut blocker_changed = report.clone();
         blocker_changed.candidates[0].blocked_reason = Some("destination-exists".into());
         blocker_changed.potentially_reclaimable_bytes = 0;
@@ -3029,6 +3136,7 @@ mod tests {
                 access_issue: None,
             },
             generated_at_ms: 100,
+            source_selection_policy: Some(cloud::CloudPlanOptions::default()),
             candidates: vec![canonical, redundant],
             candidate_bytes: 84,
             potentially_reclaimable_bytes: 84,
@@ -3231,6 +3339,8 @@ mod tests {
 
         let help = parse_args(&["--help".into()], Path::new("/h")).unwrap_err();
         assert!(help.contains("--reviewed-by human:ID"));
+        assert!(help.contains("--export-naruon-copy-readiness --verify-capacity"));
+        assert!(help.contains("--naruon-copy-readiness-output ABSOLUTE_NEW_FILE.json"));
 
         assert!(parse_args(
             &["--review-disposition".into(), "maybe".into(),],
@@ -3329,6 +3439,7 @@ mod tests {
         let mut report = cloud::CloudPlanReport {
             cloud_root: root.clone(),
             generated_at_ms: 1,
+            source_selection_policy: Some(cloud::CloudPlanOptions::default()),
             candidates: Vec::new(),
             candidate_bytes: 0,
             potentially_reclaimable_bytes: 0,
@@ -3464,6 +3575,61 @@ mod tests {
         )
         .unwrap();
         assert!(validate_action_args(&multiple).is_err());
+    }
+
+    #[test]
+    fn naruon_copy_readiness_export_is_fresh_single_destination_and_safe_output() {
+        let export = parse_args(
+            &[
+                "--verify-capacity".into(),
+                "--export-naruon-copy-readiness".into(),
+                "--naruon-copy-readiness-output".into(),
+                "/artifacts/readiness.json".into(),
+                "--provider".into(),
+                "onedrive".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(export.export_naruon_copy_readiness);
+        assert_eq!(
+            export.naruon_copy_readiness_output,
+            Some(PathBuf::from("/artifacts/readiness.json"))
+        );
+        assert!(validate_action_args(&export).is_ok());
+
+        let missing_capacity = parse_args(
+            &["--export-naruon-copy-readiness".into()],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&missing_capacity).is_err());
+
+        let output_only = parse_args(
+            &[
+                "--naruon-copy-readiness-output".into(),
+                "/artifacts/readiness.json".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&output_only).is_err());
+
+        let relative_output = parse_args(
+            &[
+                "--verify-capacity".into(),
+                "--export-naruon-copy-readiness".into(),
+                "--naruon-copy-readiness-output".into(),
+                "readiness.json".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&relative_output).is_err());
+
+        let mut conflicting = export;
+        conflicting.export_naruon_capacity = true;
+        assert!(validate_action_args(&conflicting).is_err());
     }
 
     #[test]
