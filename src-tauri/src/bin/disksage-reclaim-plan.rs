@@ -12,7 +12,13 @@ struct Args {
     paths: Vec<PathBuf>,
 }
 
-fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
+#[derive(Debug, PartialEq, Eq)]
+enum ParseResult {
+    Run(Args),
+    Help,
+}
+
+fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResult, String> {
     let mut operation = PlannedOperation::Trash;
     let mut pretty = false;
     let mut paths = Vec::new();
@@ -30,14 +36,7 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Args, Stri
                 operation = value.parse()?;
             }
             Some("--pretty") => pretty = true,
-            Some("-h" | "--help") => {
-                println!("{USAGE}");
-                return Ok(Args {
-                    operation,
-                    pretty,
-                    paths,
-                });
-            }
+            Some("-h" | "--help") => return Ok(ParseResult::Help),
             Some("--") => {
                 paths.extend(args.map(PathBuf::from));
                 break;
@@ -49,15 +48,21 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Args, Stri
         }
     }
 
-    Ok(Args {
+    Ok(ParseResult::Run(Args {
         operation,
         pretty,
         paths,
-    })
+    }))
 }
 
-fn run() -> Result<(), String> {
-    let args = parse_args(std::env::args_os().skip(1))?;
+fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), String> {
+    let args = match parse_args(raw_args)? {
+        ParseResult::Help => {
+            println!("{USAGE}");
+            return Ok(());
+        }
+        ParseResult::Run(args) => args,
+    };
     let plan = plan_reclaim(&args.paths, args.operation)?;
     let json = if args.pretty {
         serde_json::to_string_pretty(&plan)
@@ -67,6 +72,10 @@ fn run() -> Result<(), String> {
     .map_err(|error| error.to_string())?;
     println!("{json}");
     Ok(())
+}
+
+fn run() -> Result<(), String> {
+    run_with_args(std::env::args_os().skip(1))
 }
 
 fn main() {
@@ -80,15 +89,24 @@ fn main() {
 mod tests {
     use super::*;
 
+    fn expect_run(parsed: ParseResult) -> Args {
+        match parsed {
+            ParseResult::Run(args) => args,
+            ParseResult::Help => panic!("expected runnable arguments"),
+        }
+    }
+
     #[test]
     fn parses_options_and_preserves_path_arguments() {
-        let parsed = parse_args([
-            OsString::from("--operation"),
-            OsString::from("delete"),
-            OsString::from("--pretty"),
-            OsString::from("/tmp/example"),
-        ])
-        .unwrap();
+        let parsed = expect_run(
+            parse_args([
+                OsString::from("--operation"),
+                OsString::from("delete"),
+                OsString::from("--pretty"),
+                OsString::from("/tmp/example"),
+            ])
+            .unwrap(),
+        );
 
         assert_eq!(parsed.operation, PlannedOperation::Delete);
         assert!(parsed.pretty);
@@ -97,13 +115,24 @@ mod tests {
 
     #[test]
     fn double_dash_preserves_option_like_paths() {
-        let parsed = parse_args([
-            OsString::from("--"),
-            OsString::from("--not-an-option"),
-        ])
-        .unwrap();
+        let parsed = expect_run(
+            parse_args([
+                OsString::from("--"),
+                OsString::from("--not-an-option"),
+            ])
+            .unwrap(),
+        );
 
         assert_eq!(parsed.paths, [PathBuf::from("--not-an-option")]);
+    }
+
+    #[test]
+    fn help_is_a_successful_terminal_parse_result() {
+        assert_eq!(
+            parse_args([OsString::from("--help")]).unwrap(),
+            ParseResult::Help
+        );
+        assert!(run_with_args([OsString::from("-h")]).is_ok());
     }
 
     #[cfg(unix)]
@@ -112,7 +141,7 @@ mod tests {
         use std::os::unix::ffi::OsStringExt;
 
         let path = OsString::from_vec(vec![b'/', b't', b'm', b'p', b'/', 0x80]);
-        let parsed = parse_args([path.clone()]).unwrap();
+        let parsed = expect_run(parse_args([path.clone()]).unwrap());
 
         assert_eq!(parsed.paths, [PathBuf::from(path)]);
     }
