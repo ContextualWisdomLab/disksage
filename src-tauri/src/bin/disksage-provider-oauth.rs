@@ -175,7 +175,7 @@ fn parse_args(args: &[String], environment_home: Option<PathBuf>) -> Result<Args
                 }
             }
             "--help" | "-h" => return Err(usage()),
-            flag => return Err(format!("unknown argument: {flag}")),
+            _ => return Err("unknown argument".into()),
         }
         index += 1;
     }
@@ -511,6 +511,16 @@ mod tests {
         )
         .is_err());
         assert!(parse_args(&strings(&["--list", "--home", "relative"]), home,).is_err());
+    }
+
+    #[test]
+    fn unknown_argument_does_not_echo_its_value() {
+        let sensitive = "private-token-or-path";
+        let error =
+            parse_args(&strings(&["--list", sensitive]), Some(absolute_home())).unwrap_err();
+
+        assert_eq!(error, "unknown argument");
+        assert!(!error.contains(sensitive));
     }
 
     #[test]
