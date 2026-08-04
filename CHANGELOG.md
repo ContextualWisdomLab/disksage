@@ -2,7 +2,7 @@
 
 All notable changes to DiskSage are documented in this file.
 
-The format follows Keep a Changelog, and releases use Semantic Versioning.
+The format follows Keep a Changelog, and releases use Semantic Versioning. Unreleased entries describe integrated source changes only; they are not release evidence until the repository's review, CI, security, packaging, provenance, and release-acceptance gates pass on the exact tagged commit.
 
 ## [Unreleased]
 
