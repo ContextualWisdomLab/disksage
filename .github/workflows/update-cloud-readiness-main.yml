@@ -1,0 +1,42 @@
+name: Update cloud readiness foundation from main
+
+on:
+  push:
+    branches:
+      - feat/cloud-readiness-foundation-mainline
+    paths:
+      - .github/workflows/update-cloud-readiness-main.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-cloud-readiness-main-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: feat/cloud-readiness-foundation-mainline
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Merge current main and remove one-shot workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --no-tags origin main
+          git merge --no-ff --no-edit origin/main
+          rm .github/workflows/update-cloud-readiness-main.yml
+          git add -A
+          git commit --amend --no-edit
+          git diff HEAD^1 --check
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin HEAD:feat/cloud-readiness-foundation-mainline
