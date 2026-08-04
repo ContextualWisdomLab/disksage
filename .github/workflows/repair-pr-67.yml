@@ -17,7 +17,7 @@ permissions:
 
 concurrency:
   group: repair-pr-67-${{ github.event.pull_request.number }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   repair:
@@ -25,7 +25,7 @@ jobs:
     permissions:
       contents: write
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -42,7 +42,12 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev
 
-      - name: Apply bounded review fixes and regressions
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: src-tauri
+
+      - name: Apply complete bounded review fixes
         shell: python
         run: |
           from pathlib import Path
@@ -54,129 +59,764 @@ jobs:
                   raise SystemExit(f"{label}: expected one marker, found {count}")
               return text.replace(old, new, 1)
 
+          def replace_between(text: str, start: str, end: str, new: str, label: str) -> str:
+              first = text.find(start)
+              if first < 0:
+                  raise SystemExit(f"{label}: start marker not found")
+              last = text.find(end, first)
+              if last < 0:
+                  raise SystemExit(f"{label}: end marker not found")
+              return text[:first] + new + text[last:]
+
           module_path = Path("src-tauri/src/cloud_local_inventory.rs")
           module = module_path.read_text(encoding="utf-8")
-          module = replace_once(
-              module,
-              "const CHECKPOINT_ENTRY_INTERVAL: u64 = 256;\nconst CHECKPOINT_INTERVAL_MS: u64 = 1_000;",
-              "const CHECKPOINT_ENTRY_INTERVAL: u64 = 256;\nconst CHECKPOINT_ISSUE_INTERVAL: u64 = 32;\nconst CHECKPOINT_INTERVAL_MS: u64 = 1_000;",
-              "checkpoint constant",
-          )
-          module = replace_once(
-              module,
-              "    let issue_due = state.skipped_entries != cadence.skipped_entries;",
-              "    let issue_due = state\n        .skipped_entries\n        .saturating_sub(cadence.skipped_entries)\n        >= CHECKPOINT_ISSUE_INTERVAL;",
-              "checkpoint cadence",
-          )
-          if "fn issue_checkpoints_require_a_bounded_skipped_entry_delta()" not in module:
-              marker = "\n    #[test]\n    fn inventories_allocated_files_without_claiming_sync_or_lineage() {"
-              test = dedent(
-                  """
-
-                      #[test]
-                      fn issue_checkpoints_require_a_bounded_skipped_entry_delta() {
-                          let root = root(Path::new("/Cloud"));
-                          let context = InventoryContext {
-                              root: &root,
-                              root_path: Path::new("/Cloud"),
-                              options: options(),
-                              observed_at_ms: 1,
-                          };
-                          let mut state = InventoryState::default();
-                          let mut cadence = CheckpointCadence {
-                              emitted: true,
-                              ..CheckpointCadence::default()
-                          };
-                          let mut emitted = 0usize;
-                          let mut emit = |_report: &CloudLocalAllocationInventory| {
-                              emitted += 1;
-                              Ok(())
-                          };
-
-                          state.skipped_entries = CHECKPOINT_ISSUE_INTERVAL - 1;
-                          maybe_emit_checkpoint(context, &state, &mut cadence, 0, false, &mut emit)
-                              .unwrap();
-                          assert_eq!(emitted, 0);
-
-                          state.skipped_entries = CHECKPOINT_ISSUE_INTERVAL;
-                          maybe_emit_checkpoint(context, &state, &mut cadence, 0, false, &mut emit)
-                              .unwrap();
-                          assert_eq!(emitted, 1);
-                      }
-                  """
+          if "use std::cmp::Ordering;" not in module:
+              module = replace_once(
+                  module,
+                  "use std::collections::VecDeque;",
+                  "use std::cmp::Ordering;\nuse std::collections::{BinaryHeap, VecDeque};",
+                  "bounded candidate imports",
               )
-              module = replace_once(module, marker, test + marker, "module test insertion")
+          if "const CHECKPOINT_ISSUE_INTERVAL" not in module:
+              module = replace_once(
+                  module,
+                  "const CHECKPOINT_ENTRY_INTERVAL: u64 = 256;\nconst CHECKPOINT_INTERVAL_MS: u64 = 1_000;",
+                  "const CHECKPOINT_ENTRY_INTERVAL: u64 = 256;\nconst CHECKPOINT_ISSUE_INTERVAL: u64 = 32;\nconst CHECKPOINT_INTERVAL_MS: u64 = 1_000;",
+                  "checkpoint constants",
+              )
+
+          if "struct RankedCandidate(" not in module:
+              ranking_and_report = dedent(
+                  r'''
+                  #[derive(Debug, Clone, PartialEq, Eq)]
+                  struct RankedCandidate(CloudLocalAllocationCandidate);
+
+                  impl Ord for RankedCandidate {
+                      fn cmp(&self, other: &Self) -> Ordering {
+                          other
+                              .0
+                              .allocated_bytes
+                              .cmp(&self.0.allocated_bytes)
+                              .then_with(|| self.0.path.cmp(&other.0.path))
+                      }
+                  }
+
+                  impl PartialOrd for RankedCandidate {
+                      fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                          Some(self.cmp(other))
+                      }
+                  }
+
+                  fn candidate_order(
+                      left: &CloudLocalAllocationCandidate,
+                      right: &CloudLocalAllocationCandidate,
+                  ) -> Ordering {
+                      right
+                          .allocated_bytes
+                          .cmp(&left.allocated_bytes)
+                          .then_with(|| left.path.cmp(&right.path))
+                  }
+
+                  fn bounded_candidates(
+                      candidates: &[CloudLocalAllocationCandidate],
+                      max_results: usize,
+                  ) -> Vec<CloudLocalAllocationCandidate> {
+                      let mut selected = BinaryHeap::with_capacity(max_results.saturating_add(1));
+                      for candidate in candidates {
+                          selected.push(RankedCandidate(candidate.clone()));
+                          if selected.len() > max_results {
+                              selected.pop();
+                          }
+                      }
+                      let mut selected = selected
+                          .into_iter()
+                          .map(|ranked| ranked.0)
+                          .collect::<Vec<_>>();
+                      selected.sort_by(candidate_order);
+                      selected
+                  }
+
+                  fn inventory_report(
+                      context: InventoryContext<'_>,
+                      state: &InventoryState,
+                      checkpoint: bool,
+                  ) -> CloudLocalAllocationInventory {
+                      let results_truncated = state.candidates.len() > context.options.max_results;
+                      let candidates = bounded_candidates(&state.candidates, context.options.max_results);
+                      let issues_truncated =
+                          state.skipped_entries > u64::try_from(state.issues.len()).unwrap_or(u64::MAX);
+                      let evidence_complete =
+                          !checkpoint && state.stop_reasons.is_empty() && state.skipped_entries == 0;
+                      let mut notices = base_notices();
+                      if results_truncated {
+                          notices.push("candidate-output-truncated".into());
+                      }
+                      if checkpoint {
+                          notices.push("inventory-checkpoint-not-terminal".into());
+                      } else if !evidence_complete {
+                          notices.push("inventory-incomplete".into());
+                      }
+                      if issues_truncated {
+                          notices.push("inventory-issues-truncated".into());
+                      }
+
+                      CloudLocalAllocationInventory {
+                          version: 2,
+                          cloud_root_id: context.root.id.clone(),
+                          provider: context.root.provider,
+                          account_scope: context.root.account_scope,
+                          cloud_root: context.root_path.to_string_lossy().into_owned(),
+                          observed_at_ms: context.observed_at_ms,
+                          options: context.options,
+                          visited_entries: state.visited_entries,
+                          visited_files: state.visited_files,
+                          visited_directories: state.visited_directories,
+                          skipped_entries: state.skipped_entries,
+                          issues: state.issues.clone(),
+                          issues_truncated,
+                          allocated_candidate_bytes: state.allocated_candidate_bytes,
+                          candidates,
+                          results_truncated,
+                          evidence_complete,
+                          stop_reasons: state.stop_reasons.clone(),
+                          notices,
+                      }
+                  }
+
+                  ''')
+              module = replace_between(
+                  module,
+                  "fn inventory_report(",
+                  "fn maybe_emit_checkpoint(",
+                  ranking_and_report,
+                  "bounded candidate report",
+              )
+          if "state.skipped_entries != cadence.skipped_entries" in module:
+              module = replace_once(
+                  module,
+                  "    let issue_due = state.skipped_entries != cadence.skipped_entries;",
+                  "    let issue_due = state\n        .skipped_entries\n        .saturating_sub(cadence.skipped_entries)\n        >= CHECKPOINT_ISSUE_INTERVAL;",
+                  "checkpoint issue cadence",
+              )
+          if "checkpoint.candidates.len() > options.max_results" not in module:
+              module = replace_once(
+                  module,
+                  "        || checkpoint.options != options\n        || checkpoint.evidence_complete",
+                  "        || checkpoint.options != options\n        || checkpoint.evidence_complete\n        || checkpoint.candidates.len() > options.max_results\n        || checkpoint.issues.len() > options.max_issues",
+                  "checkpoint output bounds",
+              )
+          if "        let entries = match fs::read_dir(&directory) {" in module:
+              module = replace_once(
+                  module,
+                  "        let entries = match fs::read_dir(&directory) {",
+                  "        let mut entries = match fs::read_dir(&directory) {",
+                  "mutable directory iterator",
+              )
+              module = replace_once(
+                  module,
+                  "        };\n        let mut entries = entries;\n        loop {",
+                  "        };\n        loop {",
+                  "directory iterator rebinding",
+              )
+          if "            if elapsed_ms() >= options.max_duration_ms {" in module:
+              module = replace_once(
+                  module,
+                  "            if elapsed_ms() >= options.max_duration_ms {",
+                  "            if now_ms >= options.max_duration_ms {",
+                  "single monotonic clock read",
+              )
+
+          if "fn sample_candidate(" not in module:
+              module = replace_once(
+                  module,
+                  "    fn write_file(path: &Path, size: usize) {\n        let mut file = File::create(path).unwrap();\n        file.write_all(&vec![0x5a; size]).unwrap();\n        file.sync_all().unwrap();\n    }",
+                  dedent(
+                      r'''
+                      fn write_file(path: &Path, size: usize) {
+                          let mut file = File::create(path).unwrap();
+                          file.write_all(&vec![0x5a; size]).unwrap();
+                          file.sync_all().unwrap();
+                      }
+
+                      fn sample_candidate(
+                          path: &str,
+                          allocated_bytes: u64,
+                      ) -> CloudLocalAllocationCandidate {
+                          CloudLocalAllocationCandidate {
+                              path: path.into(),
+                              logical_bytes: allocated_bytes,
+                              allocated_bytes,
+                              filesystem_created_ms: None,
+                              filesystem_modified_ms: None,
+                              allocation_evidence: "test".into(),
+                              content_opened: false,
+                              embedded_metadata_inspected: false,
+                              provider_sync_attested: false,
+                              eviction_blockers: Vec::new(),
+                          }
+                      }''').strip(),
+                  "test candidate helper",
+              )
+          if "fn issue_checkpoints_require_a_bounded_skipped_entry_delta()" not in module:
+              test_marker = "\n    #[test]\n    fn inventories_allocated_files_without_claiming_sync_or_lineage() {"
+              additional_tests = dedent(
+                  r'''
+
+                  #[test]
+                  fn issue_checkpoints_require_a_bounded_skipped_entry_delta() {
+                      let root = root(Path::new("/Cloud"));
+                      let context = InventoryContext {
+                          root: &root,
+                          root_path: Path::new("/Cloud"),
+                          options: options(),
+                          observed_at_ms: 1,
+                      };
+                      let mut state = InventoryState::default();
+                      let mut cadence = CheckpointCadence {
+                          emitted: true,
+                          ..CheckpointCadence::default()
+                      };
+                      let mut emitted = 0usize;
+                      let mut emit = |_report: &CloudLocalAllocationInventory| {
+                          emitted += 1;
+                          Ok(())
+                      };
+
+                      state.skipped_entries = CHECKPOINT_ISSUE_INTERVAL - 1;
+                      maybe_emit_checkpoint(context, &state, &mut cadence, 0, false, &mut emit)
+                          .unwrap();
+                      assert_eq!(emitted, 0);
+
+                      state.skipped_entries = CHECKPOINT_ISSUE_INTERVAL;
+                      maybe_emit_checkpoint(context, &state, &mut cadence, 0, false, &mut emit)
+                          .unwrap();
+                      assert_eq!(emitted, 1);
+                  }
+
+                  #[test]
+                  fn checkpoint_candidate_selection_is_memory_bounded_and_stably_ordered() {
+                      let root = root(Path::new("/Cloud"));
+                      let mut bounded = options();
+                      bounded.max_results = 2;
+                      let context = InventoryContext {
+                          root: &root,
+                          root_path: Path::new("/Cloud"),
+                          options: bounded,
+                          observed_at_ms: 1,
+                      };
+                      let state = InventoryState {
+                          candidates: vec![
+                              sample_candidate("/Cloud/z.bin", 10),
+                              sample_candidate("/Cloud/b.bin", 30),
+                              sample_candidate("/Cloud/a.bin", 30),
+                              sample_candidate("/Cloud/c.bin", 20),
+                          ],
+                          ..InventoryState::default()
+                      };
+                      let report = inventory_report(context, &state, true);
+                      assert!(report.results_truncated);
+                      assert_eq!(
+                          report
+                              .candidates
+                              .iter()
+                              .map(|candidate| candidate.path.as_str())
+                              .collect::<Vec<_>>(),
+                          vec!["/Cloud/a.bin", "/Cloud/b.bin"]
+                      );
+                  }
+                  ''')
+              module = replace_once(
+                  module,
+                  test_marker,
+                  additional_tests + test_marker,
+                  "module regression tests",
+              )
+
+          checkpoint_start = "    #[test]\n    fn checkpoint_recovery_rejects_scope_or_option_drift() {"
+          if checkpoint_start in module:
+              checkpoint_test = dedent(
+                  r'''
+                  #[test]
+                  fn checkpoint_recovery_rejects_scope_option_marker_and_output_drift() {
+                      let root = root(Path::new("/Cloud"));
+                      let mut valid = hard_timeout_inventory(&root, options(), 1).unwrap();
+                      valid.stop_reasons.clear();
+                      valid.notices = vec!["inventory-checkpoint-not-terminal".into()];
+
+                      let mut scope_drift = valid.clone();
+                      scope_drift.cloud_root_id = "icloud:other".into();
+                      assert_eq!(
+                          hard_timeout_inventory_from_checkpoint(&root, options(), scope_drift)
+                              .unwrap_err(),
+                          "cloud-local-inventory-checkpoint-invalid"
+                      );
+
+                      let mut option_drift = options();
+                      option_drift.max_results = 5;
+                      assert_eq!(
+                          hard_timeout_inventory_from_checkpoint(&root, option_drift, valid.clone())
+                              .unwrap_err(),
+                          "cloud-local-inventory-checkpoint-invalid"
+                      );
+
+                      let mut missing_marker = valid.clone();
+                      missing_marker.notices.clear();
+                      assert_eq!(
+                          hard_timeout_inventory_from_checkpoint(&root, options(), missing_marker)
+                              .unwrap_err(),
+                          "cloud-local-inventory-checkpoint-invalid"
+                      );
+
+                      let mut candidate_overflow = valid.clone();
+                      candidate_overflow.candidates = (0..=options().max_results)
+                          .map(|index| {
+                              sample_candidate(&format!("/Cloud/{index}.bin"), index as u64)
+                          })
+                          .collect();
+                      assert_eq!(
+                          hard_timeout_inventory_from_checkpoint(&root, options(), candidate_overflow)
+                              .unwrap_err(),
+                          "cloud-local-inventory-checkpoint-invalid"
+                      );
+
+                      let mut issue_overflow = valid;
+                      issue_overflow.issues = (0..=options().max_issues)
+                          .map(|_| CloudLocalInventoryIssue {
+                              relative_scope: None,
+                              kind: "test".into(),
+                              reason: "test".into(),
+                          })
+                          .collect();
+                      assert_eq!(
+                          hard_timeout_inventory_from_checkpoint(&root, options(), issue_overflow)
+                              .unwrap_err(),
+                          "cloud-local-inventory-checkpoint-invalid"
+                      );
+                  }
+
+                  ''')
+              module = replace_between(
+                  module,
+                  checkpoint_start,
+                  "    #[test]\n    fn rejects_unbounded_or_non_directory_inputs() {",
+                  checkpoint_test,
+                  "checkpoint fail-closed tests",
+              )
           module_path.write_text(module, encoding="utf-8")
 
           cli_path = Path("src-tauri/src/bin/disksage-cloud-local-inventory.rs")
           cli = cli_path.read_text(encoding="utf-8")
-          if "fn stable_batch_failure_reason(" not in cli:
-              marker = "\n#[cfg(not(coverage))]\nfn inventory_all_roots("
-              helper = dedent(
-                  """
+          if "struct CloudLocalInventoryBatchUnprocessed" not in cli:
+              cli = replace_once(
+                  cli,
+                  dedent(
+                      r'''
+                      #[cfg(not(coverage))]
+                      #[derive(Debug, serde::Serialize)]
+                      struct CloudLocalInventoryBatchFailure {
+                          cloud_root_id: String,
+                          provider: cloud::CloudProvider,
+                          account_scope: cloud::CloudAccountScope,
+                          cloud_root: String,
+                          reason: String,
+                      }
+                      ''').strip(),
+                  dedent(
+                      r'''
+                      #[cfg(not(coverage))]
+                      #[derive(Debug, serde::Serialize)]
+                      struct CloudLocalInventoryBatchFailure {
+                          cloud_root_id: String,
+                          provider: cloud::CloudProvider,
+                          account_scope: cloud::CloudAccountScope,
+                          cloud_root: String,
+                          reason: String,
+                      }
 
                       #[cfg(not(coverage))]
-                      fn stable_batch_failure_reason(reason: &str) -> String {
-                          let code = reason.split(':').next().unwrap_or_default();
-                          if !code.is_empty()
-                              && code.len() <= 128
-                              && code.chars().all(|character| {
-                                  character.is_ascii_lowercase()
-                                      || character.is_ascii_digit()
-                                      || character == '-'
-                              })
-                          {
-                              code.to_string()
-                          } else {
-                              "cloud-local-inventory-root-failed".into()
-                          }
+                      #[derive(Debug, serde::Serialize)]
+                      struct CloudLocalInventoryBatchUnprocessed {
+                          cloud_root_id: String,
+                          provider: cloud::CloudProvider,
+                          account_scope: cloud::CloudAccountScope,
+                          cloud_root: String,
+                          reason: String,
                       }
-                  """
+                      ''').strip(),
+                  "unprocessed batch evidence",
               )
-              cli = replace_once(cli, marker, helper + marker, "batch helper insertion")
-          cli = replace_once(
-              cli,
-              "                reason,",
-              "                reason: stable_batch_failure_reason(&reason),",
-              "batch failure reason",
-          )
-          if "fn batch_failure_reason_discards_worker_stderr_details()" not in cli:
-              marker = "\n    #[test]\n    fn batch_completion_requires_roots_and_complete_discovery_and_reports() {"
-              test = dedent(
-                  """
+              cli = replace_once(
+                  cli,
+                  "    failed_roots: usize,\n    candidate_count: usize,",
+                  "    failed_roots: usize,\n    unprocessed_root_count: usize,\n    candidate_count: usize,",
+                  "unprocessed count field",
+              )
+              cli = replace_once(
+                  cli,
+                  "    failures: Vec<CloudLocalInventoryBatchFailure>,\n    evidence_complete: bool,",
+                  "    failures: Vec<CloudLocalInventoryBatchFailure>,\n    unprocessed_roots: Vec<CloudLocalInventoryBatchUnprocessed>,\n    evidence_complete: bool,",
+                  "unprocessed report field",
+              )
 
-                      #[test]
-                      fn batch_failure_reason_discards_worker_stderr_details() {
-                          assert_eq!(
-                              stable_batch_failure_reason(
-                                  "inventory-worker-failed:/Users/private/customer-file: panic"
-                              ),
-                              "inventory-worker-failed"
-                          );
-                          assert_eq!(
-                              stable_batch_failure_reason("INVALID:/secret"),
-                              "cloud-local-inventory-root-failed"
-                          );
+          invocation = dedent(
+              r'''
+              #[cfg(not(coverage))]
+              fn single_root_invocation(
+                  args: &Args,
+                  root: &CloudRoot,
+                  max_duration_ms: u64,
+              ) -> (Vec<String>, Args) {
+                  let raw = vec![
+                      "--cloud-root".into(),
+                      root.path.clone(),
+                      "--min-allocated-mib".into(),
+                      args.min_allocated_mib.to_string(),
+                      "--max-entries".into(),
+                      args.max_entries.to_string(),
+                      "--max-results".into(),
+                      args.max_results.to_string(),
+                      "--max-depth".into(),
+                      args.max_depth.to_string(),
+                      "--max-duration-ms".into(),
+                      max_duration_ms.to_string(),
+                      "--max-issues".into(),
+                      args.max_issues.to_string(),
+                  ];
+                  (
+                      raw,
+                      Args {
+                          cloud_root: Some(PathBuf::from(&root.path)),
+                          all_roots: false,
+                          relative_subpath: None,
+                          min_allocated_mib: args.min_allocated_mib,
+                          max_entries: args.max_entries,
+                          max_results: args.max_results,
+                          max_depth: args.max_depth,
+                          max_duration_ms,
+                          max_issues: args.max_issues,
+                      },
+                  )
+              }
+
+              #[cfg(not(coverage))]
+              fn stable_batch_failure_reason(reason: &str) -> String {
+                  let code = reason.split(':').next().unwrap_or_default();
+                  if !code.is_empty()
+                      && code.len() <= 128
+                      && code.chars().all(|character| {
+                          character.is_ascii_lowercase()
+                              || character.is_ascii_digit()
+                              || character == '-'
+                      })
+                  {
+                      code.to_string()
+                  } else {
+                      "cloud-local-inventory-root-failed".into()
+                  }
+              }
+
+              #[cfg(not(coverage))]
+              fn worker_budget_ms(remaining_batch_ms: u64) -> Option<u64> {
+                  remaining_batch_ms
+                      .checked_sub(WORKER_REPORT_GRACE_MS)
+                      .filter(|budget| *budget > 0)
+              }
+
+              #[cfg(not(coverage))]
+              fn unprocessed_root(root: CloudRoot) -> CloudLocalInventoryBatchUnprocessed {
+                  CloudLocalInventoryBatchUnprocessed {
+                      cloud_root_id: root.id,
+                      provider: root.provider,
+                      account_scope: root.account_scope,
+                      cloud_root: root.path,
+                      reason: "batch-time-budget-exhausted".into(),
+                  }
+              }
+
+              ''')
+          cli = replace_between(
+              cli,
+              "#[cfg(not(coverage))]\nfn single_root_invocation(",
+              "#[cfg(not(coverage))]\nfn inventory_all_roots(",
+              invocation,
+              "single-root invocation and safety helpers",
+          )
+
+          inventory_all = dedent(
+              r'''
+              #[cfg(not(coverage))]
+              fn inventory_all_roots(
+                  discovery: cloud::CloudRootDiscoveryReport,
+                  args: &Args,
+              ) -> CloudLocalInventoryBatchReport {
+                  let discovered_roots = discovery.roots.len();
+                  let started = Instant::now();
+                  let mut reports = Vec::with_capacity(discovered_roots);
+                  let mut failures = Vec::new();
+                  let mut unprocessed_roots = Vec::new();
+                  let mut roots = discovery.roots.into_iter();
+                  while let Some(root) = roots.next() {
+                      let elapsed_ms =
+                          u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                      let remaining_batch_ms = args.max_duration_ms.saturating_sub(elapsed_ms);
+                      let Some(worker_budget_ms) = worker_budget_ms(remaining_batch_ms) else {
+                          unprocessed_roots.push(unprocessed_root(root));
+                          unprocessed_roots.extend(roots.map(unprocessed_root));
+                          break;
+                      };
+                      let (raw, root_args) = single_root_invocation(args, &root, worker_budget_ms);
+                      match run_watchdog(&raw, &root, &root_args) {
+                          Ok(report) => reports.push(report),
+                          Err(reason) => failures.push(CloudLocalInventoryBatchFailure {
+                              cloud_root_id: root.id,
+                              provider: root.provider,
+                              account_scope: root.account_scope,
+                              cloud_root: root.path,
+                              reason: stable_batch_failure_reason(&reason),
+                          }),
                       }
-                  """
+                  }
+                  finish_batch_report(
+                      cloud::system_now_ms(),
+                      discovered_roots,
+                      discovery.issues,
+                      reports,
+                      failures,
+                      unprocessed_roots,
+                  )
+              }
+
+              ''')
+          cli = replace_between(
+              cli,
+              "#[cfg(not(coverage))]\nfn inventory_all_roots(",
+              "#[cfg(not(coverage))]\nfn finish_batch_report(",
+              inventory_all,
+              "batch-wide time budget",
+          )
+
+          finish_batch = dedent(
+              r'''
+              #[cfg(not(coverage))]
+              fn finish_batch_report(
+                  observed_at_ms: u64,
+                  discovered_roots: usize,
+                  discovery_issues: Vec<cloud::CloudRootDiscoveryIssue>,
+                  reports: Vec<CloudLocalAllocationInventory>,
+                  failures: Vec<CloudLocalInventoryBatchFailure>,
+                  unprocessed_roots: Vec<CloudLocalInventoryBatchUnprocessed>,
+              ) -> CloudLocalInventoryBatchReport {
+                  let candidate_count = reports.iter().map(|report| report.candidates.len()).sum();
+                  let allocated_candidate_bytes = reports.iter().fold(0_u64, |total, report| {
+                      total.saturating_add(report.allocated_candidate_bytes)
+                  });
+                  let evidence_complete = discovered_roots > 0
+                      && discovery_issues.is_empty()
+                      && failures.is_empty()
+                      && unprocessed_roots.is_empty()
+                      && reports.len() == discovered_roots
+                      && reports.iter().all(|report| report.evidence_complete);
+                  let mut notices = vec![
+                      "metadata-only-content-not-opened".into(),
+                      "batch-inventory-does-not-authorize-eviction".into(),
+                  ];
+                  if discovered_roots == 0 {
+                      notices.push("no-cloud-roots-discovered".into());
+                  }
+                  if !discovery_issues.is_empty() {
+                      notices.push("cloud-root-discovery-issues-present".into());
+                  }
+                  if !failures.is_empty() {
+                      notices.push("one-or-more-root-inventories-failed".into());
+                  }
+                  if !unprocessed_roots.is_empty() {
+                      notices.push("one-or-more-root-inventories-unprocessed".into());
+                  }
+                  if reports.iter().any(|report| !report.evidence_complete) {
+                      notices.push("one-or-more-root-inventories-incomplete".into());
+                  }
+                  CloudLocalInventoryBatchReport {
+                      version: 2,
+                      observed_at_ms,
+                      discovered_roots,
+                      reported_roots: reports.len(),
+                      failed_roots: failures.len(),
+                      unprocessed_root_count: unprocessed_roots.len(),
+                      candidate_count,
+                      allocated_candidate_bytes,
+                      discovery_issues,
+                      reports,
+                      failures,
+                      unprocessed_roots,
+                      evidence_complete,
+                      notices,
+                  }
+              }
+
+              ''')
+          cli = replace_between(
+              cli,
+              "#[cfg(not(coverage))]\nfn finish_batch_report(",
+              "#[cfg(not(coverage))]\n#[derive(Debug, serde::Serialize)]\n#[serde(tag = \"kind\"",
+              finish_batch,
+              "batch report completion",
+          )
+          if "inventory-worker-json-invalid" in cli:
+              cli = replace_once(
+                  cli,
+                  "            let message: WorkerMessage = serde_json::from_str(&line)\n                .map_err(|_| \"inventory-worker-json-invalid\".to_string())?;",
+                  "            let Ok(message) = serde_json::from_str::<WorkerMessage>(&line) else {\n                continue;\n            };",
+                  "worker stdout protocol resilience",
               )
-              cli = replace_once(cli, marker, test + marker, "CLI test insertion")
+          if "unexpected-worker-noise" not in cli:
+              cli = replace_once(
+                  cli,
+                  "        write_worker_message(&mut bytes, &WorkerMessageRef::Checkpoint(&checkpoint)).unwrap();",
+                  "        bytes.extend_from_slice(b\"unexpected-worker-noise\\n\");\n        write_worker_message(&mut bytes, &WorkerMessageRef::Checkpoint(&checkpoint)).unwrap();",
+                  "worker noise regression",
+              )
+          cli = cli.replace(
+              "        let (raw, child) = single_root_invocation(&batch, &root);",
+              "        let (raw, child) = single_root_invocation(&batch, &root, 1234);",
+          )
+
+          old_batch_test = "    #[test]\n    fn batch_completion_requires_roots_and_complete_discovery_and_reports() {"
+          if old_batch_test in cli:
+              batch_test = dedent(
+                  r'''
+                  #[test]
+                  fn batch_failure_reason_discards_worker_stderr_details() {
+                      assert_eq!(
+                          stable_batch_failure_reason(
+                              "inventory-worker-failed:/Users/private/customer-file: panic"
+                          ),
+                          "inventory-worker-failed"
+                      );
+                      assert_eq!(
+                          stable_batch_failure_reason("INVALID:/secret"),
+                          "cloud-local-inventory-root-failed"
+                      );
+                  }
+
+                  #[test]
+                  fn batch_budget_accounts_for_worker_report_grace() {
+                      assert_eq!(worker_budget_ms(WORKER_REPORT_GRACE_MS), None);
+                      assert_eq!(worker_budget_ms(WORKER_REPORT_GRACE_MS + 1), Some(1));
+                      assert_eq!(worker_budget_ms(5_000), Some(3_000));
+                  }
+
+                  #[test]
+                  fn batch_completion_requires_complete_discovery_processing_and_reports() {
+                      let cloud = tempfile::tempdir().unwrap();
+                      let root = CloudRoot {
+                          id: "google-drive:test".into(),
+                          provider: CloudProvider::GoogleDrive,
+                          account_scope: CloudAccountScope::Personal,
+                          label: "Google Drive".into(),
+                          path: cloud.path().to_string_lossy().into_owned(),
+                          readable: true,
+                          access_issue: None,
+                      };
+                      let mut report =
+                          hard_timeout_inventory(&root, CloudLocalInventoryOptions::default(), 1)
+                              .unwrap();
+                      report.evidence_complete = true;
+                      report.stop_reasons.clear();
+                      let complete = finish_batch_report(
+                          2,
+                          1,
+                          Vec::new(),
+                          vec![report.clone()],
+                          Vec::new(),
+                          Vec::new(),
+                      );
+                      assert!(complete.evidence_complete);
+                      assert_eq!(complete.reported_roots, 1);
+
+                      let missing = finish_batch_report(
+                          3,
+                          0,
+                          Vec::new(),
+                          Vec::new(),
+                          Vec::new(),
+                          Vec::new(),
+                      );
+                      assert!(!missing.evidence_complete);
+
+                      let failure = CloudLocalInventoryBatchFailure {
+                          cloud_root_id: "icloud:failed".into(),
+                          provider: CloudProvider::Icloud,
+                          account_scope: CloudAccountScope::Personal,
+                          cloud_root: "/Failed".into(),
+                          reason: "inventory-worker-failed".into(),
+                      };
+                      let failed = finish_batch_report(
+                          5,
+                          2,
+                          Vec::new(),
+                          Vec::new(),
+                          vec![failure],
+                          Vec::new(),
+                      );
+                      assert!(!failed.evidence_complete);
+                      assert_eq!(failed.failed_roots, 1);
+                      assert!(failed
+                          .notices
+                          .iter()
+                          .any(|notice| notice == "one-or-more-root-inventories-failed"));
+
+                      let partial = finish_batch_report(
+                          6,
+                          2,
+                          Vec::new(),
+                          vec![report],
+                          Vec::new(),
+                          Vec::new(),
+                      );
+                      assert!(!partial.evidence_complete);
+
+                      let unprocessed = CloudLocalInventoryBatchUnprocessed {
+                          cloud_root_id: "onedrive:pending".into(),
+                          provider: CloudProvider::Onedrive,
+                          account_scope: CloudAccountScope::Personal,
+                          cloud_root: "/Pending".into(),
+                          reason: "batch-time-budget-exhausted".into(),
+                      };
+                      let budget_exhausted = finish_batch_report(
+                          7,
+                          1,
+                          Vec::new(),
+                          Vec::new(),
+                          Vec::new(),
+                          vec![unprocessed],
+                      );
+                      assert!(!budget_exhausted.evidence_complete);
+                      assert_eq!(budget_exhausted.unprocessed_root_count, 1);
+                  }
+                  ''')
+              first = cli.find(old_batch_test)
+              closing = cli.rfind("\n}")
+              if first < 0 or closing < first:
+                  raise SystemExit("batch test replacement markers unavailable")
+              cli = cli[:first] + batch_test + "\n" + cli[closing:]
           cli_path.write_text(cli, encoding="utf-8")
 
       - name: Format changed Rust files
         run: |
           rustfmt src-tauri/src/cloud_local_inventory.rs
           rustfmt src-tauri/src/bin/disksage-cloud-local-inventory.rs
+          git diff --check
 
       - name: Run focused validation
         run: |
-          cargo test --manifest-path src-tauri/Cargo.toml --lib cloud_local_inventory::tests
-          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-cloud-local-inventory
-          cargo check --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-cloud-local-inventory
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib cloud_local_inventory::tests
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-cloud-local-inventory
+          cargo check --locked --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-cloud-local-inventory
 
       - name: Commit validated repair and remove workflow
         env:
           GH_TOKEN: ${{ github.token }}
+          ORIGINAL_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           rm .github/workflows/repair-pr-67.yml
@@ -184,6 +824,7 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add src-tauri/src/cloud_local_inventory.rs src-tauri/src/bin/disksage-cloud-local-inventory.rs .github/workflows/repair-pr-67.yml
           git diff --cached --check
-          git commit -m "fix: bound cloud inventory failure evidence"
+          git commit -m "fix: complete cloud inventory review hardening"
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git push origin HEAD:feat/multicloud-local-inventory-batch
+          git push --force-with-lease=refs/heads/feat/multicloud-local-inventory-batch:${ORIGINAL_HEAD} \
+            origin HEAD:refs/heads/feat/multicloud-local-inventory-batch
