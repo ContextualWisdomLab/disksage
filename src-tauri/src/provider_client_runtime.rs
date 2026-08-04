@@ -187,6 +187,7 @@ fn process_name_matches(provider: CloudProvider, name: &str) -> bool {
             name.eq_ignore_ascii_case("Google Drive")
                 || name.eq_ignore_ascii_case("Google Drive File Stream")
                 || name.eq_ignore_ascii_case("DriveFS")
+                || name.eq_ignore_ascii_case("DFSFileProviderExtension")
         }
     }
 }
@@ -449,7 +450,7 @@ mod tests {
 
     #[test]
     fn detects_only_exact_vendor_runtime_names() {
-        let names = b"Finder\nOneDrive Sync Service\nnot-google-drive-helper\n";
+        let names = b"Finder\nOneDrive Sync Service\nnot-google-drive-helper\nnot-DFSFileProviderExtension-helper\n";
         let onedrive = assess_provider_client_runtime(CloudProvider::Onedrive, Some(names), 42);
         let google = assess_provider_client_runtime(CloudProvider::GoogleDrive, Some(names), 42);
 
@@ -477,6 +478,21 @@ mod tests {
         assert!(!snapshot.raw_process_names_included);
         assert!(!encoded.contains("Finder"));
         assert!(!encoded.contains("Google Drive"));
+    }
+
+    #[test]
+    fn detects_current_macos_google_file_provider_extension() {
+        let snapshot = assess_provider_client_runtime(
+            CloudProvider::GoogleDrive,
+            Some(b"Finder\nDFSFileProviderExtension\n"),
+            8,
+        );
+        let encoded = serde_json::to_string(&snapshot).unwrap();
+
+        assert_eq!(snapshot.state, ProviderClientRuntimeState::Running);
+        assert!(snapshot.copy_prerequisite_met);
+        assert!(!snapshot.raw_process_names_included);
+        assert!(!encoded.contains("DFSFileProviderExtension"));
     }
 
     #[test]
