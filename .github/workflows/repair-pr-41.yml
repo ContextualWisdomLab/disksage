@@ -39,7 +39,7 @@ jobs:
           cache: npm
 
       - name: Align the Svelte plugin with Vite 8
-        run: npm install --save-dev '@sveltejs/vite-plugin-svelte@^7.2.0' --package-lock-only
+        run: npm install --save-dev '@sveltejs/vite-plugin-svelte@7.2.0' --package-lock-only --ignore-scripts
 
       - name: Validate clean install and production behavior
         run: |
