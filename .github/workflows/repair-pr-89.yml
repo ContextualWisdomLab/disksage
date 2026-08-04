@@ -1,20 +1,20 @@
-name: Repair PR 89 review findings
+name: Repair merged iCloud batch review findings
 
 on:
   push:
     branches:
-      - feat/icloud-local-eviction-batch
+      - fix/icloud-batch-postmerge-verification
 
 permissions:
   contents: read
 
 concurrency:
-  group: repair-pr-89-${{ github.ref }}
+  group: repair-icloud-batch-postmerge-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   validate:
-    if: github.repository == 'ContextualWisdomLab/disksage' && github.ref == 'refs/heads/feat/icloud-local-eviction-batch'
+    if: github.repository == 'ContextualWisdomLab/disksage' && github.ref == 'refs/heads/fix/icloud-batch-postmerge-verification'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     outputs:
@@ -38,12 +38,12 @@ jobs:
           set +e
           cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli \
             cloud_local_eviction_batch::tests::execution_stops_after_first_failed_item_and_records_each_checkpoint \
-            > /tmp/pr89-core-red.log 2>&1
+            > /tmp/icloud-batch-core-red.log 2>&1
           status=$?
           set -e
-          cat /tmp/pr89-core-red.log
+          cat /tmp/icloud-batch-core-red.log
           test "$status" -ne 0
-          grep -Eq 'BatchRecordWriter|execute_icloud_local_eviction_batch_with' /tmp/pr89-core-red.log
+          grep -Eq 'BatchRecordWriter|execute_icloud_local_eviction_batch_with' /tmp/icloud-batch-core-red.log
       - name: Apply execution repair
         run: python .github/scripts/repair_pr_89.py core
       - name: Prove execution-seam tests pass
@@ -54,12 +54,12 @@ jobs:
           cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli \
             --bin disksage-icloud-local-eviction-batch \
             control_locations_reject_symlinked_cloud_ancestors \
-            > /tmp/pr89-cli-red.log 2>&1
+            > /tmp/icloud-batch-cli-red.log 2>&1
           status=$?
           set -e
-          cat /tmp/pr89-cli-red.log
+          cat /tmp/icloud-batch-cli-red.log
           test "$status" -ne 0
-          grep -F 'icloud-local-eviction-batch-record-dir-inside-cloud-data' /tmp/pr89-cli-red.log
+          grep -F 'icloud-local-eviction-batch-record-dir-inside-cloud-data' /tmp/icloud-batch-cli-red.log
       - name: Apply CLI diagnostic repair
         run: python .github/scripts/repair_pr_89.py cli
       - name: Verify focused CLI and manifest boundaries
@@ -78,7 +78,7 @@ jobs:
 
   publish:
     needs: validate
-    if: github.repository == 'ContextualWisdomLab/disksage' && github.ref == 'refs/heads/feat/icloud-local-eviction-batch'
+    if: github.repository == 'ContextualWisdomLab/disksage' && github.ref == 'refs/heads/fix/icloud-batch-postmerge-verification'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
