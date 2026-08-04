@@ -1,4 +1,4 @@
-name: Repair merged iCloud batch safeguards on branch
+name: Repair merged iCloud batch safeguards on exact branch head
 
 on:
   push:
