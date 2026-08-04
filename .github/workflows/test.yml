@@ -86,55 +86,52 @@ jobs:
 
           old_raw = r'br#"{\\"plans\\":[]}"#'
           new_raw = r'br#"{\"plans\":[]}"#'
-          raw_count = text.count(old_raw)
-          if raw_count != 2:
-              raise SystemExit(f'expected two raw-string anchors, found {raw_count}')
+          if text.count(old_raw) != 2:
+              raise SystemExit('raw-string repair anchors changed unexpectedly')
           text = text.replace(old_raw, new_raw)
-          if old_raw in text or text.count(new_raw) != 2:
-              raise SystemExit('raw-string anchor normalization was not exact')
 
           old_writer = r'        write_immutable_record(record_dir, name, value)\n'
           new_writer = r'        write_immutable_record(record_dir, name, value).map(|_| ())\n'
-          writer_count = text.count(old_writer)
-          if writer_count != 1:
-              raise SystemExit(
-                  f'expected one immutable-writer return anchor, found {writer_count}'
-              )
+          if text.count(old_writer) != 1:
+              raise SystemExit('immutable-writer repair anchor changed unexpectedly')
           text = text.replace(old_writer, new_writer)
-          if old_writer in text or text.count(new_writer) != 1:
-              raise SystemExit('immutable-writer return normalization was not exact')
 
-          stale_loop_repair = """    replace_once(
-              CORE,
-              '''    for (offset, (item, individual)) in plan\\n        .items\\n        .iter()\\n        .zip(individual_approvals.iter())\\n        .enumerate()\\n    {\\n''',
-              '''    for (item, individual) in plan.items.iter().zip(individual_approvals.iter()) {\\n''',
-          )
-"""
-          loop_count = text.count(stale_loop_repair)
-          if loop_count != 1:
-              raise SystemExit(f'expected one stale loop repair, found {loop_count}')
+          stale_loop_repair = '\n'.join((
+              '    replace_once(',
+              '        CORE,',
+              "        '''    for (offset, (item, individual)) in plan\\n        .items\\n        .iter()\\n        .zip(individual_approvals.iter())\\n        .enumerate()\\n    {\\n''',",
+              "        '''    for (item, individual) in plan.items.iter().zip(individual_approvals.iter()) {\\n''',",
+              '    )',
+              '',
+          ))
+          if text.count(stale_loop_repair) != 1:
+              raise SystemExit('stale loop repair anchor changed unexpectedly')
           text = text.replace(stale_loop_repair, '', 1)
 
-          stale_timestamp_repair = """    replace_once(
-              CORE,
-              '''        let item_requested_at_ms =\\n            requested_at_ms.saturating_add(u64::try_from(offset).unwrap_or(u64::MAX));\\n        let execution = execute_icloud_local_eviction(\\n''',
-              '''        let item_requested_at_ms = fresh_item_requested_at_ms(&mut now_ms);\\n        let execution = executor(\\n''',
-          )
-"""
-          current_executor_repair = """    replace_once(
-              CORE,
-              '''        let execution = execute_icloud_local_eviction(\\n''',
-              '''        let execution = executor(\\n''',
-          )
-"""
-          timestamp_count = text.count(stale_timestamp_repair)
-          if timestamp_count != 1:
-              raise SystemExit(
-                  f'expected one stale timestamp repair, found {timestamp_count}'
-              )
+          stale_timestamp_repair = '\n'.join((
+              '    replace_once(',
+              '        CORE,',
+              "        '''        let item_requested_at_ms =\\n            requested_at_ms.saturating_add(u64::try_from(offset).unwrap_or(u64::MAX));\\n        let execution = execute_icloud_local_eviction(\\n''',",
+              "        '''        let item_requested_at_ms = fresh_item_requested_at_ms(&mut now_ms);\\n        let execution = executor(\\n''',",
+              '    )',
+              '',
+          ))
+          current_executor_repair = '\n'.join((
+              '    replace_once(',
+              '        CORE,',
+              "        '''        let execution = execute_icloud_local_eviction(\\n''',",
+              "        '''        let execution = executor(\\n''',",
+              '    )',
+              '',
+          ))
+          if text.count(stale_timestamp_repair) != 1:
+              raise SystemExit('stale timestamp repair anchor changed unexpectedly')
           text = text.replace(stale_timestamp_repair, current_executor_repair, 1)
-          if stale_loop_repair in text or stale_timestamp_repair in text:
-              raise SystemExit('stale repair normalization was not exact')
+
+          if old_raw in text or old_writer in text:
+              raise SystemExit('repair anchor normalization was incomplete')
+          if text.count(new_raw) != 2 or text.count(new_writer) != 1:
+              raise SystemExit('repair anchor normalization was not exact')
           if text.count(current_executor_repair) != 1:
               raise SystemExit('executor repair normalization was not exact')
 
@@ -161,8 +158,7 @@ jobs:
       - name: Apply execution repair
         run: python .github/scripts/repair_pr_89.py core
       - name: Prove execution-seam tests pass
-        run: |
-          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli cloud_local_eviction_batch::tests::
+        run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli cloud_local_eviction_batch::tests::
       - name: Prove diagnostic regression test fails before CLI repair
         run: |
           set +e
