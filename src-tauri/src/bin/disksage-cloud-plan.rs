@@ -633,17 +633,11 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
         return Err("--export-naruon-capacity에는 --verify-capacity가 필요함".into());
     }
     if args.export_naruon_copy_readiness && !args.verify_capacity {
-        return Err(
-            "--export-naruon-copy-readiness에는 --verify-capacity가 필요함"
-                .into(),
-        );
+        return Err("--export-naruon-copy-readiness에는 --verify-capacity가 필요함".into());
     }
-    if args.naruon_copy_readiness_output.is_some()
-        && !args.export_naruon_copy_readiness
-    {
+    if args.naruon_copy_readiness_output.is_some() && !args.export_naruon_copy_readiness {
         return Err(
-            "--naruon-copy-readiness-output에는 --export-naruon-copy-readiness가 필요함"
-                .into(),
+            "--naruon-copy-readiness-output에는 --export-naruon-copy-readiness가 필요함".into(),
         );
     }
     if args
@@ -651,9 +645,7 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
         .as_ref()
         .is_some_and(|path| !path.is_absolute())
     {
-        return Err(
-            "--naruon-copy-readiness-output은 절대 경로여야 함".into(),
-        );
+        return Err("--naruon-copy-readiness-output은 절대 경로여야 함".into());
     }
     let actions = usize::from(args.list_roots)
         + usize::from(args.inspect_roots)
@@ -2029,10 +2021,7 @@ fn attach_local_copy_prerequisites(report: &mut cloud::CloudPlanReport, home: &P
     if report.cloud_root.provider == CloudProvider::Icloud {
         let health =
             icloud_sync_health::inspect_new_copy_admission(home, cloud::system_now_ms()).ok();
-        icloud_sync_health::attach_new_copy_admission_notice(
-            &mut report.notices,
-            health.as_ref(),
-        );
+        icloud_sync_health::attach_new_copy_admission_notice(&mut report.notices, health.as_ref());
     }
 }
 
@@ -2431,30 +2420,23 @@ fn run() -> Result<(), String> {
             observed_at_ms,
         );
         let icloud_health = if selected.provider == CloudProvider::Icloud {
-            icloud_sync_health::inspect_new_copy_admission(
-                &home,
-                observed_at_ms,
-            )
-            .ok()
+            icloud_sync_health::inspect_new_copy_admission(&home, observed_at_ms).ok()
         } else {
             None
         };
-        let envelope =
-            naruon_cloud_copy_readiness::export_naruon_cloud_copy_readiness(
-                &report,
-                &runtime,
-                icloud_health.as_ref(),
-            )?;
+        let envelope = naruon_cloud_copy_readiness::export_naruon_cloud_copy_readiness(
+            &report,
+            &runtime,
+            icloud_health.as_ref(),
+        )?;
         if let Some(output_path) = &args.naruon_copy_readiness_output {
-            let value = serde_json::to_value(&envelope).map_err(|_| {
-                "naruon-copy-readiness-output-json-invalid".to_string()
-            })?;
+            let value = serde_json::to_value(&envelope)
+                .map_err(|_| "naruon-copy-readiness-output-json-invalid".to_string())?;
             write_private_review_dossier(output_path, &value)?;
         }
         println!(
             "{}",
-            serde_json::to_string_pretty(&envelope)
-                .map_err(|error| error.to_string())?
+            serde_json::to_string_pretty(&envelope).map_err(|error| error.to_string())?
         );
         return Ok(());
     }
@@ -2588,11 +2570,9 @@ fn run() -> Result<(), String> {
                 cloud::system_now_ms(),
             )?;
             if selected.provider == CloudProvider::Icloud {
-                let health = icloud_sync_health::inspect_new_copy_admission(
-                    &home,
-                    cloud::system_now_ms(),
-                )
-                .map_err(|_| "icloud-new-copy-admission-evidence-unavailable".to_string())?;
+                let health =
+                    icloud_sync_health::inspect_new_copy_admission(&home, cloud::system_now_ms())
+                        .map_err(|_| "icloud-new-copy-admission-evidence-unavailable".to_string())?;
                 icloud_sync_health::require_new_copy_admission(&health)?;
             }
             let capacity_snapshot = report
@@ -2619,7 +2599,6 @@ fn run() -> Result<(), String> {
                 candidate,
                 &selected,
                 receipt_dir,
-                action_at_ms,
                 review_decision.as_ref(),
                 &copy_approval,
             )?
@@ -2628,7 +2607,6 @@ fn run() -> Result<(), String> {
                 candidate,
                 &selected,
                 receipt_dir,
-                action_at_ms,
                 review_decision.as_ref(),
                 &copy_approval,
             )?
@@ -4195,11 +4173,8 @@ mod tests {
         );
         assert!(validate_action_args(&export).is_ok());
 
-        let missing_capacity = parse_args(
-            &["--export-naruon-copy-readiness".into()],
-            Path::new("/h"),
-        )
-        .unwrap();
+        let missing_capacity =
+            parse_args(&["--export-naruon-copy-readiness".into()], Path::new("/h")).unwrap();
         assert!(validate_action_args(&missing_capacity).is_err());
 
         let output_only = parse_args(

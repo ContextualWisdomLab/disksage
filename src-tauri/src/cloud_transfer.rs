@@ -1200,9 +1200,28 @@ fn build_verified_receipt(
 }
 
 /// Copy a candidate only after validating both the optional metadata review decision and a fresh,
-/// exact, human-attributed copy approval. Every path/provider/planner gate remains mandatory.
+/// exact, human-attributed copy approval. The production entrypoint reads the live clock at the
+/// mutation boundary so an earlier preflight cannot silently extend the approval lifetime.
 #[cfg(not(coverage))]
 pub fn prepare_cloud_copy_with_approval(
+    candidate: &CloudCandidate,
+    cloud_root: &CloudRoot,
+    receipt_dir: &Path,
+    review_decision: Option<&CloudReviewDecision>,
+    copy_approval: &CloudCopyApproval,
+) -> Result<(CloudCopyReceipt, PathBuf), String> {
+    prepare_cloud_copy_with_approval_at(
+        candidate,
+        cloud_root,
+        receipt_dir,
+        crate::cloud::system_now_ms(),
+        review_decision,
+        copy_approval,
+    )
+}
+
+#[cfg(not(coverage))]
+fn prepare_cloud_copy_with_approval_at(
     candidate: &CloudCandidate,
     cloud_root: &CloudRoot,
     receipt_dir: &Path,
@@ -1240,8 +1259,27 @@ pub fn prepare_cloud_copy_with_approval(
 }
 
 /// Verify and adopt an existing destination only after the same exact human action approval.
+/// The approval age is evaluated from a fresh live-clock read immediately before verification.
 #[cfg(not(coverage))]
 pub fn adopt_existing_cloud_copy_with_approval(
+    candidate: &CloudCandidate,
+    cloud_root: &CloudRoot,
+    receipt_dir: &Path,
+    review_decision: Option<&CloudReviewDecision>,
+    copy_approval: &CloudCopyApproval,
+) -> Result<(CloudCopyReceipt, PathBuf), String> {
+    adopt_existing_cloud_copy_with_approval_at(
+        candidate,
+        cloud_root,
+        receipt_dir,
+        crate::cloud::system_now_ms(),
+        review_decision,
+        copy_approval,
+    )
+}
+
+#[cfg(not(coverage))]
+fn adopt_existing_cloud_copy_with_approval_at(
     candidate: &CloudCandidate,
     cloud_root: &CloudRoot,
     receipt_dir: &Path,
@@ -1316,7 +1354,7 @@ pub fn prepare_cloud_copy_with_review(
         CloudCopyApprovalAction::CopyOnly,
         copied_at_ms,
     )?;
-    prepare_cloud_copy_with_approval(
+    prepare_cloud_copy_with_approval_at(
         candidate,
         cloud_root,
         receipt_dir,
@@ -1339,7 +1377,7 @@ pub fn adopt_existing_cloud_copy(
         CloudCopyApprovalAction::AdoptExistingCopy,
         verified_at_ms,
     )?;
-    adopt_existing_cloud_copy_with_approval(
+    adopt_existing_cloud_copy_with_approval_at(
         candidate,
         cloud_root,
         receipt_dir,
@@ -1629,6 +1667,45 @@ mod tests {
         already_cloud.src = DESTINATION.into();
         assert!(candidate_blockers(&already_cloud, &root())
             .contains(&"source-already-in-cloud-root".to_string()));
+    }
+
+    #[test]
+    #[cfg(not(coverage))]
+    fn production_copy_entrypoints_recheck_approval_age_against_live_time() {
+        let candidate = candidate();
+        let root = root();
+        let copy_approval =
+            test_copy_approval(&candidate, &root, CloudCopyApprovalAction::CopyOnly, 1).unwrap();
+        assert_eq!(
+            prepare_cloud_copy_with_approval(
+                &candidate,
+                &root,
+                std::path::Path::new("/unused"),
+                None,
+                &copy_approval,
+            )
+            .unwrap_err(),
+            "cloud-copy-approval-stale"
+        );
+
+        let adoption_approval = test_copy_approval(
+            &candidate,
+            &root,
+            CloudCopyApprovalAction::AdoptExistingCopy,
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            adopt_existing_cloud_copy_with_approval(
+                &candidate,
+                &root,
+                std::path::Path::new("/unused"),
+                None,
+                &adoption_approval,
+            )
+            .unwrap_err(),
+            "cloud-copy-approval-stale"
+        );
     }
 
     #[test]

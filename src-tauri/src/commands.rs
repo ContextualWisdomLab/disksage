@@ -16,8 +16,8 @@ use crate::organize;
 use crate::safety;
 #[cfg(not(coverage))]
 use crate::{
-    cloud, cloud_eviction, cloud_local_eviction, cloud_review, cloud_transfer, dev_artifacts, dupes,
-    git_worktree, icloud_sync_health, provider_api_client, provider_capacity,
+    cloud, cloud_eviction, cloud_local_eviction, cloud_review, cloud_transfer, dev_artifacts,
+    dupes, git_worktree, icloud_sync_health, provider_api_client, provider_capacity,
     provider_client_runtime, provider_evidence, provider_oauth, provider_sync, rules,
 };
 
@@ -53,7 +53,10 @@ pub struct NodeView {
 /// 스캔 결과 + 실시간 read_dir로 한 레벨을 조회 (순수 함수 — 테스트 대상)
 pub fn node_view(res: &ScanResult, path: &Path) -> Result<NodeView, String> {
     // '..'는 lexical starts_with를 우회해 루트 밖을 열람할 수 있음 — 컴포넌트 단위로 거부
-    if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+    if path
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
         return Err("path outside scanned root".into());
     }
     if !path.starts_with(&res.root) {
@@ -95,11 +98,7 @@ pub struct CleanResult {
 }
 
 /// 정리 실행의 순수 코어 — 결과는 항목별, 하나가 실패해도 나머지는 진행 (스펙 §8)
-pub fn clean_paths_inner(
-    paths: &[PathBuf],
-    journal_path: &Path,
-    now_ms: u64,
-) -> Vec<CleanResult> {
+pub fn clean_paths_inner(paths: &[PathBuf], journal_path: &Path, now_ms: u64) -> Vec<CleanResult> {
     paths
         .iter()
         .map(|p| {
@@ -146,12 +145,26 @@ pub fn parse_move_entry(path_field: &str) -> Option<(String, String)> {
 }
 
 /// MovePlan을 safety::move_file로 실행하는 순수 코어 — 항목별 결과, 하나 실패해도 나머지는 진행 (M2와 동일 원칙)
-pub fn execute_moves_inner(plans: &[organize::MovePlan], journal_path: &Path, now_ms: u64) -> Vec<CleanResult> {
+pub fn execute_moves_inner(
+    plans: &[organize::MovePlan],
+    journal_path: &Path,
+    now_ms: u64,
+) -> Vec<CleanResult> {
     plans
         .iter()
-        .map(|p| match safety::move_file(Path::new(&p.src), Path::new(&p.dst), journal_path, now_ms) {
-            Ok(()) => CleanResult { path: p.src.clone(), ok: true, error: String::new() },
-            Err(e) => CleanResult { path: p.src.clone(), ok: false, error: e.to_string() },
+        .map(|p| {
+            match safety::move_file(Path::new(&p.src), Path::new(&p.dst), journal_path, now_ms) {
+                Ok(()) => CleanResult {
+                    path: p.src.clone(),
+                    ok: true,
+                    error: String::new(),
+                },
+                Err(e) => CleanResult {
+                    path: p.src.clone(),
+                    ok: false,
+                    error: e.to_string(),
+                },
+            }
         })
         .collect()
 }
@@ -167,9 +180,19 @@ pub fn undo_last_moves_inner(limit: usize, journal_path: &Path, now_ms: u64) -> 
         .filter(|e| e.op == "move" && e.outcome == "ok")
         .take(limit)
         .filter_map(|e| parse_move_entry(&e.path))
-        .map(|(src, dst)| match safety::move_file(Path::new(&dst), Path::new(&src), journal_path, now_ms) {
-            Ok(()) => CleanResult { path: src, ok: true, error: String::new() },
-            Err(e) => CleanResult { path: src, ok: false, error: e.to_string() },
+        .map(|(src, dst)| {
+            match safety::move_file(Path::new(&dst), Path::new(&src), journal_path, now_ms) {
+                Ok(()) => CleanResult {
+                    path: src,
+                    ok: true,
+                    error: String::new(),
+                },
+                Err(e) => CleanResult {
+                    path: src,
+                    ok: false,
+                    error: e.to_string(),
+                },
+            }
         })
         .collect()
 }
@@ -203,7 +226,9 @@ pub fn load_ontology_from(ttl: &str) -> Result<crate::ontology::Ontology, String
 fn user_rules_json(app: &AppHandle) -> String {
     use tauri::Manager;
     if let Ok(dir) = app.path().app_config_dir() {
-        if let Ok(s) = std::fs::read_to_string(dir.join("userrules.json")) { return s; }
+        if let Ok(s) = std::fs::read_to_string(dir.join("userrules.json")) {
+            return s;
+        }
     }
     "[]".to_string()
 }
@@ -223,7 +248,10 @@ fn bundled_ontology_ttl(app: &AppHandle) -> Result<String, String> {
     }
     let res = app
         .path()
-        .resolve("resources/ontology/default.ttl", tauri::path::BaseDirectory::Resource)
+        .resolve(
+            "resources/ontology/default.ttl",
+            tauri::path::BaseDirectory::Resource,
+        )
         .map_err(|e| e.to_string())?;
     std::fs::read_to_string(&res).map_err(|e| e.to_string())
 }
@@ -236,7 +264,10 @@ pub fn get_ontology(app: AppHandle) -> Result<crate::ontology::Ontology, String>
 
 #[cfg(not(coverage))]
 #[tauri::command(async)]
-pub fn disk_inventory(root: String, app: AppHandle) -> Result<crate::inventory::InventoryReport, String> {
+pub fn disk_inventory(
+    root: String,
+    app: AppHandle,
+) -> Result<crate::inventory::InventoryReport, String> {
     let onto = load_ontology_from(&bundled_ontology_ttl(&app)?)?;
     let files = crate::dupes::collect_files(std::path::Path::new(&root));
     Ok(crate::inventory::build_inventory(&files, &onto))
@@ -272,7 +303,10 @@ pub fn get_settings(app: AppHandle) -> Result<crate::settings::Settings, String>
 /// online_mode 설정 후 영속. 반환은 저장된 설정.
 #[cfg(not(coverage))]
 #[tauri::command]
-pub fn set_settings(online_mode: bool, app: AppHandle) -> Result<crate::settings::Settings, String> {
+pub fn set_settings(
+    online_mode: bool,
+    app: AppHandle,
+) -> Result<crate::settings::Settings, String> {
     let s = crate::settings::Settings { online_mode };
     let path = settings_file_path(&app)?;
     std::fs::write(&path, crate::settings::serialize_settings(&s)).map_err(|e| e.to_string())?;
@@ -375,7 +409,11 @@ pub fn list_dev_artifacts(
     root: String,
     min_age_days: u64,
 ) -> Result<Vec<dev_artifacts::DevArtifact>, String> {
-    Ok(dev_artifacts::find_artifacts(Path::new(&root), min_age_days, now_ms()))
+    Ok(dev_artifacts::find_artifacts(
+        Path::new(&root),
+        min_age_days,
+        now_ms(),
+    ))
 }
 
 #[cfg(not(coverage))]
@@ -388,7 +426,10 @@ pub fn clean_paths(paths: Vec<String>, app: AppHandle) -> Result<Vec<CleanResult
 
 #[cfg(not(coverage))]
 #[tauri::command]
-pub fn recent_operations(limit: usize, app: AppHandle) -> Result<Vec<safety::JournalEntry>, String> {
+pub fn recent_operations(
+    limit: usize,
+    app: AppHandle,
+) -> Result<Vec<safety::JournalEntry>, String> {
     Ok(safety::journal_recent(&journal_file_path(&app)?, limit))
 }
 
@@ -396,7 +437,9 @@ pub fn recent_operations(limit: usize, app: AppHandle) -> Result<Vec<safety::Jou
 #[tauri::command]
 pub fn expand_clean_targets(dir: String) -> Vec<String> {
     // 카탈로그 경로로만 스코프 — 임의 디렉토리 열람 IPC가 되지 않도록
-    let Some(bases) = rules::BaseDirs::from_env() else { return Vec::new() };
+    let Some(bases) = rules::BaseDirs::from_env() else {
+        return Vec::new();
+    };
     let d = Path::new(&dir);
     if !rules::is_catalog_path(&bases, d) {
         return Vec::new();
@@ -742,12 +785,7 @@ pub async fn connect_cloud_provider(
     let connection_path = oauth_connections_path(&app)?;
     let connected_at_ms = cloud::system_now_ms();
     tauri::async_runtime::spawn_blocking(move || {
-        provider_oauth::finish_authorization(
-            pending,
-            &selected,
-            &connection_path,
-            connected_at_ms,
-        )
+        provider_oauth::finish_authorization(pending, &selected, &connection_path, connected_at_ms)
     })
     .await
     .map_err(|_| "provider-oauth-task-failed".to_string())?
@@ -757,10 +795,7 @@ pub async fn connect_cloud_provider(
 /// connection descriptor. This does not alter any cloud file.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
-pub async fn disconnect_cloud_provider(
-    cloud_root: String,
-    app: AppHandle,
-) -> Result<(), String> {
+pub async fn disconnect_cloud_provider(cloud_root: String, app: AppHandle) -> Result<(), String> {
     let selected = selected_cloud_root(&app, &cloud_root)?;
     if selected.provider == cloud::CloudProvider::Icloud {
         return Err("icloud-oauth-not-supported".into());
@@ -858,10 +893,7 @@ pub fn inspect_cloud_provider_client_runtime(
 pub fn inspect_icloud_new_copy_admission(
     app: AppHandle,
 ) -> Result<icloud_sync_health::IcloudSyncHealthReport, String> {
-    icloud_sync_health::inspect_new_copy_admission(
-        &resolve_home(&app),
-        cloud::system_now_ms(),
-    )
+    icloud_sync_health::inspect_new_copy_admission(&resolve_home(&app), cloud::system_now_ms())
 }
 
 #[cfg(not(coverage))]
@@ -882,7 +914,10 @@ fn cloud_plan_for_inputs(
         .cloned()
         .ok_or_else(|| "탐지된 클라우드 루트가 아님".to_string())?;
     cloud::validate_cloud_root_readable(&selected)?;
-    let excluded: Vec<PathBuf> = discovered.iter().map(|root| PathBuf::from(&root.path)).collect();
+    let excluded: Vec<PathBuf> = discovered
+        .iter()
+        .map(|root| PathBuf::from(&root.path))
+        .collect();
     if excluded.iter().any(|cloud| root_path.starts_with(cloud)) {
         return Err("이미 클라우드 안에 있는 경로는 오프로드 원본으로 사용할 수 없음".into());
     }
@@ -921,10 +956,7 @@ fn cloud_plan_for_inputs(
             cloud::system_now_ms(),
         )
         .ok();
-        icloud_sync_health::attach_new_copy_admission_notice(
-            &mut report.notices,
-            health.as_ref(),
-        );
+        icloud_sync_health::attach_new_copy_admission_notice(&mut report.notices, health.as_ref());
     }
     Ok((selected, report))
 }
@@ -977,18 +1009,20 @@ fn attach_capacity_assessment(
     report
         .notices
         .retain(|notice| notice != "cloud-quota-unverified");
-    report.notices.push(match assessment.can_fit {
-        Some(true)
-            if assessment.snapshot.evidence_kind
-                == provider_capacity::CapacityEvidenceKind::ProviderNativeStatus =>
-        {
-            "cloud-quota-provider-native-verified"
+    report.notices.push(
+        match assessment.can_fit {
+            Some(true)
+                if assessment.snapshot.evidence_kind
+                    == provider_capacity::CapacityEvidenceKind::ProviderNativeStatus =>
+            {
+                "cloud-quota-provider-native-verified"
+            }
+            Some(true) => "cloud-quota-provider-api-verified",
+            Some(false) => "cloud-quota-insufficient-or-blocked",
+            None => "cloud-quota-unavailable",
         }
-        Some(true) => "cloud-quota-provider-api-verified",
-        Some(false) => "cloud-quota-insufficient-or-blocked",
-        None => "cloud-quota-unavailable",
-    }
-    .into());
+        .into(),
+    );
     report.capacity = Some(assessment);
     Ok(())
 }
@@ -1051,7 +1085,11 @@ fn local_human_reviewer() -> String {
         .collect();
     format!(
         "human:local:{}",
-        if bounded.is_empty() { "unknown" } else { &bounded }
+        if bounded.is_empty() {
+            "unknown"
+        } else {
+            &bounded
+        }
     )
 }
 
@@ -1071,9 +1109,7 @@ pub fn review_cloud_candidate(
     state: State<AppState>,
 ) -> Result<cloud_review::CloudReviewDecision, String> {
     for fingerprint in [&metadata_fingerprint, &review_fingerprint] {
-        if fingerprint.len() != 64
-            || !fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit())
-        {
+        if fingerprint.len() != 64 || !fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err("cloud-review-fingerprint-invalid".into());
         }
     }
@@ -1081,14 +1117,8 @@ pub fn review_cloud_candidate(
         .cloud_review
         .lock()
         .map_err(|_| "cloud-review-lock-poisoned".to_string())?;
-    let (_, report) = cloud_plan_for_inputs(
-        &root,
-        &cloud_root,
-        min_size_mib,
-        min_age_days,
-        limit,
-        &app,
-    )?;
+    let (_, report) =
+        cloud_plan_for_inputs(&root, &cloud_root, min_size_mib, min_age_days, limit, &app)?;
     let matches: Vec<_> = report
         .candidates
         .iter()
@@ -1135,18 +1165,14 @@ fn create_cloud_candidate_receipt(
     adopt_existing: bool,
 ) -> Result<CloudCopyOutput, String> {
     if metadata_fingerprint.len() != 64
-        || !metadata_fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || !metadata_fingerprint
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
     {
         return Err("metadata-fingerprint-invalid".into());
     }
-    let (selected, report) = cloud_plan_for_inputs(
-        root,
-        cloud_root,
-        min_size_mib,
-        min_age_days,
-        limit,
-        app,
-    )?;
+    let (selected, report) =
+        cloud_plan_for_inputs(root, cloud_root, min_size_mib, min_age_days, limit, app)?;
     let matches: Vec<_> = report
         .candidates
         .iter()
@@ -1209,7 +1235,6 @@ fn create_cloud_candidate_receipt(
             candidate,
             &selected,
             &receipt_dir,
-            action_at_ms,
             review_decision.as_ref(),
             &copy_approval,
         )?
@@ -1218,7 +1243,6 @@ fn create_cloud_candidate_receipt(
             candidate,
             &selected,
             &receipt_dir,
-            action_at_ms,
             review_decision.as_ref(),
             &copy_approval,
         )?
@@ -1550,7 +1574,11 @@ pub async fn trash_verified_cloud_source(
 #[cfg(not(coverage))]
 #[cfg_attr(not(feature = "llm-engine"), allow(unused_variables))]
 #[tauri::command(async)]
-pub fn plan_organize(root: String, app: AppHandle, state: State<AppState>) -> Result<Vec<organize::MovePlan>, String> {
+pub fn plan_organize(
+    root: String,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<Vec<organize::MovePlan>, String> {
     let onto = load_ontology_from(&bundled_ontology_ttl(&app)?)?;
     let rules = crate::userrules::parse_rules(&user_rules_json(&app))?; // malformed → Err surfaced
     let files = dupes::collect_files(Path::new(&root));
@@ -1574,11 +1602,25 @@ pub fn plan_organize(root: String, app: AppHandle, state: State<AppState>) -> Re
                     let meta = file_meta_at(p, 0, 0);
                     crate::llm::pick_class(engine, &meta, cands)
                 };
-                return Ok(organize::plan_moves_with(&files, &onto, &home, now_ms(), &rules, &pick));
+                return Ok(organize::plan_moves_with(
+                    &files,
+                    &onto,
+                    &home,
+                    now_ms(),
+                    &rules,
+                    &pick,
+                ));
             }
         }
     }
-    Ok(organize::plan_moves_with(&files, &onto, &home, now_ms(), &rules, &|_, _| None))
+    Ok(organize::plan_moves_with(
+        &files,
+        &onto,
+        &home,
+        now_ms(),
+        &rules,
+        &|_, _| None,
+    ))
 }
 
 /// 활성 사용자 규칙 조회(UI 표시용). 손상 파일은 Err.
@@ -1591,7 +1633,10 @@ pub fn user_rules(app: AppHandle) -> Result<Vec<crate::userrules::Rule>, String>
 /// MovePlan을 safety::move_file로 실행 — 항목별 결과, 하나 실패해도 나머지는 진행 (M2와 동일 원칙)
 #[cfg(not(coverage))]
 #[tauri::command(async)]
-pub fn execute_moves(plans: Vec<organize::MovePlan>, app: AppHandle) -> Result<Vec<CleanResult>, String> {
+pub fn execute_moves(
+    plans: Vec<organize::MovePlan>,
+    app: AppHandle,
+) -> Result<Vec<CleanResult>, String> {
     let jp = journal_file_path(&app)?;
     Ok(execute_moves_inner(&plans, &jp, now_ms()))
 }
@@ -1612,23 +1657,37 @@ pub struct ModelStatus {
 
 /// 모델 파일 경로: <app_data>/models/<DEFAULT.name>.gguf
 pub fn model_file_path(app_data_dir: &Path) -> PathBuf {
-    app_data_dir.join("models").join(format!("{}.gguf", crate::llm::DEFAULT.name))
+    app_data_dir
+        .join("models")
+        .join(format!("{}.gguf", crate::llm::DEFAULT.name))
 }
 
 /// 모델 존재 여부 + 이름. 없으면 앱은 규칙 기반으로 동작(배지 미판정).
 pub fn model_status_for(model_path: &Path) -> ModelStatus {
-    ModelStatus { present: model_path.exists(), name: crate::llm::DEFAULT.name.to_string() }
+    ModelStatus {
+        present: model_path.exists(),
+        name: crate::llm::DEFAULT.name.to_string(),
+    }
 }
 
 /// 경로 + (이미 읽은) size·age로 FileMeta 구성. name/parent는 경로에서, 없으면 빈 문자열(패닉 없음).
 pub fn file_meta_at(path: &Path, size: u64, mtime_days: u64) -> crate::llm::FileMeta {
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let parent = path
         .parent()
         .and_then(|p| p.file_name())
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    crate::llm::FileMeta { path: path.to_string_lossy().into_owned(), name, size, mtime_days, parent }
+    crate::llm::FileMeta {
+        path: path.to_string_lossy().into_owned(),
+        name,
+        size,
+        mtime_days,
+        parent,
+    }
 }
 
 /// 항목마다 캐시(path|size|mtime_ms) 확인 후 미스면 추론. 판정만 캐시(이유는 미스 시에만).
@@ -1641,7 +1700,11 @@ pub fn verdicts_with(
     for (meta, mtime_ms) in items {
         let key = crate::llm::VerdictCache::key(&meta.path, meta.size, *mtime_ms);
         if let Some(v) = cache.get(&key) {
-            out.push(crate::llm::FileVerdict { path: meta.path.clone(), verdict: v, reason: String::new() });
+            out.push(crate::llm::FileVerdict {
+                path: meta.path.clone(),
+                verdict: v,
+                reason: String::new(),
+            });
         } else {
             let fv = crate::llm::verdict_for(engine, meta);
             cache.put(key, fv.verdict);
@@ -1657,16 +1720,21 @@ pub fn verdicts_with(
 
 #[cfg(not(coverage))]
 fn meta_items(paths: &[String]) -> Vec<(crate::llm::FileMeta, u64)> {
-    paths.iter().filter_map(|p| {
-        let path = std::path::Path::new(p);
-        let md = std::fs::metadata(path).ok()?;
-        let mtime_ms = md.modified().ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        let age_days = now_ms().saturating_sub(mtime_ms) / 86_400_000; // 실제 파일 나이(프롬프트용); 캐시 키는 원시 mtime_ms 사용
-        Some((file_meta_at(path, md.len(), age_days), mtime_ms))
-    }).collect()
+    paths
+        .iter()
+        .filter_map(|p| {
+            let path = std::path::Path::new(p);
+            let md = std::fs::metadata(path).ok()?;
+            let mtime_ms = md
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let age_days = now_ms().saturating_sub(mtime_ms) / 86_400_000; // 실제 파일 나이(프롬프트용); 캐시 키는 원시 mtime_ms 사용
+            Some((file_meta_at(path, md.len(), age_days), mtime_ms))
+        })
+        .collect()
 }
 
 #[cfg(not(coverage))]
@@ -1693,7 +1761,11 @@ pub fn download_model(app: AppHandle) -> Result<(), String> {
 #[cfg(not(coverage))]
 #[cfg_attr(not(feature = "llm-engine"), allow(unused_variables))]
 #[tauri::command(async)]
-pub fn file_verdicts(paths: Vec<String>, app: AppHandle, state: State<AppState>) -> Result<Vec<crate::llm::FileVerdict>, String> {
+pub fn file_verdicts(
+    paths: Vec<String>,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<Vec<crate::llm::FileVerdict>, String> {
     let items = meta_items(&paths);
 
     #[cfg(feature = "llm-engine")]
@@ -1728,7 +1800,11 @@ pub fn file_verdicts(paths: Vec<String>, app: AppHandle, state: State<AppState>)
 #[cfg(not(coverage))]
 #[cfg_attr(not(feature = "llm-engine"), allow(unused_variables))]
 #[tauri::command(async)]
-pub fn summarize_unknown_bucket(paths: Vec<String>, app: AppHandle, state: State<AppState>) -> Result<Option<String>, String> {
+pub fn summarize_unknown_bucket(
+    paths: Vec<String>,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<Option<String>, String> {
     if paths.is_empty() {
         return Ok(None);
     }
@@ -1769,8 +1845,14 @@ pub fn reason_unknown_extensions(
     // opt-in 웹: online_mode일 때만 DdgLookup, 아니면 None → build_insights의 웹 분기 절대 미실행(default offline)
     let settings = get_settings(app.clone())?;
     let ddg = crate::web::DdgLookup;
-    let web_fn = |ext: &str| -> Option<String> { crate::web::WebLookup::file_type(&ddg, ext).ok().flatten() };
-    let web: Option<&dyn Fn(&str) -> Option<String>> = if settings.online_mode { Some(&web_fn) } else { None };
+    let web_fn = |ext: &str| -> Option<String> {
+        crate::web::WebLookup::file_type(&ddg, ext).ok().flatten()
+    };
+    let web: Option<&dyn Fn(&str) -> Option<String>> = if settings.online_mode {
+        Some(&web_fn)
+    } else {
+        None
+    };
 
     // 오프라인 LLM(feature+모델+엔진 있으면 실제; 그 블록에서 반환). 없으면 아래 fallback로 낙하.
     #[cfg(feature = "llm-engine")]
@@ -1780,8 +1862,11 @@ pub fn reason_unknown_extensions(
         if model_status_for(&model_file_path(&dir)).present {
             // 온톨로지 로드는 LLM 경로에서만 필요 — 여기로 이동해 기본/웹전용 빌드가 malformed ontology.ttl로 실패하지 않게 함
             let onto = load_ontology_from(&bundled_ontology_ttl(&app)?)?;
-            let candidates: Vec<String> = onto.classes.iter()
-                .map(|c| c.id.rsplit(['#', '/']).next().unwrap_or(&c.id).to_string()).collect();
+            let candidates: Vec<String> = onto
+                .classes
+                .iter()
+                .map(|c| c.id.rsplit(['#', '/']).next().unwrap_or(&c.id).to_string())
+                .collect();
             let cand_refs: Vec<&str> = candidates.iter().map(|s| s.as_str()).collect();
 
             let mut guard = state.engine.lock().unwrap();
@@ -1813,7 +1898,10 @@ mod tests {
     // --- M5 LLM 커맨드 순수 헬퍼 ---
     use crate::llm::{InferenceEngine, Verdict, VerdictCache};
 
-    struct CountingFake { out: String, calls: std::cell::Cell<usize> }
+    struct CountingFake {
+        out: String,
+        calls: std::cell::Cell<usize>,
+    }
     impl InferenceEngine for CountingFake {
         fn infer(&self, _p: &str) -> Result<String, String> {
             self.calls.set(self.calls.get() + 1);
@@ -1854,19 +1942,29 @@ mod tests {
 
     #[test]
     fn verdicts_with_caches_and_avoids_reinference() {
-        let engine = CountingFake { out: r#"{"verdict":"safe","reason":"r"}"#.into(), calls: std::cell::Cell::new(0) };
+        let engine = CountingFake {
+            out: r#"{"verdict":"safe","reason":"r"}"#.into(),
+            calls: std::cell::Cell::new(0),
+        };
         let mut cache = VerdictCache::new();
         let meta = file_meta_at(std::path::Path::new("/x/a.bin"), 100, 1);
         let items = vec![(meta.clone(), 1700u64), (meta, 1700u64)]; // 같은 path|size|mtime → 두 번째는 캐시 히트
         let out = verdicts_with(&engine, &mut cache, &items);
         assert_eq!(out.len(), 2);
         assert!(out.iter().all(|fv| fv.verdict == Verdict::Safe));
-        assert_eq!(engine.calls.get(), 1, "두 번째 항목은 캐시 히트라 추론 1회만");
+        assert_eq!(
+            engine.calls.get(),
+            1,
+            "두 번째 항목은 캐시 히트라 추론 1회만"
+        );
     }
 
     #[test]
     fn verdicts_with_distinct_items_infer_each() {
-        let engine = CountingFake { out: r#"{"verdict":"keep"}"#.into(), calls: std::cell::Cell::new(0) };
+        let engine = CountingFake {
+            out: r#"{"verdict":"keep"}"#.into(),
+            calls: std::cell::Cell::new(0),
+        };
         let mut cache = VerdictCache::new();
         let a = (file_meta_at(std::path::Path::new("/x/a"), 1, 1), 10u64);
         let b = (file_meta_at(std::path::Path::new("/x/b"), 2, 2), 20u64);
@@ -2016,9 +2114,14 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         let ok_file = tmp.path().join("disksage-clean-fixture-file.bin");
         fs::write(&ok_file, vec![0u8; 16]).unwrap();
         let missing = tmp.path().join("ghost");
-        let protected = std::path::PathBuf::from(if cfg!(windows) { "C:\\Windows" } else { "/usr" });
+        let protected =
+            std::path::PathBuf::from(if cfg!(windows) { "C:\\Windows" } else { "/usr" });
 
-        let results = clean_paths_inner(&[ok_dir.clone(), ok_file.clone(), missing, protected], &jp, 7);
+        let results = clean_paths_inner(
+            &[ok_dir.clone(), ok_file.clone(), missing, protected],
+            &jp,
+            7,
+        );
 
         assert_eq!(results.len(), 4);
         assert!(results[0].ok);
@@ -2038,7 +2141,10 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
             .iter()
             .find(|e| e.outcome == "ok" && e.path.contains("disksage-clean-fixture-file"))
             .unwrap();
-        assert_eq!(ok_file_entry.bytes, 16, "단일 파일은 metadata 크기로 저널링");
+        assert_eq!(
+            ok_file_entry.bytes, 16,
+            "단일 파일은 metadata 크기로 저널링"
+        );
 
         // 테스트 픽스처 휴지통 정리 (win/linux)
         #[cfg(any(windows, target_os = "linux"))]
@@ -2048,7 +2154,8 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
                 .into_iter()
                 .filter(|i| {
                     let n = i.name.to_string_lossy();
-                    n.contains("disksage-clean-fixture-dir") || n.contains("disksage-clean-fixture-file")
+                    n.contains("disksage-clean-fixture-dir")
+                        || n.contains("disksage-clean-fixture-file")
                 })
                 .collect();
             trash::os_limited::purge_all(items).unwrap();
@@ -2064,8 +2171,16 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         let dst_ok = tmp.path().join("sub").join("a.bin");
         // 하나는 성공(같은 볼륨 rename), 하나는 실패(존재하지 않는 src)
         let plans = vec![
-            organize::MovePlan { src: src_ok.to_string_lossy().into(), dst: dst_ok.to_string_lossy().into(), class_id: "x".into() },
-            organize::MovePlan { src: tmp.path().join("ghost").to_string_lossy().into(), dst: tmp.path().join("g2").to_string_lossy().into(), class_id: "x".into() },
+            organize::MovePlan {
+                src: src_ok.to_string_lossy().into(),
+                dst: dst_ok.to_string_lossy().into(),
+                class_id: "x".into(),
+            },
+            organize::MovePlan {
+                src: tmp.path().join("ghost").to_string_lossy().into(),
+                dst: tmp.path().join("g2").to_string_lossy().into(),
+                class_id: "x".into(),
+            },
         ];
         let results = execute_moves_inner(&plans, &jp, 1);
         assert_eq!(results.len(), 2);
@@ -2083,7 +2198,11 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         std::fs::write(&a, vec![2u8; 8]).unwrap();
         let a_moved = tmp.path().join("dest").join("a.bin");
         // 먼저 이동 실행(저널에 move/ok 기록)
-        let plans = vec![organize::MovePlan { src: a.to_string_lossy().into(), dst: a_moved.to_string_lossy().into(), class_id: "x".into() }];
+        let plans = vec![organize::MovePlan {
+            src: a.to_string_lossy().into(),
+            dst: a_moved.to_string_lossy().into(),
+            class_id: "x".into(),
+        }];
         execute_moves_inner(&plans, &jp, 5);
         assert!(!a.exists());
         assert!(a_moved.exists());
@@ -2104,10 +2223,22 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
             let s = tmp.path().join(name);
             std::fs::write(&s, b"z").unwrap();
             let d = tmp.path().join("d").join(name);
-            execute_moves_inner(&[organize::MovePlan { src: s.to_string_lossy().into(), dst: d.to_string_lossy().into(), class_id: "x".into() }], &jp, 1);
+            execute_moves_inner(
+                &[organize::MovePlan {
+                    src: s.to_string_lossy().into(),
+                    dst: d.to_string_lossy().into(),
+                    class_id: "x".into(),
+                }],
+                &jp,
+                1,
+            );
         }
         let undone = undo_last_moves_inner(1, &jp, 9);
-        assert_eq!(undone.len(), 1, "filter-before-take: pending 라인이 실제 성공을 밀어내지 않음");
+        assert_eq!(
+            undone.len(),
+            1,
+            "filter-before-take: pending 라인이 실제 성공을 밀어내지 않음"
+        );
     }
 
     #[test]
@@ -2117,14 +2248,21 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         let a = tmp.path().join("a.bin");
         std::fs::write(&a, vec![3u8; 4]).unwrap();
         let a_moved = tmp.path().join("dest").join("a.bin");
-        let plans = vec![organize::MovePlan { src: a.to_string_lossy().into(), dst: a_moved.to_string_lossy().into(), class_id: "x".into() }];
+        let plans = vec![organize::MovePlan {
+            src: a.to_string_lossy().into(),
+            dst: a_moved.to_string_lossy().into(),
+            class_id: "x".into(),
+        }];
         execute_moves_inner(&plans, &jp, 1);
         assert!(a_moved.exists());
         // 원래 자리에 새 파일이 다시 생겨 되돌리기 목적지가 막힘 → move_file이 실패해야 함
         std::fs::write(&a, b"blocker").unwrap();
         let undone = undo_last_moves_inner(1, &jp, 2);
         assert_eq!(undone.len(), 1);
-        assert!(!undone[0].ok, "목적지 재점유 시 되돌리기 실패를 보고해야 함");
+        assert!(
+            !undone[0].ok,
+            "목적지 재점유 시 되돌리기 실패를 보고해야 함"
+        );
         assert!(a_moved.exists(), "실패 시 원본은 이동된 위치에 그대로 남음");
     }
 }
