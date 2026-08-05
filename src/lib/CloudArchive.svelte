@@ -25,6 +25,8 @@
   let reviewDecisions: api.CloudReviewDecision[] = $state([]);
   let reviewRationales: Record<string, string> = $state({});
   let reviewTenantAuthorities: Record<string, boolean> = $state({});
+  let copyConfirmations: Record<string, string> = $state({});
+  let copyRationales: Record<string, string> = $state({});
   let selectedRoot = $state("");
   let minSizeMib = $state(256);
   let minAgeDays = $state(90);
@@ -94,6 +96,8 @@
     reviewReason = "";
     reviewSort = "bytes-desc";
     reviewPage = 1;
+    copyConfirmations = {};
+    copyRationales = {};
     try {
       const planned = await api.planCloudArchive(
         scannedRoot,
@@ -120,10 +124,12 @@
     const embeddedHighConfidence = candidate.production_time_confidence === "high"
       && candidate.production_time_source.startsWith("embedded:");
     const capacityEvidenceAvailable = api.cloudCapacityAllowsCopy(report?.capacity);
+    const approvalPhrase = api.cloudCopyApprovalPhrase(candidate, "copy-only");
     return candidate.blocked_reason === null
       && (!candidate.requires_review || exactApproval)
       && (embeddedHighConfidence || exactApproval)
-      && capacityEvidenceAvailable;
+      && capacityEvidenceAvailable
+      && approvalPhrase !== null;
   }
 
   function adoptEligible(candidate: api.CloudCandidate): boolean {
@@ -131,9 +137,11 @@
     const exactApproval = decision?.disposition === "approved";
     const embeddedHighConfidence = candidate.production_time_confidence === "high"
       && candidate.production_time_source.startsWith("embedded:");
+    const approvalPhrase = api.cloudCopyApprovalPhrase(candidate, "adopt-existing-copy");
     return candidate.blocked_reason === "destination-exists"
       && (!candidate.requires_review || exactApproval)
-      && (embeddedHighConfidence || exactApproval);
+      && (embeddedHighConfidence || exactApproval)
+      && approvalPhrase !== null;
   }
 
   function reviewDecision(candidate: api.CloudCandidate): api.CloudReviewDecision | null {
@@ -196,6 +204,14 @@
 
   async function copyCandidate(candidate: api.CloudCandidate) {
     if (!scannedRoot || !selectedRoot || !copyEligible(candidate)) return;
+    const exactConfirmationPhrase =
+      (copyConfirmations[candidate.metadata_fingerprint] ?? "").trim();
+    const approvalRationale =
+      (copyRationales[candidate.metadata_fingerprint] ?? "").trim();
+    const expectedApprovalPhrase = api.cloudCopyApprovalPhrase(candidate, "copy-only");
+    if (!expectedApprovalPhrase
+      || exactConfirmationPhrase !== expectedApprovalPhrase
+      || !approvalRationale) return;
     copyingFingerprint = candidate.metadata_fingerprint;
     loadError = "";
     copied = null;
@@ -209,6 +225,8 @@
         scannedRoot,
         selectedRoot,
         candidate.metadata_fingerprint,
+        exactConfirmationPhrase,
+        approvalRationale,
         Math.max(1, Math.floor(minSizeMib)),
         Math.max(0, Math.floor(minAgeDays)),
         200,
@@ -222,6 +240,17 @@
 
   async function adoptExistingCandidate(candidate: api.CloudCandidate) {
     if (!scannedRoot || !selectedRoot || !adoptEligible(candidate)) return;
+    const exactConfirmationPhrase =
+      (copyConfirmations[candidate.metadata_fingerprint] ?? "").trim();
+    const approvalRationale =
+      (copyRationales[candidate.metadata_fingerprint] ?? "").trim();
+    const expectedApprovalPhrase = api.cloudCopyApprovalPhrase(
+      candidate,
+      "adopt-existing-copy",
+    );
+    if (!expectedApprovalPhrase
+      || exactConfirmationPhrase !== expectedApprovalPhrase
+      || !approvalRationale) return;
     copyingFingerprint = candidate.metadata_fingerprint;
     loadError = "";
     copied = null;
@@ -235,6 +264,8 @@
         scannedRoot,
         selectedRoot,
         candidate.metadata_fingerprint,
+        exactConfirmationPhrase,
+        approvalRationale,
         Math.max(1, Math.floor(minSizeMib)),
         Math.max(0, Math.floor(minAgeDays)),
         200,
@@ -845,22 +876,98 @@
               </div>
             {/if}
             {#if copyEligible(candidate)}
-              <button
-                class="copy"
-                onclick={() => copyCandidate(candidate)}
-                disabled={copyingFingerprint !== "" || copied?.receipt.candidate_fingerprint === candidate.metadata_fingerprint}
-              >
-                {copyingFingerprint === candidate.metadata_fingerprint ? "복사·해시 검증 중…" : "원본을 유지하고 클라우드에 복사"}
-              </button>
+              {@const copyApprovalPhrase = api.cloudCopyApprovalPhrase(candidate, "copy-only")}
+              <div class="copy-approval">
+                <div class="context">현재 메타데이터·출발지·목적지에 결부된 문구를 정확히 입력해야 합니다.</div>
+                <code>{copyApprovalPhrase ?? "현재 계획의 승인 문구를 확인할 수 없습니다."}</code>
+                <label>
+                  복사 승인 사유
+                  <textarea
+                    maxlength="1000"
+                    value={copyRationales[candidate.metadata_fingerprint] ?? ""}
+                    oninput={(event) => {
+                      copyRationales = {
+                        ...copyRationales,
+                        [candidate.metadata_fingerprint]: event.currentTarget.value,
+                      };
+                    }}
+                    disabled={copyingFingerprint !== ""}
+                  ></textarea>
+                </label>
+                <label>
+                  정확한 복사 승인 문구
+                  <input
+                    class="receipt-confirmation"
+                    value={copyConfirmations[candidate.metadata_fingerprint] ?? ""}
+                    oninput={(event) => {
+                      copyConfirmations = {
+                        ...copyConfirmations,
+                        [candidate.metadata_fingerprint]: event.currentTarget.value,
+                      };
+                    }}
+                    disabled={copyingFingerprint !== ""}
+                  />
+                </label>
+                <button
+                  class="copy"
+                  onclick={() => copyCandidate(candidate)}
+                  disabled={copyingFingerprint !== ""
+                    || copied?.receipt.candidate_fingerprint === candidate.metadata_fingerprint
+                    || !(copyRationales[candidate.metadata_fingerprint] ?? "").trim()
+                    || copyApprovalPhrase === null
+                    || (copyConfirmations[candidate.metadata_fingerprint] ?? "").trim()
+                      !== copyApprovalPhrase}
+                >
+                  {copyingFingerprint === candidate.metadata_fingerprint ? "복사·해시 검증 중…" : "원본을 유지하고 클라우드에 복사"}
+                </button>
+              </div>
             {/if}
             {#if adoptEligible(candidate)}
-              <button
-                class="copy"
-                onclick={() => adoptExistingCandidate(candidate)}
-                disabled={copyingFingerprint !== "" || copied?.receipt.candidate_fingerprint === candidate.metadata_fingerprint}
-              >
-                {copyingFingerprint === candidate.metadata_fingerprint ? "기존 파일 전체 해시 검증 중…" : "기존 클라우드 복사본 해시 검증·채택"}
-              </button>
+              {@const adoptApprovalPhrase = api.cloudCopyApprovalPhrase(candidate, "adopt-existing-copy")}
+              <div class="copy-approval">
+                <div class="context">기존 목적지 파일의 전체 해시 검증·채택도 정확한 별도 승인이 필요합니다.</div>
+                <code>{adoptApprovalPhrase ?? "현재 계획의 채택 승인 문구를 확인할 수 없습니다."}</code>
+                <label>
+                  기존 복사본 채택 사유
+                  <textarea
+                    maxlength="1000"
+                    value={copyRationales[candidate.metadata_fingerprint] ?? ""}
+                    oninput={(event) => {
+                      copyRationales = {
+                        ...copyRationales,
+                        [candidate.metadata_fingerprint]: event.currentTarget.value,
+                      };
+                    }}
+                    disabled={copyingFingerprint !== ""}
+                  ></textarea>
+                </label>
+                <label>
+                  정확한 채택 승인 문구
+                  <input
+                    class="receipt-confirmation"
+                    value={copyConfirmations[candidate.metadata_fingerprint] ?? ""}
+                    oninput={(event) => {
+                      copyConfirmations = {
+                        ...copyConfirmations,
+                        [candidate.metadata_fingerprint]: event.currentTarget.value,
+                      };
+                    }}
+                    disabled={copyingFingerprint !== ""}
+                  />
+                </label>
+                <button
+                  class="copy"
+                  onclick={() => adoptExistingCandidate(candidate)}
+                  disabled={copyingFingerprint !== ""
+                    || copied?.receipt.candidate_fingerprint === candidate.metadata_fingerprint
+                    || !(copyRationales[candidate.metadata_fingerprint] ?? "").trim()
+                    || adoptApprovalPhrase === null
+                    || (copyConfirmations[candidate.metadata_fingerprint] ?? "").trim()
+                      !== adoptApprovalPhrase}
+                >
+                  {copyingFingerprint === candidate.metadata_fingerprint ? "기존 파일 전체 해시 검증 중…" : "기존 클라우드 복사본 해시 검증·채택"}
+                </button>
+              </div>
             {/if}
             <details>
               <summary>메타데이터 증거 {candidate.metadata_evidence.length}건</summary>
@@ -923,6 +1030,10 @@
   .schema-columns { margin: 0.25rem 0; padding-left: 1.2rem; max-height: 10rem; overflow-y: auto; }
   .schema-columns em { margin-left: 0.4rem; color: #9a5b00; }
   .context { color: #777; font-size: 0.75rem; margin-top: 0.2rem; }
+  .copy-approval { margin-top: 0.55rem; padding: 0.55rem; border: 1px solid #c8d4df; border-radius: 4px; background: #f8fafc; display: grid; gap: 0.45rem; }
+  .copy-approval code { overflow-wrap: anywhere; font-size: 0.72rem; }
+  .copy-approval label { display: grid; gap: 0.2rem; font-size: 0.78rem; }
+  .copy-approval textarea { width: min(52rem, 88vw); min-height: 3.5rem; resize: vertical; }
   .copy { margin-top: 0.4rem; }
   details { margin-top: 0.3rem; color: #59636e; font-size: 0.75rem; }
   .evidence { margin: 0.25rem 0 0; padding-left: 1.2rem; }

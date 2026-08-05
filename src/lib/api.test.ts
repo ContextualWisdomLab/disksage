@@ -65,10 +65,10 @@ describe("api wrappers", () => {
       [() => api.planCloudArchive("/scan", "/cloud", 10, 30, 5), "plan_cloud_archive", { root: "/scan", cloudRoot: "/cloud", minSizeMib: 10, minAgeDays: 30, limit: 5 }],
       [() => api.reviewCloudCandidate("/scan", "/cloud", "a".repeat(64), "b".repeat(64), "approved", "verified exact source"), "review_cloud_candidate", { root: "/scan", cloudRoot: "/cloud", metadataFingerprint: "a".repeat(64), reviewFingerprint: "b".repeat(64), disposition: "approved", rationale: "verified exact source", minSizeMib: 256, minAgeDays: 90, limit: 200 }],
       [() => api.reviewCloudCandidate("/scan", "/cloud", "c".repeat(64), "d".repeat(64), "held", "needs another look", 10, 30, 5), "review_cloud_candidate", { root: "/scan", cloudRoot: "/cloud", metadataFingerprint: "c".repeat(64), reviewFingerprint: "d".repeat(64), disposition: "held", rationale: "needs another look", minSizeMib: 10, minAgeDays: 30, limit: 5 }],
-      [() => api.copyCloudCandidate("/scan", "/cloud", "a".repeat(64)), "copy_cloud_candidate", { root: "/scan", cloudRoot: "/cloud", metadataFingerprint: "a".repeat(64), minSizeMib: 256, minAgeDays: 90, limit: 200 }],
-      [() => api.copyCloudCandidate("/scan", "/cloud", "b".repeat(64), 10, 30, 5), "copy_cloud_candidate", { root: "/scan", cloudRoot: "/cloud", metadataFingerprint: "b".repeat(64), minSizeMib: 10, minAgeDays: 30, limit: 5 }],
-      [() => api.adoptExistingCloudCandidate("/scan", "/cloud", "e".repeat(64)), "adopt_existing_cloud_candidate", { root: "/scan", cloudRoot: "/cloud", metadataFingerprint: "e".repeat(64), minSizeMib: 256, minAgeDays: 90, limit: 200 }],
-      [() => api.adoptExistingCloudCandidate("/scan", "/cloud", "f".repeat(64), 10, 30, 5), "adopt_existing_cloud_candidate", { root: "/scan", cloudRoot: "/cloud", metadataFingerprint: "f".repeat(64), minSizeMib: 10, minAgeDays: 30, limit: 5 }],
+      [() => api.copyCloudCandidate("/scan", "/cloud", "a".repeat(64), "exact copy", "reviewed exact copy"), "copy_cloud_candidate", { root: "/scan", cloudRoot: "/cloud", metadataFingerprint: "a".repeat(64), exactConfirmationPhrase: "exact copy", approvalRationale: "reviewed exact copy", minSizeMib: 256, minAgeDays: 90, limit: 200 }],
+      [() => api.copyCloudCandidate("/scan", "/cloud", "b".repeat(64), "exact copy", "reviewed exact copy", 10, 30, 5), "copy_cloud_candidate", { root: "/scan", cloudRoot: "/cloud", metadataFingerprint: "b".repeat(64), exactConfirmationPhrase: "exact copy", approvalRationale: "reviewed exact copy", minSizeMib: 10, minAgeDays: 30, limit: 5 }],
+      [() => api.adoptExistingCloudCandidate("/scan", "/cloud", "e".repeat(64), "exact adoption", "reviewed exact adoption"), "adopt_existing_cloud_candidate", { root: "/scan", cloudRoot: "/cloud", metadataFingerprint: "e".repeat(64), exactConfirmationPhrase: "exact adoption", approvalRationale: "reviewed exact adoption", minSizeMib: 256, minAgeDays: 90, limit: 200 }],
+      [() => api.adoptExistingCloudCandidate("/scan", "/cloud", "f".repeat(64), "exact adoption", "reviewed exact adoption", 10, 30, 5), "adopt_existing_cloud_candidate", { root: "/scan", cloudRoot: "/cloud", metadataFingerprint: "f".repeat(64), exactConfirmationPhrase: "exact adoption", approvalRationale: "reviewed exact adoption", minSizeMib: 10, minAgeDays: 30, limit: 5 }],
       [() => api.attestCloudCopy("c".repeat(64)), "attest_cloud_copy", { receiptId: "c".repeat(64), objectId: null }],
       [() => api.attestCloudCopy("d".repeat(64), "remote-id"), "attest_cloud_copy", { receiptId: "d".repeat(64), objectId: "remote-id" }],
       [() => api.trashVerifiedCloudSource("e".repeat(64), "e".repeat(64), "verified exact source"), "trash_verified_cloud_source", { receiptId: "e".repeat(64), confirmationReceiptId: "e".repeat(64), rationale: "verified exact source", objectId: null }],
@@ -136,6 +136,27 @@ describe("cloud root identity", () => {
     expect(api.cloudRootIdentityMatches({ ...connection, provider: "onedrive" }, root)).toBe(false);
     expect(api.cloudRootIdentityMatches({ ...connection, cloud_root_id: "/Cloud/other" }, root)).toBe(false);
     expect(api.cloudRootIdentityMatches({ ...connection, cloud_root_path: "/Cloud/other" }, root)).toBe(false);
+  });
+});
+
+describe("cloud copy approval phrase", () => {
+  const exactPhrase = `DiskSage cloud copy-only ${"a".repeat(64)} 승인`;
+
+  it("returns only the backend-authored phrase for the matching action", () => {
+    const candidate = {
+      copy_approval_action: "copy-only" as const,
+      exact_copy_approval_phrase: exactPhrase,
+    };
+    expect(api.cloudCopyApprovalPhrase(candidate, "copy-only")).toBe(exactPhrase);
+    expect(api.cloudCopyApprovalPhrase(candidate, "adopt-existing-copy")).toBeNull();
+  });
+
+  it("fails closed when the backend omitted the action or exact phrase", () => {
+    expect(api.cloudCopyApprovalPhrase({}, "copy-only")).toBeNull();
+    expect(api.cloudCopyApprovalPhrase({
+      copy_approval_action: "copy-only",
+      exact_copy_approval_phrase: null,
+    }, "copy-only")).toBeNull();
   });
 });
 
