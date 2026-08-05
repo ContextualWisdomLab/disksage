@@ -18,7 +18,6 @@ jobs:
   apply-and-clean:
     if: >-
       github.repository == 'ContextualWisdomLab/disksage' &&
-      github.actor == 'seonghobae' &&
       github.ref == 'refs/heads/feat/exact-cloud-copy-approval-lineage'
     runs-on: ubuntu-latest
     steps:
