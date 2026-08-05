@@ -12,7 +12,7 @@ DiskSage already has a Rust-first, read-only Podman evidence probe that distingu
 
 The UI must not turn evidence into authority. Podman documents that image reclaimable values can overstate what a prune would actually free when layers are shared. DiskSage therefore treats all `podman system df` candidate values as logical review evidence rather than verified host physical reclaimability.
 
-The headless report also contains local-only details such as machine names, configuration paths, raw-image paths, graph-root paths, and dynamic command errors. Those details are useful for local diagnosis but are unnecessary for the desktop summary and unsafe for telemetry or shareable evidence.
+The headless report also contains local-only details such as machine names, configuration paths, raw-image paths, graph-root paths, and dynamic command errors. Those details are useful for local diagnosis but are unnecessary for the desktop summary and unsafe for telemetry or shareable evidence. Tauri transport failures and arbitrary JavaScript rejection values can also contain account-local paths, socket names, or command detail, so the UI error boundary must redact them independently of the Rust projection.
 
 ## Decision
 
@@ -55,11 +55,13 @@ The desktop surface exposes no prune, remove, machine start/stop, VM deletion, T
 
 Images, stopped containers, and local volumes have separate review booleans and separate UI sections. A review signal for one domain never authorizes another domain. This preserves future compatibility with distinct approval records and least-privilege workflows.
 
-### 4. Keep visual semantics explicit and accessible
+### 4. Keep visual semantics explicit, accessible, and privacy-safe
 
 The panel uses semantic headings, definition lists, buttons, `role="status"` for progress and results, and `role="alert"` for errors. WCAG 2.2 requires status messages to be programmatically determinable without moving focus; the component uses live status regions for that purpose.
 
 The UI never uses color as the only carrier of completeness. Text labels always state “증거 완전” or “부분 증거.”
+
+The UI never renders `String(reason)` or another untrusted exception representation. `podmanEvidenceErrorMessage` discards every transport, operating-system, and JavaScript failure detail and returns only `podman-evidence-unavailable`. Detailed diagnosis remains confined to trusted local logs and does not cross into the desktop evidence, telemetry, or shareable-evidence boundary.
 
 ### 5. Preserve standalone and MSA compatibility
 
@@ -72,13 +74,15 @@ The desktop response is a versioned JSON contract with no dependency on Naruon o
 - Buyers can inspect a concrete Podman storage gap from the main Cleanup workflow.
 - Logical size, host allocation, guest use, and verified physical reclaimability cannot be silently conflated.
 - Local identifiers stay outside the frontend contract, telemetry, and shareable evidence boundary.
+- Transport and JavaScript failures cannot leak machine names, paths, sockets, or command detail through the visible error region.
 - The architecture can later add separate governed image, container, and volume approval records without changing the read-only evidence contract.
-- Headless API validation and view-state tests remain deterministic and are included in the 100% frontend statement, branch, function, and line coverage gate.
+- Headless API validation, error-redaction tests, and view-state tests remain deterministic and are included in the 100% frontend statement, branch, function, and line coverage gate.
 
 ### Negative
 
 - The UI intentionally cannot perform cleanup. Operators must use a separate reviewed workflow until a mutation design includes exact candidate binding, independent approval, rollback evidence, and before-and-after host verification.
 - Some evidence remains unavailable when Podman is absent, the machine is stopped, or the API is unhealthy. Unknown values remain `null`; the UI never converts missing evidence to zero.
+- Visible failures intentionally use a stable generic code; sensitive operational detail must be inspected through trusted local diagnostics rather than the shareable desktop surface.
 
 ## Verification matrix
 
@@ -90,9 +94,11 @@ The desktop response is a versioned JSON contract with no dependency on Naruon o
 | Missing observations stay unknown | Rust and TypeScript null-preservation tests |
 | Exact Tauri command contract | Mocked TypeScript invoke test |
 | Schema/type/range drift rejected | TypeScript parser tests |
+| Untrusted failure details never reach visible UI | `podmanEvidence.error.test.ts` supplies path, socket, object, null, and undefined failures and expects one stable code |
 | Progress and errors announced | Svelte markup uses `role="status"` and `role="alert"` |
 | No mutation surface | Registered command list exposes inspection only |
-| Frontend logic coverage | `vitest.config.ts` includes `podmanEvidence.ts` at 100% thresholds |
+| Frontend logic coverage | `vitest.config.ts` includes `podmanEvidence.ts` and `podmanEvidenceError.ts` at 100% thresholds |
+| Beginner-readable function documentation | Source-level JSDoc regression test checks every production function declaration |
 
 ## Release acceptance
 
