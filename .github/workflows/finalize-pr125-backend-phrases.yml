@@ -1,8 +1,11 @@
 name: Finalize PR 125 backend approval phrases
 
 on:
-  pull_request:
-    types: [ready_for_review]
+  push:
+    branches:
+      - feat/exact-cloud-copy-approval-lineage
+    paths:
+      - .github/workflows/finalize-pr125-backend-phrases.yml
 
 permissions:
   contents: read
@@ -15,28 +18,25 @@ jobs:
   finalize:
     if: >-
       github.repository == 'ContextualWisdomLab/disksage' &&
-      github.event.pull_request.number == 125 &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.ref == 'feat/exact-cloud-copy-approval-lineage'
+      github.actor == 'seonghobae' &&
+      github.ref == 'refs/heads/feat/exact-cloud-copy-approval-lineage'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     permissions:
       contents: write
     steps:
-      - name: Check out exact pull-request head
+      - name: Check out exact repair trigger
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 2
           persist-credentials: false
 
       - name: Verify audited repair parent
-        env:
-          EVENT_HEAD: ${{ github.event.pull_request.head.sha }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          test "$(git rev-parse HEAD^)" = "f4c989a8026659e9b716884d816b8265c424c625"
-          test "$(git rev-parse HEAD)" = "$EVENT_HEAD"
+          test "$(git rev-parse HEAD^)" = "481fb1a817844e96736c4b6074c53a57b8bbce2e"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
       - name: Install Tauri system dependencies
         shell: bash --noprofile --norc -e -o pipefail {0}
@@ -105,7 +105,7 @@ jobs:
 
       - name: Publish exact repair and remove one-shot automation
         env:
-          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_HEAD: ${{ github.sha }}
           SOURCE_BRANCH: feat/exact-cloud-copy-approval-lineage
           GH_TOKEN: ${{ github.token }}
         shell: bash --noprofile --norc -e -o pipefail {0}
@@ -132,10 +132,6 @@ jobs:
             src/lib/CloudArchive.svelte \
             src/lib/api.test.ts \
             src/lib/api.ts | sort)"
-
-          printf 'Actual changed files:\n%s\n' "$actual_changed_files"
-          printf 'Allowed changed files:\n%s\n' "$allowed_changed_files"
-          printf 'Required changed files:\n%s\n' "$required_changed_files"
 
           unexpected_changed_files="$(comm -23 \
             <(printf '%s\n' "$actual_changed_files") \
