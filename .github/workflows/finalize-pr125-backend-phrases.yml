@@ -35,7 +35,7 @@ jobs:
           EVENT_HEAD: ${{ github.event.pull_request.head.sha }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          test "$(git rev-parse HEAD^)" = "88e92f05b3c49a0278b0c0ca6929eb0991cbe666"
+          test "$(git rev-parse HEAD^)" = "f4c989a8026659e9b716884d816b8265c424c625"
           test "$(git rev-parse HEAD)" = "$EVENT_HEAD"
 
       - name: Install Tauri system dependencies
@@ -113,7 +113,9 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           python3 .github/scripts/finalize_pr125_backend_phrases.py cleanup
           git diff --check
-          test "$(git diff --name-only | sort)" = "$(printf '%s\n' \
+
+          actual_changed_files="$(git diff --name-only | sort)"
+          allowed_changed_files="$(printf '%s\n' \
             .github/scripts/finalize_pr125_backend_phrases.py \
             .github/workflows/finalize-pr125-backend-phrases.yml \
             CHANGELOG.md \
@@ -122,6 +124,27 @@ jobs:
             src/lib/CloudArchive.svelte \
             src/lib/api.test.ts \
             src/lib/api.ts | sort)"
+          required_changed_files="$(printf '%s\n' \
+            .github/scripts/finalize_pr125_backend_phrases.py \
+            .github/workflows/finalize-pr125-backend-phrases.yml \
+            src-tauri/src/commands.rs \
+            src-tauri/tests/cloud_transfer_coverage_contract.rs \
+            src/lib/CloudArchive.svelte \
+            src/lib/api.test.ts \
+            src/lib/api.ts | sort)"
+
+          printf 'Actual changed files:\n%s\n' "$actual_changed_files"
+          printf 'Allowed changed files:\n%s\n' "$allowed_changed_files"
+          printf 'Required changed files:\n%s\n' "$required_changed_files"
+
+          unexpected_changed_files="$(comm -23 \
+            <(printf '%s\n' "$actual_changed_files") \
+            <(printf '%s\n' "$allowed_changed_files"))"
+          test -z "$unexpected_changed_files"
+          while IFS= read -r required_path; do
+            printf '%s\n' "$actual_changed_files" | grep -Fqx -- "$required_path"
+          done <<< "$required_changed_files"
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
