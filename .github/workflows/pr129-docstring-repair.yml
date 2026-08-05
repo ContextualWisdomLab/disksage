@@ -1,37 +1,41 @@
 name: PR 129 production docstring repair
 
 on:
-  push:
-    branches:
-      - fix/icloud-batch-postmerge-verification
+  pull_request:
+    types: [synchronize]
 
 concurrency:
-  group: pr129-production-docstrings
+  group: pr129-production-docstrings-${{ github.event.pull_request.head.sha }}
   cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
-  repair-and-publish:
+  validate:
     if: >-
       github.repository == 'ContextualWisdomLab/disksage' &&
-      github.actor == 'seonghobae'
+      github.actor == 'seonghobae' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fix/icloud-batch-postmerge-verification'
     runs-on: ubuntu-24.04
-    permissions:
-      contents: write
+    timeout-minutes: 45
+    outputs:
+      core_sha: ${{ steps.digests.outputs.core_sha }}
+      cli_sha: ${{ steps.digests.outputs.cli_sha }}
     steps:
-      - name: Check out the exact triggering head
+      - name: Check out the exact pull-request head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
-          fetch-depth: 2
-          persist-credentials: true
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
 
       - name: Verify exact repair inputs
         shell: bash --noprofile --norc -e -o pipefail {0}
+        env:
+          SOURCE_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
           test "$(git rev-parse HEAD:src-tauri/src/cloud_local_eviction_batch.rs)" = "bc3e23c011cba87d8fd1ec1a31ae1aa02cc055a2"
           test "$(git rev-parse HEAD:src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs)" = "2f9738ac5f2b8af7ed7aa2fd3022a7628622875b"
           echo "0e8acc012e4e506bce3ecb6ee624ac7e4e01b94cdbcba77f17cda5d3926619e7  .github/scripts/pr129_docstring_repair.py" |
@@ -79,19 +83,83 @@ jobs:
             src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs \
             src-tauri/src/cloud_local_eviction_batch.rs | sort)"
 
-      - name: Commit only exact validated sources and remove temporary machinery
+      - name: Bind exact validated source digests
+        id: digests
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          git rm .github/scripts/pr129_docstring_repair.py .github/workflows/pr129-docstring-repair.yml
+          echo "core_sha=$(sha256sum src-tauri/src/cloud_local_eviction_batch.rs | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "cli_sha=$(sha256sum src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: validate
+    if: needs.validate.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the exact validated pull-request head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify immutable inputs and unchanged branch head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_BRANCH: fix/icloud-batch-postmerge-verification
+          SOURCE_HEAD: ${{ github.event.pull_request.head.sha }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+          echo "0e8acc012e4e506bce3ecb6ee624ac7e4e01b94cdbcba77f17cda5d3926619e7  .github/scripts/pr129_docstring_repair.py" |
+            sha256sum --check --strict
+          encoded_branch="$(python - <<'PY'
+          import urllib.parse
+          print(urllib.parse.quote('fix/icloud-batch-postmerge-verification', safe=''))
+          PY
+          )"
+          live_head="$(gh api "repos/${GITHUB_REPOSITORY}/branches/${encoded_branch}" --jq '.commit.sha')"
+          test "$live_head" = "$SOURCE_HEAD"
+
+      - name: Reproduce only the validated source transformation
+        run: python .github/scripts/pr129_docstring_repair.py apply
+
+      - name: Verify reproduced source digests
+        env:
+          EXPECTED_CORE_SHA: ${{ needs.validate.outputs.core_sha }}
+          EXPECTED_CLI_SHA: ${{ needs.validate.outputs.cli_sha }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$(sha256sum src-tauri/src/cloud_local_eviction_batch.rs | cut -d' ' -f1)" = "$EXPECTED_CORE_SHA"
+          test "$(sha256sum src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs | cut -d' ' -f1)" = "$EXPECTED_CLI_SHA"
+          git diff --check
           test "$(git diff --name-only | sort)" = "$(printf '%s\n' \
+            src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs \
+            src-tauri/src/cloud_local_eviction_batch.rs | sort)"
+
+      - name: Publish exact sources and remove temporary machinery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_BRANCH: fix/icloud-batch-postmerge-verification
+          SOURCE_HEAD: ${{ github.event.pull_request.head.sha }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          rm .github/scripts/pr129_docstring_repair.py .github/workflows/pr129-docstring-repair.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs \
+            src-tauri/src/cloud_local_eviction_batch.rs \
+            .github/scripts/pr129_docstring_repair.py \
+            .github/workflows/pr129-docstring-repair.yml
+          test "$(git diff --cached --name-only | sort)" = "$(printf '%s\n' \
             .github/scripts/pr129_docstring_repair.py \
             .github/workflows/pr129-docstring-repair.yml \
             src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs \
             src-tauri/src/cloud_local_eviction_batch.rs | sort)"
-          git diff --check
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src-tauri/src/bin/disksage-icloud-local-eviction-batch.rs src-tauri/src/cloud_local_eviction_batch.rs
+          git diff --cached --check
           git commit -m "docs: complete iCloud batch production docstrings"
-          git push --force-with-lease="refs/heads/${GITHUB_REF_NAME}:${GITHUB_SHA}" \
-            origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
+          remote_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push --force-with-lease="refs/heads/${SOURCE_BRANCH}:${SOURCE_HEAD}" \
+            "$remote_url" "HEAD:refs/heads/${SOURCE_BRANCH}"
