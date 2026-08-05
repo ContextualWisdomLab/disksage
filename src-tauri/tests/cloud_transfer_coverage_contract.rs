@@ -44,11 +44,52 @@ fn cloud_copy_approval_public_surfaces_remain_documented() {
     for documented_declaration in [
         "/** Identifies the exact cloud-copy action authorized by a human reviewer. */\nexport type CloudCopyApprovalAction",
         "/** Records who approved one exact candidate, destination, and action, and when. */\nexport interface CloudCopyApproval",
-        "/** Builds the exact confirmation phrase shown to and entered by the human reviewer. */\nexport const cloudCopyApprovalPhrase",
+        "/** Returns the exact backend-authored phrase only for the matching candidate action. */\nexport const cloudCopyApprovalPhrase",
     ] {
         assert!(
             typescript_source.contains(documented_declaration),
             "missing required TypeScript public documentation contract: {documented_declaration}"
         );
+    }
+}
+
+/// Verifies that plans expose backend-authored phrases and the frontend never reconstructs them.
+#[test]
+fn cloud_plan_exports_backend_authored_approval_phrase() {
+    let view_source = include_str!("../src/cloud_plan_view.rs");
+    let command_source = include_str!("../src/commands.rs");
+    let api_source = include_str!("../../src/lib/api.ts");
+    let ui_source = include_str!("../../src/lib/CloudArchive.svelte");
+
+    for marker in [
+        "pub struct CloudPlanCandidateView",
+        "pub copy_approval_action: Option<CloudCopyApprovalAction>",
+        "pub exact_copy_approval_phrase: Option<String>",
+        "pub copy_approval_max_age_ms: u64",
+        "cloud_copy_approval_phrase(&candidate, action)",
+    ] {
+        assert!(view_source.contains(marker), "missing backend plan-view marker: {marker}");
+    }
+    assert!(
+        command_source.contains("Result<cloud_plan_view::CloudPlanReportView, String>"),
+        "Tauri plan command must return the typed backend-authored view"
+    );
+    for marker in [
+        "copy_approval_action?: CloudCopyApprovalAction | null",
+        "exact_copy_approval_phrase?: string | null",
+        "copy_approval_max_age_ms?: number",
+        "/** Returns the exact backend-authored phrase only for the matching candidate action. */",
+    ] {
+        assert!(api_source.contains(marker), "missing frontend plan contract: {marker}");
+    }
+    assert!(
+        !api_source.contains("`DiskSage cloud ${action} ${candidate.review_fingerprint} 승인`"),
+        "frontend must not reconstruct the authorization phrase"
+    );
+    for marker in [
+        "{@const copyApprovalPhrase = api.cloudCopyApprovalPhrase(candidate, \"copy-only\")}",
+        "{@const adoptApprovalPhrase = api.cloudCopyApprovalPhrase(candidate, \"adopt-existing-copy\")}",
+    ] {
+        assert!(ui_source.contains(marker), "approval phrase must be evaluated once: {marker}");
     }
 }

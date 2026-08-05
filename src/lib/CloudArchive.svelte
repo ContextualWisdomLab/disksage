@@ -124,10 +124,12 @@
     const embeddedHighConfidence = candidate.production_time_confidence === "high"
       && candidate.production_time_source.startsWith("embedded:");
     const capacityEvidenceAvailable = api.cloudCapacityAllowsCopy(report?.capacity);
+    const approvalPhrase = api.cloudCopyApprovalPhrase(candidate, "copy-only");
     return candidate.blocked_reason === null
       && (!candidate.requires_review || exactApproval)
       && (embeddedHighConfidence || exactApproval)
-      && capacityEvidenceAvailable;
+      && capacityEvidenceAvailable
+      && approvalPhrase !== null;
   }
 
   function adoptEligible(candidate: api.CloudCandidate): boolean {
@@ -135,9 +137,11 @@
     const exactApproval = decision?.disposition === "approved";
     const embeddedHighConfidence = candidate.production_time_confidence === "high"
       && candidate.production_time_source.startsWith("embedded:");
+    const approvalPhrase = api.cloudCopyApprovalPhrase(candidate, "adopt-existing-copy");
     return candidate.blocked_reason === "destination-exists"
       && (!candidate.requires_review || exactApproval)
-      && (embeddedHighConfidence || exactApproval);
+      && (embeddedHighConfidence || exactApproval)
+      && approvalPhrase !== null;
   }
 
   function reviewDecision(candidate: api.CloudCandidate): api.CloudReviewDecision | null {
@@ -204,7 +208,9 @@
       (copyConfirmations[candidate.metadata_fingerprint] ?? "").trim();
     const approvalRationale =
       (copyRationales[candidate.metadata_fingerprint] ?? "").trim();
-    if (exactConfirmationPhrase !== api.cloudCopyApprovalPhrase(candidate, "copy-only")
+    const expectedApprovalPhrase = api.cloudCopyApprovalPhrase(candidate, "copy-only");
+    if (!expectedApprovalPhrase
+      || exactConfirmationPhrase !== expectedApprovalPhrase
       || !approvalRationale) return;
     copyingFingerprint = candidate.metadata_fingerprint;
     loadError = "";
@@ -238,8 +244,12 @@
       (copyConfirmations[candidate.metadata_fingerprint] ?? "").trim();
     const approvalRationale =
       (copyRationales[candidate.metadata_fingerprint] ?? "").trim();
-    if (exactConfirmationPhrase
-        !== api.cloudCopyApprovalPhrase(candidate, "adopt-existing-copy")
+    const expectedApprovalPhrase = api.cloudCopyApprovalPhrase(
+      candidate,
+      "adopt-existing-copy",
+    );
+    if (!expectedApprovalPhrase
+      || exactConfirmationPhrase !== expectedApprovalPhrase
       || !approvalRationale) return;
     copyingFingerprint = candidate.metadata_fingerprint;
     loadError = "";
@@ -866,9 +876,10 @@
               </div>
             {/if}
             {#if copyEligible(candidate)}
+              {@const copyApprovalPhrase = api.cloudCopyApprovalPhrase(candidate, "copy-only")}
               <div class="copy-approval">
                 <div class="context">현재 메타데이터·출발지·목적지에 결부된 문구를 정확히 입력해야 합니다.</div>
-                <code>{api.cloudCopyApprovalPhrase(candidate, "copy-only")}</code>
+                <code>{copyApprovalPhrase ?? "현재 계획의 승인 문구를 확인할 수 없습니다."}</code>
                 <label>
                   복사 승인 사유
                   <textarea
@@ -903,17 +914,19 @@
                   disabled={copyingFingerprint !== ""
                     || copied?.receipt.candidate_fingerprint === candidate.metadata_fingerprint
                     || !(copyRationales[candidate.metadata_fingerprint] ?? "").trim()
+                    || copyApprovalPhrase === null
                     || (copyConfirmations[candidate.metadata_fingerprint] ?? "").trim()
-                      !== api.cloudCopyApprovalPhrase(candidate, "copy-only")}
+                      !== copyApprovalPhrase}
                 >
                   {copyingFingerprint === candidate.metadata_fingerprint ? "복사·해시 검증 중…" : "원본을 유지하고 클라우드에 복사"}
                 </button>
               </div>
             {/if}
             {#if adoptEligible(candidate)}
+              {@const adoptApprovalPhrase = api.cloudCopyApprovalPhrase(candidate, "adopt-existing-copy")}
               <div class="copy-approval">
                 <div class="context">기존 목적지 파일의 전체 해시 검증·채택도 정확한 별도 승인이 필요합니다.</div>
-                <code>{api.cloudCopyApprovalPhrase(candidate, "adopt-existing-copy")}</code>
+                <code>{adoptApprovalPhrase ?? "현재 계획의 채택 승인 문구를 확인할 수 없습니다."}</code>
                 <label>
                   기존 복사본 채택 사유
                   <textarea
@@ -948,8 +961,9 @@
                   disabled={copyingFingerprint !== ""
                     || copied?.receipt.candidate_fingerprint === candidate.metadata_fingerprint
                     || !(copyRationales[candidate.metadata_fingerprint] ?? "").trim()
+                    || adoptApprovalPhrase === null
                     || (copyConfirmations[candidate.metadata_fingerprint] ?? "").trim()
-                      !== api.cloudCopyApprovalPhrase(candidate, "adopt-existing-copy")}
+                      !== adoptApprovalPhrase}
                 >
                   {copyingFingerprint === candidate.metadata_fingerprint ? "기존 파일 전체 해시 검증 중…" : "기존 클라우드 복사본 해시 검증·채택"}
                 </button>

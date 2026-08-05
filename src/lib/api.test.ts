@@ -140,14 +140,23 @@ describe("cloud root identity", () => {
 });
 
 describe("cloud copy approval phrase", () => {
-  it("binds the exact review fingerprint and requested action", () => {
-    const candidate = { review_fingerprint: "a".repeat(64) };
-    expect(api.cloudCopyApprovalPhrase(candidate, "copy-only")).toBe(
-      `DiskSage cloud copy-only ${"a".repeat(64)} 승인`,
-    );
-    expect(api.cloudCopyApprovalPhrase(candidate, "adopt-existing-copy")).toBe(
-      `DiskSage cloud adopt-existing-copy ${"a".repeat(64)} 승인`,
-    );
+  const exactPhrase = `DiskSage cloud copy-only ${"a".repeat(64)} 승인`;
+
+  it("returns only the backend-authored phrase for the matching action", () => {
+    const candidate = {
+      copy_approval_action: "copy-only" as const,
+      exact_copy_approval_phrase: exactPhrase,
+    };
+    expect(api.cloudCopyApprovalPhrase(candidate, "copy-only")).toBe(exactPhrase);
+    expect(api.cloudCopyApprovalPhrase(candidate, "adopt-existing-copy")).toBeNull();
+  });
+
+  it("fails closed when the backend omitted the action or exact phrase", () => {
+    expect(api.cloudCopyApprovalPhrase({}, "copy-only")).toBeNull();
+    expect(api.cloudCopyApprovalPhrase({
+      copy_approval_action: "copy-only",
+      exact_copy_approval_phrase: null,
+    }, "copy-only")).toBeNull();
   });
 });
 
