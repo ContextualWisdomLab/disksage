@@ -1,0 +1,106 @@
+name: One-shot rebase Podman evidence onto protected main
+
+on:
+  push:
+    branches:
+      - feat/podman-reclaim-desktop-evidence
+    paths:
+      - .github/workflows/one-shot-rebase-podman-evidence.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-shot-rebase-podman-evidence
+  cancel-in-progress: false
+
+jobs:
+  rebase-validated-slice:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Snapshot the bounded Podman product slice
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat >"${RUNNER_TEMP}/expected-paths.txt" <<'EOF'
+          CHANGELOG.md
+          docs/adr/0001-podman-desktop-evidence-boundary.md
+          src-tauri/src/lib.rs
+          src-tauri/src/podman_desktop.rs
+          src-tauri/tests/podman_desktop_contract.rs
+          src/lib/Cleanup.svelte
+          src/lib/PodmanReclaimEvidence.svelte
+          src/lib/PodmanReclaimEvidence.test.ts
+          src/lib/podmanApi.test.ts
+          src/lib/podmanApi.ts
+          src/lib/podmanEvidence.test.ts
+          src/lib/podmanEvidence.ts
+          vitest.config.ts
+          EOF
+          tar -cf "${RUNNER_TEMP}/podman-slice.tar" -T "${RUNNER_TEMP}/expected-paths.txt"
+          test "$(tar -tf "${RUNNER_TEMP}/podman-slice.tar" | sort | sha256sum)" = \
+            "$(sort "${RUNNER_TEMP}/expected-paths.txt" | sha256sum)"
+      - name: Rebase the bounded slice onto the protected main head
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          main_sha="$(git rev-parse origin/main)"
+          git reset --hard "$main_sha"
+          tar -xf "${RUNNER_TEMP}/podman-slice.tar"
+          git diff --check
+          git diff --name-only "$main_sha" | sort >"${RUNNER_TEMP}/actual-paths.txt"
+          sort "${RUNNER_TEMP}/expected-paths.txt" >"${RUNNER_TEMP}/expected-paths.sorted.txt"
+          diff -u "${RUNNER_TEMP}/expected-paths.sorted.txt" "${RUNNER_TEMP}/actual-paths.txt"
+          printf '%s\n' "$main_sha" >"${RUNNER_TEMP}/main-sha.txt"
+      - name: Install Tauri system dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20.19.0
+      - name: Validate the bounded product slice before publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+          cargo test --manifest-path src-tauri/Cargo.toml podman_desktop
+          cargo test --manifest-path src-tauri/Cargo.toml --test podman_desktop_contract
+          npm ci --ignore-scripts
+          npm test
+          npm run check
+          npm run build
+          git diff --check
+          git diff --name-only "$(cat "${RUNNER_TEMP}/main-sha.txt")" | sort \
+            >"${RUNNER_TEMP}/validated-paths.txt"
+          diff -u "${RUNNER_TEMP}/expected-paths.sorted.txt" "${RUNNER_TEMP}/validated-paths.txt"
+      - name: Publish one exact rebase commit without the one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          main_sha="$(cat "${RUNNER_TEMP}/main-sha.txt")"
+          test "$(git rev-parse HEAD)" = "$main_sha"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add --pathspec-from-file="${RUNNER_TEMP}/expected-paths.txt"
+          git diff --cached --name-only | sort >"${RUNNER_TEMP}/staged-paths.txt"
+          diff -u "${RUNNER_TEMP}/expected-paths.sorted.txt" "${RUNNER_TEMP}/staged-paths.txt"
+          git commit -m "feat: rebase Podman desktop evidence onto protected main"
+          test "$(git diff-tree --no-commit-id --name-only -r HEAD | sort | sha256sum)" = \
+            "$(sort "${RUNNER_TEMP}/expected-paths.txt" | sha256sum)"
+          git push --force-with-lease=refs/heads/feat/podman-reclaim-desktop-evidence:${{ github.sha }} \
+            origin HEAD:refs/heads/feat/podman-reclaim-desktop-evidence
