@@ -78,6 +78,7 @@ The desktop response is a versioned JSON contract with no dependency on Naruon o
 - Transport and JavaScript failures cannot leak machine names, paths, sockets, or command detail through the visible error region.
 - The architecture can later add separate governed image, container, and volume approval records without changing the read-only evidence contract.
 - Headless API validation, issue-code privacy tests, error-redaction tests, and view-state tests remain deterministic and are included in the 100% frontend statement, branch, function, and line coverage gate.
+- Module-level `missing_docs` enforcement and a source-level Rust documentation contract keep every Podman desktop function, including private helpers and regression tests, beginner-readable.
 
 ### Negative
 
@@ -100,7 +101,8 @@ The desktop response is a versioned JSON contract with no dependency on Naruon o
 | Progress and errors announced | Svelte markup uses `role="status"` and `role="alert"` |
 | No mutation surface | Registered command list exposes inspection only |
 | Frontend logic coverage | `vitest.config.ts` includes `podmanEvidence.ts` and `podmanEvidenceError.ts` at 100% thresholds |
-| Beginner-readable function documentation | Source-level JSDoc regression test checks every production function declaration |
+| Beginner-readable frontend function documentation | Source-level JSDoc regression test checks every production function declaration |
+| Beginner-readable Rust function documentation | `missing_docs` rejects undocumented public API and `podman_desktop_documentation_contract.rs` checks every named function |
 
 ## Release acceptance
 
