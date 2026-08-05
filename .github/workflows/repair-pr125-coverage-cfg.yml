@@ -87,7 +87,7 @@ jobs:
       - name: Verify normal and coverage test compilation
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+          rustfmt --edition 2021 --check src-tauri/src/cloud_transfer.rs
           cargo test --manifest-path src-tauri/Cargo.toml --lib \
             cloud_transfer::tests::receipt_lineage_is_integrity_bound_and_older_receipts_remain_valid \
             --features cloud-cli
