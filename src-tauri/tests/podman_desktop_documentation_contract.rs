@@ -22,10 +22,13 @@ fn every_podman_desktop_function_has_beginner_readable_rustdoc() {
             || declaration.starts_with("pub(crate) fn ")
             || declaration.starts_with("async fn ")
             || declaration.starts_with("pub async fn ")
+            || declaration.starts_with("pub(crate) async fn ")
             || declaration.starts_with("unsafe fn ")
             || declaration.starts_with("pub unsafe fn ")
+            || declaration.starts_with("pub(crate) unsafe fn ")
             || declaration.starts_with("const fn ")
-            || declaration.starts_with("pub const fn ");
+            || declaration.starts_with("pub const fn ")
+            || declaration.starts_with("pub(crate) const fn ");
         if !is_named_function {
             continue;
         }
