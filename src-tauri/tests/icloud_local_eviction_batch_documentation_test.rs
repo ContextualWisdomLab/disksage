@@ -3,9 +3,11 @@
 //! These checks keep the operational claims, evidence boundary, standards mapping, and APA 7th
 //! references reviewable alongside the Rust behavior they describe.
 
+/// Operator guide compiled into the test binary so documentation claims are checked offline.
 const OPERATOR_GUIDE: &str =
     include_str!("../../docs/development/icloud-local-eviction-batch.md");
 
+/// Verifies that the operator guide maps fail-closed behavior to authoritative controls.
 #[test]
 fn operator_guide_maps_fail_closed_behavior_to_authoritative_controls() {
     for required_text in [
@@ -25,6 +27,7 @@ fn operator_guide_maps_fail_closed_behavior_to_authoritative_controls() {
     }
 }
 
+/// Verifies that local-only evidence is clearly separated from shareable evidence.
 #[test]
 fn operator_guide_separates_local_only_and_shareable_evidence() {
     for required_text in [
@@ -40,6 +43,7 @@ fn operator_guide_separates_local_only_and_shareable_evidence() {
     }
 }
 
+/// Verifies that the operator guide contains complete APA 7th reference markers.
 #[test]
 fn operator_guide_contains_complete_apa_seventh_references() {
     for required_text in [
