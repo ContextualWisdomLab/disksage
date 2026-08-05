@@ -54,10 +54,10 @@ that workflow.
 
 ### Privacy and logging boundary
 
-The backend report may contain machine names, raw-image paths, and graph-root paths for local operator
-use. The desktop panel does not render those identifiers. Detailed issue strings are reduced to stable
-`[a-z0-9-]` codes before presentation. The integration does not call logging, analytics, telemetry, or
-remote support APIs.
+The backend report may contain machine names, raw-image paths, and graph-root paths as **local-only**
+operator evidence. The desktop panel does not render those identifiers. Detailed issue strings are
+reduced to stable `[a-z0-9-]` codes before presentation. The integration does not call logging,
+analytics, telemetry, or remote support APIs.
 
 The exact unused-image candidate set is represented only by its SHA-256 fingerprint. Image IDs, tags,
 and account-local paths are not added to the frontend contract.
