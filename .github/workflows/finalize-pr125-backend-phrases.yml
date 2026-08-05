@@ -1,11 +1,8 @@
 name: Finalize PR 125 backend approval phrases
 
 on:
-  push:
-    branches:
-      - feat/exact-cloud-copy-approval-lineage
-    paths:
-      - .github/workflows/finalize-pr125-backend-phrases.yml
+  pull_request:
+    types: [ready_for_review]
 
 permissions:
   contents: read
@@ -18,24 +15,28 @@ jobs:
   finalize:
     if: >-
       github.repository == 'ContextualWisdomLab/disksage' &&
-      github.ref == 'refs/heads/feat/exact-cloud-copy-approval-lineage'
+      github.event.pull_request.number == 125 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'feat/exact-cloud-copy-approval-lineage'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     permissions:
       contents: write
     steps:
-      - name: Check out exact repair trigger
+      - name: Check out exact pull-request head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 2
           persist-credentials: false
 
       - name: Verify audited repair parent
+        env:
+          EVENT_HEAD: ${{ github.event.pull_request.head.sha }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          test "$(git rev-parse HEAD^)" = "a4307cab094e7df9509bc0a0da15e39ac947b8b4"
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD^)" = "88e92f05b3c49a0278b0c0ca6929eb0991cbe666"
+          test "$(git rev-parse HEAD)" = "$EVENT_HEAD"
 
       - name: Install Tauri system dependencies
         shell: bash --noprofile --norc -e -o pipefail {0}
@@ -104,7 +105,7 @@ jobs:
 
       - name: Publish exact repair and remove one-shot automation
         env:
-          EXPECTED_HEAD: ${{ github.sha }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
           SOURCE_BRANCH: feat/exact-cloud-copy-approval-lineage
           GH_TOKEN: ${{ github.token }}
         shell: bash --noprofile --norc -e -o pipefail {0}
