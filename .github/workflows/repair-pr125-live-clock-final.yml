@@ -1,0 +1,319 @@
+name: Repair PR 125 live-clock approval boundary
+
+on:
+  push:
+    branches:
+      - feat/exact-cloud-copy-approval-lineage
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-pr125-live-clock-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: >-
+      github.repository == 'ContextualWisdomLab/disksage'
+      && github.ref == 'refs/heads/feat/exact-cloud-copy-approval-lineage'
+      && github.actor == 'seonghobae'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - name: Add the regression test first
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src-tauri/src/cloud_transfer.rs')
+          text = path.read_text(encoding='utf-8')
+          anchor = '''    #[test]
+              fn copy_approval_requires_exact_phrase_human_attribution_context_and_freshness() {
+          '''
+          test = '''    #[test]
+              #[cfg(not(coverage))]
+              fn production_copy_entrypoints_recheck_approval_age_against_live_time() {
+                  let candidate = candidate();
+                  let root = root();
+                  let copy_approval = test_copy_approval(
+                      &candidate,
+                      &root,
+                      CloudCopyApprovalAction::CopyOnly,
+                      1,
+                  )
+                  .unwrap();
+                  assert_eq!(
+                      prepare_cloud_copy_with_approval(
+                          &candidate,
+                          &root,
+                          std::path::Path::new("/unused"),
+                          None,
+                          &copy_approval,
+                      )
+                      .unwrap_err(),
+                      "cloud-copy-approval-stale"
+                  );
+
+                  let adoption_approval = test_copy_approval(
+                      &candidate,
+                      &root,
+                      CloudCopyApprovalAction::AdoptExistingCopy,
+                      1,
+                  )
+                  .unwrap();
+                  assert_eq!(
+                      adopt_existing_cloud_copy_with_approval(
+                          &candidate,
+                          &root,
+                          std::path::Path::new("/unused"),
+                          None,
+                          &adoption_approval,
+                      )
+                      .unwrap_err(),
+                      "cloud-copy-approval-stale"
+                  );
+              }
+
+          '''
+          if test in text:
+              raise SystemExit('regression test unexpectedly already present')
+          if text.count(anchor) != 1:
+              raise SystemExit(f'expected one regression anchor, found {text.count(anchor)}')
+          path.write_text(text.replace(anchor, test + anchor, 1), encoding='utf-8')
+          PY
+      - name: Prove the regression is red
+        run: |
+          if cargo test --manifest-path src-tauri/Cargo.toml --lib cloud_transfer::tests::production_copy_entrypoints_recheck_approval_age_against_live_time --features cloud-cli; then
+            echo 'regression unexpectedly passed before the production repair' >&2
+            exit 1
+          fi
+      - name: Apply the bounded production repair
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          transfer_path = Path('src-tauri/src/cloud_transfer.rs')
+          commands_path = Path('src-tauri/src/commands.rs')
+          cli_path = Path('src-tauri/src/bin/disksage-cloud-plan.rs')
+          transfer = transfer_path.read_text(encoding='utf-8')
+
+          old_copy = '''/// Copy a candidate only after validating both the optional metadata review decision and a fresh,
+          /// exact, human-attributed copy approval. Every path/provider/planner gate remains mandatory.
+          #[cfg(not(coverage))]
+          pub fn prepare_cloud_copy_with_approval(
+              candidate: &CloudCandidate,
+              cloud_root: &CloudRoot,
+              receipt_dir: &Path,
+              copied_at_ms: u64,
+              review_decision: Option<&CloudReviewDecision>,
+              copy_approval: &CloudCopyApproval,
+          ) -> Result<(CloudCopyReceipt, PathBuf), String> {
+              validate_cloud_copy_approval_for_action(
+          '''
+          new_copy = '''/// Copy a candidate only after validating both the optional metadata review decision and a fresh,
+          /// exact, human-attributed copy approval. The production entrypoint reads the live clock at the
+          /// mutation boundary so an earlier preflight cannot silently extend the approval lifetime.
+          #[cfg(not(coverage))]
+          pub fn prepare_cloud_copy_with_approval(
+              candidate: &CloudCandidate,
+              cloud_root: &CloudRoot,
+              receipt_dir: &Path,
+              review_decision: Option<&CloudReviewDecision>,
+              copy_approval: &CloudCopyApproval,
+          ) -> Result<(CloudCopyReceipt, PathBuf), String> {
+              prepare_cloud_copy_with_approval_at(
+                  candidate,
+                  cloud_root,
+                  receipt_dir,
+                  crate::cloud::system_now_ms(),
+                  review_decision,
+                  copy_approval,
+              )
+          }
+
+          #[cfg(not(coverage))]
+          fn prepare_cloud_copy_with_approval_at(
+              candidate: &CloudCandidate,
+              cloud_root: &CloudRoot,
+              receipt_dir: &Path,
+              copied_at_ms: u64,
+              review_decision: Option<&CloudReviewDecision>,
+              copy_approval: &CloudCopyApproval,
+          ) -> Result<(CloudCopyReceipt, PathBuf), String> {
+              validate_cloud_copy_approval_for_action(
+          '''
+          if transfer.count(old_copy) != 1:
+              raise SystemExit(f'copy entrypoint anchor count: {transfer.count(old_copy)}')
+          transfer = transfer.replace(old_copy, new_copy, 1)
+
+          old_adopt = '''/// Verify and adopt an existing destination only after the same exact human action approval.
+          #[cfg(not(coverage))]
+          pub fn adopt_existing_cloud_copy_with_approval(
+              candidate: &CloudCandidate,
+              cloud_root: &CloudRoot,
+              receipt_dir: &Path,
+              verified_at_ms: u64,
+              review_decision: Option<&CloudReviewDecision>,
+              copy_approval: &CloudCopyApproval,
+          ) -> Result<(CloudCopyReceipt, PathBuf), String> {
+              validate_cloud_copy_approval_for_action(
+          '''
+          new_adopt = '''/// Verify and adopt an existing destination only after the same exact human action approval.
+          /// The approval age is evaluated from a fresh live-clock read immediately before verification.
+          #[cfg(not(coverage))]
+          pub fn adopt_existing_cloud_copy_with_approval(
+              candidate: &CloudCandidate,
+              cloud_root: &CloudRoot,
+              receipt_dir: &Path,
+              review_decision: Option<&CloudReviewDecision>,
+              copy_approval: &CloudCopyApproval,
+          ) -> Result<(CloudCopyReceipt, PathBuf), String> {
+              adopt_existing_cloud_copy_with_approval_at(
+                  candidate,
+                  cloud_root,
+                  receipt_dir,
+                  crate::cloud::system_now_ms(),
+                  review_decision,
+                  copy_approval,
+              )
+          }
+
+          #[cfg(not(coverage))]
+          fn adopt_existing_cloud_copy_with_approval_at(
+              candidate: &CloudCandidate,
+              cloud_root: &CloudRoot,
+              receipt_dir: &Path,
+              verified_at_ms: u64,
+              review_decision: Option<&CloudReviewDecision>,
+              copy_approval: &CloudCopyApproval,
+          ) -> Result<(CloudCopyReceipt, PathBuf), String> {
+              validate_cloud_copy_approval_for_action(
+          '''
+          if transfer.count(old_adopt) != 1:
+              raise SystemExit(f'adoption entrypoint anchor count: {transfer.count(old_adopt)}')
+          transfer = transfer.replace(old_adopt, new_adopt, 1)
+
+          old_test_copy = '''    prepare_cloud_copy_with_approval(
+                  candidate,
+                  cloud_root,
+                  receipt_dir,
+                  copied_at_ms,
+                  review_decision,
+                  &approval,
+              )
+          '''
+          new_test_copy = '''    prepare_cloud_copy_with_approval_at(
+                  candidate,
+                  cloud_root,
+                  receipt_dir,
+                  copied_at_ms,
+                  review_decision,
+                  &approval,
+              )
+          '''
+          if transfer.count(old_test_copy) != 1:
+              raise SystemExit(f'test copy wrapper anchor count: {transfer.count(old_test_copy)}')
+          transfer = transfer.replace(old_test_copy, new_test_copy, 1)
+
+          old_test_adopt = '''    adopt_existing_cloud_copy_with_approval(
+                  candidate,
+                  cloud_root,
+                  receipt_dir,
+                  verified_at_ms,
+                  None,
+                  &approval,
+              )
+          '''
+          new_test_adopt = '''    adopt_existing_cloud_copy_with_approval_at(
+                  candidate,
+                  cloud_root,
+                  receipt_dir,
+                  verified_at_ms,
+                  None,
+                  &approval,
+              )
+          '''
+          if transfer.count(old_test_adopt) != 1:
+              raise SystemExit(f'test adoption wrapper anchor count: {transfer.count(old_test_adopt)}')
+          transfer = transfer.replace(old_test_adopt, new_test_adopt, 1)
+          transfer_path.write_text(transfer, encoding='utf-8')
+
+          def remove_stale_timestamp(path: Path) -> None:
+              text = path.read_text(encoding='utf-8')
+              for function_name in (
+                  'adopt_existing_cloud_copy_with_approval',
+                  'prepare_cloud_copy_with_approval',
+              ):
+                  marker = f'cloud_transfer::{function_name}('
+                  start = text.index(marker)
+                  end = text.index('            &copy_approval,', start)
+                  fragment = text[start:end]
+                  if fragment.count('            action_at_ms,\n') != 1:
+                      raise SystemExit(f'{path}: expected one stale timestamp in {function_name}')
+                  replacement = fragment.replace('            action_at_ms,\n', '', 1)
+                  text = text[:start] + replacement + text[end:]
+              path.write_text(text, encoding='utf-8')
+
+          remove_stale_timestamp(commands_path)
+          remove_stale_timestamp(cli_path)
+          PY
+      - name: Format and verify the exact repair
+        run: |
+          cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+          cargo test --manifest-path src-tauri/Cargo.toml --lib cloud_transfer::tests::production_copy_entrypoints_recheck_approval_age_against_live_time --features cloud-cli
+          cargo test --manifest-path src-tauri/Cargo.toml --lib cloud_transfer::tests --features cloud-cli
+          cargo test --manifest-path src-tauri/Cargo.toml --lib naruon_lineage::tests --features cloud-cli
+          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-cloud-plan
+          cargo check --manifest-path src-tauri/Cargo.toml --bins --features cloud-cli
+          git diff --check
+      - name: Verify final fail-closed shape
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          transfer = Path('src-tauri/src/cloud_transfer.rs').read_text(encoding='utf-8')
+          commands = Path('src-tauri/src/commands.rs').read_text(encoding='utf-8')
+          cli = Path('src-tauri/src/bin/disksage-cloud-plan.rs').read_text(encoding='utf-8')
+          required = (
+              'production_copy_entrypoints_recheck_approval_age_against_live_time',
+              'fn prepare_cloud_copy_with_approval_at(',
+              'fn adopt_existing_cloud_copy_with_approval_at(',
+              'crate::cloud::system_now_ms(),',
+          )
+          for marker in required:
+              if marker not in transfer:
+                  raise SystemExit(f'missing final marker: {marker}')
+          for source, name in ((commands, 'commands'), (cli, 'cli')):
+              for function_name in (
+                  'adopt_existing_cloud_copy_with_approval',
+                  'prepare_cloud_copy_with_approval',
+              ):
+                  start = source.index(f'cloud_transfer::{function_name}(')
+                  fragment = source[start:start + 320]
+                  if 'action_at_ms,' in fragment:
+                      raise SystemExit(f'{name} still passes stale time to {function_name}')
+          PY
+      - name: Commit the validated repair and remove this workflow
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          remote_head=$(git ls-remote "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')
+          test "$remote_head" = "$GITHUB_SHA"
+          rm .github/workflows/repair-pr125-live-clock-final.yml
+          git add src-tauri/src/cloud_transfer.rs src-tauri/src/commands.rs src-tauri/src/bin/disksage-cloud-plan.rs .github/workflows/repair-pr125-live-clock-final.yml
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: bind cloud copy approval to live mutation time'
+          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}" --force-with-lease="refs/heads/${GITHUB_REF_NAME}:${GITHUB_SHA}"
