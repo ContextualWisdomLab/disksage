@@ -68,6 +68,14 @@ export interface PodmanEvidenceView {
 type InvokeFunction = <T>(command: string) => Promise<T>;
 type JsonRecord = Record<string, unknown>;
 
+/**
+ * Require a plain JSON object and reject arrays, null, and primitive values.
+ *
+ * @param value - Untrusted value received from the Tauri boundary.
+ * @param label - Stable field label included in the fail-closed error code.
+ * @returns The same value narrowed to a string-keyed JSON record.
+ * @throws When the value is not a plain object-shaped record.
+ */
 function record(value: unknown, label: string): JsonRecord {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error(`invalid-${label}`);
@@ -75,16 +83,43 @@ function record(value: unknown, label: string): JsonRecord {
   return value as JsonRecord;
 }
 
+/**
+ * Require a string value from an untrusted response field.
+ *
+ * @param value - Candidate field value.
+ * @param label - Stable field label included in the error code.
+ * @returns The validated string.
+ * @throws When the value is not a string.
+ */
 function stringValue(value: unknown, label: string): string {
   if (typeof value !== "string") throw new Error(`invalid-${label}`);
   return value;
 }
 
+/**
+ * Require a boolean value from an untrusted response field.
+ *
+ * @param value - Candidate field value.
+ * @param label - Stable field label included in the error code.
+ * @returns The validated boolean.
+ * @throws When the value is not a boolean.
+ */
 function booleanValue(value: unknown, label: string): boolean {
   if (typeof value !== "boolean") throw new Error(`invalid-${label}`);
   return value;
 }
 
+/**
+ * Require a non-negative JavaScript safe integer.
+ *
+ * Byte counts and record counts are rejected rather than rounded when Rust-to-JavaScript
+ * serialization produces an unsafe, negative, fractional, or nonnumeric value.
+ *
+ * @param value - Candidate numeric field value.
+ * @param label - Stable field label included in the error code.
+ * @returns The validated unsigned safe integer.
+ * @throws When the value cannot be represented exactly and safely in JavaScript.
+ */
 function unsignedInteger(value: unknown, label: string): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
     throw new Error(`invalid-${label}`);
@@ -92,10 +127,26 @@ function unsignedInteger(value: unknown, label: string): number {
   return value;
 }
 
+/**
+ * Preserve an explicitly unavailable observation as null or validate its unsigned value.
+ *
+ * @param value - Candidate field value, where null means the probe could not observe it.
+ * @param label - Stable field label included in the error code.
+ * @returns Null for an unavailable observation, otherwise a validated unsigned safe integer.
+ * @throws When a non-null value is not a safe unsigned integer.
+ */
 function optionalUnsignedInteger(value: unknown, label: string): number | null {
   return value === null ? null : unsignedInteger(value, label);
 }
 
+/**
+ * Require an array containing only strings and return a defensive copy.
+ *
+ * @param value - Candidate list value.
+ * @param label - Stable field label included in the error code.
+ * @returns A new array containing the validated strings.
+ * @throws When the value is not a string-only array.
+ */
 function stringArray(value: unknown, label: string): string[] {
   if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
     throw new Error(`invalid-${label}`);
@@ -103,6 +154,13 @@ function stringArray(value: unknown, label: string): string[] {
   return [...value];
 }
 
+/**
+ * Validate an optional lowercase SHA-256 commitment.
+ *
+ * @param value - Null when no candidate set was observed, otherwise the encoded digest.
+ * @returns Null or a 64-character lowercase hexadecimal SHA-256 string.
+ * @throws When a supplied fingerprint is malformed or uses a different encoding.
+ */
 function sha256OrNull(value: unknown): string | null {
   if (value === null) return null;
   const fingerprint = stringValue(value, "image-candidate-set-sha256");
@@ -112,6 +170,13 @@ function sha256OrNull(value: unknown): string | null {
   return fingerprint;
 }
 
+/**
+ * Parse the capacity section while preserving every measurement as a distinct concept.
+ *
+ * @param value - Untrusted capacity object from the Rust response.
+ * @returns Validated capacity observations with unavailable values preserved as null.
+ * @throws When the section or any member violates the versioned desktop contract.
+ */
 function parseCapacity(value: unknown): PodmanDesktopCapacityEvidence {
   const capacity = record(value, "podman-capacity");
   return {
@@ -141,6 +206,13 @@ function parseCapacity(value: unknown): PodmanDesktopCapacityEvidence {
   };
 }
 
+/**
+ * Parse logical cleanup candidates without treating them as verified physical savings.
+ *
+ * @param value - Untrusted candidate object from the Rust response.
+ * @returns Validated candidate counts, byte observations, and optional set commitment.
+ * @throws When a candidate field violates its type, range, or fingerprint contract.
+ */
 function parseCandidates(value: unknown): PodmanDesktopCandidateEvidence {
   const candidates = record(value, "podman-candidates");
   return {
@@ -168,6 +240,13 @@ function parseCandidates(value: unknown): PodmanDesktopCandidateEvidence {
   };
 }
 
+/**
+ * Parse independent review requirements for images, stopped containers, and volumes.
+ *
+ * @param value - Untrusted review-boundary object from the Rust response.
+ * @returns Three validated booleans that remain advisory and mutually non-authorizing.
+ * @throws When any review boundary is absent or not boolean.
+ */
 function parseReviewBoundaries(value: unknown): PodmanDesktopReviewBoundaries {
   const boundaries = record(value, "podman-review-boundaries");
   return {
