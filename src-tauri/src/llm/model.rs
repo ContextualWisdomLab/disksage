@@ -40,7 +40,10 @@ pub fn download_to(spec: &ModelSpec, dest: &std::path::Path) -> Result<(), Strin
     let mut buf = Vec::new();
     reader.read_to_end(&mut buf).map_err(|e| e.to_string())?;
     if !verify_sha256(&buf, spec.sha256_hex) {
-        return Err(format!("SHA-256 불일치 — 손상되었거나 예상과 다른 파일: {}", spec.name));
+        return Err(format!(
+            "SHA-256 불일치 — 손상되었거나 예상과 다른 파일: {}",
+            spec.name
+        ));
     }
     std::fs::write(&part, &buf).map_err(|e| e.to_string())?;
     std::fs::rename(&part, dest).map_err(|e| e.to_string())?;

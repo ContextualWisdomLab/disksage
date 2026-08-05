@@ -21,7 +21,11 @@ impl BaseDirs {
         let local_data = std::env::var("LOCALAPPDATA").map(PathBuf::from).ok()?;
         #[cfg(not(windows))]
         let local_data = home.join(".cache");
-        Some(BaseDirs { temp, local_data, home })
+        Some(BaseDirs {
+            temp,
+            local_data,
+            home,
+        })
     }
 }
 
@@ -58,8 +62,11 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
         ("os-temp", "OS 임시 폴더", bases.temp.clone()),
         ("npm-cache", "npm 캐시", npm),
         ("pip-cache", "pip 캐시", pip),
-        ("cargo-registry-cache", "cargo 레지스트리 캐시",
-            bases.home.join(".cargo").join("registry").join("cache")),
+        (
+            "cargo-registry-cache",
+            "cargo 레지스트리 캐시",
+            bases.home.join(".cargo").join("registry").join("cache"),
+        ),
     ];
 
     // Windows 진단 캐시 — 조용히 수십 GB로 자라는 것들. RDP 자동 추적(RdClientAutoTrace)의 .etl 로그가
@@ -67,12 +74,25 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
     // 사용자가 크기를 보고 그것만 콕 집어 정리하게 한다. WER/CrashDumps도 동류의 진단 산출물.
     #[cfg(windows)]
     entries.extend([
-        ("rdp-autotrace", "원격 데스크톱 추적 로그",
-            bases.temp.join("DiagOutputDir").join("RdClientAutoTrace")),
-        ("windows-crashdumps", "앱 크래시 덤프",
-            bases.local_data.join("CrashDumps")),
-        ("windows-wer", "Windows 오류 보고 (WER)",
-            bases.local_data.join("Microsoft").join("Windows").join("WER")),
+        (
+            "rdp-autotrace",
+            "원격 데스크톱 추적 로그",
+            bases.temp.join("DiagOutputDir").join("RdClientAutoTrace"),
+        ),
+        (
+            "windows-crashdumps",
+            "앱 크래시 덤프",
+            bases.local_data.join("CrashDumps"),
+        ),
+        (
+            "windows-wer",
+            "Windows 오류 보고 (WER)",
+            bases
+                .local_data
+                .join("Microsoft")
+                .join("Windows")
+                .join("WER"),
+        ),
     ]);
 
     entries
@@ -88,7 +108,9 @@ pub fn cache_candidates(bases: &BaseDirs) -> Vec<CacheCandidate> {
                 // UX가 문제 되면 candidates에 취소 토큰과 진행 이벤트를 추가.
                 // interval 1: 진행 콜백(no-op)이 작은 테스트 픽스처에서도 실행되어 커버리지에서
                 // 0으로 남지 않음 — 콜백이 아무 일도 하지 않으므로 호출 빈도는 동작에 무관
-                scanner::scan_dir_with_interval(&path, &AtomicBool::new(false), 1, |_| {}).stats.bytes
+                scanner::scan_dir_with_interval(&path, &AtomicBool::new(false), 1, |_| {})
+                    .stats
+                    .bytes
             } else {
                 0
             };
@@ -111,7 +133,9 @@ pub fn is_catalog_path(bases: &BaseDirs, dir: &Path) -> bool {
 /// 캐시 디렉토리 자체는 보존하고 내용물만 비우기 위한 직계 자식 열거.
 /// 심링크는 제외 — 이 코드베이스의 모든 순회와 동일한 방어 (scanner keep_entry, node_view 참조)
 pub fn clean_targets(dir: &Path) -> Vec<PathBuf> {
-    let Ok(rd) = std::fs::read_dir(dir) else { return Vec::new() };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
     rd.filter_map(|e| e.ok())
         .filter(|e| e.file_type().map(|t| !t.is_symlink()).unwrap_or(false))
         .map(|e| e.path())
@@ -144,7 +168,11 @@ mod tests {
         let bases = fake_bases(tmp.path());
         // npm 캐시만 실제로 만들어 둔다 (한 줄: 각 arm이 별도 라인이면 플랫폼별로 반대쪽이
         // 영구 미커버로 남는다 — is_protected의 home 변수명 선택과 동일한 관례)
-        let npm = if cfg!(windows) { bases.local_data.join("npm-cache") } else { bases.home.join(".npm") };
+        let npm = if cfg!(windows) {
+            bases.local_data.join("npm-cache")
+        } else {
+            bases.home.join(".npm")
+        };
         fs::create_dir_all(&npm).unwrap();
         fs::write(npm.join("blob.bin"), vec![0u8; 128]).unwrap();
 
@@ -209,7 +237,8 @@ mod tests {
     fn clean_targets_excludes_symlinks() {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("real.bin"), b"x").unwrap();
-        std::os::unix::fs::symlink(tmp.path().join("real.bin"), tmp.path().join("link.bin")).unwrap();
+        std::os::unix::fs::symlink(tmp.path().join("real.bin"), tmp.path().join("link.bin"))
+            .unwrap();
         let names: Vec<String> = clean_targets(tmp.path())
             .iter()
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())

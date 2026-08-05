@@ -132,11 +132,7 @@ mod tests {
     #[test]
     fn double_dash_preserves_option_like_paths() {
         let parsed = expect_run(
-            parse_args([
-                OsString::from("--"),
-                OsString::from("--not-an-option"),
-            ])
-            .unwrap(),
+            parse_args([OsString::from("--"), OsString::from("--not-an-option")]).unwrap(),
         );
 
         assert_eq!(parsed.paths, [PathBuf::from("--not-an-option")]);

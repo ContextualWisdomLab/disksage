@@ -60,7 +60,10 @@ pub fn scan_dir_with_interval(
         seen += 1;
         // 순회/메타데이터 오류는 skipped로 집계 — 한 줄 let-else (오류 분기가 플랫폼별 테스트에만
         // 잡히더라도 라인 자체는 항상 실행돼 커버리지가 안정적)
-        let Ok(e) = entry else { stats.skipped += 1; continue };
+        let Ok(e) = entry else {
+            stats.skipped += 1;
+            continue;
+        };
         if e.file_type().is_dir() {
             stats.dirs += 1;
             // jwalk는 하위 목록 읽기 실패를 Err 항목이 아니라 디렉토리 엔트리의
@@ -70,7 +73,10 @@ pub fn scan_dir_with_interval(
             }
             dir_sizes.entry(e.path()).or_insert(0);
         } else if e.file_type().is_file() {
-            let Ok(md) = e.metadata() else { stats.skipped += 1; continue };
+            let Ok(md) = e.metadata() else {
+                stats.skipped += 1;
+                continue;
+            };
             let size = md.len();
             stats.files += 1;
             stats.bytes += size;
@@ -278,7 +284,9 @@ mod tests {
     fn unreadable_dir_counts_as_skipped() {
         use std::os::unix::fs::PermissionsExt;
         // root는 권한 비트를 무시하므로 이 테스트는 의미 없음 (한 줄: CI 비-root에서 return 라인 미실행 방지)
-        if running_as_root() { return; }
+        if running_as_root() {
+            return;
+        }
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         let locked = root.join("locked");
@@ -289,7 +297,11 @@ mod tests {
         let res = scan_dir(root, &AtomicBool::new(false), noop);
 
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(res.stats.skipped >= 1, "expected skipped >= 1, got {}", res.stats.skipped);
+        assert!(
+            res.stats.skipped >= 1,
+            "expected skipped >= 1, got {}",
+            res.stats.skipped
+        );
         assert_eq!(res.stats.files, 0);
     }
 
@@ -297,7 +309,9 @@ mod tests {
     #[test]
     fn metadata_failure_counts_as_skipped() {
         use std::os::unix::fs::PermissionsExt;
-        if running_as_root() { return; }
+        if running_as_root() {
+            return;
+        }
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         let noexec = root.join("noexec");
@@ -309,7 +323,11 @@ mod tests {
         let res = scan_dir(root, &AtomicBool::new(false), noop);
 
         fs::set_permissions(&noexec, fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(res.stats.skipped >= 1, "expected skipped >= 1, got {}", res.stats.skipped);
+        assert!(
+            res.stats.skipped >= 1,
+            "expected skipped >= 1, got {}",
+            res.stats.skipped
+        );
         assert_eq!(res.stats.bytes, 0);
     }
 

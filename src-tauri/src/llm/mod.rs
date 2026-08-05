@@ -20,9 +20,13 @@ pub use model::{verify_sha256, ModelSpec, DEFAULT};
 #[cfg(not(coverage))]
 pub use model::download_to;
 #[cfg_attr(coverage, allow(unused_imports))]
-pub use parse::{parse_class_pick, parse_ext_reasoning, parse_summary, parse_verdict, parse_verdict_full};
+pub use parse::{
+    parse_class_pick, parse_ext_reasoning, parse_summary, parse_verdict, parse_verdict_full,
+};
 #[cfg_attr(coverage, allow(unused_imports))]
-pub use prompt::{classify_prompt, ext_reason_prompt, summary_prompt, verdict_prompt, ExtReasoning, FileMeta};
+pub use prompt::{
+    classify_prompt, ext_reason_prompt, summary_prompt, verdict_prompt, ExtReasoning, FileMeta,
+};
 #[cfg_attr(coverage, allow(unused_imports))]
 pub use verdict::{FileVerdict, Verdict};
 
@@ -39,11 +43,19 @@ pub fn verdict_for(engine: &dyn InferenceEngine, meta: &FileMeta) -> FileVerdict
         Ok(out) => parse_verdict_full(&out),
         Err(_) => (Verdict::Unrated, String::new()),
     };
-    FileVerdict { path: meta.path.clone(), verdict, reason }
+    FileVerdict {
+        path: meta.path.clone(),
+        verdict,
+        reason,
+    }
 }
 
 /// 후보 목록 중 클래스 선택. infer 실패·범위 밖은 None(자유 생성 거부).
-pub fn pick_class(engine: &dyn InferenceEngine, meta: &FileMeta, candidates: &[&str]) -> Option<String> {
+pub fn pick_class(
+    engine: &dyn InferenceEngine,
+    meta: &FileMeta,
+    candidates: &[&str],
+) -> Option<String> {
     let out = engine.infer(&classify_prompt(meta, candidates)).ok()?;
     parse_class_pick(&out, candidates)
 }
@@ -55,7 +67,11 @@ pub fn summarize_unknown(engine: &dyn InferenceEngine, samples: &[FileMeta]) -> 
 }
 
 /// 확장자 하나를 추론(type + 제안 class). infer 실패·파싱 실패는 None.
-pub fn reason_extension(engine: &dyn InferenceEngine, ext: &str, candidates: &[&str]) -> Option<ExtReasoning> {
+pub fn reason_extension(
+    engine: &dyn InferenceEngine,
+    ext: &str,
+    candidates: &[&str],
+) -> Option<ExtReasoning> {
     let out = engine.infer(&ext_reason_prompt(ext, candidates)).ok()?;
     parse_ext_reasoning(&out, candidates)
 }
@@ -66,11 +82,18 @@ mod tests {
 
     struct Fake(Result<String, String>);
     impl InferenceEngine for Fake {
-        fn infer(&self, _p: &str) -> Result<String, String> { self.0.clone() }
+        fn infer(&self, _p: &str) -> Result<String, String> {
+            self.0.clone()
+        }
     }
     fn meta() -> FileMeta {
-        FileMeta { path: "/downloads/old_report.pdf".into(), name: "old_report.pdf".into(),
-                   size: 2_400_000, mtime_days: 420, parent: "downloads".into() }
+        FileMeta {
+            path: "/downloads/old_report.pdf".into(),
+            name: "old_report.pdf".into(),
+            size: 2_400_000,
+            mtime_days: 420,
+            parent: "downloads".into(),
+        }
     }
 
     #[test]
@@ -91,7 +114,10 @@ mod tests {
     #[test]
     fn pick_class_returns_candidate() {
         let e = Fake(Ok(r#"{"class":"Image"}"#.into()));
-        assert_eq!(pick_class(&e, &meta(), &["Image", "Doc"]), Some("Image".into()));
+        assert_eq!(
+            pick_class(&e, &meta(), &["Image", "Doc"]),
+            Some("Image".into())
+        );
     }
     #[test]
     fn pick_class_rejects_out_of_list() {

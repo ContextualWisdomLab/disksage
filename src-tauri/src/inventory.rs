@@ -75,12 +75,26 @@ pub fn build_inventory(files: &[FileEntry], onto: &Ontology) -> InventoryReport 
 
     let mut tallies: Vec<ClassTally> = acc
         .into_iter()
-        .map(|(class_id, (label, bytes, count))| ClassTally { class_id, label, bytes, count })
+        .map(|(class_id, (label, bytes, count))| ClassTally {
+            class_id,
+            label,
+            bytes,
+            count,
+        })
         .collect();
     // bytes 내림차순, 동점은 class_id로 결정적 정렬(HashMap 순서 무작위성 → UI 깜빡임 방지)
-    tallies.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.class_id.cmp(&b.class_id)));
+    tallies.sort_by(|a, b| {
+        b.bytes
+            .cmp(&a.bytes)
+            .then_with(|| a.class_id.cmp(&b.class_id))
+    });
 
-    InventoryReport { tallies, unknown_bytes, unknown_count, unknown_samples }
+    InventoryReport {
+        tallies,
+        unknown_bytes,
+        unknown_count,
+        unknown_samples,
+    }
 }
 
 #[cfg(test)]
@@ -99,7 +113,11 @@ dm:Code a owl:Class ; rdfs:label "코드"@ko .
 "#;
 
     fn fe(p: &str, size: u64) -> FileEntry {
-        FileEntry { path: PathBuf::from(p), size, mtime_ms: 0 }
+        FileEntry {
+            path: PathBuf::from(p),
+            size,
+            mtime_ms: 0,
+        }
     }
 
     #[test]
@@ -107,7 +125,7 @@ dm:Code a owl:Class ; rdfs:label "코드"@ko .
         // Image
         assert_eq!(classify(&PathBuf::from("/x/a.png")), Some("Image"));
         assert_eq!(classify(&PathBuf::from("/x/b.JPG")), Some("Image")); // 대소문자 무관
-        // Code
+                                                                         // Code
         assert_eq!(classify(&PathBuf::from("/x/c.rs")), Some("Code"));
         // Video
         assert_eq!(classify(&PathBuf::from("/x/movie.mp4")), Some("Video"));
@@ -128,9 +146,9 @@ dm:Code a owl:Class ; rdfs:label "코드"@ko .
         let onto = parse_ttl(ONTO).unwrap();
         let files = vec![
             fe("/a.png", 100),
-            fe("/b.png", 200),   // Image 합계 300, count 2
-            fe("/c.rs", 50),     // Code 50, count 1
-            fe("/d.xyz", 999),   // 미분류 → unknown
+            fe("/b.png", 200), // Image 합계 300, count 2
+            fe("/c.rs", 50),   // Code 50, count 1
+            fe("/d.xyz", 999), // 미분류 → unknown
         ];
         let rep = build_inventory(&files, &onto);
         // Unknown은 일급 필드
@@ -138,10 +156,16 @@ dm:Code a owl:Class ; rdfs:label "코드"@ko .
         assert_eq!(rep.unknown_count, 1);
         assert_eq!(rep.unknown_samples, vec!["/d.xyz".to_string()]);
         // tallies는 바이트 내림차순: Image(300) > Code(50)
-        assert_eq!(rep.tallies[0].class_id, "https://disksage.app/ontology#Image");
+        assert_eq!(
+            rep.tallies[0].class_id,
+            "https://disksage.app/ontology#Image"
+        );
         assert_eq!(rep.tallies[0].bytes, 300);
         assert_eq!(rep.tallies[0].count, 2);
-        assert_eq!(rep.tallies[1].class_id, "https://disksage.app/ontology#Code");
+        assert_eq!(
+            rep.tallies[1].class_id,
+            "https://disksage.app/ontology#Code"
+        );
     }
 
     #[test]

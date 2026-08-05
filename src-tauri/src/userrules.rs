@@ -5,13 +5,20 @@ use std::path::Path;
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuleMatch {
-    #[serde(default)] pub ext: Option<String>,
-    #[serde(default)] pub name_contains: Option<String>,
-    #[serde(default)] pub path_contains: Option<String>,
-    #[serde(default)] pub min_size: Option<u64>,
-    #[serde(default)] pub max_size: Option<u64>,
-    #[serde(default)] pub min_age_days: Option<u64>,
-    #[serde(default)] pub max_age_days: Option<u64>,
+    #[serde(default)]
+    pub ext: Option<String>,
+    #[serde(default)]
+    pub name_contains: Option<String>,
+    #[serde(default)]
+    pub path_contains: Option<String>,
+    #[serde(default)]
+    pub min_size: Option<u64>,
+    #[serde(default)]
+    pub max_size: Option<u64>,
+    #[serde(default)]
+    pub min_age_days: Option<u64>,
+    #[serde(default)]
+    pub max_age_days: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -28,27 +35,55 @@ pub fn parse_rules(json: &str) -> Result<Vec<Rule>, String> {
 
 /// 첫 매칭 규칙의 클래스. 매칭 규칙 없으면 None.
 pub fn classify_by_rules(rules: &[Rule], path: &Path, size: u64, age_days: u64) -> Option<String> {
-    rules.iter().find(|r| rule_matches(&r.r#match, path, size, age_days)).map(|r| r.class.clone())
+    rules
+        .iter()
+        .find(|r| rule_matches(&r.r#match, path, size, age_days))
+        .map(|r| r.class.clone())
 }
 
 /// 존재하는 모든 술어가 AND로 일치해야 매칭. 술어 전무(all-None)면 catch-all(true).
 fn rule_matches(m: &RuleMatch, path: &Path, size: u64, age_days: u64) -> bool {
     if let Some(ext) = &m.ext {
         let want = ext.to_lowercase();
-        let got = path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase());
-        if got.as_deref() != Some(want.as_str()) { return false; }
+        let got = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_lowercase());
+        if got.as_deref() != Some(want.as_str()) {
+            return false;
+        }
     }
     if let Some(sub) = &m.name_contains {
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if !name.contains(sub.as_str()) { return false; }
+        if !name.contains(sub.as_str()) {
+            return false;
+        }
     }
     if let Some(sub) = &m.path_contains {
-        if !path.to_string_lossy().contains(sub.as_str()) { return false; }
+        if !path.to_string_lossy().contains(sub.as_str()) {
+            return false;
+        }
     }
-    if let Some(min) = m.min_size { if size < min { return false; } }
-    if let Some(max) = m.max_size { if size > max { return false; } }
-    if let Some(min) = m.min_age_days { if age_days < min { return false; } }
-    if let Some(max) = m.max_age_days { if age_days > max { return false; } }
+    if let Some(min) = m.min_size {
+        if size < min {
+            return false;
+        }
+    }
+    if let Some(max) = m.max_size {
+        if size > max {
+            return false;
+        }
+    }
+    if let Some(min) = m.min_age_days {
+        if age_days < min {
+            return false;
+        }
+    }
+    if let Some(max) = m.max_age_days {
+        if age_days > max {
+            return false;
+        }
+    }
     true
 }
 
@@ -57,7 +92,17 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn m() -> RuleMatch { RuleMatch { ext: None, name_contains: None, path_contains: None, min_size: None, max_size: None, min_age_days: None, max_age_days: None } }
+    fn m() -> RuleMatch {
+        RuleMatch {
+            ext: None,
+            name_contains: None,
+            path_contains: None,
+            min_size: None,
+            max_size: None,
+            min_age_days: None,
+            max_age_days: None,
+        }
+    }
 
     #[test]
     fn parse_valid_and_malformed() {
@@ -72,63 +117,175 @@ mod tests {
 
     #[test]
     fn ext_predicate_case_insensitive() {
-        let r = vec![Rule { r#match: RuleMatch { ext: Some("ISO".into()), ..m() }, class: "Installer".into() }];
-        assert_eq!(classify_by_rules(&r, &PathBuf::from("/d/x.iso"), 0, 0).as_deref(), Some("Installer"));
-        assert_eq!(classify_by_rules(&r, &PathBuf::from("/d/x.zip"), 0, 0), None); // 확장자 불일치
-        assert_eq!(classify_by_rules(&r, &PathBuf::from("/d/noext"), 0, 0), None); // 확장자 없음
+        let r = vec![Rule {
+            r#match: RuleMatch {
+                ext: Some("ISO".into()),
+                ..m()
+            },
+            class: "Installer".into(),
+        }];
+        assert_eq!(
+            classify_by_rules(&r, &PathBuf::from("/d/x.iso"), 0, 0).as_deref(),
+            Some("Installer")
+        );
+        assert_eq!(
+            classify_by_rules(&r, &PathBuf::from("/d/x.zip"), 0, 0),
+            None
+        ); // 확장자 불일치
+        assert_eq!(
+            classify_by_rules(&r, &PathBuf::from("/d/noext"), 0, 0),
+            None
+        ); // 확장자 없음
     }
 
     #[test]
     fn name_and_path_contains() {
-        let rn = vec![Rule { r#match: RuleMatch { name_contains: Some("backup".into()), ..m() }, class: "Archive".into() }];
-        assert_eq!(classify_by_rules(&rn, &PathBuf::from("/d/my_backup.tar"), 0, 0).as_deref(), Some("Archive"));
-        assert_eq!(classify_by_rules(&rn, &PathBuf::from("/d/report.tar"), 0, 0), None);
+        let rn = vec![Rule {
+            r#match: RuleMatch {
+                name_contains: Some("backup".into()),
+                ..m()
+            },
+            class: "Archive".into(),
+        }];
+        assert_eq!(
+            classify_by_rules(&rn, &PathBuf::from("/d/my_backup.tar"), 0, 0).as_deref(),
+            Some("Archive")
+        );
+        assert_eq!(
+            classify_by_rules(&rn, &PathBuf::from("/d/report.tar"), 0, 0),
+            None
+        );
         assert_eq!(classify_by_rules(&rn, &PathBuf::from("/"), 0, 0), None); // 파일명 없음 → "" → 불일치
-        let rp = vec![Rule { r#match: RuleMatch { path_contains: Some("Downloads".into()), ..m() }, class: "Dl".into() }];
-        assert_eq!(classify_by_rules(&rp, &PathBuf::from("/home/Downloads/x.bin"), 0, 0).as_deref(), Some("Dl"));
-        assert_eq!(classify_by_rules(&rp, &PathBuf::from("/home/Docs/x.bin"), 0, 0), None);
+        let rp = vec![Rule {
+            r#match: RuleMatch {
+                path_contains: Some("Downloads".into()),
+                ..m()
+            },
+            class: "Dl".into(),
+        }];
+        assert_eq!(
+            classify_by_rules(&rp, &PathBuf::from("/home/Downloads/x.bin"), 0, 0).as_deref(),
+            Some("Dl")
+        );
+        assert_eq!(
+            classify_by_rules(&rp, &PathBuf::from("/home/Docs/x.bin"), 0, 0),
+            None
+        );
     }
 
     #[test]
     fn size_bounds_inclusive() {
-        let r = vec![Rule { r#match: RuleMatch { min_size: Some(100), max_size: Some(200), ..m() }, class: "Mid".into() }];
-        assert_eq!(classify_by_rules(&r, &PathBuf::from("/x"), 100, 0).as_deref(), Some("Mid")); // 하한 포함
-        assert_eq!(classify_by_rules(&r, &PathBuf::from("/x"), 200, 0).as_deref(), Some("Mid")); // 상한 포함
-        assert_eq!(classify_by_rules(&r, &PathBuf::from("/x"), 99, 0), None);  // 하한 미만
+        let r = vec![Rule {
+            r#match: RuleMatch {
+                min_size: Some(100),
+                max_size: Some(200),
+                ..m()
+            },
+            class: "Mid".into(),
+        }];
+        assert_eq!(
+            classify_by_rules(&r, &PathBuf::from("/x"), 100, 0).as_deref(),
+            Some("Mid")
+        ); // 하한 포함
+        assert_eq!(
+            classify_by_rules(&r, &PathBuf::from("/x"), 200, 0).as_deref(),
+            Some("Mid")
+        ); // 상한 포함
+        assert_eq!(classify_by_rules(&r, &PathBuf::from("/x"), 99, 0), None); // 하한 미만
         assert_eq!(classify_by_rules(&r, &PathBuf::from("/x"), 201, 0), None); // 상한 초과
     }
 
     #[test]
     fn age_bounds_inclusive() {
-        let r = vec![Rule { r#match: RuleMatch { min_age_days: Some(30), max_age_days: Some(90), ..m() }, class: "Stale".into() }];
-        assert_eq!(classify_by_rules(&r, &PathBuf::from("/x"), 0, 30).as_deref(), Some("Stale")); // 하한 포함
-        assert_eq!(classify_by_rules(&r, &PathBuf::from("/x"), 0, 90).as_deref(), Some("Stale")); // 상한 포함
+        let r = vec![Rule {
+            r#match: RuleMatch {
+                min_age_days: Some(30),
+                max_age_days: Some(90),
+                ..m()
+            },
+            class: "Stale".into(),
+        }];
+        assert_eq!(
+            classify_by_rules(&r, &PathBuf::from("/x"), 0, 30).as_deref(),
+            Some("Stale")
+        ); // 하한 포함
+        assert_eq!(
+            classify_by_rules(&r, &PathBuf::from("/x"), 0, 90).as_deref(),
+            Some("Stale")
+        ); // 상한 포함
         assert_eq!(classify_by_rules(&r, &PathBuf::from("/x"), 0, 29), None); // 하한 미만
         assert_eq!(classify_by_rules(&r, &PathBuf::from("/x"), 0, 91), None); // 상한 초과
     }
 
     #[test]
     fn age_ands_with_other_predicates() {
-        let r = vec![Rule { r#match: RuleMatch { ext: Some("iso".into()), min_age_days: Some(365), ..m() }, class: "OldIso".into() }];
-        assert_eq!(classify_by_rules(&r, &PathBuf::from("/x.iso"), 0, 400).as_deref(), Some("OldIso"));
-        assert_eq!(classify_by_rules(&r, &PathBuf::from("/x.iso"), 0, 100), None); // ext OK, age 미달 → AND 실패
+        let r = vec![Rule {
+            r#match: RuleMatch {
+                ext: Some("iso".into()),
+                min_age_days: Some(365),
+                ..m()
+            },
+            class: "OldIso".into(),
+        }];
+        assert_eq!(
+            classify_by_rules(&r, &PathBuf::from("/x.iso"), 0, 400).as_deref(),
+            Some("OldIso")
+        );
+        assert_eq!(
+            classify_by_rules(&r, &PathBuf::from("/x.iso"), 0, 100),
+            None
+        ); // ext OK, age 미달 → AND 실패
     }
 
     #[test]
     fn and_semantics_and_first_match_wins_and_catch_all() {
         // AND: ext+min_size 둘 다 만족해야
-        let r = vec![Rule { r#match: RuleMatch { ext: Some("mp4".into()), min_size: Some(1000), ..m() }, class: "BigVid".into() }];
-        assert_eq!(classify_by_rules(&r, &PathBuf::from("/x.mp4"), 2000, 0).as_deref(), Some("BigVid"));
-        assert_eq!(classify_by_rules(&r, &PathBuf::from("/x.mp4"), 500, 0), None); // ext OK, size 미달 → AND 실패
-        // 첫 매칭 승리
+        let r = vec![Rule {
+            r#match: RuleMatch {
+                ext: Some("mp4".into()),
+                min_size: Some(1000),
+                ..m()
+            },
+            class: "BigVid".into(),
+        }];
+        assert_eq!(
+            classify_by_rules(&r, &PathBuf::from("/x.mp4"), 2000, 0).as_deref(),
+            Some("BigVid")
+        );
+        assert_eq!(
+            classify_by_rules(&r, &PathBuf::from("/x.mp4"), 500, 0),
+            None
+        ); // ext OK, size 미달 → AND 실패
+           // 첫 매칭 승리
         let ord = vec![
-            Rule { r#match: RuleMatch { ext: Some("log".into()), ..m() }, class: "First".into() },
-            Rule { r#match: RuleMatch { ext: Some("log".into()), ..m() }, class: "Second".into() },
+            Rule {
+                r#match: RuleMatch {
+                    ext: Some("log".into()),
+                    ..m()
+                },
+                class: "First".into(),
+            },
+            Rule {
+                r#match: RuleMatch {
+                    ext: Some("log".into()),
+                    ..m()
+                },
+                class: "Second".into(),
+            },
         ];
-        assert_eq!(classify_by_rules(&ord, &PathBuf::from("/x.log"), 0, 0).as_deref(), Some("First"));
+        assert_eq!(
+            classify_by_rules(&ord, &PathBuf::from("/x.log"), 0, 0).as_deref(),
+            Some("First")
+        );
         // all-None catch-all
-        let catch = vec![Rule { r#match: m(), class: "Any".into() }];
-        assert_eq!(classify_by_rules(&catch, &PathBuf::from("/anything.zzz"), 0, 0).as_deref(), Some("Any"));
+        let catch = vec![Rule {
+            r#match: m(),
+            class: "Any".into(),
+        }];
+        assert_eq!(
+            classify_by_rules(&catch, &PathBuf::from("/anything.zzz"), 0, 0).as_deref(),
+            Some("Any")
+        );
         // 빈 규칙 → None
         assert_eq!(classify_by_rules(&[], &PathBuf::from("/x"), 0, 0), None);
     }

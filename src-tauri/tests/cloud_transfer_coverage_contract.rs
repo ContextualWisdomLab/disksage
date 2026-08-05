@@ -68,7 +68,10 @@ fn cloud_plan_exports_backend_authored_approval_phrase() {
         "pub copy_approval_max_age_ms: u64",
         "cloud_copy_approval_phrase(&candidate, action)",
     ] {
-        assert!(view_source.contains(marker), "missing backend plan-view marker: {marker}");
+        assert!(
+            view_source.contains(marker),
+            "missing backend plan-view marker: {marker}"
+        );
     }
     assert!(
         command_source.contains("Result<cloud_plan_view::CloudPlanReportView, String>"),
@@ -80,7 +83,10 @@ fn cloud_plan_exports_backend_authored_approval_phrase() {
         "copy_approval_max_age_ms?: number",
         "/** Returns the exact backend-authored phrase only for the matching candidate action. */",
     ] {
-        assert!(api_source.contains(marker), "missing frontend plan contract: {marker}");
+        assert!(
+            api_source.contains(marker),
+            "missing frontend plan contract: {marker}"
+        );
     }
     assert!(
         !api_source.contains("`DiskSage cloud ${action} ${candidate.review_fingerprint} 승인`"),

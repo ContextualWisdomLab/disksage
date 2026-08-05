@@ -28,7 +28,9 @@ fn artifact_kind(name: &str) -> Option<&'static (&'static str, &'static [&'stati
 fn age_days(path: &Path, now_ms: u64) -> u64 {
     let Ok(md) = path.metadata() else { return 0 };
     let Ok(mtime) = md.modified() else { return 0 };
-    let Ok(dur) = mtime.duration_since(std::time::UNIX_EPOCH) else { return 0 };
+    let Ok(dur) = mtime.duration_since(std::time::UNIX_EPOCH) else {
+        return 0;
+    };
     let mtime_ms = dur.as_millis() as u64;
     now_ms.saturating_sub(mtime_ms) / 86_400_000
 }
@@ -57,8 +59,12 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
             continue;
         }
         let path = e.path();
-        let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
-        let Some((_, markers)) = artifact_kind(&name) else { continue };
+        let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+            continue;
+        };
+        let Some((_, markers)) = artifact_kind(&name) else {
+            continue;
+        };
         let parent = path.parent().unwrap_or(root);
         let marker_ok = markers.is_empty() || markers.iter().any(|m| parent.join(m).exists());
         if marker_ok {
@@ -82,7 +88,11 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
     let mut found: Vec<DevArtifact> = top_level
         .into_iter()
         .filter_map(|path| {
-            let age = if now_ms == u64::MAX { u64::MAX } else { age_days(path, now_ms) };
+            let age = if now_ms == u64::MAX {
+                u64::MAX
+            } else {
+                age_days(path, now_ms)
+            };
             if age < min_age_days {
                 return None;
             }
@@ -91,7 +101,9 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
             let parent = path.parent().unwrap_or(root);
             // interval 1: 진행 콜백(no-op)이 작은 테스트 픽스처에서도 실행되어 커버리지에서
             // 0으로 남지 않음 — 콜백이 아무 일도 하지 않으므로 호출 빈도는 동작에 무관
-            let bytes = scanner::scan_dir_with_interval(path, &AtomicBool::new(false), 1, |_| {}).stats.bytes;
+            let bytes = scanner::scan_dir_with_interval(path, &AtomicBool::new(false), 1, |_| {})
+                .stats
+                .bytes;
             Some(DevArtifact {
                 path: path.to_string_lossy().into_owned(),
                 kind: kind.to_string(),
@@ -114,7 +126,12 @@ mod tests {
     use super::*;
     use std::fs;
 
-    fn project(root: &std::path::Path, name: &str, marker: &str, artifact: &str) -> std::path::PathBuf {
+    fn project(
+        root: &std::path::Path,
+        name: &str,
+        marker: &str,
+        artifact: &str,
+    ) -> std::path::PathBuf {
         let p = root.join(name);
         fs::create_dir_all(&p).unwrap();
         fs::write(p.join(marker), b"{}").unwrap();
