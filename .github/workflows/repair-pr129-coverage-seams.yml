@@ -1,0 +1,143 @@
+name: Repair PR 129 coverage seams
+
+on:
+  push:
+    branches:
+      - fix/icloud-batch-postmerge-verification
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-pr129-coverage-seams
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    if: >-
+      github.repository == 'ContextualWisdomLab/disksage' &&
+      github.ref == 'refs/heads/fix/icloud-batch-postmerge-verification'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out exact repair source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify audited source blob
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test "$(git hash-object src-tauri/src/cloud_local_eviction_batch.rs)" = "bc3e23c011cba87d8fd1ec1a31ae1aa02cc055a2"
+
+      - name: Prove the coverage seam regression is red
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import sys
+
+          source = Path("src-tauri/src/cloud_local_eviction_batch.rs").read_text(encoding="utf-8")
+          required = [
+              "#[cfg(any(not(coverage), test))]\ntrait BatchRecordWriter",
+              "#[cfg(any(not(coverage), test))]\nfn fresh_item_requested_at_ms",
+              "#[cfg(any(not(coverage), test))]\nfn execute_icloud_local_eviction_batch_with",
+          ]
+          missing = [anchor for anchor in required if anchor not in source]
+          if missing:
+              print("coverage test seams are unavailable")
+              sys.exit(1)
+          print("coverage test seams are available")
+          PY
+          set +e
+          python3 /tmp/nonexistent-pr129-check.py >/dev/null 2>&1
+          static_status=$?
+          set -e
+          test "$static_status" -ne 0
+          set +e
+          python3 - <<'PY' > /tmp/pr129-red.log 2>&1
+          from pathlib import Path
+          import sys
+          source = Path("src-tauri/src/cloud_local_eviction_batch.rs").read_text(encoding="utf-8")
+          if "#[cfg(any(not(coverage), test))]\ntrait BatchRecordWriter" not in source:
+              print("coverage test seams are unavailable")
+              sys.exit(1)
+          PY
+          status=$?
+          set -e
+          cat /tmp/pr129-red.log
+          test "$status" -ne 0
+          grep -F "coverage test seams are unavailable" /tmp/pr129-red.log
+
+      - name: Apply the minimal coverage seam repair
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src-tauri/src/cloud_local_eviction_batch.rs")
+          source = path.read_text(encoding="utf-8")
+          replacements = [
+              (
+                  "#[cfg(not(coverage))]\ntrait BatchRecordWriter",
+                  "#[cfg(any(not(coverage), test))]\ntrait BatchRecordWriter",
+              ),
+              (
+                  "#[cfg(not(coverage))]\nfn fresh_item_requested_at_ms",
+                  "#[cfg(any(not(coverage), test))]\nfn fresh_item_requested_at_ms",
+              ),
+              (
+                  "#[cfg(not(coverage))]\nfn execute_icloud_local_eviction_batch_with",
+                  "#[cfg(any(not(coverage), test))]\nfn execute_icloud_local_eviction_batch_with",
+              ),
+          ]
+          for old, new in replacements:
+              count = source.count(old)
+              if count != 1:
+                  raise SystemExit(f"expected one audited anchor {old!r}, found {count}")
+              source = source.replace(old, new, 1)
+          path.write_text(source, encoding="utf-8")
+          PY
+          git diff --check
+          test "$(git diff --name-only)" = "src-tauri/src/cloud_local_eviction_batch.rs"
+
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Install repository Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
+      - name: Prove normal and coverage test compilation is green
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          rustfmt --edition 2021 --check src-tauri/src/cloud_local_eviction_batch.rs
+          cargo test --manifest-path src-tauri/Cargo.toml --lib \
+            cloud_local_eviction_batch::tests --features cloud-cli
+          RUSTFLAGS="--cfg coverage" cargo test --manifest-path src-tauri/Cargo.toml --lib \
+            cloud_local_eviction_batch::tests --features cloud-cli
+          git diff --check
+
+      - name: Commit exact validated repair and remove one-shot workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_HEAD: ${{ github.sha }}
+          SOURCE_BRANCH: fix/icloud-batch-postmerge-verification
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          rm .github/workflows/repair-pr129-coverage-seams.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src-tauri/src/cloud_local_eviction_batch.rs .github/workflows/repair-pr129-coverage-seams.yml
+          test "$(git diff --cached --name-only | sort)" = "$(printf '%s\n' \
+            .github/workflows/repair-pr129-coverage-seams.yml \
+            src-tauri/src/cloud_local_eviction_batch.rs | sort)"
+          git diff --cached --check
+          git commit -m "fix: expose iCloud batch test seams under coverage"
+          remote_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push --force-with-lease="refs/heads/${SOURCE_BRANCH}:${SOURCE_HEAD}" \
+            "$remote_url" "HEAD:refs/heads/${SOURCE_BRANCH}"
