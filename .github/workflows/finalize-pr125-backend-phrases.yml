@@ -1,0 +1,132 @@
+name: Finalize PR 125 backend approval phrases
+
+on:
+  push:
+    branches:
+      - feat/exact-cloud-copy-approval-lineage
+    paths:
+      - .github/workflows/finalize-pr125-backend-phrases.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: finalize-pr125-backend-phrases
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    if: >-
+      github.repository == 'ContextualWisdomLab/disksage' &&
+      github.actor == 'seonghobae' &&
+      github.ref == 'refs/heads/feat/exact-cloud-copy-approval-lineage'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: write
+    steps:
+      - name: Check out exact repair trigger
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Verify audited repair parent
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD^)" = "7793e5c82de5861788937547e1cd511740055ab4"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Install Tauri system dependencies
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
+      - name: Install pinned Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20.19.0
+          cache: npm
+
+      - name: Install JavaScript dependencies without lifecycle scripts
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: npm ci --ignore-scripts
+
+      - name: Add regression before production repair
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: python3 .github/scripts/finalize_pr125_backend_phrases.py add-test
+
+      - name: Prove backend phrase ownership regression is red
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          set +e
+          cargo test --manifest-path src-tauri/Cargo.toml \
+            --test cloud_transfer_coverage_contract \
+            cloud_copy_approval_phrases_are_backend_owned \
+            > /tmp/pr125-backend-phrases-red.log 2>&1
+          red_status=$?
+          set -e
+          cat /tmp/pr125-backend-phrases-red.log
+          test "$red_status" -ne 0
+          grep -Eq 'TypeScript must not duplicate|Tauri plan command must expose|current plan response' \
+            /tmp/pr125-backend-phrases-red.log
+
+      - name: Apply bounded production repair
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 .github/scripts/finalize_pr125_backend_phrases.py apply
+          cargo fmt --manifest-path src-tauri/Cargo.toml
+          git diff --check
+
+      - name: Verify exact repaired contracts
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml \
+            --test cloud_transfer_coverage_contract
+          cargo test --manifest-path src-tauri/Cargo.toml \
+            --lib cloud_plan_output_tests
+          cargo test --manifest-path src-tauri/Cargo.toml \
+            --lib cloud_transfer::tests --features cloud-cli
+          npm test -- --run src/lib/api.test.ts
+          npm run check
+          npm run build
+          cargo check --manifest-path src-tauri/Cargo.toml --features cloud-cli --bins
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+          git diff --check
+
+      - name: Publish exact repair and remove one-shot automation
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+          SOURCE_BRANCH: feat/exact-cloud-copy-approval-lineage
+          GH_TOKEN: ${{ github.token }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          python3 .github/scripts/finalize_pr125_backend_phrases.py cleanup
+          git diff --check
+          test "$(git diff --name-only | sort)" = "$(printf '%s\n' \
+            .github/scripts/finalize_pr125_backend_phrases.py \
+            .github/workflows/finalize-pr125-backend-phrases.yml \
+            CHANGELOG.md \
+            src-tauri/src/commands.rs \
+            src-tauri/tests/cloud_transfer_coverage_contract.rs \
+            src/lib/CloudArchive.svelte \
+            src/lib/api.test.ts \
+            src/lib/api.ts | sort)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: source cloud approval phrases from Rust"
+          remote_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push --force-with-lease="refs/heads/${SOURCE_BRANCH}:${EXPECTED_HEAD}" \
+            "$remote_url" "HEAD:refs/heads/${SOURCE_BRANCH}"
