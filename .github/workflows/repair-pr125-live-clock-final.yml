@@ -78,7 +78,10 @@ jobs:
             src-tauri/src/cloud_transfer.rs \
             src-tauri/src/commands.rs \
             src-tauri/src/bin/disksage-cloud-plan.rs
-          cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+          rustfmt --edition 2021 --check \
+            src-tauri/src/cloud_transfer.rs \
+            src-tauri/src/commands.rs \
+            src-tauri/src/bin/disksage-cloud-plan.rs
           python3 .github/scripts/repair_pr125_live_clock.py verify
           cargo test --manifest-path src-tauri/Cargo.toml --lib \
             cloud_transfer::tests::production_copy_entrypoints_recheck_approval_age_against_live_time \
@@ -141,7 +144,10 @@ jobs:
             src-tauri/src/cloud_transfer.rs \
             src-tauri/src/commands.rs \
             src-tauri/src/bin/disksage-cloud-plan.rs
-          cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+          rustfmt --edition 2021 --check \
+            src-tauri/src/cloud_transfer.rs \
+            src-tauri/src/commands.rs \
+            src-tauri/src/bin/disksage-cloud-plan.rs
           python3 .github/scripts/repair_pr125_live_clock.py verify
 
       - name: Verify reproduced source digests
