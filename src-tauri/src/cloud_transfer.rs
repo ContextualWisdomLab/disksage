@@ -1312,7 +1312,7 @@ fn adopt_existing_cloud_copy_with_approval_at(
     Ok((receipt, path))
 }
 
-#[cfg(all(test, not(coverage)))]
+#[cfg(test)]
 fn test_copy_approval(
     candidate: &CloudCandidate,
     cloud_root: &CloudRoot,
