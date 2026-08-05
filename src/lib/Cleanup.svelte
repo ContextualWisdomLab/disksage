@@ -4,6 +4,7 @@
   import { verdictBadge } from "./verdictBadge";
   import { confirm } from "@tauri-apps/plugin-dialog";
   import GitWorktreeCleanup from "./GitWorktreeCleanup.svelte";
+  import PodmanReclaimEvidence from "./PodmanReclaimEvidence.svelte";
 
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
@@ -113,6 +114,8 @@
       </li>
     {/each}
   </ul>
+
+  <PodmanReclaimEvidence />
 
   <h3>오래된 개발 아티팩트 {scannedRoot ? `(${scannedRoot}, 30일+)` : "(먼저 스캔하세요)"}</h3>
   <ul class="list">
