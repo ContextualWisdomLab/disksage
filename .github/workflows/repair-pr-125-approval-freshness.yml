@@ -1,0 +1,162 @@
+name: Repair PR 125 live-clock approval freshness
+
+on:
+  push:
+    branches:
+      - feat/exact-cloud-copy-approval-lineage
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repair-pr-125-approval-freshness-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: >-
+      github.repository == 'ContextualWisdomLab/disksage'
+      && github.ref == 'refs/heads/feat/exact-cloud-copy-approval-lineage'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      transfer_sha: ${{ steps.digests.outputs.transfer_sha }}
+      commands_sha: ${{ steps.digests.outputs.commands_sha }}
+      cli_sha: ${{ steps.digests.outputs.cli_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify immutable repair source
+        run: echo 'c096589509380c42c268e672e7667105b0a92721fad88dd909e23908d890d020  .github/scripts/repair_pr_125_approval_freshness.py' | sha256sum --check --strict
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - name: Add the regression before production repair
+        run: python .github/scripts/repair_pr_125_approval_freshness.py tests
+      - name: Prove the old production API can reuse the approval timestamp
+        shell: bash
+        run: |
+          set +e
+          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli \
+            cloud_transfer::tests::production_copy_entrypoints_recheck_approval_age_against_live_time \
+            > /tmp/pr125-red.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/pr125-red.log
+          test "$status" -ne 0
+          grep -Eq 'prepare_cloud_copy_with_approval|adopt_existing_cloud_copy_with_approval|E0061' /tmp/pr125-red.log
+      - name: Apply the bounded live-clock repair
+        run: python .github/scripts/repair_pr_125_approval_freshness.py production
+      - name: Format repaired Rust sources
+        run: |
+          rustfmt --edition 2021 \
+            src-tauri/src/cloud_transfer.rs \
+            src-tauri/src/commands.rs \
+            src-tauri/src/bin/disksage-cloud-plan.rs
+      - name: Verify the focused regression and complete cloud-transfer suite
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli \
+            cloud_transfer::tests::production_copy_entrypoints_recheck_approval_age_against_live_time
+          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli cloud_transfer::tests::
+      - name: Verify production CLI and all cloud-enabled targets compile
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-cloud-plan
+          cargo check --manifest-path src-tauri/Cargo.toml --features cloud-cli --lib --bins
+      - name: Verify final source shape and whitespace
+        shell: bash
+        run: |
+          python - <<'PY'
+          import importlib.util
+          from pathlib import Path
+          path = Path('.github/scripts/repair_pr_125_approval_freshness.py')
+          spec = importlib.util.spec_from_file_location('repair_pr_125', path)
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          module.verify_final_shape()
+          PY
+          git diff --check
+      - name: Bind exact validated source digests
+        id: digests
+        shell: bash
+        run: |
+          echo "transfer_sha=$(sha256sum src-tauri/src/cloud_transfer.rs | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "commands_sha=$(sha256sum src-tauri/src/commands.rs | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "cli_sha=$(sha256sum src-tauri/src/bin/disksage-cloud-plan.rs | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: validate
+    if: needs.validate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - name: Verify immutable repair source and unchanged branch head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_BRANCH: feat/exact-cloud-copy-approval-lineage
+          SOURCE_HEAD: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'c096589509380c42c268e672e7667105b0a92721fad88dd909e23908d890d020  .github/scripts/repair_pr_125_approval_freshness.py' | sha256sum --check --strict
+          encoded_branch="$(python - <<'PY'
+          import urllib.parse
+          print(urllib.parse.quote('feat/exact-cloud-copy-approval-lineage', safe=''))
+          PY
+          )"
+          live_head="$(gh api "repos/${GITHUB_REPOSITORY}/branches/${encoded_branch}" --jq '.commit.sha')"
+          test "$live_head" = "$SOURCE_HEAD"
+      - name: Reproduce only the validated source transformation
+        run: |
+          python .github/scripts/repair_pr_125_approval_freshness.py all
+          rustfmt --edition 2021 \
+            src-tauri/src/cloud_transfer.rs \
+            src-tauri/src/commands.rs \
+            src-tauri/src/bin/disksage-cloud-plan.rs
+      - name: Verify reproduced source digests
+        env:
+          EXPECTED_TRANSFER_SHA: ${{ needs.validate.outputs.transfer_sha }}
+          EXPECTED_COMMANDS_SHA: ${{ needs.validate.outputs.commands_sha }}
+          EXPECTED_CLI_SHA: ${{ needs.validate.outputs.cli_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(sha256sum src-tauri/src/cloud_transfer.rs | cut -d' ' -f1)" = "$EXPECTED_TRANSFER_SHA"
+          test "$(sha256sum src-tauri/src/commands.rs | cut -d' ' -f1)" = "$EXPECTED_COMMANDS_SHA"
+          test "$(sha256sum src-tauri/src/bin/disksage-cloud-plan.rs | cut -d' ' -f1)" = "$EXPECTED_CLI_SHA"
+          git diff --check
+      - name: Publish exact repair and remove one-shot machinery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_BRANCH: feat/exact-cloud-copy-approval-lineage
+          SOURCE_HEAD: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/repair-pr-125-approval-freshness.yml \
+            .github/scripts/repair_pr_125_approval_freshness.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src-tauri/src/cloud_transfer.rs \
+            src-tauri/src/commands.rs \
+            src-tauri/src/bin/disksage-cloud-plan.rs \
+            .github/workflows/repair-pr-125-approval-freshness.yml \
+            .github/scripts/repair_pr_125_approval_freshness.py
+          git diff --cached --check
+          git commit -m 'fix: recheck cloud copy approval freshness at execution'
+          remote_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push \
+            --force-with-lease="refs/heads/${SOURCE_BRANCH}:${SOURCE_HEAD}" \
+            "$remote_url" \
+            "HEAD:refs/heads/${SOURCE_BRANCH}"
