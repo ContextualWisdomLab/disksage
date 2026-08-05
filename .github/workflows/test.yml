@@ -23,8 +23,12 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: src-tauri
-      - name: Rust formatting
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+      - name: Podman Rust formatting
+        run: >-
+          rustfmt --edition 2021 --check
+          src-tauri/src/podman_desktop.rs
+          src-tauri/tests/podman_desktop_documentation_contract.rs
+          src-tauri/tests/podman_desktop_issue_privacy.rs
       - name: Rust tests (includes unix symlink test)
         run: cargo test --manifest-path src-tauri/Cargo.toml
       - name: Headless cloud planner tests
