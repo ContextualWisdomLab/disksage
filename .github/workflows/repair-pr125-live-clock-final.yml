@@ -1,5 +1,6 @@
 name: Repair PR 125 live-clock approval boundary
 
+# Re-trigger the audited one-shot repair after exact-head workflow inspection.
 on:
   pull_request:
     types: [synchronize]
