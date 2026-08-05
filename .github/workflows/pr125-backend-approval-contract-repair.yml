@@ -1,0 +1,309 @@
+name: Repair PR 125 backend approval contract
+
+on:
+  push:
+    branches: [feat/exact-cloud-copy-approval-lineage]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr125-backend-approval-contract-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: feat/exact-cloud-copy-approval-lineage
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Install deterministic test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20.19.0
+      - run: npm ci --ignore-scripts
+
+      - name: Add regression tests before production changes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          commands = Path("src-tauri/src/commands.rs")
+          text = commands.read_text(encoding="utf-8")
+          marker = "/// Read-only cloud offload plan. The selected destination must be one of the roots discovered\n"
+          test_module = r'''
+          #[cfg(all(test, not(coverage)))]
+          mod cloud_plan_output_tests {
+              use super::*;
+
+              fn candidate() -> cloud::CloudCandidate {
+                  cloud::CloudCandidate {
+                      metadata_fingerprint: "a".repeat(64),
+                      review_fingerprint: "b".repeat(64),
+                      src: "/source/archive.wav".into(),
+                      dst: "/cloud/archive.wav".into(),
+                      provider: cloud::CloudProvider::Icloud,
+                      destination_account_scope: cloud::CloudAccountScope::Personal,
+                      kind: cloud::ArchiveKind::Media,
+                      bytes: 1024,
+                      age_days: 90,
+                      created_ms: 1,
+                      modified_ms: 2,
+                      production_time_ms: 1,
+                      production_time_source: "filesystem-created".into(),
+                      production_time_confidence: "low".into(),
+                      source_root: "/source".into(),
+                      relative_path: "archive.wav".into(),
+                      source_context: "source".into(),
+                      requires_review: false,
+                      review_reasons: Vec::new(),
+                      content_title: None,
+                      content_authors: Vec::new(),
+                      content_context: Vec::new(),
+                      duration_ms: None,
+                      dataset_profile: None,
+                      metadata_evidence: Vec::new(),
+                      blocked_reason: None,
+                  }
+              }
+
+              #[test]
+              fn plan_output_returns_backend_phrases_for_both_copy_actions() {
+                  let candidate = candidate();
+                  let report = cloud::CloudPlanReport {
+                      cloud_root: cloud::CloudRoot {
+                          id: "icloud-personal".into(),
+                          provider: cloud::CloudProvider::Icloud,
+                          account_scope: cloud::CloudAccountScope::Personal,
+                          label: "iCloud Drive".into(),
+                          path: "/cloud".into(),
+                          readable: true,
+                          access_issue: None,
+                      },
+                      generated_at_ms: 3,
+                      source_selection_policy: None,
+                      candidates: vec![candidate.clone()],
+                      candidate_bytes: candidate.bytes,
+                      potentially_reclaimable_bytes: candidate.bytes,
+                      exact_duplicates: cloud::ExactDuplicateSummary::default(),
+                      capacity: None,
+                      notices: Vec::new(),
+                  };
+
+                  let output = cloud_plan_output(report);
+                  assert_eq!(output.copy_approval_phrases.len(), 1);
+                  let phrases = &output.copy_approval_phrases[0];
+                  assert_eq!(phrases.metadata_fingerprint, candidate.metadata_fingerprint);
+                  assert_eq!(
+                      phrases.copy_only,
+                      cloud_transfer::cloud_copy_approval_phrase(
+                          &candidate,
+                          cloud_transfer::CloudCopyApprovalAction::CopyOnly,
+                      )
+                  );
+                  assert_eq!(
+                      phrases.adopt_existing_copy,
+                      cloud_transfer::cloud_copy_approval_phrase(
+                          &candidate,
+                          cloud_transfer::CloudCopyApprovalAction::AdoptExistingCopy,
+                      )
+                  );
+              }
+          }
+
+          '''
+          if "mod cloud_plan_output_tests" in text:
+              raise SystemExit("Rust regression tests already present")
+          if text.count(marker) != 1:
+              raise SystemExit("Rust test insertion anchor mismatch")
+          commands.write_text(text.replace(marker, test_module + marker, 1), encoding="utf-8")
+
+          tests = Path("src/lib/api.test.ts")
+          test_text = tests.read_text(encoding="utf-8")
+          ts_tests = r'''
+
+          describe("backend cloud copy approval phrase contract", () => {
+            const metadataFingerprint = "a".repeat(64);
+            const candidate = { metadata_fingerprint: metadataFingerprint } as api.CloudCandidate;
+            const report = {
+              copy_approval_phrases: [{
+                metadata_fingerprint: metadataFingerprint,
+                copy_only: "backend copy phrase",
+                adopt_existing_copy: "backend adoption phrase",
+              }],
+            } as api.CloudPlanReport;
+
+            it("uses the backend phrase verbatim for each action", () => {
+              expect(api.cloudCopyApprovalPhrase(report, candidate, "copy-only"))
+                .toBe("backend copy phrase");
+              expect(api.cloudCopyApprovalPhrase(report, candidate, "adopt-existing-copy"))
+                .toBe("backend adoption phrase");
+            });
+
+            it("fails closed when the current plan has no bound phrase", () => {
+              expect(() => api.cloudCopyApprovalPhrase(
+                { copy_approval_phrases: [] } as api.CloudPlanReport,
+                candidate,
+                "copy-only",
+              )).toThrow("cloud-copy-approval-phrase-missing");
+            });
+          });
+          '''
+          if "backend cloud copy approval phrase contract" in test_text:
+              raise SystemExit("TypeScript regression tests already present")
+          tests.write_text(test_text.rstrip() + ts_tests + "\n", encoding="utf-8")
+          PY
+
+      - name: Prove the regression tests fail before production changes
+        run: |
+          set +e
+          cargo test --manifest-path src-tauri/Cargo.toml --lib cloud_plan_output_tests \
+            > /tmp/pr125-rust-red.log 2>&1
+          rust_status=$?
+          npm test -- --run src/lib/api.test.ts > /tmp/pr125-ts-red.log 2>&1
+          ts_status=$?
+          set -e
+          cat /tmp/pr125-rust-red.log
+          cat /tmp/pr125-ts-red.log
+          if [ "$rust_status" -eq 0 ] || [ "$ts_status" -eq 0 ]; then
+            echo "Expected both newly added regression suites to fail before production changes" >&2
+            exit 1
+          fi
+          grep -Eq 'cloud_plan_output|CloudPlanOutput' /tmp/pr125-rust-red.log
+          grep -Eq 'cloudCopyApprovalPhrase|Expected 2 arguments|Expected 3 arguments' /tmp/pr125-ts-red.log
+
+      - name: Implement backend-owned approval phrase response
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          commands = Path("src-tauri/src/commands.rs")
+          text = commands.read_text(encoding="utf-8")
+          marker = "/// Read-only cloud offload plan. The selected destination must be one of the roots discovered\n"
+          production = r'''
+          /// Exact operator phrases generated by the Rust approval policy for one planned candidate.
+          #[cfg(not(coverage))]
+          #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+          pub struct CloudCopyApprovalPhraseSet {
+              /// Metadata fingerprint used to bind this phrase set to one current plan candidate.
+              pub metadata_fingerprint: String,
+              /// Exact phrase required to create a new verified cloud copy.
+              pub copy_only: String,
+              /// Exact phrase required to adopt an already-existing verified destination copy.
+              pub adopt_existing_copy: String,
+          }
+
+          /// UI-facing cloud plan that preserves the complete plan and adds Rust-owned phrases.
+          #[cfg(not(coverage))]
+          #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+          pub struct CloudPlanOutput {
+              /// Original read-only cloud plan serialized without changing its established fields.
+              #[serde(flatten)]
+              pub report: cloud::CloudPlanReport,
+              /// Exact approval phrases keyed by candidate metadata fingerprint.
+              pub copy_approval_phrases: Vec<CloudCopyApprovalPhraseSet>,
+          }
+
+          /// Bind both supported approval actions to every candidate using the production Rust policy.
+          #[cfg(not(coverage))]
+          fn cloud_plan_output(report: cloud::CloudPlanReport) -> CloudPlanOutput {
+              let copy_approval_phrases = report
+                  .candidates
+                  .iter()
+                  .map(|candidate| CloudCopyApprovalPhraseSet {
+                      metadata_fingerprint: candidate.metadata_fingerprint.clone(),
+                      copy_only: cloud_transfer::cloud_copy_approval_phrase(
+                          candidate,
+                          cloud_transfer::CloudCopyApprovalAction::CopyOnly,
+                      ),
+                      adopt_existing_copy: cloud_transfer::cloud_copy_approval_phrase(
+                          candidate,
+                          cloud_transfer::CloudCopyApprovalAction::AdoptExistingCopy,
+                      ),
+                  })
+                  .collect();
+              CloudPlanOutput {
+                  report,
+                  copy_approval_phrases,
+              }
+          }
+
+          '''
+          if "pub struct CloudPlanOutput" in text:
+              raise SystemExit("Rust production output already present")
+          if text.count(marker) != 1:
+              raise SystemExit("Rust production insertion anchor mismatch")
+          text = text.replace(marker, production + marker, 1)
+          old_signature = ") -> Result<cloud::CloudPlanReport, String> {\n    tauri::async_runtime::spawn_blocking(move || {\n        let (_, report) =\n            cloud_plan_for_inputs(&root, &cloud_root, min_size_mib, min_age_days, limit, &app)?;\n        Ok(report)\n    })"
+          new_signature = ") -> Result<CloudPlanOutput, String> {\n    tauri::async_runtime::spawn_blocking(move || {\n        let (_, report) =\n            cloud_plan_for_inputs(&root, &cloud_root, min_size_mib, min_age_days, limit, &app)?;\n        Ok(cloud_plan_output(report))\n    })"
+          if text.count(old_signature) != 1:
+              raise SystemExit("plan_cloud_archive replacement anchor mismatch")
+          commands.write_text(text.replace(old_signature, new_signature, 1), encoding="utf-8")
+
+          api = Path("src/lib/api.ts")
+          api_text = api.read_text(encoding="utf-8")
+          report_old = '''export interface CloudPlanReport {\n  cloud_root: CloudRoot;\n  generated_at_ms: number;\n  candidates: CloudCandidate[];\n  candidate_bytes: number;\n  potentially_reclaimable_bytes: number;\n  exact_duplicates: ExactDuplicateSummary;\n  capacity?: CloudCapacityAssessment;\n  notices: string[];\n}\n'''
+          report_new = '''export interface CloudCopyApprovalPhraseSet {\n  metadata_fingerprint: string;\n  copy_only: string;\n  adopt_existing_copy: string;\n}\n\nexport interface CloudPlanReport {\n  cloud_root: CloudRoot;\n  generated_at_ms: number;\n  candidates: CloudCandidate[];\n  candidate_bytes: number;\n  potentially_reclaimable_bytes: number;\n  exact_duplicates: ExactDuplicateSummary;\n  capacity?: CloudCapacityAssessment;\n  notices: string[];\n  copy_approval_phrases: CloudCopyApprovalPhraseSet[];\n}\n'''
+          if api_text.count(report_old) != 1:
+              raise SystemExit("TypeScript CloudPlanReport anchor mismatch")
+          api_text = api_text.replace(report_old, report_new, 1)
+          helper_old = '''export const cloudCopyApprovalPhrase = (\n  candidate: Pick<CloudCandidate, "review_fingerprint">,\n  action: CloudCopyApprovalAction,\n) => `DiskSage cloud ${action} ${candidate.review_fingerprint} 승인`;\n'''
+          helper_new = '''/** Return the exact Rust-generated phrase for one current plan candidate and action. */\nexport function cloudCopyApprovalPhrase(\n  report: Pick<CloudPlanReport, "copy_approval_phrases">,\n  candidate: Pick<CloudCandidate, "metadata_fingerprint">,\n  action: CloudCopyApprovalAction,\n): string {\n  const phrases = report.copy_approval_phrases.find(\n    (entry) => entry.metadata_fingerprint === candidate.metadata_fingerprint,\n  );\n  if (!phrases) throw new Error("cloud-copy-approval-phrase-missing");\n  const phrase = action === "copy-only" ? phrases.copy_only : phrases.adopt_existing_copy;\n  if (!phrase) throw new Error("cloud-copy-approval-phrase-missing");\n  return phrase;\n}\n'''
+          if api_text.count(helper_old) != 1:
+              raise SystemExit("TypeScript phrase helper anchor mismatch")
+          api.write_text(api_text.replace(helper_old, helper_new, 1), encoding="utf-8")
+
+          svelte = Path("src/lib/CloudArchive.svelte")
+          svelte_text = svelte.read_text(encoding="utf-8")
+          old_call = "api.cloudCopyApprovalPhrase(candidate, "
+          call_count = svelte_text.count(old_call)
+          if call_count != 6:
+              raise SystemExit(f"Expected 6 UI phrase calls, found {call_count}")
+          svelte.write_text(
+              svelte_text.replace(old_call, "api.cloudCopyApprovalPhrase(report!, candidate, "),
+              encoding="utf-8",
+          )
+
+          changelog = Path("CHANGELOG.md")
+          changelog_text = changelog.read_text(encoding="utf-8")
+          anchor = "### Security\n\n"
+          entry = "- Return exact cloud copy and existing-copy adoption approval phrases from the Rust plan response and consume them verbatim in the UI, eliminating duplicated frontend authorization policy.\n"
+          if entry not in changelog_text:
+              if changelog_text.count(anchor) != 1:
+                  raise SystemExit("CHANGELOG security anchor mismatch")
+              changelog_text = changelog_text.replace(anchor, anchor + entry, 1)
+          changelog.write_text(changelog_text, encoding="utf-8")
+          PY
+
+      - name: Format and verify exact repaired source
+        run: |
+          cargo fmt --manifest-path src-tauri/Cargo.toml
+          cargo test --manifest-path src-tauri/Cargo.toml --lib cloud_plan_output_tests
+          cargo test --manifest-path src-tauri/Cargo.toml --lib cloud_transfer::tests
+          npm test -- --run src/lib/api.test.ts
+          npm run check
+          npm run build
+          git diff --check
+
+      - name: Remove one-shot repair source and commit exact validated tree
+        run: |
+          rm -f .github/workflows/pr125-backend-approval-contract-repair.yml
+          rm -f .github/workflows/pr125-cloud-approval-repair.yml
+          rm -f .github/scripts/pr125_cloud_approval_repair.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src-tauri/src/commands.rs src/lib/api.ts src/lib/api.test.ts src/lib/CloudArchive.svelte CHANGELOG.md
+          git add -u .github/workflows .github/scripts
+          git diff --cached --check
+          git commit -m "fix: bind cloud approval phrases to Rust plan output"
+          git push origin HEAD:feat/exact-cloud-copy-approval-lineage
