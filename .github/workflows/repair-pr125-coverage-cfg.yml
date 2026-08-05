@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - feat/exact-cloud-copy-approval-lineage
+    paths:
+      - .github/workflows/repair-pr125-coverage-cfg.yml
 
 permissions:
   contents: read
@@ -18,9 +20,10 @@ jobs:
       github.repository == 'ContextualWisdomLab/disksage' &&
       github.ref == 'refs/heads/feat/exact-cloud-copy-approval-lineage'
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 10
     permissions:
       contents: write
+      pull-requests: write
     steps:
       - name: Check out exact repair source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -29,91 +32,56 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify audited source blob
-        shell: bash --noprofile --norc -e -o pipefail {0}
-        run: |
-          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
-          test "$(git hash-object src-tauri/src/cloud_transfer.rs)" = "a4b3fd760b2f890046e9d5ff5c8f219b73596ae3"
-
-      - name: Prove the cfg regression is red
-        shell: bash --noprofile --norc -e -o pipefail {0}
-        run: |
-          cat > /tmp/check_pr125_cfg.py <<'PY'
-          from pathlib import Path
-          import sys
-
-          text = Path("src-tauri/src/cloud_transfer.rs").read_text(encoding="utf-8")
-          expected = "#[cfg(test)]\nfn test_copy_approval("
-          if expected not in text:
-              print("test_copy_approval is unavailable when cfg(coverage) is active")
-              sys.exit(1)
-          if "#[cfg(test)]\nmod tests {" not in text:
-              print("cloud_transfer tests module contract changed unexpectedly")
-              sys.exit(1)
-          print("coverage cfg contract satisfied")
-          PY
-          set +e
-          python3 /tmp/check_pr125_cfg.py > /tmp/pr125-red.log 2>&1
-          status=$?
-          set -e
-          cat /tmp/pr125-red.log
-          test "$status" -ne 0
-          grep -F "test_copy_approval is unavailable when cfg(coverage) is active" /tmp/pr125-red.log
-
-      - name: Apply the minimal cfg repair
-        shell: bash --noprofile --norc -e -o pipefail {0}
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path("src-tauri/src/cloud_transfer.rs")
-          text = path.read_text(encoding="utf-8")
-          old = "#[cfg(all(test, not(coverage)))]\nfn test_copy_approval("
-          new = "#[cfg(test)]\nfn test_copy_approval("
-          if text.count(old) != 1:
-              raise SystemExit(f"expected one audited cfg anchor, found {text.count(old)}")
-          path.write_text(text.replace(old, new, 1), encoding="utf-8")
-          PY
-          python3 /tmp/check_pr125_cfg.py
-          git diff --check
-          test "$(git diff --name-only)" = "src-tauri/src/cloud_transfer.rs"
-
-      - name: Install Tauri system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
-
-      - name: Install repository Rust toolchain
-        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
-
-      - name: Verify normal and coverage test compilation
-        shell: bash --noprofile --norc -e -o pipefail {0}
-        run: |
-          rustfmt --edition 2021 --check src-tauri/src/cloud_transfer.rs
-          cargo test --manifest-path src-tauri/Cargo.toml --lib \
-            cloud_transfer::tests::receipt_lineage_is_integrity_bound_and_older_receipts_remain_valid \
-            --features cloud-cli
-          RUSTFLAGS="--cfg coverage" cargo test --manifest-path src-tauri/Cargo.toml --lib \
-            cloud_transfer::tests::receipt_lineage_is_integrity_bound_and_older_receipts_remain_valid \
-            --features cloud-cli
-          git diff --check
-
-      - name: Commit the exact repair and remove one-shot workflow
+      - name: Apply and publish the exact bounded repair
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_HEAD: ${{ github.sha }}
           SOURCE_BRANCH: feat/exact-cloud-copy-approval-lineage
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          rm .github/workflows/repair-pr125-coverage-cfg.yml
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src-tauri/src/cloud_transfer.rs .github/workflows/repair-pr125-coverage-cfg.yml
-          test "$(git diff --cached --name-only | sort)" = "$(printf '%s\n' \
+          report_failure() {
+            status=$?
+            gh pr comment 125 --repo "$GITHUB_REPOSITORY" \
+              --body "PR125 exact-head repair failed on \`$SOURCE_HEAD\` with status \`$status\`; inspect workflow \`$GITHUB_RUN_ID\` before retrying." \
+              >/dev/null 2>&1 || true
+            exit "$status"
+          }
+          trap report_failure ERR
+
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+          test "$(git hash-object src-tauri/src/cloud_transfer.rs)" = \
+            "a4b3fd760b2f890046e9d5ff5c8f219b73596ae3"
+          git ls-files --error-unmatch .github/repair-pr125-trigger.txt >/dev/null
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src-tauri/src/cloud_transfer.rs")
+          source = path.read_text(encoding="utf-8")
+          old = "#[cfg(all(test, not(coverage)))]\nfn test_copy_approval("
+          new = "#[cfg(test)]\nfn test_copy_approval("
+          if source.count(old) != 1:
+              raise SystemExit(f"expected one audited cfg anchor, found {source.count(old)}")
+          repaired = source.replace(old, new, 1)
+          if repaired.count(new) != 1:
+              raise SystemExit("green cfg contract missing or duplicated")
+          path.write_text(repaired, encoding="utf-8")
+          PY
+
+          rm .github/workflows/repair-pr125-coverage-cfg.yml \
+            .github/repair-pr125-trigger.txt
+          git diff --check
+          test "$(git diff --name-only | sort)" = "$(printf '%s\n' \
+            .github/repair-pr125-trigger.txt \
             .github/workflows/repair-pr125-coverage-cfg.yml \
             src-tauri/src/cloud_transfer.rs | sort)"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
           git diff --cached --check
           git commit -m "fix: compile cloud transfer tests under coverage"
           remote_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push --force-with-lease="refs/heads/${SOURCE_BRANCH}:${SOURCE_HEAD}" \
             "$remote_url" "HEAD:refs/heads/${SOURCE_BRANCH}"
+          trap - ERR
