@@ -43,21 +43,22 @@ jobs:
 
           source = Path("src-tauri/src/cloud_local_eviction_batch.rs").read_text(encoding="utf-8")
           required = [
+              "#[cfg(not(coverage))]\nuse crate::cloud_local_eviction::{execute_icloud_local_eviction, write_immutable_record};",
               "#[cfg(any(not(coverage), test))]\ntrait BatchRecordWriter",
               "#[cfg(any(not(coverage), test))]\nfn fresh_item_requested_at_ms",
               "#[cfg(any(not(coverage), test))]\nfn execute_icloud_local_eviction_batch_with",
           ]
           missing = [anchor for anchor in required if anchor not in source]
           if missing:
-              print("coverage test seams are unavailable")
+              print("coverage test seams or conditional production imports are unavailable")
               sys.exit(1)
-          print("coverage test seams are available")
+          print("coverage test seams and imports are available")
           PY
           status=$?
           set -e
           cat /tmp/pr129-red.log
           test "$status" -ne 0
-          grep -F "coverage test seams are unavailable" /tmp/pr129-red.log
+          grep -F "coverage test seams or conditional production imports are unavailable" /tmp/pr129-red.log
 
       - name: Apply the minimal coverage seam repair
         shell: bash --noprofile --norc -e -o pipefail {0}
@@ -67,7 +68,21 @@ jobs:
 
           path = Path("src-tauri/src/cloud_local_eviction_batch.rs")
           source = path.read_text(encoding="utf-8")
+          old_import = '''use crate::cloud_local_eviction::{
+              approve_icloud_local_eviction, execute_icloud_local_eviction, plan_icloud_local_eviction,
+              write_immutable_record, IcloudLocalEvictionApproval, IcloudLocalEvictionPlan,
+              IcloudLocalEvictionResult,
+          };
+          '''
+          new_import = '''use crate::cloud_local_eviction::{
+              approve_icloud_local_eviction, plan_icloud_local_eviction, IcloudLocalEvictionApproval,
+              IcloudLocalEvictionPlan, IcloudLocalEvictionResult,
+          };
+          #[cfg(not(coverage))]
+          use crate::cloud_local_eviction::{execute_icloud_local_eviction, write_immutable_record};
+          '''
           replacements = [
+              (old_import, new_import),
               (
                   "#[cfg(not(coverage))]\ntrait BatchRecordWriter",
                   "#[cfg(any(not(coverage), test))]\ntrait BatchRecordWriter",
@@ -93,6 +108,7 @@ jobs:
 
           source = Path("src-tauri/src/cloud_local_eviction_batch.rs").read_text(encoding="utf-8")
           for anchor in [
+              "#[cfg(not(coverage))]\nuse crate::cloud_local_eviction::{execute_icloud_local_eviction, write_immutable_record};",
               "#[cfg(any(not(coverage), test))]\ntrait BatchRecordWriter",
               "#[cfg(any(not(coverage), test))]\nfn fresh_item_requested_at_ms",
               "#[cfg(any(not(coverage), test))]\nfn execute_icloud_local_eviction_batch_with",
