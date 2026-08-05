@@ -11,6 +11,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add a read-only Podman evidence panel to Cleanup that separately displays configured VM capacity, raw-image logical size, host allocation, guest filesystem observations, Podman store observations, image/stopped-container/volume logical candidates, evidence completeness, stable issue codes, and a redacted candidate-set fingerprint.
 - Add a privacy-safe Tauri contract that removes machine names, local paths, graph-root locations, image identifiers, tags, command output, and dynamic error details before evidence reaches the desktop frontend.
 - Add beginner-readable JSDoc for every Podman frontend contract function and a deterministic source-level regression test that fails when any production function loses its adjacent documentation.
+- Add module-level Rust `missing_docs` enforcement and a deterministic source-level contract that requires beginner-readable rustdoc for every Podman desktop function, including private helpers and regression tests.
 
 ### Changed
 
