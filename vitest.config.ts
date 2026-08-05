@@ -13,11 +13,12 @@ export default defineConfig({
         "src/lib/fmt.ts",
         "src/lib/dupeGuard.ts",
         "src/lib/verdictBadge.ts",
+        "src/lib/podmanEvidence.ts",
       ],
       reporter: ["text", "json", "json-summary"],
-      // ponytail: 위 include 5개 순수 로직 파일은 헤드리스로 완전 검증 가능하므로
-      // 네 지표 모두 100%로 고정한다. 이 게이트는 scope를 넓히지 않는다 —
-      // Svelte 컴포넌트는 여전히 cargo test + 수동 체크리스트로 검증한다.
+      // ponytail: 위 include의 헤드리스 순수 로직/API 계약 파일은 완전 검증 가능하므로
+      // 네 지표 모두 100%로 고정한다. Svelte 컴포넌트의 상태 분기는 같은 순수 view
+      // model을 통해 검증하고, 실제 렌더링은 build/svelte-check와 수동 체크리스트로 확인한다.
       thresholds: {
         statements: 100,
         branches: 100,
