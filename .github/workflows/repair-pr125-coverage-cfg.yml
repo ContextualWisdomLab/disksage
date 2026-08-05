@@ -10,7 +10,7 @@ permissions:
 
 concurrency:
   group: repair-pr125-coverage-cfg
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   repair:
