@@ -1,0 +1,4 @@
+Trigger the existing fail-closed PR 129 coverage-seam repair workflow.
+
+Exact-head retrigger source: 6504d5373dd6351c9ab1b22d889a586f25596109.
+Repair the iCloud batch coverage seams, verify normal and coverage test compilation, remove the one-shot repair workflow, and refuse stale-head writes.
