@@ -1,77 +1,77 @@
 // coverage 빌드(비-테스트)에서는 run()이 빠져 모듈 내용이 테스트에서만 쓰이므로 dead_code만 허용
-pub mod archive_git_tree;
 #[cfg_attr(coverage, allow(dead_code))]
-pub mod cloud;
-#[cfg(not(coverage))]
-pub mod cloud_eviction;
-pub mod cloud_local_eviction;
-pub mod cloud_local_eviction_batch;
-pub mod cloud_local_inventory;
-/// Typed backend-authored presentation contract for cloud archive plans.
-pub mod cloud_plan_view;
-pub mod cloud_review;
-pub mod cloud_transfer;
+mod dupes;
 #[cfg_attr(coverage, allow(dead_code))]
 mod commands;
-pub mod content_digest;
 #[cfg_attr(coverage, allow(dead_code))]
-mod dataset_metadata;
+mod scanner;
+#[cfg_attr(coverage, allow(dead_code))]
+mod userrules;
+#[cfg_attr(coverage, allow(dead_code))]
+mod settings;
+#[cfg_attr(coverage, allow(dead_code))]
+mod safety;
+#[cfg(all(test, target_os = "macos"))]
+mod macos_temp_guard_tests;
+#[cfg_attr(coverage, allow(dead_code))]
+mod rules;
 #[cfg_attr(coverage, allow(dead_code))]
 mod dev_artifacts;
 #[cfg_attr(coverage, allow(dead_code))]
-mod dupes;
+mod ontology;
+#[cfg_attr(coverage, allow(dead_code))]
+mod inventory;
+#[cfg_attr(coverage, allow(dead_code))]
+mod organize;
+#[cfg_attr(coverage, allow(dead_code))]
+mod llm;
+#[cfg_attr(coverage, allow(dead_code))]
+mod web;
+#[cfg_attr(coverage, allow(dead_code))]
+mod reasoning;
+#[cfg_attr(coverage, allow(dead_code))]
+mod dataset_metadata;
+pub mod archive_git_tree;
+#[cfg_attr(coverage, allow(dead_code))]
+pub mod cloud;
+/// Typed backend-authored presentation contract for cloud archive plans.
+pub mod cloud_plan_view;
+pub mod cloud_local_inventory;
+pub mod cloud_local_eviction;
+pub mod cloud_local_eviction_batch;
+#[cfg(not(coverage))]
+pub mod cloud_eviction;
+pub mod cloud_review;
+pub mod cloud_transfer;
+pub mod content_digest;
 pub mod duplicate_audit;
-pub mod git_worktree;
 pub mod icloud_sync_health;
 pub mod incomplete_download;
 pub mod incomplete_download_materialization;
 pub mod incomplete_download_materialization_destination;
 pub mod incomplete_download_materialization_execution;
 pub mod incomplete_download_recovery;
-#[cfg_attr(coverage, allow(dead_code))]
-mod inventory;
-#[cfg_attr(coverage, allow(dead_code))]
-mod llm;
-#[cfg(all(test, target_os = "macos"))]
-mod macos_temp_guard_tests;
+pub mod git_worktree;
 pub mod maven_cache;
 pub mod multipart_archive;
 pub mod naruon_capacity;
 pub mod naruon_cloud_copy_readiness;
 pub mod naruon_lineage;
-#[cfg_attr(coverage, allow(dead_code))]
-mod ontology;
-#[cfg_attr(coverage, allow(dead_code))]
-mod organize;
 /// Privacy-safe desktop projection of read-only Podman reclaim evidence.
 pub mod podman_desktop;
 /// Read-only, fail-closed Podman VM/store reclaim evidence.
 pub mod podman_reclaim;
-pub mod private_evidence;
 pub mod provider_api_client;
 pub mod provider_capacity;
 pub mod provider_client_runtime;
 pub mod provider_evidence;
 pub mod provider_oauth;
 pub mod provider_sync;
-#[cfg_attr(coverage, allow(dead_code))]
-mod reasoning;
+pub mod private_evidence;
 /// Read-only, fail-closed logical/allocation/reclaimability evidence.
 pub mod reclaim;
-#[cfg_attr(coverage, allow(dead_code))]
-mod rules;
-#[cfg_attr(coverage, allow(dead_code))]
-mod safety;
-#[cfg_attr(coverage, allow(dead_code))]
-mod scanner;
 pub mod semantic_catalog;
-#[cfg_attr(coverage, allow(dead_code))]
-mod settings;
-#[cfg_attr(coverage, allow(dead_code))]
-mod userrules;
 pub mod volume_pressure;
-#[cfg_attr(coverage, allow(dead_code))]
-mod web;
 
 // coverage 빌드에서 제외 — GUI 런타임은 헤드리스 테스트로 실행 불가
 #[cfg(not(coverage))]
@@ -126,7 +126,7 @@ pub fn run() {
             commands::adopt_existing_cloud_candidate,
             commands::attest_cloud_copy,
             commands::trash_verified_cloud_source,
-            podman_desktop::inspect_podman_reclaim,
+            podman_desktop::inspect_podman_reclaim
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
