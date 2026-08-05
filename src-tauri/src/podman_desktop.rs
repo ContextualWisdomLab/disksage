@@ -124,9 +124,9 @@ fn stable_issue_code(value: &str) -> String {
             .bytes()
             .next()
             .is_some_and(|byte| byte.is_ascii_lowercase())
-        && code.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
-        });
+        && code
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
 
     if valid {
         code.to_string()
