@@ -6,12 +6,13 @@
 //! evidence; callers must not emit machine names, filesystem paths, image identifiers, tags, or
 //! account-local context to telemetry, analytics, remote logs, or support bundles.
 
-use crate::podman_reclaim::{
-    PodmanReclaimAssessment, PodmanReclaimPlan, DEFAULT_PODMAN_MACHINE, DEFAULT_PROBE_TIMEOUT,
-    PODMAN_RECLAIM_SCHEMA_KIND,
-};
-use std::path::Path;
+use crate::podman_reclaim::{PodmanReclaimPlan, DEFAULT_PODMAN_MACHINE};
+#[cfg(test)]
+use crate::podman_reclaim::{PodmanReclaimAssessment, PODMAN_RECLAIM_SCHEMA_KIND};
 #[cfg(not(coverage))]
+use crate::podman_reclaim::DEFAULT_PROBE_TIMEOUT;
+use std::path::Path;
+#[cfg(any(not(coverage), test))]
 use std::path::PathBuf;
 use std::time::Duration;
 
