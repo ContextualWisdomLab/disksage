@@ -132,6 +132,8 @@ fn paths_overlap(left: &Path, right: &Path) -> bool {
     left == right || left.starts_with(right) || right.starts_with(left)
 }
 
+/// Ensures the cloud root, manifest, and optional record directory are all real, distinct paths
+/// that do not nest inside each other, so evidence and immutable records stay outside cloud data.
 fn validate_control_locations(
     cloud_root: &Path,
     manifest: &Path,
@@ -161,6 +163,8 @@ fn validate_control_locations(
     Ok(())
 }
 
+/// Finds the single iCloud root matching `requested`, returning a specific error if none, more
+/// than one, or a non-iCloud root matches.
 fn select_root<'a>(roots: &'a [CloudRoot], requested: &Path) -> Result<&'a CloudRoot, String> {
     let matches: Vec<_> = roots
         .iter()

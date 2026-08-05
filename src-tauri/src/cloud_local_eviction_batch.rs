@@ -645,14 +645,13 @@ fn checkpoint_name(approval_id: &str, attempted_count: u32) -> String {
     )
 }
 
-/// Execute one fully preflighted batch.
+/// A place to save immutable batch records, kept separate from disk I/O so tests can check writes.
 ///
-/// All current plans and all immutable individual approval records are prepared before the first
-/// eviction request. Execution stops after the first error or incomplete verification. Each
-/// attempted item is followed by a create-new batch checkpoint; a rerun therefore fails before a
-/// mutation instead of silently reusing an earlier approval record.
+/// A real implementation writes to the immutable record directory. A test implementation can
+/// record what was written and simulate write failures without touching the filesystem.
 #[cfg(not(coverage))]
 trait BatchRecordWriter {
+    /// Write one serializable record to `record_dir` under `name`, or return an error string.
     fn write<T: serde::Serialize>(
         &mut self,
         record_dir: &Path,
@@ -662,10 +661,12 @@ trait BatchRecordWriter {
 }
 
 #[cfg(not(coverage))]
+/// The production `BatchRecordWriter` that writes real immutable records to disk.
 struct ImmutableBatchRecordWriter;
 
 #[cfg(not(coverage))]
 impl BatchRecordWriter for ImmutableBatchRecordWriter {
+    /// Write `value` as an immutable record file, mapping the writer's result to `Ok(())`.
     fn write<T: serde::Serialize>(
         &mut self,
         record_dir: &Path,
@@ -716,6 +717,10 @@ fn fresh_item_requested_at_ms(now_ms: &mut impl FnMut() -> u64) -> u64 {
 }
 
 #[cfg(not(coverage))]
+/// Executes one approved batch using injected planner, executor, recorder, and clock functions.
+///
+/// This generic implementation lets tests substitute deterministic behavior; the public entry
+/// point injects the real cloud implementations and system clock.
 fn execute_icloud_local_eviction_batch_with<P, E, R, N>(
     root: &CloudRoot,
     plan: &IcloudLocalEvictionBatchPlan,
