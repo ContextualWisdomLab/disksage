@@ -1,0 +1,97 @@
+name: Repair PR 125 coverage helper
+
+on:
+  push:
+    branches:
+      - feat/exact-cloud-copy-approval-lineage
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repair-pr125-coverage-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  repair-coverage-helper:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the exact triggering head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+
+      - name: Prove the coverage regression is red
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          RUSTFLAGS='--cfg coverage' cargo test \
+            --manifest-path src-tauri/Cargo.toml \
+            --lib cloud_transfer::tests \
+            --features cloud-cli \
+            --no-run > /tmp/pr125-red.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/pr125-red.log
+          if [ "$status" -eq 0 ]; then
+            echo 'Expected the pre-fix coverage compile to fail, but it passed.' >&2
+            exit 1
+          fi
+          grep -Eq 'cannot find function.*test_copy_approval|test_copy_approval.*not found' /tmp/pr125-red.log
+
+      - name: Apply the bounded cfg repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src-tauri/src/cloud_transfer.rs')
+          source = path.read_text(encoding='utf-8')
+          old = '#[cfg(all(test, not(coverage)))]\nfn test_copy_approval('
+          new = '#[cfg(test)]\nfn test_copy_approval('
+          count = source.count(old)
+          if count != 1:
+              raise SystemExit(f'expected exactly one coverage helper anchor, found {count}')
+          path.write_text(source.replace(old, new, 1), encoding='utf-8')
+          PY
+          git diff --check
+
+      - name: Prove the coverage regression is green
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUSTFLAGS='--cfg coverage' cargo test \
+            --manifest-path src-tauri/Cargo.toml \
+            --lib cloud_transfer::tests \
+            --features cloud-cli \
+            --no-run
+          cargo test \
+            --manifest-path src-tauri/Cargo.toml \
+            --lib cloud_transfer::tests \
+            --features cloud-cli
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Commit only the validated production repair
+        shell: bash
+        env:
+          BRANCH_NAME: feat/exact-cloud-copy-approval-lineage
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          rm .github/workflows/repair-pr125-coverage.yml
+          git diff --check
+          remote_head="$(git ls-remote origin "refs/heads/${BRANCH_NAME}" | cut -f1)"
+          if [ "$remote_head" != "$EXPECTED_HEAD" ]; then
+            echo "Refusing stale-head write: expected $EXPECTED_HEAD, found $remote_head" >&2
+            exit 1
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src-tauri/src/cloud_transfer.rs .github/workflows/repair-pr125-coverage.yml
+          git commit -m 'fix: compile cloud approval tests under coverage'
+          git push origin "HEAD:refs/heads/${BRANCH_NAME}"
