@@ -29,7 +29,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Install Tauri system dependencies
         shell: bash --noprofile --norc -e -o pipefail {0}
@@ -71,6 +71,22 @@ jobs:
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           python3 .github/scripts/repair_pr125_backend_phrases.py apply
+          python3 - <<'PY'
+          from pathlib import Path
+
+          changelog = Path("CHANGELOG.md")
+          text = changelog.read_text(encoding="utf-8")
+          entry = (
+              "- Source cloud copy and existing-copy adoption approval phrases from the Rust "
+              "plan response, so the frontend cannot drift from the authorization policy.\n"
+          )
+          if entry not in text:
+              marker = "## [Unreleased]\n"
+              if marker not in text:
+                  raise SystemExit("CHANGELOG missing [Unreleased] section")
+              text = text.replace(marker, marker + "\n" + entry, 1)
+              changelog.write_text(text, encoding="utf-8")
+          PY
           cargo fmt --manifest-path src-tauri/Cargo.toml
           git diff --check
 
@@ -85,6 +101,7 @@ jobs:
             --lib --features cloud-cli
           npm test -- --run src/lib/api.test.ts
           npm run check
+          npm run build
           cargo check --manifest-path src-tauri/Cargo.toml --features cloud-cli --bins
           cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
           git diff --check
@@ -93,14 +110,18 @@ jobs:
         env:
           EXPECTED_HEAD: ${{ github.sha }}
           SOURCE_BRANCH: feat/exact-cloud-copy-approval-lineage
+          GH_TOKEN: ${{ github.token }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           python3 .github/scripts/repair_pr125_backend_phrases.py cleanup
+          rm -f .github/workflows/pr125-backend-approval-contract-repair.yml
           git diff --check
           test "$(git diff --name-only | sort)" = "$(printf '%s\n' \
             .github/scripts/repair_pr125_backend_phrases.py \
+            .github/workflows/pr125-backend-approval-contract-repair.yml \
             .github/workflows/repair-pr125-backend-approval-phrases.yml \
+            CHANGELOG.md \
             src-tauri/src/commands.rs \
             src-tauri/tests/cloud_transfer_coverage_contract.rs \
             src/lib/CloudArchive.svelte \
@@ -111,5 +132,6 @@ jobs:
           git add -A
           git diff --cached --check
           git commit -m "fix: source cloud approval phrases from Rust"
+          remote_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push --force-with-lease="refs/heads/${SOURCE_BRANCH}:${EXPECTED_HEAD}" \
-            origin "HEAD:refs/heads/${SOURCE_BRANCH}"
+            "$remote_url" "HEAD:refs/heads/${SOURCE_BRANCH}"
