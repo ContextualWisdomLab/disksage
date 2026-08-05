@@ -1,6 +1,12 @@
 name: PR133 Rustfmt Evidence
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src-tauri/src/podman_desktop.rs"
+      - "src-tauri/src/lib.rs"
+      - ".github/workflows/pr133-rustfmt-evidence.yml"
   push:
     branches: [feat/podman-desktop-evidence]
     paths:
@@ -12,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: pr133-rustfmt-evidence-${{ github.ref }}
+  group: pr133-rustfmt-evidence-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
