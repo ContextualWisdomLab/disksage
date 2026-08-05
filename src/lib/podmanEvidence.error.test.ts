@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { podmanEvidenceErrorMessage } from "./podmanEvidence";
+import { podmanEvidenceErrorMessage } from "./podmanEvidenceError";
 
 describe("podmanEvidenceErrorMessage", () => {
   it.each([
