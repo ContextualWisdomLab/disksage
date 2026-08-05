@@ -6,6 +6,7 @@
     type OptionalBytes,
     type PodmanDesktopEvidence,
   } from "./podmanEvidence";
+  import { podmanEvidenceErrorMessage } from "./podmanEvidenceError";
 
   let evidence: PodmanDesktopEvidence | null = $state(null);
   let busy = $state(false);
@@ -27,7 +28,7 @@
       evidence = await loadPodmanEvidence();
     } catch (reason) {
       evidence = null;
-      error = String(reason);
+      error = podmanEvidenceErrorMessage(reason);
     } finally {
       busy = false;
     }
