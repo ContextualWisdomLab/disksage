@@ -30,11 +30,10 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
-          persist-credentials: false
+          persist-credentials: true
 
       - name: Apply and publish exact bounded repair
         env:
-          GH_TOKEN: ${{ github.token }}
           SOURCE_HEAD: ${{ github.sha }}
           SOURCE_BRANCH: fix/icloud-batch-postmerge-verification
         shell: bash --noprofile --norc -e -o pipefail {0}
@@ -215,7 +214,6 @@ fn batch_module_documents_every_production_function_and_support_item() {
           git add -A
           git diff --cached --check
           git commit -m "fix: expose covered iCloud batch seams and document helpers"
-          remote_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push --force-with-lease="refs/heads/${SOURCE_BRANCH}:${SOURCE_HEAD}" \
-            "$remote_url" "HEAD:refs/heads/${SOURCE_BRANCH}"
+            origin "HEAD:refs/heads/${SOURCE_BRANCH}"
           trap - ERR
