@@ -43,7 +43,7 @@ The projection excludes:
 - command output and dynamic error details;
 - any mutation command or approval record.
 
-Issue strings are reduced to the stable code before the first colon. Invalid candidate fingerprints fail closed: the fingerprint is removed, the evidence is marked incomplete, and a stable issue code is added.
+Issue strings are reduced to the prefix before the first colon only when that prefix is a bounded lowercase kebab-case code: it must start with a lowercase ASCII letter, contain only lowercase ASCII letters, digits, or hyphens, and be no longer than 96 bytes. Delimiter-free paths, sockets, whitespace, uppercase text, Unicode, underscores, empty prefixes, and malformed values collapse to `podman-evidence-error`. Invalid candidate fingerprints fail closed: the fingerprint is removed, the evidence is marked incomplete, and a stable issue code is added.
 
 ### 2. Keep the Tauri command read-only and argv-based
 
@@ -74,9 +74,10 @@ The desktop response is a versioned JSON contract with no dependency on Naruon o
 - Buyers can inspect a concrete Podman storage gap from the main Cleanup workflow.
 - Logical size, host allocation, guest use, and verified physical reclaimability cannot be silently conflated.
 - Local identifiers stay outside the frontend contract, telemetry, and shareable evidence boundary.
+- Malformed or delimiter-free probe issues cannot masquerade as safe codes or serialize local path content.
 - Transport and JavaScript failures cannot leak machine names, paths, sockets, or command detail through the visible error region.
 - The architecture can later add separate governed image, container, and volume approval records without changing the read-only evidence contract.
-- Headless API validation, error-redaction tests, and view-state tests remain deterministic and are included in the 100% frontend statement, branch, function, and line coverage gate.
+- Headless API validation, issue-code privacy tests, error-redaction tests, and view-state tests remain deterministic and are included in the 100% frontend statement, branch, function, and line coverage gate.
 
 ### Negative
 
@@ -89,6 +90,7 @@ The desktop response is a versioned JSON contract with no dependency on Naruon o
 | Invariant | Deterministic evidence |
 |---|---|
 | No machine names or paths in desktop JSON | Rust serialization test searches for private fixture values |
+| Delimiter-free or malformed issue text cannot cross IPC | Rust unit and integration tests expect `podman-evidence-error` for paths, uppercase text, and underscores |
 | Image/container/volume review separation | Rust projection test and TypeScript view-model test |
 | Invalid fingerprint fails closed | Rust and TypeScript malformed-fingerprint tests |
 | Missing observations stay unknown | Rust and TypeScript null-preservation tests |
