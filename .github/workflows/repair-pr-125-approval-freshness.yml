@@ -1,44 +1,52 @@
 name: Repair PR 125 live-clock approval freshness
 
 on:
-  push:
-    branches:
-      - feat/exact-cloud-copy-approval-lineage
+  pull_request:
+    types: [synchronize]
 
 permissions:
   contents: read
 
 concurrency:
-  group: repair-pr-125-approval-freshness-${{ github.ref }}
+  group: repair-pr-125-approval-freshness-${{ github.event.pull_request.head.sha }}
   cancel-in-progress: false
 
 jobs:
   validate:
     if: >-
-      github.repository == 'ContextualWisdomLab/disksage'
-      && github.ref == 'refs/heads/feat/exact-cloud-copy-approval-lineage'
-    runs-on: ubuntu-latest
+      github.repository == 'ContextualWisdomLab/disksage' &&
+      github.actor == 'seonghobae' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'feat/exact-cloud-copy-approval-lineage'
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     outputs:
       transfer_sha: ${{ steps.digests.outputs.transfer_sha }}
       commands_sha: ${{ steps.digests.outputs.commands_sha }}
       cli_sha: ${{ steps.digests.outputs.cli_sha }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out the exact pull-request head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
-      - name: Verify immutable repair source
-        run: echo 'c096589509380c42c268e672e7667105b0a92721fad88dd909e23908d890d020  .github/scripts/repair_pr_125_approval_freshness.py' | sha256sum --check --strict
+      - name: Verify immutable repair source and exact head
+        env:
+          SOURCE_HEAD: ${{ github.event.pull_request.head.sha }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+          echo 'c096589509380c42c268e672e7667105b0a92721fad88dd909e23908d890d020  .github/scripts/repair_pr_125_approval_freshness.py' | sha256sum --check --strict
       - name: Install Tauri system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - name: Install the repository Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       - name: Add the regression before production repair
         run: python .github/scripts/repair_pr_125_approval_freshness.py tests
       - name: Prove the old production API can reuse the approval timestamp
-        shell: bash
+        shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           set +e
           cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli \
@@ -67,7 +75,7 @@ jobs:
           cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-cloud-plan
           cargo check --manifest-path src-tauri/Cargo.toml --features cloud-cli --lib --bins
       - name: Verify final source shape and whitespace
-        shell: bash
+        shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           python - <<'PY'
           import importlib.util
@@ -81,7 +89,7 @@ jobs:
           git diff --check
       - name: Bind exact validated source digests
         id: digests
-        shell: bash
+        shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           echo "transfer_sha=$(sha256sum src-tauri/src/cloud_transfer.rs | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "commands_sha=$(sha256sum src-tauri/src/commands.rs | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
@@ -90,25 +98,25 @@ jobs:
   publish:
     needs: validate
     if: needs.validate.result == 'success'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out the exact validated pull-request head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       - name: Verify immutable repair source and unchanged branch head
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_BRANCH: feat/exact-cloud-copy-approval-lineage
-          SOURCE_HEAD: ${{ github.sha }}
-        shell: bash
+          SOURCE_HEAD: ${{ github.event.pull_request.head.sha }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
           echo 'c096589509380c42c268e672e7667105b0a92721fad88dd909e23908d890d020  .github/scripts/repair_pr_125_approval_freshness.py' | sha256sum --check --strict
           encoded_branch="$(python - <<'PY'
           import urllib.parse
@@ -129,9 +137,8 @@ jobs:
           EXPECTED_TRANSFER_SHA: ${{ needs.validate.outputs.transfer_sha }}
           EXPECTED_COMMANDS_SHA: ${{ needs.validate.outputs.commands_sha }}
           EXPECTED_CLI_SHA: ${{ needs.validate.outputs.cli_sha }}
-        shell: bash
+        shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          set -euo pipefail
           test "$(sha256sum src-tauri/src/cloud_transfer.rs | cut -d' ' -f1)" = "$EXPECTED_TRANSFER_SHA"
           test "$(sha256sum src-tauri/src/commands.rs | cut -d' ' -f1)" = "$EXPECTED_COMMANDS_SHA"
           test "$(sha256sum src-tauri/src/bin/disksage-cloud-plan.rs | cut -d' ' -f1)" = "$EXPECTED_CLI_SHA"
@@ -140,10 +147,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_BRANCH: feat/exact-cloud-copy-approval-lineage
-          SOURCE_HEAD: ${{ github.sha }}
-        shell: bash
+          SOURCE_HEAD: ${{ github.event.pull_request.head.sha }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          set -euo pipefail
           rm .github/workflows/repair-pr-125-approval-freshness.yml \
             .github/scripts/repair_pr_125_approval_freshness.py
           git config user.name 'github-actions[bot]'
@@ -153,10 +159,14 @@ jobs:
             src-tauri/src/bin/disksage-cloud-plan.rs \
             .github/workflows/repair-pr-125-approval-freshness.yml \
             .github/scripts/repair_pr_125_approval_freshness.py
+          test "$(git diff --cached --name-only | sort)" = "$(printf '%s\n' \
+            .github/scripts/repair_pr_125_approval_freshness.py \
+            .github/workflows/repair-pr-125-approval-freshness.yml \
+            src-tauri/src/bin/disksage-cloud-plan.rs \
+            src-tauri/src/cloud_transfer.rs \
+            src-tauri/src/commands.rs | sort)"
           git diff --cached --check
           git commit -m 'fix: recheck cloud copy approval freshness at execution'
           remote_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git push \
-            --force-with-lease="refs/heads/${SOURCE_BRANCH}:${SOURCE_HEAD}" \
-            "$remote_url" \
-            "HEAD:refs/heads/${SOURCE_BRANCH}"
+          git push --force-with-lease="refs/heads/${SOURCE_BRANCH}:${SOURCE_HEAD}" \
+            "$remote_url" "HEAD:refs/heads/${SOURCE_BRANCH}"
