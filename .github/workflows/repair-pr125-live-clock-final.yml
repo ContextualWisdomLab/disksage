@@ -74,7 +74,10 @@ jobs:
 
       - name: Format and verify behavior
         run: |
-          cargo fmt --manifest-path src-tauri/Cargo.toml --all
+          rustfmt --edition 2021 \
+            src-tauri/src/cloud_transfer.rs \
+            src-tauri/src/commands.rs \
+            src-tauri/src/bin/disksage-cloud-plan.rs
           cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
           python3 .github/scripts/repair_pr125_live_clock.py verify
           cargo test --manifest-path src-tauri/Cargo.toml --lib \
@@ -134,7 +137,11 @@ jobs:
         run: |
           python3 .github/scripts/repair_pr125_live_clock.py tests
           python3 .github/scripts/repair_pr125_live_clock.py production
-          cargo fmt --manifest-path src-tauri/Cargo.toml --all
+          rustfmt --edition 2021 \
+            src-tauri/src/cloud_transfer.rs \
+            src-tauri/src/commands.rs \
+            src-tauri/src/bin/disksage-cloud-plan.rs
+          cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
           python3 .github/scripts/repair_pr125_live_clock.py verify
 
       - name: Verify reproduced source digests
@@ -148,6 +155,10 @@ jobs:
           test "$(sha256sum src-tauri/src/commands.rs | cut -d' ' -f1)" = "$EXPECTED_COMMANDS_SHA"
           test "$(sha256sum src-tauri/src/bin/disksage-cloud-plan.rs | cut -d' ' -f1)" = "$EXPECTED_CLI_SHA"
           git diff --check
+          test "$(git diff --name-only | sort)" = "$(printf '%s\n' \
+            src-tauri/src/bin/disksage-cloud-plan.rs \
+            src-tauri/src/cloud_transfer.rs \
+            src-tauri/src/commands.rs | sort)"
 
       - name: Publish exact repair and remove one-shot machinery
         env:
