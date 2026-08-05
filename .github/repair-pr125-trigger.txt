@@ -1,1 +1,3 @@
 Trigger the existing fail-closed PR 125 coverage repair workflow.
+
+Exact-head retrigger: repair the cloud-transfer coverage cfg mismatch, verify the normal and coverage test compilations, remove the one-shot repair workflow, and refuse stale-head writes.
