@@ -50,7 +50,7 @@ export function podmanActionLabel(kind: PodmanRecommendedActionKind): string {
 
 /** Reduce a potentially detailed backend issue string to a path-free stable code. */
 export function safePodmanIssueCode(issue: string): string {
-  const code = issue.split(":", 1)[0]?.trim() ?? "";
+  const code = issue.split(":", 1)[0].trim();
   return SAFE_ISSUE_CODE.test(code) ? code : "podman-evidence-error";
 }
 
