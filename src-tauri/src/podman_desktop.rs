@@ -6,8 +6,8 @@
 //! image identifiers, tags, or shell command text.
 
 use crate::podman_reclaim::{
-    probe_podman_reclaim, PodmanRecommendedActionKind, PodmanReclaimPlan,
-    DEFAULT_PODMAN_MACHINE, DEFAULT_PROBE_TIMEOUT,
+    probe_podman_reclaim, PodmanReclaimPlan, PodmanRecommendedActionKind, DEFAULT_PODMAN_MACHINE,
+    DEFAULT_PROBE_TIMEOUT,
 };
 use serde::Serialize;
 use std::path::Path;
@@ -162,10 +162,7 @@ pub fn redact_podman_reclaim_plan(plan: PodmanReclaimPlan) -> PodmanDesktopEvide
             .guest_filesystem
             .as_ref()
             .map(|guest| guest.total_bytes),
-        guest_used_bytes: plan
-            .guest_filesystem
-            .as_ref()
-            .map(|guest| guest.used_bytes),
+        guest_used_bytes: plan.guest_filesystem.as_ref().map(|guest| guest.used_bytes),
         guest_available_bytes: plan
             .guest_filesystem
             .as_ref()
@@ -174,10 +171,7 @@ pub fn redact_podman_reclaim_plan(plan: PodmanReclaimPlan) -> PodmanDesktopEvide
             .store
             .as_ref()
             .map(|store| store.graph_root_allocated_bytes),
-        graph_root_used_bytes: plan
-            .store
-            .as_ref()
-            .map(|store| store.graph_root_used_bytes),
+        graph_root_used_bytes: plan.store.as_ref().map(|store| store.graph_root_used_bytes),
     };
 
     let candidates = PodmanDesktopCandidateEvidence {
@@ -197,10 +191,7 @@ pub fn redact_podman_reclaim_plan(plan: PodmanReclaimPlan) -> PodmanDesktopEvide
             .unused_images
             .as_ref()
             .map(|images| images.unused_records),
-        stopped_container_records: plan
-            .store
-            .as_ref()
-            .map(|store| store.containers_stopped),
+        stopped_container_records: plan.store.as_ref().map(|store| store.containers_stopped),
         image_candidate_set_sha256: candidate_fingerprint.filter(|_| fingerprint_valid),
     };
 
@@ -261,8 +252,8 @@ pub fn inspect_podman_reclaim() -> PodmanDesktopEvidence {
 mod tests {
     use super::*;
     use crate::podman_reclaim::{
-        GuestFilesystemEvidence, PodmanMachineEvidence, PodmanRecommendedAction,
-        PodmanReclaimAssessment, PodmanStoreEvidence, PodmanSystemDfCategoryEvidence,
+        GuestFilesystemEvidence, PodmanMachineEvidence, PodmanReclaimAssessment,
+        PodmanRecommendedAction, PodmanStoreEvidence, PodmanSystemDfCategoryEvidence,
         PodmanSystemDfEvidence, PodmanUnusedImageEvidence, RawImageEvidence,
         PODMAN_RECLAIM_SCHEMA_KIND,
     };
@@ -418,10 +409,7 @@ mod tests {
     #[test]
     fn invalid_fingerprint_fails_closed_without_hiding_other_evidence() {
         let mut plan = complete_plan();
-        plan.unused_images
-            .as_mut()
-            .unwrap()
-            .candidate_set_sha256 = "BAD".to_string();
+        plan.unused_images.as_mut().unwrap().candidate_set_sha256 = "BAD".to_string();
         let evidence = redact_podman_reclaim_plan(plan);
         assert!(!evidence.evidence_complete);
         assert_eq!(evidence.candidates.image_candidate_set_sha256, None);
