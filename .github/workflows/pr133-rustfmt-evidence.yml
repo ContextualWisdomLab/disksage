@@ -1,0 +1,46 @@
+name: PR133 Rustfmt Evidence
+
+on:
+  push:
+    branches: [feat/podman-desktop-evidence]
+    paths:
+      - "src-tauri/src/podman_desktop.rs"
+      - "src-tauri/src/lib.rs"
+      - ".github/workflows/pr133-rustfmt-evidence.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr133-rustfmt-evidence-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rustfmt-evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          components: rustfmt
+      - name: Generate exact rustfmt output
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml
+      - name: Require a bounded formatting delta
+        run: |
+          set -euo pipefail
+          git diff --exit-code -- src-tauri/src/lib.rs src-tauri/src/podman_desktop.rs && {
+            echo "Expected rustfmt to produce a formatting delta." >&2
+            exit 1
+          }
+          git diff --check -- src-tauri/src/lib.rs src-tauri/src/podman_desktop.rs
+      - name: Upload formatted Rust sources
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pr133-rustfmt-sources
+          path: |
+            src-tauri/src/lib.rs
+            src-tauri/src/podman_desktop.rs
+          if-no-files-found: error
+          retention-days: 1
