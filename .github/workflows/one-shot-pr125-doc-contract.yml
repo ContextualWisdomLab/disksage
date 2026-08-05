@@ -1,0 +1,91 @@
+name: One-shot PR 125 documentation contract
+
+on:
+  push:
+    branches:
+      - feat/exact-cloud-copy-approval-lineage
+    paths:
+      - .github/workflows/one-shot-pr125-doc-contract.yml
+
+permissions: {}
+
+concurrency:
+  group: one-shot-pr125-doc-contract
+  cancel-in-progress: false
+
+jobs:
+  repair-and-clean:
+    if: >-
+      github.repository == 'ContextualWisdomLab/disksage' &&
+      github.ref == 'refs/heads/feat/exact-cloud-copy-approval-lineage'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact triggering head without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
+      - name: Verify exact branch head
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git ls-remote origin refs/heads/feat/exact-cloud-copy-approval-lineage | cut -f1)" = "$GITHUB_SHA"
+          git diff --exit-code
+
+      - name: Restore non-weakened documentation contract
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 .github/scripts/repair_pr_125_doc_contract.py
+          rustc --test src-tauri/tests/cloud_transfer_coverage_contract.rs -o /tmp/cloud-transfer-contract
+          /tmp/cloud-transfer-contract
+          git diff --check
+          git diff --name-only | sort > /tmp/changed-files.txt
+          printf '%s\n' \
+            src-tauri/src/cloud_transfer.rs \
+            src-tauri/tests/cloud_transfer_coverage_contract.rs \
+            src/lib/api.ts | sort > /tmp/expected-files.txt
+          diff -u /tmp/expected-files.txt /tmp/changed-files.txt
+
+      - name: Remove one-shot repair sources
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          rm .github/scripts/repair_pr_125_doc_contract.py
+          rm .github/workflows/one-shot-pr125-doc-contract.yml
+          test ! -e .github/scripts/repair_pr_125_doc_contract.py
+          test ! -e .github/workflows/one-shot-pr125-doc-contract.yml
+          git diff --check
+          git diff --name-only | sort > /tmp/final-changed-files.txt
+          printf '%s\n' \
+            .github/scripts/repair_pr_125_doc_contract.py \
+            .github/workflows/one-shot-pr125-doc-contract.yml \
+            src-tauri/src/cloud_transfer.rs \
+            src-tauri/tests/cloud_transfer_coverage_contract.rs \
+            src/lib/api.ts | sort > /tmp/final-expected-files.txt
+          diff -u /tmp/final-expected-files.txt /tmp/final-changed-files.txt
+
+      - name: Commit exact validated result
+        env:
+          PUSH_TOKEN: ${{ github.token }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add --all -- \
+            .github/scripts/repair_pr_125_doc_contract.py \
+            .github/workflows/one-shot-pr125-doc-contract.yml \
+            src-tauri/src/cloud_transfer.rs \
+            src-tauri/tests/cloud_transfer_coverage_contract.rs \
+            src/lib/api.ts
+          git diff --cached --check
+          git commit -m 'docs: restore cloud copy approval API contract'
+          remote_url="https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push "$remote_url" \
+            "HEAD:refs/heads/feat/exact-cloud-copy-approval-lineage" \
+            "--force-with-lease=refs/heads/feat/exact-cloud-copy-approval-lineage:${GITHUB_SHA}"
