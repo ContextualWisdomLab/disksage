@@ -71,6 +71,7 @@ struct Args {
     copy_fingerprint: Option<String>,
     adopt_existing_fingerprint: Option<String>,
     receipt_dir: Option<PathBuf>,
+    confirm_copy_phrase: Option<String>,
     attest_receipt: Option<PathBuf>,
     evidence_dir: Option<PathBuf>,
     provider_object_id: Option<String>,
@@ -193,6 +194,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
         copy_fingerprint: None,
         adopt_existing_fingerprint: None,
         receipt_dir: None,
+        confirm_copy_phrase: None,
         attest_receipt: None,
         evidence_dir: None,
         provider_object_id: None,
@@ -320,6 +322,10 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             "--receipt-dir" => {
                 parsed.receipt_dir = Some(PathBuf::from(value(args, &mut index, "--receipt-dir")?))
             }
+            "--confirm-copy-phrase" => {
+                parsed.confirm_copy_phrase =
+                    Some(value(args, &mut index, "--confirm-copy-phrase")?)
+            }
             "--attest-receipt" => {
                 parsed.attest_receipt = Some(PathBuf::from(value(
                     args,
@@ -439,7 +445,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             "--export-semantic-catalog" => parsed.export_semantic_catalog = true,
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary] [--min-size-mib N] [--min-age-days N] [--limit N] [--decision-summary [--private-candidate-inspection-output ABSOLUTE_NEW_FILE.json | --review-reason-set REASON|REASON [--private-review-output ABSOLUTE_NEW_FILE.json]] | --exact-duplicate-review-prefix DIR_PREFIX --exact-duplicate-kind document|media|archive|dataset|backup|creative|incomplete-download | --export-naruon-copy-readiness --verify-capacity [--naruon-copy-readiness-output ABSOLUTE_NEW_FILE.json] | --export-semantic-catalog] [--verify-capacity [--oauth-connections ABSOLUTE_PATH] [--export-naruon-capacity]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
+                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary] [--min-size-mib N] [--min-age-days N] [--limit N] [--decision-summary [--private-candidate-inspection-output ABSOLUTE_NEW_FILE.json | --review-reason-set REASON|REASON [--private-review-output ABSOLUTE_NEW_FILE.json]] | --exact-duplicate-review-prefix DIR_PREFIX --exact-duplicate-kind document|media|archive|dataset|backup|creative|incomplete-download | --export-naruon-copy-readiness --verify-capacity [--naruon-copy-readiness-output ABSOLUTE_NEW_FILE.json] | --export-semantic-catalog] [--verify-capacity [--oauth-connections ABSOLUTE_PATH] [--export-naruon-capacity]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH --confirm-copy-phrase EXACT --reviewed-by human:ID --review-rationale TEXT [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH --confirm-copy-phrase EXACT --reviewed-by human:ID --review-rationale TEXT [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -517,6 +523,9 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     if (copy_action || adoption_action) != args.receipt_dir.is_some() {
         return Err("copy/adoption fingerprint와 --receipt-dir은 함께 지정해야 함".into());
     }
+    if (copy_action || adoption_action) != args.confirm_copy_phrase.is_some() {
+        return Err("copy/adoption action에는 --confirm-copy-phrase가 반드시 필요함".into());
+    }
     let review_evidence_fields = [
         args.review_candidate_fingerprint.is_some(),
         args.review_fingerprint.is_some(),
@@ -537,6 +546,9 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     let review_action = review_evidence_fields.iter().all(|value| *value);
     if review_action && !attributed {
         return Err("review action에는 reviewer와 rationale가 필요함".into());
+    }
+    if (copy_action || adoption_action) && !attributed {
+        return Err("copy/adoption action에는 reviewer와 rationale가 필요함".into());
     }
     if attributed {
         cloud_review::validate_review_attribution(
@@ -563,8 +575,11 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
         );
     }
     let eviction_action = eviction_fields.iter().all(|value| *value) && attributed;
-    if attributed && !review_action && !eviction_action {
-        return Err("reviewer와 rationale는 review 또는 eviction action에만 지정할 수 있음".into());
+    if attributed && !review_action && !copy_action && !adoption_action && !eviction_action {
+        return Err(
+            "reviewer와 rationale는 review, copy, adoption 또는 eviction action에만 지정할 수 있음"
+                .into(),
+        );
     }
     let attestation_action = args.attest_receipt.is_some();
     if (attestation_action || eviction_action) != args.evidence_dir.is_some() {
@@ -618,17 +633,11 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
         return Err("--export-naruon-capacity에는 --verify-capacity가 필요함".into());
     }
     if args.export_naruon_copy_readiness && !args.verify_capacity {
-        return Err(
-            "--export-naruon-copy-readiness에는 --verify-capacity가 필요함"
-                .into(),
-        );
+        return Err("--export-naruon-copy-readiness에는 --verify-capacity가 필요함".into());
     }
-    if args.naruon_copy_readiness_output.is_some()
-        && !args.export_naruon_copy_readiness
-    {
+    if args.naruon_copy_readiness_output.is_some() && !args.export_naruon_copy_readiness {
         return Err(
-            "--naruon-copy-readiness-output에는 --export-naruon-copy-readiness가 필요함"
-                .into(),
+            "--naruon-copy-readiness-output에는 --export-naruon-copy-readiness가 필요함".into(),
         );
     }
     if args
@@ -636,9 +645,7 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
         .as_ref()
         .is_some_and(|path| !path.is_absolute())
     {
-        return Err(
-            "--naruon-copy-readiness-output은 절대 경로여야 함".into(),
-        );
+        return Err("--naruon-copy-readiness-output은 절대 경로여야 함".into());
     }
     let actions = usize::from(args.list_roots)
         + usize::from(args.inspect_roots)
@@ -932,6 +939,13 @@ fn decision_aggregates(report: &cloud::CloudPlanReport) -> serde_json::Value {
 
 #[cfg(not(coverage))]
 fn redacted_decision(candidate: &cloud::CloudCandidate) -> serde_json::Value {
+    let approval_action = match candidate.blocked_reason.as_deref() {
+        None => Some(cloud_transfer::CloudCopyApprovalAction::CopyOnly),
+        Some("destination-exists") => {
+            Some(cloud_transfer::CloudCopyApprovalAction::AdoptExistingCopy)
+        }
+        Some(_) => None,
+    };
     serde_json::json!({
         "metadata_fingerprint": &candidate.metadata_fingerprint,
         "review_fingerprint": &candidate.review_fingerprint,
@@ -947,6 +961,10 @@ fn redacted_decision(candidate: &cloud::CloudCandidate) -> serde_json::Value {
         "requires_review": candidate.requires_review,
         "review_reasons": &candidate.review_reasons,
         "blocked_reason": &candidate.blocked_reason,
+        "copy_approval_action": approval_action,
+        "exact_copy_approval_phrase": approval_action
+            .map(|action| cloud_transfer::cloud_copy_approval_phrase(candidate, action)),
+        "copy_approval_max_age_ms": cloud_transfer::MAX_CLOUD_COPY_APPROVAL_AGE_MS,
     })
 }
 
@@ -1028,7 +1046,7 @@ fn review_batch_summary(
         .collect::<Vec<_>>();
 
     Ok(serde_json::json!({
-        "schema_version": 2,
+        "schema_version": 3,
         "output_mode": "review-batch-summary",
         "generated_at_ms": report.generated_at_ms,
         "source_selection_policy": report.source_selection_policy,
@@ -1054,6 +1072,8 @@ fn review_batch_summary(
             "summary_is_dry_run_only": true,
             "batch_fingerprint_is_not_approval": true,
             "candidate_review_decisions_remain_individual": true,
+            "exact_human_attributed_copy_approval_required": true,
+            "copy_approval_max_age_ms": cloud_transfer::MAX_CLOUD_COPY_APPROVAL_AGE_MS,
         },
         "redacted_from_summary": [
             "absolute-source-path",
@@ -1656,7 +1676,7 @@ fn decision_summary(report: &cloud::CloudPlanReport) -> serde_json::Value {
         .collect::<Vec<_>>();
 
     serde_json::json!({
-        "schema_version": 2,
+        "schema_version": 3,
         "output_mode": "decision-summary",
         "generated_at_ms": report.generated_at_ms,
         "source_selection_policy": report.source_selection_policy,
@@ -1672,6 +1692,8 @@ fn decision_summary(report: &cloud::CloudPlanReport) -> serde_json::Value {
             "filename_dates_are_auxiliary": true,
             "summary_is_dry_run_only": true,
             "review_fingerprints_bind_operator_decisions": true,
+            "exact_human_attributed_copy_approval_required": true,
+            "copy_approval_is_bound_to_review_fingerprint_and_action": true,
             "verified_provider_sync_required_before_local_eviction": true,
         },
         "cloud": {
@@ -1801,7 +1823,7 @@ fn compact_decision_summary(report: &cloud::CloudPlanReport) -> serde_json::Valu
     let organization_manifest = organization_manifest_summary(report);
 
     serde_json::json!({
-        "schema_version": 2,
+        "schema_version": 3,
         "output_mode": "compact-decision-summary",
         "generated_at_ms": report.generated_at_ms,
         "source_selection_policy": report.source_selection_policy,
@@ -1818,6 +1840,8 @@ fn compact_decision_summary(report: &cloud::CloudPlanReport) -> serde_json::Valu
             "summary_is_dry_run_only": true,
             "batch_fingerprint_is_not_approval": true,
             "private_candidate_review_required_before_copy": true,
+            "exact_human_attributed_copy_approval_required": true,
+            "copy_approval_max_age_ms": cloud_transfer::MAX_CLOUD_COPY_APPROVAL_AGE_MS,
             "verified_provider_sync_required_before_local_eviction": true,
         },
         "cloud": {
@@ -1997,10 +2021,7 @@ fn attach_local_copy_prerequisites(report: &mut cloud::CloudPlanReport, home: &P
     if report.cloud_root.provider == CloudProvider::Icloud {
         let health =
             icloud_sync_health::inspect_new_copy_admission(home, cloud::system_now_ms()).ok();
-        icloud_sync_health::attach_new_copy_admission_notice(
-            &mut report.notices,
-            health.as_ref(),
-        );
+        icloud_sync_health::attach_new_copy_admission_notice(&mut report.notices, health.as_ref());
     }
 }
 
@@ -2347,7 +2368,7 @@ fn run() -> Result<(), String> {
             "cloud-capacity-unverified"
         };
         let output = serde_json::json!({
-            "schema_version": 2,
+            "schema_version": 3,
             "output_mode": "multicloud-decision-summary",
             "source_snapshot": {
                 "candidate_count": snapshot.candidate_count(),
@@ -2399,30 +2420,23 @@ fn run() -> Result<(), String> {
             observed_at_ms,
         );
         let icloud_health = if selected.provider == CloudProvider::Icloud {
-            icloud_sync_health::inspect_new_copy_admission(
-                &home,
-                observed_at_ms,
-            )
-            .ok()
+            icloud_sync_health::inspect_new_copy_admission(&home, observed_at_ms).ok()
         } else {
             None
         };
-        let envelope =
-            naruon_cloud_copy_readiness::export_naruon_cloud_copy_readiness(
-                &report,
-                &runtime,
-                icloud_health.as_ref(),
-            )?;
+        let envelope = naruon_cloud_copy_readiness::export_naruon_cloud_copy_readiness(
+            &report,
+            &runtime,
+            icloud_health.as_ref(),
+        )?;
         if let Some(output_path) = &args.naruon_copy_readiness_output {
-            let value = serde_json::to_value(&envelope).map_err(|_| {
-                "naruon-copy-readiness-output-json-invalid".to_string()
-            })?;
+            let value = serde_json::to_value(&envelope)
+                .map_err(|_| "naruon-copy-readiness-output-json-invalid".to_string())?;
             write_private_review_dossier(output_path, &value)?;
         }
         println!(
             "{}",
-            serde_json::to_string_pretty(&envelope)
-                .map_err(|error| error.to_string())?
+            serde_json::to_string_pretty(&envelope).map_err(|error| error.to_string())?
         );
         return Ok(());
     }
@@ -2529,17 +2543,36 @@ fn run() -> Result<(), String> {
         } else {
             None
         };
+        let action = if adopt_existing {
+            cloud_transfer::CloudCopyApprovalAction::AdoptExistingCopy
+        } else {
+            cloud_transfer::CloudCopyApprovalAction::CopyOnly
+        };
+        let action_at_ms = cloud::system_now_ms();
+        let copy_approval = cloud_transfer::create_cloud_copy_approval(
+            candidate,
+            &selected,
+            action,
+            action_at_ms,
+            args.reviewed_by
+                .as_deref()
+                .ok_or_else(|| "--reviewed-by가 필요함".to_string())?,
+            args.review_rationale
+                .as_deref()
+                .ok_or_else(|| "--review-rationale가 필요함".to_string())?,
+            args.confirm_copy_phrase
+                .as_deref()
+                .ok_or_else(|| "--confirm-copy-phrase가 필요함".to_string())?,
+        )?;
         if !adopt_existing {
             provider_client_runtime::require_provider_client_runtime(
                 selected.provider,
                 cloud::system_now_ms(),
             )?;
             if selected.provider == CloudProvider::Icloud {
-                let health = icloud_sync_health::inspect_new_copy_admission(
-                    &home,
-                    cloud::system_now_ms(),
-                )
-                .map_err(|_| "icloud-new-copy-admission-evidence-unavailable".to_string())?;
+                let health =
+                    icloud_sync_health::inspect_new_copy_admission(&home, cloud::system_now_ms())
+                        .map_err(|_| "icloud-new-copy-admission-evidence-unavailable".to_string())?;
                 icloud_sync_health::require_new_copy_admission(&health)?;
             }
             let capacity_snapshot = report
@@ -2562,20 +2595,20 @@ fn run() -> Result<(), String> {
             }
         }
         let (receipt, receipt_path) = if adopt_existing {
-            cloud_transfer::adopt_existing_cloud_copy_with_review(
+            cloud_transfer::adopt_existing_cloud_copy_with_approval(
                 candidate,
                 &selected,
                 receipt_dir,
-                cloud::system_now_ms(),
                 review_decision.as_ref(),
+                &copy_approval,
             )?
         } else {
-            cloud_transfer::prepare_cloud_copy_with_review(
+            cloud_transfer::prepare_cloud_copy_with_approval(
                 candidate,
                 &selected,
                 receipt_dir,
-                cloud::system_now_ms(),
                 review_decision.as_ref(),
+                &copy_approval,
             )?
         };
         println!(
@@ -3099,7 +3132,7 @@ mod tests {
         let summary = decision_summary(&report);
         let item = &summary["decisions"][0];
         assert_eq!(summary["output_mode"], "decision-summary");
-        assert_eq!(summary["schema_version"], 2);
+        assert_eq!(summary["schema_version"], 3);
         assert!(summary["redacted_from_summary"]
             .as_array()
             .unwrap()
@@ -3124,6 +3157,31 @@ mod tests {
         );
         assert!(item.get("relative_path").is_none());
         assert_eq!(item["decision_state"], "review-required");
+        assert_eq!(item["copy_approval_action"], "copy-only");
+        assert_eq!(
+            item["exact_copy_approval_phrase"],
+            format!(
+                "DiskSage cloud copy-only {} 승인",
+                item["review_fingerprint"].as_str().unwrap()
+            )
+        );
+        assert_eq!(item["copy_approval_max_age_ms"], 15 * 60 * 1000);
+        let mut destination_exists = report.candidates[0].clone();
+        destination_exists.blocked_reason = Some("destination-exists".into());
+        let adoption = redacted_decision(&destination_exists);
+        assert_eq!(adoption["copy_approval_action"], "adopt-existing-copy");
+        assert_eq!(
+            adoption["exact_copy_approval_phrase"],
+            format!(
+                "DiskSage cloud adopt-existing-copy {} 승인",
+                adoption["review_fingerprint"].as_str().unwrap()
+            )
+        );
+
+        destination_exists.blocked_reason = Some("incomplete-download".into());
+        let ineligible = redacted_decision(&destination_exists);
+        assert!(ineligible["copy_approval_action"].is_null());
+        assert!(ineligible["exact_copy_approval_phrase"].is_null());
         assert_eq!(
             summary["aggregates"]["decision_state"]["counts"]["review-required"],
             1
@@ -3208,10 +3266,14 @@ mod tests {
         };
         let compact = compact_decision_summary(&compact_report);
         assert_eq!(compact["output_mode"], "compact-decision-summary");
-        assert_eq!(compact["schema_version"], 2);
+        assert_eq!(compact["schema_version"], 3);
         assert_eq!(compact["candidate_details_included"], false);
         assert_eq!(compact["cloud_write_executed"], false);
         assert_eq!(compact["source_eviction_authorized"], false);
+        assert_eq!(
+            compact["metadata_policy"]["exact_human_attributed_copy_approval_required"],
+            true
+        );
         assert_eq!(compact["exact_duplicates"]["cluster_count"], 1);
         assert_eq!(compact["exact_duplicates"]["redundant_bytes"], 42);
         assert_eq!(compact["exact_duplicates"]["cluster_members_omitted"], true);
@@ -3274,7 +3336,7 @@ mod tests {
         let reason_set = report.candidates[0].review_reasons.clone();
         let review_batch = review_batch_summary(&report, &reason_set).unwrap();
         assert_eq!(review_batch["output_mode"], "review-batch-summary");
-        assert_eq!(review_batch["schema_version"], 2);
+        assert_eq!(review_batch["schema_version"], 3);
         assert!(review_batch["redacted_from_summary"]
             .as_array()
             .unwrap()
@@ -3744,6 +3806,9 @@ mod tests {
         args.copy_fingerprint = Some("a".repeat(64));
         assert!(validate_action_args(&args).is_err());
         args.receipt_dir = Some(PathBuf::from("/receipts"));
+        args.confirm_copy_phrase = Some("exact copy phrase".into());
+        args.reviewed_by = Some("human:local:test".into());
+        args.review_rationale = Some("exact copy reviewed".into());
         assert!(validate_action_args(&args).is_ok());
         args.receipt_dir = Some(PathBuf::from("relative-receipts"));
         assert!(validate_action_args(&args).is_err());
@@ -3766,6 +3831,12 @@ mod tests {
                 "b".repeat(64),
                 "--receipt-dir".into(),
                 "/receipts".into(),
+                "--confirm-copy-phrase".into(),
+                "exact copy phrase".into(),
+                "--reviewed-by".into(),
+                "human:local:test".into(),
+                "--review-rationale".into(),
+                "exact copy reviewed".into(),
             ],
             Path::new("/h"),
         )
@@ -3779,6 +3850,12 @@ mod tests {
                 "e".repeat(64),
                 "--receipt-dir".into(),
                 "/receipts".into(),
+                "--confirm-copy-phrase".into(),
+                "exact adoption phrase".into(),
+                "--reviewed-by".into(),
+                "human:local:test".into(),
+                "--review-rationale".into(),
+                "exact adoption reviewed".into(),
             ],
             Path::new("/h"),
         )
@@ -3831,6 +3908,7 @@ mod tests {
 
         let help = parse_args(&["--help".into()], Path::new("/h")).unwrap_err();
         assert!(help.contains("--reviewed-by human:ID"));
+        assert!(help.contains("--confirm-copy-phrase EXACT"));
         assert!(help.contains("--export-naruon-copy-readiness --verify-capacity"));
         assert!(help.contains("--naruon-copy-readiness-output ABSOLUTE_NEW_FILE.json"));
         assert!(help.contains("--private-candidate-inspection-output ABSOLUTE_NEW_FILE.json"));
@@ -3851,6 +3929,9 @@ mod tests {
         let mut copy = parse_args(&[], Path::new("/h")).unwrap();
         copy.copy_fingerprint = Some("a".repeat(64));
         copy.receipt_dir = Some(PathBuf::from("/receipts"));
+        copy.confirm_copy_phrase = Some("exact copy phrase".into());
+        copy.reviewed_by = Some("human:test".into());
+        copy.review_rationale = Some("exact copy reviewed".into());
         copy.oauth_connections = Some(PathBuf::from("/connections.json"));
         assert!(validate_action_args(&copy).is_ok());
 
@@ -3986,8 +4067,9 @@ mod tests {
         args.review_candidate_fingerprint = None;
         args.review_fingerprint = None;
         args.review_disposition = None;
-        args.reviewed_by = None;
-        args.review_rationale = None;
+        args.confirm_copy_phrase = Some("exact copy phrase".into());
+        args.reviewed_by = Some("human:local:test".into());
+        args.review_rationale = Some("exact copy reviewed".into());
         assert!(validate_action_args(&args).is_ok());
 
         let mut reason_set = parse_args(
@@ -4091,11 +4173,8 @@ mod tests {
         );
         assert!(validate_action_args(&export).is_ok());
 
-        let missing_capacity = parse_args(
-            &["--export-naruon-copy-readiness".into()],
-            Path::new("/h"),
-        )
-        .unwrap();
+        let missing_capacity =
+            parse_args(&["--export-naruon-copy-readiness".into()], Path::new("/h")).unwrap();
         assert!(validate_action_args(&missing_capacity).is_err());
 
         let output_only = parse_args(

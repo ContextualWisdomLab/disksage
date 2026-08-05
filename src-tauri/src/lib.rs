@@ -34,6 +34,8 @@ mod dataset_metadata;
 pub mod archive_git_tree;
 #[cfg_attr(coverage, allow(dead_code))]
 pub mod cloud;
+/// Typed backend-authored presentation contract for cloud archive plans.
+pub mod cloud_plan_view;
 pub mod cloud_local_inventory;
 pub mod cloud_local_eviction;
 pub mod cloud_local_eviction_batch;
