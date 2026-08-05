@@ -5,6 +5,8 @@
 //! that contains measurements and stable issue codes, but never machine names, paths,
 //! image identifiers, tags, or shell command text.
 
+#![deny(missing_docs)]
+
 use crate::podman_reclaim::{
     probe_podman_reclaim, PodmanReclaimPlan, PodmanRecommendedActionKind, DEFAULT_PODMAN_MACHINE,
     DEFAULT_PROBE_TIMEOUT,
@@ -276,6 +278,7 @@ mod tests {
         PODMAN_RECLAIM_SCHEMA_KIND,
     };
 
+    /// Build a deterministic Podman `system df` category fixture with one active record.
     fn category(reclaimable_bytes: u64) -> PodmanSystemDfCategoryEvidence {
         PodmanSystemDfCategoryEvidence {
             total: 2,
@@ -285,6 +288,7 @@ mod tests {
         }
     }
 
+    /// Build a complete privacy-sensitive headless plan used by redaction regression tests.
     fn complete_plan() -> PodmanReclaimPlan {
         PodmanReclaimPlan {
             schema_kind: PODMAN_RECLAIM_SCHEMA_KIND,
@@ -358,6 +362,7 @@ mod tests {
         }
     }
 
+    /// Verify that the desktop contract keeps capacity categories separate and redacts local data.
     #[test]
     fn projection_keeps_measurements_separate_and_removes_private_context() {
         let evidence = redact_podman_reclaim_plan(complete_plan());
@@ -382,6 +387,7 @@ mod tests {
         assert!(!json.contains("/var/home/private"));
     }
 
+    /// Verify that image, stopped-container, and volume review decisions never authorize each other.
     #[test]
     fn image_container_and_volume_reviews_remain_separate() {
         let evidence = redact_podman_reclaim_plan(complete_plan());
@@ -401,6 +407,7 @@ mod tests {
         assert!(!evidence.review_boundaries.volume_review_required);
     }
 
+    /// Verify that dynamic local diagnostic details are removed and duplicate stable codes collapse.
     #[test]
     fn dynamic_issue_details_are_redacted_and_deduplicated() {
         let mut plan = complete_plan();
@@ -424,6 +431,7 @@ mod tests {
             .contains("Users/alice"));
     }
 
+    /// Verify that malformed candidate fingerprints fail closed without discarding safe measurements.
     #[test]
     fn invalid_fingerprint_fails_closed_without_hiding_other_evidence() {
         let mut plan = complete_plan();
@@ -437,6 +445,7 @@ mod tests {
         assert_eq!(evidence.candidates.image_candidate_bytes, Some(200));
     }
 
+    /// Verify that missing optional observations remain unknown rather than becoming false zeroes.
     #[test]
     fn absent_optional_evidence_stays_unknown_instead_of_becoming_zero() {
         let mut plan = complete_plan();
@@ -464,6 +473,7 @@ mod tests {
         assert_eq!(evidence.candidates.image_candidate_set_sha256, None);
     }
 
+    /// Verify stable fallback issue codes and canonical lowercase SHA-256 validation.
     #[test]
     fn issue_code_fallback_and_fingerprint_validation_are_stable() {
         assert_eq!(stable_issue_code(""), "podman-evidence-error");
