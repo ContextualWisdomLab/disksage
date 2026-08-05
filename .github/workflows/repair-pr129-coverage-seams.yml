@@ -20,10 +20,9 @@ jobs:
       github.repository == 'ContextualWisdomLab/disksage' &&
       github.ref == 'refs/heads/fix/icloud-batch-postmerge-verification'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     permissions:
       contents: write
-      pull-requests: write
     steps:
       - name: Check out exact repair source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -32,188 +31,68 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Apply and publish exact bounded repair
+      - name: Verify exact audited inputs
+        env:
+          SOURCE_HEAD: ${{ github.sha }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+          test "$(git hash-object src-tauri/src/cloud_local_eviction_batch.rs)" = \
+            "bc3e23c011cba87d8fd1ec1a31ae1aa02cc055a2"
+          test "$(git hash-object src-tauri/tests/icloud_local_eviction_batch_documentation_test.rs)" = \
+            "84a698ee2407ad93cd00afae63a819a384225fbc"
+          git ls-files --error-unmatch .github/repair-pr129-trigger.txt >/dev/null
+          git ls-files --error-unmatch .github/scripts/finalize_pr129.py >/dev/null
+
+      - name: Prove the documentation regression fails first
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 .github/scripts/finalize_pr129.py add-test
+          set +e
+          cargo test --manifest-path src-tauri/Cargo.toml \
+            --test icloud_local_eviction_batch_documentation_test \
+            batch_module_documents_every_production_function_and_support_item
+          red_status=$?
+          set -e
+          test "$red_status" -ne 0
+
+      - name: Apply the bounded production repair
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 .github/scripts/finalize_pr129.py apply-repair
+          cargo fmt --manifest-path src-tauri/Cargo.toml
+          git diff --check
+
+      - name: Verify normal and coverage configurations
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml \
+            --test icloud_local_eviction_batch_documentation_test
+          cargo test --manifest-path src-tauri/Cargo.toml \
+            --lib cloud_local_eviction_batch::tests
+          RUSTFLAGS="--cfg coverage" cargo test --manifest-path src-tauri/Cargo.toml \
+            --lib cloud_local_eviction_batch::tests
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Commit the exact repair and remove one-shot automation
         env:
           SOURCE_HEAD: ${{ github.sha }}
           SOURCE_BRANCH: fix/icloud-batch-postmerge-verification
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          report_failure() {
-            status=$?
-            gh pr comment 129 --repo "$GITHUB_REPOSITORY" \
-              --body "PR129 exact-head repair failed on \`$SOURCE_HEAD\` with status \`$status\`; inspect workflow \`$GITHUB_RUN_ID\` before retrying." \
-              >/dev/null 2>&1 || true
-            exit "$status"
-          }
-          trap report_failure ERR
-
           test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
-          test "$(git hash-object src-tauri/src/cloud_local_eviction_batch.rs)" = \
-            "bc3e23c011cba87d8fd1ec1a31ae1aa02cc055a2"
-          git ls-files --error-unmatch .github/repair-pr129-trigger.txt >/dev/null
-
-          python3 - <<'PY'
-          from pathlib import Path
-
-          source_path = Path("src-tauri/src/cloud_local_eviction_batch.rs")
-          source = source_path.read_text(encoding="utf-8")
-          old_import = '''use crate::cloud_local_eviction::{
-              approve_icloud_local_eviction, execute_icloud_local_eviction, plan_icloud_local_eviction,
-              write_immutable_record, IcloudLocalEvictionApproval, IcloudLocalEvictionPlan,
-              IcloudLocalEvictionResult,
-          };
-          '''
-          new_import = '''use crate::cloud_local_eviction::{
-              approve_icloud_local_eviction, plan_icloud_local_eviction, IcloudLocalEvictionApproval,
-              IcloudLocalEvictionPlan, IcloudLocalEvictionResult,
-          };
-          #[cfg(not(coverage))]
-          use crate::cloud_local_eviction::{execute_icloud_local_eviction, write_immutable_record};
-          '''
-          replacements = [
-              (old_import, new_import),
-              (
-                  "#[cfg(not(coverage))]\ntrait BatchRecordWriter",
-                  "#[cfg(any(not(coverage), test))]\ntrait BatchRecordWriter",
-              ),
-              (
-                  "#[cfg(not(coverage))]\nfn fresh_item_requested_at_ms",
-                  "#[cfg(any(not(coverage), test))]\nfn fresh_item_requested_at_ms",
-              ),
-              (
-                  "#[cfg(not(coverage))]\nfn execute_icloud_local_eviction_batch_with",
-                  "#[cfg(any(not(coverage), test))]\nfn execute_icloud_local_eviction_batch_with",
-              ),
-          ]
-          for old, new in replacements:
-              if source.count(old) != 1:
-                  raise SystemExit(f"expected one audited repair anchor {old!r}")
-              source = source.replace(old, new, 1)
-
-          documentation = {
-              "fn valid_hex64(value: &str) -> bool {":
-                  "/// Returns whether a value is a complete 64-digit hexadecimal digest.\n",
-              "fn hash_field(hasher: &mut blake3::Hasher, value: &[u8]) {":
-                  "/// Appends one length-prefixed field to an integrity digest.\n",
-              "fn batch_blockers(items: &[IcloudLocalEvictionBatchItem]) -> Vec<String> {":
-                  "/// Derives fail-closed batch blockers from executable item evidence.\n",
-              "fn batch_fingerprint_for(plan: &IcloudLocalEvictionBatchPlan) -> String {":
-                  "/// Computes the deterministic digest binding a complete batch plan.\n",
-              "fn approval_id_for(\n":
-                  "/// Computes the deterministic identifier for one attributed approval.\n",
-              "fn result_id_for(result: &IcloudLocalEvictionBatchResult) -> String {":
-                  "/// Computes the deterministic identifier for a batch checkpoint state.\n",
-              "fn bounded_error_code(error: &str) -> String {":
-                  "/// Converts an internal failure into a bounded path-free diagnostic code.\n",
-              "fn item_plan_is_safe(plan: &IcloudLocalEvictionPlan) -> bool {":
-                  "/// Verifies every single-item safety invariant required by a batch.\n",
-              "fn expected_notices() -> Vec<String> {":
-                  "/// Returns the stable operator notices serialized into every batch record.\n",
-              "fn validate_batch_plan(\n":
-                  "/// Validates structure, totals, ordering, scope, and digest integrity.\n",
-              "fn build_batch_plan(\n":
-                  "/// Builds and integrity-checks a normalized batch plan from bounded evidence.\n",
-              "fn plan_batch_with<F>(\n":
-                  "/// Plans a bounded manifest through an injected read-only item planner.\n",
-              "fn validate_batch_approval(\n":
-                  "/// Validates exact-plan confirmation, attribution, freshness, and integrity.\n",
-              "fn preflight_with<F>(\n":
-                  "/// Replans every selected item before the first mutation and rejects drift.\n",
-              "fn refresh_result_summary(result: &mut IcloudLocalEvictionBatchResult, completed_at_ms: u64) {":
-                  "/// Recomputes checkpoint counts, completion flags, and the result digest.\n",
-              "fn checkpoint_name(approval_id: &str, attempted_count: u32) -> String {":
-                  "/// Derives the immutable checkpoint filename for an attempted-item count.\n",
-              "trait BatchRecordWriter {\n    fn write":
-                  "trait BatchRecordWriter {\n    /// Persists one create-new immutable approval, result, or checkpoint record.\n    fn write",
-              "#[cfg(not(coverage))]\nstruct ImmutableBatchRecordWriter;":
-                  "/// Production writer that delegates to the create-new immutable record boundary.\n#[cfg(not(coverage))]\nstruct ImmutableBatchRecordWriter;",
-              "impl BatchRecordWriter for ImmutableBatchRecordWriter {\n    fn write":
-                  "impl BatchRecordWriter for ImmutableBatchRecordWriter {\n    /// Writes a serialized record without overwriting an existing evidence object.\n    fn write",
-              "#[cfg(any(not(coverage), test))]\nfn fresh_item_requested_at_ms":
-                  "#[cfg(any(not(coverage), test))]\n/// Reads a fresh mutation timestamp instead of deriving synthetic item times.\nfn fresh_item_requested_at_ms",
-              "#[cfg(any(not(coverage), test))]\nfn execute_icloud_local_eviction_batch_with":
-                  "#[cfg(any(not(coverage), test))]\n/// Executes one approved batch through injected planner, executor, writer, and clock seams.\nfn execute_icloud_local_eviction_batch_with",
-          }
-          for anchor, documented in documentation.items():
-              if source.count(anchor) != 1:
-                  raise SystemExit(f"expected one documentation anchor {anchor!r}, found {source.count(anchor)}")
-              if documented.startswith("trait ") or documented.startswith("impl ") or documented.startswith("/// Production") or documented.startswith("#[cfg"):
-                  replacement = documented
-              else:
-                  replacement = documented + anchor
-              source = source.replace(anchor, replacement, 1)
-
-          source_path.write_text(source, encoding="utf-8")
-
-          test_path = Path("src-tauri/tests/icloud_local_eviction_batch_documentation_test.rs")
-          test_source = test_path.read_text(encoding="utf-8")
-          if "batch_module_documents_every_production_function_and_support_item" in test_source:
-              raise SystemExit("documentation regression already exists")
-          addition = r'''
-
-/// Verifies that every production helper and injected support item retains attached Rust docs.
-#[test]
-fn batch_module_documents_every_production_function_and_support_item() {
-    let source = include_str!("../src/cloud_local_eviction_batch.rs");
-    let production = source
-        .split("\n#[cfg(test)]\nmod tests {")
-        .next()
-        .expect("production module prefix");
-    let lines: Vec<&str> = production.lines().collect();
-    let mut undocumented = Vec::new();
-
-    for (index, line) in lines.iter().enumerate() {
-        let trimmed = line.trim_start();
-        let indentation = line.len().saturating_sub(trimmed.len());
-        let production_item = (indentation == 0
-            && (trimmed.starts_with("fn ")
-                || trimmed.starts_with("pub fn ")
-                || trimmed.starts_with("trait BatchRecordWriter")
-                || trimmed.starts_with("struct ImmutableBatchRecordWriter")))
-            || (indentation == 4 && trimmed.starts_with("fn write<"));
-        if !production_item {
-            continue;
-        }
-
-        let mut cursor = index;
-        let mut documented = false;
-        while cursor > 0 {
-            cursor -= 1;
-            let previous = lines[cursor].trim();
-            if previous.starts_with("#[") {
-                continue;
-            }
-            documented = previous.starts_with("///");
-            break;
-        }
-        if !documented {
-            undocumented.push(trimmed.to_string());
-        }
-    }
-
-    assert!(
-        undocumented.is_empty(),
-        "production items missing attached Rust documentation: {undocumented:?}"
-    );
-}
-'''
-          test_path.write_text(test_source + addition, encoding="utf-8")
-          PY
-
-          rm .github/workflows/repair-pr129-coverage-seams.yml \
-            .github/repair-pr129-trigger.txt
+          python3 .github/scripts/finalize_pr129.py cleanup
           git diff --check
           test "$(git diff --name-only | sort)" = "$(printf '%s\n' \
             .github/repair-pr129-trigger.txt \
+            .github/scripts/finalize_pr129.py \
             .github/workflows/repair-pr129-coverage-seams.yml \
             src-tauri/src/cloud_local_eviction_batch.rs \
             src-tauri/tests/icloud_local_eviction_batch_documentation_test.rs | sort)"
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git diff --cached --check
-          git commit -m "fix: expose covered iCloud batch seams and document helpers"
+          git commit -m "fix: document and cover iCloud batch seams"
           git push --force-with-lease="refs/heads/${SOURCE_BRANCH}:${SOURCE_HEAD}" \
             origin "HEAD:refs/heads/${SOURCE_BRANCH}"
-          trap - ERR
