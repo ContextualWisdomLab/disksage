@@ -1,9 +1,11 @@
-name: Repair PR 129 coverage seams
+name: Repair PR 129 coverage seams and documentation
 
 on:
   push:
     branches:
       - fix/icloud-batch-postmerge-verification
+    paths:
+      - .github/workflows/repair-pr129-coverage-seams.yml
 
 permissions:
   contents: read
@@ -18,9 +20,10 @@ jobs:
       github.repository == 'ContextualWisdomLab/disksage' &&
       github.ref == 'refs/heads/fix/icloud-batch-postmerge-verification'
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 10
     permissions:
       contents: write
+      pull-requests: write
     steps:
       - name: Check out exact repair source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -29,47 +32,32 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify audited source blob
+      - name: Apply and publish exact bounded repair
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_HEAD: ${{ github.sha }}
+          SOURCE_BRANCH: fix/icloud-batch-postmerge-verification
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
-          test "$(git hash-object src-tauri/src/cloud_local_eviction_batch.rs)" = "bc3e23c011cba87d8fd1ec1a31ae1aa02cc055a2"
+          report_failure() {
+            status=$?
+            gh pr comment 129 --repo "$GITHUB_REPOSITORY" \
+              --body "PR129 exact-head repair failed on \`$SOURCE_HEAD\` with status \`$status\`; inspect workflow \`$GITHUB_RUN_ID\` before retrying." \
+              >/dev/null 2>&1 || true
+            exit "$status"
+          }
+          trap report_failure ERR
 
-      - name: Prove the coverage seam regression is red
-        shell: bash --noprofile --norc -e -o pipefail {0}
-        run: |
-          set +e
-          python3 - <<'PY' > /tmp/pr129-red.log 2>&1
-          from pathlib import Path
-          import sys
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+          test "$(git hash-object src-tauri/src/cloud_local_eviction_batch.rs)" = \
+            "bc3e23c011cba87d8fd1ec1a31ae1aa02cc055a2"
+          git ls-files --error-unmatch .github/repair-pr129-trigger.txt >/dev/null
 
-          source = Path("src-tauri/src/cloud_local_eviction_batch.rs").read_text(encoding="utf-8")
-          required = [
-              "#[cfg(not(coverage))]\nuse crate::cloud_local_eviction::{execute_icloud_local_eviction, write_immutable_record};",
-              "#[cfg(any(not(coverage), test))]\ntrait BatchRecordWriter",
-              "#[cfg(any(not(coverage), test))]\nfn fresh_item_requested_at_ms",
-              "#[cfg(any(not(coverage), test))]\nfn execute_icloud_local_eviction_batch_with",
-          ]
-          missing = [anchor for anchor in required if anchor not in source]
-          if missing:
-              print("coverage test seams or conditional production imports are unavailable")
-              sys.exit(1)
-          print("coverage test seams and imports are available")
-          PY
-          status=$?
-          set -e
-          cat /tmp/pr129-red.log
-          test "$status" -ne 0
-          grep -F "coverage test seams or conditional production imports are unavailable" /tmp/pr129-red.log
-
-      - name: Apply the minimal coverage seam repair
-        shell: bash --noprofile --norc -e -o pipefail {0}
-        run: |
           python3 - <<'PY'
           from pathlib import Path
 
-          path = Path("src-tauri/src/cloud_local_eviction_batch.rs")
-          source = path.read_text(encoding="utf-8")
+          source_path = Path("src-tauri/src/cloud_local_eviction_batch.rs")
+          source = source_path.read_text(encoding="utf-8")
           old_import = '''use crate::cloud_local_eviction::{
               approve_icloud_local_eviction, execute_icloud_local_eviction, plan_icloud_local_eviction,
               write_immutable_record, IcloudLocalEvictionApproval, IcloudLocalEvictionPlan,
@@ -99,62 +87,135 @@ jobs:
               ),
           ]
           for old, new in replacements:
-              count = source.count(old)
-              if count != 1:
-                  raise SystemExit(f"expected one audited anchor {old!r}, found {count}")
+              if source.count(old) != 1:
+                  raise SystemExit(f"expected one audited repair anchor {old!r}")
               source = source.replace(old, new, 1)
-          path.write_text(source, encoding="utf-8")
-          PY
-          python3 - <<'PY'
-          from pathlib import Path
 
-          source = Path("src-tauri/src/cloud_local_eviction_batch.rs").read_text(encoding="utf-8")
-          for anchor in [
-              "#[cfg(not(coverage))]\nuse crate::cloud_local_eviction::{execute_icloud_local_eviction, write_immutable_record};",
-              "#[cfg(any(not(coverage), test))]\ntrait BatchRecordWriter",
-              "#[cfg(any(not(coverage), test))]\nfn fresh_item_requested_at_ms",
-              "#[cfg(any(not(coverage), test))]\nfn execute_icloud_local_eviction_batch_with",
-          ]:
+          documentation = {
+              "fn valid_hex64(value: &str) -> bool {":
+                  "/// Returns whether a value is a complete 64-digit hexadecimal digest.\n",
+              "fn hash_field(hasher: &mut blake3::Hasher, value: &[u8]) {":
+                  "/// Appends one length-prefixed field to an integrity digest.\n",
+              "fn batch_blockers(items: &[IcloudLocalEvictionBatchItem]) -> Vec<String> {":
+                  "/// Derives fail-closed batch blockers from executable item evidence.\n",
+              "fn batch_fingerprint_for(plan: &IcloudLocalEvictionBatchPlan) -> String {":
+                  "/// Computes the deterministic digest binding a complete batch plan.\n",
+              "fn approval_id_for(\n":
+                  "/// Computes the deterministic identifier for one attributed approval.\n",
+              "fn result_id_for(result: &IcloudLocalEvictionBatchResult) -> String {":
+                  "/// Computes the deterministic identifier for a batch checkpoint state.\n",
+              "fn bounded_error_code(error: &str) -> String {":
+                  "/// Converts an internal failure into a bounded path-free diagnostic code.\n",
+              "fn item_plan_is_safe(plan: &IcloudLocalEvictionPlan) -> bool {":
+                  "/// Verifies every single-item safety invariant required by a batch.\n",
+              "fn expected_notices() -> Vec<String> {":
+                  "/// Returns the stable operator notices serialized into every batch record.\n",
+              "fn validate_batch_plan(\n":
+                  "/// Validates structure, totals, ordering, scope, and digest integrity.\n",
+              "fn build_batch_plan(\n":
+                  "/// Builds and integrity-checks a normalized batch plan from bounded evidence.\n",
+              "fn plan_batch_with<F>(\n":
+                  "/// Plans a bounded manifest through an injected read-only item planner.\n",
+              "fn validate_batch_approval(\n":
+                  "/// Validates exact-plan confirmation, attribution, freshness, and integrity.\n",
+              "fn preflight_with<F>(\n":
+                  "/// Replans every selected item before the first mutation and rejects drift.\n",
+              "fn refresh_result_summary(result: &mut IcloudLocalEvictionBatchResult, completed_at_ms: u64) {":
+                  "/// Recomputes checkpoint counts, completion flags, and the result digest.\n",
+              "fn checkpoint_name(approval_id: &str, attempted_count: u32) -> String {":
+                  "/// Derives the immutable checkpoint filename for an attempted-item count.\n",
+              "trait BatchRecordWriter {\n    fn write":
+                  "trait BatchRecordWriter {\n    /// Persists one create-new immutable approval, result, or checkpoint record.\n    fn write",
+              "#[cfg(not(coverage))]\nstruct ImmutableBatchRecordWriter;":
+                  "/// Production writer that delegates to the create-new immutable record boundary.\n#[cfg(not(coverage))]\nstruct ImmutableBatchRecordWriter;",
+              "impl BatchRecordWriter for ImmutableBatchRecordWriter {\n    fn write":
+                  "impl BatchRecordWriter for ImmutableBatchRecordWriter {\n    /// Writes a serialized record without overwriting an existing evidence object.\n    fn write",
+              "#[cfg(any(not(coverage), test))]\nfn fresh_item_requested_at_ms":
+                  "#[cfg(any(not(coverage), test))]\n/// Reads a fresh mutation timestamp instead of deriving synthetic item times.\nfn fresh_item_requested_at_ms",
+              "#[cfg(any(not(coverage), test))]\nfn execute_icloud_local_eviction_batch_with":
+                  "#[cfg(any(not(coverage), test))]\n/// Executes one approved batch through injected planner, executor, writer, and clock seams.\nfn execute_icloud_local_eviction_batch_with",
+          }
+          for anchor, documented in documentation.items():
               if source.count(anchor) != 1:
-                  raise SystemExit(f"green coverage seam missing or duplicated: {anchor}")
+                  raise SystemExit(f"expected one documentation anchor {anchor!r}, found {source.count(anchor)}")
+              if documented.startswith("trait ") or documented.startswith("impl ") or documented.startswith("/// Production") or documented.startswith("#[cfg"):
+                  replacement = documented
+              else:
+                  replacement = documented + anchor
+              source = source.replace(anchor, replacement, 1)
+
+          source_path.write_text(source, encoding="utf-8")
+
+          test_path = Path("src-tauri/tests/icloud_local_eviction_batch_documentation_test.rs")
+          test_source = test_path.read_text(encoding="utf-8")
+          if "batch_module_documents_every_production_function_and_support_item" in test_source:
+              raise SystemExit("documentation regression already exists")
+          addition = r'''
+
+/// Verifies that every production helper and injected support item retains attached Rust docs.
+#[test]
+fn batch_module_documents_every_production_function_and_support_item() {
+    let source = include_str!("../src/cloud_local_eviction_batch.rs");
+    let production = source
+        .split("\n#[cfg(test)]\nmod tests {")
+        .next()
+        .expect("production module prefix");
+    let lines: Vec<&str> = production.lines().collect();
+    let mut undocumented = Vec::new();
+
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+        let indentation = line.len().saturating_sub(trimmed.len());
+        let production_item = (indentation == 0
+            && (trimmed.starts_with("fn ")
+                || trimmed.starts_with("pub fn ")
+                || trimmed.starts_with("trait BatchRecordWriter")
+                || trimmed.starts_with("struct ImmutableBatchRecordWriter")))
+            || (indentation == 4 && trimmed.starts_with("fn write<"));
+        if !production_item {
+            continue;
+        }
+
+        let mut cursor = index;
+        let mut documented = false;
+        while cursor > 0 {
+            cursor -= 1;
+            let previous = lines[cursor].trim();
+            if previous.starts_with("#[") {
+                continue;
+            }
+            documented = previous.starts_with("///");
+            break;
+        }
+        if !documented {
+            undocumented.push(trimmed.to_string());
+        }
+    }
+
+    assert!(
+        undocumented.is_empty(),
+        "production items missing attached Rust documentation: {undocumented:?}"
+    );
+}
+'''
+          test_path.write_text(test_source + addition, encoding="utf-8")
           PY
+
+          rm .github/workflows/repair-pr129-coverage-seams.yml \
+            .github/repair-pr129-trigger.txt
           git diff --check
-          test "$(git diff --name-only)" = "src-tauri/src/cloud_local_eviction_batch.rs"
+          test "$(git diff --name-only | sort)" = "$(printf '%s\n' \
+            .github/repair-pr129-trigger.txt \
+            .github/workflows/repair-pr129-coverage-seams.yml \
+            src-tauri/src/cloud_local_eviction_batch.rs \
+            src-tauri/tests/icloud_local_eviction_batch_documentation_test.rs | sort)"
 
-      - name: Install Tauri system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
-
-      - name: Install repository Rust toolchain
-        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
-
-      - name: Prove normal and coverage test compilation is green
-        shell: bash --noprofile --norc -e -o pipefail {0}
-        run: |
-          rustfmt --edition 2021 --check src-tauri/src/cloud_local_eviction_batch.rs
-          cargo test --manifest-path src-tauri/Cargo.toml --lib \
-            cloud_local_eviction_batch::tests --features cloud-cli
-          RUSTFLAGS="--cfg coverage" cargo test --manifest-path src-tauri/Cargo.toml --lib \
-            cloud_local_eviction_batch::tests --features cloud-cli
-          git diff --check
-
-      - name: Commit exact validated repair and remove one-shot workflow
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SOURCE_HEAD: ${{ github.sha }}
-          SOURCE_BRANCH: fix/icloud-batch-postmerge-verification
-        shell: bash --noprofile --norc -e -o pipefail {0}
-        run: |
-          rm .github/workflows/repair-pr129-coverage-seams.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src-tauri/src/cloud_local_eviction_batch.rs .github/workflows/repair-pr129-coverage-seams.yml
-          test "$(git diff --cached --name-only | sort)" = "$(printf '%s\n' \
-            .github/workflows/repair-pr129-coverage-seams.yml \
-            src-tauri/src/cloud_local_eviction_batch.rs | sort)"
+          git add -A
           git diff --cached --check
-          git commit -m "fix: expose iCloud batch test seams under coverage"
+          git commit -m "fix: expose covered iCloud batch seams and document helpers"
           remote_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push --force-with-lease="refs/heads/${SOURCE_BRANCH}:${SOURCE_HEAD}" \
             "$remote_url" "HEAD:refs/heads/${SOURCE_BRANCH}"
+          trap - ERR
