@@ -36,7 +36,8 @@ jobs:
       - name: Prove the coverage seam regression is red
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          python3 - <<'PY'
+          set +e
+          python3 - <<'PY' > /tmp/pr129-red.log 2>&1
           from pathlib import Path
           import sys
 
@@ -51,20 +52,6 @@ jobs:
               print("coverage test seams are unavailable")
               sys.exit(1)
           print("coverage test seams are available")
-          PY
-          set +e
-          python3 /tmp/nonexistent-pr129-check.py >/dev/null 2>&1
-          static_status=$?
-          set -e
-          test "$static_status" -ne 0
-          set +e
-          python3 - <<'PY' > /tmp/pr129-red.log 2>&1
-          from pathlib import Path
-          import sys
-          source = Path("src-tauri/src/cloud_local_eviction_batch.rs").read_text(encoding="utf-8")
-          if "#[cfg(any(not(coverage), test))]\ntrait BatchRecordWriter" not in source:
-              print("coverage test seams are unavailable")
-              sys.exit(1)
           PY
           status=$?
           set -e
@@ -100,6 +87,18 @@ jobs:
                   raise SystemExit(f"expected one audited anchor {old!r}, found {count}")
               source = source.replace(old, new, 1)
           path.write_text(source, encoding="utf-8")
+          PY
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path("src-tauri/src/cloud_local_eviction_batch.rs").read_text(encoding="utf-8")
+          for anchor in [
+              "#[cfg(any(not(coverage), test))]\ntrait BatchRecordWriter",
+              "#[cfg(any(not(coverage), test))]\nfn fresh_item_requested_at_ms",
+              "#[cfg(any(not(coverage), test))]\nfn execute_icloud_local_eviction_batch_with",
+          ]:
+              if source.count(anchor) != 1:
+                  raise SystemExit(f"green coverage seam missing or duplicated: {anchor}")
           PY
           git diff --check
           test "$(git diff --name-only)" = "src-tauri/src/cloud_local_eviction_batch.rs"
