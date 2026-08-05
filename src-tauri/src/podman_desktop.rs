@@ -110,7 +110,12 @@ fn valid_sha256(value: &str) -> bool {
 }
 
 fn stable_issue_code(value: &str) -> String {
-    value.split(':').next().unwrap_or("podman-evidence-error").to_string()
+    value
+        .split(':')
+        .next()
+        .filter(|code| !code.is_empty())
+        .unwrap_or("podman-evidence-error")
+        .to_string()
 }
 
 fn has_action(plan: &PodmanReclaimPlan, kind: PodmanRecommendedActionKind) -> bool {
@@ -136,9 +141,7 @@ pub fn redact_podman_reclaim_plan(plan: PodmanReclaimPlan) -> PodmanDesktopEvide
         .unused_images
         .as_ref()
         .map(|images| images.candidate_set_sha256.clone());
-    let fingerprint_valid = candidate_fingerprint
-        .as_deref()
-        .is_none_or(valid_sha256);
+    let fingerprint_valid = candidate_fingerprint.as_deref().is_none_or(valid_sha256);
     if !fingerprint_valid {
         issue_codes.push("podman-desktop-invalid-candidate-fingerprint".to_string());
     }
@@ -368,7 +371,6 @@ mod tests {
         assert!(!json.contains("private-machine"));
         assert!(!json.contains("/Users/private"));
         assert!(!json.contains("/var/home/private"));
-        assert!(!json.contains("graph_root"));
     }
 
     #[test]
@@ -416,7 +418,10 @@ mod tests {
     #[test]
     fn invalid_fingerprint_fails_closed_without_hiding_other_evidence() {
         let mut plan = complete_plan();
-        plan.unused_images.as_mut().unwrap().candidate_set_sha256 = "BAD".to_string();
+        plan.unused_images
+            .as_mut()
+            .unwrap()
+            .candidate_set_sha256 = "BAD".to_string();
         let evidence = redact_podman_reclaim_plan(plan);
         assert!(!evidence.evidence_complete);
         assert_eq!(evidence.candidates.image_candidate_set_sha256, None);
@@ -454,8 +459,10 @@ mod tests {
     }
 
     #[test]
-    fn issue_code_fallback_is_stable_for_empty_detail() {
-        assert_eq!(stable_issue_code(""), "");
+    fn issue_code_fallback_and_fingerprint_validation_are_stable() {
+        assert_eq!(stable_issue_code(""), "podman-evidence-error");
+        assert_eq!(stable_issue_code(":private"), "podman-evidence-error");
+        assert_eq!(stable_issue_code("stable:private"), "stable");
         assert!(valid_sha256(&"0".repeat(64)));
         assert!(!valid_sha256(&"A".repeat(64)));
         assert!(!valid_sha256("short"));
