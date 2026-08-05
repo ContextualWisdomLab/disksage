@@ -126,7 +126,7 @@ pub fn run() {
             commands::adopt_existing_cloud_candidate,
             commands::attest_cloud_copy,
             commands::trash_verified_cloud_source,
-            podman_desktop::inspect_podman_reclaim
+            podman_desktop::inspect_podman_reclaim,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
