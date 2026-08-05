@@ -8,6 +8,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Expose read-only Podman VM and storage evidence in Cleanup while keeping configured capacity, observed allocation, logical image/container/volume candidates, and verified host physical reclaimability as separate evidence classes.
+- Keep image, stopped-container, and local-volume candidates as independent review categories that would each require a separate future human approval; this desktop slice adds no prune, removal, machine lifecycle, TRIM, or raw-image mutation path.
 - Align the frontend toolchain on Vite 8.2 and `@sveltejs/vite-plugin-svelte` 7.2 so the declared peer dependency graph is installable and reproducible.
 - Declare the supported Node.js runtime floor as Node.js 20.19 or Node.js 22.12 and later, matching Vite 8 requirements.
 - Pin the primary test workflow to Node.js 20.19.0 so the minimum supported runtime is continuously verified.
@@ -19,5 +21,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Security
 
+- Reduce detailed Podman probe failures to stable issue codes for presentation, keep machine names and filesystem paths out of rendered evidence, and expose exact unused-image membership only through a validated SHA-256 candidate-set fingerprint.
 - Generate the npm lockfile in an exact-head validation job with repository contents read-only and dependency lifecycle scripts disabled, bind the artifact to SHA-256 evidence, and grant `contents: write` only to a separate publication job that verifies the same-run artifact and unchanged branch head before committing the lockfile.
 - Removed obsolete one-shot repair workflows and patch scripts so repository automation no longer retains dormant write-capable recovery paths.
