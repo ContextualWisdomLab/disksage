@@ -14,6 +14,7 @@ export default defineConfig({
         "src/lib/dupeGuard.ts",
         "src/lib/verdictBadge.ts",
         "src/lib/podmanEvidence.ts",
+        "src/lib/podmanEvidenceError.ts",
       ],
       reporter: ["text", "json", "json-summary"],
       // ponytail: 위 include의 헤드리스 순수 로직/API 계약 파일은 완전 검증 가능하므로
