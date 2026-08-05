@@ -102,6 +102,7 @@ pub struct PodmanDesktopEvidence {
     pub notices: Vec<String>,
 }
 
+/// Return true only for a canonical lowercase hexadecimal SHA-256 encoding.
 fn valid_sha256(value: &str) -> bool {
     value.len() == 64
         && value
@@ -109,15 +110,32 @@ fn valid_sha256(value: &str) -> bool {
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
+/// Reduce untrusted local diagnostic text to a bounded kebab-case issue code.
+///
+/// The prefix before the first colon is accepted only when it starts with a lowercase ASCII
+/// letter, contains lowercase ASCII letters, digits, or hyphens, and is at most 96 bytes. Paths,
+/// socket names, whitespace, uppercase text, Unicode, underscores, and empty prefixes fall back to
+/// one stable generic code rather than crossing the desktop IPC boundary.
 fn stable_issue_code(value: &str) -> String {
-    value
-        .split(':')
-        .next()
-        .filter(|code| !code.is_empty())
-        .unwrap_or("podman-evidence-error")
-        .to_string()
+    let code = value.split(':').next().unwrap_or_default();
+    let valid = !code.is_empty()
+        && code.len() <= 96
+        && code
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_lowercase())
+        && code.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
+        });
+
+    if valid {
+        code.to_string()
+    } else {
+        "podman-evidence-error".to_string()
+    }
 }
 
+/// Return whether a matching recommended action requires independent human approval.
 fn has_action(plan: &PodmanReclaimPlan, kind: PodmanRecommendedActionKind) -> bool {
     plan.assessment
         .recommended_actions
@@ -450,6 +468,12 @@ mod tests {
     fn issue_code_fallback_and_fingerprint_validation_are_stable() {
         assert_eq!(stable_issue_code(""), "podman-evidence-error");
         assert_eq!(stable_issue_code(":private"), "podman-evidence-error");
+        assert_eq!(
+            stable_issue_code("/Users/alice/private-machine.sock"),
+            "podman-evidence-error"
+        );
+        assert_eq!(stable_issue_code("UPPERCASE"), "podman-evidence-error");
+        assert_eq!(stable_issue_code("unsafe_code"), "podman-evidence-error");
         assert_eq!(stable_issue_code("stable:private"), "stable");
         assert!(valid_sha256(&"0".repeat(64)));
         assert!(!valid_sha256(&"A".repeat(64)));
