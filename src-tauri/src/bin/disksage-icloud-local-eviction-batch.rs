@@ -132,6 +132,27 @@ fn paths_overlap(left: &Path, right: &Path) -> bool {
     left == right || left.starts_with(right) || right.starts_with(left)
 }
 
+/// Validates that the cloud root, manifest, and optional record directory are available and located outside one another's restricted areas.
+///
+/// # Examples
+///
+/// ```
+/// use std::fs;
+///
+/// let base = std::env::temp_dir().join(format!(
+///     "icloud-validation-example-{}",
+///     std::process::id()
+/// ));
+/// let cloud_root = base.join("cloud");
+/// let manifest = base.join("manifest.json");
+///
+/// fs::create_dir_all(&cloud_root).unwrap();
+/// fs::write(&manifest, b"{}").unwrap();
+///
+/// assert!(validate_control_locations(&cloud_root, &manifest, None).is_ok());
+///
+/// fs::remove_dir_all(base).unwrap();
+/// ```
 fn validate_control_locations(
     cloud_root: &Path,
     manifest: &Path,
@@ -161,6 +182,29 @@ fn validate_control_locations(
     Ok(())
 }
 
+/// Selects the requested iCloud root from the detected cloud roots.
+///
+/// Returns an error when no root matches, the sole matching root is not iCloud, or multiple roots match.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+///
+/// let roots: &[CloudRoot] = &[];
+/// let result = select_root(roots, Path::new("/Users/example/Library/Mobile Documents"));
+///
+/// assert!(result.is_err());
+/// ```
+///
+/// # Arguments
+///
+/// * `roots` - The cloud roots detected on the system.
+/// * `requested` - The path used to identify the desired cloud root.
+///
+/// # Returns
+///
+/// The matching iCloud root, or an error describing why selection failed.
 fn select_root<'a>(roots: &'a [CloudRoot], requested: &Path) -> Result<&'a CloudRoot, String> {
     let matches: Vec<_> = roots
         .iter()

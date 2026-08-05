@@ -506,8 +506,21 @@ where
     build_batch_plan(root, paths.len(), items, unavailable, observed_at_ms)
 }
 
-/// Build a bounded read-only batch plan. Unavailable paths are represented by index and a bounded,
-/// path-free error code. No file content is opened and no local allocation is changed.
+/// Builds a bounded, read-only batch plan for local iCloud eviction.
+///
+/// Unavailable paths are recorded by input index with a bounded, path-free error
+/// code. Planning does not open file content or modify local allocations.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::path::PathBuf;
+///
+/// let root: &CloudRoot = unimplemented!();
+/// let paths = vec![PathBuf::from("example.txt")];
+/// let plan = plan_icloud_local_eviction_batch(root, &paths, 0);
+/// ```
+///
 #[cfg(not(coverage))]
 pub fn plan_icloud_local_eviction_batch(
     root: &CloudRoot,
@@ -517,10 +530,33 @@ pub fn plan_icloud_local_eviction_batch(
     plan_batch_with(root, paths, observed_at_ms, plan_icloud_local_eviction)
 }
 
-/// Create an attributed human approval for one exact eligible batch plan.
+/// Creates human approval evidence for an eligible batch plan with an exact fingerprint.
 ///
-/// This pure function validates the plan, reviewer identity, rationale, and timestamps. It
-/// never reads file content and never changes local or cloud data.
+/// The plan fingerprint, reviewer attribution, rationale, and approval timestamp are
+/// validated before the approval record is created. This function does not read file
+/// content or modify local or cloud data.
+///
+/// # Errors
+///
+/// Returns an error if the plan is invalid, the fingerprint does not match, the plan
+/// is not eligible, reviewer attribution or rationale is invalid, or the approval
+/// predates the plan.
+///
+/// # Examples
+///
+/// ```no_run
+/// # let plan = todo!();
+/// # let root = todo!();
+/// let approval = approve_icloud_local_eviction_batch(
+///     &plan,
+///     &root,
+///     &plan.batch_fingerprint,
+///     1_000,
+///     "human:reviewer",
+///     "Approved after reviewing the batch plan.",
+/// );
+/// # let _ = approval;
+/// ```
 pub fn approve_icloud_local_eviction_batch(
     plan: &IcloudLocalEvictionBatchPlan,
     root: &CloudRoot,
@@ -666,6 +702,19 @@ struct ImmutableBatchRecordWriter;
 
 #[cfg(not(coverage))]
 impl BatchRecordWriter for ImmutableBatchRecordWriter {
+    /// Writes a serialized value as an immutable record in the specified directory.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// writer.write(record_dir, "approval.json", &approval)?;
+    /// # Ok::<(), String>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the value cannot be serialized or the immutable record
+    /// cannot be written.
     fn write<T: serde::Serialize>(
         &mut self,
         record_dir: &Path,
@@ -677,16 +726,33 @@ impl BatchRecordWriter for ImmutableBatchRecordWriter {
 }
 
 #[cfg(not(coverage))]
-/// Execute one approved batch after revalidating every planned item.
+/// Executes an approved iCloud local-eviction batch after revalidating every planned item.
 ///
-/// The coordinator prepares all current plans and immutable individual approvals before the
-/// first eviction request. It processes items sequentially, writes a create-new checkpoint
-/// after every attempt, and stops after the first error or incomplete verification.
+/// Items are processed sequentially. The coordinator records immutable approval and result
+/// evidence, creates a new checkpoint after each attempt, and stops after the first execution,
+/// verification, recording, or checkpoint failure.
 ///
 /// # Errors
 ///
-/// Returns a stable error code when plan or approval integrity fails, preflight evidence
-/// changes, or an immutable approval, result, or checkpoint record cannot be written.
+/// Returns a stable error code if plan or approval integrity fails, preflight evidence changes,
+/// or an immutable approval, result, or checkpoint record cannot be written.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::path::Path;
+///
+/// let result = execute_icloud_local_eviction_batch(
+///     &todo!(),
+///     &todo!(),
+///     &todo!(),
+///     "batch-fingerprint",
+///     Path::new("/var/lib/icloud-records"),
+///     0,
+/// )?;
+/// # let _: IcloudLocalEvictionBatchResult = result;
+/// # Ok::<(), String>(())
+/// ```
 pub fn execute_icloud_local_eviction_batch(
     root: &CloudRoot,
     plan: &IcloudLocalEvictionBatchPlan,
@@ -710,12 +776,51 @@ pub fn execute_icloud_local_eviction_batch(
     )
 }
 
-#[cfg(not(coverage))]
+/// Obtains a fresh timestamp from the supplied clock.
+///
+/// # Examples
+///
+/// ```
+/// let timestamp = fresh_item_requested_at_ms(&mut || 1_700_000_000_000);
+/// assert_eq!(timestamp, 1_700_000_000_000);
+/// ```
 fn fresh_item_requested_at_ms(now_ms: &mut impl FnMut() -> u64) -> u64 {
     now_ms()
 }
 
+/// Executes an approved batch of iCloud local-eviction operations and records immutable progress checkpoints.
+///
+/// The batch is preflighted before mutation. Items execute sequentially, and execution halts after
+/// an execution, eviction, verification, result-recording, or checkpoint-recording failure.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// let result = execute_icloud_local_eviction_batch_with(
+///     &root,
+///     &plan,
+///     &approval,
+///     &plan.batch_fingerprint,
+///     record_dir,
+///     requested_at_ms,
+///     planner,
+///     executor,
+///     &mut recorder,
+///     clock,
+/// )?;
+/// assert_eq!(result.batch_fingerprint, plan.batch_fingerprint);
+/// # Ok::<(), String>(())
+/// ```
+///
+/// # Parameters
+///
+/// * `confirmation_batch_fingerprint` must match the approved plan fingerprint.
+/// * `record_dir` identifies where approval, result, and checkpoint records are written.
+/// * `requested_at_ms` is the batch start timestamp.
+/// * `planner`, `executor`, `recorder`, and `now_ms` provide planning, execution, persistence, and
+///   per-item timestamp behavior.
 #[cfg(not(coverage))]
+期特码?
 fn execute_icloud_local_eviction_batch_with<P, E, R, N>(
     root: &CloudRoot,
     plan: &IcloudLocalEvictionBatchPlan,
@@ -1165,6 +1270,15 @@ mod tests {
         }
     }
 
+    /// Extracts the numeric index from a file name with a `file-` prefix.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::path::Path;
+    ///
+    /// assert_eq!(plan_index(Path::new("file-3")), 3);
+    /// ```
     fn plan_index(path: &Path) -> usize {
         path.file_stem()
             .unwrap()
@@ -1197,6 +1311,26 @@ mod tests {
         (plan, approval)
     }
 
+    /// Constructs a completed result for a successfully verified local eviction.
+    ///
+    /// # Arguments
+    ///
+    /// * `plan` - The eviction plan that was executed.
+    /// * `approval` - The approval authorizing the eviction.
+    /// * `requested_at_ms` - The request timestamp in milliseconds since the Unix epoch.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn example(
+    /// #     plan: &IcloudLocalEvictionPlan,
+    /// #     approval: &IcloudLocalEvictionApproval,
+    /// # ) {
+    /// let result = successful_result(plan, approval, 1_700_000_000_000);
+    /// assert!(result.eviction_request_succeeded);
+    /// assert!(result.verification_complete);
+    /// # }
+    /// ```
     fn successful_result(
         plan: &IcloudLocalEvictionPlan,
         approval: &IcloudLocalEvictionApproval,
