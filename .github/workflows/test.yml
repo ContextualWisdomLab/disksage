@@ -23,6 +23,8 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: src-tauri
+      - name: Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
       - name: Rust tests (includes unix symlink test)
         run: cargo test --manifest-path src-tauri/Cargo.toml
       - name: Headless cloud planner tests
@@ -40,6 +42,8 @@ jobs:
           node-version: 20.19.0
       - run: npm ci
       - run: npm test
+      - run: npm run coverage
+      - run: npm run check
       - run: npm run build
 
   llm-engine-build:
