@@ -23,10 +23,15 @@ use std::io::{Read, Write};
 #[cfg(not(coverage))]
 use std::path::PathBuf;
 
+/// Legacy receipt schema version retained for backward-compatible reads.
 pub const LEGACY_RECEIPT_VERSION: u32 = 2;
+/// Receipt schema version used before exact action approvals were embedded.
 pub const PRE_APPROVAL_RECEIPT_VERSION: u32 = 3;
+/// Current immutable cloud-copy receipt schema version.
 pub const RECEIPT_VERSION: u32 = 4;
+/// Schema version for one exact human cloud-copy approval.
 pub const CLOUD_COPY_APPROVAL_VERSION: u32 = 1;
+/// Maximum age accepted for an exact cloud-copy approval.
 pub const MAX_CLOUD_COPY_APPROVAL_AGE_MS: u64 = 15 * 60 * 1000;
 #[cfg(not(coverage))]
 const MAX_RECEIPT_BYTES: u64 = 64 * 1024;
@@ -59,14 +64,18 @@ impl CloudCopyVerificationMethod {
     }
 }
 
+/// Identifies the exact cloud-copy action authorized by a human reviewer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CloudCopyApprovalAction {
+    /// Authorize creating a new provider copy while retaining the local source.
     CopyOnly,
+    /// Authorize adopting an already-existing destination after digest verification.
     AdoptExistingCopy,
 }
 
 impl CloudCopyApprovalAction {
+    /// Return the stable kebab-case value stored in receipts and confirmation phrases.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::CopyOnly => "copy-only",
@@ -90,17 +99,29 @@ impl CloudCopyApprovalAction {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CloudCopyApproval {
+    /// Version of the approval record schema.
     pub version: u32,
+    /// Integrity digest binding every field in this approval.
     pub approval_id: String,
+    /// Exact copy or adoption action the reviewer authorized.
     pub action: CloudCopyApprovalAction,
+    /// Metadata fingerprint of the candidate shown to the reviewer.
     pub candidate_fingerprint: String,
+    /// Review fingerprint binding source, destination, scope, and displayed evidence.
     pub review_fingerprint: String,
+    /// Cloud provider that will receive or already contains the destination object.
     pub provider: CloudProvider,
+    /// Account boundary in which the destination is located.
     pub destination_account_scope: CloudAccountScope,
+    /// Stable identifier of the reviewed cloud root.
     pub cloud_root_id: String,
+    /// Millisecond Unix timestamp at which the reviewer approved the action.
     pub approved_at_ms: u64,
+    /// Human-attributed reviewer identifier, such as `human:operator-id`.
     pub approved_by: String,
+    /// Reviewer-authored explanation for approving this exact action.
     pub rationale: String,
+    /// Exact candidate-specific phrase entered by the reviewer.
     pub exact_confirmation_phrase: String,
 }
 
@@ -253,6 +274,10 @@ fn copy_approval_id_for(approval: &CloudCopyApproval) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
+/// Build the exact phrase a human must enter for one candidate and action.
+///
+/// The phrase includes the action and current review fingerprint, preventing a generic approval
+/// from being replayed for a different source, destination, account scope, or operation.
 pub fn cloud_copy_approval_phrase(
     candidate: &CloudCandidate,
     action: CloudCopyApprovalAction,
@@ -288,6 +313,10 @@ fn validate_cloud_copy_approval_integrity(approval: &CloudCopyApproval) -> Resul
     Ok(())
 }
 
+/// Create an integrity-bound approval after validating the candidate, destination, actor, and phrase.
+///
+/// This constructor fails closed when the candidate fingerprint is stale, the cloud root does not
+/// match the candidate, the reviewer attribution is incomplete, or the exact phrase differs.
 pub fn create_cloud_copy_approval(
     candidate: &CloudCandidate,
     cloud_root: &CloudRoot,
@@ -1330,6 +1359,7 @@ fn test_copy_approval(
     )
 }
 
+/// Test-only compatibility helper that creates a valid exact approval before preparing a copy.
 #[cfg(all(test, not(coverage)))]
 pub fn prepare_cloud_copy(
     candidate: &CloudCandidate,
@@ -1340,6 +1370,7 @@ pub fn prepare_cloud_copy(
     prepare_cloud_copy_with_review(candidate, cloud_root, receipt_dir, copied_at_ms, None)
 }
 
+/// Test-only compatibility helper that combines metadata review and exact copy approval fixtures.
 #[cfg(all(test, not(coverage)))]
 pub fn prepare_cloud_copy_with_review(
     candidate: &CloudCandidate,
@@ -1364,6 +1395,7 @@ pub fn prepare_cloud_copy_with_review(
     )
 }
 
+/// Test-only compatibility helper that approves and verifies adoption of an existing copy.
 #[cfg(all(test, not(coverage)))]
 pub fn adopt_existing_cloud_copy(
     candidate: &CloudCandidate,

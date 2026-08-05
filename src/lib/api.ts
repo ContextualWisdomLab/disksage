@@ -580,8 +580,10 @@ export interface CloudCopyReceipt {
 }
 
 export type CloudCopyVerificationMethod = "copied-by-disk-sage" | "adopted-existing";
+/** Identifies the exact cloud-copy action authorized by a human reviewer. */
 export type CloudCopyApprovalAction = "copy-only" | "adopt-existing-copy";
 
+/** Records who approved one exact candidate, destination, and action, and when. */
 export interface CloudCopyApproval {
   version: number;
   approval_id: string;
@@ -861,6 +863,7 @@ export const adoptExistingCloudCandidate = (
   limit,
 });
 
+/** Builds the exact confirmation phrase shown to and entered by the human reviewer. */
 export const cloudCopyApprovalPhrase = (
   candidate: Pick<CloudCandidate, "review_fingerprint">,
   action: CloudCopyApprovalAction,
