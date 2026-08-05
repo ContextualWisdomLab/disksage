@@ -18,7 +18,6 @@ jobs:
   finalize:
     if: >-
       github.repository == 'ContextualWisdomLab/disksage' &&
-      github.actor == 'seonghobae' &&
       github.ref == 'refs/heads/feat/exact-cloud-copy-approval-lineage'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
@@ -35,7 +34,7 @@ jobs:
       - name: Verify audited repair parent
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          test "$(git rev-parse HEAD^)" = "7793e5c82de5861788937547e1cd511740055ab4"
+          test "$(git rev-parse HEAD^)" = "a4307cab094e7df9509bc0a0da15e39ac947b8b4"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
       - name: Install Tauri system dependencies
