@@ -1,0 +1,50 @@
+name: PR133 Rustfmt Repair
+
+on:
+  push:
+    branches: [feat/podman-desktop-evidence]
+    paths:
+      - ".github/workflows/pr133-rustfmt-diff.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr133-rustfmt-repair-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  rustfmt-repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: true
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          components: rustfmt
+      - name: Apply exact rustfmt output
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml
+      - name: Verify bounded formatting-only changes
+        run: |
+          set -euo pipefail
+          git diff --check
+          mapfile -t changed_files < <(git diff --name-only)
+          test "${#changed_files[@]}" -gt 0
+          for changed_file in "${changed_files[@]}"; do
+            case "$changed_file" in
+              src-tauri/*.rs|src-tauri/src/*.rs|src-tauri/src/**/*.rs) ;;
+              *)
+                echo "Unexpected rustfmt output outside Rust sources: $changed_file" >&2
+                exit 1
+                ;;
+            esac
+          done
+      - name: Commit exact rustfmt output
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- src-tauri
+          git commit -m "style: apply repository-wide rustfmt output"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
