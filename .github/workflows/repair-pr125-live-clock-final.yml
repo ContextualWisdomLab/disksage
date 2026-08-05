@@ -1,0 +1,77 @@
+name: Repair PR 125 live-clock approval boundary
+
+on:
+  push:
+    branches:
+      - feat/exact-cloud-copy-approval-lineage
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-pr125-live-clock-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: >-
+      github.repository == 'ContextualWisdomLab/disksage'
+      && github.ref == 'refs/heads/feat/exact-cloud-copy-approval-lineage'
+      && github.actor == 'seonghobae'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify audited repair inputs
+        run: |
+          test "$(git hash-object .github/scripts/repair_pr125_live_clock.py)" = "7b17235307c031e570d0f124f211fc76e13b5b67"
+          test "$(git hash-object src-tauri/src/cloud_transfer.rs)" = "3146c21b99d74c6401816452faf682424ee22847"
+          test "$(git hash-object src-tauri/src/commands.rs)" = "f4466d34613a51853a69b1f930038d0e5934928d"
+          test "$(git hash-object src-tauri/src/bin/disksage-cloud-plan.rs)" = "9c30bb3b297648a621e5a9089ee66c9a3f33d3bb"
+          python3 -m py_compile .github/scripts/repair_pr125_live_clock.py
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - name: Add the regression test first
+        run: python3 .github/scripts/repair_pr125_live_clock.py tests
+      - name: Prove the regression is red
+        run: |
+          if cargo test --manifest-path src-tauri/Cargo.toml --lib cloud_transfer::tests::production_copy_entrypoints_recheck_approval_age_against_live_time --features cloud-cli; then
+            echo 'regression unexpectedly passed before the production repair' >&2
+            exit 1
+          fi
+      - name: Apply the bounded production repair
+        run: python3 .github/scripts/repair_pr125_live_clock.py production
+      - name: Format and verify the exact repair
+        run: |
+          cargo fmt --manifest-path src-tauri/Cargo.toml --all
+          cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+          python3 .github/scripts/repair_pr125_live_clock.py verify
+          cargo test --manifest-path src-tauri/Cargo.toml --lib cloud_transfer::tests::production_copy_entrypoints_recheck_approval_age_against_live_time --features cloud-cli
+          cargo test --manifest-path src-tauri/Cargo.toml --lib cloud_transfer::tests --features cloud-cli
+          cargo test --manifest-path src-tauri/Cargo.toml --lib naruon_lineage::tests --features cloud-cli
+          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-cloud-plan
+          cargo check --manifest-path src-tauri/Cargo.toml --bins --features cloud-cli
+          git diff --check
+      - name: Commit the validated repair and cleanup
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          remote_url="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          remote_head=$(git ls-remote "$remote_url" "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')
+          test "$remote_head" = "$GITHUB_SHA"
+          rm .github/scripts/repair_pr125_live_clock.py
+          rm .github/workflows/repair-pr125-live-clock-final.yml
+          git add src-tauri/src/cloud_transfer.rs src-tauri/src/commands.rs src-tauri/src/bin/disksage-cloud-plan.rs .github/scripts/repair_pr125_live_clock.py .github/workflows/repair-pr125-live-clock-final.yml
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: bind cloud copy approval to live mutation time'
+          git remote set-url origin "$remote_url"
+          git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}" --force-with-lease="refs/heads/${GITHUB_REF_NAME}:${GITHUB_SHA}"
