@@ -12,9 +12,7 @@ fn extract_json(raw: &str) -> Option<&str> {
             depth += 1;
         } else if bytes[i] == b'}' {
             depth -= 1;
-            if depth == 0 {
-                return Some(&raw[start..=i]);
-            }
+            if depth == 0 { return Some(&raw[start..=i]); }
         }
     }
     None
@@ -27,17 +25,9 @@ pub fn parse_verdict(raw: &str) -> Verdict {
 
 /// (판정, 이유). 실패 시 (Unrated, "")로 fail-closed.
 pub fn parse_verdict_full(raw: &str) -> (Verdict, String) {
-    let Some(js) = extract_json(raw) else {
-        return (Verdict::Unrated, String::new());
-    };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(js) else {
-        return (Verdict::Unrated, String::new());
-    };
-    let reason = v
-        .get("reason")
-        .and_then(|r| r.as_str())
-        .unwrap_or("")
-        .to_string();
+    let Some(js) = extract_json(raw) else { return (Verdict::Unrated, String::new()); };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(js) else { return (Verdict::Unrated, String::new()); };
+    let reason = v.get("reason").and_then(|r| r.as_str()).unwrap_or("").to_string();
     let verdict = match v.get("verdict").and_then(|x| x.as_str()) {
         Some("safe") => Verdict::Safe,
         Some("caution") => Verdict::Caution,
@@ -71,11 +61,7 @@ pub fn parse_ext_reasoning(raw: &str, candidates: &[&str]) -> Option<ExtReasonin
     let js = extract_json(raw)?;
     let v = serde_json::from_str::<serde_json::Value>(js).ok()?;
     let type_desc = v.get("type")?.as_str()?.to_string();
-    let class = v
-        .get("class")
-        .and_then(|c| c.as_str())
-        .filter(|c| candidates.contains(c))
-        .map(|c| c.to_string());
+    let class = v.get("class").and_then(|c| c.as_str()).filter(|c| candidates.contains(c)).map(|c| c.to_string());
     Some(ExtReasoning { type_desc, class })
 }
 
@@ -84,10 +70,7 @@ mod tests {
     use super::*;
     #[test]
     fn parses_clean_json() {
-        assert_eq!(
-            parse_verdict(r#"{"verdict":"safe","reason":"cache file"}"#),
-            Verdict::Safe
-        );
+        assert_eq!(parse_verdict(r#"{"verdict":"safe","reason":"cache file"}"#), Verdict::Safe);
         assert_eq!(parse_verdict(r#"{"verdict":"caution"}"#), Verdict::Caution);
         assert_eq!(parse_verdict(r#"{"verdict":"keep"}"#), Verdict::Keep);
     }
@@ -95,10 +78,7 @@ mod tests {
     fn parses_nested_json_object() {
         // 중첩 객체 — 안쪽 {..}가 먼저 닫혀 depth가 0이 아닌 값으로 감소하는 fall-through 경로 커버.
         // extract_json은 바깥 객체 전체를 반환해야 한다.
-        assert_eq!(
-            parse_verdict(r#"{"verdict":"safe","meta":{"x":1}}"#),
-            Verdict::Safe
-        );
+        assert_eq!(parse_verdict(r#"{"verdict":"safe","meta":{"x":1}}"#), Verdict::Safe);
     }
 
     #[test]
@@ -108,23 +88,14 @@ mod tests {
     }
     #[test]
     fn verdict_full_returns_reason() {
-        assert_eq!(
-            parse_verdict_full(r#"{"verdict":"safe","reason":"tmp"}"#),
-            (Verdict::Safe, "tmp".to_string())
-        );
+        assert_eq!(parse_verdict_full(r#"{"verdict":"safe","reason":"tmp"}"#), (Verdict::Safe, "tmp".to_string()));
         // reason 없으면 빈 문자열
-        assert_eq!(
-            parse_verdict_full(r#"{"verdict":"safe"}"#),
-            (Verdict::Safe, String::new())
-        );
+        assert_eq!(parse_verdict_full(r#"{"verdict":"safe"}"#), (Verdict::Safe, String::new()));
     }
     #[test]
     fn unknown_verdict_value_is_unrated() {
         assert_eq!(parse_verdict(r#"{"verdict":"delete"}"#), Verdict::Unrated); // 알 수 없는 값
-        assert_eq!(
-            parse_verdict(r#"{"note":"no verdict field"}"#),
-            Verdict::Unrated
-        ); // 필드 없음
+        assert_eq!(parse_verdict(r#"{"note":"no verdict field"}"#), Verdict::Unrated); // 필드 없음
     }
     #[test]
     fn no_braces_is_unrated() {
@@ -141,43 +112,32 @@ mod tests {
     }
     #[test]
     fn class_pick_only_from_candidates() {
-        assert_eq!(
-            parse_class_pick(r#"{"class":"Image"}"#, &["Image", "Doc"]),
-            Some("Image".into())
-        );
-        assert_eq!(
-            parse_class_pick(r#"{"class":"Video"}"#, &["Image", "Doc"]),
-            None
-        ); // 자유 생성 거부
+        assert_eq!(parse_class_pick(r#"{"class":"Image"}"#, &["Image","Doc"]), Some("Image".into()));
+        assert_eq!(parse_class_pick(r#"{"class":"Video"}"#, &["Image","Doc"]), None); // 자유 생성 거부
     }
     #[test]
     fn class_pick_failure_paths_are_none() {
-        assert_eq!(parse_class_pick("no json", &["Image"]), None); // extract None
-        assert_eq!(parse_class_pick("{bad json}", &["Image"]), None); // serde err
+        assert_eq!(parse_class_pick("no json", &["Image"]), None);          // extract None
+        assert_eq!(parse_class_pick("{bad json}", &["Image"]), None);       // serde err
         assert_eq!(parse_class_pick(r#"{"other":"x"}"#, &["Image"]), None); // class 필드 없음
-        assert_eq!(parse_class_pick(r#"{"class":5}"#, &["Image"]), None); // class가 문자열 아님
+        assert_eq!(parse_class_pick(r#"{"class":5}"#, &["Image"]), None);   // class가 문자열 아님
     }
     #[test]
     fn summary_extracted_or_none() {
-        assert_eq!(
-            parse_summary(r#"{"summary":"old installers"}"#),
-            Some("old installers".into())
-        );
-        assert_eq!(parse_summary("no json"), None); // extract None
-        assert_eq!(parse_summary("{bad}"), None); // serde err
-        assert_eq!(parse_summary(r#"{"x":1}"#), None); // summary 필드 없음
+        assert_eq!(parse_summary(r#"{"summary":"old installers"}"#), Some("old installers".into()));
+        assert_eq!(parse_summary("no json"), None);          // extract None
+        assert_eq!(parse_summary("{bad}"), None);            // serde err
+        assert_eq!(parse_summary(r#"{"x":1}"#), None);       // summary 필드 없음
         assert_eq!(parse_summary(r#"{"summary":9}"#), None); // 문자열 아님
     }
     #[test]
     fn ext_reasoning_extracts_type_and_validates_class() {
         // class가 후보에 있으면 Some
-        let r =
-            parse_ext_reasoning(r#"{"type":"3D model","class":"Model3D"}"#, &["Model3D"]).unwrap();
+        let r = parse_ext_reasoning(r#"{"type":"3D model","class":"Model3D"}"#, &["Model3D"]).unwrap();
         assert_eq!(r.type_desc, "3D model");
         assert_eq!(r.class.as_deref(), Some("Model3D"));
         // class가 후보 밖이면 type은 유지, class는 None(자유 생성 거부)
-        let r2 =
-            parse_ext_reasoning(r#"{"type":"3D model","class":"Nope"}"#, &["Model3D"]).unwrap();
+        let r2 = parse_ext_reasoning(r#"{"type":"3D model","class":"Nope"}"#, &["Model3D"]).unwrap();
         assert_eq!(r2.class, None);
         assert_eq!(r2.type_desc, "3D model");
         // class:"none" → None
@@ -186,9 +146,9 @@ mod tests {
     }
     #[test]
     fn ext_reasoning_failure_paths_are_none() {
-        assert!(parse_ext_reasoning("no json", &["X"]).is_none()); // extract None
-        assert!(parse_ext_reasoning("{bad}", &["X"]).is_none()); // serde err
+        assert!(parse_ext_reasoning("no json", &["X"]).is_none());       // extract None
+        assert!(parse_ext_reasoning("{bad}", &["X"]).is_none());         // serde err
         assert!(parse_ext_reasoning(r#"{"class":"X"}"#, &["X"]).is_none()); // type 필드 없음 → None
-        assert!(parse_ext_reasoning(r#"{"type":9}"#, &["X"]).is_none()); // type이 문자열 아님
+        assert!(parse_ext_reasoning(r#"{"type":9}"#, &["X"]).is_none());  // type이 문자열 아님
     }
 }

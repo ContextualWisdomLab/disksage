@@ -6,9 +6,7 @@ pub struct Settings {
 }
 
 impl Default for Settings {
-    fn default() -> Self {
-        Settings { online_mode: false }
-    }
+    fn default() -> Self { Settings { online_mode: false } }
 }
 
 /// JSON → Settings. 손상/부분 JSON은 기본값(offline)으로 fail-safe — 설정 파일이 앱을 깨지 않게.

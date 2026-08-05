@@ -21,11 +21,7 @@ pub fn ddg_query(ext: &str) -> String {
 pub fn parse_ddg_abstract(json: &str) -> Option<String> {
     let v = serde_json::from_str::<serde_json::Value>(json).ok()?;
     let s = v.get("AbstractText")?.as_str()?;
-    if s.is_empty() {
-        None
-    } else {
-        Some(s.to_string())
-    }
+    if s.is_empty() { None } else { Some(s.to_string()) }
 }
 
 #[cfg(test)]
@@ -41,13 +37,11 @@ mod tests {
     }
     #[test]
     fn abstract_extracted_or_none() {
-        assert_eq!(
-            parse_ddg_abstract(r#"{"AbstractText":"Autodesk FBX is a 3D format."}"#),
-            Some("Autodesk FBX is a 3D format.".to_string())
-        );
+        assert_eq!(parse_ddg_abstract(r#"{"AbstractText":"Autodesk FBX is a 3D format."}"#),
+                   Some("Autodesk FBX is a 3D format.".to_string()));
         assert_eq!(parse_ddg_abstract(r#"{"AbstractText":""}"#), None); // 빈 abstract
-        assert_eq!(parse_ddg_abstract(r#"{"Heading":"x"}"#), None); // 필드 없음
-        assert_eq!(parse_ddg_abstract("not json"), None); // 파싱 실패
+        assert_eq!(parse_ddg_abstract(r#"{"Heading":"x"}"#), None);     // 필드 없음
+        assert_eq!(parse_ddg_abstract("not json"), None);              // 파싱 실패
         assert_eq!(parse_ddg_abstract(r#"{"AbstractText":5}"#), None); // 문자열 아님
     }
 }

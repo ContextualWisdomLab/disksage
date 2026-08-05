@@ -37,9 +37,7 @@ pub fn classify_prompt(m: &FileMeta, candidates: &[&str]) -> String {
          Candidates: {list}\n\
          Reply with ONLY this JSON (choose exactly one id from the list above):\n\
          {{\"class\":\"<one id from Candidates>\"}}",
-        name = m.name,
-        parent = m.parent,
-        list = candidates.join(", ")
+        name = m.name, parent = m.parent, list = candidates.join(", ")
     )
 }
 
@@ -71,13 +69,8 @@ pub fn ext_reason_prompt(ext: &str, candidates: &[&str]) -> String {
 mod tests {
     use super::*;
     fn meta() -> FileMeta {
-        FileMeta {
-            path: "/downloads/old_report.pdf".into(),
-            name: "old_report.pdf".into(),
-            size: 2_400_000,
-            mtime_days: 420,
-            parent: "downloads".into(),
-        }
+        FileMeta { path: "/downloads/old_report.pdf".into(), name: "old_report.pdf".into(),
+                   size: 2_400_000, mtime_days: 420, parent: "downloads".into() }
     }
     #[test]
     fn verdict_prompt_has_metadata_and_schema() {
@@ -90,9 +83,7 @@ mod tests {
     #[test]
     fn classify_prompt_lists_all_candidates_and_forbids_free_text() {
         let p = classify_prompt(&meta(), &["Image", "Document", "Installer"]);
-        for c in ["Image", "Document", "Installer"] {
-            assert!(p.contains(c));
-        }
+        for c in ["Image", "Document", "Installer"] { assert!(p.contains(c)); }
         assert!(p.to_lowercase().contains("exactly one"));
     }
     #[test]
@@ -102,20 +93,8 @@ mod tests {
     }
     #[test]
     fn summary_prompt_handles_multiple_samples() {
-        let a = FileMeta {
-            path: "/a/x.bin".into(),
-            name: "x.bin".into(),
-            size: 1,
-            mtime_days: 1,
-            parent: "a".into(),
-        };
-        let b = FileMeta {
-            path: "/a/y.dat".into(),
-            name: "y.dat".into(),
-            size: 2,
-            mtime_days: 2,
-            parent: "a".into(),
-        };
+        let a = FileMeta { path: "/a/x.bin".into(), name: "x.bin".into(), size: 1, mtime_days: 1, parent: "a".into() };
+        let b = FileMeta { path: "/a/y.dat".into(), name: "y.dat".into(), size: 2, mtime_days: 2, parent: "a".into() };
         let p = summary_prompt(&[a, b]);
         assert!(p.contains("x.bin") && p.contains("y.dat"));
     }
