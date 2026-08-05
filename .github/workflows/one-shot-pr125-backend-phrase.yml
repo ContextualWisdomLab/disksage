@@ -65,14 +65,15 @@ jobs:
           python3 .github/scripts/repair_pr_125_backend_phrase.py --implementation-only
           rustfmt --edition 2021 \
             src-tauri/src/cloud_plan_view.rs \
-            src-tauri/src/commands.rs \
-            src-tauri/src/lib.rs
+            src-tauri/src/commands.rs
           python3 .github/scripts/repair_pr_125_backend_phrase.py --verify-only
           rustc --test src-tauri/tests/cloud_transfer_coverage_contract.rs \
             -o /tmp/pr125-backend-phrase-green
           /tmp/pr125-backend-phrase-green
           git diff --check
-          git diff --name-only | sort > /tmp/product-changed-files.txt
+          git status --short --untracked-files=all \
+            | sed -E 's/^.. //' \
+            | sort > /tmp/product-changed-files.txt
           printf '%s\n' \
             src-tauri/src/cloud_plan_view.rs \
             src-tauri/src/commands.rs \
@@ -120,7 +121,9 @@ jobs:
           test ! -e .github/scripts/repair_pr_125_backend_phrase.py
           test ! -e .github/workflows/one-shot-pr125-backend-phrase.yml
           git diff --check
-          git diff --name-only | sort > /tmp/final-changed-files.txt
+          git status --short --untracked-files=all \
+            | sed -E 's/^.. //' \
+            | sort > /tmp/final-changed-files.txt
           printf '%s\n' \
             .github/scripts/repair_pr_125_backend_phrase.py \
             .github/workflows/one-shot-pr125-backend-phrase.yml \
