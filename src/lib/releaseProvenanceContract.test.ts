@@ -188,6 +188,8 @@ describe('release artifact provenance contract', () => {
       'actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131',
     );
     expect(attestJob).toContain('pattern: release-disksage-*');
+    expect(attestJob).toContain('merge-multiple: false');
+    expect(attestJob).not.toContain('merge-multiple: true');
     expect(attestJob).toContain(
       'actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26',
     );
@@ -220,6 +222,8 @@ describe('release artifact provenance contract', () => {
       'actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131',
     );
     expect(publishJob).toContain('pattern: release-disksage-*');
+    expect(publishJob).toContain('merge-multiple: false');
+    expect(publishJob).not.toContain('merge-multiple: true');
     expect(publishJob).toContain(
       'softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228',
     );
@@ -252,6 +256,39 @@ describe('release artifact provenance contract', () => {
         expect(result.status).not.toBe(0);
         expect(result.stderr).toContain(
           'must reference its adjacent operational CLI',
+        );
+      } finally {
+        rmSync(fixtureRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'rejects one required CLI duplicated across preserved artifact namespaces',
+    () => {
+      const fixtureRoot = createReleaseArtifactFixture();
+      try {
+        const duplicatedName = 'disksage-cloud-plan-linux-x86_64';
+        const sourcePath = join(
+          fixtureRoot,
+          'release-artifacts',
+          'ubuntu',
+          duplicatedName,
+        );
+        const duplicatePath = join(
+          fixtureRoot,
+          'release-artifacts',
+          'windows',
+          duplicatedName,
+        );
+        mkdirSync(dirname(duplicatePath), { recursive: true });
+        writeFileSync(duplicatePath, readFileSync(sourcePath));
+
+        const result = runReleaseArtifactVerifier(fixtureRoot);
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          `Expected exactly one release artifact named ${duplicatedName}, found 2.`,
         );
       } finally {
         rmSync(fixtureRoot, { recursive: true, force: true });
