@@ -115,13 +115,17 @@ describe('release version contract', () => {
     ).toThrow(
       'Release manifest versions disagree: package.json=0.1.0, Cargo.toml=0.1.0, tauri.conf.json=0.2.0.',
     );
-    expect(() =>
-      validateReleaseVersion({
-        packageVersion: '01.0',
-        cargoVersion: '01.0',
-        tauriVersion: '01.0',
-      }),
-    ).toThrow('Release manifest version 01.0 is not valid Semantic Versioning.');
+    for (const invalidVersion of ['01.0', '1.0.0-01', '1.0.0-alpha.01']) {
+      expect(() =>
+        validateReleaseVersion({
+          packageVersion: invalidVersion,
+          cargoVersion: invalidVersion,
+          tauriVersion: invalidVersion,
+        }),
+      ).toThrow(
+        `Release manifest version ${invalidVersion} is not valid Semantic Versioning.`,
+      );
+    }
     expect(() =>
       validateReleaseVersion({
         packageVersion: '0.1.0',
