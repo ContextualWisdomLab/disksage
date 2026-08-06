@@ -57,6 +57,9 @@ describe('release artifact provenance contract', () => {
 
     expect(buildJob).toContain('name: Upload release artifact set');
     expect(buildJob).toContain('name: release-disksage-${{ matrix.os }}');
+    expect(buildJob).toContain(
+      'ref: ${{ github.event.pull_request.head.sha || github.sha }}',
+    );
     expect(buildJob).not.toContain('softprops/action-gh-release');
 
     expect(attestJob).toContain("if: startsWith(github.ref, 'refs/tags/')");
