@@ -22,7 +22,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
-- Made release concurrency retry-safe so a new first attempt still supersedes stale work while an explicit GitHub Actions rerun cannot cancel itself inside the same concurrency group.
+- Added retry-safe release concurrency so a new first attempt still supersedes stale work while an explicit GitHub Actions rerun cannot cancel itself inside the same concurrency group.
 - Made architecture evidence tests independent of the process working directory, verified linked evidence files actually exist, enforced heading and exact-head continuity, and retained the two-word `snake_case` database-object naming contract.
 - Hardened iCloud local-copy batch eviction with fresh per-item timestamps, deterministic planner/executor/recorder/clock seams, fail-closed immutable checkpoint handling, bounded manifest admission, symlink-safe control-path validation, and distinct operator diagnostics.
 - Restored the cloud-copy public documentation regression contract after a temporary repair path removed it, so CI continues to fail when the new Rust or TypeScript approval surfaces lose beginner-readable documentation.
