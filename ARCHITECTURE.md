@@ -118,20 +118,54 @@ success, or approval.
 
 ### Durable authorization
 
-A mutating operation requires all authority inputs defined by that operation, which
-can include:
+#### Read-only operations
 
-- a current plan generated from current source evidence;
-- a stable schema and exact plan fingerprint;
-- a bounded destination and no-clobber collision result;
-- fresh capacity or provider evidence where material;
-- an exact operator confirmation phrase;
-- a human-attributed approver and rationale;
-- an operation-specific execution flag; and
-- a receipt location outside protected source and destination boundaries.
+A read-only invocation requires an allow-listed operation identifier, supported schema
+version, bounded source or provider scope, explicit resource limits, and a current
+observation timestamp and fingerprint for every claim it emits. It never requires or
+returns a reusable mutation token. It cannot promote a successful observation into
+approval, provider identity, account ownership, synchronization completion, physical
+reclaimability, or deletion safety.
 
-Authorization is single-purpose and short-lived. It cannot be reused for another
-candidate, destination, provider, account scope, plan revision, or head revision.
+Read-only evidence is regenerated for each invocation. An absent observation, an
+unsupported schema, a changed scope, a limit breach, a stale fingerprint, or a failed
+clock validation returns the stable rejection state `evidence-incomplete`. Persisted
+UTC timestamps are evidence labels rather than authorization. When one process measures
+elapsed time, Rust also uses a monotonic clock so wall-clock adjustment cannot make an
+observation appear fresher.
+
+#### Mutating operation contracts
+
+Every registered mutating command must map to exactly one operation class below. The
+listed inputs are mandatory, not optional examples. If a command cannot supply every
+applicable input, it remains unavailable or read-only.
+
+| Operation class | Required fingerprint and scope | Additional required authority | Maximum authorization age |
+| --- | --- | --- | --- |
+| Copy or create-new materialization, including cloud copy-only and incomplete-download materialization | Exact source-lineage fingerprint, exact destination-plan fingerprint, provider and account scope when applicable, bounded destination, byte total, and no-clobber collision result | Human-attributed approver, rationale, exact backend-authored confirmation phrase, explicit execution flag, and restricted receipt location | 15 minutes |
+| Existing-copy adoption | Exact existing-object fingerprint, candidate identifier, destination, provider and account scope, and review fingerprint | Human-attributed approver, rationale, exact backend-authored confirmation phrase, explicit execution flag, and restricted receipt location | 15 minutes |
+| Local eviction, trash, quarantine, or cleanup | Exact current candidate-set fingerprint, action class, source scope, current safety-plan fingerprint, and rollback or trash destination | Human-attributed approver, rationale, exact backend-authored confirmation phrase, explicit execution flag, and restricted receipt location | 15 minutes |
+| Organize, archive, recover, or transform | Exact source-lineage fingerprint, transformation schema and version, destination-plan fingerprint, bounded destination, and collision result | Human-attributed approver, rationale, exact backend-authored confirmation phrase, explicit execution flag, and restricted receipt location | 15 minutes |
+
+The authorization record contains an operation identifier, schema version, all scope
+fields, all fingerprints, `issued_at_utc`, `expires_at_utc`, approver identity,
+rationale, and confirmation phrase. Rust computes `expires_at_utc` as exactly 15
+minutes after `issued_at_utc`. The trusted Rust clock evaluates UTC expiry and, for an
+authorization created and consumed in one process, also requires monotonic elapsed time
+to remain below 15 minutes.
+
+At or after `expires_at_utc`, execution fails with `approval-expired`. A current UTC
+clock earlier than the recorded issue time, a reversed monotonic interval, or any
+inconsistent clock pair fails with `approval-clock-invalid`. A changed candidate,
+destination, provider, account, action class, schema, fingerprint, phrase, or receipt
+scope fails with `approval-scope-mismatch`. Revalidation that produces a different
+current plan fails with `plan-stale`. No retry, workflow, service, UI state, or model
+response may extend, refresh, or substitute the approval; a new plan and new human
+approval are required.
+
+Authorization is single-purpose. It cannot be reused for another candidate,
+destination, provider, account scope, operation class, plan revision, schema revision,
+or repository head.
 
 ### Repository authorization
 
@@ -141,8 +175,8 @@ approval is satisfied. Queued, pending, cancelled, skipped-required, neutral-req
 absent, failed, stale-head, or older-head evidence is not passing.
 
 No document, review, status, or artifact from an older head may be reused to authorize
-merge, release, or a buyer-facing assurance claim. Local validation and CI evidence
-remain distinct from durable repository authorization.
+merge or release; local validation and CI evidence remain distinct from durable
+repository authorization.
 
 ## Data and privacy boundaries
 
@@ -213,8 +247,17 @@ A release candidate is evidence-complete only when the integrated exact head pas
 
 The local entry points for this evidence are `.github/workflows/test.yml` and
 `.github/workflows/release.yml`; shared required workflows may add stricter gates.
+The Test workflow runs `npm run coverage` directly. The package `build` script also
+starts with `npm run coverage`, and Tauri's `beforeBuildCommand` invokes that script;
+therefore the Release workflow's `npm run tauri -- build` inherits the same
+`npm run coverage` gate before packaging on every build-matrix platform. The Vitest
+scope includes all source-controlled production TypeScript modules under `src/lib` and
+`src/routes`, excluding only tests and declarations. Rust coverage remains a separate
+exact-head gate owned by the Rust toolchain.
+
 A successful workflow run is bound to its exact workflow source, base revision, head
-revision, run attempt, and artifacts.
+revision, run attempt, and artifacts. A release workflow does not replace the required
+Test result; both remain independently inspectable evidence.
 
 For acquisition diligence, a reviewer should be able to trace each material claim to:
 
@@ -228,10 +271,11 @@ For acquisition diligence, a reviewer should be able to trace each material clai
 
 NIST SP 800-218 SSDF practices inform the secure-development evidence model. SLSA
 Version 1.2 informs source, build, provenance, and verification vocabulary. OWASP ASVS
-5.0.0 informs application-security verification targets. WCAG 2.2, also published as
-ISO/IEC 40500:2025, informs accessible user workflows. DiskSage records the exact
-control implementation and test rather than claiming blanket compliance from a
-citation.
+5.0.0 informs application-security verification targets. The October 2023 W3C
+Recommendation for WCAG 2.2 informs accessible user workflows. ISO/IEC 40500:2025 is a
+separate ISO/IEC publication based on that October 2023 recommendation. DiskSage
+records the exact control implementation and test rather than claiming blanket
+compliance from a citation.
 
 ## Database object naming
 
@@ -274,26 +318,30 @@ International Organization for Standardization. (2024). *ISO/IEC 27040:2024:
 Information technology—Security techniques—Storage security*.
 https://www.iso.org/standard/80194.html
 
+International Organization for Standardization. (2025). *ISO/IEC 40500:2025:
+Information technology—W3C Web Content Accessibility Guidelines (WCAG) 2.2*.
+https://www.iso.org/standard/91029.html
+
 National Institute of Standards and Technology. (2022). *Secure software development
 framework (SSDF) version 1.1: Recommendations for mitigating the risk of software
 vulnerabilities* (NIST Special Publication 800-218).
 https://doi.org/10.6028/NIST.SP.800-218
 
 Open Worldwide Application Security Project. (2025). *Application Security
-Verification Standard 5.0.0*. https://owasp.org/www-project-application-security-verification-standard/
+Verification Standard 5.0.0*.
+https://owasp.org/www-project-application-security-verification-standard/
 
 Supply-chain Levels for Software Artifacts. (2026). *SLSA specification, version
 1.2*. https://slsa.dev/spec/v1.2/
 
-World Wide Web Consortium. (2023). *Web Content Accessibility Guidelines (WCAG) 2.2*.
-https://www.w3.org/TR/WCAG22/
-
-World Wide Web Consortium. (2025). *Web Content Accessibility Guidelines 2.2 approved
-as ISO/IEC 40500:2025*. https://www.w3.org/WAI/news/2025-10-21/wcag22-iso/
+World Wide Web Consortium. (2023). *Web Content Accessibility Guidelines (WCAG) 2.2*
+(W3C Recommendation, October 5, 2023).
+https://www.w3.org/TR/2023/REC-WCAG22-20231005/
 
 ## Reference verification note
 
 The standards above were rechecked against their official publishers for this
-architecture decision. The repository uses the references as current design and
-evidence inputs and records them in APA 7th format; certification or formal conformity
-requires an independent scope-specific assessment.
+architecture decision. WCAG 2.2 and ISO/IEC 40500:2025 are recorded separately because
+they have distinct publishers, dates, and canonical URLs. The repository uses the
+references as current design and evidence inputs and records them in APA 7th format;
+certification or formal conformity requires an independent scope-specific assessment.
