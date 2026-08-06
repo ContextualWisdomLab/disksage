@@ -27,6 +27,7 @@ The release contract requires all of the following:
 - the attestation job depends on the complete build matrix;
 - Linux `.deb` and `.AppImage`, Windows `.msi` and NSIS `.exe`, and macOS `.dmg` bundles are present exactly once in their expected bundle paths;
 - all six platform-specific operational CLIs and all six corresponding `.sha256` files are each present exactly once;
+- the merged release tree contains exactly 17 regular files and no symlink, device, socket, FIFO, or other non-regular entry, so unreviewed debug output, logs, dumps, or unrelated executables cannot become attested release subjects;
 - every checksum file contains exactly one SHA-256 record naming its adjacent expected CLI basename, so alternate, absolute, traversing, or decoy filenames are rejected before digest verification;
 - each checksum is verified before provenance generation;
 - `actions/download-artifact` is immutably pinned to commit `37930b1c2abaa49bbe596cd826c3c89aef350131`, the upstream `v7.0.0` tag commit;
@@ -56,7 +57,7 @@ Retain the artifact, the downloaded bundle, the release tag, the source commit S
 
 ## Failure and stale-evidence behavior
 
-The pipeline fails closed when an expected platform bundle, operational CLI, or checksum file is absent or duplicated. Path-scoped checks distinguish the Windows NSIS installer from the two separately shipped Windows operational CLI executables. The pipeline also fails when a checksum record names a file other than its adjacent operational CLI, contains additional fields or records, or presents a malformed digest. A checksum mismatch stops the attestation job. A failed, cancelled, skipped, neutral, missing, or stale-head attestation job cannot satisfy the publication dependency.
+The pipeline fails closed when an expected platform bundle, operational CLI, or checksum file is absent or duplicated. It also rejects any eighteenth regular file and every non-regular filesystem entry before checksum verification, attestation, or publication. This exact-set rule prevents a build step from silently adding an unreviewed diagnostic archive, crash dump, log, secret-bearing output, or unrelated executable to the release. Path-scoped checks distinguish the Windows NSIS installer from the two separately shipped Windows operational CLI executables. The pipeline also fails when a checksum record names a file other than its adjacent operational CLI, contains additional fields or records, or presents a malformed digest. A checksum mismatch stops the attestation job. A failed, cancelled, skipped, neutral, missing, or stale-head attestation job cannot satisfy the publication dependency.
 
 Concurrency cancellation applies only to a first workflow attempt. A newer first attempt may cancel stale work for the same ref, but an explicit rerun has `github.run_attempt > 1` and therefore cannot cancel itself. A rerun remains non-authoritative until every required exact-head job in that attempt completes successfully.
 
@@ -64,7 +65,7 @@ Attestations bind artifact digests, not mutable filenames. Rebuilding the same v
 
 ## Privacy and security boundaries
 
-The attestation describes build provenance and artifact digests. It must not include API keys, user data, local disk inventory, file paths from an operator workstation, model prompts, cleanup plans, or dynamic command output containing private host information. GitHub Secrets remain unavailable to pull-request-controlled release tests unless a separately reviewed workflow explicitly requires them.
+The attestation describes build provenance and artifact digests. It must not include API keys, user data, local disk inventory, file paths from an operator workstation, model prompts, cleanup plans, or dynamic command output containing private host information. GitHub Secrets remain unavailable to pull-request-controlled release tests unless a separately reviewed workflow explicitly requires them. The exact 17-file allowlist is also a privacy boundary: unexpected diagnostics and transient build outputs are rejected rather than made durable through an attestation or GitHub Release.
 
 All third-party actions in the release path use immutable 40-character commit SHAs. The attestation job receives no `contents: write` permission, and the publication job receives neither `id-token: write` nor `attestations: write`. This separation limits the impact of a compromised publication or attestation step.
 
