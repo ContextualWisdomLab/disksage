@@ -19,13 +19,15 @@ The authoritative implementation is `.github/workflows/release.yml`.
 The release contract requires all of the following:
 
 - the three platform builds upload the exact bundle and operational CLI paths that later jobs consume;
+- release workflow artifacts use the `release-disksage-*` namespace, which excludes concurrently uploaded `disksage-gpu-*` diagnostic bundles;
 - release publication is absent from the matrix build job, preventing any matrix member from publishing before the complete set exists;
 - the attestation and publication jobs run only for `refs/tags/`;
 - the attestation job depends on the complete build matrix;
-- Linux `.deb` and `.AppImage`, Windows `.msi` and NSIS `.exe`, and macOS `.dmg` bundles are present exactly once;
+- Linux `.deb` and `.AppImage`, Windows `.msi` and NSIS `.exe`, and macOS `.dmg` bundles are present exactly once in their expected bundle paths;
 - all six platform-specific operational CLIs and their six `.sha256` files are present;
 - each checksum is verified before provenance generation;
-- `actions/attest` is immutably pinned to commit `6bc26cfc5e23777f4e24aaf5def813d314ebfd25`, whose `package.json` and `action.yml` match the upstream `v4.1.0` tag;
+- `actions/download-artifact` is immutably pinned to commit `37930b1c2abaa49bbe596cd826c3c89aef350131`, the upstream `v7.0.0` tag commit;
+- `actions/attest` is immutably pinned to commit `59d89421af93a897026c735860bf21b6eb4f7b26`, the upstream `v4.1.0` tag commit;
 - every published file is a subject of the generated attestation; and
 - publication depends on successful attestation rather than merely running in parallel with it.
 
@@ -51,7 +53,7 @@ Retain the artifact, the downloaded bundle, the release tag, the source commit S
 
 ## Failure and stale-evidence behavior
 
-The pipeline fails closed when an expected platform bundle, operational CLI, or checksum file is absent or duplicated. A checksum mismatch stops the attestation job. A failed, cancelled, skipped, neutral, missing, or stale-head attestation job cannot satisfy the publication dependency.
+The pipeline fails closed when an expected platform bundle, operational CLI, or checksum file is absent or duplicated. Path-scoped checks distinguish the Windows NSIS installer from the two separately shipped Windows operational CLI executables. A checksum mismatch stops the attestation job. A failed, cancelled, skipped, neutral, missing, or stale-head attestation job cannot satisfy the publication dependency.
 
 Attestations bind artifact digests, not mutable filenames. Rebuilding the same version produces different bytes and therefore requires new exact-build attestations. Evidence from an earlier workflow run or commit must never authorize publication of a later head.
 
@@ -90,4 +92,4 @@ Supply-chain Levels for Software Artifacts. (2026). *Build: Verifying artifacts 
 
 ## Reference verification note
 
-The sources above were rechecked against their authoritative upstream locations on August 6, 2026. GitHub documentation was used for the supported action permissions and verification commands; the SLSA and in-toto specifications were used for provenance semantics and attestation structure. This document makes no unsupported claim that the workflow alone certifies a particular SLSA level.
+The sources above were rechecked against their authoritative upstream locations on August 6, 2026. GitHub documentation was used for the supported action permissions and verification commands; upstream tag comparisons established the immutable action commits; the SLSA and in-toto specifications were used for provenance semantics and attestation structure. This document makes no unsupported claim that the workflow alone certifies a particular SLSA level.
