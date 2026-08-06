@@ -28,6 +28,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Security
 
+- Require explicit organization-tenant authority when either the organization destination scope or the organization-sensitive review reason is present, preventing a missing or contradictory candidate field from making cloud approval less restrictive; record the fail-closed decision, rollback boundary, tests, and APA 7th references in `docs/architecture/cloud-review-tenant-authority.md`.
 - Persist copy-approval provenance in immutable receipt lineage, reject stale, generic, mismatched, or tampered approvals, and retain explicit backward readability for pre-approval receipt formats.
 - Generate the npm lockfile in an exact-head validation job with repository contents read-only and dependency lifecycle scripts disabled, bind the artifact to SHA-256 evidence, and grant `contents: write` only to a separate publication job that verifies the same-run artifact and unchanged branch head before committing the lockfile.
 - Removed obsolete one-shot repair workflows and patch scripts so repository automation no longer retains dormant write-capable recovery paths.
