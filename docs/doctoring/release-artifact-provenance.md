@@ -19,6 +19,7 @@ The authoritative implementation is `.github/workflows/release.yml`.
 The release contract requires all of the following:
 
 - checkout binds every platform build to `github.event.pull_request.head.sha` for pull requests and `github.sha` for tags or manual runs, rather than silently treating a generated pull-request merge ref as exact-head evidence;
+- release concurrency uses `github.run_attempt == 1`, so a fresh first attempt supersedes stale work while explicit rerun attempts do not cancel themselves inside the same concurrency group;
 - the three platform builds upload the exact bundle and operational CLI paths that later jobs consume;
 - release workflow artifacts use the `release-disksage-*` namespace, which excludes concurrently uploaded `disksage-gpu-*` diagnostic bundles;
 - release publication is absent from the matrix build job, preventing any matrix member from publishing before the complete set exists;
@@ -56,6 +57,8 @@ Retain the artifact, the downloaded bundle, the release tag, the source commit S
 ## Failure and stale-evidence behavior
 
 The pipeline fails closed when an expected platform bundle, operational CLI, or checksum file is absent or duplicated. Path-scoped checks distinguish the Windows NSIS installer from the two separately shipped Windows operational CLI executables. The pipeline also fails when a checksum record names a file other than its adjacent operational CLI, contains additional fields or records, or presents a malformed digest. A checksum mismatch stops the attestation job. A failed, cancelled, skipped, neutral, missing, or stale-head attestation job cannot satisfy the publication dependency.
+
+Concurrency cancellation applies only to a first workflow attempt. A newer first attempt may cancel stale work for the same ref, but an explicit rerun has `github.run_attempt > 1` and therefore cannot cancel itself. A rerun remains non-authoritative until every required exact-head job in that attempt completes successfully.
 
 Attestations bind artifact digests, not mutable filenames. Rebuilding the same version produces different bytes and therefore requires new exact-build attestations. Evidence from an earlier workflow run or commit must never authorize publication of a later head.
 
