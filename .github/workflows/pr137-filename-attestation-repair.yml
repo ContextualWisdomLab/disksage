@@ -1,0 +1,97 @@
+name: PR 137 filename-attestation fixture repair
+
+on:
+  push:
+    branches:
+      - docs/acquisition-architecture-contract
+    paths:
+      - .github/workflows/pr137-filename-attestation-repair.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr137-filename-attestation-repair-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: contains(github.event.head_commit.message, 'stage exact PR 137 filename-attestation repair')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - name: Check out exact branch head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: docs/acquisition-architecture-contract
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Refuse stale or unexpected source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "docs/acquisition-architecture-contract"
+          git fetch --no-tags origin docs/acquisition-architecture-contract
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse origin/docs/acquisition-architecture-contract)" = "$GITHUB_SHA"
+
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Align the remaining organization-scoped filename fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src-tauri/src/cloud_transfer.rs")
+          old = '"Filename date is auxiliary; destination and surrounding context were reviewed."'
+          new = '"[organization-tenant-authority-confirmed] Filename date is auxiliary; destination and surrounding context were reviewed."'
+          text = path.read_text(encoding="utf-8")
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f"expected exactly one stale filename rationale, found {count}")
+          path.write_text(text.replace(old, new), encoding="utf-8")
+          PY
+
+      - name: Verify exact repaired tree
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+          cargo test --manifest-path src-tauri/Cargo.toml --all-features operator_decision_clears_only_the_matching_review_gate
+          cargo test --manifest-path src-tauri/Cargo.toml --all-features
+          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+
+      - name: Commit verified repair and remove the temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin docs/acquisition-architecture-contract
+          test "$(git rev-parse origin/docs/acquisition-architecture-contract)" = "$GITHUB_SHA"
+          test "$(git rev-parse --abbrev-ref HEAD)" = "docs/acquisition-architecture-contract"
+          git rm .github/workflows/pr137-filename-attestation-repair.yml
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src-tauri/src/cloud_transfer.rs
+          changed="$(git diff --cached --name-only | LC_ALL=C sort)"
+          expected="$(printf '%s\n' .github/workflows/pr137-filename-attestation-repair.yml src-tauri/src/cloud_transfer.rs | LC_ALL=C sort)"
+          test "$changed" = "$expected"
+          git commit -m "test(security): attest organization filename fixture"
+          git push origin HEAD:docs/acquisition-architecture-contract
