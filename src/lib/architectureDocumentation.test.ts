@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { ssr } from '../routes/+layout';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -104,5 +105,6 @@ describe('acquisition-ready architecture documentation', () => {
     expect(coverageConfiguration).toContain('src/routes/**/*.ts');
     expect(coverageConfiguration).toContain('**/*.test.ts');
     expect(architecture).toContain('inherits the same `npm run coverage` gate');
+    expect(ssr).toBe(false);
   });
 });
