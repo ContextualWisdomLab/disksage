@@ -29,6 +29,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Security
 
+- Require explicit organization-tenant authority in both the frontend projection and durable Rust transfer gate when either the organization destination scope or the organization-sensitive review reason is present, preventing a missing, contradictory, or malformed candidate field from making cloud approval less restrictive; record the fail-closed decision, rollback boundary, realistic signal-matrix tests, and APA 7th references in `docs/architecture/cloud-review-tenant-authority.md`.
+- Separate runtime mutation authorization from repository merge and release authorization: runtime approvals bind exact operation scope, fingerprints, schema, and trusted-clock freshness, while exact repository-head evidence remains a CI and release gate and never becomes an operator credential.
 - Added buyer-verifiable release artifact provenance with checksum-first admission, immutable `actions/attest` pinning, tag-only OIDC and attestation authority, and publication that depends on successful exact-artifact provenance generation.
 - Preserve per-artifact directories during attestation and publication downloads so duplicate release basenames cannot be hidden by last-writer-wins archive flattening before exact-set admission.
 - Fail closed before packaging when `package.json`, Cargo, and Tauri versions disagree, when a version is missing or malformed, or when a release tag is not exactly `v<manifest version>`.
