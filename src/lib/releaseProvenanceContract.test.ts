@@ -43,6 +43,7 @@ describe('release artifact provenance contract', () => {
     const publishJob = extractWorkflowJob(workflow, 'publish-release');
 
     expect(buildJob).toContain('name: Upload release artifact set');
+    expect(buildJob).toContain('name: release-disksage-${{ matrix.os }}');
     expect(buildJob).not.toContain('softprops/action-gh-release');
 
     expect(attestJob).toContain("if: startsWith(github.ref, 'refs/tags/')");
@@ -53,11 +54,16 @@ describe('release artifact provenance contract', () => {
     expect(attestJob).toContain(
       'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c',
     );
+    expect(attestJob).toContain('pattern: release-disksage-*');
     expect(attestJob).toContain(
       'actions/attest@6bc26cfc5e23777f4e24aaf5def813d314ebfd25',
     );
     expect(attestJob).toContain('subject-path: release-artifacts/**/*');
     expect(attestJob).toContain('name: Verify release artifact checksums');
+    expect(attestJob).toContain(
+      "require_exactly_one_path '*/bundle/nsis/*.exe' 'Windows NSIS bundle'",
+    );
+    expect(attestJob).not.toContain("require_exactly_one '*.exe'");
     expect(attestJob.indexOf('name: Verify release artifact checksums')).toBeLessThan(
       attestJob.indexOf('actions/attest@6bc26cfc5e23777f4e24aaf5def813d314ebfd25'),
     );
@@ -68,6 +74,7 @@ describe('release artifact provenance contract', () => {
     expect(publishJob).toContain(
       'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c',
     );
+    expect(publishJob).toContain('pattern: release-disksage-*');
     expect(publishJob).toContain(
       'softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228',
     );
