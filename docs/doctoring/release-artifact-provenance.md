@@ -26,6 +26,7 @@ The release contract requires all of the following:
 - the attestation job depends on the complete build matrix;
 - Linux `.deb` and `.AppImage`, Windows `.msi` and NSIS `.exe`, and macOS `.dmg` bundles are present exactly once in their expected bundle paths;
 - all six platform-specific operational CLIs and all six corresponding `.sha256` files are each present exactly once;
+- every checksum file contains exactly one SHA-256 record naming its adjacent expected CLI basename, so alternate, absolute, traversing, or decoy filenames are rejected before digest verification;
 - each checksum is verified before provenance generation;
 - `actions/download-artifact` is immutably pinned to commit `37930b1c2abaa49bbe596cd826c3c89aef350131`, the upstream `v7.0.0` tag commit;
 - `actions/attest` is immutably pinned to commit `59d89421af93a897026c735860bf21b6eb4f7b26`, the upstream `v4.1.0` tag commit;
@@ -54,7 +55,7 @@ Retain the artifact, the downloaded bundle, the release tag, the source commit S
 
 ## Failure and stale-evidence behavior
 
-The pipeline fails closed when an expected platform bundle, operational CLI, or checksum file is absent or duplicated. Path-scoped checks distinguish the Windows NSIS installer from the two separately shipped Windows operational CLI executables. A checksum mismatch stops the attestation job. A failed, cancelled, skipped, neutral, missing, or stale-head attestation job cannot satisfy the publication dependency.
+The pipeline fails closed when an expected platform bundle, operational CLI, or checksum file is absent or duplicated. Path-scoped checks distinguish the Windows NSIS installer from the two separately shipped Windows operational CLI executables. The pipeline also fails when a checksum record names a file other than its adjacent operational CLI, contains additional fields or records, or presents a malformed digest. A checksum mismatch stops the attestation job. A failed, cancelled, skipped, neutral, missing, or stale-head attestation job cannot satisfy the publication dependency.
 
 Attestations bind artifact digests, not mutable filenames. Rebuilding the same version produces different bytes and therefore requires new exact-build attestations. Evidence from an earlier workflow run or commit must never authorize publication of a later head.
 
