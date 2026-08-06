@@ -2010,7 +2010,7 @@ mod tests {
             CloudReviewDisposition::Approved,
             13,
             "human:local:reviewer",
-            "Filename date is auxiliary; destination and surrounding context were reviewed.",
+            "[organization-tenant-authority-confirmed] Filename date is auxiliary; destination and surrounding context were reviewed.",
         )
         .unwrap();
         assert!(
