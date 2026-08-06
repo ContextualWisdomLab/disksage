@@ -171,8 +171,7 @@ jobs:
             ARCHITECTURE.md \
             CHANGELOG.md \
             docs/architecture/cloud-review-tenant-authority.md \
-            src-tauri/src/cloud_transfer.rs \
-            src-tauri/tests/cloud_transfer_tenant_authority_gate.rs | LC_ALL=C sort)"
+            src-tauri/src/cloud_transfer.rs | LC_ALL=C sort)"
           test "$changed" = "$expected"
           git commit -m "fix: enforce durable tenant authority boundaries"
           git push origin "HEAD:$BRANCH_NAME"
