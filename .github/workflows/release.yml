@@ -208,6 +208,18 @@ jobs:
             require_exactly_one_file "$required_name"
             require_exactly_one_file "$required_name.sha256"
           done
+          unexpected_entry="$(find release-artifacts -mindepth 1 ! -type d ! -type f -print -quit)"
+          if [[ -n "$unexpected_entry" ]]; then
+            printf 'Unexpected release artifact entries: non-regular path %s is not publishable.\n' "$unexpected_entry" >&2
+            exit 1
+          fi
+          regular_file_count=0
+          matched_path=""
+          while IFS= read -r -d '' matched_path; do regular_file_count=$((regular_file_count + 1)); done < <(find release-artifacts -type f -print0)
+          if [[ $regular_file_count -ne 17 ]]; then
+            printf 'Unexpected release artifact entries: expected exactly 17 regular files, found %s.\n' "$regular_file_count" >&2
+            exit 1
+          fi
           checksum_files=()
           checksum_file=""
           while IFS= read -r -d '' checksum_file; do checksum_files+=("$checksum_file"); done < <(find release-artifacts -type f -name '*.sha256' -print0)
