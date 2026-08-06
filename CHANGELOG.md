@@ -22,12 +22,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Added retry-safe release concurrency so a new first attempt still supersedes stale work while an explicit GitHub Actions rerun cannot cancel itself inside the same concurrency group.
 - Made architecture evidence tests independent of the process working directory, verified linked evidence files actually exist, enforced heading and exact-head continuity, and retained the two-word `snake_case` database-object naming contract.
 - Hardened iCloud local-copy batch eviction with fresh per-item timestamps, deterministic planner/executor/recorder/clock seams, fail-closed immutable checkpoint handling, bounded manifest admission, symlink-safe control-path validation, and distinct operator diagnostics.
 - Restored the cloud-copy public documentation regression contract after a temporary repair path removed it, so CI continues to fail when the new Rust or TypeScript approval surfaces lose beginner-readable documentation.
 
 ### Security
 
+- Added buyer-verifiable release artifact provenance with checksum-first admission, immutable `actions/attest` pinning, tag-only OIDC and attestation authority, and publication that depends on successful exact-artifact provenance generation.
+- Bound every release checksum record to the exact adjacent operational CLI basename and reject malformed, multi-record, redirected, traversing, absolute, or decoy checksum targets before digest verification.
+- Reject every unexpected eighteenth release file and every non-regular artifact-tree entry before attestation or publication, preventing unreviewed diagnostics, dumps, logs, secrets, or unrelated executables from becoming durable release assets.
 - Persist copy-approval provenance in immutable receipt lineage, reject stale, generic, mismatched, or tampered approvals, and retain explicit backward readability for pre-approval receipt formats.
 - Generate the npm lockfile in an exact-head validation job with repository contents read-only and dependency lifecycle scripts disabled, bind the artifact to SHA-256 evidence, and grant `contents: write` only to a separate publication job that verifies the same-run artifact and unchanged branch head before committing the lockfile.
 - Removed obsolete one-shot repair workflows and patch scripts so repository automation no longer retains dormant write-capable recovery paths.
