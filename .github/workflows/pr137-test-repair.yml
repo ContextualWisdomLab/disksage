@@ -1,7 +1,6 @@
 name: PR 137 stale-test repair
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - docs/acquisition-architecture-contract
@@ -9,7 +8,7 @@ on:
       - .github/workflows/pr137-test-repair.yml
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: pr137-test-repair-${{ github.ref }}
@@ -17,14 +16,27 @@ concurrency:
 
 jobs:
   repair:
-    runs-on: ubuntu-latest
+    if: contains(github.event.head_commit.message, 'stage exact PR 137 stale-test repair')
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
+    permissions:
+      contents: write
     steps:
       - name: Check out exact branch head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: docs/acquisition-architecture-contract
           fetch-depth: 0
+          persist-credentials: true
+
+      - name: Refuse stale or unexpected source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "docs/acquisition-architecture-contract"
+          git fetch --no-tags origin docs/acquisition-architecture-contract
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse origin/docs/acquisition-architecture-contract)" = "$GITHUB_SHA"
 
       - name: Install Tauri system dependencies
         run: |
@@ -79,11 +91,6 @@ jobs:
                       )
                   text = text.replace(old, new)
               path.write_text(text, encoding="utf-8")
-
-          workflow = Path(".github/workflows/pr137-test-repair.yml")
-          if not workflow.is_file():
-              raise SystemExit("one-shot workflow source is missing")
-          workflow.unlink()
           PY
 
       - name: Format and verify exact repaired tree
@@ -98,11 +105,15 @@ jobs:
       - name: Commit verified stale-test repair
         run: |
           set -euo pipefail
+          git fetch --no-tags origin docs/acquisition-architecture-contract
+          test "$(git rev-parse origin/docs/acquisition-architecture-contract)" = "$GITHUB_SHA"
           test "$(git rev-parse --abbrev-ref HEAD)" = "docs/acquisition-architecture-contract"
           git diff --check
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src-tauri/src/cloud_transfer.rs src-tauri/src/naruon_lineage.rs .github/workflows/pr137-test-repair.yml
-          git diff --cached --quiet && { echo "No repair changes to commit."; exit 1; }
+          git add src-tauri/src/cloud_transfer.rs src-tauri/src/naruon_lineage.rs
+          changed="$(git diff --cached --name-only | LC_ALL=C sort)"
+          expected="$(printf '%s\n' src-tauri/src/cloud_transfer.rs src-tauri/src/naruon_lineage.rs | LC_ALL=C sort)"
+          test "$changed" = "$expected"
           git commit -m "test(security): align organization approval fixtures"
           git push origin HEAD:docs/acquisition-architecture-contract
