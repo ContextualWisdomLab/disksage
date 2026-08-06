@@ -89,6 +89,36 @@ describe('acquisition-ready architecture documentation', () => {
     }
   });
 
+  it('binds operation authorization to the exact integrated repository head', () => {
+    const architecture = readRepositoryDocument('ARCHITECTURE.md');
+
+    expect(architecture).toContain('`repository_head_sha`');
+    expect(architecture).toMatch(
+      /issuance[\s\S]{0,240}`repository_head_sha`[\s\S]{0,400}execution[\s\S]{0,240}current integrated repository head[\s\S]{0,240}`approval-scope-mismatch`/i,
+    );
+  });
+
+  it('records standards and exact marker syntax with precise publication evidence', () => {
+    const architecture = readRepositoryDocument('ARCHITECTURE.md');
+    const tenantAuthority = readRepositoryDocument(
+      'docs/architecture/cloud-review-tenant-authority.md',
+    );
+
+    expect(architecture).toContain(
+      'Supply-chain Levels for Software Artifacts. (2025).',
+    );
+    expect(tenantAuthority).toContain('Joint Task Force. (2020).');
+    expect(tenantAuthority).toContain(
+      'National Institute of Standards and Technology. (2025, August 27).',
+    );
+    expect(tenantAuthority).toContain(
+      '`[organization-tenant-authority-confirmed]` followed by exactly one U+0020 ASCII space',
+    );
+    expect(tenantAuthority).not.toContain(
+      '`[organization-tenant-authority-confirmed] `',
+    );
+  });
+
   it('binds test and release entry points to the complete TypeScript coverage gate', () => {
     const packageJson = JSON.parse(readRepositoryDocument('package.json')) as {
       scripts: Record<string, string>;
