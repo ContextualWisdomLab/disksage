@@ -72,6 +72,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
       - name: Install Linux system deps (tauri GTK + llama.cpp native)
@@ -211,10 +212,12 @@ jobs:
             fi
           }
 
-          require_file() {
+          require_exactly_one_file() {
             local file_name="$1"
-            if ! find release-artifacts -type f -name "$file_name" -print -quit | grep -q .; then
-              printf 'Missing required release artifact: %s\n' "$file_name" >&2
+            mapfile -d '' matches < <(find release-artifacts -type f -name "$file_name" -print0)
+            if [[ ${#matches[@]} -ne 1 ]]; then
+              printf 'Expected exactly one release artifact named %s, found %s.\n' \
+                "$file_name" "${#matches[@]}" >&2
               exit 1
             fi
           }
@@ -232,8 +235,8 @@ jobs:
             disksage-duplicate-audit-windows-x86_64.exe \
             disksage-cloud-plan-macos-arm64 \
             disksage-duplicate-audit-macos-arm64; do
-            require_file "$required_name"
-            require_file "$required_name.sha256"
+            require_exactly_one_file "$required_name"
+            require_exactly_one_file "$required_name.sha256"
           done
 
           mapfile -d '' checksum_files < <(find release-artifacts -type f -name '*.sha256' -print0)
@@ -295,6 +298,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
       - name: Install Linux system deps (tauri GTK + llama.cpp native + Vulkan build)
