@@ -95,3 +95,5 @@ jobs:
           test "$changed" = "$expected"
           git commit -m "test(security): attest organization filename fixture"
           git push origin HEAD:docs/acquisition-architecture-contract
+
+# Triggered after the workflow file exists on the branch so this exact source can execute.
