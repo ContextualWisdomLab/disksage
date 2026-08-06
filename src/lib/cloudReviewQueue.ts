@@ -50,7 +50,7 @@ export function organizationTenantAuthorityRequired(candidate: CloudCandidate): 
 }
 
 function isReviewFormatControl(character: string): boolean {
-  const codepoint = character.codePointAt(0) ?? -1;
+  const codepoint = character.codePointAt(0)!;
   return codepoint === 0x00ad
     || (codepoint >= 0x0600 && codepoint <= 0x0605)
     || [0x061c, 0x06dd, 0x070f, 0x08e2, 0x180e, 0xfeff].includes(codepoint)
