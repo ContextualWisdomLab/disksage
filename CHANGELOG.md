@@ -30,6 +30,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Security
 
 - Added buyer-verifiable release artifact provenance with checksum-first admission, immutable `actions/attest` pinning, tag-only OIDC and attestation authority, and publication that depends on successful exact-artifact provenance generation.
+- Fail closed before packaging when `package.json`, Cargo, and Tauri versions disagree, when a version is missing or malformed, or when a release tag is not exactly `v<manifest version>`.
 - Bound every release checksum record to the exact adjacent operational CLI basename and reject malformed, multi-record, redirected, traversing, absolute, or decoy checksum targets before digest verification.
 - Reject every unexpected eighteenth release file and every non-regular artifact-tree entry before attestation or publication, preventing unreviewed diagnostics, dumps, logs, secrets, or unrelated executables from becoming durable release assets.
 - Persist copy-approval provenance in immutable receipt lineage, reject stale, generic, mismatched, or tampered approvals, and retain explicit backward readability for pre-approval receipt formats.
