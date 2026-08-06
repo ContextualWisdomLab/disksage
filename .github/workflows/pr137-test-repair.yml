@@ -76,7 +76,7 @@ jobs:
                   (
                       '"embedded metadata checked"',
                       '"[organization-tenant-authority-confirmed] embedded metadata checked"',
-                      1,
+                      2,
                   ),
               ],
           }
