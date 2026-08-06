@@ -150,6 +150,7 @@ jobs:
         run: |
           set -euo pipefail
           npm ci --ignore-scripts
+          npx svelte-kit sync
           npx vitest run src/lib/architectureDocumentation.test.ts
 
       - name: Publish only the verified exact repair
