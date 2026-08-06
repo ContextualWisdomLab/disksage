@@ -5,10 +5,13 @@ import { describe, expect, it } from "vitest";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
+type CspPolicy = null | Record<string, string | string[]>;
+
 interface TauriSecurityConfig {
   app: {
     security: {
-      csp: null | Record<string, string | string[]>;
+      csp: CspPolicy;
+      devCsp?: CspPolicy;
     };
   };
 }
@@ -42,17 +45,38 @@ describe("Tauri content security policy", () => {
     });
   });
 
-  it("does not authorize wildcard, remote script, remote style, or eval sources", () => {
-    const csp = readTauriSecurityConfig().app.security.csp;
-    expect(csp).not.toBeNull();
+  it("keeps development HMR functional without widening the production network boundary", () => {
+    const security = readTauriSecurityConfig().app.security;
 
-    const serialized = JSON.stringify(csp);
-    expect(serialized).not.toContain("*");
-    expect(serialized).not.toContain("https://");
-    expect(serialized).not.toContain("'unsafe-eval'");
-    expect(serialized).not.toContain("'wasm-unsafe-eval'");
-    expect(csp?.["script-src"]).not.toContain("'unsafe-inline'");
-    expect(csp?.["connect-src"]).toBe("ipc: http://ipc.localhost");
+    expect(security.devCsp).toEqual({
+      "default-src": "'self'",
+      "base-uri": "'none'",
+      "connect-src": "'self' ipc: http://ipc.localhost ws:",
+      "font-src": "'self'",
+      "frame-src": "'none'",
+      "img-src": "'self' data: blob:",
+      "object-src": "'none'",
+      "script-src": "'self'",
+      "style-src": "'self' 'unsafe-inline'",
+    });
+    expect(security.csp?.["connect-src"]).toBe("ipc: http://ipc.localhost");
+    expect(security.csp?.["connect-src"]).not.toContain("ws:");
+  });
+
+  it("does not authorize wildcard, remote script, remote style, or eval sources", () => {
+    const security = readTauriSecurityConfig().app.security;
+    expect(security.csp).not.toBeNull();
+    expect(security.devCsp).not.toBeNull();
+
+    for (const policy of [security.csp, security.devCsp]) {
+      const serialized = JSON.stringify(policy);
+      expect(serialized).not.toContain("*");
+      expect(serialized).not.toContain("https://");
+      expect(serialized).not.toContain("'unsafe-eval'");
+      expect(serialized).not.toContain("'wasm-unsafe-eval'");
+      expect(policy?.["script-src"]).not.toContain("'unsafe-inline'");
+    }
+    expect(security.csp?.["connect-src"]).toBe("ipc: http://ipc.localhost");
   });
 
   it("keeps the security decision, rollback procedure, standards, and changelog durable", () => {
@@ -62,12 +86,14 @@ describe("Tauri content security policy", () => {
     const changelog = readRepositoryFile("CHANGELOG.md");
 
     expect(doctoring).toContain("# Tauri content security policy");
+    expect(doctoring).toContain("## Development policy");
     expect(doctoring).toContain("## Rollback and migration");
     expect(doctoring).toContain("## Standalone and MSA compatibility");
     expect(doctoring).toContain("## APA 7th references");
     expect(doctoring).toContain("Content Security Policy Level 2");
     expect(doctoring).toContain("Content Security Policy Level 3");
     expect(doctoring).toContain("https://v2.tauri.app/security/csp/");
+    expect(doctoring).toContain("https://vite.dev/config/server-options");
     expect(changelog).toContain(
       "Enable an explicit fail-closed Tauri Content Security Policy",
     );
