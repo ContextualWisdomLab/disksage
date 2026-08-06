@@ -21,9 +21,10 @@ permissions:
 
 jobs:
   build:
-    # Minimal top-level (read); elevate only this job — it publishes the Release on tag.
+    # Build jobs only read source and upload ephemeral artifacts. Durable release
+    # authority is isolated in the tag-only jobs below.
     permissions:
-      contents: write
+      contents: read
     env:
       # llama.cpp's ggml uses std::filesystem (needs macOS 10.15+). macos-latest is arm64 → 11.0.
       # Ignored on Windows/Linux runners.
@@ -177,21 +178,106 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "${app_bundles[0]}"
           codesign --display --verbose=4 "${app_bundles[0]}"
 
-      # PR / manual: keep the bundles as inspectable artifacts, no release published.
-      - name: Upload build artifacts (no publish)
-        if: github.event_name != 'push'
+      # Every build exports the exact files that a later tag-only job may attest and publish.
+      # Uploading on pull requests keeps the release candidate independently inspectable.
+      - name: Upload release artifact set
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: disksage-${{ matrix.os }}
           path: ${{ matrix.bundles }}
           if-no-files-found: error
 
-      # Tag push: publish/attach the bundles to a single GitHub Release (matrix-safe).
-      - name: Publish to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
+  attest-release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download exact release artifact set
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v7.0.0
+        with:
+          pattern: disksage-*
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Verify release artifact checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          require_exactly_one() {
+            local pattern="$1"
+            local label="$2"
+            mapfile -d '' matches < <(find release-artifacts -type f -name "$pattern" -print0)
+            if [[ ${#matches[@]} -ne 1 ]]; then
+              printf 'Expected exactly one %s, found %s.\n' "$label" "${#matches[@]}" >&2
+              exit 1
+            fi
+          }
+
+          require_file() {
+            local file_name="$1"
+            if ! find release-artifacts -type f -name "$file_name" -print -quit | grep -q .; then
+              printf 'Missing required release artifact: %s\n' "$file_name" >&2
+              exit 1
+            fi
+          }
+
+          require_exactly_one '*.deb' 'Debian bundle'
+          require_exactly_one '*.AppImage' 'AppImage bundle'
+          require_exactly_one '*.msi' 'Windows MSI bundle'
+          require_exactly_one '*.exe' 'Windows NSIS bundle or operational CLI executable'
+          require_exactly_one '*.dmg' 'macOS DMG bundle'
+
+          for required_name in \
+            disksage-cloud-plan-linux-x86_64 \
+            disksage-duplicate-audit-linux-x86_64 \
+            disksage-cloud-plan-windows-x86_64.exe \
+            disksage-duplicate-audit-windows-x86_64.exe \
+            disksage-cloud-plan-macos-arm64 \
+            disksage-duplicate-audit-macos-arm64; do
+            require_file "$required_name"
+            require_file "$required_name.sha256"
+          done
+
+          mapfile -d '' checksum_files < <(find release-artifacts -type f -name '*.sha256' -print0)
+          if [[ ${#checksum_files[@]} -ne 6 ]]; then
+            printf 'Expected six operational CLI checksum files, found %s.\n' "${#checksum_files[@]}" >&2
+            exit 1
+          fi
+
+          for checksum_file in "${checksum_files[@]}"; do
+            checksum_dir="$(dirname "$checksum_file")"
+            checksum_name="$(basename "$checksum_file")"
+            (cd "$checksum_dir" && sha256sum --check "$checksum_name")
+          done
+
+      - name: Generate GitHub build provenance
+        uses: actions/attest@6bc26cfc5e23777f4e24aaf5def813d314ebfd25 # v4.1.0
+        with:
+          subject-path: release-artifacts/**/*
+
+  publish-release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: attest-release
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download attested release artifact set
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v7.0.0
+        with:
+          pattern: disksage-*
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Publish attested artifacts to GitHub Release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
-          files: ${{ matrix.bundles }}
+          files: release-artifacts/**/*
           generate_release_notes: true
           fail_on_unmatched_files: true
 
