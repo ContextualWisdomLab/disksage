@@ -248,6 +248,28 @@ jobs:
           for checksum_file in "${checksum_files[@]}"; do
             checksum_dir="$(dirname "$checksum_file")"
             checksum_name="$(basename "$checksum_file")"
+            expected_asset_name="${checksum_name%.sha256}"
+
+            mapfile -t checksum_lines <"$checksum_file"
+            if [[ ${#checksum_lines[@]} -ne 1 ]]; then
+              printf 'Checksum file %s must contain exactly one record.\n' \
+                "$checksum_name" >&2
+              exit 1
+            fi
+
+            recorded_digest=""
+            recorded_name=""
+            extra_field=""
+            read -r recorded_digest recorded_name extra_field <<<"${checksum_lines[0]}"
+            if [[ ! "$recorded_digest" =~ ^[0-9a-fA-F]{64}$ ]] || \
+              [[ "$recorded_name" != "$expected_asset_name" ]] || \
+              [[ -n "$extra_field" ]]; then
+              printf \
+                'Checksum file %s must reference its adjacent operational CLI %s exactly once.\n' \
+                "$checksum_name" "$expected_asset_name" >&2
+              exit 1
+            fi
+
             (cd "$checksum_dir" && sha256sum --check "$checksum_name")
           done
 
