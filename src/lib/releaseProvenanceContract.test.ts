@@ -73,6 +73,14 @@ describe('release artifact provenance contract', () => {
     );
     expect(attestJob).toContain('subject-path: release-artifacts/**/*');
     expect(attestJob).toContain('name: Verify release artifact checksums');
+    expect(attestJob).toContain('require_exactly_one_file()');
+    expect(attestJob).not.toContain('require_file()');
+    expect(attestJob).toContain(
+      'require_exactly_one_file "$required_name"',
+    );
+    expect(attestJob).toContain(
+      'require_exactly_one_file "$required_name.sha256"',
+    );
     expect(attestJob).toContain(
       "require_exactly_one_path '*/bundle/nsis/*.exe' 'Windows NSIS bundle'",
     );
@@ -112,6 +120,9 @@ describe('release artifact provenance contract', () => {
     expect(doctoring).toContain('APA 7th references');
     expect(doctoring).toContain('59d89421af93a897026c735860bf21b6eb4f7b26');
     expect(doctoring).toContain('37930b1c2abaa49bbe596cd826c3c89aef350131');
+    expect(doctoring).toContain(
+      'operational CLI, or checksum file is absent or duplicated',
+    );
     expect(changelog).toContain('buyer-verifiable release artifact provenance');
   });
 });
