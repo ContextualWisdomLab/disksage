@@ -56,7 +56,7 @@ describe('release artifact provenance contract', () => {
     );
     expect(attestJob).toContain('pattern: release-disksage-*');
     expect(attestJob).toContain(
-      'actions/attest@6bc26cfc5e23777f4e24aaf5def813d314ebfd25',
+      'actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26',
     );
     expect(attestJob).toContain('subject-path: release-artifacts/**/*');
     expect(attestJob).toContain('name: Verify release artifact checksums');
@@ -65,7 +65,7 @@ describe('release artifact provenance contract', () => {
     );
     expect(attestJob).not.toContain("require_exactly_one '*.exe'");
     expect(attestJob.indexOf('name: Verify release artifact checksums')).toBeLessThan(
-      attestJob.indexOf('actions/attest@6bc26cfc5e23777f4e24aaf5def813d314ebfd25'),
+      attestJob.indexOf('actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26'),
     );
 
     expect(publishJob).toContain("if: startsWith(github.ref, 'refs/tags/')");
@@ -93,7 +93,7 @@ describe('release artifact provenance contract', () => {
     expect(doctoring).toContain('SLSA Provenance v1');
     expect(doctoring).toContain('in-toto Statement v1');
     expect(doctoring).toContain('APA 7th references');
-    expect(doctoring).toContain('6bc26cfc5e23777f4e24aaf5def813d314ebfd25');
+    expect(doctoring).toContain('59d89421af93a897026c735860bf21b6eb4f7b26');
     expect(changelog).toContain('buyer-verifiable release artifact provenance');
   });
 });
