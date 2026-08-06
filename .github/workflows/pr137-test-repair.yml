@@ -117,3 +117,5 @@ jobs:
           test "$changed" = "$expected"
           git commit -m "test(security): align organization approval fixtures"
           git push origin HEAD:docs/acquisition-architecture-contract
+
+# Exact-head trigger marker; remove after the repair commit lands.
