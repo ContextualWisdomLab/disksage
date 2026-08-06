@@ -1,9 +1,10 @@
 name: PR 137 filename-attestation fixture repair
 
 on:
-  push:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches:
-      - docs/acquisition-architecture-contract
+      - main
     paths:
       - .github/workflows/pr137-filename-attestation-repair.yml
 
@@ -11,12 +12,15 @@ permissions:
   contents: read
 
 concurrency:
-  group: pr137-filename-attestation-repair-${{ github.ref }}
+  group: pr137-filename-attestation-repair-${{ github.event.pull_request.head.ref }}
   cancel-in-progress: false
 
 jobs:
   repair:
-    if: contains(github.event.head_commit.message, 'stage exact PR 137 filename-attestation repair')
+    if: >-
+      github.event.pull_request.number == 137 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'docs/acquisition-architecture-contract'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
@@ -30,13 +34,15 @@ jobs:
           persist-credentials: true
 
       - name: Refuse stale or unexpected source
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         shell: bash
         run: |
           set -euo pipefail
-          test "$GITHUB_REF_NAME" = "docs/acquisition-architecture-contract"
+          test "$GITHUB_HEAD_REF" = "docs/acquisition-architecture-contract"
           git fetch --no-tags origin docs/acquisition-architecture-contract
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git rev-parse origin/docs/acquisition-architecture-contract)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+          test "$(git rev-parse origin/docs/acquisition-architecture-contract)" = "$EXPECTED_HEAD_SHA"
 
       - name: Install Tauri system dependencies
         run: |
@@ -52,6 +58,16 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt, clippy
+
+      - name: Prove the stale organization-scoped fixture is red
+        shell: bash
+        run: |
+          set -euo pipefail
+          if cargo test --manifest-path src-tauri/Cargo.toml --all-features \
+            operator_decision_clears_only_the_matching_review_gate; then
+            echo "The expected red regression no longer reproduces; refusing an unneeded repair." >&2
+            exit 1
+          fi
 
       - name: Align the remaining organization-scoped filename fixture
         shell: bash
@@ -74,16 +90,19 @@ jobs:
         run: |
           set -euo pipefail
           cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-          cargo test --manifest-path src-tauri/Cargo.toml --all-features operator_decision_clears_only_the_matching_review_gate
+          cargo test --manifest-path src-tauri/Cargo.toml --all-features \
+            operator_decision_clears_only_the_matching_review_gate
           cargo test --manifest-path src-tauri/Cargo.toml --all-features
           cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
 
       - name: Commit verified repair and remove the temporary workflow
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         shell: bash
         run: |
           set -euo pipefail
           git fetch --no-tags origin docs/acquisition-architecture-contract
-          test "$(git rev-parse origin/docs/acquisition-architecture-contract)" = "$GITHUB_SHA"
+          test "$(git rev-parse origin/docs/acquisition-architecture-contract)" = "$EXPECTED_HEAD_SHA"
           test "$(git rev-parse --abbrev-ref HEAD)" = "docs/acquisition-architecture-contract"
           git rm .github/workflows/pr137-filename-attestation-repair.yml
           git diff --check
@@ -94,7 +113,7 @@ jobs:
           expected="$(printf '%s\n' .github/workflows/pr137-filename-attestation-repair.yml src-tauri/src/cloud_transfer.rs | LC_ALL=C sort)"
           test "$changed" = "$expected"
           git commit -m "test(security): attest organization filename fixture"
-          git push origin HEAD:docs/acquisition-architecture-contract
-
-# Triggered after the workflow file exists on the branch so this exact source can execute.
-# Trigger request: exact-head repair and self-removal.
+          local_head="$(git rev-parse HEAD)"
+          git push --atomic origin HEAD:refs/heads/docs/acquisition-architecture-contract
+          git fetch --no-tags origin docs/acquisition-architecture-contract
+          test "$(git rev-parse origin/docs/acquisition-architecture-contract)" = "$local_head"
