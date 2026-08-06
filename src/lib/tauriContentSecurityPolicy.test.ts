@@ -13,10 +13,15 @@ interface TauriSecurityConfig {
   };
 }
 
+/** Read one UTF-8 file from the source-controlled repository root. */
+function readRepositoryFile(relativePath: string): string {
+  return readFileSync(resolve(repositoryRoot, relativePath), "utf8");
+}
+
 /** Read and parse the source-controlled Tauri configuration under test. */
 function readTauriSecurityConfig(): TauriSecurityConfig {
   return JSON.parse(
-    readFileSync(resolve(repositoryRoot, "src-tauri/tauri.conf.json"), "utf8"),
+    readRepositoryFile("src-tauri/tauri.conf.json"),
   ) as TauriSecurityConfig;
 }
 
@@ -48,5 +53,23 @@ describe("Tauri content security policy", () => {
     expect(serialized).not.toContain("'wasm-unsafe-eval'");
     expect(csp?.["script-src"]).not.toContain("'unsafe-inline'");
     expect(csp?.["connect-src"]).toBe("ipc: http://ipc.localhost");
+  });
+
+  it("keeps the security decision, rollback procedure, standards, and changelog durable", () => {
+    const doctoring = readRepositoryFile(
+      "docs/doctoring/tauri-content-security-policy.md",
+    );
+    const changelog = readRepositoryFile("CHANGELOG.md");
+
+    expect(doctoring).toContain("# Tauri content security policy");
+    expect(doctoring).toContain("## Rollback and migration");
+    expect(doctoring).toContain("## Standalone and MSA compatibility");
+    expect(doctoring).toContain("## APA 7th references");
+    expect(doctoring).toContain("Content Security Policy Level 2");
+    expect(doctoring).toContain("Content Security Policy Level 3");
+    expect(doctoring).toContain("https://v2.tauri.app/security/csp/");
+    expect(changelog).toContain(
+      "Enable an explicit fail-closed Tauri Content Security Policy",
+    );
   });
 });
