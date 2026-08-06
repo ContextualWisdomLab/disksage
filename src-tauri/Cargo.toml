@@ -1,8 +1,11 @@
 [package]
 name = "disksage"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "Privacy-first desktop storage analysis and reclaim decision-support application."
+authors = ["Contextual Wisdom Lab"]
+license = "MIT"
+repository = "https://github.com/ContextualWisdomLab/disksage"
+publish = false
 edition = "2021"
 rust-version = "1.88"
 default-run = "disksage"
