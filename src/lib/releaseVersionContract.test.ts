@@ -1,9 +1,14 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  main,
+  readCargoPackageVersion,
+  readJsonVersion,
+  validateReleaseVersion,
+  verifyReleaseVersion,
+} from '../../scripts/ci/release-version.mjs';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -12,143 +17,191 @@ function readRepositoryFile(relativePath: string): string {
   return readFileSync(resolve(repositoryRoot, relativePath), 'utf8');
 }
 
-/** Return one top-level GitHub Actions job block after normalizing line endings. */
-function extractWorkflowJob(workflow: string, jobName: string): string {
-  const normalizedWorkflow = workflow.replace(/\r\n?/g, '\n');
-  const marker = `\n  ${jobName}:\n`;
-  const start = normalizedWorkflow.indexOf(marker);
-  if (start < 0) throw new Error(`Missing workflow job: ${jobName}`);
-  const remaining = normalizedWorkflow.slice(start + marker.length);
-  const nextJobOffset = remaining.search(/\n  [a-zA-Z0-9_-]+:\n/);
-  return nextJobOffset < 0 ? remaining : remaining.slice(0, nextJobOffset);
-}
-
-/** Extract the literal Bash body from one named workflow step. */
-function extractWorkflowRunScript(job: string, stepName: string): string {
-  const normalizedJob = job.replace(/\r\n?/g, '\n');
-  const stepMarker = `      - name: ${stepName}\n`;
-  const stepStart = normalizedJob.indexOf(stepMarker);
-  if (stepStart < 0) throw new Error(`Missing workflow step: ${stepName}`);
-  const runMarker = '        run: |\n';
-  const runStart = normalizedJob.indexOf(runMarker, stepStart);
-  if (runStart < 0) throw new Error(`Missing literal run block: ${stepName}`);
-  const remaining = normalizedJob.slice(runStart + runMarker.length);
-  const nextStepOffset = remaining.search(/\n      - (?:name:|uses:)/);
-  const script = nextStepOffset < 0 ? remaining : remaining.slice(0, nextStepOffset);
-  return script
-    .split('\n')
-    .map((line) => (line.startsWith('          ') ? line.slice(10) : line))
-    .join('\n');
-}
-
-/** Create one minimal repository fixture whose three release versions agree. */
-function createVersionFixture(): string {
-  const fixtureRoot = mkdtempSync(join(tmpdir(), 'disksage-release-version-'));
-  mkdirSync(join(fixtureRoot, 'src-tauri'), { recursive: true });
-  writeFileSync(
-    join(fixtureRoot, 'package.json'),
-    JSON.stringify({ name: 'disksage', version: '0.1.0' }),
-  );
-  writeFileSync(
-    join(fixtureRoot, 'src-tauri', 'Cargo.toml'),
-    '[package]\nname = "disksage"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\n',
-  );
-  writeFileSync(
-    join(fixtureRoot, 'src-tauri', 'tauri.conf.json'),
-    JSON.stringify({ productName: 'DiskSage', version: '0.1.0' }),
-  );
-  return fixtureRoot;
-}
-
-/** Execute the exact release-version admission script against one fixture. */
-function runReleaseVersionVerifier(
-  fixtureRoot: string,
-  ref: string,
-  refName: string,
-) {
-  const workflow = readRepositoryFile('.github/workflows/release.yml');
-  const buildJob = extractWorkflowJob(workflow, 'build');
-  const verifier = extractWorkflowRunScript(
-    buildJob,
-    'Verify release version contract',
-  );
-  return spawnSync('bash', ['-c', verifier], {
-    cwd: fixtureRoot,
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      GITHUB_REF: ref,
-      GITHUB_REF_NAME: refName,
-    },
-  });
-}
-
 describe('release version contract', () => {
-  it.runIf(process.platform !== 'win32')(
-    'accepts a tag that exactly matches all release manifests',
-    () => {
-      const fixtureRoot = createVersionFixture();
-      try {
-        const result = runReleaseVersionVerifier(
-          fixtureRoot,
-          'refs/tags/v0.1.0',
-          'v0.1.0',
-        );
+  it('binds Tauri packaging to the cross-platform version gate', () => {
+    const packageManifest = JSON.parse(readRepositoryFile('package.json')) as {
+      scripts: Record<string, string>;
+    };
+    const tauriConfig = JSON.parse(
+      readRepositoryFile('src-tauri/tauri.conf.json'),
+    ) as { build: { beforeBuildCommand: string } };
+    const coverageConfig = readRepositoryFile('vitest.config.ts');
 
-        expect(result.status).toBe(0);
-        expect(result.stdout).toContain(
-          'Release version contract passed for 0.1.0.',
-        );
-      } finally {
-        rmSync(fixtureRoot, { recursive: true, force: true });
-      }
-    },
-  );
+    expect(packageManifest.scripts['verify:release-version']).toContain(
+      "import('./scripts/ci/release-version.mjs')",
+    );
+    expect(packageManifest.scripts.build).toBe(
+      'npm run verify:release-version && npm run coverage && vite build',
+    );
+    expect(tauriConfig.build.beforeBuildCommand).toBe('npm run build');
+    expect(coverageConfig).toContain('scripts/ci/release-version.mjs');
+  });
 
-  it.runIf(process.platform !== 'win32')(
-    'rejects a release tag that disagrees with the packaged version',
-    () => {
-      const fixtureRoot = createVersionFixture();
-      try {
-        const result = runReleaseVersionVerifier(
-          fixtureRoot,
-          'refs/tags/v0.2.0',
-          'v0.2.0',
-        );
+  it('reads valid JSON and Cargo package versions', () => {
+    expect(readJsonVersion('package.json', () => '{"version":"1.2.3"}')).toBe(
+      '1.2.3',
+    );
+    expect(
+      readCargoPackageVersion(
+        'Cargo.toml',
+        () =>
+          '# preamble\n[workspace]\nmembers = []\n\n[package]\nname = "disksage"\nversion = "1.2.3" # buyer-visible\nedition = "2021"\n\n[dependencies]\n',
+      ),
+    ).toBe('1.2.3');
+  });
 
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(
-          'Release tag v0.2.0 does not match manifest version v0.1.0.',
-        );
-      } finally {
-        rmSync(fixtureRoot, { recursive: true, force: true });
-      }
-    },
-  );
+  it('refuses invalid, missing, empty, or ambiguous manifest versions', () => {
+    expect(() => readJsonVersion('broken.json', () => '{')).toThrow(
+      'Release manifest broken.json is missing or invalid JSON.',
+    );
+    expect(() => readJsonVersion('missing.json', () => '{}')).toThrow(
+      'Release manifest missing.json must define one non-empty string version.',
+    );
+    expect(() =>
+      readJsonVersion('empty.json', () => '{"version":""}'),
+    ).toThrow(
+      'Release manifest empty.json must define one non-empty string version.',
+    );
+    expect(() =>
+      readCargoPackageVersion('missing.toml', () => '[workspace]\nmembers = []\n'),
+    ).toThrow(
+      'Release manifest missing.toml must define exactly one package version.',
+    );
+    expect(() =>
+      readCargoPackageVersion(
+        'duplicate.toml',
+        () => '[package]\nversion = "1.0.0"\nversion = "1.0.1"\n',
+      ),
+    ).toThrow(
+      'Release manifest duplicate.toml must define exactly one package version.',
+    );
+  });
 
-  it.runIf(process.platform !== 'win32')(
-    'rejects disagreement between package, Cargo, and Tauri versions',
-    () => {
-      const fixtureRoot = createVersionFixture();
-      try {
-        writeFileSync(
-          join(fixtureRoot, 'src-tauri', 'Cargo.toml'),
-          '[package]\nname = "disksage"\nversion = "0.2.0"\nedition = "2021"\n',
-        );
+  it('accepts matching manifests for branches and exact release tags', () => {
+    expect(
+      validateReleaseVersion({
+        packageVersion: '1.2.3-beta.1+build.7',
+        cargoVersion: '1.2.3-beta.1+build.7',
+        tauriVersion: '1.2.3-beta.1+build.7',
+      }),
+    ).toBe('Release version contract passed for 1.2.3-beta.1+build.7.');
+    expect(
+      validateReleaseVersion({
+        packageVersion: '0.1.0',
+        cargoVersion: '0.1.0',
+        tauriVersion: '0.1.0',
+        githubRef: 'refs/tags/v0.1.0',
+        githubRefName: 'v0.1.0',
+      }),
+    ).toBe('Release version contract passed for 0.1.0.');
+  });
 
-        const result = runReleaseVersionVerifier(
-          fixtureRoot,
-          'refs/heads/main',
-          'main',
-        );
+  it('refuses manifest disagreement, malformed SemVer, and tag drift', () => {
+    expect(() =>
+      validateReleaseVersion({
+        packageVersion: '0.1.0',
+        cargoVersion: '0.2.0',
+        tauriVersion: '0.1.0',
+      }),
+    ).toThrow(
+      'Release manifest versions disagree: package.json=0.1.0, Cargo.toml=0.2.0, tauri.conf.json=0.1.0.',
+    );
+    expect(() =>
+      validateReleaseVersion({
+        packageVersion: '0.1.0',
+        cargoVersion: '0.1.0',
+        tauriVersion: '0.2.0',
+      }),
+    ).toThrow(
+      'Release manifest versions disagree: package.json=0.1.0, Cargo.toml=0.1.0, tauri.conf.json=0.2.0.',
+    );
+    expect(() =>
+      validateReleaseVersion({
+        packageVersion: '01.0',
+        cargoVersion: '01.0',
+        tauriVersion: '01.0',
+      }),
+    ).toThrow('Release manifest version 01.0 is not valid Semantic Versioning.');
+    expect(() =>
+      validateReleaseVersion({
+        packageVersion: '0.1.0',
+        cargoVersion: '0.1.0',
+        tauriVersion: '0.1.0',
+        githubRef: 'refs/tags/v0.2.0',
+        githubRefName: 'v0.2.0',
+      }),
+    ).toThrow(
+      'Release tag v0.2.0 does not match manifest version v0.1.0.',
+    );
+  });
 
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(
-          'Release manifest versions disagree: package.json=0.1.0, Cargo.toml=0.2.0, tauri.conf.json=0.1.0.',
-        );
-      } finally {
-        rmSync(fixtureRoot, { recursive: true, force: true });
-      }
-    },
-  );
+  it('loads repository manifests through injectable runtime boundaries', () => {
+    const manifests = new Map([
+      ['/fixture/package.json', '{"version":"0.1.0"}'],
+      [
+        '/fixture/src-tauri/Cargo.toml',
+        '[package]\nname = "disksage"\nversion = "0.1.0"\n[dependencies]\n',
+      ],
+      ['/fixture/src-tauri/tauri.conf.json', '{"version":"0.1.0"}'],
+    ]);
+    const readText = vi.fn((path: string) => {
+      const value = manifests.get(path);
+      if (value === undefined) throw new Error(`unexpected path ${path}`);
+      return value;
+    });
+
+    expect(
+      verifyReleaseVersion({
+        repositoryRoot: '/fixture',
+        environment: {
+          GITHUB_REF: 'refs/tags/v0.1.0',
+          GITHUB_REF_NAME: 'v0.1.0',
+        },
+        readText,
+      }),
+    ).toBe('Release version contract passed for 0.1.0.');
+    expect(readText).toHaveBeenCalledTimes(3);
+    expect(verifyReleaseVersion()).toBe(
+      'Release version contract passed for 0.1.0.',
+    );
+  });
+
+  it('reports stable success and failure outcomes at the CLI boundary', () => {
+    const output: string[] = [];
+    const errors: string[] = [];
+    const exitCodes: number[] = [];
+
+    expect(
+      main({
+        verify: () => 'passed',
+        writeOutput: (message: string) => output.push(message),
+        writeError: (message: string) => errors.push(message),
+        setExitCode: (code: number) => exitCodes.push(code),
+      }),
+    ).toBe(true);
+    expect(output).toEqual(['passed']);
+
+    expect(
+      main({
+        verify: () => {
+          throw new Error('failed');
+        },
+        writeOutput: (message: string) => output.push(message),
+        writeError: (message: string) => errors.push(message),
+        setExitCode: (code: number) => exitCodes.push(code),
+      }),
+    ).toBe(false);
+    expect(
+      main({
+        verify: () => {
+          throw 'non-error';
+        },
+        writeOutput: (message: string) => output.push(message),
+        writeError: (message: string) => errors.push(message),
+        setExitCode: (code: number) => exitCodes.push(code),
+      }),
+    ).toBe(false);
+    expect(errors).toEqual(['failed', 'Unknown release version failure.']);
+    expect(exitCodes).toEqual([1, 1]);
+  });
 });
