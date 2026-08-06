@@ -27,7 +27,7 @@ OR organization-sensitive tenant review reason
 
 Either signal is sufficient. Only a candidate with neither signal follows the ordinary approval contract.
 
-An approved decision is accepted only when its rationale starts with the exact backend-defined marker `[organization-tenant-authority-confirmed] ` whenever the predicate is true. Held decisions remain admissible without the marker because they grant no execution-ready approval. Candidate and decision fingerprints, reviewer attribution, rationale validation, and all durable Rust authorization checks remain mandatory and independent.
+An approved decision is accepted only when its rationale starts with the exact backend-defined marker `[organization-tenant-authority-confirmed]` followed by exactly one U+0020 ASCII space whenever the predicate is true. Held decisions remain admissible without the marker because they grant no execution-ready approval. Candidate and decision fingerprints, reviewer attribution, rationale validation, and all durable Rust authorization checks remain mandatory and independent.
 
 ## Security invariants
 
@@ -50,7 +50,9 @@ A rollback must revert the implementation, both regression-test commits, this de
 
 ## References
 
-Joint Task Force. (2020). *Security and privacy controls for information systems and organizations* (NIST Special Publication 800-53 Rev. 5, updates through Release 5.2.0). National Institute of Standards and Technology. https://doi.org/10.6028/NIST.SP.800-53r5
+Joint Task Force. (2020). *Security and privacy controls for information systems and organizations* (NIST Special Publication 800-53 Rev. 5). National Institute of Standards and Technology. https://doi.org/10.6028/NIST.SP.800-53r5
+
+National Institute of Standards and Technology. (2025, August 27). *NIST releases revision to SP 800-53 controls*. https://csrc.nist.gov/News/2025/nist-releases-revision-to-sp-800-53-controls
 
 MITRE. (2026). *CWE-863: Incorrect authorization* (CWE Version 4.20). https://cwe.mitre.org/data/definitions/863.html
 

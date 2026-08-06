@@ -147,12 +147,14 @@ applicable input, it remains unavailable or read-only.
 | Local eviction, trash, quarantine, or cleanup | Exact current candidate-set fingerprint, action class, source scope, current safety-plan fingerprint, and rollback or trash destination | Human-attributed approver, rationale, exact backend-authored confirmation phrase, explicit execution flag, and restricted receipt location | 15 minutes |
 | Organize, archive, recover, or transform | Exact source-lineage fingerprint, transformation schema and version, destination-plan fingerprint, bounded destination, and collision result | Human-attributed approver, rationale, exact backend-authored confirmation phrase, explicit execution flag, and restricted receipt location | 15 minutes |
 
-The authorization record contains an operation identifier, schema version, all scope
-fields, all fingerprints, `issued_at_utc`, `expires_at_utc`, approver identity,
-rationale, and confirmation phrase. Rust computes `expires_at_utc` as exactly 15
-minutes after `issued_at_utc`. The trusted Rust clock evaluates UTC expiry and, for an
-authorization created and consumed in one process, also requires monotonic elapsed time
-to remain below 15 minutes.
+At issuance, the authorization record contains an operation identifier, schema
+version, all scope fields, all fingerprints, the exact `repository_head_sha`,
+`issued_at_utc`, `expires_at_utc`, approver identity, rationale, and confirmation phrase.
+Rust computes `expires_at_utc` as exactly 15 minutes after `issued_at_utc`. The trusted
+Rust clock evaluates UTC expiry and, for an authorization created and consumed in one
+process, also requires monotonic elapsed time to remain below 15 minutes. At execution,
+Rust compares `repository_head_sha` with the current integrated repository head; any
+mismatch fails closed with `approval-scope-mismatch` before mutation.
 
 At or after `expires_at_utc`, execution fails with `approval-expired`. A current UTC
 clock earlier than the recorded issue time, a reversed monotonic interval, or any
@@ -331,7 +333,7 @@ Open Worldwide Application Security Project. (2025). *Application Security
 Verification Standard 5.0.0*.
 https://owasp.org/www-project-application-security-verification-standard/
 
-Supply-chain Levels for Software Artifacts. (2026). *SLSA specification, version
+Supply-chain Levels for Software Artifacts. (2025). *SLSA specification, version
 1.2*. https://slsa.dev/spec/v1.2/
 
 World Wide Web Consortium. (2023). *Web Content Accessibility Guidelines (WCAG) 2.2*

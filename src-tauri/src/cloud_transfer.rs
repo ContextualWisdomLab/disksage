@@ -409,7 +409,7 @@ fn candidate_blockers_for_action(
     let mut exact_review_approved = false;
     let organization_tenant_authority_required = candidate.destination_account_scope
         == CloudAccountScope::Organization
-        && candidate
+        || candidate
             .review_reasons
             .iter()
             .any(|reason| reason == ORGANIZATION_TENANT_AUTHORITY_REVIEW_REASON);
