@@ -205,19 +205,27 @@ jobs:
           require_exactly_one_path() {
             local path_pattern="$1"
             local label="$2"
-            mapfile -d '' matches < <(find release-artifacts -type f -path "$path_pattern" -print0)
-            if [[ ${#matches[@]} -ne 1 ]]; then
-              printf 'Expected exactly one %s, found %s.\n' "$label" "${#matches[@]}" >&2
+            local count=0
+            local matched_path=""
+            while IFS= read -r -d '' matched_path; do
+              count=$((count + 1))
+            done < <(find release-artifacts -type f -path "$path_pattern" -print0)
+            if [[ $count -ne 1 ]]; then
+              printf 'Expected exactly one %s, found %s.\n' "$label" "$count" >&2
               exit 1
             fi
           }
 
           require_exactly_one_file() {
             local file_name="$1"
-            mapfile -d '' matches < <(find release-artifacts -type f -name "$file_name" -print0)
-            if [[ ${#matches[@]} -ne 1 ]]; then
+            local count=0
+            local matched_path=""
+            while IFS= read -r -d '' matched_path; do
+              count=$((count + 1))
+            done < <(find release-artifacts -type f -name "$file_name" -print0)
+            if [[ $count -ne 1 ]]; then
               printf 'Expected exactly one release artifact named %s, found %s.\n' \
-                "$file_name" "${#matches[@]}" >&2
+                "$file_name" "$count" >&2
               exit 1
             fi
           }
@@ -239,9 +247,14 @@ jobs:
             require_exactly_one_file "$required_name.sha256"
           done
 
-          mapfile -d '' checksum_files < <(find release-artifacts -type f -name '*.sha256' -print0)
+          checksum_files=()
+          checksum_file=""
+          while IFS= read -r -d '' checksum_file; do
+            checksum_files+=("$checksum_file")
+          done < <(find release-artifacts -type f -name '*.sha256' -print0)
           if [[ ${#checksum_files[@]} -ne 6 ]]; then
-            printf 'Expected six operational CLI checksum files, found %s.\n' "${#checksum_files[@]}" >&2
+            printf 'Expected six operational CLI checksum files, found %s.\n' \
+              "${#checksum_files[@]}" >&2
             exit 1
           fi
 
@@ -250,8 +263,14 @@ jobs:
             checksum_name="$(basename "$checksum_file")"
             expected_asset_name="${checksum_name%.sha256}"
 
-            mapfile -t checksum_lines <"$checksum_file"
-            if [[ ${#checksum_lines[@]} -ne 1 ]]; then
+            checksum_line=""
+            line=""
+            line_count=0
+            while IFS= read -r line || [[ -n "$line" ]]; do
+              line_count=$((line_count + 1))
+              checksum_line="$line"
+            done <"$checksum_file"
+            if [[ $line_count -ne 1 ]]; then
               printf 'Checksum file %s must contain exactly one record.\n' \
                 "$checksum_name" >&2
               exit 1
@@ -260,7 +279,7 @@ jobs:
             recorded_digest=""
             recorded_name=""
             extra_field=""
-            read -r recorded_digest recorded_name extra_field <<<"${checksum_lines[0]}"
+            read -r recorded_digest recorded_name extra_field <<<"$checksum_line"
             if [[ ! "$recorded_digest" =~ ^[0-9a-fA-F]{64}$ ]] || \
               [[ "$recorded_name" != "$expected_asset_name" ]] || \
               [[ -n "$extra_field" ]]; then
@@ -270,7 +289,14 @@ jobs:
               exit 1
             fi
 
-            (cd "$checksum_dir" && sha256sum --check "$checksum_name")
+            if command -v sha256sum >/dev/null 2>&1; then
+              (cd "$checksum_dir" && sha256sum --check "$checksum_name")
+            elif command -v shasum >/dev/null 2>&1; then
+              (cd "$checksum_dir" && shasum -a 256 --check "$checksum_name")
+            else
+              printf 'No SHA-256 checksum verifier is available.\n' >&2
+              exit 1
+            fi
           done
 
       - name: Generate GitHub build provenance
