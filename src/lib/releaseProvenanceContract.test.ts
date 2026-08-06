@@ -1,9 +1,26 @@
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const operationalAssetNames = [
+  'disksage-cloud-plan-linux-x86_64',
+  'disksage-duplicate-audit-linux-x86_64',
+  'disksage-cloud-plan-windows-x86_64.exe',
+  'disksage-duplicate-audit-windows-x86_64.exe',
+  'disksage-cloud-plan-macos-arm64',
+  'disksage-duplicate-audit-macos-arm64',
+] as const;
 
 /**
  * Read one UTF-8 repository file from the source-controlled project root.
@@ -34,6 +51,95 @@ function extractWorkflowJob(workflow: string, jobName: string): string {
   const remaining = normalizedWorkflow.slice(contentStart);
   const nextJobOffset = remaining.search(/\n  [a-zA-Z0-9_-]+:\n/);
   return nextJobOffset < 0 ? remaining : remaining.slice(0, nextJobOffset);
+}
+
+/**
+ * Extract one literal Bash `run` block from a named workflow step.
+ *
+ * The release validator is security-sensitive executable policy. Running the
+ * exact source-controlled block against fixtures proves behavior without
+ * maintaining a second, test-only implementation that could drift.
+ */
+function extractWorkflowRunScript(job: string, stepName: string): string {
+  const normalizedJob = job.replace(/\r\n?/g, '\n');
+  const stepMarker = `      - name: ${stepName}\n`;
+  const stepStart = normalizedJob.indexOf(stepMarker);
+  if (stepStart < 0) {
+    throw new Error(`Missing workflow step: ${stepName}`);
+  }
+
+  const runMarker = '        run: |\n';
+  const runStart = normalizedJob.indexOf(runMarker, stepStart);
+  if (runStart < 0) {
+    throw new Error(`Missing literal run block for workflow step: ${stepName}`);
+  }
+
+  const scriptStart = runStart + runMarker.length;
+  const remaining = normalizedJob.slice(scriptStart);
+  const nextStepOffset = remaining.search(/\n      - (?:name:|uses:)/);
+  const indentedScript =
+    nextStepOffset < 0 ? remaining : remaining.slice(0, nextStepOffset);
+  return indentedScript
+    .split('\n')
+    .map((line) => (line.startsWith('          ') ? line.slice(10) : line))
+    .join('\n');
+}
+
+/**
+ * Write a realistic complete release-artifact tree and return its root.
+ *
+ * Each operational checksum initially names and authenticates the adjacent CLI
+ * exactly as the platform build job does. Individual tests can then mutate one
+ * boundary while every unrelated admission requirement remains valid.
+ */
+function createReleaseArtifactFixture(): string {
+  const fixtureRoot = mkdtempSync(join(tmpdir(), 'disksage-release-contract-'));
+  const artifactRoot = join(fixtureRoot, 'release-artifacts');
+  const bundlePaths = [
+    'ubuntu/bundle/deb/disksage.deb',
+    'ubuntu/bundle/appimage/disksage.AppImage',
+    'windows/bundle/msi/disksage.msi',
+    'windows/bundle/nsis/disksage-setup.exe',
+    'macos/bundle/dmg/disksage.dmg',
+  ];
+
+  for (const bundlePath of bundlePaths) {
+    const absolutePath = join(artifactRoot, bundlePath);
+    mkdirSync(dirname(absolutePath), { recursive: true });
+    writeFileSync(absolutePath, `bundle:${bundlePath}`);
+  }
+
+  for (const assetName of operationalAssetNames) {
+    const platformDirectory = assetName.includes('windows')
+      ? 'windows'
+      : assetName.includes('macos')
+        ? 'macos'
+        : 'ubuntu';
+    const assetPath = join(artifactRoot, platformDirectory, assetName);
+    const assetBytes = Buffer.from(`operational-cli:${assetName}`);
+    mkdirSync(dirname(assetPath), { recursive: true });
+    writeFileSync(assetPath, assetBytes);
+    writeFileSync(
+      `${assetPath}.sha256`,
+      `${createHash('sha256').update(assetBytes).digest('hex')}  ${assetName}\n`,
+    );
+  }
+
+  return fixtureRoot;
+}
+
+/** Execute the exact release-admission Bash block in one fixture directory. */
+function runReleaseArtifactVerifier(fixtureRoot: string) {
+  const workflow = readRepositoryFile('.github/workflows/release.yml');
+  const attestJob = extractWorkflowJob(workflow, 'attest-release');
+  const verifier = extractWorkflowRunScript(
+    attestJob,
+    'Verify release artifact checksums',
+  );
+  return spawnSync('bash', ['-c', verifier], {
+    cwd: fixtureRoot,
+    encoding: 'utf8',
+  });
 }
 
 describe('release artifact provenance contract', () => {
@@ -119,6 +225,40 @@ describe('release artifact provenance contract', () => {
     );
   });
 
+  it.runIf(process.platform !== 'win32')(
+    'rejects a checksum record that authenticates a decoy instead of the expected CLI',
+    () => {
+      const fixtureRoot = createReleaseArtifactFixture();
+      try {
+        const linuxDirectory = join(
+          fixtureRoot,
+          'release-artifacts',
+          'ubuntu',
+        );
+        const checksumPath = join(
+          linuxDirectory,
+          'disksage-cloud-plan-linux-x86_64.sha256',
+        );
+        const decoyName = 'unpublished-decoy';
+        const decoyBytes = Buffer.from('not-the-published-cli');
+        writeFileSync(join(linuxDirectory, decoyName), decoyBytes);
+        writeFileSync(
+          checksumPath,
+          `${createHash('sha256').update(decoyBytes).digest('hex')}  ${decoyName}\n`,
+        );
+
+        const result = runReleaseArtifactVerifier(fixtureRoot);
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          'must reference its adjacent operational CLI',
+        );
+      } finally {
+        rmSync(fixtureRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
   it('documents buyer-verifiable provenance and authoritative standards', () => {
     const doctoring = readRepositoryFile(
       'docs/doctoring/release-artifact-provenance.md',
@@ -136,6 +276,9 @@ describe('release artifact provenance contract', () => {
     expect(doctoring).toContain('37930b1c2abaa49bbe596cd826c3c89aef350131');
     expect(doctoring).toContain(
       'operational CLI, or checksum file is absent or duplicated',
+    );
+    expect(doctoring).toContain(
+      'checksum record names a file other than its adjacent operational CLI',
     );
     expect(changelog).toContain('buyer-verifiable release artifact provenance');
   });
