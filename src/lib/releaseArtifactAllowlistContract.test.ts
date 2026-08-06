@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -119,6 +120,27 @@ describe('release artifact exact-set admission', () => {
 
         expect(result.status).not.toBe(0);
         expect(result.stderr).toContain('Unexpected release artifact entries');
+      } finally {
+        rmSync(fixtureRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'rejects a symlink before it can become a provenance subject',
+    () => {
+      const fixtureRoot = createCompleteReleaseFixture();
+      try {
+        symlinkSync(
+          'disksage-cloud-plan-linux-x86_64',
+          join(fixtureRoot, 'release-artifacts', 'ubuntu', 'unexpected-cli-alias'),
+        );
+
+        const result = runReleaseArtifactVerifier(fixtureRoot);
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain('non-regular path');
+        expect(result.stderr).toContain('unexpected-cli-alias');
       } finally {
         rmSync(fixtureRoot, { recursive: true, force: true });
       }
