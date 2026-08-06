@@ -52,7 +52,7 @@ describe('release artifact provenance contract', () => {
     expect(attestJob).toContain('id-token: write');
     expect(attestJob).toContain('attestations: write');
     expect(attestJob).toContain(
-      'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c',
+      'actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131',
     );
     expect(attestJob).toContain('pattern: release-disksage-*');
     expect(attestJob).toContain(
@@ -72,7 +72,7 @@ describe('release artifact provenance contract', () => {
     expect(publishJob).toContain('needs: attest-release');
     expect(publishJob).toContain('contents: write');
     expect(publishJob).toContain(
-      'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c',
+      'actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131',
     );
     expect(publishJob).toContain('pattern: release-disksage-*');
     expect(publishJob).toContain(
@@ -94,6 +94,7 @@ describe('release artifact provenance contract', () => {
     expect(doctoring).toContain('in-toto Statement v1');
     expect(doctoring).toContain('APA 7th references');
     expect(doctoring).toContain('59d89421af93a897026c735860bf21b6eb4f7b26');
+    expect(doctoring).toContain('37930b1c2abaa49bbe596cd826c3c89aef350131');
     expect(changelog).toContain('buyer-verifiable release artifact provenance');
   });
 });
