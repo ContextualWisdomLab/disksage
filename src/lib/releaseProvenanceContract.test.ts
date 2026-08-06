@@ -18,24 +18,37 @@ function readRepositoryFile(relativePath: string): string {
 /**
  * Return one top-level GitHub Actions job block without parsing untrusted YAML.
  *
- * Release governance tests need only stable job boundaries. Restricting the
- * scanner to two-space-indented job keys keeps the assertion dependency-free
- * and makes an absent or duplicate contract fail loudly.
+ * Release governance tests need only stable job boundaries. Normalizing CRLF
+ * and legacy CR separators keeps the contract portable across Git checkouts on
+ * Windows, macOS, and Linux without changing the source-controlled workflow.
  */
 function extractWorkflowJob(workflow: string, jobName: string): string {
+  const normalizedWorkflow = workflow.replace(/\r\n?/g, '\n');
   const marker = `\n  ${jobName}:\n`;
-  const start = workflow.indexOf(marker);
+  const start = normalizedWorkflow.indexOf(marker);
   if (start < 0) {
     throw new Error(`Missing workflow job: ${jobName}`);
   }
 
   const contentStart = start + marker.length;
-  const remaining = workflow.slice(contentStart);
+  const remaining = normalizedWorkflow.slice(contentStart);
   const nextJobOffset = remaining.search(/\n  [a-zA-Z0-9_-]+:\n/);
   return nextJobOffset < 0 ? remaining : remaining.slice(0, nextJobOffset);
 }
 
 describe('release artifact provenance contract', () => {
+  it('extracts workflow jobs from Windows CRLF checkouts', () => {
+    const workflow =
+      'jobs:\r\n  build:\r\n    runs-on: windows-latest\r\n  publish:\r\n    runs-on: ubuntu-latest\r\n';
+
+    expect(extractWorkflowJob(workflow, 'build')).toContain(
+      'runs-on: windows-latest',
+    );
+    expect(extractWorkflowJob(workflow, 'build')).not.toContain(
+      'runs-on: ubuntu-latest',
+    );
+  });
+
   it('makes exact release provenance a tag-only gate before publication', () => {
     const workflow = readRepositoryFile('.github/workflows/release.yml');
     const buildJob = extractWorkflowJob(workflow, 'build');
@@ -64,8 +77,12 @@ describe('release artifact provenance contract', () => {
       "require_exactly_one_path '*/bundle/nsis/*.exe' 'Windows NSIS bundle'",
     );
     expect(attestJob).not.toContain("require_exactly_one '*.exe'");
-    expect(attestJob.indexOf('name: Verify release artifact checksums')).toBeLessThan(
-      attestJob.indexOf('actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26'),
+    expect(
+      attestJob.indexOf('name: Verify release artifact checksums'),
+    ).toBeLessThan(
+      attestJob.indexOf(
+        'actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26',
+      ),
     );
 
     expect(publishJob).toContain("if: startsWith(github.ref, 'refs/tags/')");
