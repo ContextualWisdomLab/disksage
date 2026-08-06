@@ -64,7 +64,7 @@ describe('acquisition-ready architecture documentation', () => {
       /A pull request may merge only on the exact current head SHA[\s\S]{0,500}independent non-author[\s\S]{0,120}approval is satisfied\./,
     );
     expect(architecture).toMatch(
-      /No document, review, status, or artifact from an older head[\s\S]{0,260}durable repository authorization\./,
+      /No document, review, status, or artifact from an older head[\s\S]{0,260}durable\s+repository authorization\./,
     );
     expect(architecture).toMatch(
       /Database objects must contain at least two descriptive words and use `snake_case` by\s+default\./,
@@ -104,7 +104,7 @@ describe('acquisition-ready architecture documentation', () => {
     expect(coverageConfiguration).toContain('src/lib/**/*.ts');
     expect(coverageConfiguration).toContain('src/routes/**/*.ts');
     expect(coverageConfiguration).toContain('**/*.test.ts');
-    expect(architecture).toContain('inherits the same `npm run coverage` gate');
+    expect(architecture).toMatch(/inherits the same\s+`npm run coverage` gate/);
     expect(ssr).toBe(false);
   });
 });
