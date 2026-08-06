@@ -15,21 +15,27 @@ fn cargo_manifest() -> String {
 }
 
 #[test]
-fn acquisition_metadata_is_complete_and_non_placeholder() {
+fn cargo_exposes_expected_acquisition_metadata_to_build_consumers() {
+    assert_eq!(
+        env!("CARGO_PKG_DESCRIPTION"),
+        "Privacy-first desktop storage analysis and reclaim decision-support application."
+    );
+    assert_eq!(env!("CARGO_PKG_AUTHORS"), "Contextual Wisdom Lab");
+    assert_eq!(env!("CARGO_PKG_LICENSE"), "MIT");
+    assert_eq!(
+        env!("CARGO_PKG_REPOSITORY"),
+        "https://github.com/ContextualWisdomLab/disksage"
+    );
+}
+
+#[test]
+fn manifest_refuses_placeholders_and_registry_publication() {
     let manifest = cargo_manifest();
 
-    for required in [
-        "description = \"Privacy-first desktop storage analysis and reclaim decision-support application.\"",
-        "authors = [\"Contextual Wisdom Lab\"]",
-        "license = \"MIT\"",
-        "repository = \"https://github.com/ContextualWisdomLab/disksage\"",
-        "publish = false",
-    ] {
-        assert!(
-            manifest.contains(required),
-            "Cargo package metadata is missing required acquisition field: {required}"
-        );
-    }
+    assert!(
+        manifest.contains("publish = false"),
+        "Cargo registry publication must remain explicitly disabled for the desktop package"
+    );
 
     for placeholder in ["description = \"A Tauri App\"", "authors = [\"you\"]"] {
         assert!(
