@@ -30,6 +30,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Security
 
 - Added buyer-verifiable release artifact provenance with checksum-first admission, immutable `actions/attest` pinning, tag-only OIDC and attestation authority, and publication that depends on successful exact-artifact provenance generation.
+- Preserve per-artifact directories during attestation and publication downloads so duplicate release basenames cannot be hidden by last-writer-wins archive flattening before exact-set admission.
 - Fail closed before packaging when `package.json`, Cargo, and Tauri versions disagree, when a version is missing or malformed, or when a release tag is not exactly `v<manifest version>`.
 - Enforce Semantic Versioning 2.0.0 numeric prerelease rules and reject leading-zero identifiers such as `1.0.0-01` before packaging.
 - Bound every release checksum record to the exact adjacent operational CLI basename and reject malformed, multi-record, redirected, traversing, absolute, or decoy checksum targets before digest verification.
