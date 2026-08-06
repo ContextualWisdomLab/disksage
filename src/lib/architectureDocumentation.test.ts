@@ -89,12 +89,15 @@ describe('acquisition-ready architecture documentation', () => {
     }
   });
 
-  it('binds operation authorization to the exact integrated repository head', () => {
+  it('separates runtime operation authorization from repository authorization', () => {
     const architecture = readRepositoryDocument('ARCHITECTURE.md');
 
-    expect(architecture).toContain('`repository_head_sha`');
+    expect(architecture).not.toContain('`repository_head_sha`');
+    expect(architecture).toContain(
+      'Runtime authorization does not use a repository checkout or Git reference as an operator credential.',
+    );
     expect(architecture).toMatch(
-      /issuance[\s\S]{0,240}`repository_head_sha`[\s\S]{0,400}execution[\s\S]{0,240}current integrated repository head[\s\S]{0,240}`approval-scope-mismatch`/i,
+      /runtime authorization[\s\S]{0,500}operation scope[\s\S]{0,500}Repository authorization[\s\S]{0,500}exact current head SHA/i,
     );
   });
 
