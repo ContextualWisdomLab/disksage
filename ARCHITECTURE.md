@@ -135,10 +135,10 @@ candidate, destination, provider, account scope, plan revision, or head revision
 
 ### Repository authorization
 
-A pull request may merge only when every required check, security gate, review policy,
-branch rule, and independent non-author approval is satisfied on the exact current
-head SHA. Queued, pending, cancelled, skipped-required, neutral-required, absent,
-failed, stale-head, or older-head evidence is not passing.
+A pull request may merge only on the exact current head SHA and only when every
+required check, security gate, review policy, branch rule, and independent non-author
+approval is satisfied. Queued, pending, cancelled, skipped-required, neutral-required,
+absent, failed, stale-head, or older-head evidence is not passing.
 
 No document, review, status, or artifact from an older head may be reused to authorize
 merge, release, or a buyer-facing assurance claim. Local validation and CI evidence
