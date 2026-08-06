@@ -49,6 +49,17 @@ describe('release artifact provenance contract', () => {
     );
   });
 
+  it('binds all required test jobs to the exact current head', () => {
+    const workflow = readRepositoryFile('.github/workflows/test.yml');
+    const exactHeadCheckout =
+      'ref: ${{ github.event.pull_request.head.sha || github.sha }}';
+
+    expect(extractWorkflowJob(workflow, 'test')).toContain(exactHeadCheckout);
+    expect(extractWorkflowJob(workflow, 'llm-engine-build')).toContain(
+      exactHeadCheckout,
+    );
+  });
+
   it('makes exact release provenance a tag-only gate before publication', () => {
     const workflow = readRepositoryFile('.github/workflows/release.yml');
     const buildJob = extractWorkflowJob(workflow, 'build');
