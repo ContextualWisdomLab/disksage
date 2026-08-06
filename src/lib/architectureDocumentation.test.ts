@@ -91,14 +91,27 @@ describe('acquisition-ready architecture documentation', () => {
 
   it('separates runtime operation authorization from repository authorization', () => {
     const architecture = readRepositoryDocument('ARCHITECTURE.md');
+    const runtimeStatement =
+      'Runtime authorization does not use a repository checkout or Git reference as an operator credential.';
+    const runtimeStatementIndex = architecture.indexOf(runtimeStatement);
+    const operationScopeIndex = architecture.indexOf(
+      'operation scope',
+      runtimeStatementIndex,
+    );
+    const repositoryAuthorizationIndex = architecture.indexOf(
+      '### Repository authorization',
+      operationScopeIndex,
+    );
+    const exactHeadIndex = architecture.indexOf(
+      'exact current head SHA',
+      repositoryAuthorizationIndex,
+    );
 
     expect(architecture).not.toContain('`repository_head_sha`');
-    expect(architecture).toContain(
-      'Runtime authorization does not use a repository checkout or Git reference as an operator credential.',
-    );
-    expect(architecture).toMatch(
-      /runtime authorization[\s\S]{0,500}operation scope[\s\S]{0,500}Repository authorization[\s\S]{0,500}exact current head SHA/i,
-    );
+    expect(runtimeStatementIndex).toBeGreaterThanOrEqual(0);
+    expect(operationScopeIndex).toBeGreaterThan(runtimeStatementIndex);
+    expect(repositoryAuthorizationIndex).toBeGreaterThan(operationScopeIndex);
+    expect(exactHeadIndex).toBeGreaterThan(repositoryAuthorizationIndex);
   });
 
   it('records standards and exact marker syntax with precise publication evidence', () => {
