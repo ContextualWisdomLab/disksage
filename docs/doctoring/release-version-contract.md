@@ -13,13 +13,13 @@ The verifier:
 - reads each JSON manifest as UTF-8 and requires one non-empty string `version`;
 - reads exactly one literal `version = "..."` from Cargo's `[package]` section and refuses absent, duplicated, or workspace-inherited ambiguity;
 - requires all three values to be identical;
-- requires the shared value to satisfy Semantic Versioning 2.0.0;
+- requires the shared value to satisfy Semantic Versioning 2.0.0, including rejection of leading zeroes in numeric prerelease identifiers such as `1.0.0-01` and `1.0.0-alpha.01`;
 - treats branch and pull-request builds as version-consistency checks without inventing a release tag;
 - when `GITHUB_REF` is a tag reference, requires `GITHUB_REF_NAME` to equal `v<manifest version>` exactly;
 - emits stable privacy-safe diagnostics containing only repository-controlled version values; and
 - runs under the ordinary read-only build authority before compilation, attestation, or publication authority exists.
 
-`src/lib/releaseVersionContract.test.ts` verifies valid releases, prerelease/build metadata, Cargo section parsing, invalid JSON, missing and empty versions, duplicate Cargo versions, each manifest-disagreement path, malformed Semantic Versioning, tag drift, repository-root loading, and stable CLI success and failure behavior. `vitest.config.ts` includes the production verifier in the 100% statement, branch, function, and line coverage gate.
+`src/lib/releaseVersionContract.test.ts` verifies valid releases, prerelease/build metadata, Cargo section parsing, invalid JSON, missing and empty versions, duplicate Cargo versions, each manifest-disagreement path, malformed Semantic Versioning including numeric prerelease leading zeroes, tag drift, repository-root loading, and stable CLI success and failure behavior. `vitest.config.ts` includes the production verifier in the 100% statement, branch, function, and line coverage gate.
 
 ## Failure and stale-evidence behavior
 
@@ -47,4 +47,4 @@ Tauri Programme within The Commons Conservancy. (n.d.). *Distribute*. Tauri. Ret
 
 ## Reference verification note
 
-The authoritative publisher sources above were rechecked on August 6, 2026. They support the manifest locations, package version semantics, and distribution boundary used by this contract; they do not imply external certification of DiskSage.
+The authoritative publisher sources above were rechecked on August 6, 2026. They support the manifest locations, package version semantics, including the prohibition on leading zeroes in numeric prerelease identifiers, and distribution boundary used by this contract; they do not imply external certification of DiskSage.
