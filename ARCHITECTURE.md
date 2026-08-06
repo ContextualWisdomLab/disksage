@@ -147,14 +147,19 @@ applicable input, it remains unavailable or read-only.
 | Local eviction, trash, quarantine, or cleanup | Exact current candidate-set fingerprint, action class, source scope, current safety-plan fingerprint, and rollback or trash destination | Human-attributed approver, rationale, exact backend-authored confirmation phrase, explicit execution flag, and restricted receipt location | 15 minutes |
 | Organize, archive, recover, or transform | Exact source-lineage fingerprint, transformation schema and version, destination-plan fingerprint, bounded destination, and collision result | Human-attributed approver, rationale, exact backend-authored confirmation phrase, explicit execution flag, and restricted receipt location | 15 minutes |
 
-At issuance, the authorization record contains an operation identifier, schema
-version, all scope fields, all fingerprints, the exact `repository_head_sha`,
-`issued_at_utc`, `expires_at_utc`, approver identity, rationale, and confirmation phrase.
-Rust computes `expires_at_utc` as exactly 15 minutes after `issued_at_utc`. The trusted
-Rust clock evaluates UTC expiry and, for an authorization created and consumed in one
-process, also requires monotonic elapsed time to remain below 15 minutes. At execution,
-Rust compares `repository_head_sha` with the current integrated repository head; any
-mismatch fails closed with `approval-scope-mismatch` before mutation.
+At issuance, the runtime authorization record contains an operation identifier,
+schema version, all scope fields, all fingerprints, `issued_at_utc`, `expires_at_utc`,
+approver identity, rationale, and confirmation phrase. Rust computes `expires_at_utc` as
+exactly 15 minutes after `issued_at_utc`. The trusted Rust clock evaluates UTC expiry and,
+for an authorization created and consumed in one process, also requires monotonic elapsed
+time to remain below 15 minutes.
+
+Runtime authorization does not use a repository checkout or Git reference as an operator credential.
+A packaged process cannot establish repository state as an authorization fact without
+mixing local validation with durable authority. Runtime authorization is instead bound to
+operation scope, current fingerprints, executable schema, and trusted-clock freshness.
+Exact repository-head evidence remains a separate merge and release gate under Repository
+authorization and never substitutes for the human approval required for mutation.
 
 At or after `expires_at_utc`, execution fails with `approval-expired`. A current UTC
 clock earlier than the recorded issue time, a reversed monotonic interval, or any
@@ -166,8 +171,7 @@ response may extend, refresh, or substitute the approval; a new plan and new hum
 approval are required.
 
 Authorization is single-purpose. It cannot be reused for another candidate,
-destination, provider, account scope, operation class, plan revision, schema revision,
-or repository head.
+destination, provider, account scope, operation class, plan revision, or schema revision.
 
 ### Repository authorization
 
