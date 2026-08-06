@@ -78,7 +78,7 @@ describe("cloud review queue", () => {
     expect(cloudReviewQueueState(item, [exact])).toBe("approved");
   });
 
-  it("requires organization scope and the exact sensitive-context reason", () => {
+  it("fails closed when either organization authority signal is present", () => {
     const organizationSensitive = candidate("a", 10, {
       destination_account_scope: "organization",
       review_reasons: [
@@ -97,8 +97,8 @@ describe("cloud review queue", () => {
     });
 
     expect(organizationTenantAuthorityRequired(organizationSensitive)).toBe(true);
-    expect(organizationTenantAuthorityRequired(organizationOrdinary)).toBe(false);
-    expect(organizationTenantAuthorityRequired(personalSensitive)).toBe(false);
+    expect(organizationTenantAuthorityRequired(organizationOrdinary)).toBe(true);
+    expect(organizationTenantAuthorityRequired(personalSensitive)).toBe(true);
   });
 
   it("requires an integrity-bound tenant authority attestation for organization-sensitive approval", () => {
