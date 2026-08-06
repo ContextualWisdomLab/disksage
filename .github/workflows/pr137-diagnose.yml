@@ -1,0 +1,27 @@
+name: PR 137 stale fixture diagnosis
+
+on:
+  push:
+    branches:
+      - docs/acquisition-architecture-contract
+    paths:
+      - .github/workflows/pr137-diagnose.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: docs/acquisition-architecture-contract
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Print exact failing test and nearby helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          nl -ba src-tauri/src/naruon_lineage.rs | sed -n '820,980p'
