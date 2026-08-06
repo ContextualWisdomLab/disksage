@@ -39,7 +39,7 @@ jobs:
         with:
           node-version: 20.19.0
       - run: npm ci
-      - run: npm test
+      - run: npm run coverage
       - run: npm run build
 
   llm-engine-build:

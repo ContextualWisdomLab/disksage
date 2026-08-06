@@ -44,13 +44,22 @@ export interface CloudReviewQueuePage {
   totalItems: number;
 }
 
+/**
+ * Reports whether an approval needs explicit organization-tenant authority.
+ *
+ * The destination scope and the backend-authored review reason are independent
+ * safety signals. Either signal is sufficient to require the attestation so a
+ * missing or contradictory field cannot make an organization-sensitive
+ * candidate easier to approve. Only a candidate with neither signal uses the
+ * ordinary approval contract.
+ */
 export function organizationTenantAuthorityRequired(candidate: CloudCandidate): boolean {
   return candidate.destination_account_scope === "organization"
-    && candidate.review_reasons.includes(ORGANIZATION_TENANT_AUTHORITY_REVIEW_REASON);
+    || candidate.review_reasons.includes(ORGANIZATION_TENANT_AUTHORITY_REVIEW_REASON);
 }
 
 function isReviewFormatControl(character: string): boolean {
-  const codepoint = character.codePointAt(0) ?? -1;
+  const codepoint = character.codePointAt(0)!;
   return codepoint === 0x00ad
     || (codepoint >= 0x0600 && codepoint <= 0x0605)
     || [0x061c, 0x06dd, 0x070f, 0x08e2, 0x180e, 0xfeff].includes(codepoint)

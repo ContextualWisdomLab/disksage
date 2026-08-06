@@ -9,6 +9,7 @@ import {
   cloudReviewReasons,
   filterCloudReviewQueue,
   matchingReviewDecision,
+  organizationTenantAuthorityRequired,
 } from "./cloudReviewQueue";
 
 function candidate(
@@ -69,11 +70,35 @@ describe("cloud review queue", () => {
     const item = candidate("a", 10);
     const exact = decision(item, "approved");
     const stale = decision(item, "held", "f".repeat(64));
+    expect(candidateReviewDecision(item, [])).toBeNull();
     expect(candidateReviewDecision(item, [stale])).toBe(stale);
     expect(matchingReviewDecision(item, [stale])).toBeNull();
     expect(cloudReviewQueueState(item, [stale])).toBe("unreviewed");
     expect(matchingReviewDecision(item, [exact])).toBe(exact);
     expect(cloudReviewQueueState(item, [exact])).toBe("approved");
+  });
+
+  it("fails closed when either organization authority signal is present", () => {
+    const organizationSensitive = candidate("a", 10, {
+      destination_account_scope: "organization",
+      review_reasons: [
+        "organization-cloud-sensitive-context-needs-explicit-tenant-approval",
+      ],
+    });
+    const organizationOrdinary = candidate("b", 10, {
+      destination_account_scope: "organization",
+      review_reasons: ["destination-account-scope-unknown"],
+    });
+    const personalSensitive = candidate("c", 10, {
+      destination_account_scope: "personal",
+      review_reasons: [
+        "organization-cloud-sensitive-context-needs-explicit-tenant-approval",
+      ],
+    });
+
+    expect(organizationTenantAuthorityRequired(organizationSensitive)).toBe(true);
+    expect(organizationTenantAuthorityRequired(organizationOrdinary)).toBe(true);
+    expect(organizationTenantAuthorityRequired(personalSensitive)).toBe(true);
   });
 
   it("requires an integrity-bound tenant authority attestation for organization-sensitive approval", () => {
@@ -89,10 +114,12 @@ describe("cloud review queue", () => {
       rationale:
         "[organization-tenant-authority-confirmed] Authorized tenant and destination reviewed.",
     };
+    const heldWithoutAttestation = decision(item, "held");
     expect(matchingReviewDecision(item, [unconfirmed])).toBeNull();
     expect(cloudReviewQueueState(item, [unconfirmed])).toBe("unreviewed");
     expect(matchingReviewDecision(item, [confirmed])).toBe(confirmed);
     expect(cloudReviewQueueState(item, [confirmed])).toBe("approved");
+    expect(matchingReviewDecision(item, [heldWithoutAttestation])).toBe(heldWithoutAttestation);
   });
 
   it("keeps legacy or unattributed decisions out of the execution-ready state", () => {
@@ -110,6 +137,14 @@ describe("cloud review queue", () => {
     const missingHumanIdentity: CloudReviewDecision = {
       ...decision(item, "approved"),
       reviewed_by: "human:   ",
+    };
+    const nonHumanReviewer: CloudReviewDecision = {
+      ...decision(item, "approved"),
+      reviewed_by: "service:local:test",
+    };
+    const punctuationOnlyRationale: CloudReviewDecision = {
+      ...decision(item, "approved"),
+      rationale: "---",
     };
     const invisibleHumanIdentity: CloudReviewDecision = {
       ...decision(item, "approved"),
@@ -179,6 +214,8 @@ describe("cloud review queue", () => {
     expect(matchingReviewDecision(item, [missingHumanIdentity])).toBeNull();
     expect(cloudReviewQueueState(item, [missingHumanIdentity])).toBe("unreviewed");
     for (const invalid of [
+      nonHumanReviewer,
+      punctuationOnlyRationale,
       invisibleHumanIdentity,
       controlHumanIdentity,
       oversizedHumanIdentity,
@@ -210,6 +247,59 @@ describe("cloud review queue", () => {
       rationale: "\u0e33",
     };
     expect(matchingReviewDecision(item, [thaiLetterDecision])).toBe(thaiLetterDecision);
+  });
+
+  it("rejects every explicitly forbidden Unicode review-format range", () => {
+    const item = candidate("a", 10);
+    const forbiddenFormatControls = [
+      0x00ad,
+      0x0600,
+      0x0605,
+      0x061c,
+      0x06dd,
+      0x070f,
+      0x08e2,
+      0x180e,
+      0xfeff,
+      0x0890,
+      0x0891,
+      0x200b,
+      0x200f,
+      0x202a,
+      0x202e,
+      0x2060,
+      0x2064,
+      0x2066,
+      0x206f,
+      0xfff9,
+      0xfffb,
+      0x110bd,
+      0x110cd,
+      0xe0001,
+      0x13430,
+      0x1343f,
+      0x1bca0,
+      0x1bca3,
+      0x1d173,
+      0x1d17a,
+      0xe0020,
+      0xe007f,
+    ];
+
+    for (const codepoint of forbiddenFormatControls) {
+      const invalid = {
+        ...decision(item, "approved"),
+        rationale: `reviewed${String.fromCodePoint(codepoint)}reason`,
+      };
+      expect(matchingReviewDecision(item, [invalid]), codepoint.toString(16)).toBeNull();
+    }
+
+    const neighboringVisibleCharacters = {
+      ...decision(item, "approved"),
+      rationale: "reviewed\u05ff\u0606\u088f\u0892\u200a\u2010\u2029\u202f\u2065\u2070\ufff8\ufffc reason",
+    };
+    expect(matchingReviewDecision(item, [neighboringVisibleCharacters]))
+      .toBe(neighboringVisibleCharacters);
   });
 
   it("summarizes actionable review progress without counting blocked candidates", () => {
@@ -249,19 +339,45 @@ describe("cloud review queue", () => {
       "reason-b",
       "bytes-desc",
     ).map((item) => item.relative_path)).toEqual(["b.pdf", "a.pdf"]);
+    expect(filterCloudReviewQueue(
+      [small, large, approved],
+      [decision(approved, "approved")],
+      "all",
+      "reason-a",
+      "bytes-desc",
+    ).map((item) => item.relative_path)).toEqual(["a.pdf"]);
   });
 
-  it("sorts equal values with a deterministic relative-path tie break", () => {
-    const later = candidate("b", 100, { relative_path: "z.pdf", production_time_ms: 500 });
-    const earlierB = candidate("c", 100, { relative_path: "b.pdf", production_time_ms: 100 });
-    const earlierA = candidate("a", 100, { relative_path: "a.pdf", production_time_ms: 100 });
-    expect(filterCloudReviewQueue(
-      [later, earlierB, earlierA],
-      [],
-      "all",
-      "",
-      "production-asc",
-    ).map((item) => item.relative_path)).toEqual(["a.pdf", "b.pdf", "z.pdf"]);
+  it("covers every deterministic sorting direction and tie breaker", () => {
+    const oldestA = candidate("a", 100, {
+      relative_path: "same.pdf",
+      metadata_fingerprint: "a".repeat(64),
+      production_time_ms: 100,
+    });
+    const oldestB = candidate("b", 100, {
+      relative_path: "same.pdf",
+      metadata_fingerprint: "b".repeat(64),
+      production_time_ms: 100,
+    });
+    const middle = candidate("m", 200, {
+      relative_path: "middle.pdf",
+      production_time_ms: 300,
+    });
+    const newest = candidate("z", 50, {
+      relative_path: "newest.pdf",
+      production_time_ms: 500,
+    });
+    const items = [oldestB, newest, middle, oldestA];
+
+    expect(filterCloudReviewQueue(items, [], "all", "", "bytes-desc")
+      .map((item) => item.metadata_fingerprint[0]))
+      .toEqual(["m", "a", "b", "z"]);
+    expect(filterCloudReviewQueue(items, [], "all", "", "production-asc")
+      .map((item) => item.metadata_fingerprint[0]))
+      .toEqual(["a", "b", "m", "z"]);
+    expect(filterCloudReviewQueue(items, [], "all", "", "production-desc")
+      .map((item) => item.metadata_fingerprint[0]))
+      .toEqual(["z", "m", "a", "b"]);
   });
 
   it("deduplicates and sorts review-reason options", () => {
@@ -269,6 +385,10 @@ describe("cloud review queue", () => {
       candidate("a", 1, { review_reasons: ["z", "a"] }),
       candidate("b", 1, { review_reasons: ["a", "m"] }),
     ])).toEqual(["a", "m", "z"]);
+    expect(cloudReviewReasons([
+      candidate("a", 1, { review_reasons: ["same"] }),
+      candidate("b", 1, { review_reasons: ["same"] }),
+    ])).toEqual(["same"]);
   });
 
   it("renders known decision reasons in plain Korean and preserves unknown evidence", () => {
@@ -280,7 +400,7 @@ describe("cloud review queue", () => {
       .toBe("future-review-reason");
   });
 
-  it("clamps pages and reports the visible range", () => {
+  it("clamps pages, normalizes fractional limits, and reports the visible range", () => {
     const items = Array.from({ length: 45 }, (_, index) => candidate(String(index), index));
     expect(cloudReviewQueuePage(items, 99, 20)).toMatchObject({
       page: 3,
@@ -288,6 +408,18 @@ describe("cloud review queue", () => {
       startIndex: 41,
       endIndex: 45,
       totalItems: 45,
+    });
+    expect(cloudReviewQueuePage(items, -4.8, 2.9)).toMatchObject({
+      page: 1,
+      totalPages: 23,
+      startIndex: 1,
+      endIndex: 2,
+    });
+    expect(cloudReviewQueuePage(items, 2, 0)).toMatchObject({
+      page: 2,
+      totalPages: 45,
+      startIndex: 2,
+      endIndex: 2,
     });
     expect(cloudReviewQueuePage([], 2, 20)).toEqual({
       items: [],

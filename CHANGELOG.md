@@ -8,6 +8,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Added the authoritative buyer-facing architecture contract for standalone and modular MSA deployment, trust and authorization boundaries, privacy-safe evidence, migration and rollback, exact-head release evidence, database naming, and acquisition diligence, with current APA 7th standards references and a deterministic documentation regression test.
+- Defined separate read-only and mutating-operation authority contracts with mandatory scope and fingerprint inputs, trusted UTC and monotonic clock handling, a uniform 15-minute authorization lifetime, and explicit fail-closed rejection states for expired, clock-invalid, scope-mismatched, and stale-plan execution attempts.
+- Separated the October 2023 W3C WCAG 2.2 Recommendation from ISO/IEC 40500:2025 in the standards record so publisher, publication date, and canonical URL remain attributable.
+- Expanded frontend coverage measurement to all production TypeScript modules under `src/lib` and `src/routes`, excluding only tests and declarations, while retaining 100% statement, branch, function, and line thresholds.
+- Bound both exact-head Test and release packaging entry points to `npm run coverage`; Tauri release builds inherit the coverage gate through the package build contract before bundle creation.
 - Require a fresh, exact, human-attributed approval and rationale for cloud copy-only and existing-copy adoption actions, with a 15-minute authorization lifetime bound to the candidate, destination, provider, account scope, and review fingerprint.
 - Return the candidate-specific cloud copy approval action, exact confirmation phrase, and maximum approval age from the Rust plan contract; the frontend only displays and submits that backend-authored phrase and fails closed when it is missing or does not match the candidate action.
 - Align the frontend toolchain on Vite 8.2 and `@sveltejs/vite-plugin-svelte` 7.2 so the declared peer dependency graph is installable and reproducible.
@@ -17,11 +22,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Made architecture evidence tests independent of the process working directory, verified linked evidence files actually exist, enforced heading and exact-head continuity, and retained the two-word `snake_case` database-object naming contract.
 - Hardened iCloud local-copy batch eviction with fresh per-item timestamps, deterministic planner/executor/recorder/clock seams, fail-closed immutable checkpoint handling, bounded manifest admission, symlink-safe control-path validation, and distinct operator diagnostics.
 - Restored the cloud-copy public documentation regression contract after a temporary repair path removed it, so CI continues to fail when the new Rust or TypeScript approval surfaces lose beginner-readable documentation.
 
 ### Security
 
+- Require explicit organization-tenant authority in both the frontend projection and durable Rust transfer gate when either the organization destination scope or the organization-sensitive review reason is present, preventing a missing, contradictory, or malformed candidate field from making cloud approval less restrictive; record the fail-closed decision, rollback boundary, realistic signal-matrix tests, and APA 7th references in `docs/architecture/cloud-review-tenant-authority.md`.
+- Separate runtime mutation authorization from repository merge and release authorization: runtime approvals bind exact operation scope, fingerprints, schema, and trusted-clock freshness, while exact repository-head evidence remains a CI and release gate and never becomes an operator credential.
 - Persist copy-approval provenance in immutable receipt lineage, reject stale, generic, mismatched, or tampered approvals, and retain explicit backward readability for pre-approval receipt formats.
 - Generate the npm lockfile in an exact-head validation job with repository contents read-only and dependency lifecycle scripts disabled, bind the artifact to SHA-256 evidence, and grant `contents: write` only to a separate publication job that verifies the same-run artifact and unchanged branch head before committing the lockfile.
 - Removed obsolete one-shot repair workflows and patch scripts so repository automation no longer retains dormant write-capable recovery paths.

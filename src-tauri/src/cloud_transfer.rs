@@ -409,7 +409,7 @@ fn candidate_blockers_for_action(
     let mut exact_review_approved = false;
     let organization_tenant_authority_required = candidate.destination_account_scope
         == CloudAccountScope::Organization
-        && candidate
+        || candidate
             .review_reasons
             .iter()
             .any(|reason| reason == ORGANIZATION_TENANT_AUTHORITY_REVIEW_REASON);
@@ -1900,7 +1900,7 @@ mod tests {
             CloudReviewDisposition::Approved,
             11,
             "human:local:reviewer",
-            "Metadata title, account scope, and destination reviewed.",
+            "[organization-tenant-authority-confirmed] Metadata title, account scope, and destination reviewed.",
         )
         .unwrap();
         assert!(candidate_blockers_with_review(&reviewed, &root(), Some(&approved)).is_empty());
@@ -1929,7 +1929,7 @@ mod tests {
         );
         assert_eq!(
             reviewed_lineage.review_rationale.as_deref(),
-            Some("Metadata title, account scope, and destination reviewed.")
+            Some("[organization-tenant-authority-confirmed] Metadata title, account scope, and destination reviewed.")
         );
 
         let mut organization_sensitive = reviewed.clone();
@@ -2010,7 +2010,7 @@ mod tests {
             CloudReviewDisposition::Approved,
             13,
             "human:local:reviewer",
-            "Filename date is auxiliary; destination and surrounding context were reviewed.",
+            "[organization-tenant-authority-confirmed] Filename date is auxiliary; destination and surrounding context were reviewed.",
         )
         .unwrap();
         assert!(
