@@ -94,6 +94,13 @@ describe("Tauri content security policy", () => {
     expect(doctoring).toContain("Content Security Policy Level 3");
     expect(doctoring).toContain("https://v2.tauri.app/security/csp/");
     expect(doctoring).toContain("https://vite.dev/config/server-options");
+    expect(doctoring).toContain(
+      "World Wide Web Consortium. (2026, July 29). *Content Security Policy Level 3*",
+    );
+    expect(doctoring).toContain(
+      "https://www.w3.org/TR/2026/WD-CSP3-20260729/",
+    );
+    expect(doctoring).not.toContain("WD-CSP3-20260505");
     expect(changelog).toContain(
       "Enable an explicit fail-closed Tauri Content Security Policy",
     );
