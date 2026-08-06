@@ -1,0 +1,108 @@
+name: PR 137 stale-test repair
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - docs/acquisition-architecture-contract
+    paths:
+      - .github/workflows/pr137-test-repair.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr137-test-repair-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out exact branch head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: docs/acquisition-architecture-contract
+          fetch-depth: 0
+
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Align stale tests with fail-closed tenant authority
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          replacements = {
+              Path("src-tauri/src/cloud_transfer.rs"): [
+                  (
+                      '"Metadata title, account scope, and destination reviewed."',
+                      '"[organization-tenant-authority-confirmed] Metadata title, account scope, and destination reviewed."',
+                      2,
+                  ),
+                  (
+                      '"Filename date is auxiliary; destination and surrounding context were reviewed."',
+                      '"[organization-tenant-authority-confirmed] Filename date is auxiliary; destination and surrounding context were reviewed."',
+                      1,
+                  ),
+              ],
+              Path("src-tauri/src/naruon_lineage.rs"): [
+                  (
+                      '"embedded metadata checked"',
+                      '"[organization-tenant-authority-confirmed] embedded metadata checked"',
+                      1,
+                  ),
+              ],
+          }
+
+          for path, path_replacements in replacements.items():
+              text = path.read_text(encoding="utf-8")
+              for old, new, expected_count in path_replacements:
+                  actual_count = text.count(old)
+                  if actual_count != expected_count:
+                      raise SystemExit(
+                          f"{path}: expected {expected_count} occurrences of {old!r}, found {actual_count}"
+                      )
+                  text = text.replace(old, new)
+              path.write_text(text, encoding="utf-8")
+
+          workflow = Path(".github/workflows/pr137-test-repair.yml")
+          if not workflow.is_file():
+              raise SystemExit("one-shot workflow source is missing")
+          workflow.unlink()
+          PY
+
+      - name: Format and verify exact repaired tree
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+          cargo test --manifest-path src-tauri/Cargo.toml --all-features operator_decision_clears_only_the_matching_review_gate
+          cargo test --manifest-path src-tauri/Cargo.toml --all-features export_accepts_real_attributed_copy_receipt
+          cargo test --manifest-path src-tauri/Cargo.toml --all-features
+          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+
+      - name: Commit verified stale-test repair
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse --abbrev-ref HEAD)" = "docs/acquisition-architecture-contract"
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src-tauri/src/cloud_transfer.rs src-tauri/src/naruon_lineage.rs .github/workflows/pr137-test-repair.yml
+          git diff --cached --quiet && { echo "No repair changes to commit."; exit 1; }
+          git commit -m "test(security): align organization approval fixtures"
+          git push origin HEAD:docs/acquisition-architecture-contract
