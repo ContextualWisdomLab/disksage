@@ -18,13 +18,14 @@ The authoritative implementation is `.github/workflows/release.yml`.
 
 The release contract requires all of the following:
 
+- checkout binds every platform build to `github.event.pull_request.head.sha` for pull requests and `github.sha` for tags or manual runs, rather than silently treating a generated pull-request merge ref as exact-head evidence;
 - the three platform builds upload the exact bundle and operational CLI paths that later jobs consume;
 - release workflow artifacts use the `release-disksage-*` namespace, which excludes concurrently uploaded `disksage-gpu-*` diagnostic bundles;
 - release publication is absent from the matrix build job, preventing any matrix member from publishing before the complete set exists;
 - the attestation and publication jobs run only for `refs/tags/`;
 - the attestation job depends on the complete build matrix;
 - Linux `.deb` and `.AppImage`, Windows `.msi` and NSIS `.exe`, and macOS `.dmg` bundles are present exactly once in their expected bundle paths;
-- all six platform-specific operational CLIs and their six `.sha256` files are present;
+- all six platform-specific operational CLIs and all six corresponding `.sha256` files are each present exactly once;
 - each checksum is verified before provenance generation;
 - `actions/download-artifact` is immutably pinned to commit `37930b1c2abaa49bbe596cd826c3c89aef350131`, the upstream `v7.0.0` tag commit;
 - `actions/attest` is immutably pinned to commit `59d89421af93a897026c735860bf21b6eb4f7b26`, the upstream `v4.1.0` tag commit;
@@ -80,15 +81,15 @@ Provenance is attached at the DiskSage release boundary and does not require `na
 
 ## APA 7th references
 
-GitHub. (2026). *Using artifact attestations to establish provenance for builds*. GitHub Docs. Retrieved August 6, 2026, from https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations
+GitHub. (n.d.). *Using artifact attestations to establish provenance for builds*. GitHub Docs. Retrieved August 6, 2026, from https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations
 
-GitHub. (2026). *Verifying attestations offline*. GitHub Docs. Retrieved August 6, 2026, from https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/verify-attestations-offline
+GitHub. (n.d.). *Verifying attestations offline*. GitHub Docs. Retrieved August 6, 2026, from https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/verify-attestations-offline
 
-in-toto Project. (2026). *in-toto attestation framework specification*. https://github.com/in-toto/attestation/blob/main/spec/README.md
+in-toto Project. (n.d.). *in-toto attestation framework specification (Version 1.2)*. GitHub. Retrieved August 6, 2026, from https://github.com/in-toto/attestation/blob/v1.2.0/spec/README.md
 
-Supply-chain Levels for Software Artifacts. (2026). *SLSA specification (Version 1.2)*. The Linux Foundation. https://slsa.dev/spec/v1.2/
+Supply-chain Levels for Software Artifacts. (n.d.). *SLSA specification (Version 1.2)*. The Linux Foundation. Retrieved August 6, 2026, from https://slsa.dev/spec/v1.2/
 
-Supply-chain Levels for Software Artifacts. (2026). *Build: Verifying artifacts (Version 1.2)*. The Linux Foundation. https://slsa.dev/spec/v1.2/verifying-artifacts
+Supply-chain Levels for Software Artifacts. (n.d.). *Build: Verifying artifacts (Version 1.2)*. The Linux Foundation. Retrieved August 6, 2026, from https://slsa.dev/spec/v1.2/verifying-artifacts
 
 ## Reference verification note
 
