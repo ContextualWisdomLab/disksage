@@ -3,11 +3,13 @@
 //! DiskSage treats an on-device model as executable product supply-chain input.
 //! The trusted model specification therefore binds an immutable upstream revision,
 //! expected byte length, and SHA-256 digest. Downloads are streamed into a
-//! create-new sibling staging file, verified, and only then linked into the final
-//! destination without replacing an existing file.
+//! create-new sibling staging file, verified, identity-bound to the open file
+//! handle, and only then linked into the final destination without replacing an
+//! existing file.
 
+use same_file::Handle;
 use sha2::{Digest, Sha256};
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -81,10 +83,12 @@ pub fn verify_sha256(bytes: &[u8], expected_hex: &str) -> bool {
 /// must exactly match the trusted specification before any file is created.
 ///
 /// The destination is never overwritten. A sibling `<filename>.part` file is
-/// created with create-new semantics, removed on validation or I/O failure, and
-/// promoted with a no-clobber hard link only after exact byte-count, SHA-256, flush,
-/// and durable file-sync checks pass. Returned errors are stable codes and do not
-/// expose local paths, HTTP response bodies, or dynamic network diagnostics.
+/// created with create-new semantics, removed on validation or I/O failure only
+/// while its pathname still identifies DiskSage's open file, and promoted with a
+/// no-clobber hard link only after exact byte-count, SHA-256, flush, durable
+/// file-sync, and source/destination identity checks pass. Returned errors are
+/// stable codes and do not expose local paths, HTTP response bodies, or dynamic
+/// network diagnostics.
 pub fn download_to(spec: &ModelSpec, dest: &Path) -> Result<(), String> {
     validate_model_spec(spec)?;
     let mut response = ureq::get(spec.url)
@@ -137,9 +141,38 @@ fn staging_path(dest: &Path) -> Result<PathBuf, String> {
     Ok(dest.with_file_name(staging_name))
 }
 
-/// Remove a staging file after an unsuccessful installation attempt.
-fn cleanup_staging(path: &Path) {
-    let _ = fs::remove_file(path);
+/// Open an identity handle only for a regular file, never for a symlink alias.
+fn regular_file_handle(path: &Path) -> Option<Handle> {
+    let metadata = fs::symlink_metadata(path).ok()?;
+    if !metadata.file_type().is_file() {
+        return None;
+    }
+    Handle::from_path(path).ok()
+}
+
+/// Return `true` only when a regular-file pathname still names `expected`.
+fn path_matches_handle(path: &Path, expected: &Handle) -> bool {
+    regular_file_handle(path)
+        .map(|current| current.eq(expected))
+        .unwrap_or(false)
+}
+
+/// Remove `path` only when it still identifies the file owned by DiskSage.
+fn cleanup_owned_path(path: &Path, expected: &Handle) {
+    if path_matches_handle(path, expected) {
+        let _ = fs::remove_file(path);
+    }
+}
+
+/// Derive current identity from an open file before cleaning its pathname.
+fn cleanup_open_file_path(path: &Path, file: &File) {
+    let Ok(cloned_file) = file.try_clone() else {
+        return;
+    };
+    let Ok(expected) = Handle::from_file(cloned_file) else {
+        return;
+    };
+    cleanup_owned_path(path, &expected);
 }
 
 /// Stream trusted model bytes into a create-new staging file and promote them safely.
@@ -164,7 +197,7 @@ fn install_verified_reader<R: Read>(
         .open(&staging)
         .map_err(|_| ERROR_STAGING_CREATE.to_string())?;
 
-    let result = (|| {
+    let verified_identity = match (|| {
         let mut hasher = Sha256::new();
         let mut observed_bytes = 0_u64;
         let mut buffer = [0_u8; MODEL_STREAM_BUFFER_BYTES];
@@ -206,18 +239,52 @@ fn install_verified_reader<R: Read>(
         output
             .sync_all()
             .map_err(|_| ERROR_STAGING_SYNC.to_string())?;
-        drop(output);
+        let cloned_file = output
+            .try_clone()
+            .map_err(|_| ERROR_FINALIZE.to_string())?;
+        Handle::from_file(cloned_file).map_err(|_| ERROR_FINALIZE.to_string())
+    })() {
+        Ok(identity) => identity,
+        Err(error) => {
+            cleanup_open_file_path(&staging, &output);
+            return Err(error);
+        }
+    };
+
+    let result = (|| {
+        if !path_matches_handle(&staging, &verified_identity) {
+            return Err(ERROR_FINALIZE.to_string());
+        }
 
         fs::hard_link(&staging, dest).map_err(|_| ERROR_FINALIZE.to_string())?;
+        let destination_identity = match regular_file_handle(dest) {
+            Some(identity) => identity,
+            None => {
+                let _ = fs::remove_file(dest);
+                return Err(ERROR_FINALIZE.to_string());
+            }
+        };
+        if !destination_identity.eq(&verified_identity) {
+            cleanup_owned_path(dest, &destination_identity);
+            return Err(ERROR_FINALIZE.to_string());
+        }
+
+        if !path_matches_handle(&staging, &verified_identity) {
+            cleanup_owned_path(dest, &verified_identity);
+            return Err(ERROR_FINALIZE.to_string());
+        }
         if fs::remove_file(&staging).is_err() {
-            let _ = fs::remove_file(dest);
+            cleanup_owned_path(dest, &verified_identity);
+            return Err(ERROR_FINALIZE.to_string());
+        }
+        if !path_matches_handle(dest, &verified_identity) {
             return Err(ERROR_FINALIZE.to_string());
         }
         Ok(())
     })();
 
     if result.is_err() {
-        cleanup_staging(&staging);
+        cleanup_owned_path(&staging, &verified_identity);
     }
     result
 }
@@ -356,6 +423,46 @@ mod tests {
             PathBuf::from("/tmp/model.gguf.part")
         );
         assert_eq!(staging_path(Path::new("/")).unwrap_err(), ERROR_STAGING_CREATE);
+    }
+
+    #[test]
+    fn identity_aware_cleanup_is_idempotent_and_preserves_unowned_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let owned = directory.path().join("owned.gguf.part");
+        let unowned = directory.path().join("unowned.gguf.part");
+        let missing = directory.path().join("missing.gguf.part");
+        fs::write(&owned, b"owned").unwrap();
+        fs::write(&unowned, b"unowned").unwrap();
+        let owned_identity = regular_file_handle(&owned).unwrap();
+
+        assert!(path_matches_handle(&owned, &owned_identity));
+        assert!(!path_matches_handle(&unowned, &owned_identity));
+        assert!(!path_matches_handle(&missing, &owned_identity));
+
+        cleanup_owned_path(&unowned, &owned_identity);
+        cleanup_owned_path(&missing, &owned_identity);
+        cleanup_owned_path(&owned, &owned_identity);
+        cleanup_owned_path(&owned, &owned_identity);
+
+        assert_eq!(fs::read(&unowned).unwrap(), b"unowned");
+        assert!(!owned.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pathname_identity_rejects_symlink_aliases() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let owned = directory.path().join("owned.gguf.part");
+        let alias = directory.path().join("alias.gguf.part");
+        fs::write(&owned, b"owned").unwrap();
+        symlink(&owned, &alias).unwrap();
+        let owned_identity = regular_file_handle(&owned).unwrap();
+
+        assert!(!path_matches_handle(&alias, &owned_identity));
+        cleanup_owned_path(&alias, &owned_identity);
+        assert!(fs::symlink_metadata(&alias).unwrap().file_type().is_symlink());
     }
 
     #[test]
@@ -514,16 +621,6 @@ mod tests {
             download_to(&invalid, &dest),
             Err(ERROR_INVALID_SPEC.to_string())
         );
-    }
-
-    #[test]
-    fn cleanup_staging_is_idempotent() {
-        let dir = tempfile::tempdir().unwrap();
-        let staging = dir.path().join("fixture.gguf.part");
-        fs::write(&staging, b"temporary").unwrap();
-        cleanup_staging(&staging);
-        cleanup_staging(&staging);
-        assert!(!staging.exists());
     }
 
     #[test]
