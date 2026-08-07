@@ -29,6 +29,7 @@ mod tests {
     use super::*;
     use std::fs;
     use std::io::{self, Cursor};
+    use std::path::PathBuf;
 
     const FIXTURE_PAYLOAD: &[u8] = b"deterministic-model-fixture";
     const FIXTURE_SHA256: &str =
@@ -44,6 +45,14 @@ mod tests {
             sha256_hex: digest,
             bytes: FIXTURE_PAYLOAD.len() as u64,
         }
+    }
+
+    /// Resolve one source-controlled path from the Cargo manifest directory.
+    fn repository_path(relative_path: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("src-tauri must have a repository parent")
+            .join(relative_path)
     }
 
     /// Reader that emits fixture bytes once and then fails deterministically.
@@ -149,9 +158,56 @@ mod tests {
         assert_eq!(
             verify_reader(
                 &fixture_spec(FIXTURE_SHA256),
-                Cursor::new(b"xxxxxxxxxxxxxxxxxxxxxxxxxxx")
+                Cursor::new(b"deterministic-model-fixturf")
             ),
             Err(ERROR_DIGEST_MISMATCH.to_string())
         );
+    }
+
+    #[test]
+    fn engine_requires_verified_default_model_before_llama_initialization() {
+        let engine = fs::read_to_string(repository_path("src-tauri/src/llm/engine.rs")).unwrap();
+        let verifier = "super::installed_model::verify_installed_model(&super::model::DEFAULT, model_path)?;";
+        let verifier_index = engine
+            .find(verifier)
+            .expect("LlamaEngine::new must verify the pinned default model first");
+        let backend_index = engine
+            .find("LlamaBackend::init()")
+            .expect("engine must initialize llama backend");
+        let load_index = engine
+            .find("LlamaModel::load_from_file")
+            .expect("engine must load llama model");
+
+        assert!(verifier_index < backend_index);
+        assert!(verifier_index < load_index);
+        assert_eq!(engine.matches("verify_installed_model(").count(), 1);
+    }
+
+    #[test]
+    fn installed_model_documentation_is_durable() {
+        let doctoring = fs::read_to_string(repository_path(
+            "docs/doctoring/model-artifact-integrity.md",
+        ))
+        .unwrap();
+        let changelog = fs::read_to_string(repository_path("CHANGELOG.md")).unwrap();
+
+        for required in [
+            "## Load-time verification boundary",
+            "file existence is not integrity evidence",
+            "64 KiB",
+            ERROR_UNAVAILABLE,
+            ERROR_NOT_REGULAR,
+            ERROR_SIZE_MISMATCH,
+            ERROR_READ_FAILED,
+            ERROR_DIGEST_MISMATCH,
+            "no model bytes or local paths become shareable evidence",
+            "## Rollback and migration",
+        ] {
+            assert!(
+                doctoring.contains(required),
+                "doctoring must retain load-time integrity evidence: {required}"
+            );
+        }
+        assert!(changelog.contains("verify the installed GGUF again before llama.cpp initialization"));
     }
 }
