@@ -14,6 +14,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Declare the supported Node.js runtime floor as Node.js 20.19 or Node.js 22.12 and later, matching Vite 8 requirements.
 - Pin the primary test workflow to Node.js 20.19.0 so the minimum supported runtime is continuously verified.
 - Document the iCloud batch operation's local-only versus path-free shareable evidence boundary and map its fail-closed controls to NIST SP 800-53 Release 5.2.0, ISO/IEC 27040:2024, and primary secure-design literature with APA 7th references and deterministic documentation contract tests.
+- Refresh the Tauri CSP standards evidence to the current July 29, 2026 W3C Content Security Policy Level 3 Working Draft and regression-test its exact publication URL so future doctoring cannot silently drift back to an older draft.
 
 ### Fixed
 
@@ -22,6 +23,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Security
 
+- Enable an explicit fail-closed Tauri Content Security Policy to keep executable scripts and fonts local, grant production network authority only to the Tauri IPC transport, confine Vite WebSocket HMR to a separate development-only CSP, deny object/frame/base-URI authority, deny form submissions with explicit `form-action 'none'`, deny unused worker, media, and web-app-manifest fetch authority with explicit `'none'` directives, and regression-test against null, wildcard, remote-script/style, eval, and development-authority leakage.
 - Persist copy-approval provenance in immutable receipt lineage, reject stale, generic, mismatched, or tampered approvals, and retain explicit backward readability for pre-approval receipt formats.
 - Generate the npm lockfile in an exact-head validation job with repository contents read-only and dependency lifecycle scripts disabled, bind the artifact to SHA-256 evidence, and grant `contents: write` only to a separate publication job that verifies the same-run artifact and unchanged branch head before committing the lockfile.
 - Removed obsolete one-shot repair workflows and patch scripts so repository automation no longer retains dormant write-capable recovery paths.
