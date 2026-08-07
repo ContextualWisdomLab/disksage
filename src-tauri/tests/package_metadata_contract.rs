@@ -6,12 +6,72 @@
 //! refuse accidental registry publication.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 /// Reads the authoritative Cargo manifest from the crate root without depending on process CWD.
 fn cargo_manifest() -> String {
     let manifest_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
     fs::read_to_string(manifest_path).expect("Cargo.toml must be readable for metadata validation")
+}
+
+/// Asks Cargo to parse one manifest and returns its registry-publication policy.
+///
+/// Cargo's versioned metadata format represents unrestricted publication as `null`, complete
+/// publication refusal (`publish = false`) as an empty array, and an allowlist as a non-empty
+/// array. Consulting Cargo itself prevents comments, strings, or unrelated TOML tables from
+/// masquerading as the authoritative `[package].publish` value.
+fn cargo_publish_policy(manifest_path: &Path) -> Option<Vec<String>> {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let output = Command::new(cargo)
+        .arg("metadata")
+        .arg("--format-version")
+        .arg("1")
+        .arg("--no-deps")
+        .arg("--manifest-path")
+        .arg(manifest_path)
+        .env("CARGO_TERM_COLOR", "never")
+        .output()
+        .expect("cargo metadata must execute for publication-policy validation");
+
+    assert!(
+        output.status.success(),
+        "cargo metadata must parse the manifest successfully: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("cargo metadata must emit valid JSON format version 1");
+    let canonical_manifest = fs::canonicalize(manifest_path)
+        .expect("manifest path must canonicalize for exact package selection");
+    let packages = metadata["packages"]
+        .as_array()
+        .expect("cargo metadata packages must be an array");
+    let package = packages
+        .iter()
+        .find(|package| {
+            package["manifest_path"]
+                .as_str()
+                .map(PathBuf::from)
+                .is_some_and(|path| path == canonical_manifest)
+        })
+        .expect("cargo metadata must contain the package for the requested manifest");
+
+    match &package["publish"] {
+        serde_json::Value::Null => None,
+        serde_json::Value::Array(registries) => Some(
+            registries
+                .iter()
+                .map(|registry| {
+                    registry
+                        .as_str()
+                        .expect("Cargo publication allowlist entries must be strings")
+                        .to_owned()
+                })
+                .collect(),
+        ),
+        unexpected => panic!("Cargo publication metadata has unexpected shape: {unexpected}"),
+    }
 }
 
 #[test]
