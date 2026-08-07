@@ -1,9 +1,17 @@
 //! Load-time integrity verification for the installed on-device model artifact.
+//!
+//! Download-time admission and load-time trust are deliberately separate. A file
+//! that was once downloaded correctly can later be replaced, truncated, or
+//! redirected. This module re-opens the local artifact read-only and proves that
+//! its current regular-file bytes still match the immutable model specification.
 
 use super::model::ModelSpec;
+use sha2::{Digest, Sha256};
+use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
+const MODEL_READ_BUFFER_BYTES: usize = 64 * 1024;
 const ERROR_UNAVAILABLE: &str = "model-installed-unavailable";
 const ERROR_NOT_REGULAR: &str = "model-installed-not-regular";
 const ERROR_SIZE_MISMATCH: &str = "model-installed-size-mismatch";
@@ -12,15 +20,64 @@ const ERROR_DIGEST_MISMATCH: &str = "model-installed-digest-mismatch";
 
 /// Verify that an installed model file is the exact artifact named by `spec`.
 ///
-/// The verifier returns only stable, path-free error codes so callers can
-/// explain a refusal without exposing local filesystem details. The initial
-/// test-first placeholder is intentionally incomplete and must not ship.
-pub(crate) fn verify_installed_model(_spec: &ModelSpec, _path: &Path) -> Result<(), String> {
-    Ok(())
+/// This is the load-time gate used before llama.cpp initialization. The path is
+/// inspected without following symbolic links, directories and other non-regular
+/// objects are rejected, and the opened file handle must report the exact trusted
+/// byte length before any model bytes are hashed. SHA-256 is then recomputed using
+/// a fixed 64 KiB buffer. Failures return stable path-free error codes and never
+/// include local paths, operating-system diagnostics, or model bytes.
+pub(crate) fn verify_installed_model(spec: &ModelSpec, path: &Path) -> Result<(), String> {
+    let path_metadata = std::fs::symlink_metadata(path)
+        .map_err(|_| ERROR_UNAVAILABLE.to_string())?;
+    if path_metadata.file_type().is_symlink() || !path_metadata.is_file() {
+        return Err(ERROR_NOT_REGULAR.to_string());
+    }
+
+    let file = File::open(path).map_err(|_| ERROR_READ_FAILED.to_string())?;
+    let handle_metadata = file.metadata().map_err(|_| ERROR_READ_FAILED.to_string())?;
+    if !handle_metadata.is_file() {
+        return Err(ERROR_NOT_REGULAR.to_string());
+    }
+    if handle_metadata.len() != spec.bytes {
+        return Err(ERROR_SIZE_MISMATCH.to_string());
+    }
+
+    verify_reader(spec, file)
 }
 
-/// Verify bytes already admitted as a regular file by the path boundary.
-fn verify_reader<R: Read>(_spec: &ModelSpec, _reader: R) -> Result<(), String> {
+/// Verify the exact byte count and SHA-256 digest from an already-open reader.
+fn verify_reader<R: Read>(spec: &ModelSpec, mut reader: R) -> Result<(), String> {
+    let mut hasher = Sha256::new();
+    let mut observed_bytes = 0_u64;
+    let mut buffer = [0_u8; MODEL_READ_BUFFER_BYTES];
+
+    loop {
+        let count = reader
+            .read(&mut buffer)
+            .map_err(|_| ERROR_READ_FAILED.to_string())?;
+        if count == 0 {
+            break;
+        }
+        observed_bytes = observed_bytes
+            .checked_add(count as u64)
+            .ok_or_else(|| ERROR_SIZE_MISMATCH.to_string())?;
+        if observed_bytes > spec.bytes {
+            return Err(ERROR_SIZE_MISMATCH.to_string());
+        }
+        hasher.update(&buffer[..count]);
+    }
+
+    if observed_bytes != spec.bytes {
+        return Err(ERROR_SIZE_MISMATCH.to_string());
+    }
+    let observed_digest: String = hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    if !observed_digest.eq_ignore_ascii_case(spec.sha256_hex) {
+        return Err(ERROR_DIGEST_MISMATCH.to_string());
+    }
     Ok(())
 }
 
@@ -68,6 +125,23 @@ mod tests {
             self.sent = true;
             let count = FIXTURE_PAYLOAD.len().min(buffer.len());
             buffer[..count].copy_from_slice(&FIXTURE_PAYLOAD[..count]);
+            Ok(count)
+        }
+    }
+
+    /// Reader that emits more bytes than the trusted size without allocating a large fixture.
+    struct RepeatingReader {
+        remaining: usize,
+    }
+
+    impl Read for RepeatingReader {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            if self.remaining == 0 {
+                return Ok(0);
+            }
+            let count = self.remaining.min(buffer.len());
+            buffer[..count].fill(b'x');
+            self.remaining -= count;
             Ok(count)
         }
     }
@@ -121,7 +195,7 @@ mod tests {
                 ERROR_SIZE_MISMATCH,
             ),
             (b"deterministic-model-fixture-extra", ERROR_SIZE_MISMATCH),
-            (b"xxxxxxxxxxxxxxxxxxxxxxxxxxx", ERROR_DIGEST_MISMATCH),
+            (b"deterministic-model-fixturf", ERROR_DIGEST_MISMATCH),
         ];
 
         for (index, (bytes, expected)) in cases.into_iter().enumerate() {
@@ -152,6 +226,15 @@ mod tests {
             verify_reader(
                 &fixture_spec(FIXTURE_SHA256),
                 Cursor::new(&FIXTURE_PAYLOAD[..FIXTURE_PAYLOAD.len() - 1])
+            ),
+            Err(ERROR_SIZE_MISMATCH.to_string())
+        );
+        assert_eq!(
+            verify_reader(
+                &fixture_spec(FIXTURE_SHA256),
+                RepeatingReader {
+                    remaining: FIXTURE_PAYLOAD.len() + 1,
+                }
             ),
             Err(ERROR_SIZE_MISMATCH.to_string())
         );
@@ -208,6 +291,8 @@ mod tests {
                 "doctoring must retain load-time integrity evidence: {required}"
             );
         }
-        assert!(changelog.contains("verify the installed GGUF again before llama.cpp initialization"));
+        assert!(
+            changelog.contains("verify the installed GGUF again before llama.cpp initialization")
+        );
     }
 }
