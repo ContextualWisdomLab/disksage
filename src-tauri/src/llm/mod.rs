@@ -3,6 +3,8 @@ mod cache;
 #[cfg(all(not(coverage), feature = "llm-engine"))]
 mod engine;
 mod model;
+#[cfg(test)]
+mod model_concurrency_tests;
 mod parse;
 mod prompt;
 mod verdict;
@@ -14,11 +16,7 @@ pub use cache::VerdictCache;
 #[cfg(all(not(coverage), feature = "llm-engine"))]
 pub use engine::LlamaEngine;
 #[cfg_attr(coverage, allow(unused_imports))]
-pub use model::{verify_sha256, ModelSpec, DEFAULT};
-// commands.rs의 download_model 래퍼가 필요로 하는 다운로드 fn — model 모듈 자체는 private이라 재-export로만 노출.
-// download_to는 네트워크 io라 coverage 빌드에서 이미 제외돼 있으므로(model.rs) 이 재-export도 동일하게 게이트.
-#[cfg(not(coverage))]
-pub use model::download_to;
+pub use model::{download_to, verify_sha256, ModelSpec, DEFAULT};
 #[cfg_attr(coverage, allow(unused_imports))]
 pub use parse::{parse_class_pick, parse_ext_reasoning, parse_summary, parse_verdict, parse_verdict_full};
 #[cfg_attr(coverage, allow(unused_imports))]
