@@ -211,7 +211,6 @@ where
             }
         };
         if !destination_identity.eq(verified_identity) {
-            cleanup_owned_path(dest, &destination_identity);
             return Err(ERROR_FINALIZE.to_string());
         }
         after_destination_binding();
