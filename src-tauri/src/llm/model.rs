@@ -175,6 +175,67 @@ fn cleanup_open_file_path(path: &Path, file: &File) {
     cleanup_owned_path(path, &expected);
 }
 
+/// Finalize a verified staging file while exposing deterministic race seams to tests.
+///
+/// Production passes no-op hooks. The hooks exist so concurrency regressions can
+/// mutate pathnames at exact boundaries without sleeps or probabilistic scheduling.
+/// Every cleanup is identity-bound: foreign replacements are preserved unless the
+/// path still identifies the exact file DiskSage observed for that cleanup action.
+pub(super) fn finalize_verified_staging_with_hooks<F1, F2, F3>(
+    staging: &Path,
+    dest: &Path,
+    verified_identity: &Handle,
+    after_staging_preflight: F1,
+    after_link_creation: F2,
+    after_destination_binding: F3,
+) -> Result<(), String>
+where
+    F1: FnOnce(),
+    F2: FnOnce(),
+    F3: FnOnce(),
+{
+    let result = (|| {
+        if !path_matches_handle(staging, verified_identity) {
+            return Err(ERROR_FINALIZE.to_string());
+        }
+        after_staging_preflight();
+
+        fs::hard_link(staging, dest).map_err(|_| ERROR_FINALIZE.to_string())?;
+        after_link_creation();
+
+        let destination_identity = match regular_file_handle(dest) {
+            Some(identity) => identity,
+            None => {
+                cleanup_owned_path(dest, verified_identity);
+                return Err(ERROR_FINALIZE.to_string());
+            }
+        };
+        if !destination_identity.eq(verified_identity) {
+            cleanup_owned_path(dest, &destination_identity);
+            return Err(ERROR_FINALIZE.to_string());
+        }
+        after_destination_binding();
+
+        if !path_matches_handle(staging, verified_identity) {
+            cleanup_owned_path(dest, verified_identity);
+            return Err(ERROR_FINALIZE.to_string());
+        }
+        if fs::remove_file(staging).is_err() {
+            cleanup_owned_path(dest, verified_identity);
+            return Err(ERROR_FINALIZE.to_string());
+        }
+        if !path_matches_handle(dest, verified_identity) {
+            return Err(ERROR_FINALIZE.to_string());
+        }
+        Ok(())
+    })();
+
+    if result.is_err() {
+        cleanup_owned_path(staging, verified_identity);
+    }
+    result
+}
+
 /// Stream trusted model bytes into a create-new staging file and promote them safely.
 fn install_verified_reader<R: Read>(
     spec: &ModelSpec,
@@ -251,42 +312,14 @@ fn install_verified_reader<R: Read>(
         }
     };
 
-    let result = (|| {
-        if !path_matches_handle(&staging, &verified_identity) {
-            return Err(ERROR_FINALIZE.to_string());
-        }
-
-        fs::hard_link(&staging, dest).map_err(|_| ERROR_FINALIZE.to_string())?;
-        let destination_identity = match regular_file_handle(dest) {
-            Some(identity) => identity,
-            None => {
-                let _ = fs::remove_file(dest);
-                return Err(ERROR_FINALIZE.to_string());
-            }
-        };
-        if !destination_identity.eq(&verified_identity) {
-            cleanup_owned_path(dest, &destination_identity);
-            return Err(ERROR_FINALIZE.to_string());
-        }
-
-        if !path_matches_handle(&staging, &verified_identity) {
-            cleanup_owned_path(dest, &verified_identity);
-            return Err(ERROR_FINALIZE.to_string());
-        }
-        if fs::remove_file(&staging).is_err() {
-            cleanup_owned_path(dest, &verified_identity);
-            return Err(ERROR_FINALIZE.to_string());
-        }
-        if !path_matches_handle(dest, &verified_identity) {
-            return Err(ERROR_FINALIZE.to_string());
-        }
-        Ok(())
-    })();
-
-    if result.is_err() {
-        cleanup_owned_path(&staging, &verified_identity);
-    }
-    result
+    finalize_verified_staging_with_hooks(
+        &staging,
+        dest,
+        &verified_identity,
+        || {},
+        || {},
+        || {},
+    )
 }
 
 #[cfg(test)]
