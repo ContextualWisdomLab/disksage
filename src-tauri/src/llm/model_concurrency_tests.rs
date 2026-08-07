@@ -42,6 +42,27 @@ fn verified_fixture(path: &Path) -> (File, Handle) {
     (file, identity)
 }
 
+/// Start a one-shot loopback server that serves the exact fixture payload.
+fn exact_fixture_server() -> (&'static str, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let url = Box::leak(format!("http://{address}/model.gguf").into_boxed_str());
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0_u8; 2048];
+        let _ = stream.read(&mut request).unwrap();
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            FIXTURE_PAYLOAD.len()
+        )
+        .unwrap();
+        stream.write_all(FIXTURE_PAYLOAD).unwrap();
+        stream.flush().unwrap();
+    });
+    (url, server)
+}
+
 #[test]
 fn concurrent_destination_creation_is_preserved_and_never_replaced() {
     let directory = tempfile::tempdir().unwrap();
@@ -356,4 +377,32 @@ fn same_inode_staging_truncation_is_rejected() {
     assert_eq!(result, Err("model-finalize-failed".to_string()));
     assert!(!destination.exists());
     assert!(!staging.exists());
+}
+
+/// A foreign `.part` pathname must never become installer authority or be modified.
+///
+/// This is intentionally RED while production still uses a named sibling staging
+/// file: the hardened design must stage through an unnamed file owned only by its
+/// open handle, install the verified model, and leave the unrelated `.part` bytes
+/// untouched.
+#[test]
+fn foreign_part_path_is_not_an_installer_authority_boundary() {
+    let directory = tempfile::tempdir().unwrap();
+    let destination = directory.path().join("fixture.gguf");
+    let foreign_part = staging_path(&destination);
+    fs::write(&foreign_part, b"foreign-owner").unwrap();
+    let (url, server) = exact_fixture_server();
+    let spec = ModelSpec {
+        name: "fixture-model",
+        url,
+        sha256_hex: FIXTURE_SHA256,
+        bytes: FIXTURE_PAYLOAD.len() as u64,
+    };
+
+    let result = download_to(&spec, &destination);
+    server.join().unwrap();
+
+    assert_eq!(result, Ok(()));
+    assert_eq!(fs::read(&destination).unwrap(), FIXTURE_PAYLOAD);
+    assert_eq!(fs::read(&foreign_part).unwrap(), b"foreign-owner");
 }
