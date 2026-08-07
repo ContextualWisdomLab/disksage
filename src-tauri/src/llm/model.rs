@@ -64,7 +64,11 @@ pub const DEFAULT: ModelSpec = ModelSpec {
 pub fn verify_sha256(bytes: &[u8], expected_hex: &str) -> bool {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
-    let observed = format!("{:x}", hasher.finalize());
+    let observed: String = hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
     observed.eq_ignore_ascii_case(expected_hex)
 }
 
@@ -83,7 +87,9 @@ pub fn verify_sha256(bytes: &[u8], expected_hex: &str) -> bool {
 /// expose local paths, HTTP response bodies, or dynamic network diagnostics.
 pub fn download_to(spec: &ModelSpec, dest: &Path) -> Result<(), String> {
     validate_model_spec(spec)?;
-    let mut response = ureq::get(spec.url).call().map_err(|_| ERROR_NETWORK.to_string())?;
+    let mut response = ureq::get(spec.url)
+        .call()
+        .map_err(|_| ERROR_NETWORK.to_string())?;
     if let Some(content_length) = response.body().content_length() {
         if content_length != spec.bytes {
             return Err(ERROR_SIZE_MISMATCH.to_string());
@@ -185,7 +191,11 @@ fn install_verified_reader<R: Read>(
         if observed_bytes != spec.bytes {
             return Err(ERROR_SIZE_MISMATCH.to_string());
         }
-        let observed_digest = format!("{:x}", hasher.finalize());
+        let observed_digest: String = hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
         if !observed_digest.eq_ignore_ascii_case(spec.sha256_hex) {
             return Err(ERROR_DIGEST_MISMATCH.to_string());
         }
@@ -314,16 +324,28 @@ mod tests {
 
         for invalid in [
             ModelSpec { name: " ", ..good },
-            ModelSpec { url: "http://example.invalid/model.gguf", ..good },
-            ModelSpec { sha256_hex: "abcd", ..good },
+            ModelSpec {
+                url: "http://example.invalid/model.gguf",
+                ..good
+            },
+            ModelSpec {
+                sha256_hex: "abcd",
+                ..good
+            },
             ModelSpec {
                 sha256_hex: "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
                 ..good
             },
             ModelSpec { bytes: 0, ..good },
-            ModelSpec { bytes: u64::MAX, ..good },
+            ModelSpec {
+                bytes: u64::MAX,
+                ..good
+            },
         ] {
-            assert_eq!(validate_model_spec(&invalid), Err(ERROR_INVALID_SPEC.to_string()));
+            assert_eq!(
+                validate_model_spec(&invalid),
+                Err(ERROR_INVALID_SPEC.to_string())
+            );
         }
     }
 
@@ -333,10 +355,7 @@ mod tests {
             staging_path(Path::new("/tmp/model.gguf")).unwrap(),
             PathBuf::from("/tmp/model.gguf.part")
         );
-        assert_eq!(
-            staging_path(Path::new("/")).unwrap_err(),
-            ERROR_STAGING_CREATE
-        );
+        assert_eq!(staging_path(Path::new("/")).unwrap_err(), ERROR_STAGING_CREATE);
     }
 
     #[test]
@@ -355,7 +374,10 @@ mod tests {
     fn verified_stream_install_rejects_short_long_and_wrong_digest_inputs() {
         let spec = fixture_spec("https://example.invalid/model.gguf");
         let cases: [(&[u8], &str); 3] = [
-            (&FIXTURE_PAYLOAD[..FIXTURE_PAYLOAD.len() - 1], ERROR_SIZE_MISMATCH),
+            (
+                &FIXTURE_PAYLOAD[..FIXTURE_PAYLOAD.len() - 1],
+                ERROR_SIZE_MISMATCH,
+            ),
             (b"deterministic-model-fixture-extra", ERROR_SIZE_MISMATCH),
             (b"xxxxxxxxxxxxxxxxxxxxxxxxxxx", ERROR_DIGEST_MISMATCH),
         ];
@@ -457,7 +479,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("downloaded.gguf");
 
-        assert_eq!(download_to(&spec, &dest), Err(ERROR_SIZE_MISMATCH.to_string()));
+        assert_eq!(
+            download_to(&spec, &dest),
+            Err(ERROR_SIZE_MISMATCH.to_string())
+        );
         server.join().unwrap();
         assert!(!dest.exists());
         assert!(!staging_path(&dest).unwrap().exists());
@@ -485,7 +510,10 @@ mod tests {
         };
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("downloaded.gguf");
-        assert_eq!(download_to(&invalid, &dest), Err(ERROR_INVALID_SPEC.to_string()));
+        assert_eq!(
+            download_to(&invalid, &dest),
+            Err(ERROR_INVALID_SPEC.to_string())
+        );
     }
 
     #[test]
