@@ -2,7 +2,7 @@
 
 ## Decision
 
-DiskSage treats its downloadable on-device GGUF model as executable product supply-chain input. A model may be obtained from an upstream service, but it does not become trusted merely because the transport succeeded or because the upstream repository is trusted. The production registry therefore binds the default model to an immutable Hugging Face revision, an exact byte count, and a SHA-256 digest, and the installer independently verifies all three relevant local conditions before the artifact is exposed at the final model path.
+DiskSage treats its downloadable on-device GGUF model as executable product supply-chain input. A model may be obtained from an upstream service, but it does not become trusted merely because the transport succeeded or because the upstream repository is trusted. The production registry therefore binds the default model to an immutable Hugging Face revision, an exact byte count, and a SHA-256 digest. The installer validates the streamed staging bytes, then revalidates the exact bytes copied from the still-open verified staging handle before it returns installation success.
 
 The authoritative production implementation is `src-tauri/src/llm/model.rs`. The bounded installer is deliberately part of the normal Rust coverage surface; the previous `cfg(not(coverage))` exclusion around model downloading is not retained.
 
@@ -14,14 +14,16 @@ The installation path assumes the upstream network, CDN response, partial downlo
 - a response declaring or delivering a different size from the reviewed model specification;
 - an oversized or unbounded response exhausting memory or disk unexpectedly;
 - a truncated response that happens to parse as an ordinary file;
-- bytes with the wrong SHA-256 digest being promoted into the executable model location;
+- bytes with the wrong SHA-256 digest being accepted as an installed model;
 - an existing destination, symlink, or stale staging file being overwritten;
 - a concurrent actor replacing the staging pathname after DiskSage created and opened the verified file;
-- a concurrent actor replacing the destination pathname after DiskSage creates its no-clobber link but before or after destination identity binding;
-- an I/O failure leaving an apparently complete final artifact;
+- a concurrent actor mutating the same staging file inode after the first verification pass;
+- a concurrent actor creating or replacing the destination pathname during finalization;
+- cleanup deleting a pathname that now belongs to another actor;
+- an I/O failure leaving an apparently successful final artifact;
 - local or network diagnostics leaking paths or untrusted response detail through the public error contract.
 
-This boundary does **not** claim that SHA-256 proves model safety, behavioral quality, training-data provenance, absence of backdoors, or license suitability. The digest proves only that the received bytes match the specifically reviewed artifact. Model behavioral evaluation and inference governance remain separate controls.
+This boundary does **not** claim that SHA-256 proves model safety, behavioral quality, training-data provenance, absence of backdoors, or license suitability. The digest proves only that the accepted bytes match the specifically reviewed artifact. Model behavioral evaluation and inference governance remain separate controls.
 
 ## Upstream identity
 
@@ -39,13 +41,17 @@ If a future release bundles, mirrors, or otherwise redistributes the model artif
 
 `ureq` 3.3 documents that response readers are unlimited unless a body limit is configured and that `Content-Length`, when present, is enforced by its HTTP body machinery. DiskSage sets an independent reader limit of `expected bytes + 1`, allowing the installer to detect an overlong body while avoiding the previous design that accumulated the entire approximately 1.12 GB model in a `Vec<u8>` before writing.
 
-The installer uses a fixed 64 KiB buffer, updates SHA-256 while writing, and refuses short, long, or digest-mismatched streams. The sibling staging name appends `.part` to the complete destination filename and is opened with create-new semantics. After exact-size and digest validation, the file is flushed and `sync_all` is required. DiskSage then derives a `same_file::Handle` from a clone of the still-open verified file and treats this operating-system file identity, rather than the mutable pathname alone, as the finalization subject.
+The installer uses a fixed 64 KiB buffer, updates SHA-256 while writing, and refuses short, long, or digest-mismatched streams. The sibling staging name appends `.part` to the complete destination filename and is opened with create-new semantics. After exact-size and digest validation, the staging file is flushed and `sync_all` is required. DiskSage then derives a `same_file::Handle` from a clone of the still-open verified file and treats this operating-system file identity, rather than the mutable pathname alone, as the finalization source.
 
-Before creating the final hard link, the staging path must still resolve to a regular file with the verified identity; symlink aliases and replaced entries fail closed. Immediately after a successful no-clobber hard-link operation, DiskSage captures the destination's regular-file identity before any later namespace observation. If that captured link identity is not the verified staging identity, the operation fails and removes the destination pathname only while it still identifies the exact file that DiskSage's link operation materialized; a later replacement is preserved. If the captured link identity is verified, DiskSage reopens the destination and requires it still to identify the verified file before continuing. A destination replaced between those observations, or after later identity binding, is preserved rather than deleted. The staging identity is checked again immediately before its pathname is removed. A foreign staging replacement is likewise preserved. All such failures return `model-finalize-failed`.
+The earlier hard-link design had an irreducible ownership ambiguity between `hard_link(staging, destination)` returning and the first pathname-based destination identity capture: a foreign replacement in that interval could be mistaken for the link DiskSage created and deleted during cleanup. The current design removes that ambiguity. Before destination creation, the staging pathname must still resolve to the verified identity. DiskSage opens the destination with create-new semantics and immediately derives destination ownership from the returned open file handle, not from a later pathname observation. A deterministic race hook then proves that a destination replaced after creation is preserved because later cleanup removes the destination only while its pathname still resolves to that exact create-new file identity.
 
-The preflight destination check improves operator feedback but is not treated as durable authorization: the hard-link operation re-establishes the no-clobber condition at mutation time, while the immediate post-link capture records what that mutation actually created and later identity checks refuse to infer ownership from a mutable pathname. This preserves the repository's separation between local validation and durable mutation authority.
+Finalization does not trust the earlier staging digest indefinitely. DiskSage clones the already-open verified staging file handle, seeks that handle to the beginning, copies through the bounded buffer into the create-new destination, and recomputes exact byte count plus SHA-256 during that second pass. Same-inode staging growth, truncation, or same-length content mutation therefore fails closed even though the staging pathname identity itself did not change. The destination is flushed and `sync_all` is required before the verified-binding hook. Staging and destination identities are checked again before staging removal and once more before success. Any error removes only DiskSage-owned paths whose current operating-system identity still matches the captured handle; foreign replacements are preserved. All finalization failures return `model-finalize-failed`.
 
-Four deterministic concurrency regressions cover distinct namespace races. One creates the destination after staging begins but before finalization; the installer must preserve the concurrently created destination and remove only its own staging entry. A second replaces the staging pathname between preflight and hard-link creation; if DiskSage links that raced source, it removes only the attempted destination link while that path still identifies the captured link target and preserves the foreign staging entry. A third replaces the destination after the no-clobber link is captured but before verified destination binding; the foreign destination must survive. A fourth replaces the destination after identity binding but before cleanup; the later foreign replacement must also survive. Together these regressions demonstrate the difference between content integrity of an open file, identity of a mutation result, and authorization to mutate a later pathname.
+The initial destination existence check remains operator feedback rather than durable authorization. Mutation authority is re-established by create-new destination creation, and ownership is captured from the resulting open handle. This preserves the repository's separation between local validation and durable mutation authority without inferring ownership from a mutable pathname.
+
+The final destination pathname necessarily exists while the second verified copy is in progress. Path existence alone is therefore **not** model-load authorization. A model consumer must independently verify the trusted exact size and SHA-256 before inference, including when another process or task can observe the path concurrently. The stacked load-integrity slice provides that execution-side check; until both installation and load verification are integrated, this installer PR remains a bounded supply-chain hardening slice rather than an end-to-end claim that every model load is authorized.
+
+Deterministic concurrency regressions cover distinct namespace and same-inode races. One creates the destination after staging begins but before finalization; the installer preserves that concurrent destination and removes only its own staging entry. A second replaces the staging pathname before finalization begins. A third replaces it exactly after the first preflight check. A fourth replaces the create-new destination after DiskSage has captured ownership from the open handle. A fifth replaces the destination after verified copy and binding. Three additional tests mutate the still-open staging inode after the first verification pass with same-length wrong-digest bytes, growth, and truncation; every case fails closed without leaving an accepted destination. These regressions distinguish content integrity of an open file, operating-system identity of an owned file, and authorization to mutate a later pathname.
 
 ## Error and privacy boundary
 
@@ -63,11 +69,12 @@ The Rust tests exercise:
 - successful exact-size and exact-digest streaming installation;
 - short, oversized, and digest-mismatched streams;
 - existing destination and stale staging refusal;
-- concurrent destination creation after staging preflight without overwrite;
-- concurrent staging-path replacement without promotion or deletion of the replacement;
-- cleanup of a destination link created from a raced foreign staging source only while the destination still has the captured link identity;
-- destination replacement after link capture without deletion of the foreign replacement;
-- destination replacement after identity binding without deletion of the foreign replacement;
+- concurrent destination creation after staging begins without overwrite;
+- concurrent staging-path replacement before finalization without promotion or deletion of the replacement;
+- staging replacement after the first finalization preflight without deletion of the replacement;
+- destination replacement immediately after create-new ownership capture without deletion of the foreign replacement;
+- destination replacement after verified copy and identity binding without deletion of the foreign replacement;
+- same-inode staging digest mutation, growth, and truncation after first-pass verification;
 - deterministic reader failure cleanup;
 - missing-parent staging failure without path-bearing errors;
 - a real loopback HTTP success path through `ureq`;
@@ -85,13 +92,13 @@ This slice supports those acquisition-oriented secure-development expectations b
 
 ## Standalone and MSA compatibility
 
-The model artifact is installed and verified locally. No Naruon, contextual-orchestrator, central CWL service, tenant account, or remote authorization service is required for standalone operation. If another CWL service later supplies model metadata or download coordination, it may propose an artifact but cannot weaken the DiskSage local exact-size, exact-digest, immutable-revision, no-clobber, and file-identity acceptance boundary. The on-device inference path therefore remains usable as a standalone component and as a bounded module in a larger MSA.
+The model artifact is installed and verified locally. No Naruon, contextual-orchestrator, central CWL service, tenant account, or remote authorization service is required for standalone installation. If another CWL service later supplies model metadata or download coordination, it may propose an artifact but cannot weaken the DiskSage local exact-size, exact-digest, immutable-revision, no-clobber, and file-identity acceptance boundary. End-to-end inference remains fail closed only when the local model loader independently verifies those trusted artifact properties before loading; that load-side control is equally applicable in standalone and modular MSA operation.
 
 ## Rollback and migration
 
 There is no database migration and no database object is introduced by this slice. Existing valid model files remain readable because the runtime model filename does not change. The new installer affects only future downloads.
 
-Rollback must be a reviewed source change. If the pinned upstream revision becomes unavailable, update the immutable revision, exact byte count, and SHA-256 together after independently revalidating the intended model file; add a failing regression test first; update this document and `CHANGELOG.md`; and rerun exact-head Rust tests, coverage, security, packaging, provenance, and release-acceptance gates. Do not revert to `/resolve/main/`, remove the byte limit, accept a missing/mismatched digest, restore whole-model in-memory buffering, or remove file-identity binding as an availability shortcut.
+Rollback must be a reviewed source change. If the pinned upstream revision becomes unavailable, update the immutable revision, exact byte count, and SHA-256 together after independently revalidating the intended model file; add a failing regression test first; update this document and `CHANGELOG.md`; and rerun exact-head Rust tests, coverage, security, packaging, provenance, and release-acceptance gates. Do not revert to `/resolve/main/`, remove the byte limit, accept a missing/mismatched digest, restore whole-model in-memory buffering, infer path ownership after a race, or remove file-identity binding as an availability shortcut.
 
 ## APA 7th references
 
