@@ -1,7 +1,9 @@
 //! Concurrency regression tests for the model-artifact no-clobber boundary.
 
+use super::model::finalize_verified_staging_with_hooks;
 use super::{download_to, ModelSpec};
-use std::fs;
+use same_file::Handle;
+use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -17,6 +19,11 @@ fn staging_path(dest: &Path) -> PathBuf {
     let mut file_name = dest.file_name().unwrap().to_os_string();
     file_name.push(".part");
     dest.with_file_name(file_name)
+}
+
+/// Capture the operating-system file identity for a deterministic test fixture.
+fn identity_for(path: &Path) -> Handle {
+    Handle::from_file(File::open(path).unwrap()).unwrap()
 }
 
 #[test]
@@ -131,4 +138,64 @@ fn concurrent_staging_path_replacement_is_rejected_and_preserved() {
     assert_eq!(result, Err("model-finalize-failed".to_string()));
     assert!(!destination.exists());
     assert_eq!(fs::read(&staging).unwrap(), CONCURRENT_OWNER_BYTES);
+}
+
+/// Prove that a replacement linked between preflight and hard-link creation is preserved.
+#[cfg(unix)]
+#[test]
+fn linked_foreign_staging_is_removed_only_from_the_attempt_destination() {
+    const CONCURRENT_OWNER_BYTES: &[u8] = b"attacker-controlled-bytes!!";
+
+    let directory = tempfile::tempdir().unwrap();
+    let destination = directory.path().join("fixture.gguf");
+    let staging = staging_path(&destination);
+    fs::write(&staging, FIXTURE_PAYLOAD).unwrap();
+    let verified_identity = identity_for(&staging);
+
+    let result = finalize_verified_staging_with_hooks(
+        &staging,
+        &destination,
+        &verified_identity,
+        || {
+            fs::remove_file(&staging).unwrap();
+            fs::write(&staging, CONCURRENT_OWNER_BYTES).unwrap();
+        },
+        || {},
+        || {},
+    );
+
+    assert_eq!(result, Err("model-finalize-failed".to_string()));
+    assert!(!destination.exists());
+    assert_eq!(fs::read(&staging).unwrap(), CONCURRENT_OWNER_BYTES);
+}
+
+/// Prove that failed cleanup never deletes a destination replaced after identity binding.
+#[cfg(unix)]
+#[test]
+fn destination_replaced_after_link_identity_binding_is_preserved() {
+    const CONCURRENT_DESTINATION_BYTES: &[u8] = b"concurrent-destination-owner";
+
+    let directory = tempfile::tempdir().unwrap();
+    let destination = directory.path().join("fixture.gguf");
+    let staging = staging_path(&destination);
+    fs::write(&staging, FIXTURE_PAYLOAD).unwrap();
+    let verified_identity = identity_for(&staging);
+
+    let result = finalize_verified_staging_with_hooks(
+        &staging,
+        &destination,
+        &verified_identity,
+        || {},
+        || {},
+        || {
+            fs::remove_file(&destination).unwrap();
+            fs::write(&destination, CONCURRENT_DESTINATION_BYTES).unwrap();
+        },
+    );
+
+    assert_eq!(result, Err("model-finalize-failed".to_string()));
+    assert_eq!(
+        fs::read(&destination).unwrap(),
+        CONCURRENT_DESTINATION_BYTES
+    );
 }
