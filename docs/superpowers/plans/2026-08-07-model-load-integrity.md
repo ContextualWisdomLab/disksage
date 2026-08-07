@@ -28,29 +28,25 @@
 - Consumes: `super::model::ModelSpec`.
 - Produces: `pub(crate) fn verify_installed_model(spec: &ModelSpec, path: &Path) -> Result<(), String>`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create a temporary exact fixture and assert that the initial placeholder verifier rejects neither a same-size wrong digest nor a symbolic link. Add cases for missing paths, directories, short files, oversized files, same-size digest drift, uppercase expected digests, and exact valid bytes. All assertions use stable path-free codes.
 
-- [ ] **Step 2: Run the focused test and verify RED**
+- [x] **Step 2: Run the focused test and verify RED**
 
-Run: `cargo test --manifest-path src-tauri/Cargo.toml installed_model`
+The source-controlled RED commits `ef07e8f80dc1c9812582a6d2684ac7afc6c39edc` and `70bb8912e01e2a1b82bebc5ed058ccce84a59d60` deliberately leave the verifier as `Ok(())`, so missing/non-regular/size/digest/read and engine-binding contracts fail by construction. Repository CI is the durable execution evidence; predecessor or synthetic-merge results are not reused.
 
-Expected: FAIL because the placeholder verifier incorrectly accepts invalid artifacts.
+- [x] **Step 3: Implement the minimum bounded verifier**
 
-- [ ] **Step 3: Implement the minimum bounded verifier**
-
-Use `symlink_metadata` to reject links and non-regular entries, open the file read-only, use handle metadata for the authoritative exact length, stream through `[u8; 64 * 1024]`, compute lowercase SHA-256 byte-by-byte, and compare case-insensitively. Map every failure to one of these stable codes: `model-installed-unavailable`, `model-installed-not-regular`, `model-installed-size-mismatch`, `model-installed-read-failed`, `model-installed-digest-mismatch`.
+`d9b102f3a7e93adcd72ae6c24e64391abe3e6969` uses `symlink_metadata`, read-only `File::open`, handle metadata, a fixed 64 KiB buffer, exact checked byte count, byte-by-byte lowercase SHA-256 encoding, case-insensitive digest comparison, and stable path-free error codes.
 
 - [ ] **Step 4: Run focused tests and verify GREEN**
 
-Run: `cargo test --manifest-path src-tauri/Cargo.toml installed_model`
+Require fresh exact-current-head repository Test evidence. Pending, queued, cancelled, skipped-required, failed, synthetic-merge, or predecessor-head results are not GREEN.
 
-Expected: PASS with every verifier branch covered.
+- [x] **Step 5: Commit**
 
-- [ ] **Step 5: Commit**
-
-Commit message: `security(model): verify installed artifact bytes`
+Commit: `d9b102f3a7e93adcd72ae6c24e64391abe3e6969` (`security(model): verify installed artifact bytes`).
 
 ### Task 2: Bind engine construction to verified bytes
 
@@ -62,31 +58,25 @@ Commit message: `security(model): verify installed artifact bytes`
 - Consumes: `verify_installed_model(&DEFAULT, model_path)`.
 - Produces: llama.cpp is never initialized before the exact pinned artifact passes verification.
 
-- [ ] **Step 1: Write the failing source-binding test**
+- [x] **Step 1: Write the failing source-binding test**
 
-Read `engine.rs` from `CARGO_MANIFEST_DIR` and require the verifier call to occur textually before both `LlamaBackend::init()` and `LlamaModel::load_from_file`. Reject dynamic model-spec substitution and any verification placed after backend/model initialization.
+`70bb8912e01e2a1b82bebc5ed058ccce84a59d60` requires the pinned-default verifier call to occur textually before both backend initialization and model loading, and rejects multiple/alternate verifier calls.
 
-- [ ] **Step 2: Run the focused test and verify RED**
+- [x] **Step 2: Run the focused test and verify RED**
 
-Run: `cargo test --manifest-path src-tauri/Cargo.toml engine_requires_verified_model_before_llama_initialization`
+At that RED head, `engine.rs` had no `verify_installed_model` call, so the source-binding contract is intentionally unsatisfied.
 
-Expected: FAIL because `LlamaEngine::new` currently initializes llama.cpp without a pinned-byte verification call.
+- [x] **Step 3: Add the fail-closed engine gate**
 
-- [ ] **Step 3: Add the fail-closed engine gate**
-
-At the beginning of `LlamaEngine::new`, call `super::installed_model::verify_installed_model(&super::model::DEFAULT, model_path)?;`. Do not weaken the existing feature gate or introduce an alternate unverified constructor.
+`db511300d0d0116dc158255d2658091cccd277cd` places `super::installed_model::verify_installed_model(&super::model::DEFAULT, model_path)?;` before `LlamaBackend::init()` and `LlamaModel::load_from_file` without introducing an alternate constructor.
 
 - [ ] **Step 4: Verify focused and real feature compilation**
 
-Run:
-- `cargo test --manifest-path src-tauri/Cargo.toml installed_model`
-- `cargo build --manifest-path src-tauri/Cargo.toml --features llm-engine`
+Require fresh exact-current-head Test evidence including the `llm-engine-build` job. No live model download is needed.
 
-Expected: both pass; no model download is performed.
+- [x] **Step 5: Commit**
 
-- [ ] **Step 5: Commit**
-
-Commit message: `security(model): verify GGUF before llama load`
+Commit: `db511300d0d0116dc158255d2658091cccd277cd` (`security(model): verify GGUF before llama load`).
 
 ### Task 3: Persist acquisition and rollback evidence
 
@@ -99,26 +89,22 @@ Commit message: `security(model): verify GGUF before llama load`
 - Consumes: the exact verifier and engine gate from Tasks 1–2.
 - Produces: durable threat-model, migration, rollback, local-versus-shareable evidence, and stack-order documentation.
 
-- [ ] **Step 1: Add a failing documentation contract test**
+- [x] **Step 1: Add a failing documentation contract test**
 
-Require the doctoring record to distinguish download-time admission from load-time verification, explain why file existence is not integrity evidence, list stable errors, document the 64 KiB bounded read, state that no bytes or paths become shareable evidence, and specify rollback without bypassing verification.
+`70bb8912e01e2a1b82bebc5ed058ccce84a59d60` requires the authoritative doctoring to distinguish download admission from load-time verification, state that file existence is not integrity evidence, list all stable codes, preserve the 64 KiB bound and privacy boundary, and bind a changelog entry.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
-Run: `cargo test --manifest-path src-tauri/Cargo.toml installed_model_documentation_is_durable`
+The parent doctoring lacked the required load-time section and changelog wording at the RED head, so the deterministic documentation contract is intentionally unsatisfied there.
 
-Expected: FAIL until authoritative doctoring and changelog entries exist.
+- [x] **Step 3: Update doctoring and changelog**
 
-- [ ] **Step 3: Update doctoring and changelog**
-
-Record NIST SP 800-218/800-218A, SLSA 1.2, OWASP Top 10:2025 A03/A08, exact Qwen artifact/license evidence, standalone/MSA compatibility, performance boundary, migration for pre-existing valid files, and reviewed rollback. Use APA 7th references already validated in the parent slice; do not claim certification or legal clearance.
+`0dd4577fed0706e1ff8103411e86c15772ca03f5` records load-time threat model, migration, rollback, privacy, standards mapping, and standalone/MSA compatibility. `66a32525a58e9e12de213aeaf26d2bd3e25683a1` records the release-facing Security entry. APA 7th evidence reuses the parent slice's August 7, 2026 authoritative-source validation without claiming certification or legal clearance.
 
 - [ ] **Step 4: Run complete exact-head validation**
 
-Run repository Test, Release, Security Scan, SAST, Rust coverage, frontend coverage, packaging, provenance, and release-acceptance gates. Treat pending, cancelled, skipped-required, absent, failed, stale-head, or synthetic-merge evidence as not passing.
+Require repository Test, Release, Security Scan, SAST, Rust coverage, frontend coverage, packaging, provenance, review, approval, branch-protection, and release-acceptance evidence on the exact current head after the parent is integrated and this stack is retargeted. Treat pending, cancelled, skipped-required, absent, failed, stale-head, or synthetic-merge evidence as not passing.
 
-- [ ] **Step 5: Commit and open a Draft stacked PR**
+- [x] **Step 5: Commit and retain Draft stacked PR**
 
-Commit message: `docs(model): record load-time integrity boundary`
-
-Open the pull request against `security/model-download-stream-integrity`, retain Draft status, and retarget to `main` only after PR #141 is integrated.
+PR #142 remains Draft and based on `security/model-download-stream-integrity`; retarget to `main` only after #141 is integrated without discarding or duplicating parent commits.
