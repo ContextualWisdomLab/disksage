@@ -169,6 +169,38 @@ fn linked_foreign_staging_is_removed_only_from_the_attempt_destination() {
     assert_eq!(fs::read(&staging).unwrap(), CONCURRENT_OWNER_BYTES);
 }
 
+/// Prove that a destination replaced before identity capture is never deleted as ours.
+#[cfg(unix)]
+#[test]
+fn destination_replaced_before_identity_capture_is_preserved() {
+    const CONCURRENT_DESTINATION_BYTES: &[u8] = b"concurrent-destination-owner";
+
+    let directory = tempfile::tempdir().unwrap();
+    let destination = directory.path().join("fixture.gguf");
+    let staging = staging_path(&destination);
+    fs::write(&staging, FIXTURE_PAYLOAD).unwrap();
+    let verified_identity = identity_for(&staging);
+
+    let result = finalize_verified_staging_with_hooks(
+        &staging,
+        &destination,
+        &verified_identity,
+        || {},
+        || {
+            fs::remove_file(&destination).unwrap();
+            fs::write(&destination, CONCURRENT_DESTINATION_BYTES).unwrap();
+        },
+        || {},
+    );
+
+    assert_eq!(result, Err("model-finalize-failed".to_string()));
+    assert_eq!(
+        fs::read(&destination).unwrap(),
+        CONCURRENT_DESTINATION_BYTES
+    );
+    assert!(!staging.exists());
+}
+
 /// Prove that failed cleanup never deletes a destination replaced after identity binding.
 #[cfg(unix)]
 #[test]
