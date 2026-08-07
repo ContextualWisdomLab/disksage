@@ -23,7 +23,7 @@ pub use model::{download_to, verify_sha256, ModelSpec, DEFAULT};
 #[cfg_attr(coverage, allow(unused_imports))]
 pub use parse::{parse_class_pick, parse_ext_reasoning, parse_summary, parse_verdict, parse_verdict_full};
 #[cfg_attr(coverage, allow(unused_imports))]
-pub use prompt::{classify_prompt, ext_reasoning, ext_reason_prompt, summary_prompt, verdict_prompt, ExtReasoning, FileMeta};
+pub use prompt::{classify_prompt, ext_reason_prompt, summary_prompt, verdict_prompt, ExtReasoning, FileMeta};
 #[cfg_attr(coverage, allow(unused_imports))]
 pub use verdict::{FileVerdict, Verdict};
 
