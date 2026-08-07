@@ -1,4 +1,4 @@
-//! 모델 레지스트리 + SHA-256 검증(순수, 게이트 대상) + 다운로드(cfg(not(coverage)), 게이트 제외).
+//! Model registry and fail-closed model-artifact integrity contracts.
 use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, Copy)]
@@ -60,6 +60,8 @@ fn real_download_verifies() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
+
     #[test]
     fn verify_sha256_matches_known_vector() {
         // echo -n "abc" | sha256sum
@@ -67,6 +69,7 @@ mod tests {
         assert!(verify_sha256(b"abc", want));
         assert!(verify_sha256(b"abc", &want.to_uppercase())); // 대소문자 무관
     }
+
     #[test]
     fn verify_sha256_rejects_mismatch() {
         assert!(!verify_sha256(b"abc", "deadbeef")); // 길이/값 불일치
@@ -75,11 +78,39 @@ mod tests {
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         ));
     }
+
     #[test]
     fn default_spec_is_wellformed() {
         assert!(DEFAULT.url.starts_with("https://"));
         assert_eq!(DEFAULT.sha256_hex.len(), 64);
         assert!(DEFAULT.bytes > 0);
         assert!(!DEFAULT.name.is_empty());
+    }
+
+    #[test]
+    fn default_spec_is_bound_to_an_immutable_hub_revision() {
+        assert!(DEFAULT
+            .url
+            .contains("/resolve/a615a81362316d7b9f5a7a9c4313adfdf9b54588/"));
+        assert!(!DEFAULT.url.contains("/resolve/main/"));
+    }
+
+    #[test]
+    fn verified_stream_install_materializes_only_exact_size_and_digest() {
+        let payload = b"deterministic-model-fixture";
+        let digest = format!("{:x}", Sha256::digest(payload));
+        let spec = ModelSpec {
+            name: "fixture-model",
+            url: "https://example.invalid/model.gguf",
+            sha256_hex: Box::leak(digest.into_boxed_str()),
+            bytes: payload.len() as u64,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("fixture.gguf");
+
+        install_verified_reader(&spec, Cursor::new(payload), &dest).unwrap();
+
+        assert_eq!(std::fs::read(&dest).unwrap(), payload);
+        assert!(!dest.with_extension("part").exists());
     }
 }
