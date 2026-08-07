@@ -37,6 +37,7 @@ describe("Tauri content security policy", () => {
       "base-uri": "'none'",
       "connect-src": "ipc: http://ipc.localhost",
       "font-src": "'self'",
+      "form-action": "'none'",
       "frame-src": "'none'",
       "img-src": "'self' data: blob:",
       "object-src": "'none'",
@@ -53,6 +54,7 @@ describe("Tauri content security policy", () => {
       "base-uri": "'none'",
       "connect-src": "'self' ipc: http://ipc.localhost ws:",
       "font-src": "'self'",
+      "form-action": "'none'",
       "frame-src": "'none'",
       "img-src": "'self' data: blob:",
       "object-src": "'none'",
@@ -61,6 +63,13 @@ describe("Tauri content security policy", () => {
     });
     expect(security.csp?.["connect-src"]).toBe("ipc: http://ipc.localhost");
     expect(security.csp?.["connect-src"]).not.toContain("ws:");
+  });
+
+  it("blocks form submissions because form-action does not fall back to default-src", () => {
+    const security = readTauriSecurityConfig().app.security;
+
+    expect(security.csp?.["form-action"]).toBe("'none'");
+    expect(security.devCsp?.["form-action"]).toBe("'none'");
   });
 
   it("does not authorize wildcard, remote script, remote style, or eval sources", () => {
@@ -86,6 +95,8 @@ describe("Tauri content security policy", () => {
     const changelog = readRepositoryFile("CHANGELOG.md");
 
     expect(doctoring).toContain("# Tauri content security policy");
+    expect(doctoring).toContain("form-action 'none'");
+    expect(doctoring).toContain("does not fall back to `default-src`");
     expect(doctoring).toContain("## Development policy");
     expect(doctoring).toContain("## Rollback and migration");
     expect(doctoring).toContain("## Standalone and MSA compatibility");
@@ -102,7 +113,7 @@ describe("Tauri content security policy", () => {
     );
     expect(doctoring).not.toContain("WD-CSP3-20260505");
     expect(changelog).toContain(
-      "Enable an explicit fail-closed Tauri Content Security Policy",
+      "deny form submissions",
     );
   });
 });
