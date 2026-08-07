@@ -2,22 +2,21 @@
 //!
 //! DiskSage treats an on-device model as executable product supply-chain input.
 //! The trusted model specification therefore binds an immutable upstream revision,
-//! expected byte length, and SHA-256 digest. Downloads are streamed into a
-//! create-new sibling staging file, verified against the trusted specification,
-//! and copied from the verified open file handle into a create-new destination.
-//! Filesystem cleanup is always bound to operating-system file identity so foreign
-//! pathname replacements are never deleted as if DiskSage owned them.
+//! expected byte length, and SHA-256 digest. Downloads are streamed into an unnamed
+//! same-directory temporary file, verified against the trusted specification, and
+//! copied from that still-open file into a create-new destination. Unnamed staging
+//! removes pathname cleanup authority entirely; destination cleanup remains bound to
+//! operating-system file identity so later foreign replacements are preserved.
 
 use same_file::Handle;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 const MODEL_STREAM_BUFFER_BYTES: usize = 64 * 1024;
 const ERROR_INVALID_SPEC: &str = "model-spec-invalid";
 const ERROR_DESTINATION_EXISTS: &str = "model-destination-exists";
-const ERROR_STAGING_EXISTS: &str = "model-staging-exists";
 const ERROR_STAGING_CREATE: &str = "model-staging-create-failed";
 const ERROR_STREAM_READ: &str = "model-stream-read-failed";
 const ERROR_STREAM_WRITE: &str = "model-stream-write-failed";
@@ -81,15 +80,15 @@ pub fn verify_sha256(bytes: &[u8], expected_hex: &str) -> bool {
 /// streamed with an explicit `expected bytes + 1` reader limit so an upstream
 /// server cannot cause a one-gigabyte model to be buffered entirely in memory or
 /// silently append unbounded data. When the server supplies `Content-Length`, it
-/// must exactly match the trusted specification before any file is created.
+/// must exactly match the trusted specification before any local file is created.
 ///
-/// The destination is never overwritten. A sibling `<filename>.part` file is
-/// created with create-new semantics, removed on validation or I/O failure only
-/// while its pathname still identifies DiskSage's open file, and finalized only
-/// after exact byte-count, SHA-256, flush, durable file-sync, repeated integrity
-/// verification from the open staging handle, and identity-bound destination
-/// creation succeed. Returned errors are stable codes and do not expose local
-/// paths, HTTP response bodies, or dynamic network diagnostics.
+/// Staging uses `tempfile::tempfile_in` in the destination directory, so no stable
+/// sibling staging pathname exists for another actor to replace and no pathname is
+/// later unlinked as staging cleanup. The final destination is opened with
+/// create-new semantics, its ownership is captured from the returned open handle,
+/// and the copied bytes are independently re-read and rehashed before success.
+/// Returned errors are stable codes and do not expose local paths, HTTP response
+/// bodies, or dynamic network diagnostics.
 pub fn download_to(spec: &ModelSpec, dest: &Path) -> Result<(), String> {
     validate_model_spec(spec)?;
     let mut response = ureq::get(spec.url)
@@ -132,14 +131,11 @@ fn validate_model_spec(spec: &ModelSpec) -> Result<(), String> {
     Ok(())
 }
 
-/// Derive a staging path by appending `.part` to the complete destination filename.
-fn staging_path(dest: &Path) -> Result<PathBuf, String> {
-    let file_name = dest
-        .file_name()
-        .ok_or_else(|| ERROR_STAGING_CREATE.to_string())?;
-    let mut staging_name = file_name.to_os_string();
-    staging_name.push(".part");
-    Ok(dest.with_file_name(staging_name))
+/// Return the directory in which the unnamed staging file must be created.
+fn destination_parent(dest: &Path) -> &Path {
+    dest.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
 }
 
 /// Open an identity handle only for a regular file, never for a symlink alias.
@@ -165,151 +161,152 @@ fn cleanup_owned_path(path: &Path, expected: &Handle) {
     }
 }
 
-/// Derive current identity from an open file before cleaning its pathname.
-fn cleanup_open_file_path(path: &Path, file: &File) {
-    let Ok(cloned_file) = file.try_clone() else {
-        return;
-    };
-    let Ok(expected) = Handle::from_file(cloned_file) else {
-        return;
-    };
-    cleanup_owned_path(path, &expected);
+/// Hash exactly the bytes supplied by `reader`, failing when size exceeds `limit`.
+fn hash_reader<R: Read>(reader: &mut R, limit: u64) -> Result<(u64, String), String> {
+    let mut hasher = Sha256::new();
+    let mut observed_bytes = 0_u64;
+    let mut buffer = [0_u8; MODEL_STREAM_BUFFER_BYTES];
+    loop {
+        let count = reader
+            .read(&mut buffer)
+            .map_err(|_| ERROR_FINALIZE.to_string())?;
+        if count == 0 {
+            break;
+        }
+        observed_bytes = observed_bytes
+            .checked_add(count as u64)
+            .ok_or_else(|| ERROR_FINALIZE.to_string())?;
+        if observed_bytes > limit {
+            return Err(ERROR_FINALIZE.to_string());
+        }
+        hasher.update(&buffer[..count]);
+    }
+    let digest = hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    Ok((observed_bytes, digest))
 }
 
-/// Finalize a verified staging file while exposing deterministic race seams to tests.
+/// Finalize a verified unnamed staging file with deterministic race seams for tests.
 ///
-/// Production passes no-op hooks. The hooks exist so concurrency regressions can
-/// mutate pathnames at exact boundaries without sleeps or probabilistic scheduling.
-/// DiskSage never derives ownership from a destination pathname after creating it:
-/// ownership is captured directly from the create-new destination file handle.
-/// The verified staging bytes are reread from the already-open staging handle and
-/// revalidated while copying, so pathname replacement and in-place staging
-/// mutation both fail closed. Every cleanup is identity-bound and therefore
-/// preserves later foreign pathname replacements.
-pub(super) fn finalize_verified_staging_with_hooks<F1, F2, F3>(
+/// Production passes no-op hooks. The staging artifact has no stable pathname, so
+/// namespace replacement and staging cleanup races are structurally absent. The
+/// first hook can mutate a deliberately shared test handle before the second-pass
+/// source verification. Destination ownership is captured directly from the
+/// create-new open file handle before any destination hook runs. The destination is
+/// then re-read from that same open handle and checked against trusted size and
+/// SHA-256 before the final pathname-identity check authorizes success.
+pub(super) fn finalize_verified_file_with_hooks<F1, F2, F3, F4>(
     spec: &ModelSpec,
-    staging: &Path,
     dest: &Path,
     verified_file: &File,
-    verified_identity: &Handle,
-    after_staging_preflight: F1,
+    before_source_copy: F1,
     after_destination_creation: F2,
-    after_destination_binding: F3,
+    before_destination_reverify: F3,
+    after_destination_reverify: F4,
 ) -> Result<(), String>
 where
     F1: FnOnce(),
     F2: FnOnce(),
     F3: FnOnce(),
+    F4: FnOnce(),
 {
-    let result = (|| {
-        if !path_matches_handle(staging, verified_identity) {
-            return Err(ERROR_FINALIZE.to_string());
-        }
-        after_staging_preflight();
-        if !path_matches_handle(staging, verified_identity) {
-            return Err(ERROR_FINALIZE.to_string());
-        }
-
-        let mut destination_file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(dest)
-            .map_err(|_| ERROR_FINALIZE.to_string())?;
-        let destination_identity = Handle::from_file(
-            destination_file
-                .try_clone()
-                .map_err(|_| ERROR_FINALIZE.to_string())?,
-        )
+    let mut destination_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(dest)
         .map_err(|_| ERROR_FINALIZE.to_string())?;
+    let destination_identity = Handle::from_file(
+        destination_file
+            .try_clone()
+            .map_err(|_| ERROR_FINALIZE.to_string())?,
+    )
+    .map_err(|_| ERROR_FINALIZE.to_string())?;
 
-        let destination_result = (|| {
-            after_destination_creation();
-            if !path_matches_handle(dest, &destination_identity)
-                || !path_matches_handle(staging, verified_identity)
-            {
-                return Err(ERROR_FINALIZE.to_string());
-            }
-
-            let mut source = verified_file
-                .try_clone()
-                .map_err(|_| ERROR_FINALIZE.to_string())?;
-            source
-                .seek(SeekFrom::Start(0))
-                .map_err(|_| ERROR_FINALIZE.to_string())?;
-
-            let mut hasher = Sha256::new();
-            let mut observed_bytes = 0_u64;
-            let mut buffer = [0_u8; MODEL_STREAM_BUFFER_BYTES];
-            loop {
-                let count = source
-                    .read(&mut buffer)
-                    .map_err(|_| ERROR_FINALIZE.to_string())?;
-                if count == 0 {
-                    break;
-                }
-                observed_bytes = observed_bytes
-                    .checked_add(count as u64)
-                    .ok_or_else(|| ERROR_FINALIZE.to_string())?;
-                if observed_bytes > spec.bytes {
-                    return Err(ERROR_FINALIZE.to_string());
-                }
-                destination_file
-                    .write_all(&buffer[..count])
-                    .map_err(|_| ERROR_FINALIZE.to_string())?;
-                hasher.update(&buffer[..count]);
-            }
-
-            if observed_bytes != spec.bytes {
-                return Err(ERROR_FINALIZE.to_string());
-            }
-            let observed_digest: String = hasher
-                .finalize()
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect();
-            if !observed_digest.eq_ignore_ascii_case(spec.sha256_hex) {
-                return Err(ERROR_FINALIZE.to_string());
-            }
-
-            destination_file
-                .flush()
-                .map_err(|_| ERROR_FINALIZE.to_string())?;
-            destination_file
-                .sync_all()
-                .map_err(|_| ERROR_FINALIZE.to_string())?;
-            if !path_matches_handle(dest, &destination_identity) {
-                return Err(ERROR_FINALIZE.to_string());
-            }
-            after_destination_binding();
-
-            if !path_matches_handle(staging, verified_identity)
-                || !path_matches_handle(dest, &destination_identity)
-            {
-                return Err(ERROR_FINALIZE.to_string());
-            }
-            if fs::remove_file(staging).is_err() {
-                return Err(ERROR_FINALIZE.to_string());
-            }
-            if !path_matches_handle(dest, &destination_identity) {
-                return Err(ERROR_FINALIZE.to_string());
-            }
-            Ok(())
-        })();
-
-        if destination_result.is_err() {
-            cleanup_owned_path(dest, &destination_identity);
+    let result = (|| {
+        after_destination_creation();
+        if !path_matches_handle(dest, &destination_identity) {
+            return Err(ERROR_FINALIZE.to_string());
         }
-        destination_result
+
+        before_source_copy();
+        let mut source = verified_file
+            .try_clone()
+            .map_err(|_| ERROR_FINALIZE.to_string())?;
+        source
+            .seek(SeekFrom::Start(0))
+            .map_err(|_| ERROR_FINALIZE.to_string())?;
+
+        let mut source_hasher = Sha256::new();
+        let mut source_bytes = 0_u64;
+        let mut buffer = [0_u8; MODEL_STREAM_BUFFER_BYTES];
+        loop {
+            let count = source
+                .read(&mut buffer)
+                .map_err(|_| ERROR_FINALIZE.to_string())?;
+            if count == 0 {
+                break;
+            }
+            source_bytes = source_bytes
+                .checked_add(count as u64)
+                .ok_or_else(|| ERROR_FINALIZE.to_string())?;
+            if source_bytes > spec.bytes {
+                return Err(ERROR_FINALIZE.to_string());
+            }
+            destination_file
+                .write_all(&buffer[..count])
+                .map_err(|_| ERROR_FINALIZE.to_string())?;
+            source_hasher.update(&buffer[..count]);
+        }
+        if source_bytes != spec.bytes {
+            return Err(ERROR_FINALIZE.to_string());
+        }
+        let source_digest: String = source_hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        if !source_digest.eq_ignore_ascii_case(spec.sha256_hex) {
+            return Err(ERROR_FINALIZE.to_string());
+        }
+
+        destination_file
+            .flush()
+            .map_err(|_| ERROR_FINALIZE.to_string())?;
+        destination_file
+            .sync_all()
+            .map_err(|_| ERROR_FINALIZE.to_string())?;
+        before_destination_reverify();
+        destination_file
+            .seek(SeekFrom::Start(0))
+            .map_err(|_| ERROR_FINALIZE.to_string())?;
+        let (destination_bytes, destination_digest) =
+            hash_reader(&mut destination_file, spec.bytes)?;
+        if destination_bytes != spec.bytes
+            || !destination_digest.eq_ignore_ascii_case(spec.sha256_hex)
+        {
+            return Err(ERROR_FINALIZE.to_string());
+        }
+        if !path_matches_handle(dest, &destination_identity) {
+            return Err(ERROR_FINALIZE.to_string());
+        }
+        after_destination_reverify();
+        if !path_matches_handle(dest, &destination_identity) {
+            return Err(ERROR_FINALIZE.to_string());
+        }
+        Ok(())
     })();
 
     if result.is_err() {
-        cleanup_owned_path(staging, verified_identity);
+        cleanup_owned_path(dest, &destination_identity);
     }
     result
 }
 
-/// Stream trusted model bytes into a create-new staging file and finalize them safely.
+/// Stream trusted model bytes into unnamed staging and finalize them safely.
 fn install_verified_reader<R: Read>(
     spec: &ModelSpec,
     mut reader: R,
@@ -320,78 +317,55 @@ fn install_verified_reader<R: Read>(
         return Err(ERROR_DESTINATION_EXISTS.to_string());
     }
 
-    let staging = staging_path(dest)?;
-    if fs::symlink_metadata(&staging).is_ok() {
-        return Err(ERROR_STAGING_EXISTS.to_string());
-    }
-
-    let mut output = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .open(&staging)
+    let mut staging = tempfile::tempfile_in(destination_parent(dest))
         .map_err(|_| ERROR_STAGING_CREATE.to_string())?;
+    let mut hasher = Sha256::new();
+    let mut observed_bytes = 0_u64;
+    let mut buffer = [0_u8; MODEL_STREAM_BUFFER_BYTES];
 
-    let verified_identity = match (|| {
-        let mut hasher = Sha256::new();
-        let mut observed_bytes = 0_u64;
-        let mut buffer = [0_u8; MODEL_STREAM_BUFFER_BYTES];
-
-        loop {
-            let count = reader
-                .read(&mut buffer)
-                .map_err(|_| ERROR_STREAM_READ.to_string())?;
-            if count == 0 {
-                break;
-            }
-            observed_bytes = observed_bytes
-                .checked_add(count as u64)
-                .ok_or_else(|| ERROR_SIZE_MISMATCH.to_string())?;
-            if observed_bytes > spec.bytes {
-                return Err(ERROR_SIZE_MISMATCH.to_string());
-            }
-            output
-                .write_all(&buffer[..count])
-                .map_err(|_| ERROR_STREAM_WRITE.to_string())?;
-            hasher.update(&buffer[..count]);
+    loop {
+        let count = reader
+            .read(&mut buffer)
+            .map_err(|_| ERROR_STREAM_READ.to_string())?;
+        if count == 0 {
+            break;
         }
-
-        if observed_bytes != spec.bytes {
+        observed_bytes = observed_bytes
+            .checked_add(count as u64)
+            .ok_or_else(|| ERROR_SIZE_MISMATCH.to_string())?;
+        if observed_bytes > spec.bytes {
             return Err(ERROR_SIZE_MISMATCH.to_string());
         }
-        let observed_digest: String = hasher
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
-        if !observed_digest.eq_ignore_ascii_case(spec.sha256_hex) {
-            return Err(ERROR_DIGEST_MISMATCH.to_string());
-        }
+        staging
+            .write_all(&buffer[..count])
+            .map_err(|_| ERROR_STREAM_WRITE.to_string())?;
+        hasher.update(&buffer[..count]);
+    }
 
-        output
-            .flush()
-            .map_err(|_| ERROR_STAGING_SYNC.to_string())?;
-        output
-            .sync_all()
-            .map_err(|_| ERROR_STAGING_SYNC.to_string())?;
-        let cloned_file = output
-            .try_clone()
-            .map_err(|_| ERROR_FINALIZE.to_string())?;
-        Handle::from_file(cloned_file).map_err(|_| ERROR_FINALIZE.to_string())
-    })() {
-        Ok(identity) => identity,
-        Err(error) => {
-            cleanup_open_file_path(&staging, &output);
-            return Err(error);
-        }
-    };
+    if observed_bytes != spec.bytes {
+        return Err(ERROR_SIZE_MISMATCH.to_string());
+    }
+    let observed_digest: String = hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    if !observed_digest.eq_ignore_ascii_case(spec.sha256_hex) {
+        return Err(ERROR_DIGEST_MISMATCH.to_string());
+    }
 
-    finalize_verified_staging_with_hooks(
+    staging
+        .flush()
+        .map_err(|_| ERROR_STAGING_SYNC.to_string())?;
+    staging
+        .sync_all()
+        .map_err(|_| ERROR_STAGING_SYNC.to_string())?;
+
+    finalize_verified_file_with_hooks(
         spec,
-        &staging,
         dest,
-        &output,
-        &verified_identity,
+        &staging,
+        || {},
         || {},
         || {},
         || {},
@@ -526,20 +500,20 @@ mod tests {
     }
 
     #[test]
-    fn staging_path_appends_part_without_discarding_the_real_extension() {
+    fn destination_parent_supports_relative_and_nested_paths() {
+        assert_eq!(destination_parent(Path::new("fixture.gguf")), Path::new("."));
         assert_eq!(
-            staging_path(Path::new("/tmp/model.gguf")).unwrap(),
-            PathBuf::from("/tmp/model.gguf.part")
+            destination_parent(Path::new("nested/fixture.gguf")),
+            Path::new("nested")
         );
-        assert_eq!(staging_path(Path::new("/")).unwrap_err(), ERROR_STAGING_CREATE);
     }
 
     #[test]
     fn identity_aware_cleanup_is_idempotent_and_preserves_unowned_paths() {
         let directory = tempfile::tempdir().unwrap();
-        let owned = directory.path().join("owned.gguf.part");
-        let unowned = directory.path().join("unowned.gguf.part");
-        let missing = directory.path().join("missing.gguf.part");
+        let owned = directory.path().join("owned.gguf");
+        let unowned = directory.path().join("unowned.gguf");
+        let missing = directory.path().join("missing.gguf");
         fs::write(&owned, b"owned").unwrap();
         fs::write(&unowned, b"unowned").unwrap();
         let owned_identity = regular_file_handle(&owned).unwrap();
@@ -563,8 +537,8 @@ mod tests {
         use std::os::unix::fs::symlink;
 
         let directory = tempfile::tempdir().unwrap();
-        let owned = directory.path().join("owned.gguf.part");
-        let alias = directory.path().join("alias.gguf.part");
+        let owned = directory.path().join("owned.gguf");
+        let alias = directory.path().join("alias.gguf");
         fs::write(&owned, b"owned").unwrap();
         symlink(&owned, &alias).unwrap();
         let owned_identity = regular_file_handle(&owned).unwrap();
@@ -583,7 +557,6 @@ mod tests {
         install_verified_reader(&spec, Cursor::new(FIXTURE_PAYLOAD), &dest).unwrap();
 
         assert_eq!(fs::read(&dest).unwrap(), FIXTURE_PAYLOAD);
-        assert!(!staging_path(&dest).unwrap().exists());
     }
 
     #[test]
@@ -606,12 +579,11 @@ mod tests {
                 Err(expected_error.to_string())
             );
             assert!(!dest.exists());
-            assert!(!staging_path(&dest).unwrap().exists());
         }
     }
 
     #[test]
-    fn verified_stream_install_never_overwrites_destination_or_staging_file() {
+    fn verified_stream_install_never_overwrites_destination() {
         let spec = fixture_spec("https://example.invalid/model.gguf");
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("fixture.gguf");
@@ -621,20 +593,10 @@ mod tests {
             Err(ERROR_DESTINATION_EXISTS.to_string())
         );
         assert_eq!(fs::read(&dest).unwrap(), b"keep-destination");
-
-        fs::remove_file(&dest).unwrap();
-        let staging = staging_path(&dest).unwrap();
-        fs::write(&staging, b"keep-staging").unwrap();
-        assert_eq!(
-            install_verified_reader(&spec, Cursor::new(FIXTURE_PAYLOAD), &dest),
-            Err(ERROR_STAGING_EXISTS.to_string())
-        );
-        assert_eq!(fs::read(&staging).unwrap(), b"keep-staging");
-        assert!(!dest.exists());
     }
 
     #[test]
-    fn verified_stream_install_cleans_staging_after_reader_failure() {
+    fn verified_stream_install_cleans_unnamed_staging_after_reader_failure() {
         let spec = fixture_spec("https://example.invalid/model.gguf");
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("fixture.gguf");
@@ -643,7 +605,7 @@ mod tests {
             Err(ERROR_STREAM_READ.to_string())
         );
         assert!(!dest.exists());
-        assert!(!staging_path(&dest).unwrap().exists());
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 
     #[test]
@@ -656,6 +618,20 @@ mod tests {
             Err(ERROR_STAGING_CREATE.to_string())
         );
         assert!(!dest.exists());
+    }
+
+    #[test]
+    fn hash_reader_enforces_bound_and_reports_digest() {
+        let mut exact = Cursor::new(FIXTURE_PAYLOAD);
+        let (bytes, digest) = hash_reader(&mut exact, FIXTURE_PAYLOAD.len() as u64).unwrap();
+        assert_eq!(bytes, FIXTURE_PAYLOAD.len() as u64);
+        assert_eq!(digest, FIXTURE_SHA256);
+
+        let mut oversized = Cursor::new(FIXTURE_PAYLOAD);
+        assert_eq!(
+            hash_reader(&mut oversized, (FIXTURE_PAYLOAD.len() - 1) as u64),
+            Err(ERROR_FINALIZE.to_string())
+        );
     }
 
     #[test]
@@ -701,7 +677,6 @@ mod tests {
         );
         server.join().unwrap();
         assert!(!dest.exists());
-        assert!(!staging_path(&dest).unwrap().exists());
     }
 
     #[test]
