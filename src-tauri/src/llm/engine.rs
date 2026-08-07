@@ -25,6 +25,7 @@ impl LlamaEngine {
     /// GPU 백엔드(CUDA/Vulkan/Metal)가 컴파일돼 있으면 그걸 쓰고, 없으면(CPU 빌드) 무시되어 CPU.
     /// `DISKSAGE_GPU_LAYERS`로 오버라이드(0이면 CPU 강제 — GPU 대비 검증용). 실패는 Err(문자열).
     pub fn new(model_path: &Path) -> Result<Self, String> {
+        super::installed_model::verify_installed_model(&super::model::DEFAULT, model_path)?;
         let backend = LlamaBackend::init().map_err(|e| e.to_string())?;
         let gpu_layers: u32 = std::env::var("DISKSAGE_GPU_LAYERS")
             .ok()
