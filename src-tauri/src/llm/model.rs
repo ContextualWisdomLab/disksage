@@ -179,8 +179,9 @@ fn cleanup_open_file_path(path: &Path, file: &File) {
 ///
 /// Production passes no-op hooks. The hooks exist so concurrency regressions can
 /// mutate pathnames at exact boundaries without sleeps or probabilistic scheduling.
-/// Every cleanup is identity-bound: foreign replacements are preserved unless the
-/// path still identifies the exact file DiskSage observed for that cleanup action.
+/// Every cleanup is identity-bound: foreign pathname replacements are preserved,
+/// while a destination link created from a raced staging source is removed only if
+/// the destination still identifies the exact file DiskSage linked.
 pub(super) fn finalize_verified_staging_with_hooks<F1, F2, F3>(
     staging: &Path,
     dest: &Path,
@@ -201,7 +202,16 @@ where
         after_staging_preflight();
 
         fs::hard_link(staging, dest).map_err(|_| ERROR_FINALIZE.to_string())?;
+        let linked_destination_identity = match regular_file_handle(dest) {
+            Some(identity) => identity,
+            None => return Err(ERROR_FINALIZE.to_string()),
+        };
         after_link_creation();
+
+        if !linked_destination_identity.eq(verified_identity) {
+            cleanup_owned_path(dest, &linked_destination_identity);
+            return Err(ERROR_FINALIZE.to_string());
+        }
 
         let destination_identity = match regular_file_handle(dest) {
             Some(identity) => identity,
