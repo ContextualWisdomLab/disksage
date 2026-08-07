@@ -15,6 +15,12 @@ use crate::llm::InferenceEngine;
 const MAX_TOKENS: i32 = 256;
 const N_CTX: u32 = 4096;
 
+/// Loaded llama.cpp inference engine backed by DiskSage's verified default GGUF.
+///
+/// Construction is intentionally fail closed: [`LlamaEngine::new`] re-verifies
+/// the installed model's exact pinned bytes before initializing the llama backend
+/// or allowing llama.cpp to parse the file. Once constructed, the engine retains
+/// the initialized backend and model for deterministic metadata-only inference.
 pub struct LlamaEngine {
     backend: LlamaBackend,
     model: LlamaModel,
