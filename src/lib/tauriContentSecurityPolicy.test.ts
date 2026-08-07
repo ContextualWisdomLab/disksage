@@ -40,9 +40,12 @@ describe("Tauri content security policy", () => {
       "form-action": "'none'",
       "frame-src": "'none'",
       "img-src": "'self' data: blob:",
+      "manifest-src": "'none'",
+      "media-src": "'none'",
       "object-src": "'none'",
       "script-src": "'self'",
       "style-src": "'self' 'unsafe-inline'",
+      "worker-src": "'none'",
     });
   });
 
@@ -57,12 +60,25 @@ describe("Tauri content security policy", () => {
       "form-action": "'none'",
       "frame-src": "'none'",
       "img-src": "'self' data: blob:",
+      "manifest-src": "'none'",
+      "media-src": "'none'",
       "object-src": "'none'",
       "script-src": "'self'",
       "style-src": "'self' 'unsafe-inline'",
+      "worker-src": "'none'",
     });
     expect(security.csp?.["connect-src"]).toBe("ipc: http://ipc.localhost");
     expect(security.csp?.["connect-src"]).not.toContain("ws:");
+  });
+
+  it("denies unused worker, media, and manifest fetch authority explicitly", () => {
+    const security = readTauriSecurityConfig().app.security;
+
+    for (const policy of [security.csp, security.devCsp]) {
+      expect(policy?.["worker-src"]).toBe("'none'");
+      expect(policy?.["media-src"]).toBe("'none'");
+      expect(policy?.["manifest-src"]).toBe("'none'");
+    }
   });
 
   it("blocks form submissions because form-action does not fall back to default-src", () => {
