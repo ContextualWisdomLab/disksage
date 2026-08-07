@@ -35,9 +35,6 @@ pub(crate) fn verify_installed_model(spec: &ModelSpec, path: &Path) -> Result<()
 
     let file = File::open(path).map_err(|_| ERROR_READ_FAILED.to_string())?;
     let handle_metadata = file.metadata().map_err(|_| ERROR_READ_FAILED.to_string())?;
-    if !handle_metadata.is_file() {
-        return Err(ERROR_NOT_REGULAR.to_string());
-    }
     if handle_metadata.len() != spec.bytes {
         return Err(ERROR_SIZE_MISMATCH.to_string());
     }
@@ -58,13 +55,12 @@ fn verify_reader<R: Read>(spec: &ModelSpec, mut reader: R) -> Result<(), String>
         if count == 0 {
             break;
         }
-        observed_bytes = observed_bytes
-            .checked_add(count as u64)
-            .ok_or_else(|| ERROR_SIZE_MISMATCH.to_string())?;
-        if observed_bytes > spec.bytes {
+        let count = count as u64;
+        if count > spec.bytes.saturating_sub(observed_bytes) {
             return Err(ERROR_SIZE_MISMATCH.to_string());
         }
-        hasher.update(&buffer[..count]);
+        observed_bytes += count;
+        hasher.update(&buffer[..count as usize]);
     }
 
     if observed_bytes != spec.bytes {
