@@ -3,7 +3,7 @@
 use super::model::finalize_verified_staging_with_hooks;
 use super::{download_to, ModelSpec};
 use same_file::Handle;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -21,9 +21,25 @@ fn staging_path(dest: &Path) -> PathBuf {
     dest.with_file_name(file_name)
 }
 
-/// Capture the operating-system file identity for a deterministic test fixture.
-fn identity_for(path: &Path) -> Handle {
-    Handle::from_file(File::open(path).unwrap()).unwrap()
+/// Build trusted fixture metadata for direct finalization tests.
+fn fixture_spec() -> ModelSpec {
+    ModelSpec {
+        name: "fixture-model",
+        url: "https://example.invalid/model.gguf",
+        sha256_hex: FIXTURE_SHA256,
+        bytes: FIXTURE_PAYLOAD.len() as u64,
+    }
+}
+
+/// Open one staging fixture and capture identity from that exact open file.
+fn verified_fixture(path: &Path) -> (File, Handle) {
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .unwrap();
+    let identity = Handle::from_file(file.try_clone().unwrap()).unwrap();
+    (file, identity)
 }
 
 #[test]
@@ -81,7 +97,7 @@ fn concurrent_destination_creation_is_preserved_and_never_replaced() {
     assert!(!staging.exists());
 }
 
-/// Prove that finalization cannot link or delete a staging pathname replaced after creation.
+/// Prove that finalization cannot copy or delete a staging pathname replaced after creation.
 #[cfg(unix)]
 #[test]
 fn concurrent_staging_path_replacement_is_rejected_and_preserved() {
@@ -140,21 +156,24 @@ fn concurrent_staging_path_replacement_is_rejected_and_preserved() {
     assert_eq!(fs::read(&staging).unwrap(), CONCURRENT_OWNER_BYTES);
 }
 
-/// Prove that a replacement linked between preflight and hard-link creation is preserved.
+/// Prove that staging replacement between preflight and destination creation is preserved.
 #[cfg(unix)]
 #[test]
-fn linked_foreign_staging_is_removed_only_from_the_attempt_destination() {
+fn staging_replacement_after_preflight_is_rejected_and_preserved() {
     const CONCURRENT_OWNER_BYTES: &[u8] = b"attacker-controlled-bytes!!";
 
     let directory = tempfile::tempdir().unwrap();
     let destination = directory.path().join("fixture.gguf");
     let staging = staging_path(&destination);
     fs::write(&staging, FIXTURE_PAYLOAD).unwrap();
-    let verified_identity = identity_for(&staging);
+    let (verified_file, verified_identity) = verified_fixture(&staging);
+    let spec = fixture_spec();
 
     let result = finalize_verified_staging_with_hooks(
+        &spec,
         &staging,
         &destination,
+        &verified_file,
         &verified_identity,
         || {
             fs::remove_file(&staging).unwrap();
@@ -169,21 +188,24 @@ fn linked_foreign_staging_is_removed_only_from_the_attempt_destination() {
     assert_eq!(fs::read(&staging).unwrap(), CONCURRENT_OWNER_BYTES);
 }
 
-/// Prove that a destination replaced before identity capture is never deleted as ours.
+/// Prove that a destination replaced after create-new ownership capture is preserved.
 #[cfg(unix)]
 #[test]
-fn destination_replaced_before_identity_capture_is_preserved() {
+fn destination_replaced_after_creation_identity_capture_is_preserved() {
     const CONCURRENT_DESTINATION_BYTES: &[u8] = b"concurrent-destination-owner";
 
     let directory = tempfile::tempdir().unwrap();
     let destination = directory.path().join("fixture.gguf");
     let staging = staging_path(&destination);
     fs::write(&staging, FIXTURE_PAYLOAD).unwrap();
-    let verified_identity = identity_for(&staging);
+    let (verified_file, verified_identity) = verified_fixture(&staging);
+    let spec = fixture_spec();
 
     let result = finalize_verified_staging_with_hooks(
+        &spec,
         &staging,
         &destination,
+        &verified_file,
         &verified_identity,
         || {},
         || {
@@ -201,21 +223,24 @@ fn destination_replaced_before_identity_capture_is_preserved() {
     assert!(!staging.exists());
 }
 
-/// Prove that failed cleanup never deletes a destination replaced after identity binding.
+/// Prove that failed cleanup never deletes a destination replaced after verified binding.
 #[cfg(unix)]
 #[test]
-fn destination_replaced_after_link_identity_binding_is_preserved() {
+fn destination_replaced_after_verified_binding_is_preserved() {
     const CONCURRENT_DESTINATION_BYTES: &[u8] = b"concurrent-destination-owner";
 
     let directory = tempfile::tempdir().unwrap();
     let destination = directory.path().join("fixture.gguf");
     let staging = staging_path(&destination);
     fs::write(&staging, FIXTURE_PAYLOAD).unwrap();
-    let verified_identity = identity_for(&staging);
+    let (verified_file, verified_identity) = verified_fixture(&staging);
+    let spec = fixture_spec();
 
     let result = finalize_verified_staging_with_hooks(
+        &spec,
         &staging,
         &destination,
+        &verified_file,
         &verified_identity,
         || {},
         || {},
@@ -230,4 +255,105 @@ fn destination_replaced_after_link_identity_binding_is_preserved() {
         fs::read(&destination).unwrap(),
         CONCURRENT_DESTINATION_BYTES
     );
+    assert!(!staging.exists());
+}
+
+/// Prove that same-inode staging mutation cannot bypass the trusted SHA-256 binding.
+#[cfg(unix)]
+#[test]
+fn same_inode_staging_digest_mutation_is_rejected() {
+    const MUTATED_BYTES: &[u8] = b"attacker-controlled-bytes!!";
+
+    assert_eq!(MUTATED_BYTES.len(), FIXTURE_PAYLOAD.len());
+    let directory = tempfile::tempdir().unwrap();
+    let destination = directory.path().join("fixture.gguf");
+    let staging = staging_path(&destination);
+    fs::write(&staging, FIXTURE_PAYLOAD).unwrap();
+    let (verified_file, verified_identity) = verified_fixture(&staging);
+    let spec = fixture_spec();
+
+    let result = finalize_verified_staging_with_hooks(
+        &spec,
+        &staging,
+        &destination,
+        &verified_file,
+        &verified_identity,
+        || fs::write(&staging, MUTATED_BYTES).unwrap(),
+        || {},
+        || {},
+    );
+
+    assert_eq!(result, Err("model-finalize-failed".to_string()));
+    assert!(!destination.exists());
+    assert!(!staging.exists());
+}
+
+/// Prove that same-inode growth after verification is rejected before installation.
+#[cfg(unix)]
+#[test]
+fn same_inode_staging_growth_is_rejected() {
+    let directory = tempfile::tempdir().unwrap();
+    let destination = directory.path().join("fixture.gguf");
+    let staging = staging_path(&destination);
+    fs::write(&staging, FIXTURE_PAYLOAD).unwrap();
+    let (verified_file, verified_identity) = verified_fixture(&staging);
+    let spec = fixture_spec();
+
+    let result = finalize_verified_staging_with_hooks(
+        &spec,
+        &staging,
+        &destination,
+        &verified_file,
+        &verified_identity,
+        || {
+            OpenOptions::new()
+                .append(true)
+                .open(&staging)
+                .unwrap()
+                .write_all(b"!")
+                .unwrap();
+        },
+        || {},
+        || {},
+    );
+
+    assert_eq!(result, Err("model-finalize-failed".to_string()));
+    assert!(!destination.exists());
+    assert!(!staging.exists());
+}
+
+/// Prove that same-inode truncation after verification is rejected before installation.
+#[cfg(unix)]
+#[test]
+fn same_inode_staging_truncation_is_rejected() {
+    let directory = tempfile::tempdir().unwrap();
+    let destination = directory.path().join("fixture.gguf");
+    let staging = staging_path(&destination);
+    fs::write(&staging, FIXTURE_PAYLOAD).unwrap();
+    let (verified_file, verified_identity) = verified_fixture(&staging);
+    let spec = fixture_spec();
+
+    let result = finalize_verified_staging_with_hooks(
+        &spec,
+        &staging,
+        &destination,
+        &verified_file,
+        &verified_identity,
+        || {
+            let mut replacement = OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(&staging)
+                .unwrap();
+            replacement
+                .write_all(&FIXTURE_PAYLOAD[..FIXTURE_PAYLOAD.len() - 1])
+                .unwrap();
+        },
+        || {},
+        || {},
+    );
+
+    assert_eq!(result, Err("model-finalize-failed".to_string()));
+    assert!(!destination.exists());
+    assert!(!staging.exists());
 }
