@@ -27,9 +27,12 @@
         "form-action": "'none'",
         "frame-src": "'none'",
         "img-src": "'self' data: blob:",
+        "manifest-src": "'none'",
+        "media-src": "'none'",
         "object-src": "'none'",
         "script-src": "'self'",
-        "style-src": "'self' 'unsafe-inline'"
+        "style-src": "'self' 'unsafe-inline'",
+        "worker-src": "'none'"
       },
       "devCsp": {
         "default-src": "'self'",
@@ -39,9 +42,12 @@
         "form-action": "'none'",
         "frame-src": "'none'",
         "img-src": "'self' data: blob:",
+        "manifest-src": "'none'",
+        "media-src": "'none'",
         "object-src": "'none'",
         "script-src": "'self'",
-        "style-src": "'self' 'unsafe-inline'"
+        "style-src": "'self' 'unsafe-inline'",
+        "worker-src": "'none'"
       }
     }
   },
