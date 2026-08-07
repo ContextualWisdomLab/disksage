@@ -22,6 +22,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Security
 
+- Re-verify the installed GGUF again before llama.cpp initialization: reject missing, linked, non-regular, short, oversized, unreadable, or SHA-256-mismatched artifacts with stable path-free errors, use a fixed 64 KiB load-time hashing buffer, and bind verification of the immutable default model ahead of backend/model initialization.
 - Bind the default on-device GGUF model to an immutable upstream revision, exact byte count, and SHA-256 digest; replace whole-model memory buffering with bounded streaming into a create-new staging file; refuse destination/staging overwrite; finalize with no-clobber same-directory linking only after exact-size, digest, flush, and file-sync verification; and keep model installation inside the Rust coverage surface with privacy-safe stable errors.
 - Persist copy-approval provenance in immutable receipt lineage, reject stale, generic, mismatched, or tampered approvals, and retain explicit backward readability for pre-approval receipt formats.
 - Generate the npm lockfile in an exact-head validation job with repository contents read-only and dependency lifecycle scripts disabled, bind the artifact to SHA-256 evidence, and grant `contents: write` only to a separate publication job that verifies the same-run artifact and unchanged branch head before committing the lockfile.
