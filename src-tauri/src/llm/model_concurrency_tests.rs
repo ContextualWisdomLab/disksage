@@ -59,44 +59,29 @@ fn exact_fixture_server() -> (&'static str, thread::JoinHandle<()>) {
     (url, server)
 }
 
+/// The durable create-new finalizer refuses a destination owned by another actor.
+///
+/// The installer has an earlier advisory existence check, but authorization is not
+/// derived from that observation. This direct finalizer regression exercises the
+/// actual mutation boundary deterministically: once another actor owns the path,
+/// create-new must fail and preserve the foreign bytes unchanged.
 #[test]
-fn concurrent_destination_creation_is_preserved_and_never_replaced() {
+fn destination_created_before_create_new_is_preserved_and_never_replaced() {
     let directory = tempfile::tempdir().unwrap();
     let destination = directory.path().join("fixture.gguf");
-    let server_destination = destination.clone();
+    let staging = verified_unnamed_fixture(directory.path());
+    let spec = fixture_spec();
+    fs::write(&destination, b"concurrent-owner").unwrap();
 
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let url = Box::leak(format!("http://{address}/model.gguf").into_boxed_str());
-    let server = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut request = [0_u8; 2048];
-        let _ = stream.read(&mut request).unwrap();
-        write!(
-            stream,
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            FIXTURE_PAYLOAD.len()
-        )
-        .unwrap();
-        stream
-            .write_all(&FIXTURE_PAYLOAD[..FIXTURE_PAYLOAD.len() - 1])
-            .unwrap();
-        stream.flush().unwrap();
-        fs::write(&server_destination, b"concurrent-owner").unwrap();
-        stream
-            .write_all(&FIXTURE_PAYLOAD[FIXTURE_PAYLOAD.len() - 1..])
-            .unwrap();
-        stream.flush().unwrap();
-    });
-
-    let spec = ModelSpec {
-        name: "fixture-model",
-        url,
-        sha256_hex: FIXTURE_SHA256,
-        bytes: FIXTURE_PAYLOAD.len() as u64,
-    };
-    let result = download_to(&spec, &destination);
-    server.join().unwrap();
+    let result = finalize_verified_file_with_hooks(
+        &spec,
+        &destination,
+        &staging,
+        || {},
+        || {},
+        || {},
+        || {},
+    );
 
     assert_eq!(result, Err("model-finalize-failed".to_string()));
     assert_eq!(fs::read(&destination).unwrap(), b"concurrent-owner");
