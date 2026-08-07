@@ -23,7 +23,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Security
 
-- Enable an explicit fail-closed Tauri Content Security Policy that keeps executable scripts and fonts local, grants production network authority only to the Tauri IPC transport, confines Vite WebSocket HMR to a separate development-only CSP, denies object/frame/base-URI authority, deny form submissions with explicit `form-action 'none'`, and regression-tests against null, wildcard, remote-script/style, eval, and development-authority leakage.
+- Enable an explicit fail-closed Tauri Content Security Policy that keeps executable scripts and fonts local, grants production network authority only to the Tauri IPC transport, confines Vite WebSocket HMR to a separate development-only CSP, denies object/frame/base-URI authority, denies form submissions with explicit `form-action 'none'`, deny unused worker, media, and web-app-manifest fetch authority with explicit `'none'` directives, and regression-tests against null, wildcard, remote-script/style, eval, and development-authority leakage.
 - Persist copy-approval provenance in immutable receipt lineage, reject stale, generic, mismatched, or tampered approvals, and retain explicit backward readability for pre-approval receipt formats.
 - Generate the npm lockfile in an exact-head validation job with repository contents read-only and dependency lifecycle scripts disabled, bind the artifact to SHA-256 evidence, and grant `contents: write` only to a separate publication job that verifies the same-run artifact and unchanged branch head before committing the lockfile.
 - Removed obsolete one-shot repair workflows and patch scripts so repository automation no longer retains dormant write-capable recovery paths.
