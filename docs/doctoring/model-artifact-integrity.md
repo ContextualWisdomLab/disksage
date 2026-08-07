@@ -8,7 +8,7 @@ The authoritative production implementation is `src-tauri/src/llm/model.rs`. The
 
 ## Threat model
 
-The installation path assumes the upstream network, CDN response, partial download, local staging namespace, and concurrent local destination creation can all fail or drift independently. Controls therefore address the following failure modes:
+The installation path assumes the upstream network, CDN response, partial download, local staging namespace, and concurrent local namespace mutation can all fail or drift independently. Controls therefore address the following failure modes:
 
 - a mutable upstream branch later resolving to different bytes;
 - a response declaring or delivering a different size from the reviewed model specification;
@@ -16,6 +16,7 @@ The installation path assumes the upstream network, CDN response, partial downlo
 - a truncated response that happens to parse as an ordinary file;
 - bytes with the wrong SHA-256 digest being promoted into the executable model location;
 - an existing destination, symlink, or stale staging file being overwritten;
+- a concurrent actor replacing the staging pathname after DiskSage created and opened the verified file;
 - an I/O failure leaving an apparently complete final artifact;
 - local or network diagnostics leaking paths or untrusted response detail through the public error contract.
 
@@ -33,13 +34,17 @@ The official `Qwen/Qwen2.5-1.5B-Instruct-GGUF` repository declares the model rep
 
 If a future release bundles, mirrors, or otherwise redistributes the model artifact, release acceptance must re-check the exact upstream revision's license and accompanying attribution material and satisfy the applicable Apache License, Version 2.0 redistribution conditions before publication. The Apache Software Foundation identifies Apache License 2.0 as its current license and its distribution guidance explains that license and NOTICE material must be preserved where the license requires it. A future packaging change therefore cannot inherit approval merely from this runtime-download decision.
 
-## Bounded streaming and no-clobber finalization
+## Bounded streaming and identity-bound no-clobber finalization
 
 `ureq` 3.3 documents that response readers are unlimited unless a body limit is configured and that `Content-Length`, when present, is enforced by its HTTP body machinery. DiskSage sets an independent reader limit of `expected bytes + 1`, allowing the installer to detect an overlong body while avoiding the previous design that accumulated the entire approximately 1.12 GB model in a `Vec<u8>` before writing.
 
-The installer uses a fixed 64 KiB buffer, updates SHA-256 while writing, and refuses short, long, or digest-mismatched streams. The sibling staging name appends `.part` to the complete destination filename and is opened with create-new semantics. After exact-size and digest validation, the file is flushed and `sync_all` is required. Promotion uses a same-directory hard link, which fails if another entry already occupies the final destination; only after that no-clobber link succeeds is the staging name removed. Validation and I/O failures remove staging evidence rather than presenting it as an installed model.
+The installer uses a fixed 64 KiB buffer, updates SHA-256 while writing, and refuses short, long, or digest-mismatched streams. The sibling staging name appends `.part` to the complete destination filename and is opened with create-new semantics. After exact-size and digest validation, the file is flushed and `sync_all` is required. DiskSage then derives a `same_file::Handle` from a clone of the still-open verified file and treats this operating-system file identity, rather than the mutable pathname alone, as the finalization subject.
 
-The preflight destination check improves operator feedback but is not treated as durable authorization: the final hard-link operation re-establishes the no-clobber condition at mutation time. This preserves the repository's separation between local validation and durable mutation authority. A deterministic concurrency regression test deliberately creates the destination after staging has begun but before finalization; the installer must preserve the concurrently created file, fail with the stable finalization code, and remove only its own staging entry.
+Before creating the final hard link, the staging path must still resolve to a regular file with the verified identity; symlink aliases and replaced entries fail closed. After the no-clobber hard link succeeds, the destination must resolve to that same verified identity, and the staging identity is checked again immediately before its pathname is removed. Error cleanup deletes a pathname only while it still resolves to the DiskSage-owned file identity. A foreign replacement entry is preserved, any destination link created from a mismatched source is removed when its identity can be established, and the public operation returns `model-finalize-failed`.
+
+The preflight destination check improves operator feedback but is not treated as durable authorization: the hard-link operation re-establishes the no-clobber condition at mutation time, while the identity checks bind the mutation result to the exact open file whose byte count and digest were verified. This preserves the repository's separation between local validation and durable mutation authority.
+
+Two deterministic concurrency regressions cover distinct races. One creates the destination after staging begins but before finalization; the installer must preserve the concurrently created destination and remove only its own staging entry. The other unlinks and replaces the staging pathname while DiskSage still writes to its original open handle; the installer must reject the replacement, leave the foreign staging entry untouched, and expose no destination. These tests demonstrate the difference between content integrity of an open file and authorization to mutate a later pathname.
 
 ## Error and privacy boundary
 
@@ -53,10 +58,12 @@ The Rust tests exercise:
 - immutable-revision pinning of the default model;
 - fail-closed specification validation;
 - staging-name semantics;
+- regular-file identity matching, symlink rejection, idempotent owned cleanup, and preservation of unowned paths;
 - successful exact-size and exact-digest streaming installation;
 - short, oversized, and digest-mismatched streams;
 - existing destination and stale staging refusal;
 - concurrent destination creation after staging preflight without overwrite;
+- concurrent staging-path replacement without promotion or deletion of the replacement;
 - deterministic reader failure cleanup;
 - missing-parent staging failure without path-bearing errors;
 - a real loopback HTTP success path through `ureq`;
@@ -70,17 +77,17 @@ No live 1.12 GB model download is required for CI acceptance. The reviewed upstr
 
 NIST SP 800-218 version 1.1 remains the current **final** SSDF, while NIST published SP 800-218 Rev. 1 / SSDF 1.2 as an Initial Public Draft on December 17, 2025. DiskSage records the newer draft as forward-looking evidence but does not misrepresent it as a final standard. NIST SP 800-218A is final and explicitly extends SSDF practices to producers and acquirers of AI systems and models.
 
-This slice supports those acquisition-oriented secure-development expectations by making the model dependency version-specific, integrity-bound, independently verified, bounded during transfer, and covered by deterministic tests. OWASP Top 10:2025 A03 recommends obtaining components from official sources over secure links and hardening supply-chain artifacts, while A08 specifically identifies downloading artifacts without adequate integrity verification as an integrity failure. SLSA 1.2 similarly treats fetched artifacts as dependencies whose identities and digests are material to provenance. These mappings are engineering rationale, not a claim of certification or blanket conformance.
+This slice supports those acquisition-oriented secure-development expectations by making the model dependency version-specific, integrity-bound, independently verified, bounded during transfer, namespace-race resistant, and covered by deterministic tests. OWASP Top 10:2025 A03 recommends obtaining components from official sources over secure links and hardening supply-chain artifacts, while A08 specifically identifies downloading artifacts without adequate integrity verification as an integrity failure. SLSA 1.2 similarly treats fetched artifacts as dependencies whose identities and digests are material to provenance. These mappings are engineering rationale, not a claim of certification or blanket conformance.
 
 ## Standalone and MSA compatibility
 
-The model artifact is installed and verified locally. No Naruon, contextual-orchestrator, central CWL service, tenant account, or remote authorization service is required for standalone operation. If another CWL service later supplies model metadata or download coordination, it may propose an artifact but cannot weaken the DiskSage local exact-size, exact-digest, immutable-revision, and no-clobber acceptance boundary. The on-device inference path therefore remains usable as a standalone component and as a bounded module in a larger MSA.
+The model artifact is installed and verified locally. No Naruon, contextual-orchestrator, central CWL service, tenant account, or remote authorization service is required for standalone operation. If another CWL service later supplies model metadata or download coordination, it may propose an artifact but cannot weaken the DiskSage local exact-size, exact-digest, immutable-revision, no-clobber, and file-identity acceptance boundary. The on-device inference path therefore remains usable as a standalone component and as a bounded module in a larger MSA.
 
 ## Rollback and migration
 
 There is no database migration and no database object is introduced by this slice. Existing valid model files remain readable because the runtime model filename does not change. The new installer affects only future downloads.
 
-Rollback must be a reviewed source change. If the pinned upstream revision becomes unavailable, update the immutable revision, exact byte count, and SHA-256 together after independently revalidating the intended model file; add a failing regression test first; update this document and `CHANGELOG.md`; and rerun exact-head Rust tests, coverage, security, packaging, provenance, and release-acceptance gates. Do not revert to `/resolve/main/`, remove the byte limit, accept a missing/mismatched digest, or restore whole-model in-memory buffering as an availability shortcut.
+Rollback must be a reviewed source change. If the pinned upstream revision becomes unavailable, update the immutable revision, exact byte count, and SHA-256 together after independently revalidating the intended model file; add a failing regression test first; update this document and `CHANGELOG.md`; and rerun exact-head Rust tests, coverage, security, packaging, provenance, and release-acceptance gates. Do not revert to `/resolve/main/`, remove the byte limit, accept a missing/mismatched digest, restore whole-model in-memory buffering, or remove file-identity binding as an availability shortcut.
 
 ## APA 7th references
 
@@ -102,10 +109,12 @@ Open Worldwide Application Security Project. (2025). *A08:2025 software or data 
 
 OpenSSF. (n.d.). *Supply-chain Levels for Software Artifacts specification, version 1.2*. Retrieved August 7, 2026, from https://slsa.dev/spec/v1.2/
 
+same-file contributors. (n.d.). *same-file 1.0.6: Handle* [Rust crate documentation]. Retrieved August 7, 2026, from https://docs.rs/same-file/1.0.6/same_file/struct.Handle.html
+
 Souppaya, M., Scarfone, K., & Dodson, D. (2022). *Secure software development framework (SSDF) version 1.1: Recommendations for mitigating the risk of software vulnerabilities* (NIST Special Publication 800-218). National Institute of Standards and Technology. https://doi.org/10.6028/NIST.SP.800-218
 
 ureq contributors. (2026). *ureq 3.3.0: Body and BodyWithConfig* [Rust crate documentation]. Docs.rs. https://docs.rs/ureq/3.3.0/ureq/struct.Body.html
 
 ## Evidence verification note
 
-The NIST SSDF publication index, NIST SP 800-218A final publication, SLSA 1.2 specification, OWASP Top 10:2025 A03/A08 pages, Hugging Face Hub download documentation, official Qwen GGUF repository license declaration, immutable Qwen model-file page, Apache Software Foundation License 2.0 guidance, and ureq 3.3.0 primary crate documentation were rechecked on August 7, 2026. The final-versus-draft status distinction above reflects NIST's publication index as of that date.
+The NIST SSDF publication index, NIST SP 800-218A final publication, SLSA 1.2 specification, OWASP Top 10:2025 A03/A08 pages, Hugging Face Hub download documentation, official Qwen GGUF repository license declaration, immutable Qwen model-file page, Apache Software Foundation License 2.0 guidance, same-file 1.0.6 primary crate documentation, and ureq 3.3.0 primary crate documentation were rechecked on August 7, 2026. The final-versus-draft status distinction above reflects NIST's publication index as of that date.
