@@ -3,6 +3,8 @@ mod cache;
 #[cfg(all(not(coverage), feature = "llm-engine"))]
 mod engine;
 mod model;
+#[cfg(test)]
+mod model_concurrency_tests;
 mod parse;
 mod prompt;
 mod verdict;
