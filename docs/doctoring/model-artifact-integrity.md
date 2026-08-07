@@ -27,13 +27,19 @@ The default Qwen2.5 1.5B Instruct Q4_K_M GGUF URL is pinned to Hugging Face revi
 
 Hugging Face documents revision-specific downloads and content-addressed blob caching. Its current Hub documentation also describes Xet retrieval as using the LFS SHA-256 hash to obtain reconstruction metadata. DiskSage does not delegate its local trust decision to cache metadata: it recomputes the SHA-256 digest over the bytes it actually writes.
 
+## Upstream license evidence
+
+The official `Qwen/Qwen2.5-1.5B-Instruct-GGUF` repository declares the model repository license as `apache-2.0`. DiskSage currently downloads the reviewed artifact directly from that upstream repository on explicit user request; the model is not bundled into DiskSage's application package by this slice. This record is acquisition due-diligence evidence, not legal advice or a representation that model licensing can never change.
+
+If a future release bundles, mirrors, or otherwise redistributes the model artifact, release acceptance must re-check the exact upstream revision's license and accompanying attribution material and satisfy the applicable Apache License, Version 2.0 redistribution conditions before publication. The Apache Software Foundation identifies Apache License 2.0 as its current license and its distribution guidance explains that license and NOTICE material must be preserved where the license requires it. A future packaging change therefore cannot inherit approval merely from this runtime-download decision.
+
 ## Bounded streaming and no-clobber finalization
 
 `ureq` 3.3 documents that response readers are unlimited unless a body limit is configured and that `Content-Length`, when present, is enforced by its HTTP body machinery. DiskSage sets an independent reader limit of `expected bytes + 1`, allowing the installer to detect an overlong body while avoiding the previous design that accumulated the entire approximately 1.12 GB model in a `Vec<u8>` before writing.
 
 The installer uses a fixed 64 KiB buffer, updates SHA-256 while writing, and refuses short, long, or digest-mismatched streams. The sibling staging name appends `.part` to the complete destination filename and is opened with create-new semantics. After exact-size and digest validation, the file is flushed and `sync_all` is required. Promotion uses a same-directory hard link, which fails if another entry already occupies the final destination; only after that no-clobber link succeeds is the staging name removed. Validation and I/O failures remove staging evidence rather than presenting it as an installed model.
 
-The preflight destination check improves operator feedback but is not treated as durable authorization: the final hard-link operation re-establishes the no-clobber condition at mutation time. This preserves the repository's separation between local validation and durable mutation authority.
+The preflight destination check improves operator feedback but is not treated as durable authorization: the final hard-link operation re-establishes the no-clobber condition at mutation time. This preserves the repository's separation between local validation and durable mutation authority. A deterministic concurrency regression test deliberately creates the destination after staging has begun but before finalization; the installer must preserve the concurrently created file, fail with the stable finalization code, and remove only its own staging entry.
 
 ## Error and privacy boundary
 
@@ -50,6 +56,7 @@ The Rust tests exercise:
 - successful exact-size and exact-digest streaming installation;
 - short, oversized, and digest-mismatched streams;
 - existing destination and stale staging refusal;
+- concurrent destination creation after staging preflight without overwrite;
 - deterministic reader failure cleanup;
 - missing-parent staging failure without path-bearing errors;
 - a real loopback HTTP success path through `ureq`;
@@ -77,9 +84,13 @@ Rollback must be a reviewed source change. If the pinned upstream revision becom
 
 ## APA 7th references
 
+Apache Software Foundation. (2004). *Apache License, Version 2.0*. https://www.apache.org/licenses/LICENSE-2.0
+
 Booth, H., Souppaya, M., Vassilev, A., Ogata, M., Stanley, M., & Scarfone, K. (2024). *Secure software development practices for generative AI and dual-use foundation models: An SSDF community profile* (NIST Special Publication 800-218A). National Institute of Standards and Technology. https://doi.org/10.6028/NIST.SP.800-218A
 
 Hugging Face. (n.d.). *Download files from the Hub*. Retrieved August 7, 2026, from https://huggingface.co/docs/huggingface_hub/en/guides/download
+
+Hugging Face. (n.d.). *Qwen/Qwen2.5-1.5B-Instruct-GGUF*. Retrieved August 7, 2026, from https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF
 
 Hugging Face. (n.d.). *qwen2.5-1.5b-instruct-q4_k_m.gguf at revision a615a81362316d7b9f5a7a9c4313adfdf9b54588*. Retrieved August 7, 2026, from https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/blob/a615a81362316d7b9f5a7a9c4313adfdf9b54588/qwen2.5-1.5b-instruct-q4_k_m.gguf
 
@@ -97,4 +108,4 @@ ureq contributors. (2026). *ureq 3.3.0: Body and BodyWithConfig* [Rust crate doc
 
 ## Evidence verification note
 
-The NIST SSDF publication index, NIST SP 800-218A final publication, SLSA 1.2 specification, OWASP Top 10:2025 A03/A08 pages, Hugging Face Hub download documentation, immutable Qwen model-file page, and ureq 3.3.0 primary crate documentation were rechecked on August 7, 2026. The final-versus-draft status distinction above reflects NIST's publication index as of that date.
+The NIST SSDF publication index, NIST SP 800-218A final publication, SLSA 1.2 specification, OWASP Top 10:2025 A03/A08 pages, Hugging Face Hub download documentation, official Qwen GGUF repository license declaration, immutable Qwen model-file page, Apache Software Foundation License 2.0 guidance, and ureq 3.3.0 primary crate documentation were rechecked on August 7, 2026. The final-versus-draft status distinction above reflects NIST's publication index as of that date.
