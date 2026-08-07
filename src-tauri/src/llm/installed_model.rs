@@ -18,28 +18,67 @@ const ERROR_SIZE_MISMATCH: &str = "model-installed-size-mismatch";
 const ERROR_READ_FAILED: &str = "model-installed-read-failed";
 const ERROR_DIGEST_MISMATCH: &str = "model-installed-digest-mismatch";
 
+/// Non-following path facts collected before an installed model is opened.
+///
+/// The observation deliberately contains no path or filename. It allows tests to
+/// exercise every admission branch without depending on host permission behavior,
+/// while production still obtains the facts from `symlink_metadata`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct InstalledModelObservation {
+    /// Whether the source-controlled model path itself is a symbolic link.
+    pub(super) is_symbolic_link: bool,
+    /// Whether the path metadata identifies an ordinary regular file.
+    pub(super) is_regular_file: bool,
+    /// Byte length reported by the non-following path metadata snapshot.
+    pub(super) observed_bytes: u64,
+}
+
 /// Verify that an installed model file is the exact artifact named by `spec`.
 ///
 /// This is the load-time gate used before llama.cpp initialization. The path is
-/// inspected without following symbolic links, directories and other non-regular
-/// objects are rejected, and the opened file handle must report the exact trusted
-/// byte length before any model bytes are hashed. SHA-256 is then recomputed using
-/// a fixed 64 KiB buffer. Failures return stable path-free error codes and never
-/// include local paths, operating-system diagnostics, or model bytes.
+/// inspected without following symbolic links; directories and other non-regular
+/// objects are rejected; and the metadata snapshot must report the trusted byte
+/// length before opening. The bytes actually read are then counted again and
+/// hashed through a fixed 64 KiB buffer, so a stale metadata snapshot cannot turn
+/// a short, overlong, or modified stream into trusted input. Failures return stable
+/// path-free error codes and never include local paths, operating-system
+/// diagnostics, or model bytes.
 pub(crate) fn verify_installed_model(spec: &ModelSpec, path: &Path) -> Result<(), String> {
     let path_metadata = std::fs::symlink_metadata(path)
         .map_err(|_| ERROR_UNAVAILABLE.to_string())?;
-    if path_metadata.file_type().is_symlink() || !path_metadata.is_file() {
+    let observation = InstalledModelObservation {
+        is_symbolic_link: path_metadata.file_type().is_symlink(),
+        is_regular_file: path_metadata.is_file(),
+        observed_bytes: path_metadata.len(),
+    };
+
+    verify_observed_model(spec, observation, || File::open(path))
+}
+
+/// Apply fail-closed path admission and verify bytes from an injected opener.
+///
+/// Production supplies `File::open`; deterministic tests may supply a reader or a
+/// synthetic opener failure. Rejected symbolic links, non-regular files, and size
+/// drift never invoke the opener, which keeps the least-privilege boundary
+/// observable and independently testable.
+pub(super) fn verify_observed_model<R, F>(
+    spec: &ModelSpec,
+    observation: InstalledModelObservation,
+    open: F,
+) -> Result<(), String>
+where
+    R: Read,
+    F: FnOnce() -> std::io::Result<R>,
+{
+    if observation.is_symbolic_link || !observation.is_regular_file {
         return Err(ERROR_NOT_REGULAR.to_string());
     }
-
-    let file = File::open(path).map_err(|_| ERROR_READ_FAILED.to_string())?;
-    let handle_metadata = file.metadata().map_err(|_| ERROR_READ_FAILED.to_string())?;
-    if handle_metadata.len() != spec.bytes {
+    if observation.observed_bytes != spec.bytes {
         return Err(ERROR_SIZE_MISMATCH.to_string());
     }
 
-    verify_reader(spec, file)
+    let reader = open().map_err(|_| ERROR_READ_FAILED.to_string())?;
+    verify_reader(spec, reader)
 }
 
 /// Verify the exact byte count and SHA-256 digest from an already-open reader.
