@@ -113,6 +113,9 @@ describe("Tauri content security policy", () => {
     expect(doctoring).toContain("# Tauri content security policy");
     expect(doctoring).toContain("form-action 'none'");
     expect(doctoring).toContain("does not fall back to `default-src`");
+    expect(doctoring).toContain(
+      "`worker-src 'none'`, `media-src 'none'`, and `manifest-src 'none'`",
+    );
     expect(doctoring).toContain("## Development policy");
     expect(doctoring).toContain("## Rollback and migration");
     expect(doctoring).toContain("## Standalone and MSA compatibility");
@@ -128,8 +131,9 @@ describe("Tauri content security policy", () => {
       "https://www.w3.org/TR/2026/WD-CSP3-20260729/",
     );
     expect(doctoring).not.toContain("WD-CSP3-20260505");
+    expect(changelog).toContain("deny form submissions");
     expect(changelog).toContain(
-      "deny form submissions",
+      "deny unused worker, media, and web-app-manifest fetch authority",
     );
   });
 });
