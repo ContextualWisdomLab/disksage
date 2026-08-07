@@ -17,6 +17,7 @@ The installation path assumes the upstream network, CDN response, partial downlo
 - bytes with the wrong SHA-256 digest being promoted into the executable model location;
 - an existing destination, symlink, or stale staging file being overwritten;
 - a concurrent actor replacing the staging pathname after DiskSage created and opened the verified file;
+- a concurrent actor replacing the destination pathname after DiskSage creates its no-clobber link but before or after destination identity binding;
 - an I/O failure leaving an apparently complete final artifact;
 - local or network diagnostics leaking paths or untrusted response detail through the public error contract.
 
@@ -40,11 +41,11 @@ If a future release bundles, mirrors, or otherwise redistributes the model artif
 
 The installer uses a fixed 64 KiB buffer, updates SHA-256 while writing, and refuses short, long, or digest-mismatched streams. The sibling staging name appends `.part` to the complete destination filename and is opened with create-new semantics. After exact-size and digest validation, the file is flushed and `sync_all` is required. DiskSage then derives a `same_file::Handle` from a clone of the still-open verified file and treats this operating-system file identity, rather than the mutable pathname alone, as the finalization subject.
 
-Before creating the final hard link, the staging path must still resolve to a regular file with the verified identity; symlink aliases and replaced entries fail closed. After the no-clobber hard link succeeds, the destination must resolve to that same verified identity, and the staging identity is checked again immediately before its pathname is removed. Error cleanup deletes a pathname only while it still resolves to the DiskSage-owned file identity. A foreign replacement entry is preserved, any destination link created from a mismatched source is removed when its identity can be established, and the public operation returns `model-finalize-failed`.
+Before creating the final hard link, the staging path must still resolve to a regular file with the verified identity; symlink aliases and replaced entries fail closed. After the no-clobber hard link succeeds, the destination must resolve to that same verified identity, and the staging identity is checked again immediately before its pathname is removed. Error cleanup deletes a pathname only while it still resolves to the DiskSage-owned verified identity. If the destination has already been replaced before identity capture, DiskSage fails closed without deleting the newly observed foreign file; if a previously identity-bound destination is later replaced, cleanup again refuses to delete the replacement. A foreign staging replacement is likewise preserved, while a destination link that still identifies DiskSage's verified file may be removed after a failed finalization. All such failures return `model-finalize-failed`.
 
 The preflight destination check improves operator feedback but is not treated as durable authorization: the hard-link operation re-establishes the no-clobber condition at mutation time, while the identity checks bind the mutation result to the exact open file whose byte count and digest were verified. This preserves the repository's separation between local validation and durable mutation authority.
 
-Two deterministic concurrency regressions cover distinct races. One creates the destination after staging begins but before finalization; the installer must preserve the concurrently created destination and remove only its own staging entry. The other unlinks and replaces the staging pathname while DiskSage still writes to its original open handle; the installer must reject the replacement, leave the foreign staging entry untouched, and expose no destination. These tests demonstrate the difference between content integrity of an open file and authorization to mutate a later pathname.
+Four deterministic concurrency regressions cover distinct namespace races. One creates the destination after staging begins but before finalization; the installer must preserve the concurrently created destination and remove only its own staging entry. A second replaces the staging pathname before hard-link creation; a failed finalization must not promote or delete the foreign staging entry, and any attempted destination link is cleaned only when it still identifies DiskSage's verified file. A third replaces the destination immediately after the no-clobber link but before DiskSage captures destination identity; the foreign destination must survive. A fourth replaces the destination after identity binding but before cleanup; the later foreign replacement must also survive. Together these regressions demonstrate the difference between content integrity of an open file and authorization to mutate a later pathname.
 
 ## Error and privacy boundary
 
@@ -64,6 +65,8 @@ The Rust tests exercise:
 - existing destination and stale staging refusal;
 - concurrent destination creation after staging preflight without overwrite;
 - concurrent staging-path replacement without promotion or deletion of the replacement;
+- destination replacement immediately after hard-link creation without deletion of the foreign replacement;
+- destination replacement after identity binding without deletion of the foreign replacement;
 - deterministic reader failure cleanup;
 - missing-parent staging failure without path-bearing errors;
 - a real loopback HTTP success path through `ureq`;
