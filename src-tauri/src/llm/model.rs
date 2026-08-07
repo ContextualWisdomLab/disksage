@@ -202,11 +202,11 @@ where
         after_staging_preflight();
 
         fs::hard_link(staging, dest).map_err(|_| ERROR_FINALIZE.to_string())?;
+        after_link_creation();
         let linked_destination_identity = match regular_file_handle(dest) {
             Some(identity) => identity,
             None => return Err(ERROR_FINALIZE.to_string()),
         };
-        after_link_creation();
 
         if !linked_destination_identity.eq(verified_identity) {
             cleanup_owned_path(dest, &linked_destination_identity);
