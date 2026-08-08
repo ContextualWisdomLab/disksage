@@ -25,6 +25,11 @@ describe('Test workflow coverage evidence contract', () => {
     expect(workflow).toContain('coverage-evidence.json');
   });
 
+  it('measures the production Rust graph instead of cfg-pruned substitutes', () => {
+    expect(workflow).toContain('--no-cfg-coverage');
+    expect(workflow).toContain('--no-cfg-coverage-nightly');
+  });
+
   it('uploads fail-closed evidence under the organization contract name', () => {
     expect(workflow).toContain('name: coverage-evidence');
     expect(workflow).toContain('path: coverage-evidence.json');
