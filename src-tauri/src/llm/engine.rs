@@ -17,10 +17,11 @@ const N_CTX: u32 = 4096;
 
 /// Loaded llama.cpp inference engine backed by DiskSage's verified default GGUF.
 ///
-/// Construction is intentionally fail closed: [`LlamaEngine::new`] re-verifies
-/// the installed model's exact pinned bytes before initializing the llama backend
-/// or allowing llama.cpp to parse the file. Once constructed, the engine retains
-/// the initialized backend and model for deterministic metadata-only inference.
+/// Construction is intentionally fail closed: [`LlamaEngine::new`] opens and
+/// verifies the installed model's exact pinned bytes once, retains that validated
+/// file identity through llama.cpp loading, and only then returns an inference
+/// engine. Once constructed, the engine retains the initialized backend and model
+/// for deterministic metadata-only inference.
 pub struct LlamaEngine {
     backend: LlamaBackend,
     model: LlamaModel,
@@ -31,14 +32,18 @@ impl LlamaEngine {
     /// GPU 백엔드(CUDA/Vulkan/Metal)가 컴파일돼 있으면 그걸 쓰고, 없으면(CPU 빌드) 무시되어 CPU.
     /// `DISKSAGE_GPU_LAYERS`로 오버라이드(0이면 CPU 강제 — GPU 대비 검증용). 실패는 Err(문자열).
     pub fn new(model_path: &Path) -> Result<Self, String> {
-        super::installed_model::verify_installed_model(&super::model::DEFAULT, model_path)?;
+        let verified_model = super::installed_model::prepare_verified_installed_model(
+            &super::model::DEFAULT,
+            model_path,
+        )?;
         let backend = LlamaBackend::init().map_err(|e| e.to_string())?;
         let gpu_layers: u32 = std::env::var("DISKSAGE_GPU_LAYERS")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(999);
         let params = LlamaModelParams::default().with_n_gpu_layers(gpu_layers);
-        let model = LlamaModel::load_from_file(&backend, model_path, &params).map_err(|e| e.to_string())?;
+        let model = LlamaModel::load_from_file(&backend, verified_model.load_path(), &params)
+            .map_err(|e| e.to_string())?;
         Ok(Self { backend, model })
     }
 }
