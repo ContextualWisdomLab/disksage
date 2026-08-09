@@ -87,7 +87,52 @@ jobs:
           }
 
           const report = JSON.parse(readFileSync('coverage.json', 'utf8'));
-          const totals = report?.data?.[0]?.totals;
+          const coverageData = report?.data?.[0];
+          const totals = coverageData?.totals;
+          const safeGap = (value) => {
+            const count = value?.count;
+            const covered = value?.covered;
+            return Number.isSafeInteger(count) &&
+              Number.isSafeInteger(covered) &&
+              count >= covered &&
+              covered >= 0
+              ? count - covered
+              : 0;
+          };
+          const repositoryPath = (filename) => {
+            const normalized = String(filename ?? '').replaceAll('\\', '/');
+            const marker = '/src-tauri/';
+            const markerIndex = normalized.lastIndexOf(marker);
+            if (markerIndex < 0) return null;
+            return `src-tauri/${normalized.slice(markerIndex + marker.length)}`;
+          };
+          const top_uncovered_files = (coverageData?.files ?? [])
+            .map((file) => {
+              const path = repositoryPath(file?.filename);
+              const summary = file?.summary;
+              if (!path) return null;
+              return {
+                path,
+                uncovered_regions: safeGap(summary?.regions),
+                uncovered_branches: safeGap(summary?.branches),
+                uncovered_functions: safeGap(summary?.functions),
+                uncovered_lines: safeGap(summary?.lines),
+              };
+            })
+            .filter((entry) => entry && (
+              entry.uncovered_regions > 0 ||
+              entry.uncovered_branches > 0 ||
+              entry.uncovered_functions > 0 ||
+              entry.uncovered_lines > 0
+            ))
+            .sort((left, right) => {
+              const leftGap = left.uncovered_regions + left.uncovered_branches +
+                left.uncovered_functions + left.uncovered_lines;
+              const rightGap = right.uncovered_regions + right.uncovered_branches +
+                right.uncovered_functions + right.uncovered_lines;
+              return rightGap - leftGap || left.path.localeCompare(right.path);
+            })
+            .slice(0, 20);
           const diagnostic = {
             schema_version: 1,
             head_sha: sha,
@@ -96,6 +141,7 @@ jobs:
             branches: totals?.branches ?? null,
             functions: totals?.functions ?? null,
             lines: totals?.lines ?? null,
+            top_uncovered_files,
           };
           writeFileSync(
             'coverage-diagnostic.json',
