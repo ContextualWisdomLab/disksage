@@ -2,6 +2,9 @@ mod backend;
 mod cache;
 #[cfg(all(not(coverage), feature = "llm-engine"))]
 mod engine;
+mod installed_model;
+#[cfg(test)]
+mod installed_model_io_tests;
 mod model;
 #[cfg(test)]
 mod model_concurrency_tests;
