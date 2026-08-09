@@ -451,6 +451,9 @@ fn candidate_blockers_for_action(
             Some(_) => exact_review_approved = true,
         }
     }
+    if organization_tenant_authority_required && !candidate.requires_review {
+        blockers.push("organization-tenant-authority-attestation-required".into());
+    }
     let existing_destination_candidate =
         candidate.blocked_reason.as_deref() == Some("destination-exists");
     if candidate.blocked_reason.is_some()
@@ -1457,7 +1460,7 @@ mod tests {
         CloudRoot {
             id: "icloud:test".into(),
             provider: CloudProvider::Icloud,
-            account_scope: CloudAccountScope::Organization,
+            account_scope: CloudAccountScope::Personal,
             label: "iCloud Drive".into(),
             path: ROOT.into(),
             readable: true,
@@ -1472,7 +1475,7 @@ mod tests {
             src: SOURCE.into(),
             dst: DESTINATION.into(),
             provider: CloudProvider::Icloud,
-            destination_account_scope: CloudAccountScope::Organization,
+            destination_account_scope: CloudAccountScope::Personal,
             kind: ArchiveKind::Document,
             bytes: 12,
             age_days: 90,
@@ -1684,7 +1687,7 @@ mod tests {
             .contains(&"source-equals-destination".to_string()));
 
         let mut changed_scope = root();
-        changed_scope.account_scope = CloudAccountScope::Personal;
+        changed_scope.account_scope = CloudAccountScope::Organization;
         assert!(candidate_blockers(&candidate(), &changed_scope)
             .contains(&"destination-account-scope-mismatch".to_string()));
 
@@ -2251,7 +2254,7 @@ mod tests {
         let test_root = CloudRoot {
             id: "icloud:test".into(),
             provider: CloudProvider::Icloud,
-            account_scope: CloudAccountScope::Organization,
+            account_scope: CloudAccountScope::Personal,
             label: "iCloud Drive".into(),
             path: cloud.to_string_lossy().into_owned(),
             readable: true,
@@ -2327,7 +2330,7 @@ mod tests {
         let test_root = CloudRoot {
             id: "icloud:test".into(),
             provider: CloudProvider::Icloud,
-            account_scope: CloudAccountScope::Organization,
+            account_scope: CloudAccountScope::Personal,
             label: "iCloud Drive".into(),
             path: cloud.to_string_lossy().into_owned(),
             readable: true,
@@ -2381,7 +2384,7 @@ mod tests {
         let test_root = CloudRoot {
             id: "icloud:test".into(),
             provider: CloudProvider::Icloud,
-            account_scope: CloudAccountScope::Organization,
+            account_scope: CloudAccountScope::Personal,
             label: "iCloud Drive".into(),
             path: cloud.to_string_lossy().into_owned(),
             readable: true,
@@ -2427,7 +2430,7 @@ mod tests {
         let test_root = CloudRoot {
             id: "icloud:test".into(),
             provider: CloudProvider::Icloud,
-            account_scope: CloudAccountScope::Organization,
+            account_scope: CloudAccountScope::Personal,
             label: "iCloud Drive".into(),
             path: cloud.to_string_lossy().into_owned(),
             readable: true,
@@ -2483,7 +2486,7 @@ mod tests {
         let test_root = CloudRoot {
             id: "icloud:test".into(),
             provider: CloudProvider::Icloud,
-            account_scope: CloudAccountScope::Organization,
+            account_scope: CloudAccountScope::Personal,
             label: "iCloud Drive".into(),
             path: cloud.to_string_lossy().into_owned(),
             readable: true,
@@ -2527,7 +2530,7 @@ mod tests {
         let test_root = CloudRoot {
             id: "icloud:test".into(),
             provider: CloudProvider::Icloud,
-            account_scope: CloudAccountScope::Organization,
+            account_scope: CloudAccountScope::Personal,
             label: "iCloud Drive".into(),
             path: cloud.to_string_lossy().into_owned(),
             readable: true,
@@ -2568,7 +2571,7 @@ mod tests {
         let test_root = CloudRoot {
             id: "icloud:test".into(),
             provider: CloudProvider::Icloud,
-            account_scope: CloudAccountScope::Organization,
+            account_scope: CloudAccountScope::Personal,
             label: "iCloud Drive".into(),
             path: cloud.to_string_lossy().into_owned(),
             readable: true,
