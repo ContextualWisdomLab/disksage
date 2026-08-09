@@ -2,14 +2,18 @@
 //!
 //! Download-time admission and load-time trust are deliberately separate. A file
 //! that was once downloaded correctly can later be replaced, truncated, or
-//! redirected. This module re-opens the local artifact read-only and proves that
-//! its current regular-file bytes still match the immutable model specification.
+//! redirected. This module opens the local artifact once, binds that open file to
+//! the observed pathname, verifies its exact bytes, and retains the validated file
+//! while llama.cpp opens a stable load path.
 
 use super::model::ModelSpec;
+use same_file::Handle;
 use sha2::{Digest, Sha256};
 use std::fs::File;
-use std::io::Read;
-use std::path::Path;
+#[cfg(windows)]
+use std::fs::OpenOptions;
+use std::io::{Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
 
 const MODEL_READ_BUFFER_BYTES: usize = 64 * 1024;
 const ERROR_UNAVAILABLE: &str = "model-installed-unavailable";
@@ -17,6 +21,7 @@ const ERROR_NOT_REGULAR: &str = "model-installed-not-regular";
 const ERROR_SIZE_MISMATCH: &str = "model-installed-size-mismatch";
 const ERROR_READ_FAILED: &str = "model-installed-read-failed";
 const ERROR_DIGEST_MISMATCH: &str = "model-installed-digest-mismatch";
+const ERROR_IDENTITY_MISMATCH: &str = "model-installed-identity-mismatch";
 
 /// Non-following path facts collected before an installed model is opened.
 ///
@@ -33,17 +38,48 @@ pub(super) struct InstalledModelObservation {
     pub(super) observed_bytes: u64,
 }
 
+/// A verified open model file whose load path cannot silently retarget to another inode.
+///
+/// On Unix the load path is the process file-descriptor namespace, so pathname
+/// replacement after verification still refers llama.cpp to the retained open file.
+/// On Windows the retained read handle is opened with read-only sharing, which
+/// prevents writers and delete/rename operations until llama.cpp finishes opening
+/// the original path. The guard is intentionally kept private so callers cannot
+/// separate the load path from the lifetime that makes it trustworthy.
+pub(crate) struct VerifiedInstalledModel {
+    _guard: File,
+    load_path: PathBuf,
+}
+
+impl VerifiedInstalledModel {
+    /// Return the path that llama.cpp may open while this verified guard is alive.
+    pub(crate) fn load_path(&self) -> &Path {
+        &self.load_path
+    }
+}
+
 /// Verify that an installed model file is the exact artifact named by `spec`.
 ///
-/// This is the load-time gate used before llama.cpp initialization. The path is
-/// inspected without following symbolic links; directories and other non-regular
-/// objects are rejected; and the metadata snapshot must report the trusted byte
-/// length before opening. The bytes actually read are then counted again and
-/// hashed through a fixed 64 KiB buffer, so a stale metadata snapshot cannot turn
-/// a short, overlong, or modified stream into trusted input. Failures return stable
-/// path-free error codes and never include local paths, operating-system
-/// diagnostics, or model bytes.
+/// This compatibility helper performs the same single-open identity and byte
+/// verification as the engine-facing guard and then drops the retained handle.
+/// Engine code must use [`prepare_verified_installed_model`] so the verified file
+/// remains bound through `LlamaModel::load_from_file`.
 pub(crate) fn verify_installed_model(spec: &ModelSpec, path: &Path) -> Result<(), String> {
+    prepare_verified_installed_model(spec, path).map(|_| ())
+}
+
+/// Prepare an installed model for race-resistant llama.cpp loading.
+///
+/// The function first rejects symbolic links, non-regular entries, and trusted-size
+/// drift from non-following pathname metadata. It then opens the source once,
+/// validates the opened file type and size, proves the pathname still resolves to
+/// the same operating-system file identity, hashes the bytes through a fixed 64 KiB
+/// buffer, rewinds the retained handle, and derives an OS-specific stable load path.
+/// All failures are path-free stable codes.
+pub(crate) fn prepare_verified_installed_model(
+    spec: &ModelSpec,
+    path: &Path,
+) -> Result<VerifiedInstalledModel, String> {
     let path_metadata = std::fs::symlink_metadata(path)
         .map_err(|_| ERROR_UNAVAILABLE.to_string())?;
     let observation = InstalledModelObservation {
@@ -51,16 +87,100 @@ pub(crate) fn verify_installed_model(spec: &ModelSpec, path: &Path) -> Result<()
         is_regular_file: path_metadata.is_file(),
         observed_bytes: path_metadata.len(),
     };
+    validate_observation(spec, observation)?;
 
-    verify_observed_model(spec, observation, || File::open(path))
+    let mut source = open_verified_source(path).map_err(|_| ERROR_READ_FAILED.to_string())?;
+    let opened_metadata = source
+        .metadata()
+        .map_err(|_| ERROR_READ_FAILED.to_string())?;
+    if !opened_metadata.is_file() {
+        return Err(ERROR_NOT_REGULAR.to_string());
+    }
+    if opened_metadata.len() != spec.bytes {
+        return Err(ERROR_SIZE_MISMATCH.to_string());
+    }
+
+    let current_metadata = std::fs::symlink_metadata(path)
+        .map_err(|_| ERROR_IDENTITY_MISMATCH.to_string())?;
+    if current_metadata.file_type().is_symlink() || !current_metadata.is_file() {
+        return Err(ERROR_IDENTITY_MISMATCH.to_string());
+    }
+
+    let opened_identity = Handle::from_file(
+        source
+            .try_clone()
+            .map_err(|_| ERROR_READ_FAILED.to_string())?,
+    )
+    .map_err(|_| ERROR_READ_FAILED.to_string())?;
+    let current_identity =
+        Handle::from_path(path).map_err(|_| ERROR_IDENTITY_MISMATCH.to_string())?;
+    if opened_identity != current_identity {
+        return Err(ERROR_IDENTITY_MISMATCH.to_string());
+    }
+
+    verify_reader(spec, &mut source)?;
+    source
+        .seek(SeekFrom::Start(0))
+        .map_err(|_| ERROR_READ_FAILED.to_string())?;
+    let load_path = stable_load_path(&source, path);
+
+    Ok(VerifiedInstalledModel {
+        _guard: source,
+        load_path,
+    })
+}
+
+/// Open the source with platform-appropriate mutation exclusion while verification is active.
+#[cfg(windows)]
+fn open_verified_source(path: &Path) -> std::io::Result<File> {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    const FILE_SHARE_READ: u32 = 0x0000_0001;
+    OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(path)
+}
+
+/// Open the source read-only on Unix; the retained descriptor becomes the load authority.
+#[cfg(not(windows))]
+fn open_verified_source(path: &Path) -> std::io::Result<File> {
+    File::open(path)
+}
+
+/// Build a stable load path for an already-open verified file.
+#[cfg(target_os = "linux")]
+fn stable_load_path(file: &File, _source_path: &Path) -> PathBuf {
+    use std::os::fd::AsRawFd;
+
+    PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()))
+}
+
+/// Build a stable load path for an already-open verified file on other Unix targets.
+#[cfg(all(unix, not(target_os = "linux")))]
+fn stable_load_path(file: &File, _source_path: &Path) -> PathBuf {
+    use std::os::fd::AsRawFd;
+
+    PathBuf::from(format!("/dev/fd/{}", file.as_raw_fd()))
+}
+
+/// Keep the original pathname on Windows while the retained handle denies write/delete sharing.
+#[cfg(windows)]
+fn stable_load_path(_file: &File, source_path: &Path) -> PathBuf {
+    source_path.to_path_buf()
+}
+
+/// Fallback for unsupported non-Unix, non-Windows build targets.
+#[cfg(not(any(unix, windows)))]
+fn stable_load_path(_file: &File, source_path: &Path) -> PathBuf {
+    source_path.to_path_buf()
 }
 
 /// Apply fail-closed path admission and verify bytes from an injected opener.
 ///
-/// Production supplies `File::open`; deterministic tests may supply a reader or a
-/// synthetic opener failure. Rejected symbolic links, non-regular files, and size
-/// drift never invoke the opener, which keeps the least-privilege boundary
-/// observable and independently testable.
+/// Deterministic tests may supply a reader or a synthetic opener failure. Rejected
+/// symbolic links, non-regular files, and size drift never invoke the opener,
+/// keeping the least-privilege boundary independently testable.
 pub(super) fn verify_observed_model<R, F>(
     spec: &ModelSpec,
     observation: InstalledModelObservation,
@@ -70,15 +190,23 @@ where
     R: Read,
     F: FnOnce() -> std::io::Result<R>,
 {
+    validate_observation(spec, observation)?;
+    let reader = open().map_err(|_| ERROR_READ_FAILED.to_string())?;
+    verify_reader(spec, reader)
+}
+
+/// Validate non-following pathname facts before any model bytes are opened.
+fn validate_observation(
+    spec: &ModelSpec,
+    observation: InstalledModelObservation,
+) -> Result<(), String> {
     if observation.is_symbolic_link || !observation.is_regular_file {
         return Err(ERROR_NOT_REGULAR.to_string());
     }
     if observation.observed_bytes != spec.bytes {
         return Err(ERROR_SIZE_MISMATCH.to_string());
     }
-
-    let reader = open().map_err(|_| ERROR_READ_FAILED.to_string())?;
-    verify_reader(spec, reader)
+    Ok(())
 }
 
 /// Verify the exact byte count and SHA-256 digest from an already-open reader.
@@ -283,12 +411,12 @@ mod tests {
     }
 
     #[test]
-    fn engine_requires_verified_default_model_before_llama_initialization() {
+    fn engine_requires_retained_verified_model_before_llama_initialization() {
         let engine = fs::read_to_string(repository_path("src-tauri/src/llm/engine.rs")).unwrap();
-        let verifier = "super::installed_model::verify_installed_model(&super::model::DEFAULT, model_path)?;";
+        let verifier = "super::installed_model::prepare_verified_installed_model(";
         let verifier_index = engine
             .find(verifier)
-            .expect("LlamaEngine::new must verify the pinned default model first");
+            .expect("LlamaEngine::new must retain the verified model handle first");
         let backend_index = engine
             .find("LlamaBackend::init()")
             .expect("engine must initialize llama backend");
@@ -298,7 +426,8 @@ mod tests {
 
         assert!(verifier_index < backend_index);
         assert!(verifier_index < load_index);
-        assert_eq!(engine.matches("verify_installed_model(").count(), 1);
+        assert!(engine.contains("verified_model.load_path()"));
+        assert_eq!(engine.matches("prepare_verified_installed_model(").count(), 1);
     }
 
     #[test]
@@ -318,6 +447,9 @@ mod tests {
             ERROR_SIZE_MISMATCH,
             ERROR_READ_FAILED,
             ERROR_DIGEST_MISMATCH,
+            ERROR_IDENTITY_MISMATCH,
+            "stable descriptor path",
+            "Windows read-sharing guard",
             "no model bytes or local paths become shareable evidence",
             "## Rollback and migration",
         ] {
@@ -327,7 +459,7 @@ mod tests {
             );
         }
         assert!(
-            changelog.contains("verify the installed GGUF again before llama.cpp initialization")
+            changelog.contains("retain the verified model handle through llama.cpp loading")
         );
     }
 }
