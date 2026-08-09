@@ -132,6 +132,8 @@ oxrdf = "0.3.3"
 llama-cpp-2 = { version = "0.1.151", optional = true }
 sha2 = "0.11.0"
 sha1 = "0.11.0"
+same-file = "1.0.6"
+tempfile = "3.27.0"
 ureq = "3.3.0"
 fs4 = "1.1.0"
 unicode-normalization = "0.1"
@@ -152,9 +154,6 @@ embed_plist = "1.2.2"
 objc2 = "0.6.4"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSError", "NSFileManager", "NSObject", "NSString", "NSURL", "NSValue"] }
 plist = "1"
-
-[dev-dependencies]
-tempfile = "3.27.0"
 
 [features]
 volume-cli = []
