@@ -162,6 +162,7 @@ describe('acquisition-ready architecture documentation', () => {
       'docs/adr/README.md',
       'docs/UML.md',
       'docs/DATA_MODEL.md',
+      'docs/API_CONTRACT.md',
       'docs/THREAT_MODEL.md',
       'docs/TEST_STRATEGY.md',
       'docs/OPERABILITY.md',
@@ -185,6 +186,7 @@ describe('acquisition-ready architecture documentation', () => {
     expect(assessment).toContain('## Coverage matrix');
     expect(assessment).toContain('PRD');
     expect(assessment).toContain('TRD');
+    expect(assessment).toContain('API / IPC / evidence contract');
     expect(assessment).toContain('UML');
     expect(assessment).toContain('ERD');
     expect(adrIndex).toContain('ADR-0001');
@@ -192,5 +194,60 @@ describe('acquisition-ready architecture documentation', () => {
     expect(dataModel).toContain('Conceptual, logical, and persisted status');
     expect(dataModel).toContain('No central application database is claimed by this document');
     expect(uml).toContain('```mermaid');
+  });
+
+  it('keeps public authorization, coverage, release, and model-integrity contracts aligned', () => {
+    const apiContract = readRepositoryDocument('docs/API_CONTRACT.md');
+    const prd = readRepositoryDocument('docs/PRD.md');
+    const trd = readRepositoryDocument('docs/TRD.md');
+    const traceability = readRepositoryDocument('docs/TRACEABILITY.md');
+    const uml = readRepositoryDocument('docs/UML.md');
+    const authorizationAdr = readRepositoryDocument(
+      'docs/adr/0002-evidence-authorization-separation.md',
+    );
+    const repositoryEvidenceAdr = readRepositoryDocument(
+      'docs/adr/0003-exact-head-repository-evidence.md',
+    );
+    const modelArtifactAdr = readRepositoryDocument(
+      'docs/adr/0004-model-artifact-integrity.md',
+    );
+    const controlPlaneAdr = readRepositoryDocument(
+      'docs/adr/0005-central-control-plane-boundary.md',
+    );
+    const agents = readRepositoryDocument('AGENTS.md');
+    const changelog = readRepositoryDocument('CHANGELOG.md');
+
+    for (const document of [apiContract, prd, trd]) {
+      expect(document).toContain('15 minutes');
+      expect(document).toContain('organization');
+      expect(document).toContain('fail closed');
+    }
+    expect(apiContract).toContain('`approval-expired`');
+    expect(apiContract).toContain('`approval-clock-invalid`');
+    expect(apiContract).toContain('`plan-stale`');
+    expect(apiContract).toContain('tenant-authority');
+    expect(authorizationAdr).toContain('exactly 15 minutes');
+    expect(authorizationAdr).toContain('no per-operation exception');
+
+    expect(prd).toContain('`src/lib/**/*.ts`');
+    expect(prd).toContain('`src/routes/**/*.ts`');
+    expect(prd).toContain('statement, branch, function, and line');
+    expect(trd).toContain('`npm run coverage`');
+    expect(trd).toContain('`npm run tauri -- build`');
+    expect(traceability).toContain('`docs/API_CONTRACT.md`');
+    expect(traceability).toContain('`src/lib/**/*.ts`');
+    expect(traceability).toContain('100% statement, branch, function, and line');
+
+    expect(repositoryEvidenceAdr).toContain('`pr_source_head`');
+    expect(repositoryEvidenceAdr).toContain('`live_base_tip`');
+    expect(repositoryEvidenceAdr).toContain('`protected_integrated_head`');
+    expect(modelArtifactAdr).toContain('identity-bound through llama initialization');
+    expect(controlPlaneAdr).toContain('immutably pinned OpenCode Agent');
+    expect(uml).toContain('durable flush/fsync');
+
+    expect(agents).toContain(
+      'Lockfile regeneration and publication stay under the DiskSage writer lease.',
+    );
+    expect(changelog).not.toContain('grant `contents: write` only to a separate publication job');
   });
 });
