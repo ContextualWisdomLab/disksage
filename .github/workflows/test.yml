@@ -74,10 +74,7 @@ jobs:
         with:
           workspaces: src-tauri
       - name: Measure exact-head Rust coverage
-        run: >-
-          cargo llvm-cov --manifest-path src-tauri/Cargo.toml
-          --branch --no-cfg-coverage --no-cfg-coverage-nightly
-          --json --summary-only --output-path coverage.json
+        run: cargo llvm-cov --manifest-path src-tauri/Cargo.toml --branch --json --summary-only --output-path coverage.json --no-cfg-coverage --no-cfg-coverage-nightly
       - name: Build exact-head coverage evidence
         run: |
           node --input-type=module <<'NODE'
