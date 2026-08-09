@@ -436,6 +436,10 @@ mod tests {
             "docs/doctoring/model-artifact-integrity.md",
         ))
         .unwrap();
+        let handle_doctoring = fs::read_to_string(repository_path(
+            "docs/doctoring/model-load-handle-binding.md",
+        ))
+        .unwrap();
         let changelog = fs::read_to_string(repository_path("CHANGELOG.md")).unwrap();
 
         for required in [
@@ -447,15 +451,24 @@ mod tests {
             ERROR_SIZE_MISMATCH,
             ERROR_READ_FAILED,
             ERROR_DIGEST_MISMATCH,
-            ERROR_IDENTITY_MISMATCH,
-            "stable descriptor path",
-            "Windows read-sharing guard",
             "no model bytes or local paths become shareable evidence",
             "## Rollback and migration",
         ] {
             assert!(
                 doctoring.contains(required),
                 "doctoring must retain load-time integrity evidence: {required}"
+            );
+        }
+        for required in [
+            ERROR_IDENTITY_MISMATCH,
+            "stable descriptor path",
+            "Windows read-sharing guard",
+            "LlamaModel::load_from_file",
+            "## Rollback",
+        ] {
+            assert!(
+                handle_doctoring.contains(required),
+                "handle-binding doctoring must retain race-control evidence: {required}"
             );
         }
         assert!(
