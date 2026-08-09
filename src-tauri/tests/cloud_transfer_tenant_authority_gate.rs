@@ -41,6 +41,7 @@ fn cloud_root(account_scope: CloudAccountScope) -> CloudRoot {
 fn candidate(
     destination_account_scope: CloudAccountScope,
     review_reasons: &[&str],
+    requires_review: bool,
 ) -> CloudCandidate {
     let mut candidate = CloudCandidate {
         metadata_fingerprint: "a".repeat(64),
@@ -60,7 +61,7 @@ fn candidate(
         source_root: SOURCE_PATH.into(),
         relative_path: "report.pdf".into(),
         source_context: "source".into(),
-        requires_review: true,
+        requires_review,
         review_reasons: review_reasons.iter().map(|reason| (*reason).into()).collect(),
         content_title: Some("Report".into()),
         content_authors: vec!["Author".into()],
@@ -133,7 +134,7 @@ fn either_organization_signal_requires_explicit_tenant_authority_attestation() {
     ];
 
     for (label, scope, reasons, tenant_authority_required) in cases {
-        let candidate = candidate(scope, &reasons);
+        let candidate = candidate(scope, &reasons, true);
         let decision = unconfirmed_decision(&candidate);
         let blockers =
             candidate_blockers_with_review(&candidate, &cloud_root(scope), Some(&decision));
@@ -143,6 +144,33 @@ fn either_organization_signal_requires_explicit_tenant_authority_attestation() {
         assert_eq!(
             blocked, tenant_authority_required,
             "{label} produced blockers: {blockers:?}"
+        );
+    }
+}
+
+#[test]
+fn organization_signals_require_tenant_authority_even_without_ordinary_review() {
+    let cases = [
+        (
+            "organization scope without ordinary review",
+            CloudAccountScope::Organization,
+            vec!["embedded-metadata-probe-incomplete"],
+        ),
+        (
+            "organization reason without ordinary review",
+            CloudAccountScope::Personal,
+            vec![ORGANIZATION_TENANT_AUTHORITY_REVIEW_REASON],
+        ),
+    ];
+
+    for (label, scope, reasons) in cases {
+        let candidate = candidate(scope, &reasons, false);
+        let blockers = candidate_blockers_with_review(&candidate, &cloud_root(scope), None);
+        assert!(
+            blockers
+                .iter()
+                .any(|blocker| blocker == "organization-tenant-authority-attestation-required"),
+            "{label} must fail closed without tenant-authority attestation: {blockers:?}"
         );
     }
 }
