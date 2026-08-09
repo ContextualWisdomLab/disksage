@@ -88,6 +88,20 @@ jobs:
 
           const report = JSON.parse(readFileSync('coverage.json', 'utf8'));
           const totals = report?.data?.[0]?.totals;
+          const diagnostic = {
+            schema_version: 1,
+            head_sha: sha,
+            repository,
+            regions: totals?.regions ?? null,
+            branches: totals?.branches ?? null,
+            functions: totals?.functions ?? null,
+            lines: totals?.lines ?? null,
+          };
+          writeFileSync(
+            'coverage-diagnostic.json',
+            `${JSON.stringify(diagnostic, null, 2)}\n`,
+          );
+
           const metric = (name, value) => {
             if (
               !value ||
@@ -124,6 +138,13 @@ jobs:
             `${JSON.stringify(evidence, null, 2)}\n`,
           );
           NODE
+      - name: Upload bounded coverage diagnostic
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-diagnostic-${{ env.HEAD_SHA }}
+          path: coverage-diagnostic.json
+          if-no-files-found: error
       - name: Upload coverage evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
