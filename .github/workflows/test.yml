@@ -78,7 +78,7 @@ jobs:
       - name: Build exact-head coverage evidence
         run: |
           node --input-type=module <<'NODE'
-          import { readFileSync, writeFileSync } from 'node:fs';
+          import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 
           const sha = process.env.HEAD_SHA ?? '';
           const repository = process.env.GITHUB_REPOSITORY ?? '';
@@ -101,6 +101,14 @@ jobs:
             'coverage-diagnostic.json',
             `${JSON.stringify(diagnostic, null, 2)}\n`,
           );
+          console.error(`coverage-diagnostic=${JSON.stringify(diagnostic)}`);
+          const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+          if (summaryPath) {
+            appendFileSync(
+              summaryPath,
+              `### Coverage diagnostic for \`${sha}\`\n\n\`\`\`json\n${JSON.stringify(diagnostic, null, 2)}\n\`\`\`\n`,
+            );
+          }
 
           const metric = (name, value) => {
             if (
