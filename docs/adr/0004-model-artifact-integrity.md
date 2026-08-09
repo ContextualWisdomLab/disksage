@@ -42,44 +42,45 @@ Installation shall:
 - reject declared or observed size drift;
 - recompute SHA-256 over bytes actually staged;
 - use create-new staging;
-- flush/synchronize verified bytes;
+- perform a durable flush/fsync of verified staged bytes before publication;
 - publish without clobbering an existing destination;
 - make race cleanup identity-bound so foreign replacements are preserved;
 - return stable privacy-safe error codes.
 
-Load shall re-check non-following metadata, regular-file identity, exact byte count, readable bytes, and SHA-256 immediately before llama backend/model initialization. A pre-existing file is accepted only if it matches the same reviewed specification.
+Load shall re-check non-following metadata, regular-file identity, exact byte count, readable bytes, and SHA-256. Verification is not sufficient if llama.cpp then reopens the same pathname without preserving the verified object identity. The validated artifact must remain identity-bound through llama initialization: the loader must either consume an already validated file handle/descriptor or byte source, or provide an equivalent operating-system identity binding that proves the object opened by llama is the same object whose bytes were verified. If the wrapper can only reopen by pathname and cannot prove this identity, load remains fail-closed rather than claiming the TOCTOU gap is closed. A pre-existing file is accepted only if it matches the same reviewed specification and the verified identity remains bound through initialization.
 
 ## Consequences
 
 ### Positive
 
-- Mutable upstream branches and local post-install tampering no longer silently authorize model load.
+- Mutable upstream branches and local post-install tampering no longer silently authorize model load after the complete contract is implemented.
 - Verification has bounded memory use.
-- Existing valid installations remain compatible.
+- Existing valid installations remain compatible when the loader can preserve verified identity.
 - Privacy-safe diagnostics can cross product boundaries without paths/model bytes.
 
 ### Negative
 
 - Startup/load requires hashing the model artifact.
+- The llama wrapper may require an identity-preserving adapter instead of its path-only load API.
 - An upstream artifact change requires a reviewed specification update and fresh artifact.
 - Digest verification does not establish model quality, safety, provenance, or license suitability.
 
 ## Failure and recovery
 
-A missing, linked, non-regular, truncated, oversized, unreadable, or digest-mismatched artifact fails closed. Recovery is replacement through the reviewed bounded installation path or a separately reviewed specification migration. Availability pressure is not a reason to skip verification.
+A missing, linked, non-regular, truncated, oversized, unreadable, digest-mismatched, identity-replaced, or identity-unverifiable artifact fails closed. Recovery is replacement through the reviewed bounded installation path or a separately reviewed specification migration. Availability pressure is not a reason to skip verification or fall back to a path-only reopen that loses identity binding.
 
 ## Security and governance impact
 
-The model file is treated as untrusted until exact identity verification. Installation and load errors are stable reason categories and exclude paths, response bodies, and model content. Upstream license/provenance evidence remains part of release/acquisition diligence.
+The model file is treated as untrusted until exact identity verification and identity-preserving handoff into native model initialization. Installation and load errors are stable reason categories and exclude paths, response bodies, and model content. Upstream license/provenance evidence remains part of release/acquisition diligence.
 
 ## Verification and acceptance
 
-Required tests include known digest vectors, immutable-revision metadata, invalid trusted specification, exact/short/long/wrong-digest streams, staging/destination collision races, symlink/non-regular inputs, reader/open failures, cleanup ownership, loopback HTTP behavior, and source binding proving verification occurs before llama initialization. Exact-head coverage/security/review gates still apply.
+Required tests include known digest vectors, immutable-revision metadata, invalid trusted specification, exact/short/long/wrong-digest streams, staging/destination collision races, symlink/non-regular inputs, reader/open failures, cleanup ownership, loopback HTTP behavior, and source binding proving verification occurs before llama initialization. Load tests must also replace or rename the pathname after verification and prove the model initializer either continues using the exact already-validated identity or refuses the load; reopening a different object by the same path must never pass. Exact-head coverage/security/review gates still apply.
 
 ## Migration and rollback
 
-A replacement model updates immutable revision, exact bytes, and digest together after independent validation and regression tests. Rollback may select another reviewed immutable specification but may not restore mutable `/main/` URLs, unbounded buffering, clobbering publication, or a bypass for pre-existing files.
+A replacement model updates immutable revision, exact bytes, and digest together after independent validation and regression tests. Rollback may select another reviewed immutable specification but may not restore mutable `/main/` URLs, unbounded buffering, clobbering publication, path-only identity loss, or a bypass for pre-existing files.
 
 ## Supersession conditions
 
-A content-addressed artifact or signed provenance system may supplement this design. Supersession must still bind exact bytes at the point of installation and load and preserve race, privacy, and rollback properties.
+A content-addressed artifact or signed provenance system may supplement this design. Supersession must still bind exact bytes and exact file identity at the point of installation and load and preserve race, privacy, and rollback properties.
