@@ -77,6 +77,11 @@ fn cargo_publish_policy(manifest_path: &Path) -> Option<Vec<String>> {
 #[test]
 fn cargo_exposes_expected_acquisition_metadata_to_build_consumers() {
     assert_eq!(
+        env!("CARGO_PKG_NAME"),
+        "disksage",
+        "the Cargo package name is part of DiskSage's acquisition and provenance identity"
+    );
+    assert_eq!(
         env!("CARGO_PKG_DESCRIPTION"),
         "Privacy-first desktop storage analysis and reclaim decision-support application."
     );
