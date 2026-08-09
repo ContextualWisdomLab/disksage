@@ -30,6 +30,15 @@ describe('Test workflow coverage evidence contract', () => {
     expect(workflow).toContain('--no-cfg-coverage-nightly');
   });
 
+  it('passes coverage-evidence paths through the environment inside the quoted heredoc', () => {
+    expect(workflow).toContain('os.environ["JS_OUTPUT"]');
+    expect(workflow).toContain('os.environ["RUST_OUTPUT"]');
+    expect(workflow).toContain('os.environ["GITHUB_SHA"]');
+    expect(workflow).toContain('os.environ["COVERAGE_REPORT"]');
+    expect(workflow).not.toContain('open("${JS_OUTPUT}"');
+    expect(workflow).not.toContain('open("${RUST_OUTPUT}"');
+  });
+
   it('uploads fail-closed evidence under the organization contract name', () => {
     expect(workflow).toContain('name: coverage-evidence');
     expect(workflow).toContain('path: coverage-evidence.json');
