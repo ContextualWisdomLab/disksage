@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed in PR #137.
+Proposed in PR #137 under the ADR status model in `docs/adr/README.md`; it remains non-protected authority until integration.
 
 ## Context
 
@@ -59,7 +59,7 @@ If a central workflow or external service is unavailable, automation identifies 
 
 ## Security and governance impact
 
-Shared workflow references used for privileged automation should be immutably source-pinned where repository policy requires. Secrets remain purpose-bound. Review-agent credentials are not repurposed as development credentials. Autonomous model-backed development uses `NVIDIA_NIM_API_KEY`, not `COPILOT_GITHUB_TOKEN`.
+Shared workflow references used for privileged automation are immutably source-pinned where repository policy requires. Secrets remain purpose-bound. Review-agent credentials are not repurposed as development credentials. Autonomous model-backed development uses an immutably pinned OpenCode Agent and `NVIDIA_NIM_API_KEY`; `COPILOT_GITHUB_TOKEN` is not a development-model credential. The agent pin is mandatory on privileged autonomous-development paths, and changing it is a reviewed supply-chain change rather than an implicit floating upgrade.
 
 Temporary self-modifying repair workflows, encoded patch finalizers, or broad cross-repository writer permissions are not accepted as a steady-state integration mechanism.
 
@@ -68,12 +68,13 @@ Temporary self-modifying repair workflows, encoded patch finalizers, or broad cr
 - Standalone tests run without CWL runtime services.
 - Cross-service schemas fail closed on unknown versions.
 - Shared workflow failures remain distinguishable from local source defects.
+- Privileged autonomous-development workflows bind their OpenCode Agent implementation immutably and expose model credentials only on the model-backed path.
 - Writer loops re-fetch target head/base/blob state before writes and avoid branch races.
 - No central service can bypass Rust runtime approval checks.
 
 ## Migration and rollback
 
-Changing a central contract requires versioned compatibility or coordinated migration. A central dependency can be disabled or replaced without corrupting local DiskSage evidence. Rollback must restore a known compatible contract, not weaken required security/review gates.
+Changing a central contract or pinned autonomous-development agent requires versioned compatibility or coordinated migration plus exact-head validation. A central dependency can be disabled or replaced without corrupting local DiskSage evidence. Rollback must restore a known compatible, reviewed pin and must not weaken required security/review gates.
 
 ## Supersession conditions
 
