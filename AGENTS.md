@@ -30,6 +30,8 @@ Immediately before a write, re-fetch the exact target PR head, independently res
 
 Do not create, restore, or retain temporary self-modifying PR repair workflows, encoded-patch GitHub Actions, one-shot finalizers, or broad cross-repository bot write permissions as a repair shortcut. Prefer CAS/blob-SHA-bound connector writes or a trusted exact-head checkout.
 
+Lockfile regeneration and publication stay under the DiskSage writer lease. Validation jobs remain read-only; any publication path must bind generated dependency metadata to the exact unchanged source head, verify the same-run artifact before mutation, and preserve least privilege rather than granting ambient repository-write authority.
+
 ## Pull request and merge evidence
 
 - Treat queued, pending, cancelled, skipped-required, neutral-required, absent, stale-head, predecessor-head, synthetic-only, status-only, action-required, rate-limited, and failed evidence as not passing.
