@@ -41,7 +41,7 @@ DiskSage models at least five distinct stages:
 4. **Execution** — the one narrowly authorized mutation after last-moment revalidation.
 5. **Receipt/evidence** — bounded record of what occurred and what remains unproven.
 
-Unknown, missing, malformed, contradictory, stale, or out-of-bound evidence is represented explicitly and fails closed. The default mutation approval lifetime is 15 minutes and cannot be refreshed by a retry, model, UI state, or workflow.
+Unknown, missing, malformed, contradictory, stale, or out-of-bound evidence is represented explicitly and fails closed. Every mutation approval is valid for exactly 15 minutes from issuance; there is no longer lifetime and no per-operation exception. A retry, model, UI state, workflow, or prior receipt cannot refresh or extend that authority.
 
 ## Consequences
 
