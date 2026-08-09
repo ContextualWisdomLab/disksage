@@ -8,6 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Added a canonical acquisition documentation graph covering PRD, TRD, architecture decisions, Mermaid UML, conceptual-versus-persisted data model and ERD, API/IPC/evidence contracts, threat model, test strategy, operability/recovery, requirements/evidence traceability, documentation completeness assessment, agent governance, and repository context; a deterministic documentation contract now fails when required families or critical authority markers disappear.
 - Added the authoritative buyer-facing architecture contract for standalone and modular MSA deployment, trust and authorization boundaries, privacy-safe evidence, migration and rollback, exact-head release evidence, database naming, and acquisition diligence, with current APA 7th standards references and a deterministic documentation regression test.
 - Defined separate read-only and mutating-operation authority contracts with mandatory scope and fingerprint inputs, trusted UTC and monotonic clock handling, a uniform 15-minute authorization lifetime, and explicit fail-closed rejection states for expired, clock-invalid, scope-mismatched, and stale-plan execution attempts.
 - Separated the October 2023 W3C WCAG 2.2 Recommendation from ISO/IEC 40500:2025 in the standards record so publisher, publication date, and canonical URL remain attributable.
