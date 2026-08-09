@@ -30,6 +30,17 @@ describe('Test workflow coverage evidence contract', () => {
     expect(workflow).toContain('--no-cfg-coverage-nightly');
   });
 
+  it('preserves bounded exact-head metric diagnostics when the 100% gate fails', () => {
+    expect(workflow).toContain('coverage-diagnostic.json');
+    expect(workflow).toContain('name: coverage-diagnostic-${{ env.HEAD_SHA }}');
+    expect(workflow).toContain('path: coverage-diagnostic.json');
+    expect(workflow).toContain('if: always()');
+    expect(workflow).toContain('regions: totals?.regions ?? null');
+    expect(workflow).toContain('branches: totals?.branches ?? null');
+    expect(workflow).toContain('functions: totals?.functions ?? null');
+    expect(workflow).toContain('lines: totals?.lines ?? null');
+  });
+
   it('uploads fail-closed evidence under the organization contract name', () => {
     expect(workflow).toContain('name: coverage-evidence');
     expect(workflow).toContain('path: coverage-evidence.json');
