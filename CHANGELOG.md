@@ -16,6 +16,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Changed
 
 - Require the `Test` workflow to produce exact-head, branch-aware, fail-closed Rust coverage evidence from real `cargo llvm-cov` measurements before organization-level review can treat 100% statement-equivalent region, branch, function, and line coverage as passing.
+- Surface the same bounded exact-head Rust coverage totals in the failing job log and GitHub step summary before enforcing the 100% gate, while retaining the success-only coverage evidence artifact and privacy-safe diagnostic artifact boundary.
 - Require a fresh, exact, human-attributed approval and rationale for cloud copy-only and existing-copy adoption actions, with a 15-minute authorization lifetime bound to the candidate, destination, provider, account scope, and review fingerprint.
 - Return the candidate-specific cloud copy approval action, exact confirmation phrase, and maximum approval age from the Rust plan contract; the frontend only displays and submits that backend-authored phrase and fails closed when it is missing or does not match the candidate action.
 - Align the frontend toolchain on Vite 8.2 and `@sveltejs/vite-plugin-svelte` 7.2 so the declared peer dependency graph is installable and reproducible.
