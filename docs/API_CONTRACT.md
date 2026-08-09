@@ -74,11 +74,15 @@ A mutation request includes the operation-specific subset of:
 - attributed human approver;
 - human rationale;
 - exact backend-authored confirmation phrase;
-- issuance/expiry/freshness evidence;
+- issuance and expiry timestamps;
 - explicit execution intent;
 - restricted receipt location where required.
 
-Rust revalidates current state before the mutation boundary. Mismatch, expiry, clock inconsistency, or plan drift fails closed and requires regeneration rather than server/UI-side approval refresh.
+Every mutation authorization is valid for exactly 15 minutes from issuance. Rust evaluates trusted UTC time and, when issuance and consumption occur in the same process, monotonic elapsed time. At the expiry boundary or later the operation fails with `approval-expired`. A current clock earlier than issuance, reversed monotonic interval, or inconsistent clock pair fails with `approval-clock-invalid`. Relevant current-state drift that changes the approved plan fails with `plan-stale`. Scope, fingerprint, action, provider/account, destination, schema, or confirmation mismatch fails closed rather than being refreshed by the UI, model, retry, workflow, or prior receipt.
+
+Tenant-authority evidence is a separate mutation gate. If `destination_account_scope` is `organization` **or** the canonical review reason `organization-cloud-sensitive-context-needs-explicit-tenant-approval` is present, Rust requires a current, correctly formatted, non-contradictory organization-tenant authority attestation bound to the exact review decision and candidate. Missing, unknown, malformed, contradictory, stale, or mismatched tenant-authority proof fails closed with `organization-tenant-authority-attestation-required` or the more specific validation refusal. A personal-cloud candidate with neither organization signal does not require this organization attestation, though its ordinary review/approval requirements still apply. External observations, UI state, provider responses, Naruon data, and model output can never grant tenant authority.
+
+Rust revalidates current state before the mutation boundary. Mismatch, expiry, clock inconsistency, tenant-authority failure, or plan drift fails closed and requires regeneration rather than server/UI-side approval refresh.
 
 ## Error contract
 
@@ -124,7 +128,7 @@ Adapters normalize only what the reviewed contract can prove. They do not collap
 
 ## Model contract
 
-The local model specification and public refusal codes are part of the supply-chain interface. Active PR #141 proposes immutable revision/exact bytes/SHA-256 bounded installation; active stacked PR #142 proposes load-time re-verification. These remain `active_pr`, not protected-main contract claims, until integrated.
+The local model specification and public refusal codes are part of the supply-chain interface. Active PR #141 proposes immutable revision/exact bytes/SHA-256 bounded installation; active stacked PR #142 proposes load-time re-verification and must ultimately preserve the verified artifact identity through llama initialization. These remain `active_pr`, not protected-main contract claims, until integrated.
 
 ## Repository automation contract
 
