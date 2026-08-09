@@ -41,6 +41,17 @@ describe('Test workflow coverage evidence contract', () => {
     expect(workflow).toContain('lines: totals?.lines ?? null');
   });
 
+  it('identifies the largest exact-head Rust coverage gaps without leaking runner paths', () => {
+    expect(workflow).toContain('top_uncovered_files');
+    expect(workflow).toContain("const marker = '/src-tauri/'");
+    expect(workflow).toContain("return `src-tauri/${normalized.slice(markerIndex + marker.length)}`");
+    expect(workflow).toContain('.slice(0, 20)');
+    expect(workflow).toContain('uncovered_regions');
+    expect(workflow).toContain('uncovered_branches');
+    expect(workflow).toContain('uncovered_functions');
+    expect(workflow).toContain('uncovered_lines');
+  });
+
   it('surfaces the same bounded diagnostic in logs and the GitHub step summary', () => {
     expect(workflow).toContain("console.error(`coverage-diagnostic=${JSON.stringify(diagnostic)}`)");
     expect(workflow).toContain('process.env.GITHUB_STEP_SUMMARY');
