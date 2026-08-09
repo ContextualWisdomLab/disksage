@@ -12,6 +12,8 @@ The evidence builder rejects a missing or malformed SHA. Both `head_sha` and `co
 
 The workflow uses `cargo llvm-cov` with LLVM source-based instrumentation. Branch coverage is requested explicitly with `--branch`; because cargo-llvm-cov documents branch coverage as unstable, the workflow uses an immutable dated Rust nightly with `llvm-tools-preview` instead of silently falling back to a toolchain that cannot measure the required metric.
 
+The workflow passes `--no-cfg-coverage` and `--no-cfg-coverage-nightly`, so cargo-llvm-cov does not define its normal `cfg(coverage)` or `cfg(coverage_nightly)` build configurations. Production code guarded by `#[cfg(not(coverage))]` therefore remains in the measured graph rather than disappearing merely because coverage is being collected. This keeps the gate aligned with the production-behavior requirement; it also means unreachable GUI or command boundaries must be made realistically testable rather than hidden from measurement.
+
 The JSON summary is the only source for the emitted percentages. The evidence builder reads LLVM's aggregate totals and requires all of the following to be present, finite, non-empty, fully covered, and exactly 100%:
 
 - statement coverage: LLVM region coverage, used as the statement-equivalent source-based metric;
@@ -19,17 +21,19 @@ The JSON summary is the only source for the emitted percentages. The evidence bu
 - function coverage: LLVM function totals; and
 - line coverage: LLVM line totals.
 
-The workflow never manufactures a percentage from a successful test exit status. Missing totals, zero denominators, partial coverage, malformed JSON, or identity drift stop the job before the artifact can be uploaded.
+The workflow never manufactures a percentage from a successful test exit status. Missing totals, zero denominators, partial coverage, malformed JSON, or identity drift stop the job before the success artifact can be uploaded.
 
-## Evidence contract
+## Evidence and failure diagnostics
 
 A valid `coverage-evidence.json` has schema version `1` and records the immutable head, repository, CI trust tier, server, workflow name, coverage command, four exact percentages, and `passed: true`. The organization review workflow independently downloads this artifact from the successful `Test` run for the same head and revalidates the contract.
 
-The artifact is uploaded with `if-no-files-found: error`. GitHub Actions artifacts persist workflow outputs such as test and coverage results after the producing job completes, which lets the organization-level reviewer consume evidence without granting the coverage job repository-write permission.
+The success artifact is uploaded with `if-no-files-found: error`. GitHub Actions artifacts persist workflow outputs such as test and coverage results after the producing job completes, which lets the organization-level reviewer consume evidence without granting the coverage job repository-write permission.
+
+When any metric is below 100%, the job still writes the bounded `coverage-diagnostic.json` containing only the exact head/repository identity and aggregate region, branch, function, and line totals. The same bounded diagnostic is emitted to the job log and `GITHUB_STEP_SUMMARY` before validation throws, then uploaded with `if: always()`. This makes the first failing coverage boundary directly observable without exposing source contents, local paths, secrets, test fixtures, or command output, while the success-only `coverage-evidence.json` remains fail closed.
 
 ## Fail-closed operating rule
 
-A missing `coverage-evidence` artifact is not equivalent to passing coverage. A queued, cancelled, failed, stale-head, malformed, or less-than-100% measurement is also not passing. Engineers must add realistic tests or remove genuinely unreachable production code; they must not lower thresholds, hard-code percentages, exclude reachable production arithmetic merely to satisfy the gate, or reuse an artifact from an older head.
+A missing `coverage-evidence` artifact is not equivalent to passing coverage. A queued, cancelled, failed, stale-head, malformed, or less-than-100% measurement is also not passing. Engineers must add realistic tests or remove genuinely unreachable production code; they must not lower thresholds, hard-code percentages, exclude reachable production behavior merely to satisfy the gate, or reuse an artifact from an older head.
 
 ## References
 
