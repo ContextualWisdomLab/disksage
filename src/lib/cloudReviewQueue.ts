@@ -172,6 +172,7 @@ export function cloudReviewQueueState(
   decisions: CloudReviewDecision[],
 ): CloudReviewQueueState {
   if (candidate.blocked_reason !== null) return "blocked";
+  if (!candidate.requires_review && organizationTenantAuthorityRequired(candidate)) return "blocked";
   if (!candidate.requires_review) return "ready";
   return matchingReviewDecision(candidate, decisions)?.disposition ?? "unreviewed";
 }
