@@ -98,4 +98,21 @@ describe("organization tenant authority fail-closed validation", () => {
       )])).toBe("approved");
     }
   });
+
+  it("blocks organization signals when the ordinary review flag is absent", () => {
+    for (const item of [
+      candidate("d", {
+        destination_account_scope: "organization",
+        requires_review: false,
+        review_reasons: ["embedded-metadata-probe-incomplete"],
+      }),
+      candidate("e", {
+        destination_account_scope: "personal",
+        requires_review: false,
+        review_reasons: [ORGANIZATION_TENANT_AUTHORITY_REVIEW_REASON],
+      }),
+    ]) {
+      expect(cloudReviewQueueState(item, [])).toBe("blocked");
+    }
+  });
 });
