@@ -45,7 +45,7 @@ describe('Test workflow coverage evidence contract', () => {
     expect(workflow).toContain("console.error(`coverage-diagnostic=${JSON.stringify(diagnostic)}`)");
     expect(workflow).toContain('process.env.GITHUB_STEP_SUMMARY');
     expect(workflow).toMatch(/appendFileSync\(\s*summaryPath,/u);
-    expect(workflow).toContain('Coverage diagnostic for `${sha}`');
+    expect(workflow).toContain('Coverage diagnostic for \\`${sha}\\`');
   });
 
   it('uploads fail-closed evidence under the organization contract name', () => {
