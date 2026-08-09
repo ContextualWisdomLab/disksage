@@ -859,8 +859,15 @@ mod tests {
     use super::*;
     use crate::cloud::{
         candidate_review_fingerprint, ArchiveKind, CloudCandidate, CloudRoot, MetadataEvidence,
+        ORGANIZATION_TENANT_AUTHORITY_REVIEW_REASON,
     };
-    use crate::cloud_transfer::{approve_local_eviction, prepare_cloud_copy, ProviderSyncEvidence};
+    use crate::cloud_review::{
+        create_attributed_decision, CloudReviewDisposition,
+        ORGANIZATION_TENANT_AUTHORITY_ATTESTATION,
+    };
+    use crate::cloud_transfer::{
+        approve_local_eviction, prepare_cloud_copy_with_review, ProviderSyncEvidence,
+    };
     use crate::provider_evidence::create_sync_evidence_record;
 
     fn valid_receipt(temp: &tempfile::TempDir) -> (CloudCopyReceipt, LocalEvictionPermit) {
@@ -892,8 +899,8 @@ mod tests {
             source_root: source_dir.to_string_lossy().into_owned(),
             relative_path: "report.bin".into(),
             source_context: ".".into(),
-            requires_review: false,
-            review_reasons: Vec::new(),
+            requires_review: true,
+            review_reasons: vec![ORGANIZATION_TENANT_AUTHORITY_REVIEW_REASON.into()],
             content_title: Some("Report".into()),
             content_authors: Vec::new(),
             content_context: Vec::new(),
@@ -917,7 +924,25 @@ mod tests {
             readable: true,
             access_issue: None,
         };
-        let (receipt, _) = prepare_cloud_copy(&candidate, &root, &receipt_dir, 100).unwrap();
+        let decision = create_attributed_decision(
+            &candidate,
+            CloudReviewDisposition::Approved,
+            90,
+            "human:tenant-admin:test",
+            &format!(
+                "{} exact organization destination approved for eviction fixture",
+                ORGANIZATION_TENANT_AUTHORITY_ATTESTATION
+            ),
+        )
+        .unwrap();
+        let (receipt, _) = prepare_cloud_copy_with_review(
+            &candidate,
+            &root,
+            &receipt_dir,
+            100,
+            Some(&decision),
+        )
+        .unwrap();
         let evidence = ProviderSyncEvidence {
             receipt_id: receipt.receipt_id.clone(),
             provider: receipt.provider,
