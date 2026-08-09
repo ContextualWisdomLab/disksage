@@ -153,4 +153,44 @@ describe('acquisition-ready architecture documentation', () => {
     expect(architecture).toMatch(/inherits the same\s+`npm run coverage` gate/);
     expect(ssr).toBe(false);
   });
+
+  it('keeps the canonical product documentation graph discoverable and explicit', () => {
+    const requiredDocuments = [
+      'docs/PRD.md',
+      'docs/TRD.md',
+      'ARCHITECTURE.md',
+      'docs/adr/README.md',
+      'docs/UML.md',
+      'docs/DATA_MODEL.md',
+      'docs/THREAT_MODEL.md',
+      'docs/TEST_STRATEGY.md',
+      'docs/OPERABILITY.md',
+      'docs/TRACEABILITY.md',
+      'docs/DOCUMENTATION_ASSESSMENT.md',
+      'AGENTS.md',
+      'CLAUDE.md',
+      'SECURITY.md',
+      'CHANGELOG.md',
+    ];
+
+    for (const documentPath of requiredDocuments) {
+      expect(existsSync(resolve(repositoryRoot, documentPath))).toBe(true);
+    }
+
+    const assessment = readRepositoryDocument('docs/DOCUMENTATION_ASSESSMENT.md');
+    const adrIndex = readRepositoryDocument('docs/adr/README.md');
+    const dataModel = readRepositoryDocument('docs/DATA_MODEL.md');
+    const uml = readRepositoryDocument('docs/UML.md');
+
+    expect(assessment).toContain('## Coverage matrix');
+    expect(assessment).toContain('PRD');
+    expect(assessment).toContain('TRD');
+    expect(assessment).toContain('UML');
+    expect(assessment).toContain('ERD');
+    expect(adrIndex).toContain('ADR-0001');
+    expect(adrIndex).toContain('ADR-0005');
+    expect(dataModel).toContain('Conceptual, logical, and persisted status');
+    expect(dataModel).toContain('No central application database is claimed by this document');
+    expect(uml).toContain('```mermaid');
+  });
 });
