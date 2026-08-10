@@ -161,3 +161,38 @@ fn unsupported_missing_and_bounded_files_report_stable_quality_codes() {
         .quality_warnings
         .contains(&"byte-sample-limit-reached".to_string()));
 }
+
+#[test]
+fn corrupt_spreadsheet_inputs_fail_closed_at_the_workbook_boundary() {
+    let temp = tempfile::tempdir().unwrap();
+    for extension in ["xlsx", "xls", "ods"] {
+        let path = temp.path().join(format!("corrupt.{extension}"));
+        write_file(&path, b"not-a-workbook");
+        let profile = profile_dataset(&path);
+        assert_eq!(profile.format, extension);
+        assert!(!profile.profile_complete);
+        assert_eq!(
+            profile.quality_warnings,
+            vec!["spreadsheet-open-error".to_string()]
+        );
+    }
+}
+
+#[test]
+fn public_profile_path_enforces_the_row_sample_limit() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("bounded.csv");
+    let mut contents = String::from("id\n");
+    for index in 0..101 {
+        contents.push_str(&format!("{index}\n"));
+    }
+    write_file(&path, contents.as_bytes());
+
+    let profile = profile_dataset(&path);
+    assert_eq!(profile.sampled_rows, 100);
+    assert!(profile.sample_truncated);
+    assert!(!profile.profile_complete);
+    assert!(profile
+        .quality_warnings
+        .contains(&"row-sample-limit-reached".to_string()));
+}
