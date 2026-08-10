@@ -165,7 +165,7 @@ mod tests {
         assert_eq!(parse_summary("no json"), None);          // extract None
         assert_eq!(parse_summary("{bad}"), None);            // serde err
         assert_eq!(parse_summary(r#"{"x":1}"#), None);       // summary 필드 없음
-        assert_eq!(parse_summary(r#"{"summary":9}"#, None)); // 문자열 아님
+        assert_eq!(parse_summary(r#"{"summary":9}"#), None); // 문자열 아님
     }
     #[test]
     fn ext_reasoning_extracts_type_and_validates_class() {
