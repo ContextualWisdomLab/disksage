@@ -3,7 +3,7 @@
 //! Fixtures are synthetic and temporary. The profiler must report schema/type/quality evidence
 //! without serializing sampled cell values into the returned profile.
 
-use disksage_lib::dataset_metadata::profile_dataset;
+use disksage_lib::profile_dataset;
 use std::io::Write;
 
 fn write_file(path: &std::path::Path, bytes: &[u8]) {
