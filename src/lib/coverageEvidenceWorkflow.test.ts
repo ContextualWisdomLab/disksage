@@ -86,6 +86,12 @@ describe('Test workflow coverage evidence contract', () => {
     expect(workflow).toContain('path: frontend-coverage-diagnostic.json');
   });
 
+  it('runs frontend diagnostics after the failing coverage step', () => {
+    expect(workflow).toContain(
+      "if: failure() && steps.frontend-coverage.outcome == 'failure'",
+    );
+  });
+
   it('uploads fail-closed evidence under the organization contract name', () => {
     expect(workflow).toContain('name: coverage-evidence');
     expect(workflow).toContain('path: coverage-evidence.json');
