@@ -45,7 +45,7 @@ describe('release version contract', () => {
     ).toBe('1.2.3');
   });
 
-  it('refuses invalid, missing, empty, or ambiguous manifest versions', () => {
+  it('refuses invalid, missing, empty, null, or ambiguous manifest versions', () => {
     expect(() => readJsonVersion('broken.json', () => '{')).toThrow(
       'Release manifest broken.json is missing or invalid JSON.',
     );
@@ -54,6 +54,9 @@ describe('release version contract', () => {
     );
     expect(() => readJsonVersion('empty.json', () => '{"version":""}')).toThrow(
       'Release manifest empty.json must define one non-empty string version.',
+    );
+    expect(() => readJsonVersion('null.json', () => 'null')).toThrow(
+      'Release manifest null.json must define one non-empty string version.',
     );
     expect(() => readCargoPackageVersion('missing.toml', () => '[workspace]\nmembers = []\n')).toThrow(
       'Release manifest missing.toml must define exactly one package version.',
