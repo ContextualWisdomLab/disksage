@@ -47,7 +47,10 @@ function fixture(): Record<string, unknown> {
     assessment_status: "unverified",
     reason_codes: ["host-physical-reclaim-unverified"],
     issue_codes: ["partial-evidence"],
-    notices: ["read only"],
+    notices: [
+      "Podman-reported logical candidates are not verified host physical reclaimability.",
+      "This desktop surface exposes no prune, remove, machine lifecycle, TRIM, or raw-image mutation command.",
+    ],
   };
 }
 
@@ -104,6 +107,16 @@ describe("parsePodmanDesktopEvidence", () => {
     expect(() => parsePodmanDesktopEvidence(inconsistent)).toThrow(
       "unverified-physical-reclaim-claim",
     );
+  });
+
+  it("rejects path-bearing or noncanonical notices before the UI boundary", () => {
+    const pathBearing = cloneFixture();
+    pathBearing.notices = ["Podman socket /Users/alice/.local/share/podman.sock failed"];
+    expect(() => parsePodmanDesktopEvidence(pathBearing)).toThrow("invalid-notices");
+
+    const duplicate = cloneFixture();
+    duplicate.notices = [duplicate.notices[0], duplicate.notices[0]];
+    expect(() => parsePodmanDesktopEvidence(duplicate)).toThrow("invalid-notices");
   });
 });
 
