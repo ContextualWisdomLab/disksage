@@ -112,13 +112,8 @@ fn valid_sha256(value: &str) -> bool {
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
-/// Reduce untrusted local diagnostic text to a bounded kebab-case issue code.
-///
-/// The prefix before the first colon is accepted only when it starts with a lowercase ASCII
-/// letter, contains lowercase ASCII letters, digits, or hyphens, and is at most 96 bytes. Paths,
-/// socket names, whitespace, uppercase text, Unicode, underscores, and empty prefixes fall back to
-/// one stable generic code rather than crossing the desktop IPC boundary.
-fn stable_issue_code(value: &str) -> String {
+/// Return the bounded kebab-case prefix of an untrusted diagnostic code when it is safe.
+fn stable_code_prefix(value: &str) -> Option<String> {
     let code = value.split(':').next().unwrap_or_default();
     let valid = !code.is_empty()
         && code.len() <= 96
@@ -129,12 +124,17 @@ fn stable_issue_code(value: &str) -> String {
         && code
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+    valid.then(|| code.to_string())
+}
 
-    if valid {
-        code.to_string()
-    } else {
-        "podman-evidence-error".to_string()
-    }
+/// Reduce untrusted local diagnostic text to a bounded kebab-case issue code.
+///
+/// The prefix before the first colon is accepted only when it starts with a lowercase ASCII
+/// letter, contains lowercase ASCII letters, digits, or hyphens, and is at most 96 bytes. Paths,
+/// socket names, whitespace, uppercase text, Unicode, underscores, and empty prefixes fall back to
+/// one stable generic code rather than crossing the desktop IPC boundary.
+fn stable_issue_code(value: &str) -> String {
+    stable_code_prefix(value).unwrap_or_else(|| "podman-evidence-error".to_string())
 }
 
 /// Return whether a matching recommended action requires independent human approval.
@@ -148,8 +148,8 @@ fn has_action(plan: &PodmanReclaimPlan, kind: PodmanRecommendedActionKind) -> bo
 /// Convert a detailed headless Podman plan into the desktop-safe contract.
 ///
 /// The conversion removes machine names, all local paths, graph-root locations, image IDs,
-/// tags, command output, and dynamic error details. Invalid candidate fingerprints fail
-/// closed by clearing the fingerprint and marking the response incomplete.
+/// tags, command output, and dynamic error details. Invalid candidate fingerprints or assessment
+/// codes fail closed by clearing unsafe data and marking the response incomplete.
 pub fn redact_podman_reclaim_plan(plan: PodmanReclaimPlan) -> PodmanDesktopEvidence {
     let mut issue_codes = plan
         .issues
@@ -164,6 +164,30 @@ pub fn redact_podman_reclaim_plan(plan: PodmanReclaimPlan) -> PodmanDesktopEvide
     let fingerprint_valid = candidate_fingerprint.as_deref().is_none_or(valid_sha256);
     if !fingerprint_valid {
         issue_codes.push("podman-desktop-invalid-candidate-fingerprint".to_string());
+    }
+
+    let assessment_status_valid = plan.assessment.status == "unverified";
+    let assessment_status = if assessment_status_valid {
+        plan.assessment.status.clone()
+    } else {
+        "unverified".to_string()
+    };
+    let mut assessment_codes_valid = assessment_status_valid;
+    let mut reason_codes = plan
+        .assessment
+        .reason_codes
+        .iter()
+        .map(|reason| {
+            stable_code_prefix(reason).unwrap_or_else(|| {
+                assessment_codes_valid = false;
+                "podman-assessment-error".to_string()
+            })
+        })
+        .collect::<Vec<_>>();
+    reason_codes.sort();
+    reason_codes.dedup();
+    if !assessment_codes_valid {
+        issue_codes.push("podman-desktop-invalid-assessment-code".to_string());
     }
     issue_codes.sort();
     issue_codes.dedup();
@@ -219,7 +243,7 @@ pub fn redact_podman_reclaim_plan(plan: PodmanReclaimPlan) -> PodmanDesktopEvide
         schema_kind: PODMAN_DESKTOP_SCHEMA_KIND,
         schema_version: 1,
         platform: plan.platform,
-        evidence_complete: plan.evidence_complete && fingerprint_valid,
+        evidence_complete: plan.evidence_complete && fingerprint_valid && assessment_codes_valid,
         elapsed_ms: plan.elapsed_ms,
         capacity,
         candidates,
@@ -242,8 +266,8 @@ pub fn redact_podman_reclaim_plan(plan: PodmanReclaimPlan) -> PodmanDesktopEvide
         raw_allocated_minus_guest_used_bytes: plan
             .assessment
             .raw_allocated_minus_guest_used_bytes,
-        assessment_status: plan.assessment.status,
-        reason_codes: plan.assessment.reason_codes,
+        assessment_status,
+        reason_codes,
         issue_codes,
         notices: vec![
             "Podman-reported logical candidates are not verified host physical reclaimability."
@@ -258,7 +282,6 @@ pub fn redact_podman_reclaim_plan(plan: PodmanReclaimPlan) -> PodmanDesktopEvide
 ///
 /// The command passes an argument vector directly to `std::process::Command` through the
 /// headless probe. It never constructs a shell command and never executes a mutation.
-#[cfg(not(coverage))]
 #[tauri::command]
 pub fn inspect_podman_reclaim() -> PodmanDesktopEvidence {
     redact_podman_reclaim_plan(probe_podman_reclaim(
