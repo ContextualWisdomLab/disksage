@@ -1,18 +1,37 @@
 //! 강제-JSON 파싱 — 모델 출력에서 첫 균형 잡힌 {..}를 뽑아 serde. 모든 실패는 fail-closed(Unrated/None).
 use crate::llm::{ExtReasoning, Verdict};
 
-/// 첫 '{'부터 짝이 맞는 '}'까지 슬라이스. 없거나 안 맞으면 None.
-// ponytail: 순진한 중괄호 카운트 — 문자열 값 안의 중괄호는 오분류 가능. 소형 모델 강제 JSON엔 충분.
+/// 첫 '{'부터 문자열 밖에서 짝이 맞는 '}'까지 슬라이스. 없거나 안 맞으면 None.
 fn extract_json(raw: &str) -> Option<&str> {
     let start = raw.find('{')?;
     let bytes = raw.as_bytes();
     let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+
     for i in start..bytes.len() {
-        if bytes[i] == b'{' {
-            depth += 1;
-        } else if bytes[i] == b'}' {
-            depth -= 1;
-            if depth == 0 { return Some(&raw[start..=i]); }
+        let byte = bytes[i];
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match byte {
+            b'"' => in_string = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(&raw[start..=i]);
+                }
+            }
+            _ => {}
         }
     }
     None
@@ -146,7 +165,7 @@ mod tests {
         assert_eq!(parse_summary("no json"), None);          // extract None
         assert_eq!(parse_summary("{bad}"), None);            // serde err
         assert_eq!(parse_summary(r#"{"x":1}"#), None);       // summary 필드 없음
-        assert_eq!(parse_summary(r#"{"summary":9}"#), None); // 문자열 아님
+        assert_eq!(parse_summary(r#"{"summary":9}"#, None)); // 문자열 아님
     }
     #[test]
     fn ext_reasoning_extracts_type_and_validates_class() {
