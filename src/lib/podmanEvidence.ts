@@ -77,14 +77,7 @@ export interface PodmanEvidenceView {
 type InvokeFunction = <T>(command: string) => Promise<T>;
 type JsonRecord = Record<string, unknown>;
 
-/**
- * Require a plain JSON object and reject arrays, null, and primitive values.
- *
- * @param value - Untrusted value received from the Tauri boundary.
- * @param label - Stable field label included in the fail-closed error code.
- * @returns The same value narrowed to a string-keyed JSON record.
- * @throws When the value is not a plain object-shaped record.
- */
+/** Require a plain JSON object and reject arrays, null, and primitive values. */
 function record(value: unknown, label: string): JsonRecord {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error(`invalid-${label}`);
@@ -92,25 +85,13 @@ function record(value: unknown, label: string): JsonRecord {
   return value as JsonRecord;
 }
 
-/**
- * Require a string value from an untrusted response field.
- *
- * @param value - Candidate field value.
- * @param label - Stable field label included in the error code.
- * @returns The validated string.
- * @throws When the value is not a string.
- */
+/** Require a string value from an untrusted response field. */
 function stringValue(value: unknown, label: string): string {
   if (typeof value !== "string") throw new Error(`invalid-${label}`);
   return value;
 }
 
-/**
- * Require one supported desktop operating-system identifier.
- *
- * Arbitrary strings are rejected because the value is rendered in the UI and otherwise could
- * become a path, machine-name, or account-detail display channel.
- */
+/** Require one supported desktop operating-system identifier. */
 function platformValue(value: unknown): PodmanDesktopPlatform {
   if (value !== "linux" && value !== "macos" && value !== "windows") {
     throw new Error("invalid-platform");
@@ -118,30 +99,13 @@ function platformValue(value: unknown): PodmanDesktopPlatform {
   return value;
 }
 
-/**
- * Require a boolean value from an untrusted response field.
- *
- * @param value - Candidate field value.
- * @param label - Stable field label included in the error code.
- * @returns The validated boolean.
- * @throws When the value is not a boolean.
- */
+/** Require a boolean value from an untrusted response field. */
 function booleanValue(value: unknown, label: string): boolean {
   if (typeof value !== "boolean") throw new Error(`invalid-${label}`);
   return value;
 }
 
-/**
- * Require a non-negative JavaScript safe integer.
- *
- * Byte counts and record counts are rejected rather than rounded when Rust-to-JavaScript
- * serialization produces an unsafe, negative, fractional, or nonnumeric value.
- *
- * @param value - Candidate numeric field value.
- * @param label - Stable field label included in the error code.
- * @returns The validated unsigned safe integer.
- * @throws When the value cannot be represented exactly and safely in JavaScript.
- */
+/** Require a non-negative JavaScript safe integer. */
 function unsignedInteger(value: unknown, label: string): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
     throw new Error(`invalid-${label}`);
@@ -149,26 +113,12 @@ function unsignedInteger(value: unknown, label: string): number {
   return value;
 }
 
-/**
- * Preserve an explicitly unavailable observation as null or validate its unsigned value.
- *
- * @param value - Candidate field value, where null means the probe could not observe it.
- * @param label - Stable field label included in the error code.
- * @returns Null for an unavailable observation, otherwise a validated unsigned safe integer.
- * @throws When a non-null value is not a safe unsigned integer.
- */
+/** Preserve an unavailable observation as null or validate its unsigned value. */
 function optionalUnsignedInteger(value: unknown, label: string): number | null {
   return value === null ? null : unsignedInteger(value, label);
 }
 
-/**
- * Require an array containing only strings and return a defensive copy.
- *
- * @param value - Candidate list value.
- * @param label - Stable field label included in the error code.
- * @returns A new array containing the validated strings.
- * @throws When the value is not a string-only array.
- */
+/** Require an array containing only strings and return a defensive copy. */
 function stringArray(value: unknown, label: string): string[] {
   if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
     throw new Error(`invalid-${label}`);
@@ -176,12 +126,7 @@ function stringArray(value: unknown, label: string): string[] {
   return [...value];
 }
 
-/**
- * Require the exact schema-versioned notices rather than rendering arbitrary local text.
- *
- * Any wording, ordering, count, duplicate, or path-bearing drift requires an explicit schema
- * change instead of silently crossing the desktop privacy boundary.
- */
+/** Require the exact schema-versioned notices rather than rendering arbitrary local text. */
 function canonicalNotices(value: unknown): string[] {
   const notices = stringArray(value, "notices");
   if (
@@ -193,19 +138,12 @@ function canonicalNotices(value: unknown): string[] {
   return [...PODMAN_DESKTOP_NOTICES];
 }
 
-/** Return true only for a bounded lowercase kebab-case code safe to cross the desktop boundary. */
+/** Return true only for a bounded lowercase kebab-case code safe across IPC. */
 function isStableCode(value: unknown): value is string {
   return typeof value === "string" && /^[a-z][a-z0-9-]{0,95}$/.test(value);
 }
 
-/**
- * Require a duplicate-free array of bounded lowercase kebab-case codes.
- *
- * @param value - Candidate assessment or issue-code list from the untrusted Tauri response.
- * @param label - Stable field label included in the fail-closed error code.
- * @returns A defensive copy of the validated stable codes.
- * @throws When a code is malformed, path-bearing, oversized, or duplicated.
- */
+/** Require a duplicate-free array of bounded lowercase kebab-case codes. */
 function stableCodeArray(value: unknown, label: string): string[] {
   if (
     !Array.isArray(value) ||
@@ -217,19 +155,13 @@ function stableCodeArray(value: unknown, label: string): string[] {
   return [...value];
 }
 
-/** Require the only assessment status currently emitted by the Rust headless authority. */
+/** Require the only assessment status currently emitted by the Rust authority. */
 function assessmentStatus(value: unknown): string {
   if (value !== "unverified") throw new Error("invalid-assessment-status");
   return value;
 }
 
-/**
- * Validate an optional lowercase SHA-256 commitment.
- *
- * @param value - Null when no candidate set was observed, otherwise the encoded digest.
- * @returns Null or a 64-character lowercase hexadecimal SHA-256 string.
- * @throws When a supplied fingerprint is malformed or uses a different encoding.
- */
+/** Validate an optional lowercase SHA-256 commitment. */
 function sha256OrNull(value: unknown): string | null {
   if (value === null) return null;
   const fingerprint = stringValue(value, "image-candidate-set-sha256");
@@ -239,13 +171,12 @@ function sha256OrNull(value: unknown): string | null {
   return fingerprint;
 }
 
-/**
- * Parse the capacity section while preserving every measurement as a distinct concept.
- *
- * @param value - Untrusted capacity object from the Rust response.
- * @returns Validated capacity observations with unavailable values preserved as null.
- * @throws When the section or any member violates the versioned desktop contract.
- */
+/** Return true only when a nullable observation contains a positive value. */
+function hasPositiveObservation(value: number | null): boolean {
+  return value !== null && value > 0;
+}
+
+/** Parse the capacity section while preserving every measurement as a distinct concept. */
 function parseCapacity(value: unknown): PodmanDesktopCapacityEvidence {
   const capacity = record(value, "podman-capacity");
   return {
@@ -275,13 +206,7 @@ function parseCapacity(value: unknown): PodmanDesktopCapacityEvidence {
   };
 }
 
-/**
- * Parse logical cleanup candidates without treating them as verified physical savings.
- *
- * @param value - Untrusted candidate object from the Rust response.
- * @returns Validated candidate counts, byte observations, and optional set commitment.
- * @throws When a candidate field violates its type, range, or fingerprint contract.
- */
+/** Parse logical cleanup candidates without treating them as physical savings. */
 function parseCandidates(value: unknown): PodmanDesktopCandidateEvidence {
   const candidates = record(value, "podman-candidates");
   return {
@@ -309,13 +234,7 @@ function parseCandidates(value: unknown): PodmanDesktopCandidateEvidence {
   };
 }
 
-/**
- * Parse independent review requirements for images, stopped containers, and volumes.
- *
- * @param value - Untrusted review-boundary object from the Rust response.
- * @returns Three validated booleans that remain advisory and mutually non-authorizing.
- * @throws When any review boundary is absent or not boolean.
- */
+/** Parse independent review requirements for images, stopped containers, and volumes. */
 function parseReviewBoundaries(value: unknown): PodmanDesktopReviewBoundaries {
   const boundaries = record(value, "podman-review-boundaries");
   return {
@@ -334,7 +253,52 @@ function parseReviewBoundaries(value: unknown): PodmanDesktopReviewBoundaries {
   };
 }
 
-/** Parse the Rust response and fail closed on schema, type, range, or fingerprint drift. */
+/**
+ * Reject semantic contradictions between candidate evidence, fingerprints, and review domains.
+ *
+ * Complete exact-image evidence must include both an exact-record count and its set commitment.
+ * Partial evidence may omit an invalid fingerprint while retaining safe counts, but a fingerprint
+ * may never appear without the exact-record observation it commits to. Any positive candidate in
+ * a domain conservatively requires its own review boundary; a review signal never authorizes a
+ * different domain and remains advisory only.
+ */
+function validateCandidateConsistency(
+  candidates: PodmanDesktopCandidateEvidence,
+  reviewBoundaries: PodmanDesktopReviewBoundaries,
+  evidenceComplete: boolean,
+): void {
+  const hasExactImageRecords = candidates.unused_image_records !== null;
+  const hasImageFingerprint = candidates.image_candidate_set_sha256 !== null;
+  if (
+    (hasImageFingerprint && !hasExactImageRecords) ||
+    (evidenceComplete && (!hasExactImageRecords || !hasImageFingerprint))
+  ) {
+    throw new Error("inconsistent-image-candidate-fingerprint");
+  }
+
+  if (
+    (hasPositiveObservation(candidates.image_candidate_bytes) ||
+      hasPositiveObservation(candidates.unused_image_records)) &&
+    !reviewBoundaries.image_review_required
+  ) {
+    throw new Error("inconsistent-image-review-boundary");
+  }
+  if (
+    (hasPositiveObservation(candidates.stopped_container_candidate_bytes) ||
+      hasPositiveObservation(candidates.stopped_container_records)) &&
+    !reviewBoundaries.stopped_container_review_required
+  ) {
+    throw new Error("inconsistent-stopped-container-review-boundary");
+  }
+  if (
+    hasPositiveObservation(candidates.volume_candidate_bytes) &&
+    !reviewBoundaries.volume_review_required
+  ) {
+    throw new Error("inconsistent-volume-review-boundary");
+  }
+}
+
+/** Parse the Rust response and fail closed on schema, type, range, or semantic drift. */
 export function parsePodmanDesktopEvidence(value: unknown): PodmanDesktopEvidence {
   const evidence = record(value, "podman-desktop-evidence");
   if (evidence.schema_kind !== PODMAN_DESKTOP_SCHEMA_KIND) {
@@ -357,6 +321,10 @@ export function parsePodmanDesktopEvidence(value: unknown): PodmanDesktopEvidenc
   if (assessment_status === "unverified" && physically_reclaimable_bytes !== null) {
     throw new Error("unverified-physical-reclaim-claim");
   }
+  const candidates = parseCandidates(evidence.candidates);
+  const review_boundaries = parseReviewBoundaries(evidence.review_boundaries);
+  validateCandidateConsistency(candidates, review_boundaries, evidence_complete);
+
   return {
     schema_kind: PODMAN_DESKTOP_SCHEMA_KIND,
     schema_version: 1,
@@ -364,8 +332,8 @@ export function parsePodmanDesktopEvidence(value: unknown): PodmanDesktopEvidenc
     evidence_complete,
     elapsed_ms: unsignedInteger(evidence.elapsed_ms, "elapsed-ms"),
     capacity: parseCapacity(evidence.capacity),
-    candidates: parseCandidates(evidence.candidates),
-    review_boundaries: parseReviewBoundaries(evidence.review_boundaries),
+    candidates,
+    review_boundaries,
     physically_reclaimable_bytes,
     podman_reported_reclaimable_bytes: optionalUnsignedInteger(
       evidence.podman_reported_reclaimable_bytes,
