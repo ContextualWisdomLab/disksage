@@ -3,6 +3,12 @@ import { invoke } from "@tauri-apps/api/core";
 /** Stable schema kind emitted by the Rust desktop projection. */
 export const PODMAN_DESKTOP_SCHEMA_KIND = "disksage.podman-desktop-evidence";
 
+/** Exact privacy-safe notices emitted by schema version 1. */
+const PODMAN_DESKTOP_NOTICES = [
+  "Podman-reported logical candidates are not verified host physical reclaimability.",
+  "This desktop surface exposes no prune, remove, machine lifecycle, TRIM, or raw-image mutation command.",
+] as const;
+
 /** Nullable byte value used when an observation could not be collected. */
 export type OptionalBytes = number | null;
 
@@ -152,6 +158,23 @@ function stringArray(value: unknown, label: string): string[] {
     throw new Error(`invalid-${label}`);
   }
   return [...value];
+}
+
+/**
+ * Require the exact schema-versioned notices rather than rendering arbitrary local text.
+ *
+ * Any wording, ordering, count, duplicate, or path-bearing drift requires an explicit schema
+ * change instead of silently crossing the desktop privacy boundary.
+ */
+function canonicalNotices(value: unknown): string[] {
+  const notices = stringArray(value, "notices");
+  if (
+    notices.length !== PODMAN_DESKTOP_NOTICES.length ||
+    notices.some((notice, index) => notice !== PODMAN_DESKTOP_NOTICES[index])
+  ) {
+    throw new Error("invalid-notices");
+  }
+  return [...PODMAN_DESKTOP_NOTICES];
 }
 
 /** Return true only for a bounded lowercase kebab-case code safe to cross the desktop boundary. */
@@ -333,7 +356,7 @@ export function parsePodmanDesktopEvidence(value: unknown): PodmanDesktopEvidenc
     assessment_status,
     reason_codes: stableCodeArray(evidence.reason_codes, "reason-codes"),
     issue_codes: stableCodeArray(evidence.issue_codes, "issue-codes"),
-    notices: stringArray(evidence.notices, "notices"),
+    notices: canonicalNotices(evidence.notices),
   };
 }
 
