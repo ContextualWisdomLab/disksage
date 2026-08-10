@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Surface the existing read-only Podman reclaim probe in the desktop Cleanup workflow through a versioned privacy-safe schema that keeps configured capacity, raw logical size, host allocation, guest usage, logical cleanup candidates, and verified physical reclaimability semantically separate; local paths, machine names, image identifiers, command output, and dynamic failures are redacted before the frontend boundary, and image/container/volume review domains remain independent.
+
 ### Changed
 
 - Replace generator-era Cargo package metadata with the DiskSage product description, MIT license expression, canonical source repository URL, and `publish = false` registry-publication boundary; deliberately omit Cargo's deprecated `authors` field, verify publication refusal through Cargo's versioned parsed metadata rather than substring matching, and regression-test commented/out-of-table decoys together with the retained acquisition metadata and doctoring evidence.
