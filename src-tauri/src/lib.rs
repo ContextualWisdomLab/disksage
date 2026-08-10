@@ -3,6 +3,8 @@
 mod dupes;
 #[cfg_attr(coverage, allow(dead_code))]
 mod commands;
+#[cfg(test)]
+mod commands_public_tests;
 #[cfg_attr(coverage, allow(dead_code))]
 mod scanner;
 #[cfg_attr(coverage, allow(dead_code))]
