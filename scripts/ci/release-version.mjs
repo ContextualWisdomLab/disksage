@@ -1,5 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { argv } from 'node:process';
+import { fileURLToPath } from 'node:url';
 
 /**
  * Read one JSON release manifest and return its non-empty version string.
@@ -148,4 +150,8 @@ export function main({
     setExitCode(1);
     return false;
   }
+}
+
+if (argv[1] && resolve(argv[1]) === fileURLToPath(import.meta.url)) {
+  main();
 }
