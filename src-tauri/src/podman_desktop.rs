@@ -150,7 +150,8 @@ fn has_action(plan: &PodmanReclaimPlan, kind: PodmanRecommendedActionKind) -> bo
 /// The conversion removes machine names, all local paths, graph-root locations, image IDs,
 /// tags, command output, and dynamic error details. Invalid candidate fingerprints, assessment
 /// codes, unverified physical-reclaim claims, or any projected issue fail closed by clearing
-/// unsafe data and marking the response incomplete.
+/// unsafe data and marking the response incomplete. Positive candidates conservatively force the
+/// corresponding review boundary even if an upstream recommended-action record is missing.
 pub fn redact_podman_reclaim_plan(plan: PodmanReclaimPlan) -> PodmanDesktopEvidence {
     let mut issue_codes = plan
         .issues
@@ -250,6 +251,25 @@ pub fn redact_podman_reclaim_plan(plan: PodmanReclaimPlan) -> PodmanDesktopEvide
         image_candidate_set_sha256: candidate_fingerprint.filter(|_| fingerprint_valid),
     };
 
+    let image_review_required = has_action(
+        &plan,
+        PodmanRecommendedActionKind::ReviewUnusedImages,
+    ) || candidates.image_candidate_bytes.is_some_and(|bytes| bytes > 0)
+        || candidates.unused_image_records.is_some_and(|records| records > 0);
+    let stopped_container_review_required = has_action(
+        &plan,
+        PodmanRecommendedActionKind::ReviewStoppedContainers,
+    ) || candidates
+        .stopped_container_candidate_bytes
+        .is_some_and(|bytes| bytes > 0)
+        || candidates
+            .stopped_container_records
+            .is_some_and(|records| records > 0);
+    let volume_review_required = has_action(
+        &plan,
+        PodmanRecommendedActionKind::ReviewUnusedVolumes,
+    ) || candidates.volume_candidate_bytes.is_some_and(|bytes| bytes > 0);
+
     PodmanDesktopEvidence {
         schema_kind: PODMAN_DESKTOP_SCHEMA_KIND,
         schema_version: 1,
@@ -263,18 +283,9 @@ pub fn redact_podman_reclaim_plan(plan: PodmanReclaimPlan) -> PodmanDesktopEvide
         capacity,
         candidates,
         review_boundaries: PodmanDesktopReviewBoundaries {
-            image_review_required: has_action(
-                &plan,
-                PodmanRecommendedActionKind::ReviewUnusedImages,
-            ),
-            stopped_container_review_required: has_action(
-                &plan,
-                PodmanRecommendedActionKind::ReviewStoppedContainers,
-            ),
-            volume_review_required: has_action(
-                &plan,
-                PodmanRecommendedActionKind::ReviewUnusedVolumes,
-            ),
+            image_review_required,
+            stopped_container_review_required,
+            volume_review_required,
         },
         physically_reclaimable_bytes,
         podman_reported_reclaimable_bytes: plan.assessment.podman_reported_reclaimable_bytes,
@@ -434,6 +445,10 @@ mod tests {
         assert!(evidence.review_boundaries.volume_review_required);
 
         let mut plan = complete_plan();
+        plan.store = None;
+        plan.system_df = None;
+        plan.unused_images = None;
+        plan.evidence_complete = false;
         plan.assessment.recommended_actions = vec![PodmanRecommendedAction {
             kind: PodmanRecommendedActionKind::InvestigateApi,
             requires_human_approval: false,
