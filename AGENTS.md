@@ -51,6 +51,21 @@ A blocked merge, queued check, reviewer/provider latency, central dependency, or
 
 One RCA, one commit, one documentation update, one review request, one merge, or one blocker is always intermediate while another safe action exists. Before ending, perform two fresh whole-repository sweeps covering PRs/issues, protected main, reviews/checks/security, stale/superseded work, docs, release state, and buyer-visible gaps. End only at practical invocation/tool-budget exhaustion or when both sweeps find no safe executable work.
 
+## Scheduler-control incident recovery
+
+A generic scheduled-task error, missed expected recurrence, user report that work remained, or request to repair the prompt is control-plane evidence, not repository completion and not proof of a source defect.
+
+In the same invocation:
+
+1. re-fetch the enabled task state when the control-plane API is available and the complete live DiskSage queue;
+2. distinguish scheduler activation/transport/prompt/tool/provider/credential failure from repository failure without inventing an unobservable error code;
+3. repair the same scheduler rather than creating a duplicate writer when a supported control-plane mutation exists;
+4. assign zero completion credit to the prompt edit, inventory, RCA, documentation mutation, one check, one merge, or one product slice by itself;
+5. resume substantive repository execution immediately, including a non-documentation lane whenever one is safe;
+6. if two materially distinct safe execute-now actions exist, advance both before voluntary termination; otherwise execute every safe action and prove through two fresh queue rebuilds that no second action exists.
+
+A prompt or documentation mutation must not be the final mutation of an incident-recovery invocation when a safe source, test, CI, PR-state, merge, operational-proof, or product action exists. Scheduler API unavailability blocks only scheduler mutation; it never licenses a status-only response while repository work remains.
+
 ## RCA and feasibility
 
 Every non-passing gate is a symptom. Identify the first failing boundary, exact state, immediate/root/systemic cause where material, and correction owner. Enumerate materially distinct remedies and verify real-world feasibility against API/tool support, permissions, credentials, reviewer eligibility, workflow semantics, repository policy, stack ancestry, writer lease, rate limits, blast radius, rollback, and an exact acceptance test.
