@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite dev",
-    "verify:release-version": "node --input-type=module --eval \"import('./scripts/ci/release-version.mjs').then(({ main }) => main())\"",
+    "verify:release-version": "node scripts/ci/release-version.mjs",
     "build": "npm run verify:release-version && vite build",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
