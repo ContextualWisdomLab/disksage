@@ -80,6 +80,24 @@ mod tests {
         // extract_json은 바깥 객체 전체를 반환해야 한다.
         assert_eq!(parse_verdict(r#"{"verdict":"safe","meta":{"x":1}}"#), Verdict::Safe);
     }
+    #[test]
+    fn braces_inside_json_strings_do_not_truncate_valid_model_output() {
+        assert_eq!(
+            parse_verdict_full(r#"{"verdict":"safe","reason":"literal } brace"}"#),
+            (Verdict::Safe, "literal } brace".to_string())
+        );
+        assert_eq!(
+            parse_summary(r#"{"summary":"literal { brace"}"#),
+            Some("literal { brace".to_string())
+        );
+    }
+    #[test]
+    fn escaped_quotes_do_not_change_string_brace_semantics() {
+        assert_eq!(
+            parse_verdict_full(r#"{"verdict":"keep","reason":"quoted \"} token\" remains text"}"#),
+            (Verdict::Keep, "quoted \"} token\" remains text".to_string())
+        );
+    }
 
     #[test]
     fn parses_json_with_prose_and_fences() {
