@@ -1,8 +1,8 @@
 //! Deterministic coverage for command-layer pure cores without exposing them as public crate APIs.
 
 use crate::commands::{
-    execute_moves_inner, list_roots, load_ontology_from, node_view, parse_move_entry,
-    undo_last_moves_inner,
+    clean_paths_inner, execute_moves_inner, list_roots, load_ontology_from, node_view,
+    parse_move_entry, undo_last_moves_inner,
 };
 use crate::organize::MovePlan;
 use crate::scanner::{ScanResult, ScanStats};
@@ -70,6 +70,48 @@ fn node_view_lists_files_and_directories_by_descending_size() {
     assert_eq!(view.entries[1].name, "file.bin");
     assert!(!view.entries[1].is_dir);
     assert_eq!(view.entries[1].size, 4);
+}
+
+#[test]
+fn clean_paths_fail_closed_before_mutation_when_journaling_is_unavailable() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("file.bin");
+    let directory = temp.path().join("directory");
+    let nested = directory.join("nested.bin");
+    let missing = temp.path().join("missing.bin");
+    fs::write(&file, [1_u8, 2, 3, 4]).unwrap();
+    fs::create_dir(&directory).unwrap();
+    fs::write(&nested, [5_u8, 6, 7]).unwrap();
+
+    // Passing an existing directory as the journal file makes OpenOptions fail before
+    // trash::delete can run. This exercises regular-file, recursive-directory, and missing-file
+    // accounting while proving the command core keeps every real target intact when its audit
+    // journal cannot be written.
+    let results = clean_paths_inner(
+        &[file.clone(), directory.clone(), missing.clone()],
+        temp.path(),
+        99,
+    );
+
+    assert_eq!(results.len(), 3);
+    assert!(results.iter().all(|result| !result.ok));
+    assert!(results.iter().all(|result| !result.error.is_empty()));
+    assert_eq!(results[0].path, file.to_string_lossy());
+    assert_eq!(results[1].path, directory.to_string_lossy());
+    assert_eq!(results[2].path, missing.to_string_lossy());
+    assert!(file.exists());
+    assert!(directory.exists());
+    assert!(nested.exists());
+    assert!(!missing.exists());
+
+    #[cfg(unix)]
+    {
+        // A filesystem root is rejected by the final safety guard without touching the journal.
+        let protected = clean_paths_inner(&[PathBuf::from("/")], temp.path(), 100);
+        assert_eq!(protected.len(), 1);
+        assert!(!protected[0].ok);
+        assert!(!protected[0].error.is_empty());
+    }
 }
 
 #[test]
