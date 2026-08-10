@@ -15,7 +15,12 @@ export function readJsonVersion(manifestPath, readText = readFileSync) {
   } catch {
     throw new Error(`Release manifest ${manifestPath} is missing or invalid JSON.`);
   }
-  if (typeof parsed.version !== 'string' || parsed.version.length === 0) {
+  if (
+    parsed === null ||
+    typeof parsed !== 'object' ||
+    typeof parsed.version !== 'string' ||
+    parsed.version.length === 0
+  ) {
     throw new Error(
       `Release manifest ${manifestPath} must define one non-empty string version.`,
     );
