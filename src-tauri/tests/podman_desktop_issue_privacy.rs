@@ -8,7 +8,7 @@ use disksage_lib::podman_reclaim::{
     PodmanReclaimAssessment, PodmanReclaimPlan, PODMAN_RECLAIM_SCHEMA_KIND,
 };
 
-/// Builds the smallest complete public plan needed to exercise issue-code projection.
+/// Builds the smallest public plan needed to exercise issue-code projection.
 fn plan_with_issue(issue: &str) -> PodmanReclaimPlan {
     PodmanReclaimPlan {
         schema_kind: PODMAN_RECLAIM_SCHEMA_KIND,
@@ -46,4 +46,16 @@ fn delimiter_free_private_issue_detail_falls_back_to_stable_code() {
     assert!(!json.contains("alice"));
     assert!(!json.contains("private-machine"));
     assert!(!json.contains("/Users/"));
+}
+
+/// Any projected issue forces completeness false even if an upstream caller contradicts it.
+#[test]
+fn projected_issue_codes_fail_completeness_closed() {
+    let mut plan = plan_with_issue("podman-info-failed:/run/user/501/private.sock");
+    plan.evidence_complete = true;
+
+    let evidence = redact_podman_reclaim_plan(plan);
+
+    assert_eq!(evidence.issue_codes, vec!["podman-info-failed"]);
+    assert!(!evidence.evidence_complete);
 }
