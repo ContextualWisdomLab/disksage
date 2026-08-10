@@ -16,6 +16,12 @@ describe('Test workflow coverage evidence contract', () => {
     );
   });
 
+  it('binds every checkout-bearing Test job to the exact current head', () => {
+    const exactHeadCheckout =
+      'ref: ${{ github.event.pull_request.head.sha || github.sha }}';
+    expect(workflow.split(exactHeadCheckout).length - 1).toBe(3);
+  });
+
   it('measures Rust branch coverage instead of synthesizing percentages', () => {
     expect(workflow).toContain('tool: cargo-llvm-cov');
     expect(workflow).toContain(
