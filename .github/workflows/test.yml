@@ -11,6 +11,8 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -41,7 +43,103 @@ jobs:
           node-version: 20.19.0
       - run: npm ci
       - run: npm test
-      - run: npm run coverage
+      - name: Frontend production coverage
+        id: frontend-coverage
+        run: npm run coverage
+      - name: Build bounded frontend coverage diagnostic
+        if: steps.frontend-coverage.outcome == 'failure'
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+
+          const sha = process.env.HEAD_SHA ?? '';
+          const repository = process.env.GITHUB_REPOSITORY ?? '';
+          if (!/^[0-9a-f]{40}$/.test(sha) || repository.length === 0) {
+            throw new Error('frontend coverage diagnostic identity is invalid');
+          }
+
+          const finalCoverage = JSON.parse(
+            readFileSync('coverage/coverage-final.json', 'utf8'),
+          );
+          const summaryCoverage = JSON.parse(
+            readFileSync('coverage/coverage-summary.json', 'utf8'),
+          );
+          const frontendMarker = '/src/';
+          const frontendRepositoryPath = (filename) => {
+            const normalized = String(filename ?? '').replaceAll('\\', '/');
+            if (normalized.startsWith('src/')) return normalized;
+            const markerIndex = normalized.lastIndexOf(frontendMarker);
+            if (markerIndex < 0) return null;
+            return `src/${normalized.slice(markerIndex + frontendMarker.length)}`;
+          };
+          const uncoveredCount = (values) => values.filter((value) => value === 0).length;
+          const frontend_uncovered_line_numbers = (file) => {
+            const lines = new Set();
+            for (const [statementId, count] of Object.entries(file?.s ?? {})) {
+              if (count !== 0) continue;
+              const line = file?.statementMap?.[statementId]?.start?.line;
+              if (Number.isSafeInteger(line) && line > 0) lines.add(line);
+            }
+            return [...lines].sort((left, right) => left - right).slice(0, 40);
+          };
+          const frontend_top_uncovered_files = Object.entries(finalCoverage)
+            .map(([filename, file]) => {
+              const path = frontendRepositoryPath(filename);
+              if (!path || !file || typeof file !== 'object') return null;
+              const statements = Object.values(file.s ?? {});
+              const functions = Object.values(file.f ?? {});
+              const branches = Object.values(file.b ?? {}).flatMap((value) =>
+                Array.isArray(value) ? value : [],
+              );
+              return {
+                path,
+                uncovered_statements: uncoveredCount(statements),
+                uncovered_branches: uncoveredCount(branches),
+                uncovered_functions: uncoveredCount(functions),
+                uncovered_line_numbers: frontend_uncovered_line_numbers(file),
+              };
+            })
+            .filter((entry) => entry && (
+              entry.uncovered_statements > 0 ||
+              entry.uncovered_branches > 0 ||
+              entry.uncovered_functions > 0 ||
+              entry.uncovered_line_numbers.length > 0
+            ))
+            .sort((left, right) => {
+              const leftGap = left.uncovered_statements + left.uncovered_branches +
+                left.uncovered_functions + left.uncovered_line_numbers.length;
+              const rightGap = right.uncovered_statements + right.uncovered_branches +
+                right.uncovered_functions + right.uncovered_line_numbers.length;
+              return rightGap - leftGap || left.path.localeCompare(right.path);
+            })
+            .slice(0, 20);
+          const diagnostic = {
+            schema_version: 1,
+            head_sha: sha,
+            repository,
+            totals: summaryCoverage?.total ?? null,
+            frontend_top_uncovered_files,
+          };
+          writeFileSync(
+            'frontend-coverage-diagnostic.json',
+            `${JSON.stringify(diagnostic, null, 2)}\n`,
+          );
+          console.error(`frontend-coverage-diagnostic=${JSON.stringify(diagnostic)}`);
+          const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+          if (summaryPath) {
+            appendFileSync(
+              summaryPath,
+              `### Frontend coverage diagnostic for \`${sha}\`\n\n\`\`\`json\n${JSON.stringify(diagnostic, null, 2)}\n\`\`\`\n`,
+            );
+          }
+          NODE
+      - name: Upload bounded frontend coverage diagnostic
+        if: steps.frontend-coverage.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: frontend-coverage-diagnostic-${{ env.HEAD_SHA }}
+          path: frontend-coverage-diagnostic.json
+          if-no-files-found: error
       - run: npm run check
       - run: npm run build
 
