@@ -38,9 +38,13 @@ The projection excludes machine names and states; configuration, raw-image, and 
 
 Issue strings are reduced to the prefix before the first colon only when that prefix is a bounded lowercase kebab-case code: it must start with a lowercase ASCII letter, contain only lowercase ASCII letters, digits, or hyphens, and be no longer than 96 bytes. Delimiter-free paths, sockets, whitespace, uppercase text, Unicode, underscores, empty prefixes, and malformed values collapse to `podman-evidence-error`. Invalid candidate fingerprints fail closed: the fingerprint is removed, the evidence is marked incomplete, and a stable issue code is added.
 
+Any projected issue code forces `evidence_complete` to false, even when an upstream caller incorrectly supplies `true`. The frontend independently rejects a response that combines `evidence_complete: true` with one or more issue codes. This keeps completeness as an integrity assertion rather than a cosmetic label.
+
 The only assessment status admitted by schema version 1 is `unverified`. If a contradictory headless plan supplies a concrete `physically_reclaimable_bytes` value while the assessment remains unverified, the Rust projection clears that value before IPC, marks the evidence incomplete, and emits `podman-desktop-unverified-physical-reclaim-claim`. A future verified physical-reclaim contract requires an explicit schema and evidence-authority change; it cannot appear by silently forwarding a new headless value.
 
 The two user-facing safety notices are also part of schema version 1 rather than arbitrary display text. The frontend accepts only those two exact statements in the defined order and count. Any modified, duplicated, reordered, additional, path-bearing, or otherwise noncanonical notice fails closed with `invalid-notices` instead of being rendered.
+
+The platform field is also schema-bound because it appears in the user interface. Schema version 1 admits only the Tauri desktop targets `linux`, `macos`, and `windows`. Unsupported, path-bearing, machine-specific, or account-specific platform text fails closed with `invalid-platform` rather than becoming visible evidence.
 
 ### 2. Keep the Tauri command read-only and argv-based
 
@@ -69,7 +73,8 @@ The desktop response is a versioned JSON contract with no dependency on Naruon o
 - Contradictory unverified physical-reclaim claims are removed in Rust before IPC rather than relying on frontend refusal.
 - Local identifiers stay outside the frontend contract, telemetry, and shareable evidence boundary.
 - Malformed or delimiter-free probe issues cannot masquerade as safe codes or serialize local path content.
-- Arbitrary notice text cannot become a path or account-detail display channel.
+- Any issue forces partial evidence in Rust, and the frontend refuses contradictory complete-plus-issues payloads.
+- Arbitrary notice or platform text cannot become a path, machine-name, or account-detail display channel.
 - Transport and JavaScript failures cannot leak machine names, paths, sockets, or command detail through the visible error region.
 - The architecture can later add separate governed image, container, and volume approval records without changing the read-only evidence contract.
 - Module-level `missing_docs` enforcement and source-level documentation contracts keep the Podman desktop functions beginner-readable.
@@ -79,7 +84,7 @@ The desktop response is a versioned JSON contract with no dependency on Naruon o
 - The UI intentionally cannot perform cleanup. Operators must use a separate reviewed workflow until a mutation design includes exact candidate binding, independent approval, rollback evidence, and before-and-after host verification.
 - Some evidence remains unavailable when Podman is absent, the machine is stopped, or the API is unhealthy. Unknown values remain `null`; the UI never converts missing evidence to zero.
 - Visible failures intentionally use a stable generic code; sensitive operational detail must be inspected through trusted local diagnostics rather than the shareable desktop surface.
-- Notice wording is schema-bound; changing it requires coordinated Rust/frontend contract review rather than a copy-only UI edit.
+- Notice wording and supported platform identifiers are schema-bound; changing either requires coordinated Rust/frontend contract review rather than a copy-only UI edit.
 
 ## Verification matrix
 
@@ -87,8 +92,11 @@ The desktop response is a versioned JSON contract with no dependency on Naruon o
 |---|---|
 | No machine names or paths in desktop JSON | Rust serialization tests search for private fixture values |
 | Delimiter-free or malformed issue text cannot cross IPC | Rust unit and integration tests expect `podman-evidence-error` |
+| Any projected issue forces partial evidence | `podman_desktop_issue_privacy.rs` contradicts upstream completeness and requires false |
+| Complete-plus-issues payloads are rejected | TypeScript parser regression expects `inconsistent-evidence-completeness` |
 | Unverified physical-reclaim claims cannot cross IPC | `podman_desktop_physical_reclaim_claim.rs` requires removal, incomplete evidence, and a stable issue code |
 | Arbitrary or duplicated notices cannot reach the UI | TypeScript parser regression requires the exact schema-v1 notice sequence |
+| Unsupported or path-bearing platform values cannot reach the UI | TypeScript parser regression admits only `linux`, `macos`, and `windows` |
 | Image/container/volume review separation | Rust projection tests and TypeScript view-model tests |
 | Invalid fingerprint fails closed | Rust and TypeScript malformed-fingerprint tests |
 | Missing observations stay unknown | Rust and TypeScript null-preservation tests |
