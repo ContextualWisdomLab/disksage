@@ -18,11 +18,15 @@ const requiredDocuments = [
   'docs/UML.md',
   'docs/DATA_MODEL.md',
   'docs/API_CONTRACT.md',
+  'docs/DATA_GOVERNANCE.md',
   'docs/THREAT_MODEL.md',
   'docs/TEST_STRATEGY.md',
   'docs/OPERABILITY.md',
+  'docs/INCIDENT_RUNBOOK.md',
   'docs/ROADMAP.md',
   'docs/RELEASE_AND_ROLLBACK.md',
+  'docs/ACQUISITION_DILIGENCE.md',
+  'docs/LICENSING_AND_NOTICES.md',
   'docs/TRACEABILITY.md',
   'docs/DOCUMENTATION_ASSESSMENT.md',
   'docs/README.md',
@@ -81,6 +85,8 @@ describe('canonical DiskSage documentation graph', () => {
     expect(architecture).toContain('## Standalone and modular deployment');
     expect(uml).toContain('```mermaid');
     expect(uml).toContain('## Repository merge and release authority flow');
+    expect(uml).toContain('## Stale branch convergence sequence');
+    expect(uml).toContain('## Incident RCA and remediation flow');
     expect(dataModel).toContain('Conceptual, logical, and persisted status');
     expect(dataModel).toContain('No central application database is claimed');
     expect(dataModel).toContain('erDiagram');
@@ -90,9 +96,30 @@ describe('canonical DiskSage documentation graph', () => {
     expect(release).toContain('SBOM');
     expect(release).toContain('rollback');
 
-    for (let index = 1; index <= 8; index += 1) {
+    for (let index = 1; index <= 10; index += 1) {
       expect(adrIndex).toContain(`ADR-${String(index).padStart(4, '0')}`);
     }
+  });
+
+  it('keeps privacy, incident, acquisition, and licensing authority explicit', () => {
+    const governance = readRepositoryDocument('docs/DATA_GOVERNANCE.md');
+    const incident = readRepositoryDocument('docs/INCIDENT_RUNBOOK.md');
+    const diligence = readRepositoryDocument('docs/ACQUISITION_DILIGENCE.md');
+    const licensing = readRepositoryDocument('docs/LICENSING_AND_NOTICES.md');
+
+    expect(governance).toContain('## Data classes and authority');
+    expect(governance).toContain('## Retention and deletion');
+    expect(governance).toContain('purpose-bound');
+    expect(incident).toContain('## RCA contract');
+    expect(incident).toContain('## Distinct remedies and feasibility');
+    expect(incident).toContain('## Recovery and closure evidence');
+    expect(diligence).toContain('## Buyer evidence matrix');
+    expect(diligence).toContain('protected main');
+    expect(diligence).toContain('no evidence');
+    expect(licensing).toContain('## Rights evidence model');
+    expect(licensing).toContain('SBOM');
+    expect(licensing).toContain('NOTICE');
+    expect(licensing).toContain('must not invent');
   });
 
   it('keeps documentation completeness and traceability machine-visible', () => {
@@ -101,9 +128,13 @@ describe('canonical DiskSage documentation graph', () => {
 
     expect(assessment).toContain('## Coverage matrix');
     expect(assessment).toContain('## Current conclusion');
+    expect(assessment).toContain('PRESENT_CURRENT');
+    expect(assessment).toContain('OWNED_BY_ACTIVE_PR');
     expect(traceability).toContain('requirement');
     expect(traceability).toContain('ADR');
     expect(traceability).toContain('test');
     expect(traceability).toContain('evidence');
+    expect(traceability).toContain('IMPLEMENTED_ON_PROTECTED_MAIN');
+    expect(traceability).toContain('IMPLEMENTED_ON_ACTIVE_PR');
   });
 });
