@@ -880,7 +880,7 @@ mod tests {
             src: source.to_string_lossy().into_owned(),
             dst: destination.to_string_lossy().into_owned(),
             provider: CloudProvider::Onedrive,
-            destination_account_scope: crate::cloud::CloudAccountScope::Organization,
+            destination_account_scope: crate::cloud::CloudAccountScope::Personal,
             kind: ArchiveKind::Document,
             bytes: metadata.len(),
             age_days: 1,
@@ -911,7 +911,7 @@ mod tests {
         let root = CloudRoot {
             id: cloud_dir.to_string_lossy().into_owned(),
             provider: CloudProvider::Onedrive,
-            account_scope: crate::cloud::CloudAccountScope::Organization,
+            account_scope: crate::cloud::CloudAccountScope::Personal,
             label: "test".into(),
             path: cloud_dir.to_string_lossy().into_owned(),
             readable: true,

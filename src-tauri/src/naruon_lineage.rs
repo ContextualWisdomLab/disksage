@@ -501,7 +501,7 @@ mod tests {
             CloudReviewDisposition::Approved,
             25,
             "human:local:test",
-            "embedded metadata checked",
+            "[organization-tenant-authority-confirmed] embedded metadata checked",
         )
         .unwrap();
         let root = CloudRoot {
