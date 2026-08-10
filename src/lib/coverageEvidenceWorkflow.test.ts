@@ -25,8 +25,9 @@ describe('Test workflow coverage evidence contract', () => {
   it('measures Rust branch coverage instead of synthesizing percentages', () => {
     expect(workflow).toContain('tool: cargo-llvm-cov');
     expect(workflow).toContain(
-      'cargo llvm-cov --manifest-path src-tauri/Cargo.toml --branch --json --summary-only --output-path coverage.json',
+      'cargo llvm-cov --manifest-path src-tauri/Cargo.toml --branch --json --output-path coverage.json',
     );
+    expect(workflow).not.toContain('--summary-only');
     expect(workflow).toContain('coverage.json');
     expect(workflow).toContain('coverage-evidence.json');
   });
@@ -56,6 +57,14 @@ describe('Test workflow coverage evidence contract', () => {
     expect(workflow).toContain('uncovered_branches');
     expect(workflow).toContain('uncovered_functions');
     expect(workflow).toContain('uncovered_lines');
+  });
+
+  it('preserves bounded repository-relative uncovered line numbers for test targeting', () => {
+    expect(workflow).toContain('uncovered_line_numbers');
+    expect(workflow).toContain('const uncoveredLineNumbers = (segments) =>');
+    expect(workflow).toContain('Array.isArray(segment)');
+    expect(workflow).toContain('segment[2] === 0');
+    expect(workflow).toContain('.slice(0, 40)');
   });
 
   it('surfaces the same bounded diagnostic in logs and the GitHub step summary', () => {
