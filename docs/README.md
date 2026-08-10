@@ -1,6 +1,6 @@
 # DiskSage Documentation Index
 
-This directory is the canonical map for product, technical, architecture, security, data governance, operability, release, licensing, and acquisition documentation. Feature-specific design specs and doctoring records remain valuable evidence but do not replace this cross-cutting graph.
+This directory is the canonical map for product, technical, architecture, quality, accessibility, interoperability, observability, security, data governance, operability, release, licensing, standards, and acquisition documentation. Feature-specific design specs and doctoring records remain valuable evidence but do not replace this cross-cutting graph.
 
 ## Canonical graph
 
@@ -11,6 +11,10 @@ This directory is the canonical map for product, technical, architecture, securi
 - [UML and architecture diagrams](UML.md)
 - [Data/evidence model and conceptual ERD](DATA_MODEL.md)
 - [API, IPC, and evidence contracts](API_CONTRACT.md)
+- [Product quality attributes and acceptance evidence](QUALITY_ATTRIBUTES.md)
+- [Accessibility acceptance](ACCESSIBILITY_ACCEPTANCE.md)
+- [Standalone and CWL interoperability](INTEROPERABILITY.md)
+- [Privacy-safe observability and evidence boundary](OBSERVABILITY.md)
 - [Data governance, privacy, and retention](DATA_GOVERNANCE.md)
 - [Threat model](THREAT_MODEL.md)
 - [Test strategy](TEST_STRATEGY.md)
@@ -19,6 +23,7 @@ This directory is the canonical map for product, technical, architecture, securi
 - [Commercial roadmap](ROADMAP.md)
 - [Release and rollback](RELEASE_AND_ROLLBACK.md)
 - [Licensing, IP, and NOTICE evidence](LICENSING_AND_NOTICES.md)
+- [Standards and primary-reference registry](STANDARDS_AND_REFERENCES.md)
 - [Acquisition diligence](ACQUISITION_DILIGENCE.md)
 - [Requirements/decisions/evidence traceability](TRACEABILITY.md)
 - [Documentation completeness assessment](DOCUMENTATION_ASSESSMENT.md)
@@ -40,7 +45,7 @@ An active PR, chat statement, issue, diagram, or target architecture is not prot
 
 - One active branch owns the canonical cross-cutting documentation graph.
 - Feature-specific doctoring remains authoritative for detailed local evidence when consistent with protected main.
-- Cross-cutting decisions affecting product identity, authority, persistence, privacy, interoperability, security, incident response, repository governance, release, licensing, or acquisition diligence are promoted into this graph or an ADR.
+- Cross-cutting decisions affecting product identity, authority, persistence, quality, accessibility, privacy, interoperability, observability, security, incident response, repository governance, release, licensing, standards, or acquisition diligence are promoted into this graph or an ADR.
 - A stale broad documentation/source branch is not canonical merely because it was created earlier. ADR-0009 governs semantic convergence and clean replacements.
 - Documentation completion is never equivalent to product/release readiness. ADR-0010 requires implementation/evidence handoff whenever a safe gap remains.
 
