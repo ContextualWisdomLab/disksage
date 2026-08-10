@@ -1,33 +1,49 @@
 # DiskSage Documentation Index
 
-This directory is the canonical map for product, technical, architecture, security, operability, and acquisition documentation. Feature-specific design specs and doctoring records remain valuable evidence but do not replace this cross-cutting graph.
+This directory is the canonical map for product, technical, architecture, security, data governance, operability, release, licensing, and acquisition documentation. Feature-specific design specs and doctoring records remain valuable evidence but do not replace this cross-cutting graph.
+
+## Canonical graph
 
 - [Product requirements](PRD.md)
 - [Technical requirements](TRD.md)
 - [System architecture](../ARCHITECTURE.md)
 - [Architecture decisions](adr/README.md)
 - [UML and architecture diagrams](UML.md)
-- [Data/evidence model and ERD](DATA_MODEL.md)
+- [Data/evidence model and conceptual ERD](DATA_MODEL.md)
 - [API, IPC, and evidence contracts](API_CONTRACT.md)
+- [Data governance, privacy, and retention](DATA_GOVERNANCE.md)
 - [Threat model](THREAT_MODEL.md)
 - [Test strategy](TEST_STRATEGY.md)
 - [Operability and recovery](OPERABILITY.md)
+- [Incident, RCA, and recovery runbook](INCIDENT_RUNBOOK.md)
 - [Commercial roadmap](ROADMAP.md)
 - [Release and rollback](RELEASE_AND_ROLLBACK.md)
-- [Requirements/evidence traceability](TRACEABILITY.md)
+- [Licensing, IP, and NOTICE evidence](LICENSING_AND_NOTICES.md)
+- [Acquisition diligence](ACQUISITION_DILIGENCE.md)
+- [Requirements/decisions/evidence traceability](TRACEABILITY.md)
 - [Documentation completeness assessment](DOCUMENTATION_ASSESSMENT.md)
 - [Security policy](../SECURITY.md)
 - [Agent/development rules](../AGENTS.md)
 - [Repository context](../CLAUDE.md)
 - [Changelog](../CHANGELOG.md)
+- [Outbound repository license](../LICENSE)
 
-## Status language
+## Authority and status language
 
-- `protected_main` means the behavior is evidenced on the protected default branch.
-- `proposed` means a reviewed documentation/architecture decision is not yet integrated.
-- `planned` means the product intent is not implementation evidence.
-- dated PR/run/SHA evidence belongs in review or assessment records, not timeless architecture.
+Documentation fitness uses `PRESENT_CURRENT`, `PRESENT_STALE`, `PARTIAL`, `MISSING`, `NOT_APPLICABLE`, `SUPERSEDED`, and `OWNED_BY_ACTIVE_PR` as defined in `DOCUMENTATION_ASSESSMENT.md`.
+
+Capability maturity uses `IMPLEMENTED_ON_PROTECTED_MAIN`, `IMPLEMENTED_ON_ACTIVE_PR`, `PARTIAL`, `ACCEPTED_ARCHITECTURE`, `PLANNED`, `RESEARCH_ONLY`, `SUPERSEDED`, `DOWNSTREAM`, `REJECTED`, and `OUT_OF_SCOPE` as defined in `TRACEABILITY.md`.
+
+An active PR, chat statement, issue, diagram, or target architecture is not protected-main implementation evidence. Dated PR/run/SHA evidence belongs in review, release, incident, or diligence records rather than timeless architecture.
+
+## Canonical ownership rules
+
+- One active branch owns the canonical cross-cutting documentation graph.
+- Feature-specific doctoring remains authoritative for detailed local evidence when consistent with protected main.
+- Cross-cutting decisions affecting product identity, authority, persistence, privacy, interoperability, security, incident response, repository governance, release, licensing, or acquisition diligence are promoted into this graph or an ADR.
+- A stale broad documentation/source branch is not canonical merely because it was created earlier. ADR-0009 governs semantic convergence and clean replacements.
+- Documentation completion is never equivalent to product/release readiness. ADR-0010 requires implementation/evidence handoff whenever a safe gap remains.
 
 ## Feature-specific records
 
-`docs/doctoring/`, `docs/architecture/`, `docs/development/`, and `docs/superpowers/` contain detailed feature or implementation evidence. Promote cross-cutting decisions into this canonical graph or an ADR when they affect product identity, authority, persistence, interoperability, security, release, or acquisition diligence.
+`docs/doctoring/`, `docs/architecture/`, `docs/development/`, and `docs/superpowers/` contain detailed feature or implementation evidence. They should link to or be indexed by the canonical graph when their decisions become cross-cutting, while preserving historical evidence rather than duplicating it into competing authorities.
