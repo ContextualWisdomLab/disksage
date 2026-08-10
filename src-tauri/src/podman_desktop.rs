@@ -78,7 +78,7 @@ pub struct PodmanDesktopEvidence {
     pub schema_version: u32,
     /// Operating-system family that produced the evidence.
     pub platform: &'static str,
-    /// True only when the headless probe is complete and the candidate fingerprint is valid.
+    /// True only when the probe is complete and no projected issue invalidates the evidence.
     pub evidence_complete: bool,
     /// Bounded probe duration in milliseconds.
     pub elapsed_ms: u64,
@@ -149,8 +149,8 @@ fn has_action(plan: &PodmanReclaimPlan, kind: PodmanRecommendedActionKind) -> bo
 ///
 /// The conversion removes machine names, all local paths, graph-root locations, image IDs,
 /// tags, command output, and dynamic error details. Invalid candidate fingerprints, assessment
-/// codes, or unverified physical-reclaim claims fail closed by clearing unsafe data and marking
-/// the response incomplete.
+/// codes, unverified physical-reclaim claims, or any projected issue fail closed by clearing
+/// unsafe data and marking the response incomplete.
 pub fn redact_podman_reclaim_plan(plan: PodmanReclaimPlan) -> PodmanDesktopEvidence {
     let mut issue_codes = plan
         .issues
@@ -201,6 +201,7 @@ pub fn redact_podman_reclaim_plan(plan: PodmanReclaimPlan) -> PodmanDesktopEvide
 
     issue_codes.sort();
     issue_codes.dedup();
+    let issues_absent = issue_codes.is_empty();
 
     let capacity = PodmanDesktopCapacityEvidence {
         configured_disk_bytes: plan
@@ -256,7 +257,8 @@ pub fn redact_podman_reclaim_plan(plan: PodmanReclaimPlan) -> PodmanDesktopEvide
         evidence_complete: plan.evidence_complete
             && fingerprint_valid
             && assessment_codes_valid
-            && physical_reclaim_claim_valid,
+            && physical_reclaim_claim_valid
+            && issues_absent,
         elapsed_ms: plan.elapsed_ms,
         capacity,
         candidates,
