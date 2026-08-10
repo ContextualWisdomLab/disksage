@@ -43,13 +43,16 @@ fn snapshot(provider: CloudProvider, state: CloudCapacityState) -> CloudCapacity
 
 #[test]
 fn capacity_scope_binding_preserves_or_refines_only_verified_authority() {
-    let root = root(CloudProvider::Onedrive, CloudAccountScope::Unknown);
+    let unknown_root = root(CloudProvider::Onedrive, CloudAccountScope::Unknown);
     let no_scope = snapshot(CloudProvider::Onedrive, CloudCapacityState::Normal);
-    assert_eq!(root_with_verified_capacity_scope(&root, &no_scope).unwrap(), root);
+    assert_eq!(
+        root_with_verified_capacity_scope(&unknown_root, &no_scope).unwrap(),
+        unknown_root
+    );
 
     let mut personal = no_scope.clone();
     personal.account_scope = Some(CloudAccountScope::Personal);
-    let refined = root_with_verified_capacity_scope(&root, &personal).unwrap();
+    let refined = root_with_verified_capacity_scope(&unknown_root, &personal).unwrap();
     assert_eq!(refined.account_scope, CloudAccountScope::Personal);
 
     let already_personal = root(CloudProvider::Onedrive, CloudAccountScope::Personal);
@@ -67,7 +70,7 @@ fn capacity_scope_binding_preserves_or_refines_only_verified_authority() {
     let mut wrong_provider = personal;
     wrong_provider.provider = CloudProvider::GoogleDrive;
     assert_eq!(
-        root_with_verified_capacity_scope(&root, &wrong_provider).unwrap_err(),
+        root_with_verified_capacity_scope(&unknown_root, &wrong_provider).unwrap_err(),
         "cloud-capacity-provider-mismatch"
     );
 }
