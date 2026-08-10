@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Surface the existing read-only Podman reclaim probe in the desktop Cleanup workflow through a versioned privacy-safe schema that keeps configured capacity, raw logical size, host allocation, guest usage, logical cleanup candidates, and verified physical reclaimability semantically separate; local paths, machine names, image identifiers, command output, and dynamic failures are redacted before the frontend boundary, and image/container/volume review domains remain independent.
+
 ### Changed
 
 - Require a fresh, exact, human-attributed approval and rationale for cloud copy-only and existing-copy adoption actions, with a 15-minute authorization lifetime bound to the candidate, destination, provider, account scope, and review fingerprint.
