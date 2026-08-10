@@ -154,6 +154,36 @@ function stringArray(value: unknown, label: string): string[] {
   return [...value];
 }
 
+/** Return true only for a bounded lowercase kebab-case code safe to cross the desktop boundary. */
+function isStableCode(value: unknown): value is string {
+  return typeof value === "string" && /^[a-z][a-z0-9-]{0,95}$/.test(value);
+}
+
+/**
+ * Require a duplicate-free array of bounded lowercase kebab-case codes.
+ *
+ * @param value - Candidate assessment or issue-code list from the untrusted Tauri response.
+ * @param label - Stable field label included in the fail-closed error code.
+ * @returns A defensive copy of the validated stable codes.
+ * @throws When a code is malformed, path-bearing, oversized, or duplicated.
+ */
+function stableCodeArray(value: unknown, label: string): string[] {
+  if (
+    !Array.isArray(value) ||
+    !value.every(isStableCode) ||
+    new Set(value).size !== value.length
+  ) {
+    throw new Error(`invalid-${label}`);
+  }
+  return [...value];
+}
+
+/** Require the only assessment status currently emitted by the Rust headless authority. */
+function assessmentStatus(value: unknown): string {
+  if (value !== "unverified") throw new Error("invalid-assessment-status");
+  return value;
+}
+
 /**
  * Validate an optional lowercase SHA-256 commitment.
  *
@@ -295,9 +325,9 @@ export function parsePodmanDesktopEvidence(value: unknown): PodmanDesktopEvidenc
       evidence.raw_allocated_minus_guest_used_bytes,
       "raw-allocated-minus-guest-used-bytes",
     ),
-    assessment_status: stringValue(evidence.assessment_status, "assessment-status"),
-    reason_codes: stringArray(evidence.reason_codes, "reason-codes"),
-    issue_codes: stringArray(evidence.issue_codes, "issue-codes"),
+    assessment_status: assessmentStatus(evidence.assessment_status),
+    reason_codes: stableCodeArray(evidence.reason_codes, "reason-codes"),
+    issue_codes: stableCodeArray(evidence.issue_codes, "issue-codes"),
     notices: stringArray(evidence.notices, "notices"),
   };
 }
