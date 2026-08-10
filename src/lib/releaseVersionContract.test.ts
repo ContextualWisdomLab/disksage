@@ -18,7 +18,7 @@ function readRepositoryFile(relativePath: string): string {
 }
 
 describe('release version contract', () => {
-  it('binds Tauri packaging to the cross-platform version gate', () => {
+  it('binds Tauri packaging to a directly executable version gate', () => {
     const packageManifest = JSON.parse(readRepositoryFile('package.json')) as {
       scripts: Record<string, string>;
     };
@@ -26,8 +26,8 @@ describe('release version contract', () => {
       readRepositoryFile('src-tauri/tauri.conf.json'),
     ) as { build: { beforeBuildCommand: string } };
 
-    expect(packageManifest.scripts['verify:release-version']).toContain(
-      "import('./scripts/ci/release-version.mjs')",
+    expect(packageManifest.scripts['verify:release-version']).toBe(
+      'node scripts/ci/release-version.mjs',
     );
     expect(packageManifest.scripts.build).toBe(
       'npm run verify:release-version && vite build',
