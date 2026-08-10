@@ -8,7 +8,9 @@ use disksage_lib::cloud::{
     candidate_review_fingerprint, ArchiveKind, CloudAccountScope, CloudCandidate, CloudProvider,
     CloudRoot, MetadataEvidence, ORGANIZATION_TENANT_AUTHORITY_REVIEW_REASON,
 };
-use disksage_lib::cloud_review::{create_attributed_decision, CloudReviewDisposition};
+use disksage_lib::cloud_review::{
+    create_attributed_decision, CloudReviewDisposition, ORGANIZATION_TENANT_AUTHORITY_ATTESTATION,
+};
 use disksage_lib::cloud_transfer::candidate_blockers_with_review;
 
 #[cfg(windows)]
@@ -92,6 +94,21 @@ fn unconfirmed_decision(candidate: &CloudCandidate) -> disksage_lib::cloud_revie
     .expect("the realistic review decision should be valid")
 }
 
+/// Create an exact approved decision with the canonical tenant-authority attestation marker.
+fn confirmed_decision(candidate: &CloudCandidate) -> disksage_lib::cloud_review::CloudReviewDecision {
+    let rationale = format!(
+        "{ORGANIZATION_TENANT_AUTHORITY_ATTESTATION} Organization tenant authority was independently confirmed."
+    );
+    create_attributed_decision(
+        candidate,
+        CloudReviewDisposition::Approved,
+        100,
+        "human:integration-reviewer",
+        &rationale,
+    )
+    .expect("the tenant-authority decision should be valid")
+}
+
 #[test]
 fn either_organization_signal_requires_explicit_tenant_authority_attestation() {
     let cases = [
@@ -146,6 +163,28 @@ fn either_organization_signal_requires_explicit_tenant_authority_attestation() {
             "{label} produced blockers: {blockers:?}"
         );
     }
+}
+
+#[test]
+fn organization_scope_only_accepts_exact_tenant_authority_attestation() {
+    let candidate = candidate(
+        CloudAccountScope::Organization,
+        &["embedded-metadata-probe-incomplete"],
+        true,
+    );
+    let decision = confirmed_decision(&candidate);
+    let blockers = candidate_blockers_with_review(
+        &candidate,
+        &cloud_root(CloudAccountScope::Organization),
+        Some(&decision),
+    );
+
+    assert!(
+        !blockers
+            .iter()
+            .any(|blocker| blocker == "organization-tenant-authority-attestation-required"),
+        "organization scope alone must not require an additional canonical review reason after exact attestation: {blockers:?}"
+    );
 }
 
 #[test]
