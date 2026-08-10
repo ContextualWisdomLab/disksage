@@ -17,6 +17,16 @@ describe('release workflow retry contract', () => {
     expect(workflow).not.toContain('cancel-in-progress: true');
   });
 
+  it('binds upload and download artifact names to the current rerun attempt', () => {
+    const workflow = readRepositoryFile('.github/workflows/release.yml');
+    expect(workflow).toContain(
+      'name: release-disksage-${{ matrix.os }}-${{ github.run_attempt }}',
+    );
+    expect(
+      workflow.split('pattern: release-disksage-*-${{ github.run_attempt }}').length - 1,
+    ).toBe(2);
+  });
+
   it('documents retry-safe concurrency in authoritative evidence', () => {
     const doctoring = readRepositoryFile('docs/doctoring/release-artifact-provenance.md');
     const changelog = readRepositoryFile('CHANGELOG.md');
