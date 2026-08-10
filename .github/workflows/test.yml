@@ -69,7 +69,7 @@ jobs:
         with:
           workspaces: src-tauri
       - name: Measure exact-head Rust coverage
-        run: cargo llvm-cov --manifest-path src-tauri/Cargo.toml --branch --json --summary-only --output-path coverage.json --no-cfg-coverage --no-cfg-coverage-nightly
+        run: cargo llvm-cov --manifest-path src-tauri/Cargo.toml --branch --json --output-path coverage.json --no-cfg-coverage --no-cfg-coverage-nightly
       - name: Build exact-head coverage evidence
         run: |
           node --input-type=module <<'NODE'
@@ -101,6 +101,23 @@ jobs:
             if (markerIndex < 0) return null;
             return `src-tauri/${normalized.slice(markerIndex + marker.length)}`;
           };
+          const uncoveredLineNumbers = (segments) => {
+            const lines = new Set();
+            for (const segment of Array.isArray(segments) ? segments : []) {
+              if (
+                Array.isArray(segment) &&
+                Number.isSafeInteger(segment[0]) &&
+                segment[0] > 0 &&
+                segment[2] === 0 &&
+                segment[3] === true &&
+                segment[4] === true &&
+                segment[5] !== true
+              ) {
+                lines.add(segment[0]);
+              }
+            }
+            return [...lines].sort((left, right) => left - right).slice(0, 40);
+          };
           const top_uncovered_files = (coverageData?.files ?? [])
             .map((file) => {
               const path = repositoryPath(file?.filename);
@@ -112,6 +129,7 @@ jobs:
                 uncovered_branches: safeGap(summary?.branches),
                 uncovered_functions: safeGap(summary?.functions),
                 uncovered_lines: safeGap(summary?.lines),
+                uncovered_line_numbers: uncoveredLineNumbers(file?.segments),
               };
             })
             .filter((entry) => entry && (
