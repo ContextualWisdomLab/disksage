@@ -9,6 +9,9 @@ const PODMAN_DESKTOP_NOTICES = [
   "This desktop surface exposes no prune, remove, machine lifecycle, TRIM, or raw-image mutation command.",
 ] as const;
 
+/** Desktop operating-system identifiers supported by the Tauri application. */
+export type PodmanDesktopPlatform = "linux" | "macos" | "windows";
+
 /** Nullable byte value used when an observation could not be collected. */
 export type OptionalBytes = number | null;
 
@@ -45,7 +48,7 @@ export interface PodmanDesktopReviewBoundaries {
 export interface PodmanDesktopEvidence {
   schema_kind: typeof PODMAN_DESKTOP_SCHEMA_KIND;
   schema_version: 1;
-  platform: string;
+  platform: PodmanDesktopPlatform;
   evidence_complete: boolean;
   elapsed_ms: number;
   capacity: PodmanDesktopCapacityEvidence;
@@ -99,6 +102,19 @@ function record(value: unknown, label: string): JsonRecord {
  */
 function stringValue(value: unknown, label: string): string {
   if (typeof value !== "string") throw new Error(`invalid-${label}`);
+  return value;
+}
+
+/**
+ * Require one supported desktop operating-system identifier.
+ *
+ * Arbitrary strings are rejected because the value is rendered in the UI and otherwise could
+ * become a path, machine-name, or account-detail display channel.
+ */
+function platformValue(value: unknown): PodmanDesktopPlatform {
+  if (value !== "linux" && value !== "macos" && value !== "windows") {
+    throw new Error("invalid-platform");
+  }
   return value;
 }
 
@@ -327,6 +343,12 @@ export function parsePodmanDesktopEvidence(value: unknown): PodmanDesktopEvidenc
   if (evidence.schema_version !== 1) {
     throw new Error("unsupported-podman-desktop-schema-version");
   }
+  const platform = platformValue(evidence.platform);
+  const evidence_complete = booleanValue(evidence.evidence_complete, "evidence-complete");
+  const issue_codes = stableCodeArray(evidence.issue_codes, "issue-codes");
+  if (evidence_complete && issue_codes.length > 0) {
+    throw new Error("inconsistent-evidence-completeness");
+  }
   const assessment_status = assessmentStatus(evidence.assessment_status);
   const physically_reclaimable_bytes = optionalUnsignedInteger(
     evidence.physically_reclaimable_bytes,
@@ -338,8 +360,8 @@ export function parsePodmanDesktopEvidence(value: unknown): PodmanDesktopEvidenc
   return {
     schema_kind: PODMAN_DESKTOP_SCHEMA_KIND,
     schema_version: 1,
-    platform: stringValue(evidence.platform, "platform"),
-    evidence_complete: booleanValue(evidence.evidence_complete, "evidence-complete"),
+    platform,
+    evidence_complete,
     elapsed_ms: unsignedInteger(evidence.elapsed_ms, "elapsed-ms"),
     capacity: parseCapacity(evidence.capacity),
     candidates: parseCandidates(evidence.candidates),
@@ -355,7 +377,7 @@ export function parsePodmanDesktopEvidence(value: unknown): PodmanDesktopEvidenc
     ),
     assessment_status,
     reason_codes: stableCodeArray(evidence.reason_codes, "reason-codes"),
-    issue_codes: stableCodeArray(evidence.issue_codes, "issue-codes"),
+    issue_codes,
     notices: canonicalNotices(evidence.notices),
   };
 }
