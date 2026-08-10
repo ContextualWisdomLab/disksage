@@ -4,8 +4,9 @@
 //! invoke provider APIs, mutate files, or require credentials.
 
 use disksage_lib::cloud::{
-    cloud_root_path_matches, validate_cloud_root_readable, validate_source_root_readable,
-    CloudAccountScope, CloudProvider, CloudRoot,
+    cloud_root_path_matches, discover_cloud_roots, discover_cloud_roots_report,
+    validate_cloud_root_readable, validate_source_root_readable, CloudAccountScope, CloudProvider,
+    CloudRoot,
 };
 use unicode_normalization::UnicodeNormalization;
 
@@ -99,4 +100,72 @@ fn provider_and_scope_wire_values_remain_stable() {
     assert_eq!(CloudAccountScope::Organization.as_str(), "organization");
     assert_eq!(CloudAccountScope::Shared.as_str(), "shared");
     assert_eq!(CloudAccountScope::Unknown.as_str(), "unknown");
+}
+
+#[test]
+fn discovery_classifies_synthetic_provider_roots_without_touching_real_accounts() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+
+    std::fs::create_dir_all(home.join("Library/Mobile Documents/com~apple~CloudDocs")).unwrap();
+    std::fs::create_dir(home.join("iCloudDrive")).unwrap();
+
+    let cloud_storage = home.join("Library/CloudStorage");
+    std::fs::create_dir_all(cloud_storage.join("OneDrive-alice@outlook.com")).unwrap();
+    let google = cloud_storage.join("GoogleDrive-user@gmail.com");
+    std::fs::create_dir_all(google.join("My Drive")).unwrap();
+    std::fs::create_dir(google.join("Shared Drives")).unwrap();
+    std::fs::create_dir(google.join(".hidden")).unwrap();
+
+    std::fs::create_dir(home.join("OneDrive - Contoso")).unwrap();
+    std::fs::create_dir(home.join("Google Drive")).unwrap();
+
+    let report = discover_cloud_roots_report(home);
+    assert!(report.issues.is_empty(), "{:?}", report.issues);
+    assert!(report.roots.iter().all(|root| root.readable));
+    assert!(report.roots.iter().all(|root| root.access_issue.is_none()));
+
+    assert!(report.roots.iter().any(|root| {
+        root.provider == CloudProvider::Icloud
+            && root.account_scope == CloudAccountScope::Unknown
+            && root.label == "iCloud Drive"
+    }));
+    assert!(report.roots.iter().any(|root| {
+        root.provider == CloudProvider::Onedrive
+            && root.account_scope == CloudAccountScope::Personal
+            && root.label.contains("alice@outlook.com")
+    }));
+    assert!(report.roots.iter().any(|root| {
+        root.provider == CloudProvider::Onedrive
+            && root.account_scope == CloudAccountScope::Organization
+            && root.label.contains("OneDrive - Contoso")
+    }));
+    assert!(report.roots.iter().any(|root| {
+        root.provider == CloudProvider::GoogleDrive
+            && root.account_scope == CloudAccountScope::Personal
+            && root.label.ends_with("My Drive")
+    }));
+    assert!(report.roots.iter().any(|root| {
+        root.provider == CloudProvider::GoogleDrive
+            && root.account_scope == CloudAccountScope::Shared
+            && root.label.ends_with("Shared Drives")
+    }));
+    assert!(!report.roots.iter().any(|root| root.label.contains(".hidden")));
+
+    let roots = discover_cloud_roots(home);
+    assert_eq!(roots, report.roots);
+}
+
+#[test]
+fn discovery_reports_non_directory_provider_candidates_fail_closed() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    std::fs::create_dir_all(home.join("Library/CloudStorage")).unwrap();
+    std::fs::write(home.join("OneDrive"), b"not-a-directory").unwrap();
+
+    let report = discover_cloud_roots_report(home);
+    assert!(report.roots.iter().all(|root| root.path != home.join("OneDrive").to_string_lossy()));
+    assert!(report.issues.iter().any(|issue| {
+        issue.provider == Some(CloudProvider::Onedrive) && issue.reason == "not-a-directory"
+    }));
 }
