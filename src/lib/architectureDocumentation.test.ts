@@ -18,6 +18,10 @@ const requiredDocuments = [
   'docs/UML.md',
   'docs/DATA_MODEL.md',
   'docs/API_CONTRACT.md',
+  'docs/QUALITY_ATTRIBUTES.md',
+  'docs/ACCESSIBILITY_ACCEPTANCE.md',
+  'docs/INTEROPERABILITY.md',
+  'docs/OBSERVABILITY.md',
   'docs/DATA_GOVERNANCE.md',
   'docs/THREAT_MODEL.md',
   'docs/TEST_STRATEGY.md',
@@ -27,6 +31,7 @@ const requiredDocuments = [
   'docs/RELEASE_AND_ROLLBACK.md',
   'docs/ACQUISITION_DILIGENCE.md',
   'docs/LICENSING_AND_NOTICES.md',
+  'docs/STANDARDS_AND_REFERENCES.md',
   'docs/TRACEABILITY.md',
   'docs/DOCUMENTATION_ASSESSMENT.md',
   'docs/README.md',
@@ -99,6 +104,31 @@ describe('canonical DiskSage documentation graph', () => {
     for (let index = 1; index <= 10; index += 1) {
       expect(adrIndex).toContain(`ADR-${String(index).padStart(4, '0')}`);
     }
+  });
+
+  it('keeps quality, accessibility, interoperability, observability, and standards explicit', () => {
+    const quality = readRepositoryDocument('docs/QUALITY_ATTRIBUTES.md');
+    const accessibility = readRepositoryDocument('docs/ACCESSIBILITY_ACCEPTANCE.md');
+    const interoperability = readRepositoryDocument('docs/INTEROPERABILITY.md');
+    const observability = readRepositoryDocument('docs/OBSERVABILITY.md');
+    const standards = readRepositoryDocument('docs/STANDARDS_AND_REFERENCES.md');
+
+    expect(quality).toContain('ISO/IEC 25010:2023');
+    expect(quality).toContain('## Quality-attribute scenarios');
+    expect(quality).toContain('No metric without context');
+    expect(accessibility).toContain('WCAG 2.2');
+    expect(accessibility).toContain('ISO/IEC 40500:2025');
+    expect(accessibility).toContain('## Release acceptance matrix');
+    expect(interoperability).toContain('## Prime directive');
+    expect(interoperability).toContain('No CWL services configured');
+    expect(interoperability).toContain('hidden database');
+    expect(observability).toContain('Observability is **evidence**, not authorization');
+    expect(observability).toContain('## Prohibited default fields');
+    expect(observability).toContain('OpenTelemetry');
+    expect(standards).toContain('## Product quality and architecture');
+    expect(standards).toContain('## Non-normative watch items');
+    expect(standards).toContain('NIST SP 800-218');
+    expect(standards).toContain('SLSA 1.2');
   });
 
   it('keeps privacy, incident, acquisition, and licensing authority explicit', () => {
