@@ -46,7 +46,7 @@ function fixture(): Record<string, unknown> {
     raw_allocated_minus_guest_used_bytes: 200,
     assessment_status: "unverified",
     reason_codes: ["host-physical-reclaim-unverified"],
-    issue_codes: ["partial-evidence"],
+    issue_codes: [],
     notices: [
       "Podman-reported logical candidates are not verified host physical reclaimability.",
       "This desktop surface exposes no prune, remove, machine lifecycle, TRIM, or raw-image mutation command.",
@@ -90,6 +90,24 @@ describe("parsePodmanDesktopEvidence", () => {
     wrongVersion.schema_version = 2;
     expect(() => parsePodmanDesktopEvidence(wrongVersion)).toThrow(
       "unsupported-podman-desktop-schema-version",
+    );
+  });
+
+  it("rejects unsupported or path-bearing platform values", () => {
+    const pathBearing = cloneFixture();
+    pathBearing.platform = "/Users/alice/private-machine";
+    expect(() => parsePodmanDesktopEvidence(pathBearing)).toThrow("invalid-platform");
+
+    const unsupported = cloneFixture();
+    unsupported.platform = "plan9";
+    expect(() => parsePodmanDesktopEvidence(unsupported)).toThrow("invalid-platform");
+  });
+
+  it("rejects complete evidence that also carries issue codes", () => {
+    const inconsistent = cloneFixture();
+    inconsistent.issue_codes = ["partial-evidence"];
+    expect(() => parsePodmanDesktopEvidence(inconsistent)).toThrow(
+      "inconsistent-evidence-completeness",
     );
   });
 
