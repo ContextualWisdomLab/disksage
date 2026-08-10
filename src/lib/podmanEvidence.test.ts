@@ -97,6 +97,14 @@ describe("parsePodmanDesktopEvidence", () => {
       "invalid-image-candidate-set-sha256",
     );
   });
+
+  it("rejects physical reclaim claims while the only supported assessment is unverified", () => {
+    const inconsistent = cloneFixture();
+    inconsistent.physically_reclaimable_bytes = 1;
+    expect(() => parsePodmanDesktopEvidence(inconsistent)).toThrow(
+      "unverified-physical-reclaim-claim",
+    );
+  });
 });
 
 describe("loadPodmanEvidence", () => {
