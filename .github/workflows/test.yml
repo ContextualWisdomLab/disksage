@@ -47,7 +47,7 @@ jobs:
         id: frontend-coverage
         run: npm run coverage
       - name: Build bounded frontend coverage diagnostic
-        if: steps.frontend-coverage.outcome == 'failure'
+        if: failure() && steps.frontend-coverage.outcome == 'failure'
         run: |
           node --input-type=module <<'NODE'
           import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
@@ -134,7 +134,7 @@ jobs:
           }
           NODE
       - name: Upload bounded frontend coverage diagnostic
-        if: steps.frontend-coverage.outcome == 'failure'
+        if: failure() && steps.frontend-coverage.outcome == 'failure'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: frontend-coverage-diagnostic-${{ env.HEAD_SHA }}
