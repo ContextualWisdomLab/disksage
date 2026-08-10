@@ -107,9 +107,41 @@ fn provider_object_ids_and_paths_enforce_bounded_wire_inputs() {
         );
     }
 
+    let maximum_id = "x".repeat(1_024);
+    assert!(provider_metadata_url(&ProviderRemoteLocator::OneDriveItemId(maximum_id.clone())).is_ok());
+    assert!(provider_metadata_url(&ProviderRemoteLocator::GoogleDriveFileId(maximum_id)).is_ok());
     assert_eq!(
         provider_metadata_url(&ProviderRemoteLocator::GoogleDriveFileId("x".repeat(1_025)))
             .unwrap_err(),
         "provider-object-id-invalid"
+    );
+}
+
+#[test]
+fn path_builders_normalize_unicode_and_reject_control_or_oversized_paths() {
+    let root = tempfile::tempdir().unwrap();
+    let decomposed = root.path().join("e\u{301}vidence.pdf");
+    let locator = onedrive_path_locator(root.path(), &decomposed).unwrap();
+    assert_eq!(
+        provider_metadata_url(&locator).unwrap(),
+        "https://graph.microsoft.com/v1.0/me/drive/root:/%C3%A9vidence.pdf?%24select=id%2Csize%2CeTag%2Cfile%2Cdeleted"
+    );
+
+    let control = root.path().join("bad\nname.pdf");
+    assert_eq!(
+        onedrive_path_locator(root.path(), &control).unwrap_err(),
+        "provider-path-invalid"
+    );
+    assert_eq!(
+        google_drive_path_locator(root.path(), &control, "file-id").unwrap_err(),
+        "provider-path-invalid"
+    );
+
+    let maximum_path = root.path().join("x".repeat(4_096));
+    assert!(onedrive_path_locator(root.path(), &maximum_path).is_ok());
+    let oversized_path = root.path().join("x".repeat(4_097));
+    assert_eq!(
+        onedrive_path_locator(root.path(), &oversized_path).unwrap_err(),
+        "provider-path-invalid"
     );
 }
