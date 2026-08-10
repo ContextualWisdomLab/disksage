@@ -28,11 +28,15 @@ fn node_view_rejects_parent_outside_and_missing_paths() {
     let result = result_for(&root, HashMap::new());
 
     assert_eq!(
-        node_view(&result, &root.join("..")).unwrap_err(),
+        node_view(&result, &root.join(".."))
+            .err()
+            .expect("parent traversal must fail"),
         "path outside scanned root"
     );
     assert_eq!(
-        node_view(&result, &temp.path().join("outside")).unwrap_err(),
+        node_view(&result, &temp.path().join("outside"))
+            .err()
+            .expect("outside path must fail"),
         "path outside scanned root"
     );
     assert!(node_view(&result, &root.join("missing")).is_err());
