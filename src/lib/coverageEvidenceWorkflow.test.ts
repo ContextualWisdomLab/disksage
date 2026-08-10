@@ -74,6 +74,18 @@ describe('Test workflow coverage evidence contract', () => {
     expect(workflow).toContain('Coverage diagnostic for \\`${sha}\\`');
   });
 
+  it('preserves bounded frontend diagnostics when the all-production threshold fails', () => {
+    expect(workflow).toContain('name: Build bounded frontend coverage diagnostic');
+    expect(workflow).toContain("readFileSync('coverage/coverage-final.json', 'utf8')");
+    expect(workflow).toContain("readFileSync('coverage/coverage-summary.json', 'utf8')");
+    expect(workflow).toContain('frontend_top_uncovered_files');
+    expect(workflow).toContain('frontend_uncovered_line_numbers');
+    expect(workflow).toContain("const frontendMarker = '/src/'");
+    expect(workflow).toContain('frontend-coverage-diagnostic.json');
+    expect(workflow).toContain('frontend-coverage-diagnostic-${{ env.HEAD_SHA }}');
+    expect(workflow).toContain('path: frontend-coverage-diagnostic.json');
+  });
+
   it('uploads fail-closed evidence under the organization contract name', () => {
     expect(workflow).toContain('name: coverage-evidence');
     expect(workflow).toContain('path: coverage-evidence.json');
