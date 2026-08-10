@@ -37,7 +37,28 @@ The active documentation owner is structurally comprehensive for the documentati
 
 A fresh protected-main reconciliation also confirms that four important controls which were previously active work are now shipped truth: fail-closed Tauri CSP, fail-closed organization-tenant authorization on either organization signal, buyer-visible Cargo package metadata hardening, and removal of the obsolete branch-local self-modifying repair workflow with a regression preventing its return. Canonical docs must describe those as `IMPLEMENTED_ON_PROTECTED_MAIN`, not as pending work.
 
+The documentation owner is not currently integration-ready merely because its content graph is comprehensive. At the 2026-08-10 reconciliation, the active documentation head and protected main have diverged and GitHub reports the PR as non-mergeable. The correct status is therefore **family-complete but convergence-required**: preserve the canonical semantic graph, reconcile it onto a current protected-main base without importing obsolete branch-local repair machinery, reacquire exact-head evidence, and only then promote the families to `PRESENT_CURRENT`.
+
 If an unchanged canonical branch integrates after current repository gates, its document families can move to `PRESENT_CURRENT` only after another protected-main reconciliation. **Documentation sufficiency is not commercial/acquisition readiness.** Product completeness, exact production coverage/security, representative performance, recovery exercises, accessibility execution evidence, release provenance/SBOM/NOTICE, legal/IP evidence, platform packaging, observability implementation where claimed, interoperability compatibility tests, and buyer workflow evidence remain independent gates.
+
+## Conversation decision capture audit
+
+The durable decisions repeatedly established in the project conversation are represented in the canonical graph rather than left as chat-only authority:
+
+| Durable decision family | Canonical authority | Capture assessment |
+| --- | --- | --- |
+| Product identity and buyer problem | `docs/PRD.md`, `ARCHITECTURE.md` | captured; local-first storage intelligence/conservative reclaim, not a generic delete-large-files utility |
+| Runtime authority vs evidence | `ARCHITECTURE.md`, ADR-0001, ADR-0002, `docs/API_CONTRACT.md`, `docs/UML.md` | captured; Rust authorization/mutation remains distinct from UI/model/provider/repository evidence |
+| Standalone operation and CWL/MSA composition | `docs/INTEROPERABILITY.md`, `ARCHITECTURE.md`, ADR-0005 | captured; optional composition uses explicit bounded interfaces and no hidden runtime/database coupling |
+| Autonomous writer lease and work-conserving execution | `AGENTS.md`, ADR-0006, ADR-0009, ADR-0010, `docs/UML.md` | captured; a wait blocks only one lane, stale work converges semantically, and documentation completion hands back to executable work |
+| Premature-stop incident semantics | `AGENTS.md`, ADR-0006, ADR-0010, `docs/INCIDENT_RUNBOOK.md` | captured in repository governance; prompt repair, RCA, docs, one check, one merge, or one slice are intermediate while another safe action exists |
+| Privacy, retention, export, residency and privileged evidence boundaries | `docs/DATA_GOVERNANCE.md`, `docs/OBSERVABILITY.md`, `docs/DATA_MODEL.md`, `docs/THREAT_MODEL.md` | captured; purpose-bound/local-private evidence is preferred over blanket masking or invented central persistence |
+| Release, provenance, rollback and recovery | ADR-0008, `docs/RELEASE_AND_ROLLBACK.md`, `docs/OPERABILITY.md`, `docs/INCIDENT_RUNBOOK.md` | captured; claims bind to one exact integrated head and verified artifacts/evidence |
+| Exact-head/live-base software-delivery evidence | ADR-0003, `docs/TRACEABILITY.md`, `docs/UML.md` | captured; predecessor/synthetic/stale/status-only evidence cannot transfer |
+| Documentation status vs shipped truth | ADR-0010, `docs/DOCUMENTATION_ASSESSMENT.md`, `docs/TRACEABILITY.md` | captured; active PR/chat is never protected-main implementation evidence |
+| Non-goals and anti-invention constraints | `docs/PRD.md`, `docs/DATA_MODEL.md`, `docs/OBSERVABILITY.md`, `docs/DOCUMENTATION_ASSESSMENT.md` | captured; no invented SQL database, remote telemetry, certification, measured SLO/RPO/RTO, or provenance success |
+
+This audit is intentionally about durable decisions, not verbatim chat preservation. Transient run IDs, remembered SHAs, rate limits, one-off review states, and scheduler execution instances belong to live repository/run evidence and are re-fetched rather than frozen into timeless architecture.
 
 ## Coverage matrix
 
@@ -47,7 +68,7 @@ If an unchanged canonical branch integrates after current repository gates, its 
 | TRD | `MISSING` canonical authority | `docs/TRD.md` | `OWNED_BY_ACTIVE_PR` | runtime/evidence/API/release constraints remain code-current |
 | Architecture | `MISSING` root canonical authority | `ARCHITECTURE.md` | `OWNED_BY_ACTIVE_PR` | trust/deployment/authority changes require reconciliation |
 | ADR lifecycle | `PARTIAL` dispersed decisions | `docs/adr/README.md` + ADR-0001..0010 | `OWNED_BY_ACTIVE_PR` | explicit Proposed/Accepted/Superseded lifecycle |
-| UML | `MISSING` cross-cutting diagrams | `docs/UML.md` | `OWNED_BY_ACTIVE_PR` | topology/runtime/repository authority/convergence/RCA flows |
+| UML | `MISSING` cross-cutting diagrams | `docs/UML.md` | `OWNED_BY_ACTIVE_PR` | component/sequence/state/deployment/runtime/repository authority/convergence/RCA/recovery flows |
 | ERD/data model | `MISSING` canonical conceptual-vs-persisted model | `docs/DATA_MODEL.md` | `OWNED_BY_ACTIVE_PR` | never invent persistence or physical tables |
 | API/IPC/evidence | `PARTIAL` feature contracts dispersed | `docs/API_CONTRACT.md` | `OWNED_BY_ACTIVE_PR` | version breaking interfaces/evidence schemas |
 | Quality attributes | `MISSING` canonical measurable quality model | `docs/QUALITY_ATTRIBUTES.md` | `OWNED_BY_ACTIVE_PR` | buyer/release claims require contextual evidence |
@@ -108,10 +129,11 @@ Active PR states must be re-evaluated whenever a branch closes, merges, becomes 
 
 ## Sufficiency decision
 
-For the user-requested documentation question, the answer is deliberately two-layered:
+For the user-requested documentation question, the answer is deliberately three-layered:
 
 1. **Family coverage: sufficient on the active canonical owner.** ADR, PRD, TRD, Architecture, UML, conceptual/logical ERD/data model, API contracts, security/threat model, test/operability/incident/recovery, quality/accessibility/interoperability/observability, data governance, roadmap, release/provenance, licensing, standards, diligence, traceability, repository governance, and machine-checkable documentation contracts are all represented.
-2. **Protected-main authority: not yet sufficient.** Until the canonical owner is reconciled with current main, passes exact-head gates, and integrates, protected main still lacks the discoverable cross-cutting authority graph.
+2. **Conversation decision capture: sufficient for durable architecture/product/governance decisions.** Product identity, evidence/authority separation, standalone/CWL composition, writer governance, privacy/data handling, release/recovery, exact-head evidence and non-goals have canonical homes. Transient execution state remains live evidence by design.
+3. **Protected-main authority/integration readiness: not yet sufficient.** The active owner is currently diverged/non-mergeable and must converge semantically onto current main, reacquire exact-head gates, and integrate before protected main has the discoverable cross-cutting authority graph.
 
 Additional prose families should not be added merely to increase document count. New documents are justified only when a distinct durable decision, audience, lifecycle, or evidence boundary cannot be represented coherently in the existing graph.
 
