@@ -31,6 +31,11 @@ mod web;
 mod reasoning;
 #[cfg_attr(coverage, allow(dead_code))]
 mod dataset_metadata;
+/// Privacy-safe dataset schema and quality evidence returned by the bounded profiler.
+pub use dataset_metadata::{DatasetColumnProfile, DatasetProfile};
+/// Profile a supported local dataset without returning sampled cell values.
+#[cfg(not(coverage))]
+pub use dataset_metadata::profile_dataset;
 pub mod archive_git_tree;
 #[cfg_attr(coverage, allow(dead_code))]
 pub mod cloud;
