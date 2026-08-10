@@ -123,9 +123,9 @@ fn fingerprint_validation_rejects_lowercase_non_hex_at_exact_length() {
         .contains(&"podman-desktop-invalid-candidate-fingerprint".to_string()));
 }
 
-/// Distinguish a matching action without approval from unrelated and approving actions.
+/// Preserve fail-closed candidate review while distinguishing action-approval branches.
 #[test]
-fn review_boundaries_require_both_matching_kind_and_human_approval() {
+fn observed_candidates_force_review_even_without_matching_approval() {
     let mut plan = complete_plan();
     plan.assessment.recommended_actions = vec![
         PodmanRecommendedAction {
@@ -152,9 +152,12 @@ fn review_boundaries_require_both_matching_kind_and_human_approval() {
 
     let evidence = redact_podman_reclaim_plan(plan);
 
-    assert!(!evidence.review_boundaries.image_review_required);
+    // The stopped-container path is satisfied by a matching approved action. Image and volume
+    // deliberately are not, but their non-zero observed candidates still force review. An
+    // unrelated approved action cannot substitute for the object-domain boundary.
+    assert!(evidence.review_boundaries.image_review_required);
     assert!(evidence.review_boundaries.stopped_container_review_required);
-    assert!(!evidence.review_boundaries.volume_review_required);
+    assert!(evidence.review_boundaries.volume_review_required);
 }
 
 /// Preserve unknown inner optional measurements even when their enclosing observations exist.
