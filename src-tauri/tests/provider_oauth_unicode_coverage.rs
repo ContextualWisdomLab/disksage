@@ -2,7 +2,7 @@
 //!
 //! macOS File Provider can expose equivalent root identifiers and paths in NFC or NFD. These
 //! deterministic regressions prove that a legacy raw-spelling connection remains usable, that a
-//! canonical connection is preferred when both identities exist, and that duplicate legacy
+//! canonical connection is preferred when both identities exist, and that duplicate or invalid
 //! records fail closed instead of selecting an arbitrary credential.
 
 use disksage_lib::cloud::{CloudAccountScope, CloudProvider, CloudRoot};
@@ -66,10 +66,14 @@ fn write_document(path: &std::path::Path, connections: &[OAuthConnection]) {
 const COMPOSED_PATH: &str = "C:\\Cloud\\Caf\u{e9}";
 #[cfg(windows)]
 const DECOMPOSED_PATH: &str = "C:\\Cloud\\Cafe\u{301}";
+#[cfg(windows)]
+const OTHER_PATH: &str = "C:\\Cloud\\Other";
 #[cfg(not(windows))]
 const COMPOSED_PATH: &str = "/Cloud/Caf\u{e9}";
 #[cfg(not(windows))]
 const DECOMPOSED_PATH: &str = "/Cloud/Cafe\u{301}";
+#[cfg(not(windows))]
+const OTHER_PATH: &str = "/Cloud/Other";
 
 #[test]
 fn legacy_decomposed_identity_matches_the_canonical_root() {
@@ -104,6 +108,22 @@ fn canonical_identity_is_preferred_over_an_equivalent_legacy_record() {
 }
 
 #[test]
+fn duplicate_canonical_identities_fail_closed_as_ambiguous() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = connections_path(temp.path());
+    let canonical_root = root("Caf\u{e9}", COMPOSED_PATH);
+    let canonical = connection(&canonical_root);
+
+    write_document(&path, &[canonical.clone(), canonical]);
+    let loaded = load_connections(&path).unwrap();
+
+    assert_eq!(
+        connection_for_root(&loaded, &canonical_root).unwrap_err(),
+        "provider-oauth-connection-ambiguous"
+    );
+}
+
+#[test]
 fn duplicate_legacy_identities_fail_closed_as_ambiguous() {
     let temp = tempfile::tempdir().unwrap();
     let path = connections_path(temp.path());
@@ -117,5 +137,28 @@ fn duplicate_legacy_identities_fail_closed_as_ambiguous() {
     assert_eq!(
         connection_for_root(&loaded, &canonical).unwrap_err(),
         "provider-oauth-connection-ambiguous"
+    );
+}
+
+#[test]
+fn unrelated_connection_is_reported_as_missing() {
+    let requested = root("Caf\u{e9}", COMPOSED_PATH);
+    let other = root("other", OTHER_PATH);
+
+    assert_eq!(
+        connection_for_root(&[connection(&other)], &requested).unwrap_err(),
+        "provider-oauth-connection-missing"
+    );
+}
+
+#[test]
+fn invalid_candidate_is_ignored_instead_of_authorizing_the_root() {
+    let requested = root("Caf\u{e9}", COMPOSED_PATH);
+    let mut invalid = connection(&requested);
+    invalid.scope = "https://example.invalid/overbroad".into();
+
+    assert_eq!(
+        connection_for_root(&[invalid], &requested).unwrap_err(),
+        "provider-oauth-connection-missing"
     );
 }
