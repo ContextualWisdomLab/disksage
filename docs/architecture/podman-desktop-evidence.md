@@ -38,6 +38,8 @@ The projection excludes machine names and states; configuration, raw-image, and 
 
 Issue strings are reduced to the prefix before the first colon only when that prefix is a bounded lowercase kebab-case code: it must start with a lowercase ASCII letter, contain only lowercase ASCII letters, digits, or hyphens, and be no longer than 96 bytes. Delimiter-free paths, sockets, whitespace, uppercase text, Unicode, underscores, empty prefixes, and malformed values collapse to `podman-evidence-error`. Invalid candidate fingerprints fail closed: the fingerprint is removed, the evidence is marked incomplete, and a stable issue code is added.
 
+A complete exact-image observation must contain both the exact unused-image record count and the SHA-256 commitment to that candidate set. The frontend rejects complete evidence when either member is missing and rejects a fingerprint that has no exact record observation. Partial evidence may retain safe exact-record counts after Rust removes an invalid fingerprint and emits an issue; this remains explicitly incomplete rather than being mislabeled as a complete candidate set.
+
 Any projected issue code forces `evidence_complete` to false, even when an upstream caller incorrectly supplies `true`. The frontend independently rejects a response that combines `evidence_complete: true` with one or more issue codes. This keeps completeness as an integrity assertion rather than a cosmetic label.
 
 The only assessment status admitted by schema version 1 is `unverified`. If a contradictory headless plan supplies a concrete `physically_reclaimable_bytes` value while the assessment remains unverified, the Rust projection clears that value before IPC, marks the evidence incomplete, and emits `podman-desktop-unverified-physical-reclaim-claim`. A future verified physical-reclaim contract requires an explicit schema and evidence-authority change; it cannot appear by silently forwarding a new headless value.
@@ -50,9 +52,11 @@ The platform field is also schema-bound because it appears in the user interface
 
 `inspect_podman_reclaim` invokes the existing Rust probe using an executable plus an argument vector. It does not construct a shell string. The desktop surface exposes no prune, remove, machine start/stop, VM deletion, TRIM, raw-image mutation, or generic command execution path.
 
-### 3. Keep review domains independent
+### 3. Keep review domains independent and conservative
 
 Images, stopped containers, and local volumes have separate review booleans and separate UI sections. A review signal for one domain never authorizes another domain. This preserves future compatibility with distinct approval records and least-privilege workflows.
+
+A positive candidate observation itself conservatively requires review in its own domain, even if an upstream assessment accidentally omits the corresponding recommended-action record. Rust derives the image, stopped-container, and volume review booleans from both the action list and the observed candidates. The frontend independently rejects a candidate domain whose required review boolean is false. An extra conservative `true` remains advisory only and never creates mutation authority.
 
 ### 4. Keep visual semantics explicit, accessible, and privacy-safe
 
@@ -74,6 +78,8 @@ The desktop response is a versioned JSON contract with no dependency on Naruon o
 - Local identifiers stay outside the frontend contract, telemetry, and shareable evidence boundary.
 - Malformed or delimiter-free probe issues cannot masquerade as safe codes or serialize local path content.
 - Any issue forces partial evidence in Rust, and the frontend refuses contradictory complete-plus-issues payloads.
+- Complete exact-image evidence cannot omit or detach its candidate-set commitment.
+- Positive candidates cannot be displayed with a false no-review signal in their own domain.
 - Arbitrary notice or platform text cannot become a path, machine-name, or account-detail display channel.
 - Transport and JavaScript failures cannot leak machine names, paths, sockets, or command detail through the visible error region.
 - The architecture can later add separate governed image, container, and volume approval records without changing the read-only evidence contract.
@@ -84,7 +90,7 @@ The desktop response is a versioned JSON contract with no dependency on Naruon o
 - The UI intentionally cannot perform cleanup. Operators must use a separate reviewed workflow until a mutation design includes exact candidate binding, independent approval, rollback evidence, and before-and-after host verification.
 - Some evidence remains unavailable when Podman is absent, the machine is stopped, or the API is unhealthy. Unknown values remain `null`; the UI never converts missing evidence to zero.
 - Visible failures intentionally use a stable generic code; sensitive operational detail must be inspected through trusted local diagnostics rather than the shareable desktop surface.
-- Notice wording and supported platform identifiers are schema-bound; changing either requires coordinated Rust/frontend contract review rather than a copy-only UI edit.
+- Notice wording, supported platform identifiers, candidate/fingerprint relations, and review-boundary semantics are schema-bound; changing them requires coordinated Rust/frontend contract review rather than a copy-only UI edit.
 
 ## Verification matrix
 
@@ -94,6 +100,10 @@ The desktop response is a versioned JSON contract with no dependency on Naruon o
 | Delimiter-free or malformed issue text cannot cross IPC | Rust unit and integration tests expect `podman-evidence-error` |
 | Any projected issue forces partial evidence | `podman_desktop_issue_privacy.rs` contradicts upstream completeness and requires false |
 | Complete-plus-issues payloads are rejected | TypeScript parser regression expects `inconsistent-evidence-completeness` |
+| Complete exact-image evidence requires its fingerprint | TypeScript parser regression expects `inconsistent-image-candidate-fingerprint` |
+| A fingerprint cannot exist without exact image records | TypeScript parser regression rejects detached commitments even for partial evidence |
+| Observed candidates conservatively require domain review | `podman_desktop_candidate_review_consistency.rs` omits actions and requires all three review booleans |
+| Candidate-plus-false-review payloads are rejected | TypeScript parser regressions cover image, stopped-container, and volume domains separately |
 | Unverified physical-reclaim claims cannot cross IPC | `podman_desktop_physical_reclaim_claim.rs` requires removal, incomplete evidence, and a stable issue code |
 | Arbitrary or duplicated notices cannot reach the UI | TypeScript parser regression requires the exact schema-v1 notice sequence |
 | Unsupported or path-bearing platform values cannot reach the UI | TypeScript parser regression admits only `linux`, `macos`, and `windows` |
