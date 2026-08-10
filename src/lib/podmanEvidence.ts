@@ -304,6 +304,14 @@ export function parsePodmanDesktopEvidence(value: unknown): PodmanDesktopEvidenc
   if (evidence.schema_version !== 1) {
     throw new Error("unsupported-podman-desktop-schema-version");
   }
+  const assessment_status = assessmentStatus(evidence.assessment_status);
+  const physically_reclaimable_bytes = optionalUnsignedInteger(
+    evidence.physically_reclaimable_bytes,
+    "physically-reclaimable-bytes",
+  );
+  if (assessment_status === "unverified" && physically_reclaimable_bytes !== null) {
+    throw new Error("unverified-physical-reclaim-claim");
+  }
   return {
     schema_kind: PODMAN_DESKTOP_SCHEMA_KIND,
     schema_version: 1,
@@ -313,10 +321,7 @@ export function parsePodmanDesktopEvidence(value: unknown): PodmanDesktopEvidenc
     capacity: parseCapacity(evidence.capacity),
     candidates: parseCandidates(evidence.candidates),
     review_boundaries: parseReviewBoundaries(evidence.review_boundaries),
-    physically_reclaimable_bytes: optionalUnsignedInteger(
-      evidence.physically_reclaimable_bytes,
-      "physically-reclaimable-bytes",
-    ),
+    physically_reclaimable_bytes,
     podman_reported_reclaimable_bytes: optionalUnsignedInteger(
       evidence.podman_reported_reclaimable_bytes,
       "podman-reported-reclaimable-bytes",
@@ -325,7 +330,7 @@ export function parsePodmanDesktopEvidence(value: unknown): PodmanDesktopEvidenc
       evidence.raw_allocated_minus_guest_used_bytes,
       "raw-allocated-minus-guest-used-bytes",
     ),
-    assessment_status: assessmentStatus(evidence.assessment_status),
+    assessment_status,
     reason_codes: stableCodeArray(evidence.reason_codes, "reason-codes"),
     issue_codes: stableCodeArray(evidence.issue_codes, "issue-codes"),
     notices: stringArray(evidence.notices, "notices"),
