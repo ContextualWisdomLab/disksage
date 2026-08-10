@@ -146,7 +146,7 @@ fn retained_primary_worktree_is_preserved_with_privacy_safe_public_summary() {
 }
 
 #[test]
-fn dirty_primary_state_is observed_without_becoming_removal_authority() {
+fn dirty_primary_state_is_observed_without_becoming_removal_authority() {
     let root = initialized_repository();
     std::fs::write(root.path().join("untracked.txt"), b"local-only\n").unwrap();
 
