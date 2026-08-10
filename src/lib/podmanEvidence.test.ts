@@ -119,6 +119,44 @@ describe("parsePodmanDesktopEvidence", () => {
     );
   });
 
+  it("rejects complete exact-image evidence without its candidate-set fingerprint", () => {
+    const inconsistent = cloneFixture();
+    inconsistent.candidates.image_candidate_set_sha256 = null;
+    expect(() => parsePodmanDesktopEvidence(inconsistent)).toThrow(
+      "inconsistent-image-candidate-fingerprint",
+    );
+  });
+
+  it("rejects fingerprints that have no exact image-record observation", () => {
+    const inconsistent = cloneFixture();
+    inconsistent.evidence_complete = false;
+    inconsistent.issue_codes = ["partial-evidence"];
+    inconsistent.candidates.unused_image_records = null;
+    expect(() => parsePodmanDesktopEvidence(inconsistent)).toThrow(
+      "inconsistent-image-candidate-fingerprint",
+    );
+  });
+
+  it("rejects candidate domains whose mandatory review boundary is false", () => {
+    const image = cloneFixture();
+    image.review_boundaries.image_review_required = false;
+    expect(() => parsePodmanDesktopEvidence(image)).toThrow(
+      "inconsistent-image-review-boundary",
+    );
+
+    const container = cloneFixture();
+    container.review_boundaries.stopped_container_review_required = false;
+    expect(() => parsePodmanDesktopEvidence(container)).toThrow(
+      "inconsistent-stopped-container-review-boundary",
+    );
+
+    const volume = cloneFixture();
+    volume.review_boundaries.volume_review_required = false;
+    expect(() => parsePodmanDesktopEvidence(volume)).toThrow(
+      "inconsistent-volume-review-boundary",
+    );
+  });
+
   it("rejects physical reclaim claims while the only supported assessment is unverified", () => {
     const inconsistent = cloneFixture();
     inconsistent.physically_reclaimable_bytes = 1;
