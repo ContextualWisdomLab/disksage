@@ -148,8 +148,9 @@ fn has_action(plan: &PodmanReclaimPlan, kind: PodmanRecommendedActionKind) -> bo
 /// Convert a detailed headless Podman plan into the desktop-safe contract.
 ///
 /// The conversion removes machine names, all local paths, graph-root locations, image IDs,
-/// tags, command output, and dynamic error details. Invalid candidate fingerprints or assessment
-/// codes fail closed by clearing unsafe data and marking the response incomplete.
+/// tags, command output, and dynamic error details. Invalid candidate fingerprints, assessment
+/// codes, or unverified physical-reclaim claims fail closed by clearing unsafe data and marking
+/// the response incomplete.
 pub fn redact_podman_reclaim_plan(plan: PodmanReclaimPlan) -> PodmanDesktopEvidence {
     let mut issue_codes = plan
         .issues
@@ -189,6 +190,15 @@ pub fn redact_podman_reclaim_plan(plan: PodmanReclaimPlan) -> PodmanDesktopEvide
     if !assessment_codes_valid {
         issue_codes.push("podman-desktop-invalid-assessment-code".to_string());
     }
+
+    let physical_reclaim_claim_valid = plan.assessment.physically_reclaimable_bytes.is_none();
+    let physically_reclaimable_bytes = if physical_reclaim_claim_valid {
+        plan.assessment.physically_reclaimable_bytes
+    } else {
+        issue_codes.push("podman-desktop-unverified-physical-reclaim-claim".to_string());
+        None
+    };
+
     issue_codes.sort();
     issue_codes.dedup();
 
@@ -243,7 +253,10 @@ pub fn redact_podman_reclaim_plan(plan: PodmanReclaimPlan) -> PodmanDesktopEvide
         schema_kind: PODMAN_DESKTOP_SCHEMA_KIND,
         schema_version: 1,
         platform: plan.platform,
-        evidence_complete: plan.evidence_complete && fingerprint_valid && assessment_codes_valid,
+        evidence_complete: plan.evidence_complete
+            && fingerprint_valid
+            && assessment_codes_valid
+            && physical_reclaim_claim_valid,
         elapsed_ms: plan.elapsed_ms,
         capacity,
         candidates,
@@ -261,7 +274,7 @@ pub fn redact_podman_reclaim_plan(plan: PodmanReclaimPlan) -> PodmanDesktopEvide
                 PodmanRecommendedActionKind::ReviewUnusedVolumes,
             ),
         },
-        physically_reclaimable_bytes: plan.assessment.physically_reclaimable_bytes,
+        physically_reclaimable_bytes,
         podman_reported_reclaimable_bytes: plan.assessment.podman_reported_reclaimable_bytes,
         raw_allocated_minus_guest_used_bytes: plan
             .assessment
