@@ -20,9 +20,19 @@ An ADR status never turns unimplemented functionality into shipped behavior. Imp
 | [ADR-0006](0006-work-conserving-writer-lease.md) | Work-conserving maintenance + branch-local writer lease | Proposed governance baseline |
 | [ADR-0007](0007-independent-review-governance.md) | Independent review realism and CODEOWNERS hold | Proposed governance baseline |
 | [ADR-0008](0008-release-provenance-and-rollback.md) | Build/provenance/publication/rollback authority separation | Proposed release baseline |
+| [ADR-0009](0009-stale-branch-clean-replacement-convergence.md) | Stale broad branch decomposition and clean-replacement convergence | Proposed governance baseline |
+| [ADR-0010](0010-documentation-authority-and-handoff.md) | Canonical documentation authority, maturity status, and implementation handoff | Proposed documentation/governance baseline |
 
 ## Required ADR content
 
 Material ADRs include context, drivers, alternatives, decision, consequences, failure/recovery, security/governance impact, verification/acceptance, migration/rollback, and supersession conditions.
 
 Architecture-changing PRs update an affected ADR or add a superseding ADR rather than silently changing authority, persistence, interoperability, or release contracts.
+
+## Lifecycle rules
+
+- ADR links remain stable after acceptance; superseding decisions add a new ADR and point back to the prior record.
+- `Proposed` is never interpreted as protected-main implementation evidence.
+- `Accepted` requires the canonical record and applicable behavior/governance to be integrated on protected main.
+- A stale branch cannot become the canonical ADR owner by ancestry alone; convergence follows ADR-0009.
+- Documentation completion is an intermediate maintenance event and hands back to implementation/verification under ADR-0010 and ADR-0006.
