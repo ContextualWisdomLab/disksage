@@ -146,6 +146,57 @@ fn retained_primary_worktree_is_preserved_with_privacy_safe_public_summary() {
 }
 
 #[test]
+fn removal_approval_rejects_tampered_audit_evidence_before_authorization() {
+    let root = initialized_repository();
+    let report = audit_git_worktrees(
+        root.path(),
+        &["HEAD".into()],
+        GitWorktreeAuditOptions::default(),
+        700,
+    )
+    .unwrap();
+
+    let reject = |candidate: &disksage_lib::git_worktree::GitWorktreeAuditReport| {
+        approve_stale_worktree_removal(
+            candidate,
+            "not-authorized",
+            701,
+            "human:test",
+            "Review tamper-resistant worktree evidence",
+        )
+        .unwrap_err()
+    };
+
+    let mut invalid_envelope = report.clone();
+    invalid_envelope.schema_kind = "disksage.git-worktree-audit/forged".into();
+    assert_eq!(
+        reject(&invalid_envelope),
+        "git-worktree-removal-audit-integrity-invalid"
+    );
+
+    let mut invalid_reference_binding = report.clone();
+    invalid_reference_binding.retention_reference_set_fingerprint = "0".repeat(64);
+    assert_eq!(
+        reject(&invalid_reference_binding),
+        "git-worktree-removal-reference-binding-mismatch"
+    );
+
+    let mut invalid_entry = report.clone();
+    invalid_entry.entries[0].path_fingerprint = "0".repeat(64);
+    assert_eq!(
+        reject(&invalid_entry),
+        "git-worktree-removal-entry-integrity-mismatch"
+    );
+
+    let mut invalid_summary = report;
+    invalid_summary.worktree_count = invalid_summary.worktree_count.saturating_add(1);
+    assert_eq!(
+        reject(&invalid_summary),
+        "git-worktree-removal-audit-summary-mismatch"
+    );
+}
+
+#[test]
 fn dirty_primary_state_is_observed_without_becoming_removal_authority() {
     let root = initialized_repository();
     std::fs::write(root.path().join("untracked.txt"), b"local-only\n").unwrap();
