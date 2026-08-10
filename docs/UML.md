@@ -200,6 +200,66 @@ sequenceDiagram
 
 A reviewer/check/provider wait is branch/action-local, not a run-wide stop signal.
 
+## Stale branch convergence sequence
+
+```mermaid
+sequenceDiagram
+    participant Main as Protected main
+    participant Stale as Stale broad PR
+    participant Loop as DiskSage writer
+    participant Clean as Clean current-base replacement
+    participant Evidence as Fresh checks/reviews
+
+    Loop->>Main: resolve exact current protected tip
+    Loop->>Stale: resolve exact stale head
+    Loop->>Main: compare main to stale head
+    Loop->>Loop: enumerate every unique file and semantic delta
+    alt delta already integrated
+        Loop->>Loop: mark integrated_on_protected_main
+    else valuable unresolved delta
+        Loop->>Clean: preserve smallest current-base semantic slice
+        Clean->>Evidence: reacquire exact-head evidence
+        Evidence-->>Loop: current replacement evidence only
+    else obsolete/unsafe delta
+        Loop->>Loop: record explicit rejected/superseded reason
+    end
+    Loop->>Loop: repeat until no unresolved valuable delta remains
+    alt convergence proven
+        Loop->>Stale: close with preserved lineage map
+    else unresolved delta exists
+        Loop-->>Stale: keep open; do not claim supersession
+    end
+```
+
+A newer base, `behind_by`, replacement title, or predecessor green check is not semantic convergence proof. See ADR-0009.
+
+## Incident RCA and remediation flow
+
+```mermaid
+flowchart TD
+    Symptom[Observed failure or unsafe state]
+    Identity[Bind exact runtime or repository evidence identity]
+    Boundary[Find first failing contract boundary]
+    Cause[Immediate + technical + systemic cause]
+    Hypothesis[Falsifiable hypothesis]
+    Remedies[Materially distinct remedies]
+    Feasible[Verify authority/API/lease/blast radius/rollback]
+    Probe[Read-only or deterministic failing probe]
+    Fix[Smallest root-cause-changing remedy]
+    Verify[Focused + applicable complete verification]
+    Recurrence[Search adjacent same-class failures]
+    Close[Recovery/closure evidence]
+    Reassess[Architecture/governance reassessment]
+
+    Symptom --> Identity --> Boundary --> Cause --> Hypothesis --> Remedies --> Feasible --> Probe --> Fix --> Verify
+    Verify -->|passes| Recurrence --> Close
+    Verify -->|fails with new evidence| Remedies
+    Remedies -->|three distinct cross-layer hypotheses fail| Reassess
+    Reassess --> Remedies
+```
+
+RCA is incomplete until it produces a feasible remedy or an empirically unavoidable external/safety decision. A blocked incident lane hands back to other safe work. See `docs/INCIDENT_RUNBOOK.md`.
+
 ## Deployment topology
 
 ```mermaid
@@ -242,4 +302,4 @@ flowchart TB
 
 ## Diagram maintenance rule
 
-A change to bounded contexts, authority edges, lifecycle/state transitions, persistence, deployment, model/provider trust, or release evidence updates this file or records why the diagrams remain valid.
+A change to bounded contexts, authority edges, lifecycle/state transitions, persistence, deployment, model/provider trust, repository convergence, incident recovery, or release evidence updates this file or records why the diagrams remain valid.
