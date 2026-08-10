@@ -8,6 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Measure exact-head Rust production statement-equivalent region, branch, function, and line coverage in CI; require every metric to be exactly 100%, emit privacy-bounded failure diagnostics, and publish success evidence only for the immutable pull-request head that actually passed.
 - Replace generator-era Cargo package metadata with the DiskSage product description, MIT license expression, canonical source repository URL, and `publish = false` registry-publication boundary; deliberately omit Cargo's deprecated `authors` field, verify publication refusal through Cargo's versioned parsed metadata rather than substring matching, and regression-test commented/out-of-table decoys together with the retained acquisition metadata and doctoring evidence.
 - Require a fresh, exact, human-attributed approval and rationale for cloud copy-only and existing-copy adoption actions, with a 15-minute authorization lifetime bound to the candidate, destination, provider, account scope, and review fingerprint.
 - Return the candidate-specific cloud copy approval action, exact confirmation phrase, and maximum approval age from the Rust plan contract; the frontend only displays and submits that backend-authored phrase and fails closed when it is missing or does not match the candidate action.
