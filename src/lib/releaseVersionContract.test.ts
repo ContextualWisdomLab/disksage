@@ -118,7 +118,12 @@ describe('release version contract', () => {
       readText,
     })).toBe('Release version contract passed for 0.1.0.');
     expect(readText).toHaveBeenCalledTimes(3);
-    expect(verifyReleaseVersion()).toBe('Release version contract passed for 0.1.0.');
+    const currentVersion = (
+      JSON.parse(readRepositoryFile('package.json')) as { version: string }
+    ).version;
+    expect(verifyReleaseVersion({ environment: {} })).toBe(
+      `Release version contract passed for ${currentVersion}.`,
+    );
   });
 
   it('reports stable success and failure outcomes at the CLI boundary', () => {
