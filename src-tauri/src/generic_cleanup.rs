@@ -17,9 +17,13 @@ fn clean_paths_inner(paths: &[String]) -> Vec<CleanResult> {
 /// Fail generic cleanup closed until the final reversible recycle primitive can remain bound to
 /// the exact filesystem object that was authorized. Path revalidation cannot close a same-user
 /// rename/symlink replacement window when the operating-system trash API consumes a pathname.
+///
+/// The Rust function name is intentionally distinct from the legacy command wrapper. Tauri 2.11+
+/// maps this handler back to the stable external `clean_paths` IPC name without generating the
+/// duplicate command macro symbol that the former same-named Rust function produced.
 #[cfg(not(coverage))]
-#[tauri::command]
-pub fn clean_paths(paths: Vec<String>) -> Result<Vec<CleanResult>, String> {
+#[tauri::command(rename = "clean_paths")]
+pub fn fail_closed_clean_paths(paths: Vec<String>) -> Result<Vec<CleanResult>, String> {
     Ok(clean_paths_inner(&paths))
 }
 
