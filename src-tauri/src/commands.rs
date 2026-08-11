@@ -137,6 +137,64 @@ pub fn clean_paths_inner(paths: &[PathBuf], journal_path: &Path, now_ms: u64) ->
         .collect()
 }
 
+/// 개발 아티팩트는 목록 시점의 bounded metadata manifest와 일치할 때만 휴지통으로 보낸다.
+/// 선택 후 재생성·변경된 target/node_modules는 경로가 같아도 재스캔을 요구한다.
+pub fn clean_dev_artifacts_inner(
+    requests: &[dev_artifacts::DevArtifact],
+    root: &Path,
+    min_age_days: u64,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Vec<CleanResult> {
+    let current = dev_artifacts::find_artifacts(root, min_age_days, now_ms);
+    requests
+        .iter()
+        .map(|request| {
+            let matches = current.iter().find(|candidate| {
+                candidate.path == request.path
+                    && candidate.kind == request.kind
+                    && candidate.project == request.project
+                    && candidate.bytes == request.bytes
+                    && candidate.files == request.files
+                    && candidate.skipped == request.skipped
+                    && candidate.scan_complete
+                    && request.scan_complete
+                    && request.skipped == 0
+                    && candidate.fingerprint == request.fingerprint
+                    && !request.object_id.is_empty()
+                    && candidate.object_id == request.object_id
+                    && candidate.age_days >= request.age_days
+            });
+            if matches.is_none() {
+                return CleanResult {
+                    path: request.path.clone(),
+                    ok: false,
+                    error: "개발 아티팩트가 변경되었거나 메타데이터 스캔이 불완전합니다. 정리 전에 다시 스캔하세요".into(),
+                };
+            }
+
+            match safety::trash_delete_if_identity(
+                Path::new(&request.path),
+                &request.object_id,
+                request.bytes,
+                journal_path,
+                now_ms,
+            ) {
+                Ok(()) => CleanResult {
+                    path: request.path.clone(),
+                    ok: true,
+                    error: String::new(),
+                },
+                Err(error) => CleanResult {
+                    path: request.path.clone(),
+                    ok: false,
+                    error: error.to_string(),
+                },
+            }
+        })
+        .collect()
+}
+
 /// 저널의 move 경로 필드 "src -> dst"를 분리 (순수 함수 — 테스트 대상). 구분자 없으면 None.
 pub fn parse_move_entry(path_field: &str) -> Option<(String, String)> {
     path_field
@@ -422,6 +480,24 @@ pub fn clean_paths(paths: Vec<String>, app: AppHandle) -> Result<Vec<CleanResult
     let jp = journal_file_path(&app)?;
     let pbufs: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
     Ok(clean_paths_inner(&pbufs, &jp, now_ms()))
+}
+
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn clean_dev_artifacts(
+    root: String,
+    min_age_days: u64,
+    artifacts: Vec<dev_artifacts::DevArtifact>,
+    app: AppHandle,
+) -> Result<Vec<CleanResult>, String> {
+    let jp = journal_file_path(&app)?;
+    Ok(clean_dev_artifacts_inner(
+        &artifacts,
+        Path::new(&root),
+        min_age_days,
+        &jp,
+        now_ms(),
+    ))
 }
 
 #[cfg(not(coverage))]
@@ -2161,6 +2237,38 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
                 .collect();
             trash::os_limited::purge_all(items).unwrap();
         }
+    }
+
+    #[test]
+    fn dev_artifact_cleanup_rejects_a_stale_metadata_fingerprint() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("webapp");
+        let artifact = project.join("node_modules");
+        fs::create_dir_all(&artifact).unwrap();
+        fs::write(project.join("package.json"), b"{}").unwrap();
+        fs::write(artifact.join("payload.bin"), b"old").unwrap();
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let observed = crate::dev_artifacts::find_artifacts(tmp.path(), 0, now);
+        assert_eq!(observed.len(), 1);
+
+        // The path still exists, but its metadata manifest no longer matches the selection.
+        fs::write(artifact.join("payload.bin"), b"recreated-with-different-size").unwrap();
+        let results = clean_dev_artifacts_inner(
+            &observed,
+            tmp.path(),
+            0,
+            &tmp.path().join("journal.jsonl"),
+            now,
+        );
+
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].ok);
+        assert!(results[0].error.contains("다시 스캔"));
+        assert!(artifact.join("payload.bin").exists());
     }
 
     #[test]

@@ -1,14 +1,28 @@
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::time::{Duration, Instant};
 
 use crate::scanner;
 
-#[derive(Debug, Clone, serde::Serialize)]
+// A development tree can contain millions of generated entries. The inventory remains
+// fail-closed for cleanup when this bounded metadata manifest cannot finish; it must never turn
+// a partial observation into permission to move a recreated directory to the trash.
+const ARTIFACT_MANIFEST_BUDGET: Duration = Duration::from_secs(3);
+const ARTIFACT_MANIFEST_MAX_RECORDS: usize = 250_000;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DevArtifact {
     pub path: String,
     pub kind: String,
     pub project: String,
     pub bytes: u64,
+    pub files: u64,
+    pub skipped: u64,
+    pub scan_complete: bool,
+    /// Deterministic metadata manifest; file contents are never read.
+    pub fingerprint: String,
+    /// Platform filesystem identity of the candidate root; unlike a path it cannot be reused by
+    /// a recreated directory on Unix/Windows.
+    pub object_id: String,
     pub age_days: u64,
 }
 
@@ -31,6 +45,127 @@ fn age_days(path: &Path, now_ms: u64) -> u64 {
     let Ok(dur) = mtime.duration_since(std::time::UNIX_EPOCH) else { return 0 };
     let mtime_ms = dur.as_millis() as u64;
     now_ms.saturating_sub(mtime_ms) / 86_400_000
+}
+
+#[derive(Default)]
+struct ArtifactManifest {
+    bytes: u64,
+    files: u64,
+    skipped: u64,
+    scan_complete: bool,
+    records: Vec<String>,
+    fingerprint: String,
+    object_id: String,
+}
+
+/// Build a bounded, deterministic metadata-only manifest for one generated directory.
+///
+/// Paths, kinds, sizes, mtimes, and symlink targets are enough to detect a stale selection while
+/// avoiding sensitive content reads. A time/record bound makes the cleanup gate fail closed on
+/// unusually large trees instead of blocking the UI indefinitely.
+fn artifact_manifest(root: &Path) -> ArtifactManifest {
+    let mut manifest = ArtifactManifest {
+        scan_complete: true,
+        ..ArtifactManifest::default()
+    };
+    let root_object_id = crate::safety::filesystem_object_id(root).ok();
+    if root_object_id.is_none() {
+        manifest.scan_complete = false;
+    }
+    manifest.object_id = root_object_id.unwrap_or_default();
+    let deadline = Instant::now() + ARTIFACT_MANIFEST_BUDGET;
+    let walker = jwalk::WalkDir::new(root)
+        .follow_links(false)
+        .skip_hidden(false)
+        .process_read_dir(|_depth, _path, _state, children| {
+            children.retain(|r| r.as_ref().map(scanner::keep_entry).unwrap_or(true));
+        });
+
+    for entry in walker {
+        if Instant::now() >= deadline || manifest.records.len() >= ARTIFACT_MANIFEST_MAX_RECORDS {
+            manifest.scan_complete = false;
+            break;
+        }
+        let Ok(entry) = entry else {
+            manifest.skipped = manifest.skipped.saturating_add(1);
+            manifest.scan_complete = false;
+            continue;
+        };
+        if entry.read_children_error.is_some() {
+            manifest.skipped = manifest.skipped.saturating_add(1);
+            manifest.scan_complete = false;
+        }
+        let entry_path = entry.path();
+        let relative = entry_path
+            .strip_prefix(root)
+            .unwrap_or(entry_path.as_path())
+            .to_string_lossy()
+            .replace('\\', "/");
+        let relative = if relative.is_empty() { "." } else { &relative };
+        let file_type = entry.file_type();
+        if file_type.is_dir() {
+            let Ok(metadata) = entry.metadata() else {
+                manifest.skipped = manifest.skipped.saturating_add(1);
+                manifest.scan_complete = false;
+                continue;
+            };
+            let identity = crate::safety::filesystem_object_id(&entry_path).unwrap_or_else(|_| {
+                manifest.skipped = manifest.skipped.saturating_add(1);
+                manifest.scan_complete = false;
+                "<unknown>".into()
+            });
+            let modified = modified_stamp(&metadata).unwrap_or_else(|| {
+                manifest.skipped = manifest.skipped.saturating_add(1);
+                manifest.scan_complete = false;
+                "<unknown>".into()
+            });
+            manifest
+                .records
+                .push(format!("D\0{relative}\0{identity}\0{modified}"));
+        } else if file_type.is_file() {
+            let Ok(metadata) = entry.metadata() else {
+                manifest.skipped = manifest.skipped.saturating_add(1);
+                manifest.scan_complete = false;
+                continue;
+            };
+            let identity = crate::safety::filesystem_object_id(&entry_path).unwrap_or_else(|_| {
+                manifest.skipped = manifest.skipped.saturating_add(1);
+                manifest.scan_complete = false;
+                "<unknown>".into()
+            });
+            let modified = modified_stamp(&metadata).unwrap_or_else(|| {
+                manifest.skipped = manifest.skipped.saturating_add(1);
+                manifest.scan_complete = false;
+                "<unknown>".into()
+            });
+            manifest.bytes = manifest.bytes.saturating_add(metadata.len());
+            manifest.files = manifest.files.saturating_add(1);
+            manifest
+                .records
+                .push(format!("F\0{relative}\0{identity}\0{}\0{modified}", metadata.len()));
+        }
+    }
+
+    if !manifest.scan_complete {
+        manifest.records.push("!incomplete\0bounded-artifact-manifest".into());
+    }
+    manifest.records.sort_unstable();
+    manifest.fingerprint = metadata_fingerprint(&manifest.records);
+    manifest
+}
+
+fn modified_stamp(metadata: &std::fs::Metadata) -> Option<String> {
+    let duration = metadata.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
+    Some(format!("{}:{}", duration.as_secs(), duration.subsec_nanos()))
+}
+
+fn metadata_fingerprint(records: &[String]) -> String {
+    let mut hasher = blake3::Hasher::new();
+    for record in records {
+        hasher.update(&(record.len() as u64).to_le_bytes());
+        hasher.update(record.as_bytes());
+    }
+    hasher.finalize().to_hex().to_string()
 }
 
 /// 마커 인접 아티팩트 디렉토리를 찾아 mtime 나이로 걸러 크기 내림차순으로 반환.
@@ -89,9 +224,7 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
             let name = path.file_name()?.to_string_lossy().into_owned();
             let (kind, _) = artifact_kind(&name)?;
             let parent = path.parent().unwrap_or(root);
-            // interval 1: 진행 콜백(no-op)이 작은 테스트 픽스처에서도 실행되어 커버리지에서
-            // 0으로 남지 않음 — 콜백이 아무 일도 하지 않으므로 호출 빈도는 동작에 무관
-            let bytes = scanner::scan_dir_with_interval(path, &AtomicBool::new(false), 1, |_| {}).stats.bytes;
+            let manifest = artifact_manifest(path);
             Some(DevArtifact {
                 path: path.to_string_lossy().into_owned(),
                 kind: kind.to_string(),
@@ -99,7 +232,12 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default(),
-                bytes,
+                bytes: manifest.bytes,
+                files: manifest.files,
+                skipped: manifest.skipped,
+                scan_complete: manifest.scan_complete,
+                fingerprint: manifest.fingerprint,
+                object_id: manifest.object_id,
                 age_days: if age == u64::MAX { 0 } else { age },
             })
         })
