@@ -13,6 +13,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[cfg(not(target_os = "macos"))]
+use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
@@ -22,6 +24,10 @@ const CP_PATH: &str = "/bin/cp";
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const SNAPSHOT_COPY_TIMEOUT: Duration = Duration::from_secs(5);
 const SNAPSHOT_ATTEMPTS: usize = 3;
+// CloudDocs' managed SQLite database can grow to many GiB. Never clone a database larger than
+// this bounded amount during a read-only health probe: the immutable fallback below is slower and
+// less complete, but it cannot unexpectedly consume the user's remaining disk while planning.
+const MAX_SNAPSHOT_SOURCE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_STDOUT_BYTES: usize = 16 * 1024;
 const MAX_STDERR_BYTES: usize = 4 * 1024;
 const ITEM_ERROR_AGE_NOTICE_MS: u64 = 86_400_000;
@@ -370,6 +376,7 @@ fn create_temporary_snapshot_directory() -> Result<TemporarySnapshotDirectory, S
 
 #[cfg(target_os = "macos")]
 fn clone_snapshot_file(source: &Path, destination: &Path) -> Result<(), String> {
+    ensure_snapshot_file_within_limit(source)?;
     let cp_metadata = fs::symlink_metadata(CP_PATH)
         .map_err(|_| "icloud-sync-health-clone-command-unavailable".to_string())?;
     if cp_metadata.file_type().is_symlink() || !cp_metadata.is_file() {
@@ -384,15 +391,77 @@ fn clone_snapshot_file(source: &Path, destination: &Path) -> Result<(), String> 
         .stderr(Stdio::null())
         .spawn()
         .map_err(|_| "icloud-sync-health-clone-command-spawn-failed".to_string())?;
-    run_bounded_child(child, SNAPSHOT_COPY_TIMEOUT)
-        .map_err(|_| "icloud-sync-health-clone-command-failed".to_string())
+    if run_bounded_child(child, SNAPSHOT_COPY_TIMEOUT).is_err() {
+        let _ = fs::remove_file(destination);
+        return Err("icloud-sync-health-clone-command-failed".into());
+    }
+    ensure_snapshot_file_with_cleanup(destination)
 }
 
 #[cfg(not(target_os = "macos"))]
 fn clone_snapshot_file(source: &Path, destination: &Path) -> Result<(), String> {
-    fs::copy(source, destination)
-        .map(|_| ())
-        .map_err(|_| "icloud-sync-health-snapshot-copy-failed".into())
+    ensure_snapshot_file_within_limit(source)?;
+    let mut input = fs::File::open(source)
+        .map_err(|_| "icloud-sync-health-snapshot-copy-failed".to_string())?;
+    let mut output = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)
+        .map_err(|_| "icloud-sync-health-snapshot-copy-failed".to_string())?;
+    let mut copied = 0u64;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let remaining = MAX_SNAPSHOT_SOURCE_BYTES.saturating_sub(copied);
+        let read_limit = remaining.saturating_add(1).min(buffer.len() as u64) as usize;
+        let read = input
+            .read(&mut buffer[..read_limit])
+            .map_err(|_| "icloud-sync-health-snapshot-copy-failed".to_string());
+        let read = match read {
+            Ok(read) => read,
+            Err(error) => {
+                let _ = fs::remove_file(destination);
+                return Err(error);
+            }
+        };
+        if read == 0 {
+            if output.sync_all().is_err() {
+                let _ = fs::remove_file(destination);
+                return Err("icloud-sync-health-snapshot-copy-failed".into());
+            }
+            break;
+        }
+        if copied.saturating_add(read as u64) > MAX_SNAPSHOT_SOURCE_BYTES {
+            let _ = fs::remove_file(destination);
+            return Err("icloud-sync-health-snapshot-source-too-large".into());
+        }
+        if output.write_all(&buffer[..read]).is_err() {
+            let _ = fs::remove_file(destination);
+            return Err("icloud-sync-health-snapshot-copy-failed".into());
+        }
+        copied = copied.saturating_add(read as u64);
+    }
+    ensure_snapshot_file_with_cleanup(destination)
+}
+
+fn ensure_snapshot_file_within_limit(path: &Path) -> Result<(), String> {
+    let identity = source_file_identity(path, true)?;
+    if identity
+        .as_ref()
+        .is_some_and(|identity| identity.logical_bytes > MAX_SNAPSHOT_SOURCE_BYTES)
+    {
+        return Err("icloud-sync-health-snapshot-source-too-large".into());
+    }
+    Ok(())
+}
+
+fn ensure_snapshot_file_with_cleanup(path: &Path) -> Result<(), String> {
+    match ensure_snapshot_file_within_limit(path) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = fs::remove_file(path);
+            Err(error)
+        }
+    }
 }
 
 struct ClientDatabaseSnapshot {
@@ -406,7 +475,19 @@ fn clone_client_database_snapshot(db_dir: &Path) -> Result<ClientDatabaseSnapsho
     let source_wal = db_dir.join("client.db-wal");
     for _ in 0..SNAPSHOT_ATTEMPTS {
         let before_db = source_file_identity(&source_db, true)?;
+        if before_db
+            .as_ref()
+            .is_some_and(|identity| identity.logical_bytes > MAX_SNAPSHOT_SOURCE_BYTES)
+        {
+            return Err("icloud-sync-health-snapshot-source-too-large".into());
+        }
         let before_wal = source_file_identity(&source_wal, false)?;
+        if before_wal
+            .as_ref()
+            .is_some_and(|identity| identity.logical_bytes > MAX_SNAPSHOT_SOURCE_BYTES)
+        {
+            return Err("icloud-sync-health-snapshot-source-too-large".into());
+        }
         let directory = create_temporary_snapshot_directory()?;
         let client_db = directory.path.join("client.db");
         clone_snapshot_file(&source_db, &client_db)?;
@@ -880,6 +961,35 @@ mod tests {
             default_cloud_docs_db_dir(Path::new("/home/test")),
             PathBuf::from("/home/test/Library/Application Support/CloudDocs/session/db")
         );
+    }
+
+    #[test]
+    fn oversized_cloud_docs_database_fails_closed_before_snapshot_copy() {
+        let source = tempfile::tempdir().unwrap();
+        let client_db = source.path().join("client.db");
+        fs::File::create(&client_db)
+            .unwrap()
+            .set_len(MAX_SNAPSHOT_SOURCE_BYTES + 1)
+            .unwrap();
+
+        let error = match clone_client_database_snapshot(source.path()) {
+            Ok(_) => panic!("oversized database must not be snapshotted"),
+            Err(error) => error,
+        };
+        assert_eq!(error, "icloud-sync-health-snapshot-source-too-large");
+
+        fs::write(&client_db, b"within-limit").unwrap();
+        let client_db_wal = source.path().join("client.db-wal");
+        fs::File::create(&client_db_wal)
+            .unwrap()
+            .set_len(MAX_SNAPSHOT_SOURCE_BYTES + 1)
+            .unwrap();
+
+        let error = match clone_client_database_snapshot(source.path()) {
+            Ok(_) => panic!("oversized WAL must not be snapshotted"),
+            Err(error) => error,
+        };
+        assert_eq!(error, "icloud-sync-health-snapshot-source-too-large");
     }
 
     #[cfg(target_os = "macos")]
