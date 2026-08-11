@@ -88,3 +88,19 @@ fn whitespace_cells_and_invalid_date_shapes_fail_to_text_without_false_dates() {
     assert_eq!(profile.columns[2].inferred_type, "mixed");
     assert_eq!(profile.columns[3].inferred_type, "mixed");
 }
+
+#[test]
+fn valid_dates_and_digit_invalid_shapes_cover_exact_date_admission() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("exact-date.csv");
+    write_file(
+        &path,
+        b"date,non_digit_month,non_digit_day\n2026-01-31,2026-aa-01,2026-01-xy\n",
+    );
+
+    let profile = profile_dataset(&path);
+    assert!(profile.profile_complete);
+    assert_eq!(profile.columns[0].inferred_type, "date");
+    assert_eq!(profile.columns[1].inferred_type, "text");
+    assert_eq!(profile.columns[2].inferred_type, "text");
+}
