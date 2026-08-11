@@ -33,6 +33,10 @@ pub const REASON_ALLOCATED_UNAVAILABLE: &str = "allocated-size-unavailable";
 pub const REASON_EVIDENCE_INCOMPLETE: &str = "evidence-incomplete-skipped-entries";
 /// Indicates that moving an item to Trash does not immediately return its blocks.
 pub const REASON_TRASH_RETAINS: &str = "trash-retains-bytes-until-emptied";
+/// Bounded timeout used by the optional active-use probe.
+pub const ACTIVE_USE_PROBE_TIMEOUT_MS: u64 = 2_000;
+/// Maximum process identifiers retained by the optional active-use probe.
+pub const ACTIVE_USE_PROBE_MAX_PIDS: usize = 128;
 
 /// Destructive lifecycle whose consequences the read-only plan is estimating.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -118,6 +122,16 @@ pub struct PathReclaimEstimate {
     pub skipped: u64,
     /// Logical, allocation, and physical-reclaimability evidence for this root.
     pub estimate: ReclaimEstimate,
+    /// Optional bounded `lsof` evidence. Omitted unless the caller explicitly requests it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_use: Option<crate::git_worktree::GitWorktreeActiveUseEvidence>,
+}
+
+/// Optional evidence controls for a reclaim plan.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReclaimPlanOptions {
+    /// Collect bounded process/file-use evidence for each normalized root.
+    pub include_active_use: bool,
 }
 
 /// Read-only reclaim evidence for a normalized, deduplicated path selection.
@@ -353,6 +367,7 @@ fn scan_root(
     root: &Path,
     operation: PlannedOperation,
     totals: &mut Accumulator,
+    options: ReclaimPlanOptions,
 ) -> Result<PathReclaimEstimate, String> {
     let metadata = std::fs::metadata(root)
         .map_err(|error| format!("cannot inspect {}: {error}", root.display()))?;
@@ -420,6 +435,14 @@ fn scan_root(
         RootKind::Directory
     };
 
+    let active_use = options.include_active_use.then(|| {
+        crate::git_worktree::active_use_evidence(
+            root,
+            ACTIVE_USE_PROBE_TIMEOUT_MS,
+            ACTIVE_USE_PROBE_MAX_PIDS,
+        )
+    });
+
     Ok(PathReclaimEstimate {
         path: validated_evidence_path(root)?,
         kind,
@@ -427,6 +450,7 @@ fn scan_root(
         dirs: local.dirs,
         skipped: local.skipped,
         estimate: estimate(&local, operation),
+        active_use,
     })
 }
 
@@ -435,11 +459,20 @@ pub fn plan_reclaim(
     raw_paths: &[PathBuf],
     operation: PlannedOperation,
 ) -> Result<ReclaimPlan, String> {
+    plan_reclaim_with_options(raw_paths, operation, ReclaimPlanOptions::default())
+}
+
+/// Builds a read-only plan with explicit evidence controls.
+pub fn plan_reclaim_with_options(
+    raw_paths: &[PathBuf],
+    operation: PlannedOperation,
+    options: ReclaimPlanOptions,
+) -> Result<ReclaimPlan, String> {
     let roots = normalize_roots(raw_paths)?;
     let mut totals = Accumulator::new();
     let mut paths = Vec::with_capacity(roots.len());
     for root in roots {
-        paths.push(scan_root(&root, operation, &mut totals)?);
+        paths.push(scan_root(&root, operation, &mut totals, options)?);
     }
 
     Ok(ReclaimPlan {
@@ -497,6 +530,26 @@ mod tests {
         let json = serde_json::to_value(&plan).unwrap();
         assert_eq!(json["schema_kind"], "disksage.reclaim-plan");
         assert_eq!(json["schema_version"], 1);
+        assert!(json["paths"][0].get("active_use").is_none());
+    }
+
+    #[test]
+    fn active_use_evidence_is_opt_in_and_path_local() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("payload.bin");
+        fs::write(&file, b"payload").unwrap();
+
+        let plan = plan_reclaim_with_options(
+            &[file],
+            PlannedOperation::Trash,
+            ReclaimPlanOptions {
+                include_active_use: true,
+            },
+        )
+        .unwrap();
+        let evidence = plan.paths[0].active_use.as_ref().unwrap();
+        assert!(evidence.evidence_complete || evidence.error.is_some());
+        assert!(evidence.observed_pids.len() <= ACTIVE_USE_PROBE_MAX_PIDS);
     }
 
     #[test]

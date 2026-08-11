@@ -15,6 +15,12 @@ reports:
 - `physically_reclaimable_bytes: null` and `status: unverified` before the operation;
 - stable reason codes explaining shared-extent uncertainty and Trash retention.
 
+When an operator needs to distinguish an idle cache from a build or editor tree that is currently
+in use, the command accepts `--check-active-use`. This opt-in adds bounded, path-local `lsof`
+evidence per normalized root (`evidence_complete`, `active`, and a capped PID list); the probe is
+diagnostic only and never treats an idle result as permission to delete. The default output omits
+this optional field for compatibility and to avoid the extra process/file scan.
+
 Nested selected roots are deduplicated and symbolic-link roots are rejected. The command never
 moves, unlinks, or writes to supplied paths. APFS clone sharing is intentionally not inferred from
 content equality or per-inode allocated blocks because those are not proof of unique extents or
@@ -26,3 +32,13 @@ reparse points are included in `skipped` rather than silently disappearing from 
 The GUI must label selection totals as logical size. Moving an item to Trash preserves its blocks;
 actual physical recovery can only be claimed from a post-lifecycle filesystem free-space
 observation after Trash is emptied or from an equally strong filesystem-native unique-extent proof.
+
+For example, a read-only cache review can be run with:
+
+```sh
+cargo run --locked --manifest-path src-tauri/Cargo.toml \
+  --bin disksage-reclaim-plan -- \
+  --operation trash --check-active-use \
+  "$HOME/Library/Caches/codec-carver" \
+  "$HOME/Library/Caches/trivy"
+```

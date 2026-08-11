@@ -3,11 +3,11 @@
 //! The parser preserves operating-system paths without forcing Unicode conversion. The command
 //! produces local evidence only and never moves, deletes, or otherwise mutates supplied paths.
 
-use disksage_lib::reclaim::{plan_reclaim, PlannedOperation};
+use disksage_lib::reclaim::{plan_reclaim_with_options, PlannedOperation, ReclaimPlanOptions};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-const USAGE: &str = "Usage: disksage-reclaim-plan [--operation trash|delete] [--pretty] PATH...\n\
+const USAGE: &str = "Usage: disksage-reclaim-plan [--operation trash|delete] [--pretty] [--check-active-use] PATH...\n\
 Builds read-only logical/allocation evidence. It never moves or deletes files.";
 
 /// Parsed arguments for one reclaim-plan execution.
@@ -17,6 +17,8 @@ struct Args {
     operation: PlannedOperation,
     /// Whether the JSON result should use human-readable indentation.
     pretty: bool,
+    /// Whether to include bounded process/file-use evidence for each root.
+    check_active_use: bool,
     /// Filesystem roots to inspect without mutation.
     paths: Vec<PathBuf>,
 }
@@ -34,6 +36,7 @@ enum ParseResult {
 fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResult, String> {
     let mut operation = PlannedOperation::Trash;
     let mut pretty = false;
+    let mut check_active_use = false;
     let mut paths = Vec::new();
     let mut args = raw_args.into_iter();
 
@@ -49,6 +52,7 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
                 operation = value.parse()?;
             }
             Some("--pretty") => pretty = true,
+            Some("--check-active-use") => check_active_use = true,
             Some("-h" | "--help") => return Ok(ParseResult::Help),
             Some("--") => {
                 paths.extend(args.map(PathBuf::from));
@@ -64,6 +68,7 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
     Ok(ParseResult::Run(Args {
         operation,
         pretty,
+        check_active_use,
         paths,
     }))
 }
@@ -77,7 +82,13 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
         }
         ParseResult::Run(args) => args,
     };
-    let plan = plan_reclaim(&args.paths, args.operation)?;
+    let plan = plan_reclaim_with_options(
+        &args.paths,
+        args.operation,
+        ReclaimPlanOptions {
+            include_active_use: args.check_active_use,
+        },
+    )?;
     let json = if args.pretty {
         serde_json::to_string_pretty(&plan)
     } else {
@@ -119,6 +130,7 @@ mod tests {
                 OsString::from("--operation"),
                 OsString::from("delete"),
                 OsString::from("--pretty"),
+                OsString::from("--check-active-use"),
                 OsString::from("/tmp/example"),
             ])
             .unwrap(),
@@ -126,17 +138,14 @@ mod tests {
 
         assert_eq!(parsed.operation, PlannedOperation::Delete);
         assert!(parsed.pretty);
+        assert!(parsed.check_active_use);
         assert_eq!(parsed.paths, [PathBuf::from("/tmp/example")]);
     }
 
     #[test]
     fn double_dash_preserves_option_like_paths() {
         let parsed = expect_run(
-            parse_args([
-                OsString::from("--"),
-                OsString::from("--not-an-option"),
-            ])
-            .unwrap(),
+            parse_args([OsString::from("--"), OsString::from("--not-an-option")]).unwrap(),
         );
 
         assert_eq!(parsed.paths, [PathBuf::from("--not-an-option")]);

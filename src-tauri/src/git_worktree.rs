@@ -604,7 +604,7 @@ fn skipped_active_use(reason: &str) -> GitWorktreeActiveUseEvidence {
 }
 
 #[cfg(unix)]
-fn active_use_evidence(
+pub(crate) fn active_use_evidence(
     path: &Path,
     timeout_ms: u64,
     max_pids: usize,
@@ -717,7 +717,7 @@ fn active_use_evidence(
 }
 
 #[cfg(not(unix))]
-fn active_use_evidence(
+pub(crate) fn active_use_evidence(
     _path: &Path,
     _timeout_ms: u64,
     _max_pids: usize,
