@@ -273,7 +273,7 @@ fn clean_merged_secondary_worktree_requires_exact_approval_then_removes_only_the
             "Reviewed clean merged temporary worktree",
         )
         .unwrap_err(),
-        "git-worktree-removal-confirmation-mismatch"
+        "git-worktree-removal-exact-approval-required"
     );
     let approval = approve_stale_worktree_removal(
         &report,
