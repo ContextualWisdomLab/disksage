@@ -2,13 +2,14 @@
 
 use crate::commands::{
     clean_paths_inner, execute_moves_inner, list_roots, load_ontology_from, node_view,
-    parse_move_entry, undo_last_moves_inner,
+    parse_move_entry, undo_last_moves_inner, AppState, CleanResult, EntryView, NodeView,
 };
 use crate::organize::MovePlan;
 use crate::scanner::{ScanResult, ScanStats};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 
 fn result_for(root: &Path, dir_sizes: HashMap<PathBuf, u64>) -> ScanResult {
     ScanResult {
@@ -70,6 +71,43 @@ fn node_view_lists_files_and_directories_by_descending_size() {
     assert_eq!(view.entries[1].name, "file.bin");
     assert!(!view.entries[1].is_dir);
     assert_eq!(view.entries[1].size, 4);
+}
+
+#[test]
+fn command_state_defaults_and_serializable_views_are_covered() {
+    let state = AppState::default();
+    assert!(state.result.lock().unwrap().is_none());
+    assert!(!state.cancel.load(Ordering::SeqCst));
+    assert!(!state.scanning.load(Ordering::SeqCst));
+    assert!(state.cloud_review.lock().is_ok());
+
+    let node = NodeView {
+        path: "/tmp/example".into(),
+        size: 7,
+        entries: vec![EntryView {
+            name: "file.bin".into(),
+            path: "/tmp/example/file.bin".into(),
+            size: 7,
+            is_dir: false,
+        }],
+    };
+    let node_json = serde_json::to_value(&node).unwrap();
+    assert_eq!(node_json["path"], "/tmp/example");
+    assert_eq!(node_json["size"], 7);
+    assert_eq!(node_json["entries"][0]["name"], "file.bin");
+    assert_eq!(node_json["entries"][0]["path"], "/tmp/example/file.bin");
+    assert_eq!(node_json["entries"][0]["size"], 7);
+    assert_eq!(node_json["entries"][0]["is_dir"], false);
+
+    let clean = CleanResult {
+        path: "/tmp/example/file.bin".into(),
+        ok: false,
+        error: "blocked".into(),
+    };
+    let clean_json = serde_json::to_value(&clean).unwrap();
+    assert_eq!(clean_json["path"], "/tmp/example/file.bin");
+    assert_eq!(clean_json["ok"], false);
+    assert_eq!(clean_json["error"], "blocked");
 }
 
 #[test]
