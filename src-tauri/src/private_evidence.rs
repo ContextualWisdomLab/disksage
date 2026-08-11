@@ -19,8 +19,9 @@ pub struct PrivateEvidenceReceipt {
 
 /// Persist exact local evidence outside the audited source tree.
 ///
-/// The destination parent must already exist and must not be a symlink. The file is created once
-/// with mode 0600, synced, and never overwritten. A failed write is removed before returning.
+/// The destination parent must already exist, must not be a symlink, and must not be writable by
+/// group or other principals. The file is created once with mode 0600, synced, and never
+/// overwritten. A failed write is removed before returning.
 #[cfg(unix)]
 pub fn write_private_json_create_new(
     source_root: &Path,
@@ -37,6 +38,9 @@ pub fn write_private_json_create_new(
         .map_err(|_| "private-evidence-parent-unavailable".to_string())?;
     if !parent_metadata.is_dir() || parent_metadata.file_type().is_symlink() {
         return Err("private-evidence-parent-unsafe".into());
+    }
+    if parent_metadata.permissions().mode() & 0o022 != 0 {
+        return Err("private-evidence-parent-writable-by-others".into());
     }
     let canonical_parent = std::fs::canonicalize(parent)
         .map_err(|_| "private-evidence-parent-unavailable".to_string())?;
