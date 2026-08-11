@@ -10,7 +10,7 @@ function fixture(): Record<string, any> {
     schema_kind: PODMAN_DESKTOP_SCHEMA_KIND,
     schema_version: 1,
     platform: "macos",
-    evidence_complete: true,
+    evidence_complete: false,
     elapsed_ms: 1,
     capacity: {
       configured_disk_bytes: null,
