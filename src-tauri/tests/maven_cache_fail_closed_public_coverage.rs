@@ -29,6 +29,76 @@ fn audit(root: &Path) -> MavenCacheAuditReport {
 }
 
 #[test]
+fn audit_rejects_missing_and_regular_file_roots() {
+    let temp = tempfile::tempdir().unwrap();
+    let missing = temp.path().join("missing-repository");
+    assert_eq!(
+        audit_maven_repository(&missing, MavenCacheAuditOptions::default(), 1).unwrap_err(),
+        "maven-cache-root-unavailable"
+    );
+
+    let regular_file = temp.path().join("repository.txt");
+    std::fs::write(&regular_file, b"not a repository").unwrap();
+    assert_eq!(
+        audit_maven_repository(&regular_file, MavenCacheAuditOptions::default(), 1).unwrap_err(),
+        "maven-cache-root-not-real-directory"
+    );
+}
+
+#[test]
+fn zero_entry_budget_fails_closed_as_a_truncated_scan() {
+    let temp = tempfile::tempdir().unwrap();
+    let version = version_dir(temp.path(), "org/example/bounded/1.0.0");
+    write_remote_pair(&version, "bounded-1.0.0");
+
+    let report = audit_maven_repository(
+        temp.path(),
+        MavenCacheAuditOptions {
+            max_entries: 0,
+            max_candidates: 500,
+            max_issues: 200,
+        },
+        1,
+    )
+    .unwrap();
+
+    assert!(report.scan_truncated);
+    assert!(report.truncated);
+    assert_eq!(report.scanned_entries, 0);
+    assert_eq!(report.marker_directories, 0);
+    assert_eq!(report.remote_recoverable_directories, 0);
+    assert!(report.candidates.is_empty());
+    assert!(!report.provider_write_executed);
+}
+
+#[cfg(unix)]
+#[test]
+fn audit_rejects_symlink_and_non_utf8_repository_roots() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let real = temp.path().join("real-repository");
+    std::fs::create_dir(&real).unwrap();
+    let link = temp.path().join("repository-link");
+    symlink(&real, &link).unwrap();
+    assert_eq!(
+        audit_maven_repository(&link, MavenCacheAuditOptions::default(), 1).unwrap_err(),
+        "maven-cache-root-not-real-directory"
+    );
+
+    let invalid_name = OsString::from_vec(vec![b'r', b'e', b'p', b'o', b'-', 0xff]);
+    let invalid_utf8_root = temp.path().join(invalid_name);
+    std::fs::create_dir(&invalid_utf8_root).unwrap();
+    assert_eq!(
+        audit_maven_repository(&invalid_utf8_root, MavenCacheAuditOptions::default(), 1)
+            .unwrap_err(),
+        "maven-cache-root-not-utf8"
+    );
+}
+
+#[test]
 fn local_metadata_nested_directories_and_missing_payloads_are_held() {
     let temp = tempfile::tempdir().unwrap();
 
@@ -42,7 +112,7 @@ fn local_metadata_nested_directories_and_missing_payloads_are_held() {
 
     let nested = version_dir(temp.path(), "org/example/nested/1.0.0");
     write_remote_pair(&nested, "nested-1.0.0");
-    std::fs::create_dir(nested.join("expanded")) .unwrap();
+    std::fs::create_dir(nested.join("expanded")).unwrap();
 
     let no_payload = version_dir(temp.path(), "org/example/no-payload/1.0.0");
     std::fs::write(
