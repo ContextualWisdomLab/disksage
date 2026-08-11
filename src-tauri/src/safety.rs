@@ -134,7 +134,7 @@ pub fn object_id_from_metadata(metadata: &std::fs::Metadata) -> Option<String> {
         // Windows' `MetadataExt::{volume_serial_number,file_index}` methods are still gated
         // behind the unstable `windows_by_handle` feature. Callers that need a Windows identity
         // must use `filesystem_object_id`, which keeps the file handle open while deriving the
-        // same volume/file-index key through the already-supported `same-file` crate.
+        // same volume/file-index key through the `winapi-util` crate.
         let _ = metadata;
         return None;
     }
@@ -160,13 +160,16 @@ pub fn filesystem_object_id(path: &Path) -> std::io::Result<String> {
         ));
     }
 
-    let metadata = std::fs::symlink_metadata(path)?;
-    object_id_from_metadata(&metadata).ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "filesystem object identity is unavailable on this platform",
-        )
-    })
+    #[cfg(not(windows))]
+    {
+        let metadata = std::fs::symlink_metadata(path)?;
+        object_id_from_metadata(&metadata).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "filesystem object identity is unavailable on this platform",
+            )
+        })
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -362,15 +365,34 @@ fn create_private_staging_dir(path: &Path, now_ms: u64) -> std::io::Result<PathB
     ))
 }
 
-fn restore_staged_if_source_absent(path: &Path, staged: &Path, staging_dir: &Path) {
+fn restore_staged_if_source_absent(
+    path: &Path,
+    staged: &Path,
+    staging_dir: &Path,
+) -> Result<(), String> {
     let source_absent = matches!(
         std::fs::symlink_metadata(path),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound
     );
-    if source_absent {
-        let _ = std::fs::rename(staged, path);
-        let _ = std::fs::remove_dir(staging_dir);
+    if !source_absent {
+        return Err(format!(
+            "staged object retained at {}; source path reappeared",
+            staged.display()
+        ));
     }
+    std::fs::rename(staged, path).map_err(|error| {
+        format!(
+            "staged restore failed for {}: {error}",
+            staged.display()
+        )
+    })?;
+    std::fs::remove_dir(staging_dir).map_err(|error| {
+        format!(
+            "staging directory cleanup failed for {}: {error}",
+            staging_dir.display()
+        )
+    })?;
+    Ok(())
 }
 
 /// Move the exact reviewed filesystem object into a private sibling staging directory before
@@ -427,22 +449,37 @@ pub fn trash_delete_if_identity(
             )));
         }
         let moved_id = filesystem_object_id(&staged).map_err(|error| {
-            restore_staged_if_source_absent(path, &staged, &staging_dir);
-            SafetyError::Trash(format!("staged object identity unavailable: {error}"))
+            let restore = restore_staged_if_source_absent(path, &staged, &staging_dir);
+            match restore {
+                Ok(()) => SafetyError::Trash(format!("staged object identity unavailable: {error}")),
+                Err(restore_error) => SafetyError::Trash(format!(
+                    "staged object identity unavailable: {error}; {restore_error}"
+                )),
+            }
         })?;
         if moved_id != expected_object_id {
-            restore_staged_if_source_absent(path, &staged, &staging_dir);
-            return Err(SafetyError::Trash(
-                "atomic staging move changed the filesystem object; nothing was trashed".into(),
-            ));
+            return match restore_staged_if_source_absent(path, &staged, &staging_dir) {
+                Ok(()) => Err(SafetyError::Trash(
+                    "atomic staging move changed the filesystem object; nothing was trashed".into(),
+                )),
+                Err(restore_error) => Err(SafetyError::Trash(format!(
+                    "atomic staging move changed the filesystem object; {restore_error}"
+                ))),
+            };
         }
         if let Err(error) = trash::delete(&staged) {
-            restore_staged_if_source_absent(path, &staged, &staging_dir);
-            return Err(SafetyError::Trash(error.to_string()));
+            return match restore_staged_if_source_absent(path, &staged, &staging_dir) {
+                Ok(()) => Err(SafetyError::Trash(error.to_string())),
+                Err(restore_error) => Err(SafetyError::Trash(format!(
+                    "{}; {restore_error}",
+                    error
+                ))),
+            };
         }
-        // The object is already in the OS trash. An empty staging directory is only housekeeping;
-        // failure to remove it must not turn a successful, reversible trash operation into an error.
-        let _ = std::fs::remove_dir(&staging_dir);
+        // Keep the empty identity-staging directory after a successful OS-trash move. The trash
+        // provider records the staged pathname as the undo target; retaining its parent preserves
+        // that recovery path. A later recovery pass may remove empty staging directories only
+        // after the corresponding trash item is no longer undoable.
         Ok(())
     })();
     entry.outcome = match &result {
@@ -844,6 +881,35 @@ mod tests {
         assert!(victim.exists(), "대체 객체는 삭제되지 않아야 함");
         assert!(original.exists(), "검토된 원래 객체도 보존되어야 함");
         assert!(journal_recent(&jp, 10).is_empty(), "stale identity는 저널/휴지통 전에 거부");
+    }
+
+    #[test]
+    fn staged_restore_reports_reappeared_source_and_retains_staged_object() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let staging_dir = tmp.path().join(".disksage-trash-staging");
+        let staged = staging_dir.join("source");
+        std::fs::write(&source, b"replacement").unwrap();
+        std::fs::create_dir(&staging_dir).unwrap();
+        std::fs::write(&staged, b"reviewed").unwrap();
+
+        let error = restore_staged_if_source_absent(&source, &staged, &staging_dir).unwrap_err();
+        assert!(error.contains(staged.to_string_lossy().as_ref()));
+        assert!(source.exists());
+        assert!(staged.exists());
+    }
+
+    #[test]
+    fn staged_restore_reports_rename_failure_with_staged_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let staging_dir = tmp.path().join(".disksage-trash-staging");
+        let staged = staging_dir.join("source");
+        std::fs::create_dir(&staging_dir).unwrap();
+
+        let error = restore_staged_if_source_absent(&source, &staged, &staging_dir).unwrap_err();
+        assert!(error.contains(staged.to_string_lossy().as_ref()));
+        assert!(staging_dir.exists());
     }
 
     #[test]

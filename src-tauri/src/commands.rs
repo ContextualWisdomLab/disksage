@@ -163,7 +163,7 @@ pub fn clean_dev_artifacts_inner(
                     && candidate.fingerprint == request.fingerprint
                     && !request.object_id.is_empty()
                     && candidate.object_id == request.object_id
-                    && candidate.age_days == request.age_days
+                    && candidate.age_days >= request.age_days
             });
             if matches.is_none() {
                 return vec![CleanResult {

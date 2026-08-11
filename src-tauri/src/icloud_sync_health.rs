@@ -13,6 +13,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[cfg(not(target_os = "macos"))]
+use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
@@ -374,6 +376,7 @@ fn create_temporary_snapshot_directory() -> Result<TemporarySnapshotDirectory, S
 
 #[cfg(target_os = "macos")]
 fn clone_snapshot_file(source: &Path, destination: &Path) -> Result<(), String> {
+    ensure_snapshot_file_within_limit(source)?;
     let cp_metadata = fs::symlink_metadata(CP_PATH)
         .map_err(|_| "icloud-sync-health-clone-command-unavailable".to_string())?;
     if cp_metadata.file_type().is_symlink() || !cp_metadata.is_file() {
@@ -388,15 +391,77 @@ fn clone_snapshot_file(source: &Path, destination: &Path) -> Result<(), String> 
         .stderr(Stdio::null())
         .spawn()
         .map_err(|_| "icloud-sync-health-clone-command-spawn-failed".to_string())?;
-    run_bounded_child(child, SNAPSHOT_COPY_TIMEOUT)
-        .map_err(|_| "icloud-sync-health-clone-command-failed".to_string())
+    if run_bounded_child(child, SNAPSHOT_COPY_TIMEOUT).is_err() {
+        let _ = fs::remove_file(destination);
+        return Err("icloud-sync-health-clone-command-failed".into());
+    }
+    ensure_snapshot_file_with_cleanup(destination)
 }
 
 #[cfg(not(target_os = "macos"))]
 fn clone_snapshot_file(source: &Path, destination: &Path) -> Result<(), String> {
-    fs::copy(source, destination)
-        .map(|_| ())
-        .map_err(|_| "icloud-sync-health-snapshot-copy-failed".into())
+    ensure_snapshot_file_within_limit(source)?;
+    let mut input = fs::File::open(source)
+        .map_err(|_| "icloud-sync-health-snapshot-copy-failed".to_string())?;
+    let mut output = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)
+        .map_err(|_| "icloud-sync-health-snapshot-copy-failed".to_string())?;
+    let mut copied = 0u64;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let remaining = MAX_SNAPSHOT_SOURCE_BYTES.saturating_sub(copied);
+        let read_limit = remaining.saturating_add(1).min(buffer.len() as u64) as usize;
+        let read = input
+            .read(&mut buffer[..read_limit])
+            .map_err(|_| "icloud-sync-health-snapshot-copy-failed".to_string());
+        let read = match read {
+            Ok(read) => read,
+            Err(error) => {
+                let _ = fs::remove_file(destination);
+                return Err(error);
+            }
+        };
+        if read == 0 {
+            if output.sync_all().is_err() {
+                let _ = fs::remove_file(destination);
+                return Err("icloud-sync-health-snapshot-copy-failed".into());
+            }
+            break;
+        }
+        if copied.saturating_add(read as u64) > MAX_SNAPSHOT_SOURCE_BYTES {
+            let _ = fs::remove_file(destination);
+            return Err("icloud-sync-health-snapshot-source-too-large".into());
+        }
+        if output.write_all(&buffer[..read]).is_err() {
+            let _ = fs::remove_file(destination);
+            return Err("icloud-sync-health-snapshot-copy-failed".into());
+        }
+        copied = copied.saturating_add(read as u64);
+    }
+    ensure_snapshot_file_with_cleanup(destination)
+}
+
+fn ensure_snapshot_file_within_limit(path: &Path) -> Result<(), String> {
+    let identity = source_file_identity(path, true)?;
+    if identity
+        .as_ref()
+        .is_some_and(|identity| identity.logical_bytes > MAX_SNAPSHOT_SOURCE_BYTES)
+    {
+        return Err("icloud-sync-health-snapshot-source-too-large".into());
+    }
+    Ok(())
+}
+
+fn ensure_snapshot_file_with_cleanup(path: &Path) -> Result<(), String> {
+    match ensure_snapshot_file_within_limit(path) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = fs::remove_file(path);
+            Err(error)
+        }
+    }
 }
 
 struct ClientDatabaseSnapshot {

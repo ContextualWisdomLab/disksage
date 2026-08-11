@@ -372,7 +372,7 @@ fn access_issue_for_error(error: &std::io::Error) -> String {
 
 #[cfg(not(coverage))]
 fn directory_access_issue(path: &Path) -> Option<String> {
-    #[cfg(target_os = "macos")]
+    #[cfg(all(not(coverage), target_os = "macos"))]
     {
         return run_bounded_find(
             path,
@@ -381,7 +381,7 @@ fn directory_access_issue(path: &Path) -> Option<String> {
         .err();
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(any(coverage, not(target_os = "macos")))]
     std::fs::read_dir(path)
         .err()
         .map(|error| access_issue_for_error(&error))
