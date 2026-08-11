@@ -12,14 +12,13 @@ function readSource(path: string): string {
 describe("cache cleanup execution boundary", () => {
   it("uses one backend operation for cache cleanup", () => {
     const cleanup = readSource("src/lib/Cleanup.svelte");
-    const api = readSource("src/lib/api.ts");
-    const commands = readSource("src-tauri/src/commands.rs");
+    const backend = readSource("src-tauri/src/cache_cleanup.rs");
     const tauri = readSource("src-tauri/src/lib.rs");
 
     expect(cleanup).not.toContain("api.expandCleanTargets(c.path)");
-    expect(cleanup).toContain("api.cleanCacheContents(c.path)");
-    expect(api).toContain('invoke<CleanResult[]>("clean_cache_contents"');
-    expect(commands).toContain("pub fn clean_cache_contents(");
-    expect(tauri).toContain("commands::clean_cache_contents");
+    expect(cleanup).toContain('invoke<api.CleanResult[]>("clean_cache_contents"');
+    expect(backend).toContain("pub fn clean_cache_contents(");
+    expect(backend).toContain("guard.still_current()");
+    expect(tauri).toContain("cache_cleanup::clean_cache_contents");
   });
 });
