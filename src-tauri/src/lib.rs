@@ -1,3 +1,6 @@
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+compile_error!("DiskSage supports only Windows, Linux, and macOS targets.");
+
 // coverage 빌드(비-테스트)에서는 run()이 빠져 모듈 내용이 테스트에서만 쓰이므로 dead_code만 허용
 #[cfg_attr(coverage, allow(dead_code))]
 mod dupes;
