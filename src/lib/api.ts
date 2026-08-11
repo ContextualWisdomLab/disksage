@@ -37,6 +37,10 @@ export interface DevArtifact {
   kind: string;
   project: string;
   bytes: number;
+  files: number;
+  skipped: number;
+  scan_complete: boolean;
+  fingerprint: string;
   age_days: number;
 }
 export interface CleanResult {
@@ -61,6 +65,8 @@ export const listCacheCandidates = () => invoke<CacheCandidate[]>("list_cache_ca
 export const listDevArtifacts = (root: string, minAgeDays = 30) =>
   invoke<DevArtifact[]>("list_dev_artifacts", { root, minAgeDays });
 export const cleanPaths = (paths: string[]) => invoke<CleanResult[]>("clean_paths", { paths });
+export const cleanDevArtifacts = (root: string, minAgeDays: number, artifacts: DevArtifact[]) =>
+  invoke<CleanResult[]>("clean_dev_artifacts", { root, minAgeDays, artifacts });
 export const expandCleanTargets = (dir: string) =>
   invoke<string[]>("expand_clean_targets", { dir });
 export const recentOperations = (limit = 20) =>

@@ -88,6 +88,7 @@ pub fn run() {
             commands::list_cache_candidates,
             commands::list_dev_artifacts,
             commands::clean_paths,
+            commands::clean_dev_artifacts,
             commands::recent_operations,
             commands::expand_clean_targets,
             commands::find_duplicate_files,

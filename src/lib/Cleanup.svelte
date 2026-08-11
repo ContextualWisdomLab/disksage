@@ -45,21 +45,27 @@
 
   let totalSelected = $derived(
     caches.filter((c) => selectedRules.has(c.id)).reduce((s, c) => s + c.bytes, 0) +
-      artifacts.filter((a) => selected.has(a.path)).reduce((s, a) => s + a.bytes, 0),
+      artifacts
+        .filter((a) => selected.has(a.path) && a.scan_complete && a.skipped === 0)
+        .reduce((s, a) => s + a.bytes, 0),
   );
 
   let selectionCount = $derived(
     caches.filter((c) => selectedRules.has(c.id) && c.exists).length +
-      artifacts.filter((a) => selected.has(a.path)).length,
+      artifacts.filter((a) => selected.has(a.path) && a.scan_complete && a.skipped === 0).length,
   );
 
   async function executeClean() {
     // 검토·확인 (스펙 §7-6): 명시적 승인 없이는 아무것도 실행되지 않는다
     const ruleDirs = caches.filter((c) => selectedRules.has(c.id) && c.exists);
-    const artifactPaths = artifacts.filter((a) => selected.has(a.path)).map((a) => a.path);
+    const selectedArtifacts = artifacts.filter(
+      (a) => selected.has(a.path) && a.scan_complete && a.skipped === 0,
+    );
     const summary = [
       ...ruleDirs.map((c) => `${c.label} (${fmtBytes(c.bytes)}) — 내용물 비우기`),
-      ...artifactPaths,
+      ...selectedArtifacts.map(
+        (a) => `${a.path} (${fmtBytes(a.bytes)}, ${a.files}개) — 메타데이터 지문 ${a.fingerprint.slice(0, 12)}`,
+      ),
     ];
     if (summary.length === 0) return;
     const okay = await confirm(
@@ -73,11 +79,15 @@
 
     busy = true;
     try {
-      const paths: string[] = [...artifactPaths];
+      const paths: string[] = [];
       for (const c of ruleDirs) {
         paths.push(...(await api.expandCleanTargets(c.path)));
       }
-      results = await api.cleanPaths(paths);
+      const cacheResults = paths.length ? await api.cleanPaths(paths) : [];
+      const artifactResults = selectedArtifacts.length && scannedRoot
+        ? await api.cleanDevArtifacts(scannedRoot, 30, selectedArtifacts)
+        : [];
+      results = [...cacheResults, ...artifactResults];
       selected = new Set();
       selectedRules = new Set();
       await load();
@@ -118,15 +128,21 @@
   <ul class="list">
     {#each artifacts as a (a.path)}
       <li>
-        <label>
+        <label class:disabled={!a.scan_complete || a.skipped > 0}>
           <input
             type="checkbox"
-            disabled={busy}
+            disabled={busy || !a.scan_complete || a.skipped > 0}
             checked={selected.has(a.path)}
             onchange={() => (selected = toggle(selected, a.path))}
           />
           {a.kind} <em>({a.project}, {a.age_days}일)</em>
-          <span class="size">{fmtBytes(a.bytes)}</span>
+          <span class="size">
+            {!a.scan_complete
+              ? `${fmtBytes(a.bytes)} · 메타데이터 스캔 미완료`
+              : a.skipped > 0
+                ? `${fmtBytes(a.bytes)} · 읽기 오류 ${a.skipped}`
+                : fmtBytes(a.bytes)}
+          </span>
           {#if verdicts[a.path]}
             {@const b = verdictBadge(verdicts[a.path])}
             <span class={b.cls} title={b.title}>{b.label}</span>
