@@ -161,6 +161,8 @@ pub fn clean_dev_artifacts_inner(
                     && request.scan_complete
                     && request.skipped == 0
                     && candidate.fingerprint == request.fingerprint
+                    && !request.object_id.is_empty()
+                    && candidate.object_id == request.object_id
                     && candidate.age_days == request.age_days
             });
             if matches.is_none() {
@@ -171,7 +173,24 @@ pub fn clean_dev_artifacts_inner(
                 }];
             }
 
-            clean_paths_inner(&[PathBuf::from(&request.path)], journal_path, now_ms)
+            match safety::trash_delete_if_identity(
+                Path::new(&request.path),
+                &request.object_id,
+                request.bytes,
+                journal_path,
+                now_ms,
+            ) {
+                Ok(()) => vec![CleanResult {
+                    path: request.path.clone(),
+                    ok: true,
+                    error: String::new(),
+                }],
+                Err(error) => vec![CleanResult {
+                    path: request.path.clone(),
+                    ok: false,
+                    error: error.to_string(),
+                }],
+            }
         })
         .collect()
 }

@@ -20,6 +20,9 @@ pub struct DevArtifact {
     pub scan_complete: bool,
     /// Deterministic metadata manifest; file contents are never read.
     pub fingerprint: String,
+    /// Platform filesystem identity of the candidate root; unlike a path it cannot be reused by
+    /// a recreated directory on Unix/Windows.
+    pub object_id: String,
     pub age_days: u64,
 }
 
@@ -52,6 +55,7 @@ struct ArtifactManifest {
     scan_complete: bool,
     records: Vec<String>,
     fingerprint: String,
+    object_id: String,
 }
 
 /// Build a bounded, deterministic metadata-only manifest for one generated directory.
@@ -64,6 +68,13 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
         scan_complete: true,
         ..ArtifactManifest::default()
     };
+    let root_object_id = std::fs::symlink_metadata(root)
+        .ok()
+        .and_then(|metadata| crate::safety::object_id_from_metadata(&metadata));
+    if root_object_id.is_none() {
+        manifest.scan_complete = false;
+    }
+    manifest.object_id = root_object_id.unwrap_or_default();
     let deadline = Instant::now() + ARTIFACT_MANIFEST_BUDGET;
     let walker = jwalk::WalkDir::new(root)
         .follow_links(false)
@@ -95,22 +106,35 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
         let relative = if relative.is_empty() { "." } else { &relative };
         let file_type = entry.file_type();
         if file_type.is_dir() {
-            let modified = entry
-                .metadata()
-                .ok()
-                .and_then(|m| modified_stamp(&m))
-                .unwrap_or_else(|| {
-                    manifest.skipped = manifest.skipped.saturating_add(1);
-                    manifest.scan_complete = false;
-                    "<unknown>".into()
-                });
-            manifest.records.push(format!("D\0{relative}\0{modified}"));
+            let Ok(metadata) = entry.metadata() else {
+                manifest.skipped = manifest.skipped.saturating_add(1);
+                manifest.scan_complete = false;
+                continue;
+            };
+            let identity = crate::safety::object_id_from_metadata(&metadata).unwrap_or_else(|| {
+                manifest.skipped = manifest.skipped.saturating_add(1);
+                manifest.scan_complete = false;
+                "<unknown>".into()
+            });
+            let modified = modified_stamp(&metadata).unwrap_or_else(|| {
+                manifest.skipped = manifest.skipped.saturating_add(1);
+                manifest.scan_complete = false;
+                "<unknown>".into()
+            });
+            manifest
+                .records
+                .push(format!("D\0{relative}\0{identity}\0{modified}"));
         } else if file_type.is_file() {
             let Ok(metadata) = entry.metadata() else {
                 manifest.skipped = manifest.skipped.saturating_add(1);
                 manifest.scan_complete = false;
                 continue;
             };
+            let identity = crate::safety::object_id_from_metadata(&metadata).unwrap_or_else(|| {
+                manifest.skipped = manifest.skipped.saturating_add(1);
+                manifest.scan_complete = false;
+                "<unknown>".into()
+            });
             let modified = modified_stamp(&metadata).unwrap_or_else(|| {
                 manifest.skipped = manifest.skipped.saturating_add(1);
                 manifest.scan_complete = false;
@@ -120,7 +144,7 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
             manifest.files = manifest.files.saturating_add(1);
             manifest
                 .records
-                .push(format!("F\0{relative}\0{}\0{modified}", metadata.len()));
+                .push(format!("F\0{relative}\0{identity}\0{}\0{modified}", metadata.len()));
         }
     }
 
@@ -215,6 +239,7 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
                 skipped: manifest.skipped,
                 scan_complete: manifest.scan_complete,
                 fingerprint: manifest.fingerprint,
+                object_id: manifest.object_id,
                 age_days: if age == u64::MAX { 0 } else { age },
             })
         })

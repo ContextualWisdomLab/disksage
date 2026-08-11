@@ -41,6 +41,7 @@ export interface DevArtifact {
   skipped: number;
   scan_complete: boolean;
   fingerprint: string;
+  object_id: string;
   age_days: number;
 }
 export interface CleanResult {

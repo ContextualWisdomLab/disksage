@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Debug)]
 pub enum SafetyError {
@@ -114,6 +115,42 @@ pub fn is_protected(path: &Path) -> bool {
         }
     }
     false
+}
+
+/// Stable identity for one filesystem object. Metadata fingerprints describe a tree, while this
+/// identity binds the later trash operation to the exact directory entry observed at review time.
+/// Unix uses the device/inode pair; Windows uses the volume serial and file index. Unsupported
+/// platforms fail closed because a path-only fallback would reintroduce a replacement race.
+pub fn object_id_from_metadata(metadata: &std::fs::Metadata) -> Option<String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        return Some(format!("unix:{}:{}", metadata.dev(), metadata.ino()));
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        return Some(format!(
+            "windows:{}:{}",
+            metadata.volume_serial_number().unwrap_or(0),
+            metadata.file_index()
+        ));
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = metadata;
+        None
+    }
+}
+
+pub fn filesystem_object_id(path: &Path) -> std::io::Result<String> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    object_id_from_metadata(&metadata).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "filesystem object identity is unavailable on this platform",
+        )
+    })
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -271,6 +308,126 @@ pub fn trash_delete(
             Err(SafetyError::Trash(e.to_string()))
         }
     }
+}
+
+static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn create_private_staging_dir(path: &Path, now_ms: u64) -> std::io::Result<PathBuf> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let pid = std::process::id();
+    for _ in 0..32 {
+        let serial = STAGING_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let candidate = parent.join(format!(
+            ".disksage-trash-{}-{}-{}",
+            pid, now_ms, serial
+        ));
+        match std::fs::create_dir(&candidate) {
+            Ok(()) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(
+                        &candidate,
+                        std::fs::Permissions::from_mode(0o700),
+                    )?;
+                }
+                return Ok(candidate);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "could not allocate a private trash staging directory",
+    ))
+}
+
+fn restore_staged_if_source_absent(path: &Path, staged: &Path, staging_dir: &Path) {
+    let source_absent = matches!(
+        std::fs::symlink_metadata(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    );
+    if source_absent {
+        let _ = std::fs::rename(staged, path);
+        let _ = std::fs::remove_dir(staging_dir);
+    }
+}
+
+/// Move the exact reviewed filesystem object into a private sibling staging directory before
+/// handing it to the OS trash. The initial identity check prevents a stale path from being used;
+/// the atomic rename plus a second identity check prevents a replacement that wins the race from
+/// being trashed. If either check fails, the object is restored when the original path is free;
+/// it is never silently deleted under a different identity.
+pub fn trash_delete_if_identity(
+    path: &Path,
+    expected_object_id: &str,
+    bytes: u64,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Result<(), SafetyError> {
+    if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return Err(SafetyError::Protected(path.to_path_buf()));
+    }
+    let guard_path = strip_verbatim(
+        &std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()),
+    );
+    if is_protected(&guard_path) {
+        return Err(SafetyError::Protected(path.to_path_buf()));
+    }
+    let actual = filesystem_object_id(path)
+        .map_err(|error| SafetyError::Trash(format!("object identity unavailable: {error}")))?;
+    if actual != expected_object_id {
+        return Err(SafetyError::Trash(
+            "개발 아티팩트의 파일시스템 객체가 바뀌었습니다. 다시 스캔하세요".into(),
+        ));
+    }
+    let file_name = path.file_name().ok_or_else(|| {
+        SafetyError::Trash("개발 아티팩트의 파일명이 없습니다. 다시 스캔하세요".into())
+    })?;
+    let staging_dir = create_private_staging_dir(path, now_ms)
+        .map_err(|error| SafetyError::Trash(error.to_string()))?;
+    let staged = staging_dir.join(file_name);
+    let mut entry = JournalEntry {
+        ts_ms: now_ms,
+        op: "trash_delete".into(),
+        path: path.to_string_lossy().into_owned(),
+        bytes,
+        outcome: "pending".into(),
+    };
+    if let Err(error) = journal_append(journal_path, &entry) {
+        let _ = std::fs::remove_dir(&staging_dir);
+        return Err(error);
+    }
+
+    let result = (|| -> Result<(), SafetyError> {
+        std::fs::rename(path, &staged)
+            .map_err(|error| SafetyError::Trash(format!("atomic staging move failed: {error}")))?;
+        let moved_id = filesystem_object_id(&staged).map_err(|error| {
+            restore_staged_if_source_absent(path, &staged, &staging_dir);
+            SafetyError::Trash(format!("staged object identity unavailable: {error}"))
+        })?;
+        if moved_id != expected_object_id {
+            restore_staged_if_source_absent(path, &staged, &staging_dir);
+            return Err(SafetyError::Trash(
+                "atomic staging move changed the filesystem object; nothing was trashed".into(),
+            ));
+        }
+        if let Err(error) = trash::delete(&staged) {
+            restore_staged_if_source_absent(path, &staged, &staging_dir);
+            return Err(SafetyError::Trash(error.to_string()));
+        }
+        // The object is already in the OS trash. An empty staging directory is only housekeeping;
+        // failure to remove it must not turn a successful, reversible trash operation into an error.
+        let _ = std::fs::remove_dir(&staging_dir);
+        Ok(())
+    })();
+    entry.outcome = match &result {
+        Ok(()) => "ok".into(),
+        Err(error) => format!("error:{error}"),
+    };
+    journal_append(journal_path, &entry)?;
+    result
 }
 
 /// 두 경로가 같은 볼륨인지 — rename 가능 판정(순수). 목적지는 아직 없을 수 있어 부모로 판정.
@@ -633,6 +790,37 @@ mod tests {
         let err = trash_delete(Path::new(root), 0, &jp, 1);
         assert!(matches!(err, Err(SafetyError::Protected(_))));
         assert!(journal_recent(&jp, 10).is_empty(), "보호 거부는 저널 이전에 일어나야 함");
+    }
+
+    #[test]
+    fn filesystem_object_id_is_available_for_regular_fixture() {
+        let tmp = tempfile::tempdir().unwrap();
+        let victim = tmp.path().join("identity-fixture");
+        std::fs::create_dir(&victim).unwrap();
+        let first = filesystem_object_id(&victim).unwrap();
+        let second = filesystem_object_id(&victim).unwrap();
+        assert!(!first.is_empty());
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn trash_delete_if_identity_rejects_a_replaced_object() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jp = tmp.path().join("j.jsonl");
+        let victim = tmp.path().join("identity-target");
+        let original = tmp.path().join("identity-original");
+        let replacement = tmp.path().join("identity-replacement");
+        std::fs::create_dir(&victim).unwrap();
+        let expected = filesystem_object_id(&victim).unwrap();
+        std::fs::rename(&victim, &original).unwrap();
+        std::fs::create_dir(&replacement).unwrap();
+        std::fs::rename(&replacement, &victim).unwrap();
+
+        let err = trash_delete_if_identity(&victim, &expected, 0, &jp, 1);
+        assert!(err.is_err());
+        assert!(victim.exists(), "대체 객체는 삭제되지 않아야 함");
+        assert!(original.exists(), "검토된 원래 객체도 보존되어야 함");
+        assert!(journal_recent(&jp, 10).is_empty(), "stale identity는 저널/휴지통 전에 거부");
     }
 
     #[test]
