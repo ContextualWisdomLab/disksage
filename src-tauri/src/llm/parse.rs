@@ -1,18 +1,37 @@
 //! 강제-JSON 파싱 — 모델 출력에서 첫 균형 잡힌 {..}를 뽑아 serde. 모든 실패는 fail-closed(Unrated/None).
 use crate::llm::{ExtReasoning, Verdict};
 
-/// 첫 '{'부터 짝이 맞는 '}'까지 슬라이스. 없거나 안 맞으면 None.
-// ponytail: 순진한 중괄호 카운트 — 문자열 값 안의 중괄호는 오분류 가능. 소형 모델 강제 JSON엔 충분.
+/// 첫 '{'부터 문자열 밖에서 짝이 맞는 '}'까지 슬라이스. 없거나 안 맞으면 None.
 fn extract_json(raw: &str) -> Option<&str> {
     let start = raw.find('{')?;
     let bytes = raw.as_bytes();
     let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+
     for i in start..bytes.len() {
-        if bytes[i] == b'{' {
-            depth += 1;
-        } else if bytes[i] == b'}' {
-            depth -= 1;
-            if depth == 0 { return Some(&raw[start..=i]); }
+        let byte = bytes[i];
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match byte {
+            b'"' => in_string = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(&raw[start..=i]);
+                }
+            }
+            _ => {}
         }
     }
     None
@@ -79,6 +98,24 @@ mod tests {
         // 중첩 객체 — 안쪽 {..}가 먼저 닫혀 depth가 0이 아닌 값으로 감소하는 fall-through 경로 커버.
         // extract_json은 바깥 객체 전체를 반환해야 한다.
         assert_eq!(parse_verdict(r#"{"verdict":"safe","meta":{"x":1}}"#), Verdict::Safe);
+    }
+    #[test]
+    fn braces_inside_json_strings_do_not_truncate_valid_model_output() {
+        assert_eq!(
+            parse_verdict_full(r#"{"verdict":"safe","reason":"literal } brace"}"#),
+            (Verdict::Safe, "literal } brace".to_string())
+        );
+        assert_eq!(
+            parse_summary(r#"{"summary":"literal { brace"}"#),
+            Some("literal { brace".to_string())
+        );
+    }
+    #[test]
+    fn escaped_quotes_do_not_change_string_brace_semantics() {
+        assert_eq!(
+            parse_verdict_full(r#"{"verdict":"keep","reason":"quoted \"} token\" remains text"}"#),
+            (Verdict::Keep, "quoted \"} token\" remains text".to_string())
+        );
     }
 
     #[test]
