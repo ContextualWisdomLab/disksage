@@ -46,12 +46,14 @@
     caches
       .filter((c) => selectedRules.has(c.id) && c.skipped === 0 && c.scan_complete)
       .reduce((s, c) => s + c.bytes, 0) +
-      artifacts.filter((a) => selected.has(a.path)).reduce((s, a) => s + a.bytes, 0),
+      artifacts
+        .filter((a) => selected.has(a.path) && a.scan_complete && a.skipped === 0)
+        .reduce((s, a) => s + a.bytes, 0),
   );
 
   let selectionCount = $derived(
     caches.filter((c) => selectedRules.has(c.id) && c.exists && c.skipped === 0 && c.scan_complete).length +
-      artifacts.filter((a) => selected.has(a.path)).length,
+      artifacts.filter((a) => selected.has(a.path) && a.scan_complete && a.skipped === 0).length,
   );
 
   async function executeClean() {
@@ -59,13 +61,17 @@
     const ruleDirs = caches.filter(
       (c) => selectedRules.has(c.id) && c.exists && c.skipped === 0 && c.scan_complete,
     );
-    const artifactPaths = artifacts.filter((a) => selected.has(a.path)).map((a) => a.path);
+    const selectedArtifacts = artifacts.filter(
+      (a) => selected.has(a.path) && a.scan_complete && a.skipped === 0,
+    );
     const summary = [
       ...ruleDirs.map(
         (c) =>
           `${c.label} (${fmtBytes(c.bytes)}, ${c.files}개) — 내용물 비우기 · 지문 ${c.fingerprint.slice(0, 12)}`,
       ),
-      ...artifactPaths,
+      ...selectedArtifacts.map(
+        (a) => `${a.path} (${fmtBytes(a.bytes)}, ${a.files}개) — 메타데이터 지문 ${a.fingerprint.slice(0, 12)}`,
+      ),
     ];
     if (summary.length === 0) return;
     const okay = await confirm(
@@ -94,7 +100,9 @@
             })),
           )
         : [];
-      const artifactResults = artifactPaths.length ? await api.cleanPaths(artifactPaths) : [];
+      const artifactResults = selectedArtifacts.length && scannedRoot
+        ? await api.cleanDevArtifacts(scannedRoot, 30, selectedArtifacts)
+        : [];
       results = [...cacheResults, ...artifactResults];
       selected = new Set();
       selectedRules = new Set();
@@ -144,15 +152,21 @@
   <ul class="list">
     {#each artifacts as a (a.path)}
       <li>
-        <label>
-          <input
-            type="checkbox"
-            disabled={busy}
+          <label class:disabled={!a.scan_complete || a.skipped > 0}>
+            <input
+              type="checkbox"
+              disabled={busy || !a.scan_complete || a.skipped > 0}
             checked={selected.has(a.path)}
             onchange={() => (selected = toggle(selected, a.path))}
           />
           {a.kind} <em>({a.project}, {a.age_days}일)</em>
-          <span class="size">{fmtBytes(a.bytes)}</span>
+          <span class="size">
+            {!a.scan_complete
+              ? `${fmtBytes(a.bytes)} · 메타데이터 스캔 미완료`
+              : a.skipped > 0
+                ? `${fmtBytes(a.bytes)} · 읽기 오류 ${a.skipped}`
+                : fmtBytes(a.bytes)}
+          </span>
           {#if verdicts[a.path]}
             {@const b = verdictBadge(verdicts[a.path])}
             <span class={b.cls} title={b.title}>{b.label}</span>

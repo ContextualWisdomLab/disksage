@@ -26,10 +26,14 @@ verified metadata or silently treated as safe to evict.
 Cache cleanup planning is bounded too: the metadata manifest has a 2-second and 100,000-record
 budget per catalog entry. A partial manifest is returned with `scan_complete=false` and
 `metadata-manifest-bounded`; it is display-only and cannot be submitted to the trash-delete gate.
+Developer-artifact cleanup uses the same fail-closed rule: each `node_modules`, `target`, `venv`,
+or `__pycache__` candidate carries a bounded metadata fingerprint, byte/file counts, and scan
+status. The Rust command re-scans the selected root immediately before trashing; a changed,
+recreated, or incomplete candidate is rejected and must be refreshed.
 
 ## Safety first
 
-Every destructive action goes through explicit review and the OS trash — DiskSage has **no permanent-delete code path**. Cache cleanup is bound to the exact candidate path, byte count, file count, and metadata fingerprint observed at review time; a changed or incomplete scan is rejected and must be refreshed. Cloud archiving currently exposes copy and evidence only: even a successful provider attestation returns a local-eviction permit without deleting the source. All destructive operations are journaled and undoable.
+Every destructive action goes through explicit review and the OS trash — DiskSage has **no permanent-delete code path**. Cache and developer-artifact cleanup are bound to the exact candidate path, byte/file counts, age, and metadata fingerprint observed at review time; a changed or incomplete scan is rejected and must be refreshed. Cloud archiving currently exposes copy and evidence only: even a successful provider attestation returns a local-eviction permit without deleting the source. All destructive operations are journaled and undoable.
 
 For a headless, read-only cache inventory, run `cargo run --locked --features cleanup-cli --bin disksage-clean-plan` (add `--id trivy-cache`, `--id pnpm-cache`, or `--id uv-cache` to inspect one candidate). The command prints the current metadata fingerprint; it never deletes files.
 

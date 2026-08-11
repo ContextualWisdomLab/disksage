@@ -50,6 +50,10 @@ export interface DevArtifact {
   kind: string;
   project: string;
   bytes: number;
+  files: number;
+  skipped: number;
+  scan_complete: boolean;
+  fingerprint: string;
   age_days: number;
 }
 export interface WorktreeCandidate {
@@ -98,6 +102,8 @@ export const listDevArtifacts = (root: string, minAgeDays = 30) =>
 export const listStaleWorktrees = (repository: string) =>
   invoke<WorktreeAudit>("list_stale_worktrees", { repository });
 export const cleanPaths = (paths: string[]) => invoke<CleanResult[]>("clean_paths", { paths });
+export const cleanDevArtifacts = (root: string, minAgeDays: number, artifacts: DevArtifact[]) =>
+  invoke<CleanResult[]>("clean_dev_artifacts", { root, minAgeDays, artifacts });
 export const cleanCacheCandidates = (requests: CacheCleanupRequest[]) =>
   invoke<CleanResult[]>("clean_cache_candidates", { requests });
 export const expandCleanTargets = (dir: string) =>
