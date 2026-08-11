@@ -4,7 +4,7 @@
 //! enriched Maven repository state remains held instead of becoming deletion authority.
 
 use disksage_lib::maven_cache::{
-    audit_maven_repository, MavenCacheAuditOptions, MavenCacheAuditReport,
+    audit_maven_repository, prune_maven_repository, MavenCacheAuditOptions, MavenCacheAuditReport,
 };
 use std::path::Path;
 
@@ -235,4 +235,30 @@ fn remote_support_sidecars_do_not_become_untracked_payloads() {
     assert_eq!(report.held_directories, 0);
     assert_eq!(report.candidates.len(), 1);
     assert_eq!(report.candidates[0].artifact_files, 2);
+}
+
+#[test]
+fn prune_validation_rejects_uppercase_fingerprints_and_zero_entry_budgets() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("repository");
+    let version = version_dir(&root, "org/example/prune/1.0.0");
+    write_remote_pair(&version, "prune-1.0.0");
+    let report = audit(&root);
+    let uppercase = report.candidate_set_fingerprint.to_ascii_uppercase();
+
+    assert_eq!(
+        prune_maven_repository(&root, &uppercase, false, 10_000, 2).unwrap_err(),
+        "maven-cache-prune-expected-fingerprint-invalid"
+    );
+    assert_eq!(
+        prune_maven_repository(
+            &root,
+            &report.candidate_set_fingerprint,
+            false,
+            0,
+            2,
+        )
+        .unwrap_err(),
+        "maven-cache-prune-max-entries-invalid"
+    );
 }
