@@ -1,5 +1,6 @@
 <script lang="ts">
   import * as api from "./api";
+  import { invoke } from "@tauri-apps/api/core";
   import { fmtBytes } from "./fmt";
   import { verdictBadge } from "./verdictBadge";
   import { confirm } from "@tauri-apps/plugin-dialog";
@@ -16,6 +17,9 @@
   let loadError = $state("");
   // ponytail: 배지는 개별 파일/디렉토리 후보(artifacts)에만 표시 — caches는 소수의 고정 규칙 카테고리라 LLM 판정 가치가 낮음.
   let verdicts: Record<string, api.Verdict> = $state({});
+
+  const cleanCacheContents = (dir: string) =>
+    invoke<api.CleanResult[]>("clean_cache_contents", { dir });
 
   async function loadVerdicts(paths: string[]) {
     try {
@@ -73,11 +77,12 @@
 
     busy = true;
     try {
-      const paths: string[] = [...artifactPaths];
+      const cacheResults: api.CleanResult[] = [];
       for (const c of ruleDirs) {
-        paths.push(...(await api.expandCleanTargets(c.path)));
+        cacheResults.push(...(await cleanCacheContents(c.path)));
       }
-      results = await api.cleanPaths(paths);
+      const artifactResults = artifactPaths.length > 0 ? await api.cleanPaths(artifactPaths) : [];
+      results = [...cacheResults, ...artifactResults];
       selected = new Set();
       selectedRules = new Set();
       await load();
