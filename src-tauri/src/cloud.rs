@@ -1795,6 +1795,13 @@ fn exiftool_metadata(path: &Path) -> ContentMetadata {
 }
 
 #[cfg(not(coverage))]
+fn exiftool_batch_failure_metadata(failure: MetadataProbeFailure) -> ContentMetadata {
+    let mut metadata = ContentMetadata::default();
+    add_probe_warning(&mut metadata, "exiftool-batch", failure);
+    metadata
+}
+
+#[cfg(not(coverage))]
 fn exiftool_metadata_batch(paths: &[PathBuf]) -> BTreeMap<PathBuf, ContentMetadata> {
     let mut by_path = BTreeMap::new();
     for chunk in paths.chunks(EXIFTOOL_BATCH_SIZE) {
@@ -1810,15 +1817,22 @@ fn exiftool_metadata_batch(paths: &[PathBuf]) -> BTreeMap<PathBuf, ContentMetada
         match batch {
             Ok(mut parsed) => {
                 for path in chunk {
-                    let metadata = parsed
-                        .remove(path)
-                        .unwrap_or_else(|| exiftool_metadata(path));
+                    let metadata = parsed.remove(path).unwrap_or_else(|| {
+                        // A successful batch that omits a requested source is incomplete.
+                        // Do not fall back to one unbounded subprocess per file; retain an
+                        // explicit warning so the planner can block or review the candidate.
+                        exiftool_batch_failure_metadata(MetadataProbeFailure::InvalidOutput)
+                    });
                     by_path.insert(path.clone(), metadata);
                 }
             }
-            Err(_) => {
+            Err(failure) => {
+                // Retrying every path individually after a batch timeout turned one bounded
+                // probe into minutes of serial work on a real Downloads corpus. Preserve the
+                // metadata gap as evidence and let format-specific probes (ffprobe, zip, PDF,
+                // and so on) continue without hiding the batch failure.
                 for path in chunk {
-                    by_path.insert(path.clone(), exiftool_metadata(path));
+                    by_path.insert(path.clone(), exiftool_batch_failure_metadata(failure));
                 }
             }
         }
@@ -4649,6 +4663,18 @@ mod tests {
             .evidence
             .iter()
             .any(|evidence| evidence.value == "exiftool:invalid-output"));
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn exiftool_batch_failure_is_retained_as_metadata_evidence() {
+        let metadata = exiftool_batch_failure_metadata(MetadataProbeFailure::Timeout);
+        assert!(metadata.production_time_ms.is_none());
+        assert!(metadata.evidence.iter().any(|evidence| {
+            evidence.field == "metadata-probe-warning"
+                && evidence.value == "exiftool-batch:timeout"
+                && evidence.confidence == "high"
+        }));
     }
 
     #[cfg(all(not(coverage), unix))]
