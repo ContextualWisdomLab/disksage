@@ -7,10 +7,19 @@ use disksage_lib::cloud_eviction::{
 };
 use disksage_lib::cloud_local_eviction::ActiveUseEvidence;
 use disksage_lib::cloud_transfer::{
-    approve_local_eviction, prepare_cloud_copy, ProviderSyncEvidence, SyncEvidenceKind,
+    approve_local_eviction, cloud_copy_approval_phrase, create_cloud_copy_approval,
+    prepare_cloud_copy_with_approval, CloudCopyApprovalAction, ProviderSyncEvidence,
+    SyncEvidenceKind,
 };
 use disksage_lib::provider_evidence::create_sync_evidence_record;
 use std::path::Path;
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+}
 
 fn valid_receipt(
     temp: &tempfile::TempDir,
@@ -79,14 +88,28 @@ fn valid_receipt(
         readable: true,
         access_issue: None,
     };
-    let (receipt, _) = prepare_cloud_copy(&candidate, &root, &receipt_dir, 100).unwrap();
+    let approval_time = now_ms();
+    let action = CloudCopyApprovalAction::CopyOnly;
+    let copy_approval = create_cloud_copy_approval(
+        &candidate,
+        &root,
+        action,
+        approval_time,
+        "human:local:test",
+        "authorize exact test cloud copy",
+        &cloud_copy_approval_phrase(&candidate, action),
+    )
+    .unwrap();
+    let (receipt, _) =
+        prepare_cloud_copy_with_approval(&candidate, &root, &receipt_dir, None, &copy_approval)
+            .unwrap();
     let evidence = ProviderSyncEvidence {
         receipt_id: receipt.receipt_id.clone(),
         provider: receipt.provider,
         destination: receipt.destination.clone(),
         observed_bytes: receipt.bytes,
         destination_blake3: receipt.blake3.clone(),
-        confirmed_at_ms: 101,
+        confirmed_at_ms: receipt.copied_at_ms + 1,
         kind: SyncEvidenceKind::ProviderNativeStatus,
         evidence_id: "native-test-evidence".into(),
         sync_complete: true,
@@ -108,20 +131,29 @@ fn idle_active_use() -> ActiveUseEvidence {
     }
 }
 
+fn staging_dir(receipt: &disksage_lib::cloud_transfer::CloudCopyReceipt) -> std::path::PathBuf {
+    Path::new(&receipt.source)
+        .parent()
+        .unwrap()
+        .join(format!(".disksage-evict-{}", receipt.receipt_id))
+}
+
 #[test]
 fn production_cloud_eviction_fails_closed_without_identity_bound_recycle() {
     let temp = tempfile::tempdir().unwrap();
     let (receipt, permit) = valid_receipt(&temp);
     let source = Path::new(&receipt.source);
     let original = std::fs::read(source).unwrap();
+    let observed_at_ms = permit.approved_at_ms + 1;
+    let approved_at_ms = observed_at_ms + 1;
     let approval = create_source_eviction_approval(
         &receipt,
         &permit,
         &receipt.receipt_id,
-        160,
+        approved_at_ms,
         "human:local:test",
         "verified cloud copy; move only this source to Trash",
-        150,
+        observed_at_ms,
         idle_active_use(),
     )
     .unwrap();
@@ -133,13 +165,14 @@ fn production_cloud_eviction_fails_closed_without_identity_bound_recycle() {
         &receipt.receipt_id,
         &temp.path().join("evictions"),
         &temp.path().join("journal/operations.jsonl"),
-        200,
+        approved_at_ms + 1,
     )
     .unwrap_err();
 
     assert_eq!(error, "source-eviction-identity-bound-recycle-unavailable");
     assert!(source.exists());
     assert_eq!(std::fs::read(source).unwrap(), original);
+    assert!(!staging_dir(&receipt).exists());
     assert!(!temp.path().join("evictions").exists());
     assert!(!temp.path().join("journal").exists());
 }
@@ -150,14 +183,16 @@ fn invalid_confirmation_is_rejected_before_capability_gate_without_mutation() {
     let (receipt, permit) = valid_receipt(&temp);
     let source = Path::new(&receipt.source);
     let original = std::fs::read(source).unwrap();
+    let observed_at_ms = permit.approved_at_ms + 1;
+    let approved_at_ms = observed_at_ms + 1;
     let approval = create_source_eviction_approval(
         &receipt,
         &permit,
         &receipt.receipt_id,
-        160,
+        approved_at_ms,
         "human:local:test",
         "verified cloud copy; move only this source to Trash",
-        150,
+        observed_at_ms,
         idle_active_use(),
     )
     .unwrap();
@@ -169,13 +204,14 @@ fn invalid_confirmation_is_rejected_before_capability_gate_without_mutation() {
         &"0".repeat(64),
         &temp.path().join("evictions"),
         &temp.path().join("journal/operations.jsonl"),
-        200,
+        approved_at_ms + 1,
     )
     .unwrap_err();
 
     assert_eq!(error, "eviction-confirmation-receipt-id-mismatch");
     assert!(source.exists());
     assert_eq!(std::fs::read(source).unwrap(), original);
+    assert!(!staging_dir(&receipt).exists());
     assert!(!temp.path().join("evictions").exists());
     assert!(!temp.path().join("journal").exists());
 }
