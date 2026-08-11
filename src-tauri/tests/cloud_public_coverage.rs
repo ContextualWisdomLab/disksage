@@ -5,8 +5,8 @@
 
 use disksage_lib::cloud::{
     cloud_root_path_matches, discover_cloud_roots, discover_cloud_roots_report,
-    validate_cloud_root_readable, validate_source_root_readable, CloudAccountScope, CloudProvider,
-    CloudRoot,
+    prepare_cloud_archive_source, validate_cloud_root_readable, validate_source_root_readable,
+    CloudAccountScope, CloudPlanOptions, CloudProvider, CloudRoot, ContentMetadata, FileFact,
 };
 use unicode_normalization::UnicodeNormalization;
 
@@ -100,6 +100,49 @@ fn provider_and_scope_wire_values_remain_stable() {
     assert_eq!(CloudAccountScope::Organization.as_str(), "organization");
     assert_eq!(CloudAccountScope::Shared.as_str(), "shared");
     assert_eq!(CloudAccountScope::Unknown.as_str(), "unknown");
+}
+
+#[test]
+fn source_snapshot_applies_selection_policy_and_reports_totals() {
+    const DAY_MS: u64 = 24 * 60 * 60 * 1_000;
+
+    let temp = tempfile::tempdir().unwrap();
+    let source_root = temp.path().join("source");
+    std::fs::create_dir(&source_root).unwrap();
+    let now_ms = 10 * DAY_MS;
+    let prepared_metadata = ContentMetadata {
+        title: Some("coverage fixture".into()),
+        ..ContentMetadata::default()
+    };
+    let file = |path: std::path::PathBuf, bytes: u64, modified_ms: u64| FileFact {
+        path,
+        bytes,
+        created_ms: modified_ms,
+        modified_ms,
+        content_metadata: prepared_metadata.clone(),
+    };
+    let files = vec![
+        file(source_root.join("eligible.pdf"), 20, now_ms - 3 * DAY_MS),
+        file(source_root.join("too-small.pdf"), 9, now_ms - 3 * DAY_MS),
+        file(source_root.join("too-young.pdf"), 20, now_ms - DAY_MS),
+        file(source_root.join("missing-date.pdf"), 20, 0),
+        file(source_root.join("unsupported.rs"), 20, now_ms - 3 * DAY_MS),
+        file(temp.path().join("outside.pdf"), 20, now_ms - 3 * DAY_MS),
+    ];
+    let options = CloudPlanOptions {
+        min_size_bytes: 10,
+        min_age_days: 2,
+        limit: 7,
+    };
+
+    let snapshot = prepare_cloud_archive_source(&files, &source_root, now_ms, options);
+    assert_eq!(snapshot.candidate_count(), 1);
+    assert_eq!(snapshot.candidate_bytes(), 20);
+
+    let defaults = CloudPlanOptions::default();
+    assert_eq!(defaults.min_size_bytes, 256 * 1024 * 1024);
+    assert_eq!(defaults.min_age_days, 90);
+    assert_eq!(defaults.limit, 200);
 }
 
 #[test]
