@@ -23,6 +23,7 @@ pub fn serialize_settings(s: &Settings) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn default_is_offline() {
@@ -43,5 +44,33 @@ mod tests {
     #[test]
     fn parse_explicit_true() {
         assert!(parse_settings(r#"{"online_mode":true}"#).online_mode);
+    }
+
+    #[test]
+    fn persist_settings_roundtrips_via_regular_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("settings.json");
+        let expected = Settings { online_mode: true };
+
+        persist_settings(&path, &expected).unwrap();
+
+        let encoded = fs::read_to_string(path).unwrap();
+        assert_eq!(parse_settings(&encoded), expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persist_settings_replaces_symlink_entry_without_touching_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("do-not-overwrite.txt");
+        let settings_path = tmp.path().join("settings.json");
+        fs::write(&target, b"sentinel").unwrap();
+        std::os::unix::fs::symlink(&target, &settings_path).unwrap();
+
+        persist_settings(&settings_path, &Settings { online_mode: true }).unwrap();
+
+        assert_eq!(fs::read_to_string(&target).unwrap(), "sentinel");
+        assert!(!fs::symlink_metadata(&settings_path).unwrap().file_type().is_symlink());
+        assert!(parse_settings(&fs::read_to_string(settings_path).unwrap()).online_mode);
     }
 }
