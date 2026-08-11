@@ -115,9 +115,26 @@ fn open_directory_handle(path: &Path) -> Option<Handle> {
     Handle::from_file(file).ok()
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+const NOFOLLOW_DIRECTORY_FLAGS: i32 = 0o600000; // O_DIRECTORY | O_NOFOLLOW
+#[cfg(target_os = "macos")]
+const NOFOLLOW_DIRECTORY_FLAGS: i32 = 0x0010_0100; // O_DIRECTORY | O_NOFOLLOW
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn open_directory_handle(path: &Path) -> Option<Handle> {
-    Handle::from_path(path).ok()
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(NOFOLLOW_DIRECTORY_FLAGS)
+        .open(path)
+        .ok()?;
+    Handle::from_file(file).ok()
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn open_directory_handle(_path: &Path) -> Option<Handle> {
+    None
 }
 
 #[cfg(target_os = "linux")]
@@ -378,6 +395,18 @@ mod tests {
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names, vec!["real.bin"]);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn unix_directory_handle_open_rejects_symlink() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        let linked = tmp.path().join("linked");
+        fs::create_dir(&real).unwrap();
+        std::os::unix::fs::symlink(&real, &linked).unwrap();
+
+        assert!(open_directory_handle(&linked).is_none());
     }
 
     #[cfg(unix)]
