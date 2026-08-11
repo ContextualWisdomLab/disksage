@@ -4,6 +4,8 @@ mod dupes;
 #[cfg_attr(coverage, allow(dead_code))]
 mod commands;
 #[cfg_attr(coverage, allow(dead_code))]
+mod cache_cleanup;
+#[cfg_attr(coverage, allow(dead_code))]
 mod scanner;
 #[cfg_attr(coverage, allow(dead_code))]
 mod userrules;
@@ -88,6 +90,7 @@ pub fn run() {
             commands::list_cache_candidates,
             commands::list_dev_artifacts,
             commands::clean_paths,
+            cache_cleanup::clean_cache_contents,
             commands::recent_operations,
             commands::expand_clean_targets,
             commands::find_duplicate_files,
