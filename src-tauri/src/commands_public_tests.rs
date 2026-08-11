@@ -1,8 +1,9 @@
 //! Deterministic coverage for command-layer pure cores without exposing them as public crate APIs.
 
 use crate::commands::{
-    clean_paths_inner, execute_moves_inner, list_roots, load_ontology_from, node_view,
-    parse_move_entry, undo_last_moves_inner, AppState, CleanResult, EntryView, NodeView,
+    clean_dev_artifacts_inner, clean_paths_inner, execute_moves_inner, list_roots,
+    load_ontology_from, node_view, parse_move_entry, undo_last_moves_inner, AppState, CleanResult,
+    EntryView, NodeView,
 };
 use crate::organize::MovePlan;
 use crate::scanner::{ScanResult, ScanStats};
@@ -150,6 +151,52 @@ fn clean_paths_fail_closed_before_mutation_when_journaling_is_unavailable() {
         assert!(!protected[0].ok);
         assert!(!protected[0].error.is_empty());
     }
+}
+
+#[test]
+fn developer_artifact_cleanup_rejects_stale_manifest_and_preserves_current_object_on_journal_failure() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("app");
+    let target = project.join("target");
+    fs::create_dir_all(&target).unwrap();
+    fs::write(project.join("Cargo.toml"), b"[package]\nname = \"coverage-fixture\"\n").unwrap();
+    fs::write(target.join("artifact.bin"), b"preserve-me").unwrap();
+
+    let mut requests = crate::dev_artifacts::find_artifacts(temp.path(), 0, u64::MAX);
+    assert_eq!(requests.len(), 1);
+    let current = requests.pop().unwrap();
+    assert!(current.scan_complete);
+    assert!(!current.object_id.is_empty());
+
+    let mut stale = current.clone();
+    stale.fingerprint.push('0');
+    let stale_result = clean_dev_artifacts_inner(
+        &[stale],
+        temp.path(),
+        0,
+        &temp.path().join("missing-journal-parent").join("operations.jsonl"),
+        u64::MAX,
+    );
+    assert_eq!(stale_result.len(), 1);
+    assert!(!stale_result[0].ok);
+    assert!(stale_result[0].error.contains("다시 스캔"));
+    assert!(target.exists());
+
+    // A current manifest reaches the identity-bound recycle authority. Pointing its audit journal
+    // at a nonexistent parent makes journaling fail before the staged object can be renamed, so
+    // the fixture proves the matching/error arm without relying on the host trash provider.
+    let current_result = clean_dev_artifacts_inner(
+        &[current],
+        temp.path(),
+        0,
+        &temp.path().join("missing-journal-parent").join("operations.jsonl"),
+        u64::MAX,
+    );
+    assert_eq!(current_result.len(), 1);
+    assert!(!current_result[0].ok);
+    assert!(!current_result[0].error.is_empty());
+    assert!(target.exists());
+    assert_eq!(fs::read(target.join("artifact.bin")).unwrap(), b"preserve-me");
 }
 
 #[test]
