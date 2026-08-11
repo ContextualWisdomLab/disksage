@@ -50,6 +50,10 @@ const MAX_INCOMPLETE_DOWNLOAD_EOCD_OFFSETS: usize = 64;
 const MAX_EMAIL_HEADER_BYTES: usize = 1024 * 1024;
 #[cfg(not(coverage))]
 const MAX_AUDACITY_SCHEMA_PROBE_BYTES: usize = 64 * 1024;
+#[cfg(all(not(coverage), target_os = "macos"))]
+const DIRECTORY_READ_TIMEOUT: Duration = Duration::from_secs(3);
+#[cfg(all(not(coverage), target_os = "macos"))]
+const DIRECTORY_READ_OUTPUT_LIMIT: u64 = 256 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -318,6 +322,16 @@ pub fn validate_cloud_root_readable(root: &CloudRoot) -> Result<(), String> {
             root.access_issue.as_deref().unwrap_or("not-verified")
         ));
     }
+
+    #[cfg(all(not(coverage), target_os = "macos"))]
+    {
+        if let Some(reason) = directory_access_issue(Path::new(&root.path)) {
+            return Err(format!("cloud-root-unreadable:{}:{reason}", root.path));
+        }
+        return Ok(());
+    }
+
+    #[cfg(any(coverage, not(target_os = "macos")))]
     std::fs::read_dir(&root.path)
         .map(|_| ())
         .map_err(|error| format!("cloud-root-unreadable:{}:{error}", root.path))
@@ -358,24 +372,134 @@ fn access_issue_for_error(error: &std::io::Error) -> String {
 
 #[cfg(not(coverage))]
 fn directory_access_issue(path: &Path) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        return run_bounded_find(
+            path,
+            &["-mindepth", "1", "-maxdepth", "1", "-print0", "-quit"],
+        )
+        .err();
+    }
+
+    #[cfg(not(target_os = "macos"))]
     std::fs::read_dir(path)
         .err()
         .map(|error| access_issue_for_error(&error))
 }
 
+#[cfg(all(not(coverage), target_os = "macos"))]
+fn run_bounded_find(path: &Path, action: &[&str]) -> Result<Vec<u8>, String> {
+    let metadata = std::fs::metadata(path).map_err(|error| access_issue_for_error(&error))?;
+    if !metadata.is_dir() {
+        return Err("not-a-directory".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mode = metadata.permissions().mode();
+        if mode & 0o444 == 0 || mode & 0o111 == 0 {
+            return Err("permission-denied".into());
+        }
+    }
+
+    let find = Path::new("/usr/bin/find");
+    let find_metadata =
+        std::fs::symlink_metadata(find).map_err(|_| "read-dir-helper-unavailable".to_string())?;
+    if !find_metadata.file_type().is_file() {
+        return Err("read-dir-helper-unavailable".into());
+    }
+
+    let mut child = Command::new(find)
+        .arg(path)
+        .args(action)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| "read-dir-helper-failed".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "read-dir-helper-failed".to_string())?;
+    let reader = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        stdout
+            .take(DIRECTORY_READ_OUTPUT_LIMIT + 1)
+            .read_to_end(&mut output)
+            .map(|_| output)
+    });
+
+    let deadline = Instant::now() + DIRECTORY_READ_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = reader.join();
+                return Err("read-dir-timeout".into());
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = reader.join();
+                return Err("read-dir-helper-failed".into());
+            }
+        }
+    };
+    let output = reader
+        .join()
+        .map_err(|_| "read-dir-helper-failed".to_string())?
+        .map_err(|_| "read-dir-helper-failed".to_string())?;
+    if output.len() as u64 > DIRECTORY_READ_OUTPUT_LIMIT {
+        return Err("read-dir-output-too-large".into());
+    }
+    if !status.success() {
+        return Err("read-dir-failed".into());
+    }
+    Ok(output)
+}
+
 #[cfg(not(coverage))]
 fn read_children_sorted(path: &Path, limit: usize) -> Result<Vec<PathBuf>, String> {
-    let entries = std::fs::read_dir(path).map_err(|error| access_issue_for_error(&error))?;
-    let mut children = Vec::new();
-    for entry in entries.take(limit) {
-        children.push(
-            entry
-                .map_err(|error| access_issue_for_error(&error))?
-                .path(),
-        );
+    #[cfg(target_os = "macos")]
+    {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let output = run_bounded_find(path, &["-mindepth", "1", "-maxdepth", "1", "-print0"])?;
+        let mut children = Vec::new();
+        for raw in output
+            .split(|byte| *byte == 0)
+            .filter(|raw| !raw.is_empty())
+        {
+            if children.len() >= limit {
+                break;
+            }
+            children.push(PathBuf::from(OsString::from_vec(raw.to_vec())));
+        }
+        children.sort();
+        return Ok(children);
     }
-    children.sort();
-    Ok(children)
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let entries = std::fs::read_dir(path).map_err(|error| access_issue_for_error(&error))?;
+        let mut children = Vec::new();
+        for entry in entries.take(limit) {
+            children.push(
+                entry
+                    .map_err(|error| access_issue_for_error(&error))?
+                    .path(),
+            );
+        }
+        children.sort();
+        Ok(children)
+    }
 }
 
 #[cfg(not(coverage))]

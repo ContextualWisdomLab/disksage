@@ -22,6 +22,10 @@ const CP_PATH: &str = "/bin/cp";
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const SNAPSHOT_COPY_TIMEOUT: Duration = Duration::from_secs(5);
 const SNAPSHOT_ATTEMPTS: usize = 3;
+// CloudDocs' managed SQLite database can grow to many GiB. Never clone a database larger than
+// this bounded amount during a read-only health probe: the immutable fallback below is slower and
+// less complete, but it cannot unexpectedly consume the user's remaining disk while planning.
+const MAX_SNAPSHOT_SOURCE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_STDOUT_BYTES: usize = 16 * 1024;
 const MAX_STDERR_BYTES: usize = 4 * 1024;
 const ITEM_ERROR_AGE_NOTICE_MS: u64 = 86_400_000;
@@ -406,7 +410,19 @@ fn clone_client_database_snapshot(db_dir: &Path) -> Result<ClientDatabaseSnapsho
     let source_wal = db_dir.join("client.db-wal");
     for _ in 0..SNAPSHOT_ATTEMPTS {
         let before_db = source_file_identity(&source_db, true)?;
+        if before_db
+            .as_ref()
+            .is_some_and(|identity| identity.logical_bytes > MAX_SNAPSHOT_SOURCE_BYTES)
+        {
+            return Err("icloud-sync-health-snapshot-source-too-large".into());
+        }
         let before_wal = source_file_identity(&source_wal, false)?;
+        if before_wal
+            .as_ref()
+            .is_some_and(|identity| identity.logical_bytes > MAX_SNAPSHOT_SOURCE_BYTES)
+        {
+            return Err("icloud-sync-health-snapshot-source-too-large".into());
+        }
         let directory = create_temporary_snapshot_directory()?;
         let client_db = directory.path.join("client.db");
         clone_snapshot_file(&source_db, &client_db)?;
@@ -880,6 +896,22 @@ mod tests {
             default_cloud_docs_db_dir(Path::new("/home/test")),
             PathBuf::from("/home/test/Library/Application Support/CloudDocs/session/db")
         );
+    }
+
+    #[test]
+    fn oversized_cloud_docs_database_fails_closed_before_snapshot_copy() {
+        let source = tempfile::tempdir().unwrap();
+        let client_db = source.path().join("client.db");
+        fs::File::create(&client_db)
+            .unwrap()
+            .set_len(MAX_SNAPSHOT_SOURCE_BYTES + 1)
+            .unwrap();
+
+        let error = match clone_client_database_snapshot(source.path()) {
+            Ok(_) => panic!("oversized database must not be snapshotted"),
+            Err(error) => error,
+        };
+        assert_eq!(error, "icloud-sync-health-snapshot-source-too-large");
     }
 
     #[cfg(target_os = "macos")]
