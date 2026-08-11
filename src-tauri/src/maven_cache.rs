@@ -542,18 +542,6 @@ fn valid_candidate_set_fingerprint(value: &str) -> bool {
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
-fn candidate_path(root: &Path, relative: &str) -> Result<PathBuf, String> {
-    let relative = Path::new(relative);
-    if relative.components().next().is_none()
-        || relative
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_)))
-    {
-        return Err("maven-cache-prune-relative-path-invalid".into());
-    }
-    Ok(root.join(relative))
-}
-
 pub fn prune_maven_repository(
     root: &Path,
     expected_candidate_set_fingerprint: &str,
@@ -583,70 +571,26 @@ pub fn prune_maven_repository(
     if audit.candidate_set_fingerprint != expected_candidate_set_fingerprint {
         return Err("maven-cache-prune-candidate-set-mismatch".into());
     }
+    if apply {
+        return Err("maven-cache-prune-identity-bound-recycle-unavailable".into());
+    }
 
-    let candidate_directories = audit.remote_recoverable_directories;
-    let candidate_bytes = audit.remote_recoverable_bytes;
-    let mut report = MavenCachePruneReport {
+    Ok(MavenCachePruneReport {
         schema_kind: "disksage.maven-cache-prune/v1".into(),
-        repository_root: audit.repository_root.clone(),
+        repository_root: audit.repository_root,
         generated_at_ms,
         expected_candidate_set_fingerprint: expected_candidate_set_fingerprint.into(),
         observed_candidate_set_fingerprint: audit.candidate_set_fingerprint,
-        candidate_directories,
-        candidate_bytes,
+        candidate_directories: audit.remote_recoverable_directories,
+        candidate_bytes: audit.remote_recoverable_bytes,
         removed_directories: 0,
         removed_bytes: 0,
         skipped_directories: 0,
         skip_reason_counts: BTreeMap::new(),
-        apply_requested: apply,
+        apply_requested: false,
         filesystem_mutation_executed: false,
-        complete: !apply,
-    };
-    if !apply {
-        return Ok(report);
-    }
-
-    let canonical_root =
-        fs::canonicalize(root).map_err(|_| "maven-cache-prune-root-unavailable".to_string())?;
-    if canonical_root.to_string_lossy() != audit.repository_root {
-        return Err("maven-cache-prune-root-changed".into());
-    }
-
-    for candidate in audit.candidates {
-        let path = candidate_path(&canonical_root, &candidate.relative_path)?;
-        let current = audit_marker_directory(&canonical_root, &path).candidate;
-        let unchanged = current.as_ref().is_some_and(|value| {
-            value.relative_path == candidate.relative_path
-                && value.bytes == candidate.bytes
-                && value.candidate_fingerprint == candidate.candidate_fingerprint
-        });
-        if !unchanged {
-            report.skipped_directories = report.skipped_directories.saturating_add(1);
-            *report
-                .skip_reason_counts
-                .entry("candidate-changed-before-remove".into())
-                .or_insert(0) += 1;
-            continue;
-        }
-        match fs::remove_dir_all(&path) {
-            Ok(()) => {
-                report.removed_directories = report.removed_directories.saturating_add(1);
-                report.removed_bytes = report.removed_bytes.saturating_add(candidate.bytes);
-                report.filesystem_mutation_executed = true;
-            }
-            Err(_) => {
-                report.skipped_directories = report.skipped_directories.saturating_add(1);
-                *report
-                    .skip_reason_counts
-                    .entry("candidate-remove-failed".into())
-                    .or_insert(0) += 1;
-            }
-        }
-    }
-    report.complete = report.removed_directories == candidate_directories
-        && report.removed_bytes == candidate_bytes
-        && report.skipped_directories == 0;
-    Ok(report)
+        complete: true,
+    })
 }
 
 #[cfg(test)]
@@ -823,7 +767,7 @@ mod tests {
     }
 
     #[test]
-    fn prune_apply_removes_only_revalidated_remote_candidates() {
+    fn prune_apply_fails_closed_without_identity_bound_recycle() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("repository");
         let remote = version_dir(&root, "org/example/remote/1.0.0");
@@ -833,16 +777,15 @@ mod tests {
         fs::write(local.join("_remote.repositories"), "local-1.0.0.jar>=\n").unwrap();
         let audit = audit_maven_repository(&root, MavenCacheAuditOptions::default(), 123).unwrap();
 
-        let report =
+        let error =
             prune_maven_repository(&root, &audit.candidate_set_fingerprint, true, 10_000, 456)
-                .unwrap();
+                .unwrap_err();
 
-        assert_eq!(report.candidate_directories, 1);
-        assert_eq!(report.removed_directories, 1);
-        assert_eq!(report.skipped_directories, 0);
-        assert!(report.filesystem_mutation_executed);
-        assert!(report.complete);
-        assert!(!remote.exists());
+        assert_eq!(
+            error,
+            "maven-cache-prune-identity-bound-recycle-unavailable"
+        );
+        assert!(remote.exists());
         assert!(local.exists());
     }
 }
