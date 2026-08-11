@@ -43,19 +43,28 @@
   }
 
   let totalSelected = $derived(
-    artifacts.filter((a) => selected.has(a.path)).reduce((sum, artifact) => sum + artifact.bytes, 0),
+    artifacts
+      .filter((a) => selected.has(a.path) && a.scan_complete && a.skipped === 0)
+      .reduce((sum, artifact) => sum + artifact.bytes, 0),
   );
 
-  let selectionCount = $derived(artifacts.filter((a) => selected.has(a.path)).length);
+  let selectionCount = $derived(
+    artifacts.filter((a) => selected.has(a.path) && a.scan_complete && a.skipped === 0).length,
+  );
 
   async function executeClean() {
     // 검토·확인 (스펙 §7-6): 명시적 승인 없이는 아무것도 실행되지 않는다
-    const artifactPaths = artifacts.filter((a) => selected.has(a.path)).map((a) => a.path);
-    if (artifactPaths.length === 0) return;
+    const selectedArtifacts = artifacts.filter(
+      (a) => selected.has(a.path) && a.scan_complete && a.skipped === 0,
+    );
+    if (selectedArtifacts.length === 0 || !scannedRoot) return;
+    const summary = selectedArtifacts.map(
+      (a) => `${a.path} (${fmtBytes(a.bytes)}, ${a.files}개) — 메타데이터 지문 ${a.fingerprint.slice(0, 12)}`,
+    );
     const okay = await confirm(
-      `다음 ${artifactPaths.length}개 항목을 휴지통으로 보냅니다 (논리 크기 합계 ${fmtBytes(totalSelected)}):\n\n` +
-        artifactPaths.slice(0, 15).join("\n") +
-        (artifactPaths.length > 15 ? `\n… 외 ${artifactPaths.length - 15}개` : "") +
+      `다음 ${summary.length}개 항목을 휴지통으로 보냅니다 (논리 크기 합계 ${fmtBytes(totalSelected)}):\n\n` +
+        summary.slice(0, 15).join("\n") +
+        (summary.length > 15 ? `\n… 외 ${summary.length - 15}개` : "") +
         "\n\n휴지통에서 언제든 복원할 수 있습니다. 휴지통을 비우기 전에는 물리 공간이 회수되지 않으며, APFS 공유 블록 때문에 실제 회수량은 논리 크기보다 작을 수 있습니다.",
       { title: "DiskSage", kind: "warning" },
     );
@@ -63,7 +72,7 @@
 
     busy = true;
     try {
-      results = await api.cleanPaths(artifactPaths);
+      results = await api.cleanDevArtifacts(scannedRoot, 30, selectedArtifacts);
       selected = new Set();
       await load();
     } catch (e) {
@@ -101,15 +110,21 @@
   <ul class="list">
     {#each artifacts as a (a.path)}
       <li>
-        <label>
+        <label class:disabled={!a.scan_complete || a.skipped > 0}>
           <input
             type="checkbox"
-            disabled={busy}
+            disabled={busy || !a.scan_complete || a.skipped > 0}
             checked={selected.has(a.path)}
             onchange={() => (selected = toggle(selected, a.path))}
           />
           {a.kind} <em>({a.project}, {a.age_days}일)</em>
-          <span class="size">{fmtBytes(a.bytes)}</span>
+          <span class="size">
+            {!a.scan_complete
+              ? `${fmtBytes(a.bytes)} · 메타데이터 스캔 미완료`
+              : a.skipped > 0
+                ? `${fmtBytes(a.bytes)} · 읽기 오류 ${a.skipped}`
+                : fmtBytes(a.bytes)}
+          </span>
           {#if verdicts[a.path]}
             {@const b = verdictBadge(verdicts[a.path])}
             <span class={b.cls} title={b.title}>{b.label}</span>
