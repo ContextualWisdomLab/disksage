@@ -72,4 +72,23 @@ mod tests {
         assert_eq!(fs::read(&victim).unwrap(), b"keep");
         assert!(bases.temp.is_dir());
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_rejects_symlinked_catalog_root_without_touching_outside_data() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bases = fake_bases(tmp.path());
+        let outside = tmp.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        let outside_file = outside.join("outside.bin");
+        fs::write(&outside_file, b"outside").unwrap();
+        std::os::unix::fs::symlink(&outside, &bases.temp).unwrap();
+
+        let error = clean_cache_contents_inner(&bases, &bases.temp)
+            .err()
+            .expect("symlinked catalog root should be rejected");
+
+        assert_eq!(error, "cache-root-not-current-or-safe");
+        assert_eq!(fs::read(&outside_file).unwrap(), b"outside");
+    }
 }
