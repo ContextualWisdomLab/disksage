@@ -149,7 +149,7 @@ pub fn clean_dev_artifacts_inner(
     let current = dev_artifacts::find_artifacts(root, min_age_days, now_ms);
     requests
         .iter()
-        .flat_map(|request| {
+        .map(|request| {
             let matches = current.iter().find(|candidate| {
                 candidate.path == request.path
                     && candidate.kind == request.kind
@@ -166,11 +166,11 @@ pub fn clean_dev_artifacts_inner(
                     && candidate.age_days >= request.age_days
             });
             if matches.is_none() {
-                return vec![CleanResult {
+                return CleanResult {
                     path: request.path.clone(),
                     ok: false,
                     error: "개발 아티팩트가 변경되었거나 메타데이터 스캔이 불완전합니다. 정리 전에 다시 스캔하세요".into(),
-                }];
+                };
             }
 
             match safety::trash_delete_if_identity(
@@ -180,16 +180,16 @@ pub fn clean_dev_artifacts_inner(
                 journal_path,
                 now_ms,
             ) {
-                Ok(()) => vec![CleanResult {
+                Ok(()) => CleanResult {
                     path: request.path.clone(),
                     ok: true,
                     error: String::new(),
-                }],
-                Err(error) => vec![CleanResult {
+                },
+                Err(error) => CleanResult {
                     path: request.path.clone(),
                     ok: false,
                     error: error.to_string(),
-                }],
+                },
             }
         })
         .collect()

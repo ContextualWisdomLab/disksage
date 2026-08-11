@@ -977,6 +977,19 @@ mod tests {
             Err(error) => error,
         };
         assert_eq!(error, "icloud-sync-health-snapshot-source-too-large");
+
+        fs::write(&client_db, b"within-limit").unwrap();
+        let client_db_wal = source.path().join("client.db-wal");
+        fs::File::create(&client_db_wal)
+            .unwrap()
+            .set_len(MAX_SNAPSHOT_SOURCE_BYTES + 1)
+            .unwrap();
+
+        let error = match clone_client_database_snapshot(source.path()) {
+            Ok(_) => panic!("oversized WAL must not be snapshotted"),
+            Err(error) => error,
+        };
+        assert_eq!(error, "icloud-sync-health-snapshot-source-too-large");
     }
 
     #[cfg(target_os = "macos")]
