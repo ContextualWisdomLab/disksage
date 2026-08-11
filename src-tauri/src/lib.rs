@@ -62,6 +62,8 @@ pub mod multipart_archive;
 pub mod naruon_capacity;
 pub mod naruon_cloud_copy_readiness;
 pub mod naruon_lineage;
+/// Privacy-safe desktop projection of read-only Podman reclaim evidence.
+pub mod podman_desktop;
 /// Read-only, fail-closed Podman VM/store reclaim evidence.
 pub mod podman_reclaim;
 pub mod provider_api_client;
@@ -129,7 +131,8 @@ pub fn run() {
             commands::copy_cloud_candidate,
             commands::adopt_existing_cloud_candidate,
             commands::attest_cloud_copy,
-            commands::trash_verified_cloud_source
+            commands::trash_verified_cloud_source,
+            podman_desktop::inspect_podman_reclaim
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
