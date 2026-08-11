@@ -1,22 +1,22 @@
-use disksage::cloud::{
+use disksage_lib::cloud::{
     candidate_review_fingerprint, ArchiveKind, CloudAccountScope, CloudCandidate, CloudProvider,
     CloudRoot, MetadataEvidence,
 };
-use disksage::cloud_eviction::{
+use disksage_lib::cloud_eviction::{
     create_source_eviction_approval, evict_source_with_human_approval,
 };
-use disksage::cloud_local_eviction::ActiveUseEvidence;
-use disksage::cloud_transfer::{
+use disksage_lib::cloud_local_eviction::ActiveUseEvidence;
+use disksage_lib::cloud_transfer::{
     approve_local_eviction, prepare_cloud_copy, ProviderSyncEvidence, SyncEvidenceKind,
 };
-use disksage::provider_evidence::create_sync_evidence_record;
+use disksage_lib::provider_evidence::create_sync_evidence_record;
 use std::path::Path;
 
 fn valid_receipt(
     temp: &tempfile::TempDir,
 ) -> (
-    disksage::cloud_transfer::CloudCopyReceipt,
-    disksage::cloud_transfer::LocalEvictionPermit,
+    disksage_lib::cloud_transfer::CloudCopyReceipt,
+    disksage_lib::cloud_transfer::LocalEvictionPermit,
 ) {
     let source_dir = temp.path().join("source");
     let cloud_dir = temp.path().join("cloud");
