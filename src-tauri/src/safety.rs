@@ -130,10 +130,12 @@ pub fn object_id_from_metadata(metadata: &std::fs::Metadata) -> Option<String> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
+        let volume = metadata.volume_serial_number()?;
+        let file_index = metadata.file_index()?;
         return Some(format!(
             "windows:{}:{}",
-            metadata.volume_serial_number().unwrap_or(0),
-            metadata.file_index()
+            volume,
+            file_index
         ));
     }
     #[cfg(not(any(unix, windows)))]
@@ -313,7 +315,10 @@ pub fn trash_delete(
 static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn create_private_staging_dir(path: &Path, now_ms: u64) -> std::io::Result<PathBuf> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let parent = path
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+    let parent = std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
     let pid = std::process::id();
     for _ in 0..32 {
         let serial = STAGING_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -401,8 +406,12 @@ pub fn trash_delete_if_identity(
     }
 
     let result = (|| -> Result<(), SafetyError> {
-        std::fs::rename(path, &staged)
-            .map_err(|error| SafetyError::Trash(format!("atomic staging move failed: {error}")))?;
+        if let Err(error) = std::fs::rename(path, &staged) {
+            let _ = std::fs::remove_dir(&staging_dir);
+            return Err(SafetyError::Trash(format!(
+                "atomic staging move failed: {error}"
+            )));
+        }
         let moved_id = filesystem_object_id(&staged).map_err(|error| {
             restore_staged_if_source_absent(path, &staged, &staging_dir);
             SafetyError::Trash(format!("staged object identity unavailable: {error}"))
