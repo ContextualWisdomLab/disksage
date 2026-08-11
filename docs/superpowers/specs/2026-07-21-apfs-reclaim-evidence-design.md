@@ -17,9 +17,11 @@ reports:
 
 When an operator needs to distinguish an idle cache from a build or editor tree that is currently
 in use, the command accepts `--check-active-use`. This opt-in adds bounded, path-local `lsof`
-evidence per normalized root (`evidence_complete`, `active`, and a capped PID list); the probe is
-diagnostic only and never treats an idle result as permission to delete. The default output omits
-this optional field for compatibility and to avoid the extra process/file scan.
+evidence per normalized root (`evidence_complete`, `active`, and a capped PID list). Regular-file
+roots use an exact-file `lsof` query (`lsof-file-pid`), while directory roots use recursive
+`lsof` (`lsof-recursive-pid`). The probe is diagnostic only and never treats an idle result as
+permission to delete. The default output omits this optional field for compatibility and to avoid
+the extra process/file scan.
 
 Nested selected roots are deduplicated and symbolic-link roots are rejected. The command never
 moves, unlinks, or writes to supplied paths. APFS clone sharing is intentionally not inferred from

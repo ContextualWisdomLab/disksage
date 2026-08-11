@@ -440,6 +440,7 @@ fn scan_root(
             root,
             ACTIVE_USE_PROBE_TIMEOUT_MS,
             ACTIVE_USE_PROBE_MAX_PIDS,
+            matches!(kind, RootKind::Directory),
         )
     });
 
@@ -549,6 +550,7 @@ mod tests {
         .unwrap();
         let evidence = plan.paths[0].active_use.as_ref().unwrap();
         assert!(evidence.evidence_complete || evidence.error.is_some());
+        assert_eq!(evidence.method, "lsof-file-pid");
         assert!(evidence.observed_pids.len() <= ACTIVE_USE_PROBE_MAX_PIDS);
     }
 

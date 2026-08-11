@@ -608,24 +608,26 @@ pub(crate) fn active_use_evidence(
     path: &Path,
     timeout_ms: u64,
     max_pids: usize,
+    recursive: bool,
 ) -> GitWorktreeActiveUseEvidence {
     // Running lsof with its own CWD inside the audited tree would make the probe observe itself.
     // A canonical worktree has an existing parent, which is outside the candidate directory.
     let command_cwd = path.parent().unwrap_or(path);
-    let result = match run_bounded_command(
-        "lsof",
-        &[
-            OsString::from("-F0p"),
-            OsString::from("+D"),
-            path.as_os_str().to_os_string(),
-        ],
-        command_cwd,
-        timeout_ms,
-    ) {
+    let method = if recursive {
+        "lsof-recursive-pid"
+    } else {
+        "lsof-file-pid"
+    };
+    let mut lsof_args = vec![OsString::from("-F0p")];
+    if recursive {
+        lsof_args.push(OsString::from("+D"));
+    }
+    lsof_args.push(path.as_os_str().to_os_string());
+    let result = match run_bounded_command("lsof", &lsof_args, command_cwd, timeout_ms) {
         Ok(result) => result,
         Err(error) => {
             return GitWorktreeActiveUseEvidence {
-                method: "lsof-recursive-pid".into(),
+                method: method.into(),
                 assessed: true,
                 evidence_complete: false,
                 active: false,
@@ -637,7 +639,7 @@ pub(crate) fn active_use_evidence(
     };
     if result.timed_out {
         return GitWorktreeActiveUseEvidence {
-            method: "lsof-recursive-pid".into(),
+            method: method.into(),
             assessed: true,
             evidence_complete: false,
             active: false,
@@ -648,7 +650,7 @@ pub(crate) fn active_use_evidence(
     }
     if result.stdout_truncated || result.stderr_truncated {
         return GitWorktreeActiveUseEvidence {
-            method: "lsof-recursive-pid".into(),
+            method: method.into(),
             assessed: true,
             evidence_complete: false,
             active: false,
@@ -662,7 +664,7 @@ pub(crate) fn active_use_evidence(
         || (result.status_code == Some(1) && !stderr.trim().is_empty())
     {
         return GitWorktreeActiveUseEvidence {
-            method: "lsof-recursive-pid".into(),
+            method: method.into(),
             assessed: true,
             evidence_complete: false,
             active: false,
@@ -678,7 +680,7 @@ pub(crate) fn active_use_evidence(
         };
         let Ok(raw_pid) = std::str::from_utf8(raw_pid) else {
             return GitWorktreeActiveUseEvidence {
-                method: "lsof-recursive-pid".into(),
+                method: method.into(),
                 assessed: true,
                 evidence_complete: false,
                 active: false,
@@ -689,7 +691,7 @@ pub(crate) fn active_use_evidence(
         };
         let Ok(pid) = raw_pid.parse::<u32>() else {
             return GitWorktreeActiveUseEvidence {
-                method: "lsof-recursive-pid".into(),
+                method: method.into(),
                 assessed: true,
                 evidence_complete: false,
                 active: false,
@@ -706,7 +708,7 @@ pub(crate) fn active_use_evidence(
     let results_truncated = pids.len() > max_pids;
     let observed_pids: Vec<_> = pids.into_iter().take(max_pids).collect();
     GitWorktreeActiveUseEvidence {
-        method: "lsof-recursive-pid".into(),
+        method: method.into(),
         assessed: true,
         evidence_complete: !results_truncated,
         active: !observed_pids.is_empty(),
@@ -721,9 +723,15 @@ pub(crate) fn active_use_evidence(
     _path: &Path,
     _timeout_ms: u64,
     _max_pids: usize,
+    recursive: bool,
 ) -> GitWorktreeActiveUseEvidence {
     GitWorktreeActiveUseEvidence {
-        method: "platform-active-use-probe-unavailable".into(),
+        method: if recursive {
+            "lsof-recursive-pid"
+        } else {
+            "lsof-file-pid"
+        }
+        .into(),
         assessed: true,
         evidence_complete: false,
         active: false,
@@ -1171,6 +1179,7 @@ pub fn audit_git_worktrees(
                 canonical_path,
                 options.command_timeout_ms,
                 options.max_active_pids,
+                true,
             )
         } else {
             skipped_active_use("active-use-not-needed-for-preserved-worktree")
