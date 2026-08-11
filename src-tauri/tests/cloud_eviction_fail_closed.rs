@@ -143,3 +143,39 @@ fn production_cloud_eviction_fails_closed_without_identity_bound_recycle() {
     assert!(!temp.path().join("evictions").exists());
     assert!(!temp.path().join("journal").exists());
 }
+
+#[test]
+fn invalid_confirmation_is_rejected_before_capability_gate_without_mutation() {
+    let temp = tempfile::tempdir().unwrap();
+    let (receipt, permit) = valid_receipt(&temp);
+    let source = Path::new(&receipt.source);
+    let original = std::fs::read(source).unwrap();
+    let approval = create_source_eviction_approval(
+        &receipt,
+        &permit,
+        &receipt.receipt_id,
+        160,
+        "human:local:test",
+        "verified cloud copy; move only this source to Trash",
+        150,
+        idle_active_use(),
+    )
+    .unwrap();
+
+    let error = evict_source_with_human_approval(
+        &receipt,
+        &permit,
+        &approval,
+        &"0".repeat(64),
+        &temp.path().join("evictions"),
+        &temp.path().join("journal/operations.jsonl"),
+        200,
+    )
+    .unwrap_err();
+
+    assert_eq!(error, "eviction-confirmation-receipt-id-mismatch");
+    assert!(source.exists());
+    assert_eq!(std::fs::read(source).unwrap(), original);
+    assert!(!temp.path().join("evictions").exists());
+    assert!(!temp.path().join("journal").exists());
+}
