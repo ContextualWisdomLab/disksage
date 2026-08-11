@@ -1058,6 +1058,7 @@ dependencies = [
  "unicode-general-category",
  "unicode-normalization",
  "ureq",
+ "winapi-util",
  "zeroize",
  "zip",
 ]

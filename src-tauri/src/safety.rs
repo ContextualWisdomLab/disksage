@@ -148,17 +148,16 @@ pub fn object_id_from_metadata(metadata: &std::fs::Metadata) -> Option<String> {
 pub fn filesystem_object_id(path: &Path) -> std::io::Result<String> {
     #[cfg(windows)]
     {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        // `same-file` opens the path and derives equality from the Windows volume serial and
-        // file index. Hashing that private key gives us a portable, serializable identity without
-        // relying on the unstable std metadata accessors. The handle remains live through the
-        // hash operation, matching the crate's documented Windows safety requirement.
-        let handle = same_file::Handle::from_path(path)?;
-        let mut hasher = DefaultHasher::new();
-        handle.hash(&mut hasher);
-        return Ok(format!("windows:{:016x}", hasher.finish()));
+        // `winapi-util` keeps the Windows handle open while querying the stable
+        // volume/file-index pair. This avoids the unstable `std` metadata accessors and avoids
+        // reducing the identity to a lossy hash.
+        let handle = winapi_util::Handle::from_path_any(path)?;
+        let info = winapi_util::file::information(&handle)?;
+        return Ok(format!(
+            "windows:{}:{}",
+            info.volume_serial_number(),
+            info.file_index()
+        ));
     }
 
     let metadata = std::fs::symlink_metadata(path)?;
