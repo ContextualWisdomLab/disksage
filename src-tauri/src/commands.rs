@@ -13,11 +13,13 @@ use crate::scanner::ScanResult;
 
 // clean_paths_inner/execute_moves_inner/undo_last_moves_inner(순수 함수)가 쓰는 것은 무조건 import; 래퍼 전용은 cfg(not(coverage))
 use crate::organize;
+use crate::rules;
 use crate::safety;
+use crate::worktrees;
 #[cfg(not(coverage))]
 use crate::{
     cloud, cloud_review, cloud_transfer, dev_artifacts, dupes, provider_api_client,
-    provider_capacity, provider_evidence, provider_oauth, provider_sync, rules,
+    provider_capacity, provider_evidence, provider_oauth, provider_sync,
 };
 
 #[derive(Default)]
@@ -133,6 +135,48 @@ pub fn clean_paths_inner(
                     error: e.to_string(),
                 },
             }
+        })
+        .collect()
+}
+
+/// 캐시 후보는 목록을 읽은 시점의 메타데이터 지문과 일치할 때만 휴지통으로 보낸다.
+/// 후보가 바뀌었거나 읽기 오류가 섞였으면 어떤 항목도 이동하지 않고 재스캔을 요구한다.
+pub fn clean_cache_candidates_inner(
+    requests: &[rules::CacheCleanupRequest],
+    bases: &rules::BaseDirs,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Vec<CleanResult> {
+    let current = rules::cache_candidates(bases);
+    requests
+        .iter()
+        .flat_map(|request| {
+            let Some(candidate) = current.iter().find(|c| c.id == request.id) else {
+                return vec![CleanResult {
+                    path: request.path.clone(),
+                    ok: false,
+                    error: "캐시 규칙을 찾지 못했습니다. 다시 스캔하세요".into(),
+                }];
+            };
+
+            let matches = candidate.exists
+                && candidate.scan_complete
+                && candidate.skipped == 0
+                && candidate.path == request.path
+                && candidate.bytes == request.bytes
+                && candidate.files == request.files
+                && candidate.skipped == request.skipped
+                && candidate.fingerprint == request.fingerprint;
+            if !matches {
+                return vec![CleanResult {
+                    path: request.path.clone(),
+                    ok: false,
+                    error: "캐시 후보가 변경되었거나 불완전하게 읽혔습니다. 정리 전에 다시 스캔하세요".into(),
+                }];
+            }
+
+            let targets = rules::clean_targets(Path::new(&candidate.path));
+            clean_paths_inner(&targets, journal_path, now_ms)
         })
         .collect()
 }
@@ -379,10 +423,27 @@ pub fn list_dev_artifacts(
 
 #[cfg(not(coverage))]
 #[tauri::command]
+pub fn list_stale_worktrees(repository: String) -> Result<worktrees::WorktreeAudit, String> {
+    worktrees::audit(Path::new(&repository), worktrees::system_now_ms())
+}
+
+#[cfg(not(coverage))]
+#[tauri::command]
 pub fn clean_paths(paths: Vec<String>, app: AppHandle) -> Result<Vec<CleanResult>, String> {
     let jp = journal_file_path(&app)?;
     let pbufs: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
     Ok(clean_paths_inner(&pbufs, &jp, now_ms()))
+}
+
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn clean_cache_candidates(
+    requests: Vec<rules::CacheCleanupRequest>,
+    app: AppHandle,
+) -> Result<Vec<CleanResult>, String> {
+    let bases = rules::BaseDirs::from_env().ok_or("환경변수에서 기본 경로를 찾지 못함")?;
+    let jp = journal_file_path(&app)?;
+    Ok(clean_cache_candidates_inner(&requests, &bases, &jp, now_ms()))
 }
 
 #[cfg(not(coverage))]
@@ -714,7 +775,7 @@ fn require_capacity_for_copy(
     selected: &cloud::CloudRoot,
     candidate: &cloud::CloudCandidate,
     app: &AppHandle,
-) -> Result<(), String> {
+) -> Result<provider_capacity::CloudCapacityAssessment, String> {
     let snapshot = authenticated_capacity_snapshot(selected, app, cloud::system_now_ms())?;
     let assessment = provider_capacity::assess_capacity(
         snapshot,
@@ -723,7 +784,7 @@ fn require_capacity_for_copy(
         provider_capacity::DEFAULT_CAPACITY_RESERVE_BYTES,
     );
     if assessment.can_fit == Some(true) {
-        Ok(())
+        Ok(assessment)
     } else {
         Err(if assessment.blockers.is_empty() {
             "cloud-capacity-verification-required".into()
@@ -821,6 +882,9 @@ pub fn review_cloud_candidate(
     if candidate.review_fingerprint != review_fingerprint {
         return Err("fresh-plan-review-fingerprint-mismatch".into());
     }
+    if cloud_transfer::candidate_requires_fresh_plan(candidate) {
+        return Err("deferred-probe-requires-fresh-plan".into());
+    }
     let decision = cloud_review::create_attributed_decision(
         candidate,
         disposition,
@@ -887,9 +951,11 @@ fn create_cloud_candidate_receipt(
     } else {
         None
     };
-    if !adopt_existing {
-        require_capacity_for_copy(&selected, candidate, app)?;
-    }
+    let capacity = if adopt_existing {
+        None
+    } else {
+        Some(require_capacity_for_copy(&selected, candidate, app)?)
+    };
     let (receipt, receipt_path) = if adopt_existing {
         cloud_transfer::adopt_existing_cloud_copy_with_review(
             candidate,
@@ -899,12 +965,13 @@ fn create_cloud_candidate_receipt(
             review_decision.as_ref(),
         )?
     } else {
-        cloud_transfer::prepare_cloud_copy_with_review(
+        cloud_transfer::prepare_cloud_copy_with_review_and_capacity(
             candidate,
             &selected,
             &receipt_dir,
             cloud::system_now_ms(),
             review_decision.as_ref(),
+            capacity.as_ref(),
         )?
     };
     Ok(CloudCopyOutput {
@@ -1616,6 +1683,47 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
                 .collect();
             trash::os_limited::purge_all(items).unwrap();
         }
+    }
+
+    #[test]
+    fn cache_cleanup_rejects_a_stale_metadata_fingerprint() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bases = rules::BaseDirs {
+            temp: tmp.path().join("tmp"),
+            local_data: tmp.path().join("local"),
+            home: tmp.path().join("home"),
+        };
+        let trivy = rules::cache_candidates(&bases)
+            .into_iter()
+            .find(|c| c.id == "trivy-cache")
+            .unwrap()
+            .path;
+        let trivy_path = PathBuf::from(&trivy);
+        fs::create_dir_all(&trivy_path).unwrap();
+        fs::write(trivy_path.join("db.bin"), b"old").unwrap();
+        let observed = rules::cache_candidates(&bases)
+            .into_iter()
+            .find(|c| c.id == "trivy-cache")
+            .unwrap();
+
+        // 목록을 읽은 뒤 새 파일이 생기면, 같은 크기라도 경로가 manifest에 들어가므로 거부한다.
+        fs::write(trivy_path.join("new.bin"), b"new").unwrap();
+        let request = rules::CacheCleanupRequest {
+            id: observed.id,
+            path: observed.path,
+            bytes: observed.bytes,
+            files: observed.files,
+            skipped: observed.skipped,
+            scan_complete: observed.scan_complete,
+            fingerprint: observed.fingerprint,
+        };
+        let results = clean_cache_candidates_inner(&[request], &bases, &tmp.path().join("journal.jsonl"), 1);
+
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].ok);
+        assert!(results[0].error.contains("다시 스캔"));
+        assert!(trivy_path.join("db.bin").exists());
+        assert!(trivy_path.join("new.bin").exists());
     }
 
     #[test]

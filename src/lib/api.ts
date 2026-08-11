@@ -30,7 +30,20 @@ export interface CacheCandidate {
   label: string;
   path: string;
   bytes: number;
+  files: number;
+  skipped: number;
+  scan_complete: boolean;
+  fingerprint: string;
   exists: boolean;
+}
+export interface CacheCleanupRequest {
+  id: string;
+  path: string;
+  bytes: number;
+  files: number;
+  skipped: number;
+  scan_complete: boolean;
+  fingerprint: string;
 }
 export interface DevArtifact {
   path: string;
@@ -38,6 +51,28 @@ export interface DevArtifact {
   project: string;
   bytes: number;
   age_days: number;
+}
+export interface WorktreeCandidate {
+  path: string;
+  head: string;
+  branch: string | null;
+  is_primary: boolean;
+  detached: boolean;
+  exists: boolean;
+  locked_reason: string | null;
+  prunable_reason: string | null;
+  metadata_prune_eligible: boolean;
+  review_reasons: string[];
+}
+export interface WorktreeAudit {
+  repository: string;
+  generated_at_ms: number;
+  registration_fingerprint: string;
+  evidence_complete: boolean;
+  worktrees: WorktreeCandidate[];
+  stale_count: number;
+  metadata_prune_eligible_count: number;
+  notices: string[];
 }
 export interface CleanResult {
   path: string;
@@ -60,7 +95,11 @@ export interface DupeGroup {
 export const listCacheCandidates = () => invoke<CacheCandidate[]>("list_cache_candidates");
 export const listDevArtifacts = (root: string, minAgeDays = 30) =>
   invoke<DevArtifact[]>("list_dev_artifacts", { root, minAgeDays });
+export const listStaleWorktrees = (repository: string) =>
+  invoke<WorktreeAudit>("list_stale_worktrees", { repository });
 export const cleanPaths = (paths: string[]) => invoke<CleanResult[]>("clean_paths", { paths });
+export const cleanCacheCandidates = (requests: CacheCleanupRequest[]) =>
+  invoke<CleanResult[]>("clean_cache_candidates", { requests });
 export const expandCleanTargets = (dir: string) =>
   invoke<string[]>("expand_clean_targets", { dir });
 export const recentOperations = (limit = 20) =>
@@ -386,6 +425,7 @@ export interface CloudLineageSnapshot {
   duration_ms: number | null;
   dataset_profile: DatasetProfile | null;
   metadata_evidence: MetadataEvidence[];
+  capacity?: CloudCapacityAssessment;
 }
 
 export interface CloudCopyOutput {

@@ -43,21 +43,28 @@
   }
 
   let totalSelected = $derived(
-    caches.filter((c) => selectedRules.has(c.id)).reduce((s, c) => s + c.bytes, 0) +
+    caches
+      .filter((c) => selectedRules.has(c.id) && c.skipped === 0 && c.scan_complete)
+      .reduce((s, c) => s + c.bytes, 0) +
       artifacts.filter((a) => selected.has(a.path)).reduce((s, a) => s + a.bytes, 0),
   );
 
   let selectionCount = $derived(
-    caches.filter((c) => selectedRules.has(c.id) && c.exists).length +
+    caches.filter((c) => selectedRules.has(c.id) && c.exists && c.skipped === 0 && c.scan_complete).length +
       artifacts.filter((a) => selected.has(a.path)).length,
   );
 
   async function executeClean() {
     // 검토·확인 (스펙 §7-6): 명시적 승인 없이는 아무것도 실행되지 않는다
-    const ruleDirs = caches.filter((c) => selectedRules.has(c.id) && c.exists);
+    const ruleDirs = caches.filter(
+      (c) => selectedRules.has(c.id) && c.exists && c.skipped === 0 && c.scan_complete,
+    );
     const artifactPaths = artifacts.filter((a) => selected.has(a.path)).map((a) => a.path);
     const summary = [
-      ...ruleDirs.map((c) => `${c.label} (${fmtBytes(c.bytes)}) — 내용물 비우기`),
+      ...ruleDirs.map(
+        (c) =>
+          `${c.label} (${fmtBytes(c.bytes)}, ${c.files}개) — 내용물 비우기 · 지문 ${c.fingerprint.slice(0, 12)}`,
+      ),
       ...artifactPaths,
     ];
     if (summary.length === 0) return;
@@ -72,11 +79,23 @@
 
     busy = true;
     try {
-      const paths: string[] = [...artifactPaths];
-      for (const c of ruleDirs) {
-        paths.push(...(await api.expandCleanTargets(c.path)));
-      }
-      results = await api.cleanPaths(paths);
+      // 캐시는 목록 시점의 메타데이터 지문을 Rust에서 다시 검증한다. 목록이 바뀌면
+      // 해당 후보만 거부하고, 중복/개발 아티팩트의 기존 경로 정리는 별도 API로 처리한다.
+      const cacheResults = ruleDirs.length
+        ? await api.cleanCacheCandidates(
+          ruleDirs.map(({ id, path, bytes, files, skipped, scan_complete, fingerprint }) => ({
+            id,
+            path,
+            bytes,
+            files,
+            skipped,
+            scan_complete,
+            fingerprint,
+            })),
+          )
+        : [];
+      const artifactResults = artifactPaths.length ? await api.cleanPaths(artifactPaths) : [];
+      results = [...cacheResults, ...artifactResults];
       selected = new Set();
       selectedRules = new Set();
       await load();
@@ -98,15 +117,23 @@
   <ul class="list">
     {#each caches as c (c.id)}
       <li>
-        <label class:disabled={!c.exists}>
+        <label class:disabled={!c.exists || c.skipped > 0 || !c.scan_complete}>
           <input
             type="checkbox"
-            disabled={!c.exists || busy}
+            disabled={!c.exists || c.skipped > 0 || !c.scan_complete || busy}
             checked={selectedRules.has(c.id)}
             onchange={() => (selectedRules = toggle(selectedRules, c.id))}
           />
           {c.label}
-          <span class="size">{c.exists ? fmtBytes(c.bytes) : "없음"}</span>
+          <span class="size">
+            {!c.exists
+              ? "없음"
+              : !c.scan_complete
+                ? `${fmtBytes(c.bytes)} · 메타데이터 스캔 미완료`
+                : c.skipped > 0
+                  ? `${fmtBytes(c.bytes)} · 읽기 오류 ${c.skipped}`
+                  : fmtBytes(c.bytes)}
+          </span>
         </label>
         <span class="path" title={c.path}>{c.path}</span>
       </li>

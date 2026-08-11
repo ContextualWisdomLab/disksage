@@ -30,7 +30,20 @@ describe("api wrappers", () => {
       [() => api.listCacheCandidates(), "list_cache_candidates"],
       [() => api.listDevArtifacts("/repo"), "list_dev_artifacts", { root: "/repo", minAgeDays: 30 }],
       [() => api.listDevArtifacts("/repo", 7), "list_dev_artifacts", { root: "/repo", minAgeDays: 7 }],
+      [() => api.listStaleWorktrees("/repo"), "list_stale_worktrees", { repository: "/repo" }],
       [() => api.cleanPaths(["/tmp/a"]), "clean_paths", { paths: ["/tmp/a"] }],
+      [
+        () =>
+          api.cleanCacheCandidates([
+            { id: "trivy-cache", path: "/cache/trivy", bytes: 4, files: 1, skipped: 0, scan_complete: true, fingerprint: "a".repeat(64) },
+          ]),
+        "clean_cache_candidates",
+        {
+          requests: [
+            { id: "trivy-cache", path: "/cache/trivy", bytes: 4, files: 1, skipped: 0, scan_complete: true, fingerprint: "a".repeat(64) },
+          ],
+        },
+      ],
       [() => api.expandCleanTargets("/tmp"), "expand_clean_targets", { dir: "/tmp" }],
       [() => api.recentOperations(), "recent_operations", { limit: 20 }],
       [() => api.recentOperations(3), "recent_operations", { limit: 3 }],

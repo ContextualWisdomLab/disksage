@@ -1016,6 +1016,7 @@ dependencies = [
  "getrandom 0.3.4",
  "jwalk",
  "keyring",
+ "libc",
  "llama-cpp-2",
  "memchr",
  "objc2",

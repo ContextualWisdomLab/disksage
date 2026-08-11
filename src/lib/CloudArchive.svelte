@@ -77,6 +77,7 @@
       && candidate.production_time_source.startsWith("embedded:");
     const capacityEvidenceAvailable = api.cloudCapacityAllowsCopy(report?.capacity);
     return candidate.blocked_reason === null
+      && !requiresFreshProbe(candidate)
       && (!candidate.requires_review || exactApproval)
       && (embeddedHighConfidence || exactApproval)
       && capacityEvidenceAvailable;
@@ -88,6 +89,7 @@
     const embeddedHighConfidence = candidate.production_time_confidence === "high"
       && candidate.production_time_source.startsWith("embedded:");
     return candidate.blocked_reason === "destination-exists"
+      && !requiresFreshProbe(candidate)
       && (!candidate.requires_review || exactApproval)
       && (embeddedHighConfidence || exactApproval);
   }
@@ -103,9 +105,22 @@
     return decision?.review_fingerprint === candidate.review_fingerprint ? decision : null;
   }
 
+  function requiresFreshProbe(candidate: api.CloudCandidate): boolean {
+    return candidate.review_reasons.some((reason) =>
+      reason === "content-metadata-probe-deferred"
+      || reason === "exact-duplicate-content-probe-deferred"
+    );
+  }
+
   function reviewReasonLabel(reason: string): string {
     if (reason === "embedded-date-differs-from-filename-publication-month") {
       return "내장 생산일과 파일명 발행월이 다름";
+    }
+    if (reason === "content-metadata-probe-deferred") {
+      return "계획 메타데이터 예산 초과로 내장 메타데이터 미확인";
+    }
+    if (reason === "exact-duplicate-content-probe-deferred") {
+      return "중복 content hash 예산 초과로 동일성 미확인";
     }
     return reason;
   }
@@ -114,7 +129,7 @@
     candidate: api.CloudCandidate,
     disposition: api.CloudReviewDisposition,
   ) {
-    if (!scannedRoot || !selectedRoot || !candidate.requires_review) return;
+    if (!scannedRoot || !selectedRoot || !candidate.requires_review || requiresFreshProbe(candidate)) return;
     const rationale = (reviewRationales[candidate.metadata_fingerprint] ?? "").trim();
     if (!rationale) return;
     reviewingFingerprint = candidate.metadata_fingerprint;
@@ -225,6 +240,22 @@
     return connectionCapacityRoot === selectedRoot ? connectionCapacity : null;
   }
 
+  async function refreshCapacityBoundPlan() {
+    if (!report || !scannedRoot || !selectedRoot) return;
+    const planned = await api.planCloudArchive(
+      scannedRoot,
+      selectedRoot,
+      Math.max(1, Math.floor(minSizeMib)),
+      Math.max(0, Math.floor(minAgeDays)),
+      200,
+    );
+    report = planned;
+    if (planned.capacity) {
+      connectionCapacity = planned.capacity.snapshot;
+      connectionCapacityRoot = selectedRoot;
+    }
+  }
+
   function capacityUnavailableLabel(reason: string | null): string {
     const labels: Record<string, string> = {
       "provider-oauth-connection-missing": "저장된 연결 설정이 없습니다.",
@@ -250,6 +281,7 @@
     try {
       connectionCapacity = await api.verifyCloudProviderCapacity(root.path);
       connectionCapacityRoot = root.path;
+      await refreshCapacityBoundPlan();
     } catch (e) {
       loadError = String(e);
     } finally {
@@ -271,6 +303,7 @@
       oauthClientId = "";
       connectionCapacity = await api.verifyCloudProviderCapacity(root.path);
       connectionCapacityRoot = root.path;
+      await refreshCapacityBoundPlan();
     } catch (e) {
       loadError = String(e);
     } finally {
@@ -447,6 +480,12 @@
       {report.candidates.length}개 후보 · 총 {fmtBytes(report.candidate_bytes)} ·
       충돌 제외 잠재 회수 {fmtBytes(report.potentially_reclaimable_bytes)}
     </div>
+    {#if report.notices.includes("content-metadata-probe-deferred") || report.notices.includes("content-hash-deferred")}
+      <p class="warning">
+        계획 예산 때문에 일부 후보의 내장 메타데이터 또는 중복 content hash를 아직 확인하지 못했습니다.
+        해당 후보는 검토 사유와 evidence를 확인하고, 복사 전 새 계획에서 다시 확인해야 합니다.
+      </p>
+    {/if}
     {#if report.capacity}
       {#if report.capacity.can_fit === true}
         <p class="capacity-ok">
@@ -582,7 +621,9 @@
             </div>
             {#if candidate.requires_review}
               <div class="review-controls">
-                {#if matchingReviewDecision(candidate)?.disposition === "approved"}
+                {#if requiresFreshProbe(candidate)}
+                  <strong class="held">계획 예산 때문에 증거가 미확인입니다. 새 계획에서 메타데이터·content hash를 다시 확인해야 합니다.</strong>
+                {:else if matchingReviewDecision(candidate)?.disposition === "approved"}
                   <strong class="approved">현재 메타데이터 증거 검토 승인됨</strong>
                 {:else if matchingReviewDecision(candidate)?.disposition === "held"}
                   <strong class="held">현재 메타데이터 증거 보류됨</strong>
@@ -597,30 +638,32 @@
                     근거: {matchingReviewDecision(candidate)?.rationale ?? "legacy decision"}
                   </span>
                 {/if}
-                <label class="review-rationale">
-                  새 승인·보류 근거 (민감한 셀 값이나 문서 본문은 입력하지 마세요)
-                  <textarea
-                    maxlength="1000"
-                    value={reviewRationales[candidate.metadata_fingerprint] ?? ""}
-                    oninput={(event) => {
-                      reviewRationales = {
-                        ...reviewRationales,
-                        [candidate.metadata_fingerprint]: event.currentTarget.value,
-                      };
-                    }}
-                    disabled={reviewingFingerprint !== ""}
-                  ></textarea>
-                </label>
-                <button
-                  onclick={() => reviewCandidate(candidate, "approved")}
-                  disabled={reviewingFingerprint !== "" || !(reviewRationales[candidate.metadata_fingerprint] ?? "").trim()}
-                >
-                  {reviewingFingerprint === candidate.metadata_fingerprint ? "기록 중…" : "메타데이터 검토 승인"}
-                </button>
-                <button
-                  onclick={() => reviewCandidate(candidate, "held")}
-                  disabled={reviewingFingerprint !== "" || !(reviewRationales[candidate.metadata_fingerprint] ?? "").trim()}
-                >보류</button>
+                {#if !requiresFreshProbe(candidate)}
+                  <label class="review-rationale">
+                    새 승인·보류 근거 (민감한 셀 값이나 문서 본문은 입력하지 마세요)
+                    <textarea
+                      maxlength="1000"
+                      value={reviewRationales[candidate.metadata_fingerprint] ?? ""}
+                      oninput={(event) => {
+                        reviewRationales = {
+                          ...reviewRationales,
+                          [candidate.metadata_fingerprint]: event.currentTarget.value,
+                        };
+                      }}
+                      disabled={reviewingFingerprint !== ""}
+                    ></textarea>
+                  </label>
+                  <button
+                    onclick={() => reviewCandidate(candidate, "approved")}
+                    disabled={reviewingFingerprint !== "" || !(reviewRationales[candidate.metadata_fingerprint] ?? "").trim()}
+                  >
+                    {reviewingFingerprint === candidate.metadata_fingerprint ? "기록 중…" : "메타데이터 검토 승인"}
+                  </button>
+                  <button
+                    onclick={() => reviewCandidate(candidate, "held")}
+                    disabled={reviewingFingerprint !== "" || !(reviewRationales[candidate.metadata_fingerprint] ?? "").trim()}
+                  >보류</button>
+                {/if}
               </div>
             {/if}
             {#if copyEligible(candidate)}

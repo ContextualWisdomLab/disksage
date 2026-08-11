@@ -24,6 +24,16 @@ name = "disksage-archive-tree"
 path = "src/bin/disksage-archive-tree.rs"
 required-features = ["archive-cli"]
 
+[[bin]]
+name = "disksage-clean-plan"
+path = "src/bin/disksage-clean-plan.rs"
+required-features = ["cleanup-cli"]
+
+[[bin]]
+name = "disksage-git-worktree-audit"
+path = "src/bin/disksage-git-worktree-audit.rs"
+required-features = ["worktree-cli"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -36,6 +46,7 @@ serde_json = "1"
 jwalk = "0.8"
 trash = "5.2.6"
 blake3 = "1.8.5"
+libc = "0.2.186"
 base64 = "0.22.1"
 oxttl = "0.2.3"
 oxrdf = "0.3.3"
@@ -63,6 +74,8 @@ tempfile = "3.27.0"
 
 [features]
 archive-cli = []
+cleanup-cli = []
+worktree-cli = []
 cloud-cli = []
 llm-engine = ["dep:llama-cpp-2"]
 

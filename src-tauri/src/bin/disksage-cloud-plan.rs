@@ -918,7 +918,9 @@ fn run() -> Result<(), String> {
         } else {
             None
         };
-        if !adopt_existing {
+        let capacity = if adopt_existing {
+            None
+        } else {
             let assessment = verified_capacity_for_bytes(
                 &selected,
                 args.oauth_connections.as_deref(),
@@ -933,7 +935,8 @@ fn run() -> Result<(), String> {
                     assessment.blockers.join(",")
                 });
             }
-        }
+            Some(assessment)
+        };
         let (receipt, receipt_path) = if adopt_existing {
             cloud_transfer::adopt_existing_cloud_copy_with_review(
                 candidate,
@@ -943,12 +946,13 @@ fn run() -> Result<(), String> {
                 review_decision.as_ref(),
             )?
         } else {
-            cloud_transfer::prepare_cloud_copy_with_review(
+            cloud_transfer::prepare_cloud_copy_with_review_and_capacity(
                 candidate,
                 &selected,
                 receipt_dir,
                 cloud::system_now_ms(),
                 review_decision.as_ref(),
+                capacity.as_ref(),
             )?
         };
         println!(

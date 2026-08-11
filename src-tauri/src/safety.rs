@@ -29,6 +29,14 @@ fn is_home_root(path: &Path, home: Option<&str>) -> bool {
 /// 시스템·루트 경로 하드 거부 목록 (스펙 §7-3).
 /// 안전 계층의 최후 방어선 — 호출자가 무엇을 넘기든 여기서 걸러진다.
 pub fn is_protected(path: &Path) -> bool {
+    // ParentDir components are rejected before any prefix exception (including macOS temp
+    // folders), so callers that preflight without canonicalization cannot scan through `..`.
+    if path
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return true;
+    }
     // 드라이브/파일시스템 루트 자체
     if path.parent().is_none() {
         return true;
@@ -87,9 +95,18 @@ pub fn is_protected(path: &Path) -> bool {
             "/System", "/Library", "/Applications", "/private", "/Volumes", "/cores", "/Network",
         ]);
         let s = path.to_string_lossy();
-        if denied_prefixes
-            .iter()
-            .any(|d| s == *d || s.starts_with(&format!("{d}/")))
+        // `/var/folders` and `/var/tmp` resolve to `/private/var/...` on macOS. They are
+        // user/session-scoped temporary areas and are valid trash-only cleanup targets; keeping
+        // the broad `/private` guard without this narrow exception would classify every
+        // tempfile-backed operation as protected after canonicalization.
+        #[cfg(target_os = "macos")]
+        let macos_ephemeral = s.starts_with("/private/var/folders/") || s.starts_with("/private/var/tmp/");
+        #[cfg(not(target_os = "macos"))]
+        let macos_ephemeral = false;
+        if !macos_ephemeral
+            && denied_prefixes
+                .iter()
+                .any(|d| s == *d || s.starts_with(&format!("{d}/")))
         {
             return true;
         }
@@ -467,6 +484,11 @@ mod tests {
         ] {
             assert!(is_protected(Path::new(p)), "{p} must be protected on macOS");
         }
+        // tempfile::tempdir() commonly resolves through /var -> /private/var. The ephemeral
+        // descendants remain valid trash-only fixtures even though /private itself is guarded.
+        assert!(!is_protected(Path::new("/private/var/folders/user/temp")));
+        assert!(!is_protected(Path::new("/private/var/tmp/disksage-fixture")));
+        assert!(is_protected(Path::new("/private/var/folders/../System")));
     }
 
     #[test]

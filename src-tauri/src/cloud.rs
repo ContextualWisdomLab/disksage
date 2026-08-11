@@ -14,6 +14,8 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 #[cfg(not(coverage))]
 use std::io::{Read, Seek, SeekFrom};
+#[cfg(all(not(coverage), unix))]
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 #[cfg(not(coverage))]
 use std::process::{Command, Stdio};
@@ -27,6 +29,14 @@ const DAY_MS: u64 = 86_400_000;
 const METADATA_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(not(coverage))]
 const METADATA_PROBE_OUTPUT_LIMIT: usize = 1024 * 1024;
+#[cfg(not(coverage))]
+const METADATA_PROBE_PLAN_BUDGET: Duration = Duration::from_secs(10);
+#[cfg(not(coverage))]
+const MAX_METADATA_PROBE_FILES: usize = 32;
+#[cfg(not(coverage))]
+// Hashing is only a duplicate hint during a read-only plan. Keep the initial pass small so a
+// provider placeholder or a nearly-full disk cannot turn an inventory request into a long read.
+const MAX_CONTENT_HASH_BYTES_PER_PLAN: u64 = 16 * 1024 * 1024;
 #[cfg(not(coverage))]
 const MAX_ZIP_METADATA_ENTRIES: usize = 10_000;
 #[cfg(not(coverage))]
@@ -1074,6 +1084,18 @@ fn run_metadata_command_with_limits(
     timeout: Duration,
     output_limit: usize,
 ) -> Result<Vec<u8>, MetadataProbeFailure> {
+    // ExifTool/ffprobe/pdfinfo may spawn helpers that inherit stdout.  Put each probe in its
+    // own process group so a timeout can close the pipe instead of waiting forever for a child
+    // that the direct `Child` handle does not represent.
+    #[cfg(unix)]
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
     command.stdout(Stdio::piped()).stderr(Stdio::null());
     let mut child = command.spawn().map_err(|_| MetadataProbeFailure::Spawn)?;
     let mut stdout = child.stdout.take().ok_or(MetadataProbeFailure::Read)?;
@@ -1104,15 +1126,26 @@ fn run_metadata_command_with_limits(
                 std::thread::sleep(Duration::from_millis(25));
             }
             Ok(None) => {
+                #[cfg(unix)]
+                unsafe {
+                    let _ = libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+                }
                 let _ = child.kill();
                 let _ = child.wait();
-                let _ = output_reader.join();
+                // Do not join a reader whose pipe may still be held by an escaped helper.  The
+                // process group kill normally lets it finish immediately; detaching is the final
+                // bound that keeps the planner responsive even when a provider tool misbehaves.
+                drop(output_reader);
                 return Err(MetadataProbeFailure::Timeout);
             }
             Err(_) => {
+                #[cfg(unix)]
+                unsafe {
+                    let _ = libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+                }
                 let _ = child.kill();
                 let _ = child.wait();
-                let _ = output_reader.join();
+                drop(output_reader);
                 return Err(MetadataProbeFailure::Wait);
             }
         }
@@ -3021,8 +3054,13 @@ fn push_candidate_evidence(
 /// Hash only non-blocked candidates that share a byte length. Exact duplicates remain movable,
 /// but require an operator to select the canonical lineage instead of silently copying every path.
 #[cfg(not(coverage))]
-fn mark_exact_duplicate_candidates(candidates: &mut [CloudCandidate]) -> ExactDuplicateSummary {
+fn mark_exact_duplicate_candidates_with_budget(
+    candidates: &mut [CloudCandidate],
+    max_hash_bytes: Option<u64>,
+) -> (ExactDuplicateSummary, bool) {
     let mut summary = ExactDuplicateSummary::default();
+    let mut hashed_bytes = 0_u64;
+    let mut deferred = false;
     let mut by_size: BTreeMap<u64, Vec<usize>> = BTreeMap::new();
     for (index, candidate) in candidates.iter().enumerate() {
         if candidate.blocked_reason.is_none() {
@@ -3034,6 +3072,24 @@ fn mark_exact_duplicate_candidates(candidates: &mut [CloudCandidate]) -> ExactDu
         let mut by_digest: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
         for &index in same_size {
             let candidate = &candidates[index];
+            if max_hash_bytes.is_some_and(|limit| {
+                candidate.bytes > limit.saturating_sub(hashed_bytes)
+            }) {
+                let candidate = &mut candidates[index];
+                candidate
+                    .review_reasons
+                    .push("exact-duplicate-content-probe-deferred".into());
+                push_candidate_evidence(
+                    candidate,
+                    "content-hash-status",
+                    "deferred:content-hash-budget",
+                    "local:content-hash:planner-budget",
+                    "high",
+                );
+                deferred = true;
+                continue;
+            }
+            hashed_bytes = hashed_bytes.saturating_add(candidate.bytes);
             match hash_duplicate_candidate(Path::new(&candidate.src), candidate.bytes) {
                 Ok(digests) => by_digest
                     .entry((digests.sha256, digests.blake3))
@@ -3105,7 +3161,7 @@ fn mark_exact_duplicate_candidates(candidates: &mut [CloudCandidate]) -> ExactDu
         candidate.requires_review = !candidate.review_reasons.is_empty();
         candidate.review_fingerprint = candidate_review_fingerprint(candidate);
     }
-    summary
+    (summary, deferred)
 }
 
 fn hash_review_value(hasher: &mut blake3::Hasher, value: &[u8]) {
@@ -3186,6 +3242,38 @@ pub fn plan_cloud_archive(
     now_ms: u64,
     options: CloudPlanOptions,
 ) -> CloudPlanReport {
+    #[cfg(not(coverage))]
+    let mut metadata_probe_candidates: Vec<&FileFact> = files
+        .iter()
+        .filter(|file| {
+            if file.bytes < options.min_size_bytes || file.modified_ms == 0 {
+                return false;
+            }
+            let age_days = now_ms.saturating_sub(file.modified_ms) / DAY_MS;
+            if age_days < options.min_age_days || archive_kind(&file.path).is_none() {
+                return false;
+            }
+            let Ok(relative) = file.path.strip_prefix(source_root) else {
+                return false;
+            };
+            !relative.as_os_str().is_empty()
+        })
+        .collect();
+    #[cfg(not(coverage))]
+    metadata_probe_candidates
+        .sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.path.cmp(&b.path)));
+    #[cfg(not(coverage))]
+    metadata_probe_candidates.truncate(options.limit.min(MAX_METADATA_PROBE_FILES));
+    #[cfg(not(coverage))]
+    let metadata_probe_paths: BTreeSet<PathBuf> = metadata_probe_candidates
+        .into_iter()
+        .map(|file| file.path.clone())
+        .collect();
+    #[cfg(not(coverage))]
+    let metadata_probe_deadline = Instant::now() + METADATA_PROBE_PLAN_BUDGET;
+    #[cfg(not(coverage))]
+    let mut metadata_probe_deferred = false;
+
     let mut candidates = Vec::new();
     for file in files {
         if file.bytes < options.min_size_bytes || file.modified_ms == 0 {
@@ -3207,12 +3295,28 @@ pub fn plan_cloud_archive(
         let filename_ms = filename_date_ms(&file.path);
         let filename_publication_month = filename_publication_month(&file.path);
         let mut lineage_metadata = file.content_metadata.clone();
+        #[cfg(not(coverage))]
+        let mut metadata_probe_deferred_for_file = false;
         // Coverage builds exercise the deterministic planning core. Content probing is an
         // external-process adapter (ExifTool/ffprobe/pdfinfo/unzip) covered by normal tests and
         // integration smoke runs, so it is kept outside the in-process line-coverage boundary.
         #[cfg(not(coverage))]
         if lineage_metadata == ContentMetadata::default() && file.path.is_file() {
-            lineage_metadata = probe_content_metadata(&file.path);
+            if metadata_probe_paths.contains(&file.path)
+                && Instant::now() < metadata_probe_deadline
+            {
+                lineage_metadata = probe_content_metadata(&file.path);
+            } else {
+                add_evidence(
+                    &mut lineage_metadata,
+                    "metadata-probe-status",
+                    "deferred:plan-budget-or-result-limit",
+                    "local:metadata-probe:planner-budget",
+                    "high",
+                );
+                metadata_probe_deferred_for_file = true;
+                metadata_probe_deferred = true;
+            }
         }
         let embedded_production_time_ms = lineage_metadata.production_time_ms;
         if let Some(value) = filename_ms {
@@ -3284,6 +3388,10 @@ pub fn plan_cloud_archive(
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|| ".".into());
         let mut review_reasons = review_reasons(&file.path, kind);
+        #[cfg(not(coverage))]
+        if metadata_probe_deferred_for_file {
+            review_reasons.push("content-metadata-probe-deferred".into());
+        }
         review_reasons.extend(embedded_metadata_review_reasons(
             &file.path,
             &lineage_metadata,
@@ -3404,7 +3512,10 @@ pub fn plan_cloud_archive(
         candidates.push(candidate);
     }
     #[cfg(not(coverage))]
-    let exact_duplicates = mark_exact_duplicate_candidates(&mut candidates);
+    let (exact_duplicates, content_hash_deferred) = mark_exact_duplicate_candidates_with_budget(
+        &mut candidates,
+        Some(MAX_CONTENT_HASH_BYTES_PER_PLAN),
+    );
     #[cfg(coverage)]
     let exact_duplicates = ExactDuplicateSummary::default();
     candidates.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.src.cmp(&b.src)));
@@ -3415,6 +3526,20 @@ pub fn plan_cloud_archive(
         .filter(|c| c.blocked_reason.is_none())
         .map(|c| c.bytes)
         .sum();
+    let mut notices = vec![
+        "dry-run-only".into(),
+        "cloud-quota-unverified".into(),
+        "cloud-sync-unverified".into(),
+        "content-hash-pending".into(),
+    ];
+    #[cfg(not(coverage))]
+    if metadata_probe_deferred {
+        notices.push("content-metadata-probe-deferred".into());
+    }
+    #[cfg(not(coverage))]
+    if content_hash_deferred {
+        notices.push("content-hash-deferred".into());
+    }
     CloudPlanReport {
         cloud_root: cloud_root.clone(),
         generated_at_ms: now_ms,
@@ -3423,12 +3548,7 @@ pub fn plan_cloud_archive(
         potentially_reclaimable_bytes,
         exact_duplicates,
         capacity: None,
-        notices: vec![
-            "dry-run-only".into(),
-            "cloud-quota-unverified".into(),
-            "cloud-sync-unverified".into(),
-            "content-hash-pending".into(),
-        ],
+        notices,
     }
 }
 

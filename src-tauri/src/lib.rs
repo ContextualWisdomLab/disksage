@@ -12,7 +12,9 @@ mod settings;
 #[cfg_attr(coverage, allow(dead_code))]
 mod safety;
 #[cfg_attr(coverage, allow(dead_code))]
-mod rules;
+pub mod rules;
+#[cfg_attr(coverage, allow(dead_code))]
+pub mod worktrees;
 #[cfg_attr(coverage, allow(dead_code))]
 mod dev_artifacts;
 #[cfg_attr(coverage, allow(dead_code))]
@@ -60,7 +62,9 @@ pub fn run() {
             commands::top_files,
             commands::list_cache_candidates,
             commands::list_dev_artifacts,
+            commands::list_stale_worktrees,
             commands::clean_paths,
+            commands::clean_cache_candidates,
             commands::recent_operations,
             commands::expand_clean_targets,
             commands::find_duplicate_files,

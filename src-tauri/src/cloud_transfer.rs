@@ -11,6 +11,7 @@ use crate::cloud::{
 use crate::cloud_review::{validate_decision, CloudReviewDecision, CloudReviewDisposition};
 use crate::dataset_metadata::DatasetProfile;
 use crate::provider_evidence::{validate_sync_evidence_record, ProviderSyncEvidenceRecord};
+use crate::provider_capacity::CloudCapacityAssessment;
 use std::path::Path;
 
 #[cfg(not(coverage))]
@@ -106,6 +107,9 @@ pub struct CloudLineageSnapshot {
     pub duration_ms: Option<u64>,
     pub dataset_profile: Option<DatasetProfile>,
     pub metadata_evidence: Vec<MetadataEvidence>,
+    /// Capacity evidence used by the copy gate. Older receipts omit this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity: Option<CloudCapacityAssessment>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -172,6 +176,15 @@ fn embedded_high_confidence(candidate: &CloudCandidate) -> bool {
         && candidate.production_time_source.starts_with("embedded:")
 }
 
+pub fn candidate_requires_fresh_plan(candidate: &CloudCandidate) -> bool {
+    candidate.review_reasons.iter().any(|reason| {
+        matches!(
+            reason.as_str(),
+            "content-metadata-probe-deferred" | "exact-duplicate-content-probe-deferred"
+        )
+    })
+}
+
 /// Validate that a dry-run candidate is still eligible to enter the copy-only phase.
 ///
 /// The function collects every reason so the UI can explain why a candidate remains blocked.
@@ -224,6 +237,12 @@ fn candidate_blockers_for_action(
     }
     if allow_existing_destination && !existing_destination_candidate {
         blockers.push("existing-destination-plan-required".into());
+    }
+    // A bounded planner intentionally did not observe the embedded metadata or the duplicate
+    // content digest for these candidates. An operator rationale cannot turn an unobserved probe
+    // into evidence; refresh the plan so the missing proof is collected before copying.
+    if candidate_requires_fresh_plan(candidate) {
+        blockers.push("deferred-probe-requires-fresh-plan".into());
     }
     // Embedded, high-confidence production time remains the only evidence that can pass without
     // an operator decision. A low-confidence explicit filename date, filesystem creation time, or
@@ -337,6 +356,15 @@ fn lineage_snapshot(
     review_decision: Option<&CloudReviewDecision>,
     copy_verification_method: CloudCopyVerificationMethod,
 ) -> CloudLineageSnapshot {
+    lineage_snapshot_with_capacity(candidate, review_decision, copy_verification_method, None)
+}
+
+fn lineage_snapshot_with_capacity(
+    candidate: &CloudCandidate,
+    review_decision: Option<&CloudReviewDecision>,
+    copy_verification_method: CloudCopyVerificationMethod,
+    capacity: Option<&CloudCapacityAssessment>,
+) -> CloudLineageSnapshot {
     CloudLineageSnapshot {
         candidate_fingerprint: candidate.metadata_fingerprint.clone(),
         review_fingerprint: candidate.review_fingerprint.clone(),
@@ -368,6 +396,7 @@ fn lineage_snapshot(
         duration_ms: candidate.duration_ms,
         dataset_profile: candidate.dataset_profile.clone(),
         metadata_evidence: candidate.metadata_evidence.clone(),
+        capacity: capacity.cloned(),
     }
 }
 
@@ -904,7 +933,31 @@ fn build_verified_receipt(
     verified_at_ms: u64,
     copy_verification_method: CloudCopyVerificationMethod,
 ) -> Result<CloudCopyReceipt, String> {
-    let lineage = lineage_snapshot(candidate, review_decision, copy_verification_method);
+    build_verified_receipt_with_capacity(
+        candidate,
+        review_decision,
+        hashes,
+        verified_at_ms,
+        copy_verification_method,
+        None,
+    )
+}
+
+#[cfg(not(coverage))]
+fn build_verified_receipt_with_capacity(
+    candidate: &CloudCandidate,
+    review_decision: Option<&CloudReviewDecision>,
+    hashes: ContentDigests,
+    verified_at_ms: u64,
+    copy_verification_method: CloudCopyVerificationMethod,
+    capacity: Option<&CloudCapacityAssessment>,
+) -> Result<CloudCopyReceipt, String> {
+    let lineage = lineage_snapshot_with_capacity(
+        candidate,
+        review_decision,
+        copy_verification_method,
+        capacity,
+    );
     let lineage_fingerprint = lineage_fingerprint(&lineage)?;
     let mut receipt = CloudCopyReceipt {
         version: RECEIPT_VERSION,
@@ -966,17 +1019,40 @@ pub fn prepare_cloud_copy_with_review(
     copied_at_ms: u64,
     review_decision: Option<&CloudReviewDecision>,
 ) -> Result<(CloudCopyReceipt, PathBuf), String> {
+    prepare_cloud_copy_with_review_and_capacity(
+        candidate,
+        cloud_root,
+        receipt_dir,
+        copied_at_ms,
+        review_decision,
+        None,
+    )
+}
+
+/// Copy a candidate after validating an optional operator review decision and the fresh provider
+/// capacity assessment used by the copy gate. Capacity evidence is persisted in the receipt
+/// lineage so an auditor can distinguish a verified copy from an unverified quota assumption.
+#[cfg(not(coverage))]
+pub fn prepare_cloud_copy_with_review_and_capacity(
+    candidate: &CloudCandidate,
+    cloud_root: &CloudRoot,
+    receipt_dir: &Path,
+    copied_at_ms: u64,
+    review_decision: Option<&CloudReviewDecision>,
+    capacity: Option<&CloudCapacityAssessment>,
+) -> Result<(CloudCopyReceipt, PathBuf), String> {
     let blockers = candidate_blockers_with_review(candidate, cloud_root, review_decision);
     if !blockers.is_empty() {
         return Err(blockers.join(","));
     }
     let (_, hashes) = copy_and_verify(candidate, cloud_root)?;
-    let receipt = build_verified_receipt(
+    let receipt = build_verified_receipt_with_capacity(
         candidate,
         review_decision,
         hashes,
         copied_at_ms,
         CloudCopyVerificationMethod::CopiedByDiskSage,
+        capacity,
     )?;
     match write_immutable_receipt(&receipt, receipt_dir) {
         Ok(path) => Ok((receipt, path)),
@@ -1107,6 +1183,53 @@ mod tests {
         };
         candidate.review_fingerprint = candidate_review_fingerprint(&candidate);
         candidate
+    }
+
+    #[test]
+    fn capacity_evidence_is_bound_to_lineage_fingerprint() {
+        let candidate = candidate();
+        let without_capacity = lineage_snapshot(
+            &candidate,
+            None,
+            CloudCopyVerificationMethod::CopiedByDiskSage,
+        );
+        let capacity = crate::provider_capacity::CloudCapacityAssessment {
+            snapshot: crate::provider_capacity::CloudCapacitySnapshot {
+                schema_version: 1,
+                provider: CloudProvider::Icloud,
+                evidence_kind: crate::provider_capacity::CapacityEvidenceKind::ProviderNativeStatus,
+                observed_at_ms: 10,
+                total_bytes: None,
+                used_bytes: None,
+                remaining_bytes: Some(100),
+                trashed_bytes: None,
+                max_upload_size_bytes: None,
+                state: crate::provider_capacity::CloudCapacityState::Available,
+                evidence_fingerprint: Some("f".repeat(64)),
+                unavailable_reason: None,
+            },
+            requested_bytes: candidate.bytes,
+            largest_candidate_bytes: candidate.bytes,
+            reserve_bytes: 10,
+            required_bytes: Some(candidate.bytes + 10),
+            can_fit: Some(true),
+            blockers: Vec::new(),
+            notices: Vec::new(),
+        };
+        let with_capacity = lineage_snapshot_with_capacity(
+            &candidate,
+            None,
+            CloudCopyVerificationMethod::CopiedByDiskSage,
+            Some(&capacity),
+        );
+
+        assert_ne!(
+            lineage_fingerprint(&without_capacity).unwrap(),
+            lineage_fingerprint(&with_capacity).unwrap()
+        );
+        assert!(with_capacity.capacity.is_some());
+        let encoded = serde_json::to_value(&with_capacity).unwrap();
+        assert!(encoded.get("capacity").is_some());
     }
 
     fn refresh_review_fingerprint(candidate: &mut CloudCandidate) {
@@ -1415,6 +1538,30 @@ mod tests {
             candidate_blockers_with_review(&reviewed, &root(), Some(&filename_hold));
         assert!(held_blockers.contains(&"review-held".to_string()));
         assert!(held_blockers.contains(&"embedded-high-confidence-date-required".to_string()));
+    }
+
+    #[test]
+    fn deferred_probe_requires_a_fresh_plan_even_after_operator_approval() {
+        for reason in [
+            "content-metadata-probe-deferred",
+            "exact-duplicate-content-probe-deferred",
+        ] {
+            let mut deferred = candidate();
+            deferred.requires_review = true;
+            deferred.review_reasons = vec![reason.into()];
+            deferred.review_fingerprint = crate::cloud::candidate_review_fingerprint(&deferred);
+            let approval = crate::cloud_review::create_decision(
+                &deferred,
+                CloudReviewDisposition::Approved,
+                10,
+            )
+            .unwrap();
+            let blockers = candidate_blockers_with_review(&deferred, &root(), Some(&approval));
+            assert!(
+                blockers.contains(&"deferred-probe-requires-fresh-plan".to_string()),
+                "{reason} must remain non-overridable"
+            );
+        }
     }
 
     #[test]

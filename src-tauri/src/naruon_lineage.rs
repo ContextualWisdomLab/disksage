@@ -302,6 +302,7 @@ mod tests {
                     source: "exiftool:CreateDate".into(),
                     confidence: "high".into(),
                 }],
+                capacity: None,
             }),
         }
     }
