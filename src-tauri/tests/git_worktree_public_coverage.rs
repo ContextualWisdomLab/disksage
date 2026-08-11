@@ -1,11 +1,12 @@
 //! Public-contract coverage for the read-only Git worktree audit boundary.
 //!
 //! The fixtures create local temporary repositories only. They perform no fetch, branch deletion,
-//! worktree removal, provider operation, or user-file cleanup.
+//! provider operation, or user-file cleanup. The removal-flow regression mutates only a temporary
+//! Git worktree created by the test and verifies that its branch is retained.
 
 use disksage_lib::git_worktree::{
-    approve_stale_worktree_removal, audit_git_worktrees, public_summary, GitWorktreeAuditOptions,
-    GitWorktreeDisposition, GIT_WORKTREE_AUDIT_SCHEMA_KIND,
+    approve_stale_worktree_removal, audit_git_worktrees, execute_stale_worktree_removal,
+    public_summary, GitWorktreeAuditOptions, GitWorktreeDisposition, GIT_WORKTREE_AUDIT_SCHEMA_KIND,
 };
 use std::path::Path;
 use std::process::Command;
@@ -215,4 +216,98 @@ fn dirty_primary_state_is_observed_without_becoming_removal_authority() {
     assert_eq!(entry.disposition, GitWorktreeDisposition::Preserve);
     assert_eq!(report.removal_candidate_count, 0);
     assert!(!report.filesystem_mutation_executed);
+}
+
+#[cfg(unix)]
+#[test]
+fn clean_merged_secondary_worktree_requires_exact_approval_then_removes_only_the_worktree() {
+    let root = initialized_repository();
+    git(root.path(), &["branch", "stale-test-worktree"]);
+
+    std::fs::write(root.path().join("newer.txt"), b"retained tip\n").unwrap();
+    git(root.path(), &["add", "newer.txt"]);
+    git(root.path(), &["commit", "-q", "-m", "advance retained tip"]);
+
+    let secondary_parent = tempfile::tempdir().unwrap();
+    let secondary = secondary_parent.path().join("stale-worktree");
+    let secondary_text = secondary.to_string_lossy().into_owned();
+    git(
+        root.path(),
+        &["worktree", "add", "-q", &secondary_text, "stale-test-worktree"],
+    );
+
+    let options = GitWorktreeAuditOptions::default();
+    let report = audit_git_worktrees(root.path(), &["HEAD".into()], options, 1_000).unwrap();
+    assert_eq!(report.worktree_count, 2);
+    assert_eq!(report.removal_candidate_count, 1);
+    assert_eq!(report.preserved_count, 1);
+    assert_eq!(report.evidence_gap_count, 0);
+    assert!(report.evidence_complete);
+
+    let candidate = report
+        .entries
+        .iter()
+        .find(|entry| entry.path == secondary_text)
+        .expect("secondary worktree must be in the exact audit");
+    assert_eq!(candidate.disposition, GitWorktreeDisposition::RemovalCandidate);
+    assert!(candidate.blockers.is_empty());
+    assert_eq!(candidate.status_clean, Some(true));
+    assert_eq!(candidate.contained_in_reference, Some(true));
+    assert!(!candidate.head_is_retained_tip);
+    assert_eq!(candidate.actor_cwd_inside, Some(false));
+    assert!(candidate.size.evidence_complete);
+    assert!(candidate.active_use.assessed);
+    assert!(candidate.active_use.evidence_complete);
+    assert!(!candidate.active_use.active);
+
+    let phrase = report
+        .exact_approval_phrase
+        .clone()
+        .expect("one verified candidate must produce an exact approval phrase");
+    assert_eq!(
+        approve_stale_worktree_removal(
+            &report,
+            "wrong confirmation",
+            1_001,
+            "human:test",
+            "Reviewed clean merged temporary worktree",
+        )
+        .unwrap_err(),
+        "git-worktree-removal-confirmation-mismatch"
+    );
+    let approval = approve_stale_worktree_removal(
+        &report,
+        &phrase,
+        1_001,
+        "human:test",
+        "Reviewed clean merged temporary worktree",
+    )
+    .unwrap();
+    assert_eq!(approval.removal_candidate_count, 1);
+    assert_eq!(approval.exact_approval_phrase, phrase);
+
+    let result = execute_stale_worktree_removal(&report, &approval, &phrase, options, 1_002).unwrap();
+    assert!(result.verification_complete);
+    assert_eq!(result.planned_candidate_count, 1);
+    assert_eq!(result.attempted_count, 1);
+    assert_eq!(result.removed_count, 1);
+    assert!(result.filesystem_mutation_executed);
+    assert!(!result.branch_delete_executed);
+    assert!(!result.git_prune_executed);
+    assert_eq!(result.stopped_reason, None);
+    assert_eq!(result.items.len(), 1);
+    let item = &result.items[0];
+    assert!(item.removal_attempted);
+    assert!(item.removal_command_succeeded);
+    assert!(item.path_absence_verified);
+    assert!(item.registration_absence_verified);
+    assert_eq!(item.branch_retained, Some(true));
+    assert_eq!(item.error, None);
+    assert!(!secondary.exists());
+    assert!(root.path().exists());
+
+    git(
+        root.path(),
+        &["show-ref", "--verify", "--quiet", "refs/heads/stale-test-worktree"],
+    );
 }
