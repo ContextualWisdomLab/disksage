@@ -228,7 +228,8 @@ mod tests {
         fs::create_dir(&bases.temp).unwrap();
         let journal = tmp.path().join("journal.jsonl");
         let result = clean_cache_contents_inner(&bases, tmp.path(), &journal, 1);
-        assert_eq!(result.unwrap_err(), "cache-root-not-current-or-safe");
+        let error = result.err().expect("non-catalog root should be rejected");
+        assert_eq!(error, "cache-root-not-current-or-safe");
     }
 
     #[cfg(any(windows, target_os = "linux"))]
