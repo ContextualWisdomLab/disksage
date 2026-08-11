@@ -211,3 +211,28 @@ fn symlink_entries_hold_an_otherwise_remote_version_directory() {
     assert_eq!(report.remote_recoverable_directories, 0);
     assert_eq!(report.held_reason_counts.get("symlink-entry"), Some(&1));
 }
+
+#[test]
+fn remote_support_sidecars_do_not_become_untracked_payloads() {
+    let temp = tempfile::tempdir().unwrap();
+    let version = version_dir(temp.path(), "org/example/sidecars/1.0.0");
+    write_remote_pair(&version, "sidecars-1.0.0");
+
+    for name in [
+        "resolver-status.properties",
+        "sidecars-1.0.0.jar.lastUpdated",
+        "sidecars-1.0.0.jar.sha1",
+        "sidecars-1.0.0.jar.md5",
+        "sidecars-1.0.0.jar.sha256",
+        "sidecars-1.0.0.jar.sha512",
+        "maven-metadata-central.xml",
+    ] {
+        std::fs::write(version.join(name), b"metadata").unwrap();
+    }
+
+    let report = audit(temp.path());
+    assert_eq!(report.remote_recoverable_directories, 1);
+    assert_eq!(report.held_directories, 0);
+    assert_eq!(report.candidates.len(), 1);
+    assert_eq!(report.candidates[0].artifact_files, 2);
+}
