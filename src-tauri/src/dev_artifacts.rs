@@ -68,9 +68,7 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
         scan_complete: true,
         ..ArtifactManifest::default()
     };
-    let root_object_id = std::fs::symlink_metadata(root)
-        .ok()
-        .and_then(|metadata| crate::safety::object_id_from_metadata(&metadata));
+    let root_object_id = crate::safety::filesystem_object_id(root).ok();
     if root_object_id.is_none() {
         manifest.scan_complete = false;
     }
@@ -111,7 +109,7 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
                 manifest.scan_complete = false;
                 continue;
             };
-            let identity = crate::safety::object_id_from_metadata(&metadata).unwrap_or_else(|| {
+            let identity = crate::safety::filesystem_object_id(&entry_path).unwrap_or_else(|_| {
                 manifest.skipped = manifest.skipped.saturating_add(1);
                 manifest.scan_complete = false;
                 "<unknown>".into()
@@ -130,7 +128,7 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
                 manifest.scan_complete = false;
                 continue;
             };
-            let identity = crate::safety::object_id_from_metadata(&metadata).unwrap_or_else(|| {
+            let identity = crate::safety::filesystem_object_id(&entry_path).unwrap_or_else(|_| {
                 manifest.skipped = manifest.skipped.saturating_add(1);
                 manifest.scan_complete = false;
                 "<unknown>".into()

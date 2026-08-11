@@ -119,8 +119,10 @@ pub fn is_protected(path: &Path) -> bool {
 
 /// Stable identity for one filesystem object. Metadata fingerprints describe a tree, while this
 /// identity binds the later trash operation to the exact directory entry observed at review time.
-/// Unix uses the device/inode pair; Windows uses the volume serial and file index. Unsupported
-/// platforms fail closed because a path-only fallback would reintroduce a replacement race.
+/// Unix uses the device/inode pair. Windows obtains the equivalent volume/file-index identity from
+/// an open handle in [`filesystem_object_id`], because the stable `std` metadata accessors are not
+/// available on the supported Rust toolchains. Unsupported platforms fail closed because a
+/// path-only fallback would reintroduce a replacement race.
 pub fn object_id_from_metadata(metadata: &std::fs::Metadata) -> Option<String> {
     #[cfg(unix)]
     {
@@ -129,14 +131,12 @@ pub fn object_id_from_metadata(metadata: &std::fs::Metadata) -> Option<String> {
     }
     #[cfg(windows)]
     {
-        use std::os::windows::fs::MetadataExt;
-        let volume = metadata.volume_serial_number()?;
-        let file_index = metadata.file_index()?;
-        return Some(format!(
-            "windows:{}:{}",
-            volume,
-            file_index
-        ));
+        // Windows' `MetadataExt::{volume_serial_number,file_index}` methods are still gated
+        // behind the unstable `windows_by_handle` feature. Callers that need a Windows identity
+        // must use `filesystem_object_id`, which keeps the file handle open while deriving the
+        // same volume/file-index key through the already-supported `same-file` crate.
+        let _ = metadata;
+        return None;
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -146,6 +146,21 @@ pub fn object_id_from_metadata(metadata: &std::fs::Metadata) -> Option<String> {
 }
 
 pub fn filesystem_object_id(path: &Path) -> std::io::Result<String> {
+    #[cfg(windows)]
+    {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        // `same-file` opens the path and derives equality from the Windows volume serial and
+        // file index. Hashing that private key gives us a portable, serializable identity without
+        // relying on the unstable std metadata accessors. The handle remains live through the
+        // hash operation, matching the crate's documented Windows safety requirement.
+        let handle = same_file::Handle::from_path(path)?;
+        let mut hasher = DefaultHasher::new();
+        handle.hash(&mut hasher);
+        return Ok(format!("windows:{:016x}", hasher.finish()));
+    }
+
     let metadata = std::fs::symlink_metadata(path)?;
     object_id_from_metadata(&metadata).ok_or_else(|| {
         std::io::Error::new(
