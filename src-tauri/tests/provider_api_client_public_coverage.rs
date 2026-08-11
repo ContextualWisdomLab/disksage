@@ -81,13 +81,16 @@ fn path_locator_builders_reject_outside_root_root_itself_and_parent_components()
 #[test]
 fn google_drive_locator_enforces_parent_chain_depth_before_remote_collection() {
     let root = tempfile::tempdir().unwrap();
-    let mut destination = root.path().to_path_buf();
-    for index in 0..102 {
-        destination.push(format!("segment-{index}"));
+    let mut maximum_supported = root.path().to_path_buf();
+    for index in 0..101 {
+        maximum_supported.push(format!("segment-{index}"));
     }
+    assert!(google_drive_path_locator(root.path(), &maximum_supported, "file-id").is_ok());
 
+    let mut too_deep = maximum_supported;
+    too_deep.push("segment-101");
     assert_eq!(
-        google_drive_path_locator(root.path(), &destination, "file-id").unwrap_err(),
+        google_drive_path_locator(root.path(), &too_deep, "file-id").unwrap_err(),
         "google-drive-path-too-deep"
     );
 }
@@ -110,11 +113,12 @@ fn provider_object_ids_and_paths_enforce_bounded_wire_inputs() {
     let maximum_id = "x".repeat(1_024);
     assert!(provider_metadata_url(&ProviderRemoteLocator::OneDriveItemId(maximum_id.clone())).is_ok());
     assert!(provider_metadata_url(&ProviderRemoteLocator::GoogleDriveFileId(maximum_id)).is_ok());
-    assert_eq!(
-        provider_metadata_url(&ProviderRemoteLocator::GoogleDriveFileId("x".repeat(1_025)))
-            .unwrap_err(),
-        "provider-object-id-invalid"
-    );
+    for locator in [
+        ProviderRemoteLocator::OneDriveItemId("x".repeat(1_025)),
+        ProviderRemoteLocator::GoogleDriveFileId("x".repeat(1_025)),
+    ] {
+        assert_eq!(provider_metadata_url(&locator).unwrap_err(), "provider-object-id-invalid");
+    }
 }
 
 #[test]
@@ -137,11 +141,37 @@ fn path_builders_normalize_unicode_and_reject_control_or_oversized_paths() {
         "provider-path-invalid"
     );
 
+    for whitespace_edge in [" leading.pdf", "trailing.pdf "] {
+        assert_eq!(
+            onedrive_path_locator(root.path(), &root.path().join(whitespace_edge)).unwrap_err(),
+            "provider-path-invalid"
+        );
+    }
+
     let maximum_path = root.path().join("x".repeat(4_096));
     assert!(onedrive_path_locator(root.path(), &maximum_path).is_ok());
     let oversized_path = root.path().join("x".repeat(4_097));
     assert_eq!(
         onedrive_path_locator(root.path(), &oversized_path).unwrap_err(),
         "provider-path-invalid"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn path_builders_reject_non_unicode_segments_before_transport() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let destination = root.path().join(OsString::from_vec(vec![b'b', b'a', b'd', 0xff]));
+
+    assert_eq!(
+        onedrive_path_locator(root.path(), &destination).unwrap_err(),
+        "provider-path-not-unicode"
+    );
+    assert_eq!(
+        google_drive_path_locator(root.path(), &destination, "file-id").unwrap_err(),
+        "provider-path-not-unicode"
     );
 }
