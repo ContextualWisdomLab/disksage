@@ -16,7 +16,8 @@ describe("cache cleanup execution boundary", () => {
     const tauri = readSource("src-tauri/src/lib.rs");
 
     expect(cleanup).not.toContain("api.expandCleanTargets(c.path)");
-    expect(cleanup).toContain('invoke<api.CleanResult[]>("clean_cache_contents"');
+    expect(cleanup).not.toContain('invoke<api.CleanResult[]>("clean_cache_contents"');
+    expect(cleanup).toContain("캐시 항목은 현재 읽기 전용입니다");
     expect(backend).toContain("pub fn clean_cache_contents(");
     expect(backend).toContain("cache-cleanup-atomic-trash-unavailable");
     expect(backend).not.toContain("trash_delete(");
