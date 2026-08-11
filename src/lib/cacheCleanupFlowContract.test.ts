@@ -10,7 +10,7 @@ function readSource(path: string): string {
 }
 
 describe("cache cleanup execution boundary", () => {
-  it("uses one backend operation for cache cleanup", () => {
+  it("keeps cache mutation behind one fail-closed backend authority", () => {
     const cleanup = readSource("src/lib/Cleanup.svelte");
     const backend = readSource("src-tauri/src/cache_cleanup.rs");
     const tauri = readSource("src-tauri/src/lib.rs");
@@ -18,7 +18,8 @@ describe("cache cleanup execution boundary", () => {
     expect(cleanup).not.toContain("api.expandCleanTargets(c.path)");
     expect(cleanup).toContain('invoke<api.CleanResult[]>("clean_cache_contents"');
     expect(backend).toContain("pub fn clean_cache_contents(");
-    expect(backend).toContain("guard.still_current()");
+    expect(backend).toContain("cache-cleanup-atomic-trash-unavailable");
+    expect(backend).not.toContain("trash_delete(");
     expect(tauri).toContain("cache_cleanup::clean_cache_contents");
   });
 });
