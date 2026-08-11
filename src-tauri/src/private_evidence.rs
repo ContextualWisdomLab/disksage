@@ -137,4 +137,27 @@ mod tests {
         )
         .is_err());
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_parent_writable_by_other_principals() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let source = tempfile::tempdir().unwrap();
+        let private = tempfile::tempdir().unwrap();
+        let mut permissions = std::fs::metadata(private.path()).unwrap().permissions();
+        permissions.set_mode(0o777);
+        std::fs::set_permissions(private.path(), permissions).unwrap();
+
+        let path = private.path().join("audit.json");
+        let error = write_private_json_create_new(
+            source.path(),
+            &path,
+            &serde_json::json!({"private": true}),
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "private-evidence-parent-writable-by-others");
+        assert!(!path.exists());
+    }
 }
