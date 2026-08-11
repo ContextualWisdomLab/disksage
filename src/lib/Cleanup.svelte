@@ -10,7 +10,6 @@
   let caches: api.CacheCandidate[] = $state([]);
   let artifacts: api.DevArtifact[] = $state([]);
   let selected: Set<string> = $state(new Set());
-  let selectedRules: Set<string> = $state(new Set());
   let results: api.CleanResult[] = $state([]);
   let busy = $state(false);
   let loadError = $state("");
@@ -44,30 +43,24 @@
   }
 
   let totalSelected = $derived(
-    caches.filter((c) => selectedRules.has(c.id)).reduce((s, c) => s + c.bytes, 0) +
-      artifacts
-        .filter((a) => selected.has(a.path) && a.scan_complete && a.skipped === 0)
-        .reduce((s, a) => s + a.bytes, 0),
+    artifacts
+      .filter((a) => selected.has(a.path) && a.scan_complete && a.skipped === 0)
+      .reduce((sum, artifact) => sum + artifact.bytes, 0),
   );
 
   let selectionCount = $derived(
-    caches.filter((c) => selectedRules.has(c.id) && c.exists).length +
-      artifacts.filter((a) => selected.has(a.path) && a.scan_complete && a.skipped === 0).length,
+    artifacts.filter((a) => selected.has(a.path) && a.scan_complete && a.skipped === 0).length,
   );
 
   async function executeClean() {
     // 검토·확인 (스펙 §7-6): 명시적 승인 없이는 아무것도 실행되지 않는다
-    const ruleDirs = caches.filter((c) => selectedRules.has(c.id) && c.exists);
     const selectedArtifacts = artifacts.filter(
       (a) => selected.has(a.path) && a.scan_complete && a.skipped === 0,
     );
-    const summary = [
-      ...ruleDirs.map((c) => `${c.label} (${fmtBytes(c.bytes)}) — 내용물 비우기`),
-      ...selectedArtifacts.map(
-        (a) => `${a.path} (${fmtBytes(a.bytes)}, ${a.files}개) — 메타데이터 지문 ${a.fingerprint.slice(0, 12)}`,
-      ),
-    ];
-    if (summary.length === 0) return;
+    if (selectedArtifacts.length === 0 || !scannedRoot) return;
+    const summary = selectedArtifacts.map(
+      (a) => `${a.path} (${fmtBytes(a.bytes)}, ${a.files}개) — 메타데이터 지문 ${a.fingerprint.slice(0, 12)}`,
+    );
     const okay = await confirm(
       `다음 ${summary.length}개 항목을 휴지통으로 보냅니다 (논리 크기 합계 ${fmtBytes(totalSelected)}):\n\n` +
         summary.slice(0, 15).join("\n") +
@@ -79,17 +72,8 @@
 
     busy = true;
     try {
-      const paths: string[] = [];
-      for (const c of ruleDirs) {
-        paths.push(...(await api.expandCleanTargets(c.path)));
-      }
-      const cacheResults = paths.length ? await api.cleanPaths(paths) : [];
-      const artifactResults = selectedArtifacts.length && scannedRoot
-        ? await api.cleanDevArtifacts(scannedRoot, 30, selectedArtifacts)
-        : [];
-      results = [...cacheResults, ...artifactResults];
+      results = await api.cleanDevArtifacts(scannedRoot, 30, selectedArtifacts);
       selected = new Set();
-      selectedRules = new Set();
       await load();
     } catch (e) {
       loadError = String(e);
@@ -103,19 +87,17 @@
 
 <section>
   <h2>정리 <button onclick={load} disabled={busy}>새로고침</button></h2>
-  {#if loadError}<p class="error">{loadError}</p>{/if}
+  {#if loadError}<p class="error" role="alert">{loadError}</p>{/if}
 
   <h3>캐시</h3>
+  <p class="notice" role="status">
+    캐시 항목은 현재 읽기 전용입니다. 검증된 파일시스템 객체와 휴지통 이동을 하나의 원자적 권한 경계로 묶기 전까지 DiskSage는 캐시 삭제를 실행하지 않습니다.
+  </p>
   <ul class="list">
     {#each caches as c (c.id)}
       <li>
-        <label class:disabled={!c.exists}>
-          <input
-            type="checkbox"
-            disabled={!c.exists || busy}
-            checked={selectedRules.has(c.id)}
-            onchange={() => (selectedRules = toggle(selectedRules, c.id))}
-          />
+        <label class="disabled">
+          <input type="checkbox" disabled />
           {c.label}
           <span class="size">{c.exists ? fmtBytes(c.bytes) : "없음"}</span>
         </label>
@@ -184,6 +166,7 @@
   .size { color: #666; font-variant-numeric: tabular-nums; margin-left: 0.5rem; }
   .path { color: #999; font-size: 0.8rem; overflow-wrap: anywhere; text-align: right; }
   .disabled { color: #aaa; }
+  .notice { color: #555; font-size: 0.9rem; }
   .error, .errors { color: #b00; }
   .errors { font-size: 0.85rem; }
   .badge-safe, .badge-caution, .badge-keep, .badge-unrated {

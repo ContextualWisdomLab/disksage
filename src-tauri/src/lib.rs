@@ -1,8 +1,13 @@
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+compile_error!("DiskSage supports only Windows, Linux, and macOS targets.");
+
 // coverage 빌드(비-테스트)에서는 run()이 빠져 모듈 내용이 테스트에서만 쓰이므로 dead_code만 허용
 #[cfg_attr(coverage, allow(dead_code))]
 mod dupes;
 #[cfg_attr(coverage, allow(dead_code))]
 mod commands;
+#[cfg_attr(coverage, allow(dead_code))]
+mod cache_cleanup;
 #[cfg_attr(coverage, allow(dead_code))]
 mod scanner;
 #[cfg_attr(coverage, allow(dead_code))]
@@ -88,6 +93,7 @@ pub fn run() {
             commands::list_cache_candidates,
             commands::list_dev_artifacts,
             commands::clean_paths,
+            cache_cleanup::clean_cache_contents,
             commands::clean_dev_artifacts,
             commands::recent_operations,
             commands::expand_clean_targets,
