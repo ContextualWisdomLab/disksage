@@ -200,6 +200,88 @@ fn developer_artifact_cleanup_rejects_stale_manifest_and_preserves_current_objec
 }
 
 #[test]
+fn developer_artifact_cleanup_rejects_each_mutable_request_identity_field() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("app");
+    let target = project.join("target");
+    fs::create_dir_all(&target).unwrap();
+    fs::write(project.join("Cargo.toml"), b"[package]\nname = \"branch-coverage-fixture\"\n").unwrap();
+    fs::write(target.join("artifact.bin"), b"stable").unwrap();
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let mut discovered = crate::dev_artifacts::find_artifacts(temp.path(), 0, now_ms);
+    assert_eq!(discovered.len(), 1);
+    let current = discovered.pop().unwrap();
+    assert!(current.scan_complete);
+    assert_eq!(current.skipped, 0);
+    assert!(!current.object_id.is_empty());
+
+    let mut variants = Vec::new();
+
+    let mut changed = current.clone();
+    changed.path.push_str("-replacement");
+    variants.push(changed);
+
+    let mut changed = current.clone();
+    changed.kind.push_str("-replacement");
+    variants.push(changed);
+
+    let mut changed = current.clone();
+    changed.project.push_str("-replacement");
+    variants.push(changed);
+
+    let mut changed = current.clone();
+    changed.bytes = changed.bytes.saturating_add(1);
+    variants.push(changed);
+
+    let mut changed = current.clone();
+    changed.files = changed.files.saturating_add(1);
+    variants.push(changed);
+
+    let mut changed = current.clone();
+    changed.skipped = 1;
+    variants.push(changed);
+
+    let mut changed = current.clone();
+    changed.scan_complete = false;
+    variants.push(changed);
+
+    let mut changed = current.clone();
+    changed.fingerprint.push('0');
+    variants.push(changed);
+
+    let mut changed = current.clone();
+    changed.object_id.clear();
+    variants.push(changed);
+
+    let mut changed = current.clone();
+    changed.object_id.push_str("-replacement");
+    variants.push(changed);
+
+    let mut changed = current.clone();
+    changed.age_days = changed.age_days.saturating_add(1);
+    variants.push(changed);
+
+    for request in variants {
+        let result = clean_dev_artifacts_inner(
+            &[request],
+            temp.path(),
+            0,
+            &temp.path().join("unused-journal.jsonl"),
+            now_ms,
+        );
+        assert_eq!(result.len(), 1);
+        assert!(!result[0].ok);
+        assert!(result[0].error.contains("다시 스캔"));
+        assert!(target.exists());
+        assert_eq!(fs::read(target.join("artifact.bin")).unwrap(), b"stable");
+    }
+}
+
+#[test]
 fn move_execution_journaling_and_undo_form_one_reversible_flow() {
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("source.txt");
