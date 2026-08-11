@@ -1,6 +1,5 @@
 <script lang="ts">
   import * as api from "./api";
-  import { invoke } from "@tauri-apps/api/core";
   import { fmtBytes } from "./fmt";
   import { verdictBadge } from "./verdictBadge";
   import { confirm } from "@tauri-apps/plugin-dialog";
@@ -11,15 +10,11 @@
   let caches: api.CacheCandidate[] = $state([]);
   let artifacts: api.DevArtifact[] = $state([]);
   let selected: Set<string> = $state(new Set());
-  let selectedRules: Set<string> = $state(new Set());
   let results: api.CleanResult[] = $state([]);
   let busy = $state(false);
   let loadError = $state("");
   // ponytail: 배지는 개별 파일/디렉토리 후보(artifacts)에만 표시 — caches는 소수의 고정 규칙 카테고리라 LLM 판정 가치가 낮음.
   let verdicts: Record<string, api.Verdict> = $state({});
-
-  const cleanCacheContents = (dir: string) =>
-    invoke<api.CleanResult[]>("clean_cache_contents", { dir });
 
   async function loadVerdicts(paths: string[]) {
     try {
@@ -48,28 +43,19 @@
   }
 
   let totalSelected = $derived(
-    caches.filter((c) => selectedRules.has(c.id)).reduce((s, c) => s + c.bytes, 0) +
-      artifacts.filter((a) => selected.has(a.path)).reduce((s, a) => s + a.bytes, 0),
+    artifacts.filter((a) => selected.has(a.path)).reduce((sum, artifact) => sum + artifact.bytes, 0),
   );
 
-  let selectionCount = $derived(
-    caches.filter((c) => selectedRules.has(c.id) && c.exists).length +
-      artifacts.filter((a) => selected.has(a.path)).length,
-  );
+  let selectionCount = $derived(artifacts.filter((a) => selected.has(a.path)).length);
 
   async function executeClean() {
     // 검토·확인 (스펙 §7-6): 명시적 승인 없이는 아무것도 실행되지 않는다
-    const ruleDirs = caches.filter((c) => selectedRules.has(c.id) && c.exists);
     const artifactPaths = artifacts.filter((a) => selected.has(a.path)).map((a) => a.path);
-    const summary = [
-      ...ruleDirs.map((c) => `${c.label} (${fmtBytes(c.bytes)}) — 내용물 비우기`),
-      ...artifactPaths,
-    ];
-    if (summary.length === 0) return;
+    if (artifactPaths.length === 0) return;
     const okay = await confirm(
-      `다음 ${summary.length}개 항목을 휴지통으로 보냅니다 (논리 크기 합계 ${fmtBytes(totalSelected)}):\n\n` +
-        summary.slice(0, 15).join("\n") +
-        (summary.length > 15 ? `\n… 외 ${summary.length - 15}개` : "") +
+      `다음 ${artifactPaths.length}개 항목을 휴지통으로 보냅니다 (논리 크기 합계 ${fmtBytes(totalSelected)}):\n\n` +
+        artifactPaths.slice(0, 15).join("\n") +
+        (artifactPaths.length > 15 ? `\n… 외 ${artifactPaths.length - 15}개` : "") +
         "\n\n휴지통에서 언제든 복원할 수 있습니다. 휴지통을 비우기 전에는 물리 공간이 회수되지 않으며, APFS 공유 블록 때문에 실제 회수량은 논리 크기보다 작을 수 있습니다.",
       { title: "DiskSage", kind: "warning" },
     );
@@ -77,14 +63,8 @@
 
     busy = true;
     try {
-      const cacheResults: api.CleanResult[] = [];
-      for (const c of ruleDirs) {
-        cacheResults.push(...(await cleanCacheContents(c.path)));
-      }
-      const artifactResults = artifactPaths.length > 0 ? await api.cleanPaths(artifactPaths) : [];
-      results = [...cacheResults, ...artifactResults];
+      results = await api.cleanPaths(artifactPaths);
       selected = new Set();
-      selectedRules = new Set();
       await load();
     } catch (e) {
       loadError = String(e);
@@ -98,19 +78,17 @@
 
 <section>
   <h2>정리 <button onclick={load} disabled={busy}>새로고침</button></h2>
-  {#if loadError}<p class="error">{loadError}</p>{/if}
+  {#if loadError}<p class="error" role="alert">{loadError}</p>{/if}
 
   <h3>캐시</h3>
+  <p class="notice" role="status">
+    캐시 항목은 현재 읽기 전용입니다. 검증된 파일시스템 객체와 휴지통 이동을 하나의 원자적 권한 경계로 묶기 전까지 DiskSage는 캐시 삭제를 실행하지 않습니다.
+  </p>
   <ul class="list">
     {#each caches as c (c.id)}
       <li>
-        <label class:disabled={!c.exists}>
-          <input
-            type="checkbox"
-            disabled={!c.exists || busy}
-            checked={selectedRules.has(c.id)}
-            onchange={() => (selectedRules = toggle(selectedRules, c.id))}
-          />
+        <label class="disabled">
+          <input type="checkbox" disabled />
           {c.label}
           <span class="size">{c.exists ? fmtBytes(c.bytes) : "없음"}</span>
         </label>
@@ -173,6 +151,7 @@
   .size { color: #666; font-variant-numeric: tabular-nums; margin-left: 0.5rem; }
   .path { color: #999; font-size: 0.8rem; overflow-wrap: anywhere; text-align: right; }
   .disabled { color: #aaa; }
+  .notice { color: #555; font-size: 0.9rem; }
   .error, .errors { color: #b00; }
   .errors { font-size: 0.85rem; }
   .badge-safe, .badge-caution, .badge-keep, .badge-unrated {
