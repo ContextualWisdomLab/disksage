@@ -7,6 +7,8 @@ mod dupes;
 #[cfg_attr(coverage, allow(dead_code))]
 mod commands;
 #[cfg_attr(coverage, allow(dead_code))]
+mod generic_cleanup;
+#[cfg_attr(coverage, allow(dead_code))]
 mod cache_cleanup;
 #[cfg_attr(coverage, allow(dead_code))]
 mod scanner;
@@ -92,7 +94,7 @@ pub fn run() {
             commands::top_files,
             commands::list_cache_candidates,
             commands::list_dev_artifacts,
-            commands::clean_paths,
+            generic_cleanup::clean_paths,
             cache_cleanup::clean_cache_contents,
             commands::recent_operations,
             commands::expand_clean_targets,
