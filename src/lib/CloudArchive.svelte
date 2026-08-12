@@ -77,7 +77,7 @@
       reviewDecisions = await api.listCloudReviewDecisions();
       selectedRoot = roots.find((root) => root.readable)?.path ?? "";
     } catch (e) {
-      loadError = String(e);
+      loadError = "클라우드 정보를 불러오지 못했습니다.";
     }
   });
 
@@ -112,7 +112,7 @@
         connectionCapacityRoot = selectedRoot;
       }
     } catch (e) {
-      loadError = String(e);
+      loadError = "클라우드 오프로드 후보를 분석하지 못했습니다.";
     } finally {
       busy = false;
     }
@@ -196,7 +196,7 @@
         [candidate.metadata_fingerprint]: false,
       };
     } catch (e) {
-      loadError = String(e);
+      loadError = "클라우드 후보 검토 결정을 저장하지 못했습니다.";
     } finally {
       reviewingFingerprint = "";
     }
@@ -232,7 +232,7 @@
         200,
       );
     } catch (e) {
-      loadError = String(e);
+      loadError = "클라우드 후보를 복사하지 못했습니다.";
     } finally {
       copyingFingerprint = "";
     }
@@ -271,7 +271,7 @@
         200,
       );
     } catch (e) {
-      loadError = String(e);
+      loadError = "기존 클라우드 복사본을 채택하지 못했습니다.";
     } finally {
       copyingFingerprint = "";
     }
@@ -288,7 +288,7 @@
         copied.receipt.provider === "google-drive" ? objectId.trim() || null : null,
       );
     } catch (e) {
-      loadError = String(e);
+      loadError = "클라우드 복사 증거를 검증하지 못했습니다.";
     } finally {
       attesting = false;
     }
@@ -319,7 +319,7 @@
       evictionConfirmation = "";
       evictionRationale = "";
     } catch (e) {
-      loadError = String(e);
+      loadError = "검증된 원본을 휴지통으로 보내지 못했습니다.";
     } finally {
       evicting = false;
     }
@@ -365,7 +365,7 @@
       connectionCapacity = await api.verifyCloudProviderCapacity(root.path);
       connectionCapacityRoot = root.path;
     } catch (e) {
-      loadError = String(e);
+      loadError = "클라우드 원격 용량을 검증하지 못했습니다.";
     } finally {
       checkingCapacity = false;
     }
@@ -386,7 +386,7 @@
       connectionCapacity = await api.verifyCloudProviderCapacity(root.path);
       connectionCapacityRoot = root.path;
     } catch (e) {
-      loadError = String(e);
+      loadError = "클라우드 공급자 연결을 완료하지 못했습니다.";
     } finally {
       connecting = false;
     }
@@ -404,7 +404,7 @@
       connectionCapacity = null;
       connectionCapacityRoot = "";
     } catch (e) {
-      loadError = String(e);
+      loadError = "클라우드 공급자 연결을 해제하지 못했습니다.";
     } finally {
       disconnecting = false;
     }
@@ -557,7 +557,7 @@
   {/if}
 
   {#if !scannedRoot}<p class="muted">먼저 스캔을 완료하세요.</p>{/if}
-  {#if loadError}<p class="error">{loadError}</p>{/if}
+  {#if loadError}<p class="error" role="alert">{loadError}</p>{/if}
 
   {#if report}
     <div class="summary">
