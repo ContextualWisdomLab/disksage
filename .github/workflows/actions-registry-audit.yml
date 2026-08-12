@@ -1,0 +1,87 @@
+name: Actions registry audit
+
+on:
+  pull_request:
+    paths:
+      - scripts/actions-registry-audit.mjs
+      - scripts/actions-registry-audit.test.mjs
+      - .github/workflows/actions-registry-audit.yml
+  push:
+    branches: [main]
+    paths:
+      - scripts/actions-registry-audit.mjs
+      - scripts/actions-registry-audit.test.mjs
+      - .github/workflows/actions-registry-audit.yml
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * *"
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20.19.0
+      - name: Exact audit-module coverage
+        run: >-
+          node --experimental-test-coverage
+          --test-coverage-include='scripts/actions-registry-audit.mjs'
+          --test-coverage-lines=100
+          --test-coverage-branches=100
+          --test-coverage-functions=100
+          --test scripts/actions-registry-audit.test.mjs
+
+  live-registry:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20.19.0
+      - name: Audit complete live Actions registry against exact protected main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { auditActionsRegistry } from './scripts/actions-registry-audit.mjs';
+
+          const repository = process.env.REPOSITORY;
+          const token = process.env.GH_TOKEN;
+          if (!repository || !token) throw new Error('actions-registry-audit-input-missing');
+
+          const fetchJson = async (pathname) => {
+            const response = await fetch(`https://api.github.com${pathname}`, {
+              headers: {
+                Accept: 'application/vnd.github+json',
+                Authorization: `Bearer ${token}`,
+                'X-GitHub-Api-Version': '2022-11-28',
+              },
+            });
+            if (!response.ok) {
+              throw new Error(`github-api-${response.status}`);
+            }
+            return response.json();
+          };
+
+          const metadata = await fetchJson(`/repos/${repository}`);
+          const liveMain = await fetchJson(
+            `/repos/${repository}/commits/${encodeURIComponent(metadata.default_branch)}`,
+          );
+          const report = await auditActionsRegistry(fetchJson, repository, liveMain.sha);
+          console.log(JSON.stringify(report, null, 2));
+          if (report.orphaned_records.length > 0) {
+            throw new Error(`orphaned-actions-workflows:${report.orphaned_records.length}`);
+          }
+          NODE
