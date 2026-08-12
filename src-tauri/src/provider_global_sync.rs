@@ -96,8 +96,11 @@ pub fn parse_dump(
         let trimmed = line.trim();
         upload_progress_present |= line_has_active_progress(trimmed, "upload progress:");
         download_progress_present |= line_has_active_progress(trimmed, "download progress:");
-        pending_indexable_count =
-            pending_indexable_count.or_else(|| parse_pending_indexable_count(trimmed));
+        if let Some(count) = parse_pending_indexable_count(trimmed) {
+            pending_indexable_count = Some(
+                pending_indexable_count.map_or(count, |existing: u64| existing.max(count)),
+            );
+        }
         if trimmed == "needs-indexing: yes" || trimmed == "indexing: yes" {
             needs_indexing = true;
         }
