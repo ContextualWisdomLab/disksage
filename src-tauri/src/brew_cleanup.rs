@@ -191,16 +191,16 @@ fn run_command(mut command: std::process::Command) -> Result<CommandOutput, Stri
             Ok(None) if Instant::now() >= deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
-                let _ = stdout_reader.join();
-                let _ = stderr_reader.join();
+                drop(stdout_reader);
+                drop(stderr_reader);
                 return Err("brew-cleanup-timeout".into());
             }
             Ok(None) => thread::sleep(Duration::from_millis(50)),
             Err(_) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                let _ = stdout_reader.join();
-                let _ = stderr_reader.join();
+                drop(stdout_reader);
+                drop(stderr_reader);
                 return Err("brew-cleanup-wait-failed".into());
             }
         }
@@ -222,18 +222,20 @@ fn run_command(mut command: std::process::Command) -> Result<CommandOutput, Stri
 }
 
 #[cfg(target_os = "macos")]
-fn run_brew_object_bound(path: &Path, args: &[&str]) -> Result<(String, CommandOutput), String> {
+fn run_verified_brew(
+    path: &Path,
+    verified: VerifiedBrewExecutable,
+    args: &[&str],
+) -> Result<CommandOutput, String> {
     use std::os::fd::AsRawFd;
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
 
-    let verified = open_verified_brew(path)?;
-    let identity = verified.identity.clone();
     let file_fd = verified.file.as_raw_fd();
     let script_path = path.to_string_lossy().into_owned();
     let mut command = Command::new("/bin/bash");
     command
-        .args(["-c", "source /dev/fd/3 \"$@\"", &script_path])
+        .args(["-p", "-c", "source /dev/fd/3 \"$@\"", &script_path])
         .args(args)
         .stdin(Stdio::null());
     unsafe {
@@ -244,7 +246,15 @@ fn run_brew_object_bound(path: &Path, args: &[&str]) -> Result<(String, CommandO
             Ok(())
         });
     }
-    Ok((identity, run_command(command)?))
+    run_command(command)
+}
+
+#[cfg(target_os = "macos")]
+fn run_brew_object_bound(path: &Path, args: &[&str]) -> Result<(String, CommandOutput), String> {
+    let verified = open_verified_brew(path)?;
+    let identity = verified.identity.clone();
+    let output = run_verified_brew(path, verified, args)?;
+    Ok((identity, output))
 }
 
 #[cfg(target_os = "macos")]
@@ -382,30 +392,40 @@ pub fn execute(
     judgment_id: &str,
     executed_at_ms: u64,
 ) -> Result<BrewCleanupExecution, String> {
-    let path = fixed_brew_path()?;
-    if path != Path::new(&plan.brew_path) {
-        return Err("brew-cleanup-brew-path-changed".into());
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (plan, judgment_id, executed_at_ms);
+        return Err("brew-cleanup-unsupported-platform".into());
     }
-    let (identity, output) = run_brew_object_bound(&path, &EXECUTE_ARGUMENTS)?;
-    if identity != plan.brew_identity {
-        return Err("brew-cleanup-executable-identity-bound-execution-unavailable".into());
+
+    #[cfg(target_os = "macos")]
+    {
+        let path = fixed_brew_path()?;
+        if path != Path::new(&plan.brew_path) {
+            return Err("brew-cleanup-brew-path-changed".into());
+        }
+        let verified = open_verified_brew(&path)?;
+        if verified.identity != plan.brew_identity {
+            return Err("brew-cleanup-executable-identity-bound-execution-unavailable".into());
+        }
+        let output = run_verified_brew(&path, verified, &EXECUTE_ARGUMENTS)?;
+        Ok(BrewCleanupExecution {
+            schema_version: SCHEMA_VERSION,
+            plan_fingerprint: plan.plan_fingerprint.clone(),
+            judgment_id: judgment_id.to_string(),
+            command: std::iter::once(EXECUTABLE.to_string())
+                .chain(EXECUTE_ARGUMENTS.iter().map(|arg| (*arg).to_string()))
+                .collect(),
+            status_code: output.status_code,
+            stdout: output.stdout,
+            stderr: output.stderr,
+            output_truncated: output.truncated,
+            executed: true,
+            executed_at_ms,
+            record_path: None,
+            record_error: None,
+        })
     }
-    Ok(BrewCleanupExecution {
-        schema_version: SCHEMA_VERSION,
-        plan_fingerprint: plan.plan_fingerprint.clone(),
-        judgment_id: judgment_id.to_string(),
-        command: std::iter::once(EXECUTABLE.to_string())
-            .chain(EXECUTE_ARGUMENTS.iter().map(|arg| (*arg).to_string()))
-            .collect(),
-        status_code: output.status_code,
-        stdout: output.stdout,
-        stderr: output.stderr,
-        output_truncated: output.truncated,
-        executed: true,
-        executed_at_ms,
-        record_path: None,
-        record_error: None,
-    })
 }
 
 const MAX_AUDIT_BYTES: usize = 128 * 1024;
