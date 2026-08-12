@@ -25,4 +25,13 @@ describe("settings persistence feedback", () => {
 
     expect(source).toContain('error = "";');
   });
+
+  it("keeps the toggle disabled until the initial persisted value settles", () => {
+    const source = readSource("src/lib/Settings.svelte");
+
+    expect(source).toContain("let busy = $state(true);");
+    expect(source).toContain(".finally(() => {");
+    expect(source).toContain("busy = false;");
+    expect(source).toContain("disabled={busy}");
+  });
 });
