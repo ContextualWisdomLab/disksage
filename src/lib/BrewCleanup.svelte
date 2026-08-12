@@ -25,8 +25,8 @@
     reset();
     try {
       judgment = await api.judgeBrewCleanup();
-    } catch (e) {
-      error = String(e);
+    } catch {
+      error = "Homebrew 정리 계획을 만들지 못했습니다.";
     } finally {
       planning = false;
     }
@@ -72,8 +72,8 @@
         confirmationPhrase.trim(),
         rationale.trim(),
       );
-    } catch (e) {
-      error = String(e);
+    } catch {
+      error = "Homebrew 정리를 실행하지 못했습니다.";
     } finally {
       judgment = null;
       confirmationPhrase = "";
