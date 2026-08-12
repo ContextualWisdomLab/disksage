@@ -117,9 +117,25 @@ fn persisted_connection_shape_validation_fails_closed_by_field() {
 
     let mut cases = Vec::new();
 
+    let mut short_connection_id = baseline.clone();
+    short_connection_id.connection_id = "0".repeat(63);
+    cases.push(short_connection_id);
+
+    let mut non_hex_connection_id = baseline.clone();
+    non_hex_connection_id.connection_id = "g".repeat(64);
+    cases.push(non_hex_connection_id);
+
     let mut empty_root_id = baseline.clone();
     empty_root_id.cloud_root_id.clear();
     cases.push(empty_root_id);
+
+    let mut whitespace_root_id = baseline.clone();
+    whitespace_root_id.cloud_root_id = "   ".into();
+    cases.push(whitespace_root_id);
+
+    let mut empty_root_path = baseline.clone();
+    empty_root_path.cloud_root_path.clear();
+    cases.push(empty_root_path);
 
     let mut relative_root = baseline.clone();
     relative_root.cloud_root_path = "relative/root".into();
@@ -138,4 +154,27 @@ fn persisted_connection_shape_validation_fails_closed_by_field() {
         std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
         assert!(load_connections(&path).is_err());
     }
+}
+
+#[test]
+fn persisted_icloud_oauth_identity_fails_at_the_unsupported_provider_boundary() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("connections.json");
+    let icloud = root(CloudProvider::Icloud);
+    let invalid = OAuthConnection {
+        connection_id: "0".repeat(64),
+        provider: CloudProvider::Icloud,
+        cloud_root_id: icloud.id,
+        cloud_root_path: icloud.path,
+        client_id: MICROSOFT_CLIENT_ID.into(),
+        scope: "Files.Read offline_access".into(),
+        connected_at_ms: 7,
+    };
+    let document = serde_json::json!({"version": 1, "connections": [invalid]});
+    std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+
+    assert_eq!(
+        load_connections(&path).unwrap_err(),
+        "icloud-oauth-not-supported"
+    );
 }
