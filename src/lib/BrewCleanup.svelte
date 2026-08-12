@@ -32,10 +32,21 @@
     }
   }
 
+  function approvalGuidance(): string {
+    if (!judgment || judgment.verdict !== "safe") return "";
+    if (confirmationPhrase.trim() !== judgment.exact_approval_phrase) {
+      return "승인 문구가 일치하지 않습니다.";
+    }
+    if (rationale.trim().length === 0) {
+      return "실행 사유를 입력하십시오.";
+    }
+    return "";
+  }
+
   function executionReady(): boolean {
     return judgment !== null
       && judgment.verdict === "safe"
-      && confirmationPhrase === judgment.exact_approval_phrase
+      && confirmationPhrase.trim() === judgment.exact_approval_phrase
       && rationale.trim().length > 0
       && !executing
       && execution === null;
@@ -58,7 +69,7 @@
       execution = await api.executeBrewCleanup(
         submittedJudgment.plan_fingerprint,
         submittedJudgment.judgment_id,
-        confirmationPhrase,
+        confirmationPhrase.trim(),
         rationale.trim(),
       );
     } catch (e) {
@@ -104,6 +115,9 @@
             실행 사유
             <textarea bind:value={rationale} maxlength="1000" placeholder="예: dry-run 결과를 검토했고 끊어진 심볼릭 링크와 빈 디렉터리 정리가 필요함" disabled={executing}></textarea>
           </label>
+          {#if approvalGuidance()}
+            <p class="warning" role="status">{approvalGuidance()}</p>
+          {/if}
           <button onclick={executeCleanup} disabled={!executionReady()}>
             {executing ? "재검증 후 Homebrew 정리 중…" : "승인하고 brew cleanup 실행"}
           </button>
