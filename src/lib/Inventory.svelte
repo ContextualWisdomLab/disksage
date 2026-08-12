@@ -11,9 +11,11 @@
 
   let model = $state<api.ModelStatus | null>(null);
   let modelBusy = $state(false);
+  let modelError = $state("");
   let summary = $state<string | null>(null);
   let summaryLoaded = $state(false);
   let summaryBusy = $state(false);
+  let summaryError = $state("");
 
   // 온톨로지 정합성(advisory) — 인벤토리 집계와 별개로 로드 실패해도 조용히 무시(게이트 아님)
   let issues = $state<api.Issue[] | null>(null);
@@ -37,9 +39,9 @@
       const rules = await api.getUserRules();
       userRulesCount = rules.length;
       userRulesError = "";
-    } catch (e) {
+    } catch {
       userRulesCount = null;
-      userRulesError = String(e);
+      userRulesError = "규칙 파일을 불러오지 못했습니다.";
     }
   }
 
@@ -54,8 +56,8 @@
       await loadUserRules();
       // 미분류 확장자 인사이트: 비차단(fire-and-forget) — 실패해도 인벤토리 표시를 막지 않음
       api.reasonUnknownExtensions(report.unknown_samples).then((r) => (insights = r)).catch(() => {});
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "인벤토리 집계에 실패했습니다.";
     } finally {
       busy = false;
     }
@@ -71,11 +73,12 @@
 
   async function doDownload() {
     modelBusy = true;
+    modelError = "";
     try {
       await api.downloadModel();
       await loadModel();
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      modelError = "모델 다운로드에 실패했습니다.";
     } finally {
       modelBusy = false;
     }
@@ -85,10 +88,13 @@
   // 샘플이 없거나 모델이 없으면 null(안내 문구로 대체).
   async function summarizeUnknown() {
     summaryBusy = true;
+    summaryLoaded = false;
+    summary = null;
+    summaryError = "";
     try {
       summary = await api.summarizeUnknownBucket(report?.unknown_samples ?? []);
-    } catch (e) {
-      summary = String(e);
+    } catch {
+      summaryError = "미분류 요약에 실패했습니다.";
     } finally {
       summaryLoaded = true;
       summaryBusy = false;
@@ -114,7 +120,7 @@
     인벤토리 {scannedRoot ? "" : "(먼저 스캔하세요)"}
     <button onclick={load} disabled={busy || !scannedRoot}>{busy ? "집계 중…" : "인벤토리 집계"}</button>
   </h2>
-  {#if loadError}<p class="error">{loadError}</p>{/if}
+  {#if loadError}<p class="error" role="alert">{loadError}</p>{/if}
 
   <div class="model-status">
     {#if model?.present}
@@ -123,6 +129,7 @@
       <button onclick={doDownload} disabled={modelBusy}>{modelBusy ? "다운로드 중…" : "모델 다운로드"}</button>
     {/if}
     <span class="muted small">판정은 참고용(자문)입니다 — 모델 없이도 규칙 기반으로 전체 기능이 동작합니다.</span>
+    {#if modelError}<span class="error small" role="alert">{modelError}</span>{/if}
   </div>
 
   <Settings />
@@ -147,7 +154,9 @@
           <div class="bar"><div class="fill unk" style="width:{pct(report.unknown_bytes)}%"></div></div>
           <div class="unknown-summary">
             <button onclick={summarizeUnknown} disabled={summaryBusy}>{summaryBusy ? "요약 중…" : "요약 보기"}</button>
-            {#if summaryLoaded}
+            {#if summaryError}
+              <span class="error small" role="alert">{summaryError}</span>
+            {:else if summaryLoaded}
               <span class="summary-text">{summary ?? "미판정 (모델 없음)"}</span>
             {/if}
           </div>
@@ -185,7 +194,7 @@
     {#if userRulesCount}
       <p class="ok small">사용자 규칙 {userRulesCount}개 적용 중</p>
     {:else if userRulesError}
-      <p class="warn small">규칙 파일 오류: {userRulesError}</p>
+      <p class="warn small" role="alert">규칙 파일 오류: {userRulesError}</p>
     {/if}
   {/if}
 </section>
@@ -202,6 +211,7 @@
   .fill.unk { background: #d98a4a; }
   .unknown .label em { color: #a60; font-style: normal; font-size: 0.8rem; }
   .error { color: #b00; }
+  .error.small { font-size: 0.8rem; }
   .model-status { display: flex; align-items: center; gap: 0.5rem; margin: 0.5rem 0; font-size: 0.85rem; }
   .muted.small { color: #999; font-size: 0.75rem; }
   .unknown-summary { margin-top: 0.25rem; display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; }
