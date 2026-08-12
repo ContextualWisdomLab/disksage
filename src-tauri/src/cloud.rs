@@ -24,6 +24,12 @@ use unicode_normalization::UnicodeNormalization;
 
 const ARCHIVE_DIR: &str = "DiskSage Archive";
 const DAY_MS: u64 = 86_400_000;
+// OneDrive's decoded relative path is limited to 400 characters; local sync also needs each
+// component to fit the filesystem's 255-character/byte boundary. Keep this provider-specific
+// preflight separate from iCloud/Google Drive planning.
+const ONEDRIVE_MAX_RELATIVE_PATH_CHARS: usize = 400;
+const ONEDRIVE_MAX_PATH_COMPONENT_CHARS: usize = 255;
+const ONEDRIVE_MAX_PATH_COMPONENT_BYTES: usize = 255;
 #[cfg(not(coverage))]
 const METADATA_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(not(coverage))]
@@ -1425,6 +1431,56 @@ fn add_probe_warning(metadata: &mut ContentMetadata, tool: &str, failure: Metada
         &format!("local:metadata-probe:{tool}"),
         "high",
     );
+}
+
+/// A File Provider placeholder has a logical size but no locally allocated blocks. Opening it can
+/// request materialization, which is the opposite of a read-only inventory on a low-disk machine.
+/// Restrict the path check to macOS managed roots so ordinary sparse files elsewhere are unaffected.
+#[cfg(target_os = "macos")]
+fn provider_placeholder_not_materialized_for_home(path: &Path, home: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    let managed_root = path.starts_with(home.join("Library/CloudStorage"))
+        || path.starts_with(home.join("Library/Mobile Documents/com~apple~CloudDocs"));
+    managed_root
+        && std::fs::symlink_metadata(path).is_ok_and(|metadata| {
+            metadata.is_file() && metadata.len() > 0 && metadata.blocks() == 0
+        })
+}
+
+pub(crate) fn provider_placeholder_not_materialized(path: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+            return false;
+        };
+        return provider_placeholder_not_materialized_for_home(path, &home);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+#[cfg(not(coverage))]
+fn cloud_placeholder_metadata(path: &Path) -> ContentMetadata {
+    let mut metadata = ContentMetadata::default();
+    add_evidence(
+        &mut metadata,
+        "metadata-probe-warning",
+        "provider:placeholder-not-materialized",
+        "local:file-provider:placeholder",
+        "high",
+    );
+    add_evidence(
+        &mut metadata,
+        "provider-materialization-blocked",
+        "true",
+        "local:file-provider:placeholder",
+        "high",
+    );
+    merge_metadata(metadata, macos_file_provenance_metadata(path))
 }
 
 fn json_strings(value: Option<&serde_json::Value>) -> Vec<String> {
@@ -3211,6 +3267,9 @@ fn probe_content_metadata_with_general(
     path: &Path,
     prefetched_general: Option<ContentMetadata>,
 ) -> ContentMetadata {
+    if provider_placeholder_not_materialized(path) {
+        return cloud_placeholder_metadata(path);
+    }
     let extension = path
         .extension()
         .map(|e| e.to_string_lossy().to_ascii_lowercase())
@@ -3585,6 +3644,14 @@ fn source_blocked_reason(
     kind: ArchiveKind,
     metadata: &ContentMetadata,
 ) -> Option<String> {
+    if provider_placeholder_not_materialized(path)
+        || metadata
+            .evidence
+            .iter()
+            .any(|evidence| evidence.field == "provider-materialization-blocked")
+    {
+        return Some("provider-placeholder-not-materialized".into());
+    }
     if kind == ArchiveKind::IncompleteDownload {
         return Some("incomplete-download".into());
     }
@@ -3621,6 +3688,43 @@ fn planner_blocked_reason(
     source_blocked_reason(path, kind, metadata)
 }
 
+fn provider_destination_path_blocked_reason(
+    cloud_root: &CloudRoot,
+    destination: &Path,
+) -> Option<String> {
+    if cloud_root.provider != CloudProvider::Onedrive {
+        return None;
+    }
+    let Ok(relative) = destination.strip_prefix(Path::new(&cloud_root.path)) else {
+        return Some("destination-outside-cloud-root".into());
+    };
+    let mut relative_chars = 0;
+    for component in relative.components() {
+        let std::path::Component::Normal(component) = component else {
+            return Some("onedrive-path-invalid".into());
+        };
+        let Some(component) = component.to_str() else {
+            return Some("onedrive-path-not-unicode".into());
+        };
+        let normalized = component.nfc().collect::<String>();
+        if normalized.is_empty() {
+            return Some("onedrive-path-invalid".into());
+        }
+        if normalized.chars().count() > ONEDRIVE_MAX_PATH_COMPONENT_CHARS
+            || normalized.as_bytes().len() > ONEDRIVE_MAX_PATH_COMPONENT_BYTES
+        {
+            return Some("onedrive-path-component-too-long".into());
+        }
+        relative_chars += normalized.chars().count();
+    }
+    if relative.components().count().saturating_sub(1) + relative_chars
+        > ONEDRIVE_MAX_RELATIVE_PATH_CHARS
+    {
+        return Some("onedrive-path-too-long".into());
+    }
+    None
+}
+
 fn metadata_fingerprint(file: &FileFact, relative: &Path) -> String {
     let input = format!(
         "{}\0{}\0{}\0{}",
@@ -3634,6 +3738,9 @@ fn metadata_fingerprint(file: &FileFact, relative: &Path) -> String {
 
 #[cfg(not(coverage))]
 fn hash_duplicate_candidate(path: &Path, expected_bytes: u64) -> Result<ContentDigests, String> {
+    if provider_placeholder_not_materialized(path) {
+        return Err("duplicate-content-provider-placeholder-not-materialized".into());
+    }
     let before =
         std::fs::metadata(path).map_err(|_| "duplicate-content-metadata-unreadable".to_string())?;
     if !before.is_file() {
@@ -4286,6 +4393,7 @@ pub fn prepare_cloud_archive_source(
                         .is_ok_and(|relative| !relative.as_os_str().is_empty())
                     && file.content_metadata == ContentMetadata::default()
                     && file.path.is_file()
+                    && !provider_placeholder_not_materialized(&file.path)
                     && should_probe_general_metadata(&file.path)
             })
             .map(|file| file.path.clone())
@@ -4440,6 +4548,7 @@ pub fn plan_cloud_archive_from_snapshot(
             Some("source-snapshot-stale".into())
         } else {
             planner_blocked_reason(&file.path, kind, &lineage_metadata, &dst)
+                .or_else(|| provider_destination_path_blocked_reason(cloud_root, &dst))
         };
         let source_context = relative
             .parent()
@@ -4979,6 +5088,43 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn provider_placeholder_guard_never_opens_unmaterialized_managed_file() {
+        use std::os::unix::fs::MetadataExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp
+            .path()
+            .join("Library/CloudStorage/test-account/placeholder.wav");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(256 * 1024 * 1024).unwrap();
+        let metadata = std::fs::symlink_metadata(&path).unwrap();
+        assert!(metadata.len() > 0);
+        assert_eq!(metadata.blocks(), 0, "fixture must remain sparse");
+        assert!(provider_placeholder_not_materialized_for_home(
+            &path,
+            temp.path()
+        ));
+
+        let unrelated = temp
+            .path()
+            .join("project/Library/CloudStorage/test-account/unrelated.bin");
+        std::fs::create_dir_all(unrelated.parent().unwrap()).unwrap();
+        let unrelated_file = std::fs::File::create(&unrelated).unwrap();
+        unrelated_file.set_len(256 * 1024 * 1024).unwrap();
+        assert_eq!(
+            std::fs::symlink_metadata(&unrelated).unwrap().blocks(),
+            0,
+            "fixture must remain sparse"
+        );
+        assert!(!provider_placeholder_not_materialized_for_home(
+            &unrelated,
+            temp.path()
+        ));
+    }
+
     #[test]
     fn local_download_provenance_parsers_keep_hosts_and_acquisition_separate() {
         assert_eq!(
@@ -5349,6 +5495,45 @@ mod tests {
             )
             .as_deref(),
             Some("archive-index-unreadable")
+        );
+    }
+
+    #[test]
+    fn onedrive_destination_path_limits_fail_closed_without_affecting_other_providers() {
+        let cloud_root = root(CloudProvider::Onedrive, Path::new("/cloud"));
+        let short = Path::new("/cloud/DiskSage Archive/2026/documents/report.pdf");
+        assert_eq!(
+            provider_destination_path_blocked_reason(&cloud_root, short),
+            None
+        );
+
+        let long_component = PathBuf::from("/cloud")
+            .join(ARCHIVE_DIR)
+            .join("2026")
+            .join("documents")
+            .join("x".repeat(ONEDRIVE_MAX_PATH_COMPONENT_BYTES + 1));
+        assert_eq!(
+            provider_destination_path_blocked_reason(&cloud_root, &long_component).as_deref(),
+            Some("onedrive-path-component-too-long")
+        );
+
+        let long_relative = PathBuf::from("/cloud")
+            .join(ARCHIVE_DIR)
+            .join("2026")
+            .join("documents")
+            .join("a".repeat(100))
+            .join("b".repeat(100))
+            .join("c".repeat(100))
+            .join("d".repeat(100));
+        assert_eq!(
+            provider_destination_path_blocked_reason(&cloud_root, &long_relative).as_deref(),
+            Some("onedrive-path-too-long")
+        );
+
+        let google_root = root(CloudProvider::GoogleDrive, Path::new("/cloud"));
+        assert_eq!(
+            provider_destination_path_blocked_reason(&google_root, &long_relative),
+            None
         );
     }
 
