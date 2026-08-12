@@ -301,32 +301,15 @@ pub fn judge(
     }
 }
 
+/// Refuse destructive Homebrew cleanup until process launch remains bound to the exact executable
+/// object that the user reviewed. Re-resolving a fixed pathname after review leaves a same-user
+/// replacement window before `Command::spawn`, so pathname equality is not sufficient authority.
 pub fn execute(
-    plan: &BrewCleanupPlan,
-    judgment_id: &str,
-    executed_at_ms: u64,
+    _plan: &BrewCleanupPlan,
+    _judgment_id: &str,
+    _executed_at_ms: u64,
 ) -> Result<BrewCleanupExecution, String> {
-    let path = fixed_brew_path()?;
-    if path != Path::new(&plan.brew_path) {
-        return Err("brew-cleanup-brew-path-changed".into());
-    }
-    let output = run_brew(&path, &EXECUTE_ARGUMENTS)?;
-    Ok(BrewCleanupExecution {
-        schema_version: SCHEMA_VERSION,
-        plan_fingerprint: plan.plan_fingerprint.clone(),
-        judgment_id: judgment_id.to_string(),
-        command: std::iter::once(EXECUTABLE.to_string())
-            .chain(EXECUTE_ARGUMENTS.iter().map(|arg| (*arg).to_string()))
-            .collect(),
-        status_code: output.status_code,
-        stdout: output.stdout,
-        stderr: output.stderr,
-        output_truncated: output.truncated,
-        executed: true,
-        executed_at_ms,
-        record_path: None,
-        record_error: None,
-    })
+    Err("brew-cleanup-executable-identity-bound-execution-unavailable".into())
 }
 
 const MAX_AUDIT_BYTES: usize = 128 * 1024;
