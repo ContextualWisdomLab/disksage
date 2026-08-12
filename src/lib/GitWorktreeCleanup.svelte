@@ -57,7 +57,7 @@
       repositoryRoot = selected;
       resetDecision();
     } catch (e) {
-      error = String(e);
+      error = "Git 저장소 선택에 실패했습니다.";
     }
   }
 
@@ -74,7 +74,7 @@
         .map((binding) => binding.reference_ref)
         .join("\n");
     } catch (e) {
-      error = String(e);
+      error = "Git worktree 감사에 실패했습니다.";
     } finally {
       planning = false;
     }
@@ -112,7 +112,7 @@
       confirmationPhrase = "";
       rationale = "";
     } catch (e) {
-      error = String(e);
+      error = "Git worktree 제거에 실패했습니다.";
     } finally {
       executing = false;
     }
