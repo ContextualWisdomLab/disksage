@@ -40,6 +40,13 @@ fn valid_record() -> BrewCleanupAuditRecord {
     .expect("test audit record must satisfy the production schema")
 }
 
+fn brew_cleanup_source() -> String {
+    std::fs::read_to_string(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/brew_cleanup.rs"),
+    )
+    .expect("brew cleanup source must be readable")
+}
+
 #[test]
 fn shared_writable_app_data_parent_fails_closed_without_creating_audit_storage() {
     for unsafe_write_bit in [0o020, 0o002] {
@@ -89,10 +96,7 @@ fn shared_writable_audit_directory_fails_closed_without_creating_a_record() {
 
 #[test]
 fn audit_storage_is_private_at_creation_and_object_bound_for_hardening() {
-    let source = std::fs::read_to_string(
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/brew_cleanup.rs"),
-    )
-    .expect("brew cleanup source must be readable");
+    let source = brew_cleanup_source();
 
     assert!(
         source.contains("builder.mode(0o700);"),
@@ -109,5 +113,31 @@ fn audit_storage_is_private_at_creation_and_object_bound_for_hardening() {
     assert!(
         !source.contains("std::fs::set_permissions(&path, permissions)"),
         "audit hardening must not re-resolve a replaceable pathname after create_new"
+    );
+}
+
+#[test]
+fn audit_publication_must_be_bound_to_an_opened_directory_identity() {
+    let source = brew_cleanup_source();
+    let writer = source
+        .split_once("pub fn write_audit_record(")
+        .map(|(_, writer)| writer)
+        .expect("audit writer must remain present");
+
+    assert!(
+        writer.contains("openat(") || writer.contains("openat2("),
+        "record creation must be relative to an already-opened audit directory identity"
+    );
+    assert!(
+        writer.contains("O_NOFOLLOW"),
+        "directory-relative record publication must reject symbolic-link substitution"
+    );
+    assert!(
+        !writer.contains(".open(&path)"),
+        "record publication must not re-resolve a replaceable directory pathname"
+    );
+    assert!(
+        !writer.contains("std::fs::remove_file(&path)"),
+        "failure cleanup must remain relative to the same opened audit directory identity"
     );
 }
