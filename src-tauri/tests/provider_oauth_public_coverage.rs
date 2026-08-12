@@ -109,22 +109,30 @@ fn provider_scopes_and_client_identifiers_fail_closed() {
         validate_client_id(CloudProvider::Onedrive, &"a".repeat(513)).unwrap_err(),
         "oauth-client-id-invalid"
     );
-    assert_eq!(
-        validate_client_id(CloudProvider::Onedrive, "not-a-guid").unwrap_err(),
-        "oauth-client-id-provider-format-invalid"
-    );
-    assert_eq!(
-        validate_client_id(CloudProvider::GoogleDrive, "missing-provider-suffix").unwrap_err(),
-        "oauth-client-id-provider-format-invalid"
-    );
-    assert_eq!(
-        validate_client_id(CloudProvider::GoogleDrive, ".apps.googleusercontent.com").unwrap_err(),
-        "oauth-client-id-provider-format-invalid"
-    );
-    assert_eq!(
-        validate_client_id(CloudProvider::GoogleDrive, "abc_.apps.googleusercontent.com").unwrap_err(),
-        "oauth-client-id-provider-format-invalid"
-    );
+    for malformed in [
+        "not-a-guid",
+        "1234567-1234-4abc-8def-1234567890ab",
+        "12345678-123-4abc-8def-1234567890ab",
+        "12345678-1234-4abc-8def-1234567890a",
+        "12345678-1234-4abc-8def-1234567890az",
+        "12345678-1234-4abc-8def-1234567890ab-extra",
+    ] {
+        assert_eq!(
+            validate_client_id(CloudProvider::Onedrive, malformed).unwrap_err(),
+            "oauth-client-id-provider-format-invalid"
+        );
+    }
+    for malformed in [
+        "missing-provider-suffix",
+        ".apps.googleusercontent.com",
+        "abc_.apps.googleusercontent.com",
+        "abc!.apps.googleusercontent.com",
+    ] {
+        assert_eq!(
+            validate_client_id(CloudProvider::GoogleDrive, malformed).unwrap_err(),
+            "oauth-client-id-provider-format-invalid"
+        );
+    }
     assert_eq!(
         validate_client_id(CloudProvider::Icloud, MICROSOFT_CLIENT_ID).unwrap_err(),
         "icloud-oauth-not-supported"
@@ -179,14 +187,8 @@ fn valid_connection_documents_bind_provider_root_and_identity() {
     write_document(&path, &[google.clone(), onedrive.clone()]);
     let loaded = load_connections(&path).unwrap();
     assert_eq!(loaded, vec![google.clone(), onedrive.clone()]);
-    assert_eq!(
-        connection_for_root(&loaded, &google_root).unwrap(),
-        google
-    );
-    assert_eq!(
-        connection_for_root(&loaded, &onedrive_root).unwrap(),
-        onedrive
-    );
+    assert_eq!(connection_for_root(&loaded, &google_root).unwrap(), google);
+    assert_eq!(connection_for_root(&loaded, &onedrive_root).unwrap(), onedrive);
 
     let missing = root(CloudProvider::GoogleDrive, "other-google-account");
     assert_eq!(
@@ -221,6 +223,10 @@ fn connection_document_validation_rejects_each_identity_boundary() {
     let mut blank_root = valid.clone();
     blank_root.cloud_root_id = "   ".into();
     cases.push((blank_root, "oauth-connection-invalid"));
+
+    let mut blank_path = valid.clone();
+    blank_path.cloud_root_path = "   ".into();
+    cases.push((blank_path, "oauth-connection-invalid"));
 
     let mut relative_path = valid.clone();
     relative_path.cloud_root_path = "relative/cloud".into();
