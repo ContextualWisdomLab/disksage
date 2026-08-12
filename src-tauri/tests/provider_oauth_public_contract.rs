@@ -1,7 +1,10 @@
 use disksage_lib::cloud::{CloudAccountScope, CloudProvider, CloudRoot};
 use disksage_lib::provider_oauth::{
     connection_for_root, connections_path, load_connections, requested_scope, validate_client_id,
+    OAuthConnection,
 };
+use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
 
 const MICROSOFT_CLIENT_ID: &str = "ABCDEF12-3456-7890-ABCD-EF1234567890";
 const GOOGLE_CLIENT_ID: &str = "12345-abcXYZ.apps.googleusercontent.com";
@@ -20,6 +23,38 @@ fn root(provider: CloudProvider) -> CloudRoot {
         path: path.into(),
         readable: true,
         access_issue: None,
+    }
+}
+
+fn connection_id_for_root(root: &CloudRoot) -> String {
+    let mut hasher = Sha256::new();
+    for value in [root.provider.as_str(), root.id.as_str(), root.path.as_str()] {
+        hasher.update(value.as_bytes());
+        hasher.update([0]);
+    }
+    let digest = hasher.finalize();
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(&mut encoded, "{byte:02x}").unwrap();
+    }
+    encoded
+}
+
+fn connection(provider: CloudProvider) -> OAuthConnection {
+    let root = root(provider);
+    OAuthConnection {
+        connection_id: connection_id_for_root(&root),
+        provider,
+        cloud_root_id: root.id,
+        cloud_root_path: root.path,
+        client_id: match provider {
+            CloudProvider::Onedrive => MICROSOFT_CLIENT_ID,
+            CloudProvider::GoogleDrive => GOOGLE_CLIENT_ID,
+            CloudProvider::Icloud => "unsupported",
+        }
+        .into(),
+        scope: requested_scope(provider).unwrap_or_default().into(),
+        connected_at_ms: 123,
     }
 }
 
@@ -115,6 +150,56 @@ fn public_connection_document_reader_rejects_unsafe_or_invalid_shapes() {
 }
 
 #[test]
+fn public_connection_document_reader_rejects_invalid_records_and_excess_count() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = connections_path(temp.path());
+
+    let mut invalid = connection(CloudProvider::Onedrive);
+    invalid.connection_id = "0".repeat(63);
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "connections": [invalid],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(load_connections(&path).unwrap_err(), "oauth-connection-invalid");
+
+    let mut mismatched = connection(CloudProvider::Onedrive);
+    mismatched.connection_id = "0".repeat(64);
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "connections": [mismatched],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        load_connections(&path).unwrap_err(),
+        "oauth-connection-id-mismatch"
+    );
+
+    let repeated = vec![connection(CloudProvider::GoogleDrive); 33];
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "connections": repeated,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        load_connections(&path).unwrap_err(),
+        "oauth-connection-document-version-or-count-invalid"
+    );
+}
+
+#[test]
 fn public_connection_document_reader_bounds_size_before_reading() {
     let temp = tempfile::tempdir().unwrap();
     let path = connections_path(temp.path());
@@ -133,6 +218,22 @@ fn public_connection_lookup_reports_missing_without_credentials() {
         assert_eq!(
             connection_for_root(&[], &root(provider)).unwrap_err(),
             "provider-oauth-connection-missing"
+        );
+    }
+}
+
+#[test]
+fn public_connection_lookup_accepts_exact_record_and_rejects_ambiguity() {
+    for provider in [CloudProvider::Onedrive, CloudProvider::GoogleDrive] {
+        let root = root(provider);
+        let exact = connection(provider);
+        assert_eq!(
+            connection_for_root(std::slice::from_ref(&exact), &root).unwrap(),
+            exact
+        );
+        assert_eq!(
+            connection_for_root(&[exact.clone(), exact], &root).unwrap_err(),
+            "provider-oauth-connection-ambiguous"
         );
     }
 }
