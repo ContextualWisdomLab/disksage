@@ -6,12 +6,14 @@
   let executing = $state(false);
   let error = $state("");
   let judgment: api.BrewCleanupJudgment | null = $state(null);
+  let completedJudgment: api.BrewCleanupJudgment | null = $state(null);
   let confirmationPhrase = $state("");
   let rationale = $state("");
   let execution: api.BrewCleanupExecution | null = $state(null);
 
   function reset() {
     judgment = null;
+    completedJudgment = null;
     execution = null;
     confirmationPhrase = "";
     rationale = "";
@@ -44,24 +46,27 @@
     const okay = await confirm(
       "LLM이 안전하다고 판단한 고정 명령을 실행합니다.\n\n"
         + "brew cleanup --prune-prefix\n\n"
-        + "Homebrew의 오래된 파일과 prefix를 정리하며, 실행 전 dry-run 계획을 다시 검증합니다.",
+        + "Homebrew prefix 안의 끊어진 심볼릭 링크와 빈 디렉터리만 정리하며, 실행 전 dry-run 계획을 다시 검증합니다.",
       { title: "DiskSage Homebrew 정리", kind: "warning" },
     );
     if (!okay) return;
     executing = true;
     error = "";
+    const submittedJudgment = judgment;
+    completedJudgment = submittedJudgment;
     try {
       execution = await api.executeBrewCleanup(
-        judgment.plan_fingerprint,
-        judgment.judgment_id,
+        submittedJudgment.plan_fingerprint,
+        submittedJudgment.judgment_id,
         confirmationPhrase,
         rationale.trim(),
       );
-      confirmationPhrase = "";
-      rationale = "";
     } catch (e) {
       error = String(e);
     } finally {
+      judgment = null;
+      confirmationPhrase = "";
+      rationale = "";
       executing = false;
     }
   }
@@ -78,15 +83,16 @@
 
   {#if error}<p class="error" role="alert">{error}</p>{/if}
 
-  {#if judgment}
+  {#if judgment || completedJudgment}
+    {@const report = (judgment ?? completedJudgment)!}
     <div class="report" aria-live="polite">
-      <div><strong>LLM 판정: {judgment.verdict}</strong> · {judgment.model_name}</div>
-      <p class="muted">{judgment.reason || "모델이 설명을 반환하지 않았습니다."}</p>
-      <p class="fingerprint">계획 지문: {judgment.plan_fingerprint}</p>
+      <div><strong>LLM 판정: {report.verdict}</strong> · {report.model_name}</div>
+      <p class="muted">{report.reason || "모델이 설명을 반환하지 않았습니다."}</p>
+      <p class="fingerprint">계획 지문: {report.plan_fingerprint}</p>
       <p class="fingerprint">실행 예정: brew cleanup --prune-prefix</p>
-      <pre>{judgment.plan.dry_run_output || "dry-run에서 정리 대상이 보고되지 않았습니다."}</pre>
+      <pre>{report.plan.dry_run_output || "dry-run에서 정리 대상이 보고되지 않았습니다."}</pre>
 
-      {#if judgment.verdict === "safe" && !execution}
+      {#if judgment && judgment.verdict === "safe" && !execution}
         <div class="approval">
           <p class="warning">아래 승인 문구 전체를 직접 입력해야 합니다. 실행 직전에 dry-run 계획과 LLM 판단을 다시 대조합니다.</p>
           <code>{judgment.exact_approval_phrase}</code>
@@ -102,7 +108,7 @@
             {executing ? "재검증 후 Homebrew 정리 중…" : "승인하고 brew cleanup 실행"}
           </button>
         </div>
-      {:else if judgment.verdict !== "safe"}
+      {:else if judgment && judgment.verdict !== "safe"}
         <p class="warning">Safe가 아니므로 실행 권한을 만들지 않았습니다.</p>
       {/if}
 

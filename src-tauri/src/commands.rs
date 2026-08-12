@@ -471,7 +471,7 @@ fn valid_brew_rationale(value: &str) -> bool {
 
 /// Build a read-only Homebrew cleanup plan. The command is macOS-only and fixed in Rust.
 #[cfg(not(coverage))]
-#[tauri::command]
+#[tauri::command(async)]
 pub fn plan_brew_cleanup() -> Result<brew_cleanup::BrewCleanupPlan, String> {
     brew_cleanup::plan(now_ms())
 }
@@ -507,6 +507,7 @@ pub fn judge_brew_cleanup(
             .as_ref()
             .ok_or_else(|| "brew-cleanup-llm-engine-unavailable".to_string())?;
         let judgment = brew_cleanup::judge(engine, &plan, now_ms());
+        drop(guard);
         *state
             .brew_cleanup_judgment
             .lock()
