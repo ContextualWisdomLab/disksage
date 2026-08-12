@@ -1,6 +1,9 @@
 #![cfg(unix)]
 
-use crate::brew_cleanup::{write_audit_record, BrewCleanupAuditRecord, SCHEMA_VERSION};
+use crate::brew_cleanup::{
+    write_audit_record, write_audit_record_with_before_create_hook, BrewCleanupAuditRecord,
+    SCHEMA_VERSION,
+};
 use serde_json::json;
 use std::os::unix::fs::PermissionsExt;
 
@@ -97,14 +100,18 @@ fn shared_writable_audit_directory_fails_closed_without_creating_a_record() {
 #[test]
 fn audit_storage_is_private_at_creation_and_object_bound_for_hardening() {
     let source = brew_cleanup_source();
+    let writer = source
+        .split_once("pub fn write_audit_record(")
+        .map(|(_, writer)| writer)
+        .expect("audit writer must remain present");
 
     assert!(
         source.contains("builder.mode(0o700);"),
         "the dedicated audit directory must be private from its creation boundary"
     );
     assert!(
-        source.contains("options.mode(0o400);"),
-        "audit records must be owner-read-only at create_new so a crash cannot leave broader authority"
+        writer.contains("libc::openat(") && writer.contains("0o400,"),
+        "audit records must be owner-read-only at descriptor-relative create_new"
     );
     assert!(
         source.contains("file.set_permissions(permissions)"),
@@ -139,5 +146,44 @@ fn audit_publication_must_be_bound_to_an_opened_directory_identity() {
     assert!(
         !writer.contains("std::fs::remove_file(&path)"),
         "failure cleanup must remain relative to the same opened audit directory identity"
+    );
+}
+
+#[test]
+fn directory_replacement_after_authorization_cannot_redirect_publication() {
+    let app_data = tempfile::tempdir().expect("temporary app-data directory");
+    let audit_directory = app_data.path().join("brew-cleanup-records");
+    let moved_directory = app_data.path().join("authorized-audit-directory-moved");
+
+    let error = write_audit_record_with_before_create_hook(
+        app_data.path(),
+        &valid_record(),
+        || {
+            std::fs::rename(&audit_directory, &moved_directory)
+                .expect("move the already-authorized directory");
+            std::fs::create_dir(&audit_directory).expect("install replacement directory");
+            std::fs::set_permissions(
+                &audit_directory,
+                std::fs::Permissions::from_mode(0o700),
+            )
+            .expect("keep the replacement privately writable so identity is the only defect");
+        },
+    )
+    .expect_err("directory identity drift must fail closed");
+
+    assert_eq!(error, "brew-cleanup-audit-directory-identity-drift");
+    assert_eq!(
+        std::fs::read_dir(&audit_directory)
+            .expect("replacement directory remains readable")
+            .count(),
+        0,
+        "the replacement pathname must receive no authority record"
+    );
+    assert_eq!(
+        std::fs::read_dir(&moved_directory)
+            .expect("original authorized directory remains readable")
+            .count(),
+        0,
+        "failed publication must clean the descriptor-relative partial record"
     );
 }
