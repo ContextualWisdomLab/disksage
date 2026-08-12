@@ -90,6 +90,20 @@ fn cloud_root_matching_handles_exact_canonical_and_unicode_equivalent_paths() {
     assert!(cloud_root_path_matches(&composed, &decomposed));
 }
 
+#[cfg(unix)]
+#[test]
+fn cloud_root_matching_rejects_distinct_non_utf8_fallback_paths() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+    use std::path::PathBuf;
+
+    let discovered = PathBuf::from(OsString::from_vec(vec![b'/', b't', b'm', b'p', b'/', 0xff]));
+    let requested = PathBuf::from(OsString::from_vec(vec![b'/', b't', b'm', b'p', b'/', 0xfe]));
+
+    assert_ne!(discovered, requested);
+    assert!(!cloud_root_path_matches(&discovered, &requested));
+}
+
 #[test]
 fn provider_and_scope_wire_values_remain_stable() {
     assert_eq!(CloudProvider::Icloud.as_str(), "icloud");
