@@ -165,7 +165,15 @@ fn selection_provider_capacity_and_icloud_bindings_fail_closed() {
     );
 
     let mut capacity = valid_empty_envelope();
-    capacity.capacity.requested_bytes = 1;
+    let capacity_snapshot = capacity.capacity.snapshot.clone();
+    let capacity_largest_candidate_bytes = capacity.capacity.largest_candidate_bytes;
+    let capacity_reserve_bytes = capacity.capacity.reserve_bytes;
+    capacity.capacity = assess_capacity(
+        capacity_snapshot,
+        1,
+        capacity_largest_candidate_bytes,
+        capacity_reserve_bytes,
+    );
     assert_eq!(
         validate_naruon_cloud_copy_readiness(&capacity).unwrap_err(),
         "naruon-copy-readiness-capacity-binding-invalid"
