@@ -1433,6 +1433,48 @@ fn add_probe_warning(metadata: &mut ContentMetadata, tool: &str, failure: Metada
     );
 }
 
+/// A File Provider placeholder has a logical size but no locally allocated blocks. Opening it can
+/// request materialization, which is the opposite of a read-only inventory on a low-disk machine.
+/// Restrict the path check to macOS managed roots so ordinary sparse files elsewhere are unaffected.
+pub(crate) fn provider_placeholder_not_materialized(path: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let display = path.to_string_lossy();
+        let managed_root = display.contains("/Library/CloudStorage/")
+            || display.contains("/Library/Mobile Documents/com~apple~CloudDocs/");
+        return managed_root
+            && std::fs::symlink_metadata(path).is_ok_and(|metadata| {
+                metadata.is_file() && metadata.len() > 0 && metadata.blocks() == 0
+            });
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+#[cfg(not(coverage))]
+fn cloud_placeholder_metadata(path: &Path) -> ContentMetadata {
+    let mut metadata = ContentMetadata::default();
+    add_evidence(
+        &mut metadata,
+        "metadata-probe-warning",
+        "provider:placeholder-not-materialized",
+        "local:file-provider:placeholder",
+        "high",
+    );
+    add_evidence(
+        &mut metadata,
+        "provider-materialization-blocked",
+        "true",
+        "local:file-provider:placeholder",
+        "high",
+    );
+    merge_metadata(metadata, macos_file_provenance_metadata(path))
+}
+
 fn json_strings(value: Option<&serde_json::Value>) -> Vec<String> {
     match value {
         Some(serde_json::Value::String(value)) if !value.trim().is_empty() => {
@@ -3217,6 +3259,9 @@ fn probe_content_metadata_with_general(
     path: &Path,
     prefetched_general: Option<ContentMetadata>,
 ) -> ContentMetadata {
+    if provider_placeholder_not_materialized(path) {
+        return cloud_placeholder_metadata(path);
+    }
     let extension = path
         .extension()
         .map(|e| e.to_string_lossy().to_ascii_lowercase())
@@ -3591,6 +3636,14 @@ fn source_blocked_reason(
     kind: ArchiveKind,
     metadata: &ContentMetadata,
 ) -> Option<String> {
+    if provider_placeholder_not_materialized(path)
+        || metadata
+            .evidence
+            .iter()
+            .any(|evidence| evidence.field == "provider-materialization-blocked")
+    {
+        return Some("provider-placeholder-not-materialized".into());
+    }
     if kind == ArchiveKind::IncompleteDownload {
         return Some("incomplete-download".into());
     }
@@ -3677,6 +3730,9 @@ fn metadata_fingerprint(file: &FileFact, relative: &Path) -> String {
 
 #[cfg(not(coverage))]
 fn hash_duplicate_candidate(path: &Path, expected_bytes: u64) -> Result<ContentDigests, String> {
+    if provider_placeholder_not_materialized(path) {
+        return Err("duplicate-content-provider-placeholder-not-materialized".into());
+    }
     let before =
         std::fs::metadata(path).map_err(|_| "duplicate-content-metadata-unreadable".to_string())?;
     if !before.is_file() {
@@ -4329,6 +4385,7 @@ pub fn prepare_cloud_archive_source(
                         .is_ok_and(|relative| !relative.as_os_str().is_empty())
                     && file.content_metadata == ContentMetadata::default()
                     && file.path.is_file()
+                    && !provider_placeholder_not_materialized(&file.path)
                     && should_probe_general_metadata(&file.path)
             })
             .map(|file| file.path.clone())
@@ -5021,6 +5078,25 @@ mod tests {
             validate_source_root_readable(&file),
             Err(format!("source-root-not-directory:{}", file.display()))
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn provider_placeholder_guard_never_opens_unmaterialized_managed_file() {
+        use std::os::unix::fs::MetadataExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp
+            .path()
+            .join("Library/CloudStorage/test-account/placeholder.wav");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(256 * 1024 * 1024).unwrap();
+        let metadata = std::fs::symlink_metadata(&path).unwrap();
+        assert!(metadata.len() > 0);
+        if metadata.blocks() == 0 {
+            assert!(provider_placeholder_not_materialized(&path));
+        }
     }
 
     #[test]
