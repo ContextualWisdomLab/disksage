@@ -36,6 +36,8 @@ mod web;
 mod reasoning;
 #[cfg_attr(coverage, allow(dead_code))]
 mod dataset_metadata;
+#[cfg_attr(coverage, allow(dead_code))]
+mod brew_cleanup;
 pub mod archive_git_tree;
 #[cfg_attr(coverage, allow(dead_code))]
 pub mod cloud;
@@ -113,6 +115,9 @@ pub fn run() {
             commands::get_settings,
             commands::set_settings,
             commands::reason_unknown_extensions,
+            commands::plan_brew_cleanup,
+            commands::judge_brew_cleanup,
+            commands::execute_brew_cleanup,
             commands::list_cloud_roots,
             commands::inspect_cloud_roots,
             commands::plan_icloud_local_copy_eviction,

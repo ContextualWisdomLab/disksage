@@ -1035,6 +1035,7 @@ dependencies = [
  "infer 0.22.0",
  "jwalk",
  "keyring",
+ "libc",
  "llama-cpp-2",
  "mail-parser",
  "memchr",
