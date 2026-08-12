@@ -155,3 +155,39 @@ fn jsonl_column_limit_and_empty_names_fail_closed_without_value_retention() {
     assert!(!serialized.contains("private-value-0"));
     assert!(!serialized.contains("private-value-127"));
 }
+
+#[test]
+fn jsonl_late_columns_and_reverse_type_transitions_preserve_bounded_evidence() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("late-columns.jsonl");
+    write_file(
+        &path,
+        b"{\"when\":\"2026-01-01T10:00:00Z\",\"mixed\":true,\"stable\":1}\n{\"when\":\"2026-01-02\",\"mixed\":{},\"late\":false}\n{\"when\":null,\"mixed\":7,\"late\":true}\n",
+    );
+
+    let profile = profile_dataset(&path);
+    assert!(profile.profile_complete);
+    assert_eq!(profile.sampled_rows, 3);
+
+    let when = profile.columns.iter().find(|column| column.name == "when").unwrap();
+    assert_eq!(when.inferred_type, "datetime");
+    assert_eq!(when.observed_values, 2);
+    assert_eq!(when.missing_values, 1);
+
+    let mixed = profile.columns.iter().find(|column| column.name == "mixed").unwrap();
+    assert_eq!(mixed.inferred_type, "mixed");
+    assert_eq!(mixed.observed_values, 3);
+
+    let stable = profile.columns.iter().find(|column| column.name == "stable").unwrap();
+    assert_eq!(stable.observed_values, 1);
+    assert_eq!(stable.missing_values, 2);
+
+    let late = profile.columns.iter().find(|column| column.name == "late").unwrap();
+    assert_eq!(late.inferred_type, "boolean");
+    assert_eq!(late.observed_values, 2);
+    assert_eq!(late.missing_values, 1);
+
+    let serialized = serde_json::to_string(&profile).unwrap();
+    assert!(!serialized.contains("2026-01-01T10:00:00Z"));
+    assert!(!serialized.contains("2026-01-02"));
+}
