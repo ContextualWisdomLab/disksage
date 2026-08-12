@@ -96,6 +96,7 @@ pub fn run() {
             commands::list_dev_artifacts,
             generic_cleanup::fail_closed_clean_paths,
             cache_cleanup::clean_cache_contents,
+            commands::clean_dev_artifacts,
             commands::recent_operations,
             commands::expand_clean_targets,
             commands::find_duplicate_files,
