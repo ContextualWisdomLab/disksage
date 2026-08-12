@@ -44,7 +44,7 @@ fn valid_tiny_entry_budget_yields_incomplete_non_executable_size_evidence() {
     assert!(!report.filesystem_mutation_executed);
 
     let entry = &report.entries[0];
-    assert_eq!(entry.disposition, GitWorktreeDisposition::Preserve);
+    assert_eq!(entry.disposition, GitWorktreeDisposition::EvidenceGap);
     assert!(!entry.size.evidence_complete);
     assert_eq!(entry.size.error.as_deref(), Some("size-scan-entry-limit"));
     assert!(entry
