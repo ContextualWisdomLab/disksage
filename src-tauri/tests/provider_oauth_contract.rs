@@ -123,7 +123,7 @@ fn connection_document_admission_is_fail_closed_before_identity_use() {
         "oauth-connection-document-too-large"
     );
 
-    std::fs::write(&path, br#"{"version":2,"connections":[]}"#.replace("\\\"", "\"")).unwrap();
+    std::fs::write(&path, br#"{"version":2,"connections":[]}"#).unwrap();
     assert_eq!(
         load_connections(&path).unwrap_err(),
         "oauth-connection-document-version-or-count-invalid"
