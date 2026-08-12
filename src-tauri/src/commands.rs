@@ -18,7 +18,8 @@ use crate::safety;
 use crate::{
     cloud, cloud_eviction, cloud_local_eviction, cloud_plan_view, cloud_review, cloud_transfer,
     dev_artifacts, dupes, git_worktree, icloud_sync_health, provider_api_client, provider_capacity,
-    provider_client_runtime, provider_evidence, provider_oauth, provider_sync, rules,
+    provider_client_runtime, provider_evidence, provider_global_sync, provider_oauth,
+    provider_sync, rules,
 };
 
 #[derive(Default)]
@@ -1033,6 +1034,12 @@ fn cloud_plan_for_inputs(
         )
         .ok();
         icloud_sync_health::attach_new_copy_admission_notice(&mut report.notices, health.as_ref());
+    } else {
+        let global_sync = provider_global_sync::inspect_new_copy_admission(selected.provider).ok();
+        provider_global_sync::attach_new_copy_admission_notice(
+            &mut report.notices,
+            global_sync.as_ref(),
+        );
     }
     Ok((selected, report))
 }
@@ -1300,6 +1307,11 @@ fn create_cloud_candidate_receipt(
             )
             .map_err(|_| "icloud-new-copy-admission-evidence-unavailable".to_string())?;
             icloud_sync_health::require_new_copy_admission(&health)?;
+        } else {
+            let global_sync =
+                provider_global_sync::inspect_new_copy_admission(selected.provider)
+                    .map_err(|_| "provider-global-sync-evidence-unavailable".to_string())?;
+            provider_global_sync::require_new_copy_admission(&global_sync)?;
         }
         let snapshot = report
             .capacity

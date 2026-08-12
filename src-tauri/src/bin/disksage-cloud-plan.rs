@@ -40,6 +40,8 @@ use disksage_lib::provider_client_runtime;
 #[cfg(not(coverage))]
 use disksage_lib::provider_evidence::{self, ProviderSyncEvidenceRecord};
 #[cfg(not(coverage))]
+use disksage_lib::provider_global_sync;
+#[cfg(not(coverage))]
 use disksage_lib::provider_oauth;
 #[cfg(not(coverage))]
 use disksage_lib::provider_sync;
@@ -2022,6 +2024,13 @@ fn attach_local_copy_prerequisites(report: &mut cloud::CloudPlanReport, home: &P
         let health =
             icloud_sync_health::inspect_new_copy_admission(home, cloud::system_now_ms()).ok();
         icloud_sync_health::attach_new_copy_admission_notice(&mut report.notices, health.as_ref());
+    } else {
+        let global_sync =
+            provider_global_sync::inspect_new_copy_admission(report.cloud_root.provider).ok();
+        provider_global_sync::attach_new_copy_admission_notice(
+            &mut report.notices,
+            global_sync.as_ref(),
+        );
     }
 }
 
@@ -2574,6 +2583,11 @@ fn run() -> Result<(), String> {
                     icloud_sync_health::inspect_new_copy_admission(&home, cloud::system_now_ms())
                         .map_err(|_| "icloud-new-copy-admission-evidence-unavailable".to_string())?;
                 icloud_sync_health::require_new_copy_admission(&health)?;
+            } else {
+                let global_sync =
+                    provider_global_sync::inspect_new_copy_admission(selected.provider)
+                        .map_err(|_| "provider-global-sync-evidence-unavailable".to_string())?;
+                provider_global_sync::require_new_copy_admission(&global_sync)?;
             }
             let capacity_snapshot = report
                 .capacity
