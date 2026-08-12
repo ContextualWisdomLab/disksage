@@ -16,7 +16,7 @@ use crate::organize;
 use crate::safety;
 #[cfg(not(coverage))]
 use crate::{
-    cloud, cloud_eviction, cloud_local_eviction, cloud_plan_view, cloud_review, cloud_transfer,
+    brew_cleanup, cloud, cloud_eviction, cloud_local_eviction, cloud_plan_view, cloud_review, cloud_transfer,
     dev_artifacts, dupes, git_worktree, icloud_sync_health, provider_api_client, provider_capacity,
     provider_client_runtime, provider_evidence, provider_global_sync, provider_oauth,
     provider_sync, rules,
@@ -29,6 +29,8 @@ pub struct AppState {
     pub scanning: Arc<AtomicBool>,
     /// Serialize review writes with review-gated copies so a later hold cannot race a copy.
     pub cloud_review: Arc<Mutex<()>>,
+    /// The latest model judgment is process-local and consumed by one execution attempt.
+    pub brew_cleanup_judgment: Arc<Mutex<Option<crate::brew_cleanup::BrewCleanupJudgment>>>,
     // 엔진은 최초 사용 시 한 번만 로드해 보관(모델 로드는 ~1GB — 호출마다 재로드 금지). feature off/coverage에서는 필드 자체가 없음.
     #[cfg(all(not(coverage), feature = "llm-engine"))]
     pub engine: Arc<Mutex<Option<crate::llm::LlamaEngine>>>,
@@ -453,6 +455,158 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+fn valid_brew_fingerprint(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn valid_brew_rationale(value: &str) -> bool {
+    let trimmed = value.trim();
+    value == trimmed
+        && !trimmed.is_empty()
+        && trimmed.chars().count() <= 1_000
+        && !trimmed.chars().any(char::is_control)
+}
+
+/// Build a read-only Homebrew cleanup plan. The command is macOS-only and fixed in Rust.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn plan_brew_cleanup() -> Result<brew_cleanup::BrewCleanupPlan, String> {
+    brew_cleanup::plan(now_ms())
+}
+
+/// Ask the verified local model whether the fixed cleanup is appropriate.
+/// A non-safe judgment is returned to the UI but is never stored as execution authority.
+#[cfg(not(coverage))]
+#[cfg_attr(not(feature = "llm-engine"), allow(unused_variables))]
+#[tauri::command(async)]
+pub fn judge_brew_cleanup(
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<brew_cleanup::BrewCleanupJudgment, String> {
+    let plan = brew_cleanup::plan(now_ms())?;
+
+    #[cfg(feature = "llm-engine")]
+    {
+        use tauri::Manager;
+        let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        if !model_status_for(&model_file_path(&dir)).present {
+            return Err("brew-cleanup-llm-model-unavailable".into());
+        }
+        let mut guard = state
+            .engine
+            .lock()
+            .map_err(|_| "brew-cleanup-llm-engine-lock-poisoned".to_string())?;
+        if guard.is_none() {
+            let engine = crate::llm::LlamaEngine::new(&model_file_path(&dir))
+                .map_err(|_| "brew-cleanup-llm-engine-init-failed".to_string())?;
+            *guard = Some(engine);
+        }
+        let engine = guard
+            .as_ref()
+            .ok_or_else(|| "brew-cleanup-llm-engine-unavailable".to_string())?;
+        let judgment = brew_cleanup::judge(engine, &plan, now_ms());
+        drop(guard);
+        *state
+            .brew_cleanup_judgment
+            .lock()
+            .map_err(|_| "brew-cleanup-judgment-lock-poisoned".to_string())? =
+            (judgment.verdict == crate::llm::Verdict::Safe).then_some(judgment.clone());
+        return Ok(judgment);
+    }
+
+    #[cfg(not(feature = "llm-engine"))]
+    {
+        let _ = (app, state);
+        Err("brew-cleanup-llm-engine-disabled".into())
+    }
+}
+
+/// Re-plan immediately before running Homebrew, then consume the matching safe judgment once.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn execute_brew_cleanup(
+    app: AppHandle,
+    state: State<AppState>,
+    plan_fingerprint: String,
+    judgment_id: String,
+    confirmation_phrase: String,
+    rationale: String,
+) -> Result<brew_cleanup::BrewCleanupExecution, String> {
+    if !valid_brew_fingerprint(&plan_fingerprint) || !valid_brew_fingerprint(&judgment_id) {
+        return Err("brew-cleanup-fingerprint-invalid".into());
+    }
+    if !valid_brew_rationale(&rationale) {
+        return Err("brew-cleanup-rationale-invalid".into());
+    }
+    let plan = brew_cleanup::plan(now_ms())?;
+    if plan.plan_fingerprint != plan_fingerprint {
+        return Err("brew-cleanup-plan-stale".into());
+    }
+    if plan.approval_phrase() != confirmation_phrase {
+        return Err("brew-cleanup-confirmation-mismatch".into());
+    }
+
+    let mut stored = state
+        .brew_cleanup_judgment
+        .lock()
+        .map_err(|_| "brew-cleanup-judgment-lock-poisoned".to_string())?;
+    let judgment = stored
+        .as_ref()
+        .ok_or_else(|| "brew-cleanup-llm-judgment-missing".to_string())?
+        .clone();
+    if judgment.judgment_id != judgment_id
+        || judgment.plan_fingerprint != plan_fingerprint
+        || judgment.exact_approval_phrase != plan.exact_approval_phrase
+        || judgment.verdict != crate::llm::Verdict::Safe
+        || now_ms().saturating_sub(judgment.judged_at_ms) > brew_cleanup::MAX_JUDGMENT_AGE_MS
+    {
+        return Err("brew-cleanup-llm-judgment-stale-or-not-safe".into());
+    }
+
+    let executed_at_ms = now_ms();
+    let mut execution = match brew_cleanup::execute(&plan, &judgment_id, executed_at_ms) {
+        Ok(execution) => execution,
+        Err(error) => {
+            *stored = None;
+            drop(stored);
+            return Err(error);
+        }
+    };
+    *stored = None;
+    drop(stored);
+
+    let audit = brew_cleanup::BrewCleanupAuditRecord {
+        schema_version: brew_cleanup::SCHEMA_VERSION,
+        plan,
+        judgment_id: judgment.judgment_id,
+        verdict: judgment.verdict,
+        reason: judgment.reason,
+        model_name: judgment.model_name,
+        judged_at_ms: judgment.judged_at_ms,
+        executed_at_ms,
+        approved_by: local_human_reviewer(),
+        command: execution.command.clone(),
+        status_code: execution.status_code,
+        stdout: execution.stdout.clone(),
+        stderr: execution.stderr.clone(),
+        output_truncated: execution.output_truncated,
+        rationale,
+    };
+    let audit_result = (|| -> Result<PathBuf, String> {
+        use tauri::Manager;
+        let app_data_dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|_| "app-data-directory-unavailable".to_string())?;
+        brew_cleanup::write_audit_record(&app_data_dir, &audit)
+    })();
+    match audit_result {
+        Ok(path) => execution.record_path = Some(path.to_string_lossy().into_owned()),
+        Err(error) => execution.record_error = Some(error),
+    }
+    Ok(execution)
 }
 
 #[cfg(not(coverage))]
@@ -2047,6 +2201,16 @@ mod tests {
         std::fs::write(&there, b"x").unwrap();
         assert!(model_status_for(&there).present);
         assert_eq!(model_status_for(&there).name, crate::llm::DEFAULT.name);
+    }
+
+    #[test]
+    fn brew_cleanup_inputs_are_bounded_and_exact() {
+        assert!(valid_brew_fingerprint(&"a".repeat(64)));
+        assert!(!valid_brew_fingerprint(&"a".repeat(63)));
+        assert!(!valid_brew_fingerprint(&format!("{}g", "a".repeat(63))));
+        assert!(valid_brew_rationale("reviewed dry-run output"));
+        assert!(!valid_brew_rationale(" leading-space"));
+        assert!(!valid_brew_rationale("control\ncharacter"));
     }
 
     #[test]
