@@ -78,6 +78,40 @@ fn shared_writable_eviction_record_directory_fails_closed() {
 
 #[cfg(unix)]
 #[test]
+fn successful_eviction_approval_is_owner_read_only_and_create_once_at_runtime() {
+    use disksage_lib::cloud_eviction::write_immutable_source_eviction_approval;
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().expect("temporary eviction authority directory");
+    let approval = valid_approval();
+
+    write_immutable_source_eviction_approval(directory.path(), &approval)
+        .expect("valid approval must be written once");
+
+    let entries = std::fs::read_dir(directory.path())
+        .expect("eviction authority directory remains readable")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("eviction authority entries remain readable");
+    assert_eq!(entries.len(), 1);
+    let path = entries[0].path();
+    let metadata = std::fs::symlink_metadata(&path).expect("approval metadata");
+    assert!(metadata.is_file());
+    assert_eq!(metadata.permissions().mode() & 0o777, 0o400);
+    assert!(metadata.permissions().readonly());
+
+    let stored: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&path).expect("approval file remains readable by owner"),
+    )
+    .expect("approval record remains valid JSON");
+    assert_eq!(stored["approval_id"], approval.approval_id);
+    assert_eq!(stored["receipt_id"], approval.receipt_id);
+
+    write_immutable_source_eviction_approval(directory.path(), &approval)
+        .expect_err("immutable approval must not be overwritten");
+}
+
+#[cfg(unix)]
+#[test]
 fn eviction_authority_file_is_private_from_creation_and_object_bound_for_hardening() {
     let source = std::fs::read_to_string(
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/cloud_eviction.rs"),
