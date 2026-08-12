@@ -91,12 +91,6 @@ fn public_connection_document_reader_rejects_unsafe_or_invalid_shapes() {
     assert_eq!(path, temp.path().join("cloud-oauth-connections.json"));
     assert!(load_connections(&path).unwrap().is_empty());
 
-    std::fs::write(&path, br#"{"version":1,"connections":[]}"#).unwrap();
-    assert_eq!(
-        std::fs::read(&path).unwrap(),
-        br#"{"version":1,"connections":[]}"#
-    );
-    std::fs::write(&path, br#"{"version":1,"connections":[]}"#).unwrap();
     std::fs::write(&path, b"{\"version\":1,\"connections\":[]}").unwrap();
     assert!(load_connections(&path).unwrap().is_empty());
 
