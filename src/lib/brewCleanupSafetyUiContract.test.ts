@@ -41,4 +41,15 @@ describe("Homebrew cleanup safety UX", () => {
     expect(source).toContain("승인 문구가 일치하지 않습니다.");
     expect(source).toContain("실행 사유를 입력하십시오.");
   });
+
+  it("distinguishes a failed subprocess from a successful execution", () => {
+    const source = readSource("src/lib/BrewCleanup.svelte");
+
+    expect(source).toContain("execution.status_code === 0");
+    expect(source).toContain("실행 성공 (종료 코드");
+    expect(source).toContain("실행 실패 (종료 코드");
+    expect(source).not.toContain(
+      "execution.executed ? `실행 완료 (종료 코드 ${execution.status_code})`",
+    );
+  });
 });
