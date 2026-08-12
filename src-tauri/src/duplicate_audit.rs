@@ -458,9 +458,6 @@ fn metadata_matches(metadata: &Metadata, observation: &FileObservation) -> bool 
 }
 
 fn hash_stable_file(observation: &FileObservation) -> Result<ContentDigests, String> {
-    if cloud::provider_placeholder_not_materialized(&observation.path) {
-        return Err("duplicate-audit-provider-placeholder-not-materialized".into());
-    }
     let before = std::fs::symlink_metadata(&observation.path)
         .map_err(|_| "duplicate-audit-pre-hash-metadata-failed".to_string())?;
     if !metadata_matches(&before, observation) {
