@@ -445,9 +445,26 @@ fn audit_directory(app_data_dir: &Path) -> Result<PathBuf, String> {
     if parent.file_type().is_symlink() || !parent.is_dir() {
         return Err("brew-cleanup-audit-parent-unsafe".into());
     }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if parent.permissions().mode() & 0o022 != 0 {
+            return Err("brew-cleanup-audit-parent-writable-by-others".into());
+        }
+    }
+
     let directory = app_data_dir.join("brew-cleanup-records");
-    std::fs::create_dir_all(&directory)
-        .map_err(|_| "brew-cleanup-audit-directory-create-failed".to_string())?;
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    match builder.create(&directory) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(_) => return Err("brew-cleanup-audit-directory-create-failed".into()),
+    }
     let metadata = std::fs::symlink_metadata(&directory)
         .map_err(|_| "brew-cleanup-audit-directory-unavailable".to_string())?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
@@ -456,8 +473,9 @@ fn audit_directory(app_data_dir: &Path) -> Result<PathBuf, String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
-            .map_err(|_| "brew-cleanup-audit-directory-permissions-failed".to_string())?;
+        if metadata.permissions().mode() & 0o022 != 0 {
+            return Err("brew-cleanup-audit-directory-writable-by-others".into());
+        }
     }
     Ok(directory)
 }
@@ -482,7 +500,7 @@ pub fn write_audit_record(
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+        options.mode(0o400);
     }
     let mut file = options
         .open(&path)
@@ -496,8 +514,14 @@ pub fn write_audit_record(
             .metadata()
             .map_err(|_| "brew-cleanup-audit-metadata-failed".to_string())?
             .permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            permissions.set_mode(0o400);
+        }
+        #[cfg(not(unix))]
         permissions.set_readonly(true);
-        std::fs::set_permissions(&path, permissions)
+        file.set_permissions(permissions)
             .map_err(|_| "brew-cleanup-audit-permissions-failed".to_string())?;
         std::fs::File::open(&directory)
             .and_then(|directory| directory.sync_all())
