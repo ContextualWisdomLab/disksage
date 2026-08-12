@@ -32,3 +32,13 @@ fn generic_cleanup_route_must_fail_closed_before_path_consuming_recycle() {
         "the fail-closed Rust handler name must remain distinct from the legacy command macro"
     );
 }
+
+#[test]
+fn generic_cleanup_repair_must_not_unregister_identity_bound_dev_artifact_cleanup() {
+    let lib = source("src/lib.rs");
+
+    assert!(
+        lib.contains("commands::clean_dev_artifacts,"),
+        "generic clean_paths hardening must preserve the separately object-bound clean_dev_artifacts IPC route"
+    );
+}
