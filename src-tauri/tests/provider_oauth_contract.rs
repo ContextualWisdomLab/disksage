@@ -144,9 +144,11 @@ fn connection_document_admission_is_fail_closed_before_identity_use() {
         "oauth-connection-document-version-or-count-invalid"
     );
 
+    let requested = root(CloudProvider::GoogleDrive, "count-limit");
+    let valid = connection(&requested);
     let too_many = serde_json::json!({
         "version": 1,
-        "connections": (0..33).map(|_| serde_json::json!({})).collect::<Vec<_>>()
+        "connections": vec![valid; 33]
     });
     std::fs::write(&path, serde_json::to_vec(&too_many).unwrap()).unwrap();
     assert_eq!(
