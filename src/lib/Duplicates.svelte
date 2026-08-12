@@ -38,8 +38,8 @@
       }
       toDelete = next;
       loadVerdicts(groups.flatMap((g) => g.paths));
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "중복 파일 검색에 실패했습니다.";
     } finally {
       busy = false;
     }
@@ -77,8 +77,8 @@
       const r = await api.cleanPaths(paths);
       await scan();
       results = r;
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "선택한 중복 파일을 휴지통으로 보내지 못했습니다.";
     } finally {
       busy = false;
     }
@@ -90,7 +90,7 @@
     중복 파일 {scannedRoot ? "" : "(먼저 스캔하세요)"}
     <button onclick={scan} disabled={busy || !scannedRoot}>{busy ? "찾는 중…" : "중복 찾기"}</button>
   </h2>
-  {#if loadError}<p class="error">{loadError}</p>{/if}
+  {#if loadError}<p class="error" role="alert">{loadError}</p>{/if}
 
   {#if groups.length === 0 && !busy}
     <p class="muted">중복을 찾으려면 스캔 후 "중복 찾기"를 누르세요.</p>
