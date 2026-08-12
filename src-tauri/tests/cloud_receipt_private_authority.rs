@@ -10,6 +10,13 @@ use disksage_lib::cloud_transfer::{
 };
 use std::os::unix::fs::PermissionsExt;
 
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+}
+
 fn candidate_and_root(
     temp: &tempfile::TempDir,
 ) -> (CloudCandidate, CloudRoot, std::path::PathBuf) {
@@ -94,7 +101,7 @@ fn shared_writable_receipt_directory_fails_closed_without_durable_authority() {
             &candidate,
             &root,
             action,
-            1_786_521_600_000,
+            now_ms(),
             "human:local:test",
             "authorize exact test cloud copy",
             &cloud_copy_approval_phrase(&candidate, action),
@@ -112,7 +119,10 @@ fn shared_writable_receipt_directory_fails_closed_without_durable_authority() {
 
         assert_eq!(error, "receipt-directory-writable-by-others");
         assert!(std::path::Path::new(&candidate.src).exists());
-        assert!(!destination.exists(), "failed receipt publication must roll back the new copy");
+        assert!(
+            !destination.exists(),
+            "failed receipt publication must roll back the new copy"
+        );
         assert_eq!(std::fs::read_dir(&receipt_dir).unwrap().count(), 0);
     }
 }
