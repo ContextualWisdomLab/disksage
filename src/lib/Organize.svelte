@@ -87,7 +87,7 @@
          미리보기/실행 상태와 무관하게 항상 노출되어야 한다(그렇지 않으면 재-미리보기로 사라짐). -->
     <button class="undo" onclick={undoMoves} disabled={busy}>마지막 이동 되돌리기</button>
   </h2>
-  {#if loadError}<p class="error">{loadError}</p>{/if}
+  {#if loadError}<p class="error" role="alert">{loadError}</p>{/if}
 
   {#if plans.length === 0 && !busy}
     <p class="muted">미리보기를 눌러 정리 계획을 확인하세요.</p>
@@ -121,7 +121,7 @@
   {/if}
 
   {#if results.length > 0}
-    <p>{results.filter((r) => r.ok).length}/{results.length}개 완료 — 위 "되돌리기"로 복원할 수 있습니다.</p>
+    <p role="status">{results.filter((r) => r.ok).length}/{results.length}개 완료 — 위 "되돌리기"로 복원할 수 있습니다.</p>
     {#if results.some((r) => !r.ok)}
       <ul class="errors">
         {#each results.filter((r) => !r.ok) as r (r.path)}
