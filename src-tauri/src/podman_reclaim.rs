@@ -680,6 +680,12 @@ pub fn probe_podman_reclaim(
             .disk_size_gib
             .and_then(|gib| gib.checked_mul(GIB)),
     });
+    let machine_is_running = machine
+        .as_ref()
+        .is_some_and(|value| value.state.eq_ignore_ascii_case("running"));
+    if machine.is_some() && !machine_is_running {
+        issues.push("podman-machine-not-running".to_string());
+    }
 
     let raw_image = inspect.as_ref().and_then(|record| {
         let config_path = Path::new(&record.config_dir.path).join(format!("{}.json", record.name));
@@ -715,7 +721,7 @@ pub fn probe_podman_reclaim(
             .ok()
         });
 
-    let store = inspect.as_ref().and_then(|_| {
+    let store = inspect.as_ref().filter(|_| machine_is_running).and_then(|_| {
         command_text(
             podman_bin,
             &[
@@ -733,7 +739,7 @@ pub fn probe_podman_reclaim(
         .ok()
     });
 
-    let system_df = inspect.as_ref().and_then(|_| {
+    let system_df = inspect.as_ref().filter(|_| machine_is_running).and_then(|_| {
         command_text(
             podman_bin,
             &[
@@ -752,7 +758,7 @@ pub fn probe_podman_reclaim(
         .ok()
     });
 
-    let unused_images = inspect.as_ref().and_then(|_| {
+    let unused_images = inspect.as_ref().filter(|_| machine_is_running).and_then(|_| {
         command_text(
             podman_bin,
             &[
