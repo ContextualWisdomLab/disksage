@@ -97,9 +97,8 @@ pub fn parse_dump(
         upload_progress_present |= line_has_active_progress(trimmed, "upload progress:");
         download_progress_present |= line_has_active_progress(trimmed, "download progress:");
         if let Some(count) = parse_pending_indexable_count(trimmed) {
-            pending_indexable_count = Some(
-                pending_indexable_count.map_or(count, |existing: u64| existing.max(count)),
-            );
+            pending_indexable_count =
+                Some(pending_indexable_count.map_or(count, |existing: u64| existing.max(count)));
         }
         if trimmed == "needs-indexing: yes" || trimmed == "indexing: yes" {
             needs_indexing = true;
@@ -108,6 +107,7 @@ pub fn parse_dump(
             || trimmed.contains("user-disabled")
             || trimmed.contains("can't dump the extension")
             || trimmed.contains("Error Domain=")
+            || (trimmed.contains("error:'") && !trimmed.contains("error:'<nil>'"))
         {
             has_error = true;
         }
@@ -294,6 +294,15 @@ sync engine state:
     + scheduling state: running
 "#;
 
+    const SCHEDULER_ERROR_DUMP: &str = r#"
+com.microsoft.OneDrive.FileProvider
+sync engine state:
+    + scheduling state: idle
+    + pending-indexable-count: 0
+    + errors: 0
+      i:227487 create-item: error:'NSError: POSIX 63 "filename too long"'
+"#;
+
     #[test]
     fn quiet_dump_is_clear_without_retaining_paths() {
         let report = parse_dump(CloudProvider::Onedrive, QUIET_DUMP).unwrap();
@@ -311,6 +320,16 @@ sync engine state:
         assert!(report
             .blockers
             .contains(&"provider-global-sync-transfer-active".into()));
+        assert!(require_new_copy_admission(&report).is_err());
+    }
+
+    #[test]
+    fn scheduler_error_blocks_even_when_aggregate_errors_are_zero() {
+        let report = parse_dump(CloudProvider::Onedrive, SCHEDULER_ERROR_DUMP).unwrap();
+        assert_eq!(report.state, ProviderGlobalSyncState::Error);
+        assert!(report
+            .blockers
+            .contains(&"provider-global-sync-error".into()));
         assert!(require_new_copy_admission(&report).is_err());
     }
 
