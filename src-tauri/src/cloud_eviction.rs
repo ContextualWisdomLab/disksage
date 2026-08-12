@@ -20,6 +20,7 @@ use std::path::Path;
 const EVICTION_RECORD_VERSION: u32 = 2;
 const SOURCE_EVICTION_APPROVAL_VERSION: u32 = 1;
 const MAX_RECORD_BYTES: u64 = 64 * 1024;
+const IDENTITY_BOUND_RECYCLE_AVAILABLE: bool = false;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -836,9 +837,15 @@ pub fn evict_source_with_human_approval(
     now_ms: u64,
 ) -> Result<CloudEvictionResult, String> {
     validate_source_eviction_approval(receipt, permit, approval)?;
+    if confirmation_receipt_id != receipt.receipt_id {
+        return Err("eviction-confirmation-receipt-id-mismatch".into());
+    }
     let live_active_use = observe_path_active_use(Path::new(&receipt.source));
     if !approval_active_use_is_safe(&live_active_use) {
         return Err("source-eviction-live-active-use-blocked".into());
+    }
+    if !IDENTITY_BOUND_RECYCLE_AVAILABLE {
+        return Err("source-eviction-identity-bound-recycle-unavailable".into());
     }
     evict_source_with_context(
         receipt,
@@ -880,7 +887,7 @@ mod tests {
             src: source.to_string_lossy().into_owned(),
             dst: destination.to_string_lossy().into_owned(),
             provider: CloudProvider::Onedrive,
-            destination_account_scope: crate::cloud::CloudAccountScope::Organization,
+            destination_account_scope: crate::cloud::CloudAccountScope::Personal,
             kind: ArchiveKind::Document,
             bytes: metadata.len(),
             age_days: 1,
@@ -911,7 +918,7 @@ mod tests {
         let root = CloudRoot {
             id: cloud_dir.to_string_lossy().into_owned(),
             provider: CloudProvider::Onedrive,
-            account_scope: crate::cloud::CloudAccountScope::Organization,
+            account_scope: crate::cloud::CloudAccountScope::Personal,
             label: "test".into(),
             path: cloud_dir.to_string_lossy().into_owned(),
             readable: true,
