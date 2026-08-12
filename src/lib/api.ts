@@ -155,6 +155,59 @@ export const fileVerdicts = (paths: string[]) => invoke<FileVerdict[]>("file_ver
 export const summarizeUnknownBucket = (paths: string[]) =>
   invoke<string | null>("summarize_unknown_bucket", { paths });
 
+export interface BrewCleanupPlan {
+  schema_version: number;
+  platform: "macos";
+  brew_path: string;
+  brew_version: string;
+  dry_run_output: string;
+  dry_run_output_truncated: boolean;
+  observed_at_ms: number;
+  plan_fingerprint: string;
+  exact_approval_phrase: string;
+}
+
+export interface BrewCleanupJudgment {
+  schema_version: number;
+  plan: BrewCleanupPlan;
+  plan_fingerprint: string;
+  judgment_id: string;
+  verdict: Verdict;
+  reason: string;
+  model_name: string;
+  judged_at_ms: number;
+  exact_approval_phrase: string;
+}
+
+export interface BrewCleanupExecution {
+  schema_version: number;
+  plan_fingerprint: string;
+  judgment_id: string;
+  command: string[];
+  status_code: number;
+  stdout: string;
+  stderr: string;
+  output_truncated: boolean;
+  executed: boolean;
+  executed_at_ms: number;
+  record_path: string | null;
+  record_error: string | null;
+}
+
+export const planBrewCleanup = () => invoke<BrewCleanupPlan>("plan_brew_cleanup");
+export const judgeBrewCleanup = () => invoke<BrewCleanupJudgment>("judge_brew_cleanup");
+export const executeBrewCleanup = (
+  planFingerprint: string,
+  judgmentId: string,
+  confirmationPhrase: string,
+  rationale: string,
+) => invoke<BrewCleanupExecution>("execute_brew_cleanup", {
+  planFingerprint,
+  judgmentId,
+  confirmationPhrase,
+  rationale,
+});
+
 export interface Settings { online_mode: boolean; }
 export const getSettings = () => invoke<Settings>("get_settings");
 export const setSettings = (online_mode: boolean) => invoke<Settings>("set_settings", { onlineMode: online_mode });
