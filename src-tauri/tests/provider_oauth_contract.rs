@@ -4,6 +4,7 @@ use disksage_lib::provider_oauth::{
     OAuthConnection,
 };
 use sha2::{Digest, Sha256};
+use std::fmt::Write;
 
 const MICROSOFT_CLIENT_ID: &str = "12345678-1234-4abc-8def-1234567890ab";
 const GOOGLE_CLIENT_ID: &str = "1234567890-abcxyz.apps.googleusercontent.com";
@@ -31,7 +32,13 @@ fn connection_id(root: &CloudRoot) -> String {
         hasher.update(value.as_bytes());
         hasher.update([0]);
     }
-    format!("{:x}", hasher.finalize())
+
+    let digest = hasher.finalize();
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(&mut encoded, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    encoded
 }
 
 fn connection(root: &CloudRoot) -> OAuthConnection {
