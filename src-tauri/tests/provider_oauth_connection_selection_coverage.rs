@@ -178,3 +178,66 @@ fn persisted_icloud_oauth_identity_fails_at_the_unsupported_provider_boundary() 
         "icloud-oauth-not-supported"
     );
 }
+
+#[test]
+fn connection_document_admission_bounds_fail_closed_before_connection_use() {
+    let temp = tempfile::tempdir().unwrap();
+    let missing = temp.path().join("missing.json");
+    assert!(load_connections(&missing).unwrap().is_empty());
+
+    let directory = temp.path().join("directory");
+    std::fs::create_dir(&directory).unwrap();
+    assert_eq!(
+        load_connections(&directory).unwrap_err(),
+        "oauth-connection-document-not-regular-file"
+    );
+
+    let malformed = temp.path().join("malformed.json");
+    std::fs::write(&malformed, b"{not-json").unwrap();
+    assert_eq!(
+        load_connections(&malformed).unwrap_err(),
+        "oauth-connection-document-invalid"
+    );
+
+    let wrong_version = temp.path().join("wrong-version.json");
+    std::fs::write(
+        &wrong_version,
+        serde_json::to_vec(&serde_json::json!({"version": 2, "connections": []})).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        load_connections(&wrong_version).unwrap_err(),
+        "oauth-connection-document-version-or-count-invalid"
+    );
+
+    let too_many = temp.path().join("too-many.json");
+    let repeated = vec![connection(&root(CloudProvider::Onedrive)); 33];
+    std::fs::write(
+        &too_many,
+        serde_json::to_vec(&serde_json::json!({"version": 1, "connections": repeated})).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        load_connections(&too_many).unwrap_err(),
+        "oauth-connection-document-version-or-count-invalid"
+    );
+
+    let oversized = temp.path().join("oversized.json");
+    std::fs::write(&oversized, vec![b' '; 256 * 1024 + 1]).unwrap();
+    assert_eq!(
+        load_connections(&oversized).unwrap_err(),
+        "oauth-connection-document-too-large"
+    );
+
+    #[cfg(unix)]
+    {
+        let regular = temp.path().join("regular.json");
+        let symlink = temp.path().join("connections-link.json");
+        std::fs::write(&regular, br#"{"version":1,"connections":[]}"#).unwrap();
+        std::os::unix::fs::symlink(&regular, &symlink).unwrap();
+        assert_eq!(
+            load_connections(&symlink).unwrap_err(),
+            "oauth-connection-document-not-regular-file"
+        );
+    }
+}
