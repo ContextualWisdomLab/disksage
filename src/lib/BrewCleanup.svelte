@@ -128,7 +128,11 @@
 
       {#if execution}
         <p class:success={execution.status_code === 0} class:error={execution.status_code !== 0}>
-          {execution.executed ? `실행 완료 (종료 코드 ${execution.status_code})` : "실행되지 않음"}
+          {execution.executed
+            ? execution.status_code === 0
+              ? `실행 성공 (종료 코드 ${execution.status_code})`
+              : `실행 실패 (종료 코드 ${execution.status_code})`
+            : "실행되지 않음"}
         </p>
         {#if execution.stdout}<pre>{execution.stdout}</pre>{/if}
         {#if execution.stderr}<pre class="error">{execution.stderr}</pre>{/if}
