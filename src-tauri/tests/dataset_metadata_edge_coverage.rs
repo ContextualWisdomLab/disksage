@@ -104,3 +104,54 @@ fn valid_dates_and_digit_invalid_shapes_cover_exact_date_admission() {
     assert_eq!(profile.columns[1].inferred_type, "text");
     assert_eq!(profile.columns[2].inferred_type, "text");
 }
+
+#[test]
+fn jsonl_row_limit_stops_before_unbounded_input_consumption() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("bounded.jsonl");
+    let mut contents = String::new();
+    for index in 0..101 {
+        contents.push_str(&format!("{{\"id\":{index}}}\n"));
+    }
+    write_file(&path, contents.as_bytes());
+
+    let profile = profile_dataset(&path);
+    assert_eq!(profile.sampled_rows, 100);
+    assert!(profile.sample_truncated);
+    assert!(!profile.profile_complete);
+    assert!(profile
+        .quality_warnings
+        .contains(&"row-sample-limit-reached".to_string()));
+    assert_eq!(profile.columns.len(), 1);
+    assert_eq!(profile.columns[0].observed_values, 100);
+}
+
+#[test]
+fn jsonl_column_limit_and_empty_names_fail_closed_without_value_retention() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("wide.jsonl");
+    let mut object = serde_json::Map::new();
+    object.insert(String::new(), serde_json::Value::String("private-empty".into()));
+    for index in 0..128 {
+        object.insert(
+            format!("field_{index}"),
+            serde_json::Value::String(format!("private-value-{index}")),
+        );
+    }
+    let contents = format!("{}\n", serde_json::Value::Object(object));
+    write_file(&path, contents.as_bytes());
+
+    let profile = profile_dataset(&path);
+    assert_eq!(profile.sampled_rows, 1);
+    assert_eq!(profile.columns.len(), 128);
+    assert!(!profile.profile_complete);
+    assert!(profile
+        .quality_warnings
+        .contains(&"column-limit-exceeded".to_string()));
+    assert!(profile.columns.iter().any(|column| column.name == "column_1"));
+
+    let serialized = serde_json::to_string(&profile).unwrap();
+    assert!(!serialized.contains("private-empty"));
+    assert!(!serialized.contains("private-value-0"));
+    assert!(!serialized.contains("private-value-127"));
+}
