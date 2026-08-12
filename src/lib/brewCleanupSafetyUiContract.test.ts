@@ -32,4 +32,13 @@ describe("Homebrew cleanup safety UX", () => {
     expect(start).toBeGreaterThanOrEqual(0);
     expect(executeCleanup).toContain("judgment = null;");
   });
+
+  it("normalizes the approval phrase and explains why execution is unavailable", () => {
+    const source = readSource("src/lib/BrewCleanup.svelte");
+
+    expect(source).toContain("confirmationPhrase.trim() === judgment.exact_approval_phrase");
+    expect(source).toContain("confirmationPhrase.trim(),");
+    expect(source).toContain("승인 문구가 일치하지 않습니다.");
+    expect(source).toContain("실행 사유를 입력하십시오.");
+  });
 });
