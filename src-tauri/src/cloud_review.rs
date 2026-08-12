@@ -279,6 +279,13 @@ fn secure_decision_directory(path: &Path) -> Result<(), String> {
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return Err("cloud-review-directory-unsafe".into());
     }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o022 != 0 {
+            return Err("cloud-review-directory-writable-by-others".into());
+        }
+    }
     Ok(())
 }
 
