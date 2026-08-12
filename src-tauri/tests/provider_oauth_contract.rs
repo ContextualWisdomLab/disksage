@@ -51,6 +51,14 @@ fn connection(root: &CloudRoot) -> OAuthConnection {
     }
 }
 
+fn write_connection_document(path: &std::path::Path, connections: &[OAuthConnection]) {
+    let document = serde_json::json!({
+        "version": 1,
+        "connections": connections,
+    });
+    std::fs::write(path, serde_json::to_vec(&document).unwrap()).unwrap();
+}
+
 #[test]
 fn public_client_id_contract_rejects_malformed_provider_identities() {
     assert_eq!(
@@ -137,6 +145,68 @@ fn connection_document_admission_is_fail_closed_before_identity_use() {
     assert_eq!(
         load_connections(&path).unwrap_err(),
         "oauth-connection-document-version-or-count-invalid"
+    );
+}
+
+#[test]
+fn connection_document_validation_covers_identity_and_scope_boundaries() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = connections_path(temp.path());
+    let requested = root(CloudProvider::GoogleDrive, "validation");
+    let valid = connection(&requested);
+
+    std::fs::write(&path, b"not-json").unwrap();
+    assert_eq!(
+        load_connections(&path).unwrap_err(),
+        "oauth-connection-document-invalid"
+    );
+
+    let mut invalid_hash_shape = valid.clone();
+    invalid_hash_shape.connection_id = "z".repeat(64);
+    write_connection_document(&path, &[invalid_hash_shape]);
+    assert_eq!(
+        load_connections(&path).unwrap_err(),
+        "oauth-connection-invalid"
+    );
+
+    let mut blank_root_id = valid.clone();
+    blank_root_id.cloud_root_id = " ".to_string();
+    write_connection_document(&path, &[blank_root_id]);
+    assert_eq!(
+        load_connections(&path).unwrap_err(),
+        "oauth-connection-invalid"
+    );
+
+    let mut relative_root_path = valid.clone();
+    relative_root_path.cloud_root_path = "relative/root".to_string();
+    write_connection_document(&path, &[relative_root_path]);
+    assert_eq!(
+        load_connections(&path).unwrap_err(),
+        "oauth-connection-invalid"
+    );
+
+    let mut wrong_scope = valid.clone();
+    wrong_scope.scope = "https://www.googleapis.com/auth/drive.file".to_string();
+    write_connection_document(&path, &[wrong_scope]);
+    assert_eq!(
+        load_connections(&path).unwrap_err(),
+        "oauth-connection-invalid"
+    );
+
+    let mut malformed_client = valid.clone();
+    malformed_client.client_id = "not-a-google-client".to_string();
+    write_connection_document(&path, &[malformed_client]);
+    assert_eq!(
+        load_connections(&path).unwrap_err(),
+        "oauth-client-id-provider-format-invalid"
+    );
+
+    let mut mismatched_identity = valid;
+    mismatched_identity.connection_id = "0".repeat(64);
+    write_connection_document(&path, &[mismatched_identity]);
+    assert_eq!(
+        load_connections(&path).unwrap_err(),
+        "oauth-connection-id-mismatch"
     );
 }
 
