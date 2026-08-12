@@ -2,7 +2,7 @@
   import { getSettings, setSettings } from "./api";
 
   let online = $state(false);
-  let busy = $state(false);
+  let busy = $state(true);
   let error = $state("");
 
   $effect(() => {
@@ -13,6 +13,9 @@
       })
       .catch(() => {
         error = "설정을 불러오지 못했습니다.";
+      })
+      .finally(() => {
+        busy = false;
       });
   });
 
