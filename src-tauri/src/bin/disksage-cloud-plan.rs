@@ -2433,11 +2433,18 @@ fn run() -> Result<(), String> {
         } else {
             None
         };
-        let envelope = naruon_cloud_copy_readiness::export_naruon_cloud_copy_readiness(
-            &report,
-            &runtime,
-            icloud_health.as_ref(),
-        )?;
+        let provider_global_sync = if selected.provider == CloudProvider::Icloud {
+            None
+        } else {
+            provider_global_sync::inspect_new_copy_admission(selected.provider).ok()
+        };
+        let envelope =
+            naruon_cloud_copy_readiness::export_naruon_cloud_copy_readiness_with_global_sync(
+                &report,
+                &runtime,
+                icloud_health.as_ref(),
+                provider_global_sync.as_ref(),
+            )?;
         if let Some(output_path) = &args.naruon_copy_readiness_output {
             let value = serde_json::to_value(&envelope)
                 .map_err(|_| "naruon-copy-readiness-output-json-invalid".to_string())?;
