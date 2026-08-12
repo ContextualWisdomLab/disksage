@@ -4,8 +4,10 @@
 
 A cloud root being readable is not enough evidence to copy a Downloads
 candidate. DiskSage independently evaluates metadata review, destination
-safety, the local provider client, remote account capacity, and—only for
-iCloud—the local CloudDocs upload queue. Naruon needs one bounded contract that
+safety, the local provider client, remote account capacity, and provider-wide
+synchronization admission (the immutable CloudDocs queue for iCloud and
+bounded File Provider evidence for OneDrive/Google Drive). Naruon needs one
+bounded contract that
 can validate those pre-copy facts without receiving filenames, paths, account
 identifiers, or raw embedded metadata.
 
@@ -14,7 +16,7 @@ a provider, attests synchronization, or authorizes local source eviction.
 
 ## Contract
 
-`disksage.naruon.cloud-copy-readiness` version 1 contains:
+`disksage.naruon.cloud-copy-readiness` version 5 contains:
 
 - provider and destination account scope;
 - the DiskSage decision-batch fingerprint;
@@ -28,6 +30,8 @@ a provider, attests synchronization, or authorizes local source eviction.
 - the complete provider-authoritative capacity assessment;
 - for iCloud, waiting and active upload queue counts/bytes plus the remaining
   admission blocker inputs.
+- for OneDrive and Google Drive, bounded provider-wide File Provider transfer
+  and indexing state, without retaining provider paths or filenames.
 
 `filesystem:modified-fallback` belongs to the filesystem-modified aggregate.
 Filename dates remain auxiliary evidence even when they are the selected
@@ -52,6 +56,9 @@ DiskSage starts with the existing per-candidate transfer blockers. It then adds:
 3. for iCloud, every current queue blocker, or
    `icloud-new-copy-admission-evidence-unavailable` when the immutable local
    probe cannot be obtained.
+4. for OneDrive and Google Drive, every provider-global-sync blocker, or
+   `provider-global-sync-evidence-unavailable` when the bounded dump cannot be
+   obtained.
 
 A candidate is `ready_without_new_review` only when no blocker remains. The
 envelope state is `no-candidates`, `blocked`, `partially-ready`, or
@@ -67,7 +74,7 @@ cross-runtime Unicode normalization ambiguity.
 
 The known Rust test vector for the fixed OneDrive fixture is:
 
-`3d07355c2ce73fe514447e873d59d1a6015e7fa269d83313ef011d62a7c10855`
+`9746455ea407b33b50daa408076223892894dfe0a105cc0a53d9af9b95bcae11`
 
 Naruon must reconstruct the same canonical form and digest. It must also
 recompute all semantic invariants; accepting a newly signed contradiction is
