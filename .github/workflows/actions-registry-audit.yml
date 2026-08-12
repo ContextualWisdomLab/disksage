@@ -30,7 +30,8 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 20.19.0
+          # Native test include/threshold coverage flags require Node >=22.8.0.
+          node-version: 22.18.0
       - name: Exact audit-module coverage
         run: >-
           node --experimental-test-coverage
