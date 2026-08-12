@@ -67,6 +67,18 @@ fn write_connection_document(path: &std::path::Path, connections: &[OAuthConnect
 }
 
 #[test]
+fn requested_scopes_are_provider_least_privilege_contracts() {
+    assert_eq!(
+        requested_scope(CloudProvider::Onedrive).unwrap(),
+        "Files.Read offline_access"
+    );
+    assert_eq!(
+        requested_scope(CloudProvider::GoogleDrive).unwrap(),
+        "https://www.googleapis.com/auth/drive.metadata.readonly"
+    );
+}
+
+#[test]
 fn public_client_id_contract_rejects_malformed_provider_identities() {
     assert_eq!(
         requested_scope(CloudProvider::Icloud).unwrap_err(),
