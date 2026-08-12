@@ -147,9 +147,14 @@ pub fn write_immutable_sync_evidence(
     if encoded.len() as u64 > MAX_PROVIDER_EVIDENCE_RECORD_BYTES {
         return Err("provider-evidence-record-too-large".into());
     }
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o400);
+    }
+    let mut file = options
         .open(&path)
         .map_err(|_| "provider-evidence-record-create-failed".to_string())?;
     let result = (|| -> Result<(), String> {
@@ -167,7 +172,7 @@ pub fn write_immutable_sync_evidence(
         }
         #[cfg(not(unix))]
         permissions.set_readonly(true);
-        std::fs::set_permissions(&path, permissions)
+        file.set_permissions(permissions)
             .map_err(|_| "provider-evidence-record-permissions-failed".to_string())?;
         #[cfg(unix)]
         std::fs::File::open(directory)
