@@ -33,6 +33,15 @@ fn admission_report() -> IcloudSyncHealthReport {
     }
 }
 
+fn sorted_entry_names(directory: &Path) -> Vec<String> {
+    let mut names = fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    names.sort();
+    names
+}
+
 #[test]
 fn public_probe_rejects_unsafe_database_directory_shapes_before_sqlite() {
     assert_eq!(
@@ -86,6 +95,27 @@ fn public_probe_rejects_missing_or_non_regular_managed_database_files() {
     );
     fs::remove_dir(&client_db).unwrap();
     fs::write(&client_db, b"sqlite fixture placeholder").unwrap();
+
+    let original_client_db = fs::read(&client_db).unwrap();
+    let source_entries = sorted_entry_names(&db_dir);
+    let error = probe_icloud_sync_health(&db_dir, 1).unwrap_err();
+    assert!(error.starts_with("icloud-sync-health-"), "{error}");
+    assert_eq!(fs::read(&client_db).unwrap(), original_client_db);
+    assert_eq!(sorted_entry_names(&db_dir), source_entries);
+
+    #[cfg(unix)]
+    {
+        let real_client_db = temp.path().join("real-client.db");
+        fs::write(&real_client_db, b"sqlite fixture target").unwrap();
+        fs::remove_file(&client_db).unwrap();
+        std::os::unix::fs::symlink(&real_client_db, &client_db).unwrap();
+        assert_eq!(
+            probe_icloud_sync_health(&db_dir, 1).unwrap_err(),
+            "icloud-sync-health-client.db-symlink-rejected"
+        );
+        fs::remove_file(&client_db).unwrap();
+        fs::write(&client_db, b"sqlite fixture placeholder").unwrap();
+    }
 
     let optional_sidecar = db_dir.join("client.db-shm");
     fs::create_dir(&optional_sidecar).unwrap();
