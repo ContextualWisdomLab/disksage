@@ -1436,17 +1436,25 @@ fn add_probe_warning(metadata: &mut ContentMetadata, tool: &str, failure: Metada
 /// A File Provider placeholder has a logical size but no locally allocated blocks. Opening it can
 /// request materialization, which is the opposite of a read-only inventory on a low-disk machine.
 /// Restrict the path check to macOS managed roots so ordinary sparse files elsewhere are unaffected.
+#[cfg(target_os = "macos")]
+fn provider_placeholder_not_materialized_for_home(path: &Path, home: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    let managed_root = path.starts_with(home.join("Library/CloudStorage"))
+        || path.starts_with(home.join("Library/Mobile Documents/com~apple~CloudDocs"));
+    managed_root
+        && std::fs::symlink_metadata(path).is_ok_and(|metadata| {
+            metadata.is_file() && metadata.len() > 0 && metadata.blocks() == 0
+        })
+}
+
 pub(crate) fn provider_placeholder_not_materialized(path: &Path) -> bool {
     #[cfg(target_os = "macos")]
     {
-        use std::os::unix::fs::MetadataExt;
-        let display = path.to_string_lossy();
-        let managed_root = display.contains("/Library/CloudStorage/")
-            || display.contains("/Library/Mobile Documents/com~apple~CloudDocs/");
-        return managed_root
-            && std::fs::symlink_metadata(path).is_ok_and(|metadata| {
-                metadata.is_file() && metadata.len() > 0 && metadata.blocks() == 0
-            });
+        let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+            return false;
+        };
+        return provider_placeholder_not_materialized_for_home(path, &home);
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -5094,9 +5102,27 @@ mod tests {
         file.set_len(256 * 1024 * 1024).unwrap();
         let metadata = std::fs::symlink_metadata(&path).unwrap();
         assert!(metadata.len() > 0);
-        if metadata.blocks() == 0 {
-            assert!(provider_placeholder_not_materialized(&path));
-        }
+        assert_eq!(metadata.blocks(), 0, "fixture must remain sparse");
+        assert!(provider_placeholder_not_materialized_for_home(
+            &path,
+            temp.path()
+        ));
+
+        let unrelated = temp
+            .path()
+            .join("project/Library/CloudStorage/test-account/unrelated.bin");
+        std::fs::create_dir_all(unrelated.parent().unwrap()).unwrap();
+        let unrelated_file = std::fs::File::create(&unrelated).unwrap();
+        unrelated_file.set_len(256 * 1024 * 1024).unwrap();
+        assert_eq!(
+            std::fs::symlink_metadata(&unrelated).unwrap().blocks(),
+            0,
+            "fixture must remain sparse"
+        );
+        assert!(!provider_placeholder_not_materialized_for_home(
+            &unrelated,
+            temp.path()
+        ));
     }
 
     #[test]
