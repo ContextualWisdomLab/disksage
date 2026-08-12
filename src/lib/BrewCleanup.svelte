@@ -75,7 +75,7 @@
 <div class="brew-panel">
   <strong>Homebrew 정리 (macOS)</strong>
   <p class="muted">
-    읽기 전용 dry-run 결과를 로컬 LLM이 판단합니다. Safe여도 사람의 승인 문구와 사유를 입력해야 고정 명령만 실행됩니다.
+    읽기 전용 dry-run 결과를 로컬 LLM이 판단합니다. 실행 범위는 Homebrew prefix 안의 끊어진 심볼릭 링크와 빈 디렉터리로 제한되며, Safe여도 사람의 승인 문구와 사유를 입력해야 고정 명령만 실행됩니다.
   </p>
   <button onclick={judgeCleanup} disabled={planning || executing}>
     {planning ? "Homebrew dry-run·LLM 판단 중…" : "Homebrew 정리 계획과 LLM 판단"}
@@ -102,7 +102,7 @@
           </label>
           <label>
             실행 사유
-            <textarea bind:value={rationale} maxlength="1000" placeholder="예: dry-run 결과를 검토했고 오래된 Homebrew 파일 정리가 필요함" disabled={executing}></textarea>
+            <textarea bind:value={rationale} maxlength="1000" placeholder="예: dry-run 결과를 검토했고 끊어진 심볼릭 링크와 빈 디렉터리 정리가 필요함" disabled={executing}></textarea>
           </label>
           <button onclick={executeCleanup} disabled={!executionReady()}>
             {executing ? "재검증 후 Homebrew 정리 중…" : "승인하고 brew cleanup 실행"}
