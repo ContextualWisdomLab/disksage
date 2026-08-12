@@ -10,7 +10,7 @@ const GOOGLE_CLIENT_ID: &str = "1234567890-abcxyz.apps.googleusercontent.com";
 
 fn root(provider: CloudProvider, suffix: &str) -> CloudRoot {
     #[cfg(windows)]
-    let path = format!(r"C:\\Cloud\\{suffix}");
+    let path = format!(r"C:\Cloud\{suffix}");
     #[cfg(not(windows))]
     let path = format!("/Cloud/{suffix}");
 
@@ -123,7 +123,7 @@ fn connection_document_admission_is_fail_closed_before_identity_use() {
         "oauth-connection-document-too-large"
     );
 
-    std::fs::write(&path, br#"{"version":2,"connections":[]}"#).unwrap();
+    std::fs::write(&path, br#"{"version":2,"connections":[]}"#.replace("\\\"", "\"")).unwrap();
     assert_eq!(
         load_connections(&path).unwrap_err(),
         "oauth-connection-document-version-or-count-invalid"
