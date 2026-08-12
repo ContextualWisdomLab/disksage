@@ -24,6 +24,7 @@ pub struct BrewCleanupPlan {
     pub schema_version: u32,
     pub platform: String,
     pub brew_path: String,
+    pub brew_identity: String,
     pub brew_version: String,
     pub dry_run_output: String,
     pub dry_run_output_truncated: bool,
@@ -97,6 +98,12 @@ struct CommandOutput {
 }
 
 #[cfg(target_os = "macos")]
+struct VerifiedBrewExecutable {
+    file: std::fs::File,
+    identity: String,
+}
+
+#[cfg(target_os = "macos")]
 fn fixed_brew_path() -> Result<PathBuf, String> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -122,13 +129,45 @@ fn fixed_brew_path() -> Result<PathBuf, String> {
 }
 
 #[cfg(target_os = "macos")]
-fn run_brew(path: &Path, args: &[&str]) -> Result<CommandOutput, String> {
-    use std::process::{Command, Stdio};
+fn open_verified_brew(path: &Path) -> Result<VerifiedBrewExecutable, String> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let path_metadata = std::fs::symlink_metadata(path)
+        .map_err(|_| "brew-cleanup-executable-identity-bound-execution-unavailable".to_string())?;
+    if !path_metadata.is_file()
+        || path_metadata.file_type().is_symlink()
+        || path_metadata.permissions().mode() & 0o111 == 0
+    {
+        return Err("brew-cleanup-executable-identity-bound-execution-unavailable".into());
+    }
+    let file = std::fs::File::open(path)
+        .map_err(|_| "brew-cleanup-executable-identity-bound-execution-unavailable".to_string())?;
+    let opened_metadata = file
+        .metadata()
+        .map_err(|_| "brew-cleanup-executable-identity-bound-execution-unavailable".to_string())?;
+    let current_metadata = std::fs::symlink_metadata(path)
+        .map_err(|_| "brew-cleanup-executable-identity-bound-execution-unavailable".to_string())?;
+    if !opened_metadata.is_file()
+        || current_metadata.file_type().is_symlink()
+        || !current_metadata.is_file()
+        || opened_metadata.dev() != current_metadata.dev()
+        || opened_metadata.ino() != current_metadata.ino()
+    {
+        return Err("brew-cleanup-executable-identity-bound-execution-unavailable".into());
+    }
+    Ok(VerifiedBrewExecutable {
+        identity: format!("{}:{}", opened_metadata.dev(), opened_metadata.ino()),
+        file,
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn run_command(mut command: std::process::Command) -> Result<CommandOutput, String> {
+    use std::process::Stdio;
     use std::thread;
     use std::time::{Duration, Instant};
 
-    let mut child = Command::new(path)
-        .args(args)
+    let mut child = command
         .env("HOMEBREW_NO_AUTO_UPDATE", "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -183,6 +222,32 @@ fn run_brew(path: &Path, args: &[&str]) -> Result<CommandOutput, String> {
 }
 
 #[cfg(target_os = "macos")]
+fn run_brew_object_bound(path: &Path, args: &[&str]) -> Result<(String, CommandOutput), String> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    let verified = open_verified_brew(path)?;
+    let identity = verified.identity.clone();
+    let file_fd = verified.file.as_raw_fd();
+    let script_path = path.to_string_lossy().into_owned();
+    let mut command = Command::new("/bin/bash");
+    command
+        .args(["-c", "source /dev/fd/3 \"$@\"", &script_path])
+        .args(args)
+        .stdin(Stdio::null());
+    unsafe {
+        command.pre_exec(move || {
+            if libc::dup2(file_fd, 3) == -1 || libc::fcntl(3, libc::F_SETFD, 0) == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    Ok((identity, run_command(command)?))
+}
+
+#[cfg(target_os = "macos")]
 fn read_bounded(reader: &mut impl Read) -> io::Result<(String, bool)> {
     let mut retained = Vec::with_capacity(MAX_OUTPUT_BYTES);
     let mut chunk = [0u8; 8 * 1024];
@@ -207,14 +272,16 @@ fn read_bounded(reader: &mut impl Read) -> io::Result<(String, bool)> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn run_brew(_path: &Path, _args: &[&str]) -> Result<CommandOutput, String> {
+fn run_brew_object_bound(_path: &Path, _args: &[&str]) -> Result<(String, CommandOutput), String> {
     Err("brew-cleanup-unsupported-platform".into())
 }
 
-fn fingerprint(path: &Path, version: &str, output: &str) -> String {
+fn fingerprint(path: &Path, identity: &str, version: &str, output: &str) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"disksage-brew-cleanup-plan\0");
     hasher.update(path.as_os_str().to_string_lossy().as_bytes());
+    hasher.update(&[0]);
+    hasher.update(identity.as_bytes());
     hasher.update(&[0]);
     hasher.update(version.as_bytes());
     hasher.update(&[0]);
@@ -224,11 +291,14 @@ fn fingerprint(path: &Path, version: &str, output: &str) -> String {
 
 pub fn plan(observed_at_ms: u64) -> Result<BrewCleanupPlan, String> {
     let path = fixed_brew_path()?;
-    let version = run_brew(&path, &["--version"])?;
+    let (brew_identity, version) = run_brew_object_bound(&path, &["--version"])?;
     if version.status_code != 0 || version.stdout.trim().is_empty() {
         return Err("brew-cleanup-version-check-failed".into());
     }
-    let dry_run = run_brew(&path, &DRY_RUN_ARGUMENTS)?;
+    let (dry_run_identity, dry_run) = run_brew_object_bound(&path, &DRY_RUN_ARGUMENTS)?;
+    if brew_identity != dry_run_identity {
+        return Err("brew-cleanup-executable-changed-during-plan".into());
+    }
     if dry_run.status_code != 0 {
         return Err("brew-cleanup-dry-run-failed".into());
     }
@@ -239,11 +309,17 @@ pub fn plan(observed_at_ms: u64) -> Result<BrewCleanupPlan, String> {
     } else {
         format!("{}\n{}", dry_run.stdout, dry_run.stderr)
     };
-    let plan_fingerprint = fingerprint(&path, version.stdout.trim(), &dry_run_output);
+    let plan_fingerprint = fingerprint(
+        &path,
+        &brew_identity,
+        version.stdout.trim(),
+        &dry_run_output,
+    );
     Ok(BrewCleanupPlan {
         schema_version: SCHEMA_VERSION,
         platform: "macos".into(),
         brew_path: path.to_string_lossy().into_owned(),
+        brew_identity,
         brew_version: version.stdout.trim().to_string(),
         dry_run_output,
         dry_run_output_truncated: dry_run.truncated || version.truncated,
@@ -301,15 +377,35 @@ pub fn judge(
     }
 }
 
-/// Refuse destructive Homebrew cleanup until process launch remains bound to the exact executable
-/// object that the user reviewed. Re-resolving a fixed pathname after review leaves a same-user
-/// replacement window before `Command::spawn`, so pathname equality is not sufficient authority.
 pub fn execute(
-    _plan: &BrewCleanupPlan,
-    _judgment_id: &str,
-    _executed_at_ms: u64,
+    plan: &BrewCleanupPlan,
+    judgment_id: &str,
+    executed_at_ms: u64,
 ) -> Result<BrewCleanupExecution, String> {
-    Err("brew-cleanup-executable-identity-bound-execution-unavailable".into())
+    let path = fixed_brew_path()?;
+    if path != Path::new(&plan.brew_path) {
+        return Err("brew-cleanup-brew-path-changed".into());
+    }
+    let (identity, output) = run_brew_object_bound(&path, &EXECUTE_ARGUMENTS)?;
+    if identity != plan.brew_identity {
+        return Err("brew-cleanup-executable-identity-bound-execution-unavailable".into());
+    }
+    Ok(BrewCleanupExecution {
+        schema_version: SCHEMA_VERSION,
+        plan_fingerprint: plan.plan_fingerprint.clone(),
+        judgment_id: judgment_id.to_string(),
+        command: std::iter::once(EXECUTABLE.to_string())
+            .chain(EXECUTE_ARGUMENTS.iter().map(|arg| (*arg).to_string()))
+            .collect(),
+        status_code: output.status_code,
+        stdout: output.stdout,
+        stderr: output.stderr,
+        output_truncated: output.truncated,
+        executed: true,
+        executed_at_ms,
+        record_path: None,
+        record_error: None,
+    })
 }
 
 const MAX_AUDIT_BYTES: usize = 128 * 1024;
@@ -411,6 +507,7 @@ mod tests {
             schema_version: SCHEMA_VERSION,
             platform: "macos".into(),
             brew_path: "/opt/homebrew/bin/brew".into(),
+            brew_identity: "1:2".into(),
             brew_version: "Homebrew 6.0.12".into(),
             dry_run_output: "Would remove old downloads".into(),
             dry_run_output_truncated: false,
@@ -463,6 +560,21 @@ mod tests {
         let (text, truncated) = read_bounded(&mut reader).unwrap();
         assert_eq!(text.len(), MAX_OUTPUT_BYTES);
         assert!(truncated);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn object_bound_launch_uses_the_open_executable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let script = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(script.path(), b"#!/bin/bash\nprintf 'object-bound\\n'\n").unwrap();
+        std::fs::set_permissions(script.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = script.path();
+        let (identity, output) = run_brew_object_bound(path, &["object-bound\n"]).unwrap();
+        assert!(!identity.is_empty());
+        assert_eq!(output.status_code, 0);
+        assert_eq!(output.stdout, "object-bound\n");
     }
 
     #[test]

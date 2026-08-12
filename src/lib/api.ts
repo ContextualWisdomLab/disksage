@@ -159,6 +159,7 @@ export interface BrewCleanupPlan {
   schema_version: number;
   platform: "macos";
   brew_path: string;
+  brew_identity: string;
   brew_version: string;
   dry_run_output: string;
   dry_run_output_truncated: boolean;
