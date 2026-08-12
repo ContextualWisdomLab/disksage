@@ -4,6 +4,7 @@
   import { verdictBadge } from "./verdictBadge";
   import { confirm } from "@tauri-apps/plugin-dialog";
   import GitWorktreeCleanup from "./GitWorktreeCleanup.svelte";
+  import BrewCleanup from "./BrewCleanup.svelte";
 
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
@@ -156,6 +157,7 @@
   {/if}
 
   <GitWorktreeCleanup {scannedRoot} />
+  <BrewCleanup />
 </section>
 
 <style>
