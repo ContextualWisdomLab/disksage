@@ -35,7 +35,7 @@
       path = selected;
       resetDecision();
     } catch (e) {
-      error = String(e);
+      error = "iCloud 파일 선택에 실패했습니다.";
     }
   }
 
@@ -47,7 +47,7 @@
     try {
       plan = await api.planIcloudLocalCopyEviction(cloudRoot, selectedPath);
     } catch (e) {
-      error = String(e);
+      error = "iCloud 로컬 사본 상태를 확인하지 못했습니다.";
     } finally {
       planning = false;
     }
@@ -83,7 +83,7 @@
       confirmation = "";
       rationale = "";
     } catch (e) {
-      error = String(e);
+      error = "iCloud 로컬 사본 축출에 실패했습니다.";
     } finally {
       executing = false;
     }
