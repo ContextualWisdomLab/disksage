@@ -27,7 +27,7 @@
 
 ## Safety first
 
-Every destructive action goes through explicit review and the OS trash — DiskSage has **no permanent-delete code path**. Cloud archiving currently exposes copy and evidence only: even a successful provider attestation returns a local-eviction permit without deleting the source. All destructive operations are journaled and undoable.
+Every destructive action goes through explicit review and the OS trash — DiskSage has **no permanent-delete code path**. Developer-artifact selections carry a bounded, metadata-only fingerprint, byte/file counts, scan status, and a platform filesystem-object identity; the Rust command re-scans immediately before trashing, atomically stages the exact identity in a private sibling directory, and rejects changed, recreated, unreadable, or incomplete candidates. Cloud archiving currently exposes copy and evidence only: even a successful provider attestation returns a local-eviction permit without deleting the source. All destructive operations are journaled and sent to OS trash; identity-staged operations retain their private recovery directory so OS-trash undo has a valid staged target, while restoring to the original path remains a separate recovery step.
 
 The headless split-archive audit is read-only. A contiguous sequence does not invent proof that its
 last observed member is the terminal part, and a missing-part result is never automatic deletion

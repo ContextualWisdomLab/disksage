@@ -18,7 +18,8 @@ use crate::safety;
 use crate::{
     cloud, cloud_eviction, cloud_local_eviction, cloud_plan_view, cloud_review, cloud_transfer,
     dev_artifacts, dupes, git_worktree, icloud_sync_health, provider_api_client, provider_capacity,
-    provider_client_runtime, provider_evidence, provider_oauth, provider_sync, rules,
+    provider_client_runtime, provider_evidence, provider_global_sync, provider_oauth,
+    provider_sync, rules,
 };
 
 #[derive(Default)]
@@ -131,6 +132,64 @@ pub fn clean_paths_inner(paths: &[PathBuf], journal_path: &Path, now_ms: u64) ->
                     path: p.to_string_lossy().into_owned(),
                     ok: false,
                     error: e.to_string(),
+                },
+            }
+        })
+        .collect()
+}
+
+/// 개발 아티팩트는 목록 시점의 bounded metadata manifest와 일치할 때만 휴지통으로 보낸다.
+/// 선택 후 재생성·변경된 target/node_modules는 경로가 같아도 재스캔을 요구한다.
+pub fn clean_dev_artifacts_inner(
+    requests: &[dev_artifacts::DevArtifact],
+    root: &Path,
+    min_age_days: u64,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Vec<CleanResult> {
+    let current = dev_artifacts::find_artifacts(root, min_age_days, now_ms);
+    requests
+        .iter()
+        .map(|request| {
+            let matches = current.iter().find(|candidate| {
+                candidate.path == request.path
+                    && candidate.kind == request.kind
+                    && candidate.project == request.project
+                    && candidate.bytes == request.bytes
+                    && candidate.files == request.files
+                    && candidate.skipped == request.skipped
+                    && candidate.scan_complete
+                    && request.scan_complete
+                    && request.skipped == 0
+                    && candidate.fingerprint == request.fingerprint
+                    && !request.object_id.is_empty()
+                    && candidate.object_id == request.object_id
+                    && candidate.age_days >= request.age_days
+            });
+            if matches.is_none() {
+                return CleanResult {
+                    path: request.path.clone(),
+                    ok: false,
+                    error: "개발 아티팩트가 변경되었거나 메타데이터 스캔이 불완전합니다. 정리 전에 다시 스캔하세요".into(),
+                };
+            }
+
+            match safety::trash_delete_if_identity(
+                Path::new(&request.path),
+                &request.object_id,
+                request.bytes,
+                journal_path,
+                now_ms,
+            ) {
+                Ok(()) => CleanResult {
+                    path: request.path.clone(),
+                    ok: true,
+                    error: String::new(),
+                },
+                Err(error) => CleanResult {
+                    path: request.path.clone(),
+                    ok: false,
+                    error: error.to_string(),
                 },
             }
         })
@@ -422,6 +481,24 @@ pub fn clean_paths(paths: Vec<String>, app: AppHandle) -> Result<Vec<CleanResult
     let jp = journal_file_path(&app)?;
     let pbufs: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
     Ok(clean_paths_inner(&pbufs, &jp, now_ms()))
+}
+
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn clean_dev_artifacts(
+    root: String,
+    min_age_days: u64,
+    artifacts: Vec<dev_artifacts::DevArtifact>,
+    app: AppHandle,
+) -> Result<Vec<CleanResult>, String> {
+    let jp = journal_file_path(&app)?;
+    Ok(clean_dev_artifacts_inner(
+        &artifacts,
+        Path::new(&root),
+        min_age_days,
+        &jp,
+        now_ms(),
+    ))
 }
 
 #[cfg(not(coverage))]
@@ -897,6 +974,14 @@ pub fn inspect_icloud_new_copy_admission(
 }
 
 #[cfg(not(coverage))]
+struct CloudPlanningOutput {
+    selected: cloud::CloudRoot,
+    report: cloud::CloudPlanReport,
+    icloud_health: Option<icloud_sync_health::IcloudSyncHealthReport>,
+    provider_global_sync: Option<provider_global_sync::ProviderGlobalSyncReport>,
+}
+
+#[cfg(not(coverage))]
 fn cloud_plan_for_inputs(
     root: &str,
     cloud_root: &str,
@@ -904,7 +989,7 @@ fn cloud_plan_for_inputs(
     min_age_days: u64,
     limit: usize,
     app: &AppHandle,
-) -> Result<(cloud::CloudRoot, cloud::CloudPlanReport), String> {
+) -> Result<CloudPlanningOutput, String> {
     let root_path = PathBuf::from(root);
     cloud::validate_source_root_readable(&root_path)?;
     let discovered = cloud::discover_cloud_roots(&resolve_home(app));
@@ -950,15 +1035,29 @@ fn cloud_plan_for_inputs(
         cloud::system_now_ms(),
     );
     provider_client_runtime::attach_runtime_notice(&mut report.notices, &runtime);
-    if selected.provider == cloud::CloudProvider::Icloud {
+    let (icloud_health, provider_global_sync) = if selected.provider == cloud::CloudProvider::Icloud
+    {
         let health = icloud_sync_health::inspect_new_copy_admission(
             &resolve_home(app),
             cloud::system_now_ms(),
         )
         .ok();
         icloud_sync_health::attach_new_copy_admission_notice(&mut report.notices, health.as_ref());
-    }
-    Ok((selected, report))
+        (health, None)
+    } else {
+        let global_sync = provider_global_sync::inspect_new_copy_admission(selected.provider).ok();
+        provider_global_sync::attach_new_copy_admission_notice(
+            &mut report.notices,
+            global_sync.as_ref(),
+        );
+        (None, global_sync)
+    };
+    Ok(CloudPlanningOutput {
+        selected,
+        report,
+        icloud_health,
+        provider_global_sync,
+    })
 }
 
 #[cfg(not(coverage))]
@@ -1063,9 +1162,9 @@ pub async fn plan_cloud_archive(
     app: AppHandle,
 ) -> Result<cloud_plan_view::CloudPlanReportView, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let (_, report) =
+        let planning =
             cloud_plan_for_inputs(&root, &cloud_root, min_size_mib, min_age_days, limit, &app)?;
-        Ok(report.into())
+        Ok(planning.report.into())
     })
     .await
     .map_err(|_| "cloud-plan-task-failed".to_string())?
@@ -1096,7 +1195,7 @@ fn local_human_reviewer() -> String {
 
 #[cfg(not(coverage))]
 #[tauri::command(async)]
-pub fn review_cloud_candidate(
+pub async fn review_cloud_candidate(
     root: String,
     cloud_root: String,
     metadata_fingerprint: String,
@@ -1107,41 +1206,46 @@ pub fn review_cloud_candidate(
     min_age_days: u64,
     limit: usize,
     app: AppHandle,
-    state: State<AppState>,
+    state: State<'_, AppState>,
 ) -> Result<cloud_review::CloudReviewDecision, String> {
     for fingerprint in [&metadata_fingerprint, &review_fingerprint] {
         if fingerprint.len() != 64 || !fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err("cloud-review-fingerprint-invalid".into());
         }
     }
-    let _guard = state
-        .cloud_review
-        .lock()
-        .map_err(|_| "cloud-review-lock-poisoned".to_string())?;
-    let (_, report) =
-        cloud_plan_for_inputs(&root, &cloud_root, min_size_mib, min_age_days, limit, &app)?;
-    let matches: Vec<_> = report
-        .candidates
-        .iter()
-        .filter(|candidate| candidate.metadata_fingerprint == metadata_fingerprint)
-        .collect();
-    let candidate = match matches.as_slice() {
-        [only] => *only,
-        [] => return Err("fresh-plan-candidate-not-found".into()),
-        _ => return Err("fresh-plan-candidate-ambiguous".into()),
-    };
-    if candidate.review_fingerprint != review_fingerprint {
-        return Err("fresh-plan-review-fingerprint-mismatch".into());
-    }
-    let decision = cloud_review::create_attributed_decision(
-        candidate,
-        disposition,
-        cloud::system_now_ms(),
-        &local_human_reviewer(),
-        &rationale,
-    )?;
-    cloud_review::write_immutable_decision(&cloud_review_directory(&app)?, &decision)?;
-    Ok(decision)
+    let cloud_review = Arc::clone(&state.cloud_review);
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = cloud_review
+            .lock()
+            .map_err(|_| "cloud-review-lock-poisoned".to_string())?;
+        let planning =
+            cloud_plan_for_inputs(&root, &cloud_root, min_size_mib, min_age_days, limit, &app)?;
+        let matches: Vec<_> = planning
+            .report
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.metadata_fingerprint == metadata_fingerprint)
+            .collect();
+        let candidate = match matches.as_slice() {
+            [only] => *only,
+            [] => return Err("fresh-plan-candidate-not-found".into()),
+            _ => return Err("fresh-plan-candidate-ambiguous".into()),
+        };
+        if candidate.review_fingerprint != review_fingerprint {
+            return Err("fresh-plan-review-fingerprint-mismatch".into());
+        }
+        let decision = cloud_review::create_attributed_decision(
+            candidate,
+            disposition,
+            cloud::system_now_ms(),
+            &local_human_reviewer(),
+            &rationale,
+        )?;
+        cloud_review::write_immutable_decision(&cloud_review_directory(&app)?, &decision)?;
+        Ok(decision)
+    })
+    .await
+    .map_err(|_| "cloud-review-task-failed".to_string())?
 }
 
 #[cfg(not(coverage))]
@@ -1172,8 +1276,14 @@ fn create_cloud_candidate_receipt(
     {
         return Err("metadata-fingerprint-invalid".into());
     }
-    let (selected, report) =
+    let planning =
         cloud_plan_for_inputs(root, cloud_root, min_size_mib, min_age_days, limit, app)?;
+    let CloudPlanningOutput {
+        selected,
+        report,
+        icloud_health,
+        provider_global_sync,
+    } = planning;
     let matches: Vec<_> = report
         .candidates
         .iter()
@@ -1218,12 +1328,15 @@ fn create_cloud_candidate_receipt(
             cloud::system_now_ms(),
         )?;
         if selected.provider == cloud::CloudProvider::Icloud {
-            let health = icloud_sync_health::inspect_new_copy_admission(
-                &resolve_home(app),
-                cloud::system_now_ms(),
-            )
-            .map_err(|_| "icloud-new-copy-admission-evidence-unavailable".to_string())?;
+            let health = icloud_health
+                .as_ref()
+                .ok_or_else(|| "icloud-new-copy-admission-evidence-unavailable".to_string())?;
             icloud_sync_health::require_new_copy_admission(&health)?;
+        } else {
+            let global_sync = provider_global_sync
+                .as_ref()
+                .ok_or_else(|| "provider-global-sync-evidence-unavailable".to_string())?;
+            provider_global_sync::require_new_copy_admission(global_sync)?;
         }
         let snapshot = report
             .capacity
@@ -1263,7 +1376,7 @@ fn create_cloud_candidate_receipt(
 /// The source is retained and no local-eviction API is exposed by this command.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
-pub fn copy_cloud_candidate(
+pub async fn copy_cloud_candidate(
     root: String,
     cloud_root: String,
     metadata_fingerprint: String,
@@ -1273,31 +1386,35 @@ pub fn copy_cloud_candidate(
     exact_confirmation_phrase: String,
     approval_rationale: String,
     app: AppHandle,
-    state: State<AppState>,
+    state: State<'_, AppState>,
 ) -> Result<CloudCopyOutput, String> {
-    let _guard = state
-        .cloud_review
-        .lock()
-        .map_err(|_| "cloud-review-lock-poisoned".to_string())?;
-    create_cloud_candidate_receipt(
-        &root,
-        &cloud_root,
-        &metadata_fingerprint,
-        min_size_mib,
-        min_age_days,
-        limit,
-        &exact_confirmation_phrase,
-        &approval_rationale,
-        &app,
-        false,
-    )
+    let cloud_review = Arc::clone(&state.cloud_review);
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = cloud_review
+            .lock()
+            .map_err(|_| "cloud-review-lock-poisoned".to_string())?;
+        create_cloud_candidate_receipt(
+            &root,
+            &cloud_root,
+            &metadata_fingerprint,
+            min_size_mib,
+            min_age_days,
+            limit,
+            &exact_confirmation_phrase,
+            &approval_rationale,
+            &app,
+            false,
+        )
+    })
+    .await
+    .map_err(|_| "cloud-copy-task-failed".to_string())?
 }
 
 /// Rebuild the plan and adopt an already-existing destination only after full content-digest
 /// equality is proven. Both source and destination remain in place.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
-pub fn adopt_existing_cloud_candidate(
+pub async fn adopt_existing_cloud_candidate(
     root: String,
     cloud_root: String,
     metadata_fingerprint: String,
@@ -1307,24 +1424,28 @@ pub fn adopt_existing_cloud_candidate(
     exact_confirmation_phrase: String,
     approval_rationale: String,
     app: AppHandle,
-    state: State<AppState>,
+    state: State<'_, AppState>,
 ) -> Result<CloudCopyOutput, String> {
-    let _guard = state
-        .cloud_review
-        .lock()
-        .map_err(|_| "cloud-review-lock-poisoned".to_string())?;
-    create_cloud_candidate_receipt(
-        &root,
-        &cloud_root,
-        &metadata_fingerprint,
-        min_size_mib,
-        min_age_days,
-        limit,
-        &exact_confirmation_phrase,
-        &approval_rationale,
-        &app,
-        true,
-    )
+    let cloud_review = Arc::clone(&state.cloud_review);
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = cloud_review
+            .lock()
+            .map_err(|_| "cloud-review-lock-poisoned".to_string())?;
+        create_cloud_candidate_receipt(
+            &root,
+            &cloud_root,
+            &metadata_fingerprint,
+            min_size_mib,
+            min_age_days,
+            limit,
+            &exact_confirmation_phrase,
+            &approval_rationale,
+            &app,
+            true,
+        )
+    })
+    .await
+    .map_err(|_| "cloud-adopt-existing-task-failed".to_string())?
 }
 
 #[cfg(not(coverage))]
@@ -2161,6 +2282,38 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
                 .collect();
             trash::os_limited::purge_all(items).unwrap();
         }
+    }
+
+    #[test]
+    fn dev_artifact_cleanup_rejects_a_stale_metadata_fingerprint() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("webapp");
+        let artifact = project.join("node_modules");
+        fs::create_dir_all(&artifact).unwrap();
+        fs::write(project.join("package.json"), b"{}").unwrap();
+        fs::write(artifact.join("payload.bin"), b"old").unwrap();
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let observed = crate::dev_artifacts::find_artifacts(tmp.path(), 0, now);
+        assert_eq!(observed.len(), 1);
+
+        // The path still exists, but its metadata manifest no longer matches the selection.
+        fs::write(artifact.join("payload.bin"), b"recreated-with-different-size").unwrap();
+        let results = clean_dev_artifacts_inner(
+            &observed,
+            tmp.path(),
+            0,
+            &tmp.path().join("journal.jsonl"),
+            now,
+        );
+
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].ok);
+        assert!(results[0].error.contains("다시 스캔"));
+        assert!(artifact.join("payload.bin").exists());
     }
 
     #[test]

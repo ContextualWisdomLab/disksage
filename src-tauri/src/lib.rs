@@ -71,6 +71,7 @@ pub mod provider_capacity;
 pub mod provider_client_runtime;
 pub mod provider_evidence;
 pub mod provider_oauth;
+pub mod provider_global_sync;
 pub mod provider_sync;
 pub mod private_evidence;
 /// Read-only, fail-closed logical/allocation/reclaimability evidence.
@@ -96,6 +97,7 @@ pub fn run() {
             commands::list_dev_artifacts,
             commands::clean_paths,
             cache_cleanup::clean_cache_contents,
+            commands::clean_dev_artifacts,
             commands::recent_operations,
             commands::expand_clean_targets,
             commands::find_duplicate_files,
