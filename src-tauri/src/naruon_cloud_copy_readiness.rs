@@ -17,8 +17,9 @@ use crate::icloud_sync_health::{IcloudSyncHealthReport, ICLOUD_SYNC_HEALTH_SCHEM
 use crate::naruon_capacity;
 use crate::provider_capacity::{self, CapacityEvidenceKind, CloudCapacityAssessment};
 use crate::provider_client_runtime::{self, ProviderClientRuntimeSnapshot};
+use crate::provider_global_sync::{self, ProviderGlobalSyncReport, ProviderGlobalSyncState};
 
-pub const NARUON_CLOUD_COPY_READINESS_SCHEMA_VERSION: u32 = 4;
+pub const NARUON_CLOUD_COPY_READINESS_SCHEMA_VERSION: u32 = 5;
 pub const NARUON_CLOUD_COPY_READINESS_MAX_INPUT_BYTES: u64 = 1024 * 1024;
 const NARUON_CLOUD_COPY_READINESS_SCHEMA_KIND: &str = "disksage.naruon.cloud-copy-readiness";
 const FINGERPRINT_CANONICALIZATION: &str = "lexicographic-json-object-keys-utf8-no-whitespace";
@@ -111,6 +112,7 @@ pub struct NaruonCloudCopyReadinessEnvelope {
     pub provider_runtime: ProviderClientRuntimeSnapshot,
     pub capacity: CloudCapacityAssessment,
     pub icloud_new_copy_admission: Option<IcloudNewCopyAdmissionSummary>,
+    pub provider_global_sync: Option<ProviderGlobalSyncReport>,
     pub provider_runtime_prerequisite_met: bool,
     pub remote_capacity_verified: bool,
     pub icloud_new_copy_admission_met: Option<bool>,
@@ -452,6 +454,15 @@ pub fn export_naruon_cloud_copy_readiness(
     runtime: &ProviderClientRuntimeSnapshot,
     icloud_health: Option<&IcloudSyncHealthReport>,
 ) -> Result<NaruonCloudCopyReadinessEnvelope, String> {
+    export_naruon_cloud_copy_readiness_with_global_sync(report, runtime, icloud_health, None)
+}
+
+pub fn export_naruon_cloud_copy_readiness_with_global_sync(
+    report: &CloudPlanReport,
+    runtime: &ProviderClientRuntimeSnapshot,
+    icloud_health: Option<&IcloudSyncHealthReport>,
+    provider_global_sync: Option<&ProviderGlobalSyncReport>,
+) -> Result<NaruonCloudCopyReadinessEnvelope, String> {
     provider_client_runtime::validate_provider_client_runtime_snapshot(runtime)?;
     if runtime.provider != report.cloud_root.provider {
         return Err("naruon-copy-readiness-runtime-provider-mismatch".into());
@@ -461,6 +472,8 @@ pub fn export_naruon_cloud_copy_readiness(
         capacity.snapshot.evidence_kind != CapacityEvidenceKind::Unavailable;
     let (icloud_new_copy_admission, icloud_new_copy_admission_met) =
         validate_icloud_health(report.cloud_root.provider, icloud_health)?;
+    let (provider_global_sync, provider_global_sync_blockers) =
+        validate_provider_global_sync_input(report.cloud_root.provider, provider_global_sync)?;
 
     let mut planner_unblocked = CountBytes::default();
     let mut requires_human_review = CountBytes::default();
@@ -510,6 +523,8 @@ pub fn export_naruon_cloud_copy_readiness(
                 Some(admission) => blockers.extend(admission.blockers.clone()),
                 None => blockers.push("icloud-new-copy-admission-evidence-unavailable".into()),
             }
+        } else {
+            blockers.extend(provider_global_sync_blockers.iter().cloned());
         }
         blockers.sort();
         blockers.dedup();
@@ -565,6 +580,7 @@ pub fn export_naruon_cloud_copy_readiness(
         provider_runtime: runtime.clone(),
         capacity,
         icloud_new_copy_admission,
+        provider_global_sync,
         provider_runtime_prerequisite_met: runtime.copy_prerequisite_met,
         remote_capacity_verified,
         icloud_new_copy_admission_met,
@@ -589,6 +605,37 @@ pub fn export_naruon_cloud_copy_readiness(
     envelope.readiness_fingerprint_sha256 = canonical_fingerprint(&envelope)?;
     validate_naruon_cloud_copy_readiness(&envelope)?;
     Ok(envelope)
+}
+
+fn validate_provider_global_sync_input(
+    provider: CloudProvider,
+    report: Option<&ProviderGlobalSyncReport>,
+) -> Result<(Option<ProviderGlobalSyncReport>, Vec<String>), String> {
+    if provider == CloudProvider::Icloud {
+        if report.is_some() {
+            return Err("naruon-copy-readiness-provider-global-sync-icloud-invalid".into());
+        }
+        return Ok((None, Vec::new()));
+    }
+    let Some(report) = report else {
+        return Ok((
+            None,
+            vec!["provider-global-sync-evidence-unavailable".into()],
+        ));
+    };
+    if report.schema_version != provider_global_sync::PROVIDER_GLOBAL_SYNC_SCHEMA_VERSION
+        || report.provider != provider
+        || !report.evidence_complete
+        || report
+            .blockers
+            .iter()
+            .any(|blocker| !is_reason_code(blocker))
+        || (report.state == ProviderGlobalSyncState::Clear && !report.blockers.is_empty())
+        || (report.state != ProviderGlobalSyncState::Clear && report.blockers.is_empty())
+    {
+        return Err("naruon-copy-readiness-provider-global-sync-invalid".into());
+    }
+    Ok((Some(report.clone()), report.blockers.clone()))
 }
 
 pub fn validate_naruon_cloud_copy_readiness(
@@ -835,6 +882,31 @@ pub fn validate_naruon_cloud_copy_readiness(
         .any(|blocker| envelope.candidate_blocker_counts.contains_key(*blocker))
     {
         return Err("naruon-copy-readiness-icloud-binding-invalid".into());
+    }
+    let expected_provider_global_sync_blockers = validate_provider_global_sync_input(
+        envelope.provider,
+        envelope.provider_global_sync.as_ref(),
+    )
+    .map_err(|_| "naruon-copy-readiness-provider-global-sync-binding-invalid".to_string())?
+    .1;
+    if envelope.candidate_blocker_counts.keys().any(|blocker| {
+        blocker.starts_with("provider-global-sync-")
+            && !expected_provider_global_sync_blockers
+                .iter()
+                .any(|expected| expected == blocker)
+    }) {
+        return Err("naruon-copy-readiness-provider-global-sync-binding-invalid".into());
+    }
+    if envelope.candidate_count > 0 {
+        let expected = CountBytes {
+            count: envelope.candidate_count,
+            bytes: envelope.candidate_bytes,
+        };
+        for blocker in expected_provider_global_sync_blockers {
+            if envelope.candidate_blocker_counts.get(&blocker) != Some(&expected) {
+                return Err("naruon-copy-readiness-provider-global-sync-binding-invalid".into());
+            }
+        }
     }
     let expected_state = if envelope.candidate_count == 0 {
         CloudCopyReadinessState::NoCandidates
@@ -1140,6 +1212,91 @@ mod tests {
         ] {
             assert!(!encoded.contains(redacted));
         }
+    }
+
+    #[test]
+    fn third_party_global_sync_is_bound_and_fails_closed() {
+        let report = report(CloudProvider::Onedrive);
+        let runtime = assess_provider_client_runtime(
+            CloudProvider::Onedrive,
+            Some(b"OneDrive Sync Service\n"),
+            25,
+        );
+        let expected = CountBytes {
+            count: report.candidates.len() as u64,
+            bytes: report.candidate_bytes,
+        };
+
+        let missing = export_naruon_cloud_copy_readiness(&report, &runtime, None).unwrap();
+        assert!(missing.provider_global_sync.is_none());
+        assert_eq!(
+            missing
+                .candidate_blocker_counts
+                .get("provider-global-sync-evidence-unavailable"),
+            Some(&expected)
+        );
+
+        let blocked_sync = ProviderGlobalSyncReport {
+            schema_version: provider_global_sync::PROVIDER_GLOBAL_SYNC_SCHEMA_VERSION,
+            provider: CloudProvider::Onedrive,
+            evidence_kind: "fileproviderctl-global-dump".into(),
+            evidence_complete: true,
+            state: ProviderGlobalSyncState::Pending,
+            upload_progress_present: true,
+            download_progress_present: false,
+            pending_indexable_count: Some(2),
+            blockers: vec!["provider-global-sync-transfer-active".into()],
+            notices: vec!["provider-global-sync-dump-read-only".into()],
+        };
+        let blocked = export_naruon_cloud_copy_readiness_with_global_sync(
+            &report,
+            &runtime,
+            None,
+            Some(&blocked_sync),
+        )
+        .unwrap();
+        assert_eq!(blocked.provider_global_sync, Some(blocked_sync.clone()));
+        assert_eq!(
+            blocked
+                .candidate_blocker_counts
+                .get("provider-global-sync-transfer-active"),
+            Some(&expected)
+        );
+        assert!(validate_naruon_cloud_copy_readiness(&blocked).is_ok());
+
+        let clear_sync = ProviderGlobalSyncReport {
+            state: ProviderGlobalSyncState::Clear,
+            upload_progress_present: false,
+            download_progress_present: false,
+            pending_indexable_count: Some(0),
+            blockers: Vec::new(),
+            ..blocked_sync
+        };
+        let clear = export_naruon_cloud_copy_readiness_with_global_sync(
+            &report,
+            &runtime,
+            None,
+            Some(&clear_sync),
+        )
+        .unwrap();
+        assert!(clear.provider_global_sync.is_some());
+        assert!(!clear
+            .candidate_blocker_counts
+            .keys()
+            .any(|key| key.starts_with("provider-global-sync-")));
+
+        let mut wrong_provider = clear_sync;
+        wrong_provider.provider = CloudProvider::GoogleDrive;
+        assert_eq!(
+            export_naruon_cloud_copy_readiness_with_global_sync(
+                &report,
+                &runtime,
+                None,
+                Some(&wrong_provider),
+            )
+            .unwrap_err(),
+            "naruon-copy-readiness-provider-global-sync-invalid"
+        );
     }
 
     #[test]
@@ -1460,7 +1617,7 @@ mod tests {
         assert_eq!(envelope.readiness_fingerprint_sha256, expected);
         assert_eq!(
             envelope.readiness_fingerprint_sha256,
-            "78cc208c28f677f1ca9074e8490d5dda4b66a297aec1d6c2f0c94cdd32c809b0"
+            "9746455ea407b33b50daa408076223892894dfe0a105cc0a53d9af9b95bcae11"
         );
     }
 }
