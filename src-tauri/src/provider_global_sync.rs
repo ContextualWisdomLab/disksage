@@ -75,6 +75,10 @@ fn parse_pending_indexable_count(line: &str) -> Option<u64> {
         .ok()
 }
 
+fn probe_output_is_truncated(bytes_len: usize) -> bool {
+    bytes_len as u64 > MAX_DUMP_BYTES
+}
+
 /// Parse only aggregate queue markers from one provider-filtered File Provider dump.
 pub fn parse_dump(
     provider: CloudProvider,
@@ -94,24 +98,25 @@ pub fn parse_dump(
 
     for line in output.lines() {
         let trimmed = line.trim();
-        upload_progress_present |= line_has_active_progress(trimmed, "upload progress:");
-        download_progress_present |= line_has_active_progress(trimmed, "download progress:");
-        if let Some(count) = parse_pending_indexable_count(trimmed) {
+        let marker = trimmed.strip_prefix("+ ").unwrap_or(trimmed).trim();
+        upload_progress_present |= line_has_active_progress(marker, "upload progress:");
+        download_progress_present |= line_has_active_progress(marker, "download progress:");
+        if let Some(count) = parse_pending_indexable_count(marker) {
             pending_indexable_count =
                 Some(pending_indexable_count.map_or(count, |existing: u64| existing.max(count)));
         }
-        if trimmed == "needs-indexing: yes" || trimmed == "indexing: yes" {
+        if marker == "needs-indexing: yes" || marker == "indexing: yes" {
             needs_indexing = true;
         }
-        if trimmed.contains("temporarily disconnected")
-            || trimmed.contains("user-disabled")
-            || trimmed.contains("can't dump the extension")
-            || trimmed.contains("Error Domain=")
-            || (trimmed.contains("error:'") && !trimmed.contains("error:'<nil>'"))
+        if marker.contains("temporarily disconnected")
+            || marker.contains("user-disabled")
+            || marker.contains("can't dump the extension")
+            || marker.contains("Error Domain=")
+            || (marker.contains("error:'") && !marker.contains("error:'<nil>'"))
         {
             has_error = true;
         }
-        if let Some(value) = trimmed.strip_prefix("errors:") {
+        if let Some(value) = marker.strip_prefix("errors:") {
             has_error |= value
                 .trim()
                 .parse::<u64>()
@@ -181,7 +186,7 @@ fn run_dump(provider: CloudProvider) -> Result<String, String> {
     let reader = thread::spawn(move || {
         let mut bytes = Vec::new();
         stdout
-            .take(MAX_DUMP_BYTES)
+            .take(MAX_DUMP_BYTES + 1)
             .read_to_end(&mut bytes)
             .map(|_| bytes)
             .map_err(|_| "provider-global-sync-probe-read-failed".to_string())
@@ -210,6 +215,9 @@ fn run_dump(provider: CloudProvider) -> Result<String, String> {
         .map_err(|_| "provider-global-sync-probe-read-failed".to_string())??;
     if !status.success() {
         return Err("provider-global-sync-probe-exit-failed".into());
+    }
+    if probe_output_is_truncated(bytes.len()) {
+        return Err("provider-global-sync-probe-output-truncated".into());
     }
     String::from_utf8(bytes).map_err(|_| "provider-global-sync-probe-output-invalid".into())
 }
@@ -335,12 +343,16 @@ sync engine state:
 
     #[test]
     fn disconnected_provider_is_error_and_fails_closed() {
-        let dump = format!(
-            "com.google.drivefs.fpext\nsync engine state:\n temporarily disconnected: yes\n"
-        );
-        let report = parse_dump(CloudProvider::GoogleDrive, &dump).unwrap();
+        let dump = "com.google.drivefs.fpext\nsync engine state:\n temporarily disconnected: yes\n";
+        let report = parse_dump(CloudProvider::GoogleDrive, dump).unwrap();
         assert_eq!(report.state, ProviderGlobalSyncState::Error);
         assert!(require_new_copy_admission(&report).is_err());
+    }
+
+    #[test]
+    fn bounded_probe_rejects_output_beyond_limit() {
+        assert!(!probe_output_is_truncated(MAX_DUMP_BYTES as usize));
+        assert!(probe_output_is_truncated(MAX_DUMP_BYTES as usize + 1));
     }
 
     #[test]
