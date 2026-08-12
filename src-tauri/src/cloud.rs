@@ -24,6 +24,12 @@ use unicode_normalization::UnicodeNormalization;
 
 const ARCHIVE_DIR: &str = "DiskSage Archive";
 const DAY_MS: u64 = 86_400_000;
+// OneDrive's decoded relative path is limited to 400 characters; local sync also needs each
+// component to fit the filesystem's 255-character/byte boundary. Keep this provider-specific
+// preflight separate from iCloud/Google Drive planning.
+const ONEDRIVE_MAX_RELATIVE_PATH_CHARS: usize = 400;
+const ONEDRIVE_MAX_PATH_COMPONENT_CHARS: usize = 255;
+const ONEDRIVE_MAX_PATH_COMPONENT_BYTES: usize = 255;
 #[cfg(not(coverage))]
 const METADATA_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(not(coverage))]
@@ -3621,6 +3627,43 @@ fn planner_blocked_reason(
     source_blocked_reason(path, kind, metadata)
 }
 
+fn provider_destination_path_blocked_reason(
+    cloud_root: &CloudRoot,
+    destination: &Path,
+) -> Option<String> {
+    if cloud_root.provider != CloudProvider::Onedrive {
+        return None;
+    }
+    let Ok(relative) = destination.strip_prefix(Path::new(&cloud_root.path)) else {
+        return Some("destination-outside-cloud-root".into());
+    };
+    let mut relative_chars = 0;
+    for component in relative.components() {
+        let std::path::Component::Normal(component) = component else {
+            return Some("onedrive-path-invalid".into());
+        };
+        let Some(component) = component.to_str() else {
+            return Some("onedrive-path-not-unicode".into());
+        };
+        let normalized = component.nfc().collect::<String>();
+        if normalized.is_empty() {
+            return Some("onedrive-path-invalid".into());
+        }
+        if normalized.chars().count() > ONEDRIVE_MAX_PATH_COMPONENT_CHARS
+            || normalized.as_bytes().len() > ONEDRIVE_MAX_PATH_COMPONENT_BYTES
+        {
+            return Some("onedrive-path-component-too-long".into());
+        }
+        relative_chars += normalized.chars().count();
+    }
+    if relative.components().count().saturating_sub(1) + relative_chars
+        > ONEDRIVE_MAX_RELATIVE_PATH_CHARS
+    {
+        return Some("onedrive-path-too-long".into());
+    }
+    None
+}
+
 fn metadata_fingerprint(file: &FileFact, relative: &Path) -> String {
     let input = format!(
         "{}\0{}\0{}\0{}",
@@ -4440,6 +4483,7 @@ pub fn plan_cloud_archive_from_snapshot(
             Some("source-snapshot-stale".into())
         } else {
             planner_blocked_reason(&file.path, kind, &lineage_metadata, &dst)
+                .or_else(|| provider_destination_path_blocked_reason(cloud_root, &dst))
         };
         let source_context = relative
             .parent()
@@ -5349,6 +5393,45 @@ mod tests {
             )
             .as_deref(),
             Some("archive-index-unreadable")
+        );
+    }
+
+    #[test]
+    fn onedrive_destination_path_limits_fail_closed_without_affecting_other_providers() {
+        let cloud_root = root(CloudProvider::Onedrive, Path::new("/cloud"));
+        let short = Path::new("/cloud/DiskSage Archive/2026/documents/report.pdf");
+        assert_eq!(
+            provider_destination_path_blocked_reason(&cloud_root, short),
+            None
+        );
+
+        let long_component = PathBuf::from("/cloud")
+            .join(ARCHIVE_DIR)
+            .join("2026")
+            .join("documents")
+            .join("x".repeat(ONEDRIVE_MAX_PATH_COMPONENT_BYTES + 1));
+        assert_eq!(
+            provider_destination_path_blocked_reason(&cloud_root, &long_component).as_deref(),
+            Some("onedrive-path-component-too-long")
+        );
+
+        let long_relative = PathBuf::from("/cloud")
+            .join(ARCHIVE_DIR)
+            .join("2026")
+            .join("documents")
+            .join("a".repeat(100))
+            .join("b".repeat(100))
+            .join("c".repeat(100))
+            .join("d".repeat(100));
+        assert_eq!(
+            provider_destination_path_blocked_reason(&cloud_root, &long_relative).as_deref(),
+            Some("onedrive-path-too-long")
+        );
+
+        let google_root = root(CloudProvider::GoogleDrive, Path::new("/cloud"));
+        assert_eq!(
+            provider_destination_path_blocked_reason(&google_root, &long_relative),
+            None
         );
     }
 
