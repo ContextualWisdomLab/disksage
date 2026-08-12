@@ -49,8 +49,36 @@
   }
 </script>
 
-<canvas bind:this={canvas} width={W} height={H} onclick={click}></canvas>
+<div class="treemap-view">
+  <canvas bind:this={canvas} width={W} height={H} onclick={click} aria-hidden="true"></canvas>
+
+  <details class="accessible-tree">
+    <summary>접근 가능한 항목 목록</summary>
+    <ul>
+      {#each node.entries as entry (entry.path)}
+        <li>
+          {#if entry.is_dir}
+            <button type="button" onclick={() => onOpen(entry.path)}>
+              <span class="entry-name">{entry.name}</span>
+              <span class="entry-meta">디렉터리 · {fmtBytes(entry.size)}</span>
+            </button>
+          {:else}
+            <span class="entry-name">{entry.name}</span>
+            <span class="entry-meta">파일 · {fmtBytes(entry.size)}</span>
+          {/if}
+        </li>
+      {/each}
+    </ul>
+  </details>
+</div>
 
 <style>
   canvas { max-width: 100%; cursor: pointer; }
+  .accessible-tree { margin-top: 0.5rem; font-size: 0.85rem; }
+  .accessible-tree summary { cursor: pointer; font-weight: 600; }
+  .accessible-tree ul { list-style: none; padding: 0; margin: 0.5rem 0 0; max-height: 14rem; overflow-y: auto; }
+  .accessible-tree li { display: flex; gap: 0.5rem; align-items: baseline; padding: 0.15rem 0; }
+  .accessible-tree button { display: flex; gap: 0.5rem; align-items: baseline; max-width: 100%; text-align: left; }
+  .entry-name { overflow-wrap: anywhere; }
+  .entry-meta { color: #666; white-space: nowrap; font-variant-numeric: tabular-nums; }
 </style>
