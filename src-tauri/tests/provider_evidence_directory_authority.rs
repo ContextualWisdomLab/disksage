@@ -50,3 +50,25 @@ fn shared_writable_provider_evidence_directory_fails_closed() {
         );
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn provider_evidence_file_is_private_from_creation_not_only_after_path_chmod() {
+    let source = std::fs::read_to_string(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/provider_evidence.rs"),
+    )
+    .expect("provider evidence source must be readable");
+
+    assert!(
+        source.contains("options.mode(0o400);"),
+        "provider evidence must be created with read-only owner mode atomically, so a crash before post-write chmod cannot leave a broader evidence file"
+    );
+    assert!(
+        source.contains("file.set_permissions(permissions)"),
+        "post-write hardening must remain bound to the opened evidence object rather than re-resolving its pathname"
+    );
+    assert!(
+        !source.contains("std::fs::set_permissions(&path, permissions)"),
+        "provider evidence hardening must not chmod a pathname that can be replaced after create_new"
+    );
+}
