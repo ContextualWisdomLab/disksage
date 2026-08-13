@@ -75,6 +75,7 @@ struct Args {
     copy_fingerprint: Option<String>,
     adopt_existing_fingerprint: Option<String>,
     receipt_dir: Option<PathBuf>,
+    audit_receipts: bool,
     confirm_copy_phrase: Option<String>,
     attest_receipt: Option<PathBuf>,
     evidence_dir: Option<PathBuf>,
@@ -198,6 +199,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
         copy_fingerprint: None,
         adopt_existing_fingerprint: None,
         receipt_dir: None,
+        audit_receipts: false,
         confirm_copy_phrase: None,
         attest_receipt: None,
         evidence_dir: None,
@@ -326,6 +328,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             "--receipt-dir" => {
                 parsed.receipt_dir = Some(PathBuf::from(value(args, &mut index, "--receipt-dir")?))
             }
+            "--audit-receipts" => parsed.audit_receipts = true,
             "--confirm-copy-phrase" => {
                 parsed.confirm_copy_phrase =
                     Some(value(args, &mut index, "--confirm-copy-phrase")?)
@@ -449,7 +452,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             "--export-semantic-catalog" => parsed.export_semantic_catalog = true,
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary] [--min-size-mib N] [--min-age-days N] [--limit N] [--decision-summary [--private-candidate-inspection-output ABSOLUTE_NEW_FILE.json | --review-reason-set REASON|REASON [--private-review-output ABSOLUTE_NEW_FILE.json]] | --exact-duplicate-review-prefix DIR_PREFIX --exact-duplicate-kind document|media|archive|dataset|backup|creative|incomplete-download | --export-naruon-copy-readiness --verify-capacity [--naruon-copy-readiness-output ABSOLUTE_NEW_FILE.json] | --export-semantic-catalog] [--verify-capacity [--oauth-connections ABSOLUTE_PATH] [--export-naruon-capacity]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH --confirm-copy-phrase EXACT --reviewed-by human:ID --review-rationale TEXT [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH --confirm-copy-phrase EXACT --reviewed-by human:ID --review-rationale TEXT [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
+                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary] [--min-size-mib N] [--min-age-days N] [--limit N] [--audit-receipts --receipt-dir ABSOLUTE_PATH] [--decision-summary [--private-candidate-inspection-output ABSOLUTE_NEW_FILE.json | --review-reason-set REASON|REASON [--private-review-output ABSOLUTE_NEW_FILE.json]] | --exact-duplicate-review-prefix DIR_PREFIX --exact-duplicate-kind document|media|archive|dataset|backup|creative|incomplete-download | --export-naruon-copy-readiness --verify-capacity [--naruon-copy-readiness-output ABSOLUTE_NEW_FILE.json] | --export-semantic-catalog] [--verify-capacity [--oauth-connections ABSOLUTE_PATH] [--export-naruon-capacity]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH --confirm-copy-phrase EXACT --reviewed-by human:ID --review-rationale TEXT [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH --confirm-copy-phrase EXACT --reviewed-by human:ID --review-rationale TEXT [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -515,6 +518,237 @@ struct ReviewOutput {
 }
 
 #[cfg(not(coverage))]
+#[derive(Debug, serde::Serialize)]
+struct ReceiptReconciliationEntry {
+    file_name: String,
+    receipt_id: Option<String>,
+    provider: Option<CloudProvider>,
+    bytes: Option<u64>,
+    source_state: Option<String>,
+    destination_state: Option<String>,
+    adr_projection_state: Option<String>,
+    goal_projection_state: Option<String>,
+    evidence_record_count: u64,
+    issues: Vec<String>,
+}
+
+#[cfg(not(coverage))]
+#[derive(Debug, serde::Serialize)]
+struct ReceiptReconciliationReport {
+    schema_version: u32,
+    output_mode: &'static str,
+    generated_at_ms: u64,
+    receipts_seen: u64,
+    valid_receipts: u64,
+    invalid_receipts: u64,
+    ignored_entries: u64,
+    source_not_present_count: u64,
+    destination_not_present_count: u64,
+    source_missing_destination_present_count: u64,
+    incomplete_projection_count: u64,
+    entries: Vec<ReceiptReconciliationEntry>,
+    mutation_performed: bool,
+    cloud_write_executed: bool,
+    source_eviction_authorized: bool,
+    notices: Vec<&'static str>,
+}
+
+#[cfg(not(coverage))]
+const MAX_RECONCILIATION_RECEIPTS: usize = 10_000;
+
+#[cfg(not(coverage))]
+const MAX_RECONCILIATION_PROJECTION_BYTES: u64 = 64 * 1024;
+
+#[cfg(not(coverage))]
+fn regular_file_state(path: &Path) -> &'static str {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => "unsafe",
+        Ok(metadata) if metadata.is_file() => "present",
+        Ok(_) => "unsafe",
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => "missing",
+        Err(_) => "unavailable",
+    }
+}
+
+#[cfg(not(coverage))]
+fn projection_state(path: &Path, kind: &str) -> &'static str {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return "missing",
+        Err(_) => return "unavailable",
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return "unsafe";
+    }
+    if metadata.len() > MAX_RECONCILIATION_PROJECTION_BYTES {
+        return "oversized";
+    }
+    let encoded = match std::fs::read(path) {
+        Ok(encoded) => encoded,
+        Err(_) => return "unavailable",
+    };
+    let valid = match kind {
+        "adr" => serde_json::from_slice::<cloud_adr::CloudOffloadAdrSnapshot>(&encoded).is_ok(),
+        "goal" => serde_json::from_slice::<cloud_adr::CloudOffloadGoalSnapshot>(&encoded).is_ok(),
+        _ => false,
+    };
+    if valid {
+        "valid"
+    } else {
+        "invalid"
+    }
+}
+
+#[cfg(not(coverage))]
+fn evidence_record_count(evidence_dir: &Path, receipt_id: &str) -> u64 {
+    let Ok(entries) = std::fs::read_dir(evidence_dir) else {
+        return 0;
+    };
+    let prefix = format!("{receipt_id}-");
+    entries
+        .filter_map(Result::ok)
+        .take(MAX_RECONCILIATION_RECEIPTS)
+        .filter(|entry| {
+            let path = entry.path();
+            let name_matches = entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".json"));
+            name_matches && regular_file_state(&path) == "present"
+        })
+        .count() as u64
+}
+
+#[cfg(not(coverage))]
+fn audit_receipts(
+    receipt_dir: &Path,
+    generated_at_ms: u64,
+) -> Result<ReceiptReconciliationReport, String> {
+    let metadata = std::fs::symlink_metadata(receipt_dir)
+        .map_err(|_| "receipt-directory-unavailable".to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("receipt-directory-unsafe".into());
+    }
+    let mut paths = std::fs::read_dir(receipt_dir)
+        .map_err(|_| "receipt-directory-read-failed".to_string())?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    paths.sort();
+    if paths.len() > MAX_RECONCILIATION_RECEIPTS {
+        return Err("receipt-directory-entry-limit-exceeded".into());
+    }
+    let parent = receipt_dir.parent().unwrap_or(receipt_dir);
+    let adr_dir = parent.join("cloud-adr");
+    let goal_dir = parent.join("cloud-goals");
+    let evidence_dir = parent.join("cloud-sync-evidence");
+    let mut report = ReceiptReconciliationReport {
+        schema_version: 1,
+        output_mode: "cloud-receipt-reconciliation",
+        generated_at_ms,
+        receipts_seen: 0,
+        valid_receipts: 0,
+        invalid_receipts: 0,
+        ignored_entries: 0,
+        source_not_present_count: 0,
+        destination_not_present_count: 0,
+        source_missing_destination_present_count: 0,
+        incomplete_projection_count: 0,
+        entries: Vec::new(),
+        mutation_performed: false,
+        cloud_write_executed: false,
+        source_eviction_authorized: false,
+        notices: vec![
+            "read-only",
+            "immutable-receipts-remain-authority",
+            "no-cloud-write",
+            "no-local-eviction",
+        ],
+    };
+    for path in paths {
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_string();
+        if regular_file_state(&path) != "present" || !file_name.ends_with(".json") {
+            report.ignored_entries = report.ignored_entries.saturating_add(1);
+            continue;
+        }
+        report.receipts_seen = report.receipts_seen.saturating_add(1);
+        let receipt = match cloud_transfer::read_immutable_receipt(&path) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                report.invalid_receipts = report.invalid_receipts.saturating_add(1);
+                report.entries.push(ReceiptReconciliationEntry {
+                    file_name,
+                    receipt_id: None,
+                    provider: None,
+                    bytes: None,
+                    source_state: None,
+                    destination_state: None,
+                    adr_projection_state: None,
+                    goal_projection_state: None,
+                    evidence_record_count: 0,
+                    issues: vec![format!("receipt-invalid:{error}")],
+                });
+                continue;
+            }
+        };
+        report.valid_receipts = report.valid_receipts.saturating_add(1);
+        let source_state = regular_file_state(Path::new(&receipt.source));
+        let destination_state = regular_file_state(Path::new(&receipt.destination));
+        let adr_state = projection_state(
+            &adr_dir.join(format!("{}-latest.json", receipt.receipt_id)),
+            "adr",
+        );
+        let goal_state = projection_state(
+            &goal_dir.join(format!("{}-latest.json", receipt.receipt_id)),
+            "goal",
+        );
+        let mut issues = Vec::new();
+        if source_state != "present" {
+            report.source_not_present_count = report.source_not_present_count.saturating_add(1);
+            issues.push(format!("source-{source_state}"));
+        }
+        if destination_state != "present" {
+            report.destination_not_present_count =
+                report.destination_not_present_count.saturating_add(1);
+            issues.push(format!("destination-{destination_state}"));
+        }
+        if source_state == "missing" && destination_state == "present" {
+            report.source_missing_destination_present_count = report
+                .source_missing_destination_present_count
+                .saturating_add(1);
+            issues.push("source-missing-destination-present".into());
+        }
+        if adr_state != "valid" {
+            issues.push(format!("adr-projection-{adr_state}"));
+        }
+        if goal_state != "valid" {
+            issues.push(format!("goal-projection-{goal_state}"));
+        }
+        if adr_state != "valid" || goal_state != "valid" {
+            report.incomplete_projection_count =
+                report.incomplete_projection_count.saturating_add(1);
+        }
+        report.entries.push(ReceiptReconciliationEntry {
+            file_name,
+            receipt_id: Some(receipt.receipt_id.clone()),
+            provider: Some(receipt.provider),
+            bytes: Some(receipt.bytes),
+            source_state: Some(source_state.into()),
+            destination_state: Some(destination_state.into()),
+            adr_projection_state: Some(adr_state.into()),
+            goal_projection_state: Some(goal_state.into()),
+            evidence_record_count: evidence_record_count(&evidence_dir, &receipt.receipt_id),
+            issues,
+        });
+    }
+    Ok(report)
+}
+
+#[cfg(not(coverage))]
 fn validate_action_args(args: &Args) -> Result<(), String> {
     let copy_action = args.copy_fingerprint.is_some();
     let adoption_action = args.adopt_existing_fingerprint.is_some();
@@ -536,8 +770,15 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     if copy_action && adoption_action {
         return Err("copy action과 existing-copy adoption action은 동시에 사용할 수 없음".into());
     }
-    if (copy_action || adoption_action) != args.receipt_dir.is_some() {
+    let receipt_audit_action = args.audit_receipts;
+    if receipt_audit_action && (copy_action || adoption_action) {
+        return Err("receipt audit는 copy/adoption action과 함께 사용할 수 없음".into());
+    }
+    if !receipt_audit_action && (copy_action || adoption_action) != args.receipt_dir.is_some() {
         return Err("copy/adoption fingerprint와 --receipt-dir은 함께 지정해야 함".into());
+    }
+    if receipt_audit_action && args.receipt_dir.is_none() {
+        return Err("--audit-receipts에는 --receipt-dir이 필요함".into());
     }
     if (copy_action || adoption_action) != args.confirm_copy_phrase.is_some() {
         return Err("copy/adoption action에는 --confirm-copy-phrase가 반드시 필요함".into());
@@ -622,6 +863,7 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
             || adoption_action
             || attestation_action
             || eviction_action
+            || receipt_audit_action
             || exact_duplicate_review
             || args.export_naruon_lineage.is_some())
     {
@@ -665,6 +907,7 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     }
     let actions = usize::from(args.list_roots)
         + usize::from(args.inspect_roots)
+        + usize::from(receipt_audit_action)
         + usize::from(copy_action)
         + usize::from(adoption_action)
         + usize::from(args.attest_receipt.is_some())
@@ -2292,6 +2535,19 @@ fn run() -> Result<(), String> {
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let args = parse_args(&raw, &home)?;
     validate_action_args(&args)?;
+    if args.audit_receipts {
+        let report = audit_receipts(
+            args.receipt_dir
+                .as_deref()
+                .ok_or_else(|| "--audit-receipts에는 --receipt-dir이 필요함".to_string())?,
+            cloud::system_now_ms(),
+        )?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).map_err(|error| error.to_string())?
+        );
+        return Ok(());
+    }
     if let Some(receipt_path) = &args.export_naruon_lineage {
         let receipt = cloud_transfer::read_immutable_receipt(receipt_path)?;
         let evidence = args
@@ -2823,6 +3079,7 @@ mod tests {
         assert!(defaults.private_candidate_inspection_output.is_none());
         assert!(defaults.exact_duplicate_review_prefix.is_none());
         assert!(defaults.exact_duplicate_kind.is_none());
+        assert!(!defaults.audit_receipts);
         assert_eq!(defaults.capacity_reserve_mib, 1024);
         let args = vec![
             "--root".into(),
@@ -2900,6 +3157,25 @@ mod tests {
             Some(ArchiveKind::Document)
         );
         assert!(validate_action_args(&duplicate_review).is_ok());
+    }
+
+    #[test]
+    fn receipt_audit_requires_only_a_receipt_directory_and_is_read_only() {
+        let audit = parse_args(
+            &[
+                "--audit-receipts".into(),
+                "--receipt-dir".into(),
+                "/app/cloud-receipts".into(),
+            ],
+            Path::new("/home/test"),
+        )
+        .unwrap();
+        assert!(audit.audit_receipts);
+        assert!(validate_action_args(&audit).is_ok());
+
+        let missing_directory =
+            parse_args(&["--audit-receipts".into()], Path::new("/home/test")).unwrap();
+        assert!(validate_action_args(&missing_directory).is_err());
     }
 
     #[test]
