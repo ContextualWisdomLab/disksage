@@ -241,9 +241,9 @@
         copied.receipt.receipt_id,
         copied.receipt.provider === "google-drive" ? objectId.trim() || null : null,
       );
-      const pending = !attestation.permit
-        && attestation.evidence.sync_state !== "complete"
-        && syncPollAttempts < maxSyncPollAttempts;
+      const pollable = attestation.evidence.sync_state === "pending-upload"
+        || attestation.evidence.sync_state === "uploading";
+      const pending = !attestation.permit && pollable && syncPollAttempts < maxSyncPollAttempts;
       if (pending) {
         syncPollAttempts += 1;
         syncPollTimer = setTimeout(() => {
@@ -605,7 +605,7 @@
         {#if attestation}
           <p class:warning={attestation.goal_state !== "eviction-ready"} class:safe={attestation.goal_state === "eviction-ready"}>
             Goal: {attestation.goal_state} · {syncStateLabel(attestation.evidence.sync_state)}
-            {#if !attestation.permit && attestation.evidence.sync_state === "pending-upload"}
+            {#if !attestation.permit && (attestation.evidence.sync_state === "pending-upload" || attestation.evidence.sync_state === "uploading")}
               · 업로드가 완료될 때까지 15초 간격으로 자동 재검사합니다 ({syncPollAttempts}/{maxSyncPollAttempts})
             {/if}
           </p>
