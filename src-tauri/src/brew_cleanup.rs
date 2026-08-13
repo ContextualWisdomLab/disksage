@@ -743,6 +743,39 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn verified_brew_snapshot_preserves_approved_bytes_after_same_inode_mutation() {
+        use std::io::{Read, Seek, SeekFrom, Write};
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        let script = tempfile::NamedTempFile::new().unwrap();
+        let path = script.path().to_path_buf();
+        let approved = b"#!/bin/bash\nprintf 'approved\\n'\n";
+        let changed = b"#!/bin/bash\nprintf 'changed!\\n'\n";
+        std::fs::write(&path, approved).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let mut verified = open_verified_brew(&path).unwrap();
+        let before = std::fs::metadata(&path).unwrap();
+        let mut writer = std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(&path)
+            .unwrap();
+        writer.write_all(changed).unwrap();
+        writer.sync_all().unwrap();
+        let after = std::fs::metadata(&path).unwrap();
+        assert_eq!(before.dev(), after.dev());
+        assert_eq!(before.ino(), after.ino());
+
+        verified.file.seek(SeekFrom::Start(0)).unwrap();
+        let mut captured = Vec::new();
+        verified.file.read_to_end(&mut captured).unwrap();
+        assert_eq!(captured, approved);
+        assert_eq!(verified.identity.split(':').count(), 3);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn audit_records_are_create_new_and_private() {
         let temp = tempfile::tempdir().unwrap();
         let plan = plan();
