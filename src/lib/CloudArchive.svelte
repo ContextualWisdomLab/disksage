@@ -125,10 +125,16 @@
       && candidate.production_time_source.startsWith("embedded:");
     const capacityEvidenceAvailable = api.cloudCapacityAllowsCopy(report?.capacity);
     const approvalPhrase = api.cloudCopyApprovalPhrase(candidate, "copy-only");
+    const providerAdmissionBlocked = report?.notices.some((notice) => [
+      "icloud-new-copy-admission-blocked",
+      "provider-global-sync-blocked",
+      "provider-global-sync-evidence-unavailable",
+    ].includes(notice)) ?? true;
     return candidate.blocked_reason === null
       && (!candidate.requires_review || exactApproval)
       && (embeddedHighConfidence || exactApproval)
       && capacityEvidenceAvailable
+      && !providerAdmissionBlocked
       && approvalPhrase !== null;
   }
 
