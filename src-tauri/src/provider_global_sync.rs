@@ -288,32 +288,41 @@ pub fn require_new_copy_admission(report: &ProviderGlobalSyncReport) -> Result<(
     }
 }
 
+fn is_stable_provider_blocker(notice: &str) -> bool {
+    notice.len() <= 128
+        && notice.starts_with("provider-global-sync-")
+        && notice
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
 pub fn attach_new_copy_admission_notice(
     notices: &mut Vec<String>,
     report: Option<&ProviderGlobalSyncReport>,
 ) {
-    notices.retain(|notice| {
-        !matches!(
-            notice.as_str(),
+    notices.retain(|notice| !notice.starts_with("provider-global-sync-"));
+    let admission_notice = match report {
+        Some(report)
+            if report.evidence_complete
+                && report.state == ProviderGlobalSyncState::Clear
+                && report.blockers.is_empty() =>
+        {
             "provider-global-sync-clear"
-                | "provider-global-sync-blocked"
-                | "provider-global-sync-evidence-unavailable"
-        )
-    });
-    notices.push(
-        match report {
-            Some(report)
-                if report.evidence_complete
-                    && report.state == ProviderGlobalSyncState::Clear
-                    && report.blockers.is_empty() =>
-            {
-                "provider-global-sync-clear"
-            }
-            Some(_) => "provider-global-sync-blocked",
-            None => "provider-global-sync-evidence-unavailable",
         }
-        .into(),
-    );
+        Some(_) => "provider-global-sync-blocked",
+        None => "provider-global-sync-evidence-unavailable",
+    }
+    .to_string();
+    notices.push(admission_notice);
+    if let Some(report) = report {
+        notices.extend(
+            report
+                .blockers
+                .iter()
+                .filter(|blocker| is_stable_provider_blocker(blocker))
+                .cloned(),
+        );
+    }
 }
 
 #[cfg(test)]
@@ -402,6 +411,32 @@ sync engine state:
             .notices
             .iter()
             .all(|notice| !notice.contains("server unreachable")));
+    }
+
+    #[test]
+    fn admission_notice_exposes_stable_blockers_without_paths() {
+        let report = parse_dump(
+            CloudProvider::GoogleDrive,
+            "com.google.drivefs.fpext\nsync engine state:\n temporarily disconnected: yes\n",
+        )
+        .unwrap();
+        let mut notices = vec![
+            "dry-run-only".into(),
+            "provider-global-sync-old/path".into(),
+        ];
+        attach_new_copy_admission_notice(&mut notices, Some(&report));
+        assert!(notices.contains(&"provider-global-sync-blocked".into()));
+        assert!(notices.contains(&"provider-global-sync-temporarily-disconnected".into()));
+        assert!(notices.iter().all(|notice| !notice.contains('/')));
+
+        attach_new_copy_admission_notice(&mut notices, Some(&report));
+        assert_eq!(
+            notices
+                .iter()
+                .filter(|notice| notice.as_str() == "provider-global-sync-temporarily-disconnected")
+                .count(),
+            1
+        );
     }
 
     #[test]
