@@ -344,6 +344,27 @@ pub fn write_projection_pair(
     (adr_path, goal_path, warnings)
 }
 
+/// Seed projections for a receipt whose provider evidence is not available yet.
+///
+/// This never creates an evidence record or advances a goal. A previously observed advanced
+/// projection is authoritative for the current state, so its expected state-regression warning is
+/// ignored while missing projections are created with an explicit `unknown` provider state.
+pub fn ensure_initial_projection_pair(
+    receipt: &CloudCopyReceipt,
+    adr_dir: &Path,
+    goal_dir: &Path,
+    updated_at_ms: u64,
+) -> Vec<String> {
+    let adr = initial_adr_snapshot(receipt, updated_at_ms);
+    let goal = initial_goal_snapshot(receipt, updated_at_ms);
+    let (_, _, mut warnings) = write_projection_pair(adr_dir, &adr, goal_dir, &goal);
+    warnings.retain(|warning| {
+        !warning.ends_with("cloud-adr-state-regression")
+            && !warning.ends_with("cloud-goal-state-regression")
+    });
+    warnings
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -494,5 +515,28 @@ mod tests {
         assert!(warnings
             .iter()
             .any(|warning| warning == "goal-projection-write-failed:cloud-goal-state-regression"));
+    }
+
+    #[test]
+    fn initial_projection_pair_seeds_missing_state_without_evidence() {
+        let temporary = tempfile::tempdir().unwrap();
+        let adr_dir = temporary.path().join("adr");
+        let goal_dir = temporary.path().join("goals");
+        let receipt = receipt();
+        assert!(ensure_initial_projection_pair(&receipt, &adr_dir, &goal_dir, 4).is_empty());
+
+        let adr: CloudOffloadAdrSnapshot = serde_json::from_slice(
+            &std::fs::read(adr_dir.join(format!("{}-latest.json", receipt.receipt_id))).unwrap(),
+        )
+        .unwrap();
+        let goal: CloudOffloadGoalSnapshot = serde_json::from_slice(
+            &std::fs::read(goal_dir.join(format!("{}-latest.json", receipt.receipt_id))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(adr.goal_state, CloudOffloadGoalState::CopyVerified);
+        assert_eq!(adr.provider_sync_state, ProviderSyncState::Unknown);
+        assert_eq!(goal.goal_state, CloudOffloadGoalState::CopyVerified);
+        assert_eq!(goal.provider_sync_state, ProviderSyncState::Unknown);
+        assert!(goal.evidence_record_id.is_none());
     }
 }

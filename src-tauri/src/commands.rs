@@ -1845,13 +1845,23 @@ fn reconcile_cloud_receipts_inner(
             }
             Err(error) => {
                 output.error_count = output.error_count.saturating_add(1);
+                let projection_warnings = cloud_adr::ensure_initial_projection_pair(
+                    &receipt,
+                    adr_dir,
+                    goal_dir,
+                    output.observed_at_ms,
+                );
+                let mut blockers = vec!["provider-attestation-incomplete".into()];
+                if !projection_warnings.is_empty() {
+                    blockers.push("dynamic-projection-update-incomplete".into());
+                }
                 output.entries.push(CloudReceiptReconciliationEntry {
                     receipt_id: Some(receipt.receipt_id),
                     provider: Some(receipt.provider),
                     goal_state: None,
                     provider_sync_state: None,
                     eviction_permit: false,
-                    blockers: vec!["provider-attestation-incomplete".into()],
+                    blockers,
                     error: Some(stable_reconciliation_error(&error)),
                 });
             }
