@@ -24,6 +24,9 @@ struct VerificationSummary {
     raw_metadata_values_included: bool,
     cloud_write_executed: bool,
     source_eviction_authorized: bool,
+    icloud_native_status_observed: Option<bool>,
+    icloud_native_sync_state: Option<String>,
+    icloud_native_status_timed_out: Option<bool>,
 }
 
 fn parse_args(args: &[OsString]) -> Result<PathBuf, String> {
@@ -38,6 +41,10 @@ fn parse_args(args: &[OsString]) -> Result<PathBuf, String> {
 }
 
 fn verification_summary(envelope: NaruonCloudCopyReadinessEnvelope) -> VerificationSummary {
+    let native_status = envelope
+        .icloud_new_copy_admission
+        .as_ref()
+        .and_then(|summary| summary.native_status.as_ref());
     VerificationSummary {
         ok: true,
         schema_kind: envelope.schema_kind,
@@ -52,6 +59,9 @@ fn verification_summary(envelope: NaruonCloudCopyReadinessEnvelope) -> Verificat
         raw_metadata_values_included: envelope.raw_metadata_values_included,
         cloud_write_executed: envelope.cloud_write_executed,
         source_eviction_authorized: envelope.source_eviction_authorized,
+        icloud_native_status_observed: native_status.map(|status| status.status_observed),
+        icloud_native_sync_state: native_status.and_then(|status| status.sync_state.clone()),
+        icloud_native_status_timed_out: native_status.map(|status| status.timed_out),
     }
 }
 

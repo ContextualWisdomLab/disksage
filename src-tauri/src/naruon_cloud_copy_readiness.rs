@@ -13,13 +13,16 @@ use sha2::{Digest, Sha256};
 
 use crate::cloud::{CloudPlanOptions, CloudPlanReport, CloudProvider};
 use crate::cloud_transfer;
-use crate::icloud_sync_health::{IcloudSyncHealthReport, ICLOUD_SYNC_HEALTH_SCHEMA_VERSION};
+use crate::icloud_sync_health::{
+    validate_native_status_evidence, IcloudNativeStatusEvidence, IcloudSyncHealthReport,
+    ICLOUD_SYNC_HEALTH_SCHEMA_VERSION,
+};
 use crate::naruon_capacity;
 use crate::provider_capacity::{self, CapacityEvidenceKind, CloudCapacityAssessment};
 use crate::provider_client_runtime::{self, ProviderClientRuntimeSnapshot};
 use crate::provider_global_sync::{self, ProviderGlobalSyncReport, ProviderGlobalSyncState};
 
-pub const NARUON_CLOUD_COPY_READINESS_SCHEMA_VERSION: u32 = 5;
+pub const NARUON_CLOUD_COPY_READINESS_SCHEMA_VERSION: u32 = 6;
 pub const NARUON_CLOUD_COPY_READINESS_MAX_INPUT_BYTES: u64 = 1024 * 1024;
 const NARUON_CLOUD_COPY_READINESS_SCHEMA_KIND: &str = "disksage.naruon.cloud-copy-readiness";
 const FINGERPRINT_CANONICALIZATION: &str = "lexicographic-json-object-keys-utf8-no-whitespace";
@@ -27,7 +30,7 @@ const RUNTIME_BLOCKERS: [&str; 2] = [
     "provider-client-runtime-not-observed",
     "provider-client-runtime-evidence-unavailable",
 ];
-const ICLOUD_ADMISSION_BLOCKERS: [&str; 8] = [
+const ICLOUD_ADMISSION_BLOCKERS: [&str; 9] = [
     "icloud-sync-health-evidence-incomplete",
     "icloud-upload-queue-nonempty",
     "icloud-upload-in-flight",
@@ -35,6 +38,7 @@ const ICLOUD_ADMISSION_BLOCKERS: [&str; 8] = [
     "icloud-upload-out-of-quota",
     "icloud-upload-queue-state-unclassified",
     "icloud-local-sync-item-error-present",
+    "icloud-native-sync-up-pending",
     "icloud-new-copy-admission-evidence-unavailable",
 ];
 
@@ -87,6 +91,8 @@ pub struct IcloudNewCopyAdmissionSummary {
     pub blockers: Vec<String>,
     pub evidence_complete: bool,
     pub database_snapshot_includes_wal: bool,
+    #[serde(default)]
+    pub native_status: Option<IcloudNativeStatusEvidence>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -267,6 +273,19 @@ fn expected_icloud_admission_blockers(report: &IcloudSyncHealthReport) -> Vec<St
     if report.upload_queue.item_error_count > 0 {
         blockers.push("icloud-local-sync-item-error-present".into());
     }
+    if report
+        .native_status
+        .as_ref()
+        .is_some_and(|status| {
+            status.status_observed
+                && status
+                    .sync_state
+                    .as_deref()
+                    .is_some_and(|state| state.split('|').any(|value| value == "needs-sync-up"))
+        })
+    {
+        blockers.push("icloud-native-sync-up-pending".into());
+    }
     blockers
 }
 
@@ -298,6 +317,12 @@ fn validate_icloud_health(
         || (!report.evidence_complete && report.database_snapshot_includes_wal)
     {
         return Err("naruon-copy-readiness-icloud-claim-invalid".into());
+    }
+    if let Some(native_status) = report.native_status.as_ref() {
+        validate_native_status_evidence(native_status)?;
+        if native_status.observed_at_ms != report.observed_at_ms {
+            return Err("naruon-copy-readiness-icloud-native-status-time-mismatch".into());
+        }
     }
     let reported_blockers = expected_icloud_admission_blockers(report);
     let reported_state = if reported_blockers.is_empty() {
@@ -365,6 +390,7 @@ fn validate_icloud_health(
             blockers: exported_blockers,
             evidence_complete: report.evidence_complete,
             database_snapshot_includes_wal: report.database_snapshot_includes_wal,
+            native_status: report.native_status.clone(),
         }),
         Some(admission_met),
     ))
@@ -961,6 +987,15 @@ fn validate_icloud_admission_summary(
     if summary.item_error_count > 0 {
         expected.push("icloud-local-sync-item-error-present".to_string());
     }
+    if summary.native_status.as_ref().is_some_and(|status| {
+        status.status_observed
+            && status
+                .sync_state
+                .as_deref()
+                .is_some_and(|state| state.split('|').any(|value| value == "needs-sync-up"))
+    }) {
+        expected.push("icloud-native-sync-up-pending".to_string());
+    }
     if !summary.evidence_complete {
         expected.push("icloud-new-copy-admission-evidence-unavailable".to_string());
     }
@@ -984,6 +1019,13 @@ fn validate_icloud_admission_summary(
             != summary
                 .newest_item_error_timestamp_ms
                 .and_then(|timestamp| summary.observed_at_ms.checked_sub(timestamp))
+        || summary
+            .native_status
+            .as_ref()
+            .is_some_and(|native_status| {
+                validate_native_status_evidence(native_status).is_err()
+                    || native_status.observed_at_ms != summary.observed_at_ms
+            })
         || summary.state != expected_state
         || summary.blockers != expected
     {
@@ -999,7 +1041,10 @@ mod tests {
         ArchiveKind, CloudAccountScope, CloudCandidate, CloudRoot, ExactDuplicateSummary,
         MetadataEvidence,
     };
-    use crate::icloud_sync_health::{IcloudUploadQueueSummary, ManagedDatabaseFileEvidence};
+    use crate::icloud_sync_health::{
+        IcloudNativeStatusEvidence, IcloudUploadQueueSummary, ManagedDatabaseFileEvidence,
+        ICLOUD_NATIVE_STATUS_SCHEMA_VERSION,
+    };
     use crate::provider_capacity::{
         assess_capacity, unavailable_capacity, DEFAULT_CAPACITY_RESERVE_BYTES,
     };
@@ -1155,6 +1200,24 @@ mod tests {
             provider_sync_attested: false,
             local_eviction_authorized: false,
             mutation_performed: false,
+        }
+    }
+
+    fn native_sync_up_status() -> IcloudNativeStatusEvidence {
+        IcloudNativeStatusEvidence {
+            schema_version: ICLOUD_NATIVE_STATUS_SCHEMA_VERSION,
+            observed_at_ms: 30,
+            command_succeeded: false,
+            timed_out: true,
+            output_truncated: false,
+            status_observed: true,
+            evidence_complete: true,
+            container_count: Some(1),
+            client_state: Some("needs-sync".into()),
+            server_state: Some("full-sync".into()),
+            sync_state: Some("needs-sync-up".into()),
+            last_sync_present: true,
+            notices: vec!["icloud-native-status-summary-observed".into()],
         }
     }
 
@@ -1328,7 +1391,14 @@ mod tests {
     fn icloud_queue_and_missing_evidence_both_fail_closed() {
         let report = report(CloudProvider::Icloud);
         let runtime = assess_provider_client_runtime(CloudProvider::Icloud, None, 25);
-        let health = icloud_health(true);
+        let mut health = icloud_health(true);
+        health.native_status = Some(native_sync_up_status());
+        health
+            .new_copy_admission_blockers
+            .push("icloud-native-sync-up-pending".into());
+        health
+            .blockers
+            .insert(0, "icloud-native-sync-up-pending".into());
         let blocked = export_naruon_cloud_copy_readiness(&report, &runtime, Some(&health)).unwrap();
         assert_eq!(blocked.icloud_new_copy_admission_met, Some(false));
         let admission = blocked.icloud_new_copy_admission.as_ref().unwrap();
@@ -1336,6 +1406,13 @@ mod tests {
         assert_eq!(admission.item_error_unclassified_count, 0);
         assert_eq!(admission.newest_item_error_timestamp_ms, Some(10));
         assert_eq!(admission.newest_item_error_age_ms, Some(20));
+        assert_eq!(
+            admission
+                .native_status
+                .as_ref()
+                .and_then(|status| status.sync_state.as_deref()),
+            Some("needs-sync-up")
+        );
         assert!(blocked
             .candidate_blocker_counts
             .contains_key("icloud-upload-queue-nonempty"));
@@ -1364,6 +1441,30 @@ mod tests {
         assert!(incomplete
             .candidate_blocker_counts
             .contains_key("icloud-sync-health-evidence-incomplete"));
+    }
+
+    #[test]
+    fn native_sync_up_blocks_even_when_private_queue_is_quiet() {
+        let report = report(CloudProvider::Icloud);
+        let runtime = assess_provider_client_runtime(CloudProvider::Icloud, None, 25);
+        let mut health = icloud_health(false);
+        health.native_status = Some(native_sync_up_status());
+        health.new_copy_admission_state = "blocked".into();
+        health.new_copy_admission_blockers = vec!["icloud-native-sync-up-pending".into()];
+        health.blockers = vec!["icloud-native-sync-up-pending".into()];
+
+        let envelope =
+            export_naruon_cloud_copy_readiness(&report, &runtime, Some(&health)).unwrap();
+        let admission = envelope.icloud_new_copy_admission.as_ref().unwrap();
+        assert_eq!(envelope.icloud_new_copy_admission_met, Some(false));
+        assert_eq!(admission.blockers, vec!["icloud-native-sync-up-pending"]);
+        assert_eq!(
+            admission
+                .native_status
+                .as_ref()
+                .and_then(|status| status.sync_state.as_deref()),
+            Some("needs-sync-up")
+        );
     }
 
     #[test]
@@ -1618,7 +1719,7 @@ mod tests {
         assert_eq!(envelope.readiness_fingerprint_sha256, expected);
         assert_eq!(
             envelope.readiness_fingerprint_sha256,
-            "9746455ea407b33b50daa408076223892894dfe0a105cc0a53d9af9b95bcae11"
+            "b358ff5627ac2ab9b263f972a96e6dba319c46f382a13360bbbe9336e97efc42"
         );
     }
 }

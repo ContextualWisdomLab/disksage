@@ -33,12 +33,13 @@ const MAX_SNAPSHOT_SOURCE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_STDOUT_BYTES: usize = 16 * 1024;
 const MAX_STDERR_BYTES: usize = 4 * 1024;
 const BRCTL_STATUS_PATH: &str = "/usr/bin/brctl";
-const BRCTL_STATUS_TIMEOUT: Duration = Duration::from_secs(3);
+const BRCTL_STATUS_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_BRCTL_STATUS_BYTES: usize = 64 * 1024;
 const ITEM_ERROR_AGE_NOTICE_MS: u64 = 86_400_000;
 static SNAPSHOT_NONCE: AtomicU64 = AtomicU64::new(0);
 
 pub const ICLOUD_SYNC_HEALTH_SCHEMA_VERSION: u32 = 4;
+pub const ICLOUD_NATIVE_STATUS_SCHEMA_VERSION: u32 = 1;
 
 const QUEUE_QUERY: &str = r#"
 PRAGMA query_only=ON;
@@ -101,6 +102,7 @@ pub struct IcloudUploadQueueSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IcloudNativeStatusEvidence {
     pub schema_version: u32,
     pub observed_at_ms: u64,
@@ -115,6 +117,51 @@ pub struct IcloudNativeStatusEvidence {
     pub sync_state: Option<String>,
     pub last_sync_present: bool,
     pub notices: Vec<String>,
+}
+
+pub fn validate_native_status_evidence(
+    evidence: &IcloudNativeStatusEvidence,
+) -> Result<(), String> {
+    if evidence.schema_version != ICLOUD_NATIVE_STATUS_SCHEMA_VERSION
+        || evidence.notices.is_empty()
+        || evidence.notices.iter().any(|notice| {
+            notice.is_empty()
+                || notice.len() > 128
+                || !notice
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        })
+        || [
+            evidence.client_state.as_deref(),
+            evidence.server_state.as_deref(),
+            evidence.sync_state.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|value| bounded_native_status_token(value).is_none())
+    {
+        return Err("icloud-native-status-shape-invalid".into());
+    }
+    let status_observed = evidence.client_state.is_some()
+        || evidence.server_state.is_some()
+        || evidence.sync_state.is_some();
+    let summary_complete = evidence.container_count.is_some()
+        && evidence.client_state.is_some()
+        && evidence.server_state.is_some()
+        && evidence.sync_state.is_some();
+    if evidence.status_observed != status_observed || evidence.evidence_complete != summary_complete
+    {
+        return Err("icloud-native-status-completeness-invalid".into());
+    }
+    Ok(())
+}
+
+fn native_sync_up_pending(evidence: &IcloudNativeStatusEvidence) -> bool {
+    evidence.status_observed
+        && evidence
+            .sync_state
+            .as_deref()
+            .is_some_and(|state| state.split('|').any(|value| value == "needs-sync-up"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -399,7 +446,7 @@ fn parse_native_status_output(
         notices.push("icloud-native-status-summary-incomplete".into());
     }
     IcloudNativeStatusEvidence {
-        schema_version: 1,
+        schema_version: ICLOUD_NATIVE_STATUS_SCHEMA_VERSION,
         observed_at_ms,
         command_succeeded,
         timed_out,
@@ -419,22 +466,38 @@ fn parse_native_status_output(
 fn probe_native_status(observed_at_ms: u64) -> IcloudNativeStatusEvidence {
     use std::io::ErrorKind;
     use std::os::fd::AsRawFd;
+    use std::os::unix::process::CommandExt;
 
-    let mut child = match Command::new(BRCTL_STATUS_PATH)
+    let mut command = Command::new(BRCTL_STATUS_PATH);
+    command
         .arg("status")
         .env("LANG", "C")
         .env("LC_ALL", "C")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-    {
+        .stderr(Stdio::null());
+    // Keep descendants in a private process group so brctl helpers cannot retain our pipe after
+    // the bounded probe expires.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = match command.spawn() {
         Ok(child) => child,
         Err(_) => return parse_native_status_output("", observed_at_ms, false, false, false),
+    };
+    let child_pid = child.id();
+    let kill_group = || unsafe {
+        let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
     };
     let mut stdout = match child.stdout.take() {
         Some(stdout) => stdout,
         None => {
+            kill_group();
             let _ = child.kill();
             let _ = child.wait();
             return parse_native_status_output("", observed_at_ms, false, false, false);
@@ -443,6 +506,7 @@ fn probe_native_status(observed_at_ms: u64) -> IcloudNativeStatusEvidence {
     let fd = stdout.as_raw_fd();
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
     if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        kill_group();
         let _ = child.kill();
         let _ = child.wait();
         return parse_native_status_output("", observed_at_ms, false, false, false);
@@ -461,6 +525,7 @@ fn probe_native_status(observed_at_ms: u64) -> IcloudNativeStatusEvidence {
                 output.extend_from_slice(&buffer[..read.min(remaining)]);
                 if read > remaining || output.len() >= MAX_BRCTL_STATUS_BYTES {
                     output_truncated = true;
+                    kill_group();
                     let _ = child.kill();
                     let _ = child.wait();
                     break None;
@@ -470,6 +535,7 @@ fn probe_native_status(observed_at_ms: u64) -> IcloudNativeStatusEvidence {
                 if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) => {}
             Err(_) => {
                 read_failed = true;
+                kill_group();
                 let _ = child.kill();
                 let _ = child.wait();
                 break None;
@@ -480,11 +546,13 @@ fn probe_native_status(observed_at_ms: u64) -> IcloudNativeStatusEvidence {
             Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(20)),
             Ok(None) => {
                 timed_out = true;
+                kill_group();
                 let _ = child.kill();
                 let _ = child.wait();
                 break None;
             }
             Err(_) => {
+                kill_group();
                 let _ = child.kill();
                 let _ = child.wait();
                 break None;
@@ -924,6 +992,27 @@ fn build_report(
     })
 }
 
+fn attach_native_status_admission(report: &mut IcloudSyncHealthReport) {
+    if report
+        .native_status
+        .as_ref()
+        .is_some_and(native_sync_up_pending)
+        && !report
+            .new_copy_admission_blockers
+            .iter()
+            .any(|blocker| blocker == "icloud-native-sync-up-pending")
+    {
+        report.sync_backlog_present = true;
+        report
+            .new_copy_admission_blockers
+            .push("icloud-native-sync-up-pending".into());
+        report.new_copy_admission_state = "blocked".into();
+        report
+            .blockers
+            .insert(0, "icloud-native-sync-up-pending".into());
+    }
+}
+
 /// Require a quiet local iCloud upload queue before adding another local copy.
 ///
 /// This gate does not claim remote capacity or synchronization. The source remains retained and a
@@ -1012,6 +1101,7 @@ pub fn probe_icloud_sync_health(
                 includes_wal,
             )?;
             report.native_status = Some(native_status);
+            attach_native_status_admission(&mut report);
             Ok(report)
         }
         Err(_) => {
@@ -1028,6 +1118,7 @@ pub fn probe_icloud_sync_health(
                 .notices
                 .push("consistent-copy-on-write-snapshot-unavailable".into());
             report.native_status = Some(native_status);
+            attach_native_status_admission(&mut report);
             Ok(report)
         }
     }

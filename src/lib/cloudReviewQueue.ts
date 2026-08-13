@@ -105,6 +105,7 @@ const CLOUD_DECISION_REASON_LABELS: Readonly<Record<string, string>> = {
   "filename-contains-geolocation": "파일명에 위치정보로 보이는 값이 있음",
   "filename-context-may-be-confidential": "파일명 맥락에 기밀정보 가능성이 있음",
   "incomplete-download": "다운로드가 완료되지 않은 파일임",
+  "icloud-native-sync-up-pending": "iCloud 네이티브 상태가 업로드 대기 중이라 새 복사를 보류함",
   "multipart-archive-atomic-copy-required": "분할 압축 전체를 함께 처리해야 함",
   "multipart-archive-member": "분할 압축의 일부 파일임",
   "opaque-container-content-uninspected": "컨테이너 내부 내용을 확인하지 못함",
