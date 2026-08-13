@@ -17,6 +17,7 @@
   import { fmtBytes } from "./fmt";
   import IcloudLocalEviction from "./IcloudLocalEviction.svelte";
 
+  const RECONCILIATION_INTERVAL_MS = 60_000;
   const PROVIDER_ADMISSION_BLOCKERS = new Set([
     "icloud-new-copy-admission-blocked",
     "provider-global-sync-blocked",
@@ -80,18 +81,24 @@
   );
   let reviewPageData = $derived.by(() => cloudReviewQueuePage(filteredReviewCandidates, reviewPage));
 
-  onMount(async () => {
-    try {
-      const discovery = await api.inspectCloudRoots();
-      roots = discovery.roots;
-      rootIssues = discovery.issues;
-      connections = await api.listCloudProviderConnections();
-      reviewDecisions = await api.listCloudReviewDecisions();
-      selectedRoot = roots.find((root) => root.readable)?.path ?? "";
-      await reconcileCloudReceipts();
-    } catch (e) {
-      loadError = String(e);
-    }
+  onMount(() => {
+    const reconciliationTimer = setInterval(() => {
+      if (!reconciling) void reconcileCloudReceipts();
+    }, RECONCILIATION_INTERVAL_MS);
+    void (async () => {
+      try {
+        const discovery = await api.inspectCloudRoots();
+        roots = discovery.roots;
+        rootIssues = discovery.issues;
+        connections = await api.listCloudProviderConnections();
+        reviewDecisions = await api.listCloudReviewDecisions();
+        selectedRoot = roots.find((root) => root.readable)?.path ?? "";
+        await reconcileCloudReceipts();
+      } catch (e) {
+        loadError = String(e);
+      }
+    })();
+    return () => clearInterval(reconciliationTimer);
   });
 
   async function preview() {
@@ -510,6 +517,7 @@
       <button onclick={reconcileCloudReceipts} disabled={reconciling || busy}>
         {reconciling ? "기존 영수증 재검증 중…" : "기존 영수증·ADR/Goal 재검증"}
       </button>
+      <span class="muted">화면이 열려 있는 동안 60초마다 읽기 전용 ADR/Goal 재검증</span>
     </div>
     {#if reconciliation}
       <div class="receipt-reconciliation" aria-live="polite">
