@@ -461,4 +461,38 @@ mod tests {
         .unwrap();
         assert_eq!(persisted.goal_state, CloudOffloadGoalState::SourceEvicted);
     }
+
+    #[test]
+    fn projection_pair_preserves_sanitized_write_error_codes() {
+        let adr_directory = tempfile::tempdir().unwrap();
+        let goal_directory = tempfile::tempdir().unwrap();
+        let receipt = receipt();
+        let record = pending_record();
+        let adr = snapshot_from_evidence(
+            &record,
+            CloudOffloadGoalState::SourceEvicted,
+            10,
+        );
+        let goal = goal_snapshot_from_evidence(
+            &receipt,
+            &record,
+            CloudOffloadGoalState::SourceEvicted,
+            10,
+        );
+        write_latest_snapshot(adr_directory.path(), &adr).unwrap();
+        write_latest_goal_snapshot(goal_directory.path(), &goal).unwrap();
+
+        let (_, _, warnings) = write_projection_pair(
+            adr_directory.path(),
+            &initial_adr_snapshot(&receipt, 11),
+            goal_directory.path(),
+            &initial_goal_snapshot(&receipt, 11),
+        );
+        assert!(warnings
+            .iter()
+            .any(|warning| warning == "adr-projection-write-failed:cloud-adr-state-regression"));
+        assert!(warnings
+            .iter()
+            .any(|warning| warning == "goal-projection-write-failed:cloud-goal-state-regression"));
+    }
 }
