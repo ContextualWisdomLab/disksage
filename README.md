@@ -33,7 +33,7 @@ recreated, or incomplete candidate is rejected and must be refreshed.
 
 ## Safety first
 
-Every destructive action goes through explicit review and the OS trash — DiskSage has **no permanent-delete code path**. Cache and developer-artifact cleanup are bound to the exact candidate path, byte/file counts, age, and metadata fingerprint observed at review time; a changed or incomplete scan is rejected and must be refreshed. Cloud archiving currently exposes copy and evidence only: even a successful provider attestation returns a local-eviction permit without deleting the source. All destructive operations are journaled and undoable.
+Every destructive action goes through explicit review and the OS trash — DiskSage has **no permanent-delete code path**. Cache and developer-artifact cleanup are bound to the exact candidate path, byte/file counts, age, and metadata fingerprint observed at review time; a changed or incomplete scan is rejected and must be refreshed. Cloud archiving separates copy, provider evidence, and source eviction: only a fresh provider attestation can authorize the explicit OS-Trash step. All destructive operations are journaled and undoable.
 
 For a headless, read-only cache inventory, run `cargo run --locked --features cleanup-cli --bin disksage-clean-plan` (add `--id trivy-cache`, `--id pnpm-cache`, or `--id uv-cache` to inspect one candidate). The command prints the current metadata fingerprint; it never deletes files.
 
