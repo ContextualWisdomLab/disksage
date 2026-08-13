@@ -1,6 +1,8 @@
 // coverage 빌드(비-테스트)에서는 run()이 빠져 모듈 내용이 테스트에서만 쓰이므로 dead_code만 허용
 pub mod archive_git_tree;
 #[cfg_attr(coverage, allow(dead_code))]
+mod brew_cleanup;
+#[cfg_attr(coverage, allow(dead_code))]
 pub mod cloud;
 #[cfg(not(coverage))]
 pub mod cloud_eviction;
@@ -24,6 +26,8 @@ pub mod naruon_lineage;
 mod ontology;
 #[cfg_attr(coverage, allow(dead_code))]
 mod organize;
+#[cfg_attr(coverage, allow(dead_code))]
+mod orphan;
 pub mod provider_api_client;
 pub mod provider_capacity;
 pub mod provider_evidence;
@@ -83,6 +87,12 @@ pub fn run() {
             commands::get_settings,
             commands::set_settings,
             commands::reason_unknown_extensions,
+            commands::plan_brew_cleanup,
+            commands::judge_brew_cleanup,
+            commands::execute_brew_cleanup,
+            commands::plan_orphan_cleanup,
+            commands::judge_orphan_cleanup,
+            commands::clean_orphan_candidates,
             commands::list_cloud_roots,
             commands::inspect_cloud_roots,
             commands::list_cloud_provider_connections,

@@ -18,7 +18,7 @@ use crate::safety;
 use crate::worktrees;
 #[cfg(not(coverage))]
 use crate::{
-    cloud, cloud_review, cloud_transfer, dev_artifacts, dupes, provider_api_client,
+    brew_cleanup, cloud, cloud_review, cloud_transfer, dev_artifacts, dupes, provider_api_client,
     provider_capacity, provider_evidence, provider_oauth, provider_sync,
 };
 
@@ -29,6 +29,8 @@ pub struct AppState {
     pub scanning: Arc<AtomicBool>,
     /// Serialize review writes with review-gated copies so a later hold cannot race a copy.
     pub cloud_review: Arc<Mutex<()>>,
+    /// The latest model judgment is process-local and consumed by one execution attempt.
+    pub brew_cleanup_judgment: Arc<Mutex<Option<crate::brew_cleanup::BrewCleanupJudgment>>>,
     // 엔진은 최초 사용 시 한 번만 로드해 보관(모델 로드는 ~1GB — 호출마다 재로드 금지). feature off/coverage에서는 필드 자체가 없음.
     #[cfg(all(not(coverage), feature = "llm-engine"))]
     pub engine: Arc<Mutex<Option<crate::llm::LlamaEngine>>>,
@@ -482,6 +484,267 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+fn valid_brew_fingerprint(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn valid_brew_rationale(value: &str) -> bool {
+    let trimmed = value.trim();
+    value == trimmed
+        && !trimmed.is_empty()
+        && trimmed.chars().count() <= 1_000
+        && !trimmed.chars().any(char::is_control)
+}
+
+/// Build a read-only Homebrew cleanup plan. The command is macOS-only and fixed in Rust.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn plan_brew_cleanup() -> Result<brew_cleanup::BrewCleanupPlan, String> {
+    brew_cleanup::plan(now_ms())
+}
+
+/// Ask the verified local model whether the fixed cleanup is appropriate.
+/// A non-safe judgment is returned to the UI but is never stored as execution authority.
+#[cfg(not(coverage))]
+#[cfg_attr(not(feature = "llm-engine"), allow(unused_variables))]
+#[tauri::command(async)]
+pub fn judge_brew_cleanup(
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<brew_cleanup::BrewCleanupJudgment, String> {
+    let plan = brew_cleanup::plan(now_ms())?;
+
+    #[cfg(feature = "llm-engine")]
+    {
+        use tauri::Manager;
+        let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        if !model_status_for(&model_file_path(&dir)).present {
+            return Err("brew-cleanup-llm-model-unavailable".into());
+        }
+        let mut guard = state
+            .engine
+            .lock()
+            .map_err(|_| "brew-cleanup-llm-engine-lock-poisoned".to_string())?;
+        if guard.is_none() {
+            let engine = crate::llm::LlamaEngine::new(&model_file_path(&dir))
+                .map_err(|_| "brew-cleanup-llm-engine-init-failed".to_string())?;
+            *guard = Some(engine);
+        }
+        let engine = guard
+            .as_ref()
+            .ok_or_else(|| "brew-cleanup-llm-engine-unavailable".to_string())?;
+        let judgment = brew_cleanup::judge(engine, &plan, now_ms());
+        drop(guard);
+        *state
+            .brew_cleanup_judgment
+            .lock()
+            .map_err(|_| "brew-cleanup-judgment-lock-poisoned".to_string())? =
+            (judgment.verdict == crate::llm::Verdict::Safe).then_some(judgment.clone());
+        return Ok(judgment);
+    }
+
+    #[cfg(not(feature = "llm-engine"))]
+    {
+        let _ = (app, state);
+        Err("brew-cleanup-llm-engine-disabled".into())
+    }
+}
+
+/// Re-plan immediately before running Homebrew, then consume the matching safe judgment once.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn execute_brew_cleanup(
+    app: AppHandle,
+    state: State<AppState>,
+    plan_fingerprint: String,
+    judgment_id: String,
+    confirmation_phrase: String,
+    rationale: String,
+) -> Result<brew_cleanup::BrewCleanupExecution, String> {
+    if !valid_brew_fingerprint(&plan_fingerprint) || !valid_brew_fingerprint(&judgment_id) {
+        return Err("brew-cleanup-fingerprint-invalid".into());
+    }
+    if !valid_brew_rationale(&rationale) {
+        return Err("brew-cleanup-rationale-invalid".into());
+    }
+    let plan = brew_cleanup::plan(now_ms())?;
+    if plan.plan_fingerprint != plan_fingerprint {
+        return Err("brew-cleanup-plan-stale".into());
+    }
+    if plan.approval_phrase() != confirmation_phrase {
+        return Err("brew-cleanup-confirmation-mismatch".into());
+    }
+
+    let mut stored = state
+        .brew_cleanup_judgment
+        .lock()
+        .map_err(|_| "brew-cleanup-judgment-lock-poisoned".to_string())?;
+    let judgment = stored
+        .as_ref()
+        .ok_or_else(|| "brew-cleanup-llm-judgment-missing".to_string())?
+        .clone();
+    if judgment.judgment_id != judgment_id
+        || judgment.plan_fingerprint != plan_fingerprint
+        || judgment.exact_approval_phrase != plan.exact_approval_phrase
+        || judgment.verdict != crate::llm::Verdict::Safe
+        || now_ms().saturating_sub(judgment.judged_at_ms) > brew_cleanup::MAX_JUDGMENT_AGE_MS
+    {
+        return Err("brew-cleanup-llm-judgment-stale-or-not-safe".into());
+    }
+
+    let executed_at_ms = now_ms();
+    let mut execution = match brew_cleanup::execute(&plan, &judgment_id, executed_at_ms) {
+        Ok(execution) => execution,
+        Err(error) => {
+            *stored = None;
+            drop(stored);
+            return Err(error);
+        }
+    };
+    *stored = None;
+    drop(stored);
+
+    let audit = brew_cleanup::BrewCleanupAuditRecord {
+        schema_version: brew_cleanup::SCHEMA_VERSION,
+        plan,
+        judgment_id: judgment.judgment_id,
+        verdict: judgment.verdict,
+        reason: judgment.reason,
+        model_name: judgment.model_name,
+        judged_at_ms: judgment.judged_at_ms,
+        executed_at_ms,
+        approved_by: local_human_reviewer(),
+        command: execution.command.clone(),
+        status_code: execution.status_code,
+        stdout: execution.stdout.clone(),
+        stderr: execution.stderr.clone(),
+        output_truncated: execution.output_truncated,
+        rationale,
+    };
+    let audit_result = (|| -> Result<PathBuf, String> {
+        use tauri::Manager;
+        let app_data_dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|_| "app-data-directory-unavailable".to_string())?;
+        brew_cleanup::write_audit_record(&app_data_dir, &audit)
+    })();
+    match audit_result {
+        Ok(path) => execution.record_path = Some(path.to_string_lossy().into_owned()),
+        Err(error) => execution.record_error = Some(error),
+    }
+    Ok(execution)
+}
+
+/// Library 고아 후보는 관계/메타데이터만 수집한다. 앱 지원 데이터는 계획에 보이지만
+/// `auto_trash_eligible=false`로 남겨 실제 휴지통 경로에서 거부한다.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn plan_orphan_cleanup(app: AppHandle) -> Result<crate::orphan::OrphanPlan, String> {
+    let home = resolve_home(&app);
+    tauri::async_runtime::spawn_blocking(move || crate::orphan::plan(&home, now_ms()))
+        .await
+        .map_err(|_| "orphan-plan-task-failed".to_string())?
+}
+
+/// 관계 증거를 포함해 현재 로컬 모델에 자문한다. 모델이 없거나 추론에 실패하면 unrated이며,
+/// safe 응답도 orphan 계획의 결정론적 eligibility를 바꾸지 않는다.
+#[cfg(not(coverage))]
+#[cfg_attr(not(feature = "llm-engine"), allow(unused_variables))]
+#[tauri::command(async)]
+pub async fn judge_orphan_cleanup(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<crate::orphan::OrphanJudgmentReport, String> {
+    let plan = crate::orphan::plan(&resolve_home(&app), now_ms())?;
+    #[cfg(feature = "llm-engine")]
+    {
+        use tauri::Manager;
+        let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        if model_status_for(&model_file_path(&dir)).present {
+            let mut guard = state
+                .engine
+                .lock()
+                .map_err(|_| "orphan-llm-engine-lock-poisoned".to_string())?;
+            if guard.is_none() {
+                *guard = crate::llm::LlamaEngine::new(&model_file_path(&dir)).ok();
+            }
+            let report = crate::orphan::judge_plan(
+                &plan,
+                guard
+                    .as_ref()
+                    .map(|engine| engine as &dyn crate::llm::InferenceEngine),
+                &crate::llm::DEFAULT.name,
+                now_ms(),
+            );
+            drop(guard);
+            return Ok(report);
+        }
+    }
+    #[cfg(not(feature = "llm-engine"))]
+    let _ = (&app, &state);
+    Ok(crate::orphan::judge_plan(
+        &plan,
+        None,
+        &crate::llm::DEFAULT.name,
+        now_ms(),
+    ))
+}
+
+/// 계획 지문과 각 후보의 bounded manifest가 그대로일 때만 재생성 가능한 캐시를 휴지통으로 보낸다.
+/// Application Support·broken link은 명시적 수동 처리 영역이며 이 명령에서 자동 이동하지 않는다.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn clean_orphan_candidates(
+    plan_fingerprint: String,
+    requests: Vec<crate::orphan::OrphanCleanupRequest>,
+    app: AppHandle,
+) -> Result<Vec<CleanResult>, String> {
+    if plan_fingerprint.len() != 64 || !plan_fingerprint.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("orphan-plan-fingerprint-invalid".into());
+    }
+    let home = resolve_home(&app);
+    let plan = tauri::async_runtime::spawn_blocking(move || crate::orphan::plan(&home, now_ms()))
+        .await
+        .map_err(|_| "orphan-clean-plan-task-failed".to_string())??;
+    if plan.plan_fingerprint != plan_fingerprint {
+        return Err("orphan-plan-stale".into());
+    }
+    let jp = journal_file_path(&app)?;
+    let mut results = Vec::new();
+    for request in requests {
+        let Some(candidate) = plan.candidates.iter().find(|candidate| {
+            candidate.path == request.path
+                && candidate.bytes == request.bytes
+                && candidate.files == request.files
+                && candidate.skipped == request.skipped
+                && candidate.scan_complete == request.scan_complete
+                && candidate.fingerprint == request.fingerprint
+        }) else {
+            results.push(CleanResult {
+                path: request.path,
+                ok: false,
+                error: "orphan-candidate-stale-or-not-found".into(),
+            });
+            continue;
+        };
+        if !candidate.auto_trash_eligible {
+            results.push(CleanResult {
+                path: candidate.path.clone(),
+                ok: false,
+                error: "orphan-candidate-requires-manual-review".into(),
+            });
+            continue;
+        }
+        results.extend(clean_paths_inner(
+            &[PathBuf::from(&candidate.path)],
+            &jp,
+            now_ms(),
+        ));
+    }
+    Ok(results)
 }
 
 #[cfg(not(coverage))]

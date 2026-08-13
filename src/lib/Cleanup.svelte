@@ -3,6 +3,8 @@
   import { fmtBytes } from "./fmt";
   import { verdictBadge } from "./verdictBadge";
   import { confirm } from "@tauri-apps/plugin-dialog";
+  import BrewCleanup from "./BrewCleanup.svelte";
+  import OrphanCleanup from "./OrphanCleanup.svelte";
 
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
@@ -196,6 +198,9 @@
       </ul>
     {/if}
   {/if}
+
+  <BrewCleanup />
+  <OrphanCleanup />
 </section>
 
 <style>

@@ -33,3 +33,32 @@ dm:Code a owl:Class ;
 dm:Dataset a owl:Class ;
     rdfs:label "데이터셋"@ko , "Dataset"@en ;
     dm:targetFolder "~/Datasets" .
+
+# macOS Library 고아 후보 판정에 쓰는 연결/의미 계층.
+dm:Application a owl:Class ;
+    rdfs:label "애플리케이션"@ko , "Application"@en .
+
+dm:ManagedData a owl:Class ;
+    rdfs:label "관리 데이터"@ko , "Managed data"@en .
+
+dm:ApplicationSupport a owl:Class ;
+    rdfs:subClassOf dm:ManagedData ;
+    rdfs:label "애플리케이션 지원 데이터"@ko , "Application Support"@en .
+
+dm:RegenerableCache a owl:Class ;
+    rdfs:subClassOf dm:ManagedData ;
+    rdfs:label "재생성 가능한 캐시"@ko , "Regenerable cache"@en .
+
+dm:CloudPlaceholder a owl:Class ;
+    rdfs:label "클라우드 자리표시자"@ko , "Cloud placeholder"@en .
+
+dm:ProtectedUserData a owl:Class ;
+    rdfs:label "보호된 사용자 데이터"@ko , "Protected user data"@en .
+
+dm:OrphanCandidate a owl:Class ;
+    rdfs:label "고아 후보"@ko , "Orphan candidate"@en .
+
+dm:Application dm:manages dm:ApplicationSupport .
+dm:ApplicationSupport dm:contains dm:ManagedData .
+dm:RegenerableCache dm:regeneratedBy dm:Application .
+dm:CloudPlaceholder dm:managedBy dm:Application .

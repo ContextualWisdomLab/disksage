@@ -106,6 +106,61 @@ export const cleanDevArtifacts = (root: string, minAgeDays: number, artifacts: D
   invoke<CleanResult[]>("clean_dev_artifacts", { root, minAgeDays, artifacts });
 export const cleanCacheCandidates = (requests: CacheCleanupRequest[]) =>
   invoke<CleanResult[]>("clean_cache_candidates", { requests });
+export interface OrphanRelation {
+  subject: string;
+  predicate: string;
+  object: string;
+  source: string;
+}
+export interface OrphanCandidate {
+  path: string;
+  kind: string;
+  bundle_id: string | null;
+  bytes: number;
+  files: number;
+  skipped: number;
+  scan_complete: boolean;
+  fingerprint: string;
+  ontology_class: string;
+  confidence: string;
+  relations: OrphanRelation[];
+  review_reasons: string[];
+  auto_trash_eligible: boolean;
+}
+export interface OrphanPlan {
+  schema_version: number;
+  root: string;
+  generated_at_ms: number;
+  plan_fingerprint: string;
+  candidate_bytes: number;
+  scan_complete: boolean;
+  candidates: OrphanCandidate[];
+  notices: string[];
+}
+export interface OrphanJudgment {
+  path: string;
+  plan_fingerprint: string;
+  verdict: Verdict;
+  reason: string;
+  model_name: string;
+  judged_at_ms: number;
+}
+export interface OrphanJudgmentReport {
+  plan_fingerprint: string;
+  judgments: OrphanJudgment[];
+}
+export interface OrphanCleanupRequest {
+  path: string;
+  bytes: number;
+  files: number;
+  skipped: number;
+  scan_complete: boolean;
+  fingerprint: string;
+}
+export const planOrphanCleanup = () => invoke<OrphanPlan>("plan_orphan_cleanup");
+export const judgeOrphanCleanup = () => invoke<OrphanJudgmentReport>("judge_orphan_cleanup");
+export const cleanOrphanCandidates = (planFingerprint: string, requests: OrphanCleanupRequest[]) =>
+  invoke<CleanResult[]>("clean_orphan_candidates", { planFingerprint, requests });
 export const expandCleanTargets = (dir: string) =>
   invoke<string[]>("expand_clean_targets", { dir });
 export const recentOperations = (limit = 20) =>
@@ -138,8 +193,14 @@ export interface OntoClass {
   disjoints: string[];
   target_folder: string | null;
 }
+export interface OntologyRelation {
+  subject: string;
+  predicate: string;
+  object: string;
+}
 export interface Ontology {
   classes: OntoClass[];
+  relations: OntologyRelation[];
 }
 
 export const diskInventory = (root: string) =>
@@ -192,6 +253,60 @@ export const downloadModel = () => invoke<void>("download_model");
 export const fileVerdicts = (paths: string[]) => invoke<FileVerdict[]>("file_verdicts", { paths });
 export const summarizeUnknownBucket = (paths: string[]) =>
   invoke<string | null>("summarize_unknown_bucket", { paths });
+
+export interface BrewCleanupPlan {
+  schema_version: number;
+  platform: "macos";
+  brew_path: string;
+  brew_identity: string;
+  brew_version: string;
+  dry_run_output: string;
+  dry_run_output_truncated: boolean;
+  observed_at_ms: number;
+  plan_fingerprint: string;
+  exact_approval_phrase: string;
+}
+
+export interface BrewCleanupJudgment {
+  schema_version: number;
+  plan: BrewCleanupPlan;
+  plan_fingerprint: string;
+  judgment_id: string;
+  verdict: Verdict;
+  reason: string;
+  model_name: string;
+  judged_at_ms: number;
+  exact_approval_phrase: string;
+}
+
+export interface BrewCleanupExecution {
+  schema_version: number;
+  plan_fingerprint: string;
+  judgment_id: string;
+  command: string[];
+  status_code: number;
+  stdout: string;
+  stderr: string;
+  output_truncated: boolean;
+  executed: boolean;
+  executed_at_ms: number;
+  record_path: string | null;
+  record_error: string | null;
+}
+
+export const planBrewCleanup = () => invoke<BrewCleanupPlan>("plan_brew_cleanup");
+export const judgeBrewCleanup = () => invoke<BrewCleanupJudgment>("judge_brew_cleanup");
+export const executeBrewCleanup = (
+  planFingerprint: string,
+  judgmentId: string,
+  confirmationPhrase: string,
+  rationale: string,
+) => invoke<BrewCleanupExecution>("execute_brew_cleanup", {
+  planFingerprint,
+  judgmentId,
+  confirmationPhrase,
+  rationale,
+});
 
 export interface Settings { online_mode: boolean; }
 export const getSettings = () => invoke<Settings>("get_settings");
