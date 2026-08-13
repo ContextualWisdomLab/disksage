@@ -391,6 +391,11 @@ fn execute(args: Args) -> Result<Output, String> {
 #[cfg(not(coverage))]
 fn run() -> Result<(), String> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if matches!(args.as_slice(), [flag] if flag == "--help" || flag == "-h") {
+        println!("{}", usage());
+        return Ok(());
+    }
+
     let parsed = parse_args(&args, std::env::var_os("HOME").map(PathBuf::from))?;
     let output = execute(parsed)?;
     println!(
