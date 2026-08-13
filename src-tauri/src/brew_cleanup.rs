@@ -97,7 +97,7 @@ struct CommandOutput {
     truncated: bool,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", all(test, unix)))]
 struct VerifiedBrewExecutable {
     file: std::fs::File,
     identity: String,
@@ -129,7 +129,7 @@ fn fixed_brew_path() -> Result<PathBuf, String> {
     Err("brew-cleanup-unsupported-platform".into())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", all(test, unix)))]
 fn open_verified_brew(path: &Path) -> Result<VerifiedBrewExecutable, String> {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
