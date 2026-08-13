@@ -571,7 +571,7 @@ fn regular_file_state(path: &Path) -> &'static str {
 }
 
 #[cfg(not(coverage))]
-fn projection_state(path: &Path, kind: &str) -> &'static str {
+fn projection_state(path: &Path, kind: &str, receipt_id: &str) -> &'static str {
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return "missing",
@@ -587,15 +587,32 @@ fn projection_state(path: &Path, kind: &str) -> &'static str {
         Ok(encoded) => encoded,
         Err(_) => return "unavailable",
     };
-    let valid = match kind {
-        "adr" => serde_json::from_slice::<cloud_adr::CloudOffloadAdrSnapshot>(&encoded).is_ok(),
-        "goal" => serde_json::from_slice::<cloud_adr::CloudOffloadGoalSnapshot>(&encoded).is_ok(),
-        _ => false,
-    };
-    if valid {
-        "valid"
-    } else {
-        "invalid"
+    match kind {
+        "adr" => match serde_json::from_slice::<cloud_adr::CloudOffloadAdrSnapshot>(&encoded) {
+            Ok(snapshot)
+                if snapshot.schema_version == cloud_adr::CLOUD_ADR_SCHEMA_VERSION
+                    && snapshot.receipt_id == receipt_id
+                    && snapshot.adr_id == format!("cloud-offload:{receipt_id}") =>
+            {
+                "valid"
+            }
+            Ok(snapshot) if snapshot.receipt_id != receipt_id => "invalid-binding",
+            Ok(_) => "invalid-schema",
+            Err(_) => "invalid",
+        },
+        "goal" => match serde_json::from_slice::<cloud_adr::CloudOffloadGoalSnapshot>(&encoded) {
+            Ok(snapshot)
+                if snapshot.schema_version == cloud_adr::CLOUD_GOAL_SCHEMA_VERSION
+                    && snapshot.receipt_id == receipt_id
+                    && snapshot.goal_id == "disksage-cloud-offload" =>
+            {
+                "valid"
+            }
+            Ok(snapshot) if snapshot.receipt_id != receipt_id => "invalid-binding",
+            Ok(_) => "invalid-schema",
+            Err(_) => "invalid",
+        },
+        _ => "invalid",
     }
 }
 
@@ -733,10 +750,12 @@ fn audit_receipts(
         let adr_state = projection_state(
             &adr_dir.join(format!("{}-latest.json", receipt.receipt_id)),
             "adr",
+            &receipt.receipt_id,
         );
         let goal_state = projection_state(
             &goal_dir.join(format!("{}-latest.json", receipt.receipt_id)),
             "goal",
+            &receipt.receipt_id,
         );
         let mut issues = Vec::new();
         if source_state != "present" {
@@ -3245,6 +3264,43 @@ mod tests {
         assert_eq!(
             audit_evidence_dirs(&receipt_dir, Some(&legacy_dir)),
             vec![legacy_dir]
+        );
+    }
+
+    #[test]
+    fn receipt_audit_rejects_unbound_or_outdated_projections() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("projection.json");
+        let receipt_id = "a".repeat(64);
+        let snapshot = cloud_adr::CloudOffloadAdrSnapshot {
+            schema_version: cloud_adr::CLOUD_ADR_SCHEMA_VERSION,
+            adr_id: format!("cloud-offload:{receipt_id}"),
+            receipt_id: receipt_id.clone(),
+            goal_state: cloud_transfer::CloudOffloadGoalState::CopyVerified,
+            provider_sync_state: cloud_transfer::ProviderSyncState::Unknown,
+            sync_complete: false,
+            decision: "retain-source-after-copy".into(),
+            consequences: vec!["source-retained".into()],
+            evidence_record_id: None,
+            updated_at_ms: 1,
+        };
+        std::fs::write(&path, serde_json::to_vec(&snapshot).unwrap()).unwrap();
+        assert_eq!(projection_state(&path, "adr", &receipt_id), "valid");
+
+        let mut unbound = snapshot.clone();
+        unbound.receipt_id = "b".repeat(64);
+        std::fs::write(&path, serde_json::to_vec(&unbound).unwrap()).unwrap();
+        assert_eq!(
+            projection_state(&path, "adr", &receipt_id),
+            "invalid-binding"
+        );
+
+        let mut outdated = snapshot;
+        outdated.schema_version = 1;
+        std::fs::write(&path, serde_json::to_vec(&outdated).unwrap()).unwrap();
+        assert_eq!(
+            projection_state(&path, "adr", &receipt_id),
+            "invalid-schema"
         );
     }
 
