@@ -2567,6 +2567,9 @@ fn reconcile_receipts(
         .map(|entry| entry.path())
         .collect::<Vec<_>>();
     paths.sort();
+    if paths.len() > MAX_RECONCILIATION_RECEIPTS {
+        return Err("receipt-directory-entry-limit-exceeded".into());
+    }
     for path in paths {
         let file_name = path
             .file_name()
