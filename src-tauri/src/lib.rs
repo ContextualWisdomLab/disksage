@@ -4,6 +4,7 @@ pub mod archive_git_tree;
 mod brew_cleanup;
 #[cfg_attr(coverage, allow(dead_code))]
 pub mod cloud;
+pub mod cloud_adr;
 #[cfg(not(coverage))]
 pub mod cloud_eviction;
 pub mod cloud_review;

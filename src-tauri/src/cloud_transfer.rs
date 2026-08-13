@@ -10,8 +10,8 @@ use crate::cloud::{
 };
 use crate::cloud_review::{validate_decision, CloudReviewDecision, CloudReviewDisposition};
 use crate::dataset_metadata::DatasetProfile;
-use crate::provider_evidence::{validate_sync_evidence_record, ProviderSyncEvidenceRecord};
 use crate::provider_capacity::CloudCapacityAssessment;
+use crate::provider_evidence::{validate_sync_evidence_record, ProviderSyncEvidenceRecord};
 use std::path::Path;
 
 #[cfg(not(coverage))]
@@ -31,6 +31,88 @@ const MAX_RECEIPT_BYTES: u64 = 64 * 1024;
 pub enum SyncEvidenceKind {
     ProviderApi,
     ProviderNativeStatus,
+}
+
+/// Provider state observed at the same time as the content-bound evidence.
+///
+/// `PendingUpload` is intentionally distinct from a generic incomplete result: a local-current
+/// iCloud file can still be waiting for the provider upload, so it is not safe to evict the source.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProviderSyncState {
+    Complete,
+    PendingUpload,
+    NotUbiquitous,
+    NotLocalCurrent,
+    Uploading,
+    ExcludedFromSync,
+    SyncPaused,
+    RemoteUnavailable,
+    ContentMismatch,
+    #[default]
+    Unknown,
+}
+
+impl ProviderSyncState {
+    pub fn is_complete(&self) -> bool {
+        *self == Self::Complete
+    }
+
+    pub fn is_unknown(&self) -> bool {
+        *self == Self::Unknown
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Complete => "complete",
+            Self::PendingUpload => "pending-upload",
+            Self::NotUbiquitous => "not-ubiquitous",
+            Self::NotLocalCurrent => "not-local-current",
+            Self::Uploading => "uploading",
+            Self::ExcludedFromSync => "excluded-from-sync",
+            Self::SyncPaused => "sync-paused",
+            Self::RemoteUnavailable => "remote-unavailable",
+            Self::ContentMismatch => "content-mismatch",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn blocker(&self) -> Option<&'static str> {
+        Some(match self {
+            Self::Complete | Self::Unknown => return None,
+            Self::PendingUpload => "provider-sync-pending-upload",
+            Self::NotUbiquitous => "provider-sync-not-ubiquitous",
+            Self::NotLocalCurrent => "provider-sync-not-local-current",
+            Self::Uploading => "provider-sync-uploading",
+            Self::ExcludedFromSync => "provider-sync-excluded",
+            Self::SyncPaused => "provider-sync-paused",
+            Self::RemoteUnavailable => "provider-sync-remote-unavailable",
+            Self::ContentMismatch => "provider-sync-content-mismatch",
+        })
+    }
+}
+
+/// Runtime goal state for the safe offload workflow. The source is never deleted by this state
+/// machine; `EvictionReady` only means a separate, explicitly invoked trash step may proceed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CloudOffloadGoalState {
+    CopyVerified,
+    PendingProviderSync,
+    ProviderSyncConfirmed,
+    EvictionReady,
+}
+
+impl CloudOffloadGoalState {
+    pub fn after_attestation(evidence: &ProviderSyncEvidence, permit_available: bool) -> Self {
+        if permit_available {
+            Self::EvictionReady
+        } else if evidence.sync_complete {
+            Self::ProviderSyncConfirmed
+        } else {
+            Self::PendingProviderSync
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -150,6 +232,9 @@ pub struct ProviderSyncEvidence {
     pub kind: SyncEvidenceKind,
     pub evidence_id: String,
     pub sync_complete: bool,
+    /// Older evidence records omit this field and deserialize as `Unknown`.
+    #[serde(default, skip_serializing_if = "ProviderSyncState::is_unknown")]
+    pub sync_state: ProviderSyncState,
     pub remote_content: Option<RemoteContentProof>,
 }
 
@@ -601,6 +686,9 @@ pub fn approve_local_eviction(
     let evidence = &evidence_record.evidence;
     if !evidence.sync_complete {
         blockers.push("provider-sync-incomplete".into());
+    }
+    if let Some(blocker) = evidence.sync_state.blocker() {
+        blockers.push(blocker.into());
     }
     if evidence.receipt_id != receipt.receipt_id {
         blockers.push("receipt-id-mismatch".into());
@@ -1347,6 +1435,7 @@ mod tests {
             kind: SyncEvidenceKind::ProviderNativeStatus,
             evidence_id: "icloud-uploaded-flag".into(),
             sync_complete: true,
+            sync_state: ProviderSyncState::Complete,
             remote_content: None,
         }
     }
@@ -1671,6 +1760,7 @@ mod tests {
                 kind: SyncEvidenceKind::ProviderApi,
                 evidence_id: "authenticated-provider-response".into(),
                 sync_complete: true,
+                sync_state: ProviderSyncState::Complete,
                 remote_content: Some(RemoteContentProof {
                     object_id: "remote-id".into(),
                     revision: "revision-1".into(),
@@ -1705,6 +1795,7 @@ mod tests {
             kind: SyncEvidenceKind::ProviderApi,
             evidence_id: "authenticated-provider-response".into(),
             sync_complete: true,
+            sync_state: ProviderSyncState::Complete,
             remote_content: None,
         };
         assert!(approve_evidence(&provider_receipt, &api_evidence)

@@ -335,6 +335,7 @@ mod tests {
             kind: SyncEvidenceKind::ProviderNativeStatus,
             evidence_id: format!("file-provider:{}", "1".repeat(64)),
             sync_complete: true,
+            sync_state: crate::cloud_transfer::ProviderSyncState::Complete,
             remote_content: None,
         })
         .unwrap()

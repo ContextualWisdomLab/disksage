@@ -18,8 +18,8 @@ use crate::safety;
 use crate::worktrees;
 #[cfg(not(coverage))]
 use crate::{
-    brew_cleanup, cloud, cloud_review, cloud_transfer, dev_artifacts, dupes, provider_api_client,
-    provider_capacity, provider_evidence, provider_oauth, provider_sync,
+    brew_cleanup, cloud, cloud_adr, cloud_review, cloud_transfer, dev_artifacts, dupes,
+    provider_api_client, provider_capacity, provider_evidence, provider_oauth, provider_sync,
 };
 
 #[derive(Default)]
@@ -1267,6 +1267,7 @@ pub fn review_cloud_candidate(
 #[derive(serde::Serialize)]
 pub struct CloudCopyOutput {
     pub action: &'static str,
+    pub goal_state: cloud_transfer::CloudOffloadGoalState,
     pub receipt: cloud_transfer::CloudCopyReceipt,
     pub receipt_path: String,
 }
@@ -1343,6 +1344,7 @@ fn create_cloud_candidate_receipt(
         } else {
             "copy-only"
         },
+        goal_state: cloud_transfer::CloudOffloadGoalState::CopyVerified,
         receipt,
         receipt_path: receipt_path.to_string_lossy().into_owned(),
     })
@@ -1411,9 +1413,11 @@ pub fn adopt_existing_cloud_candidate(
 #[cfg(not(coverage))]
 #[derive(serde::Serialize)]
 pub struct CloudAttestationOutput {
+    pub goal_state: cloud_transfer::CloudOffloadGoalState,
     pub evidence: cloud_transfer::ProviderSyncEvidence,
     pub evidence_record: provider_evidence::ProviderSyncEvidenceRecord,
     pub evidence_path: String,
+    pub adr_path: String,
     pub permit: Option<cloud_transfer::LocalEvictionPermit>,
     pub blockers: Vec<String>,
 }
@@ -1439,6 +1443,7 @@ pub async fn attest_cloud_copy(
         .join("cloud-receipts")
         .join(format!("{receipt_id}.json"));
     let evidence_dir = app_data_dir.join("cloud-provider-evidence");
+    let adr_dir = app_data_dir.join("cloud-adr");
     let connection_path = oauth_connections_path(&app)?;
     let cloud_roots = cloud::discover_cloud_roots(&resolve_home(&app));
     tauri::async_runtime::spawn_blocking(move || {
@@ -1528,10 +1533,22 @@ pub async fn attest_cloud_copy(
                 Ok(permit) => (Some(permit), Vec::new()),
                 Err(blockers) => (None, blockers),
             };
+        let goal_state = cloud_transfer::CloudOffloadGoalState::after_attestation(
+            &evidence,
+            permit.is_some(),
+        );
+        let adr = cloud_adr::snapshot_from_evidence(
+            &evidence_record,
+            goal_state,
+            confirmed_at_ms,
+        );
+        let adr_path = cloud_adr::write_latest_snapshot(&adr_dir, &adr)?;
         Ok(CloudAttestationOutput {
+            goal_state,
             evidence,
             evidence_record,
             evidence_path: evidence_path.to_string_lossy().into_owned(),
+            adr_path: adr_path.to_string_lossy().into_owned(),
             permit,
             blockers,
         })

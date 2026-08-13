@@ -1,7 +1,7 @@
 use crate::cloud::CloudProvider;
 use crate::cloud_transfer::{
-    CloudCopyReceipt, ProviderSyncEvidence, RemoteChecksumAlgorithm, RemoteContentProof,
-    SyncEvidenceKind,
+    CloudCopyReceipt, ProviderSyncEvidence, ProviderSyncState, RemoteChecksumAlgorithm,
+    RemoteContentProof, SyncEvidenceKind,
 };
 
 #[cfg(test)]
@@ -20,6 +20,18 @@ pub struct IcloudStatusSnapshot {
     pub is_current: bool,
     pub observed_bytes: u64,
     pub destination_blake3: String,
+}
+
+fn icloud_sync_state(snapshot: &IcloudStatusSnapshot) -> ProviderSyncState {
+    if !snapshot.is_ubiquitous {
+        ProviderSyncState::NotUbiquitous
+    } else if !snapshot.is_current {
+        ProviderSyncState::NotLocalCurrent
+    } else if !snapshot.is_uploaded {
+        ProviderSyncState::PendingUpload
+    } else {
+        ProviderSyncState::Complete
+    }
 }
 
 fn icloud_evidence_id(
@@ -69,6 +81,7 @@ pub fn evidence_from_icloud_snapshot(
         kind: SyncEvidenceKind::ProviderNativeStatus,
         evidence_id: icloud_evidence_id(receipt, snapshot, confirmed_at_ms),
         sync_complete,
+        sync_state: icloud_sync_state(snapshot),
         remote_content: None,
     })
 }
@@ -98,11 +111,23 @@ impl FileProviderStatusSnapshot {
     }
 
     fn is_sync_complete(&self) -> bool {
-        self.is_local_current()
-            && self.is_uploaded
-            && !self.is_uploading
-            && !self.is_excluded_from_sync
-            && !self.is_sync_paused
+        self.sync_state().is_complete()
+    }
+
+    fn sync_state(&self) -> ProviderSyncState {
+        if !self.is_local_current() {
+            ProviderSyncState::NotLocalCurrent
+        } else if self.is_excluded_from_sync {
+            ProviderSyncState::ExcludedFromSync
+        } else if self.is_sync_paused {
+            ProviderSyncState::SyncPaused
+        } else if self.is_uploading {
+            ProviderSyncState::Uploading
+        } else if !self.is_uploaded {
+            ProviderSyncState::PendingUpload
+        } else {
+            ProviderSyncState::Complete
+        }
     }
 }
 
@@ -160,6 +185,7 @@ pub fn evidence_from_file_provider_snapshot(
         kind: SyncEvidenceKind::ProviderNativeStatus,
         evidence_id: file_provider_evidence_id(receipt, snapshot, confirmed_at_ms),
         sync_complete: snapshot.is_sync_complete(),
+        sync_state: snapshot.sync_state(),
         remote_content: None,
     })
 }
@@ -293,6 +319,13 @@ pub fn evidence_from_provider_api_snapshot_with_location(
         && checksum_matches
         && snapshot.observed_bytes == receipt.bytes
         && snapshot.destination_blake3 == receipt.blake3;
+    let sync_state = if !snapshot.available || snapshot.trashed {
+        ProviderSyncState::RemoteUnavailable
+    } else if sync_complete {
+        ProviderSyncState::Complete
+    } else {
+        ProviderSyncState::ContentMismatch
+    };
     Ok(ProviderSyncEvidence {
         receipt_id: receipt.receipt_id.clone(),
         provider: receipt.provider,
@@ -309,6 +342,7 @@ pub fn evidence_from_provider_api_snapshot_with_location(
             confirmed_at_ms,
         ),
         sync_complete,
+        sync_state,
         remote_content: Some(RemoteContentProof {
             object_id: snapshot.remote_object_id.clone(),
             revision: snapshot.remote_revision.clone(),
@@ -979,6 +1013,16 @@ mod tests {
         ] {
             let evidence = evidence_from_icloud_snapshot(&receipt, &snapshot, 30).unwrap();
             assert!(!evidence.sync_complete);
+            assert_eq!(
+                evidence.sync_state,
+                if snapshot.is_current && snapshot.is_ubiquitous {
+                    ProviderSyncState::PendingUpload
+                } else if !snapshot.is_ubiquitous {
+                    ProviderSyncState::NotUbiquitous
+                } else {
+                    ProviderSyncState::NotLocalCurrent
+                }
+            );
         }
     }
 

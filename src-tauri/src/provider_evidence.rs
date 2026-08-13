@@ -57,14 +57,20 @@ fn validate_evidence(evidence: &ProviderSyncEvidence) -> Result<(), String> {
     }
     match (evidence.kind, &evidence.remote_content) {
         (SyncEvidenceKind::ProviderNativeStatus, None)
-        | (SyncEvidenceKind::ProviderApi, Some(_)) => Ok(()),
+        | (SyncEvidenceKind::ProviderApi, Some(_)) => {}
         (SyncEvidenceKind::ProviderNativeStatus, Some(_)) => {
-            Err("provider-evidence-native-remote-content-unexpected".into())
+            return Err("provider-evidence-native-remote-content-unexpected".into())
         }
         (SyncEvidenceKind::ProviderApi, None) => {
-            Err("provider-evidence-api-remote-content-missing".into())
+            return Err("provider-evidence-api-remote-content-missing".into())
         }
     }
+    if !evidence.sync_state.is_unknown()
+        && evidence.sync_complete != evidence.sync_state.is_complete()
+    {
+        return Err("provider-evidence-sync-state-mismatch".into());
+    }
+    Ok(())
 }
 
 fn record_id_for(version: u32, evidence: &ProviderSyncEvidence) -> Result<String, String> {
@@ -258,6 +264,7 @@ mod tests {
             kind: SyncEvidenceKind::ProviderApi,
             evidence_id: format!("provider-api:{}", "c".repeat(64)),
             sync_complete: true,
+            sync_state: crate::cloud_transfer::ProviderSyncState::Complete,
             remote_content: Some(RemoteContentProof {
                 object_id: "remote-id".into(),
                 revision: "revision-1".into(),
@@ -300,6 +307,18 @@ mod tests {
         let mut value = serde_json::to_value(record).unwrap();
         value["evidence"]["unexpected"] = serde_json::json!(true);
         assert!(serde_json::from_value::<ProviderSyncEvidenceRecord>(value).is_err());
+    }
+
+    #[test]
+    fn legacy_evidence_without_state_remains_valid_and_defaults_to_unknown() {
+        let mut value = serde_json::to_value(evidence()).unwrap();
+        value.as_object_mut().unwrap().remove("sync_state");
+        let legacy: ProviderSyncEvidence = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            legacy.sync_state,
+            crate::cloud_transfer::ProviderSyncState::Unknown
+        );
+        assert!(create_sync_evidence_record(&legacy).is_ok());
     }
 
     #[cfg(not(coverage))]

@@ -1,0 +1,19 @@
+{
+  "goal_id": "disksage-cloud-offload",
+  "status": "active",
+  "state_source": "runtime:cloud-adr/<receipt-id>-latest.json",
+  "states": [
+    "copy-verified",
+    "pending-provider-sync",
+    "provider-sync-confirmed",
+    "eviction-ready"
+  ],
+  "completion_gates": [
+    "metadata-and-lineage-bound",
+    "copy-content-verified",
+    "provider-sync-state-complete",
+    "immutable-evidence-record-valid",
+    "explicit-eviction-permit"
+  ],
+  "safety_invariant": "source-retained-until-an-explicit-trash-step"
+}

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
 
@@ -28,6 +28,19 @@
   let checkingCapacity = $state(false);
   let connectionCapacity: api.CloudCapacitySnapshot | null = $state(null);
   let connectionCapacityRoot = $state("");
+  let syncPollAttempts = $state(0);
+  let syncPollTimer: ReturnType<typeof setTimeout> | null = null;
+  const syncPollDelayMs = 15_000;
+  const maxSyncPollAttempts = 20;
+
+  function stopSyncPolling() {
+    if (syncPollTimer !== null) {
+      clearTimeout(syncPollTimer);
+      syncPollTimer = null;
+    }
+  }
+
+  onDestroy(stopSyncPolling);
 
   onMount(async () => {
     try {
@@ -44,6 +57,7 @@
 
   async function preview() {
     if (!scannedRoot || !selectedRoot) return;
+    stopSyncPolling();
     busy = true;
     loadError = "";
     report = null;
@@ -168,6 +182,7 @@
 
   async function copyCandidate(candidate: api.CloudCandidate) {
     if (!scannedRoot || !selectedRoot || !copyEligible(candidate)) return;
+    stopSyncPolling();
     copyingFingerprint = candidate.metadata_fingerprint;
     loadError = "";
     copied = null;
@@ -182,6 +197,8 @@
         Math.max(0, Math.floor(minAgeDays)),
         200,
       );
+      syncPollAttempts = 0;
+      void probeSync();
     } catch (e) {
       loadError = String(e);
     } finally {
@@ -191,6 +208,7 @@
 
   async function adoptExistingCandidate(candidate: api.CloudCandidate) {
     if (!scannedRoot || !selectedRoot || !adoptEligible(candidate)) return;
+    stopSyncPolling();
     copyingFingerprint = candidate.metadata_fingerprint;
     loadError = "";
     copied = null;
@@ -205,6 +223,8 @@
         Math.max(0, Math.floor(minAgeDays)),
         200,
       );
+      syncPollAttempts = 0;
+      void probeSync();
     } catch (e) {
       loadError = String(e);
     } finally {
@@ -212,21 +232,57 @@
     }
   }
 
-  async function attestCopy() {
-    if (!copied) return;
+  async function probeSync() {
+    if (!copied || attesting) return;
     attesting = true;
     loadError = "";
-    attestation = null;
     try {
       attestation = await api.attestCloudCopy(
         copied.receipt.receipt_id,
         copied.receipt.provider === "google-drive" ? objectId.trim() || null : null,
       );
+      const pending = !attestation.permit
+        && attestation.evidence.sync_state !== "complete"
+        && syncPollAttempts < maxSyncPollAttempts;
+      if (pending) {
+        syncPollAttempts += 1;
+        syncPollTimer = setTimeout(() => {
+          syncPollTimer = null;
+          void probeSync();
+        }, syncPollDelayMs);
+      } else {
+        stopSyncPolling();
+      }
     } catch (e) {
       loadError = String(e);
+      stopSyncPolling();
     } finally {
       attesting = false;
     }
+  }
+
+  async function attestCopy() {
+    if (!copied) return;
+    stopSyncPolling();
+    syncPollAttempts = 0;
+    attestation = null;
+    await probeSync();
+  }
+
+  function syncStateLabel(state: api.ProviderSyncState | undefined): string {
+    const labels: Record<api.ProviderSyncState, string> = {
+      complete: "공급자 동기화 완료",
+      "pending-upload": "로컬 최신본이지만 공급자 업로드 대기 중",
+      "not-ubiquitous": "iCloud 관리 대상 아님",
+      "not-local-current": "로컬 최신본 아님",
+      uploading: "공급자 업로드 중",
+      "excluded-from-sync": "공급자 동기화 제외됨",
+      "sync-paused": "공급자 동기화 일시중지됨",
+      "remote-unavailable": "원격 객체를 확인할 수 없음",
+      "content-mismatch": "원격 콘텐츠가 로컬 복사본과 다름",
+      unknown: "공급자 상태 미상(레거시 증거)",
+    };
+    return labels[state ?? "unknown"];
   }
 
   function selectedRootDetails(): api.CloudRoot | null {
@@ -544,15 +600,22 @@
           onclick={attestCopy}
           disabled={attesting}
         >
-          {attesting ? "검증 중…" : "클라우드 업로드 상태·콘텐츠 확인"}
+          {attesting ? "공급자 상태 확인 중…" : "클라우드 업로드 상태·콘텐츠 다시 확인"}
         </button>
         {#if attestation}
+          <p class:warning={attestation.goal_state !== "eviction-ready"} class:safe={attestation.goal_state === "eviction-ready"}>
+            Goal: {attestation.goal_state} · {syncStateLabel(attestation.evidence.sync_state)}
+            {#if !attestation.permit && attestation.evidence.sync_state === "pending-upload"}
+              · 업로드가 완료될 때까지 15초 간격으로 자동 재검사합니다 ({syncPollAttempts}/{maxSyncPollAttempts})
+            {/if}
+          </p>
           {#if attestation.permit}
             <p class="safe">업로드 상태와 복사 콘텐츠 검증 완료. 로컬 제거 허가 증거가 생성되었지만 파일은 그대로 보존됩니다.</p>
           {:else}
             <p class="warning">아직 제거 불가: {attestation.blockers.join(", ")}</p>
           {/if}
           <p class="muted">변경 불가 공급자 증거 기록: {attestation.evidence_path}</p>
+          <p class="muted">동적 ADR/Goal 스냅샷: {attestation.adr_path}</p>
         {/if}
       </div>
     {/if}

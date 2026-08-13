@@ -562,11 +562,28 @@ export interface CloudLineageSnapshot {
 
 export interface CloudCopyOutput {
   action: "copy-only" | "adopt-existing-copy";
+  goal_state: CloudOffloadGoalState;
   receipt: CloudCopyReceipt;
   receipt_path: string;
 }
 
 export type SyncEvidenceKind = "provider-api" | "provider-native-status";
+export type ProviderSyncState =
+  | "complete"
+  | "pending-upload"
+  | "not-ubiquitous"
+  | "not-local-current"
+  | "uploading"
+  | "excluded-from-sync"
+  | "sync-paused"
+  | "remote-unavailable"
+  | "content-mismatch"
+  | "unknown";
+export type CloudOffloadGoalState =
+  | "copy-verified"
+  | "pending-provider-sync"
+  | "provider-sync-confirmed"
+  | "eviction-ready";
 export type RemoteChecksumAlgorithm = "sha256" | "quick-xor";
 
 export interface RemoteContentProof {
@@ -588,6 +605,8 @@ export interface ProviderSyncEvidence {
   kind: SyncEvidenceKind;
   evidence_id: string;
   sync_complete: boolean;
+  /** Optional for evidence records written before explicit provider-state detection. */
+  sync_state?: ProviderSyncState;
   remote_content: RemoteContentProof | null;
 }
 
@@ -611,9 +630,11 @@ export interface LocalEvictionPermit {
 }
 
 export interface CloudAttestationOutput {
+  goal_state: CloudOffloadGoalState;
   evidence: ProviderSyncEvidence;
   evidence_record: ProviderSyncEvidenceRecord;
   evidence_path: string;
+  adr_path: string;
   permit: LocalEvictionPermit | null;
   blockers: string[];
 }
