@@ -3250,7 +3250,9 @@ fn probe_content_metadata_with_general(
         "docx" | "pptx" => zipped_document_metadata(path, "docProps/core.xml"),
         "odt" | "odp" => zipped_document_metadata(path, "meta.xml"),
         "csv" | "tsv" | "parquet" | "feather" | "arrow" | "sav" | "sas7bdat" | "dta" | "rdata"
-        | "rds" | "sqlite" | "sqlite3" | "db" | "sql" | "jsonl" => dataset_content_metadata(path),
+        | "rds" | "sqlite" | "sqlite3" | "db" | "db3" | "sql" | "jsonl" => {
+            dataset_content_metadata(path)
+        }
         _ if multipart_archive_part(path).is_some() => multipart_archive_metadata(path),
         _ => ContentMetadata::default(),
     };
@@ -5938,7 +5940,10 @@ mod tests {
         assert!(!should_probe_general_metadata(Path::new(
             "zotero.sqlite.1.bak",
         )));
+        assert!(!should_probe_general_metadata(Path::new("zotero.db")));
+        assert!(!should_probe_general_metadata(Path::new("zotero.db3")));
         assert!(!should_probe_general_metadata(Path::new("zotero.sqlite")));
+        assert!(!should_probe_general_metadata(Path::new("zotero.sqlite3")));
         assert!(should_probe_general_metadata(Path::new("video.mov")));
     }
 

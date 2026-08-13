@@ -452,7 +452,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             "--export-semantic-catalog" => parsed.export_semantic_catalog = true,
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary] [--min-size-mib N] [--min-age-days N] [--limit N] [--audit-receipts --receipt-dir ABSOLUTE_PATH] [--decision-summary [--private-candidate-inspection-output ABSOLUTE_NEW_FILE.json | --review-reason-set REASON|REASON [--private-review-output ABSOLUTE_NEW_FILE.json]] | --exact-duplicate-review-prefix DIR_PREFIX --exact-duplicate-kind document|media|archive|dataset|backup|creative|incomplete-download | --export-naruon-copy-readiness --verify-capacity [--naruon-copy-readiness-output ABSOLUTE_NEW_FILE.json] | --export-semantic-catalog] [--verify-capacity [--oauth-connections ABSOLUTE_PATH] [--export-naruon-capacity]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH --confirm-copy-phrase EXACT --reviewed-by human:ID --review-rationale TEXT [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH --confirm-copy-phrase EXACT --reviewed-by human:ID --review-rationale TEXT [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
+                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary] [--min-size-mib N] [--min-age-days N] [--limit N] [--audit-receipts --receipt-dir ABSOLUTE_PATH [--evidence-dir ABSOLUTE_PATH]] [--decision-summary [--private-candidate-inspection-output ABSOLUTE_NEW_FILE.json | --review-reason-set REASON|REASON [--private-review-output ABSOLUTE_NEW_FILE.json]] | --exact-duplicate-review-prefix DIR_PREFIX --exact-duplicate-kind document|media|archive|dataset|backup|creative|incomplete-download | --export-naruon-copy-readiness --verify-capacity [--naruon-copy-readiness-output ABSOLUTE_NEW_FILE.json] | --export-semantic-catalog] [--verify-capacity [--oauth-connections ABSOLUTE_PATH] [--export-naruon-capacity]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH --confirm-copy-phrase EXACT --reviewed-by human:ID --review-rationale TEXT [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH --confirm-copy-phrase EXACT --reviewed-by human:ID --review-rationale TEXT [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -622,6 +622,7 @@ fn evidence_record_count(evidence_dir: &Path, receipt_id: &str) -> u64 {
 #[cfg(not(coverage))]
 fn audit_receipts(
     receipt_dir: &Path,
+    evidence_dir: Option<&Path>,
     generated_at_ms: u64,
 ) -> Result<ReceiptReconciliationReport, String> {
     let metadata = std::fs::symlink_metadata(receipt_dir)
@@ -639,9 +640,10 @@ fn audit_receipts(
         return Err("receipt-directory-entry-limit-exceeded".into());
     }
     let parent = receipt_dir.parent().unwrap_or(receipt_dir);
-    let adr_dir = parent.join("cloud-adr");
-    let goal_dir = parent.join("cloud-goals");
-    let evidence_dir = parent.join("cloud-sync-evidence");
+    let evidence_dir = evidence_dir
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| parent.join("cloud-provider-evidence"));
+    let (adr_dir, goal_dir) = cloud_projection_dirs(&evidence_dir);
     let mut report = ReceiptReconciliationReport {
         schema_version: 1,
         output_mode: "cloud-receipt-reconciliation",
@@ -839,7 +841,10 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
         );
     }
     let attestation_action = args.attest_receipt.is_some();
-    if (attestation_action || eviction_action) != args.evidence_dir.is_some() {
+    let audit_evidence_override = args.audit_receipts && args.evidence_dir.is_some();
+    if (attestation_action || eviction_action || audit_evidence_override)
+        != args.evidence_dir.is_some()
+    {
         return Err("attestation/eviction action에는 --evidence-dir이 반드시 필요함".into());
     }
     if args.provider_object_id.is_some() && args.oauth_connections.is_none() {
@@ -2540,6 +2545,7 @@ fn run() -> Result<(), String> {
             args.receipt_dir
                 .as_deref()
                 .ok_or_else(|| "--audit-receipts에는 --receipt-dir이 필요함".to_string())?,
+            args.evidence_dir.as_deref(),
             cloud::system_now_ms(),
         )?;
         println!(
@@ -3172,6 +3178,19 @@ mod tests {
         .unwrap();
         assert!(audit.audit_receipts);
         assert!(validate_action_args(&audit).is_ok());
+
+        let audit_with_external_evidence = parse_args(
+            &[
+                "--audit-receipts".into(),
+                "--receipt-dir".into(),
+                "/receipts".into(),
+                "--evidence-dir".into(),
+                "/provider-evidence".into(),
+            ],
+            Path::new("/home/test"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&audit_with_external_evidence).is_ok());
 
         let missing_directory =
             parse_args(&["--audit-receipts".into()], Path::new("/home/test")).unwrap();

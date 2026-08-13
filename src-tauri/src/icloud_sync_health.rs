@@ -542,7 +542,40 @@ fn probe_native_status(observed_at_ms: u64) -> IcloudNativeStatusEvidence {
             }
         }
         match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
+            Ok(Some(status)) => {
+                // The process can exit while unread bytes remain in the pipe. Drain them before
+                // parsing; otherwise a complete native summary can be mistaken for missing data.
+                let drain_deadline = Instant::now() + Duration::from_secs(1);
+                loop {
+                    match stdout.read(&mut buffer) {
+                        Ok(0) => break,
+                        Ok(read) => {
+                            let remaining = MAX_BRCTL_STATUS_BYTES.saturating_sub(output.len());
+                            output.extend_from_slice(&buffer[..read.min(remaining)]);
+                            if read > remaining || output.len() >= MAX_BRCTL_STATUS_BYTES {
+                                output_truncated = true;
+                                kill_group();
+                                break;
+                            }
+                        }
+                        Err(error)
+                            if matches!(
+                                error.kind(),
+                                ErrorKind::WouldBlock | ErrorKind::Interrupted
+                            ) => {
+                                if Instant::now() >= drain_deadline {
+                                    break;
+                                }
+                                thread::sleep(Duration::from_millis(5));
+                            }
+                        Err(_) => {
+                            read_failed = true;
+                            break;
+                        }
+                    }
+                }
+                break Some(status);
+            }
             Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(20)),
             Ok(None) => {
                 timed_out = true;
@@ -996,6 +1029,20 @@ fn attach_native_status_admission(report: &mut IcloudSyncHealthReport) {
     if report
         .native_status
         .as_ref()
+        .is_some_and(|status| !status.evidence_complete)
+        && !report
+            .new_copy_admission_blockers
+            .iter()
+            .any(|blocker| blocker == "icloud-native-status-evidence-incomplete")
+    {
+        report
+            .new_copy_admission_blockers
+            .push("icloud-native-status-evidence-incomplete".into());
+        report.new_copy_admission_state = "blocked".into();
+    }
+    if report
+        .native_status
+        .as_ref()
         .is_some_and(native_sync_up_pending)
         && !report
             .new_copy_admission_blockers
@@ -1300,6 +1347,24 @@ mod tests {
         assert!(report
             .notices
             .contains(&"source-sqlite-wal-included".to_string()));
+    }
+
+    #[test]
+    fn incomplete_native_status_blocks_new_copy_admission() {
+        let mut report =
+            build_report(1, vec![], IcloudUploadQueueSummary::default(), true, true).unwrap();
+        report.native_status = Some(parse_native_status_output("", 1, false, true, false));
+        attach_native_status_admission(&mut report);
+
+        assert_eq!(report.new_copy_admission_state, "blocked");
+        assert_eq!(
+            report.new_copy_admission_blockers,
+            ["icloud-native-status-evidence-incomplete"]
+        );
+        assert_eq!(
+            require_new_copy_admission(&report).unwrap_err(),
+            "icloud-native-status-evidence-incomplete"
+        );
     }
 
     #[test]

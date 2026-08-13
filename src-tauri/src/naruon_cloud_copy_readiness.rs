@@ -30,7 +30,7 @@ const RUNTIME_BLOCKERS: [&str; 2] = [
     "provider-client-runtime-not-observed",
     "provider-client-runtime-evidence-unavailable",
 ];
-const ICLOUD_ADMISSION_BLOCKERS: [&str; 9] = [
+const ICLOUD_ADMISSION_BLOCKERS: [&str; 10] = [
     "icloud-sync-health-evidence-incomplete",
     "icloud-upload-queue-nonempty",
     "icloud-upload-in-flight",
@@ -38,6 +38,7 @@ const ICLOUD_ADMISSION_BLOCKERS: [&str; 9] = [
     "icloud-upload-out-of-quota",
     "icloud-upload-queue-state-unclassified",
     "icloud-local-sync-item-error-present",
+    "icloud-native-status-evidence-incomplete",
     "icloud-native-sync-up-pending",
     "icloud-new-copy-admission-evidence-unavailable",
 ];
@@ -276,6 +277,13 @@ fn expected_icloud_admission_blockers(report: &IcloudSyncHealthReport) -> Vec<St
     if report
         .native_status
         .as_ref()
+        .is_some_and(|status| !status.evidence_complete)
+    {
+        blockers.push("icloud-native-status-evidence-incomplete".into());
+    }
+    if report
+        .native_status
+        .as_ref()
         .is_some_and(|status| {
             status.status_observed
                 && status
@@ -319,7 +327,8 @@ fn validate_icloud_health(
         return Err("naruon-copy-readiness-icloud-claim-invalid".into());
     }
     if let Some(native_status) = report.native_status.as_ref() {
-        validate_native_status_evidence(native_status)?;
+        validate_native_status_evidence(native_status)
+            .map_err(|_| "naruon-copy-readiness-icloud-native-status-invalid".to_string())?;
         if native_status.observed_at_ms != report.observed_at_ms {
             return Err("naruon-copy-readiness-icloud-native-status-time-mismatch".into());
         }
@@ -987,6 +996,13 @@ fn validate_icloud_admission_summary(
     if summary.item_error_count > 0 {
         expected.push("icloud-local-sync-item-error-present".to_string());
     }
+    if summary
+        .native_status
+        .as_ref()
+        .is_some_and(|status| !status.evidence_complete)
+    {
+        expected.push("icloud-native-status-evidence-incomplete".to_string());
+    }
     if summary.native_status.as_ref().is_some_and(|status| {
         status.status_observed
             && status
@@ -1464,6 +1480,21 @@ mod tests {
                 .as_ref()
                 .and_then(|status| status.sync_state.as_deref()),
             Some("needs-sync-up")
+        );
+    }
+
+    #[test]
+    fn invalid_native_status_uses_copy_readiness_error_namespace() {
+        let report = report(CloudProvider::Icloud);
+        let runtime = assess_provider_client_runtime(CloudProvider::Icloud, None, 25);
+        let mut health = icloud_health(false);
+        let mut native = native_sync_up_status();
+        native.notices.clear();
+        health.native_status = Some(native);
+
+        assert_eq!(
+            export_naruon_cloud_copy_readiness(&report, &runtime, Some(&health)).unwrap_err(),
+            "naruon-copy-readiness-icloud-native-status-invalid"
         );
     }
 
