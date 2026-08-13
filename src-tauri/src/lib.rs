@@ -96,6 +96,7 @@ pub fn run() {
             commands::get_node,
             commands::top_files,
             commands::list_cache_candidates,
+            cache_cleanup::list_cache_targets,
             commands::list_dev_artifacts,
             commands::clean_paths,
             cache_cleanup::clean_cache_contents,

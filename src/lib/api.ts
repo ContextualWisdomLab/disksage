@@ -32,6 +32,12 @@ export interface CacheCandidate {
   bytes: number;
   exists: boolean;
 }
+export interface CacheTarget {
+  path: string;
+  bytes: number;
+  modified_ms: number;
+  object_id: string;
+}
 export interface DevArtifact {
   path: string;
   kind: string;
@@ -63,6 +69,10 @@ export interface DupeGroup {
 }
 
 export const listCacheCandidates = () => invoke<CacheCandidate[]>("list_cache_candidates");
+export const listCacheTargets = (dir: string) =>
+  invoke<CacheTarget[]>("list_cache_targets", { dir });
+export const cleanCacheContents = (dir: string, targets: CacheTarget[]) =>
+  invoke<CleanResult[]>("clean_cache_contents", { dir, targets });
 export const listDevArtifacts = (root: string, minAgeDays = 30) =>
   invoke<DevArtifact[]>("list_dev_artifacts", { root, minAgeDays });
 export const cleanPaths = (paths: string[]) => invoke<CleanResult[]>("clean_paths", { paths });

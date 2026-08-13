@@ -33,6 +33,16 @@ pub struct CacheCandidate {
     pub exists: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CacheTarget {
+    pub path: String,
+    pub bytes: u64,
+    pub modified_ms: u64,
+    pub object_id: String,
+}
+
+const MAX_CACHE_TARGETS: usize = 4_096;
+
 /// 정적 캐시 카탈로그 (스펙 §4 rules). 항목 = (id, 라벨, 베이스 기준 상대경로).
 /// ponytail: 브라우저 캐시는 프로필 글롭이 필요해 M2 범위 밖 — 카탈로그에 추가만 하면 확장됨
 fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
@@ -60,6 +70,14 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
         ("cargo-registry-cache", "cargo 레지스트리 캐시",
             bases.home.join(".cargo").join("registry").join("cache")),
     ];
+
+    #[cfg(target_os = "macos")]
+    entries.extend([
+        ("uv-cache", "uv 캐시", bases.local_data.join("uv")),
+        ("huggingface-cache", "Hugging Face 캐시", bases.local_data.join("huggingface")),
+        ("codex-runtimes-cache", "Codex 런타임 캐시", bases.local_data.join("codex-runtimes")),
+        ("gradle-cache", "Gradle 캐시", bases.home.join(".gradle").join("caches")),
+    ]);
 
     // Windows 진단 캐시 — 조용히 수십 GB로 자라는 것들. RDP 자동 추적(RdClientAutoTrace)의 .etl 로그가
     // 대표적: 원격 접속 세션마다 쌓여 재발하므로, os-temp에 묻어두지 않고 명명 항목으로 노출해
@@ -413,6 +431,50 @@ pub fn clean_targets(dir: &Path) -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
+fn modified_ms(metadata: &std::fs::Metadata) -> u64 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+        .and_then(|value| u64::try_from(value.as_millis()).ok())
+        .unwrap_or(0)
+}
+
+/// Return the exact direct children that a cache cleanup approval may move to Trash.
+/// The object identity, size, and modification timestamp bind the later mutation to this snapshot.
+pub fn cache_targets(dir: &Path) -> Result<Vec<CacheTarget>, String> {
+    let root = CatalogRoot::open(dir).ok_or("cache-root-not-current-or-safe")?;
+    let paths = root.child_paths();
+    if paths.len() > MAX_CACHE_TARGETS {
+        return Err("cache-target-limit-exceeded".into());
+    }
+    let mut targets = Vec::with_capacity(paths.len());
+    for path in paths {
+        let metadata = std::fs::symlink_metadata(&path)
+            .map_err(|_| "cache-target-metadata-unavailable".to_string())?;
+        if metadata.file_type().is_symlink() || !(metadata.is_file() || metadata.is_dir()) {
+            continue;
+        }
+        let bytes = if metadata.is_dir() {
+            CatalogRoot::open(&path)
+                .ok_or_else(|| "cache-target-directory-unavailable".to_string())?
+                .directory_size()
+        } else {
+            metadata.len()
+        };
+        let object_id = crate::safety::filesystem_object_id(&path)
+            .map_err(|_| "cache-target-identity-unavailable".to_string())?;
+        targets.push(CacheTarget {
+            path: path.to_string_lossy().into_owned(),
+            bytes,
+            modified_ms: modified_ms(&metadata),
+            object_id,
+        });
+    }
+    targets.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(targets)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -492,6 +554,27 @@ mod tests {
             .collect();
         names.sort();
         assert_eq!(names, vec!["a", "b.bin"]);
+    }
+
+    #[test]
+    fn cache_targets_bind_identity_size_and_mtime() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir(tmp.path().join("nested")).unwrap();
+        fs::write(tmp.path().join("nested").join("deep.bin"), b"deep").unwrap();
+        fs::write(tmp.path().join("blob.bin"), b"blob").unwrap();
+
+        let targets = cache_targets(tmp.path()).unwrap();
+        assert_eq!(targets.len(), 2);
+        assert!(targets.iter().all(|target| !target.object_id.is_empty()));
+        assert!(targets.iter().all(|target| target.modified_ms > 0));
+        assert_eq!(
+            targets
+                .iter()
+                .find(|target| target.path.ends_with("nested"))
+                .unwrap()
+                .bytes,
+            4
+        );
     }
 
     #[test]

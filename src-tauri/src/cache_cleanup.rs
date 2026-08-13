@@ -1,33 +1,82 @@
 use std::path::Path;
 
-use crate::{commands::CleanResult, rules};
+use crate::{commands::CleanResult, rules, safety};
 
-const ATOMIC_TRASH_UNAVAILABLE: &str = "cache-cleanup-atomic-trash-unavailable";
+fn sort_targets(targets: &mut Vec<rules::CacheTarget>) {
+    targets.sort_by(|left, right| left.path.cmp(&right.path));
+}
 
 fn clean_cache_contents_inner(
     bases: &rules::BaseDirs,
     dir: &Path,
+    requested_targets: &[rules::CacheTarget],
+    journal_path: &Path,
+    now_ms: u64,
 ) -> Result<Vec<CleanResult>, String> {
     if !rules::is_catalog_path(bases, dir) {
         return Err("cache-root-not-current-or-safe".into());
     }
+    let mut expected = requested_targets.to_vec();
+    sort_targets(&mut expected);
+    let mut current = rules::cache_targets(dir)?;
+    sort_targets(&mut current);
+    if current != expected {
+        return Err("cache-cleanup-targets-stale".into());
+    }
 
-    // A path-based recycle-bin API cannot preserve the identity of a child entry across the
-    // final same-user rename/symlink race on every supported desktop platform. Re-validating the
-    // root immediately before a path-based delete still leaves a check/use window. Until the
-    // recycle operation itself is bound to the validated filesystem object, refuse cache
-    // mutation instead of risking moving an unrelated path to the trash.
-    Err(ATOMIC_TRASH_UNAVAILABLE.into())
+    Ok(expected
+        .into_iter()
+        .map(|target| {
+            match safety::trash_delete_if_identity(
+                Path::new(&target.path),
+                &target.object_id,
+                target.bytes,
+                journal_path,
+                now_ms,
+            ) {
+                Ok(()) => CleanResult {
+                    path: target.path,
+                    ok: true,
+                    error: String::new(),
+                },
+                Err(error) => CleanResult {
+                    path: target.path,
+                    ok: false,
+                    error: error.to_string(),
+                },
+            }
+        })
+        .collect())
 }
 
-/// Validate an approved cache root and fail closed until DiskSage has a recycle operation that is
-/// bound to the exact validated filesystem object. Read-only cache discovery remains available;
-/// this command deliberately grants no destructive authority while path identity can race.
+/// Read the exact cache children that may be included in a later identity-bound Trash request.
 #[cfg(not(coverage))]
 #[tauri::command]
-pub fn clean_cache_contents(dir: String) -> Result<Vec<CleanResult>, String> {
+pub fn list_cache_targets(dir: String) -> Result<Vec<rules::CacheTarget>, String> {
     let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
-    clean_cache_contents_inner(&bases, Path::new(&dir))
+    if !rules::is_catalog_path(&bases, Path::new(&dir)) {
+        return Err("cache-root-not-current-or-safe".into());
+    }
+    rules::cache_targets(Path::new(&dir))
+}
+
+/// Move only the reviewed cache children to the OS Trash, retaining the cache root itself.
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn clean_cache_contents(
+    dir: String,
+    targets: Vec<rules::CacheTarget>,
+    app: tauri::AppHandle,
+) -> Result<Vec<CleanResult>, String> {
+    let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
+    let journal_path = crate::commands::journal_file_path(&app)?;
+    clean_cache_contents_inner(
+        &bases,
+        Path::new(&dir),
+        &targets,
+        &journal_path,
+        crate::commands::now_ms(),
+    )
 }
 
 #[cfg(test)]
@@ -48,29 +97,32 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let bases = fake_bases(tmp.path());
         fs::create_dir(&bases.temp).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
 
-        let error = clean_cache_contents_inner(&bases, tmp.path())
+        let error = clean_cache_contents_inner(&bases, tmp.path(), &[], &journal, 1)
             .err()
-            .expect("non-catalog root should be rejected");
+            .expect("non-catalog root must be rejected");
 
         assert_eq!(error, "cache-root-not-current-or-safe");
     }
 
     #[test]
-    fn cleanup_refuses_mutation_until_target_identity_can_be_preserved() {
+    fn cleanup_rejects_stale_target_snapshot_without_mutation() {
         let tmp = tempfile::tempdir().unwrap();
         let bases = fake_bases(tmp.path());
         fs::create_dir(&bases.temp).unwrap();
         let victim = bases.temp.join("keep.bin");
         fs::write(&victim, b"keep").unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+        let mut targets = rules::cache_targets(&bases.temp).unwrap();
+        targets[0].bytes += 1;
 
-        let error = clean_cache_contents_inner(&bases, &bases.temp)
+        let error = clean_cache_contents_inner(&bases, &bases.temp, &targets, &journal, 1)
             .err()
-            .expect("path-based cache cleanup must fail closed");
+            .expect("stale target snapshot must be rejected");
 
-        assert_eq!(error, ATOMIC_TRASH_UNAVAILABLE);
+        assert_eq!(error, "cache-cleanup-targets-stale");
         assert_eq!(fs::read(&victim).unwrap(), b"keep");
-        assert!(bases.temp.is_dir());
     }
 
     #[cfg(unix)]
@@ -83,10 +135,11 @@ mod tests {
         let outside_file = outside.join("outside.bin");
         fs::write(&outside_file, b"outside").unwrap();
         std::os::unix::fs::symlink(&outside, &bases.temp).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
 
-        let error = clean_cache_contents_inner(&bases, &bases.temp)
+        let error = clean_cache_contents_inner(&bases, &bases.temp, &[], &journal, 1)
             .err()
-            .expect("symlinked catalog root should be rejected");
+            .expect("symlink root must be rejected");
 
         assert_eq!(error, "cache-root-not-current-or-safe");
         assert_eq!(fs::read(&outside_file).unwrap(), b"outside");

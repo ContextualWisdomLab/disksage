@@ -445,7 +445,7 @@ pub fn top_files(limit: usize, state: State<AppState>) -> Result<Vec<EntryView>,
 }
 
 #[cfg(not(coverage))]
-fn journal_file_path(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn journal_file_path(app: &AppHandle) -> Result<PathBuf, String> {
     use tauri::Manager;
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -453,7 +453,7 @@ fn journal_file_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 #[cfg(not(coverage))]
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)

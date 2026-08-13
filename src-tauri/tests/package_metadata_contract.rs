@@ -52,7 +52,8 @@ fn cargo_publish_policy(manifest_path: &Path) -> Option<Vec<String>> {
         .find(|package| {
             package["manifest_path"]
                 .as_str()
-                .map(PathBuf::from)
+                .map(Path::new)
+                .and_then(|path| fs::canonicalize(path).ok())
                 .is_some_and(|path| path == canonical_manifest)
         })
         .expect("cargo metadata must contain the package for the requested manifest");

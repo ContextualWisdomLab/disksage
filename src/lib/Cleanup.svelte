@@ -37,6 +37,29 @@
     }
   }
 
+  async function cleanCache(candidate: api.CacheCandidate) {
+    if (busy || !candidate.exists || candidate.bytes === 0) return;
+    busy = true;
+    loadError = "";
+    try {
+      const targets = await api.listCacheTargets(candidate.path);
+      if (targets.length === 0) return;
+      const targetBytes = targets.reduce((sum, target) => sum + target.bytes, 0);
+      const okay = await confirm(
+        `${candidate.label}의 직계 캐시 ${targets.length}개(${fmtBytes(targetBytes)})를 휴지통으로 보냅니다.\n\n` +
+          "캐시 루트는 보존하며, 각 항목은 파일시스템 객체 지문·크기·수정시각을 다시 검증합니다. 휴지통에서 복원할 수 있습니다.",
+        { title: "DiskSage", kind: "warning" },
+      );
+      if (!okay) return;
+      results = await api.cleanCacheContents(candidate.path, targets);
+      await load();
+    } catch (e) {
+      loadError = String(e);
+    } finally {
+      busy = false;
+    }
+  }
+
   function toggle(set: Set<string>, key: string) {
     const next = new Set(set);
     next.has(key) ? next.delete(key) : next.add(key);
@@ -92,16 +115,18 @@
 
   <h3>캐시</h3>
   <p class="notice" role="status">
-    캐시 항목은 현재 읽기 전용입니다. 검증된 파일시스템 객체와 휴지통 이동을 하나의 원자적 권한 경계로 묶기 전까지 DiskSage는 캐시 삭제를 실행하지 않습니다.
+    알려진 캐시 루트의 직계 항목만 객체 지문·크기·수정시각을 재검증한 뒤 휴지통으로 보냅니다. 캐시 루트 자체는 보존됩니다.
   </p>
   <ul class="list">
     {#each caches as c (c.id)}
       <li>
-        <label class="disabled">
-          <input type="checkbox" disabled />
-          {c.label}
+        <div>
+          <span class:disabled={!c.exists}>{c.label}</span>
           <span class="size">{c.exists ? fmtBytes(c.bytes) : "없음"}</span>
-        </label>
+          {#if c.exists}
+            <button onclick={() => cleanCache(c)} disabled={busy || c.bytes === 0}>휴지통으로</button>
+          {/if}
+        </div>
         <span class="path" title={c.path}>{c.path}</span>
       </li>
     {/each}

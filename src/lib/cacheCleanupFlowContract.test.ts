@@ -15,12 +15,13 @@ describe("cache cleanup execution boundary", () => {
     const backend = readSource("src-tauri/src/cache_cleanup.rs");
     const tauri = readSource("src-tauri/src/lib.rs");
 
-    expect(cleanup).not.toContain("api.expandCleanTargets(c.path)");
-    expect(cleanup).not.toContain('invoke<api.CleanResult[]>("clean_cache_contents"');
-    expect(cleanup).toContain("캐시 항목은 현재 읽기 전용입니다");
+    expect(cleanup).toContain("api.listCacheTargets(candidate.path)");
+    expect(cleanup).toContain("api.cleanCacheContents(candidate.path, targets)");
+    expect(cleanup).toContain("객체 지문·크기·수정시각");
     expect(backend).toContain("pub fn clean_cache_contents(");
-    expect(backend).toContain("cache-cleanup-atomic-trash-unavailable");
-    expect(backend).not.toContain("trash_delete(");
+    expect(backend).toContain("cache-cleanup-targets-stale");
+    expect(backend).toContain("trash_delete_if_identity(");
     expect(tauri).toContain("cache_cleanup::clean_cache_contents");
+    expect(tauri).toContain("cache_cleanup::list_cache_targets");
   });
 });
