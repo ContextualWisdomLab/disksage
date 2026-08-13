@@ -13,6 +13,15 @@ struct Args {
     private_output: Option<PathBuf>,
 }
 
+fn usage() -> String {
+    format!(
+        "usage: disksage-incomplete-download-audit --root ABSOLUTE_PATH \
+         [--max-entries 1..={DEFAULT_MAX_ENTRIES}] \
+         [--stale-after-days 1..={MAX_STALE_AFTER_DAYS}] \
+         [--private-output ABSOLUTE_NEW_FILE.json]"
+    )
+}
+
 fn absolute_without_parent(path: &Path) -> bool {
     path.is_absolute()
         && !path
@@ -68,15 +77,8 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 }
                 private_output = Some(PathBuf::from(value(&mut index, "--private-output")?));
             }
-            "--help" | "-h" => {
-                return Err(format!(
-                    "usage: disksage-incomplete-download-audit --root ABSOLUTE_PATH \
-                     [--max-entries 1..={DEFAULT_MAX_ENTRIES}] \
-                     [--stale-after-days 1..={MAX_STALE_AFTER_DAYS}] \
-                     [--private-output ABSOLUTE_NEW_FILE.json]"
-                ));
-            }
-            flag => return Err(format!("알 수 없는 인자: {flag}")),
+            "--help" | "-h" => return Err(usage()),
+            _ => return Err("알 수 없는 인자".to_string()),
         }
         index += 1;
     }
@@ -106,7 +108,12 @@ fn system_now_ms() -> u64 {
 
 #[cfg(not(coverage))]
 fn run() -> Result<(), String> {
-    let args = parse_args(&std::env::args().skip(1).collect::<Vec<_>>())?;
+    let raw = std::env::args().skip(1).collect::<Vec<_>>();
+    if raw.len() == 1 && matches!(raw[0].as_str(), "--help" | "-h") {
+        println!("{}", usage());
+        return Ok(());
+    }
+    let args = parse_args(&raw)?;
     let report = collect_incomplete_download_audit(
         &args.root,
         system_now_ms(),
