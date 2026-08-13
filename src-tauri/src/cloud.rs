@@ -3275,7 +3275,10 @@ fn should_probe_general_metadata(path: &Path) -> bool {
         .unwrap_or_default();
     archive_kind(path) != Some(ArchiveKind::IncompleteDownload)
         && multipart_archive_part(path).is_none()
-        && !matches!(extension.as_str(), "eml" | "aup3")
+        && !matches!(
+            extension.as_str(),
+            "eml" | "aup3" | "bak" | "db" | "db3" | "sqlite" | "sqlite3"
+        )
 }
 
 fn looks_like_coordinates(name: &str) -> bool {
@@ -5931,6 +5934,12 @@ mod tests {
             date_epoch_ms(2026, 6, 2).unwrap(),
         )
         .contains(&"embedded-metadata-probe-incomplete".to_string()));
+
+        assert!(!should_probe_general_metadata(Path::new(
+            "zotero.sqlite.1.bak",
+        )));
+        assert!(!should_probe_general_metadata(Path::new("zotero.sqlite")));
+        assert!(should_probe_general_metadata(Path::new("video.mov")));
     }
 
     #[cfg(not(coverage))]
