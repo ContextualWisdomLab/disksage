@@ -56,7 +56,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             }
             "--output" => output = Some(PathBuf::from(value(args, &mut index, "--output")?)),
             "--help" | "-h" => return Err(usage().into()),
-            unknown => return Err(format!("알 수 없는 인자: {unknown}")),
+            _ => return Err("알 수 없는 인자".to_string()),
         }
         index += 1;
     }
@@ -128,6 +128,10 @@ fn output_summary(path: &PathBuf, report: &MavenCachePruneReport) -> Result<Stri
 
 fn run() -> Result<(), String> {
     let raw: Vec<String> = std::env::args().skip(1).collect();
+    if raw.len() == 1 && matches!(raw[0].as_str(), "--help" | "-h") {
+        println!("{}", usage());
+        return Ok(());
+    }
     let args = parse_args(&raw)?;
     let report = prune_maven_repository(
         &args.repository_root,
