@@ -10,7 +10,9 @@ use crate::cloud::{
     CloudRelationEvidence, MetadataEvidence,
 };
 use crate::cloud_review::CloudReviewDisposition;
-use crate::cloud_transfer::{CloudCopyReceipt, CloudCopyVerificationMethod, SyncEvidenceKind};
+use crate::cloud_transfer::{
+    CloudCopyReceipt, CloudCopyVerificationMethod, ProviderSyncState, SyncEvidenceKind,
+};
 use crate::provider_evidence::{validate_sync_evidence_record, ProviderSyncEvidenceRecord};
 
 pub const NARUON_FILE_LINEAGE_SCHEMA_VERSION: u32 = 1;
@@ -67,6 +69,8 @@ pub struct NaruonCloudCopyLineage {
     /// DiskSage's local File Provider copy is not proof that a provider API write executed.
     pub provider_write_executed: bool,
     pub provider_sync_confirmed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_sync_state: Option<ProviderSyncState>,
     pub sync_evidence_record_id: Option<String>,
     pub sync_evidence_kind: Option<SyncEvidenceKind>,
     pub sync_evidence_id: Option<String>,
@@ -244,6 +248,7 @@ pub fn export_naruon_file_lineage(
             local_copy_verified: receipt.copy_verified,
             provider_write_executed: false,
             provider_sync_confirmed: evidence.is_some_and(|item| item.sync_complete),
+            provider_sync_state: evidence.map(|item| item.sync_state),
             sync_evidence_record_id: evidence_record.map(|record| record.record_id.clone()),
             sync_evidence_kind: evidence.map(|item| item.kind),
             sync_evidence_id: evidence.map(|item| item.evidence_id.clone()),
@@ -361,6 +366,10 @@ mod tests {
         );
         assert!(envelope.cloud_copy.local_copy_verified);
         assert!(envelope.cloud_copy.provider_sync_confirmed);
+        assert_eq!(
+            envelope.cloud_copy.provider_sync_state,
+            Some(ProviderSyncState::Complete)
+        );
         assert!(!envelope.cloud_copy.provider_write_executed);
         assert!(envelope.cloud_copy.sync_evidence_record_id.is_some());
     }
@@ -370,6 +379,7 @@ mod tests {
         let envelope = export_naruon_file_lineage(&receipt(), None).unwrap();
 
         assert!(!envelope.cloud_copy.provider_sync_confirmed);
+        assert_eq!(envelope.cloud_copy.provider_sync_state, None);
         assert_eq!(envelope.cloud_copy.sync_evidence_id, None);
         assert_eq!(envelope.cloud_copy.sync_confirmed_at_ms, None);
     }
