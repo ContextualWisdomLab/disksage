@@ -85,10 +85,18 @@ fn write_create_new(path: &Path, encoded: &[u8]) -> Result<(), String> {
 }
 
 fn run() -> Result<(), String> {
+    let cli_args = std::env::args().skip(1).collect::<Vec<_>>();
+    if matches!(cli_args.as_slice(), [flag] if flag == "--help" || flag == "-h") {
+        println!(
+            "usage: disksage-icloud-sync-health [--db-dir ABSOLUTE_CLOUDDOCS_DB_DIR] [--output ABSOLUTE_NEW_FILE.json]"
+        );
+        return Ok(());
+    }
+
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or_else(|| "HOME is unavailable".to_string())?;
-    let args = parse_args(&std::env::args().skip(1).collect::<Vec<_>>(), &home)?;
+    let args = parse_args(&cli_args, &home)?;
     let report = probe_icloud_sync_health(&args.db_dir, now_ms()?)?;
     let encoded = serde_json::to_vec_pretty(&report)
         .map_err(|_| "icloud-sync-health-json-invalid".to_string())?;
