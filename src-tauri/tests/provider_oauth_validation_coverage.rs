@@ -359,3 +359,105 @@ fn root_lookup_ignores_invalid_persisted_connections_and_fails_closed_when_missi
         "provider-oauth-connection-missing"
     );
 }
+
+#[test]
+fn root_lookup_prefers_current_canonical_identity_over_legacy_equivalent_record() {
+    #[cfg(windows)]
+    let composed_path = r"C:\Cloud\Café";
+    #[cfg(not(windows))]
+    let composed_path = "/Cloud/Café";
+    let decomposed_path = composed_path.nfd().collect::<String>();
+    let composed_id = "google-drive:Café";
+    let decomposed_id = composed_id.nfd().collect::<String>();
+
+    let requested_root = CloudRoot {
+        id: composed_id.into(),
+        provider: CloudProvider::GoogleDrive,
+        account_scope: CloudAccountScope::Organization,
+        label: "Google Drive".into(),
+        path: composed_path.into(),
+        readable: true,
+        access_issue: None,
+    };
+    let current = OAuthConnection {
+        connection_id: current_connection_id(&requested_root),
+        provider: requested_root.provider,
+        cloud_root_id: requested_root.id.clone(),
+        cloud_root_path: requested_root.path.clone(),
+        client_id: GOOGLE_CLIENT_ID.into(),
+        scope: requested_scope(CloudProvider::GoogleDrive).unwrap().into(),
+        connected_at_ms: 20,
+    };
+    let legacy = OAuthConnection {
+        connection_id: connection_id_for_values(
+            CloudProvider::GoogleDrive.as_str(),
+            &decomposed_id,
+            &decomposed_path,
+        ),
+        provider: CloudProvider::GoogleDrive,
+        cloud_root_id: decomposed_id,
+        cloud_root_path: decomposed_path,
+        client_id: GOOGLE_CLIENT_ID.into(),
+        scope: requested_scope(CloudProvider::GoogleDrive).unwrap().into(),
+        connected_at_ms: 10,
+    };
+
+    assert_ne!(legacy.connection_id, current.connection_id);
+    assert_eq!(
+        connection_for_root(&[legacy, current.clone()], &requested_root).unwrap(),
+        current
+    );
+}
+
+#[test]
+fn root_lookup_rejects_multiple_legacy_matches_and_non_equivalent_roots() {
+    #[cfg(windows)]
+    let composed_path = r"C:\Cloud\Café";
+    #[cfg(not(windows))]
+    let composed_path = "/Cloud/Café";
+    let decomposed_path = composed_path.nfd().collect::<String>();
+    let composed_id = "google-drive:Café";
+    let decomposed_id = composed_id.nfd().collect::<String>();
+
+    let requested_root = CloudRoot {
+        id: composed_id.into(),
+        provider: CloudProvider::GoogleDrive,
+        account_scope: CloudAccountScope::Unknown,
+        label: "Coverage root".into(),
+        path: composed_path.into(),
+        readable: true,
+        access_issue: None,
+    };
+    let legacy = OAuthConnection {
+        connection_id: connection_id_for_values(
+            CloudProvider::GoogleDrive.as_str(),
+            &decomposed_id,
+            &decomposed_path,
+        ),
+        provider: CloudProvider::GoogleDrive,
+        cloud_root_id: decomposed_id,
+        cloud_root_path: decomposed_path,
+        client_id: GOOGLE_CLIENT_ID.into(),
+        scope: requested_scope(CloudProvider::GoogleDrive).unwrap().into(),
+        connected_at_ms: 10,
+    };
+
+    assert_eq!(
+        connection_for_root(&[legacy.clone(), legacy.clone()], &requested_root).unwrap_err(),
+        "provider-oauth-connection-ambiguous"
+    );
+
+    let mut wrong_path = requested_root.clone();
+    wrong_path.path.push_str("-other");
+    assert_eq!(
+        connection_for_root(std::slice::from_ref(&legacy), &wrong_path).unwrap_err(),
+        "provider-oauth-connection-missing"
+    );
+
+    let mut wrong_id = requested_root;
+    wrong_id.id.push_str("-other");
+    assert_eq!(
+        connection_for_root(std::slice::from_ref(&legacy), &wrong_id).unwrap_err(),
+        "provider-oauth-connection-missing"
+    );
+}
