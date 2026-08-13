@@ -622,6 +622,17 @@
             <div class="context">
               맥락: {candidate.source_context} · 대상 계정: {accountScopeLabel(candidate.destination_account_scope)} · lineage: {candidate.metadata_fingerprint.slice(0, 12)}
             </div>
+            <div class="context">온톨로지 클래스: {candidate.ontology_class}</div>
+            {#if candidate.ontology_relations.length > 0}
+              <details>
+                <summary>연결 관계 {candidate.ontology_relations.length}건</summary>
+                <ul class="evidence">
+                  {#each candidate.ontology_relations as relation}
+                    <li>{relation.subject} —{relation.predicate}→ {relation.object} · {relation.source}</li>
+                  {/each}
+                </ul>
+              </details>
+            {/if}
             {#if candidate.requires_review}
               <div class="review-controls">
                 {#if requiresFreshProbe(candidate)}

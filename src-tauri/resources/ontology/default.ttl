@@ -34,6 +34,30 @@ dm:Dataset a owl:Class ;
     rdfs:label "데이터셋"@ko , "Dataset"@en ;
     dm:targetFolder "~/Datasets" .
 
+dm:Archive a owl:Class ;
+    rdfs:label "아카이브"@ko , "Archive"@en .
+
+dm:Backup a owl:Class ;
+    rdfs:label "백업"@ko , "Backup"@en .
+
+dm:Creative a owl:Class ;
+    rdfs:subClassOf dm:Media ;
+    rdfs:label "창작물"@ko , "Creative"@en .
+
+dm:IncompleteDownload a owl:Class ;
+    rdfs:subClassOf dm:CloudPlaceholder ;
+    rdfs:label "미완료 다운로드"@ko , "Incomplete download"@en .
+
+dm:ReviewRequired a owl:Class ;
+    rdfs:label "검토 필요"@ko , "Review required"@en .
+
+dm:classifiedAs a owl:ObjectProperty .
+dm:archivedTo a owl:ObjectProperty .
+dm:providedBy a owl:ObjectProperty .
+dm:accountScope a owl:ObjectProperty .
+dm:requiresReview a owl:ObjectProperty .
+dm:managedBy a owl:ObjectProperty .
+
 # macOS Library 고아 후보 판정에 쓰는 연결/의미 계층.
 dm:Application a owl:Class ;
     rdfs:label "애플리케이션"@ko , "Application"@en .

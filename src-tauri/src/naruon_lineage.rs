@@ -5,7 +5,10 @@
 
 use std::path::{Component, Path};
 
-use crate::cloud::{ArchiveKind, CloudAccountScope, CloudProvider, MetadataEvidence};
+use crate::cloud::{
+    ontology_class_for_archive_kind, ArchiveKind, CloudAccountScope, CloudProvider,
+    CloudRelationEvidence, MetadataEvidence,
+};
 use crate::cloud_review::CloudReviewDisposition;
 use crate::cloud_transfer::{CloudCopyReceipt, CloudCopyVerificationMethod, SyncEvidenceKind};
 use crate::provider_evidence::{validate_sync_evidence_record, ProviderSyncEvidenceRecord};
@@ -83,6 +86,9 @@ pub struct NaruonFileLineageEnvelope {
     pub source_filename: String,
     pub source_relative_path: String,
     pub source_context: String,
+    pub ontology_class: String,
+    #[serde(default)]
+    pub ontology_relations: Vec<CloudRelationEvidence>,
     pub raw_content_sha256: String,
     pub raw_content_blake3: String,
     pub bytes: u64,
@@ -189,6 +195,12 @@ pub fn export_naruon_file_lineage(
         source_filename,
         source_relative_path: lineage.relative_path.clone(),
         source_context: lineage.source_context.clone(),
+        ontology_class: if lineage.ontology_class.is_empty() {
+            ontology_class_for_archive_kind(lineage.kind).into()
+        } else {
+            lineage.ontology_class.clone()
+        },
+        ontology_relations: lineage.ontology_relations.clone(),
         raw_content_sha256: receipt.sha256.clone(),
         raw_content_blake3: receipt.blake3.clone(),
         bytes: receipt.bytes,
@@ -246,7 +258,10 @@ pub fn export_naruon_file_lineage(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cloud::{ArchiveKind, CloudAccountScope, CloudProvider, MetadataEvidence};
+    use crate::cloud::{
+        ontology_class_for_archive_kind, ArchiveKind, CloudAccountScope, CloudProvider,
+        MetadataEvidence,
+    };
     use crate::cloud_transfer::{
         CloudCopyReceipt, CloudCopyVerificationMethod, CloudLineageSnapshot, ProviderSyncEvidence,
         SyncEvidenceKind, RECEIPT_VERSION,
@@ -281,6 +296,8 @@ mod tests {
                 review_rationale: Some("embedded metadata checked".into()),
                 destination_account_scope: CloudAccountScope::Organization,
                 kind: ArchiveKind::Document,
+                ontology_class: ontology_class_for_archive_kind(ArchiveKind::Document).into(),
+                ontology_relations: Vec::new(),
                 created_ms: 10,
                 modified_ms: 20,
                 production_time_ms: 5,

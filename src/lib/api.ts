@@ -369,6 +369,13 @@ export function cloudRootIdentityMatches(
     && connection.cloud_root_path.normalize("NFC") === root.path.normalize("NFC");
 }
 
+export interface CloudRelationEvidence {
+  subject: string;
+  predicate: string;
+  object: string;
+  source: string;
+}
+
 export interface CloudCandidate {
   metadata_fingerprint: string;
   review_fingerprint: string;
@@ -377,6 +384,8 @@ export interface CloudCandidate {
   provider: CloudProvider;
   destination_account_scope: CloudAccountScope;
   kind: ArchiveKind;
+  ontology_class: string;
+  ontology_relations: CloudRelationEvidence[];
   bytes: number;
   age_days: number;
   created_ms: number;
@@ -530,6 +539,8 @@ export interface CloudLineageSnapshot {
   review_rationale?: string;
   destination_account_scope: CloudAccountScope;
   kind: ArchiveKind;
+  ontology_class?: string;
+  ontology_relations?: CloudRelationEvidence[];
   created_ms: number;
   modified_ms: number;
   production_time_ms: number;

@@ -383,6 +383,9 @@ mod tests {
             provider: CloudProvider::Icloud,
             destination_account_scope: CloudAccountScope::Organization,
             kind: ArchiveKind::Document,
+            ontology_class: crate::cloud::ontology_class_for_archive_kind(ArchiveKind::Document)
+                .into(),
+            ontology_relations: Vec::new(),
             bytes: 12,
             age_days: 90,
             created_ms: 1,

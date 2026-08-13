@@ -669,6 +669,9 @@ mod tests {
             provider: CloudProvider::Onedrive,
             destination_account_scope: crate::cloud::CloudAccountScope::Organization,
             kind: ArchiveKind::Document,
+            ontology_class: crate::cloud::ontology_class_for_archive_kind(ArchiveKind::Document)
+                .into(),
+            ontology_relations: Vec::new(),
             bytes: metadata.len(),
             age_days: 1,
             created_ms: modified,

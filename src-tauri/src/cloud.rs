@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 use unicode_normalization::UnicodeNormalization;
 
 const ARCHIVE_DIR: &str = "DiskSage Archive";
+const DM_ONTOLOGY_PREFIX: &str = "https://disksage.app/ontology#";
 const DAY_MS: u64 = 86_400_000;
 #[cfg(not(coverage))]
 const METADATA_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -147,6 +148,19 @@ impl ArchiveKind {
     }
 }
 
+/// Map the deterministic archive classifier to the shared DiskSage ontology.
+pub fn ontology_class_for_archive_kind(kind: ArchiveKind) -> &'static str {
+    match kind {
+        ArchiveKind::Document => "https://disksage.app/ontology#Document",
+        ArchiveKind::Media => "https://disksage.app/ontology#Media",
+        ArchiveKind::Archive => "https://disksage.app/ontology#Archive",
+        ArchiveKind::Dataset => "https://disksage.app/ontology#Dataset",
+        ArchiveKind::Backup => "https://disksage.app/ontology#Backup",
+        ArchiveKind::Creative => "https://disksage.app/ontology#Creative",
+        ArchiveKind::IncompleteDownload => "https://disksage.app/ontology#IncompleteDownload",
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileFact {
     pub path: PathBuf,
@@ -177,6 +191,18 @@ pub struct MetadataEvidence {
     pub confidence: String,
 }
 
+/// A bounded, explainable edge in the file-to-cloud ontology graph.
+///
+/// The subject/object may be local paths because the surrounding cloud plan already exposes
+/// those paths to the local operator. It is never sent to a provider by the planner.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CloudRelationEvidence {
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    pub source: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CloudPlanOptions {
     pub min_size_bytes: u64,
@@ -205,6 +231,12 @@ pub struct CloudCandidate {
     pub provider: CloudProvider,
     pub destination_account_scope: CloudAccountScope,
     pub kind: ArchiveKind,
+    /// Stable ontology class used by the review UI and Naruon lineage export.
+    #[serde(default)]
+    pub ontology_class: String,
+    /// Explicit edges that explain why this source and destination are related.
+    #[serde(default)]
+    pub ontology_relations: Vec<CloudRelationEvidence>,
     pub bytes: u64,
     pub age_days: u64,
     pub created_ms: u64,
@@ -2929,6 +2961,82 @@ fn review_reasons(path: &Path, kind: ArchiveKind) -> Vec<String> {
     reasons
 }
 
+fn ontology_relation(
+    subject: impl Into<String>,
+    predicate: &str,
+    object: impl Into<String>,
+    source: &str,
+) -> CloudRelationEvidence {
+    CloudRelationEvidence {
+        subject: subject.into(),
+        predicate: predicate.into(),
+        object: object.into(),
+        source: source.into(),
+    }
+}
+
+/// Build the small relation graph needed to explain a cloud candidate without reading content.
+fn candidate_ontology_relations(candidate: &CloudCandidate) -> Vec<CloudRelationEvidence> {
+    let mut relations = vec![
+        ontology_relation(
+            &candidate.src,
+            "https://disksage.app/ontology#classifiedAs",
+            &candidate.ontology_class,
+            "archive-kind-classifier",
+        ),
+        ontology_relation(
+            &candidate.src,
+            "https://disksage.app/ontology#archivedTo",
+            &candidate.dst,
+            "archive-destination-planner",
+        ),
+        ontology_relation(
+            &candidate.dst,
+            "https://disksage.app/ontology#providedBy",
+            format!("urn:disksage:provider:{}", candidate.provider.as_str()),
+            "provider-root-discovery",
+        ),
+        ontology_relation(
+            &candidate.dst,
+            "https://disksage.app/ontology#accountScope",
+            format!(
+                "urn:disksage:account-scope:{}",
+                candidate.destination_account_scope.as_str()
+            ),
+            "provider-root-discovery",
+        ),
+    ];
+    if candidate.requires_review {
+        relations.push(ontology_relation(
+            &candidate.src,
+            "https://disksage.app/ontology#requiresReview",
+            format!("{DM_ONTOLOGY_PREFIX}ReviewRequired"),
+            "review-gate",
+        ));
+    }
+    let managed_by_application = Path::new(&candidate.src).components().any(|component| {
+        component
+            .as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("Application Support")
+    });
+    if managed_by_application {
+        relations.push(ontology_relation(
+            &candidate.src,
+            "https://disksage.app/ontology#managedBy",
+            format!("{DM_ONTOLOGY_PREFIX}Application"),
+            "path-ontology",
+        ));
+        relations.push(ontology_relation(
+            &candidate.src,
+            "http://www.w3.org/2000/01/rdf-schema#subClassOf",
+            format!("{DM_ONTOLOGY_PREFIX}ManagedData"),
+            "path-ontology",
+        ));
+    }
+    relations
+}
+
 fn destination_scope_review_reasons(
     scope: CloudAccountScope,
     existing_reasons: &[String],
@@ -3170,6 +3278,7 @@ fn mark_exact_duplicate_candidates_with_budget(
         candidate.review_reasons.sort();
         candidate.review_reasons.dedup();
         candidate.requires_review = !candidate.review_reasons.is_empty();
+        candidate.ontology_relations = candidate_ontology_relations(&candidate);
         candidate.review_fingerprint = candidate_review_fingerprint(candidate);
     }
     (summary, deferred)
@@ -3192,6 +3301,7 @@ pub fn candidate_review_fingerprint(candidate: &CloudCandidate) -> String {
         candidate.src.as_bytes(),
         candidate.dst.as_bytes(),
         candidate.kind.folder().as_bytes(),
+        candidate.ontology_class.as_bytes(),
         candidate.production_time_source.as_bytes(),
         candidate.production_time_confidence.as_bytes(),
         candidate.source_root.as_bytes(),
@@ -3204,6 +3314,12 @@ pub fn candidate_review_fingerprint(candidate: &CloudCandidate) -> String {
         },
     ] {
         hash_review_value(&mut hasher, value);
+    }
+    for relation in &candidate.ontology_relations {
+        hash_review_value(&mut hasher, relation.subject.as_bytes());
+        hash_review_value(&mut hasher, relation.predicate.as_bytes());
+        hash_review_value(&mut hasher, relation.object.as_bytes());
+        hash_review_value(&mut hasher, relation.source.as_bytes());
     }
     hash_review_value(&mut hasher, &candidate.bytes.to_le_bytes());
     hash_review_value(&mut hasher, &candidate.created_ms.to_le_bytes());
@@ -3499,6 +3615,8 @@ pub fn plan_cloud_archive(
             provider: cloud_root.provider,
             destination_account_scope: cloud_root.account_scope,
             kind,
+            ontology_class: ontology_class_for_archive_kind(kind).into(),
+            ontology_relations: Vec::new(),
             bytes: file.bytes,
             age_days,
             created_ms: file.created_ms,
@@ -3519,6 +3637,7 @@ pub fn plan_cloud_archive(
             metadata_evidence: lineage_metadata.evidence,
             blocked_reason,
         };
+        candidate.ontology_relations = candidate_ontology_relations(&candidate);
         candidate.review_fingerprint = candidate_review_fingerprint(&candidate);
         candidates.push(candidate);
     }
@@ -4832,6 +4951,24 @@ mod tests {
         assert!(report.candidates[1]
             .review_reasons
             .contains(&"dataset-sensitive-column-name-detected".to_string()));
+        assert_eq!(
+            report.candidates[0].ontology_class,
+            "https://disksage.app/ontology#Document"
+        );
+        assert!(report.candidates[0]
+            .ontology_relations
+            .iter()
+            .any(|relation| {
+                relation.predicate == "https://disksage.app/ontology#archivedTo"
+                    && relation.object == report.candidates[0].dst
+            }));
+        assert!(report.candidates[1]
+            .ontology_relations
+            .iter()
+            .any(|relation| {
+                relation.predicate == "https://disksage.app/ontology#requiresReview"
+                    && relation.object == "https://disksage.app/ontology#ReviewRequired"
+            }));
         assert_eq!(
             report.candidates[1]
                 .dataset_profile

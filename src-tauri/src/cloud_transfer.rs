@@ -6,7 +6,7 @@
 
 use crate::cloud::{
     candidate_review_fingerprint, ArchiveKind, CloudAccountScope, CloudCandidate, CloudProvider,
-    CloudRoot, MetadataEvidence,
+    CloudRelationEvidence, CloudRoot, MetadataEvidence,
 };
 use crate::cloud_review::{validate_decision, CloudReviewDecision, CloudReviewDisposition};
 use crate::dataset_metadata::DatasetProfile;
@@ -91,6 +91,10 @@ pub struct CloudLineageSnapshot {
     pub review_rationale: Option<String>,
     pub destination_account_scope: CloudAccountScope,
     pub kind: ArchiveKind,
+    #[serde(default)]
+    pub ontology_class: String,
+    #[serde(default)]
+    pub ontology_relations: Vec<CloudRelationEvidence>,
     pub created_ms: u64,
     pub modified_ms: u64,
     pub production_time_ms: u64,
@@ -380,6 +384,8 @@ fn lineage_snapshot_with_capacity(
             .map(|decision| decision.rationale.clone()),
         destination_account_scope: candidate.destination_account_scope,
         kind: candidate.kind,
+        ontology_class: candidate.ontology_class.clone(),
+        ontology_relations: candidate.ontology_relations.clone(),
         created_ms: candidate.created_ms,
         modified_ms: candidate.modified_ms,
         production_time_ms: candidate.production_time_ms,
@@ -1156,6 +1162,9 @@ mod tests {
             provider: CloudProvider::Icloud,
             destination_account_scope: CloudAccountScope::Organization,
             kind: ArchiveKind::Document,
+            ontology_class: crate::cloud::ontology_class_for_archive_kind(ArchiveKind::Document)
+                .into(),
+            ontology_relations: Vec::new(),
             bytes: 12,
             age_days: 90,
             created_ms: 1,
