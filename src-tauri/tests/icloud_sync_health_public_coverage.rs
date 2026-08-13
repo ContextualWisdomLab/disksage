@@ -1,4 +1,5 @@
 use disksage_lib::icloud_sync_health::{
+    attach_new_copy_admission_notice, default_cloud_docs_db_dir, inspect_new_copy_admission,
     probe_icloud_sync_health, require_new_copy_admission, IcloudSyncHealthReport,
     IcloudUploadQueueSummary, ICLOUD_SYNC_HEALTH_SCHEMA_VERSION,
 };
@@ -163,5 +164,57 @@ fn public_admission_gate_rejects_inconsistent_or_explicitly_blocked_reports() {
     assert_eq!(
         require_new_copy_admission(&incomplete).unwrap_err(),
         "icloud-sync-health-evidence-incomplete"
+    );
+}
+
+#[test]
+fn public_copy_admission_helpers_replace_only_owned_notices() {
+    let clear = admission_report();
+    let mut blocked = admission_report();
+    blocked.new_copy_admission_state = "blocked".into();
+    blocked.new_copy_admission_blockers = vec!["icloud-upload-in-flight".into()];
+
+    let mut notices = vec![
+        "unrelated-evidence".into(),
+        "icloud-new-copy-admission-blocked".into(),
+        "icloud-new-copy-admission-evidence-unavailable".into(),
+    ];
+    attach_new_copy_admission_notice(&mut notices, Some(&clear));
+    assert_eq!(
+        notices,
+        vec!["unrelated-evidence", "icloud-new-copy-admission-clear"]
+    );
+
+    attach_new_copy_admission_notice(&mut notices, Some(&blocked));
+    assert_eq!(
+        notices,
+        vec!["unrelated-evidence", "icloud-new-copy-admission-blocked"]
+    );
+
+    attach_new_copy_admission_notice(&mut notices, None);
+    assert_eq!(
+        notices,
+        vec![
+            "unrelated-evidence",
+            "icloud-new-copy-admission-evidence-unavailable"
+        ]
+    );
+}
+
+#[test]
+fn public_default_database_path_and_home_inspection_preserve_absolute_path_authority() {
+    let home = Path::new("/Users/disk-sage-coverage");
+    assert_eq!(
+        default_cloud_docs_db_dir(home),
+        home.join("Library")
+            .join("Application Support")
+            .join("CloudDocs")
+            .join("session")
+            .join("db")
+    );
+
+    assert_eq!(
+        inspect_new_copy_admission(Path::new("relative-home"), 123).unwrap_err(),
+        "icloud-sync-health-db-dir-not-absolute"
     );
 }
