@@ -1676,6 +1676,180 @@ pub struct CloudAttestationOutput {
 }
 
 #[cfg(not(coverage))]
+#[derive(Debug, serde::Serialize)]
+pub struct CloudReceiptReconciliationEntry {
+    pub receipt_id: Option<String>,
+    pub provider: Option<cloud::CloudProvider>,
+    pub goal_state: Option<cloud_transfer::CloudOffloadGoalState>,
+    pub provider_sync_state: Option<cloud_transfer::ProviderSyncState>,
+    pub eviction_permit: bool,
+    pub blockers: Vec<String>,
+    pub error: Option<String>,
+}
+
+#[cfg(not(coverage))]
+#[derive(Debug, serde::Serialize)]
+pub struct CloudReceiptReconciliationOutput {
+    pub schema_version: u32,
+    pub observed_at_ms: u64,
+    pub receipts_seen: u64,
+    pub attested_count: u64,
+    pub pending_count: u64,
+    pub eviction_ready_count: u64,
+    pub error_count: u64,
+    pub provider_evidence_written: u64,
+    pub entries: Vec<CloudReceiptReconciliationEntry>,
+    pub cloud_write_executed: bool,
+    pub source_eviction_authorized: bool,
+}
+
+#[cfg(not(coverage))]
+const MAX_CLOUD_RECEIPT_RECONCILIATION_ENTRIES: usize = 10_000;
+
+#[cfg(not(coverage))]
+fn stable_reconciliation_error(error: &str) -> String {
+    let token = error.split(',').next().unwrap_or_default();
+    if !token.is_empty()
+        && token.len() <= 128
+        && token
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    {
+        token.to_string()
+    } else {
+        "provider-attestation-failed".into()
+    }
+}
+
+#[cfg(not(coverage))]
+fn reconcile_cloud_receipts_inner(
+    receipt_dir: &Path,
+    evidence_dir: &Path,
+    adr_dir: &Path,
+    goal_dir: &Path,
+    connection_path: &Path,
+    cloud_roots: &[cloud::CloudRoot],
+) -> Result<CloudReceiptReconciliationOutput, String> {
+    let receipt_metadata = match std::fs::symlink_metadata(receipt_dir) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(CloudReceiptReconciliationOutput {
+                schema_version: 1,
+                observed_at_ms: cloud::system_now_ms(),
+                receipts_seen: 0,
+                attested_count: 0,
+                pending_count: 0,
+                eviction_ready_count: 0,
+                error_count: 0,
+                provider_evidence_written: 0,
+                entries: Vec::new(),
+                cloud_write_executed: false,
+                source_eviction_authorized: false,
+            });
+        }
+        Err(_) => return Err("cloud-receipt-directory-unavailable".into()),
+    };
+    if receipt_metadata.file_type().is_symlink() || !receipt_metadata.is_dir() {
+        return Err("cloud-receipt-directory-unsafe".into());
+    }
+    let mut paths = std::fs::read_dir(receipt_dir)
+        .map_err(|_| "cloud-receipt-directory-read-failed".to_string())?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    paths.sort();
+    if paths.len() > MAX_CLOUD_RECEIPT_RECONCILIATION_ENTRIES {
+        return Err("cloud-receipt-directory-entry-limit-exceeded".into());
+    }
+
+    let mut output = CloudReceiptReconciliationOutput {
+        schema_version: 1,
+        observed_at_ms: cloud::system_now_ms(),
+        receipts_seen: 0,
+        attested_count: 0,
+        pending_count: 0,
+        eviction_ready_count: 0,
+        error_count: 0,
+        provider_evidence_written: 0,
+        entries: Vec::new(),
+        cloud_write_executed: false,
+        source_eviction_authorized: false,
+    };
+    for path in paths {
+        let metadata = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(_) => continue,
+        };
+        let is_json = path.extension().and_then(|value| value.to_str()) == Some("json");
+        if metadata.file_type().is_symlink() || !metadata.is_file() || !is_json {
+            continue;
+        }
+        output.receipts_seen = output.receipts_seen.saturating_add(1);
+        let receipt = match cloud_transfer::read_immutable_receipt(&path) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                output.error_count = output.error_count.saturating_add(1);
+                output.entries.push(CloudReceiptReconciliationEntry {
+                    receipt_id: None,
+                    provider: None,
+                    goal_state: None,
+                    provider_sync_state: None,
+                    eviction_permit: false,
+                    blockers: Vec::new(),
+                    error: Some(stable_reconciliation_error(&error)),
+                });
+                continue;
+            }
+        };
+        match collect_cloud_attestation_for_receipt(
+            &receipt,
+            None,
+            evidence_dir,
+            adr_dir,
+            goal_dir,
+            connection_path,
+            cloud_roots,
+        ) {
+            Ok(attestation) => {
+                output.attested_count = output.attested_count.saturating_add(1);
+                output.provider_evidence_written =
+                    output.provider_evidence_written.saturating_add(1);
+                if attestation.goal_state
+                    == cloud_transfer::CloudOffloadGoalState::PendingProviderSync
+                {
+                    output.pending_count = output.pending_count.saturating_add(1);
+                }
+                if attestation.permit.is_some() {
+                    output.eviction_ready_count = output.eviction_ready_count.saturating_add(1);
+                }
+                output.entries.push(CloudReceiptReconciliationEntry {
+                    receipt_id: Some(receipt.receipt_id),
+                    provider: Some(receipt.provider),
+                    goal_state: Some(attestation.goal_state),
+                    provider_sync_state: Some(attestation.evidence.sync_state),
+                    eviction_permit: attestation.permit.is_some(),
+                    blockers: attestation.blockers,
+                    error: None,
+                });
+            }
+            Err(error) => {
+                output.error_count = output.error_count.saturating_add(1);
+                output.entries.push(CloudReceiptReconciliationEntry {
+                    receipt_id: Some(receipt.receipt_id),
+                    provider: Some(receipt.provider),
+                    goal_state: None,
+                    provider_sync_state: None,
+                    eviction_permit: false,
+                    blockers: vec!["provider-attestation-incomplete".into()],
+                    error: Some(stable_reconciliation_error(&error)),
+                });
+            }
+        }
+    }
+    Ok(output)
+}
+
+#[cfg(not(coverage))]
 fn collect_cloud_attestation_for_receipt(
     receipt: &cloud_transfer::CloudCopyReceipt,
     object_id: Option<String>,
@@ -1831,6 +2005,38 @@ pub async fn attest_cloud_copy(
     })
     .await
     .map_err(|_| "cloud-attestation-task-failed".to_string())?
+}
+
+/// Re-attest every persisted cloud receipt after restart. This updates only local immutable
+/// provider evidence and dynamic ADR/Goal projections; it never copies, evicts, or deletes files.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn reconcile_cloud_receipts(
+    app: AppHandle,
+) -> Result<CloudReceiptReconciliationOutput, String> {
+    use tauri::Manager;
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "app-data-directory-unavailable".to_string())?;
+    let receipt_dir = app_data_dir.join("cloud-receipts");
+    let evidence_dir = app_data_dir.join("cloud-provider-evidence");
+    let adr_dir = app_data_dir.join("cloud-adr");
+    let goal_dir = app_data_dir.join("cloud-goals");
+    let connection_path = oauth_connections_path(&app)?;
+    let cloud_roots = cloud::discover_cloud_roots(&resolve_home(&app));
+    tauri::async_runtime::spawn_blocking(move || {
+        reconcile_cloud_receipts_inner(
+            &receipt_dir,
+            &evidence_dir,
+            &adr_dir,
+            &goal_dir,
+            &connection_path,
+            &cloud_roots,
+        )
+    })
+    .await
+    .map_err(|_| "cloud-reconciliation-task-failed".to_string())?
 }
 
 #[cfg(not(coverage))]
@@ -2299,6 +2505,38 @@ mod tests {
         let p = model_file_path(std::path::Path::new("/data"));
         assert!(p.ends_with(format!("{}.gguf", crate::llm::DEFAULT.name)));
         assert!(p.to_string_lossy().contains("models"));
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn reconciliation_error_output_is_stable_and_path_free() {
+        assert_eq!(
+            stable_reconciliation_error("provider-oauth-refresh-failed,secret/path"),
+            "provider-oauth-refresh-failed"
+        );
+        assert_eq!(
+            stable_reconciliation_error("No such file or directory (os error 2)"),
+            "provider-attestation-failed"
+        );
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn reconciliation_without_receipts_is_read_only() {
+        let temporary = tempfile::tempdir().unwrap();
+        let output = reconcile_cloud_receipts_inner(
+            &temporary.path().join("missing-receipts"),
+            &temporary.path().join("evidence"),
+            &temporary.path().join("adr"),
+            &temporary.path().join("goals"),
+            &temporary.path().join("oauth.json"),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(output.receipts_seen, 0);
+        assert_eq!(output.attested_count, 0);
+        assert!(!output.cloud_write_executed);
+        assert!(!output.source_eviction_authorized);
     }
 
     #[test]

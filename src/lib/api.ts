@@ -814,6 +814,30 @@ export interface CloudAttestationOutput {
   blockers: string[];
 }
 
+export interface CloudReceiptReconciliationEntry {
+  receipt_id: string | null;
+  provider: CloudProvider | null;
+  goal_state: CloudOffloadGoalState | null;
+  provider_sync_state: ProviderSyncState | null;
+  eviction_permit: boolean;
+  blockers: string[];
+  error: string | null;
+}
+
+export interface CloudReceiptReconciliationOutput {
+  schema_version: number;
+  observed_at_ms: number;
+  receipts_seen: number;
+  attested_count: number;
+  pending_count: number;
+  eviction_ready_count: number;
+  error_count: number;
+  provider_evidence_written: number;
+  entries: CloudReceiptReconciliationEntry[];
+  cloud_write_executed: false;
+  source_eviction_authorized: false;
+}
+
 export interface ActiveUseEvidence {
   method: "lsof-fp+ps-command";
   evidence_complete: boolean;
@@ -998,6 +1022,8 @@ export const attestCloudCopy = (
   receiptId,
   objectId,
 });
+export const reconcileCloudReceipts = () =>
+  invoke<CloudReceiptReconciliationOutput>("reconcile_cloud_receipts");
 export const trashVerifiedCloudSource = (
   receiptId: string,
   confirmationReceiptId: string,

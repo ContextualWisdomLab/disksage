@@ -139,6 +139,7 @@ pub fn run() {
             commands::copy_cloud_candidate,
             commands::adopt_existing_cloud_candidate,
             commands::attest_cloud_copy,
+            commands::reconcile_cloud_receipts,
             commands::trash_verified_cloud_source
         ])
         .run(tauri::generate_context!())

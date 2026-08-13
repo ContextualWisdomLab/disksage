@@ -38,6 +38,8 @@
   let copied: api.CloudCopyOutput | null = $state(null);
   let attesting = $state(false);
   let attestation: api.CloudAttestationOutput | null = $state(null);
+  let reconciling = $state(false);
+  let reconciliation: api.CloudReceiptReconciliationOutput | null = $state(null);
   let evicting = $state(false);
   let evictionConfirmation = $state("");
   let evictionRationale = $state("");
@@ -76,6 +78,7 @@
       connections = await api.listCloudProviderConnections();
       reviewDecisions = await api.listCloudReviewDecisions();
       selectedRoot = roots.find((root) => root.readable)?.path ?? "";
+      await reconcileCloudReceipts();
     } catch (e) {
       loadError = String(e);
     }
@@ -300,6 +303,18 @@
     }
   }
 
+  async function reconcileCloudReceipts() {
+    reconciling = true;
+    loadError = "";
+    try {
+      reconciliation = await api.reconcileCloudReceipts();
+    } catch (e) {
+      loadError = String(e);
+    } finally {
+      reconciling = false;
+    }
+  }
+
   function sourceEvictionReady(): boolean {
     return copied !== null
       && attestation?.permit !== null
@@ -433,7 +448,7 @@
       "content-mismatch": "원격 콘텐츠가 로컬 복사본과 다름",
       unknown: "공급자 상태 미확인",
     };
-    return labels[state ?? "unknown"];
+    return labels[state ?? "unknown"] ?? labels.unknown;
   }
 
   function duration(ms: number): string {
@@ -484,7 +499,32 @@
       <button onclick={preview} disabled={busy || !scannedRoot || !selectedRoot}>
         {busy ? "계획 중…" : "오프로드 후보 미리보기"}
       </button>
+      <button onclick={reconcileCloudReceipts} disabled={reconciling || busy}>
+        {reconciling ? "기존 영수증 재검증 중…" : "기존 영수증·ADR/Goal 재검증"}
+      </button>
     </div>
+    {#if reconciliation}
+      <div class="receipt-reconciliation" aria-live="polite">
+        <strong>재시작 후 영수증 재검증</strong>
+        <span class="context">
+          {reconciliation.receipts_seen}개 확인 · {reconciliation.attested_count}개 provider 증거 갱신 ·
+          {reconciliation.pending_count}개 업로드 대기 · {reconciliation.error_count}개 확인 실패
+        </span>
+        {#if reconciliation.entries.length === 0}
+          <p class="muted">저장된 cloud receipt가 없습니다.</p>
+        {:else}
+          {#each reconciliation.entries as entry}
+            <p class:warning={entry.error !== null || entry.blockers.length > 0}>
+              영수증 {entry.receipt_id ?? "무효"} · {entry.provider ?? "미확인"} ·
+              Goal {entry.goal_state ?? "미확인"} · 동기화 {entry.provider_sync_state ?? "미확인"}
+              {#if entry.error} · {entry.error}{/if}
+              {#if entry.blockers.length > 0} · 차단: {entry.blockers.join(", ")}{/if}
+            </p>
+          {/each}
+        {/if}
+        <p class="muted">이 작업은 provider 증거와 동적 ADR/Goal만 갱신하며 클라우드 쓰기·원본 삭제는 수행하지 않습니다.</p>
+      </div>
+    {/if}
     {#if roots.some((root) => !root.readable)}
       <p class="warning">
         접근 불가 클라우드 루트는 선택에서 제외했습니다. macOS 개인정보 보호 권한을 허용한 뒤 목록을 다시 불러오세요.
@@ -1048,6 +1088,7 @@
   .provider-auth input { width: min(32rem, 75vw); }
   .client-id { width: min(40rem, 80vw); }
   .summary { margin-top: 0.8rem; font-weight: 600; }
+  .receipt-reconciliation { margin-top: 0.75rem; padding: 0.75rem; border: 1px solid #b7c6d8; border-radius: 4px; background: #f8fafc; display: grid; gap: 0.35rem; }
   .receipt { margin: 0.75rem 0; padding: 0.75rem; border: 1px solid #6b8e72; border-radius: 4px; background: #f5fbf6; }
   .eviction-controls { margin-top: 0.75rem; padding: 0.75rem; border: 1px solid #b78335; border-radius: 4px; background: #fffaf1; display: grid; gap: 0.55rem; }
   .eviction-controls textarea { width: min(52rem, 88vw); min-height: 3.5rem; resize: vertical; }
