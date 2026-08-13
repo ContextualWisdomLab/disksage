@@ -1138,6 +1138,7 @@ mod tests {
             }],
             managed_database_allocated_bytes: 1,
             upload_queue: queue,
+            native_status: None,
             sync_backlog_present: blocked,
             new_copy_admission_state: if blocked {
                 "blocked".into()

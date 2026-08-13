@@ -13,6 +13,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[cfg(target_os = "macos")]
+use std::io::Read;
 #[cfg(not(target_os = "macos"))]
 use std::io::{Read, Write};
 #[cfg(unix)]
@@ -30,10 +32,13 @@ const SNAPSHOT_ATTEMPTS: usize = 3;
 const MAX_SNAPSHOT_SOURCE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_STDOUT_BYTES: usize = 16 * 1024;
 const MAX_STDERR_BYTES: usize = 4 * 1024;
+const BRCTL_STATUS_PATH: &str = "/usr/bin/brctl";
+const BRCTL_STATUS_TIMEOUT: Duration = Duration::from_secs(3);
+const MAX_BRCTL_STATUS_BYTES: usize = 64 * 1024;
 const ITEM_ERROR_AGE_NOTICE_MS: u64 = 86_400_000;
 static SNAPSHOT_NONCE: AtomicU64 = AtomicU64::new(0);
 
-pub const ICLOUD_SYNC_HEALTH_SCHEMA_VERSION: u32 = 3;
+pub const ICLOUD_SYNC_HEALTH_SCHEMA_VERSION: u32 = 4;
 
 const QUEUE_QUERY: &str = r#"
 PRAGMA query_only=ON;
@@ -96,6 +101,23 @@ pub struct IcloudUploadQueueSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IcloudNativeStatusEvidence {
+    pub schema_version: u32,
+    pub observed_at_ms: u64,
+    pub command_succeeded: bool,
+    pub timed_out: bool,
+    pub output_truncated: bool,
+    pub status_observed: bool,
+    pub evidence_complete: bool,
+    pub container_count: Option<u64>,
+    pub client_state: Option<String>,
+    pub server_state: Option<String>,
+    pub sync_state: Option<String>,
+    pub last_sync_present: bool,
+    pub notices: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IcloudSyncHealthReport {
     pub schema_version: u32,
     pub output_mode: String,
@@ -110,6 +132,8 @@ pub struct IcloudSyncHealthReport {
     pub managed_database_files: Vec<ManagedDatabaseFileEvidence>,
     pub managed_database_allocated_bytes: u64,
     pub upload_queue: IcloudUploadQueueSummary,
+    #[serde(default)]
+    pub native_status: Option<IcloudNativeStatusEvidence>,
     pub sync_backlog_present: bool,
     /// Admission state for adding a new local item to iCloud Drive.
     ///
@@ -287,6 +311,199 @@ fn run_queue_probe_with_uri(
 
 fn run_queue_probe(client_db: &Path) -> Result<String, String> {
     run_queue_probe_with_uri(sqlite_uri(client_db)?, true)
+}
+
+fn bounded_native_status_token(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'|' | b'-' | b'_' | b'.'))
+    {
+        return None;
+    }
+    Some(value.to_string())
+}
+
+fn strip_ansi_sequences(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut in_escape = false;
+    for character in value.chars() {
+        if in_escape {
+            if character.is_ascii_alphabetic() {
+                in_escape = false;
+            }
+            continue;
+        }
+        if character == '\u{1b}' {
+            in_escape = true;
+        } else {
+            output.push(character);
+        }
+    }
+    output
+}
+
+fn parse_native_status_output(
+    output: &str,
+    observed_at_ms: u64,
+    command_succeeded: bool,
+    timed_out: bool,
+    output_truncated: bool,
+) -> IcloudNativeStatusEvidence {
+    let output = strip_ansi_sequences(output);
+    let container_count = output.lines().find_map(|line| {
+        let mut parts = line.split_whitespace();
+        let count = parts.next()?.parse::<u64>().ok()?;
+        (parts.next() == Some("containers") && parts.next() == Some("matching")).then_some(count)
+    });
+    let summary = output.lines().find(|line| {
+        line.contains("{client:") && line.contains(" server:") && line.contains(" sync:")
+    });
+    let (client_state, server_state, sync_state, last_sync_present) = summary
+        .and_then(|line| line.split_once("{client:").map(|(_, value)| value))
+        .map(|value| {
+            let (client, value) = value.split_once(" server:").unwrap_or((value, ""));
+            let (server, value) = value.split_once(" sync:").unwrap_or((value, ""));
+            let (sync, value) = value.split_once(" last-sync:").unwrap_or((value, ""));
+            (
+                bounded_native_status_token(client),
+                bounded_native_status_token(server),
+                bounded_native_status_token(sync),
+                !value.is_empty() || output.contains(" last-sync:"),
+            )
+        })
+        .unwrap_or((None, None, None, false));
+    let status_observed = client_state.is_some() || server_state.is_some() || sync_state.is_some();
+    let evidence_complete = container_count.is_some()
+        && client_state.is_some()
+        && server_state.is_some()
+        && sync_state.is_some();
+    let mut notices = Vec::new();
+    if status_observed {
+        notices.push("icloud-native-status-summary-observed".into());
+    } else {
+        notices.push("icloud-native-status-summary-unavailable".into());
+    }
+    if timed_out {
+        notices.push("icloud-native-status-command-timeout".into());
+    }
+    if output_truncated {
+        notices.push("icloud-native-status-output-truncated".into());
+    }
+    if !command_succeeded && !timed_out {
+        notices.push("icloud-native-status-command-failed".into());
+    }
+    if status_observed && !evidence_complete {
+        notices.push("icloud-native-status-summary-incomplete".into());
+    }
+    IcloudNativeStatusEvidence {
+        schema_version: 1,
+        observed_at_ms,
+        command_succeeded,
+        timed_out,
+        output_truncated,
+        status_observed,
+        evidence_complete,
+        container_count,
+        client_state,
+        server_state,
+        sync_state,
+        last_sync_present,
+        notices,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn probe_native_status(observed_at_ms: u64) -> IcloudNativeStatusEvidence {
+    use std::io::ErrorKind;
+    use std::os::fd::AsRawFd;
+
+    let mut child = match Command::new(BRCTL_STATUS_PATH)
+        .arg("status")
+        .env("LANG", "C")
+        .env("LC_ALL", "C")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return parse_native_status_output("", observed_at_ms, false, false, false),
+    };
+    let mut stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return parse_native_status_output("", observed_at_ms, false, false, false);
+        }
+    };
+    let fd = stdout.as_raw_fd();
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        let _ = child.kill();
+        let _ = child.wait();
+        return parse_native_status_output("", observed_at_ms, false, false, false);
+    }
+    let mut output = Vec::new();
+    let mut buffer = [0u8; 4096];
+    let deadline = Instant::now() + BRCTL_STATUS_TIMEOUT;
+    let mut timed_out = false;
+    let mut output_truncated = false;
+    let mut read_failed = false;
+    let status = loop {
+        match stdout.read(&mut buffer) {
+            Ok(0) => {}
+            Ok(read) => {
+                let remaining = MAX_BRCTL_STATUS_BYTES.saturating_sub(output.len());
+                output.extend_from_slice(&buffer[..read.min(remaining)]);
+                if read > remaining || output.len() >= MAX_BRCTL_STATUS_BYTES {
+                    output_truncated = true;
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break None;
+                }
+            }
+            Err(error)
+                if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) => {}
+            Err(_) => {
+                read_failed = true;
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(20)),
+            Ok(None) => {
+                timed_out = true;
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+        }
+    };
+    let output = String::from_utf8_lossy(&output[..output.len().min(MAX_BRCTL_STATUS_BYTES)]);
+    parse_native_status_output(
+        &output,
+        observed_at_ms,
+        !read_failed && status.is_some_and(|status| status.success()),
+        timed_out,
+        output_truncated,
+    )
+}
+
+#[cfg(not(target_os = "macos"))]
+fn probe_native_status(observed_at_ms: u64) -> IcloudNativeStatusEvidence {
+    parse_native_status_output("", observed_at_ms, false, false, false)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -691,6 +908,7 @@ fn build_report(
         managed_database_files,
         managed_database_allocated_bytes,
         upload_queue,
+        native_status: None,
         sync_backlog_present,
         new_copy_admission_state: new_copy_admission_state.into(),
         new_copy_admission_blockers,
@@ -783,14 +1001,19 @@ pub fn probe_icloud_sync_health(
         .iter()
         .map(|(role, required)| database_file_evidence(db_dir, role, *required))
         .collect::<Result<Vec<_>, _>>()?;
+    let native_status = probe_native_status(observed_at_ms);
     match run_consistent_snapshot_queue_probe(db_dir) {
-        Ok((output, includes_wal)) => build_report(
-            observed_at_ms,
-            managed_database_files,
-            parse_queue_rows(&output)?,
-            true,
-            includes_wal,
-        ),
+        Ok((output, includes_wal)) => {
+            let mut report = build_report(
+                observed_at_ms,
+                managed_database_files,
+                parse_queue_rows(&output)?,
+                true,
+                includes_wal,
+            )?;
+            report.native_status = Some(native_status);
+            Ok(report)
+        }
         Err(_) => {
             let client_db = db_dir.join("client.db");
             let upload_queue = parse_queue_rows(&run_queue_probe(&client_db)?)?;
@@ -804,6 +1027,7 @@ pub fn probe_icloud_sync_health(
             report
                 .notices
                 .push("consistent-copy-on-write-snapshot-unavailable".into());
+            report.native_status = Some(native_status);
             Ok(report)
         }
     }
@@ -846,6 +1070,52 @@ mod tests {
         assert_eq!(queue.item_error_octagon_not_signed_in_count, 1);
         assert_eq!(queue.item_error_unclassified_count, 0);
         assert_eq!(queue.newest_item_error_timestamp_ms, Some(1000));
+    }
+
+    #[test]
+    fn parses_bounded_brctl_summary_without_retaining_paths_or_item_ids() {
+        let evidence = parse_native_status_output(
+            "1 containers matching '*'\n\
+             c{1}m.a{3}e.C{7}s[1] foreground {client:needs-sync server:full-sync|fetched-recents|ever-full-sync sync:needs-sync-up|in-sync-up|has-synced-down|0x100 last-sync:2026-08-14 01:57:54 +0000 requestID:7}\n",
+            42,
+            false,
+            true,
+            true,
+        );
+        assert!(evidence.status_observed);
+        assert!(evidence.evidence_complete);
+        assert_eq!(evidence.container_count, Some(1));
+        assert_eq!(evidence.client_state.as_deref(), Some("needs-sync"));
+        assert_eq!(
+            evidence.server_state.as_deref(),
+            Some("full-sync|fetched-recents|ever-full-sync")
+        );
+        assert_eq!(
+            evidence.sync_state.as_deref(),
+            Some("needs-sync-up|in-sync-up|has-synced-down|0x100")
+        );
+        assert!(evidence.last_sync_present);
+        assert!(evidence.timed_out);
+        assert!(evidence.output_truncated);
+        assert!(!serde_json::to_string(&evidence)
+            .unwrap()
+            .contains("requestID"));
+    }
+
+    #[test]
+    fn native_status_parser_fails_closed_without_a_summary() {
+        let evidence =
+            parse_native_status_output("unexpected /Users/private/path\n", 42, false, false, false);
+        assert!(!evidence.status_observed);
+        assert!(!evidence.evidence_complete);
+        assert!(evidence.container_count.is_none());
+        assert!(evidence.client_state.is_none());
+        assert!(evidence
+            .notices
+            .contains(&"icloud-native-status-summary-unavailable".into()));
+        assert!(!serde_json::to_string(&evidence)
+            .unwrap()
+            .contains("/Users/"));
     }
 
     #[test]
