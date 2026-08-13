@@ -1855,11 +1855,27 @@ fn reconcile_cloud_receipts_inner(
                 if !projection_warnings.is_empty() {
                     blockers.push("dynamic-projection-update-incomplete".into());
                 }
+                let projection =
+                    cloud_adr::read_projection_state(&receipt.receipt_id, adr_dir, goal_dir);
+                let (goal_state, provider_sync_state) = match projection {
+                    Ok(Some(state)) => {
+                        blockers.push("projection-state-not-revalidated".into());
+                        (Some(state.goal_state), Some(state.provider_sync_state))
+                    }
+                    Ok(None) => (None, None),
+                    Err(_) => {
+                        blockers.push("dynamic-projection-state-unavailable".into());
+                        (None, None)
+                    }
+                };
+                if goal_state == Some(cloud_transfer::CloudOffloadGoalState::PendingProviderSync) {
+                    output.pending_count = output.pending_count.saturating_add(1);
+                }
                 output.entries.push(CloudReceiptReconciliationEntry {
                     receipt_id: Some(receipt.receipt_id),
                     provider: Some(receipt.provider),
-                    goal_state: None,
-                    provider_sync_state: None,
+                    goal_state,
+                    provider_sync_state,
                     eviction_permit: false,
                     blockers,
                     error: Some(stable_reconciliation_error(&error)),

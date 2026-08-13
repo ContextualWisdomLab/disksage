@@ -47,6 +47,15 @@ pub struct CloudOffloadGoalSnapshot {
     pub updated_at_ms: u64,
 }
 
+/// The latest replaceable projection state used when a fresh provider attestation is unavailable.
+/// This is never an eviction permit; it only keeps reconciliation/UI state truthful.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CloudProjectionState {
+    pub goal_state: CloudOffloadGoalState,
+    pub provider_sync_state: ProviderSyncState,
+    pub updated_at_ms: u64,
+}
+
 fn decision_for(goal_state: CloudOffloadGoalState, sync_state: ProviderSyncState) -> String {
     match goal_state {
         CloudOffloadGoalState::CopyVerified => "retain-source-after-copy".into(),
@@ -221,10 +230,7 @@ fn goal_state_rank(state: CloudOffloadGoalState) -> u8 {
     }
 }
 
-fn projection_state(
-    encoded: &[u8],
-    kind: &str,
-) -> Result<(CloudOffloadGoalState, u64), String> {
+fn projection_state(encoded: &[u8], kind: &str) -> Result<(CloudOffloadGoalState, u64), String> {
     match kind {
         "adr" => serde_json::from_slice::<CloudOffloadAdrSnapshot>(encoded)
             .map(|snapshot| (snapshot.goal_state, snapshot.updated_at_ms))
@@ -257,7 +263,8 @@ fn write_latest_json(
         if metadata.file_type().is_symlink() || !metadata.is_file() {
             return Err(format!("cloud-{kind}-existing-unsafe"));
         }
-        let existing = std::fs::read(&path).map_err(|_| format!("cloud-{kind}-existing-read-failed"))?;
+        let existing =
+            std::fs::read(&path).map_err(|_| format!("cloud-{kind}-existing-read-failed"))?;
         let previous = projection_state(&existing, kind)?;
         if goal_state_rank(incoming.0) < goal_state_rank(previous.0)
             || (incoming.0 == previous.0 && incoming.1 < previous.1)
@@ -363,6 +370,68 @@ pub fn ensure_initial_projection_pair(
             && !warning.ends_with("cloud-goal-state-regression")
     });
     warnings
+}
+
+fn read_latest_projection<T: serde::de::DeserializeOwned>(
+    directory: &Path,
+    receipt_id: &str,
+    kind: &str,
+) -> Result<Option<T>, String> {
+    let metadata = match std::fs::symlink_metadata(directory) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(format!("cloud-{kind}-directory-metadata-failed")),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(format!("cloud-{kind}-directory-unsafe"));
+    }
+    let path = directory.join(format!("{receipt_id}-latest.json"));
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(format!("cloud-{kind}-existing-metadata-failed")),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!("cloud-{kind}-existing-unsafe"));
+    }
+    let encoded = std::fs::read(&path).map_err(|_| format!("cloud-{kind}-existing-read-failed"))?;
+    serde_json::from_slice(&encoded)
+        .map(Some)
+        .map_err(|_| format!("cloud-{kind}-existing-invalid"))
+}
+
+/// Read the last paired ADR/Goal state without creating or mutating anything.
+/// A partial or divergent pair is treated as unavailable so callers cannot mistake stale state for
+/// a fresh provider attestation.
+pub fn read_projection_state(
+    receipt_id: &str,
+    adr_dir: &Path,
+    goal_dir: &Path,
+) -> Result<Option<CloudProjectionState>, String> {
+    if receipt_id.len() != 64 || !receipt_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("cloud-snapshot-receipt-id-invalid".into());
+    }
+    let adr = read_latest_projection::<CloudOffloadAdrSnapshot>(adr_dir, receipt_id, "adr")?;
+    let goal = read_latest_projection::<CloudOffloadGoalSnapshot>(goal_dir, receipt_id, "goal")?;
+    match (adr, goal) {
+        (None, None) => Ok(None),
+        (Some(_), None) | (None, Some(_)) => Err("cloud-projection-pair-incomplete".into()),
+        (Some(adr), Some(goal)) => {
+            if adr.receipt_id != receipt_id
+                || goal.receipt_id != receipt_id
+                || adr.goal_state != goal.goal_state
+                || adr.provider_sync_state != goal.provider_sync_state
+                || adr.updated_at_ms != goal.updated_at_ms
+            {
+                return Err("cloud-projection-state-mismatch".into());
+            }
+            Ok(Some(CloudProjectionState {
+                goal_state: goal.goal_state,
+                provider_sync_state: goal.provider_sync_state,
+                updated_at_ms: goal.updated_at_ms,
+            }))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -538,5 +607,41 @@ mod tests {
         assert_eq!(goal.goal_state, CloudOffloadGoalState::CopyVerified);
         assert_eq!(goal.provider_sync_state, ProviderSyncState::Unknown);
         assert!(goal.evidence_record_id.is_none());
+    }
+
+    #[test]
+    fn projection_state_can_be_read_without_granting_eviction_authority() {
+        let temporary = tempfile::tempdir().unwrap();
+        let adr_dir = temporary.path().join("adr");
+        let goal_dir = temporary.path().join("goals");
+        let receipt = receipt();
+        ensure_initial_projection_pair(&receipt, &adr_dir, &goal_dir, 4);
+
+        assert_eq!(
+            read_projection_state(&receipt.receipt_id, &adr_dir, &goal_dir).unwrap(),
+            Some(CloudProjectionState {
+                goal_state: CloudOffloadGoalState::CopyVerified,
+                provider_sync_state: ProviderSyncState::Unknown,
+                updated_at_ms: 4,
+            })
+        );
+    }
+
+    #[test]
+    fn divergent_projection_pair_is_not_reused_as_current_state() {
+        let temporary = tempfile::tempdir().unwrap();
+        let adr_dir = temporary.path().join("adr");
+        let goal_dir = temporary.path().join("goals");
+        let receipt = receipt();
+        ensure_initial_projection_pair(&receipt, &adr_dir, &goal_dir, 4);
+        let mut goal = initial_goal_snapshot(&receipt, 5);
+        goal.goal_state = CloudOffloadGoalState::PendingProviderSync;
+        goal.provider_sync_state = ProviderSyncState::PendingUpload;
+        write_latest_goal_snapshot(&goal_dir, &goal).unwrap();
+
+        assert_eq!(
+            read_projection_state(&receipt.receipt_id, &adr_dir, &goal_dir).unwrap_err(),
+            "cloud-projection-state-mismatch"
+        );
     }
 }
