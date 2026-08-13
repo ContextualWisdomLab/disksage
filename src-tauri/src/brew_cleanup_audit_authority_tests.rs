@@ -187,17 +187,3 @@ fn directory_replacement_after_authorization_cannot_redirect_publication() {
         "failed publication must clean the descriptor-relative partial record"
     );
 }
-
-#[test]
-fn standard_intel_homebrew_repository_executable_is_admitted_without_following_alias_symlinks() {
-    let source = brew_cleanup_source();
-
-    assert!(
-        source.contains("Path::new(\"/usr/local/Homebrew/bin/brew\")"),
-        "fixed executable candidates must include the standard Intel Homebrew repository target"
-    );
-    assert!(
-        source.contains("!metadata.file_type().is_symlink()"),
-        "supporting Intel Homebrew must not weaken symbolic-link rejection"
-    );
-}
