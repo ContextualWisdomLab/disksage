@@ -113,6 +113,9 @@
   }
 
   function reviewReasonLabel(reason: string): string {
+    if (reason === "application-managed-data-needs-review") {
+      return "앱 관리 데이터(Application Support)라 관계·사용 여부 검토 필요";
+    }
     if (reason === "embedded-date-differs-from-filename-publication-month") {
       return "내장 생산일과 파일명 발행월이 다름";
     }

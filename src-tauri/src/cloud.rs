@@ -2837,6 +2837,17 @@ fn embedded_metadata_review_reasons(
 
 fn review_reasons(path: &Path, kind: ArchiveKind) -> Vec<String> {
     let mut reasons = Vec::new();
+    let managed_library_component = path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("Application Support")
+    });
+    if managed_library_component {
+        // Ontology: dm:ApplicationSupport ⊑ dm:ManagedData. App-managed data is never an
+        // automatic cloud-copy decision, even when its embedded media date is high confidence.
+        reasons.push("application-managed-data-needs-review".into());
+    }
     if matches!(kind, ArchiveKind::Archive | ArchiveKind::Backup) {
         reasons.push("opaque-container-content-uninspected".into());
     }
@@ -4503,6 +4514,11 @@ mod tests {
         let neutral_spreadsheet =
             review_reasons(Path::new("quarterly-report.xlsx"), ArchiveKind::Document);
         assert!(neutral_spreadsheet.contains(&"spreadsheet-content-needs-review".to_string()));
+        let managed_media = review_reasons(
+            Path::new("/Users/test/Library/Application Support/com.apple.wallpaper/aerials.mov"),
+            ArchiveKind::Media,
+        );
+        assert!(managed_media.contains(&"application-managed-data-needs-review".to_string()));
     }
 
     #[test]
