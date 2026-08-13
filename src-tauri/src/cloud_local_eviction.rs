@@ -853,7 +853,10 @@ fn observe_icloud_state(path: &Path, observed_bytes: u64) -> Result<IcloudLocalS
 fn file_provider_command_allows_foundation_fallback(error: &str) -> bool {
     matches!(
         error,
-        "file-provider-status-command-unavailable" | "file-provider-status-command-failed"
+        "file-provider-status-command-unavailable"
+            | "file-provider-status-command-failed"
+            | "file-provider-status-field-missing:hasUnresolvedConflicts"
+            | "file-provider-status-field-missing:itemIdentifier"
     )
 }
 
@@ -1287,6 +1290,8 @@ mod tests {
         for error in [
             "file-provider-status-command-unavailable",
             "file-provider-status-command-failed",
+            "file-provider-status-field-missing:hasUnresolvedConflicts",
+            "file-provider-status-field-missing:itemIdentifier",
         ] {
             assert!(file_provider_command_allows_foundation_fallback(error));
         }
