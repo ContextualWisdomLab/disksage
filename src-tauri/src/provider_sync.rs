@@ -229,6 +229,8 @@ fn file_provider_sync_state(snapshot: &FileProviderStatusSnapshot) -> ProviderSy
         ProviderSyncState::ExcludedFromSync
     } else if snapshot.item.is_sync_paused {
         ProviderSyncState::SyncPaused
+    } else if snapshot.item.is_trashed {
+        ProviderSyncState::RemoteUnavailable
     } else if !snapshot.is_local_current() {
         ProviderSyncState::NotLocalCurrent
     } else if snapshot.item.has_unresolved_conflicts {
@@ -1072,6 +1074,21 @@ mod tests {
                 .unwrap_err(),
             "third-party-file-provider-receipt-required"
         );
+    }
+
+    #[test]
+    fn trashed_file_provider_item_remains_incomplete() {
+        let output = uploaded_file_provider_output().replace("isTrashed = 0", "isTrashed = 1");
+        let snapshot = parse_file_providerctl_snapshot(&output, 42, "content-hash").unwrap();
+        let evidence = evidence_from_file_provider_snapshot(
+            &receipt(CloudProvider::Onedrive),
+            &snapshot,
+            30,
+        )
+        .unwrap();
+        assert!(!snapshot.is_sync_complete());
+        assert!(!evidence.sync_complete);
+        assert_eq!(evidence.sync_state, ProviderSyncState::RemoteUnavailable);
     }
 
     #[test]
