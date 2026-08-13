@@ -18,8 +18,9 @@ use crate::safety;
 use crate::worktrees;
 #[cfg(not(coverage))]
 use crate::{
-    brew_cleanup, cloud, cloud_adr, cloud_review, cloud_transfer, dev_artifacts, dupes,
-    provider_api_client, provider_capacity, provider_evidence, provider_oauth, provider_sync,
+    brew_cleanup, cloud, cloud_adr, cloud_eviction, cloud_review, cloud_transfer, dev_artifacts,
+    dupes, provider_api_client, provider_capacity, provider_evidence, provider_oauth,
+    provider_sync,
 };
 
 #[derive(Default)]
@@ -1422,6 +1423,14 @@ pub struct CloudAttestationOutput {
     pub blockers: Vec<String>,
 }
 
+#[cfg(not(coverage))]
+#[derive(serde::Serialize)]
+pub struct CloudEvictionOutput {
+    pub goal_state: cloud_transfer::CloudOffloadGoalState,
+    pub eviction: cloud_eviction::CloudEvictionResult,
+    pub adr_path: String,
+}
+
 /// Read-only provider attestation. OneDrive and Google Drive access tokens are refreshed from an OS
 /// credential-store token, used once in memory, and never accepted from or returned to the UI.
 #[cfg(not(coverage))]
@@ -1555,6 +1564,53 @@ pub async fn attest_cloud_copy(
     })
     .await
     .map_err(|_| "cloud-attestation-task-failed".to_string())?
+}
+
+/// Re-attest the provider immediately before moving the verified local source to the OS Trash.
+/// The operation is reversible through the OS Trash and never permanently deletes the source.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn evict_cloud_source(
+    receipt_id: String,
+    object_id: Option<String>,
+    app: AppHandle,
+) -> Result<CloudEvictionOutput, String> {
+    let attestation = attest_cloud_copy(receipt_id.clone(), object_id, app.clone()).await?;
+    let permit = attestation.permit.ok_or_else(|| {
+        if attestation.blockers.is_empty() {
+            "eviction-not-authorized".to_string()
+        } else {
+            format!("eviction-not-authorized:{}", attestation.blockers.join(","))
+        }
+    })?;
+    use tauri::Manager;
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "app-data-directory-unavailable".to_string())?;
+    let receipt_path = app_data_dir
+        .join("cloud-receipts")
+        .join(format!("{receipt_id}.json"));
+    let receipt = cloud_transfer::read_immutable_receipt(&receipt_path)?;
+    let eviction = cloud_eviction::evict_source(
+        &receipt,
+        &permit,
+        &receipt_id,
+        &app_data_dir.join("cloud-evictions"),
+        &journal_file_path(&app)?,
+        cloud::system_now_ms(),
+    )?;
+    let adr = cloud_adr::snapshot_from_evidence(
+        &attestation.evidence_record,
+        cloud_transfer::CloudOffloadGoalState::SourceEvicted,
+        cloud::system_now_ms(),
+    );
+    let adr_path = cloud_adr::write_latest_snapshot(&app_data_dir.join("cloud-adr"), &adr)?;
+    Ok(CloudEvictionOutput {
+        goal_state: cloud_transfer::CloudOffloadGoalState::SourceEvicted,
+        eviction,
+        adr_path: adr_path.to_string_lossy().into_owned(),
+    })
 }
 
 #[cfg(not(coverage))]

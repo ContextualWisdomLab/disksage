@@ -7,7 +7,8 @@
 
 use crate::cloud::CloudProvider;
 use crate::cloud_transfer::{
-    receipt_blockers, CloudCopyReceipt, LocalEvictionPermit, SyncEvidenceKind,
+    receipt_blockers, CloudCopyReceipt, CloudOffloadGoalState, LocalEvictionPermit,
+    SyncEvidenceKind,
 };
 use crate::content_digest::{ContentDigests, ContentHasher};
 use crate::safety;
@@ -67,6 +68,7 @@ struct CloudEvictionCompletion {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct CloudEvictionResult {
     pub action: &'static str,
+    pub goal_state: CloudOffloadGoalState,
     pub receipt_id: String,
     pub intent_id: String,
     pub completion_id: String,
@@ -422,6 +424,7 @@ fn result_from_completion(
 ) -> CloudEvictionResult {
     CloudEvictionResult {
         action: "trash-verified-cloud-source",
+        goal_state: CloudOffloadGoalState::SourceEvicted,
         receipt_id: intent.receipt_id.clone(),
         intent_id: intent.intent_id.clone(),
         completion_id: completion.completion_id.clone(),
@@ -747,6 +750,7 @@ mod tests {
         )
         .unwrap();
         assert!(result.source_trashed);
+        assert_eq!(result.goal_state, CloudOffloadGoalState::SourceEvicted);
         assert!(!result.already_completed);
         assert_eq!(result.evidence_record_id, permit.evidence_record_id);
         assert!(!Path::new(&receipt.source).exists());

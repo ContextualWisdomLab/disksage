@@ -583,7 +583,8 @@ export type CloudOffloadGoalState =
   | "copy-verified"
   | "pending-provider-sync"
   | "provider-sync-confirmed"
-  | "eviction-ready";
+  | "eviction-ready"
+  | "source-evicted";
 export type RemoteChecksumAlgorithm = "sha256" | "quick-xor";
 
 export interface RemoteContentProof {
@@ -637,6 +638,28 @@ export interface CloudAttestationOutput {
   adr_path: string;
   permit: LocalEvictionPermit | null;
   blockers: string[];
+}
+
+export interface CloudEvictionResult {
+  action: "trash-verified-cloud-source";
+  goal_state: "source-evicted";
+  receipt_id: string;
+  intent_id: string;
+  completion_id: string;
+  evidence_record_id: string;
+  source: string;
+  staged_source: string;
+  intent_path: string;
+  completion_path: string;
+  source_trashed: boolean;
+  reconciled_after_interruption: boolean;
+  already_completed: boolean;
+}
+
+export interface CloudEvictionOutput {
+  goal_state: "source-evicted";
+  eviction: CloudEvictionResult;
+  adr_path: string;
 }
 
 export const listCloudRoots = () => invoke<CloudRoot[]>("list_cloud_roots");
@@ -720,6 +743,13 @@ export const attestCloudCopy = (
   receiptId: string,
   objectId: string | null = null,
 ) => invoke<CloudAttestationOutput>("attest_cloud_copy", {
+  receiptId,
+  objectId,
+});
+export const evictCloudSource = (
+  receiptId: string,
+  objectId: string | null = null,
+) => invoke<CloudEvictionOutput>("evict_cloud_source", {
   receiptId,
   objectId,
 });

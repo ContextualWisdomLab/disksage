@@ -6,7 +6,8 @@
     "copy-verified",
     "pending-provider-sync",
     "provider-sync-confirmed",
-    "eviction-ready"
+    "eviction-ready",
+    "source-evicted"
   ],
   "completion_gates": [
     "metadata-and-lineage-bound",

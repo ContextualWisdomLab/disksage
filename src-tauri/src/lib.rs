@@ -105,7 +105,8 @@ pub fn run() {
             commands::review_cloud_candidate,
             commands::copy_cloud_candidate,
             commands::adopt_existing_cloud_candidate,
-            commands::attest_cloud_copy
+            commands::attest_cloud_copy,
+            commands::evict_cloud_source
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

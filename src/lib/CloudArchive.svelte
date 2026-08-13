@@ -21,6 +21,8 @@
   let copied: api.CloudCopyOutput | null = $state(null);
   let attesting = $state(false);
   let attestation: api.CloudAttestationOutput | null = $state(null);
+  let evicting = $state(false);
+  let eviction: api.CloudEvictionOutput | null = $state(null);
   let objectId = $state("");
   let oauthClientId = $state("");
   let connecting = $state(false);
@@ -63,6 +65,7 @@
     report = null;
     copied = null;
     attestation = null;
+    eviction = null;
     objectId = "";
     try {
       const planned = await api.planCloudArchive(
@@ -187,6 +190,7 @@
     loadError = "";
     copied = null;
     attestation = null;
+    eviction = null;
     objectId = "";
     try {
       copied = await api.copyCloudCandidate(
@@ -213,6 +217,7 @@
     loadError = "";
     copied = null;
     attestation = null;
+    eviction = null;
     objectId = "";
     try {
       copied = await api.adoptExistingCloudCandidate(
@@ -267,6 +272,29 @@
     syncPollAttempts = 0;
     attestation = null;
     await probeSync();
+  }
+
+  async function evictSource() {
+    if (!copied || !attestation?.permit) return;
+    stopSyncPolling();
+    evicting = true;
+    loadError = "";
+    try {
+      eviction = await api.evictCloudSource(
+        copied.receipt.receipt_id,
+        copied.receipt.provider === "google-drive" ? objectId.trim() || null : null,
+      );
+      attestation = {
+        ...attestation,
+        goal_state: eviction.goal_state,
+        permit: null,
+        blockers: [],
+      };
+    } catch (e) {
+      loadError = String(e);
+    } finally {
+      evicting = false;
+    }
   }
 
   function syncStateLabel(state: api.ProviderSyncState | undefined): string {
@@ -577,7 +605,7 @@
       </p>
     {/if}
     <p class="warning">
-      생산일 우선순위는 내장 메타데이터 → 명시적 파일명 날짜 → 파일시스템 생성 → 수정 시각입니다. 파일명 날짜와 파일시스템 시각은 저신뢰 잠정값이며, 현재 메타데이터와 목적지에 결박된 명시적 승인 없이는 복사할 수 없습니다. 이미 존재하는 클라우드 파일은 전체 콘텐츠 해시가 모두 같을 때만 채택합니다. 앱 UI는 원본을 삭제하지 않으며, 업로드 증거가 확인되어도 허가 정보만 표시합니다.
+      생산일 우선순위는 내장 메타데이터 → 명시적 파일명 날짜 → 파일시스템 생성 → 수정 시각입니다. 파일명 날짜와 파일시스템 시각은 저신뢰 잠정값이며, 현재 메타데이터와 목적지에 결박된 명시적 승인 없이는 복사할 수 없습니다. 이미 존재하는 클라우드 파일은 전체 콘텐츠 해시가 모두 같을 때만 채택합니다. 앱 UI는 원본을 영구 삭제하지 않으며, 업로드 증거가 확인되어도 휴지통 이동은 별도 Goal 단계에서만 실행합니다.
     </p>
     {#if copied}
       <div class="receipt">
@@ -611,11 +639,19 @@
           </p>
           {#if attestation.permit}
             <p class="safe">업로드 상태와 복사 콘텐츠 검증 완료. 로컬 제거 허가 증거가 생성되었지만 파일은 그대로 보존됩니다.</p>
-          {:else}
+            <button onclick={evictSource} disabled={evicting || attesting}>
+              {evicting ? "원본을 휴지통으로 이동 중…" : "검증된 로컬 원본을 휴지통으로 이동"}
+            </button>
+            <p class="muted">이 작업은 영구 삭제가 아니라 OS 휴지통 이동이며, 실행 직전에 공급자 상태를 다시 검증합니다.</p>
+          {:else if !eviction}
             <p class="warning">아직 제거 불가: {attestation.blockers.join(", ")}</p>
           {/if}
           <p class="muted">변경 불가 공급자 증거 기록: {attestation.evidence_path}</p>
           <p class="muted">동적 ADR/Goal 스냅샷: {attestation.adr_path}</p>
+          {#if eviction}
+            <p class="safe">Goal이 source-evicted로 갱신되었습니다. 원본은 OS 휴지통에 있으며 클라우드 복사본은 유지됩니다.</p>
+            <p class="muted">휴지통 작업 기록: {eviction.eviction.completion_path} · 동적 ADR: {eviction.adr_path}</p>
+          {/if}
         {/if}
       </div>
     {/if}

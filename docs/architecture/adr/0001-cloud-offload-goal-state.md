@@ -23,7 +23,7 @@ original boolean gate.
 The runtime goal is derived from the same evidence and exposed by both the
 Rust command output and the UI:
 
-`copy-verified → pending-provider-sync → provider-sync-confirmed → eviction-ready`.
+`copy-verified → pending-provider-sync → provider-sync-confirmed → eviction-ready → source-evicted`.
 
 After each attestation, DiskSage atomically updates a per-receipt,
 machine-readable ADR snapshot at the app-data `cloud-adr` directory. The
@@ -40,7 +40,9 @@ content hashes and timestamps. `eviction-ready` never deletes the source.
 - ADR and Goal state are auditable from the same evidence record and cannot be
   silently edited in place by the provider check.
 - A separate explicit trash operation is still required after an eviction
-  permit; no automatic deletion is introduced by this ADR.
+  permit; it is not automatic.
+- The source-eviction command moves the source to the OS Trash only after a
+  fresh provider attestation and updates the Goal/ADR to `source-evicted`.
 
 ## References
 

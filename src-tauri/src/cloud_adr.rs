@@ -36,6 +36,7 @@ fn decision_for(goal_state: CloudOffloadGoalState, sync_state: ProviderSyncState
             "retain-source-eviction-gate-pending".into()
         }
         CloudOffloadGoalState::EvictionReady => "source-eviction-permit-issued".into(),
+        CloudOffloadGoalState::SourceEvicted => "source-moved-to-os-trash".into(),
     }
 }
 
@@ -47,8 +48,14 @@ pub fn snapshot_from_evidence(
 ) -> CloudOffloadAdrSnapshot {
     let evidence = &record.evidence;
     let decision = decision_for(goal_state, evidence.sync_state);
-    let mut consequences = vec!["source-retained".into()];
-    if goal_state == CloudOffloadGoalState::EvictionReady {
+    let mut consequences = if goal_state == CloudOffloadGoalState::SourceEvicted {
+        vec!["source-in-os-trash-reversible".into()]
+    } else {
+        vec!["source-retained".into()]
+    };
+    if goal_state == CloudOffloadGoalState::SourceEvicted {
+        consequences.push("explicit-trash-step-completed".into());
+    } else if goal_state == CloudOffloadGoalState::EvictionReady {
         consequences.push("explicit-trash-step-may-proceed".into());
     } else {
         consequences.push("eviction-blocked-until-provider-proof".into());

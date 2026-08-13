@@ -101,6 +101,7 @@ pub enum CloudOffloadGoalState {
     PendingProviderSync,
     ProviderSyncConfirmed,
     EvictionReady,
+    SourceEvicted,
 }
 
 impl CloudOffloadGoalState {

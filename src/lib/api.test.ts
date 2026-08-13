@@ -91,6 +91,8 @@ describe("api wrappers", () => {
       [() => api.adoptExistingCloudCandidate("/scan", "/cloud", "f".repeat(64), 10, 30, 5), "adopt_existing_cloud_candidate", { root: "/scan", cloudRoot: "/cloud", metadataFingerprint: "f".repeat(64), minSizeMib: 10, minAgeDays: 30, limit: 5 }],
       [() => api.attestCloudCopy("c".repeat(64)), "attest_cloud_copy", { receiptId: "c".repeat(64), objectId: null }],
       [() => api.attestCloudCopy("d".repeat(64), "remote-id"), "attest_cloud_copy", { receiptId: "d".repeat(64), objectId: "remote-id" }],
+      [() => api.evictCloudSource("e".repeat(64)), "evict_cloud_source", { receiptId: "e".repeat(64), objectId: null }],
+      [() => api.evictCloudSource("f".repeat(64), "remote-id"), "evict_cloud_source", { receiptId: "f".repeat(64), objectId: "remote-id" }],
     ];
 
     for (const [call, command, payload] of cases) {
