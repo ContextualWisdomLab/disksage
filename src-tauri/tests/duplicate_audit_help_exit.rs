@@ -43,3 +43,24 @@ fn duplicate_audit_help_does_not_hide_an_unknown_argument() {
         "invalid invocation must remain visible through stderr"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn duplicate_audit_non_utf8_argument_fails_without_panic() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let opaque = OsString::from_vec(vec![b'-', b'-', b'o', b'p', b'a', b'q', b'u', b'e', 0xff]);
+    let output = Command::new(env!("CARGO_BIN_EXE_disksage-duplicate-audit"))
+        .arg(opaque)
+        .output()
+        .expect("duplicate-audit CLI must launch for non-UTF-8 argument validation");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must be valid UTF-8");
+    assert_eq!(
+        stderr.trim_end(),
+        "DiskSage exact duplicate audit: duplicate-audit-argument-invalid"
+    );
+}
