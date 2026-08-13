@@ -6,9 +6,9 @@
 </script>
 
 <section>
-  <h2>대용량 파일 Top {files.length}</h2>
-  <table>
-    <thead><tr><th>크기</th><th>경로</th></tr></thead>
+  <h2 id="top-files-heading">대용량 파일 Top {files.length}</h2>
+  <table aria-labelledby="top-files-heading">
+    <thead><tr><th scope="col">크기</th><th scope="col">경로</th></tr></thead>
     <tbody>
       {#each files as f}
         <tr>
