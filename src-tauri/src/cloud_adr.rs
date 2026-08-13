@@ -316,6 +316,32 @@ pub fn write_latest_goal_snapshot(
     )
 }
 
+/// Persist replaceable ADR/Goal projections without turning an authoritative receipt/evidence
+/// result into a failed operation. Immutable records remain the source of truth.
+pub fn write_projection_pair(
+    adr_dir: &Path,
+    adr: &CloudOffloadAdrSnapshot,
+    goal_dir: &Path,
+    goal: &CloudOffloadGoalSnapshot,
+) -> (Option<PathBuf>, Option<PathBuf>, Vec<String>) {
+    let mut warnings = Vec::new();
+    let adr_path = match write_latest_snapshot(adr_dir, adr) {
+        Ok(path) => Some(path),
+        Err(_) => {
+            warnings.push("adr-projection-write-failed".to_string());
+            None
+        }
+    };
+    let goal_path = match write_latest_goal_snapshot(goal_dir, goal) {
+        Ok(path) => Some(path),
+        Err(_) => {
+            warnings.push("goal-projection-write-failed".to_string());
+            None
+        }
+    };
+    (adr_path, goal_path, warnings)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

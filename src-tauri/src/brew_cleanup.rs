@@ -51,10 +51,18 @@ pub struct BrewCleanupJudgment {
     pub model_name: String,
     pub judged_at_ms: u64,
     pub exact_approval_phrase: String,
-    /// Optional fast-mlsirm calibration result. A failed calibration can never unlock execution;
-    /// an absent result keeps the existing independent human-confirmation boundary.
+    /// A present, successful fast-mlsirm calibration is required before execution;
+    /// failed or absent calibration never unlocks the fixed command.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calibration: Option<crate::judge_calibration::JudgeCalibrationResult>,
+}
+
+impl BrewCleanupJudgment {
+    pub fn has_successful_calibration(&self) -> bool {
+        self.calibration
+            .as_ref()
+            .is_some_and(|calibration| calibration.passed)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -567,6 +575,31 @@ mod tests {
         );
         assert_eq!(judgment.verdict, crate::llm::Verdict::Safe);
         assert_eq!(judgment.plan_fingerprint, "a".repeat(64));
+    }
+
+    #[test]
+    fn calibration_is_required_for_execution() {
+        let mut judgment = judge(
+            &Fake(Ok(r#"{"verdict":"safe","reason":"fixed"}"#.into())),
+            &plan(),
+            20,
+        );
+        assert!(!judgment.has_successful_calibration());
+        judgment.calibration = Some(
+            crate::judge_calibration::validate(
+                &crate::judge_calibration::JudgeCalibrationEvidence {
+                    schema_version: crate::judge_calibration::SCHEMA_VERSION,
+                    categories: 2,
+                    model_labels: vec![0, 1, 0, 1],
+                    human_labels: vec![0, 1, 0, 1],
+                    human_baseline_a: None,
+                    human_baseline_b: None,
+                    subgroup: None,
+                },
+            )
+            .unwrap(),
+        );
+        assert!(judgment.has_successful_calibration());
     }
 
     #[test]

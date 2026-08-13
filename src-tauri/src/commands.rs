@@ -587,10 +587,7 @@ pub fn execute_brew_cleanup(
         || judgment.plan_fingerprint != plan_fingerprint
         || judgment.exact_approval_phrase != plan.exact_approval_phrase
         || judgment.verdict != crate::llm::Verdict::Safe
-        || judgment
-            .calibration
-            .as_ref()
-            .is_some_and(|calibration| !calibration.passed)
+        || !judgment.has_successful_calibration()
         || now_ms().saturating_sub(judgment.judged_at_ms) > brew_cleanup::MAX_JUDGMENT_AGE_MS
     {
         return Err("brew-cleanup-llm-judgment-stale-or-not-safe".into());
@@ -1440,8 +1437,9 @@ pub struct CloudCopyOutput {
     pub goal_state: cloud_transfer::CloudOffloadGoalState,
     pub receipt: cloud_transfer::CloudCopyReceipt,
     pub receipt_path: String,
-    pub adr_path: String,
-    pub goal_path: String,
+    pub adr_path: Option<String>,
+    pub goal_path: Option<String>,
+    pub projection_warnings: Vec<String>,
 }
 
 #[cfg(not(coverage))]
@@ -1549,15 +1547,28 @@ fn create_cloud_candidate_receipt(
             &copy_approval,
         )?
     };
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|_| "app-data-directory-unavailable".to_string())?;
-    let adr = cloud_adr::initial_adr_snapshot(&receipt, cloud::system_now_ms());
-    let adr_path = cloud_adr::write_latest_snapshot(&app_data_dir.join("cloud-adr"), &adr)?;
-    let goal = cloud_adr::initial_goal_snapshot(&receipt, cloud::system_now_ms());
-    let goal_path =
-        cloud_adr::write_latest_goal_snapshot(&app_data_dir.join("cloud-goals"), &goal)?;
+    let mut projection_warnings = Vec::new();
+    let (adr_path, goal_path) = match app.path().app_data_dir() {
+        Ok(app_data_dir) => {
+            let adr = cloud_adr::initial_adr_snapshot(&receipt, cloud::system_now_ms());
+            let goal = cloud_adr::initial_goal_snapshot(&receipt, cloud::system_now_ms());
+            let (adr_path, goal_path, warnings) = cloud_adr::write_projection_pair(
+                &app_data_dir.join("cloud-adr"),
+                &adr,
+                &app_data_dir.join("cloud-goals"),
+                &goal,
+            );
+            projection_warnings.extend(warnings);
+            (
+                adr_path.map(|path| path.to_string_lossy().into_owned()),
+                goal_path.map(|path| path.to_string_lossy().into_owned()),
+            )
+        }
+        Err(_) => {
+            projection_warnings.push("app-data-directory-unavailable".to_string());
+            (None, None)
+        }
+    };
     Ok(CloudCopyOutput {
         action: if adopt_existing {
             "adopt-existing-copy"
@@ -1567,8 +1578,9 @@ fn create_cloud_candidate_receipt(
         goal_state: cloud_transfer::CloudOffloadGoalState::CopyVerified,
         receipt,
         receipt_path: receipt_path.to_string_lossy().into_owned(),
-        adr_path: adr_path.to_string_lossy().into_owned(),
-        goal_path: goal_path.to_string_lossy().into_owned(),
+        adr_path,
+        goal_path,
+        projection_warnings,
     })
 }
 
@@ -1656,8 +1668,9 @@ pub struct CloudAttestationOutput {
     pub assessment: provider_sync::ProviderSyncTimelinessAssessment,
     pub evidence_record: provider_evidence::ProviderSyncEvidenceRecord,
     pub evidence_path: String,
-    pub adr_path: String,
-    pub goal_path: String,
+    pub adr_path: Option<String>,
+    pub goal_path: Option<String>,
+    pub projection_warnings: Vec<String>,
     pub permit: Option<cloud_transfer::LocalEvictionPermit>,
     pub blockers: Vec<String>,
 }
@@ -1754,22 +1767,23 @@ fn collect_cloud_attestation_for_receipt(
     let goal_state =
         cloud_transfer::CloudOffloadGoalState::after_attestation(&evidence, permit.is_some());
     let adr = cloud_adr::snapshot_from_evidence(&evidence_record, goal_state, confirmed_at_ms);
-    let adr_path = cloud_adr::write_latest_snapshot(adr_dir, &adr)?;
     let goal = cloud_adr::goal_snapshot_from_evidence(
         receipt,
         &evidence_record,
         goal_state,
         confirmed_at_ms,
     );
-    let goal_path = cloud_adr::write_latest_goal_snapshot(goal_dir, &goal)?;
+    let (adr_path, goal_path, projection_warnings) =
+        cloud_adr::write_projection_pair(adr_dir, &adr, goal_dir, &goal);
     Ok(CloudAttestationOutput {
         goal_state,
         evidence,
         assessment,
         evidence_record,
         evidence_path: evidence_path.to_string_lossy().into_owned(),
-        adr_path: adr_path.to_string_lossy().into_owned(),
-        goal_path: goal_path.to_string_lossy().into_owned(),
+        adr_path: adr_path.map(|path| path.to_string_lossy().into_owned()),
+        goal_path: goal_path.map(|path| path.to_string_lossy().into_owned()),
+        projection_warnings,
         permit,
         blockers,
     })
@@ -1828,8 +1842,8 @@ pub struct CloudSourceEvictionOutput {
     pub approval: cloud_eviction::CloudSourceEvictionApproval,
     pub approval_path: String,
     pub eviction: cloud_eviction::CloudEvictionResult,
-    pub adr_path: String,
-    pub goal_path: String,
+    pub adr_path: Option<String>,
+    pub goal_path: Option<String>,
     pub projection_warnings: Vec<String>,
 }
 
@@ -1918,27 +1932,14 @@ pub async fn trash_verified_cloud_source(
             cloud_transfer::CloudOffloadGoalState::SourceEvicted,
             updated_at_ms,
         );
-        let mut projection_warnings = Vec::new();
-        let adr_path = match cloud_adr::write_latest_snapshot(&adr_dir, &adr) {
-            Ok(path) => path.to_string_lossy().into_owned(),
-            Err(_) => {
-                projection_warnings.push("adr-projection-write-failed".to_string());
-                String::new()
-            }
-        };
         let goal = cloud_adr::goal_snapshot_from_evidence(
             &receipt,
             &attestation.evidence_record,
             cloud_transfer::CloudOffloadGoalState::SourceEvicted,
             updated_at_ms,
         );
-        let goal_path = match cloud_adr::write_latest_goal_snapshot(&goal_dir, &goal) {
-            Ok(path) => path.to_string_lossy().into_owned(),
-            Err(_) => {
-                projection_warnings.push("goal-projection-write-failed".to_string());
-                String::new()
-            }
-        };
+        let (adr_path, goal_path, projection_warnings) =
+            cloud_adr::write_projection_pair(&adr_dir, &adr, &goal_dir, &goal);
         Ok(CloudSourceEvictionOutput {
             action: "attest-approve-and-trash-verified-cloud-source",
             goal_state: cloud_transfer::CloudOffloadGoalState::SourceEvicted,
@@ -1946,8 +1947,8 @@ pub async fn trash_verified_cloud_source(
             approval,
             approval_path: approval_path.to_string_lossy().into_owned(),
             eviction,
-            adr_path,
-            goal_path,
+            adr_path: adr_path.map(|path| path.to_string_lossy().into_owned()),
+            goal_path: goal_path.map(|path| path.to_string_lossy().into_owned()),
             projection_warnings,
         })
     })

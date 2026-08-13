@@ -725,8 +725,9 @@ export interface CloudCopyOutput {
   goal_state: CloudOffloadGoalState;
   receipt: CloudCopyReceipt;
   receipt_path: string;
-  adr_path: string;
-  goal_path: string;
+  adr_path: string | null;
+  goal_path: string | null;
+  projection_warnings: string[];
 }
 
 export type SyncEvidenceKind = "provider-api" | "provider-native-status";
@@ -806,8 +807,9 @@ export interface CloudAttestationOutput {
   assessment: ProviderSyncTimelinessAssessment;
   evidence_record: ProviderSyncEvidenceRecord;
   evidence_path: string;
-  adr_path: string;
-  goal_path: string;
+  adr_path: string | null;
+  goal_path: string | null;
+  projection_warnings: string[];
   permit: LocalEvictionPermit | null;
   blockers: string[];
 }
@@ -856,8 +858,8 @@ export interface CloudSourceEvictionOutput {
   approval: CloudSourceEvictionApproval;
   approval_path: string;
   eviction: CloudEvictionResult;
-  adr_path: string;
-  goal_path: string;
+  adr_path: string | null;
+  goal_path: string | null;
   projection_warnings: string[];
 }
 
