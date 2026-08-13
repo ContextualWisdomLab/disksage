@@ -414,6 +414,22 @@
     return new Date(ms).toLocaleDateString();
   }
 
+  function syncStateLabel(state: api.ProviderSyncState | undefined): string {
+    const labels: Record<api.ProviderSyncState, string> = {
+      complete: "공급자 동기화 완료",
+      "pending-upload": "로컬 최신본이지만 공급자 업로드 대기 중",
+      "not-ubiquitous": "iCloud 관리 대상 아님",
+      "not-local-current": "로컬 최신본 아님",
+      uploading: "공급자 업로드 중",
+      "excluded-from-sync": "공급자 동기화 제외됨",
+      "sync-paused": "공급자 동기화 일시중지됨",
+      "remote-unavailable": "원격 객체를 확인할 수 없음",
+      "content-mismatch": "원격 콘텐츠가 로컬 복사본과 다름",
+      unknown: "공급자 상태 미확인",
+    };
+    return labels[state ?? "unknown"];
+  }
+
   function duration(ms: number): string {
     const totalMinutes = Math.floor(ms / 60_000);
     const hours = Math.floor(totalMinutes / 60);
@@ -607,6 +623,7 @@
         <strong>{copied.action === "adopt-existing-copy" ? "기존 클라우드 복사본 검증·채택 완료" : "검증 복사 완료"} · 원본 보존됨</strong>
         <div class="context">영수증 {copied.receipt.receipt_id} · {fmtBytes(copied.receipt.bytes)}</div>
         <div class="path">{copied.receipt.destination}</div>
+        <p class="muted">Goal: {copied.goal_state} · 동적 Goal: {copied.goal_path}</p>
         {#if copied.receipt.provider === "google-drive"}
           <div class="provider-auth">
             <label>
@@ -626,6 +643,9 @@
           {attesting ? "검증 중…" : "클라우드 업로드 상태·콘텐츠 확인"}
         </button>
         {#if attestation}
+          <p class:warning={attestation.goal_state !== "eviction-ready"} class:safe={attestation.goal_state === "eviction-ready"}>
+            Goal: {attestation.goal_state} · {syncStateLabel(attestation.evidence.sync_state)}
+          </p>
           {#if attestation.assessment.state === "overdue"}
             <p class="warning">
               공급자 확인이 {Math.floor(attestation.assessment.pending_age_ms / 3_600_000)}시간째 완료되지 않았습니다. 원본은 계속 보존하며 iCloud/File Provider 상태를 점검해야 합니다.
@@ -640,6 +660,7 @@
               <p class="safe">원본을 운영체제 휴지통으로 이동했습니다. 클라우드 목적지는 유지되며 휴지통은 비우지 않았습니다.</p>
               <p class="muted">사람 승인 {eviction.approval.approval_id} · 완료 {eviction.eviction.completion_id}</p>
               <p class="muted">변경 불가 승인 기록: {eviction.approval_path}</p>
+              <p class="muted">동적 ADR: {eviction.adr_path} · 동적 Goal: {eviction.goal_path}</p>
             {:else}
               <p class="safe">업로드 상태와 복사 콘텐츠 검증 완료. 로컬 제거 허가 증거가 생성되었지만 파일은 아직 그대로 보존됩니다.</p>
               <div class="eviction-controls">
@@ -676,6 +697,7 @@
             <p class="warning">아직 제거 불가: {attestation.blockers.join(", ")}</p>
           {/if}
           <p class="muted">변경 불가 공급자 증거 기록: {attestation.evidence_path}</p>
+          <p class="muted">동적 ADR: {attestation.adr_path} · 동적 Goal: {attestation.goal_path}</p>
         {/if}
       </div>
     {/if}

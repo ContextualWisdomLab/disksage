@@ -698,11 +698,30 @@ export interface CloudLineageSnapshot {
 
 export interface CloudCopyOutput {
   action: "copy-only" | "adopt-existing-copy";
+  goal_state: CloudOffloadGoalState;
   receipt: CloudCopyReceipt;
   receipt_path: string;
+  goal_path: string;
 }
 
 export type SyncEvidenceKind = "provider-api" | "provider-native-status";
+export type ProviderSyncState =
+  | "complete"
+  | "pending-upload"
+  | "not-ubiquitous"
+  | "not-local-current"
+  | "uploading"
+  | "excluded-from-sync"
+  | "sync-paused"
+  | "remote-unavailable"
+  | "content-mismatch"
+  | "unknown";
+export type CloudOffloadGoalState =
+  | "copy-verified"
+  | "pending-provider-sync"
+  | "provider-sync-confirmed"
+  | "eviction-ready"
+  | "source-evicted";
 export type RemoteChecksumAlgorithm = "sha256" | "quick-xor";
 
 export interface RemoteContentProof {
@@ -724,6 +743,7 @@ export interface ProviderSyncEvidence {
   kind: SyncEvidenceKind;
   evidence_id: string;
   sync_complete: boolean;
+  sync_state?: ProviderSyncState;
   remote_content: RemoteContentProof | null;
 }
 
@@ -756,10 +776,13 @@ export interface LocalEvictionPermit {
 }
 
 export interface CloudAttestationOutput {
+  goal_state: CloudOffloadGoalState;
   evidence: ProviderSyncEvidence;
   assessment: ProviderSyncTimelinessAssessment;
   evidence_record: ProviderSyncEvidenceRecord;
   evidence_path: string;
+  adr_path: string;
+  goal_path: string;
   permit: LocalEvictionPermit | null;
   blockers: string[];
 }
@@ -803,10 +826,13 @@ export interface CloudEvictionResult {
 
 export interface CloudSourceEvictionOutput {
   action: "attest-approve-and-trash-verified-cloud-source";
+  goal_state: "source-evicted";
   attestation: CloudAttestationOutput;
   approval: CloudSourceEvictionApproval;
   approval_path: string;
   eviction: CloudEvictionResult;
+  adr_path: string;
+  goal_path: string;
 }
 
 export const listCloudRoots = () => invoke<CloudRoot[]>("list_cloud_roots");

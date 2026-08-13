@@ -16,10 +16,10 @@ use crate::organize;
 use crate::safety;
 #[cfg(not(coverage))]
 use crate::{
-    brew_cleanup, cloud, cloud_eviction, cloud_local_eviction, cloud_plan_view, cloud_review, cloud_transfer,
-    dev_artifacts, dupes, git_worktree, icloud_sync_health, provider_api_client, provider_capacity,
-    provider_client_runtime, provider_evidence, provider_global_sync, provider_oauth,
-    provider_sync, rules,
+    brew_cleanup, cloud, cloud_adr, cloud_eviction, cloud_local_eviction, cloud_plan_view,
+    cloud_review, cloud_transfer, dev_artifacts, dupes, git_worktree, icloud_sync_health,
+    provider_api_client, provider_capacity, provider_client_runtime, provider_evidence,
+    provider_global_sync, provider_oauth, provider_sync, rules,
 };
 
 #[derive(Default)]
@@ -1406,8 +1406,10 @@ pub async fn review_cloud_candidate(
 #[derive(serde::Serialize)]
 pub struct CloudCopyOutput {
     pub action: &'static str,
+    pub goal_state: cloud_transfer::CloudOffloadGoalState,
     pub receipt: cloud_transfer::CloudCopyReceipt,
     pub receipt_path: String,
+    pub goal_path: String,
 }
 
 #[cfg(not(coverage))]
@@ -1515,14 +1517,24 @@ fn create_cloud_candidate_receipt(
             &copy_approval,
         )?
     };
+    let goal = cloud_adr::initial_goal_snapshot(&receipt, cloud::system_now_ms());
+    let goal_path = cloud_adr::write_latest_goal_snapshot(
+        &app.path()
+            .app_data_dir()
+            .map_err(|_| "app-data-directory-unavailable".to_string())?
+            .join("cloud-goals"),
+        &goal,
+    )?;
     Ok(CloudCopyOutput {
         action: if adopt_existing {
             "adopt-existing-copy"
         } else {
             "copy-only"
         },
+        goal_state: cloud_transfer::CloudOffloadGoalState::CopyVerified,
         receipt,
         receipt_path: receipt_path.to_string_lossy().into_owned(),
+        goal_path: goal_path.to_string_lossy().into_owned(),
     })
 }
 
@@ -1605,10 +1617,13 @@ pub async fn adopt_existing_cloud_candidate(
 #[cfg(not(coverage))]
 #[derive(serde::Serialize)]
 pub struct CloudAttestationOutput {
+    pub goal_state: cloud_transfer::CloudOffloadGoalState,
     pub evidence: cloud_transfer::ProviderSyncEvidence,
     pub assessment: provider_sync::ProviderSyncTimelinessAssessment,
     pub evidence_record: provider_evidence::ProviderSyncEvidenceRecord,
     pub evidence_path: String,
+    pub adr_path: String,
+    pub goal_path: String,
     pub permit: Option<cloud_transfer::LocalEvictionPermit>,
     pub blockers: Vec<String>,
 }
@@ -1618,6 +1633,8 @@ fn collect_cloud_attestation_for_receipt(
     receipt: &cloud_transfer::CloudCopyReceipt,
     object_id: Option<String>,
     evidence_dir: &Path,
+    adr_dir: &Path,
+    goal_dir: &Path,
     connection_path: &Path,
     cloud_roots: &[cloud::CloudRoot],
 ) -> Result<CloudAttestationOutput, String> {
@@ -1700,11 +1717,25 @@ fn collect_cloud_attestation_for_receipt(
         Ok(permit) => (Some(permit), Vec::new()),
         Err(blockers) => (None, blockers),
     };
+    let goal_state =
+        cloud_transfer::CloudOffloadGoalState::after_attestation(&evidence, permit.is_some());
+    let adr = cloud_adr::snapshot_from_evidence(&evidence_record, goal_state, confirmed_at_ms);
+    let adr_path = cloud_adr::write_latest_snapshot(adr_dir, &adr)?;
+    let goal = cloud_adr::goal_snapshot_from_evidence(
+        receipt,
+        &evidence_record,
+        goal_state,
+        confirmed_at_ms,
+    );
+    let goal_path = cloud_adr::write_latest_goal_snapshot(goal_dir, &goal)?;
     Ok(CloudAttestationOutput {
+        goal_state,
         evidence,
         assessment,
         evidence_record,
         evidence_path: evidence_path.to_string_lossy().into_owned(),
+        adr_path: adr_path.to_string_lossy().into_owned(),
+        goal_path: goal_path.to_string_lossy().into_owned(),
         permit,
         blockers,
     })
@@ -1731,6 +1762,8 @@ pub async fn attest_cloud_copy(
         .join("cloud-receipts")
         .join(format!("{receipt_id}.json"));
     let evidence_dir = app_data_dir.join("cloud-provider-evidence");
+    let adr_dir = app_data_dir.join("cloud-adr");
+    let goal_dir = app_data_dir.join("cloud-goals");
     let connection_path = oauth_connections_path(&app)?;
     let cloud_roots = cloud::discover_cloud_roots(&resolve_home(&app));
     tauri::async_runtime::spawn_blocking(move || {
@@ -1742,6 +1775,8 @@ pub async fn attest_cloud_copy(
             &receipt,
             object_id,
             &evidence_dir,
+            &adr_dir,
+            &goal_dir,
             &connection_path,
             &cloud_roots,
         )
@@ -1754,10 +1789,13 @@ pub async fn attest_cloud_copy(
 #[derive(serde::Serialize)]
 pub struct CloudSourceEvictionOutput {
     pub action: &'static str,
+    pub goal_state: cloud_transfer::CloudOffloadGoalState,
     pub attestation: CloudAttestationOutput,
     pub approval: cloud_eviction::CloudSourceEvictionApproval,
     pub approval_path: String,
     pub eviction: cloud_eviction::CloudEvictionResult,
+    pub adr_path: String,
+    pub goal_path: String,
 }
 
 /// Recollect provider evidence and active-use evidence, bind an attributed human approval to the
@@ -1786,6 +1824,8 @@ pub async fn trash_verified_cloud_source(
         .join("cloud-receipts")
         .join(format!("{receipt_id}.json"));
     let evidence_dir = app_data_dir.join("cloud-provider-evidence");
+    let adr_dir = app_data_dir.join("cloud-adr");
+    let goal_dir = app_data_dir.join("cloud-goals");
     let approval_dir = app_data_dir.join("cloud-source-eviction-approvals");
     let eviction_dir = app_data_dir.join("cloud-source-evictions");
     let journal_path = journal_file_path(&app)?;
@@ -1801,6 +1841,8 @@ pub async fn trash_verified_cloud_source(
             &receipt,
             object_id,
             &evidence_dir,
+            &adr_dir,
+            &goal_dir,
             &connection_path,
             &cloud_roots,
         )?;
@@ -1835,12 +1877,29 @@ pub async fn trash_verified_cloud_source(
             &journal_path,
             cloud::system_now_ms(),
         )?;
+        let updated_at_ms = cloud::system_now_ms();
+        let adr = cloud_adr::snapshot_from_evidence(
+            &attestation.evidence_record,
+            cloud_transfer::CloudOffloadGoalState::SourceEvicted,
+            updated_at_ms,
+        );
+        let adr_path = cloud_adr::write_latest_snapshot(&adr_dir, &adr)?;
+        let goal = cloud_adr::goal_snapshot_from_evidence(
+            &receipt,
+            &attestation.evidence_record,
+            cloud_transfer::CloudOffloadGoalState::SourceEvicted,
+            updated_at_ms,
+        );
+        let goal_path = cloud_adr::write_latest_goal_snapshot(&goal_dir, &goal)?;
         Ok(CloudSourceEvictionOutput {
             action: "attest-approve-and-trash-verified-cloud-source",
+            goal_state: cloud_transfer::CloudOffloadGoalState::SourceEvicted,
             attestation,
             approval,
             approval_path: approval_path.to_string_lossy().into_owned(),
             eviction,
+            adr_path: adr_path.to_string_lossy().into_owned(),
+            goal_path: goal_path.to_string_lossy().into_owned(),
         })
     })
     .await

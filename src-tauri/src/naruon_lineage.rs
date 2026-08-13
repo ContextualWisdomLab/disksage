@@ -536,6 +536,7 @@ mod tests {
             kind: SyncEvidenceKind::ProviderNativeStatus,
             evidence_id: format!("file-provider:{}", "1".repeat(64)),
             sync_complete: true,
+            sync_state: crate::cloud_transfer::ProviderSyncState::Complete,
             remote_content: None,
         })
         .unwrap()
@@ -672,6 +673,7 @@ mod tests {
         let mut pending = evidence(&receipt).evidence;
         pending.confirmed_at_ms = receipt.copied_at_ms + PROVIDER_SYNC_OVERDUE_AFTER_MS;
         pending.sync_complete = false;
+        pending.sync_state = crate::cloud_transfer::ProviderSyncState::Uploading;
         let record = create_sync_evidence_record(&pending).unwrap();
 
         let envelope = export_naruon_file_lineage(&receipt, Some(&record)).unwrap();

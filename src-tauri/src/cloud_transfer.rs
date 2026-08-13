@@ -43,6 +43,75 @@ pub enum SyncEvidenceKind {
     ProviderNativeStatus,
 }
 
+/// Provider state observed alongside content-bound synchronization evidence.
+///
+/// A local-current item with `is_uploaded=false` is deliberately represented as
+/// `pending-upload`; it is not an incomplete-but-unknown result and never authorizes eviction.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProviderSyncState {
+    Complete,
+    PendingUpload,
+    NotUbiquitous,
+    NotLocalCurrent,
+    Uploading,
+    ExcludedFromSync,
+    SyncPaused,
+    RemoteUnavailable,
+    ContentMismatch,
+    #[default]
+    Unknown,
+}
+
+impl ProviderSyncState {
+    pub fn is_complete(&self) -> bool {
+        *self == Self::Complete
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Complete => "complete",
+            Self::PendingUpload => "pending-upload",
+            Self::NotUbiquitous => "not-ubiquitous",
+            Self::NotLocalCurrent => "not-local-current",
+            Self::Uploading => "uploading",
+            Self::ExcludedFromSync => "excluded-from-sync",
+            Self::SyncPaused => "sync-paused",
+            Self::RemoteUnavailable => "remote-unavailable",
+            Self::ContentMismatch => "content-mismatch",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn is_unknown(&self) -> bool {
+        *self == Self::Unknown
+    }
+}
+
+/// Runtime state of one metadata-bound cloud offload. This state machine never deletes a source;
+/// `EvictionReady` only permits a separately approved OS-Trash operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CloudOffloadGoalState {
+    CopyVerified,
+    PendingProviderSync,
+    ProviderSyncConfirmed,
+    EvictionReady,
+    SourceEvicted,
+}
+
+impl CloudOffloadGoalState {
+    pub fn after_attestation(evidence: &ProviderSyncEvidence, permit_available: bool) -> Self {
+        if permit_available && evidence.sync_complete && evidence.sync_state.is_complete() {
+            Self::EvictionReady
+        } else if evidence.sync_complete {
+            Self::ProviderSyncConfirmed
+        } else {
+            Self::PendingProviderSync
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RemoteChecksumAlgorithm {
@@ -216,6 +285,9 @@ pub struct ProviderSyncEvidence {
     pub kind: SyncEvidenceKind,
     pub evidence_id: String,
     pub sync_complete: bool,
+    /// Older evidence records omit this field and deserialize as `unknown`.
+    #[serde(default, skip_serializing_if = "ProviderSyncState::is_unknown")]
+    pub sync_state: ProviderSyncState,
     pub remote_content: Option<RemoteContentProof>,
 }
 
@@ -1646,8 +1718,21 @@ mod tests {
             kind: SyncEvidenceKind::ProviderNativeStatus,
             evidence_id: "icloud-uploaded-flag".into(),
             sync_complete: true,
+            sync_state: ProviderSyncState::Complete,
             remote_content: None,
         }
+    }
+
+    #[test]
+    fn unknown_legacy_sync_state_cannot_promote_goal_to_eviction_ready() {
+        let evidence = evidence();
+        assert_eq!(evidence.sync_state, ProviderSyncState::Complete);
+        let mut legacy = evidence;
+        legacy.sync_state = ProviderSyncState::Unknown;
+        assert_eq!(
+            CloudOffloadGoalState::after_attestation(&legacy, true),
+            CloudOffloadGoalState::ProviderSyncConfirmed
+        );
     }
 
     #[test]
@@ -2135,6 +2220,7 @@ mod tests {
                 kind: SyncEvidenceKind::ProviderApi,
                 evidence_id: "authenticated-provider-response".into(),
                 sync_complete: true,
+                sync_state: ProviderSyncState::Complete,
                 remote_content: Some(RemoteContentProof {
                     object_id: "remote-id".into(),
                     revision: "revision-1".into(),
@@ -2169,6 +2255,7 @@ mod tests {
             kind: SyncEvidenceKind::ProviderApi,
             evidence_id: "authenticated-provider-response".into(),
             sync_complete: true,
+            sync_state: ProviderSyncState::Complete,
             remote_content: None,
         };
         assert!(approve_evidence(&provider_receipt, &api_evidence)

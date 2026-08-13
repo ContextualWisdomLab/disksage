@@ -55,6 +55,11 @@ fn validate_evidence(evidence: &ProviderSyncEvidence) -> Result<(), String> {
     {
         return Err("provider-evidence-id-invalid".into());
     }
+    if !evidence.sync_state.is_unknown()
+        && evidence.sync_complete != evidence.sync_state.is_complete()
+    {
+        return Err("provider-evidence-sync-state-mismatch".into());
+    }
     match (evidence.kind, &evidence.remote_content) {
         (SyncEvidenceKind::ProviderNativeStatus, None)
         | (SyncEvidenceKind::ProviderApi, Some(_)) => Ok(()),
@@ -258,6 +263,7 @@ mod tests {
             kind: SyncEvidenceKind::ProviderApi,
             evidence_id: format!("provider-api:{}", "c".repeat(64)),
             sync_complete: true,
+            sync_state: crate::cloud_transfer::ProviderSyncState::Complete,
             remote_content: Some(RemoteContentProof {
                 object_id: "remote-id".into(),
                 revision: "revision-1".into(),

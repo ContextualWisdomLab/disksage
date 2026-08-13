@@ -1,7 +1,7 @@
 use crate::cloud::CloudProvider;
 use crate::cloud_transfer::{
-    CloudCopyReceipt, ProviderSyncEvidence, RemoteChecksumAlgorithm, RemoteContentProof,
-    SyncEvidenceKind,
+    CloudCopyReceipt, ProviderSyncEvidence, ProviderSyncState, RemoteChecksumAlgorithm,
+    RemoteContentProof, SyncEvidenceKind,
 };
 
 #[cfg(test)]
@@ -90,6 +90,20 @@ pub struct IcloudStatusSnapshot {
     pub destination_blake3: String,
 }
 
+fn icloud_sync_state(snapshot: &IcloudStatusSnapshot) -> ProviderSyncState {
+    if !snapshot.is_ubiquitous {
+        ProviderSyncState::NotUbiquitous
+    } else if !snapshot.is_current {
+        ProviderSyncState::NotLocalCurrent
+    } else if snapshot.is_uploading {
+        ProviderSyncState::Uploading
+    } else if snapshot.is_uploaded {
+        ProviderSyncState::Complete
+    } else {
+        ProviderSyncState::PendingUpload
+    }
+}
+
 fn icloud_evidence_id(
     receipt: &CloudCopyReceipt,
     snapshot: &IcloudStatusSnapshot,
@@ -143,6 +157,7 @@ pub fn evidence_from_icloud_snapshot(
         kind: SyncEvidenceKind::ProviderNativeStatus,
         evidence_id: icloud_evidence_id(receipt, snapshot, confirmed_at_ms),
         sync_complete,
+        sync_state: icloud_sync_state(snapshot),
         remote_content: None,
     })
 }
@@ -209,6 +224,24 @@ impl FileProviderStatusSnapshot {
     }
 }
 
+fn file_provider_sync_state(snapshot: &FileProviderStatusSnapshot) -> ProviderSyncState {
+    if snapshot.item.is_excluded_from_sync {
+        ProviderSyncState::ExcludedFromSync
+    } else if snapshot.item.is_sync_paused {
+        ProviderSyncState::SyncPaused
+    } else if !snapshot.is_local_current() {
+        ProviderSyncState::NotLocalCurrent
+    } else if snapshot.item.has_unresolved_conflicts {
+        ProviderSyncState::ContentMismatch
+    } else if snapshot.item.is_uploading {
+        ProviderSyncState::Uploading
+    } else if snapshot.item.is_uploaded {
+        ProviderSyncState::Complete
+    } else {
+        ProviderSyncState::PendingUpload
+    }
+}
+
 fn file_provider_evidence_id(
     receipt: &CloudCopyReceipt,
     snapshot: &FileProviderStatusSnapshot,
@@ -268,6 +301,7 @@ pub fn evidence_from_file_provider_snapshot(
         kind: SyncEvidenceKind::ProviderNativeStatus,
         evidence_id: file_provider_evidence_id(receipt, snapshot, confirmed_at_ms),
         sync_complete: snapshot.is_sync_complete(),
+        sync_state: file_provider_sync_state(snapshot),
         remote_content: None,
     })
 }
@@ -466,6 +500,13 @@ pub fn evidence_from_provider_api_snapshot_with_location(
             confirmed_at_ms,
         ),
         sync_complete,
+        sync_state: if sync_complete {
+            ProviderSyncState::Complete
+        } else if !snapshot.available || snapshot.trashed {
+            ProviderSyncState::RemoteUnavailable
+        } else {
+            ProviderSyncState::ContentMismatch
+        },
         remote_content: Some(RemoteContentProof {
             object_id: snapshot.remote_object_id.clone(),
             revision: snapshot.remote_revision.clone(),
@@ -876,7 +917,28 @@ mod tests {
         assert_eq!(evidence.kind, SyncEvidenceKind::ProviderNativeStatus);
         assert!(evidence.evidence_id.starts_with("foundation:"));
         assert_eq!(evidence.evidence_id.len(), 75);
+        assert_eq!(evidence.sync_state, ProviderSyncState::Complete);
         assert_eq!(evidence.remote_content, None);
+    }
+
+    #[test]
+    fn local_current_but_not_uploaded_is_pending_upload() {
+        let receipt = receipt(CloudProvider::Icloud);
+        let evidence = evidence_from_icloud_snapshot(
+            &receipt,
+            &IcloudStatusSnapshot {
+                is_ubiquitous: true,
+                is_uploaded: false,
+                is_uploading: false,
+                is_current: true,
+                observed_bytes: 42,
+                destination_blake3: "content-hash".into(),
+            },
+            30,
+        )
+        .unwrap();
+        assert_eq!(evidence.sync_state, ProviderSyncState::PendingUpload);
+        assert!(!evidence.sync_complete);
     }
 
     #[test]
@@ -903,6 +965,7 @@ mod tests {
             ["provider-sync-confirmation-pending"]
         );
         assert!(!pending.sync_complete);
+        assert_eq!(pending.sync_state, ProviderSyncState::Uploading);
 
         let overdue = evidence_from_icloud_snapshot(
             &receipt,
