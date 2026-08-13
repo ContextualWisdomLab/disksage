@@ -466,6 +466,7 @@ struct CopyOutput {
     goal_state: cloud_transfer::CloudOffloadGoalState,
     receipt: CloudCopyReceipt,
     receipt_path: String,
+    adr_path: String,
     goal_path: String,
 }
 
@@ -2678,8 +2679,10 @@ fn run() -> Result<(), String> {
                 &copy_approval,
             )?
         };
+        let (adr_dir, goal_dir) = cloud_projection_dirs(receipt_dir);
+        let adr = cloud_adr::initial_adr_snapshot(&receipt, cloud::system_now_ms());
+        let adr_path = cloud_adr::write_latest_snapshot(&adr_dir, &adr)?;
         let goal = cloud_adr::initial_goal_snapshot(&receipt, cloud::system_now_ms());
-        let (_, goal_dir) = cloud_projection_dirs(receipt_dir);
         let goal_path = cloud_adr::write_latest_goal_snapshot(&goal_dir, &goal)?;
         println!(
             "{}",
@@ -2692,6 +2695,7 @@ fn run() -> Result<(), String> {
                 goal_state: cloud_transfer::CloudOffloadGoalState::CopyVerified,
                 receipt,
                 receipt_path: receipt_path.to_string_lossy().into_owned(),
+                adr_path: adr_path.to_string_lossy().into_owned(),
                 goal_path: goal_path.to_string_lossy().into_owned(),
             })
             .map_err(|error| error.to_string())?

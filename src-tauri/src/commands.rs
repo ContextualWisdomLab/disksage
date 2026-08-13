@@ -1440,6 +1440,7 @@ pub struct CloudCopyOutput {
     pub goal_state: cloud_transfer::CloudOffloadGoalState,
     pub receipt: cloud_transfer::CloudCopyReceipt,
     pub receipt_path: String,
+    pub adr_path: String,
     pub goal_path: String,
 }
 
@@ -1548,14 +1549,15 @@ fn create_cloud_candidate_receipt(
             &copy_approval,
         )?
     };
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "app-data-directory-unavailable".to_string())?;
+    let adr = cloud_adr::initial_adr_snapshot(&receipt, cloud::system_now_ms());
+    let adr_path = cloud_adr::write_latest_snapshot(&app_data_dir.join("cloud-adr"), &adr)?;
     let goal = cloud_adr::initial_goal_snapshot(&receipt, cloud::system_now_ms());
-    let goal_path = cloud_adr::write_latest_goal_snapshot(
-        &app.path()
-            .app_data_dir()
-            .map_err(|_| "app-data-directory-unavailable".to_string())?
-            .join("cloud-goals"),
-        &goal,
-    )?;
+    let goal_path =
+        cloud_adr::write_latest_goal_snapshot(&app_data_dir.join("cloud-goals"), &goal)?;
     Ok(CloudCopyOutput {
         action: if adopt_existing {
             "adopt-existing-copy"
@@ -1565,6 +1567,7 @@ fn create_cloud_candidate_receipt(
         goal_state: cloud_transfer::CloudOffloadGoalState::CopyVerified,
         receipt,
         receipt_path: receipt_path.to_string_lossy().into_owned(),
+        adr_path: adr_path.to_string_lossy().into_owned(),
         goal_path: goal_path.to_string_lossy().into_owned(),
     })
 }

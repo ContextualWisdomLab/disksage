@@ -10,7 +10,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-pub const CLOUD_ADR_SCHEMA_VERSION: u32 = 1;
+pub const CLOUD_ADR_SCHEMA_VERSION: u32 = 2;
 pub const CLOUD_GOAL_SCHEMA_VERSION: u32 = 1;
 
 // ponytail: one process-wide lock keeps low-volume projections ordered; use per-receipt locks if
@@ -28,7 +28,7 @@ pub struct CloudOffloadAdrSnapshot {
     pub sync_complete: bool,
     pub decision: String,
     pub consequences: Vec<String>,
-    pub evidence_record_id: String,
+    pub evidence_record_id: Option<String>,
     pub updated_at_ms: u64,
 }
 
@@ -81,14 +81,40 @@ pub fn snapshot_from_evidence(
     }
     CloudOffloadAdrSnapshot {
         schema_version: CLOUD_ADR_SCHEMA_VERSION,
-        adr_id: format!("cloud-offload:{}", record.record_id),
+        adr_id: format!("cloud-offload:{}", evidence.receipt_id),
         receipt_id: evidence.receipt_id.clone(),
         goal_state,
         provider_sync_state: evidence.sync_state,
         sync_complete: evidence.sync_complete,
         decision: decision_for(goal_state, evidence.sync_state),
         consequences,
-        evidence_record_id: record.record_id.clone(),
+        evidence_record_id: Some(record.record_id.clone()),
+        updated_at_ms,
+    }
+}
+
+/// Build the initial ADR projection immediately after a verified copy, before provider evidence
+/// exists. Unknown provider state is explicit; no synthetic evidence record is created.
+pub fn initial_adr_snapshot(
+    receipt: &CloudCopyReceipt,
+    updated_at_ms: u64,
+) -> CloudOffloadAdrSnapshot {
+    CloudOffloadAdrSnapshot {
+        schema_version: CLOUD_ADR_SCHEMA_VERSION,
+        adr_id: format!("cloud-offload:{}", receipt.receipt_id),
+        receipt_id: receipt.receipt_id.clone(),
+        goal_state: CloudOffloadGoalState::CopyVerified,
+        provider_sync_state: ProviderSyncState::Unknown,
+        sync_complete: false,
+        decision: decision_for(
+            CloudOffloadGoalState::CopyVerified,
+            ProviderSyncState::Unknown,
+        ),
+        consequences: vec![
+            "source-retained".into(),
+            "eviction-blocked-until-provider-proof".into(),
+        ],
+        evidence_record_id: None,
         updated_at_ms,
     }
 }
@@ -350,6 +376,15 @@ mod tests {
         );
         assert!(!snapshot.completion_gates["provider-sync-state-complete"]);
         assert!(!snapshot.completion_gates["explicit-eviction-permit"]);
+    }
+
+    #[test]
+    fn initial_adr_is_written_without_fabricating_provider_evidence() {
+        let snapshot = initial_adr_snapshot(&receipt(), 5);
+        assert_eq!(snapshot.goal_state, CloudOffloadGoalState::CopyVerified);
+        assert_eq!(snapshot.provider_sync_state, ProviderSyncState::Unknown);
+        assert_eq!(snapshot.evidence_record_id, None);
+        assert_eq!(snapshot.adr_id, format!("cloud-offload:{}", "a".repeat(64)));
     }
 
     #[test]
