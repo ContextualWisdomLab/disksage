@@ -25,3 +25,21 @@ fn duplicate_audit_help_exits_successfully_without_error_output() {
         assert!(stdout.contains("--private-output ABSOLUTE_NEW_FILE.json"));
     }
 }
+
+#[test]
+fn help_does_not_hide_an_unknown_argument() {
+    let output = Command::new(env!("CARGO_BIN_EXE_disksage-duplicate-audit"))
+        .args(["--help", "--unknown"])
+        .output()
+        .expect("duplicate-audit CLI must launch for invalid-argument validation");
+
+    assert!(
+        !output.status.success(),
+        "help must not turn an otherwise invalid invocation into success"
+    );
+    assert!(output.stdout.is_empty(), "invalid invocation must not emit help on stdout");
+    assert!(
+        !output.stderr.is_empty(),
+        "invalid invocation must remain visible through stderr"
+    );
+}
