@@ -486,6 +486,8 @@ mod tests {
                 review_rationale: Some(decision.rationale),
                 destination_account_scope: candidate.destination_account_scope,
                 kind: candidate.kind,
+                ontology_class: None,
+                ontology_relations: None,
                 created_ms: candidate.created_ms,
                 modified_ms: candidate.modified_ms,
                 production_time_ms: candidate.production_time_ms,
@@ -502,6 +504,7 @@ mod tests {
                 duration_ms: candidate.duration_ms,
                 dataset_profile: candidate.dataset_profile,
                 metadata_evidence: candidate.metadata_evidence,
+                capacity: None,
                 copy_approval: None,
             }),
         }

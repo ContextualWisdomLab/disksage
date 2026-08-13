@@ -161,6 +161,16 @@ impl CloudCopyApprovalAction {
     }
 }
 
+/// Fields retained only so lineage fingerprints from older receipts can be revalidated exactly.
+/// They are not populated on new receipts; the immutable receipt remains the authority.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct LegacyOntologyRelation {
+    subject: String,
+    predicate: String,
+    object: String,
+    source: String,
+}
+
 /// A fresh, human-attributed authorization for one exact candidate, destination, and action.
 ///
 /// The candidate review fingerprint binds the source, destination, provider/account scope,
@@ -232,6 +242,11 @@ pub struct CloudLineageSnapshot {
     pub review_rationale: Option<String>,
     pub destination_account_scope: CloudAccountScope,
     pub kind: ArchiveKind,
+    /// Backward-compatible v3 lineage fields from the pre-Naruon receipt schema.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) ontology_class: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) ontology_relations: Option<Vec<LegacyOntologyRelation>>,
     pub created_ms: u64,
     pub modified_ms: u64,
     pub production_time_ms: u64,
@@ -248,6 +263,8 @@ pub struct CloudLineageSnapshot {
     pub duration_ms: Option<u64>,
     pub dataset_profile: Option<DatasetProfile>,
     pub metadata_evidence: Vec<MetadataEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) capacity: Option<crate::provider_capacity::CloudCapacityAssessment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub copy_approval: Option<CloudCopyApproval>,
 }
@@ -665,6 +682,8 @@ fn lineage_snapshot(
             .map(|decision| decision.rationale.clone()),
         destination_account_scope: candidate.destination_account_scope,
         kind: candidate.kind,
+        ontology_class: None,
+        ontology_relations: None,
         created_ms: candidate.created_ms,
         modified_ms: candidate.modified_ms,
         production_time_ms: candidate.production_time_ms,
@@ -681,6 +700,7 @@ fn lineage_snapshot(
         duration_ms: candidate.duration_ms,
         dataset_profile: candidate.dataset_profile.clone(),
         metadata_evidence: candidate.metadata_evidence.clone(),
+        capacity: None,
         copy_approval: copy_approval.cloned(),
     }
 }
@@ -1502,6 +1522,10 @@ mod tests {
     use crate::provider_evidence::{
         create_sync_evidence_record, ProviderSyncEvidenceRecord, PROVIDER_EVIDENCE_RECORD_VERSION,
     };
+    use crate::provider_capacity::{
+        self, CapacityEvidenceKind, CloudCapacitySnapshot, CloudCapacityState,
+        CAPACITY_SCHEMA_VERSION,
+    };
 
     #[cfg(windows)]
     const ROOT: &str = r"C:\cloud";
@@ -1967,6 +1991,62 @@ mod tests {
         let decoded: CloudCopyReceipt = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(decoded, legacy);
         assert!(!String::from_utf8(encoded).unwrap().contains("lineage"));
+    }
+
+    #[test]
+    fn historical_lineage_extensions_remain_integrity_bound() {
+        let mut historical = pre_approval_receipt();
+        let lineage = historical.lineage.as_mut().unwrap();
+        lineage.ontology_class = Some("https://disksage.app/ontology#Document".into());
+        lineage.ontology_relations = Some(vec![LegacyOntologyRelation {
+            subject: SOURCE.into(),
+            predicate: "https://disksage.app/ontology#archivedTo".into(),
+            object: DESTINATION.into(),
+            source: "archive-destination-planner".into(),
+        }]);
+        lineage.capacity = Some(provider_capacity::assess_capacity(
+            CloudCapacitySnapshot {
+                schema_version: CAPACITY_SCHEMA_VERSION,
+                provider: CloudProvider::Icloud,
+                account_scope: None,
+                evidence_kind: CapacityEvidenceKind::ProviderNativeStatus,
+                observed_at_ms: 4,
+                total_bytes: None,
+                used_bytes: None,
+                remaining_bytes: Some(1024),
+                trashed_bytes: None,
+                max_upload_size_bytes: None,
+                state: CloudCapacityState::Available,
+                evidence_fingerprint: Some("f".repeat(64)),
+                unavailable_reason: None,
+            },
+            12,
+            12,
+            0,
+        ));
+        historical.lineage_fingerprint = Some(lineage_fingerprint(lineage).unwrap());
+        historical.receipt_id = receipt_id_for(
+            historical.version,
+            &historical.candidate_fingerprint,
+            historical.provider,
+            &historical.source,
+            &historical.destination,
+            historical.bytes,
+            &historical.blake3,
+            &historical.sha256,
+            &historical.quick_xor_base64,
+            historical.source_modified_ms,
+            historical.copied_at_ms,
+            historical.copy_verified,
+            historical.provider_sync_confirmed,
+            historical.lineage_fingerprint.as_deref(),
+        );
+        assert!(receipt_blockers(&historical).is_empty());
+
+        let mut tampered = historical;
+        tampered.lineage.as_mut().unwrap().ontology_class = Some("tampered".into());
+        assert!(receipt_blockers(&tampered)
+            .contains(&"receipt-lineage-integrity-mismatch".to_string()));
     }
 
     #[test]
