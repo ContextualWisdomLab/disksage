@@ -1,3 +1,5 @@
+#![cfg(feature = "cloud-cli")]
+
 use std::process::Command;
 
 fn assert_help_success(binary: &str, flag: &str, usage_marker: &str) {
