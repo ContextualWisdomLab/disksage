@@ -6,12 +6,13 @@
 use crate::cloud_transfer::{CloudCopyReceipt, CloudOffloadGoalState, ProviderSyncState};
 use crate::provider_evidence::ProviderSyncEvidenceRecord;
 use std::collections::BTreeMap;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 pub const CLOUD_ADR_SCHEMA_VERSION: u32 = 2;
 pub const CLOUD_GOAL_SCHEMA_VERSION: u32 = 1;
+const MAX_PROJECTION_BYTES: u64 = 256 * 1024;
 
 // ponytail: one process-wide lock keeps low-volume projections ordered; use per-receipt locks if
 // concurrent multi-account projection throughput ever becomes measurable.
@@ -394,7 +395,20 @@ fn read_latest_projection<T: serde::de::DeserializeOwned>(
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(format!("cloud-{kind}-existing-unsafe"));
     }
-    let encoded = std::fs::read(&path).map_err(|_| format!("cloud-{kind}-existing-read-failed"))?;
+    if metadata.len() == 0 || metadata.len() > MAX_PROJECTION_BYTES {
+        return Err(format!("cloud-{kind}-existing-size-invalid"));
+    }
+    let capacity = usize::try_from(metadata.len())
+        .map_err(|_| format!("cloud-{kind}-existing-size-invalid"))?;
+    let mut encoded = Vec::with_capacity(capacity);
+    std::fs::File::open(&path)
+        .map_err(|_| format!("cloud-{kind}-existing-read-failed"))?
+        .take(MAX_PROJECTION_BYTES + 1)
+        .read_to_end(&mut encoded)
+        .map_err(|_| format!("cloud-{kind}-existing-read-failed"))?;
+    if encoded.len() as u64 != metadata.len() {
+        return Err(format!("cloud-{kind}-existing-changed"));
+    }
     serde_json::from_slice(&encoded)
         .map(Some)
         .map_err(|_| format!("cloud-{kind}-existing-invalid"))
