@@ -725,6 +725,7 @@ export interface CloudCopyOutput {
   goal_state: CloudOffloadGoalState;
   receipt: CloudCopyReceipt;
   receipt_path: string;
+  adr_path: string;
   goal_path: string;
 }
 

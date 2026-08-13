@@ -623,7 +623,7 @@
         <strong>{copied.action === "adopt-existing-copy" ? "기존 클라우드 복사본 검증·채택 완료" : "검증 복사 완료"} · 원본 보존됨</strong>
         <div class="context">영수증 {copied.receipt.receipt_id} · {fmtBytes(copied.receipt.bytes)}</div>
         <div class="path">{copied.receipt.destination}</div>
-        <p class="muted">Goal: {copied.goal_state} · 동적 Goal: {copied.goal_path}</p>
+        <p class="muted">Goal: {copied.goal_state} · 동적 ADR: {copied.adr_path} · 동적 Goal: {copied.goal_path}</p>
         {#if copied.receipt.provider === "google-drive"}
           <div class="provider-auth">
             <label>
