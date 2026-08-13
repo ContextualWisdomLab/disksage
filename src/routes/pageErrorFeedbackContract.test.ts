@@ -9,17 +9,45 @@ function readSource(path: string): string {
   return readFileSync(resolve(repositoryRoot, path), "utf8");
 }
 
+function between(source: string, start: string, end: string): string {
+  const startIndex = source.indexOf(start);
+  const endIndex = source.indexOf(end, startIndex + start.length);
+  expect(startIndex, `missing scope start: ${start}`).toBeGreaterThanOrEqual(0);
+  expect(endIndex, `missing scope end: ${end}`).toBeGreaterThan(startIndex);
+  return source.slice(startIndex, endIndex);
+}
+
 describe("main scan and navigation failure feedback", () => {
   it("does not expose arbitrary exceptions or hide operation failures in the console", () => {
     const source = readSource("src/routes/+page.svelte");
+    const mountScope = between(source, "onMount(async () => {", "async function scan()");
+    const scanScope = between(source, "async function scan()", "async function open(");
+    const openScope = between(source, "async function open(", "async function jump(");
+    const jumpScope = between(source, "async function jump(", "</script>");
 
     expect(source).not.toContain('alert(`스캔 시작 실패: ${e}`)');
     expect(source).not.toContain('console.error("post-scan load failed:", e)');
     expect(source).not.toContain('console.error("getNode failed:", e)');
-    expect(source).toContain("디스크 루트 목록을 불러오지 못했습니다.");
-    expect(source).toContain("스캔 결과를 불러오지 못했습니다.");
-    expect(source).toContain("스캔을 시작하지 못했습니다.");
-    expect(source).toContain("폴더 내용을 불러오지 못했습니다.");
+
+    expect(mountScope).toContain("디스크 루트 목록을 불러오지 못했습니다.");
+    expect(mountScope).toContain("스캔 결과를 불러오지 못했습니다.");
+    expect(mountScope).toContain("스캔 이벤트 연결을 준비하지 못했습니다.");
+    expect(scanScope).toContain("스캔을 시작하지 못했습니다.");
+    expect(openScope).toContain("폴더 내용을 불러오지 못했습니다.");
+    expect(jumpScope).toContain("폴더 내용을 불러오지 못했습니다.");
+  });
+
+  it("clears stale feedback and invalidates navigation before issuing new requests", () => {
+    const source = readSource("src/routes/+page.svelte");
+    const scanScope = between(source, "async function scan()", "async function open(");
+    const openScope = between(source, "async function open(", "async function jump(");
+    const jumpScope = between(source, "async function jump(", "</script>");
+
+    expect(scanScope).toMatch(/\+\+navSeq;[\s\S]*operationError = "";[\s\S]*api\.startScan\(selectedRoot\)/);
+    expect(openScope).toMatch(/const seq = \+\+navSeq;[\s\S]*operationError = "";[\s\S]*api\.getNode\(path\)/);
+    expect(jumpScope).toMatch(/const seq = \+\+navSeq;[\s\S]*operationError = "";[\s\S]*api\.getNode\(crumbs\[i\]\)/);
+    expect(openScope).toContain("if (seq !== navSeq) return;");
+    expect(jumpScope).toContain("if (seq !== navSeq) return;");
   });
 
   it("preserves scan and navigation authority behind one accessible alert", () => {
