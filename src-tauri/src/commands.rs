@@ -1722,6 +1722,17 @@ fn stable_reconciliation_error(error: &str) -> String {
 }
 
 #[cfg(not(coverage))]
+fn source_eviction_blocker(source: &Path) -> Option<&'static str> {
+    match std::fs::symlink_metadata(source) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Some("source-not-regular-file"),
+        Ok(metadata) if metadata.is_file() => None,
+        Ok(_) => Some("source-not-regular-file"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some("source-not-present"),
+        Err(_) => Some("source-state-unavailable"),
+    }
+}
+
+#[cfg(not(coverage))]
 fn reconcile_cloud_receipts_inner(
     receipt_dir: &Path,
     evidence_dir: &Path,
@@ -1933,20 +1944,34 @@ fn collect_cloud_attestation_for_receipt(
     let assessment = provider_sync::assess_provider_sync_timeliness(receipt, &evidence)?;
     let (evidence_record, evidence_path) =
         provider_evidence::write_immutable_sync_evidence(evidence_dir, &evidence)?;
-    let (permit, blockers) = match cloud_transfer::approve_local_eviction(receipt, &evidence_record)
-    {
-        Ok(permit) => (Some(permit), Vec::new()),
-        Err(blockers) => (None, blockers),
-    };
+    let source_blocker = source_eviction_blocker(Path::new(&receipt.source));
+    let (mut permit, mut blockers) =
+        match cloud_transfer::approve_local_eviction(receipt, &evidence_record) {
+            Ok(permit) => (Some(permit), Vec::new()),
+            Err(blockers) => (None, blockers),
+        };
+    if let Some(blocker) = source_blocker {
+        permit = None;
+        if !blockers.iter().any(|existing| existing == blocker) {
+            blockers.push(blocker.into());
+        }
+    }
     let goal_state =
         cloud_transfer::CloudOffloadGoalState::after_attestation(&evidence, permit.is_some());
-    let adr = cloud_adr::snapshot_from_evidence(&evidence_record, goal_state, confirmed_at_ms);
-    let goal = cloud_adr::goal_snapshot_from_evidence(
+    let mut adr = cloud_adr::snapshot_from_evidence(&evidence_record, goal_state, confirmed_at_ms);
+    let mut goal = cloud_adr::goal_snapshot_from_evidence(
         receipt,
         &evidence_record,
         goal_state,
         confirmed_at_ms,
     );
+    if let Some(blocker) = source_blocker {
+        goal.status = "blocked".into();
+        goal.completion_gates.insert("source-present".into(), false);
+        adr.decision = format!("{}-source-state-unverified", adr.decision);
+        adr.consequences
+            .push(format!("source-state-blocked:{blocker}"));
+    }
     let (adr_path, goal_path, projection_warnings) =
         cloud_adr::write_projection_pair(adr_dir, &adr, goal_dir, &goal);
     Ok(CloudAttestationOutput {
@@ -2537,6 +2562,19 @@ mod tests {
         assert_eq!(output.attested_count, 0);
         assert!(!output.cloud_write_executed);
         assert!(!output.source_eviction_authorized);
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn missing_source_blocks_eviction_permit() {
+        let temporary = tempfile::tempdir().unwrap();
+        let missing = temporary.path().join("missing.bin");
+        assert_eq!(
+            source_eviction_blocker(&missing),
+            Some("source-not-present")
+        );
+        std::fs::write(&missing, b"source").unwrap();
+        assert_eq!(source_eviction_blocker(&missing), None);
     }
 
     #[test]

@@ -22,10 +22,15 @@ After copy, DiskSage atomically writes `cloud-goals/<receipt-id>-latest.json`. A
 attestation and the explicit OS-Trash step, it atomically writes both that Goal projection and
 `cloud-adr/<receipt-id>-latest.json`. The projections contain no credentials and are never used as
 the authority for eviction; the receipt and immutable evidence are revalidated at every mutation.
+If an attestation finds the destination valid but the receipt's source is absent or unsafe, the
+runtime writes a blocked Goal projection, records the source-state blocker in the ADR, and issues
+no eviction permit.
 
 ## Consequences
 
 - `is_local_current=true` and `is_uploaded=false` produces `pending-upload` and no eviction permit.
 - Goal completion gates remain false until their corresponding evidence exists.
+- A `source-not-present` or unsafe-source observation blocks the Goal even when provider sync is
+  complete; DiskSage never infers that an externally removed source was safely evicted.
 - `eviction-ready` permits only the separately approved, reversible OS-Trash operation.
 - A stale projection is replaceable state and must be reconciled against immutable evidence.

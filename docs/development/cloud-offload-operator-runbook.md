@@ -16,9 +16,12 @@ The runtime sequence is:
    UI also exposes a manual re-run, and the reconciliation never writes to cloud or evicts a source.
 4. `is_local_current=true` with `is_uploaded=false` is `pending-upload`; the source remains and
    no eviction permit is issued.
-5. Files inside a `.photoslibrary`/`.photolibrary` bundle are non-overridable
+5. If the destination is valid but the receipt source is missing or unsafe, reconciliation writes
+   a blocked Goal/ADR projection and records `source-not-present` (or the precise source-state
+   blocker); it never treats that as proof of a completed eviction.
+6. Files inside a `.photoslibrary`/`.photolibrary` bundle are non-overridable
    `system-managed-photos-library-data` blockers; individual SQLite members are never copied.
-6. Only a fresh attestation plus the separate receipt-bound human approval may move the source to
+7. Only a fresh attestation plus the separate receipt-bound human approval may move the source to
    the OS Trash. The destination and Trash are never emptied by DiskSage.
 
 The Goal and ADR files are replaceable projections. Agents or operators must compare them with the
