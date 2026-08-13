@@ -40,7 +40,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             }
             "--keep-top-level" => keep_top_level = true,
             "--help" | "-h" => return Err(usage().into()),
-            unknown => return Err(format!("알 수 없는 인자: {unknown}")),
+            _ => return Err("archive-tree-unknown-argument".into()),
         }
         index += 1;
     }
@@ -56,11 +56,15 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
 }
 
 fn run() -> Result<(), String> {
-    let raw: Vec<String> = std::env::args().skip(1).collect();
-    if raw
-        .iter()
-        .any(|argument| matches!(argument.as_str(), "--help" | "-h"))
-    {
+    let raw = std::env::args_os()
+        .skip(1)
+        .map(|argument| {
+            argument
+                .into_string()
+                .map_err(|_| "archive-tree-argument-invalid".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if raw.len() == 1 && matches!(raw[0].as_str(), "--help" | "-h") {
         println!("{}", usage());
         return Ok(());
     }
