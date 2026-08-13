@@ -600,6 +600,8 @@ mod tests {
             .unwrap(),
         );
         assert!(judgment.has_successful_calibration());
+        judgment.calibration.as_mut().unwrap().passed = false;
+        assert!(!judgment.has_successful_calibration());
     }
 
     #[test]

@@ -17,6 +17,16 @@
   import { fmtBytes } from "./fmt";
   import IcloudLocalEviction from "./IcloudLocalEviction.svelte";
 
+  const PROVIDER_ADMISSION_BLOCKERS = new Set([
+    "icloud-new-copy-admission-blocked",
+    "provider-global-sync-blocked",
+    "provider-global-sync-evidence-unavailable",
+  ]);
+
+  function hasProviderAdmissionBlocker(notices: readonly string[]): boolean {
+    return notices.some((notice) => PROVIDER_ADMISSION_BLOCKERS.has(notice));
+  }
+
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
   let roots: api.CloudRoot[] = $state([]);
@@ -128,11 +138,9 @@
       && candidate.production_time_source.startsWith("embedded:");
     const capacityEvidenceAvailable = api.cloudCapacityAllowsCopy(report?.capacity);
     const approvalPhrase = api.cloudCopyApprovalPhrase(candidate, "copy-only");
-    const providerAdmissionBlocked = report?.notices.some((notice) => [
-      "icloud-new-copy-admission-blocked",
-      "provider-global-sync-blocked",
-      "provider-global-sync-evidence-unavailable",
-    ].includes(notice)) ?? true;
+    const providerAdmissionBlocked = report
+      ? hasProviderAdmissionBlocker(report.notices)
+      : true;
     return candidate.blocked_reason === null
       && (!candidate.requires_review || exactApproval)
       && (embeddedHighConfidence || exactApproval)
@@ -626,9 +634,7 @@
       {report.candidates.length}개 후보 · 총 {fmtBytes(report.candidate_bytes)} ·
       충돌 제외 잠재 회수 {fmtBytes(report.potentially_reclaimable_bytes)}
     </div>
-    {#if report.notices.includes("icloud-new-copy-admission-blocked")
-      || report.notices.includes("provider-global-sync-blocked")
-      || report.notices.includes("provider-global-sync-evidence-unavailable")}
+    {#if hasProviderAdmissionBlocker(report.notices)}
       <p class="warning">
         현재 공급자 전역 동기화 증거가 불완전하거나 전송 중입니다. 새 copy-only 버튼은 비활성화되며,
         상태가 해소된 뒤 다시 계획해야 합니다. 기존 복사본 채택·per-item attestation은 별도 경로로 동작합니다.

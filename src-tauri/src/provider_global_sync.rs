@@ -185,13 +185,24 @@ fn run_dump(provider: CloudProvider) -> Result<String, String> {
         let _ = child.wait();
         return Err("provider-global-sync-probe-stdout-unavailable".into());
     };
-    let reader = thread::spawn(move || {
-        let mut bytes = Vec::new();
-        stdout
-            .take(MAX_DUMP_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .map(|_| bytes)
-            .map_err(|_| "provider-global-sync-probe-read-failed".to_string())
+    let reader = thread::spawn(move || -> Result<Vec<u8>, String> {
+        let max_bytes = MAX_DUMP_BYTES as usize + 1;
+        let mut stdout = stdout;
+        let mut bytes = Vec::with_capacity(64 * 1024);
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let read = stdout
+                .read(&mut buffer)
+                .map_err(|_| "provider-global-sync-probe-read-failed".to_string())?;
+            if read == 0 {
+                break;
+            }
+            let remaining = max_bytes.saturating_sub(bytes.len());
+            if remaining > 0 {
+                bytes.extend_from_slice(&buffer[..read.min(remaining)]);
+            }
+        }
+        Ok(bytes)
     });
     let deadline = Instant::now() + Duration::from_millis(PROBE_TIMEOUT_MS);
     let status = loop {
