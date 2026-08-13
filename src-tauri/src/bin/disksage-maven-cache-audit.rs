@@ -56,7 +56,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             "--max-candidates" => max_candidates = number(args, &mut index, "--max-candidates")?,
             "--max-issues" => max_issues = number(args, &mut index, "--max-issues")?,
             "--help" | "-h" => return Err(usage().into()),
-            unknown => return Err(format!("알 수 없는 인자: {unknown}")),
+            _ => return Err("알 수 없는 인자".to_string()),
         }
         index += 1;
     }
@@ -135,6 +135,10 @@ fn output_summary(path: &PathBuf, report: &MavenCacheAuditReport) -> Result<Stri
 
 fn run() -> Result<(), String> {
     let raw: Vec<String> = std::env::args().skip(1).collect();
+    if raw.len() == 1 && matches!(raw[0].as_str(), "--help" | "-h") {
+        println!("{}", usage());
+        return Ok(());
+    }
     let args = parse_args(&raw)?;
     let report = report(&args)?;
     let encoded = serde_json::to_vec_pretty(&report).map_err(|error| error.to_string())?;
