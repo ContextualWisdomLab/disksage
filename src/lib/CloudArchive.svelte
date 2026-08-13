@@ -586,6 +586,14 @@
       {report.candidates.length}개 후보 · 총 {fmtBytes(report.candidate_bytes)} ·
       충돌 제외 잠재 회수 {fmtBytes(report.potentially_reclaimable_bytes)}
     </div>
+    {#if report.notices.includes("icloud-new-copy-admission-blocked")
+      || report.notices.includes("provider-global-sync-blocked")
+      || report.notices.includes("provider-global-sync-evidence-unavailable")}
+      <p class="warning">
+        현재 공급자 전역 동기화 증거가 불완전하거나 전송 중입니다. 새 copy-only 버튼은 비활성화되며,
+        상태가 해소된 뒤 다시 계획해야 합니다. 기존 복사본 채택·per-item attestation은 별도 경로로 동작합니다.
+      </p>
+    {/if}
     {#if report.capacity}
       {#if report.capacity.can_fit === true}
         <p class="capacity-ok">
