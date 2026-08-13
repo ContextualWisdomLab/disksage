@@ -57,6 +57,13 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
 
 fn run() -> Result<(), String> {
     let raw: Vec<String> = std::env::args().skip(1).collect();
+    if raw
+        .iter()
+        .any(|argument| matches!(argument.as_str(), "--help" | "-h"))
+    {
+        println!("{}", usage());
+        return Ok(());
+    }
     let args = parse_args(&raw)?;
     let root_mode = if args.keep_top_level {
         ArchiveTreeRootMode::KeepTopLevel
