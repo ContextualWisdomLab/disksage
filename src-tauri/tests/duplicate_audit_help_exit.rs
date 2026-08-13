@@ -27,7 +27,7 @@ fn duplicate_audit_help_exits_successfully_without_error_output() {
 }
 
 #[test]
-fn help_does_not_hide_an_unknown_argument() {
+fn duplicate_audit_help_does_not_hide_an_unknown_argument() {
     let output = Command::new(env!("CARGO_BIN_EXE_disksage-duplicate-audit"))
         .args(["--help", "--unknown"])
         .output()
