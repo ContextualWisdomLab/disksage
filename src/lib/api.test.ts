@@ -49,6 +49,7 @@ describe("api wrappers", () => {
       [() => api.summarizeUnknownBucket(["/a"]), "summarize_unknown_bucket", { paths: ["/a"] }],
       [() => api.planBrewCleanup(), "plan_brew_cleanup"],
       [() => api.judgeBrewCleanup(), "judge_brew_cleanup"],
+      [() => api.validateJudgeCalibration({ schema_version: 1, categories: 2, model_labels: [0, 1], human_labels: [0, 1] }), "validate_judge_calibration", { evidence: { schema_version: 1, categories: 2, model_labels: [0, 1], human_labels: [0, 1] } }],
       [() => api.executeBrewCleanup("a".repeat(64), "b".repeat(64), "DiskSage Homebrew cleanup 승인", "reviewed dry-run"), "execute_brew_cleanup", { planFingerprint: "a".repeat(64), judgmentId: "b".repeat(64), confirmationPhrase: "DiskSage Homebrew cleanup 승인", rationale: "reviewed dry-run" }],
       [() => api.getSettings(), "get_settings"],
       [() => api.setSettings(true), "set_settings", { onlineMode: true }],

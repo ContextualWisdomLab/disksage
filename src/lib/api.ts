@@ -178,6 +178,28 @@ export interface BrewCleanupJudgment {
   model_name: string;
   judged_at_ms: number;
   exact_approval_phrase: string;
+  calibration?: JudgeCalibrationResult;
+}
+
+export interface JudgeCalibrationEvidence {
+  schema_version: number;
+  categories: number;
+  model_labels: number[];
+  human_labels: number[];
+  human_baseline_a?: number[];
+  human_baseline_b?: number[];
+  subgroup?: number[];
+}
+
+export interface JudgeCalibrationResult {
+  schema_version: number;
+  engine: string;
+  categories: number;
+  sample_count: number;
+  passed: boolean;
+  gates: Array<{ name: string; value: number; threshold: number; pass: boolean }>;
+  exact_agreement: number;
+  adjacent_agreement: number;
 }
 
 export interface BrewCleanupExecution {
@@ -197,6 +219,8 @@ export interface BrewCleanupExecution {
 
 export const planBrewCleanup = () => invoke<BrewCleanupPlan>("plan_brew_cleanup");
 export const judgeBrewCleanup = () => invoke<BrewCleanupJudgment>("judge_brew_cleanup");
+export const validateJudgeCalibration = (evidence: JudgeCalibrationEvidence) =>
+  invoke<JudgeCalibrationResult>("validate_judge_calibration", { evidence });
 export const executeBrewCleanup = (
   planFingerprint: string,
   judgmentId: string,

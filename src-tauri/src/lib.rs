@@ -54,6 +54,7 @@ pub mod cloud_transfer;
 pub mod content_digest;
 pub mod duplicate_audit;
 pub mod icloud_sync_health;
+pub mod judge_calibration;
 pub mod incomplete_download;
 pub mod incomplete_download_materialization;
 pub mod incomplete_download_materialization_destination;
@@ -118,6 +119,7 @@ pub fn run() {
             commands::reason_unknown_extensions,
             commands::plan_brew_cleanup,
             commands::judge_brew_cleanup,
+            commands::validate_judge_calibration,
             commands::execute_brew_cleanup,
             commands::list_cloud_roots,
             commands::inspect_cloud_roots,

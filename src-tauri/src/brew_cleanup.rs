@@ -39,7 +39,7 @@ impl BrewCleanupPlan {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BrewCleanupJudgment {
     pub schema_version: u32,
@@ -51,6 +51,10 @@ pub struct BrewCleanupJudgment {
     pub model_name: String,
     pub judged_at_ms: u64,
     pub exact_approval_phrase: String,
+    /// Optional fast-mlsirm calibration result. A failed calibration can never unlock execution;
+    /// an absent result keeps the existing independent human-confirmation boundary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calibration: Option<crate::judge_calibration::JudgeCalibrationResult>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -384,6 +388,7 @@ pub fn judge(
         model_name: crate::llm::DEFAULT.name.into(),
         judged_at_ms,
         exact_approval_phrase: plan.exact_approval_phrase.clone(),
+        calibration: None,
     }
 }
 

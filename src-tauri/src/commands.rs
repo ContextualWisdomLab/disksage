@@ -31,6 +31,9 @@ pub struct AppState {
     pub cloud_review: Arc<Mutex<()>>,
     /// The latest model judgment is process-local and consumed by one execution attempt.
     pub brew_cleanup_judgment: Arc<Mutex<Option<crate::brew_cleanup::BrewCleanupJudgment>>>,
+    /// Latest binary/polytomous judge calibration. It is process-local and never grants authority
+    /// without the separate human confirmation phrase.
+    pub judge_calibration: Arc<Mutex<Option<crate::judge_calibration::JudgeCalibrationResult>>>,
     // 엔진은 최초 사용 시 한 번만 로드해 보관(모델 로드는 ~1GB — 호출마다 재로드 금지). feature off/coverage에서는 필드 자체가 없음.
     #[cfg(all(not(coverage), feature = "llm-engine"))]
     pub engine: Arc<Mutex<Option<crate::llm::LlamaEngine>>>,
@@ -506,7 +509,12 @@ pub fn judge_brew_cleanup(
         let engine = guard
             .as_ref()
             .ok_or_else(|| "brew-cleanup-llm-engine-unavailable".to_string())?;
-        let judgment = brew_cleanup::judge(engine, &plan, now_ms());
+        let mut judgment = brew_cleanup::judge(engine, &plan, now_ms());
+        judgment.calibration = state
+            .judge_calibration
+            .lock()
+            .map_err(|_| "brew-cleanup-calibration-lock-poisoned".to_string())?
+            .clone();
         drop(guard);
         *state
             .brew_cleanup_judgment
@@ -521,6 +529,24 @@ pub fn judge_brew_cleanup(
         let _ = (app, state);
         Err("brew-cleanup-llm-engine-disabled".into())
     }
+}
+
+/// Validate a binary or polytomous local-model judge against attributed human labels.
+///
+/// The agreement arithmetic is delegated to fast-mlsirm's Rust core; this command never calls an
+/// external model and never grants command execution authority by itself.
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn validate_judge_calibration(
+    evidence: crate::judge_calibration::JudgeCalibrationEvidence,
+    state: State<AppState>,
+) -> Result<crate::judge_calibration::JudgeCalibrationResult, String> {
+    let result = crate::judge_calibration::validate(&evidence)?;
+    *state
+        .judge_calibration
+        .lock()
+        .map_err(|_| "judge-calibration-lock-poisoned".to_string())? = Some(result.clone());
+    Ok(result)
 }
 
 /// Re-plan immediately before running Homebrew, then consume the matching safe judgment once.
@@ -560,6 +586,10 @@ pub fn execute_brew_cleanup(
         || judgment.plan_fingerprint != plan_fingerprint
         || judgment.exact_approval_phrase != plan.exact_approval_phrase
         || judgment.verdict != crate::llm::Verdict::Safe
+        || judgment
+            .calibration
+            .as_ref()
+            .is_some_and(|calibration| !calibration.passed)
         || now_ms().saturating_sub(judgment.judged_at_ms) > brew_cleanup::MAX_JUDGMENT_AGE_MS
     {
         return Err("brew-cleanup-llm-judgment-stale-or-not-safe".into());
