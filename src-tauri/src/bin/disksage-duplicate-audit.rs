@@ -114,10 +114,18 @@ fn system_now_ms() -> u64 {
 #[cfg(not(coverage))]
 fn run() -> Result<(), String> {
     let raw = std::env::args().skip(1).collect::<Vec<_>>();
-    if raw
+    let help_requested = raw
         .iter()
-        .any(|argument| matches!(argument.as_str(), "--help" | "-h"))
-    {
+        .any(|argument| matches!(argument.as_str(), "--help" | "-h"));
+    if help_requested {
+        let validation_args = raw
+            .iter()
+            .filter(|argument| !matches!(argument.as_str(), "--help" | "-h"))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !validation_args.is_empty() {
+            parse_args(&validation_args)?;
+        }
         println!("{}", usage());
         return Ok(());
     }
