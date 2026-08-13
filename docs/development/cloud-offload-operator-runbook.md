@@ -12,9 +12,9 @@ The runtime sequence is:
 2. Provider attestation writes an immutable evidence record, then updates the Goal and ADR
    projections atomically in both entrypoints.
 3. After restart, the desktop app automatically runs `reconcile_cloud_receipts` over the bounded
-   receipt set; it refreshes provider evidence and the replaceable ADR/Goal projections only. The
-   open desktop view repeats this read-only reconciliation every 60 seconds and exposes a manual
-   re-run; the reconciliation never writes to cloud or evicts a source.
+   receipt set; it refreshes provider evidence and the replaceable ADR/Goal projections locally.
+   The open desktop view repeats this cloud-write-free reconciliation every 60 seconds and exposes
+   a manual re-run; it never evicts a source.
    The same operation is available headlessly with
    `disksage-cloud-plan --reconcile-receipts --receipt-dir ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH`
    (add the existing OAuth connection flags only when a provider API fallback is required). This

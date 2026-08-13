@@ -517,7 +517,7 @@
       <button onclick={reconcileCloudReceipts} disabled={reconciling || busy}>
         {reconciling ? "기존 영수증 재검증 중…" : "기존 영수증·ADR/Goal 재검증"}
       </button>
-      <span class="muted">화면이 열려 있는 동안 60초마다 읽기 전용 ADR/Goal 재검증</span>
+      <span class="muted">화면이 열려 있는 동안 60초마다 클라우드 쓰기·원본 삭제 없이 provider 증거와 ADR/Goal 갱신</span>
     </div>
     {#if reconciliation}
       <div class="receipt-reconciliation" aria-live="polite">
