@@ -175,10 +175,24 @@ mod tests {
         snapshot.sync_complete = true;
         snapshot.updated_at_ms = 2;
         write_latest_snapshot(directory.path(), &snapshot).unwrap();
-        let encoded = std::fs::read(path).unwrap();
+        let encoded = std::fs::read(&path).unwrap();
         let current: CloudOffloadAdrSnapshot = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(current.goal_state, CloudOffloadGoalState::EvictionReady);
         assert_eq!(current.provider_sync_state, ProviderSyncState::Complete);
+        snapshot.goal_state = CloudOffloadGoalState::SourceEvicted;
+        snapshot.decision = "source-moved-to-os-trash".into();
+        snapshot.consequences = vec![
+            "source-in-os-trash-reversible".into(),
+            "explicit-trash-step-completed".into(),
+        ];
+        snapshot.updated_at_ms = 3;
+        write_latest_snapshot(directory.path(), &snapshot).unwrap();
+        let current: CloudOffloadAdrSnapshot =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(current.decision, "source-moved-to-os-trash");
+        assert!(current
+            .consequences
+            .contains(&"explicit-trash-step-completed".into()));
         assert!(!directory
             .path()
             .join(format!(
