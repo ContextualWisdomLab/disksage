@@ -1,3 +1,5 @@
+#![cfg(feature = "cloud-cli")]
+
 use std::process::Command;
 
 #[test]
