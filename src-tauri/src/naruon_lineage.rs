@@ -15,7 +15,7 @@ use crate::cloud_review::{
 };
 use crate::cloud_transfer::{
     validate_receipt_copy_approval, CloudCopyApprovalAction, CloudCopyReceipt,
-    CloudCopyVerificationMethod, SyncEvidenceKind,
+    CloudCopyVerificationMethod, ProviderSyncState, SyncEvidenceKind,
 };
 use crate::provider_evidence::{validate_sync_evidence_record, ProviderSyncEvidenceRecord};
 #[cfg(test)]
@@ -24,6 +24,7 @@ use crate::provider_sync::{assess_provider_sync_timeliness, ProviderSyncTimeline
 
 pub const NARUON_FILE_LINEAGE_SCHEMA_VERSION: u32 = 2;
 pub const NARUON_FILE_LINEAGE_SCHEMA_KIND: &str = "disksage.file-lineage";
+const ONTOLOGY_NAMESPACE: &str = "https://disksage.app/ontology#";
 
 const EVIDENCE_PRECEDENCE: [&str; 4] = [
     "embedded_metadata",
@@ -64,6 +65,15 @@ pub struct NaruonReviewLineage {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct NaruonFileLineageRelation {
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NaruonCloudCopyLineage {
     pub receipt_id: String,
     pub lineage_fingerprint: String,
@@ -81,6 +91,7 @@ pub struct NaruonCloudCopyLineage {
     /// DiskSage's local File Provider copy is not proof that a provider API write executed.
     pub provider_write_executed: bool,
     pub provider_sync_confirmed: bool,
+    pub provider_sync_state: ProviderSyncState,
     pub sync_evidence_record_id: Option<String>,
     pub sync_evidence_kind: Option<SyncEvidenceKind>,
     pub sync_evidence_id: Option<String>,
@@ -104,6 +115,8 @@ pub struct NaruonFileLineageEnvelope {
     pub source_filename: String,
     pub source_relative_path: String,
     pub source_context: String,
+    pub ontology_class: String,
+    pub ontology_relations: Vec<NaruonFileLineageRelation>,
     pub raw_content_sha256: String,
     pub raw_content_blake3: String,
     pub bytes: u64,
@@ -120,6 +133,19 @@ pub struct NaruonFileLineageEnvelope {
 
 fn valid_hex64(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn ontology_class(kind: ArchiveKind) -> String {
+    let label = match kind {
+        ArchiveKind::Document => "Document",
+        ArchiveKind::Media => "Media",
+        ArchiveKind::Archive => "Archive",
+        ArchiveKind::Dataset => "Dataset",
+        ArchiveKind::Backup => "Backup",
+        ArchiveKind::Creative => "Creative",
+        ArchiveKind::IncompleteDownload => "IncompleteDownload",
+    };
+    format!("{ONTOLOGY_NAMESPACE}{label}")
 }
 
 fn source_filename(relative_path: &str) -> Result<String, String> {
@@ -273,6 +299,13 @@ pub fn export_naruon_file_lineage(
         source_filename,
         source_relative_path: lineage.relative_path.clone(),
         source_context: lineage.source_context.clone(),
+        ontology_class: ontology_class(lineage.kind),
+        ontology_relations: vec![NaruonFileLineageRelation {
+            subject: "source".into(),
+            predicate: format!("{ONTOLOGY_NAMESPACE}archivedTo"),
+            object: "destination".into(),
+            source: "disksage.cloud-offload".into(),
+        }],
         raw_content_sha256: receipt.sha256.clone(),
         raw_content_blake3: receipt.blake3.clone(),
         bytes: receipt.bytes,
@@ -336,6 +369,9 @@ pub fn export_naruon_file_lineage(
             local_copy_verified: receipt.copy_verified,
             provider_write_executed: false,
             provider_sync_confirmed: evidence.is_some_and(|item| item.sync_complete),
+            provider_sync_state: evidence
+                .map(|item| item.sync_state)
+                .unwrap_or(ProviderSyncState::Unknown),
             sync_evidence_record_id: evidence_record.map(|record| record.record_id.clone()),
             sync_evidence_kind: evidence.map(|item| item.kind),
             sync_evidence_id: evidence.map(|item| item.evidence_id.clone()),
@@ -550,6 +586,14 @@ mod tests {
         assert_eq!(envelope.schema_version, 2);
         assert_eq!(envelope.schema_kind, "disksage.file-lineage");
         assert_eq!(envelope.source_filename, "report.pdf");
+        assert_eq!(
+            envelope.ontology_class,
+            "https://disksage.app/ontology#Document"
+        );
+        assert_eq!(
+            envelope.ontology_relations[0].predicate,
+            "https://disksage.app/ontology#archivedTo"
+        );
         assert_eq!(envelope.raw_content_sha256, "d".repeat(64));
         assert_eq!(envelope.metadata_evidence[0].field, "production-date");
         assert_eq!(
@@ -576,6 +620,10 @@ mod tests {
         assert!(envelope.cloud_copy.local_copy_verified);
         assert_eq!(envelope.cloud_copy.copy_approval_id, None);
         assert!(envelope.cloud_copy.provider_sync_confirmed);
+        assert_eq!(
+            envelope.cloud_copy.provider_sync_state,
+            ProviderSyncState::Complete
+        );
         assert!(!envelope.cloud_copy.provider_write_executed);
         assert!(envelope.cloud_copy.sync_evidence_record_id.is_some());
         assert_eq!(
@@ -660,6 +708,10 @@ mod tests {
         let envelope = export_naruon_file_lineage(&receipt(), None).unwrap();
 
         assert!(!envelope.cloud_copy.provider_sync_confirmed);
+        assert_eq!(
+            envelope.cloud_copy.provider_sync_state,
+            ProviderSyncState::Unknown
+        );
         assert_eq!(envelope.cloud_copy.sync_evidence_id, None);
         assert_eq!(envelope.cloud_copy.sync_confirmed_at_ms, None);
         assert_eq!(envelope.cloud_copy.sync_timeliness, None);
@@ -679,6 +731,10 @@ mod tests {
         let envelope = export_naruon_file_lineage(&receipt, Some(&record)).unwrap();
 
         assert!(!envelope.cloud_copy.provider_sync_confirmed);
+        assert_eq!(
+            envelope.cloud_copy.provider_sync_state,
+            ProviderSyncState::Uploading
+        );
         assert_eq!(
             envelope.cloud_copy.sync_timeliness,
             Some(ProviderSyncTimeliness::Overdue)

@@ -17,6 +17,8 @@ use disksage_lib::cloud::{
     self, ArchiveKind, CloudAccountScope, CloudPlanOptions, CloudProvider, CloudRoot,
 };
 #[cfg(not(coverage))]
+use disksage_lib::cloud_adr;
+#[cfg(not(coverage))]
 use disksage_lib::cloud_eviction::{self, CloudEvictionResult, CloudSourceEvictionApproval};
 #[cfg(not(coverage))]
 use disksage_lib::cloud_local_eviction;
@@ -461,19 +463,24 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
 #[derive(Debug, serde::Serialize)]
 struct CopyOutput {
     action: &'static str,
+    goal_state: cloud_transfer::CloudOffloadGoalState,
     receipt: CloudCopyReceipt,
     receipt_path: String,
+    goal_path: String,
 }
 
 #[cfg(not(coverage))]
 #[derive(Debug, serde::Serialize)]
 struct AttestationOutput {
     action: &'static str,
+    goal_state: cloud_transfer::CloudOffloadGoalState,
     receipt_id: String,
     evidence: disksage_lib::cloud_transfer::ProviderSyncEvidence,
     assessment: provider_sync::ProviderSyncTimelinessAssessment,
     evidence_record: ProviderSyncEvidenceRecord,
     evidence_path: String,
+    adr_path: String,
+    goal_path: String,
     permit: Option<LocalEvictionPermit>,
     blockers: Vec<String>,
 }
@@ -482,6 +489,7 @@ struct AttestationOutput {
 #[derive(Debug, serde::Serialize)]
 struct EvictionOutput {
     action: &'static str,
+    goal_state: cloud_transfer::CloudOffloadGoalState,
     receipt_id: String,
     evidence: disksage_lib::cloud_transfer::ProviderSyncEvidence,
     evidence_record: ProviderSyncEvidenceRecord,
@@ -490,6 +498,8 @@ struct EvictionOutput {
     approval: CloudSourceEvictionApproval,
     approval_path: String,
     eviction: CloudEvictionResult,
+    adr_path: String,
+    goal_path: String,
 }
 
 #[cfg(not(coverage))]
@@ -1915,6 +1925,12 @@ fn receipt_cloud_root(receipt: &CloudCopyReceipt, home: &Path) -> Result<CloudRo
 }
 
 #[cfg(not(coverage))]
+fn cloud_projection_dirs(anchor: &Path) -> (PathBuf, PathBuf) {
+    let parent = anchor.parent().unwrap_or(anchor);
+    (parent.join("cloud-adr"), parent.join("cloud-goals"))
+}
+
+#[cfg(not(coverage))]
 fn collect_root_capacity(
     root: &CloudRoot,
     oauth_connections: Option<&Path>,
@@ -2128,13 +2144,28 @@ fn attest_receipt(
             Ok(permit) => (Some(permit), Vec::new()),
             Err(blockers) => (None, blockers),
         };
+    let goal_state =
+        cloud_transfer::CloudOffloadGoalState::after_attestation(&evidence, permit.is_some());
+    let (adr_dir, goal_dir) = cloud_projection_dirs(evidence_dir);
+    let adr = cloud_adr::snapshot_from_evidence(&evidence_record, goal_state, confirmed_at_ms);
+    let adr_path = cloud_adr::write_latest_snapshot(&adr_dir, &adr)?;
+    let goal = cloud_adr::goal_snapshot_from_evidence(
+        &receipt,
+        &evidence_record,
+        goal_state,
+        confirmed_at_ms,
+    );
+    let goal_path = cloud_adr::write_latest_goal_snapshot(&goal_dir, &goal)?;
     Ok(AttestationOutput {
         action: "attest-provider-native",
+        goal_state,
         receipt_id: receipt.receipt_id,
         evidence,
         assessment,
         evidence_record,
         evidence_path: evidence_path.to_string_lossy().into_owned(),
+        adr_path: adr_path.to_string_lossy().into_owned(),
+        goal_path: goal_path.to_string_lossy().into_owned(),
         permit,
         blockers,
     })
@@ -2194,8 +2225,21 @@ fn evict_native_receipt(
         journal_path,
         cloud::system_now_ms(),
     )?;
+    let goal_state = cloud_transfer::CloudOffloadGoalState::SourceEvicted;
+    let updated_at_ms = cloud::system_now_ms();
+    let (adr_dir, goal_dir) = cloud_projection_dirs(evidence_dir);
+    let adr = cloud_adr::snapshot_from_evidence(&evidence_record, goal_state, updated_at_ms);
+    let adr_path = cloud_adr::write_latest_snapshot(&adr_dir, &adr)?;
+    let goal = cloud_adr::goal_snapshot_from_evidence(
+        &receipt,
+        &evidence_record,
+        goal_state,
+        updated_at_ms,
+    );
+    let goal_path = cloud_adr::write_latest_goal_snapshot(&goal_dir, &goal)?;
     Ok(EvictionOutput {
         action: "attest-and-trash-verified-cloud-source",
+        goal_state,
         receipt_id: receipt.receipt_id,
         evidence,
         evidence_record,
@@ -2204,6 +2248,8 @@ fn evict_native_receipt(
         approval,
         approval_path: approval_path.to_string_lossy().into_owned(),
         eviction,
+        adr_path: adr_path.to_string_lossy().into_owned(),
+        goal_path: goal_path.to_string_lossy().into_owned(),
     })
 }
 
@@ -2632,6 +2678,9 @@ fn run() -> Result<(), String> {
                 &copy_approval,
             )?
         };
+        let goal = cloud_adr::initial_goal_snapshot(&receipt, cloud::system_now_ms());
+        let (_, goal_dir) = cloud_projection_dirs(receipt_dir);
+        let goal_path = cloud_adr::write_latest_goal_snapshot(&goal_dir, &goal)?;
         println!(
             "{}",
             serde_json::to_string_pretty(&CopyOutput {
@@ -2640,8 +2689,10 @@ fn run() -> Result<(), String> {
                 } else {
                     "copy-only"
                 },
+                goal_state: cloud_transfer::CloudOffloadGoalState::CopyVerified,
                 receipt,
                 receipt_path: receipt_path.to_string_lossy().into_owned(),
+                goal_path: goal_path.to_string_lossy().into_owned(),
             })
             .map_err(|error| error.to_string())?
         );
