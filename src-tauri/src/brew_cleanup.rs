@@ -14,6 +14,7 @@ pub const EXECUTABLE: &str = "brew";
 pub const DRY_RUN_ARGUMENTS: [&str; 3] = ["cleanup", "--prune-prefix", "--dry-run"];
 pub const EXECUTE_ARGUMENTS: [&str; 2] = ["cleanup", "--prune-prefix"];
 const MAX_OUTPUT_BYTES: usize = 32 * 1024;
+const MAX_BREW_SCRIPT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_REASON_CHARS: usize = 1_000;
 const COMMAND_TIMEOUT_MS: u64 = 120_000;
 pub const MAX_JUDGMENT_AGE_MS: u64 = 5 * 60 * 1_000;
@@ -131,6 +132,7 @@ fn fixed_brew_path() -> Result<PathBuf, String> {
 
 #[cfg(any(target_os = "macos", all(test, unix)))]
 fn open_verified_brew(path: &Path) -> Result<VerifiedBrewExecutable, String> {
+    use std::io::{Read, Seek, SeekFrom};
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
     let path_metadata = std::fs::symlink_metadata(path)
@@ -141,9 +143,9 @@ fn open_verified_brew(path: &Path) -> Result<VerifiedBrewExecutable, String> {
     {
         return Err("brew-cleanup-executable-identity-bound-execution-unavailable".into());
     }
-    let file = std::fs::File::open(path)
+    let mut source = std::fs::File::open(path)
         .map_err(|_| "brew-cleanup-executable-identity-bound-execution-unavailable".to_string())?;
-    let opened_metadata = file
+    let opened_metadata = source
         .metadata()
         .map_err(|_| "brew-cleanup-executable-identity-bound-execution-unavailable".to_string())?;
     let current_metadata = std::fs::symlink_metadata(path)
@@ -156,9 +158,68 @@ fn open_verified_brew(path: &Path) -> Result<VerifiedBrewExecutable, String> {
     {
         return Err("brew-cleanup-executable-identity-bound-execution-unavailable".into());
     }
+    if opened_metadata.len() == 0 || opened_metadata.len() > MAX_BREW_SCRIPT_BYTES as u64 {
+        return Err("brew-cleanup-executable-size-invalid".into());
+    }
+
+    let mut snapshot = tempfile::tempfile()
+        .map_err(|_| "brew-cleanup-executable-snapshot-unavailable".to_string())?;
+    let mut hasher = blake3::Hasher::new();
+    let mut captured_bytes = 0usize;
+    let mut buffer = [0u8; 16 * 1024];
+    loop {
+        let read = source
+            .read(&mut buffer)
+            .map_err(|_| "brew-cleanup-executable-snapshot-unavailable".to_string())?;
+        if read == 0 {
+            break;
+        }
+        captured_bytes = captured_bytes
+            .checked_add(read)
+            .ok_or_else(|| "brew-cleanup-executable-size-invalid".to_string())?;
+        if captured_bytes > MAX_BREW_SCRIPT_BYTES {
+            return Err("brew-cleanup-executable-size-invalid".into());
+        }
+        hasher.update(&buffer[..read]);
+        snapshot
+            .write_all(&buffer[..read])
+            .map_err(|_| "brew-cleanup-executable-snapshot-unavailable".to_string())?;
+    }
+    if captured_bytes == 0 {
+        return Err("brew-cleanup-executable-size-invalid".into());
+    }
+    snapshot
+        .sync_all()
+        .map_err(|_| "brew-cleanup-executable-snapshot-unavailable".to_string())?;
+    snapshot
+        .seek(SeekFrom::Start(0))
+        .map_err(|_| "brew-cleanup-executable-snapshot-unavailable".to_string())?;
+
+    let opened_after_snapshot = source
+        .metadata()
+        .map_err(|_| "brew-cleanup-executable-identity-bound-execution-unavailable".to_string())?;
+    let current_after_snapshot = std::fs::symlink_metadata(path)
+        .map_err(|_| "brew-cleanup-executable-identity-bound-execution-unavailable".to_string())?;
+    if !opened_after_snapshot.is_file()
+        || current_after_snapshot.file_type().is_symlink()
+        || !current_after_snapshot.is_file()
+        || current_after_snapshot.permissions().mode() & 0o111 == 0
+        || opened_metadata.dev() != opened_after_snapshot.dev()
+        || opened_metadata.ino() != opened_after_snapshot.ino()
+        || opened_after_snapshot.dev() != current_after_snapshot.dev()
+        || opened_after_snapshot.ino() != current_after_snapshot.ino()
+    {
+        return Err("brew-cleanup-executable-identity-bound-execution-unavailable".into());
+    }
+
     Ok(VerifiedBrewExecutable {
-        identity: format!("{}:{}", opened_metadata.dev(), opened_metadata.ino()),
-        file,
+        identity: format!(
+            "{}:{}:{}",
+            opened_metadata.dev(),
+            opened_metadata.ino(),
+            hasher.finalize().to_hex()
+        ),
+        file: snapshot,
     })
 }
 
