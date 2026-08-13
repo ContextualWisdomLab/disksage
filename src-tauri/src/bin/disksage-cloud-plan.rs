@@ -76,6 +76,7 @@ struct Args {
     adopt_existing_fingerprint: Option<String>,
     receipt_dir: Option<PathBuf>,
     audit_receipts: bool,
+    reconcile_receipts: bool,
     confirm_copy_phrase: Option<String>,
     attest_receipt: Option<PathBuf>,
     evidence_dir: Option<PathBuf>,
@@ -200,6 +201,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
         adopt_existing_fingerprint: None,
         receipt_dir: None,
         audit_receipts: false,
+        reconcile_receipts: false,
         confirm_copy_phrase: None,
         attest_receipt: None,
         evidence_dir: None,
@@ -329,6 +331,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
                 parsed.receipt_dir = Some(PathBuf::from(value(args, &mut index, "--receipt-dir")?))
             }
             "--audit-receipts" => parsed.audit_receipts = true,
+            "--reconcile-receipts" => parsed.reconcile_receipts = true,
             "--confirm-copy-phrase" => {
                 parsed.confirm_copy_phrase =
                     Some(value(args, &mut index, "--confirm-copy-phrase")?)
@@ -452,7 +455,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             "--export-semantic-catalog" => parsed.export_semantic_catalog = true,
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary] [--min-size-mib N] [--min-age-days N] [--limit N] [--audit-receipts --receipt-dir ABSOLUTE_PATH [--evidence-dir ABSOLUTE_PATH]] [--decision-summary [--private-candidate-inspection-output ABSOLUTE_NEW_FILE.json | --review-reason-set REASON|REASON [--private-review-output ABSOLUTE_NEW_FILE.json]] | --exact-duplicate-review-prefix DIR_PREFIX --exact-duplicate-kind document|media|archive|dataset|backup|creative|incomplete-download | --export-naruon-copy-readiness --verify-capacity [--naruon-copy-readiness-output ABSOLUTE_NEW_FILE.json] | --export-semantic-catalog] [--verify-capacity [--oauth-connections ABSOLUTE_PATH] [--export-naruon-capacity]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH --confirm-copy-phrase EXACT --reviewed-by human:ID --review-rationale TEXT [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH --confirm-copy-phrase EXACT --reviewed-by human:ID --review-rationale TEXT [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
+                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary] [--min-size-mib N] [--min-age-days N] [--limit N] [--audit-receipts --receipt-dir ABSOLUTE_PATH] [--reconcile-receipts --receipt-dir ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]]] [--decision-summary [--private-candidate-inspection-output ABSOLUTE_NEW_FILE.json | --review-reason-set REASON|REASON [--private-review-output ABSOLUTE_NEW_FILE.json]] | --exact-duplicate-review-prefix DIR_PREFIX --exact-duplicate-kind document|media|archive|dataset|backup|creative|incomplete-download | --export-naruon-copy-readiness --verify-capacity [--naruon-copy-readiness-output ABSOLUTE_NEW_FILE.json] | --export-semantic-catalog] [--verify-capacity [--oauth-connections ABSOLUTE_PATH] [--export-naruon-capacity]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH --confirm-copy-phrase EXACT --reviewed-by human:ID --review-rationale TEXT [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH --confirm-copy-phrase EXACT --reviewed-by human:ID --review-rationale TEXT [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -528,6 +531,10 @@ struct ReceiptReconciliationEntry {
     destination_state: Option<String>,
     adr_projection_state: Option<String>,
     goal_projection_state: Option<String>,
+    goal_state: Option<cloud_transfer::CloudOffloadGoalState>,
+    provider_sync_state: Option<cloud_transfer::ProviderSyncState>,
+    eviction_permit: bool,
+    attestation_error: Option<String>,
     evidence_record_count: u64,
     issues: Vec<String>,
 }
@@ -546,6 +553,10 @@ struct ReceiptReconciliationReport {
     destination_not_present_count: u64,
     source_missing_destination_present_count: u64,
     incomplete_projection_count: u64,
+    attestation_attempted_count: u64,
+    provider_evidence_written_count: u64,
+    pending_provider_sync_count: u64,
+    eviction_ready_count: u64,
     entries: Vec<ReceiptReconciliationEntry>,
     mutation_performed: bool,
     cloud_write_executed: bool,
@@ -703,6 +714,10 @@ fn audit_receipts(
         destination_not_present_count: 0,
         source_missing_destination_present_count: 0,
         incomplete_projection_count: 0,
+        attestation_attempted_count: 0,
+        provider_evidence_written_count: 0,
+        pending_provider_sync_count: 0,
+        eviction_ready_count: 0,
         entries: Vec::new(),
         mutation_performed: false,
         cloud_write_executed: false,
@@ -738,6 +753,10 @@ fn audit_receipts(
                     destination_state: None,
                     adr_projection_state: None,
                     goal_projection_state: None,
+                    goal_state: None,
+                    provider_sync_state: None,
+                    eviction_permit: false,
+                    attestation_error: None,
                     evidence_record_count: 0,
                     issues: vec![format!("receipt-invalid:{error}")],
                 });
@@ -792,6 +811,10 @@ fn audit_receipts(
             destination_state: Some(destination_state.into()),
             adr_projection_state: Some(adr_state.into()),
             goal_projection_state: Some(goal_state.into()),
+            goal_state: None,
+            provider_sync_state: None,
+            eviction_permit: false,
+            attestation_error: None,
             evidence_record_count: evidence_record_count(&evidence_dirs, &receipt.receipt_id),
             issues,
         });
@@ -822,14 +845,24 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
         return Err("copy action과 existing-copy adoption action은 동시에 사용할 수 없음".into());
     }
     let receipt_audit_action = args.audit_receipts;
-    if receipt_audit_action && (copy_action || adoption_action) {
-        return Err("receipt audit는 copy/adoption action과 함께 사용할 수 없음".into());
+    let receipt_reconcile_action = args.reconcile_receipts;
+    let receipt_action = receipt_audit_action || receipt_reconcile_action;
+    if receipt_audit_action && receipt_reconcile_action {
+        return Err("--audit-receipts와 --reconcile-receipts는 함께 사용할 수 없음".into());
     }
-    if !receipt_audit_action && (copy_action || adoption_action) != args.receipt_dir.is_some() {
+    if receipt_action && (copy_action || adoption_action) {
+        return Err(
+            "receipt audit/reconciliation은 copy/adoption action과 함께 사용할 수 없음".into(),
+        );
+    }
+    if !receipt_action && (copy_action || adoption_action) != args.receipt_dir.is_some() {
         return Err("copy/adoption fingerprint와 --receipt-dir은 함께 지정해야 함".into());
     }
-    if receipt_audit_action && args.receipt_dir.is_none() {
-        return Err("--audit-receipts에는 --receipt-dir이 필요함".into());
+    if receipt_action && args.receipt_dir.is_none() {
+        return Err("--audit-receipts/--reconcile-receipts에는 --receipt-dir이 필요함".into());
+    }
+    if receipt_reconcile_action && args.evidence_dir.is_none() {
+        return Err("--reconcile-receipts에는 --evidence-dir이 필요함".into());
     }
     if (copy_action || adoption_action) != args.confirm_copy_phrase.is_some() {
         return Err("copy/adoption action에는 --confirm-copy-phrase가 반드시 필요함".into());
@@ -891,7 +924,10 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     }
     let attestation_action = args.attest_receipt.is_some();
     let audit_evidence_override = args.audit_receipts && args.evidence_dir.is_some();
-    if (attestation_action || eviction_action || audit_evidence_override)
+    if (attestation_action
+        || eviction_action
+        || receipt_reconcile_action
+        || audit_evidence_override)
         != args.evidence_dir.is_some()
     {
         return Err("attestation/eviction action에는 --evidence-dir이 반드시 필요함".into());
@@ -902,6 +938,7 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     let remote_provider_api = args.oauth_connections.is_some();
     if remote_provider_api
         && args.attest_receipt.is_none()
+        && !receipt_reconcile_action
         && !eviction_action
         && !copy_action
         && !args.verify_capacity
@@ -917,7 +954,7 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
             || adoption_action
             || attestation_action
             || eviction_action
-            || receipt_audit_action
+            || receipt_action
             || exact_duplicate_review
             || args.export_naruon_lineage.is_some())
     {
@@ -961,7 +998,7 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     }
     let actions = usize::from(args.list_roots)
         + usize::from(args.inspect_roots)
-        + usize::from(receipt_audit_action)
+        + usize::from(receipt_action)
         + usize::from(copy_action)
         + usize::from(adoption_action)
         + usize::from(args.attest_receipt.is_some())
@@ -1022,7 +1059,7 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     }
     if actions > 1 {
         return Err(
-            "root inspection, copy, adoption, attestation, eviction, review action은 동시에 사용할 수 없음".into(),
+            "root inspection, receipt reconciliation, copy, adoption, attestation, eviction, review action은 동시에 사용할 수 없음".into(),
         );
     }
     for (flag, fingerprint) in [
@@ -2440,21 +2477,35 @@ fn attest_receipt(
     let assessment = provider_sync::assess_provider_sync_timeliness(&receipt, &evidence)?;
     let (evidence_record, evidence_path) =
         provider_evidence::write_immutable_sync_evidence(evidence_dir, &evidence)?;
-    let (permit, blockers) =
+    let source_blocker = cloud_transfer::source_eviction_blocker(Path::new(&receipt.source));
+    let (mut permit, mut blockers) =
         match cloud_transfer::approve_local_eviction(&receipt, &evidence_record) {
             Ok(permit) => (Some(permit), Vec::new()),
             Err(blockers) => (None, blockers),
         };
+    if let Some(blocker) = source_blocker {
+        permit = None;
+        if !blockers.iter().any(|existing| existing == blocker) {
+            blockers.push(blocker.into());
+        }
+    }
     let goal_state =
         cloud_transfer::CloudOffloadGoalState::after_attestation(&evidence, permit.is_some());
     let (adr_dir, goal_dir) = cloud_projection_dirs(evidence_dir);
-    let adr = cloud_adr::snapshot_from_evidence(&evidence_record, goal_state, confirmed_at_ms);
-    let goal = cloud_adr::goal_snapshot_from_evidence(
+    let mut adr = cloud_adr::snapshot_from_evidence(&evidence_record, goal_state, confirmed_at_ms);
+    let mut goal = cloud_adr::goal_snapshot_from_evidence(
         &receipt,
         &evidence_record,
         goal_state,
         confirmed_at_ms,
     );
+    if let Some(blocker) = source_blocker {
+        goal.status = "blocked".into();
+        goal.completion_gates.insert("source-present".into(), false);
+        adr.decision = format!("{}-source-state-unverified", adr.decision);
+        adr.consequences
+            .push(format!("source-state-blocked:{blocker}"));
+    }
     let (adr_path, goal_path, projection_warnings) =
         cloud_adr::write_projection_pair(&adr_dir, &adr, &goal_dir, &goal);
     Ok(AttestationOutput {
@@ -2471,6 +2522,203 @@ fn attest_receipt(
         permit,
         blockers,
     })
+}
+
+#[cfg(not(coverage))]
+fn stable_reconciliation_error(error: &str) -> String {
+    let token = error.split(',').next().unwrap_or_default();
+    if !token.is_empty()
+        && token.len() <= 128
+        && token
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    {
+        token.to_string()
+    } else {
+        "provider-attestation-failed".into()
+    }
+}
+
+/// Re-attest every persisted receipt and refresh only local provider evidence and ADR/Goal
+/// projections. This is the headless equivalent of the GUI reconciliation loop; it never writes
+/// to a cloud provider and never evicts a source file.
+#[cfg(not(coverage))]
+fn reconcile_receipts(
+    receipt_dir: &Path,
+    evidence_dir: &Path,
+    provider_object_id: Option<&str>,
+    oauth_connections: Option<&Path>,
+    home: &Path,
+    generated_at_ms: u64,
+) -> Result<ReceiptReconciliationReport, String> {
+    let mut report = audit_receipts(receipt_dir, Some(evidence_dir), generated_at_ms)?;
+    report.notices = vec![
+        "provider-attestation-attempted",
+        "local-provider-evidence-write",
+        "dynamic-adr-goal-projection-write",
+        "immutable-receipts-remain-authority",
+        "no-cloud-write",
+        "no-local-eviction",
+    ];
+    let (adr_dir, goal_dir) = cloud_projection_dirs(evidence_dir);
+    let mut paths = std::fs::read_dir(receipt_dir)
+        .map_err(|_| "receipt-directory-read-failed".to_string())?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    paths.sort();
+    for path in paths {
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_string();
+        if regular_file_state(&path) != "present" || !file_name.ends_with(".json") {
+            continue;
+        }
+        let Ok(receipt) = cloud_transfer::read_immutable_receipt(&path) else {
+            continue;
+        };
+        let Some(entry_index) = report
+            .entries
+            .iter()
+            .position(|entry| entry.receipt_id.as_deref() == Some(receipt.receipt_id.as_str()))
+        else {
+            continue;
+        };
+        report.attestation_attempted_count = report.attestation_attempted_count.saturating_add(1);
+        match attest_receipt(
+            &path,
+            evidence_dir,
+            provider_object_id,
+            oauth_connections,
+            home,
+        ) {
+            Ok(attestation) => {
+                report.provider_evidence_written_count =
+                    report.provider_evidence_written_count.saturating_add(1);
+                report.mutation_performed = true;
+                if attestation.goal_state
+                    == cloud_transfer::CloudOffloadGoalState::PendingProviderSync
+                {
+                    report.pending_provider_sync_count =
+                        report.pending_provider_sync_count.saturating_add(1);
+                }
+                if attestation.permit.is_some() {
+                    report.eviction_ready_count = report.eviction_ready_count.saturating_add(1);
+                }
+                let entry = &mut report.entries[entry_index];
+                entry.goal_state = Some(attestation.goal_state);
+                entry.provider_sync_state = Some(attestation.evidence.sync_state);
+                entry.eviction_permit = attestation.permit.is_some();
+                entry.attestation_error = None;
+                entry.issues.extend(attestation.blockers);
+                entry.issues.extend(
+                    attestation
+                        .projection_warnings
+                        .into_iter()
+                        .map(|warning| format!("projection-{warning}")),
+                );
+                entry.adr_projection_state = Some(
+                    projection_state(
+                        &adr_dir.join(format!("{}-latest.json", receipt.receipt_id)),
+                        "adr",
+                        &receipt.receipt_id,
+                    )
+                    .into(),
+                );
+                entry.goal_projection_state = Some(
+                    projection_state(
+                        &goal_dir.join(format!("{}-latest.json", receipt.receipt_id)),
+                        "goal",
+                        &receipt.receipt_id,
+                    )
+                    .into(),
+                );
+                entry.evidence_record_count =
+                    evidence_record_count(&[evidence_dir.to_path_buf()], &receipt.receipt_id);
+            }
+            Err(error) => {
+                let projection_warnings =
+                    cloud_adr::ensure_initial_projection_pair_with_source_state(
+                        &receipt,
+                        &adr_dir,
+                        &goal_dir,
+                        generated_at_ms,
+                    );
+                if projection_warnings.is_empty() {
+                    report.mutation_performed = true;
+                }
+                let projection =
+                    cloud_adr::read_projection_state(&receipt.receipt_id, &adr_dir, &goal_dir);
+                let entry = &mut report.entries[entry_index];
+                entry.attestation_error = Some(stable_reconciliation_error(&error));
+                entry.issues.push("provider-attestation-incomplete".into());
+                if let Some(blocker) =
+                    cloud_transfer::source_eviction_blocker(Path::new(&receipt.source))
+                {
+                    entry.issues.push(blocker.into());
+                }
+                if !projection_warnings.is_empty() {
+                    entry
+                        .issues
+                        .push("dynamic-projection-update-incomplete".into());
+                }
+                entry.issues.extend(
+                    projection_warnings
+                        .into_iter()
+                        .map(|warning| format!("projection-{warning}")),
+                );
+                match projection {
+                    Ok(Some(state)) => {
+                        entry.goal_state = Some(state.goal_state);
+                        entry.provider_sync_state = Some(state.provider_sync_state);
+                        entry.eviction_permit = false;
+                        entry.issues.push("projection-state-not-revalidated".into());
+                        if state.goal_state
+                            == cloud_transfer::CloudOffloadGoalState::PendingProviderSync
+                        {
+                            report.pending_provider_sync_count =
+                                report.pending_provider_sync_count.saturating_add(1);
+                        }
+                    }
+                    Ok(None) => entry
+                        .issues
+                        .push("dynamic-projection-state-unavailable".into()),
+                    Err(_) => entry
+                        .issues
+                        .push("dynamic-projection-state-unavailable".into()),
+                }
+                entry.adr_projection_state = Some(
+                    projection_state(
+                        &adr_dir.join(format!("{}-latest.json", receipt.receipt_id)),
+                        "adr",
+                        &receipt.receipt_id,
+                    )
+                    .into(),
+                );
+                entry.goal_projection_state = Some(
+                    projection_state(
+                        &goal_dir.join(format!("{}-latest.json", receipt.receipt_id)),
+                        "goal",
+                        &receipt.receipt_id,
+                    )
+                    .into(),
+                );
+                entry.evidence_record_count =
+                    evidence_record_count(&[evidence_dir.to_path_buf()], &receipt.receipt_id);
+            }
+        }
+    }
+    report.incomplete_projection_count = report
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.adr_projection_state.as_deref() != Some("valid")
+                || entry.goal_projection_state.as_deref() != Some("valid")
+        })
+        .count() as u64;
+    Ok(report)
 }
 
 #[cfg(not(coverage))]
@@ -2501,6 +2749,9 @@ fn evict_native_receipt(
     )?;
     let (evidence_record, evidence_path) =
         provider_evidence::write_immutable_sync_evidence(evidence_dir, &evidence)?;
+    if let Some(blocker) = cloud_transfer::source_eviction_blocker(Path::new(&receipt.source)) {
+        return Err(blocker.into());
+    }
     let permit = cloud_transfer::approve_local_eviction(&receipt, &evidence_record)
         .map_err(|blockers| blockers.join(","))?;
     let active_use_observed_at_ms = cloud::system_now_ms();
@@ -2589,6 +2840,25 @@ fn run() -> Result<(), String> {
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let args = parse_args(&raw, &home)?;
     validate_action_args(&args)?;
+    if args.reconcile_receipts {
+        let report = reconcile_receipts(
+            args.receipt_dir
+                .as_deref()
+                .ok_or_else(|| "--reconcile-receipts에는 --receipt-dir이 필요함".to_string())?,
+            args.evidence_dir
+                .as_deref()
+                .ok_or_else(|| "--reconcile-receipts에는 --evidence-dir이 필요함".to_string())?,
+            args.provider_object_id.as_deref(),
+            args.oauth_connections.as_deref(),
+            &home,
+            cloud::system_now_ms(),
+        )?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).map_err(|error| error.to_string())?
+        );
+        return Ok(());
+    }
     if args.audit_receipts {
         let report = audit_receipts(
             args.receipt_dir
@@ -3245,6 +3515,49 @@ mod tests {
         let missing_directory =
             parse_args(&["--audit-receipts".into()], Path::new("/home/test")).unwrap();
         assert!(validate_action_args(&missing_directory).is_err());
+    }
+
+    #[test]
+    fn receipt_reconciliation_requires_local_evidence_and_is_distinct_from_audit() {
+        let reconcile = parse_args(
+            &[
+                "--reconcile-receipts".into(),
+                "--receipt-dir".into(),
+                "/app/cloud-receipts".into(),
+                "--evidence-dir".into(),
+                "/app/cloud-provider-evidence".into(),
+            ],
+            Path::new("/home/test"),
+        )
+        .unwrap();
+        assert!(reconcile.reconcile_receipts);
+        assert!(!reconcile.audit_receipts);
+        assert!(validate_action_args(&reconcile).is_ok());
+
+        let missing_evidence = parse_args(
+            &[
+                "--reconcile-receipts".into(),
+                "--receipt-dir".into(),
+                "/receipts".into(),
+            ],
+            Path::new("/home/test"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&missing_evidence).is_err());
+    }
+
+    #[test]
+    fn empty_receipt_reconciliation_does_not_claim_a_cloud_mutation() {
+        let temp = tempfile::tempdir().unwrap();
+        let receipt_dir = temp.path().join("receipts");
+        let evidence_dir = temp.path().join("evidence");
+        std::fs::create_dir_all(&receipt_dir).unwrap();
+        let report =
+            reconcile_receipts(&receipt_dir, &evidence_dir, None, None, temp.path(), 10).unwrap();
+        assert_eq!(report.attestation_attempted_count, 0);
+        assert!(!report.mutation_performed);
+        assert!(!report.cloud_write_executed);
+        assert!(!report.source_eviction_authorized);
     }
 
     #[test]

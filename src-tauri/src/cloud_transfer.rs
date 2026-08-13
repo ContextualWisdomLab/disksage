@@ -33,6 +33,22 @@ pub const RECEIPT_VERSION: u32 = 4;
 pub const CLOUD_COPY_APPROVAL_VERSION: u32 = 1;
 /// Maximum age accepted for an exact cloud-copy approval.
 pub const MAX_CLOUD_COPY_APPROVAL_AGE_MS: u64 = 15 * 60 * 1000;
+
+/// Return a bounded blocker when the source cannot be safely revalidated for a later eviction.
+///
+/// This is deliberately separate from receipt integrity: a valid receipt may outlive its local
+/// source, and that state must keep the dynamic ADR/Goal projection blocked rather than implying
+/// that the source was safely removed.
+#[cfg(not(coverage))]
+pub fn source_eviction_blocker(source: &Path) -> Option<&'static str> {
+    match std::fs::symlink_metadata(source) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Some("source-not-regular-file"),
+        Ok(metadata) if metadata.is_file() => None,
+        Ok(_) => Some("source-not-regular-file"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some("source-not-present"),
+        Err(_) => Some("source-state-unavailable"),
+    }
+}
 #[cfg(not(coverage))]
 const MAX_RECEIPT_BYTES: u64 = 64 * 1024;
 

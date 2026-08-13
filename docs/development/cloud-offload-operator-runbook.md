@@ -15,6 +15,11 @@ The runtime sequence is:
    receipt set; it refreshes provider evidence and the replaceable ADR/Goal projections only. The
    open desktop view repeats this read-only reconciliation every 60 seconds and exposes a manual
    re-run; the reconciliation never writes to cloud or evicts a source.
+   The same operation is available headlessly with
+   `disksage-cloud-plan --reconcile-receipts --receipt-dir ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH`
+   (add the existing OAuth connection flags only when a provider API fallback is required). This
+   command performs local evidence/projection writes only; `--audit-receipts` remains a strictly
+   read-only integrity report.
 4. `is_local_current=true` with `is_uploaded=false` is `pending-upload`; the source remains and
    no eviction permit is issued.
 5. If the destination is valid but the receipt source is missing or unsafe, reconciliation writes

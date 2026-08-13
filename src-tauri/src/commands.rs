@@ -1723,16 +1723,6 @@ fn stable_reconciliation_error(error: &str) -> String {
 }
 
 #[cfg(not(coverage))]
-fn source_eviction_blocker(source: &Path) -> Option<&'static str> {
-    match std::fs::symlink_metadata(source) {
-        Ok(metadata) if metadata.file_type().is_symlink() => Some("source-not-regular-file"),
-        Ok(metadata) if metadata.is_file() => None,
-        Ok(_) => Some("source-not-regular-file"),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some("source-not-present"),
-        Err(_) => Some("source-state-unavailable"),
-    }
-}
-
 #[cfg(not(coverage))]
 fn reconcile_cloud_receipts_inner(
     receipt_dir: &Path,
@@ -1846,13 +1836,18 @@ fn reconcile_cloud_receipts_inner(
             }
             Err(error) => {
                 output.error_count = output.error_count.saturating_add(1);
-                let projection_warnings = cloud_adr::ensure_initial_projection_pair(
+                let projection_warnings = cloud_adr::ensure_initial_projection_pair_with_source_state(
                     &receipt,
                     adr_dir,
                     goal_dir,
                     output.observed_at_ms,
                 );
                 let mut blockers = vec!["provider-attestation-incomplete".into()];
+                if let Some(blocker) =
+                    cloud_transfer::source_eviction_blocker(Path::new(&receipt.source))
+                {
+                    blockers.push(blocker.into());
+                }
                 if !projection_warnings.is_empty() {
                     blockers.push("dynamic-projection-update-incomplete".into());
                 }
@@ -1971,7 +1966,7 @@ fn collect_cloud_attestation_for_receipt(
     let assessment = provider_sync::assess_provider_sync_timeliness(receipt, &evidence)?;
     let (evidence_record, evidence_path) =
         provider_evidence::write_immutable_sync_evidence(evidence_dir, &evidence)?;
-    let source_blocker = source_eviction_blocker(Path::new(&receipt.source));
+    let source_blocker = cloud_transfer::source_eviction_blocker(Path::new(&receipt.source));
     let (mut permit, mut blockers) =
         match cloud_transfer::approve_local_eviction(receipt, &evidence_record) {
             Ok(permit) => (Some(permit), Vec::new()),
@@ -2597,11 +2592,11 @@ mod tests {
         let temporary = tempfile::tempdir().unwrap();
         let missing = temporary.path().join("missing.bin");
         assert_eq!(
-            source_eviction_blocker(&missing),
+            cloud_transfer::source_eviction_blocker(&missing),
             Some("source-not-present")
         );
         std::fs::write(&missing, b"source").unwrap();
-        assert_eq!(source_eviction_blocker(&missing), None);
+        assert_eq!(cloud_transfer::source_eviction_blocker(&missing), None);
     }
 
     #[test]

@@ -373,6 +373,37 @@ pub fn ensure_initial_projection_pair(
     warnings
 }
 
+/// Seed the same no-evidence projection while binding the current source state.
+///
+/// A provider probe can fail before it produces evidence. In that case a missing or unsafe source
+/// must still make the projection explicitly blocked; otherwise a truthful provider-unknown
+/// state could be mistaken for a live source eligible for later eviction.
+#[cfg(not(coverage))]
+pub fn ensure_initial_projection_pair_with_source_state(
+    receipt: &CloudCopyReceipt,
+    adr_dir: &Path,
+    goal_dir: &Path,
+    updated_at_ms: u64,
+) -> Vec<String> {
+    let mut adr = initial_adr_snapshot(receipt, updated_at_ms);
+    let mut goal = initial_goal_snapshot(receipt, updated_at_ms);
+    if let Some(blocker) =
+        crate::cloud_transfer::source_eviction_blocker(Path::new(&receipt.source))
+    {
+        goal.status = "blocked".into();
+        goal.completion_gates.insert("source-present".into(), false);
+        adr.decision = format!("{}-source-state-unverified", adr.decision);
+        adr.consequences
+            .push(format!("source-state-blocked:{blocker}"));
+    }
+    let (_, _, mut warnings) = write_projection_pair(adr_dir, &adr, goal_dir, &goal);
+    warnings.retain(|warning| {
+        !warning.ends_with("cloud-adr-state-regression")
+            && !warning.ends_with("cloud-goal-state-regression")
+    });
+    warnings
+}
+
 fn read_latest_projection<T: serde::de::DeserializeOwned>(
     directory: &Path,
     receipt_id: &str,
@@ -620,6 +651,32 @@ mod tests {
         assert_eq!(adr.provider_sync_state, ProviderSyncState::Unknown);
         assert_eq!(goal.goal_state, CloudOffloadGoalState::CopyVerified);
         assert_eq!(goal.provider_sync_state, ProviderSyncState::Unknown);
+        assert!(goal.evidence_record_id.is_none());
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn source_state_projection_blocks_missing_source_without_fabricating_evidence() {
+        let temporary = tempfile::tempdir().unwrap();
+        let adr_dir = temporary.path().join("adr");
+        let goal_dir = temporary.path().join("goals");
+        let receipt = receipt();
+        assert!(ensure_initial_projection_pair_with_source_state(
+            &receipt, &adr_dir, &goal_dir, 4
+        )
+        .is_empty());
+
+        let adr: CloudOffloadAdrSnapshot = serde_json::from_slice(
+            &std::fs::read(adr_dir.join(format!("{}-latest.json", receipt.receipt_id))).unwrap(),
+        )
+        .unwrap();
+        let goal: CloudOffloadGoalSnapshot = serde_json::from_slice(
+            &std::fs::read(goal_dir.join(format!("{}-latest.json", receipt.receipt_id))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(goal.status, "blocked");
+        assert_eq!(goal.completion_gates["source-present"], false);
+        assert!(adr.decision.ends_with("-source-state-unverified"));
         assert!(goal.evidence_record_id.is_none());
     }
 
