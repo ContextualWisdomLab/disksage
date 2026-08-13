@@ -77,6 +77,22 @@ fn parse_pending_indexable_count(line: &str) -> Option<u64> {
         .ok()
 }
 
+fn has_reconciliation_backlog(line: &str) -> bool {
+    let line = line.trim_start();
+    let line = line.strip_prefix("+ ").unwrap_or(line);
+    let Some(rest) = line.strip_prefix("reconciliation (") else {
+        return false;
+    };
+    let Some((count, _)) = rest.split_once(" entries") else {
+        return false;
+    };
+    count
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .is_some_and(|count| count > 0)
+}
+
 fn probe_output_is_truncated(bytes_len: usize) -> bool {
     bytes_len as u64 > MAX_DUMP_BYTES
 }
@@ -96,6 +112,7 @@ pub fn parse_dump(
     let mut download_progress_present = false;
     let mut pending_indexable_count = None;
     let mut needs_indexing = false;
+    let mut reconciliation_pending = false;
     let mut has_error = false;
     let mut has_filename_too_long = false;
     let mut has_temporarily_disconnected = false;
@@ -114,6 +131,7 @@ pub fn parse_dump(
         if marker == "needs-indexing: yes" || marker == "indexing: yes" {
             needs_indexing = true;
         }
+        reconciliation_pending |= has_reconciliation_backlog(marker);
         has_filename_too_long |= marker.contains("POSIX 63")
             || marker.contains("파일 이름이 너무 깁니다")
             || marker_lower.contains("filename too long");
@@ -143,7 +161,8 @@ pub fn parse_dump(
     let pending = upload_progress_present
         || download_progress_present
         || needs_indexing
-        || pending_indexable_count.is_some_and(|count| count > 0);
+        || pending_indexable_count.is_some_and(|count| count > 0)
+        || reconciliation_pending;
     let state = if has_error {
         ProviderGlobalSyncState::Error
     } else if pending {
@@ -157,6 +176,9 @@ pub fn parse_dump(
     }
     if needs_indexing || pending_indexable_count.is_some_and(|count| count > 0) {
         blockers.push("provider-global-sync-indexing-pending".into());
+    }
+    if reconciliation_pending {
+        blockers.push("provider-global-sync-reconciliation-pending".into());
     }
     if has_filename_too_long {
         blockers.push("provider-global-sync-filename-too-long".into());
@@ -355,6 +377,13 @@ sync engine state:
       i:227487 create-item: error:'NSError: POSIX 63 "filename too long"'
 "#;
 
+    const RECONCILIATION_BACKLOG_DUMP: &str = r#"
+com.microsoft.OneDrive.FileProvider
+sync engine state:
+    + scheduling state: running
+    + reconciliation (277399 entries):
+"#;
+
     #[test]
     fn quiet_dump_is_clear_without_retaining_paths() {
         let report = parse_dump(CloudProvider::Onedrive, QUIET_DUMP).unwrap();
@@ -385,6 +414,16 @@ sync engine state:
         assert!(report
             .blockers
             .contains(&"provider-global-sync-filename-too-long".into()));
+        assert!(require_new_copy_admission(&report).is_err());
+    }
+
+    #[test]
+    fn reconciliation_backlog_blocks_without_transfer_markers() {
+        let report = parse_dump(CloudProvider::Onedrive, RECONCILIATION_BACKLOG_DUMP).unwrap();
+        assert_eq!(report.state, ProviderGlobalSyncState::Pending);
+        assert!(report
+            .blockers
+            .contains(&"provider-global-sync-reconciliation-pending".into()));
         assert!(require_new_copy_admission(&report).is_err());
     }
 
