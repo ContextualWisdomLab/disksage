@@ -1550,8 +1550,9 @@ fn create_cloud_candidate_receipt(
     let mut projection_warnings = Vec::new();
     let (adr_path, goal_path) = match app.path().app_data_dir() {
         Ok(app_data_dir) => {
-            let adr = cloud_adr::initial_adr_snapshot(&receipt, cloud::system_now_ms());
-            let goal = cloud_adr::initial_goal_snapshot(&receipt, cloud::system_now_ms());
+            let projection_updated_at_ms = cloud::system_now_ms();
+            let adr = cloud_adr::initial_adr_snapshot(&receipt, projection_updated_at_ms);
+            let goal = cloud_adr::initial_goal_snapshot(&receipt, projection_updated_at_ms);
             let (adr_path, goal_path, warnings) = cloud_adr::write_projection_pair(
                 &app_data_dir.join("cloud-adr"),
                 &adr,

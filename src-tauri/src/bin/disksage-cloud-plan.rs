@@ -2996,8 +2996,9 @@ fn run() -> Result<(), String> {
             )?
         };
         let (adr_dir, goal_dir) = cloud_projection_dirs(receipt_dir);
-        let adr = cloud_adr::initial_adr_snapshot(&receipt, cloud::system_now_ms());
-        let goal = cloud_adr::initial_goal_snapshot(&receipt, cloud::system_now_ms());
+        let projection_updated_at_ms = cloud::system_now_ms();
+        let adr = cloud_adr::initial_adr_snapshot(&receipt, projection_updated_at_ms);
+        let goal = cloud_adr::initial_goal_snapshot(&receipt, projection_updated_at_ms);
         let (adr_path, goal_path, projection_warnings) =
             cloud_adr::write_projection_pair(&adr_dir, &adr, &goal_dir, &goal);
         println!(
