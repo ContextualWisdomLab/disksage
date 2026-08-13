@@ -612,6 +612,7 @@
         <strong>{copied.action === "adopt-existing-copy" ? "기존 클라우드 복사본 검증·채택 완료" : "검증 복사 완료"} · 원본 보존됨</strong>
         <div class="context">영수증 {copied.receipt.receipt_id} · {fmtBytes(copied.receipt.bytes)}</div>
         <div class="path">{copied.receipt.destination}</div>
+        <p class="muted">동적 Goal: {copied.goal_path} · 공급자 증거 대기 중</p>
         {#if copied.receipt.provider === "google-drive"}
           <div class="provider-auth">
             <label>
@@ -647,10 +648,11 @@
             <p class="warning">아직 제거 불가: {attestation.blockers.join(", ")}</p>
           {/if}
           <p class="muted">변경 불가 공급자 증거 기록: {attestation.evidence_path}</p>
-          <p class="muted">동적 ADR/Goal 스냅샷: {attestation.adr_path}</p>
+          <p class="muted">동적 ADR: {attestation.adr_path}</p>
+          <p class="muted">동적 Goal: {attestation.goal_path}</p>
           {#if eviction}
             <p class="safe">Goal이 source-evicted로 갱신되었습니다. 원본은 OS 휴지통에 있으며 클라우드 복사본은 유지됩니다.</p>
-            <p class="muted">휴지통 작업 기록: {eviction.eviction.completion_path} · 동적 ADR: {eviction.adr_path}</p>
+            <p class="muted">휴지통 작업 기록: {eviction.eviction.completion_path} · 동적 ADR: {eviction.adr_path} · 동적 Goal: {eviction.goal_path}</p>
           {/if}
         {/if}
       </div>

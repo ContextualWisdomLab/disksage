@@ -1,15 +1,17 @@
 //! Dynamic, machine-readable ADR state for one cloud offload goal.
 //!
 //! The Markdown ADR documents the policy. This latest snapshot records the decision made by the
-//! running application after each provider attestation, so the goal and its evidence cannot drift
+//! running application after copy/attestation/eviction, so the goal and its evidence cannot drift
 //! silently between an operator view and the persisted receipt.
 
-use crate::cloud_transfer::{CloudOffloadGoalState, ProviderSyncState};
+use crate::cloud_transfer::{CloudCopyReceipt, CloudOffloadGoalState, ProviderSyncState};
 use crate::provider_evidence::ProviderSyncEvidenceRecord;
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 pub const CLOUD_ADR_SCHEMA_VERSION: u32 = 1;
+pub const CLOUD_GOAL_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -23,6 +25,25 @@ pub struct CloudOffloadAdrSnapshot {
     pub decision: String,
     pub consequences: Vec<String>,
     pub evidence_record_id: String,
+    pub updated_at_ms: u64,
+}
+
+/// Runtime Goal projection written beside the ADR snapshot.
+///
+/// The immutable provider evidence and receipt remain the authorities. This file is a
+/// replaceable, machine-readable view for UI, agents, and reconciliation jobs.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CloudOffloadGoalSnapshot {
+    pub schema_version: u32,
+    pub goal_id: String,
+    pub status: String,
+    pub receipt_id: String,
+    pub goal_state: CloudOffloadGoalState,
+    pub provider_sync_state: ProviderSyncState,
+    pub completion_gates: BTreeMap<String, bool>,
+    pub safety_invariant: String,
+    pub evidence_record_id: Option<String>,
     pub updated_at_ms: u64,
 }
 
@@ -74,6 +95,83 @@ pub fn snapshot_from_evidence(
     }
 }
 
+/// Build the runtime Goal from the immutable receipt and the same evidence used by the eviction
+/// gate. A malformed record never presents as a satisfied completion gate.
+pub fn goal_snapshot_from_evidence(
+    receipt: &CloudCopyReceipt,
+    record: &ProviderSyncEvidenceRecord,
+    goal_state: CloudOffloadGoalState,
+    updated_at_ms: u64,
+) -> CloudOffloadGoalSnapshot {
+    let evidence = &record.evidence;
+    let evidence_valid = crate::provider_evidence::validate_sync_evidence_record(record).is_ok();
+    let content_verified = receipt.copy_verified
+        && receipt.bytes == evidence.observed_bytes
+        && receipt.blake3 == evidence.destination_blake3;
+    let lineage_bound = receipt.lineage.is_some() && receipt.lineage_fingerprint.is_some();
+    let provider_sync_complete = evidence_valid
+        && evidence.sync_complete
+        && evidence.sync_state == ProviderSyncState::Complete;
+    let eviction_permit = matches!(
+        goal_state,
+        CloudOffloadGoalState::EvictionReady | CloudOffloadGoalState::SourceEvicted
+    );
+    let mut completion_gates = BTreeMap::new();
+    completion_gates.insert("metadata-and-lineage-bound".into(), lineage_bound);
+    completion_gates.insert("copy-content-verified".into(), content_verified);
+    completion_gates.insert(
+        "provider-sync-state-complete".into(),
+        provider_sync_complete,
+    );
+    completion_gates.insert("immutable-evidence-record-valid".into(), evidence_valid);
+    completion_gates.insert("explicit-eviction-permit".into(), eviction_permit);
+    CloudOffloadGoalSnapshot {
+        schema_version: CLOUD_GOAL_SCHEMA_VERSION,
+        goal_id: "disksage-cloud-offload".into(),
+        status: if goal_state == CloudOffloadGoalState::SourceEvicted {
+            "completed".into()
+        } else {
+            "active".into()
+        },
+        receipt_id: receipt.receipt_id.clone(),
+        goal_state,
+        provider_sync_state: evidence.sync_state,
+        completion_gates,
+        safety_invariant: "source-retained-until-an-explicit-trash-step".into(),
+        evidence_record_id: Some(record.record_id.clone()),
+        updated_at_ms,
+    }
+}
+
+/// Build the initial Goal projection immediately after a verified copy, before provider evidence
+/// exists. The missing evidence gate is explicit rather than represented by a fabricated record.
+pub fn initial_goal_snapshot(
+    receipt: &CloudCopyReceipt,
+    updated_at_ms: u64,
+) -> CloudOffloadGoalSnapshot {
+    let mut completion_gates = BTreeMap::new();
+    completion_gates.insert(
+        "metadata-and-lineage-bound".into(),
+        receipt.lineage.is_some() && receipt.lineage_fingerprint.is_some(),
+    );
+    completion_gates.insert("copy-content-verified".into(), receipt.copy_verified);
+    completion_gates.insert("provider-sync-state-complete".into(), false);
+    completion_gates.insert("immutable-evidence-record-valid".into(), false);
+    completion_gates.insert("explicit-eviction-permit".into(), false);
+    CloudOffloadGoalSnapshot {
+        schema_version: CLOUD_GOAL_SCHEMA_VERSION,
+        goal_id: "disksage-cloud-offload".into(),
+        status: "active".into(),
+        receipt_id: receipt.receipt_id.clone(),
+        goal_state: CloudOffloadGoalState::CopyVerified,
+        provider_sync_state: ProviderSyncState::Unknown,
+        completion_gates,
+        safety_invariant: "source-retained-until-an-explicit-trash-step".into(),
+        evidence_record_id: None,
+        updated_at_ms,
+    }
+}
+
 fn secure_directory(directory: &Path) -> Result<(), String> {
     std::fs::create_dir_all(directory)
         .map_err(|_| "cloud-adr-directory-create-failed".to_string())?;
@@ -114,6 +212,38 @@ pub fn write_latest_snapshot(
     if std::fs::rename(&temporary, &path).is_err() {
         let _ = std::fs::remove_file(&temporary);
         return Err("cloud-adr-rename-failed".into());
+    }
+    Ok(path)
+}
+
+/// Atomically replace the latest Goal snapshot for a receipt.
+pub fn write_latest_goal_snapshot(
+    directory: &Path,
+    snapshot: &CloudOffloadGoalSnapshot,
+) -> Result<PathBuf, String> {
+    secure_directory(directory)?;
+    let path = directory.join(format!("{}-latest.json", snapshot.receipt_id));
+    let temporary = directory.join(format!(
+        ".{}-{}-{}-latest.json.tmp",
+        snapshot.receipt_id,
+        snapshot.updated_at_ms,
+        std::process::id()
+    ));
+    let encoded =
+        serde_json::to_vec_pretty(snapshot).map_err(|_| "cloud-goal-json-invalid".to_string())?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(|_| "cloud-goal-temp-create-failed".to_string())?;
+    file.write_all(&encoded)
+        .map_err(|_| "cloud-goal-write-failed".to_string())?;
+    file.sync_all()
+        .map_err(|_| "cloud-goal-sync-failed".to_string())?;
+    drop(file);
+    if std::fs::rename(&temporary, &path).is_err() {
+        let _ = std::fs::remove_file(&temporary);
+        return Err("cloud-goal-rename-failed".into());
     }
     Ok(path)
 }
@@ -201,5 +331,63 @@ mod tests {
                 std::process::id()
             ))
             .exists());
+    }
+
+    #[test]
+    fn goal_snapshot_is_derived_from_receipt_and_provider_evidence() {
+        let record = ProviderSyncEvidenceRecord {
+            version: 1,
+            record_id: "a".repeat(64),
+            evidence: crate::cloud_transfer::ProviderSyncEvidence {
+                receipt_id: "b".repeat(64),
+                provider: crate::cloud::CloudProvider::Icloud,
+                destination: "/cloud/file.bin".into(),
+                observed_bytes: 1,
+                destination_blake3: "c".repeat(64),
+                confirmed_at_ms: 2,
+                kind: crate::cloud_transfer::SyncEvidenceKind::ProviderNativeStatus,
+                evidence_id: "foundation:test".into(),
+                sync_complete: false,
+                sync_state: ProviderSyncState::PendingUpload,
+                remote_content: None,
+            },
+        };
+        let receipt = CloudCopyReceipt {
+            version: crate::cloud_transfer::RECEIPT_VERSION,
+            receipt_id: "b".repeat(64),
+            candidate_fingerprint: "d".repeat(64),
+            provider: crate::cloud::CloudProvider::Icloud,
+            source: "/source/file.bin".into(),
+            destination: "/cloud/file.bin".into(),
+            bytes: 1,
+            blake3: "c".repeat(64),
+            sha256: "e".repeat(64),
+            quick_xor_base64: "".into(),
+            source_modified_ms: 1,
+            copied_at_ms: 1,
+            copy_verified: true,
+            provider_sync_confirmed: false,
+            lineage_fingerprint: None,
+            lineage: None,
+        };
+        let snapshot = goal_snapshot_from_evidence(
+            &receipt,
+            &record,
+            CloudOffloadGoalState::PendingProviderSync,
+            3,
+        );
+        assert_eq!(snapshot.status, "active");
+        assert!(snapshot.completion_gates["copy-content-verified"]);
+        assert!(!snapshot.completion_gates["provider-sync-state-complete"]);
+        assert!(!snapshot.completion_gates["explicit-eviction-permit"]);
+        let directory = tempfile::tempdir().unwrap();
+        let path = write_latest_goal_snapshot(directory.path(), &snapshot).unwrap();
+        let encoded = std::fs::read(path).unwrap();
+        let persisted: CloudOffloadGoalSnapshot = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(
+            persisted.goal_state,
+            CloudOffloadGoalState::PendingProviderSync
+        );
+        assert_eq!(persisted.evidence_record_id, Some(record.record_id));
     }
 }

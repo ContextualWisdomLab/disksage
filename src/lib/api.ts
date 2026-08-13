@@ -584,6 +584,7 @@ export interface CloudCopyOutput {
   goal_state: CloudOffloadGoalState;
   receipt: CloudCopyReceipt;
   receipt_path: string;
+  goal_path: string;
 }
 
 export type SyncEvidenceKind = "provider-api" | "provider-native-status";
@@ -655,6 +656,7 @@ export interface CloudAttestationOutput {
   evidence_record: ProviderSyncEvidenceRecord;
   evidence_path: string;
   adr_path: string;
+  goal_path: string;
   permit: LocalEvictionPermit | null;
   blockers: string[];
 }
@@ -679,6 +681,7 @@ export interface CloudEvictionOutput {
   goal_state: "source-evicted";
   eviction: CloudEvictionResult;
   adr_path: string;
+  goal_path: string;
 }
 
 export const listCloudRoots = () => invoke<CloudRoot[]>("list_cloud_roots");

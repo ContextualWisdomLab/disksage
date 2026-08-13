@@ -1,7 +1,8 @@
 {
   "goal_id": "disksage-cloud-offload",
   "status": "active",
-  "state_source": "runtime:cloud-adr/<receipt-id>-latest.json",
+  "state_source": "runtime:cloud-goals/<receipt-id>-latest.json",
+  "adr_source": "runtime:cloud-adr/<receipt-id>-latest.json",
   "states": [
     "copy-verified",
     "pending-provider-sync",

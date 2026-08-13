@@ -60,6 +60,15 @@ destination, bytes, digest, 위치와 일치하고 `sync_complete`인 경우에�
 permit이 생성된다. permit 없이 원본을 Trash로 보내지 않는다. 회수 전에는 source
 metadata와 content digest를 다시 확인하고, 실패하면 staging을 복구한다.
 
+복사 직후와 각 attestation·휴지통 이동 뒤에는 app-data의
+`cloud-goals/<receipt-id>-latest.json`을 원자적으로 갱신하고, attestation 이후에는
+`cloud-adr/<receipt-id>-latest.json`도 갱신한다. ADR은 결정·결과를, Goal은
+현재 상태와 completion gate를 보여주는 교체 가능한 projection이다. 복사 직후에는
+provider/evidence gate가 명시적으로 false다. `pending-upload`나
+`is_local_current=true`/`is_uploaded=false`는 Goal을 `pending-provider-sync`로 유지하며
+eviction permit을 만들지 않는다. 운영 도구는 Goal 파일을 권한 증거로 사용하지 말고,
+항상 immutable receipt/provider evidence를 재검증해야 한다.
+
 ## 5. 승인 문구의 범위
 
 `승인`, `네` 같은 일반 동의는 현재 후보에 결박되지 않는다. 실행 직전에 DiskSage가

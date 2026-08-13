@@ -1286,6 +1286,7 @@ pub struct CloudCopyOutput {
     pub goal_state: cloud_transfer::CloudOffloadGoalState,
     pub receipt: cloud_transfer::CloudCopyReceipt,
     pub receipt_path: String,
+    pub goal_path: String,
 }
 
 #[cfg(not(coverage))]
@@ -1354,6 +1355,14 @@ fn create_cloud_candidate_receipt(
             capacity.as_ref(),
         )?
     };
+    let goal = cloud_adr::initial_goal_snapshot(&receipt, cloud::system_now_ms());
+    let goal_path = cloud_adr::write_latest_goal_snapshot(
+        &app.path()
+            .app_data_dir()
+            .map_err(|_| "app-data-directory-unavailable".to_string())?
+            .join("cloud-goals"),
+        &goal,
+    )?;
     Ok(CloudCopyOutput {
         action: if adopt_existing {
             "adopt-existing-copy"
@@ -1363,6 +1372,7 @@ fn create_cloud_candidate_receipt(
         goal_state: cloud_transfer::CloudOffloadGoalState::CopyVerified,
         receipt,
         receipt_path: receipt_path.to_string_lossy().into_owned(),
+        goal_path: goal_path.to_string_lossy().into_owned(),
     })
 }
 
@@ -1434,6 +1444,7 @@ pub struct CloudAttestationOutput {
     pub evidence_record: provider_evidence::ProviderSyncEvidenceRecord,
     pub evidence_path: String,
     pub adr_path: String,
+    pub goal_path: String,
     pub permit: Option<cloud_transfer::LocalEvictionPermit>,
     pub blockers: Vec<String>,
 }
@@ -1444,6 +1455,7 @@ pub struct CloudEvictionOutput {
     pub goal_state: cloud_transfer::CloudOffloadGoalState,
     pub eviction: cloud_eviction::CloudEvictionResult,
     pub adr_path: String,
+    pub goal_path: String,
 }
 
 /// Read-only provider attestation. OneDrive and Google Drive access tokens are refreshed from an OS
@@ -1468,6 +1480,7 @@ pub async fn attest_cloud_copy(
         .join(format!("{receipt_id}.json"));
     let evidence_dir = app_data_dir.join("cloud-provider-evidence");
     let adr_dir = app_data_dir.join("cloud-adr");
+    let goal_dir = app_data_dir.join("cloud-goals");
     let connection_path = oauth_connections_path(&app)?;
     let cloud_roots = cloud::discover_cloud_roots(&resolve_home(&app));
     tauri::async_runtime::spawn_blocking(move || {
@@ -1567,12 +1580,20 @@ pub async fn attest_cloud_copy(
             confirmed_at_ms,
         );
         let adr_path = cloud_adr::write_latest_snapshot(&adr_dir, &adr)?;
+        let goal = cloud_adr::goal_snapshot_from_evidence(
+            &receipt,
+            &evidence_record,
+            goal_state,
+            confirmed_at_ms,
+        );
+        let goal_path = cloud_adr::write_latest_goal_snapshot(&goal_dir, &goal)?;
         Ok(CloudAttestationOutput {
             goal_state,
             evidence,
             evidence_record,
             evidence_path: evidence_path.to_string_lossy().into_owned(),
             adr_path: adr_path.to_string_lossy().into_owned(),
+            goal_path: goal_path.to_string_lossy().into_owned(),
             permit,
             blockers,
         })
@@ -1621,10 +1642,19 @@ pub async fn evict_cloud_source(
         cloud::system_now_ms(),
     );
     let adr_path = cloud_adr::write_latest_snapshot(&app_data_dir.join("cloud-adr"), &adr)?;
+    let goal = cloud_adr::goal_snapshot_from_evidence(
+        &receipt,
+        &attestation.evidence_record,
+        cloud_transfer::CloudOffloadGoalState::SourceEvicted,
+        cloud::system_now_ms(),
+    );
+    let goal_path =
+        cloud_adr::write_latest_goal_snapshot(&app_data_dir.join("cloud-goals"), &goal)?;
     Ok(CloudEvictionOutput {
         goal_state: cloud_transfer::CloudOffloadGoalState::SourceEvicted,
         eviction,
         adr_path: adr_path.to_string_lossy().into_owned(),
+        goal_path: goal_path.to_string_lossy().into_owned(),
     })
 }
 
