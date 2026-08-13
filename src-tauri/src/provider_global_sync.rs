@@ -8,7 +8,9 @@
 use crate::cloud::CloudProvider;
 use serde::{Deserialize, Serialize};
 
-const MAX_DUMP_BYTES: u64 = 512 * 1024;
+// macOS provider dumps include bounded item summaries even with --limit-dump-size. Keep enough
+// room for real OneDrive/Google Drive dumps while retaining a hard memory ceiling.
+const MAX_DUMP_BYTES: u64 = 32 * 1024 * 1024;
 const PROBE_TIMEOUT_MS: u64 = 20_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
