@@ -285,6 +285,51 @@ fn connection_document_rejects_non_regular_oversized_invalid_and_unsupported_doc
     );
 }
 
+#[test]
+fn connection_document_rejects_each_structural_authority_field_before_root_matching() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("connections.json");
+
+    let mut malformed = Vec::new();
+
+    let mut connection = bound_connection(CloudProvider::Onedrive);
+    connection.connection_id = "f".repeat(63);
+    malformed.push((connection, "oauth-connection-invalid"));
+
+    let mut connection = bound_connection(CloudProvider::Onedrive);
+    connection.connection_id = "g".repeat(64);
+    malformed.push((connection, "oauth-connection-invalid"));
+
+    let mut connection = bound_connection(CloudProvider::Onedrive);
+    connection.cloud_root_id = "   ".into();
+    malformed.push((connection, "oauth-connection-invalid"));
+
+    let mut connection = bound_connection(CloudProvider::Onedrive);
+    connection.cloud_root_path = "relative/cloud-root".into();
+    malformed.push((connection, "oauth-connection-invalid"));
+
+    let mut connection = bound_connection(CloudProvider::Onedrive);
+    connection.scope = "Files.ReadWrite offline_access".into();
+    malformed.push((connection, "oauth-connection-invalid"));
+
+    let mut connection = bound_connection(CloudProvider::Onedrive);
+    connection.client_id = "not-a-microsoft-client".into();
+    malformed.push((connection, "oauth-client-id-provider-format-invalid"));
+
+    for (connection, expected_error) in malformed {
+        fs::write(
+            &path,
+            serde_json::to_vec(&json!({
+                "version": 1,
+                "connections": [connection]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(load_connections(&path).unwrap_err(), expected_error);
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn connection_document_rejects_symbolic_links_without_following_them() {
