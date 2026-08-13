@@ -55,6 +55,7 @@
   });
 
   async function scan() {
+    ++navSeq;
     operationError = "";
     scanning = true;
     node = null;
