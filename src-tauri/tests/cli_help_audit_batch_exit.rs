@@ -1,8 +1,58 @@
 //! Black-box process contracts for DiskSage audit-oriented operational CLIs.
 
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
-fn assert_help_success(binary: &str, flag: &str, usage_marker: &str) {
+fn build_feature_gated_audit_binaries() -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let target_dir = tempfile::tempdir().expect("isolated Cargo target directory must be created");
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+    let status = Command::new(cargo)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .args([
+            "build",
+            "--locked",
+            "--features",
+            "cloud-cli",
+            "--bin",
+            "disksage-multipart-archive-audit",
+            "--bin",
+            "disksage-incomplete-download-audit",
+            "--target-dir",
+        ])
+        .arg(target_dir.path())
+        .status()
+        .expect("feature-gated audit CLIs must be buildable for their process contracts");
+    assert!(
+        status.success(),
+        "feature-gated audit CLI build must succeed before process assertions"
+    );
+
+    let executable_name = |name: &str| {
+        target_dir
+            .path()
+            .join("debug")
+            .join(format!("{name}{}", std::env::consts::EXE_SUFFIX))
+    };
+    let multipart_archive_audit = executable_name("disksage-multipart-archive-audit");
+    let incomplete_download_audit = executable_name("disksage-incomplete-download-audit");
+    assert!(
+        multipart_archive_audit.is_file(),
+        "multipart archive audit binary must exist after the explicit cloud-cli build"
+    );
+    assert!(
+        incomplete_download_audit.is_file(),
+        "incomplete download audit binary must exist after the explicit cloud-cli build"
+    );
+
+    (
+        target_dir,
+        multipart_archive_audit,
+        incomplete_download_audit,
+    )
+}
+
+fn assert_help_success(binary: &Path, flag: &str, usage_marker: &str) {
     let output = Command::new(binary)
         .env_remove("HOME")
         .arg(flag)
@@ -26,7 +76,7 @@ fn assert_help_success(binary: &str, flag: &str, usage_marker: &str) {
     );
 }
 
-fn assert_invalid_argument_is_bounded(binary: &str) {
+fn assert_invalid_argument_is_bounded(binary: &Path) {
     let output = Command::new(binary)
         .env_remove("HOME")
         .arg("--opaque-option=not-shown")
@@ -49,7 +99,7 @@ fn assert_invalid_argument_is_bounded(binary: &str) {
     );
 }
 
-fn assert_help_does_not_hide_invalid_argument(binary: &str) {
+fn assert_help_does_not_hide_invalid_argument(binary: &Path) {
     let output = Command::new(binary)
         .env_remove("HOME")
         .args(["--help", "--opaque-option=not-shown"])
@@ -73,27 +123,23 @@ fn assert_help_does_not_hide_invalid_argument(binary: &str) {
 }
 
 #[test]
-fn multipart_archive_audit_help_is_successful_and_invalid_arguments_are_bounded() {
-    let binary = env!("CARGO_BIN_EXE_disksage-multipart-archive-audit");
-    assert_help_success(
-        binary,
-        "--help",
-        "usage: disksage-multipart-archive-audit",
-    );
-    assert_help_success(binary, "-h", "usage: disksage-multipart-archive-audit");
-    assert_invalid_argument_is_bounded(binary);
-    assert_help_does_not_hide_invalid_argument(binary);
-}
+fn audit_cli_help_is_successful_and_invalid_arguments_are_bounded() {
+    let (_target_dir, multipart_archive_audit, incomplete_download_audit) =
+        build_feature_gated_audit_binaries();
 
-#[test]
-fn incomplete_download_audit_help_is_successful_and_invalid_arguments_are_bounded() {
-    let binary = env!("CARGO_BIN_EXE_disksage-incomplete-download-audit");
-    assert_help_success(
-        binary,
-        "--help",
-        "usage: disksage-incomplete-download-audit",
-    );
-    assert_help_success(binary, "-h", "usage: disksage-incomplete-download-audit");
-    assert_invalid_argument_is_bounded(binary);
-    assert_help_does_not_hide_invalid_argument(binary);
+    for (binary, usage_marker) in [
+        (
+            multipart_archive_audit.as_path(),
+            "usage: disksage-multipart-archive-audit",
+        ),
+        (
+            incomplete_download_audit.as_path(),
+            "usage: disksage-incomplete-download-audit",
+        ),
+    ] {
+        assert_help_success(binary, "--help", usage_marker);
+        assert_help_success(binary, "-h", usage_marker);
+        assert_invalid_argument_is_bounded(binary);
+        assert_help_does_not_hide_invalid_argument(binary);
+    }
 }
