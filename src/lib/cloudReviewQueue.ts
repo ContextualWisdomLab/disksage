@@ -120,6 +120,7 @@ const CLOUD_DECISION_REASON_LABELS: Readonly<Record<string, string>> = {
   "spreadsheet-schema-profile-missing": "스프레드시트 스키마 정보를 확인하지 못함",
   "spreadsheet-sensitive-column-name-detected": "민감정보로 보이는 스프레드시트 열 이름이 있음",
   "structured-data-may-contain-personal-data": "구조화 데이터에 개인정보가 포함될 수 있음",
+  "system-managed-photos-library-data": "Photos 라이브러리 내부 데이터는 패키지 전체 처리 없이 이동할 수 없음",
 };
 
 export function cloudDecisionReasonLabel(reason: string): string {

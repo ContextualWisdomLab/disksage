@@ -3596,6 +3596,9 @@ fn source_blocked_reason(
     kind: ArchiveKind,
     metadata: &ContentMetadata,
 ) -> Option<String> {
+    if path_inside_managed_photo_library(path) {
+        return Some("system-managed-photos-library-data".into());
+    }
     if kind == ArchiveKind::IncompleteDownload {
         return Some("incomplete-download".into());
     }
@@ -3618,6 +3621,16 @@ fn source_blocked_reason(
         return Some("archive-index-unreadable".into());
     }
     None
+}
+
+/// Photos databases are individually archive-shaped but are owned by the Photos package.
+/// Moving one member would corrupt the library; only a future package-aware operation may handle
+/// the bundle as a whole.
+fn path_inside_managed_photo_library(path: &Path) -> bool {
+    path.components().any(|component| {
+        let name = normalized_account_text(&component.as_os_str().to_string_lossy());
+        name.ends_with(".photoslibrary") || name.ends_with(".photolibrary")
+    })
 }
 
 fn planner_blocked_reason(
@@ -5398,6 +5411,30 @@ mod tests {
             )
             .as_deref(),
             Some("archive-index-unreadable")
+        );
+    }
+
+    #[test]
+    fn photos_library_members_are_non_overridable_planner_blocks() {
+        let destination = Path::new("/definitely/missing/disksage-destination");
+        assert_eq!(
+            planner_blocked_reason(
+                Path::new("Pictures/Photos Library.photoslibrary/database/Photos.sqlite"),
+                ArchiveKind::Dataset,
+                &ContentMetadata::default(),
+                destination,
+            )
+            .as_deref(),
+            Some("system-managed-photos-library-data")
+        );
+        assert_eq!(
+            planner_blocked_reason(
+                Path::new("Pictures/export/Photos.sqlite"),
+                ArchiveKind::Dataset,
+                &ContentMetadata::default(),
+                destination,
+            ),
+            None
         );
     }
 

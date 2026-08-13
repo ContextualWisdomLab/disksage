@@ -65,6 +65,11 @@ function decision(
 }
 
 describe("cloud review queue", () => {
+  it("labels non-overridable managed-library blockers", () => {
+    expect(cloudDecisionReasonLabel("system-managed-photos-library-data"))
+      .toBe("Photos 라이브러리 내부 데이터는 패키지 전체 처리 없이 이동할 수 없음");
+  });
+
   it("accepts only a decision bound to the current review fingerprint", () => {
     const item = candidate("a", 10);
     const exact = decision(item, "approved");
