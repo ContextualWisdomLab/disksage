@@ -209,10 +209,19 @@ impl CatalogRoot {
     }
 
     fn directory_size(&self) -> u64 {
+        #[cfg(target_os = "macos")]
+        {
+            return self.directory_size_from_handle();
+        }
+
+        #[cfg(not(target_os = "macos"))]
         let Some(stable) = self.stable_path() else { return 0 };
+        #[cfg(not(target_os = "macos"))]
         let Ok(entries) = std::fs::read_dir(stable) else { return 0 };
+        #[cfg(not(target_os = "macos"))]
         let mut bytes = 0u64;
 
+        #[cfg(not(target_os = "macos"))]
         for entry in entries.filter_map(Result::ok) {
             let path = entry.path();
             let Ok(metadata) = std::fs::symlink_metadata(&path) else { continue };
@@ -237,13 +246,22 @@ impl CatalogRoot {
             }
         }
 
+        #[cfg(not(target_os = "macos"))]
         bytes
     }
 
     fn child_paths(&self) -> Vec<PathBuf> {
+        #[cfg(target_os = "macos")]
+        {
+            return self.child_paths_from_handle();
+        }
+
+        #[cfg(not(target_os = "macos"))]
         let Some(stable) = self.stable_path() else { return Vec::new() };
+        #[cfg(not(target_os = "macos"))]
         let Ok(entries) = std::fs::read_dir(stable) else { return Vec::new() };
 
+        #[cfg(not(target_os = "macos"))]
         entries
             .filter_map(Result::ok)
             .filter_map(|entry| {
@@ -262,6 +280,104 @@ impl CatalogRoot {
                 }
                 Some(self.display_path.join(entry.file_name()))
             })
+            .collect()
+    }
+
+    #[cfg(target_os = "macos")]
+    fn directory_entries(&self) -> Option<Vec<std::ffi::OsString>> {
+        use std::ffi::CStr;
+        use std::os::fd::IntoRawFd;
+        use std::os::unix::ffi::OsStringExt;
+
+        let fd = self.handle.as_file().try_clone().ok()?.into_raw_fd();
+        if unsafe { libc::lseek(fd, 0, libc::SEEK_SET) } < 0 {
+            unsafe { libc::close(fd) };
+            return None;
+        }
+        let directory = unsafe { libc::fdopendir(fd) };
+        if directory.is_null() {
+            unsafe { libc::close(fd) };
+            return None;
+        }
+
+        let mut names = Vec::new();
+        loop {
+            let entry = unsafe { libc::readdir(directory) };
+            if entry.is_null() {
+                break;
+            }
+            let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
+            if name != b"." && name != b".." {
+                names.push(std::ffi::OsString::from_vec(name.to_vec()));
+            }
+        }
+        unsafe { libc::closedir(directory) };
+        Some(names)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn open_child(&self, entry_name: &std::ffi::OsStr) -> Option<(CatalogRoot, std::fs::Metadata)> {
+        use std::ffi::CString;
+        use std::os::fd::{AsRawFd, FromRawFd};
+        use std::os::unix::ffi::OsStrExt;
+
+        let name = CString::new(entry_name.as_bytes()).ok()?;
+        let fd = unsafe {
+            libc::openat(
+                self.handle.as_file().as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return None;
+        }
+
+        let file = unsafe { std::fs::File::from_raw_fd(fd) };
+        let metadata = file.metadata().ok()?;
+        if metadata.file_type().is_symlink() {
+            return None;
+        }
+        let handle = Handle::from_file(file).ok()?;
+        let mut display_path = self.display_path.clone();
+        display_path.push(entry_name);
+        Some((
+            CatalogRoot {
+                handle,
+                display_path,
+            },
+            metadata,
+        ))
+    }
+
+    #[cfg(target_os = "macos")]
+    fn directory_size_from_handle(&self) -> u64 {
+        let Some(names) = self.directory_entries() else {
+            return 0;
+        };
+        names
+            .into_iter()
+            .filter_map(|name| {
+                let (child, metadata) = self.open_child(&name)?;
+                if metadata.is_file() {
+                    Some(metadata.len())
+                } else if metadata.is_dir() {
+                    Some(child.directory_size())
+                } else {
+                    None
+                }
+            })
+            .fold(0u64, u64::saturating_add)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn child_paths_from_handle(&self) -> Vec<PathBuf> {
+        let Some(names) = self.directory_entries() else {
+            return Vec::new();
+        };
+        names
+            .into_iter()
+            .filter_map(|name| self.open_child(&name).map(|(child, _)| child.display_path))
             .collect()
     }
 }
