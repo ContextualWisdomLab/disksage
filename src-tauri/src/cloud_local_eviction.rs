@@ -327,6 +327,13 @@ fn build_plan(
     if !state.is_ubiquitous {
         push_unique(&mut blockers, "icloud-item-not-ubiquitous");
     }
+    if state.observation_method == IcloudStateObservationMethod::FoundationUbiquitousResourceValues
+    {
+        push_unique(
+            &mut blockers,
+            "icloud-file-provider-native-status-unavailable",
+        );
+    }
     if !state.is_uploaded {
         push_unique(&mut blockers, "icloud-upload-not-confirmed");
     }
@@ -1269,7 +1276,7 @@ mod tests {
 
     fn state() -> IcloudLocalState {
         IcloudLocalState {
-            observation_method: IcloudStateObservationMethod::FoundationUbiquitousResourceValues,
+            observation_method: IcloudStateObservationMethod::FileProviderCtlEvaluate,
             is_ubiquitous: true,
             is_uploaded: true,
             is_uploading: false,
@@ -1277,11 +1284,11 @@ mod tests {
             downloading_status_current: true,
             has_unresolved_conflicts: false,
             is_excluded_from_sync: false,
-            is_sync_paused: None,
-            is_trashed: None,
-            allows_eviction: None,
-            provider_reported_bytes: None,
-            item_identifier_fingerprint: None,
+            is_sync_paused: Some(false),
+            is_trashed: Some(false),
+            allows_eviction: Some(true),
+            provider_reported_bytes: Some(100),
+            item_identifier_fingerprint: Some("a".repeat(64)),
         }
     }
 
@@ -1304,6 +1311,30 @@ mod tests {
         ] {
             assert!(!file_provider_command_allows_foundation_fallback(error));
         }
+    }
+
+    #[test]
+    fn foundation_observation_never_authorizes_local_eviction() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut state = state();
+        state.observation_method = IcloudStateObservationMethod::FoundationUbiquitousResourceValues;
+        state.is_sync_paused = None;
+        state.is_trashed = None;
+        state.allows_eviction = None;
+        state.provider_reported_bytes = None;
+        state.item_identifier_fingerprint = None;
+        let plan = build_plan(
+            &root(temp.path()),
+            &temp.path().join("file.bin"),
+            file(),
+            state,
+            idle(),
+            20,
+        );
+        assert!(!plan.eligible_after_human_approval);
+        assert!(plan
+            .blockers
+            .contains(&"icloud-file-provider-native-status-unavailable".into()));
     }
 
     fn file_provider_state() -> IcloudLocalState {
