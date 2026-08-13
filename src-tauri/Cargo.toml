@@ -151,7 +151,7 @@ infer = "0.22.0"
 png = "0.17.16"
 mail-parser = "0.11.5"
 libc = "0.2"
-mlsirm-core = { git = "https://github.com/ContextualWisdomLab/fast-mlsirm", rev = "86aee1d8641aa07bcbeb99886c9797f0bcd7f24d", default-features = false }
+mlsirm-core = { git = "https://github.com/ContextualWisdomLab/fast-mlsirm", rev = "fa23aaaa32d3c392420a87097ba1c03425beebf2", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 winapi-util = "0.1.11"

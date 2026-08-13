@@ -2524,7 +2524,7 @@ dependencies = [
 [[package]]
 name = "mlsirm-core"
 version = "0.7.0"
-source = "git+https://github.com/ContextualWisdomLab/fast-mlsirm?rev=86aee1d8641aa07bcbeb99886c9797f0bcd7f24d#86aee1d8641aa07bcbeb99886c9797f0bcd7f24d"
+source = "git+https://github.com/ContextualWisdomLab/fast-mlsirm?rev=fa23aaaa32d3c392420a87097ba1c03425beebf2#fa23aaaa32d3c392420a87097ba1c03425beebf2"
 
 [[package]]
 name = "muda"
