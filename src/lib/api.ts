@@ -78,6 +78,16 @@ export interface WorktreeAudit {
   metadata_prune_eligible_count: number;
   notices: string[];
 }
+export interface WorktreePruneResult {
+  repository: string;
+  before_registration_fingerprint: string;
+  after_registration_fingerprint: string;
+  stale_before: number;
+  stale_after: number;
+  metadata_pruned: boolean;
+  filesystem_mutation_executed: boolean;
+  notices: string[];
+}
 export interface CleanResult {
   path: string;
   ok: boolean;
@@ -101,6 +111,15 @@ export const listDevArtifacts = (root: string, minAgeDays = 30) =>
   invoke<DevArtifact[]>("list_dev_artifacts", { root, minAgeDays });
 export const listStaleWorktrees = (repository: string) =>
   invoke<WorktreeAudit>("list_stale_worktrees", { repository });
+export const pruneStaleWorktreeMetadata = (
+  repository: string,
+  registrationFingerprint: string,
+  confirmation: string,
+) => invoke<WorktreePruneResult>("prune_stale_worktree_metadata", {
+  repository,
+  registrationFingerprint,
+  confirmation,
+});
 export const cleanPaths = (paths: string[]) => invoke<CleanResult[]>("clean_paths", { paths });
 export const cleanDevArtifacts = (root: string, minAgeDays: number, artifacts: DevArtifact[]) =>
   invoke<CleanResult[]>("clean_dev_artifacts", { root, minAgeDays, artifacts });

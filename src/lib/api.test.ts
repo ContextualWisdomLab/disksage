@@ -31,6 +31,15 @@ describe("api wrappers", () => {
       [() => api.listDevArtifacts("/repo"), "list_dev_artifacts", { root: "/repo", minAgeDays: 30 }],
       [() => api.listDevArtifacts("/repo", 7), "list_dev_artifacts", { root: "/repo", minAgeDays: 7 }],
       [() => api.listStaleWorktrees("/repo"), "list_stale_worktrees", { repository: "/repo" }],
+      [
+        () => api.pruneStaleWorktreeMetadata("/repo", "a".repeat(64), "DiskSage stale worktree metadata 정리 승인"),
+        "prune_stale_worktree_metadata",
+        {
+          repository: "/repo",
+          registrationFingerprint: "a".repeat(64),
+          confirmation: "DiskSage stale worktree metadata 정리 승인",
+        },
+      ],
       [() => api.cleanPaths(["/tmp/a"]), "clean_paths", { paths: ["/tmp/a"] }],
       [
         () =>

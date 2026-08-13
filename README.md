@@ -10,7 +10,7 @@
 - 🗺 **Large file explorer** — parallel scan with treemap visualization
 - 🧹 **Known cache & temp cleanup** — OS, browser, and package-manager caches (including uv); selected developer caches are revalidated by a Rust metadata manifest (path, size, mtime, file count) immediately before trashing
 - 🛠 **Dev artifact cleanup** — stale `node_modules`, `target/`, `venv`, …
-- 🧭 **Stale Git worktree audit** — bounded, read-only registration evidence; prune/remove stays behind an explicit review boundary
+- 🧭 **Stale Git worktree management** — bounded registration evidence; exact-fingerprint approval can prune Git metadata only, never worktree files
 - 👯 **Duplicate finder** — size → partial hash → BLAKE3 full hash
 - 🗂 **Ontology-based organizing** — files classified into an OWL taxonomy you can edit
 - 📊 **Disk inventory** — "what is on my disk?", aggregated by category, unknowns surfaced
@@ -37,7 +37,7 @@ Every destructive action goes through explicit review and the OS trash — DiskS
 
 For a headless, read-only cache inventory, run `cargo run --locked --features cleanup-cli --bin disksage-clean-plan` (add `--id trivy-cache`, `--id pnpm-cache`, or `--id uv-cache` to inspect one candidate). The command prints the current metadata fingerprint; it never deletes files.
 
-For a headless Git worktree audit, run `cargo run --locked --features worktree-cli --bin disksage-git-worktree-audit -- --repo /path/to/repository`. It reports missing/prunable registrations and lock evidence without invoking `git worktree prune` or `git worktree remove`. The `git worktree list` probe and each raw admin-file read are bounded; a malformed registration falls back to read-only `.git/worktrees` evidence and marks `evidence_complete: false` for manual review. Each report includes a registration fingerprint; any future metadata prune must re-audit and match that fingerprint before an explicitly reviewed operation. The operator sequence for provider permissions, metadata evidence, copy, attestation, and separate source eviction is in [`docs/cloud-offload-operator-runbook.md`](docs/cloud-offload-operator-runbook.md).
+For a headless Git worktree audit, run `cargo run --locked --features worktree-cli --bin disksage-git-worktree-audit -- --repo /path/to/repository`. It reports missing/prunable registrations and lock evidence without mutating the repository. The `git worktree list` probe and each raw admin-file read are bounded; a malformed registration falls back to read-only `.git/worktrees` evidence and marks `evidence_complete: false` for manual review. The UI's explicitly confirmed `prune_stale_worktree_metadata` operation re-audits and matches the registration fingerprint before invoking only `git worktree prune --expire now`; worktree directories, branches, and files are retained. The operator sequence for provider permissions, metadata evidence, copy, attestation, and separate source eviction is in [`docs/cloud-offload-operator-runbook.md`](docs/cloud-offload-operator-runbook.md).
 
 ### Metadata and integration boundaries
 

@@ -1,7 +1,7 @@
-//! Read-only stale Git worktree audit.
+//! Bounded stale Git worktree audit and explicitly approved metadata pruning.
 //!
-//! The audit never runs `git worktree remove`, `git worktree prune`, or a filesystem delete.
-//! It reports the exact local Git evidence needed for a later, explicitly reviewed cleanup.
+//! The audit is read-only. Pruning is a separate, fingerprint-bound operation that only invokes
+//! Git's metadata prune; it never removes a worktree directory or deletes user files.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -13,6 +13,9 @@ const MAX_GIT_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_GIT_ADMIN_FILE_BYTES: u64 = 4 * 1024;
 const GIT_WORKTREE_LIST_TIMEOUT: Duration = Duration::from_secs(5);
 const GIT_ADMIN_FILE_READ_TIMEOUT: Duration = Duration::from_millis(250);
+const GIT_WORKTREE_PRUNE_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_PRUNE_OUTPUT_BYTES: usize = 64 * 1024;
+pub const STALE_WORKTREE_PRUNE_CONFIRMATION: &str = "DiskSage stale worktree metadata 정리 승인";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct RawWorktree {
@@ -49,6 +52,18 @@ pub struct WorktreeAudit {
     pub worktrees: Vec<WorktreeCandidate>,
     pub stale_count: usize,
     pub metadata_prune_eligible_count: usize,
+    pub notices: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct WorktreePruneResult {
+    pub repository: String,
+    pub before_registration_fingerprint: String,
+    pub after_registration_fingerprint: String,
+    pub stale_before: usize,
+    pub stale_after: usize,
+    pub metadata_pruned: bool,
+    pub filesystem_mutation_executed: bool,
     pub notices: Vec<String>,
 }
 
@@ -202,9 +217,8 @@ fn read_bounded_text(path: &Path) -> Result<String, String> {
         .name("disksage-git-admin-read".into())
         .spawn(move || {
             let result = (|| {
-                let file = std::fs::File::open(&path).map_err(|_| {
-                    format!("worktree-admin-file-open-failed:{}", path.display())
-                })?;
+                let file = std::fs::File::open(&path)
+                    .map_err(|_| format!("worktree-admin-file-open-failed:{}", path.display()))?;
                 let mut bytes = Vec::new();
                 file.take(MAX_GIT_ADMIN_FILE_BYTES + 1)
                     .read_to_end(&mut bytes)
@@ -235,7 +249,12 @@ fn resolve_relative_git_path(base: &Path, value: &str) -> PathBuf {
 }
 
 fn parse_head_content(content: &str) -> (String, Option<String>, bool) {
-    let head = content.lines().next().unwrap_or_default().trim().to_string();
+    let head = content
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
     if let Some(branch) = head.strip_prefix("ref: ") {
         let branch = branch.trim().to_string();
         (head, Some(branch), false)
@@ -259,7 +278,12 @@ fn primary_git_dir(repository: &Path, common_dir: &Path) -> PathBuf {
 
 fn raw_from_git_admin(repository: &Path) -> Result<Vec<RawWorktree>, String> {
     let common_output = Command::new("git")
-        .args(["-C", &repository.to_string_lossy(), "rev-parse", "--git-common-dir"])
+        .args([
+            "-C",
+            &repository.to_string_lossy(),
+            "rev-parse",
+            "--git-common-dir",
+        ])
         .output()
         .map_err(|_| "git-common-dir-command-failed".to_string())?;
     if !common_output.status.success() {
@@ -269,8 +293,7 @@ fn raw_from_git_admin(repository: &Path) -> Result<Vec<RawWorktree>, String> {
         .map_err(|_| "git-common-dir-output-not-utf8".to_string())?;
     let common_dir = resolve_relative_git_path(&repository, common_value.trim());
     let primary_dir = primary_git_dir(&repository, &common_dir);
-    let primary_head = read_bounded_text(&primary_dir.join("HEAD"))
-        .unwrap_or_default();
+    let primary_head = read_bounded_text(&primary_dir.join("HEAD")).unwrap_or_default();
     let (primary_head, primary_branch, primary_detached) = parse_head_content(&primary_head);
     let mut records = vec![RawWorktree {
         path: repository.to_path_buf(),
@@ -337,7 +360,9 @@ fn raw_from_git_admin(repository: &Path) -> Result<Vec<RawWorktree>, String> {
             record.branch = branch;
             record.detached = detached;
         } else {
-            record.prunable_reason.get_or_insert_with(|| "worktree-head-missing".into());
+            record
+                .prunable_reason
+                .get_or_insert_with(|| "worktree-head-missing".into());
         }
         if let Ok(reason) = read_bounded_text(&entry_path.join("locked")) {
             record.locked_reason = Some(reason.trim().to_string());
@@ -372,7 +397,10 @@ fn build_audit(
         .map(|(index, record)| {
             let exists = record.path.is_dir();
             let stale = record.prunable_reason.is_some() || !exists;
-            let metadata_prune_eligible = stale && record.locked_reason.is_none();
+            // A Git registration can be marked prunable while its directory still exists. Keep
+            // those records for manual review; automatic metadata pruning is limited to absent
+            // directories so an orphaned-but-present checkout is never detached by surprise.
+            let metadata_prune_eligible = stale && !exists && record.locked_reason.is_none();
             let mut review_reasons = Vec::new();
             if stale {
                 stale_count += 1;
@@ -466,6 +494,117 @@ pub fn audit(repository: &Path, generated_at_ms: u64) -> Result<WorktreeAudit, S
     }
 }
 
+fn valid_fingerprint(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn run_git_worktree_prune(repository: &Path) -> Result<(), String> {
+    let repository_string = repository.to_string_lossy().into_owned();
+    let mut child = Command::new("git")
+        .args([
+            "-C",
+            repository_string.as_str(),
+            "worktree",
+            "prune",
+            "--expire",
+            "now",
+            "--verbose",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| "git-worktree-prune-command-failed".to_string())?;
+    let deadline = Instant::now() + GIT_WORKTREE_PRUNE_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    return Err("git-worktree-prune-command-failed".into());
+                }
+                break;
+            }
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("git-worktree-prune-timeout".into());
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("git-worktree-prune-wait-failed".into());
+            }
+        }
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|_| "git-worktree-prune-output-failed".to_string())?;
+    if output.stdout.len() > MAX_PRUNE_OUTPUT_BYTES {
+        return Err("git-worktree-prune-output-too-large".into());
+    }
+    Ok(())
+}
+
+/// Prune only stale Git registration metadata after an exact re-audit and explicit confirmation.
+/// Worktree directories, branches, and user files are never removed by this operation.
+pub fn prune_stale_metadata(
+    repository: &Path,
+    expected_registration_fingerprint: &str,
+    confirmation: &str,
+    generated_at_ms: u64,
+) -> Result<WorktreePruneResult, String> {
+    if !valid_fingerprint(expected_registration_fingerprint) {
+        return Err("worktree-registration-fingerprint-invalid".into());
+    }
+    if confirmation != STALE_WORKTREE_PRUNE_CONFIRMATION {
+        return Err("worktree-prune-confirmation-mismatch".into());
+    }
+    let before = audit(repository, generated_at_ms)?;
+    if !before.evidence_complete {
+        return Err("worktree-prune-evidence-incomplete".into());
+    }
+    if before.registration_fingerprint != expected_registration_fingerprint {
+        return Err("worktree-registration-fingerprint-mismatch".into());
+    }
+    if before.metadata_prune_eligible_count == 0 {
+        return Err("worktree-prune-no-eligible-registration".into());
+    }
+    for candidate in before
+        .worktrees
+        .iter()
+        .filter(|candidate| candidate.metadata_prune_eligible)
+    {
+        match std::fs::symlink_metadata(&candidate.path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err("worktree-prune-path-probe-incomplete".into()),
+            Ok(_) => return Err("worktree-prune-path-still-present".into()),
+        }
+    }
+    run_git_worktree_prune(Path::new(&before.repository))?;
+    let after = audit(Path::new(&before.repository), system_now_ms())?;
+    if !after.evidence_complete {
+        return Err("worktree-prune-post-audit-incomplete".into());
+    }
+    if after.stale_count >= before.stale_count {
+        return Err("worktree-prune-registration-not-reclaimed".into());
+    }
+    Ok(WorktreePruneResult {
+        repository: after.repository.clone(),
+        before_registration_fingerprint: before.registration_fingerprint,
+        after_registration_fingerprint: after.registration_fingerprint,
+        stale_before: before.stale_count,
+        stale_after: after.stale_count,
+        metadata_pruned: true,
+        filesystem_mutation_executed: false,
+        notices: vec![
+            "git-worktree-prune-metadata-only".into(),
+            "worktree-directories-retained".into(),
+        ],
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -534,5 +673,95 @@ mod tests {
             first,
             registration_fingerprint(Path::new("/other"), &worktrees)
         );
+    }
+
+    #[test]
+    fn present_prunable_worktree_is_manual_review_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let audit = build_audit(
+            temp.path(),
+            1,
+            vec![RawWorktree {
+                path: temp.path().to_path_buf(),
+                head: "a".repeat(40),
+                branch: Some("refs/heads/topic".into()),
+                detached: false,
+                locked_reason: None,
+                prunable_reason: Some("gitdir target missing".into()),
+            }],
+            Vec::new(),
+            true,
+        );
+        assert_eq!(audit.stale_count, 1);
+        assert_eq!(audit.metadata_prune_eligible_count, 0);
+        assert!(!audit.worktrees[0].metadata_prune_eligible);
+    }
+
+    #[test]
+    fn prune_requires_exact_confirmation_and_fingerprint_shape() {
+        let temp = tempfile::tempdir().unwrap();
+        assert_eq!(
+            prune_stale_metadata(
+                temp.path(),
+                "not-a-fingerprint",
+                STALE_WORKTREE_PRUNE_CONFIRMATION,
+                1,
+            )
+            .unwrap_err(),
+            "worktree-registration-fingerprint-invalid"
+        );
+        assert_eq!(
+            prune_stale_metadata(temp.path(), &"a".repeat(64), "승인", 1).unwrap_err(),
+            "worktree-prune-confirmation-mismatch"
+        );
+    }
+
+    #[test]
+    fn prune_reclaims_only_missing_worktree_registration_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let repository = temp.path().join("repo");
+        let worktree = temp.path().join("gone");
+        std::fs::create_dir_all(&repository).unwrap();
+        let run = |args: &[&str]| {
+            let output = Command::new("git")
+                .args(["-C", repository.to_str().unwrap()])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "git failed: {:?}", args);
+        };
+        run(&["init", "--quiet"]);
+        run(&["config", "user.email", "test@example.invalid"]);
+        run(&["config", "user.name", "DiskSage Test"]);
+        std::fs::write(repository.join("README"), "test\n").unwrap();
+        run(&["add", "README"]);
+        run(&["commit", "--quiet", "-m", "init"]);
+        let output = Command::new("git")
+            .args([
+                "-C",
+                repository.to_str().unwrap(),
+                "worktree",
+                "add",
+                "--quiet",
+            ])
+            .arg(&worktree)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        std::fs::remove_dir_all(&worktree).unwrap();
+
+        let before = audit(&repository, 1).unwrap();
+        assert!(before.metadata_prune_eligible_count > 0);
+        let result = prune_stale_metadata(
+            &repository,
+            &before.registration_fingerprint,
+            STALE_WORKTREE_PRUNE_CONFIRMATION,
+            2,
+        )
+        .unwrap();
+        assert!(result.metadata_pruned);
+        assert!(!result.filesystem_mutation_executed);
+        assert!(result.stale_after < result.stale_before);
+        assert!(!worktree.exists());
     }
 }

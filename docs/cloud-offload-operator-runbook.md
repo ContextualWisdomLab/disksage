@@ -81,7 +81,11 @@ metadata와 content digest를 다시 확인하고, 실패하면 staging을 복�
 읽기 시간을 제한하며, 비어 있거나 읽기 timeout인 `gitdir`는 실제 worktree 경로로
 추정하지 않고 `<worktree-admin:...>` 증거로 남긴다. 이 fallback 보고서는
 `evidence_complete: false`이므로 `registration_fingerprint`를 보관하고 수동 검토할
-때까지 `git worktree prune/remove`나 파일 삭제를 실행하지 않는다.
+때까지 `git worktree prune/remove`나 파일 삭제를 실행하지 않는다. 완전한 감사에서
+`metadata_prune_eligible_count`가 양수이면 UI의 명시적 승인 문구를 통해
+`prune_stale_worktree_metadata`를 실행할 수 있다. 이 명령은 재감사와 fingerprint
+일치를 먼저 확인하고 `git worktree prune --expire now`만 실행한다. worktree 디렉터리,
+브랜치, 파일은 삭제하지 않으며 사후 감사에서 stale 등록 감소를 확인하지 못하면 실패한다.
 
 ## 7. 조건부 통합 경계
 

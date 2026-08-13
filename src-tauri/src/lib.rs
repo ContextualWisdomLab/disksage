@@ -68,6 +68,7 @@ pub fn run() {
             commands::list_cache_candidates,
             commands::list_dev_artifacts,
             commands::list_stale_worktrees,
+            commands::prune_stale_worktree_metadata,
             commands::clean_paths,
             commands::clean_dev_artifacts,
             commands::clean_cache_candidates,

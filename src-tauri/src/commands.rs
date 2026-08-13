@@ -776,6 +776,21 @@ pub fn list_stale_worktrees(repository: String) -> Result<worktrees::WorktreeAud
 
 #[cfg(not(coverage))]
 #[tauri::command]
+pub fn prune_stale_worktree_metadata(
+    repository: String,
+    registration_fingerprint: String,
+    confirmation: String,
+) -> Result<worktrees::WorktreePruneResult, String> {
+    worktrees::prune_stale_metadata(
+        Path::new(&repository),
+        &registration_fingerprint,
+        &confirmation,
+        worktrees::system_now_ms(),
+    )
+}
+
+#[cfg(not(coverage))]
+#[tauri::command]
 pub fn clean_paths(paths: Vec<String>, app: AppHandle) -> Result<Vec<CleanResult>, String> {
     let jp = journal_file_path(&app)?;
     let pbufs: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
