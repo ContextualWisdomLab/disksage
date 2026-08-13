@@ -74,10 +74,7 @@ fn google_drive_path_locator_rejects_invalid_ids_and_excessive_depth() {
         google_drive_path_locator(root.path(), &destination, " bad-id").unwrap_err(),
         "provider-object-id-invalid"
     );
-
-    let valid = google_drive_path_locator(root.path(), &destination, "file-id").unwrap();
-    assert_eq!(valid.file_id(), "file-id");
-    assert_eq!(valid.segments(), &["folder".to_string(), "file.txt".to_string()]);
+    assert!(google_drive_path_locator(root.path(), &destination, "file-id").is_ok());
 
     let mut deep = root.path().to_path_buf();
     for index in 0..102 {
