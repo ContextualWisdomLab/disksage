@@ -70,6 +70,21 @@ fn cloud_root_matching_accepts_canonical_unicode_but_rejects_distinct_paths() {
     assert!(!cloud_root_path_matches(&composed, &distinct));
 }
 
+#[cfg(unix)]
+#[test]
+fn cloud_root_matching_uses_filesystem_identity_for_distinct_alias_paths() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let discovered = temp.path().join("provider-root");
+    let requested = temp.path().join("provider-root-alias");
+    std::fs::create_dir(&discovered).unwrap();
+    symlink(&discovered, &requested).unwrap();
+
+    assert_ne!(discovered, requested);
+    assert!(cloud_root_path_matches(&discovered, &requested));
+}
+
 #[test]
 fn cloud_enum_labels_are_stable_for_serialized_evidence() {
     assert_eq!(CloudProvider::Icloud.as_str(), "icloud");
