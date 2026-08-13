@@ -150,13 +150,13 @@ memchr = "2.8.3"
 infer = "0.22.0"
 png = "0.17.16"
 mail-parser = "0.11.5"
+libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 winapi-util = "0.1.11"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 embed_plist = "1.2.2"
-libc = "0.2"
 objc2 = "0.6.4"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSError", "NSFileManager", "NSObject", "NSString", "NSURL", "NSValue"] }
 plist = "1"
