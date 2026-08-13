@@ -600,23 +600,51 @@ fn projection_state(path: &Path, kind: &str) -> &'static str {
 }
 
 #[cfg(not(coverage))]
-fn evidence_record_count(evidence_dir: &Path, receipt_id: &str) -> u64 {
-    let Ok(entries) = std::fs::read_dir(evidence_dir) else {
-        return 0;
-    };
+fn evidence_record_count(evidence_dirs: &[PathBuf], receipt_id: &str) -> u64 {
     let prefix = format!("{receipt_id}-");
-    entries
-        .filter_map(Result::ok)
-        .take(MAX_RECONCILIATION_RECEIPTS)
-        .filter(|entry| {
+    let mut names = BTreeMap::new();
+    for evidence_dir in evidence_dirs {
+        let Ok(entries) = std::fs::read_dir(evidence_dir) else {
+            continue;
+        };
+        for entry in entries
+            .filter_map(Result::ok)
+            .take(MAX_RECONCILIATION_RECEIPTS)
+        {
             let path = entry.path();
-            let name_matches = entry
-                .file_name()
-                .to_str()
-                .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".json"));
-            name_matches && regular_file_state(&path) == "present"
-        })
-        .count() as u64
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if name.starts_with(&prefix)
+                && name.ends_with(".json")
+                && regular_file_state(&path) == "present"
+            {
+                names.insert(name, ());
+                if names.len() >= MAX_RECONCILIATION_RECEIPTS {
+                    return names.len() as u64;
+                }
+            }
+        }
+    }
+    names.len() as u64
+}
+
+#[cfg(not(coverage))]
+fn audit_evidence_dirs(receipt_dir: &Path, evidence_dir: Option<&Path>) -> Vec<PathBuf> {
+    if let Some(evidence_dir) = evidence_dir {
+        return vec![evidence_dir.to_path_buf()];
+    }
+    let parent = receipt_dir.parent().unwrap_or(receipt_dir);
+    let provider_dir = parent.join("cloud-provider-evidence");
+    let legacy_dir = parent.join("cloud-sync-evidence");
+    let legacy_is_safe_directory = std::fs::symlink_metadata(&legacy_dir)
+        .map(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+        .unwrap_or(false);
+    if legacy_is_safe_directory {
+        vec![provider_dir, legacy_dir]
+    } else {
+        vec![provider_dir]
+    }
 }
 
 #[cfg(not(coverage))]
@@ -640,10 +668,12 @@ fn audit_receipts(
         return Err("receipt-directory-entry-limit-exceeded".into());
     }
     let parent = receipt_dir.parent().unwrap_or(receipt_dir);
-    let evidence_dir = evidence_dir
-        .map(Path::to_path_buf)
+    let evidence_dirs = audit_evidence_dirs(receipt_dir, evidence_dir);
+    let projection_anchor = evidence_dirs
+        .first()
+        .cloned()
         .unwrap_or_else(|| parent.join("cloud-provider-evidence"));
-    let (adr_dir, goal_dir) = cloud_projection_dirs(&evidence_dir);
+    let (adr_dir, goal_dir) = cloud_projection_dirs(&projection_anchor);
     let mut report = ReceiptReconciliationReport {
         schema_version: 1,
         output_mode: "cloud-receipt-reconciliation",
@@ -743,7 +773,7 @@ fn audit_receipts(
             destination_state: Some(destination_state.into()),
             adr_projection_state: Some(adr_state.into()),
             goal_projection_state: Some(goal_state.into()),
-            evidence_record_count: evidence_record_count(&evidence_dir, &receipt.receipt_id),
+            evidence_record_count: evidence_record_count(&evidence_dirs, &receipt.receipt_id),
             issues,
         });
     }
@@ -3195,6 +3225,27 @@ mod tests {
         let missing_directory =
             parse_args(&["--audit-receipts".into()], Path::new("/home/test")).unwrap();
         assert!(validate_action_args(&missing_directory).is_err());
+    }
+
+    #[test]
+    fn receipt_audit_counts_legacy_evidence_without_double_counting() {
+        let temp = tempfile::tempdir().unwrap();
+        let receipt_dir = temp.path().join("cloud-receipts");
+        let provider_dir = temp.path().join("cloud-provider-evidence");
+        let legacy_dir = temp.path().join("cloud-sync-evidence");
+        std::fs::create_dir_all(&receipt_dir).unwrap();
+        std::fs::create_dir_all(&provider_dir).unwrap();
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+        std::fs::write(provider_dir.join("abc-1.json"), b"provider").unwrap();
+        std::fs::write(legacy_dir.join("abc-1.json"), b"legacy-copy").unwrap();
+        std::fs::write(legacy_dir.join("abc-2.json"), b"legacy").unwrap();
+
+        let dirs = audit_evidence_dirs(&receipt_dir, None);
+        assert_eq!(evidence_record_count(&dirs, "abc"), 2);
+        assert_eq!(
+            audit_evidence_dirs(&receipt_dir, Some(&legacy_dir)),
+            vec![legacy_dir]
+        );
     }
 
     #[test]
