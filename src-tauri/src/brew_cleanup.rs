@@ -820,7 +820,7 @@ mod tests {
         let mut writer = std::fs::OpenOptions::new()
             .write(true)
             .truncate(true)
-            .open(&path)
+            .open(script.path())
             .unwrap();
         writer.write_all(changed).unwrap();
         writer.sync_all().unwrap();
