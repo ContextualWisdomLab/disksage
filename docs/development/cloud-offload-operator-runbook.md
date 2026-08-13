@@ -22,6 +22,10 @@ The runtime sequence is:
    read-only integrity report.
 4. `is_local_current=true` with `is_uploaded=false` is `pending-upload`; the source remains and
    no eviction permit is issued.
+   Third-party File Provider dumps also block new copies while upload/download progress,
+   non-zero reconciliation backlogs (`provider-global-sync-reconciliation-pending`), provider
+   disconnection, or path errors are present; the stable blocker codes are shown in the plan and
+   are never a reason to bypass the gate.
 5. If the destination is valid but the receipt source is missing or unsafe, reconciliation writes
    a blocked Goal/ADR projection and records `source-not-present` (or the precise source-state
    blocker); it never treats that as proof of a completed eviction.
