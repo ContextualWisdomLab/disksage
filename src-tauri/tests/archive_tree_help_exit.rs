@@ -20,3 +20,24 @@ fn archive_tree_help_exits_successfully_without_error_output() {
     let stdout = String::from_utf8(output.stdout).expect("help output must be valid UTF-8");
     assert!(stdout.contains("disksage-archive-tree --zip PATH"));
 }
+
+#[test]
+fn archive_tree_help_does_not_hide_an_unknown_argument() {
+    let output = Command::new(env!("CARGO_BIN_EXE_disksage-archive-tree"))
+        .args(["--help", "--unknown"])
+        .output()
+        .expect("archive-tree CLI must launch for invalid-argument validation");
+
+    assert!(
+        !output.status.success(),
+        "help must not turn an otherwise invalid invocation into success"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "invalid invocation must not emit help on stdout"
+    );
+    assert!(
+        !output.stderr.is_empty(),
+        "invalid invocation must remain visible through stderr"
+    );
+}
