@@ -97,10 +97,14 @@ pub fn parse_dump(
     let mut pending_indexable_count = None;
     let mut needs_indexing = false;
     let mut has_error = false;
+    let mut has_filename_too_long = false;
+    let mut has_temporarily_disconnected = false;
+    let mut has_server_unreachable = false;
 
     for line in output.lines() {
         let trimmed = line.trim();
         let marker = trimmed.strip_prefix("+ ").unwrap_or(trimmed).trim();
+        let marker_lower = marker.to_ascii_lowercase();
         upload_progress_present |= line_has_active_progress(marker, "upload progress:");
         download_progress_present |= line_has_active_progress(marker, "download progress:");
         if let Some(count) = parse_pending_indexable_count(marker) {
@@ -110,7 +114,16 @@ pub fn parse_dump(
         if marker == "needs-indexing: yes" || marker == "indexing: yes" {
             needs_indexing = true;
         }
-        if marker.contains("temporarily disconnected")
+        has_filename_too_long |= marker.contains("POSIX 63")
+            || marker.contains("파일 이름이 너무 깁니다")
+            || marker_lower.contains("filename too long");
+        has_temporarily_disconnected |= marker_lower.contains("temporarily disconnected");
+        has_server_unreachable |= marker_lower.contains("serverunreachable")
+            || marker_lower.contains("server unreachable")
+            || marker_lower.contains("code=-1004");
+        if has_filename_too_long
+            || has_temporarily_disconnected
+            || has_server_unreachable
             || marker.contains("user-disabled")
             || marker.contains("can't dump the extension")
             || marker.contains("Error Domain=")
@@ -144,6 +157,15 @@ pub fn parse_dump(
     }
     if needs_indexing || pending_indexable_count.is_some_and(|count| count > 0) {
         blockers.push("provider-global-sync-indexing-pending".into());
+    }
+    if has_filename_too_long {
+        blockers.push("provider-global-sync-filename-too-long".into());
+    }
+    if has_temporarily_disconnected {
+        blockers.push("provider-global-sync-temporarily-disconnected".into());
+    }
+    if has_server_unreachable {
+        blockers.push("provider-global-sync-server-unreachable".into());
     }
     if has_error {
         blockers.push("provider-global-sync-error".into());
@@ -351,6 +373,9 @@ sync engine state:
         assert!(report
             .blockers
             .contains(&"provider-global-sync-error".into()));
+        assert!(report
+            .blockers
+            .contains(&"provider-global-sync-filename-too-long".into()));
         assert!(require_new_copy_admission(&report).is_err());
     }
 
@@ -359,7 +384,24 @@ sync engine state:
         let dump = "com.google.drivefs.fpext\nsync engine state:\n temporarily disconnected: yes\n";
         let report = parse_dump(CloudProvider::GoogleDrive, dump).unwrap();
         assert_eq!(report.state, ProviderGlobalSyncState::Error);
+        assert!(report
+            .blockers
+            .contains(&"provider-global-sync-temporarily-disconnected".into()));
         assert!(require_new_copy_admission(&report).is_err());
+    }
+
+    #[test]
+    fn server_unreachable_error_is_classified_without_retaining_provider_paths() {
+        let dump = "com.google.drivefs.fpext\nsync engine state:\n NSFileProviderErrorDomain Code=-1004 server unreachable\n";
+        let report = parse_dump(CloudProvider::GoogleDrive, dump).unwrap();
+        assert_eq!(report.state, ProviderGlobalSyncState::Error);
+        assert!(report
+            .blockers
+            .contains(&"provider-global-sync-server-unreachable".into()));
+        assert!(report
+            .notices
+            .iter()
+            .all(|notice| !notice.contains("server unreachable")));
     }
 
     #[test]
