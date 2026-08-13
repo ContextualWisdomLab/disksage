@@ -191,3 +191,74 @@ fn jsonl_late_columns_and_reverse_type_transitions_preserve_bounded_evidence() {
     assert!(!serialized.contains("2026-01-01T10:00:00Z"));
     assert!(!serialized.contains("2026-01-02"));
 }
+
+#[test]
+fn public_profile_rejects_unsupported_and_missing_inputs_without_reading_them() {
+    let temp = tempfile::tempdir().unwrap();
+
+    let unsupported = temp.path().join("private.parquet");
+    write_file(&unsupported, b"private-payload-must-not-be-read");
+    let profile = profile_dataset(&unsupported);
+    assert_eq!(profile.format, "parquet");
+    assert!(!profile.profile_complete);
+    assert_eq!(profile.sampled_rows, 0);
+    assert_eq!(profile.quality_warnings, vec!["unsupported-dataset-format"]);
+    assert!(!serde_json::to_string(&profile)
+        .unwrap()
+        .contains("private-payload-must-not-be-read"));
+
+    let extensionless = temp.path().join("private-dataset");
+    let profile = profile_dataset(&extensionless);
+    assert_eq!(profile.format, "unknown");
+    assert_eq!(profile.quality_warnings, vec!["unsupported-dataset-format"]);
+
+    let missing_csv = temp.path().join("missing.csv");
+    let profile = profile_dataset(&missing_csv);
+    assert_eq!(profile.format, "csv");
+    assert!(!profile.profile_complete);
+    assert_eq!(profile.quality_warnings, vec!["dataset-open-error"]);
+}
+
+#[test]
+fn tsv_and_malformed_csv_headers_exercise_public_delimited_dispatch_fail_closed() {
+    let temp = tempfile::tempdir().unwrap();
+
+    let tsv = temp.path().join("sample.tsv");
+    write_file(&tsv, b"id\tactive\n1\ttrue\n2\tfalse\n");
+    let profile = profile_dataset(&tsv);
+    assert_eq!(profile.format, "tsv");
+    assert!(profile.profile_complete);
+    assert_eq!(profile.sampled_rows, 2);
+    assert_eq!(profile.columns[0].inferred_type, "integer");
+    assert_eq!(profile.columns[1].inferred_type, "boolean");
+
+    let malformed = temp.path().join("malformed.csv");
+    write_file(&malformed, &[0xff, b',', b'a', b'\n']);
+    let profile = profile_dataset(&malformed);
+    assert!(!profile.profile_complete);
+    assert!(profile
+        .quality_warnings
+        .contains(&"header-parse-error".to_string()));
+    assert_eq!(profile.sampled_rows, 0);
+}
+
+#[test]
+fn byte_sampling_limit_is_explicit_and_never_returns_sample_values() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("large.csv");
+    let private_value = "private-value-that-must-never-be-retained";
+    let mut contents = String::from("value\n");
+    while contents.len() <= 1024 * 1024 + 1024 {
+        contents.push_str(private_value);
+        contents.push('\n');
+    }
+    write_file(&path, contents.as_bytes());
+
+    let profile = profile_dataset(&path);
+    assert!(!profile.profile_complete);
+    assert!(profile.sample_truncated);
+    assert!(profile
+        .quality_warnings
+        .contains(&"byte-sample-limit-reached".to_string()));
+    assert!(!serde_json::to_string(&profile).unwrap().contains(private_value));
+}
