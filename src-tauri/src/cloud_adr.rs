@@ -327,15 +327,17 @@ pub fn write_projection_pair(
     let mut warnings = Vec::new();
     let adr_path = match write_latest_snapshot(adr_dir, adr) {
         Ok(path) => Some(path),
-        Err(_) => {
-            warnings.push("adr-projection-write-failed".to_string());
+        Err(error) => {
+            // The projection writer only returns bounded, path-free error codes. Preserve the
+            // code so reconciliation can distinguish a rejected state regression from I/O.
+            warnings.push(format!("adr-projection-write-failed:{error}"));
             None
         }
     };
     let goal_path = match write_latest_goal_snapshot(goal_dir, goal) {
         Ok(path) => Some(path),
-        Err(_) => {
-            warnings.push("goal-projection-write-failed".to_string());
+        Err(error) => {
+            warnings.push(format!("goal-projection-write-failed:{error}"));
             None
         }
     };

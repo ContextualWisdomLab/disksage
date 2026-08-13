@@ -156,7 +156,7 @@ pub fn validate_native_status_evidence(
     Ok(())
 }
 
-fn native_sync_up_pending(evidence: &IcloudNativeStatusEvidence) -> bool {
+pub fn native_sync_up_pending(evidence: &IcloudNativeStatusEvidence) -> bool {
     evidence.status_observed
         && evidence
             .sync_state

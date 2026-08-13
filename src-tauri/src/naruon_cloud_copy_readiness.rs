@@ -14,8 +14,8 @@ use sha2::{Digest, Sha256};
 use crate::cloud::{CloudPlanOptions, CloudPlanReport, CloudProvider};
 use crate::cloud_transfer;
 use crate::icloud_sync_health::{
-    validate_native_status_evidence, IcloudNativeStatusEvidence, IcloudSyncHealthReport,
-    ICLOUD_SYNC_HEALTH_SCHEMA_VERSION,
+    native_sync_up_pending, validate_native_status_evidence, IcloudNativeStatusEvidence,
+    IcloudSyncHealthReport, ICLOUD_SYNC_HEALTH_SCHEMA_VERSION,
 };
 use crate::naruon_capacity;
 use crate::provider_capacity::{self, CapacityEvidenceKind, CloudCapacityAssessment};
@@ -281,17 +281,7 @@ fn expected_icloud_admission_blockers(report: &IcloudSyncHealthReport) -> Vec<St
     {
         blockers.push("icloud-native-status-evidence-incomplete".into());
     }
-    if report
-        .native_status
-        .as_ref()
-        .is_some_and(|status| {
-            status.status_observed
-                && status
-                    .sync_state
-                    .as_deref()
-                    .is_some_and(|state| state.split('|').any(|value| value == "needs-sync-up"))
-        })
-    {
+    if report.native_status.as_ref().is_some_and(native_sync_up_pending) {
         blockers.push("icloud-native-sync-up-pending".into());
     }
     blockers
@@ -1003,13 +993,7 @@ fn validate_icloud_admission_summary(
     {
         expected.push("icloud-native-status-evidence-incomplete".to_string());
     }
-    if summary.native_status.as_ref().is_some_and(|status| {
-        status.status_observed
-            && status
-                .sync_state
-                .as_deref()
-                .is_some_and(|state| state.split('|').any(|value| value == "needs-sync-up"))
-    }) {
+    if summary.native_status.as_ref().is_some_and(native_sync_up_pending) {
         expected.push("icloud-native-sync-up-pending".to_string());
     }
     if !summary.evidence_complete {
@@ -1481,6 +1465,7 @@ mod tests {
                 .and_then(|status| status.sync_state.as_deref()),
             Some("needs-sync-up")
         );
+        assert!(validate_naruon_cloud_copy_readiness(&envelope).is_ok());
     }
 
     #[test]
