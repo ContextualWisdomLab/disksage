@@ -22,7 +22,7 @@ use crate::provider_evidence::{validate_sync_evidence_record, ProviderSyncEviden
 use crate::provider_sync::PROVIDER_SYNC_OVERDUE_AFTER_MS;
 use crate::provider_sync::{assess_provider_sync_timeliness, ProviderSyncTimeliness};
 
-pub const NARUON_FILE_LINEAGE_SCHEMA_VERSION: u32 = 2;
+pub const NARUON_FILE_LINEAGE_SCHEMA_VERSION: u32 = 3;
 pub const NARUON_FILE_LINEAGE_SCHEMA_KIND: &str = "disksage.file-lineage";
 const ONTOLOGY_NAMESPACE: &str = "https://disksage.app/ontology#";
 
@@ -583,7 +583,7 @@ mod tests {
         let receipt = receipt();
         let envelope = export_naruon_file_lineage(&receipt, Some(&evidence(&receipt))).unwrap();
 
-        assert_eq!(envelope.schema_version, 2);
+        assert_eq!(envelope.schema_version, 3);
         assert_eq!(envelope.schema_kind, "disksage.file-lineage");
         assert_eq!(envelope.source_filename, "report.pdf");
         assert_eq!(

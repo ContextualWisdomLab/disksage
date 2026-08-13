@@ -1826,6 +1826,7 @@ pub struct CloudSourceEvictionOutput {
     pub eviction: cloud_eviction::CloudEvictionResult,
     pub adr_path: String,
     pub goal_path: String,
+    pub projection_warnings: Vec<String>,
 }
 
 /// Recollect provider evidence and active-use evidence, bind an attributed human approval to the
@@ -1913,14 +1914,27 @@ pub async fn trash_verified_cloud_source(
             cloud_transfer::CloudOffloadGoalState::SourceEvicted,
             updated_at_ms,
         );
-        let adr_path = cloud_adr::write_latest_snapshot(&adr_dir, &adr)?;
+        let mut projection_warnings = Vec::new();
+        let adr_path = match cloud_adr::write_latest_snapshot(&adr_dir, &adr) {
+            Ok(path) => path.to_string_lossy().into_owned(),
+            Err(_) => {
+                projection_warnings.push("adr-projection-write-failed".to_string());
+                String::new()
+            }
+        };
         let goal = cloud_adr::goal_snapshot_from_evidence(
             &receipt,
             &attestation.evidence_record,
             cloud_transfer::CloudOffloadGoalState::SourceEvicted,
             updated_at_ms,
         );
-        let goal_path = cloud_adr::write_latest_goal_snapshot(&goal_dir, &goal)?;
+        let goal_path = match cloud_adr::write_latest_goal_snapshot(&goal_dir, &goal) {
+            Ok(path) => path.to_string_lossy().into_owned(),
+            Err(_) => {
+                projection_warnings.push("goal-projection-write-failed".to_string());
+                String::new()
+            }
+        };
         Ok(CloudSourceEvictionOutput {
             action: "attest-approve-and-trash-verified-cloud-source",
             goal_state: cloud_transfer::CloudOffloadGoalState::SourceEvicted,
@@ -1928,8 +1942,9 @@ pub async fn trash_verified_cloud_source(
             approval,
             approval_path: approval_path.to_string_lossy().into_owned(),
             eviction,
-            adr_path: adr_path.to_string_lossy().into_owned(),
-            goal_path: goal_path.to_string_lossy().into_owned(),
+            adr_path,
+            goal_path,
+            projection_warnings,
         })
     })
     .await

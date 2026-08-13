@@ -15,6 +15,12 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 #[cfg(unix)]
+use std::os::fd::{AsRawFd, FromRawFd};
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 
 pub const GIT_WORKTREE_AUDIT_SCHEMA_KIND: &str = "disksage.git-worktree-audit/v2";
@@ -228,6 +234,7 @@ struct RawWorktree {
     lock_reason: Option<String>,
     prunable: bool,
     prunable_reason: Option<String>,
+    fallback_evidence_incomplete: bool,
 }
 
 #[derive(Default)]
@@ -259,6 +266,7 @@ impl RawWorktreeBuilder {
             lock_reason: self.lock_reason,
             prunable: self.prunable,
             prunable_reason: self.prunable_reason,
+            fallback_evidence_incomplete: false,
         })
     }
 
@@ -1027,9 +1035,50 @@ fn list_worktrees(
     Ok(entries)
 }
 
+#[cfg(unix)]
+fn open_admin_fallback_file(path: &Path) -> std::io::Result<fs::File> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let mut directory_options = fs::OpenOptions::new();
+    directory_options
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let directory = directory_options.open(parent)?;
+    let name = std::ffi::CString::new(name.as_bytes())
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let fd = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(unsafe { fs::File::from_raw_fd(fd) })
+}
+
+#[cfg(not(unix))]
+fn open_admin_fallback_file(path: &Path) -> std::io::Result<fs::File> {
+    fs::OpenOptions::new().read(true).open(path)
+}
+
 fn read_admin_fallback_file(path: &Path) -> Result<String, String> {
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|_| "git-worktree-admin-fallback-file-missing".to_string())?;
+    let file = open_admin_fallback_file(path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            "git-worktree-admin-fallback-file-missing".to_string()
+        } else {
+            "git-worktree-admin-fallback-file-open-failed".to_string()
+        }
+    })?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| "git-worktree-admin-fallback-file-metadata-failed".to_string())?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err("git-worktree-admin-fallback-file-unsafe".into());
     }
@@ -1044,11 +1093,13 @@ fn read_admin_fallback_file(path: &Path) -> Result<String, String> {
     if metadata.len() > MAX_ADMIN_FALLBACK_FILE_BYTES {
         return Err("git-worktree-admin-fallback-file-too-large".into());
     }
-    let mut file = fs::File::open(path)
-        .map_err(|_| "git-worktree-admin-fallback-file-open-failed".to_string())?;
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    file.read_to_end(&mut bytes)
+    file.take(MAX_ADMIN_FALLBACK_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
         .map_err(|_| "git-worktree-admin-fallback-file-read-failed".to_string())?;
+    if bytes.len() as u64 > MAX_ADMIN_FALLBACK_FILE_BYTES {
+        return Err("git-worktree-admin-fallback-file-too-large".into());
+    }
     String::from_utf8(bytes)
         .map(|value| value.trim().to_string())
         .map_err(|_| "git-worktree-admin-fallback-file-not-utf8".into())
@@ -1123,6 +1174,7 @@ fn admin_fallback_worktrees(
             lock_reason,
             prunable,
             prunable_reason,
+            fallback_evidence_incomplete: true,
         });
     }
     (worktrees, issues)
@@ -1320,7 +1372,10 @@ pub fn audit_git_worktrees(
             active_use_active: active_use.active,
             ..preliminary
         };
-        let blockers = candidate_blockers(&classification);
+        let mut blockers = candidate_blockers(&classification);
+        if raw.fallback_evidence_incomplete {
+            blockers.push("git-worktree-admin-fallback-evidence-incomplete".into());
+        }
         let disposition = disposition(&blockers);
         let mut entry = GitWorktreeAuditEntry {
             path: path_string.clone(),
@@ -2230,12 +2285,37 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].path, PathBuf::from("/missing-worktree"));
         assert_eq!(entries[0].head, "admin-unknown-head");
+        assert!(entries[0].fallback_evidence_incomplete);
+        assert_eq!(
+            disposition(&["git-worktree-admin-fallback-evidence-incomplete".into()]),
+            GitWorktreeDisposition::EvidenceGap
+        );
         assert!(issues
             .iter()
             .any(|issue| issue == "read-only-git-admin-fallback"));
         assert!(issues
             .iter()
             .any(|issue| issue == "git-worktree-admin-head-unavailable:stale"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn admin_fallback_file_rejects_symlinks_and_bounds_reads() {
+        let temp = tempfile::tempdir().unwrap();
+        let symlink = temp.path().join("symlink");
+        fs::write(temp.path().join("target"), b"safe").unwrap();
+        std::os::unix::fs::symlink(temp.path().join("target"), &symlink).unwrap();
+        assert_eq!(
+            read_admin_fallback_file(&symlink).unwrap_err(),
+            "git-worktree-admin-fallback-file-open-failed"
+        );
+
+        let oversized = temp.path().join("oversized");
+        fs::write(&oversized, vec![b'x'; (MAX_ADMIN_FALLBACK_FILE_BYTES + 1) as usize]).unwrap();
+        assert_eq!(
+            read_admin_fallback_file(&oversized).unwrap_err(),
+            "git-worktree-admin-fallback-file-too-large"
+        );
     }
 
     #[test]

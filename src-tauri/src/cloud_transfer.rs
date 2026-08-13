@@ -102,12 +102,13 @@ pub enum CloudOffloadGoalState {
 
 impl CloudOffloadGoalState {
     pub fn after_attestation(evidence: &ProviderSyncEvidence, permit_available: bool) -> Self {
-        if permit_available && evidence.sync_complete && evidence.sync_state.is_complete() {
+        if !evidence.sync_complete || !evidence.sync_state.is_complete() {
+            return Self::PendingProviderSync;
+        }
+        if permit_available {
             Self::EvictionReady
-        } else if evidence.sync_complete {
-            Self::ProviderSyncConfirmed
         } else {
-            Self::PendingProviderSync
+            Self::ProviderSyncConfirmed
         }
     }
 }
@@ -1731,7 +1732,7 @@ mod tests {
         legacy.sync_state = ProviderSyncState::Unknown;
         assert_eq!(
             CloudOffloadGoalState::after_attestation(&legacy, true),
-            CloudOffloadGoalState::ProviderSyncConfirmed
+            CloudOffloadGoalState::PendingProviderSync
         );
     }
 

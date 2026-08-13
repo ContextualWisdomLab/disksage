@@ -857,6 +857,7 @@ export interface CloudSourceEvictionOutput {
   eviction: CloudEvictionResult;
   adr_path: string;
   goal_path: string;
+  projection_warnings: string[];
 }
 
 export const listCloudRoots = () => invoke<CloudRoot[]>("list_cloud_roots");

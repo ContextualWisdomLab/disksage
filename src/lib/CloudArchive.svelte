@@ -660,7 +660,12 @@
               <p class="safe">원본을 운영체제 휴지통으로 이동했습니다. 클라우드 목적지는 유지되며 휴지통은 비우지 않았습니다.</p>
               <p class="muted">사람 승인 {eviction.approval.approval_id} · 완료 {eviction.eviction.completion_id}</p>
               <p class="muted">변경 불가 승인 기록: {eviction.approval_path}</p>
-              <p class="muted">동적 ADR: {eviction.adr_path} · 동적 Goal: {eviction.goal_path}</p>
+              {#if eviction.adr_path || eviction.goal_path}
+                <p class="muted">동적 ADR: {eviction.adr_path || "실패"} · 동적 Goal: {eviction.goal_path || "실패"}</p>
+              {/if}
+              {#each eviction.projection_warnings as warning}
+                <p class="warning">동적 ADR/Goal 투영 경고: {warning}</p>
+              {/each}
             {:else}
               <p class="safe">업로드 상태와 복사 콘텐츠 검증 완료. 로컬 제거 허가 증거가 생성되었지만 파일은 아직 그대로 보존됩니다.</p>
               <div class="eviction-controls">

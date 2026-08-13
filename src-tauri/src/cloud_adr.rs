@@ -8,9 +8,14 @@ use crate::provider_evidence::ProviderSyncEvidenceRecord;
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 pub const CLOUD_ADR_SCHEMA_VERSION: u32 = 1;
 pub const CLOUD_GOAL_SCHEMA_VERSION: u32 = 1;
+
+// ponytail: one process-wide lock keeps low-volume projections ordered; use per-receipt locks if
+// concurrent multi-account projection throughput ever becomes measurable.
+static PROJECTION_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -180,6 +185,31 @@ fn secure_directory(directory: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn goal_state_rank(state: CloudOffloadGoalState) -> u8 {
+    match state {
+        CloudOffloadGoalState::CopyVerified => 0,
+        CloudOffloadGoalState::PendingProviderSync => 1,
+        CloudOffloadGoalState::ProviderSyncConfirmed => 2,
+        CloudOffloadGoalState::EvictionReady => 3,
+        CloudOffloadGoalState::SourceEvicted => 4,
+    }
+}
+
+fn projection_state(
+    encoded: &[u8],
+    kind: &str,
+) -> Result<(CloudOffloadGoalState, u64), String> {
+    match kind {
+        "adr" => serde_json::from_slice::<CloudOffloadAdrSnapshot>(encoded)
+            .map(|snapshot| (snapshot.goal_state, snapshot.updated_at_ms))
+            .map_err(|_| "cloud-adr-existing-invalid".into()),
+        "goal" => serde_json::from_slice::<CloudOffloadGoalSnapshot>(encoded)
+            .map(|snapshot| (snapshot.goal_state, snapshot.updated_at_ms))
+            .map_err(|_| "cloud-goal-existing-invalid".into()),
+        _ => Err("cloud-projection-kind-invalid".into()),
+    }
+}
+
 fn write_latest_json(
     directory: &Path,
     receipt_id: &str,
@@ -191,7 +221,24 @@ fn write_latest_json(
         return Err("cloud-snapshot-receipt-id-invalid".into());
     }
     secure_directory(directory)?;
+    let _guard = PROJECTION_WRITE_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "cloud-projection-write-lock-poisoned".to_string())?;
     let path = directory.join(format!("{receipt_id}-latest.json"));
+    let incoming = projection_state(encoded, kind)?;
+    if let Ok(metadata) = std::fs::symlink_metadata(&path) {
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(format!("cloud-{kind}-existing-unsafe"));
+        }
+        let existing = std::fs::read(&path).map_err(|_| format!("cloud-{kind}-existing-read-failed"))?;
+        let previous = projection_state(&existing, kind)?;
+        if goal_state_rank(incoming.0) < goal_state_rank(previous.0)
+            || (incoming.0 == previous.0 && incoming.1 < previous.1)
+        {
+            return Err(format!("cloud-{kind}-state-regression"));
+        }
+    }
     let temporary = directory.join(format!(
         ".{receipt_id}-{updated_at_ms}-{}-{kind}.tmp",
         std::process::id()
@@ -325,5 +372,30 @@ mod tests {
             write_latest_goal_snapshot(directory.path(), &snapshot).unwrap_err(),
             "cloud-snapshot-receipt-id-invalid"
         );
+    }
+
+    #[test]
+    fn projection_writer_rejects_late_state_regression() {
+        let directory = tempfile::tempdir().unwrap();
+        let receipt = receipt();
+        let mut source_evicted = goal_snapshot_from_evidence(
+            &receipt,
+            &pending_record(),
+            CloudOffloadGoalState::SourceEvicted,
+            10,
+        );
+        write_latest_goal_snapshot(directory.path(), &source_evicted).unwrap();
+        source_evicted.goal_state = CloudOffloadGoalState::EvictionReady;
+        source_evicted.updated_at_ms = 11;
+        assert_eq!(
+            write_latest_goal_snapshot(directory.path(), &source_evicted).unwrap_err(),
+            "cloud-goal-state-regression"
+        );
+        let persisted: CloudOffloadGoalSnapshot = serde_json::from_slice(
+            &std::fs::read(directory.path().join(format!("{}-latest.json", receipt.receipt_id)))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(persisted.goal_state, CloudOffloadGoalState::SourceEvicted);
     }
 }
