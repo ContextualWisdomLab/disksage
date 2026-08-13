@@ -509,7 +509,8 @@ pub fn judge_brew_cleanup(
         let engine = guard
             .as_ref()
             .ok_or_else(|| "brew-cleanup-llm-engine-unavailable".to_string())?;
-        let mut judgment = brew_cleanup::judge(engine, &plan, now_ms());
+        let judgment = brew_cleanup::judge(engine, &plan, now_ms());
+        let mut judgment = judgment;
         judgment.calibration = state
             .judge_calibration
             .lock()
