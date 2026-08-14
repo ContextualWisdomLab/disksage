@@ -6,14 +6,17 @@ describe("fmtBytes", () => {
     expect(fmtBytes(0)).toBe("0 B");
     expect(fmtBytes(512)).toBe("512 B");
   });
-  it("uses one decimal below 10 in larger units", () => {
-    expect(fmtBytes(1024)).toBe("1.0 KB");
-    expect(fmtBytes(1536)).toBe("1.5 KB");
+  it("uses IEC binary prefixes when scaling by powers of 1024", () => {
+    expect(fmtBytes(1024)).toBe("1.0 KiB");
+    expect(fmtBytes(1536)).toBe("1.5 KiB");
+    expect(fmtBytes(1024 ** 2)).toBe("1.0 MiB");
+    expect(fmtBytes(1024 ** 3)).toBe("1.0 GiB");
+    expect(fmtBytes(1024 ** 4)).toBe("1.0 TiB");
   });
   it("drops decimals at 10 and above", () => {
-    expect(fmtBytes(10 * 1024)).toBe("10 KB");
+    expect(fmtBytes(10 * 1024)).toBe("10 KiB");
   });
-  it("caps at TB", () => {
-    expect(fmtBytes(1024 ** 5)).toBe("1024 TB");
+  it("keeps scaling beyond tebibytes instead of reporting thousands of TiB", () => {
+    expect(fmtBytes(1024 ** 5)).toBe("1.0 PiB");
   });
 });
