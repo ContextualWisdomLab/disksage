@@ -488,6 +488,13 @@ pub fn export_naruon_cloud_copy_readiness_with_global_sync(
     icloud_health: Option<&IcloudSyncHealthReport>,
     provider_global_sync: Option<&ProviderGlobalSyncReport>,
 ) -> Result<NaruonCloudCopyReadinessEnvelope, String> {
+    if report
+        .notices
+        .iter()
+        .any(|notice| notice == "source-scan-incomplete")
+    {
+        return Err("naruon-copy-readiness-source-scan-incomplete".into());
+    }
     provider_client_runtime::validate_provider_client_runtime_snapshot(runtime)?;
     if runtime.provider != report.cloud_root.provider {
         return Err("naruon-copy-readiness-runtime-provider-mismatch".into());
@@ -1219,6 +1226,21 @@ mod tests {
             last_sync_present: true,
             notices: vec!["icloud-native-status-summary-observed".into()],
         }
+    }
+
+    #[test]
+    fn partial_source_scan_never_exports_readiness() {
+        let mut report = report(CloudProvider::Onedrive);
+        report.notices.push("source-scan-incomplete".into());
+        let runtime = assess_provider_client_runtime(
+            CloudProvider::Onedrive,
+            Some(b"OneDrive Sync Service\n"),
+            25,
+        );
+        assert_eq!(
+            export_naruon_cloud_copy_readiness(&report, &runtime, None).unwrap_err(),
+            "naruon-copy-readiness-source-scan-incomplete"
+        );
     }
 
     #[test]
