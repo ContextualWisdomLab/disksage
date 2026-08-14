@@ -5,8 +5,9 @@
 
 use disksage_lib::cloud::{
     cloud_root_path_matches, discover_cloud_roots, discover_cloud_roots_report,
-    prepare_cloud_archive_source, validate_cloud_root_readable, validate_source_root_readable,
-    CloudAccountScope, CloudPlanOptions, CloudProvider, CloudRoot, ContentMetadata, FileFact,
+    plan_cloud_archive_from_snapshot, prepare_cloud_archive_source, validate_cloud_root_readable,
+    validate_source_root_readable, CloudAccountScope, CloudPlanOptions, CloudProvider, CloudRoot,
+    ContentMetadata, FileFact,
 };
 use unicode_normalization::UnicodeNormalization;
 
@@ -202,20 +203,26 @@ fn source_snapshot_recognizes_supported_archive_families_without_io() {
 }
 
 #[test]
-fn source_snapshot_enforces_the_candidate_limit_after_admission() {
+fn destination_plan_enforces_the_candidate_limit_after_source_admission() {
     const DAY_MS: u64 = 24 * 60 * 60 * 1_000;
 
     let temp = tempfile::tempdir().unwrap();
     let source_root = temp.path().join("source");
+    let destination_root = temp.path().join("cloud");
     std::fs::create_dir(&source_root).unwrap();
+    std::fs::create_dir(&destination_root).unwrap();
     let now_ms = 20 * DAY_MS;
     let modified_ms = now_ms - DAY_MS;
+    let prepared_metadata = ContentMetadata {
+        title: Some("coverage fixture".into()),
+        ..ContentMetadata::default()
+    };
     let file = |name: &str| FileFact {
         path: source_root.join(name),
         bytes: 2,
         created_ms: modified_ms,
         modified_ms,
-        content_metadata: ContentMetadata::default(),
+        content_metadata: prepared_metadata.clone(),
     };
     let files = vec![file("one.pdf"), file("two.pdf"), file("three.pdf")];
 
@@ -230,8 +237,15 @@ fn source_snapshot_enforces_the_candidate_limit_after_admission() {
         },
     );
 
-    assert_eq!(snapshot.candidate_count(), 2);
-    assert_eq!(snapshot.candidate_bytes(), 4);
+    assert_eq!(snapshot.candidate_count(), 3);
+    assert_eq!(snapshot.candidate_bytes(), 6);
+
+    let report = plan_cloud_archive_from_snapshot(
+        &snapshot,
+        &cloud_root(&destination_root, true, None),
+    );
+    assert_eq!(report.candidates.len(), 2);
+    assert_eq!(report.candidate_bytes, 4);
 }
 
 #[test]
