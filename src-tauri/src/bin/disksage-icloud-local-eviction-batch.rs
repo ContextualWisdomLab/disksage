@@ -44,6 +44,10 @@ fn value(args: &[String], index: &mut usize, flag: &str) -> Result<String, Strin
 }
 
 fn parse_args(args: &[String]) -> Result<Args, String> {
+    if args.len() == 1 && matches!(args[0].as_str(), "--help" | "-h") {
+        return Err(HELP_REQUESTED.into());
+    }
+
     let mut cloud_root = None;
     let mut manifest = None;
     let mut execute = false;
@@ -73,7 +77,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             "--record-dir" => {
                 record_dir = Some(PathBuf::from(value(args, &mut index, "--record-dir")?))
             }
-            "--help" | "-h" => return Err(HELP_REQUESTED.into()),
+            "--help" | "-h" => return Err("알 수 없는 인자".into()),
             _unknown => return Err("알 수 없는 인자".into()),
         }
         index += 1;
