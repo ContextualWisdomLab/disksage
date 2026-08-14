@@ -1,6 +1,25 @@
 #![cfg(feature = "cloud-cli")]
 
-use std::process::Command;
+use std::process::{Command, Output};
+
+const EXPECTED_USAGE: &str = "usage: disksage-duplicate-audit --root ABSOLUTE_PATH [--min-bytes POSITIVE_INTEGER] [--max-entries 1..=1000000] [--private-output ABSOLUTE_NEW_FILE.json]";
+
+fn assert_invalid_argument_is_bounded(output: Output) {
+    assert!(
+        !output.status.success(),
+        "an invalid invocation must remain a non-zero failure"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "invalid invocation must not emit successful output on stdout"
+    );
+    let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must be valid UTF-8");
+    assert!(!stderr.is_empty(), "invalid invocation must remain visible");
+    assert!(
+        !stderr.contains("not-shown"),
+        "invalid diagnostics must not echo arbitrary argument payloads"
+    );
+}
 
 #[test]
 fn duplicate_audit_help_exits_successfully_without_error_output() {
@@ -21,27 +40,26 @@ fn duplicate_audit_help_exits_successfully_without_error_output() {
             "successful {flag} help must not be projected through stderr"
         );
         let stdout = String::from_utf8(output.stdout).expect("help output must be valid UTF-8");
-        assert!(stdout.contains("usage: disksage-duplicate-audit --root ABSOLUTE_PATH"));
-        assert!(stdout.contains("--private-output ABSOLUTE_NEW_FILE.json"));
+        assert_eq!(
+            stdout,
+            format!("{EXPECTED_USAGE}\n"),
+            "help output must equal the stable usage synopsis"
+        );
     }
 }
 
 #[test]
-fn duplicate_audit_help_does_not_hide_an_unknown_argument() {
-    let output = Command::new(env!("CARGO_BIN_EXE_disksage-duplicate-audit"))
-        .args(["--help", "--unknown"])
-        .output()
-        .expect("duplicate-audit CLI must launch for invalid-argument validation");
-
-    assert!(
-        !output.status.success(),
-        "help must not turn an otherwise invalid invocation into success"
-    );
-    assert!(output.stdout.is_empty(), "invalid invocation must not emit help on stdout");
-    assert!(
-        !output.stderr.is_empty(),
-        "invalid invocation must remain visible through stderr"
-    );
+fn duplicate_audit_unknown_and_mixed_arguments_are_bounded() {
+    for arguments in [
+        vec!["--opaque-option=not-shown"],
+        vec!["--help", "--opaque-option=not-shown"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_disksage-duplicate-audit"))
+            .args(arguments)
+            .output()
+            .expect("duplicate-audit CLI must launch for invalid-argument validation");
+        assert_invalid_argument_is_bounded(output);
+    }
 }
 
 #[cfg(unix)]
