@@ -43,6 +43,9 @@ pub const MAX_CLOUD_COPY_APPROVAL_AGE_MS: u64 = 15 * 60 * 1000;
 pub fn source_eviction_blocker(source: &Path) -> Option<&'static str> {
     match std::fs::symlink_metadata(source) {
         Ok(metadata) if metadata.file_type().is_symlink() => Some("source-not-regular-file"),
+        Ok(metadata) if metadata.is_file() && crate::cloud::metadata_is_dataless(&metadata) => {
+            Some("source-content-not-local")
+        }
         Ok(metadata) if metadata.is_file() => None,
         Ok(_) => Some("source-not-regular-file"),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some("source-not-present"),
@@ -1094,6 +1097,9 @@ fn copy_and_verify(
     if before.file_type().is_symlink() || !before.is_file() {
         return Err("source-must-be-regular-file".into());
     }
+    if crate::cloud::metadata_is_dataless(&before) {
+        return Err("source-content-not-local".into());
+    }
     let before_modified_ms = modified_ms(&before)?;
     if before.len() != candidate.bytes || before_modified_ms != candidate.modified_ms {
         return Err("source-changed-since-plan".into());
@@ -1183,6 +1189,9 @@ fn verify_existing_destination(
     let source_before = std::fs::symlink_metadata(source).map_err(|error| error.to_string())?;
     if source_before.file_type().is_symlink() || !source_before.is_file() {
         return Err("source-must-be-regular-file".into());
+    }
+    if crate::cloud::metadata_is_dataless(&source_before) {
+        return Err("source-content-not-local".into());
     }
     let source_modified_ms = modified_ms(&source_before)?;
     if source_before.len() != candidate.bytes || source_modified_ms != candidate.modified_ms {

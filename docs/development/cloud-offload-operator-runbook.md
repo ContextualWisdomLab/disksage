@@ -26,9 +26,10 @@ The runtime sequence is:
    non-zero reconciliation backlogs (`provider-global-sync-reconciliation-pending`), provider
    disconnection, or path errors are present; the stable blocker codes are shown in the plan and
    are never a reason to bypass the gate.
-5. If the destination is valid but the receipt source is missing or unsafe, reconciliation writes
-   a blocked Goal/ADR projection and records `source-not-present` (or the precise source-state
-   blocker); it never treats that as proof of a completed eviction.
+5. If the destination is valid but the receipt source is missing, unsafe, or macOS reports it as a
+   File Provider `dataless` object, reconciliation writes a blocked Goal/ADR projection and records
+   `source-not-present`, `source-content-not-local`, or the precise source-state blocker; it never
+   treats that as proof of a completed eviction.
 6. Files inside a `.photoslibrary`/`.photolibrary` bundle are non-overridable
    `system-managed-photos-library-data` blockers; individual SQLite members are never copied.
 7. Only a fresh attestation plus the separate receipt-bound human approval may move the source to

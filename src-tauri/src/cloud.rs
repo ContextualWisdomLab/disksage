@@ -912,6 +912,25 @@ fn millis(time: std::io::Result<std::time::SystemTime>) -> u64 {
         .unwrap_or(0)
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn metadata_is_dataless(metadata: &std::fs::Metadata) -> bool {
+    use std::os::macos::fs::MetadataExt;
+
+    const SF_DATALESS: u32 = 0x4000_0000;
+    metadata.st_flags() & SF_DATALESS != 0
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn metadata_is_dataless(_metadata: &std::fs::Metadata) -> bool {
+    false
+}
+
+pub(crate) fn source_content_is_dataless(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .map(|metadata| metadata_is_dataless(&metadata))
+        .unwrap_or(false)
+}
+
 /// Collect only archive-shaped regular files while pruning cloud roots and regenerable trees
 /// before descent. Symlinks/reparse points are rejected by the shared scanner guard.
 ///
@@ -3730,6 +3749,9 @@ fn source_blocked_reason(
     if multipart_archive_part(path).is_some() {
         return Some("multipart-archive-atomic-copy-required".into());
     }
+    if source_content_is_dataless(path) {
+        return Some("source-content-not-local".into());
+    }
     let extension = path
         .extension()
         .map(|extension| extension.to_string_lossy().to_ascii_lowercase())
@@ -3825,6 +3847,9 @@ fn hash_duplicate_candidate(path: &Path, expected_bytes: u64) -> Result<ContentD
     if !before.is_file() {
         return Err("duplicate-content-source-not-file".into());
     }
+    if metadata_is_dataless(&before) {
+        return Err("duplicate-content-source-not-local".into());
+    }
     if before.len() != expected_bytes {
         return Err("duplicate-content-size-changed".into());
     }
@@ -3844,7 +3869,10 @@ fn hash_duplicate_candidate(path: &Path, expected_bytes: u64) -> Result<ContentD
     }
     let after =
         std::fs::metadata(path).map_err(|_| "duplicate-content-metadata-unreadable".to_string())?;
-    if after.len() != expected_bytes || millis(after.modified()) != before_modified_ms {
+    if metadata_is_dataless(&after)
+        || after.len() != expected_bytes
+        || millis(after.modified()) != before_modified_ms
+    {
         return Err("duplicate-content-source-changed".into());
     }
     Ok(hasher.finalize())
