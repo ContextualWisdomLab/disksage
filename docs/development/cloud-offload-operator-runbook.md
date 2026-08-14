@@ -38,6 +38,9 @@ The runtime sequence is:
    treats that as proof of a completed eviction. A previously advanced projection is not rewound;
    its Goal status becomes `blocked` and the explicit eviction gate is revoked. A terminal
    `source-evicted` projection remains completed because the original path is expected to be gone.
+   Files under macOS File Provider's private `File Provider Storage` tree (including
+   `DownloadStage`) are also non-overridable `system-managed-file-provider-storage` blockers;
+   DiskSage never treats provider staging bytes as user-owned cleanup candidates.
 6. Files inside a `.photoslibrary`/`.photolibrary` bundle are non-overridable
    `system-managed-photos-library-data` blockers; individual SQLite members are never copied.
 7. Only a fresh attestation plus the separate receipt-bound human approval may move the source to

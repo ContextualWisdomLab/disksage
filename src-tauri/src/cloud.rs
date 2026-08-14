@@ -3743,6 +3743,9 @@ fn source_blocked_reason(
     kind: ArchiveKind,
     metadata: &ContentMetadata,
 ) -> Option<String> {
+    if path_inside_managed_file_provider_storage(path) {
+        return Some("system-managed-file-provider-storage".into());
+    }
     if path_inside_managed_photo_library(path) {
         return Some("system-managed-photos-library-data".into());
     }
@@ -3771,6 +3774,15 @@ fn source_blocked_reason(
         return Some("archive-index-unreadable".into());
     }
     None
+}
+
+/// File Provider's private storage and download staging trees are owned by macOS. Their files
+/// are implementation state, not user payloads; only a provider-aware operation may reclaim them.
+fn path_inside_managed_file_provider_storage(path: &Path) -> bool {
+    path.components().any(|component| {
+        let name = normalized_account_text(&component.as_os_str().to_string_lossy());
+        name == "file provider storage"
+    })
 }
 
 /// Photos databases are individually archive-shaped but are owned by the Photos package.
@@ -5709,6 +5721,33 @@ mod tests {
             planner_blocked_reason(
                 Path::new("Pictures/export/Photos.sqlite"),
                 ArchiveKind::Dataset,
+                &ContentMetadata::default(),
+                destination,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn file_provider_private_storage_is_non_overridable_planner_block() {
+        let destination = Path::new("/definitely/missing/disksage-destination");
+        assert_eq!(
+            planner_blocked_reason(
+                &Path::new(
+                    "/Users/test/Library/Group Containers/group.com.apple.iCloudDrive/"
+                )
+                .join("File Provider Storage/DownloadStage/content.wav"),
+                ArchiveKind::Media,
+                &ContentMetadata::default(),
+                destination,
+            )
+            .as_deref(),
+            Some("system-managed-file-provider-storage")
+        );
+        assert_eq!(
+            planner_blocked_reason(
+                Path::new("/Users/test/iCloud Drive/DownloadStage/content.wav"),
+                ArchiveKind::Media,
                 &ContentMetadata::default(),
                 destination,
             ),
