@@ -2458,7 +2458,7 @@ fn collect_receipt_sync_evidence(
         .filter(|value| !value.is_empty());
     match receipt.provider {
         CloudProvider::Icloud => {
-            if provider_object_id.is_some() || oauth_connections.is_some() {
+            if provider_object_id.is_some() {
                 return Err("icloud-provider-api-fallback-not-supported".into());
             }
             provider_sync::collect_icloud_sync_evidence(receipt, confirmed_at_ms)
@@ -5545,6 +5545,39 @@ mod tests {
         unscoped.provider_object_id = Some("remote-item-id".into());
         unscoped.oauth_connections = Some(PathBuf::from("/connections.json"));
         assert!(validate_action_args(&unscoped).is_err());
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn icloud_reconciliation_uses_native_probe_with_shared_oauth_descriptor() {
+        let receipt = CloudCopyReceipt {
+            version: cloud_transfer::RECEIPT_VERSION,
+            receipt_id: "0".repeat(64),
+            candidate_fingerprint: "1".repeat(64),
+            provider: CloudProvider::Icloud,
+            source: "/source/file.bin".into(),
+            destination: "/missing/icloud/file.bin".into(),
+            bytes: 1,
+            blake3: "2".repeat(64),
+            sha256: "3".repeat(64),
+            quick_xor_base64: String::new(),
+            source_modified_ms: 1,
+            copied_at_ms: 2,
+            copy_verified: true,
+            provider_sync_confirmed: false,
+            lineage_fingerprint: None,
+            lineage: None,
+        };
+        let error = collect_receipt_sync_evidence(
+            &receipt,
+            None,
+            Some(Path::new("/connections.json")),
+            Path::new("/home/test"),
+            3,
+            false,
+        )
+        .unwrap_err();
+        assert_ne!(error, "icloud-provider-api-fallback-not-supported");
     }
 
     #[test]
