@@ -1,10 +1,10 @@
-//! Black-box help and invalid-argument contracts for two feature-gated operational CLIs.
+//! Black-box help and invalid-argument contracts for feature-gated eviction CLIs.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const BINARIES: [(&str, &str); 2] = [
+const BINARIES: [(&str, &str); 3] = [
     (
         "disksage-icloud-local-eviction",
         "usage: disksage-icloud-local-eviction",
@@ -12,6 +12,10 @@ const BINARIES: [(&str, &str); 2] = [
     (
         "disksage-incomplete-download-destination-plan",
         "usage: disksage-incomplete-download-destination-plan",
+    ),
+    (
+        "disksage-icloud-local-eviction-batch",
+        "usage: disksage-icloud-local-eviction-batch",
     ),
 ];
 
