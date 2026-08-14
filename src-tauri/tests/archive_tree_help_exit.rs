@@ -2,6 +2,7 @@ use std::process::Command;
 
 const EXPECTED_USAGE: &str = "DiskSage archive proof: usage: disksage-archive-tree --zip PATH [--expected-tree HEX40 | --prove-subset-of PATH] [--keep-top-level]";
 
+/// Prove both help flags return the exact stable usage line and empty stderr.
 #[test]
 fn archive_tree_help_exits_successfully_without_error_output() {
     for flag in ["--help", "-h"] {
@@ -29,6 +30,7 @@ fn archive_tree_help_exits_successfully_without_error_output() {
     }
 }
 
+/// Prove help cannot hide a trailing unknown option or emit successful stdout.
 #[test]
 fn archive_tree_help_does_not_hide_an_unknown_argument() {
     let output = Command::new(env!("CARGO_BIN_EXE_disksage-archive-tree"))
@@ -50,6 +52,7 @@ fn archive_tree_help_does_not_hide_an_unknown_argument() {
     );
 }
 
+/// Prove an unknown option uses the stable bounded diagnostic without reflection.
 #[test]
 fn archive_tree_unknown_argument_uses_bounded_diagnostic() {
     let output = Command::new(env!("CARGO_BIN_EXE_disksage-archive-tree"))
@@ -64,6 +67,7 @@ fn archive_tree_unknown_argument_uses_bounded_diagnostic() {
     assert!(!stderr.contains("not-shown"));
 }
 
+/// Prove hostile non-UTF-8 arguments fail through the stable diagnostic on Unix.
 #[cfg(unix)]
 #[test]
 fn archive_tree_non_utf8_argument_fails_without_panic() {
