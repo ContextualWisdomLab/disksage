@@ -1,24 +1,32 @@
 use std::process::Command;
 
+const EXPECTED_USAGE: &str = "DiskSage archive proof: usage: disksage-archive-tree --zip PATH [--expected-tree HEX40 | --prove-subset-of PATH] [--keep-top-level]";
+
 #[test]
 fn archive_tree_help_exits_successfully_without_error_output() {
-    let output = Command::new(env!("CARGO_BIN_EXE_disksage-archive-tree"))
-        .arg("--help")
-        .output()
-        .expect("archive-tree CLI must launch for its help contract");
+    for flag in ["--help", "-h"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_disksage-archive-tree"))
+            .arg(flag)
+            .output()
+            .expect("archive-tree CLI must launch for its help contract");
 
-    assert!(
-        output.status.success(),
-        "--help must be a successful terminal action, got status {:?} and stderr {:?}",
-        output.status.code(),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        output.stderr.is_empty(),
-        "successful help must not be projected through stderr"
-    );
-    let stdout = String::from_utf8(output.stdout).expect("help output must be valid UTF-8");
-    assert!(stdout.contains("disksage-archive-tree --zip PATH"));
+        assert!(
+            output.status.success(),
+            "{flag} must be a successful terminal action, got status {:?} and stderr {:?}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "successful help must not be projected through stderr"
+        );
+        let stdout = String::from_utf8(output.stdout).expect("help output must be valid UTF-8");
+        assert_eq!(
+            stdout,
+            format!("{EXPECTED_USAGE}\n"),
+            "help output must equal the stable usage synopsis"
+        );
+    }
 }
 
 #[test]
