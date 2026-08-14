@@ -10,10 +10,6 @@ use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fs;
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd};
 #[cfg(unix)]
@@ -22,6 +18,10 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::OpenOptionsExt;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 pub const GIT_WORKTREE_AUDIT_SCHEMA_KIND: &str = "disksage.git-worktree-audit/v2";
 const MAX_COMMAND_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
@@ -471,6 +471,61 @@ fn run_git(
         return Err(format!("{reason}-output-truncated"));
     }
     Ok(result)
+}
+
+fn git_admin_metadata_blocker(
+    status: &crate::provider_sync::FileProviderItemStatus,
+) -> Option<&'static str> {
+    (!status.is_local_current()).then_some("git-worktree-admin-metadata-not-local-current")
+}
+
+#[cfg(all(target_os = "macos", not(coverage)))]
+fn check_file_provider_git_metadata(path: &Path) -> Result<Option<&'static str>, String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|_| "git-worktree-admin-metadata-stat-failed".to_string())?;
+    let output = match crate::provider_sync::file_providerctl_status(&path.to_string_lossy()) {
+        Ok(output) => output,
+        // A regular local file is not a File Provider item; Git can inspect it normally.
+        Err(error) if error == "file-provider-status-command-failed" => return Ok(None),
+        Err(error) => return Err(format!("git-worktree-admin-metadata-{error}")),
+    };
+    let status = crate::provider_sync::parse_file_providerctl_item_status(&output, metadata.len())
+        .map_err(|error| format!("git-worktree-admin-metadata-{error}"))?;
+    Ok(git_admin_metadata_blocker(&status))
+}
+
+#[cfg(all(target_os = "macos", not(coverage)))]
+fn ensure_git_admin_metadata_local(repository_root: &Path) -> Result<(), String> {
+    let git_entry = repository_root.join(".git");
+    let mut paths = Vec::new();
+    match fs::symlink_metadata(&git_entry) {
+        Ok(metadata) if metadata.is_dir() => {
+            paths.push(git_entry.join("HEAD"));
+            paths.push(git_entry.join("config"));
+        }
+        Ok(_) => paths.push(git_entry),
+        Err(_) => {
+            let head = repository_root.join("HEAD");
+            if fs::symlink_metadata(&head).is_ok() {
+                paths.push(head);
+                paths.push(repository_root.join("config"));
+            }
+        }
+    }
+    for path in paths {
+        if fs::symlink_metadata(&path).is_err() {
+            continue;
+        }
+        if let Some(blocker) = check_file_provider_git_metadata(&path)? {
+            return Err(blocker.into());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(any(not(target_os = "macos"), coverage))]
+fn ensure_git_admin_metadata_local(_repository_root: &Path) -> Result<(), String> {
+    Ok(())
 }
 
 fn parse_worktree_porcelain(bytes: &[u8]) -> Result<Vec<RawWorktree>, String> {
@@ -1274,6 +1329,7 @@ pub fn audit_git_worktrees(
         return Err("git-worktree-repository-root-not-absolute".into());
     }
     let repository_root = canonical_real_directory(repository_root)?;
+    ensure_git_admin_metadata_local(&repository_root)?;
     let common_dir = resolve_common_dir(&repository_root, options.command_timeout_ms)?;
     let retention_references = resolve_references(
         &repository_root,
@@ -2311,7 +2367,11 @@ mod tests {
         );
 
         let oversized = temp.path().join("oversized");
-        fs::write(&oversized, vec![b'x'; (MAX_ADMIN_FALLBACK_FILE_BYTES + 1) as usize]).unwrap();
+        fs::write(
+            &oversized,
+            vec![b'x'; (MAX_ADMIN_FALLBACK_FILE_BYTES + 1) as usize],
+        )
+        .unwrap();
         assert_eq!(
             read_admin_fallback_file(&oversized).unwrap_err(),
             "git-worktree-admin-fallback-file-too-large"
@@ -2324,6 +2384,29 @@ mod tests {
         assert_eq!(containment_observation(&oid('a'), &reachable), Some(true));
         assert_eq!(containment_observation(&oid('c'), &reachable), Some(false));
         assert_eq!(containment_observation("not-an-oid", &reachable), None);
+    }
+
+    #[test]
+    fn offloaded_git_metadata_is_a_hard_blocker() {
+        let status = crate::provider_sync::FileProviderItemStatus {
+            is_downloaded: false,
+            is_downloading: false,
+            is_most_recent_version_downloaded: false,
+            is_uploaded: true,
+            is_uploading: false,
+            has_unresolved_conflicts: false,
+            is_excluded_from_sync: false,
+            is_sync_paused: false,
+            is_trashed: false,
+            capabilities: 0,
+            allows_eviction: false,
+            observed_bytes: 30,
+            item_identifier_fingerprint: "f".repeat(64),
+        };
+        assert_eq!(
+            git_admin_metadata_blocker(&status),
+            Some("git-worktree-admin-metadata-not-local-current")
+        );
     }
 
     #[test]
