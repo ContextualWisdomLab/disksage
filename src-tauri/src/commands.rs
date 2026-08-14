@@ -2395,7 +2395,7 @@ pub async fn attest_cloud_copy(
         if receipt.receipt_id != receipt_id {
             return Err("receipt-id-mismatch".into());
         }
-        collect_cloud_attestation_for_receipt(
+        let result = collect_cloud_attestation_for_receipt(
             &receipt,
             object_id,
             &evidence_dir,
@@ -2404,7 +2404,21 @@ pub async fn attest_cloud_copy(
             &connection_path,
             &cloud_roots,
             false,
-        )
+        );
+        if let Err(error) = &result {
+            // Keep direct GUI attestation consistent with reconciliation: a failed provider
+            // observation still updates the replaceable ADR/Goal projection, while the immutable
+            // receipt and source-eviction authority remain unchanged.
+            let provider_blocker = stable_reconciliation_error(error);
+            let _ = cloud_adr::ensure_initial_projection_pair_with_provider_state_outcome(
+                &receipt,
+                &adr_dir,
+                &goal_dir,
+                cloud::system_now_ms(),
+                &provider_blocker,
+            );
+        }
+        result
     })
     .await
     .map_err(|_| "cloud-attestation-task-failed".to_string())?
