@@ -34,6 +34,13 @@ enum ParseResult {
 
 /// Parses bounded options while preserving non-option values as native operating-system strings.
 fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResult, String> {
+    let raw_args: Vec<OsString> = raw_args.into_iter().collect();
+    if raw_args.len() == 1
+        && matches!(raw_args[0].to_str(), Some("-h") | Some("--help"))
+    {
+        return Ok(ParseResult::Help);
+    }
+
     let mut operation = PlannedOperation::Trash;
     let mut pretty = false;
     let mut check_active_use = false;
@@ -53,13 +60,13 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
             }
             Some("--pretty") => pretty = true,
             Some("--check-active-use") => check_active_use = true,
-            Some("-h" | "--help") => return Ok(ParseResult::Help),
+            Some("-h" | "--help") => return Err(format!("help must be used alone\n{USAGE}")),
             Some("--") => {
                 paths.extend(args.map(PathBuf::from));
                 break;
             }
             Some(value) if value.starts_with('-') => {
-                return Err(format!("unknown option: {value}\n{USAGE}"));
+                return Err(format!("unknown option\n{USAGE}"));
             }
             _ => paths.push(PathBuf::from(arg)),
         }
