@@ -393,22 +393,36 @@ pub fn write_projection_pair_with_source_blocker(
         if goal_state_rank(previous_goal.goal_state) > goal_state_rank(goal.goal_state) {
             adr.goal_state = previous_goal.goal_state;
             goal.goal_state = previous_goal.goal_state;
-            adr.decision = format!(
-                "{}-source-state-unverified",
-                decision_for(previous_goal.goal_state, adr.provider_sync_state)
-            );
         }
     }
     goal.status = "blocked".into();
     goal.completion_gates.insert("source-present".into(), false);
     goal.completion_gates
         .insert("explicit-eviction-permit".into(), false);
+    let decision_state = if goal_state_rank(goal.goal_state)
+        >= goal_state_rank(CloudOffloadGoalState::ProviderSyncConfirmed)
+    {
+        CloudOffloadGoalState::ProviderSyncConfirmed
+    } else {
+        goal.goal_state
+    };
+    adr.decision = format!(
+        "{}-source-state-unverified",
+        decision_for(decision_state, adr.provider_sync_state)
+    );
+    adr.consequences
+        .retain(|value| value != "explicit-trash-step-may-proceed");
     let blocker = format!("source-state-blocked:{source_blocker}");
     if !adr.consequences.iter().any(|value| value == &blocker) {
         adr.consequences.push(blocker);
     }
-    if !adr.decision.ends_with("-source-state-unverified") {
-        adr.decision.push_str("-source-state-unverified");
+    if !adr
+        .consequences
+        .iter()
+        .any(|value| value == "eviction-blocked-until-source-state")
+    {
+        adr.consequences
+            .push("eviction-blocked-until-source-state".into());
     }
     write_projection_pair(adr_dir, &adr, goal_dir, &goal)
 }
@@ -772,6 +786,20 @@ mod tests {
         assert_eq!(persisted.status, "blocked");
         assert!(!persisted.completion_gates["source-present"]);
         assert!(!persisted.completion_gates["explicit-eviction-permit"]);
+        let persisted_adr: CloudOffloadAdrSnapshot = serde_json::from_slice(
+            &std::fs::read(adr_dir.join(format!("{}-latest.json", receipt.receipt_id))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            persisted_adr.decision,
+            "retain-source-eviction-gate-pending-source-state-unverified"
+        );
+        assert!(persisted_adr
+            .consequences
+            .contains(&"eviction-blocked-until-source-state".into()));
+        assert!(!persisted_adr
+            .consequences
+            .contains(&"explicit-trash-step-may-proceed".into()));
     }
 
     #[test]
