@@ -1785,10 +1785,27 @@ fn create_cloud_candidate_provider_api_receipt(
             goal_path = attestation.goal_path;
             projection_warnings.extend(attestation.projection_warnings);
         }
-        Err(error) => projection_warnings.push(format!(
-            "provider-attestation-incomplete:{}",
-            stable_reconciliation_error(&error)
-        )),
+        Err(error) => {
+            let provider_blocker = stable_reconciliation_error(&error);
+            let projection_outcome =
+                cloud_adr::ensure_initial_projection_pair_with_provider_state_outcome(
+                    &receipt,
+                    &app_data_dir.join("cloud-adr"),
+                    &app_data_dir.join("cloud-goals"),
+                    cloud::system_now_ms(),
+                    &provider_blocker,
+                );
+            if let Some(path) = projection_outcome.adr_path {
+                adr_path = Some(path.to_string_lossy().into_owned());
+            }
+            if let Some(path) = projection_outcome.goal_path {
+                goal_path = Some(path.to_string_lossy().into_owned());
+            }
+            projection_warnings.extend(projection_outcome.warnings);
+            projection_warnings.push(format!(
+                "provider-attestation-incomplete:{provider_blocker}"
+            ));
+        }
     }
     Ok(CloudCopyOutput {
         action: "copy-only",
