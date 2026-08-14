@@ -1,5 +1,5 @@
 export function fmtBytes(n: number): string {
-  const units = ["B", "KB", "MB", "GB", "TB"];
+  const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
   let v = n;
   let i = 0;
   while (v >= 1024 && i < units.length - 1) {
