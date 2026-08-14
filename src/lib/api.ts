@@ -601,6 +601,7 @@ export interface CloudPlanReport {
 export interface IcloudSyncHealthReport {
   observed_at_ms: number;
   evidence_complete: boolean;
+  managed_database_allocated_bytes?: number;
   upload_queue: {
     scheduled_waiting_count: number;
     scheduled_active_count: number;

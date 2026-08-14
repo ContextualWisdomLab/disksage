@@ -715,6 +715,12 @@
         {:else}
           <p class="capacity-ok">iCloud 전역 업로드 대기열이 비어 있습니다. 개별 파일은 별도 provider 증거가 필요합니다.</p>
         {/if}
+        {#if typeof icloudHealth.managed_database_allocated_bytes === "number"}
+          <p class="warning">
+            macOS 관리 iCloud 동기화 DB가 {fmtBytes(icloudHealth.managed_database_allocated_bytes)}를 사용 중입니다.
+            DiskSage는 이 시스템 관리 데이터를 삭제하지 않습니다.
+          </p>
+        {/if}
         <p class="muted">읽기 전용 로컬 증거이며, 원격 용량·개별 파일 업로드 완료·원본 삭제 권한을 대신 증명하지 않습니다.</p>
       </div>
     {/if}
