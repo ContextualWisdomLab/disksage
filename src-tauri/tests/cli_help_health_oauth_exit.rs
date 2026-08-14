@@ -2,7 +2,7 @@
 
 use std::process::Command;
 
-fn assert_help_success(binary: &str, flag: &str, usage_marker: &str) {
+fn assert_help_success(binary: &str, flag: &str, expected_usage: &str) {
     let output = Command::new(binary)
         .env_remove("HOME")
         .arg(flag)
@@ -20,26 +20,27 @@ fn assert_help_success(binary: &str, flag: &str, usage_marker: &str) {
         "successful help must not be projected through stderr"
     );
     let stdout = String::from_utf8(output.stdout).expect("help output must be valid UTF-8");
-    assert!(
-        stdout.contains(usage_marker),
-        "help output must contain the stable usage synopsis"
+    assert_eq!(
+        stdout,
+        format!("{expected_usage}\n"),
+        "help output must equal the stable usage synopsis"
     );
 }
 
-fn assert_help_does_not_hide_invalid_argument(binary: &str) {
+fn assert_invalid_argument_is_bounded(binary: &str, arguments: &[&str]) {
     let output = Command::new(binary)
         .env_remove("HOME")
-        .args(["--help", "--opaque-option=not-shown"])
+        .args(arguments)
         .output()
-        .expect("DiskSage operational CLI must launch for invalid help composition");
+        .expect("DiskSage operational CLI must launch for invalid argument validation");
 
     assert!(
         !output.status.success(),
-        "help must not turn an otherwise invalid invocation into success"
+        "an invalid invocation must remain a non-zero failure"
     );
     assert!(
         output.stdout.is_empty(),
-        "invalid invocation must not emit successful help on stdout"
+        "invalid invocation must not emit successful output on stdout"
     );
     let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must be valid UTF-8");
     assert!(!stderr.is_empty(), "invalid invocation must remain visible");
@@ -52,15 +53,19 @@ fn assert_help_does_not_hide_invalid_argument(binary: &str) {
 #[test]
 fn icloud_sync_health_help_is_successful_without_environment_dependency() {
     let binary = env!("CARGO_BIN_EXE_disksage-icloud-sync-health");
-    assert_help_success(binary, "--help", "usage: disksage-icloud-sync-health");
-    assert_help_success(binary, "-h", "usage: disksage-icloud-sync-health");
-    assert_help_does_not_hide_invalid_argument(binary);
+    let expected_usage = "usage: disksage-icloud-sync-health [--db-dir ABSOLUTE_CLOUDDOCS_DB_DIR] [--output ABSOLUTE_NEW_FILE.json]";
+    assert_help_success(binary, "--help", expected_usage);
+    assert_help_success(binary, "-h", expected_usage);
+    assert_invalid_argument_is_bounded(binary, &["--opaque-option=not-shown"]);
+    assert_invalid_argument_is_bounded(binary, &["--help", "--opaque-option=not-shown"]);
 }
 
 #[test]
 fn provider_oauth_help_is_successful_without_environment_dependency() {
     let binary = env!("CARGO_BIN_EXE_disksage-provider-oauth");
-    assert_help_success(binary, "--help", "usage: disksage-provider-oauth");
-    assert_help_success(binary, "-h", "usage: disksage-provider-oauth");
-    assert_help_does_not_hide_invalid_argument(binary);
+    let expected_usage = "usage: disksage-provider-oauth [--home ABSOLUTE_PATH] [--connections ABSOLUTE_PATH] (--list | --connect --cloud-root ABSOLUTE_PATH --client-id ID [--manual-browser] | --verify-capacity --cloud-root ABSOLUTE_PATH | --disconnect --cloud-root ABSOLUTE_PATH)";
+    assert_help_success(binary, "--help", expected_usage);
+    assert_help_success(binary, "-h", expected_usage);
+    assert_invalid_argument_is_bounded(binary, &["--opaque-option=not-shown"]);
+    assert_invalid_argument_is_bounded(binary, &["--help", "--opaque-option=not-shown"]);
 }
