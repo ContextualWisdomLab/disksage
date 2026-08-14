@@ -48,6 +48,21 @@ describe('Test workflow coverage evidence contract', () => {
     expect(workflow).toContain('lines: totals?.lines ?? null');
   });
 
+  it('preserves a bounded sanitized command diagnostic when measurement itself fails', () => {
+    expect(workflow).toContain('id: rust-coverage');
+    expect(workflow).toContain('coverage-command.raw.log');
+    expect(workflow).toContain('coverage-command-diagnostic.log');
+    expect(workflow).toContain('MAX_COVERAGE_COMMAND_DIAGNOSTIC_BYTES=32768');
+    expect(workflow).toContain("replaceAll(workspace, '<repo>')");
+    expect(workflow).toContain("replaceAll(home, '<home>')");
+    expect(workflow).toContain(
+      "if: failure() && steps.rust-coverage.outcome == 'failure'",
+    );
+    expect(workflow).toContain(
+      'name: coverage-command-diagnostic-${{ env.HEAD_SHA }}',
+    );
+  });
+
   it('identifies the largest exact-head Rust coverage gaps without leaking runner paths', () => {
     expect(workflow).toContain('top_uncovered_files');
     expect(workflow).toContain("const marker = '/src-tauri/'");
