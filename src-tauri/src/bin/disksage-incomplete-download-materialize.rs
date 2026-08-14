@@ -94,7 +94,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
             }
             "--destination-plan" => {
                 if destination_plan.is_some() {
-                    return Err("--destination-plan은 한 번만 지정할 수 있음".into());
+                    return Err("--destination-plan는 한 번만 지정할 수 있음".replace("는", "은"));
                 }
                 destination_plan = Some(PathBuf::from(value(&mut index, "--destination-plan")?));
             }
@@ -298,7 +298,14 @@ fn verify_discovered_cloud_root(
 
 #[cfg(not(coverage))]
 fn run() -> Result<(), String> {
-    let raw = std::env::args().skip(1).collect::<Vec<_>>();
+    let raw = std::env::args_os()
+        .skip(1)
+        .map(|argument| {
+            argument
+                .into_string()
+                .map_err(|_| "incomplete-download-materialize-unknown-argument".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     if raw.len() == 1 && matches!(raw[0].as_str(), "--help" | "-h") {
         println!("{}", usage());
         return Ok(());
