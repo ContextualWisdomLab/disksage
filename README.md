@@ -23,11 +23,11 @@
 - 🩺 **Incomplete-download recovery validation** — decodes bounded PNG payloads and streams bounded whole-file or embedded ZIP ranges to EOF with entry CRC checks, without extraction, rename, or discard
 - 🧬 **Incomplete-download materialization plan** — binds fresh audit and recovery fingerprints to exact non-overlapping byte ranges, SHA-256/BLAKE3 content lineage, and content-addressed filename suggestions while withholding destination selection and write approval
 - ☁️ **Destination-bound recovery approval plan** — binds validated output units to one discovered cloud root, relative destination, fresh provider capacity evidence, collision checks, and one exact human-approval fingerprint without creating any output
-- 🌿 **Stale Git worktree audit** — resolves an exact retention-reference OID set, preserves every exact retained tip plus primary/current/dirty/unmerged/locked/prunable/active worktree, measures bounded allocated bytes, and emits a path-redacted fingerprint and exact approval phrase without pruning or removing anything
+- 🌿 **Stale Git worktree audit/removal** — resolves an exact retention-reference OID set, preserves every exact retained tip plus primary/current/dirty/unmerged/locked/prunable/active worktree, measures bounded allocated bytes, and gates clean merged inactive candidates behind a path-bound fingerprint, exact approval phrase, immediate re-audit, and immutable approval/result records; branch deletion and `git worktree prune` are unreachable
 
 ## Safety first
 
-Every destructive action goes through explicit review and the OS trash — DiskSage has **no permanent-delete code path**. Developer-artifact selections carry a bounded, metadata-only fingerprint, byte/file counts, scan status, and a platform filesystem-object identity; the Rust command re-scans immediately before trashing, atomically stages the exact identity in a private sibling directory, and rejects changed, recreated, unreadable, or incomplete candidates. Cloud archiving currently exposes copy and evidence only: even a successful provider attestation returns a local-eviction permit without deleting the source. All destructive operations are journaled and sent to OS trash; identity-staged operations retain their private recovery directory so OS-trash undo has a valid staged target, while restoring to the original path remains a separate recovery step.
+Every user-file destructive action goes through explicit review and the OS trash — DiskSage has **no permanent-delete code path** for those files. Developer-artifact selections carry a bounded, metadata-only fingerprint, byte/file counts, scan status, and a platform filesystem-object identity; the Rust command re-scans immediately before trashing, atomically stages the exact identity in a private sibling directory, and rejects changed, recreated, unreadable, or incomplete candidates. Cloud archiving currently exposes copy and evidence only: even a successful provider attestation returns a local-eviction permit without deleting the source. Stale Git worktree removal is the explicit repository-management exception: it invokes non-force `git worktree remove` only for clean, merged, inactive, fingerprint-identical candidates, records immutable approval/result evidence, retains branches, and never runs prune. All user-file trash operations are journaled and retain their private recovery directory so OS-trash undo has a valid staged target, while restoring to the original path remains a separate recovery step.
 
 The headless split-archive audit is read-only. A contiguous sequence does not invent proof that its
 last observed member is the terminal part, and a missing-part result is never automatic deletion
@@ -107,7 +107,7 @@ cargo run --features cloud-cli --bin disksage-incomplete-download-materialize --
   --execute
 ```
 
-Stale-worktree auditing is read-only. It does not fetch or assume that local remote-tracking
+Stale-worktree auditing does not fetch or assume that local remote-tracking
 references are current, so operators should refresh every selected reference before auditing.
 `--reference-ref` is repeatable: use the integration branch and every current open-PR exact head.
 An exact retained tip is always preserved. A different secondary worktree is a removal candidate
@@ -115,8 +115,7 @@ only when its HEAD is already contained in at least one resolved retention OID, 
 untracked state is clean, its bounded allocated-byte scan is complete, it is neither locked nor
 prunable, and no active CWD or recursive `lsof` consumer is observed. Local paths, branch names,
 and reference names appear only in an optional create-new mode-0600 report. The public approval
-phrase is plan evidence; this command has no remove, prune, branch-delete, or filesystem mutation
-path.
+phrase is plan evidence; it is not execution authority by itself.
 
 ```sh
 cargo run --features cloud-cli --bin disksage-git-worktree-audit -- \
@@ -124,6 +123,22 @@ cargo run --features cloud-cli --bin disksage-git-worktree-audit -- \
   --reference-ref origin/develop \
   --reference-ref CURRENT_OPEN_PR_HEAD_OID \
   --private-output /absolute/private/new-git-worktree-audit.json
+```
+
+After reviewing that exact private report, the mutating command repeats the full audit immediately
+before removal. It requires the unchanged plan fingerprint, exact approval phrase, attributed
+reviewer, rationale, and a record root outside every audited worktree. It removes only the
+currently matching candidates and stops on any drift; branches remain and no prune is performed.
+
+```sh
+cargo run --features cloud-cli --bin disksage-git-worktree-remove -- \
+  --repository-root /absolute/repository/worktree \
+  --reference-ref origin/develop \
+  --approved-removal-plan-fingerprint LOWERCASE_HEX64 \
+  --confirmation-exact-approval-phrase 'DiskSage stale worktree … 승인 LOWERCASE_HEX64' \
+  --reviewed-by human:reviewer \
+  --rationale "Merged, clean, inactive worktree with no retained unmerged commits" \
+  --record-root /absolute/private/disksage-app-data
 ```
 
 ## Local volume evidence CLI
