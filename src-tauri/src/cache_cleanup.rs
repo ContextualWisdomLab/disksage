@@ -6,6 +6,18 @@ fn sort_targets(targets: &mut Vec<rules::CacheTarget>) {
     targets.sort_by(|left, right| left.path.cmp(&right.path));
 }
 
+fn active_use_blocker(
+    evidence: &crate::git_worktree::GitWorktreeActiveUseEvidence,
+) -> Option<&'static str> {
+    if !evidence.assessed || !evidence.evidence_complete {
+        Some("cache-target-active-use-evidence-incomplete")
+    } else if evidence.active {
+        Some("cache-target-active-use-detected")
+    } else {
+        None
+    }
+}
+
 fn clean_cache_contents_inner(
     bases: &rules::BaseDirs,
     dir: &Path,
@@ -24,9 +36,26 @@ fn clean_cache_contents_inner(
         return Err("cache-cleanup-targets-stale".into());
     }
 
+    // One recursive probe covers the whole catalog root. Re-probing every child would multiply
+    // the bounded lsof cost by thousands of cache entries while adding no stronger snapshot.
+    let active_use = crate::git_worktree::active_use_evidence(
+        dir,
+        crate::reclaim::ACTIVE_USE_PROBE_TIMEOUT_MS,
+        crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
+        true,
+    );
+    let active_use_error = active_use_blocker(&active_use);
+
     Ok(expected
         .into_iter()
         .map(|target| {
+            if let Some(error) = active_use_error {
+                return CleanResult {
+                    path: target.path,
+                    ok: false,
+                    error: error.into(),
+                };
+            }
             match safety::trash_delete_if_identity(
                 Path::new(&target.path),
                 &target.object_id,
@@ -123,6 +152,37 @@ mod tests {
 
         assert_eq!(error, "cache-cleanup-targets-stale");
         assert_eq!(fs::read(&victim).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn active_use_evidence_blocks_cache_mutation() {
+        let incomplete = crate::git_worktree::GitWorktreeActiveUseEvidence {
+            method: "lsof-file-pid".into(),
+            assessed: true,
+            evidence_complete: false,
+            active: false,
+            observed_pids: Vec::new(),
+            results_truncated: false,
+            error: Some("active-use-timeout".into()),
+        };
+        assert_eq!(
+            active_use_blocker(&incomplete),
+            Some("cache-target-active-use-evidence-incomplete")
+        );
+
+        let active = crate::git_worktree::GitWorktreeActiveUseEvidence {
+            method: "lsof-file-pid".into(),
+            assessed: true,
+            evidence_complete: true,
+            active: true,
+            observed_pids: vec![42],
+            results_truncated: false,
+            error: None,
+        };
+        assert_eq!(
+            active_use_blocker(&active),
+            Some("cache-target-active-use-detected")
+        );
     }
 
     #[cfg(unix)]

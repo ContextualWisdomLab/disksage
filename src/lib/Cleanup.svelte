@@ -49,7 +49,7 @@
       const targetBytes = targets.reduce((sum, target) => sum + target.bytes, 0);
       const okay = await confirm(
         `${candidate.label}의 직계 캐시 ${targets.length}개(${fmtBytes(targetBytes)})를 휴지통으로 보냅니다.\n\n` +
-          "캐시 루트는 보존하며, 각 항목은 파일시스템 객체 지문·크기·수정시각을 다시 검증합니다. 휴지통에서 복원할 수 있습니다.",
+          "캐시 루트는 보존하며, 각 항목은 객체 지문·크기·수정시각·active-use를 다시 검증합니다. 사용 중이거나 증명이 불완전한 항목은 건너뜁니다. 휴지통에서 복원할 수 있습니다.",
         { title: "DiskSage", kind: "warning" },
       );
       if (!okay) return;
