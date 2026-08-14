@@ -340,7 +340,14 @@ fn print_json<T: serde::Serialize>(value: &T) -> Result<(), String> {
 }
 
 fn run() -> Result<(), String> {
-    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let raw = std::env::args_os()
+        .skip(1)
+        .map(|argument| {
+            argument
+                .into_string()
+                .map_err(|_| "icloud-local-eviction-batch-invalid-utf8-argument".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let args = parse_args(&raw)?;
     let roots = cloud::discover_cloud_roots(&home_dir()?);
     let root = select_root(&roots, &args.cloud_root)?.clone();
