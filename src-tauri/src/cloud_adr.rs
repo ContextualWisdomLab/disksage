@@ -9,14 +9,23 @@ use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+#[cfg(unix)]
+use std::os::unix::io::AsRawFd;
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
 
 pub const CLOUD_ADR_SCHEMA_VERSION: u32 = 2;
 pub const CLOUD_GOAL_SCHEMA_VERSION: u32 = 1;
 const MAX_PROJECTION_BYTES: u64 = 256 * 1024;
 
-// ponytail: one process-wide lock keeps low-volume projections ordered; use per-receipt locks if
-// concurrent multi-account projection throughput ever becomes measurable.
+// ponytail: one process-wide lock keeps low-volume projections ordered; the receipt lock below
+// closes the cross-process race without adding a lock manager or database.
 static PROJECTION_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+const INTERPROCESS_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -243,6 +252,78 @@ fn projection_state(encoded: &[u8], kind: &str) -> Result<(CloudOffloadGoalState
     }
 }
 
+struct InterprocessProjectionLock {
+    file: std::fs::File,
+}
+
+impl Drop for InterprocessProjectionLock {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        // SAFETY: the descriptor belongs to this guard and remains open until this method
+        // returns. Unlocking is best-effort because the file descriptor is closing anyway.
+        unsafe {
+            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN)
+        };
+    }
+}
+
+fn acquire_interprocess_projection_lock(
+    directory: &Path,
+    receipt_id: &str,
+) -> Result<InterprocessProjectionLock, String> {
+    let lock_path = directory.join(format!(".{receipt_id}.lock"));
+    if let Ok(metadata) = std::fs::symlink_metadata(&lock_path) {
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err("cloud-projection-lock-unsafe".into());
+        }
+    }
+    let deadline = Instant::now() + INTERPROCESS_LOCK_TIMEOUT;
+    loop {
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true).write(true).create(true);
+        #[cfg(unix)]
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+        #[cfg(windows)]
+        options.share_mode(0);
+        let file = match options.open(&lock_path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                if Instant::now() >= deadline {
+                    return Err("cloud-projection-lock-timeout".into());
+                }
+                std::thread::sleep(Duration::from_millis(10));
+                continue;
+            }
+            Err(_) => return Err("cloud-projection-lock-open-failed".into()),
+        };
+
+        #[cfg(unix)]
+        {
+            // SAFETY: flock only uses the live descriptor owned by `file`.
+            let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+            if result == 0 {
+                return Ok(InterprocessProjectionLock { file });
+            }
+            let would_block =
+                std::io::Error::last_os_error().kind() == std::io::ErrorKind::WouldBlock;
+            drop(file);
+            if !would_block {
+                return Err("cloud-projection-lock-acquire-failed".into());
+            }
+        }
+
+        #[cfg(windows)]
+        return Ok(InterprocessProjectionLock { file });
+
+        #[cfg(unix)]
+        if Instant::now() >= deadline {
+            return Err("cloud-projection-lock-timeout".into());
+        }
+        #[cfg(unix)]
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 fn write_latest_json(
     directory: &Path,
     receipt_id: &str,
@@ -258,6 +339,7 @@ fn write_latest_json(
         .get_or_init(|| Mutex::new(()))
         .lock()
         .map_err(|_| "cloud-projection-write-lock-poisoned".to_string())?;
+    let _interprocess_guard = acquire_interprocess_projection_lock(directory, receipt_id)?;
     let path = directory.join(format!("{receipt_id}-latest.json"));
     let incoming = projection_state(encoded, kind)?;
     if let Ok(metadata) = std::fs::symlink_metadata(&path) {
