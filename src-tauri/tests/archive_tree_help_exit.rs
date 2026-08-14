@@ -30,26 +30,37 @@ fn archive_tree_help_exits_successfully_without_error_output() {
     }
 }
 
-/// Prove help cannot hide a trailing unknown option or emit successful stdout.
+/// Prove mixed help and opaque invalid input stays a bounded failure in either order.
 #[test]
-fn archive_tree_help_does_not_hide_an_unknown_argument() {
-    let output = Command::new(env!("CARGO_BIN_EXE_disksage-archive-tree"))
-        .args(["--help", "--unknown"])
-        .output()
-        .expect("archive-tree CLI must launch for invalid-argument validation");
+fn archive_tree_help_does_not_hide_or_reflect_an_unknown_argument() {
+    for arguments in [
+        ["--help", "--opaque-option=not-shown"],
+        ["--opaque-option=not-shown", "--help"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_disksage-archive-tree"))
+            .args(arguments)
+            .output()
+            .expect("archive-tree CLI must launch for invalid-argument validation");
 
-    assert!(
-        !output.status.success(),
-        "help must not turn an otherwise invalid invocation into success"
-    );
-    assert!(
-        output.stdout.is_empty(),
-        "invalid invocation must not emit help on stdout"
-    );
-    assert!(
-        !output.stderr.is_empty(),
-        "invalid invocation must remain visible through stderr"
-    );
+        assert!(
+            !output.status.success(),
+            "help must not turn an otherwise invalid invocation into success"
+        );
+        assert!(
+            output.stdout.is_empty(),
+            "invalid invocation must not emit help on stdout"
+        );
+        let stderr =
+            String::from_utf8(output.stderr).expect("CLI diagnostics must be valid UTF-8");
+        assert!(
+            !stderr.is_empty(),
+            "invalid invocation must remain visible through stderr"
+        );
+        assert!(
+            !stderr.contains("not-shown"),
+            "mixed help diagnostics must not reflect opaque argument payloads"
+        );
+    }
 }
 
 /// Prove an unknown option uses the stable bounded diagnostic without reflection.
