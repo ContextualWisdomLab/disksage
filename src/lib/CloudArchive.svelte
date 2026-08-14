@@ -602,6 +602,8 @@
       "icloud-local-sync-item-error-present": "iCloud 로컬 동기화 오류가 있음",
       "icloud-native-sync-up-pending": "macOS iCloud sync-up이 아직 끝나지 않음",
       "icloud-native-status-evidence-incomplete": "macOS iCloud 상태 증거가 불완전함",
+      "icloud-item-error-octagon-not-signed-in": "iCloud 계정 인증이 필요함",
+      "icloud-item-error-older-than-24h": "iCloud 동기화 오류가 24시간 이상 지속됨",
     };
     return labels[blocker] ?? blocker;
   }
@@ -719,6 +721,15 @@
           <p class="warning">
             macOS 관리 iCloud 동기화 DB가 {fmtBytes(icloudHealth.managed_database_allocated_bytes)}를 사용 중입니다.
             DiskSage는 이 시스템 관리 데이터를 삭제하지 않습니다.
+          </p>
+        {/if}
+        {#if icloudHealth.notices.some((notice) => notice.startsWith("icloud-item-error-"))}
+          <p class="warning">
+            동기화 진단:
+            {icloudHealth.notices
+              .filter((notice) => notice.startsWith("icloud-item-error-"))
+              .map(icloudBlockerLabel)
+              .join(", ")}
           </p>
         {/if}
         <p class="muted">읽기 전용 로컬 증거이며, 원격 용량·개별 파일 업로드 완료·원본 삭제 권한을 대신 증명하지 않습니다.</p>
