@@ -560,6 +560,17 @@ pub fn read_projection_state(
     }
 }
 
+/// Read only the replaceable Goal status for UI/reconciliation reporting.
+/// The status is informational; eviction authority still comes from immutable evidence and gates.
+pub fn read_goal_status(goal_dir: &Path, receipt_id: &str) -> Result<Option<String>, String> {
+    Ok(read_latest_projection::<CloudOffloadGoalSnapshot>(
+        goal_dir,
+        receipt_id,
+        "goal",
+    )?
+    .map(|snapshot| snapshot.status))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -866,6 +877,26 @@ mod tests {
                 provider_sync_state: ProviderSyncState::Unknown,
                 updated_at_ms: 4,
             })
+        );
+    }
+
+    #[test]
+    fn goal_status_can_be_read_without_granting_eviction_authority() {
+        let temporary = tempfile::tempdir().unwrap();
+        let adr_dir = temporary.path().join("adr");
+        let goal_dir = temporary.path().join("goals");
+        let receipt = receipt();
+        let mut goal = initial_goal_snapshot(&receipt, 4);
+        goal.status = "blocked".into();
+        write_latest_goal_snapshot(&goal_dir, &goal).unwrap();
+
+        assert_eq!(
+            read_goal_status(&goal_dir, &receipt.receipt_id).unwrap(),
+            Some("blocked".into())
+        );
+        assert_eq!(
+            read_goal_status(&adr_dir, &receipt.receipt_id).unwrap(),
+            None
         );
     }
 

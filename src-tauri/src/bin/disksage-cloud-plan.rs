@@ -531,6 +531,7 @@ struct ReceiptReconciliationEntry {
     destination_state: Option<String>,
     adr_projection_state: Option<String>,
     goal_projection_state: Option<String>,
+    goal_status: Option<String>,
     goal_state: Option<cloud_transfer::CloudOffloadGoalState>,
     provider_sync_state: Option<cloud_transfer::ProviderSyncState>,
     eviction_permit: bool,
@@ -753,6 +754,7 @@ fn audit_receipts(
                     destination_state: None,
                     adr_projection_state: None,
                     goal_projection_state: None,
+                    goal_status: None,
                     goal_state: None,
                     provider_sync_state: None,
                     eviction_permit: false,
@@ -811,6 +813,9 @@ fn audit_receipts(
             destination_state: Some(destination_state.into()),
             adr_projection_state: Some(adr_state.into()),
             goal_projection_state: Some(goal_state.into()),
+            goal_status: cloud_adr::read_goal_status(&goal_dir, &receipt.receipt_id)
+                .ok()
+                .flatten(),
             goal_state: None,
             provider_sync_state: None,
             eviction_permit: false,
@@ -2644,6 +2649,9 @@ fn reconcile_receipts(
                     )
                     .into(),
                 );
+                entry.goal_status = cloud_adr::read_goal_status(&goal_dir, &receipt.receipt_id)
+                    .ok()
+                    .flatten();
                 entry.evidence_record_count =
                     evidence_record_count(&[evidence_dir.to_path_buf()], &receipt.receipt_id);
             }
@@ -2714,6 +2722,9 @@ fn reconcile_receipts(
                     )
                     .into(),
                 );
+                entry.goal_status = cloud_adr::read_goal_status(&goal_dir, &receipt.receipt_id)
+                    .ok()
+                    .flatten();
                 entry.evidence_record_count =
                     evidence_record_count(&[evidence_dir.to_path_buf()], &receipt.receipt_id);
             }

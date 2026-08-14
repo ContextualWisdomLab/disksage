@@ -536,7 +536,8 @@
           {#each reconciliation.entries as entry}
             <p class:warning={entry.error !== null || entry.blockers.length > 0}>
               영수증 {entry.receipt_id ?? "무효"} · {entry.provider ?? "미확인"} ·
-              Goal {entry.goal_state ?? "미확인"} · 동기화 {entry.provider_sync_state ?? "미확인"}
+              Goal {entry.goal_status ?? "미확인"} ({entry.goal_state ?? "미확인"}) ·
+              동기화 {entry.provider_sync_state ?? "미확인"}
               {#if entry.error} · {entry.error}{/if}
               {#if entry.blockers.length > 0} · 차단: {entry.blockers.join(", ")}{/if}
             </p>

@@ -1686,6 +1686,7 @@ pub struct CloudAttestationOutput {
 pub struct CloudReceiptReconciliationEntry {
     pub receipt_id: Option<String>,
     pub provider: Option<cloud::CloudProvider>,
+    pub goal_status: Option<String>,
     pub goal_state: Option<cloud_transfer::CloudOffloadGoalState>,
     pub provider_sync_state: Option<cloud_transfer::ProviderSyncState>,
     pub eviction_permit: bool,
@@ -1799,6 +1800,7 @@ fn reconcile_cloud_receipts_inner(
                 output.entries.push(CloudReceiptReconciliationEntry {
                     receipt_id: None,
                     provider: None,
+                    goal_status: None,
                     goal_state: None,
                     provider_sync_state: None,
                     eviction_permit: false,
@@ -1830,8 +1832,11 @@ fn reconcile_cloud_receipts_inner(
                     output.eviction_ready_count = output.eviction_ready_count.saturating_add(1);
                 }
                 output.entries.push(CloudReceiptReconciliationEntry {
-                    receipt_id: Some(receipt.receipt_id),
+                    receipt_id: Some(receipt.receipt_id.clone()),
                     provider: Some(receipt.provider),
+                    goal_status: cloud_adr::read_goal_status(goal_dir, &receipt.receipt_id)
+                        .ok()
+                        .flatten(),
                     goal_state: Some(attestation.goal_state),
                     provider_sync_state: Some(attestation.evidence.sync_state),
                     eviction_permit: attestation.permit.is_some(),
@@ -1873,8 +1878,11 @@ fn reconcile_cloud_receipts_inner(
                     output.pending_count = output.pending_count.saturating_add(1);
                 }
                 output.entries.push(CloudReceiptReconciliationEntry {
-                    receipt_id: Some(receipt.receipt_id),
+                    receipt_id: Some(receipt.receipt_id.clone()),
                     provider: Some(receipt.provider),
+                    goal_status: cloud_adr::read_goal_status(goal_dir, &receipt.receipt_id)
+                        .ok()
+                        .flatten(),
                     goal_state,
                     provider_sync_state,
                     eviction_permit: false,
