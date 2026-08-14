@@ -1,4 +1,5 @@
 use disksage_lib::volume_pressure::{compare_snapshots, snapshot_volume, LocalVolumeSnapshot};
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -14,7 +15,7 @@ struct Args {
 }
 
 fn main() -> ExitCode {
-    match run(std::env::args().skip(1)) {
+    match run(std::env::args_os().skip(1)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) if error == "help" => {
             println!(
@@ -33,7 +34,7 @@ fn main() -> ExitCode {
 fn run<I, S>(args: I) -> Result<(), String>
 where
     I: IntoIterator<Item = S>,
-    S: Into<String>,
+    S: Into<OsString>,
 {
     let args = parse_args(args)?;
     let current = snapshot_volume(&args.path, now_ms()?)?;
@@ -58,10 +59,10 @@ where
 fn parse_args<I, S>(args: I) -> Result<Args, String>
 where
     I: IntoIterator<Item = S>,
-    S: Into<String>,
+    S: Into<OsString>,
 {
-    let values: Vec<String> = args.into_iter().map(Into::into).collect();
-    if values.len() == 1 && matches!(values[0].as_str(), "--help" | "-h") {
+    let values: Vec<OsString> = args.into_iter().map(Into::into).collect();
+    if values.len() == 1 && matches!(values[0].to_str(), Some("--help" | "-h")) {
         return Err("help".into());
     }
 
@@ -70,9 +71,9 @@ where
     let mut logical_removed_bytes = None;
     let mut values = values.into_iter();
     while let Some(flag) = values.next() {
-        match flag.as_str() {
-            "--help" | "-h" => return Err("local-volume-argument-unknown".into()),
-            "--path" => {
+        match flag.to_str() {
+            Some("--help" | "-h") => return Err("local-volume-argument-unknown".into()),
+            Some("--path") => {
                 if path.is_some() {
                     return Err("local-volume-path-duplicate".into());
                 }
@@ -80,7 +81,7 @@ where
                     values.next().ok_or("local-volume-path-value-missing")?,
                 ));
             }
-            "--baseline" => {
+            Some("--baseline") => {
                 if baseline.is_some() {
                     return Err("local-volume-baseline-duplicate".into());
                 }
@@ -88,19 +89,22 @@ where
                     values.next().ok_or("local-volume-baseline-value-missing")?,
                 ));
             }
-            "--logical-removed-bytes" => {
+            Some("--logical-removed-bytes") => {
                 if logical_removed_bytes.is_some() {
                     return Err("local-volume-logical-removed-duplicate".into());
                 }
+                let raw_bytes = values
+                    .next()
+                    .ok_or("local-volume-logical-removed-value-missing")?;
                 logical_removed_bytes = Some(
-                    values
-                        .next()
-                        .ok_or("local-volume-logical-removed-value-missing")?
+                    raw_bytes
+                        .to_str()
+                        .ok_or("local-volume-logical-removed-invalid")?
                         .parse::<u64>()
                         .map_err(|_| "local-volume-logical-removed-invalid")?,
                 );
             }
-            _ => return Err("local-volume-argument-unknown".into()),
+            Some(_) | None => return Err("local-volume-argument-unknown".into()),
         }
     }
     if baseline.is_none() && logical_removed_bytes.is_some() {
