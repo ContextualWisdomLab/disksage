@@ -4,18 +4,21 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const BINARIES: [(&str, &str); 3] = [
+const BINARIES: [(&str, &str, &str); 3] = [
     (
         "disksage-incomplete-download-materialization",
-        "usage: disksage-incomplete-download-materialization",
+        "usage: disksage-incomplete-download-materialization --root ABSOLUTE_PATH [--max-entries 1..=200000] [--stale-after-days 1..=3650] [--private-output ABSOLUTE_NEW_FILE.json]",
+        "incomplete-download-materialization-unknown-argument",
     ),
     (
         "disksage-incomplete-download-recovery",
-        "usage: disksage-incomplete-download-recovery",
+        "usage: disksage-incomplete-download-recovery --root ABSOLUTE_PATH [--max-entries 1..=200000] [--stale-after-days 1..=3650] [--private-output ABSOLUTE_NEW_FILE.json]",
+        "incomplete-download-recovery-unknown-argument",
     ),
     (
         "disksage-incomplete-download-materialize",
-        "usage: disksage-incomplete-download-materialize",
+        "usage: disksage-incomplete-download-materialize --source-root ABSOLUTE_PATH --destination-plan ABSOLUTE_PRIVATE_PLAN.json --confirm-plan-fingerprint HEX64 --receipt-dir ABSOLUTE_PRIVATE_DIRECTORY --approved-by human:ID --rationale TEXT --execute (--live-icloud-capacity | --capacity-snapshot ABSOLUTE.json) [--max-entries 1..=200000] [--stale-after-days 1..=3650]",
+        "incomplete-download-materialize-unknown-argument",
     ),
 ];
 
@@ -26,7 +29,7 @@ fn build_feature_gated_binaries() -> (tempfile::TempDir, Vec<PathBuf>) {
     command
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .args(["build", "--locked", "--features", "cloud-cli"]);
-    for (binary, _) in BINARIES {
+    for (binary, _, _) in BINARIES {
         command.args(["--bin", binary]);
     }
     let status = command
@@ -41,7 +44,7 @@ fn build_feature_gated_binaries() -> (tempfile::TempDir, Vec<PathBuf>) {
 
     let binaries = BINARIES
         .iter()
-        .map(|(binary, _)| {
+        .map(|(binary, _, _)| {
             let path = target_dir
                 .path()
                 .join("debug")
@@ -79,13 +82,14 @@ fn assert_help_success(binary: &Path, usage: &str, flag: &str) {
         "successful help must not be projected through stderr"
     );
     let stdout = String::from_utf8(output.stdout).expect("help output must be valid UTF-8");
-    assert!(
-        stdout.contains(usage),
-        "help output must contain the stable usage synopsis"
+    assert_eq!(
+        stdout,
+        format!("{usage}\n"),
+        "help output must equal the stable usage synopsis"
     );
 }
 
-fn assert_invalid_argument_is_bounded(binary: &Path) {
+fn assert_invalid_argument_is_bounded(binary: &Path, error_token: &str) {
     let output = command(binary)
         .arg("--opaque-option=not-shown")
         .output()
@@ -100,14 +104,14 @@ fn assert_invalid_argument_is_bounded(binary: &Path) {
         "invalid invocation must not emit successful output on stdout"
     );
     let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must be valid UTF-8");
-    assert!(!stderr.is_empty(), "invalid invocation must remain visible");
+    assert!(stderr.contains(error_token), "invalid invocation must use its stable error token");
     assert!(
         !stderr.contains("not-shown"),
         "invalid diagnostics must not echo arbitrary argument payloads"
     );
 }
 
-fn assert_help_does_not_hide_invalid_argument(binary: &Path) {
+fn assert_help_does_not_hide_invalid_argument(binary: &Path, error_token: &str) {
     let output = command(binary)
         .args(["--help", "--opaque-option=not-shown"])
         .output()
@@ -122,7 +126,7 @@ fn assert_help_does_not_hide_invalid_argument(binary: &Path) {
         "mixed invalid invocation must not emit successful help on stdout"
     );
     let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must be valid UTF-8");
-    assert!(!stderr.is_empty(), "mixed invalid invocation must remain visible");
+    assert!(stderr.contains(error_token), "mixed invalid invocation must use its stable error token");
     assert!(
         !stderr.contains("not-shown"),
         "mixed invalid diagnostics must not echo arbitrary argument payloads"
@@ -130,7 +134,7 @@ fn assert_help_does_not_hide_invalid_argument(binary: &Path) {
 }
 
 #[cfg(unix)]
-fn assert_non_utf8_argument_is_bounded(binary: &Path) {
+fn assert_non_utf8_argument_is_bounded(binary: &Path, error_token: &str) {
     use std::os::unix::ffi::OsStringExt;
 
     let opaque = OsString::from_vec(vec![b'-', b'-', b'o', b'p', b'a', b'q', b'u', b'e', 0xff]);
@@ -149,7 +153,7 @@ fn assert_non_utf8_argument_is_bounded(binary: &Path) {
         "invalid non-UTF-8 input must not emit successful output"
     );
     let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must remain valid UTF-8");
-    assert!(!stderr.is_empty(), "invalid non-UTF-8 input must remain visible");
+    assert!(stderr.contains(error_token), "invalid non-UTF-8 input must use its stable error token");
     assert!(
         !stderr.contains("panicked") && !stderr.contains("thread 'main'"),
         "invalid host arguments must not escape through a Rust panic"
@@ -159,12 +163,12 @@ fn assert_non_utf8_argument_is_bounded(binary: &Path) {
 #[test]
 fn incomplete_download_help_is_successful_and_invalid_arguments_are_bounded() {
     let (_target_dir, binaries) = build_feature_gated_binaries();
-    for ((_, usage), binary) in BINARIES.iter().zip(&binaries) {
+    for ((_, usage, error_token), binary) in BINARIES.iter().zip(&binaries) {
         assert_help_success(binary, usage, "--help");
         assert_help_success(binary, usage, "-h");
-        assert_invalid_argument_is_bounded(binary);
-        assert_help_does_not_hide_invalid_argument(binary);
+        assert_invalid_argument_is_bounded(binary, error_token);
+        assert_help_does_not_hide_invalid_argument(binary, error_token);
         #[cfg(unix)]
-        assert_non_utf8_argument_is_bounded(binary);
+        assert_non_utf8_argument_is_bounded(binary, error_token);
     }
 }
