@@ -512,7 +512,43 @@ pub fn write_projection_pair_with_source_blocker_outcome(
     goal: &CloudOffloadGoalSnapshot,
     source_blocker: Option<&str>,
 ) -> ProjectionWriteOutcome {
-    let Some(source_blocker) = source_blocker else {
+    write_projection_pair_with_blockers_outcome(
+        adr_dir,
+        adr,
+        goal_dir,
+        goal,
+        source_blocker,
+        None,
+    )
+}
+
+/// Persist a provider-attestation blocker without rewinding a previously observed goal state.
+pub fn write_projection_pair_with_provider_blocker_outcome(
+    adr_dir: &Path,
+    adr: &CloudOffloadAdrSnapshot,
+    goal_dir: &Path,
+    goal: &CloudOffloadGoalSnapshot,
+    provider_blocker: &str,
+) -> ProjectionWriteOutcome {
+    write_projection_pair_with_blockers_outcome(
+        adr_dir,
+        adr,
+        goal_dir,
+        goal,
+        None,
+        Some(provider_blocker),
+    )
+}
+
+fn write_projection_pair_with_blockers_outcome(
+    adr_dir: &Path,
+    adr: &CloudOffloadAdrSnapshot,
+    goal_dir: &Path,
+    goal: &CloudOffloadGoalSnapshot,
+    source_blocker: Option<&str>,
+    provider_blocker: Option<&str>,
+) -> ProjectionWriteOutcome {
+    if source_blocker.is_none() && provider_blocker.is_none() {
         let (adr_path, goal_path, warnings) = write_projection_pair(adr_dir, adr, goal_dir, goal);
         return ProjectionWriteOutcome {
             wrote: adr_path.is_some() || goal_path.is_some(),
@@ -571,33 +607,60 @@ pub fn write_projection_pair_with_source_blocker_outcome(
         }
     }
     goal.status = "blocked".into();
-    goal.completion_gates.insert("source-present".into(), false);
+    if source_blocker.is_some() {
+        goal.completion_gates.insert("source-present".into(), false);
+    }
+    if provider_blocker.is_some() {
+        goal.completion_gates
+            .insert("provider-sync-state-complete".into(), false);
+    }
     goal.completion_gates
         .insert("explicit-eviction-permit".into(), false);
-    let decision_state = if goal_state_rank(goal.goal_state)
-        >= goal_state_rank(CloudOffloadGoalState::ProviderSyncConfirmed)
+    let decision_state = if source_blocker.is_some()
+        && goal_state_rank(goal.goal_state)
+            >= goal_state_rank(CloudOffloadGoalState::ProviderSyncConfirmed)
     {
         CloudOffloadGoalState::ProviderSyncConfirmed
     } else {
         goal.goal_state
     };
-    adr.decision = format!(
-        "{}-source-state-unverified",
-        decision_for(decision_state, adr.provider_sync_state)
-    );
+    let mut decision = decision_for(decision_state, adr.provider_sync_state);
+    if source_blocker.is_some() {
+        decision.push_str("-source-state-unverified");
+    }
+    if provider_blocker.is_some() {
+        decision.push_str("-provider-state-unverified");
+    }
+    adr.decision = decision;
     adr.consequences
         .retain(|value| value != "explicit-trash-step-may-proceed");
-    let blocker = format!("source-state-blocked:{source_blocker}");
-    if !adr.consequences.iter().any(|value| value == &blocker) {
-        adr.consequences.push(blocker);
+    if let Some(source_blocker) = source_blocker {
+        let blocker = format!("source-state-blocked:{source_blocker}");
+        if !adr.consequences.iter().any(|value| value == &blocker) {
+            adr.consequences.push(blocker);
+        }
+        if !adr
+            .consequences
+            .iter()
+            .any(|value| value == "eviction-blocked-until-source-state")
+        {
+            adr.consequences
+                .push("eviction-blocked-until-source-state".into());
+        }
     }
-    if !adr
-        .consequences
-        .iter()
-        .any(|value| value == "eviction-blocked-until-source-state")
-    {
-        adr.consequences
-            .push("eviction-blocked-until-source-state".into());
+    if let Some(provider_blocker) = provider_blocker {
+        let blocker = format!("provider-state-blocked:{provider_blocker}");
+        if !adr.consequences.iter().any(|value| value == &blocker) {
+            adr.consequences.push(blocker);
+        }
+        if !adr
+            .consequences
+            .iter()
+            .any(|value| value == "eviction-blocked-until-provider-proof")
+        {
+            adr.consequences
+                .push("eviction-blocked-until-provider-proof".into());
+        }
     }
     let (adr_path, goal_path, warnings) =
         write_projection_pair_unlocked(adr_dir, &adr, goal_dir, &goal);
@@ -671,6 +734,42 @@ pub fn ensure_initial_projection_pair_with_source_state_outcome(
         goal_dir,
         &goal,
         source_blocker,
+    );
+    outcome.warnings.retain(|warning| {
+        !warning.ends_with("cloud-adr-state-regression")
+            && !warning.ends_with("cloud-goal-state-regression")
+    });
+    outcome
+}
+
+/// Seed or update projections when provider attestation fails, preserving the current monotonic
+/// state while making the missing proof explicit in the replaceable Goal and ADR.
+#[cfg(not(coverage))]
+pub fn ensure_initial_projection_pair_with_provider_state_outcome(
+    receipt: &CloudCopyReceipt,
+    adr_dir: &Path,
+    goal_dir: &Path,
+    updated_at_ms: u64,
+    provider_blocker: &str,
+) -> ProjectionWriteOutcome {
+    let mut adr = initial_adr_snapshot(receipt, updated_at_ms);
+    let mut goal = initial_goal_snapshot(receipt, updated_at_ms);
+    let source_blocker =
+        crate::cloud_transfer::source_eviction_blocker(Path::new(&receipt.source));
+    if let Some(blocker) = source_blocker {
+        goal.status = "blocked".into();
+        goal.completion_gates.insert("source-present".into(), false);
+        adr.decision = format!("{}-source-state-unverified", adr.decision);
+        adr.consequences
+            .push(format!("source-state-blocked:{blocker}"));
+    }
+    let mut outcome = write_projection_pair_with_blockers_outcome(
+        adr_dir,
+        &adr,
+        goal_dir,
+        &goal,
+        source_blocker,
+        Some(provider_blocker),
     );
     outcome.warnings.retain(|warning| {
         !warning.ends_with("cloud-adr-state-regression")
@@ -1049,6 +1148,59 @@ mod tests {
         assert!(!persisted_adr
             .consequences
             .contains(&"explicit-trash-step-may-proceed".into()));
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn provider_blocker_updates_goal_without_rewinding_advanced_state() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("source.bin");
+        std::fs::write(&source, b"source").unwrap();
+        let adr_dir = temporary.path().join("adr");
+        let goal_dir = temporary.path().join("goals");
+        let mut receipt = receipt();
+        receipt.source = source.to_string_lossy().into_owned();
+        let record = pending_record();
+        let advanced_adr = snapshot_from_evidence(
+            &record,
+            CloudOffloadGoalState::PendingProviderSync,
+            10,
+        );
+        let advanced_goal = goal_snapshot_from_evidence(
+            &receipt,
+            &record,
+            CloudOffloadGoalState::PendingProviderSync,
+            10,
+        );
+        write_projection_pair(&adr_dir, &advanced_adr, &goal_dir, &advanced_goal);
+
+        let outcome = write_projection_pair_with_provider_blocker_outcome(
+            &adr_dir,
+            &advanced_adr,
+            &goal_dir,
+            &advanced_goal,
+            "provider-oauth-connection-missing",
+        );
+        assert!(outcome.warnings.is_empty());
+        let persisted: CloudOffloadGoalSnapshot = serde_json::from_slice(
+            &std::fs::read(goal_dir.join(format!("{}-latest.json", receipt.receipt_id))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(persisted.status, "blocked");
+        assert_eq!(persisted.goal_state, CloudOffloadGoalState::PendingProviderSync);
+        assert!(!persisted.completion_gates["provider-sync-state-complete"]);
+        assert!(!persisted.completion_gates["explicit-eviction-permit"]);
+        let persisted_adr: CloudOffloadAdrSnapshot = serde_json::from_slice(
+            &std::fs::read(adr_dir.join(format!("{}-latest.json", receipt.receipt_id))).unwrap(),
+        )
+        .unwrap();
+        assert!(persisted_adr.decision.ends_with("-provider-state-unverified"));
+        assert!(persisted_adr
+            .consequences
+            .contains(&"provider-state-blocked:provider-oauth-connection-missing".into()));
+        assert!(persisted_adr
+            .consequences
+            .contains(&"eviction-blocked-until-provider-proof".into()));
     }
 
     #[test]

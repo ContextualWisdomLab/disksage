@@ -2116,12 +2116,16 @@ fn reconcile_cloud_receipts_inner(
             }
             Err(error) => {
                 output.error_count = output.error_count.saturating_add(1);
-                let projection_warnings = cloud_adr::ensure_initial_projection_pair_with_source_state(
-                    &receipt,
-                    adr_dir,
-                    goal_dir,
-                    output.observed_at_ms,
-                );
+                let attestation_error = stable_reconciliation_error(&error);
+                let projection_warnings =
+                    cloud_adr::ensure_initial_projection_pair_with_provider_state_outcome(
+                        &receipt,
+                        adr_dir,
+                        goal_dir,
+                        output.observed_at_ms,
+                        &attestation_error,
+                    )
+                    .warnings;
                 let mut blockers = vec!["provider-attestation-incomplete".into()];
                 if let Some(blocker) =
                     cloud_transfer::source_eviction_blocker(Path::new(&receipt.source))
@@ -2157,7 +2161,7 @@ fn reconcile_cloud_receipts_inner(
                     provider_sync_state,
                     eviction_permit: false,
                     blockers,
-                    error: Some(stable_reconciliation_error(&error)),
+                    error: Some(attestation_error),
                 });
             }
         }
