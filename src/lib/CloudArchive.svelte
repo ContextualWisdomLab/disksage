@@ -166,11 +166,14 @@
     const providerAdmissionBlocked = report
       ? hasProviderAdmissionBlocker(report.notices)
       : true;
+    const icloudAdmissionBlocked = selectedRootDetails()?.provider === "icloud"
+      && icloudHealth?.new_copy_admission_state !== "clear";
     return candidate.blocked_reason === null
       && (!candidate.requires_review || exactApproval)
       && (embeddedHighConfidence || exactApproval)
       && capacityEvidenceAvailable
       && !providerAdmissionBlocked
+      && !icloudAdmissionBlocked
       && approvalPhrase !== null;
   }
 
