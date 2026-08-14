@@ -89,6 +89,8 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
         ("huggingface-cache", "Hugging Face 캐시", huggingface),
         ("codex-runtimes-cache", "Codex 런타임 캐시", bases.local_data.join("codex-runtimes")),
         ("gradle-cache", "Gradle 캐시", bases.home.join(".gradle").join("caches")),
+        ("macos-app-support-cache", "macOS 응용 프로그램 업데이트 캐시",
+            bases.home.join("Library").join("Application Support").join("Caches")),
     ]);
 
     // Windows 진단 캐시 — 조용히 수십 GB로 자라는 것들. RDP 자동 추적(RdClientAutoTrace)의 .etl 로그가
@@ -542,6 +544,19 @@ mod tests {
         let rdp = cands.iter().find(|c| c.id == "rdp-autotrace").unwrap();
         assert!(rdp.path.contains("RdClientAutoTrace"));
         assert!(cands.len() >= 7);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn catalog_includes_macos_app_support_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bases = fake_bases(tmp.path());
+        let cands = cache_candidates(&bases);
+        let candidate = cands
+            .iter()
+            .find(|candidate| candidate.id == "macos-app-support-cache")
+            .expect("macOS application-support cache must be catalogued");
+        assert!(candidate.path.ends_with("Library/Application Support/Caches"));
     }
 
     #[test]
