@@ -4,6 +4,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Build both feature-gated audit binaries in an isolated Cargo target directory.
 fn build_feature_gated_audit_binaries() -> (tempfile::TempDir, PathBuf, PathBuf) {
     let target_dir = tempfile::tempdir().expect("isolated Cargo target directory must be created");
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
@@ -52,6 +53,7 @@ fn build_feature_gated_audit_binaries() -> (tempfile::TempDir, PathBuf, PathBuf)
     )
 }
 
+/// Require one help flag to terminate successfully with the exact stable usage text.
 fn assert_help_success(binary: &Path, flag: &str, expected_usage: &str) {
     let output = Command::new(binary)
         .env_remove("HOME")
@@ -77,6 +79,7 @@ fn assert_help_success(binary: &Path, flag: &str, expected_usage: &str) {
     );
 }
 
+/// Require an unknown option to fail visibly without reflecting its opaque payload.
 fn assert_invalid_argument_is_bounded(binary: &Path) {
     let output = Command::new(binary)
         .env_remove("HOME")
@@ -100,6 +103,7 @@ fn assert_invalid_argument_is_bounded(binary: &Path) {
     );
 }
 
+/// Require a mixed help and invalid request to remain a bounded failure.
 fn assert_help_does_not_hide_invalid_argument(binary: &Path) {
     let output = Command::new(binary)
         .env_remove("HOME")
@@ -123,6 +127,7 @@ fn assert_help_does_not_hide_invalid_argument(binary: &Path) {
     );
 }
 
+/// Prove exact help output and bounded invalid-input behavior for both audit CLIs.
 #[test]
 fn audit_cli_help_is_successful_and_invalid_arguments_are_bounded() {
     let (_target_dir, multipart_archive_audit, incomplete_download_audit) =
