@@ -315,3 +315,57 @@ fn discovery_reports_non_directory_provider_candidates_fail_closed() {
         issue.provider == Some(CloudProvider::Onedrive) && issue.reason == "not-a-directory"
     }));
 }
+
+#[cfg(unix)]
+#[test]
+fn discovery_rejects_read_only_provider_roots_fail_closed() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    std::fs::create_dir_all(home.join("Library/CloudStorage")).unwrap();
+    let provider_root = home.join("OneDrive");
+    std::fs::create_dir(&provider_root).unwrap();
+
+    let mut read_only = std::fs::metadata(&provider_root).unwrap().permissions();
+    read_only.set_mode(0o555);
+    std::fs::set_permissions(&provider_root, read_only).unwrap();
+
+    let report = discover_cloud_roots_report(home);
+
+    let mut restored = std::fs::metadata(&provider_root).unwrap().permissions();
+    restored.set_mode(0o755);
+    std::fs::set_permissions(&provider_root, restored).unwrap();
+
+    assert!(report
+        .roots
+        .iter()
+        .all(|root| root.path != provider_root.to_string_lossy()));
+    assert!(report.issues.iter().any(|issue| {
+        issue.provider == Some(CloudProvider::Onedrive)
+            && issue.path == provider_root.to_string_lossy()
+            && issue.reason == "read-only"
+    }));
+}
+
+#[cfg(unix)]
+#[test]
+fn discovery_deduplicates_provider_aliases_by_canonical_identity() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    std::fs::create_dir_all(home.join("Library/CloudStorage")).unwrap();
+    let target = home.join("provider-target");
+    std::fs::create_dir(&target).unwrap();
+    std::os::unix::fs::symlink(&target, home.join("OneDrive")).unwrap();
+    std::os::unix::fs::symlink(&target, home.join("OneDrive - Contoso")).unwrap();
+
+    let report = discover_cloud_roots_report(home);
+    let onedrive_roots = report
+        .roots
+        .iter()
+        .filter(|root| root.provider == CloudProvider::Onedrive)
+        .count();
+
+    assert_eq!(onedrive_roots, 1);
+    assert!(report.issues.is_empty(), "{:?}", report.issues);
+}
