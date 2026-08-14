@@ -808,6 +808,18 @@ mod tests {
     }
 
     #[test]
+    fn projection_writer_creates_receipt_scoped_lock() {
+        let directory = tempfile::tempdir().unwrap();
+        let snapshot = initial_goal_snapshot(&receipt(), 5);
+        write_latest_goal_snapshot(directory.path(), &snapshot).unwrap();
+        let lock_path = directory
+            .path()
+            .join(format!(".{}.lock", snapshot.receipt_id));
+        let metadata = std::fs::symlink_metadata(lock_path).unwrap();
+        assert!(metadata.is_file());
+    }
+
+    #[test]
     fn snapshot_writer_rejects_path_like_receipt_ids() {
         let directory = tempfile::tempdir().unwrap();
         let mut snapshot = initial_goal_snapshot(&receipt(), 5);
