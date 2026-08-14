@@ -34,7 +34,10 @@
 
   function approvalGuidance(): string {
     if (!judgment || judgment.verdict !== "safe") return "";
-    if (judgment.calibration && !judgment.calibration.passed) {
+    if (!judgment.calibration || judgment.calibration.judgment_id !== judgment.judgment_id) {
+      return "이 정확한 LLM 판정에 연결된 fast-mlsirm calibration이 필요합니다.";
+    }
+    if (!judgment.calibration.passed) {
       return "fast-mlsirm Judge calibration이 통과하지 않아 실행할 수 없습니다.";
     }
     if (confirmationPhrase.trim() !== judgment.exact_approval_phrase) {
@@ -49,7 +52,9 @@
   function executionReady(): boolean {
     return judgment !== null
       && judgment.verdict === "safe"
-      && (!judgment.calibration || judgment.calibration.passed)
+      && judgment.calibration !== undefined
+      && judgment.calibration.judgment_id === judgment.judgment_id
+      && judgment.calibration.passed
       && confirmationPhrase.trim() === judgment.exact_approval_phrase
       && rationale.trim().length > 0
       && !executing

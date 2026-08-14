@@ -193,6 +193,7 @@ export interface BrewCleanupJudgment {
 
 export interface JudgeCalibrationEvidence {
   schema_version: number;
+  judgment_id: string;
   categories: number;
   model_labels: number[];
   human_labels: number[];
@@ -204,6 +205,7 @@ export interface JudgeCalibrationEvidence {
 export interface JudgeCalibrationResult {
   schema_version: number;
   engine: string;
+  judgment_id: string;
   categories: number;
   sample_count: number;
   passed: boolean;

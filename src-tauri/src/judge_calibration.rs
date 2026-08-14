@@ -17,6 +17,8 @@ const MAX_SAMPLES: usize = 100_000;
 #[serde(deny_unknown_fields)]
 pub struct JudgeCalibrationEvidence {
     pub schema_version: u32,
+    /// The exact local-model judgment this calibration sample evaluates.
+    pub judgment_id: String,
     /// Number of ordered labels: 2 is true/false; values above 2 are polytomous.
     pub categories: u32,
     pub model_labels: Vec<u32>,
@@ -45,6 +47,7 @@ pub struct JudgeCalibrationGate {
 pub struct JudgeCalibrationResult {
     pub schema_version: u32,
     pub engine: String,
+    pub judgment_id: String,
     pub categories: u32,
     pub sample_count: usize,
     pub passed: bool,
@@ -80,6 +83,14 @@ fn compact_subgroups(labels: &[u32]) -> Result<Vec<u32>, String> {
 pub fn validate(evidence: &JudgeCalibrationEvidence) -> Result<JudgeCalibrationResult, String> {
     if evidence.schema_version != SCHEMA_VERSION {
         return Err("judge-calibration-schema-version-unsupported".into());
+    }
+    if evidence.judgment_id.len() != 64
+        || !evidence
+            .judgment_id
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err("judge-calibration-judgment-id-invalid".into());
     }
     if !(2..=MAX_CATEGORIES).contains(&evidence.categories) {
         return Err("judge-calibration-category-count-invalid".into());
@@ -131,6 +142,7 @@ fn result_from_verdict(
     JudgeCalibrationResult {
         schema_version: SCHEMA_VERSION,
         engine: ENGINE.into(),
+        judgment_id: evidence.judgment_id.clone(),
         categories: evidence.categories,
         sample_count: evidence.model_labels.len(),
         passed: verdict.pass,
@@ -156,6 +168,7 @@ mod tests {
     fn evidence(categories: u32) -> JudgeCalibrationEvidence {
         JudgeCalibrationEvidence {
             schema_version: SCHEMA_VERSION,
+            judgment_id: "a".repeat(64),
             categories,
             model_labels: vec![0, 1, 2, 0, 1, 2],
             human_labels: vec![0, 1, 2, 0, 1, 2],
@@ -185,6 +198,12 @@ mod tests {
     #[test]
     fn rejects_mismatched_or_out_of_range_labels() {
         let mut value = evidence(2);
+        value.judgment_id = "not-a-judgment-id".into();
+        assert_eq!(
+            validate(&value).unwrap_err(),
+            "judge-calibration-judgment-id-invalid"
+        );
+        value.judgment_id = "a".repeat(64);
         value.model_labels = vec![0, 1, 0, 1, 0, 1];
         value.human_labels[0] = 2;
         assert_eq!(

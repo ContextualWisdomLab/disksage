@@ -59,9 +59,9 @@ pub struct BrewCleanupJudgment {
 
 impl BrewCleanupJudgment {
     pub fn has_successful_calibration(&self) -> bool {
-        self.calibration
-            .as_ref()
-            .is_some_and(|calibration| calibration.passed)
+        self.calibration.as_ref().is_some_and(|calibration| {
+            calibration.passed && calibration.judgment_id == self.judgment_id
+        })
     }
 }
 
@@ -589,6 +589,7 @@ mod tests {
             crate::judge_calibration::validate(
                 &crate::judge_calibration::JudgeCalibrationEvidence {
                     schema_version: crate::judge_calibration::SCHEMA_VERSION,
+                    judgment_id: judgment.judgment_id.clone(),
                     categories: 2,
                     model_labels: vec![0, 1, 0, 1],
                     human_labels: vec![0, 1, 0, 1],
@@ -600,6 +601,9 @@ mod tests {
             .unwrap(),
         );
         assert!(judgment.has_successful_calibration());
+        judgment.calibration.as_mut().unwrap().judgment_id = "b".repeat(64);
+        assert!(!judgment.has_successful_calibration());
+        judgment.calibration.as_mut().unwrap().judgment_id = judgment.judgment_id.clone();
         judgment.calibration.as_mut().unwrap().passed = false;
         assert!(!judgment.has_successful_calibration());
     }

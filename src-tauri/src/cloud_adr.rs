@@ -1081,6 +1081,56 @@ mod tests {
     }
 
     #[test]
+    fn late_pair_writer_cannot_rewind_source_evicted_state() {
+        let temporary = tempfile::tempdir().unwrap();
+        let adr_dir = temporary.path().join("adr");
+        let goal_dir = temporary.path().join("goals");
+        let receipt = receipt();
+        let pending = pending_record();
+        let source_evicted_adr =
+            snapshot_from_evidence(&pending, CloudOffloadGoalState::SourceEvicted, 10);
+        let source_evicted_goal = goal_snapshot_from_evidence(
+            &receipt,
+            &pending,
+            CloudOffloadGoalState::SourceEvicted,
+            10,
+        );
+        let (_, _, warnings) = write_projection_pair(
+            &adr_dir,
+            &source_evicted_adr,
+            &goal_dir,
+            &source_evicted_goal,
+        );
+        assert!(warnings.is_empty());
+
+        let complete = complete_record();
+        let late_adr =
+            snapshot_from_evidence(&complete, CloudOffloadGoalState::ProviderSyncConfirmed, 11);
+        let late_goal = goal_snapshot_from_evidence(
+            &receipt,
+            &complete,
+            CloudOffloadGoalState::ProviderSyncConfirmed,
+            11,
+        );
+        let outcome = write_projection_pair(&adr_dir, &late_adr, &goal_dir, &late_goal);
+        assert!(outcome.0.is_none());
+        assert!(outcome.1.is_none());
+        assert!(outcome.2.iter().any(|warning| {
+            warning == "adr-projection-write-failed:cloud-adr-state-regression"
+        }));
+        assert!(outcome.2.iter().any(|warning| {
+            warning == "goal-projection-write-failed:cloud-goal-state-regression"
+        }));
+        assert_eq!(
+            read_projection_state(&receipt.receipt_id, &adr_dir, &goal_dir)
+                .unwrap()
+                .unwrap()
+                .goal_state,
+            CloudOffloadGoalState::SourceEvicted
+        );
+    }
+
+    #[test]
     fn source_blocker_updates_goal_without_rewinding_advanced_state() {
         let temporary = tempfile::tempdir().unwrap();
         let adr_dir = temporary.path().join("adr");

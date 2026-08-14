@@ -517,7 +517,9 @@ pub fn judge_brew_cleanup(
             .judge_calibration
             .lock()
             .map_err(|_| "brew-cleanup-calibration-lock-poisoned".to_string())?
-            .clone();
+            .as_ref()
+            .filter(|calibration| calibration.judgment_id == judgment.judgment_id)
+            .cloned();
         drop(guard);
         *state
             .brew_cleanup_judgment
@@ -549,6 +551,15 @@ pub fn validate_judge_calibration(
         .judge_calibration
         .lock()
         .map_err(|_| "judge-calibration-lock-poisoned".to_string())? = Some(result.clone());
+    if let Some(judgment) = state
+        .brew_cleanup_judgment
+        .lock()
+        .map_err(|_| "brew-cleanup-judgment-lock-poisoned".to_string())?
+        .as_mut()
+        .filter(|judgment| judgment.judgment_id == result.judgment_id)
+    {
+        judgment.calibration = Some(result.clone());
+    }
     Ok(result)
 }
 
