@@ -42,6 +42,11 @@ struct ProviderClientRuntimeAudit {
 }
 
 #[cfg(not(coverage))]
+fn usage() -> &'static str {
+    "usage: disksage-provider-client-runtime [--output ABSOLUTE_NEW_FILE.json]"
+}
+
+#[cfg(not(coverage))]
 fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut output = None;
     let mut index = 0usize;
@@ -60,13 +65,8 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                     return Err("--output may be supplied once".into());
                 }
             }
-            "--help" | "-h" => {
-                return Err(
-                    "usage: disksage-provider-client-runtime [--output ABSOLUTE_NEW_FILE.json]"
-                        .into(),
-                )
-            }
-            flag => return Err(format!("unknown argument: {flag}")),
+            "--help" | "-h" => return Err(usage().into()),
+            _ => return Err("provider-client-runtime-unknown-argument".into()),
         }
         index += 1;
     }
@@ -145,6 +145,11 @@ fn write_create_new(path: &Path, encoded: &[u8]) -> Result<(), String> {
 
 #[cfg(not(coverage))]
 fn run(args: &[String]) -> Result<(), String> {
+    if matches!(args, [flag] if flag == "--help" || flag == "-h") {
+        println!("{}", usage());
+        return Ok(());
+    }
+
     let args = parse_args(args)?;
     let report = audit(cloud::system_now_ms());
     let encoded = serde_json::to_vec_pretty(&report)
