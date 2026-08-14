@@ -34,16 +34,19 @@
         stats = s;
         scanning = false;
         operationError = "";
+        const resultSeq = navSeq;
+        const scannedRoot = selectedRoot;
         try {
-          const scannedRoot = selectedRoot;
           const [nextNode, nextTop] = await Promise.all([
             api.getNode(scannedRoot),
             api.topFiles(200),
           ]);
+          if (resultSeq !== navSeq) return;
           crumbs = [scannedRoot];
           node = nextNode;
           top = nextTop;
         } catch {
+          if (resultSeq !== navSeq) return;
           node = null;
           top = [];
           operationError = "스캔 결과를 불러오지 못했습니다.";
