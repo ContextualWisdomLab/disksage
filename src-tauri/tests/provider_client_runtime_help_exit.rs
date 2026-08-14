@@ -4,6 +4,9 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+const EXPECTED_USAGE: &str =
+    "usage: disksage-provider-client-runtime [--output ABSOLUTE_NEW_FILE.json]";
+
 fn build_feature_gated_binary() -> (tempfile::TempDir, PathBuf) {
     let target_dir = tempfile::tempdir().expect("isolated Cargo target directory must be created");
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
@@ -58,9 +61,10 @@ fn assert_help_success(binary: &Path, flag: &str) {
         "successful help must not be projected through stderr"
     );
     let stdout = String::from_utf8(output.stdout).expect("help output must be valid UTF-8");
-    assert!(
-        stdout.contains("usage: disksage-provider-client-runtime"),
-        "help output must contain the stable usage synopsis"
+    assert_eq!(
+        stdout,
+        format!("{EXPECTED_USAGE}\n"),
+        "help output must equal the stable usage synopsis"
     );
 }
 
