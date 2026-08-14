@@ -1145,6 +1145,7 @@ mod tests {
                 42,
                 DEFAULT_CAPACITY_RESERVE_BYTES,
             )),
+            local_volume: None,
             notices: Vec::new(),
         }
     }

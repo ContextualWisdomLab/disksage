@@ -307,6 +307,9 @@ pub struct CloudPlanReport {
     pub exact_duplicates: ExactDuplicateSummary,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capacity: Option<crate::provider_capacity::CloudCapacityAssessment>,
+    /// Native source-volume pressure observed while preparing this plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_volume: Option<crate::volume_pressure::LocalVolumeSnapshot>,
     pub notices: Vec<String>,
 }
 
@@ -4896,6 +4899,7 @@ pub fn plan_cloud_archive_from_snapshot(
         .filter(|c| c.blocked_reason.is_none())
         .map(|c| c.bytes)
         .sum();
+    let local_volume = crate::volume_pressure::snapshot_volume(source_root, now_ms).ok();
     let mut notices = vec![
         "dry-run-only".into(),
         "cloud-quota-unverified".into(),
@@ -4925,6 +4929,7 @@ pub fn plan_cloud_archive_from_snapshot(
         potentially_reclaimable_bytes,
         exact_duplicates,
         capacity: None,
+        local_volume,
         notices,
     }
 }
@@ -5307,6 +5312,13 @@ mod tests {
             .iter()
             .all(|candidate| candidate.blocked_reason.as_deref() == Some("source-scan-incomplete")));
         assert_eq!(report.potentially_reclaimable_bytes, 0);
+        assert_eq!(
+            report
+                .local_volume
+                .as_ref()
+                .map(|snapshot| snapshot.schema_version),
+            Some(crate::volume_pressure::LOCAL_VOLUME_SNAPSHOT_SCHEMA_VERSION)
+        );
     }
 
     #[test]

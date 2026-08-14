@@ -597,7 +597,25 @@ export interface CloudPlanReport {
   potentially_reclaimable_bytes: number;
   exact_duplicates: ExactDuplicateSummary;
   capacity?: CloudCapacityAssessment;
+  local_volume?: LocalVolumeSnapshot;
   notices: string[];
+}
+
+export type LocalVolumePressure = "normal" | "elevated" | "high" | "critical";
+
+export interface LocalVolumeSnapshot {
+  schema_version: number;
+  observed_at_ms: number;
+  total_bytes: number;
+  free_bytes: number;
+  available_bytes: number;
+  used_bytes: number;
+  available_basis_points: number;
+  allocation_granularity_bytes: number;
+  pressure: LocalVolumePressure;
+  evidence_kind: string;
+  limitations: string[];
+  evidence_fingerprint: string;
 }
 
 export interface IcloudSyncHealthReport {

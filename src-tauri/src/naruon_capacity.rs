@@ -259,6 +259,7 @@ mod tests {
             potentially_reclaimable_bytes: 100,
             exact_duplicates: ExactDuplicateSummary::default(),
             capacity: Some(assess_capacity(snapshot, 100, 0, 10)),
+            local_volume: None,
             notices: Vec::new(),
         }
     }

@@ -4338,6 +4338,7 @@ mod tests {
             potentially_reclaimable_bytes: 42,
             exact_duplicates: cloud::ExactDuplicateSummary::default(),
             capacity: None,
+            local_volume: None,
             notices: vec!["dry-run-only".into()],
         };
 
@@ -4926,6 +4927,7 @@ mod tests {
                 }],
             },
             capacity: None,
+            local_volume: None,
             notices: vec!["dry-run-only".into()],
         };
 
@@ -5232,6 +5234,7 @@ mod tests {
             potentially_reclaimable_bytes: 0,
             exact_duplicates: cloud::ExactDuplicateSummary::default(),
             capacity: None,
+            local_volume: None,
             notices: vec!["dry-run-only".into(), "cloud-quota-unverified".into()],
         };
 

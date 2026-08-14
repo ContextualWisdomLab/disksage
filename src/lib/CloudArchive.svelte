@@ -32,6 +32,15 @@
     return notices.includes("source-scan-incomplete");
   }
 
+  function localPressureLabel(pressure: api.LocalVolumePressure): string {
+    return {
+      normal: "정상",
+      elevated: "상승",
+      high: "높음",
+      critical: "위험",
+    }[pressure];
+  }
+
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
   let roots: api.CloudRoot[] = $state([]);
@@ -873,6 +882,13 @@
       <p class="warning">
         원본 스캔이 제한 시간 또는 항목 수에 도달해 부분 결과만 수집되었습니다. 이 계획은 복사·원본 제거에 사용할 수 없으며,
         스캔 범위를 줄이거나 조건을 높여 전체 스캔을 다시 실행해야 합니다.
+      </p>
+    {/if}
+    {#if report.local_volume}
+      <p class:warning={report.local_volume.pressure !== "normal"}>
+        원본 볼륨 압력: {localPressureLabel(report.local_volume.pressure)} · 사용 가능
+        {fmtBytes(report.local_volume.available_bytes)}
+        ({(report.local_volume.available_basis_points / 100).toFixed(2)}%)
       </p>
     {/if}
     {#if report.capacity}
