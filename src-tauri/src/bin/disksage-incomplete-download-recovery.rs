@@ -81,7 +81,6 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 }
                 private_output = Some(PathBuf::from(value(&mut index, "--private-output")?));
             }
-            "--help" | "-h" => return Err(usage()),
             _unknown => return Err("incomplete-download-recovery-unknown-argument".into()),
         }
         index += 1;
