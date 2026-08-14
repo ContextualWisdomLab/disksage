@@ -3359,6 +3359,9 @@ fn probe_content_metadata_with_general_inner(
     prefetched_general: Option<ContentMetadata>,
     include_macos_provenance: bool,
 ) -> ContentMetadata {
+    if source_content_is_dataless(path) {
+        return ContentMetadata::default();
+    }
     let extension = path
         .extension()
         .map(|e| e.to_string_lossy().to_ascii_lowercase())
@@ -4552,6 +4555,7 @@ fn prepare_cloud_archive_source_with_scan(
                         .is_ok_and(|relative| !relative.as_os_str().is_empty())
                     && file.content_metadata == ContentMetadata::default()
                     && file.path.is_file()
+                    && !source_content_is_dataless(&file.path)
             })
             .collect::<Vec<_>>();
         probe_candidates.sort_by(|left, right| {
