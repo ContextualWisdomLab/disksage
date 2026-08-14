@@ -421,6 +421,8 @@ fn directory_access_issue(path: &Path) -> Option<String> {
 
 #[cfg(all(not(coverage), target_os = "macos"))]
 fn run_bounded_find(path: &Path, action: &[&str]) -> Result<Vec<u8>, String> {
+    use std::os::unix::process::CommandExt;
+
     let metadata = std::fs::metadata(path).map_err(|error| access_issue_for_error(&error))?;
     if !metadata.is_dir() {
         return Err("not-a-directory".into());
@@ -442,18 +444,39 @@ fn run_bounded_find(path: &Path, action: &[&str]) -> Result<Vec<u8>, String> {
         return Err("read-dir-helper-unavailable".into());
     }
 
-    let mut child = Command::new(find)
+    let mut command = Command::new(find);
+    command
         .arg(path)
         .args(action)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    // File Provider paths can leave helper descendants holding stdout after the leader exits.
+    // Keep the helper in its own group so timeout cleanup closes the pipe and joins promptly.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = command
         .spawn()
         .map_err(|_| "read-dir-helper-failed".to_string())?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "read-dir-helper-failed".to_string())?;
+    let child_pid = child.id();
+    let kill_group = || unsafe {
+        let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
+    };
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            kill_group();
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("read-dir-helper-failed".into());
+        }
+    };
     let reader = std::thread::spawn(move || {
         let mut output = Vec::new();
         stdout
@@ -470,12 +493,14 @@ fn run_bounded_find(path: &Path, action: &[&str]) -> Result<Vec<u8>, String> {
                 std::thread::sleep(Duration::from_millis(10));
             }
             Ok(None) => {
+                kill_group();
                 let _ = child.kill();
                 let _ = child.wait();
                 let _ = reader.join();
                 return Err("read-dir-timeout".into());
             }
             Err(_) => {
+                kill_group();
                 let _ = child.kill();
                 let _ = child.wait();
                 let _ = reader.join();
@@ -483,6 +508,9 @@ fn run_bounded_find(path: &Path, action: &[&str]) -> Result<Vec<u8>, String> {
             }
         }
     };
+    // The leader may have exited while a descendant still owns the pipe; close the private group
+    // before joining the reader so a successful probe cannot hang on inherited stdout.
+    kill_group();
     let output = reader
         .join()
         .map_err(|_| "read-dir-helper-failed".to_string())?
