@@ -1465,6 +1465,7 @@ pub async fn review_cloud_candidate(
 pub struct CloudCopyOutput {
     pub action: &'static str,
     pub goal_state: cloud_transfer::CloudOffloadGoalState,
+    pub goal_status: Option<String>,
     pub receipt: cloud_transfer::CloudCopyReceipt,
     pub receipt_path: String,
     pub adr_path: Option<String>,
@@ -1601,6 +1602,12 @@ fn create_cloud_candidate_receipt(
             (None, None)
         }
     };
+    let goal_status = cloud_adr::read_goal_status(
+        &app_data_dir.join("cloud-goals"),
+        &receipt.receipt_id,
+    )
+    .ok()
+    .flatten();
     Ok(CloudCopyOutput {
         action: if adopt_existing {
             "adopt-existing-copy"
@@ -1608,6 +1615,7 @@ fn create_cloud_candidate_receipt(
             "copy-only"
         },
         goal_state: cloud_transfer::CloudOffloadGoalState::CopyVerified,
+        goal_status,
         receipt,
         receipt_path: receipt_path.to_string_lossy().into_owned(),
         adr_path,
@@ -1807,9 +1815,16 @@ fn create_cloud_candidate_provider_api_receipt(
             ));
         }
     }
+    let goal_status = cloud_adr::read_goal_status(
+        &app_data_dir.join("cloud-goals"),
+        &receipt.receipt_id,
+    )
+    .ok()
+    .flatten();
     Ok(CloudCopyOutput {
         action: "copy-only",
         goal_state,
+        goal_status,
         receipt,
         receipt_path: receipt_path.to_string_lossy().into_owned(),
         adr_path,

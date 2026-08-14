@@ -767,6 +767,7 @@ export interface CloudLineageSnapshot {
 export interface CloudCopyOutput {
   action: "copy-only" | "adopt-existing-copy";
   goal_state: CloudOffloadGoalState;
+  goal_status: string | null;
   receipt: CloudCopyReceipt;
   receipt_path: string;
   adr_path: string | null;

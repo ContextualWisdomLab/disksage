@@ -483,6 +483,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
 struct CopyOutput {
     action: &'static str,
     goal_state: cloud_transfer::CloudOffloadGoalState,
+    goal_status: Option<String>,
     receipt: CloudCopyReceipt,
     receipt_path: String,
     adr_path: Option<String>,
@@ -495,6 +496,7 @@ struct CopyOutput {
 struct ProviderApiCopyOutput {
     action: &'static str,
     goal_state: cloud_transfer::CloudOffloadGoalState,
+    goal_status: Option<String>,
     receipt: CloudCopyReceipt,
     receipt_path: String,
     provider_object_id: String,
@@ -2796,6 +2798,9 @@ fn copy_candidate_via_provider_api(
     Ok(ProviderApiCopyOutput {
         action: "copy-via-provider-api",
         goal_state,
+        goal_status: cloud_adr::read_goal_status(&goal_dir, &receipt_id)
+            .ok()
+            .flatten(),
         receipt,
         receipt_path: receipt_path.to_string_lossy().into_owned(),
         provider_object_id,
@@ -3652,6 +3657,9 @@ fn run() -> Result<(), String> {
                     "copy-only"
                 },
                 goal_state: cloud_transfer::CloudOffloadGoalState::CopyVerified,
+                goal_status: cloud_adr::read_goal_status(&goal_dir, &receipt.receipt_id)
+                    .ok()
+                    .flatten(),
                 receipt,
                 receipt_path: receipt_path.to_string_lossy().into_owned(),
                 adr_path: adr_path.map(|path| path.to_string_lossy().into_owned()),
