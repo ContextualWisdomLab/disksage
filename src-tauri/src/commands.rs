@@ -2000,7 +2000,13 @@ fn collect_cloud_attestation_for_receipt(
             .push(format!("source-state-blocked:{blocker}"));
     }
     let (adr_path, goal_path, projection_warnings) =
-        cloud_adr::write_projection_pair(adr_dir, &adr, goal_dir, &goal);
+        cloud_adr::write_projection_pair_with_source_blocker(
+            adr_dir,
+            &adr,
+            goal_dir,
+            &goal,
+            source_blocker,
+        );
     Ok(CloudAttestationOutput {
         goal_state,
         evidence,

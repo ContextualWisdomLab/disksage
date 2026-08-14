@@ -24,7 +24,10 @@ attestation and the explicit OS-Trash step, it atomically writes both that Goal 
 the authority for eviction; the receipt and immutable evidence are revalidated at every mutation.
 If an attestation finds the destination valid but the receipt's source is absent or unsafe, the
 runtime writes a blocked Goal projection, records the source-state blocker in the ADR, and issues
-no eviction permit.
+no eviction permit. If a prior projection has a higher monotonic state, that historical state is
+preserved while the replaceable Goal is updated to `blocked` and its explicit eviction gate is
+revoked; a terminal `source-evicted` projection is not rewritten merely because its original path
+is now absent.
 
 ## Consequences
 

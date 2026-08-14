@@ -2507,7 +2507,13 @@ fn attest_receipt(
             .push(format!("source-state-blocked:{blocker}"));
     }
     let (adr_path, goal_path, projection_warnings) =
-        cloud_adr::write_projection_pair(&adr_dir, &adr, &goal_dir, &goal);
+        cloud_adr::write_projection_pair_with_source_blocker(
+            &adr_dir,
+            &adr,
+            &goal_dir,
+            &goal,
+            source_blocker,
+        );
     Ok(AttestationOutput {
         action: "attest-provider-native",
         goal_state,

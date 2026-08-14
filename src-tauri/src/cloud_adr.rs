@@ -352,6 +352,67 @@ pub fn write_projection_pair(
     (adr_path, goal_path, warnings)
 }
 
+/// Persist a source-state blocker without allowing a previously observed goal state to regress.
+///
+/// A missing or non-local source is a current safety fact, not proof that a completed goal should
+/// be rewound. Keep the monotonic state for audit history, but make the replaceable Goal blocked
+/// and revoke its explicit eviction gate. A `source-evicted` projection is already the terminal
+/// state and is left untouched when its original source is no longer present.
+pub fn write_projection_pair_with_source_blocker(
+    adr_dir: &Path,
+    adr: &CloudOffloadAdrSnapshot,
+    goal_dir: &Path,
+    goal: &CloudOffloadGoalSnapshot,
+    source_blocker: Option<&str>,
+) -> (Option<PathBuf>, Option<PathBuf>, Vec<String>) {
+    let Some(source_blocker) = source_blocker else {
+        return write_projection_pair(adr_dir, adr, goal_dir, goal);
+    };
+
+    let mut adr = adr.clone();
+    let mut goal = goal.clone();
+    if let (Ok(Some(_previous_adr)), Ok(Some(previous_goal))) = (
+        read_latest_projection::<CloudOffloadAdrSnapshot>(
+            adr_dir,
+            &goal.receipt_id,
+            "adr",
+        ),
+        read_latest_projection::<CloudOffloadGoalSnapshot>(
+            goal_dir,
+            &goal.receipt_id,
+            "goal",
+        ),
+    ) {
+        if previous_goal.goal_state == CloudOffloadGoalState::SourceEvicted {
+            return (
+                Some(adr_dir.join(format!("{}-latest.json", goal.receipt_id))),
+                Some(goal_dir.join(format!("{}-latest.json", goal.receipt_id))),
+                Vec::new(),
+            );
+        }
+        if goal_state_rank(previous_goal.goal_state) > goal_state_rank(goal.goal_state) {
+            adr.goal_state = previous_goal.goal_state;
+            goal.goal_state = previous_goal.goal_state;
+            adr.decision = format!(
+                "{}-source-state-unverified",
+                decision_for(previous_goal.goal_state, adr.provider_sync_state)
+            );
+        }
+    }
+    goal.status = "blocked".into();
+    goal.completion_gates.insert("source-present".into(), false);
+    goal.completion_gates
+        .insert("explicit-eviction-permit".into(), false);
+    let blocker = format!("source-state-blocked:{source_blocker}");
+    if !adr.consequences.iter().any(|value| value == &blocker) {
+        adr.consequences.push(blocker);
+    }
+    if !adr.decision.ends_with("-source-state-unverified") {
+        adr.decision.push_str("-source-state-unverified");
+    }
+    write_projection_pair(adr_dir, &adr, goal_dir, &goal)
+}
+
 /// Seed projections for a receipt whose provider evidence is not available yet.
 ///
 /// This never creates an evidence record or advances a goal. A previously observed advanced
@@ -387,16 +448,22 @@ pub fn ensure_initial_projection_pair_with_source_state(
 ) -> Vec<String> {
     let mut adr = initial_adr_snapshot(receipt, updated_at_ms);
     let mut goal = initial_goal_snapshot(receipt, updated_at_ms);
-    if let Some(blocker) =
-        crate::cloud_transfer::source_eviction_blocker(Path::new(&receipt.source))
-    {
+    let source_blocker =
+        crate::cloud_transfer::source_eviction_blocker(Path::new(&receipt.source));
+    if let Some(blocker) = source_blocker {
         goal.status = "blocked".into();
         goal.completion_gates.insert("source-present".into(), false);
         adr.decision = format!("{}-source-state-unverified", adr.decision);
         adr.consequences
             .push(format!("source-state-blocked:{blocker}"));
     }
-    let (_, _, mut warnings) = write_projection_pair(adr_dir, &adr, goal_dir, &goal);
+    let (_, _, mut warnings) = write_projection_pair_with_source_blocker(
+        adr_dir,
+        &adr,
+        goal_dir,
+        &goal,
+        source_blocker,
+    );
     warnings.retain(|warning| {
         !warning.ends_with("cloud-adr-state-regression")
             && !warning.ends_with("cloud-goal-state-regression")
@@ -524,6 +591,25 @@ mod tests {
         .unwrap()
     }
 
+    fn complete_record() -> ProviderSyncEvidenceRecord {
+        crate::provider_evidence::create_sync_evidence_record(
+            &crate::cloud_transfer::ProviderSyncEvidence {
+                receipt_id: "a".repeat(64),
+                provider: CloudProvider::Icloud,
+                destination: "/cloud/file.bin".into(),
+                observed_bytes: 1,
+                destination_blake3: "c".repeat(64),
+                confirmed_at_ms: 3,
+                kind: crate::cloud_transfer::SyncEvidenceKind::ProviderNativeStatus,
+                evidence_id: "foundation:complete".into(),
+                sync_complete: true,
+                sync_state: ProviderSyncState::Complete,
+                remote_content: None,
+            },
+        )
+        .unwrap()
+    }
+
     #[test]
     fn pending_upload_goal_never_satisfies_provider_gate() {
         let record = pending_record();
@@ -629,6 +715,63 @@ mod tests {
         assert!(warnings
             .iter()
             .any(|warning| warning == "goal-projection-write-failed:cloud-goal-state-regression"));
+    }
+
+    #[test]
+    fn source_blocker_updates_goal_without_rewinding_advanced_state() {
+        let temporary = tempfile::tempdir().unwrap();
+        let adr_dir = temporary.path().join("adr");
+        let goal_dir = temporary.path().join("goals");
+        let receipt = receipt();
+        let record = complete_record();
+        let advanced_adr = snapshot_from_evidence(
+            &record,
+            CloudOffloadGoalState::EvictionReady,
+            10,
+        );
+        let advanced_goal = goal_snapshot_from_evidence(
+            &receipt,
+            &record,
+            CloudOffloadGoalState::EvictionReady,
+            10,
+        );
+        write_projection_pair(&adr_dir, &advanced_adr, &goal_dir, &advanced_goal);
+
+        let mut blocked_adr = snapshot_from_evidence(
+            &record,
+            CloudOffloadGoalState::ProviderSyncConfirmed,
+            11,
+        );
+        let mut blocked_goal = goal_snapshot_from_evidence(
+            &receipt,
+            &record,
+            CloudOffloadGoalState::ProviderSyncConfirmed,
+            11,
+        );
+        blocked_goal.status = "blocked".into();
+        blocked_goal.completion_gates.insert("source-present".into(), false);
+        blocked_adr.decision.push_str("-source-state-unverified");
+        blocked_adr
+            .consequences
+            .push("source-state-blocked:source-not-present".into());
+
+        let warnings = write_projection_pair_with_source_blocker(
+            &adr_dir,
+            &blocked_adr,
+            &goal_dir,
+            &blocked_goal,
+            Some("source-not-present"),
+        )
+        .2;
+        assert!(warnings.is_empty());
+        let persisted: CloudOffloadGoalSnapshot = serde_json::from_slice(
+            &std::fs::read(goal_dir.join(format!("{}-latest.json", receipt.receipt_id))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(persisted.goal_state, CloudOffloadGoalState::EvictionReady);
+        assert_eq!(persisted.status, "blocked");
+        assert!(!persisted.completion_gates["source-present"]);
+        assert!(!persisted.completion_gates["explicit-eviction-permit"]);
     }
 
     #[test]
