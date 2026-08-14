@@ -124,6 +124,33 @@ fn assert_help_does_not_hide_invalid_argument(binary: &Path, help_flag: &str) {
     );
 }
 
+#[cfg(unix)]
+fn assert_non_utf8_argument_is_bounded(binary: &Path) {
+    use std::os::unix::ffi::OsStringExt;
+
+    let opaque = OsString::from_vec(vec![b'-', b'-', b'o', b'p', b'a', b'q', b'u', b'e', 0xff]);
+    let output = Command::new(binary)
+        .arg(opaque)
+        .output()
+        .expect("DiskSage CLI must launch for non-UTF-8 argument validation");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "invalid non-UTF-8 input must use the ordinary bounded argument-error exit"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "invalid non-UTF-8 input must not emit successful output"
+    );
+    let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must remain valid UTF-8");
+    assert!(!stderr.is_empty(), "invalid non-UTF-8 input must remain visible");
+    assert!(
+        !stderr.contains("panicked") && !stderr.contains("thread 'main'"),
+        "invalid host arguments must not escape through a Rust panic"
+    );
+}
+
 #[test]
 fn successful_help_is_strictly_terminal_and_invalid_input_stays_bounded() {
     let (_target_dir, binaries) = build_operational_binaries();
@@ -133,5 +160,7 @@ fn successful_help_is_strictly_terminal_and_invalid_input_stays_bounded() {
         assert_unknown_argument_is_bounded(binary);
         assert_help_does_not_hide_invalid_argument(binary, "--help");
         assert_help_does_not_hide_invalid_argument(binary, "-h");
+        #[cfg(unix)]
+        assert_non_utf8_argument_is_bounded(binary);
     }
 }
