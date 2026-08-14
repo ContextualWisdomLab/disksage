@@ -114,7 +114,14 @@ fn system_now_ms() -> u64 {
 
 #[cfg(not(coverage))]
 fn run() -> Result<(), String> {
-    let raw = std::env::args().skip(1).collect::<Vec<_>>();
+    let raw = std::env::args_os()
+        .skip(1)
+        .map(|argument| {
+            argument.into_string().map_err(|_| {
+                "incomplete-download-materialization-unknown-argument".to_string()
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     if raw.len() == 1 && matches!(raw[0].as_str(), "--help" | "-h") {
         println!("{}", usage());
         return Ok(());
