@@ -1203,6 +1203,57 @@ mod tests {
             .contains(&"eviction-blocked-until-provider-proof".into()));
     }
 
+    #[cfg(not(coverage))]
+    #[test]
+    fn provider_attestation_error_updates_seeded_projection_without_rewinding_goal() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("source.bin");
+        std::fs::write(&source, b"source").unwrap();
+        let adr_dir = temporary.path().join("adr");
+        let goal_dir = temporary.path().join("goals");
+        let mut receipt = receipt();
+        receipt.source = source.to_string_lossy().into_owned();
+        let record = pending_record();
+        let advanced_adr = snapshot_from_evidence(
+            &record,
+            CloudOffloadGoalState::PendingProviderSync,
+            10,
+        );
+        let advanced_goal = goal_snapshot_from_evidence(
+            &receipt,
+            &record,
+            CloudOffloadGoalState::PendingProviderSync,
+            10,
+        );
+        write_projection_pair(&adr_dir, &advanced_adr, &goal_dir, &advanced_goal);
+
+        let outcome = ensure_initial_projection_pair_with_provider_state_outcome(
+            &receipt,
+            &adr_dir,
+            &goal_dir,
+            11,
+            "provider-oauth-connection-missing",
+        );
+        assert!(outcome.wrote);
+        assert!(outcome.warnings.is_empty());
+        let persisted: CloudOffloadGoalSnapshot = serde_json::from_slice(
+            &std::fs::read(goal_dir.join(format!("{}-latest.json", receipt.receipt_id))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(persisted.goal_state, CloudOffloadGoalState::PendingProviderSync);
+        assert_eq!(persisted.status, "blocked");
+        assert!(!persisted.completion_gates["provider-sync-state-complete"]);
+        assert!(!persisted.completion_gates["explicit-eviction-permit"]);
+        let persisted_adr: CloudOffloadAdrSnapshot = serde_json::from_slice(
+            &std::fs::read(adr_dir.join(format!("{}-latest.json", receipt.receipt_id))).unwrap(),
+        )
+        .unwrap();
+        assert!(persisted_adr.decision.ends_with("-provider-state-unverified"));
+        assert!(persisted_adr
+            .consequences
+            .contains(&"provider-state-blocked:provider-oauth-connection-missing".into()));
+    }
+
     #[test]
     fn initial_projection_pair_seeds_missing_state_without_evidence() {
         let temporary = tempfile::tempdir().unwrap();
