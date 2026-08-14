@@ -1,10 +1,10 @@
-//! Black-box help and invalid-argument contracts for incomplete-download planning CLIs.
+//! Black-box help and invalid-argument contracts for incomplete-download operational CLIs.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const BINARIES: [(&str, &str); 2] = [
+const BINARIES: [(&str, &str); 3] = [
     (
         "disksage-incomplete-download-materialization",
         "usage: disksage-incomplete-download-materialization",
@@ -12,6 +12,10 @@ const BINARIES: [(&str, &str); 2] = [
     (
         "disksage-incomplete-download-recovery",
         "usage: disksage-incomplete-download-recovery",
+    ),
+    (
+        "disksage-incomplete-download-materialize",
+        "usage: disksage-incomplete-download-materialize",
     ),
 ];
 
@@ -126,7 +130,7 @@ fn assert_help_does_not_hide_invalid_argument(binary: &Path) {
 }
 
 #[test]
-fn incomplete_download_planning_help_is_successful_and_invalid_arguments_are_bounded() {
+fn incomplete_download_help_is_successful_and_invalid_arguments_are_bounded() {
     let (_target_dir, binaries) = build_feature_gated_binaries();
     for ((_, usage), binary) in BINARIES.iter().zip(&binaries) {
         assert_help_success(binary, usage, "--help");
