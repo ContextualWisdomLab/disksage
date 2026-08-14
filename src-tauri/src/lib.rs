@@ -69,6 +69,7 @@ pub mod naruon_lineage;
 /// Read-only, fail-closed Podman VM/store reclaim evidence.
 pub mod podman_reclaim;
 pub mod provider_api_client;
+pub mod provider_api_write;
 pub mod provider_capacity;
 pub mod provider_client_runtime;
 pub mod provider_evidence;
@@ -139,6 +140,7 @@ pub fn run() {
             commands::plan_cloud_archive,
             commands::review_cloud_candidate,
             commands::copy_cloud_candidate,
+            commands::copy_cloud_candidate_via_provider_api,
             commands::adopt_existing_cloud_candidate,
             commands::attest_cloud_copy,
             commands::reconcile_cloud_receipts,

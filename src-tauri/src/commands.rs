@@ -20,7 +20,7 @@ use crate::safety;
 use crate::{
     brew_cleanup, cloud, cloud_adr, cloud_eviction, cloud_local_eviction, cloud_plan_view,
     cloud_review, cloud_transfer, dev_artifacts, dupes, git_worktree, icloud_sync_health,
-    provider_api_client, provider_capacity, provider_client_runtime, provider_evidence,
+    provider_api_client, provider_api_write, provider_capacity, provider_client_runtime, provider_evidence,
     provider_global_sync, provider_oauth, provider_sync, rules,
 };
 
@@ -1031,6 +1031,7 @@ pub fn list_cloud_review_decisions(
 pub async fn connect_cloud_provider(
     cloud_root: String,
     client_id: String,
+    write_access: bool,
     app: AppHandle,
 ) -> Result<provider_oauth::OAuthConnection, String> {
     let selected = selected_cloud_root(&app, &cloud_root)?;
@@ -1038,7 +1039,11 @@ pub async fn connect_cloud_provider(
     if selected.provider == cloud::CloudProvider::Icloud {
         return Err("icloud-oauth-not-supported".into());
     }
-    let pending = provider_oauth::prepare_authorization(selected.provider, &client_id)?;
+    let pending = provider_oauth::prepare_authorization_with_write_access(
+        selected.provider,
+        &client_id,
+        write_access,
+    )?;
     use tauri_plugin_opener::OpenerExt;
     app.opener()
         .open_url(pending.authorization_url(), None::<&str>)
@@ -1465,6 +1470,7 @@ pub struct CloudCopyOutput {
     pub adr_path: Option<String>,
     pub goal_path: Option<String>,
     pub projection_warnings: Vec<String>,
+    pub provider_object_id: Option<String>,
 }
 
 #[cfg(not(coverage))]
@@ -1480,6 +1486,7 @@ fn create_cloud_candidate_receipt(
     app: &AppHandle,
     adopt_existing: bool,
 ) -> Result<CloudCopyOutput, String> {
+    use tauri::Manager;
     if metadata_fingerprint.len() != 64
         || !metadata_fingerprint
             .bytes()
@@ -1505,12 +1512,11 @@ fn create_cloud_candidate_receipt(
         [] => return Err("fresh-plan-candidate-not-found".into()),
         _ => return Err("fresh-plan-candidate-ambiguous".into()),
     };
-    use tauri::Manager;
-    let receipt_dir = app
+    let app_data_dir = app
         .path()
         .app_data_dir()
-        .map_err(|_| "app-data-directory-unavailable".to_string())?
-        .join("cloud-receipts");
+        .map_err(|_| "app-data-directory-unavailable".to_string())?;
+    let receipt_dir = app_data_dir.join("cloud-receipts");
     let review_decision = if candidate.requires_review {
         cloud_review::load_latest_decisions(&cloud_review_directory(&app)?)?
             .into_iter()
@@ -1607,6 +1613,192 @@ fn create_cloud_candidate_receipt(
         adr_path,
         goal_path,
         projection_warnings,
+        provider_object_id: None,
+    })
+}
+
+#[cfg(not(coverage))]
+fn create_cloud_candidate_provider_api_receipt(
+    root: &str,
+    cloud_root: &str,
+    metadata_fingerprint: &str,
+    min_size_mib: u64,
+    min_age_days: u64,
+    limit: usize,
+    exact_confirmation_phrase: &str,
+    approval_rationale: &str,
+    app: &AppHandle,
+) -> Result<CloudCopyOutput, String> {
+    use tauri::Manager;
+    if metadata_fingerprint.len() != 64
+        || !metadata_fingerprint
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err("metadata-fingerprint-invalid".into());
+    }
+    let planning =
+        cloud_plan_for_inputs(root, cloud_root, min_size_mib, min_age_days, limit, app)?;
+    let CloudPlanningOutput {
+        selected,
+        report,
+        ..
+    } = planning;
+    if selected.provider == cloud::CloudProvider::Icloud {
+        return Err("provider-api-icloud-unsupported".into());
+    }
+    let candidate = report
+        .candidates
+        .iter()
+        .find(|candidate| candidate.metadata_fingerprint == metadata_fingerprint)
+        .ok_or_else(|| "fresh-plan-candidate-not-found".to_string())?;
+    if report
+        .candidates
+        .iter()
+        .filter(|entry| entry.metadata_fingerprint == metadata_fingerprint)
+        .count()
+        != 1
+    {
+        return Err("fresh-plan-candidate-ambiguous".into());
+    }
+    let connection_path = oauth_connections_path(app)?;
+    let connection = provider_oauth::connection_for_root(
+        &provider_oauth::load_connections(&connection_path)?,
+        &selected,
+    )?;
+    if !provider_oauth::scope_allows_write(&connection) {
+        return Err("provider-oauth-write-scope-required".into());
+    }
+    let capacity = report
+        .capacity
+        .as_ref()
+        .ok_or_else(|| "cloud-capacity-verification-required".to_string())?;
+    require_capacity_for_copy(candidate, &capacity.snapshot)?;
+    let review_decision = if candidate.requires_review {
+        cloud_review::load_latest_decisions(&cloud_review_directory(app)?)?
+            .into_iter()
+            .find(|decision| decision.candidate_fingerprint == candidate.metadata_fingerprint)
+    } else {
+        None
+    };
+    let copy_approval = cloud_transfer::create_cloud_copy_approval(
+        candidate,
+        &selected,
+        cloud_transfer::CloudCopyApprovalAction::CopyOnly,
+        cloud::system_now_ms(),
+        &local_human_reviewer(),
+        approval_rationale.trim(),
+        exact_confirmation_phrase,
+    )?;
+    let copied_at_ms = cloud::system_now_ms();
+    let (receipt, source_hashes) = cloud_transfer::prepare_provider_api_source_receipt(
+        candidate,
+        &selected,
+        review_decision.as_ref(),
+        &copy_approval,
+        copied_at_ms,
+    )?;
+    let access_token = provider_oauth::refreshed_access_token(&connection_path, &selected)?;
+    let upload = provider_api_write::upload_file(
+        selected.provider,
+        Path::new(&selected.path),
+        Path::new(&candidate.dst),
+        Path::new(&candidate.src),
+        candidate.bytes,
+        access_token.as_str(),
+    )?;
+    if let Err(error) = cloud_transfer::verify_provider_api_source_unchanged(candidate, &source_hashes)
+    {
+        let cleanup = provider_api_write::delete_uploaded_object(
+            selected.provider,
+            &upload.object_id,
+            access_token.as_str(),
+        );
+        return Err(match cleanup {
+            Ok(()) => error,
+            Err(cleanup_error) => format!(
+                "{error},provider-api-upload-cleanup-failed:{cleanup_error}"
+            ),
+        });
+    }
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "app-data-directory-unavailable".to_string())?;
+    let receipt_dir = app_data_dir.join("cloud-receipts");
+    let receipt_path = match cloud_transfer::write_provider_api_receipt(&receipt, &receipt_dir) {
+        Ok(path) => path,
+        Err(error) => {
+            let cleanup = provider_api_write::delete_uploaded_object(
+                selected.provider,
+                &upload.object_id,
+                access_token.as_str(),
+            );
+            return Err(match cleanup {
+                Ok(()) => error,
+                Err(cleanup_error) => format!(
+                    "{error},provider-api-upload-cleanup-failed:{cleanup_error}"
+                ),
+            });
+        }
+    };
+    let mut projection_warnings = Vec::new();
+    let (mut adr_path, mut goal_path) = match app.path().app_data_dir() {
+        Ok(app_data_dir) => {
+            let updated_at_ms = cloud::system_now_ms();
+            let adr = cloud_adr::initial_adr_snapshot(&receipt, updated_at_ms);
+            let goal = cloud_adr::initial_goal_snapshot(&receipt, updated_at_ms);
+            let (adr_path, goal_path, warnings) = cloud_adr::write_projection_pair(
+                &app_data_dir.join("cloud-adr"),
+                &adr,
+                &app_data_dir.join("cloud-goals"),
+                &goal,
+            );
+            projection_warnings.extend(warnings);
+            (
+                adr_path.map(|path| path.to_string_lossy().into_owned()),
+                goal_path.map(|path| path.to_string_lossy().into_owned()),
+            )
+        }
+        Err(_) => {
+            projection_warnings.push("app-data-directory-unavailable".to_string());
+            (None, None)
+        }
+    };
+    let mut goal_state = cloud_transfer::CloudOffloadGoalState::CopyVerified;
+    let cloud_roots = cloud::discover_cloud_roots(&resolve_home(app));
+    let attestation_object_id = (selected.provider == cloud::CloudProvider::GoogleDrive)
+        .then(|| upload.object_id.clone());
+    match collect_cloud_attestation_for_receipt(
+        &receipt,
+        attestation_object_id,
+        &app_data_dir.join("cloud-provider-evidence"),
+        &app_data_dir.join("cloud-adr"),
+        &app_data_dir.join("cloud-goals"),
+        &connection_path,
+        &cloud_roots,
+        true,
+    ) {
+        Ok(attestation) => {
+            goal_state = attestation.goal_state;
+            adr_path = attestation.adr_path;
+            goal_path = attestation.goal_path;
+            projection_warnings.extend(attestation.projection_warnings);
+        }
+        Err(error) => projection_warnings.push(format!(
+            "provider-attestation-incomplete:{}",
+            stable_reconciliation_error(&error)
+        )),
+    }
+    Ok(CloudCopyOutput {
+        action: "copy-only",
+        goal_state,
+        receipt,
+        receipt_path: receipt_path.to_string_lossy().into_owned(),
+        adr_path,
+        goal_path,
+        projection_warnings,
+        provider_object_id: Some(upload.object_id),
     })
 }
 
@@ -1646,6 +1838,44 @@ pub async fn copy_cloud_candidate(
     })
     .await
     .map_err(|_| "cloud-copy-task-failed".to_string())?
+}
+
+/// Upload one approved candidate directly through the provider API when the local File Provider
+/// cannot admit a new copy. The source is retained; the normal provider attestation and eviction
+/// gates still run afterwards.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn copy_cloud_candidate_via_provider_api(
+    root: String,
+    cloud_root: String,
+    metadata_fingerprint: String,
+    min_size_mib: u64,
+    min_age_days: u64,
+    limit: usize,
+    exact_confirmation_phrase: String,
+    approval_rationale: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<CloudCopyOutput, String> {
+    let cloud_review = Arc::clone(&state.cloud_review);
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = cloud_review
+            .lock()
+            .map_err(|_| "cloud-review-lock-poisoned".to_string())?;
+        create_cloud_candidate_provider_api_receipt(
+            &root,
+            &cloud_root,
+            &metadata_fingerprint,
+            min_size_mib,
+            min_age_days,
+            limit,
+            &exact_confirmation_phrase,
+            &approval_rationale,
+            &app,
+        )
+    })
+    .await
+    .map_err(|_| "cloud-provider-api-copy-task-failed".to_string())?
 }
 
 /// Rebuild the plan and adopt an already-existing destination only after full content-digest
@@ -1857,6 +2087,7 @@ fn reconcile_cloud_receipts_inner(
             goal_dir,
             connection_path,
             cloud_roots,
+            false,
         ) {
             Ok(attestation) => {
                 output.attested_count = output.attested_count.saturating_add(1);
@@ -1943,6 +2174,7 @@ fn collect_cloud_attestation_for_receipt(
     goal_dir: &Path,
     connection_path: &Path,
     cloud_roots: &[cloud::CloudRoot],
+    force_provider_api: bool,
 ) -> Result<CloudAttestationOutput, String> {
     let confirmed_at_ms = cloud::system_now_ms();
     let evidence = match receipt.provider {
@@ -1966,10 +2198,27 @@ fn collect_cloud_attestation_for_receipt(
                 .max_by_key(|root| Path::new(&root.path).components().count())
                 .cloned()
                 .ok_or_else(|| "receipt-cloud-root-unavailable".to_string())?;
-            let object_id = object_id.filter(|value| !value.trim().is_empty());
+            let object_id = object_id
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| {
+                    if receipt.provider == cloud::CloudProvider::GoogleDrive {
+                        provider_evidence::latest_api_object_id(
+                            evidence_dir,
+                            &receipt.receipt_id,
+                            receipt.provider,
+                        )
+                    } else {
+                        None
+                    }
+                });
             let fallback_requested =
                 receipt.provider == cloud::CloudProvider::Onedrive || object_id.is_some();
-            match provider_sync::collect_file_provider_sync_evidence(receipt, confirmed_at_ms) {
+            let native_evidence = if force_provider_api {
+                Err("provider-api-forced".to_string())
+            } else {
+                provider_sync::collect_file_provider_sync_evidence(receipt, confirmed_at_ms)
+            };
+            match native_evidence {
                 Ok(evidence) if evidence.sync_complete || !fallback_requested => evidence,
                 Err(error) if !fallback_requested => return Err(error),
                 Ok(_) | Err(_) => {
@@ -2106,6 +2355,7 @@ pub async fn attest_cloud_copy(
             &goal_dir,
             &connection_path,
             &cloud_roots,
+            false,
         )
     })
     .await
@@ -2205,6 +2455,7 @@ pub async fn trash_verified_cloud_source(
             &goal_dir,
             &connection_path,
             &cloud_roots,
+            false,
         )?;
         let permit = attestation.permit.as_ref().ok_or_else(|| {
             if attestation.blockers.is_empty() {

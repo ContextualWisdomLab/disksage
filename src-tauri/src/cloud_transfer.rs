@@ -144,6 +144,9 @@ pub enum RemoteChecksumAlgorithm {
 pub enum CloudCopyVerificationMethod {
     #[default]
     CopiedByDiskSage,
+    /// The source was uploaded through an authenticated provider API because the local File
+    /// Provider could not admit a new copy. The same copy-only approval still binds the action.
+    CopiedByProviderApi,
     AdoptedExisting,
 }
 
@@ -172,10 +175,14 @@ impl CloudCopyApprovalAction {
         }
     }
 
-    fn verification_method(self) -> CloudCopyVerificationMethod {
+    fn accepts_verification_method(self, method: CloudCopyVerificationMethod) -> bool {
         match self {
-            Self::CopyOnly => CloudCopyVerificationMethod::CopiedByDiskSage,
-            Self::AdoptExistingCopy => CloudCopyVerificationMethod::AdoptedExisting,
+            Self::CopyOnly => matches!(
+                method,
+                CloudCopyVerificationMethod::CopiedByDiskSage
+                    | CloudCopyVerificationMethod::CopiedByProviderApi
+            ),
+            Self::AdoptExistingCopy => method == CloudCopyVerificationMethod::AdoptedExisting,
         }
     }
 }
@@ -776,7 +783,9 @@ pub fn validate_receipt_copy_approval(receipt: &CloudCopyReceipt) -> Result<(), 
         || approval.review_fingerprint != lineage.review_fingerprint
         || approval.provider != receipt.provider
         || approval.destination_account_scope != lineage.destination_account_scope
-        || approval.action.verification_method() != lineage.copy_verification_method
+        || !approval
+            .action
+            .accepts_verification_method(lineage.copy_verification_method)
         || approval.exact_confirmation_phrase != expected_phrase
         || approval.approved_at_ms > receipt.copied_at_ms
         || receipt.copied_at_ms.saturating_sub(approval.approved_at_ms)
@@ -1297,7 +1306,15 @@ fn write_immutable_receipt(
 }
 
 #[cfg(not(coverage))]
-fn build_verified_receipt(
+pub(crate) fn write_provider_api_receipt(
+    receipt: &CloudCopyReceipt,
+    receipt_dir: &Path,
+) -> Result<PathBuf, String> {
+    write_immutable_receipt(receipt, receipt_dir)
+}
+
+#[cfg(not(coverage))]
+pub(crate) fn build_verified_receipt(
     candidate: &CloudCandidate,
     review_decision: Option<&CloudReviewDecision>,
     copy_approval: &CloudCopyApproval,
@@ -1347,6 +1364,78 @@ fn build_verified_receipt(
         receipt.lineage_fingerprint.as_deref(),
     );
     Ok(receipt)
+}
+
+/// Hash and bind a source before an authenticated provider upload. This deliberately does not
+/// touch the destination: a disconnected File Provider may not expose a usable local directory.
+#[cfg(not(coverage))]
+pub(crate) fn prepare_provider_api_source_receipt(
+    candidate: &CloudCandidate,
+    cloud_root: &CloudRoot,
+    review_decision: Option<&CloudReviewDecision>,
+    copy_approval: &CloudCopyApproval,
+    copied_at_ms: u64,
+) -> Result<(CloudCopyReceipt, ContentDigests), String> {
+    validate_cloud_copy_approval_for_action(
+        copy_approval,
+        candidate,
+        cloud_root,
+        CloudCopyApprovalAction::CopyOnly,
+        copied_at_ms,
+    )?;
+    let blockers = candidate_blockers_with_review(candidate, cloud_root, review_decision);
+    if !blockers.is_empty() {
+        return Err(blockers.join(","));
+    }
+    let source = Path::new(&candidate.src);
+    let before = std::fs::symlink_metadata(source).map_err(|error| error.to_string())?;
+    if before.file_type().is_symlink() || !before.is_file() {
+        return Err("source-must-be-regular-file".into());
+    }
+    if crate::cloud::metadata_is_dataless(&before) {
+        return Err("source-content-not-local".into());
+    }
+    let before_modified_ms = modified_ms(&before)?;
+    if before.len() != candidate.bytes || before_modified_ms != candidate.modified_ms {
+        return Err("source-changed-since-plan".into());
+    }
+    let hashes = hash_file(source)?;
+    let after = std::fs::symlink_metadata(source).map_err(|error| error.to_string())?;
+    if after.file_type().is_symlink()
+        || !after.is_file()
+        || after.len() != before.len()
+        || modified_ms(&after)? != before_modified_ms
+    {
+        return Err("source-changed-during-provider-upload-preflight".into());
+    }
+    let receipt = build_verified_receipt(
+        candidate,
+        review_decision,
+        copy_approval,
+        hashes.clone(),
+        copied_at_ms,
+        CloudCopyVerificationMethod::CopiedByProviderApi,
+    )?;
+    Ok((receipt, hashes))
+}
+
+#[cfg(not(coverage))]
+pub(crate) fn verify_provider_api_source_unchanged(
+    candidate: &CloudCandidate,
+    hashes: &ContentDigests,
+) -> Result<(), String> {
+    let source = Path::new(&candidate.src);
+    let metadata = std::fs::symlink_metadata(source).map_err(|_| "source-unavailable".to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("source-changed-during-provider-upload".into());
+    }
+    if metadata.len() != candidate.bytes || modified_ms(&metadata)? != candidate.modified_ms {
+        return Err("source-changed-during-provider-upload".into());
+    }
+    if hash_file(source)? != *hashes {
+        return Err("source-changed-during-provider-upload".into());
+    }
+    Ok(())
 }
 
 /// Copy a candidate only after validating both the optional metadata review decision and a fresh,

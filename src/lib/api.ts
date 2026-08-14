@@ -771,6 +771,7 @@ export interface CloudCopyOutput {
   adr_path: string | null;
   goal_path: string | null;
   projection_warnings: string[];
+  provider_object_id: string | null;
 }
 
 export type SyncEvidenceKind = "provider-api" | "provider-native-status";
@@ -981,8 +982,8 @@ export const inspectCloudProviderGlobalSync = (cloudRoot: string) =>
   invoke<ProviderGlobalSyncReport>("inspect_cloud_provider_global_sync", { cloudRoot });
 export const listCloudReviewDecisions = () =>
   invoke<CloudReviewDecision[]>("list_cloud_review_decisions");
-export const connectCloudProvider = (cloudRoot: string, clientId: string) =>
-  invoke<OAuthConnection>("connect_cloud_provider", { cloudRoot, clientId });
+export const connectCloudProvider = (cloudRoot: string, clientId: string, writeAccess = false) =>
+  invoke<OAuthConnection>("connect_cloud_provider", { cloudRoot, clientId, writeAccess });
 export const disconnectCloudProvider = (cloudRoot: string) =>
   invoke<void>("disconnect_cloud_provider", { cloudRoot });
 export const planCloudArchive = (
@@ -1029,6 +1030,25 @@ export const copyCloudCandidate = (
   minAgeDays = 90,
   limit = 200,
 ) => invoke<CloudCopyOutput>("copy_cloud_candidate", {
+  root,
+  cloudRoot,
+  metadataFingerprint,
+  exactConfirmationPhrase,
+  approvalRationale,
+  minSizeMib,
+  minAgeDays,
+  limit,
+});
+export const copyCloudCandidateViaProviderApi = (
+  root: string,
+  cloudRoot: string,
+  metadataFingerprint: string,
+  exactConfirmationPhrase: string,
+  approvalRationale: string,
+  minSizeMib = 256,
+  minAgeDays = 90,
+  limit = 200,
+) => invoke<CloudCopyOutput>("copy_cloud_candidate_via_provider_api", {
   root,
   cloudRoot,
   metadataFingerprint,

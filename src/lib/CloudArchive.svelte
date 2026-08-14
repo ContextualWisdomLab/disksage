@@ -68,6 +68,7 @@
   let eviction: api.CloudSourceEvictionOutput | null = $state(null);
   let objectId = $state("");
   let oauthClientId = $state("");
+  let oauthWriteAccess = $state(true);
   let connecting = $state(false);
   let disconnecting = $state(false);
   let checkingCapacity = $state(false);
@@ -173,6 +174,30 @@
       && approvalPhrase !== null;
   }
 
+  function providerApiWriteConnected(): boolean {
+    const connection = connectionForSelectedRoot();
+    if (!connection) return false;
+    return (connection.provider === "onedrive" && connection.scope === "Files.ReadWrite offline_access")
+      || (connection.provider === "google-drive"
+        && connection.scope === "https://www.googleapis.com/auth/drive");
+  }
+
+  function providerApiCopyEligible(candidate: api.CloudCandidate): boolean {
+    const decision = matchingReviewDecision(candidate);
+    const exactApproval = decision?.disposition === "approved";
+    const embeddedHighConfidence = candidate.production_time_confidence === "high"
+      && candidate.production_time_source.startsWith("embedded:");
+    const approvalPhrase = api.cloudCopyApprovalPhrase(candidate, "copy-only");
+    return selectedRootDetails()?.provider !== "icloud"
+      && hasProviderAdmissionBlocker(report?.notices ?? [])
+      && providerApiWriteConnected()
+      && candidate.blocked_reason === null
+      && (!candidate.requires_review || exactApproval)
+      && (embeddedHighConfidence || exactApproval)
+      && api.cloudCapacityAllowsCopy(report?.capacity)
+      && approvalPhrase !== null;
+  }
+
   function adoptEligible(candidate: api.CloudCandidate): boolean {
     const decision = matchingReviewDecision(candidate);
     const exactApproval = decision?.disposition === "approved";
@@ -272,6 +297,44 @@
         Math.max(0, Math.floor(minAgeDays)),
         200,
       );
+      objectId = copied.provider_object_id ?? "";
+    } catch (e) {
+      loadError = String(e);
+    } finally {
+      copyingFingerprint = "";
+    }
+  }
+
+  async function copyCandidateViaProviderApi(candidate: api.CloudCandidate) {
+    if (!scannedRoot || !selectedRoot || !providerApiCopyEligible(candidate)) return;
+    const exactConfirmationPhrase =
+      (copyConfirmations[candidate.metadata_fingerprint] ?? "").trim();
+    const approvalRationale =
+      (copyRationales[candidate.metadata_fingerprint] ?? "").trim();
+    const expectedApprovalPhrase = api.cloudCopyApprovalPhrase(candidate, "copy-only");
+    if (!expectedApprovalPhrase
+      || exactConfirmationPhrase !== expectedApprovalPhrase
+      || !approvalRationale) return;
+    copyingFingerprint = candidate.metadata_fingerprint;
+    loadError = "";
+    copied = null;
+    attestation = null;
+    eviction = null;
+    evictionConfirmation = "";
+    evictionRationale = "";
+    objectId = "";
+    try {
+      copied = await api.copyCloudCandidateViaProviderApi(
+        scannedRoot,
+        selectedRoot,
+        candidate.metadata_fingerprint,
+        exactConfirmationPhrase,
+        approvalRationale,
+        Math.max(1, Math.floor(minSizeMib)),
+        Math.max(0, Math.floor(minAgeDays)),
+        200,
+      );
+      objectId = copied.provider_object_id ?? "";
     } catch (e) {
       loadError = String(e);
     } finally {
@@ -467,7 +530,11 @@
     connecting = true;
     loadError = "";
     try {
-      const connection = await api.connectCloudProvider(root.path, oauthClientId.trim());
+      const connection = await api.connectCloudProvider(
+        root.path,
+        oauthClientId.trim(),
+        oauthWriteAccess,
+      );
       connections = [
         ...connections.filter((entry) => entry.connection_id !== connection.connection_id),
         connection,
@@ -705,7 +772,7 @@
     {:else if selectedRootDetails()}
       <div class="oauth-panel">
         {#if connectionForSelectedRoot()}
-          <strong>읽기 전용 OAuth descriptor 발견</strong>
+          <strong>{providerApiWriteConnected() ? "OAuth 업로드 연결" : "읽기 전용 OAuth descriptor 발견"}</strong>
           <span class="context">범위: {connectionForSelectedRoot()?.scope}</span>
           <button
             onclick={verifyProviderCapacity}
@@ -746,8 +813,12 @@
               disabled={connecting}
             />
           </label>
+          <label>
+            <input type="checkbox" bind:checked={oauthWriteAccess} disabled={connecting} />
+            File Provider 장애 시 API로 파일 업로드할 권한도 요청
+          </label>
           <button onclick={connectProvider} disabled={connecting || !oauthClientId.trim()}>
-            {connecting ? "브라우저 동의 대기 중…" : "시스템 브라우저로 읽기 전용 연결"}
+            {connecting ? "브라우저 동의 대기 중…" : "시스템 브라우저로 OAuth 연결"}
           </button>
           <p class="muted">
             Client ID는 비밀키가 아닙니다. PKCE와 임의 loopback 포트를 사용하고 refresh token만 OS 보안 저장소에 보관합니다.
@@ -756,7 +827,7 @@
             <p class="muted">Microsoft Entra 앱은 Mobile/Desktop public client로 만들고 loopback redirect URI <code>http://localhost</code>를 등록해야 합니다. 실행 시 임의 포트를 붙이며 IPv4·IPv6 loopback만 수신합니다.</p>
           {/if}
           {#if selectedRootDetails()?.provider === "google-drive"}
-            <p class="warning">Google OAuth Client 유형은 Desktop app이어야 합니다. 기존 Drive 파일의 원격 메타데이터 확인에는 restricted scope인 drive.metadata.readonly가 필요하므로 OAuth 앱 검증 또는 테스트 사용자 등록이 필요할 수 있습니다.</p>
+            <p class="warning">Google OAuth Client 유형은 Desktop app이어야 합니다. 업로드 fallback을 선택하면 Drive 파일 쓰기 권한 동의가 필요합니다. 동의하지 않으면 읽기 전용 attestation만 사용합니다.</p>
           {/if}
         {/if}
       </div>
@@ -1111,7 +1182,7 @@
                 >보류</button>
               </div>
             {/if}
-            {#if copyEligible(candidate)}
+            {#if copyEligible(candidate) || providerApiCopyEligible(candidate)}
               {@const copyApprovalPhrase = api.cloudCopyApprovalPhrase(candidate, "copy-only")}
               <div class="copy-approval">
                 <div class="context">현재 메타데이터·출발지·목적지에 결부된 문구를 정확히 입력해야 합니다.</div>
@@ -1144,18 +1215,35 @@
                     disabled={copyingFingerprint !== ""}
                   />
                 </label>
-                <button
-                  class="copy"
-                  onclick={() => copyCandidate(candidate)}
-                  disabled={copyingFingerprint !== ""
-                    || copied?.receipt.candidate_fingerprint === candidate.metadata_fingerprint
-                    || !(copyRationales[candidate.metadata_fingerprint] ?? "").trim()
-                    || copyApprovalPhrase === null
-                    || (copyConfirmations[candidate.metadata_fingerprint] ?? "").trim()
-                      !== copyApprovalPhrase}
-                >
-                  {copyingFingerprint === candidate.metadata_fingerprint ? "복사·해시 검증 중…" : "원본을 유지하고 클라우드에 복사"}
-                </button>
+                {#if copyEligible(candidate)}
+                  <button
+                    class="copy"
+                    onclick={() => copyCandidate(candidate)}
+                    disabled={copyingFingerprint !== ""
+                      || copied?.receipt.candidate_fingerprint === candidate.metadata_fingerprint
+                      || !(copyRationales[candidate.metadata_fingerprint] ?? "").trim()
+                      || copyApprovalPhrase === null
+                      || (copyConfirmations[candidate.metadata_fingerprint] ?? "").trim()
+                        !== copyApprovalPhrase}
+                  >
+                    {copyingFingerprint === candidate.metadata_fingerprint ? "복사·해시 검증 중…" : "원본을 유지하고 클라우드에 복사"}
+                  </button>
+                {/if}
+                {#if providerApiCopyEligible(candidate)}
+                  <p class="warning">File Provider 전역 동기화가 막혀 있어, 명시적 OAuth 쓰기 연결로 공급자 API에 직접 업로드합니다. 원본은 유지되고 이후 API attestation이 필요합니다.</p>
+                  <button
+                    class="copy"
+                    onclick={() => copyCandidateViaProviderApi(candidate)}
+                    disabled={copyingFingerprint !== ""
+                      || copied?.receipt.candidate_fingerprint === candidate.metadata_fingerprint
+                      || !(copyRationales[candidate.metadata_fingerprint] ?? "").trim()
+                      || copyApprovalPhrase === null
+                      || (copyConfirmations[candidate.metadata_fingerprint] ?? "").trim()
+                        !== copyApprovalPhrase}
+                  >
+                    {copyingFingerprint === candidate.metadata_fingerprint ? "공급자 API 업로드 중…" : "File Provider를 우회해 공급자 API로 업로드"}
+                  </button>
+                {/if}
               </div>
             {/if}
             {#if adoptEligible(candidate)}

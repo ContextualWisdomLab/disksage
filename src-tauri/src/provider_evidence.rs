@@ -3,6 +3,7 @@
 //! Provider status is time-sensitive. A successful check must therefore be persisted before a
 //! later source-eviction step can proceed, rather than surviving only in terminal or UI output.
 
+use crate::cloud::CloudProvider;
 use crate::cloud_transfer::{ProviderSyncEvidence, SyncEvidenceKind};
 use std::path::Path;
 
@@ -246,6 +247,67 @@ pub fn read_immutable_sync_evidence(path: &Path) -> Result<ProviderSyncEvidenceR
     Ok(record)
 }
 
+/// Recover the latest API object id already bound to a receipt.
+///
+/// This is only a locator hint for the next authenticated re-check; the remote response and local
+/// source hash still have to pass the normal attestation gates. Invalid or unrelated records are
+/// ignored so a damaged evidence file cannot turn into an upload target.
+#[cfg(not(coverage))]
+pub fn latest_api_object_id(
+    directory: &Path,
+    receipt_id: &str,
+    provider: CloudProvider,
+) -> Option<String> {
+    if !valid_hex64(receipt_id) {
+        return None;
+    }
+    let metadata = std::fs::symlink_metadata(directory).ok()?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return None;
+    }
+    let prefix = format!("{receipt_id}-");
+    let mut latest: Option<(u64, String, String)> = None;
+    for entry in std::fs::read_dir(directory).ok()?.take(4_096) {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if !name.starts_with(&prefix) || path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(record) = read_immutable_sync_evidence(&path) else {
+            continue;
+        };
+        if record.evidence.receipt_id != receipt_id
+            || record.evidence.provider != provider
+            || record.evidence.kind != SyncEvidenceKind::ProviderApi
+        {
+            continue;
+        }
+        let Some(remote) = record.evidence.remote_content.as_ref() else {
+            continue;
+        };
+        if remote.object_id.trim().is_empty() {
+            continue;
+        }
+        let candidate = (
+            record.evidence.confirmed_at_ms,
+            record.record_id.clone(),
+            remote.object_id.clone(),
+        );
+        if latest
+            .as_ref()
+            .is_none_or(|current| (candidate.0, candidate.1.as_str()) > (current.0, current.1.as_str()))
+        {
+            latest = Some(candidate);
+        }
+    }
+    latest.map(|(_, _, object_id)| object_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,6 +368,17 @@ mod tests {
         let mut value = serde_json::to_value(record).unwrap();
         value["evidence"]["unexpected"] = serde_json::json!(true);
         assert!(serde_json::from_value::<ProviderSyncEvidenceRecord>(value).is_err());
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn latest_api_object_id_is_read_from_valid_immutable_evidence() {
+        let temp = tempfile::tempdir().unwrap();
+        let (record, _) = write_immutable_sync_evidence(temp.path(), &evidence()).unwrap();
+        assert_eq!(
+            latest_api_object_id(temp.path(), &record.evidence.receipt_id, CloudProvider::Onedrive),
+            Some("remote-id".into())
+        );
     }
 
     #[cfg(not(coverage))]
