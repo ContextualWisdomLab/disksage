@@ -679,23 +679,45 @@ fn hash_file(path: &std::path::Path) -> Result<String, String> {
 #[cfg(all(target_os = "macos", not(coverage)))]
 pub(crate) fn file_providerctl_status(path: &str) -> Result<String, String> {
     use std::io::Read;
+    use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
 
     const TIMEOUT: Duration = Duration::from_secs(5);
     const OUTPUT_LIMIT: u64 = 256 * 1_024;
 
-    let mut child = Command::new("/usr/bin/fileproviderctl")
+    let mut command = Command::new("/usr/bin/fileproviderctl");
+    command
         .arg("evaluate")
         .arg(path)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    // File Provider helpers can retain inherited stdout after the leader exits. Keep the
+    // helper in a private process group so bounded cleanup can always join the reader.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = command
         .spawn()
         .map_err(|_| "file-provider-status-command-unavailable".to_string())?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "file-provider-status-output-missing".to_string())?;
+    let child_pid = child.id();
+    let kill_group = || unsafe {
+        let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
+    };
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            kill_group();
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("file-provider-status-output-missing".into());
+        }
+    };
     let output_reader = std::thread::spawn(move || {
         let mut output = Vec::new();
         stdout
@@ -711,17 +733,23 @@ pub(crate) fn file_providerctl_status(path: &str) -> Result<String, String> {
                 std::thread::sleep(Duration::from_millis(25));
             }
             Ok(None) => {
+                kill_group();
                 let _ = child.kill();
                 let _ = child.wait();
+                let _ = output_reader.join();
                 return Err("file-provider-status-command-timeout".into());
             }
             Err(_) => {
+                kill_group();
                 let _ = child.kill();
                 let _ = child.wait();
+                let _ = output_reader.join();
                 return Err("file-provider-status-command-wait-failed".into());
             }
         }
     };
+    // The leader may exit while a descendant still owns the pipe.
+    kill_group();
     let output = output_reader
         .join()
         .map_err(|_| "file-provider-status-output-reader-panicked".to_string())?
