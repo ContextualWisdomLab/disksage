@@ -20,6 +20,12 @@ The runtime sequence is:
    (add the existing OAuth connection flags only when a provider API fallback is required). This
    command performs local evidence/projection writes only; `--audit-receipts` remains a strictly
    read-only integrity report.
+   When the local File Provider cannot admit a new OneDrive or Google Drive item, an explicitly
+   approved headless upload can use `--provider-api-copy-fingerprint HEX64` together with
+   `--oauth-connections ABSOLUTE_PATH`. This path requires the write OAuth scope, fresh capacity,
+   the same human-attributed copy phrase and review gates, re-hashes the source after upload, and
+   immediately attempts provider-API attestation. It never supports iCloud or local eviction in
+   the same action; the returned receipt/object ID is the hand-off for a later attestation.
 4. `is_local_current=true` with `is_uploaded=false` is `pending-upload`; the source remains and
    no eviction permit is issued.
    Third-party File Provider dumps also block new copies while upload/download progress,

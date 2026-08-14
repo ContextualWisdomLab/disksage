@@ -1306,7 +1306,7 @@ fn write_immutable_receipt(
 }
 
 #[cfg(not(coverage))]
-pub(crate) fn write_provider_api_receipt(
+pub fn write_provider_api_receipt(
     receipt: &CloudCopyReceipt,
     receipt_dir: &Path,
 ) -> Result<PathBuf, String> {
@@ -1369,7 +1369,7 @@ pub(crate) fn build_verified_receipt(
 /// Hash and bind a source before an authenticated provider upload. This deliberately does not
 /// touch the destination: a disconnected File Provider may not expose a usable local directory.
 #[cfg(not(coverage))]
-pub(crate) fn prepare_provider_api_source_receipt(
+pub fn prepare_provider_api_source_receipt(
     candidate: &CloudCandidate,
     cloud_root: &CloudRoot,
     review_decision: Option<&CloudReviewDecision>,
@@ -1420,7 +1420,7 @@ pub(crate) fn prepare_provider_api_source_receipt(
 }
 
 #[cfg(not(coverage))]
-pub(crate) fn verify_provider_api_source_unchanged(
+pub fn verify_provider_api_source_unchanged(
     candidate: &CloudCandidate,
     hashes: &ContentDigests,
 ) -> Result<(), String> {

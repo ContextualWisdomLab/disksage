@@ -38,6 +38,8 @@ use disksage_lib::naruon_lineage;
 #[cfg(not(coverage))]
 use disksage_lib::provider_api_client::{self, FixedHostProviderMetadataClient};
 #[cfg(not(coverage))]
+use disksage_lib::provider_api_write;
+#[cfg(not(coverage))]
 use disksage_lib::provider_capacity::{self, FixedHostProviderCapacityClient};
 #[cfg(not(coverage))]
 use disksage_lib::provider_client_runtime;
@@ -75,6 +77,7 @@ struct Args {
     exact_duplicate_kind: Option<ArchiveKind>,
     capacity_reserve_mib: u64,
     copy_fingerprint: Option<String>,
+    provider_api_copy_fingerprint: Option<String>,
     adopt_existing_fingerprint: Option<String>,
     receipt_dir: Option<PathBuf>,
     audit_receipts: bool,
@@ -200,6 +203,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
         exact_duplicate_kind: None,
         capacity_reserve_mib: 1024,
         copy_fingerprint: None,
+        provider_api_copy_fingerprint: None,
         adopt_existing_fingerprint: None,
         receipt_dir: None,
         audit_receipts: false,
@@ -321,6 +325,13 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             }
             "--copy-fingerprint" => {
                 parsed.copy_fingerprint = Some(value(args, &mut index, "--copy-fingerprint")?)
+            }
+            "--provider-api-copy-fingerprint" => {
+                parsed.provider_api_copy_fingerprint = Some(value(
+                    args,
+                    &mut index,
+                    "--provider-api-copy-fingerprint",
+                )?)
             }
             "--adopt-existing-fingerprint" => {
                 parsed.adopt_existing_fingerprint = Some(value(
@@ -457,7 +468,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
             "--export-semantic-catalog" => parsed.export_semantic_catalog = true,
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary] [--min-size-mib N] [--min-age-days N] [--limit N] [--audit-receipts --receipt-dir ABSOLUTE_PATH] [--reconcile-receipts --receipt-dir ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]]] [--decision-summary [--private-candidate-inspection-output ABSOLUTE_NEW_FILE.json | --review-reason-set REASON|REASON [--private-review-output ABSOLUTE_NEW_FILE.json]] | --exact-duplicate-review-prefix DIR_PREFIX --exact-duplicate-kind document|media|archive|dataset|backup|creative|incomplete-download | --export-naruon-copy-readiness --verify-capacity [--naruon-copy-readiness-output ABSOLUTE_NEW_FILE.json] | --export-semantic-catalog] [--verify-capacity [--oauth-connections ABSOLUTE_PATH] [--export-naruon-capacity]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH --confirm-copy-phrase EXACT --reviewed-by human:ID --review-rationale TEXT [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH --confirm-copy-phrase EXACT --reviewed-by human:ID --review-rationale TEXT [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
+                    "usage: disksage-cloud-plan [--list-roots | --inspect-roots] [--root PATH] [--cloud-root PATH | --provider icloud|onedrive|google-drive | --all-readable-roots --decision-summary] [--min-size-mib N] [--min-age-days N] [--limit N] [--audit-receipts --receipt-dir ABSOLUTE_PATH] [--reconcile-receipts --receipt-dir ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]]] [--decision-summary [--private-candidate-inspection-output ABSOLUTE_NEW_FILE.json | --review-reason-set REASON|REASON [--private-review-output ABSOLUTE_NEW_FILE.json]] | --exact-duplicate-review-prefix DIR_PREFIX --exact-duplicate-kind document|media|archive|dataset|backup|creative|incomplete-download | --export-naruon-copy-readiness --verify-capacity [--naruon-copy-readiness-output ABSOLUTE_NEW_FILE.json] | --export-semantic-catalog] [--verify-capacity [--oauth-connections ABSOLUTE_PATH] [--export-naruon-capacity]] [--capacity-reserve-mib N] [--copy-fingerprint HEX64 --receipt-dir PATH --confirm-copy-phrase EXACT --reviewed-by human:ID --review-rationale TEXT [--review-dir PATH] [--oauth-connections ABSOLUTE_PATH] | --provider-api-copy-fingerprint HEX64 --receipt-dir PATH --oauth-connections ABSOLUTE_PATH --confirm-copy-phrase EXACT --reviewed-by human:ID --review-rationale TEXT [--review-dir PATH] | --adopt-existing-fingerprint HEX64 --receipt-dir PATH --confirm-copy-phrase EXACT --reviewed-by human:ID --review-rationale TEXT [--review-dir PATH] | --attest-receipt RECEIPT.json --evidence-dir ABSOLUTE_PATH [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --evict-receipt RECEIPT.json --confirm-receipt-id HEX64 --eviction-dir ABSOLUTE_PATH --eviction-approval-dir ABSOLUTE_PATH --journal-path ABSOLUTE_PATH --evidence-dir ABSOLUTE_PATH --reviewed-by human:ID --review-rationale TEXT [--oauth-connections ABSOLUTE_PATH [--provider-object-id GOOGLE_FILE_ID]] | --review-candidate-fingerprint HEX64 --review-fingerprint HEX64 --review-disposition approved|held --reviewed-by human:ID --review-rationale TEXT --review-dir PATH | --export-naruon-lineage RECEIPT.json [--naruon-sync-evidence EVIDENCE.json]]".into(),
                 )
             }
             flag => return Err(format!("알 수 없는 인자: {flag}")),
@@ -477,6 +488,22 @@ struct CopyOutput {
     adr_path: Option<String>,
     goal_path: Option<String>,
     projection_warnings: Vec<String>,
+}
+
+#[cfg(not(coverage))]
+#[derive(Debug, serde::Serialize)]
+struct ProviderApiCopyOutput {
+    action: &'static str,
+    goal_state: cloud_transfer::CloudOffloadGoalState,
+    receipt: CloudCopyReceipt,
+    receipt_path: String,
+    provider_object_id: String,
+    evidence_path: Option<String>,
+    adr_path: Option<String>,
+    goal_path: Option<String>,
+    projection_warnings: Vec<String>,
+    permit: Option<LocalEvictionPermit>,
+    blockers: Vec<String>,
 }
 
 #[cfg(not(coverage))]
@@ -839,7 +866,8 @@ fn audit_receipts(
 
 #[cfg(not(coverage))]
 fn validate_action_args(args: &Args) -> Result<(), String> {
-    let copy_action = args.copy_fingerprint.is_some();
+    let provider_api_copy_action = args.provider_api_copy_fingerprint.is_some();
+    let copy_action = args.copy_fingerprint.is_some() || provider_api_copy_action;
     let adoption_action = args.adopt_existing_fingerprint.is_some();
     let exact_duplicate_review =
         args.exact_duplicate_review_prefix.is_some() || args.exact_duplicate_kind.is_some();
@@ -855,6 +883,9 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
         return Err(
             "--all-readable-roots는 --cloud-root 또는 --provider와 함께 사용할 수 없음".into(),
         );
+    }
+    if args.copy_fingerprint.is_some() && provider_api_copy_action {
+        return Err("native copy와 provider API copy는 동시에 사용할 수 없음".into());
     }
     if copy_action && adoption_action {
         return Err("copy action과 existing-copy adoption action은 동시에 사용할 수 없음".into());
@@ -881,6 +912,12 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     }
     if (copy_action || adoption_action) != args.confirm_copy_phrase.is_some() {
         return Err("copy/adoption action에는 --confirm-copy-phrase가 반드시 필요함".into());
+    }
+    if provider_api_copy_action && args.oauth_connections.is_none() {
+        return Err("--provider-api-copy-fingerprint에는 --oauth-connections가 필요함".into());
+    }
+    if provider_api_copy_action && args.provider_object_id.is_some() {
+        return Err("provider API copy는 --provider-object-id를 직접 받을 수 없음".into());
     }
     let review_evidence_fields = [
         args.review_candidate_fingerprint.is_some(),
@@ -1079,6 +1116,10 @@ fn validate_action_args(args: &Args) -> Result<(), String> {
     }
     for (flag, fingerprint) in [
         ("--copy-fingerprint", args.copy_fingerprint.as_ref()),
+        (
+            "--provider-api-copy-fingerprint",
+            args.provider_api_copy_fingerprint.as_ref(),
+        ),
         (
             "--adopt-existing-fingerprint",
             args.adopt_existing_fingerprint.as_ref(),
@@ -2410,6 +2451,7 @@ fn collect_receipt_sync_evidence(
     oauth_connections: Option<&Path>,
     home: &Path,
     confirmed_at_ms: u64,
+    force_provider_api: bool,
 ) -> Result<disksage_lib::cloud_transfer::ProviderSyncEvidence, String> {
     let provider_object_id = provider_object_id
         .map(str::trim)
@@ -2423,49 +2465,54 @@ fn collect_receipt_sync_evidence(
         }
         CloudProvider::Onedrive | CloudProvider::GoogleDrive => {
             let fallback_requested = oauth_connections.is_some();
-            match provider_sync::collect_file_provider_sync_evidence(receipt, confirmed_at_ms) {
-                Ok(evidence) if evidence.sync_complete || !fallback_requested => Ok(evidence),
-                Err(error) if !fallback_requested => Err(error),
-                Ok(_) | Err(_) => {
-                    let connection_path = oauth_connections
-                        .ok_or_else(|| "oauth-connections-path-missing".to_string())?;
-                    let selected_root = receipt_cloud_root(receipt, home)?;
-                    let access_token =
-                        provider_oauth::refreshed_access_token(connection_path, &selected_root)?;
-                    match receipt.provider {
-                        CloudProvider::Onedrive => {
-                            if provider_object_id.is_some() {
-                                return Err("onedrive-provider-object-id-not-accepted".into());
-                            }
-                            let locator = provider_api_client::onedrive_path_locator(
-                                Path::new(&selected_root.path),
-                                Path::new(&receipt.destination),
-                            )?;
-                            provider_api_client::collect_authenticated_provider_api_evidence_from_source(
-                                receipt,
-                                &locator,
-                                access_token.as_str(),
-                                &FixedHostProviderMetadataClient::default(),
-                                confirmed_at_ms,
-                            )
-                        }
-                        CloudProvider::GoogleDrive => {
-                            let locator = provider_api_client::google_drive_path_locator(
-                                Path::new(&selected_root.path),
-                                Path::new(&receipt.destination),
-                                provider_object_id
-                                    .ok_or_else(|| "provider-object-id-missing".to_string())?,
-                            )?;
-                            provider_api_client::collect_authenticated_google_drive_path_evidence_from_source(
-                                receipt,
-                                &locator,
-                                access_token.as_str(),
-                                &FixedHostProviderMetadataClient::default(),
-                                confirmed_at_ms,
-                            )
-                        }
-                        CloudProvider::Icloud => unreachable!(),
+            if !force_provider_api {
+                match provider_sync::collect_file_provider_sync_evidence(receipt, confirmed_at_ms) {
+                    Ok(evidence) if evidence.sync_complete || !fallback_requested => {
+                        return Ok(evidence);
                     }
+                    Err(error) if !fallback_requested => return Err(error),
+                    Ok(_) | Err(_) => {}
+                }
+            }
+            {
+                let connection_path = oauth_connections
+                    .ok_or_else(|| "oauth-connections-path-missing".to_string())?;
+                let selected_root = receipt_cloud_root(receipt, home)?;
+                let access_token =
+                    provider_oauth::refreshed_access_token(connection_path, &selected_root)?;
+                match receipt.provider {
+                    CloudProvider::Onedrive => {
+                        if provider_object_id.is_some() {
+                            return Err("onedrive-provider-object-id-not-accepted".into());
+                        }
+                        let locator = provider_api_client::onedrive_path_locator(
+                            Path::new(&selected_root.path),
+                            Path::new(&receipt.destination),
+                        )?;
+                        provider_api_client::collect_authenticated_provider_api_evidence_from_source(
+                            receipt,
+                            &locator,
+                            access_token.as_str(),
+                            &FixedHostProviderMetadataClient::default(),
+                            confirmed_at_ms,
+                        )
+                    }
+                    CloudProvider::GoogleDrive => {
+                        let locator = provider_api_client::google_drive_path_locator(
+                            Path::new(&selected_root.path),
+                            Path::new(&receipt.destination),
+                            provider_object_id
+                                .ok_or_else(|| "provider-object-id-missing".to_string())?,
+                        )?;
+                        provider_api_client::collect_authenticated_google_drive_path_evidence_from_source(
+                                receipt,
+                                &locator,
+                                access_token.as_str(),
+                                &FixedHostProviderMetadataClient::default(),
+                                confirmed_at_ms,
+                            )
+                    }
+                    CloudProvider::Icloud => unreachable!(),
                 }
             }
         }
@@ -2480,6 +2527,25 @@ fn attest_receipt(
     oauth_connections: Option<&Path>,
     home: &Path,
 ) -> Result<AttestationOutput, String> {
+    attest_receipt_with_mode(
+        path,
+        evidence_dir,
+        provider_object_id,
+        oauth_connections,
+        home,
+        false,
+    )
+}
+
+#[cfg(not(coverage))]
+fn attest_receipt_with_mode(
+    path: &Path,
+    evidence_dir: &Path,
+    provider_object_id: Option<&str>,
+    oauth_connections: Option<&Path>,
+    home: &Path,
+    force_provider_api: bool,
+) -> Result<AttestationOutput, String> {
     let receipt = cloud_transfer::read_immutable_receipt(path)?;
     let confirmed_at_ms = cloud::system_now_ms();
     let evidence = collect_receipt_sync_evidence(
@@ -2488,6 +2554,7 @@ fn attest_receipt(
         oauth_connections,
         home,
         confirmed_at_ms,
+        force_provider_api,
     )?;
     let assessment = provider_sync::assess_provider_sync_timeliness(&receipt, &evidence)?;
     let (evidence_record, evidence_path) =
@@ -2530,7 +2597,11 @@ fn attest_receipt(
             source_blocker,
         );
     Ok(AttestationOutput {
-        action: "attest-provider-native",
+        action: if force_provider_api {
+            "attest-provider-api"
+        } else {
+            "attest-provider-native"
+        },
         goal_state,
         receipt_id: receipt.receipt_id,
         evidence,
@@ -2558,6 +2629,180 @@ fn stable_reconciliation_error(error: &str) -> String {
     } else {
         "provider-attestation-failed".into()
     }
+}
+
+#[cfg(not(coverage))]
+fn copy_candidate_via_provider_api(
+    candidate: &cloud::CloudCandidate,
+    selected: &CloudRoot,
+    report: &cloud::CloudPlanReport,
+    receipt_dir: &Path,
+    review_decision: Option<&CloudReviewDecision>,
+    exact_confirmation_phrase: &str,
+    approved_by: &str,
+    rationale: &str,
+    oauth_connections: &Path,
+    capacity_reserve_mib: u64,
+    home: &Path,
+) -> Result<ProviderApiCopyOutput, String> {
+    if selected.provider == CloudProvider::Icloud {
+        return Err("provider-api-icloud-unsupported".into());
+    }
+    let connection = provider_oauth::connection_for_root(
+        &provider_oauth::load_connections(oauth_connections)?,
+        selected,
+    )?;
+    if !provider_oauth::scope_allows_write(&connection) {
+        return Err("provider-oauth-write-scope-required".into());
+    }
+    let capacity_snapshot = report
+        .capacity
+        .as_ref()
+        .map(|assessment| assessment.snapshot.clone())
+        .ok_or_else(|| "cloud-capacity-verification-required".to_string())?;
+    let capacity = provider_capacity::assess_capacity(
+        capacity_snapshot,
+        candidate.bytes,
+        candidate.bytes,
+        capacity_reserve_mib.saturating_mul(1024 * 1024),
+    );
+    if capacity.can_fit != Some(true) {
+        return Err(if capacity.blockers.is_empty() {
+            "cloud-capacity-verification-required".into()
+        } else {
+            capacity.blockers.join(",")
+        });
+    }
+
+    let copy_approval = cloud_transfer::create_cloud_copy_approval(
+        candidate,
+        selected,
+        cloud_transfer::CloudCopyApprovalAction::CopyOnly,
+        cloud::system_now_ms(),
+        approved_by,
+        rationale,
+        exact_confirmation_phrase,
+    )?;
+    let copied_at_ms = cloud::system_now_ms();
+    let (receipt, source_hashes) = cloud_transfer::prepare_provider_api_source_receipt(
+        candidate,
+        selected,
+        review_decision,
+        &copy_approval,
+        copied_at_ms,
+    )?;
+    let access_token = provider_oauth::refreshed_access_token(oauth_connections, selected)?;
+    let upload = provider_api_write::upload_file(
+        selected.provider,
+        Path::new(&selected.path),
+        Path::new(&candidate.dst),
+        Path::new(&candidate.src),
+        candidate.bytes,
+        access_token.as_str(),
+    )?;
+    if let Err(error) =
+        cloud_transfer::verify_provider_api_source_unchanged(candidate, &source_hashes)
+    {
+        let cleanup = provider_api_write::delete_uploaded_object(
+            selected.provider,
+            &upload.object_id,
+            access_token.as_str(),
+        );
+        return Err(match cleanup {
+            Ok(()) => error,
+            Err(cleanup_error) => {
+                format!("{error},provider-api-upload-cleanup-failed:{cleanup_error}")
+            }
+        });
+    }
+
+    let receipt_path = match cloud_transfer::write_provider_api_receipt(&receipt, receipt_dir) {
+        Ok(path) => path,
+        Err(error) => {
+            let cleanup = provider_api_write::delete_uploaded_object(
+                selected.provider,
+                &upload.object_id,
+                access_token.as_str(),
+            );
+            return Err(match cleanup {
+                Ok(()) => error,
+                Err(cleanup_error) => {
+                    format!("{error},provider-api-upload-cleanup-failed:{cleanup_error}")
+                }
+            });
+        }
+    };
+
+    let evidence_dir = receipt_dir
+        .parent()
+        .unwrap_or(receipt_dir)
+        .join("cloud-provider-evidence");
+    let (adr_dir, goal_dir) = cloud_projection_dirs(receipt_dir);
+    let updated_at_ms = cloud::system_now_ms();
+    let adr = cloud_adr::initial_adr_snapshot(&receipt, updated_at_ms);
+    let goal = cloud_adr::initial_goal_snapshot(&receipt, updated_at_ms);
+    let (initial_adr_path, initial_goal_path, mut projection_warnings) =
+        cloud_adr::write_projection_pair(&adr_dir, &adr, &goal_dir, &goal);
+    let mut adr_path = initial_adr_path.map(|path| path.to_string_lossy().into_owned());
+    let mut goal_path = initial_goal_path.map(|path| path.to_string_lossy().into_owned());
+    let receipt_id = receipt.receipt_id.clone();
+    let mut goal_state = cloud_transfer::CloudOffloadGoalState::CopyVerified;
+    let mut evidence_path = None;
+    let mut permit = None;
+    let mut blockers = Vec::new();
+    let provider_object_id = upload.object_id;
+    let attest_object_id =
+        (selected.provider == CloudProvider::GoogleDrive).then(|| provider_object_id.clone());
+    match attest_receipt_with_mode(
+        &receipt_path,
+        &evidence_dir,
+        attest_object_id.as_deref(),
+        Some(oauth_connections),
+        home,
+        true,
+    ) {
+        Ok(attestation) => {
+            goal_state = attestation.goal_state;
+            evidence_path = Some(attestation.evidence_path);
+            permit = attestation.permit;
+            blockers = attestation.blockers;
+            adr_path = attestation.adr_path;
+            goal_path = attestation.goal_path;
+            projection_warnings.extend(attestation.projection_warnings);
+        }
+        Err(error) => projection_warnings.push(format!(
+            "provider-attestation-incomplete:{}",
+            stable_reconciliation_error(&error)
+        )),
+    }
+
+    Ok(ProviderApiCopyOutput {
+        action: "copy-via-provider-api",
+        goal_state,
+        receipt,
+        receipt_path: receipt_path.to_string_lossy().into_owned(),
+        provider_object_id,
+        evidence_path,
+        adr_path: adr_path.or_else(|| {
+            Some(
+                adr_dir
+                    .join(format!("{}-latest.json", receipt_id))
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+        }),
+        goal_path: goal_path.or_else(|| {
+            Some(
+                goal_dir
+                    .join(format!("{}-latest.json", receipt_id))
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+        }),
+        projection_warnings,
+        permit,
+        blockers,
+    })
 }
 
 /// Re-attest every persisted receipt and refresh only local provider evidence and ADR/Goal
@@ -2793,6 +3038,7 @@ fn evict_native_receipt(
         oauth_connections,
         home,
         confirmed_at_ms,
+        false,
     )?;
     let (evidence_record, evidence_path) =
         provider_evidence::write_immutable_sync_evidence(evidence_dir, &evidence)?;
@@ -3090,7 +3336,9 @@ fn run() -> Result<(), String> {
         .into_iter()
         .next()
         .ok_or_else(|| "선택된 클라우드 루트가 없음".to_string())?;
-    let capacity_required_for_plan = args.verify_capacity || args.copy_fingerprint.is_some();
+    let capacity_required_for_plan = args.verify_capacity
+        || args.copy_fingerprint.is_some()
+        || args.provider_api_copy_fingerprint.is_some();
     let (selected, report) = plan_with_optional_capacity(
         &snapshot,
         &selected,
@@ -3206,6 +3454,59 @@ fn run() -> Result<(), String> {
                 decision_path: decision_path.to_string_lossy().into_owned(),
             })
             .map_err(|error| error.to_string())?
+        );
+        return Ok(());
+    }
+    if let Some(candidate_fingerprint) = &args.provider_api_copy_fingerprint {
+        let matches: Vec<_> = report
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.metadata_fingerprint == *candidate_fingerprint)
+            .collect();
+        let candidate = match matches.as_slice() {
+            [only] => *only,
+            [] => return Err("현재 fresh plan에 fingerprint가 일치하는 후보가 없음".into()),
+            _ => return Err("현재 fresh plan에서 fingerprint가 중복됨".into()),
+        };
+        let receipt_dir = args
+            .receipt_dir
+            .as_deref()
+            .ok_or_else(|| "--receipt-dir이 필요함".to_string())?;
+        let review_decision = if candidate.requires_review {
+            args.review_dir
+                .as_deref()
+                .map(cloud_review::load_latest_decisions)
+                .transpose()?
+                .unwrap_or_default()
+                .into_iter()
+                .find(|decision| decision.candidate_fingerprint == candidate.metadata_fingerprint)
+        } else {
+            None
+        };
+        let output = copy_candidate_via_provider_api(
+            candidate,
+            &selected,
+            &report,
+            receipt_dir,
+            review_decision.as_ref(),
+            args.confirm_copy_phrase
+                .as_deref()
+                .ok_or_else(|| "--confirm-copy-phrase가 필요함".to_string())?,
+            args.reviewed_by
+                .as_deref()
+                .ok_or_else(|| "--reviewed-by가 필요함".to_string())?,
+            args.review_rationale
+                .as_deref()
+                .ok_or_else(|| "--review-rationale가 필요함".to_string())?,
+            args.oauth_connections
+                .as_deref()
+                .ok_or_else(|| "--oauth-connections가 필요함".to_string())?,
+            args.capacity_reserve_mib,
+            &home,
+        )?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&output).map_err(|error| error.to_string())?
         );
         return Ok(());
     }
@@ -3434,6 +3735,7 @@ mod tests {
         assert_eq!(defaults.root, PathBuf::from("/home/test"));
         assert_eq!(defaults.min_size_mib, 256);
         assert!(defaults.copy_fingerprint.is_none());
+        assert!(defaults.provider_api_copy_fingerprint.is_none());
         assert!(defaults.adopt_existing_fingerprint.is_none());
         assert!(defaults.provider_object_id.is_none());
         assert!(defaults.oauth_connections.is_none());
@@ -3630,9 +3932,7 @@ mod tests {
             (receipt_dir.read_dir().unwrap().count() - MAX_RECONCILIATION_ATTESTATIONS) as u64
         );
         assert!(report.incomplete_reconciliation);
-        assert!(report
-            .notices
-            .contains(&"reconciliation-entry-limit"));
+        assert!(report.notices.contains(&"reconciliation-entry-limit"));
     }
 
     #[test]
@@ -4782,6 +5082,7 @@ mod tests {
         let help = parse_args(&["--help".into()], Path::new("/h")).unwrap_err();
         assert!(help.contains("--reviewed-by human:ID"));
         assert!(help.contains("--confirm-copy-phrase EXACT"));
+        assert!(help.contains("--provider-api-copy-fingerprint HEX64"));
         assert!(help.contains("--export-naruon-copy-readiness --verify-capacity"));
         assert!(help.contains("--naruon-copy-readiness-output ABSOLUTE_NEW_FILE.json"));
         assert!(help.contains("--private-candidate-inspection-output ABSOLUTE_NEW_FILE.json"));
@@ -5201,6 +5502,28 @@ mod tests {
         )
         .unwrap();
         assert!(validate_action_args(&onedrive_path_fallback).is_ok());
+
+        let mut provider_api_copy = parse_args(
+            &[
+                "--provider-api-copy-fingerprint".into(),
+                "f".repeat(64),
+                "--receipt-dir".into(),
+                "/receipts".into(),
+                "--confirm-copy-phrase".into(),
+                "exact provider api copy phrase".into(),
+                "--reviewed-by".into(),
+                "human:local:test".into(),
+                "--review-rationale".into(),
+                "provider API path reviewed".into(),
+            ],
+            Path::new("/h"),
+        )
+        .unwrap();
+        assert!(validate_action_args(&provider_api_copy).is_err());
+        provider_api_copy.oauth_connections = Some(PathBuf::from("/connections.json"));
+        assert!(validate_action_args(&provider_api_copy).is_ok());
+        provider_api_copy.provider_object_id = Some("unexpected-id".into());
+        assert!(validate_action_args(&provider_api_copy).is_err());
 
         let mut incomplete = parse_args(
             &[
