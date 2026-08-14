@@ -14,8 +14,10 @@ describe("Duplicates privacy-safe failure feedback", () => {
     const source = readSource("src/lib/Duplicates.svelte");
 
     expect(source).not.toContain("String(e)");
+    expect(source).not.toContain("{r.error}");
     expect(source).toContain("중복 파일 검색에 실패했습니다.");
     expect(source).toContain("선택한 중복 파일을 휴지통으로 보내지 못했습니다.");
+    expect(source).toContain("일부 파일을 휴지통으로 보내지 못했습니다.");
   });
 
   it("announces operation failures without changing focus", () => {
