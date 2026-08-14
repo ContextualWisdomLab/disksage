@@ -2,7 +2,7 @@
 
 use std::process::Command;
 
-fn assert_help_success(binary: &str, flag: &str, usage_marker: &str) {
+fn assert_help_success(binary: &str, flag: &str, expected_usage: &str) {
     let output = Command::new(binary)
         .env_remove("HOME")
         .arg(flag)
@@ -20,9 +20,10 @@ fn assert_help_success(binary: &str, flag: &str, usage_marker: &str) {
         "successful help must not be projected through stderr"
     );
     let stdout = String::from_utf8(output.stdout).expect("help output must be valid UTF-8");
-    assert!(
-        stdout.contains(usage_marker),
-        "help output must contain the stable usage synopsis"
+    assert_eq!(
+        stdout,
+        format!("{expected_usage}\n"),
+        "help output must equal the stable usage synopsis"
     );
 }
 
@@ -75,8 +76,9 @@ fn assert_help_does_not_hide_invalid_argument(binary: &str) {
 #[test]
 fn maven_cache_audit_help_is_successful_and_invalid_arguments_are_bounded() {
     let binary = env!("CARGO_BIN_EXE_disksage-maven-cache-audit");
-    assert_help_success(binary, "--help", "usage: disksage-maven-cache-audit");
-    assert_help_success(binary, "-h", "usage: disksage-maven-cache-audit");
+    let expected_usage = "usage: disksage-maven-cache-audit --repository-root ABSOLUTE_PATH [--output NEW_ABSOLUTE_JSON_PATH] [--max-entries N] [--max-candidates N] [--max-issues N]";
+    assert_help_success(binary, "--help", expected_usage);
+    assert_help_success(binary, "-h", expected_usage);
     assert_invalid_argument_is_bounded(binary);
     assert_help_does_not_hide_invalid_argument(binary);
 }
@@ -84,8 +86,9 @@ fn maven_cache_audit_help_is_successful_and_invalid_arguments_are_bounded() {
 #[test]
 fn maven_cache_prune_help_is_successful_and_invalid_arguments_are_bounded() {
     let binary = env!("CARGO_BIN_EXE_disksage-maven-cache-prune");
-    assert_help_success(binary, "--help", "usage: disksage-maven-cache-prune");
-    assert_help_success(binary, "-h", "usage: disksage-maven-cache-prune");
+    let expected_usage = "usage: disksage-maven-cache-prune --repository-root ABSOLUTE_PATH --expected-candidate-set-fingerprint HEX [--apply] [--max-entries N] [--output NEW_ABSOLUTE_JSON_PATH]";
+    assert_help_success(binary, "--help", expected_usage);
+    assert_help_success(binary, "-h", expected_usage);
     assert_invalid_argument_is_bounded(binary);
     assert_help_does_not_hide_invalid_argument(binary);
 }
