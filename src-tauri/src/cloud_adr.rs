@@ -240,6 +240,10 @@ fn goal_state_rank(state: CloudOffloadGoalState) -> u8 {
     }
 }
 
+fn valid_receipt_id(receipt_id: &str) -> bool {
+    receipt_id.len() == 64 && receipt_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 fn projection_state(encoded: &[u8], kind: &str) -> Result<(CloudOffloadGoalState, u64), String> {
     match kind {
         "adr" => serde_json::from_slice::<CloudOffloadAdrSnapshot>(encoded)
@@ -269,9 +273,9 @@ impl Drop for InterprocessProjectionLock {
 
 fn acquire_interprocess_projection_lock(
     directory: &Path,
-    receipt_id: &str,
+    lock_stem: &str,
 ) -> Result<InterprocessProjectionLock, String> {
-    let lock_path = directory.join(format!(".{receipt_id}.lock"));
+    let lock_path = directory.join(format!(".{lock_stem}.lock"));
     if let Ok(metadata) = std::fs::symlink_metadata(&lock_path) {
         if metadata.file_type().is_symlink() || !metadata.is_file() {
             return Err("cloud-projection-lock-unsafe".into());
@@ -324,6 +328,14 @@ fn acquire_interprocess_projection_lock(
     }
 }
 
+fn acquire_projection_pair_lock(
+    adr_dir: &Path,
+    receipt_id: &str,
+) -> Result<InterprocessProjectionLock, String> {
+    secure_directory(adr_dir)?;
+    acquire_interprocess_projection_lock(adr_dir, &format!("{receipt_id}.pair"))
+}
+
 fn write_latest_json(
     directory: &Path,
     receipt_id: &str,
@@ -331,7 +343,7 @@ fn write_latest_json(
     encoded: &[u8],
     kind: &str,
 ) -> Result<PathBuf, String> {
-    if receipt_id.len() != 64 || !receipt_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    if !valid_receipt_id(receipt_id) {
         return Err("cloud-snapshot-receipt-id-invalid".into());
     }
     secure_directory(directory)?;
@@ -422,6 +434,30 @@ pub fn write_projection_pair(
     goal_dir: &Path,
     goal: &CloudOffloadGoalSnapshot,
 ) -> (Option<PathBuf>, Option<PathBuf>, Vec<String>) {
+    if adr.receipt_id == goal.receipt_id && valid_receipt_id(&adr.receipt_id) {
+        let pair_lock = match acquire_projection_pair_lock(adr_dir, &adr.receipt_id) {
+            Ok(lock) => lock,
+            Err(error) => {
+                return (
+                    None,
+                    None,
+                    vec![format!("projection-pair-lock-failed:{error}")],
+                )
+            }
+        };
+        let result = write_projection_pair_unlocked(adr_dir, adr, goal_dir, goal);
+        drop(pair_lock);
+        return result;
+    }
+    write_projection_pair_unlocked(adr_dir, adr, goal_dir, goal)
+}
+
+fn write_projection_pair_unlocked(
+    adr_dir: &Path,
+    adr: &CloudOffloadAdrSnapshot,
+    goal_dir: &Path,
+    goal: &CloudOffloadGoalSnapshot,
+) -> (Option<PathBuf>, Option<PathBuf>, Vec<String>) {
     let mut warnings = Vec::new();
     let adr_path = match write_latest_snapshot(adr_dir, adr) {
         Ok(path) => Some(path),
@@ -486,6 +522,27 @@ pub fn write_projection_pair_with_source_blocker_outcome(
         };
     };
 
+    if adr.receipt_id != goal.receipt_id || !valid_receipt_id(&goal.receipt_id) {
+        let (adr_path, goal_path, warnings) = write_projection_pair(adr_dir, adr, goal_dir, goal);
+        return ProjectionWriteOutcome {
+            wrote: adr_path.is_some() || goal_path.is_some(),
+            adr_path,
+            goal_path,
+            warnings,
+        };
+    }
+    let pair_lock = match acquire_projection_pair_lock(adr_dir, &goal.receipt_id) {
+        Ok(lock) => lock,
+        Err(error) => {
+            return ProjectionWriteOutcome {
+                adr_path: None,
+                goal_path: None,
+                warnings: vec![format!("projection-pair-lock-failed:{error}")],
+                wrote: false,
+            }
+        }
+    };
+
     let mut adr = adr.clone();
     let mut goal = goal.clone();
     if let (Ok(Some(_previous_adr)), Ok(Some(previous_goal))) = (
@@ -542,7 +599,9 @@ pub fn write_projection_pair_with_source_blocker_outcome(
         adr.consequences
             .push("eviction-blocked-until-source-state".into());
     }
-    let (adr_path, goal_path, warnings) = write_projection_pair(adr_dir, &adr, goal_dir, &goal);
+    let (adr_path, goal_path, warnings) =
+        write_projection_pair_unlocked(adr_dir, &adr, goal_dir, &goal);
+    drop(pair_lock);
     ProjectionWriteOutcome {
         wrote: adr_path.is_some() || goal_path.is_some(),
         adr_path,
@@ -625,6 +684,9 @@ fn read_latest_projection<T: serde::de::DeserializeOwned>(
     receipt_id: &str,
     kind: &str,
 ) -> Result<Option<T>, String> {
+    if !valid_receipt_id(receipt_id) {
+        return Err("cloud-snapshot-receipt-id-invalid".into());
+    }
     let metadata = match std::fs::symlink_metadata(directory) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -669,7 +731,7 @@ pub fn read_projection_state(
     adr_dir: &Path,
     goal_dir: &Path,
 ) -> Result<Option<CloudProjectionState>, String> {
-    if receipt_id.len() != 64 || !receipt_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    if !valid_receipt_id(receipt_id) {
         return Err("cloud-snapshot-receipt-id-invalid".into());
     }
     let adr = read_latest_projection::<CloudOffloadAdrSnapshot>(adr_dir, receipt_id, "adr")?;
@@ -816,6 +878,25 @@ mod tests {
             .path()
             .join(format!(".{}.lock", snapshot.receipt_id));
         let metadata = std::fs::symlink_metadata(lock_path).unwrap();
+        assert!(metadata.is_file());
+    }
+
+    #[test]
+    fn projection_pair_writer_creates_receipt_scoped_pair_lock() {
+        let temporary = tempfile::tempdir().unwrap();
+        let adr_dir = temporary.path().join("adr");
+        let goal_dir = temporary.path().join("goals");
+        let receipt = receipt();
+        write_projection_pair(
+            &adr_dir,
+            &initial_adr_snapshot(&receipt, 5),
+            &goal_dir,
+            &initial_goal_snapshot(&receipt, 5),
+        );
+        let metadata = std::fs::symlink_metadata(
+            adr_dir.join(format!(".{}.pair.lock", receipt.receipt_id)),
+        )
+        .unwrap();
         assert!(metadata.is_file());
     }
 
