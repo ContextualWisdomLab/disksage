@@ -106,7 +106,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
             }
             "--receipt-dir" => {
                 if receipt_dir.is_some() {
-                    return Err("--receipt-dir은 한 번만 지정할 수 있음".into());
+                    return Err("--receipt-dir는 한 번만 지정할 수 있음".into());
                 }
                 receipt_dir = Some(PathBuf::from(value(&mut index, "--receipt-dir")?));
             }
@@ -163,7 +163,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 execute = true;
             }
             "--help" | "-h" => return Err(usage()),
-            flag => return Err(format!("알 수 없는 인자: {flag}")),
+            _unknown => return Err("incomplete-download-materialize-unknown-argument".into()),
         }
         index += 1;
     }
@@ -298,7 +298,12 @@ fn verify_discovered_cloud_root(
 
 #[cfg(not(coverage))]
 fn run() -> Result<(), String> {
-    let args = parse_args(&std::env::args().skip(1).collect::<Vec<_>>())?;
+    let raw = std::env::args().skip(1).collect::<Vec<_>>();
+    if raw.len() == 1 && matches!(raw[0].as_str(), "--help" | "-h") {
+        println!("{}", usage());
+        return Ok(());
+    }
+    let args = parse_args(&raw)?;
     let plan: IncompleteDownloadDestinationPlan = read_bounded_json(
         &args.destination_plan,
         MAX_PRIVATE_PLAN_BYTES,
@@ -313,17 +318,16 @@ fn run() -> Result<(), String> {
     verify_discovered_cloud_root(&home, &plan)?;
 
     let capacity_observed_at_ms = system_now_ms();
-    let capacity =
-        if args.live_icloud_capacity {
-            if plan.provider != CloudProvider::Icloud {
-                return Err("live-icloud-capacity-requires-icloud-plan".into());
-            }
-            collect_icloud_native_capacity(capacity_observed_at_ms)?
-        } else {
-            read_capacity_snapshot(args.capacity_snapshot.as_deref().ok_or_else(|| {
-                "materialization-execution-capacity-snapshot-missing".to_string()
-            })?)?
-        };
+    let capacity = if args.live_icloud_capacity {
+        if plan.provider != CloudProvider::Icloud {
+            return Err("live-icloud-capacity-requires-icloud-plan".into());
+        }
+        collect_icloud_native_capacity(capacity_observed_at_ms)?
+    } else {
+        read_capacity_snapshot(args.capacity_snapshot.as_deref().ok_or_else(|| {
+            "materialization-execution-capacity-snapshot-missing".to_string()
+        })?)?
+    };
 
     let audit = collect_incomplete_download_audit(
         &args.source_root,
