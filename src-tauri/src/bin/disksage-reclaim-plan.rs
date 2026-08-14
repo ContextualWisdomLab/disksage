@@ -68,7 +68,18 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
             Some(value) if value.starts_with('-') => {
                 return Err(format!("unknown option\n{USAGE}"));
             }
-            _ => paths.push(PathBuf::from(arg)),
+            None => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::ffi::OsStrExt;
+
+                    if arg.as_os_str().as_bytes().starts_with(b"-") {
+                        return Err(format!("unknown option\n{USAGE}"));
+                    }
+                }
+                paths.push(PathBuf::from(arg));
+            }
+            Some(_) => paths.push(PathBuf::from(arg)),
         }
     }
 
