@@ -19,11 +19,17 @@ fn next_utf8_argument(
 }
 
 fn run() -> Result<(), String> {
+    let raw_args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    if raw_args.len() == 1 && matches!(raw_args[0].to_str(), Some("-h") | Some("--help")) {
+        println!("{USAGE}");
+        return Ok(());
+    }
+
     let mut machine = DEFAULT_PODMAN_MACHINE.to_string();
     let mut podman_bin = PathBuf::from("podman");
     let mut timeout = DEFAULT_PROBE_TIMEOUT;
     let mut pretty = false;
-    let mut args = std::env::args_os().skip(1);
+    let mut args = raw_args.into_iter();
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--machine") => {
@@ -53,10 +59,7 @@ fn run() -> Result<(), String> {
                 timeout = Duration::from_secs(seconds);
             }
             Some("--pretty") => pretty = true,
-            Some("-h" | "--help") => {
-                println!("{USAGE}");
-                return Ok(());
-            }
+            Some("-h" | "--help") => return Err(format!("help must be used alone\n{USAGE}")),
             Some(_) => return Err(format!("unknown option\n{USAGE}")),
             None => return Err(format!("unknown option (non-UTF-8)\n{USAGE}")),
         }
