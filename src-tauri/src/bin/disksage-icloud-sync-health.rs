@@ -84,8 +84,19 @@ fn write_create_new(path: &Path, encoded: &[u8]) -> Result<(), String> {
         .map_err(|_| "icloud-sync-health-output-write-failed".to_string())
 }
 
+fn command_line_args() -> Result<Vec<String>, String> {
+    std::env::args_os()
+        .skip(1)
+        .map(|argument| {
+            argument
+                .into_string()
+                .map_err(|_| "icloud-sync-health-invalid-utf8-argument".to_string())
+        })
+        .collect()
+}
+
 fn run() -> Result<(), String> {
-    let cli_args = std::env::args().skip(1).collect::<Vec<_>>();
+    let cli_args = command_line_args()?;
     if matches!(cli_args.as_slice(), [flag] if flag == "--help" || flag == "-h") {
         println!(
             "usage: disksage-icloud-sync-health [--db-dir ABSOLUTE_CLOUDDOCS_DB_DIR] [--output ABSOLUTE_NEW_FILE.json]"
@@ -112,8 +123,13 @@ fn run() -> Result<(), String> {
 
 fn main() {
     if let Err(error) = run() {
+        let exit_code = if error == "icloud-sync-health-invalid-utf8-argument" {
+            2
+        } else {
+            1
+        };
         eprintln!("DiskSage iCloud sync health: {error}");
-        std::process::exit(1);
+        std::process::exit(exit_code);
     }
 }
 
