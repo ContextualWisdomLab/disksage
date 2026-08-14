@@ -4,6 +4,7 @@ use std::process::{Command, Output};
 
 const EXPECTED_USAGE: &str = "usage: disksage-duplicate-audit --root ABSOLUTE_PATH [--min-bytes POSITIVE_INTEGER] [--max-entries 1..=1000000] [--private-output ABSOLUTE_NEW_FILE.json]";
 
+/// Require one invalid process result to stay visible without reflecting opaque input.
 fn assert_invalid_argument_is_bounded(output: Output) {
     assert!(
         !output.status.success(),
@@ -21,6 +22,7 @@ fn assert_invalid_argument_is_bounded(output: Output) {
     );
 }
 
+/// Prove both help flags return the exact stable usage line and empty stderr.
 #[test]
 fn duplicate_audit_help_exits_successfully_without_error_output() {
     for flag in ["--help", "-h"] {
@@ -48,6 +50,7 @@ fn duplicate_audit_help_exits_successfully_without_error_output() {
     }
 }
 
+/// Prove unknown-alone and mixed help/unknown requests remain bounded failures.
 #[test]
 fn duplicate_audit_unknown_and_mixed_arguments_are_bounded() {
     for arguments in [
@@ -62,6 +65,7 @@ fn duplicate_audit_unknown_and_mixed_arguments_are_bounded() {
     }
 }
 
+/// Prove hostile non-UTF-8 arguments fail through the stable diagnostic on Unix.
 #[cfg(unix)]
 #[test]
 fn duplicate_audit_non_utf8_argument_fails_without_panic() {
