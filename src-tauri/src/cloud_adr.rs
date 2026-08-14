@@ -512,7 +512,7 @@ pub fn write_projection_pair_with_source_blocker_outcome(
     goal: &CloudOffloadGoalSnapshot,
     source_blocker: Option<&str>,
 ) -> ProjectionWriteOutcome {
-    write_projection_pair_with_blockers_outcome(
+    write_projection_pair_with_state_blockers_outcome(
         adr_dir,
         adr,
         goal_dir,
@@ -530,7 +530,7 @@ pub fn write_projection_pair_with_provider_blocker_outcome(
     goal: &CloudOffloadGoalSnapshot,
     provider_blocker: &str,
 ) -> ProjectionWriteOutcome {
-    write_projection_pair_with_blockers_outcome(
+    write_projection_pair_with_state_blockers_outcome(
         adr_dir,
         adr,
         goal_dir,
@@ -540,7 +540,8 @@ pub fn write_projection_pair_with_provider_blocker_outcome(
     )
 }
 
-fn write_projection_pair_with_blockers_outcome(
+/// Persist both source and provider blockers without rewinding a prior goal state.
+pub fn write_projection_pair_with_state_blockers_outcome(
     adr_dir: &Path,
     adr: &CloudOffloadAdrSnapshot,
     goal_dir: &Path,
@@ -763,7 +764,7 @@ pub fn ensure_initial_projection_pair_with_provider_state_outcome(
         adr.consequences
             .push(format!("source-state-blocked:{blocker}"));
     }
-    let mut outcome = write_projection_pair_with_blockers_outcome(
+    let mut outcome = write_projection_pair_with_state_blockers_outcome(
         adr_dir,
         &adr,
         goal_dir,
@@ -1198,6 +1199,53 @@ mod tests {
         assert!(persisted_adr
             .consequences
             .contains(&"provider-state-blocked:provider-oauth-connection-missing".into()));
+        assert!(persisted_adr
+            .consequences
+            .contains(&"eviction-blocked-until-provider-proof".into()));
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn source_and_provider_blockers_are_both_projected() {
+        let temporary = tempfile::tempdir().unwrap();
+        let adr_dir = temporary.path().join("adr");
+        let goal_dir = temporary.path().join("goals");
+        let receipt = receipt();
+        let record = pending_record();
+        let adr = snapshot_from_evidence(&record, CloudOffloadGoalState::PendingProviderSync, 10);
+        let goal = goal_snapshot_from_evidence(
+            &receipt,
+            &record,
+            CloudOffloadGoalState::PendingProviderSync,
+            10,
+        );
+
+        let outcome = write_projection_pair_with_state_blockers_outcome(
+            &adr_dir,
+            &adr,
+            &goal_dir,
+            &goal,
+            Some("source-not-present"),
+            Some("provider-sync-incomplete"),
+        );
+        assert!(outcome.warnings.is_empty());
+
+        let persisted_goal: CloudOffloadGoalSnapshot = serde_json::from_slice(
+            &std::fs::read(goal_dir.join(format!("{}-latest.json", receipt.receipt_id))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(persisted_goal.status, "blocked");
+        assert!(!persisted_goal.completion_gates["source-present"]);
+        assert!(!persisted_goal.completion_gates["provider-sync-state-complete"]);
+        assert!(!persisted_goal.completion_gates["explicit-eviction-permit"]);
+
+        let persisted_adr: CloudOffloadAdrSnapshot = serde_json::from_slice(
+            &std::fs::read(adr_dir.join(format!("{}-latest.json", receipt.receipt_id))).unwrap(),
+        )
+        .unwrap();
+        assert!(persisted_adr
+            .consequences
+            .contains(&"eviction-blocked-until-source-state".into()));
         assert!(persisted_adr
             .consequences
             .contains(&"eviction-blocked-until-provider-proof".into()));

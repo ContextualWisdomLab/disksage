@@ -513,6 +513,7 @@ struct ProviderApiCopyOutput {
 struct AttestationOutput {
     action: &'static str,
     goal_state: cloud_transfer::CloudOffloadGoalState,
+    goal_status: Option<String>,
     receipt_id: String,
     evidence: disksage_lib::cloud_transfer::ProviderSyncEvidence,
     assessment: provider_sync::ProviderSyncTimelinessAssessment,
@@ -2590,14 +2591,18 @@ fn attest_receipt_with_mode(
         adr.consequences
             .push(format!("source-state-blocked:{blocker}"));
     }
-    let (adr_path, goal_path, projection_warnings) =
-        cloud_adr::write_projection_pair_with_source_blocker(
-            &adr_dir,
-            &adr,
-            &goal_dir,
-            &goal,
-            source_blocker,
-        );
+    let provider_blocker = blockers
+        .iter()
+        .find(|existing| Some(existing.as_str()) != source_blocker)
+        .map(String::as_str);
+    let projection = cloud_adr::write_projection_pair_with_state_blockers_outcome(
+        &adr_dir,
+        &adr,
+        &goal_dir,
+        &goal,
+        source_blocker,
+        provider_blocker,
+    );
     Ok(AttestationOutput {
         action: if force_provider_api {
             "attest-provider-api"
@@ -2605,14 +2610,21 @@ fn attest_receipt_with_mode(
             "attest-provider-native"
         },
         goal_state,
+        goal_status: cloud_adr::read_goal_status(&goal_dir, &receipt.receipt_id)
+            .ok()
+            .flatten(),
         receipt_id: receipt.receipt_id,
         evidence,
         assessment,
         evidence_record,
         evidence_path: evidence_path.to_string_lossy().into_owned(),
-        adr_path: adr_path.map(|path| path.to_string_lossy().into_owned()),
-        goal_path: goal_path.map(|path| path.to_string_lossy().into_owned()),
-        projection_warnings,
+        adr_path: projection
+            .adr_path
+            .map(|path| path.to_string_lossy().into_owned()),
+        goal_path: projection
+            .goal_path
+            .map(|path| path.to_string_lossy().into_owned()),
+        projection_warnings: projection.warnings,
         permit,
         blockers,
     })

@@ -942,7 +942,8 @@
         </button>
         {#if attestation}
           <p class:warning={attestation.goal_state !== "eviction-ready"} class:safe={attestation.goal_state === "eviction-ready"}>
-            Goal: {attestation.goal_state} · {syncStateLabel(attestation.evidence.sync_state)}
+            Goal: {attestation.goal_state} · 상태 {attestation.goal_status ?? "미확인"} ·
+            {syncStateLabel(attestation.evidence.sync_state)}
           </p>
           {#if attestation.assessment.state === "overdue"}
             <p class="warning">

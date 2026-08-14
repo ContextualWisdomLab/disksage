@@ -849,6 +849,7 @@ export interface LocalEvictionPermit {
 
 export interface CloudAttestationOutput {
   goal_state: CloudOffloadGoalState;
+  goal_status: "active" | "blocked" | "completed" | null;
   evidence: ProviderSyncEvidence;
   assessment: ProviderSyncTimelinessAssessment;
   evidence_record: ProviderSyncEvidenceRecord;
