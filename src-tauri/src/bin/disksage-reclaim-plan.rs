@@ -180,6 +180,19 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn non_utf8_option_shaped_argument_is_rejected_without_becoming_a_path() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let option = OsString::from_vec(vec![
+            b'-', b'-', b'o', b'p', b'a', b'q', b'u', b'e', 0x80,
+        ]);
+        let error = parse_args([option]).unwrap_err();
+
+        assert!(error.starts_with("unknown option"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn non_utf8_operation_value_is_rejected_without_panicking() {
         use std::os::unix::ffi::OsStringExt;
 
