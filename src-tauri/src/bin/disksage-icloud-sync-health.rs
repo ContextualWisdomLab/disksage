@@ -45,7 +45,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
                     "usage: disksage-icloud-sync-health [--db-dir ABSOLUTE_CLOUDDOCS_DB_DIR] [--output ABSOLUTE_NEW_FILE.json]".into(),
                 );
             }
-            flag => return Err(format!("unknown argument: {flag}")),
+            _unknown => return Err("icloud-sync-health-unknown-argument".into()),
         }
         index += 1;
     }
