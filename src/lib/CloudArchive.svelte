@@ -56,6 +56,9 @@
   let reconciling = $state(false);
   let reconciliation: api.CloudReceiptReconciliationOutput | null = $state(null);
   let reconciliationError = $state("");
+  let icloudHealth: api.IcloudSyncHealthReport | null = $state(null);
+  let icloudHealthError = $state("");
+  let checkingIcloudHealth = $state(false);
   let evicting = $state(false);
   let evictionConfirmation = $state("");
   let evictionRationale = $state("");
@@ -89,6 +92,7 @@
   onMount(() => {
     const reconciliationTimer = setInterval(() => {
       if (!reconciling) void reconcileCloudReceipts();
+      if (!checkingIcloudHealth) void refreshIcloudHealth();
     }, RECONCILIATION_INTERVAL_MS);
     void (async () => {
       try {
@@ -98,7 +102,7 @@
         connections = await api.listCloudProviderConnections();
         reviewDecisions = await api.listCloudReviewDecisions();
         selectedRoot = roots.find((root) => root.readable)?.path ?? "";
-        await reconcileCloudReceipts();
+        await Promise.all([reconcileCloudReceipts(), refreshIcloudHealth()]);
       } catch (e) {
         loadError = String(e);
       }
@@ -335,6 +339,18 @@
     }
   }
 
+  async function refreshIcloudHealth() {
+    checkingIcloudHealth = true;
+    icloudHealthError = "";
+    try {
+      icloudHealth = await api.inspectIcloudNewCopyAdmission();
+    } catch (e) {
+      icloudHealthError = String(e);
+    } finally {
+      checkingIcloudHealth = false;
+    }
+  }
+
   function sourceEvictionReady(): boolean {
     return copied !== null
       && attestation?.permit !== null
@@ -471,6 +487,21 @@
     return labels[state ?? "unknown"] ?? labels.unknown;
   }
 
+  function icloudBlockerLabel(blocker: string): string {
+    const labels: Record<string, string> = {
+      "icloud-sync-health-evidence-incomplete": "iCloud 동기화 증거가 불완전함",
+      "icloud-upload-queue-nonempty": "iCloud 업로드 대기열이 남아 있음",
+      "icloud-upload-in-flight": "iCloud 업로드가 진행 중임",
+      "icloud-upload-blocked-on-sync-up": "iCloud sync-up 대기 항목이 있음",
+      "icloud-upload-out-of-quota": "iCloud 용량 부족 항목이 있음",
+      "icloud-upload-queue-state-unclassified": "분류되지 않은 iCloud 대기 상태가 있음",
+      "icloud-local-sync-item-error-present": "iCloud 로컬 동기화 오류가 있음",
+      "icloud-native-sync-up-pending": "macOS iCloud sync-up이 아직 끝나지 않음",
+      "icloud-native-status-evidence-incomplete": "macOS iCloud 상태 증거가 불완전함",
+    };
+    return labels[blocker] ?? blocker;
+  }
+
   function duration(ms: number): string {
     const totalMinutes = Math.floor(ms / 60_000);
     const hours = Math.floor(totalMinutes / 60);
@@ -549,6 +580,28 @@
       </div>
     {/if}
     {#if reconciliationError}<p class="error" role="alert">{reconciliationError}</p>{/if}
+    {#if icloudHealth}
+      <div class="receipt-reconciliation" aria-live="polite">
+        <strong>iCloud 새 복사 admission</strong>
+        <span class="context">
+          {icloudHealth.new_copy_admission_state === "clear" ? "새 복사 허용 가능" : "새 복사 차단"} ·
+          대기 {icloudHealth.upload_queue.scheduled_waiting_count}개 ·
+          진행 {icloudHealth.upload_queue.scheduled_active_count}개 ·
+          sync-up 차단 {icloudHealth.upload_queue.blocked_on_sync_up_count}개 ·
+          오류 {icloudHealth.upload_queue.item_error_count}개
+        </span>
+        {#if icloudHealth.new_copy_admission_blockers.length > 0}
+          <p class="warning">
+            차단 사유:
+            {icloudHealth.new_copy_admission_blockers.map(icloudBlockerLabel).join(", ")}
+          </p>
+        {:else}
+          <p class="capacity-ok">iCloud 전역 업로드 대기열이 비어 있습니다. 개별 파일은 별도 provider 증거가 필요합니다.</p>
+        {/if}
+        <p class="muted">읽기 전용 로컬 증거이며, 원격 용량·개별 파일 업로드 완료·원본 삭제 권한을 대신 증명하지 않습니다.</p>
+      </div>
+    {/if}
+    {#if icloudHealthError}<p class="error" role="alert">iCloud 상태 확인: {icloudHealthError}</p>{/if}
     {#if roots.some((root) => !root.readable)}
       <p class="warning">
         접근 불가 클라우드 루트는 선택에서 제외했습니다. macOS 개인정보 보호 권한을 허용한 뒤 목록을 다시 불러오세요.

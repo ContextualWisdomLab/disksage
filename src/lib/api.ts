@@ -598,6 +598,24 @@ export interface CloudPlanReport {
   notices: string[];
 }
 
+export interface IcloudSyncHealthReport {
+  observed_at_ms: number;
+  evidence_complete: boolean;
+  upload_queue: {
+    scheduled_waiting_count: number;
+    scheduled_active_count: number;
+    blocked_on_sync_up_count: number;
+    out_of_quota_count: number;
+    item_error_count: number;
+  };
+  sync_backlog_present: boolean;
+  new_copy_admission_state: "clear" | "blocked";
+  new_copy_admission_blockers: string[];
+  blockers: string[];
+  notices: string[];
+  local_eviction_authorized: boolean;
+}
+
 export type CapacityEvidenceKind = "provider-api" | "provider-native-status" | "unavailable";
 export type CloudCapacityState =
   | "available"
@@ -942,6 +960,8 @@ export const listCloudProviderConnections = () =>
   invoke<OAuthConnection[]>("list_cloud_provider_connections");
 export const verifyCloudProviderCapacity = (cloudRoot: string) =>
   invoke<CloudCapacitySnapshot>("verify_cloud_provider_capacity", { cloudRoot });
+export const inspectIcloudNewCopyAdmission = () =>
+  invoke<IcloudSyncHealthReport>("inspect_icloud_new_copy_admission");
 export const listCloudReviewDecisions = () =>
   invoke<CloudReviewDecision[]>("list_cloud_review_decisions");
 export const connectCloudProvider = (cloudRoot: string, clientId: string) =>

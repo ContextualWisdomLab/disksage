@@ -65,6 +65,7 @@ describe("api wrappers", () => {
       [() => api.removeStaleGitWorktrees("/repo", ["origin/main"], "b".repeat(64), `DiskSage stale worktree 2 4096 승인 ${"b".repeat(64)}`, "merged and idle worktrees reviewed"), "remove_stale_git_worktrees", { repositoryRoot: "/repo", retentionReferences: ["origin/main"], approvedRemovalPlanFingerprint: "b".repeat(64), confirmationExactApprovalPhrase: `DiskSage stale worktree 2 4096 승인 ${"b".repeat(64)}`, rationale: "merged and idle worktrees reviewed" }],
       [() => api.listCloudProviderConnections(), "list_cloud_provider_connections"],
       [() => api.verifyCloudProviderCapacity("/cloud"), "verify_cloud_provider_capacity", { cloudRoot: "/cloud" }],
+      [() => api.inspectIcloudNewCopyAdmission(), "inspect_icloud_new_copy_admission"],
       [() => api.listCloudReviewDecisions(), "list_cloud_review_decisions"],
       [() => api.connectCloudProvider("/cloud", "desktop-client-id"), "connect_cloud_provider", { cloudRoot: "/cloud", clientId: "desktop-client-id" }],
       [() => api.disconnectCloudProvider("/cloud"), "disconnect_cloud_provider", { cloudRoot: "/cloud" }],
