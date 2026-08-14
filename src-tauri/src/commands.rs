@@ -2509,7 +2509,7 @@ pub async fn trash_verified_cloud_source(
         if receipt.receipt_id != receipt_id {
             return Err("receipt-id-mismatch".into());
         }
-        let attestation = collect_cloud_attestation_for_receipt(
+        let attestation = match collect_cloud_attestation_for_receipt(
             &receipt,
             object_id,
             &evidence_dir,
@@ -2518,7 +2518,20 @@ pub async fn trash_verified_cloud_source(
             &connection_path,
             &cloud_roots,
             false,
-        )?;
+        ) {
+            Ok(attestation) => attestation,
+            Err(error) => {
+                let provider_blocker = stable_reconciliation_error(&error);
+                let _ = cloud_adr::ensure_initial_projection_pair_with_provider_state_outcome(
+                    &receipt,
+                    &adr_dir,
+                    &goal_dir,
+                    cloud::system_now_ms(),
+                    &provider_blocker,
+                );
+                return Err(error);
+            }
+        };
         let permit = attestation.permit.as_ref().ok_or_else(|| {
             if attestation.blockers.is_empty() {
                 "source-eviction-permit-unavailable".to_string()
