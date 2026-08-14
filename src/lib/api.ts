@@ -827,7 +827,7 @@ export interface CloudAttestationOutput {
 export interface CloudReceiptReconciliationEntry {
   receipt_id: string | null;
   provider: CloudProvider | null;
-  goal_status: "active" | "blocked" | "completed" | string | null;
+  goal_status: "active" | "blocked" | "completed" | null;
   goal_state: CloudOffloadGoalState | null;
   provider_sync_state: ProviderSyncState | null;
   eviction_permit: boolean;
