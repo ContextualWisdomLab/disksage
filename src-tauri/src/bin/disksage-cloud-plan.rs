@@ -11,6 +11,8 @@ use std::fs::OpenOptions;
 use std::io::Write;
 #[cfg(not(coverage))]
 use std::path::{Path, PathBuf};
+#[cfg(not(coverage))]
+use std::time::{Duration, Instant};
 
 #[cfg(not(coverage))]
 use disksage_lib::cloud::{
@@ -558,6 +560,8 @@ struct ReceiptReconciliationReport {
     provider_evidence_written_count: u64,
     pending_provider_sync_count: u64,
     eviction_ready_count: u64,
+    unprocessed_count: u64,
+    incomplete_reconciliation: bool,
     entries: Vec<ReceiptReconciliationEntry>,
     mutation_performed: bool,
     cloud_write_executed: bool,
@@ -567,6 +571,10 @@ struct ReceiptReconciliationReport {
 
 #[cfg(not(coverage))]
 const MAX_RECONCILIATION_RECEIPTS: usize = 10_000;
+#[cfg(not(coverage))]
+const MAX_RECONCILIATION_ATTESTATIONS: usize = 256;
+#[cfg(not(coverage))]
+const RECONCILIATION_MAX_DURATION: Duration = Duration::from_secs(30);
 
 #[cfg(not(coverage))]
 const MAX_RECONCILIATION_PROJECTION_BYTES: u64 = 64 * 1024;
@@ -719,6 +727,8 @@ fn audit_receipts(
         provider_evidence_written_count: 0,
         pending_provider_sync_count: 0,
         eviction_ready_count: 0,
+        unprocessed_count: 0,
+        incomplete_reconciliation: false,
         entries: Vec::new(),
         mutation_performed: false,
         cloud_write_executed: false,
@@ -2562,6 +2572,7 @@ fn reconcile_receipts(
     home: &Path,
     generated_at_ms: u64,
 ) -> Result<ReceiptReconciliationReport, String> {
+    let reconciliation_started = Instant::now();
     let mut report = audit_receipts(receipt_dir, Some(evidence_dir), generated_at_ms)?;
     report.notices = vec![
         "provider-attestation-attempted",
@@ -2581,14 +2592,31 @@ fn reconcile_receipts(
     if paths.len() > MAX_RECONCILIATION_RECEIPTS {
         return Err("receipt-directory-entry-limit-exceeded".into());
     }
-    for path in paths {
-        let file_name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default()
-            .to_string();
-        if regular_file_state(&path) != "present" || !file_name.ends_with(".json") {
-            continue;
+    let receipt_paths = paths
+        .into_iter()
+        .filter(|path| {
+            let file_name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default();
+            regular_file_state(path) == "present" && file_name.ends_with(".json")
+        })
+        .collect::<Vec<_>>();
+    for (index, path) in receipt_paths.iter().enumerate() {
+        if index >= MAX_RECONCILIATION_ATTESTATIONS
+            || reconciliation_started.elapsed() >= RECONCILIATION_MAX_DURATION
+        {
+            report.unprocessed_count = receipt_paths.len().saturating_sub(index) as u64;
+            report.incomplete_reconciliation = report.unprocessed_count > 0;
+            if report.incomplete_reconciliation {
+                let notice = if index >= MAX_RECONCILIATION_ATTESTATIONS {
+                    "reconciliation-entry-limit"
+                } else {
+                    "reconciliation-time-limit"
+                };
+                report.notices.push(notice);
+            }
+            break;
         }
         let Ok(receipt) = cloud_transfer::read_immutable_receipt(&path) else {
             continue;
@@ -3582,6 +3610,29 @@ mod tests {
         assert!(!report.mutation_performed);
         assert!(!report.cloud_write_executed);
         assert!(!report.source_eviction_authorized);
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn headless_reconciliation_reports_receipts_left_after_entry_budget() {
+        let temp = tempfile::tempdir().unwrap();
+        let receipt_dir = temp.path().join("receipts");
+        let evidence_dir = temp.path().join("evidence");
+        std::fs::create_dir_all(&receipt_dir).unwrap();
+        for index in 0..=MAX_RECONCILIATION_ATTESTATIONS {
+            std::fs::write(receipt_dir.join(format!("{index:04}.json")), b"{}").unwrap();
+        }
+
+        let report =
+            reconcile_receipts(&receipt_dir, &evidence_dir, None, None, temp.path(), 10).unwrap();
+        assert_eq!(
+            report.unprocessed_count,
+            (receipt_dir.read_dir().unwrap().count() - MAX_RECONCILIATION_ATTESTATIONS) as u64
+        );
+        assert!(report.incomplete_reconciliation);
+        assert!(report
+            .notices
+            .contains(&"reconciliation-entry-limit"));
     }
 
     #[test]
