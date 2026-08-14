@@ -133,8 +133,15 @@ fn output_summary(path: &PathBuf, report: &MavenCacheAuditReport) -> Result<Stri
     .map_err(|error| error.to_string())
 }
 
+fn command_line_args() -> Result<Vec<String>, String> {
+    std::env::args_os()
+        .skip(1)
+        .map(|value| value.into_string().map_err(|_| "알 수 없는 인자".to_string()))
+        .collect()
+}
+
 fn run() -> Result<(), String> {
-    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let raw = command_line_args()?;
     if raw.len() == 1 && matches!(raw[0].as_str(), "--help" | "-h") {
         println!("{}", usage());
         return Ok(());
