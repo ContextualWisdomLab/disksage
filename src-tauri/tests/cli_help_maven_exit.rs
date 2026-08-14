@@ -2,6 +2,7 @@
 
 use std::process::Command;
 
+/// Require one help flag to terminate successfully with the exact stable usage text.
 fn assert_help_success(binary: &str, flag: &str, expected_usage: &str) {
     let output = Command::new(binary)
         .env_remove("HOME")
@@ -27,6 +28,7 @@ fn assert_help_success(binary: &str, flag: &str, expected_usage: &str) {
     );
 }
 
+/// Require an unknown option to fail visibly without reflecting its opaque payload.
 fn assert_invalid_argument_is_bounded(binary: &str) {
     let output = Command::new(binary)
         .env_remove("HOME")
@@ -50,6 +52,7 @@ fn assert_invalid_argument_is_bounded(binary: &str) {
     );
 }
 
+/// Require a mixed help and invalid request to remain a bounded failure.
 fn assert_help_does_not_hide_invalid_argument(binary: &str) {
     let output = Command::new(binary)
         .env_remove("HOME")
@@ -73,6 +76,7 @@ fn assert_help_does_not_hide_invalid_argument(binary: &str) {
     );
 }
 
+/// Prove the Maven audit command's exact help and bounded invalid-input contract.
 #[test]
 fn maven_cache_audit_help_is_successful_and_invalid_arguments_are_bounded() {
     let binary = env!("CARGO_BIN_EXE_disksage-maven-cache-audit");
@@ -83,6 +87,7 @@ fn maven_cache_audit_help_is_successful_and_invalid_arguments_are_bounded() {
     assert_help_does_not_hide_invalid_argument(binary);
 }
 
+/// Prove the Maven prune command's exact help and bounded invalid-input contract.
 #[test]
 fn maven_cache_prune_help_is_successful_and_invalid_arguments_are_bounded() {
     let binary = env!("CARGO_BIN_EXE_disksage-maven-cache-prune");
