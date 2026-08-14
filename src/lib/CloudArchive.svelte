@@ -419,6 +419,7 @@
     try {
       icloudHealth = await api.inspectIcloudNewCopyAdmission();
     } catch (e) {
+      icloudHealth = null;
       icloudHealthError = String(e);
     } finally {
       checkingIcloudHealth = false;
