@@ -2980,9 +2980,14 @@ fn run() -> Result<(), String> {
     {
         return Err("이미 클라우드 안에 있는 경로는 오프로드 원본으로 사용할 수 없음".into());
     }
-    let files = cloud::collect_archive_files(&args.root, &excluded);
-    let snapshot = cloud::prepare_cloud_archive_source(
-        &files,
+    let collection = cloud::collect_archive_files_bounded(
+        &args.root,
+        &excluded,
+        cloud::ARCHIVE_SCAN_MAX_ENTRIES,
+        cloud::ARCHIVE_SCAN_MAX_DURATION,
+    );
+    let snapshot = cloud::prepare_cloud_archive_source_from_collection(
+        &collection,
         &args.root,
         cloud::system_now_ms(),
         CloudPlanOptions {

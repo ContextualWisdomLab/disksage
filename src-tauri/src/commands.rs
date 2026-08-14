@@ -1188,7 +1188,12 @@ fn cloud_plan_for_inputs(
     if excluded.iter().any(|cloud| root_path.starts_with(cloud)) {
         return Err("이미 클라우드 안에 있는 경로는 오프로드 원본으로 사용할 수 없음".into());
     }
-    let files = cloud::collect_archive_files(&root_path, &excluded);
+    let collection = cloud::collect_archive_files_bounded(
+        &root_path,
+        &excluded,
+        cloud::ARCHIVE_SCAN_MAX_ENTRIES,
+        cloud::ARCHIVE_SCAN_MAX_DURATION,
+    );
     let observed_at_ms = cloud::system_now_ms();
     let capacity_snapshot = match authenticated_capacity_snapshot(&selected, app, observed_at_ms) {
         Ok(snapshot) => snapshot,
@@ -1200,10 +1205,9 @@ fn cloud_plan_for_inputs(
     };
     let selected =
         provider_capacity::root_with_verified_capacity_scope(&selected, &capacity_snapshot)?;
-    let mut report = cloud::plan_cloud_archive(
-        &files,
+    let snapshot = cloud::prepare_cloud_archive_source_from_collection(
+        &collection,
         &root_path,
-        &selected,
         observed_at_ms,
         cloud::CloudPlanOptions {
             min_size_bytes: min_size_mib.saturating_mul(1024 * 1024),
@@ -1211,6 +1215,7 @@ fn cloud_plan_for_inputs(
             limit: limit.clamp(1, 1_000),
         },
     );
+    let mut report = cloud::plan_cloud_archive_from_snapshot(&snapshot, &selected);
     attach_capacity_assessment(&mut report, capacity_snapshot)?;
     let runtime = provider_client_runtime::collect_provider_client_runtime(
         selected.provider,

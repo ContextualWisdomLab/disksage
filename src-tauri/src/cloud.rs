@@ -35,11 +35,23 @@ const METADATA_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(not(coverage))]
 const METADATA_PROBE_OUTPUT_LIMIT: usize = 1024 * 1024;
 #[cfg(not(coverage))]
+const MACOS_METADATA_PROBE_TIMEOUT: Duration = Duration::from_millis(500);
+#[cfg(not(coverage))]
 const EXIFTOOL_BATCH_SIZE: usize = 32;
 #[cfg(not(coverage))]
-const EXIFTOOL_BATCH_TIMEOUT: Duration = Duration::from_secs(20);
+const EXIFTOOL_BATCH_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(not(coverage))]
 const EXIFTOOL_BATCH_OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
+#[cfg(not(coverage))]
+// ponytail: one largest-file metadata probe keeps planner latency bounded; expand only with an
+// asynchronous per-file budget so a stalled macOS metadata provider cannot block planning.
+const MAX_METADATA_PROBE_FILES: usize = 1;
+#[cfg(not(coverage))]
+const METADATA_PROBE_TOTAL_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(not(coverage))]
+pub const ARCHIVE_SCAN_MAX_ENTRIES: u64 = 100_000;
+#[cfg(not(coverage))]
+pub const ARCHIVE_SCAN_MAX_DURATION: Duration = Duration::from_secs(10);
 #[cfg(not(coverage))]
 const MAX_ZIP_METADATA_ENTRIES: usize = 10_000;
 #[cfg(not(coverage))]
@@ -221,6 +233,9 @@ pub struct CloudSourceSnapshot {
     prepared_at_ms: u64,
     options: CloudPlanOptions,
     files: Vec<FileFact>,
+    source_scan_complete: bool,
+    source_scan_visited_entries: u64,
+    source_scan_stop_reasons: Vec<String>,
     #[cfg(not(coverage))]
     duplicate_digests: BTreeMap<PathBuf, Result<ContentDigests, String>>,
     #[cfg(not(coverage))]
@@ -235,6 +250,20 @@ impl CloudSourceSnapshot {
     pub fn candidate_bytes(&self) -> u64 {
         self.files.iter().map(|file| file.bytes).sum()
     }
+}
+
+/// Bounded result of the source-tree walk used by the cloud planner.
+///
+/// An incomplete walk is evidence that the candidate set is not exhaustive. The planner keeps
+/// the observed files for diagnosis but marks every resulting candidate blocked, so a partial
+/// scan can never become a copy or eviction approval.
+#[cfg(not(coverage))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchiveFileCollection {
+    pub files: Vec<FileFact>,
+    pub visited_entries: u64,
+    pub complete: bool,
+    pub stop_reasons: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -886,12 +915,29 @@ fn millis(time: std::io::Result<std::time::SystemTime>) -> u64 {
 
 /// Collect only archive-shaped regular files while pruning cloud roots and regenerable trees
 /// before descent. Symlinks/reparse points are rejected by the shared scanner guard.
+///
+/// The walk is deliberately bounded. A partial source tree is useful diagnostic evidence but is
+/// never eligible for copy because `plan_cloud_archive_from_snapshot` carries the incomplete-scan
+/// blocker into every candidate.
 #[cfg(not(coverage))]
-pub fn collect_archive_files(root: &Path, excluded_roots: &[PathBuf]) -> Vec<FileFact> {
+pub fn collect_archive_files_bounded(
+    root: &Path,
+    excluded_roots: &[PathBuf],
+    max_entries: u64,
+    max_duration: Duration,
+) -> ArchiveFileCollection {
     let excluded = excluded_roots.to_vec();
-    let mut files: Vec<FileFact> = jwalk::WalkDir::new(root)
+    let mut files = Vec::new();
+    let mut visited_entries = 0_u64;
+    let mut stop_reasons = Vec::new();
+    let started = Instant::now();
+    let max_entries = max_entries.max(1);
+    let max_duration = max_duration.max(Duration::from_millis(1));
+    let mut complete = true;
+    let walker = jwalk::WalkDir::new(root)
         .follow_links(false)
         .skip_hidden(false)
+        .parallelism(jwalk::Parallelism::Serial)
         .process_read_dir(move |_depth, _path, _state, children| {
             children.retain(|result| {
                 result
@@ -914,24 +960,74 @@ pub fn collect_archive_files(root: &Path, excluded_roots: &[PathBuf]) -> Vec<Fil
                     })
                     .unwrap_or(true)
             });
-        })
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_file() && archive_kind(&entry.path()).is_some())
-        .filter_map(|entry| {
-            let metadata = entry.metadata().ok()?;
-            let path = entry.path();
-            Some(FileFact {
-                path,
-                bytes: metadata.len(),
-                created_ms: millis(metadata.created()),
-                modified_ms: millis(metadata.modified()),
-                content_metadata: ContentMetadata::default(),
-            })
-        })
-        .collect();
+        });
+    for result in walker.into_iter() {
+        if visited_entries >= max_entries {
+            complete = false;
+            stop_reasons.push("source-scan-entry-limit".into());
+            break;
+        }
+        if started.elapsed() >= max_duration {
+            complete = false;
+            stop_reasons.push("source-scan-time-limit".into());
+            break;
+        }
+        visited_entries = visited_entries.saturating_add(1);
+        let entry = match result {
+            Ok(entry) => entry,
+            Err(_) => {
+                complete = false;
+                if !stop_reasons.iter().any(|reason| reason == "source-scan-entry-error") {
+                    stop_reasons.push("source-scan-entry-error".into());
+                }
+                continue;
+            }
+        };
+        if !entry.file_type().is_file() || archive_kind(&entry.path()).is_none() {
+            continue;
+        }
+        let Some(metadata) = entry.metadata().ok() else {
+            complete = false;
+            if !stop_reasons
+                .iter()
+                .any(|reason| reason == "source-scan-metadata-error")
+            {
+                stop_reasons.push("source-scan-metadata-error".into());
+            }
+            continue;
+        };
+        files.push(FileFact {
+            path: entry.path(),
+            bytes: metadata.len(),
+            created_ms: millis(metadata.created()),
+            modified_ms: millis(metadata.modified()),
+            content_metadata: ContentMetadata::default(),
+        });
+    }
+    stop_reasons.sort();
+    stop_reasons.dedup();
+    if !stop_reasons.is_empty() {
+        complete = false;
+    }
     files.sort_by(|a, b| a.path.cmp(&b.path));
-    files
+    ArchiveFileCollection {
+        files,
+        visited_entries,
+        complete,
+        stop_reasons,
+    }
+}
+
+/// Collect archive files using the production source-scan bounds.
+#[cfg(not(coverage))]
+pub fn collect_archive_files(root: &Path, excluded_roots: &[PathBuf]) -> Vec<FileFact> {
+    collect_archive_files_bounded(
+        root,
+        excluded_roots,
+        ARCHIVE_SCAN_MAX_ENTRIES,
+        ARCHIVE_SCAN_MAX_DURATION,
+    )
+    .files
 }
 
 /// Gregorian civil date from whole days since Unix epoch. The arithmetic is the
@@ -1516,7 +1612,11 @@ fn macos_file_provenance_metadata(path: &Path) -> ContentMetadata {
     where_froms
         .args(["-px", "com.apple.metadata:kMDItemWhereFroms"])
         .arg(path);
-    if let Ok(output) = run_metadata_command(where_froms) {
+    if let Ok(output) = run_metadata_command_with_limits(
+        where_froms,
+        MACOS_METADATA_PROBE_TIMEOUT,
+        METADATA_PROBE_OUTPUT_LIMIT,
+    ) {
         if let Some(bytes) = decode_hex_ascii(&output) {
             if let Ok(plist::Value::Array(values)) =
                 plist::Value::from_reader(std::io::Cursor::new(bytes))
@@ -1540,7 +1640,11 @@ fn macos_file_provenance_metadata(path: &Path) -> ContentMetadata {
 
     let mut quarantine = local_command("xattr");
     quarantine.args(["-p", "com.apple.quarantine"]).arg(path);
-    if let Ok(output) = run_metadata_command(quarantine) {
+    if let Ok(output) = run_metadata_command_with_limits(
+        quarantine,
+        MACOS_METADATA_PROBE_TIMEOUT,
+        METADATA_PROBE_OUTPUT_LIMIT,
+    ) {
         if let Some((acquired_seconds, agent)) =
             quarantine_record(&String::from_utf8_lossy(&output))
         {
@@ -4332,9 +4436,48 @@ pub fn prepare_cloud_archive_source(
     now_ms: u64,
     options: CloudPlanOptions,
 ) -> CloudSourceSnapshot {
+    prepare_cloud_archive_source_with_scan(
+        files,
+        source_root,
+        now_ms,
+        options,
+        true,
+        files.len() as u64,
+        Vec::new(),
+    )
+}
+
+/// Prepare source metadata while retaining whether the bounded filesystem walk was exhaustive.
+#[cfg(not(coverage))]
+pub fn prepare_cloud_archive_source_from_collection(
+    collection: &ArchiveFileCollection,
+    source_root: &Path,
+    now_ms: u64,
+    options: CloudPlanOptions,
+) -> CloudSourceSnapshot {
+    prepare_cloud_archive_source_with_scan(
+        &collection.files,
+        source_root,
+        now_ms,
+        options,
+        collection.complete,
+        collection.visited_entries,
+        collection.stop_reasons.clone(),
+    )
+}
+
+fn prepare_cloud_archive_source_with_scan(
+    files: &[FileFact],
+    source_root: &Path,
+    now_ms: u64,
+    options: CloudPlanOptions,
+    source_scan_complete: bool,
+    source_scan_visited_entries: u64,
+    source_scan_stop_reasons: Vec<String>,
+) -> CloudSourceSnapshot {
     #[cfg(not(coverage))]
-    let batched_exiftool = {
-        let paths = files
+    let (batched_exiftool, selected_probe_paths, metadata_probe_started) = {
+        let mut probe_candidates = files
             .iter()
             .filter(|file| {
                 file.bytes >= options.min_size_bytes
@@ -4347,11 +4490,30 @@ pub fn prepare_cloud_archive_source(
                         .is_ok_and(|relative| !relative.as_os_str().is_empty())
                     && file.content_metadata == ContentMetadata::default()
                     && file.path.is_file()
-                    && should_probe_general_metadata(&file.path)
             })
+            .collect::<Vec<_>>();
+        probe_candidates.sort_by(|left, right| {
+            right
+                .bytes
+                .cmp(&left.bytes)
+                .then_with(|| left.path.cmp(&right.path))
+        });
+        probe_candidates.truncate(MAX_METADATA_PROBE_FILES);
+        let selected_probe_paths = probe_candidates
+            .iter()
+            .map(|file| file.path.clone())
+            .collect::<BTreeSet<_>>();
+        let paths = probe_candidates
+            .iter()
+            .filter(|file| should_probe_general_metadata(&file.path))
             .map(|file| file.path.clone())
             .collect::<Vec<_>>();
-        exiftool_metadata_batch(&paths)
+        let metadata_probe_started = Instant::now();
+        (
+            exiftool_metadata_batch(&paths),
+            selected_probe_paths,
+            metadata_probe_started,
+        )
     };
 
     let mut prepared_files = Vec::new();
@@ -4381,10 +4543,19 @@ pub fn prepare_cloud_archive_source(
         #[cfg(not(coverage))]
         if file.path.is_file() {
             verified_regular_files.insert(file.path.clone());
-            if prepared.content_metadata == ContentMetadata::default() {
+            if prepared.content_metadata == ContentMetadata::default()
+                && selected_probe_paths.contains(&file.path)
+                && metadata_probe_started.elapsed() < METADATA_PROBE_TOTAL_TIMEOUT
+            {
                 prepared.content_metadata = probe_content_metadata_with_general(
                     &file.path,
                     batched_exiftool.get(&file.path).cloned(),
+                );
+            } else if prepared.content_metadata == ContentMetadata::default() {
+                add_probe_warning(
+                    &mut prepared.content_metadata,
+                    "planner",
+                    MetadataProbeFailure::Timeout,
                 );
             }
         }
@@ -4398,6 +4569,9 @@ pub fn prepare_cloud_archive_source(
         prepared_at_ms: now_ms,
         options,
         files: prepared_files,
+        source_scan_complete,
+        source_scan_visited_entries,
+        source_scan_stop_reasons,
         #[cfg(not(coverage))]
         duplicate_digests,
         #[cfg(not(coverage))]
@@ -4417,6 +4591,8 @@ pub fn plan_cloud_archive_from_snapshot(
     let source_root = &snapshot.source_root;
     let now_ms = snapshot.prepared_at_ms;
     let options = snapshot.options;
+    let source_scan_blocker = (!snapshot.source_scan_complete)
+        .then(|| "source-scan-incomplete".to_string());
     let mut candidates = Vec::new();
     for file in files {
         let age_days = now_ms.saturating_sub(file.modified_ms) / DAY_MS;
@@ -4500,8 +4676,10 @@ pub fn plan_cloud_archive_from_snapshot(
         let blocked_reason = if source_snapshot_stale {
             Some("source-snapshot-stale".into())
         } else {
-            planner_blocked_reason(&file.path, kind, &lineage_metadata, &dst)
-                .or_else(|| provider_destination_path_blocked_reason(cloud_root, &dst))
+            source_scan_blocker.clone().or_else(|| {
+                planner_blocked_reason(&file.path, kind, &lineage_metadata, &dst)
+            })
+            .or_else(|| provider_destination_path_blocked_reason(cloud_root, &dst))
         };
         let source_context = relative
             .parent()
@@ -4626,18 +4804,43 @@ pub fn plan_cloud_archive_from_snapshot(
         candidates.push(candidate);
     }
     #[cfg(not(coverage))]
-    let exact_duplicates =
-        mark_exact_duplicate_candidates(&mut candidates, Some(&snapshot.duplicate_digests));
+    let exact_duplicates = {
+        candidates.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.src.cmp(&b.src)));
+        candidates.truncate(options.limit);
+        mark_exact_duplicate_candidates(&mut candidates, Some(&snapshot.duplicate_digests))
+    };
     #[cfg(coverage)]
-    let exact_duplicates = ExactDuplicateSummary::default();
-    candidates.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.src.cmp(&b.src)));
-    candidates.truncate(options.limit);
+    let exact_duplicates = {
+        candidates.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.src.cmp(&b.src)));
+        candidates.truncate(options.limit);
+        ExactDuplicateSummary::default()
+    };
     let candidate_bytes = candidates.iter().map(|c| c.bytes).sum();
     let potentially_reclaimable_bytes = candidates
         .iter()
         .filter(|c| c.blocked_reason.is_none())
         .map(|c| c.bytes)
         .sum();
+    let mut notices = vec![
+        "dry-run-only".into(),
+        "cloud-quota-unverified".into(),
+        "provider-client-runtime-unverified".into(),
+        "cloud-sync-unverified".into(),
+        "full-transfer-content-hash-pending".into(),
+    ];
+    if !snapshot.source_scan_complete {
+        notices.push("source-scan-incomplete".into());
+        notices.push(format!(
+            "source-scan-visited-entries:{}",
+            snapshot.source_scan_visited_entries
+        ));
+        notices.extend(
+            snapshot
+                .source_scan_stop_reasons
+                .iter()
+                .map(|reason| format!("source-scan-stopped:{reason}")),
+        );
+    }
     CloudPlanReport {
         cloud_root: cloud_root.clone(),
         generated_at_ms: now_ms,
@@ -4647,13 +4850,7 @@ pub fn plan_cloud_archive_from_snapshot(
         potentially_reclaimable_bytes,
         exact_duplicates,
         capacity: None,
-        notices: vec![
-            "dry-run-only".into(),
-            "cloud-quota-unverified".into(),
-            "provider-client-runtime-unverified".into(),
-            "cloud-sync-unverified".into(),
-            "full-transfer-content-hash-pending".into(),
-        ],
+        notices,
     }
 }
 
@@ -4989,6 +5186,51 @@ mod tests {
         let files = collect_archive_files(&scan_root, &[]);
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path, real);
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn bounded_source_scan_blocks_partial_plans() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source_root = tmp.path().join("source");
+        writable_dir(&source_root);
+        for name in ["one.pdf", "two.pdf", "three.pdf"] {
+            std::fs::write(source_root.join(name), b"pdf").unwrap();
+        }
+        let collection = collect_archive_files_bounded(
+            &source_root,
+            &[],
+            2,
+            Duration::from_secs(30),
+        );
+        assert!(!collection.complete);
+        assert!(collection
+            .stop_reasons
+            .contains(&"source-scan-entry-limit".to_string()));
+        assert!(!collection.files.is_empty());
+
+        let snapshot = prepare_cloud_archive_source_from_collection(
+            &collection,
+            &source_root,
+            system_now_ms(),
+            CloudPlanOptions {
+                min_size_bytes: 1,
+                min_age_days: 0,
+                limit: 10,
+            },
+        );
+        let destination = source_root.join("cloud");
+        writable_dir(&destination);
+        let report = plan_cloud_archive_from_snapshot(
+            &snapshot,
+            &root(CloudProvider::Icloud, &destination),
+        );
+        assert!(report.notices.contains(&"source-scan-incomplete".to_string()));
+        assert!(report
+            .candidates
+            .iter()
+            .all(|candidate| candidate.blocked_reason.as_deref() == Some("source-scan-incomplete")));
+        assert_eq!(report.potentially_reclaimable_bytes, 0);
     }
 
     #[test]

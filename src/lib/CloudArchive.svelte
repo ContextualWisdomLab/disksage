@@ -28,6 +28,10 @@
     return notices.some((notice) => PROVIDER_ADMISSION_BLOCKERS.has(notice));
   }
 
+  function hasIncompleteSourceScan(notices: readonly string[]): boolean {
+    return notices.includes("source-scan-incomplete");
+  }
+
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
   let roots: api.CloudRoot[] = $state([]);
@@ -646,6 +650,12 @@
       <p class="warning">
         현재 공급자 전역 동기화 증거가 불완전하거나 전송 중입니다. 새 copy-only 버튼은 비활성화되며,
         상태가 해소된 뒤 다시 계획해야 합니다. 기존 복사본 채택·per-item attestation은 별도 경로로 동작합니다.
+      </p>
+    {/if}
+    {#if hasIncompleteSourceScan(report.notices)}
+      <p class="warning">
+        원본 스캔이 제한 시간 또는 항목 수에 도달해 부분 결과만 수집되었습니다. 이 계획은 복사·원본 제거에 사용할 수 없으며,
+        스캔 범위를 줄이거나 조건을 높여 전체 스캔을 다시 실행해야 합니다.
       </p>
     {/if}
     {#if report.capacity}
