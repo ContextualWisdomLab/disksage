@@ -43,11 +43,10 @@ const EXIFTOOL_BATCH_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(not(coverage))]
 const EXIFTOOL_BATCH_OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
 #[cfg(not(coverage))]
-// ponytail: one largest-file metadata probe keeps planner latency bounded; expand only with an
-// asynchronous per-file budget so a stalled macOS metadata provider cannot block planning.
-const MAX_METADATA_PROBE_FILES: usize = 1;
+// ponytail: cap detailed probes per plan; expand only with an asynchronous per-file budget.
+const MAX_METADATA_PROBE_FILES: usize = 32;
 #[cfg(not(coverage))]
-const METADATA_PROBE_TOTAL_TIMEOUT: Duration = Duration::from_secs(5);
+const METADATA_PROBE_TOTAL_TIMEOUT: Duration = Duration::from_secs(15);
 #[cfg(not(coverage))]
 pub const ARCHIVE_SCAN_MAX_ENTRIES: u64 = 100_000;
 #[cfg(not(coverage))]
@@ -3321,6 +3320,26 @@ fn probe_content_metadata_with_general(
     path: &Path,
     prefetched_general: Option<ContentMetadata>,
 ) -> ContentMetadata {
+    probe_content_metadata_with_general_inner(path, prefetched_general, true)
+}
+
+#[cfg(not(coverage))]
+fn probe_content_metadata_for_planner(
+    path: &Path,
+    prefetched_general: Option<ContentMetadata>,
+) -> ContentMetadata {
+    // Download origin and quarantine are useful audit context but are not production metadata.
+    // Keep them out of the planner's per-file subprocess budget so embedded/format metadata can
+    // be collected for more candidates without weakening the lineage precedence rules.
+    probe_content_metadata_with_general_inner(path, prefetched_general, false)
+}
+
+#[cfg(not(coverage))]
+fn probe_content_metadata_with_general_inner(
+    path: &Path,
+    prefetched_general: Option<ContentMetadata>,
+    include_macos_provenance: bool,
+) -> ContentMetadata {
     let extension = path
         .extension()
         .map(|e| e.to_string_lossy().to_ascii_lowercase())
@@ -3360,10 +3379,12 @@ fn probe_content_metadata_with_general(
         _ if multipart_archive_part(path).is_some() => multipart_archive_metadata(path),
         _ => ContentMetadata::default(),
     };
-    merge_metadata(
-        merge_metadata(general, format_specific),
-        macos_file_provenance_metadata(path),
-    )
+    let metadata = merge_metadata(general, format_specific);
+    if include_macos_provenance {
+        merge_metadata(metadata, macos_file_provenance_metadata(path))
+    } else {
+        metadata
+    }
 }
 
 /// Reuse the cloud planner's bounded embedded/acquisition metadata probes in read-only audit
@@ -3832,15 +3853,28 @@ fn hash_duplicate_candidate(path: &Path, expected_bytes: u64) -> Result<ContentD
 #[cfg(not(coverage))]
 fn prehash_duplicate_candidates(
     files: &[FileFact],
+    limit: usize,
 ) -> BTreeMap<PathBuf, Result<ContentDigests, String>> {
+    let mut eligible = files
+        .iter()
+        .filter(|file| {
+            let Some(kind) = archive_kind(&file.path) else {
+                return false;
+            };
+            source_blocked_reason(&file.path, kind, &file.content_metadata).is_none()
+        })
+        .collect::<Vec<_>>();
+    eligible.sort_by(|left, right| {
+        right
+            .bytes
+            .cmp(&left.bytes)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    eligible.truncate(limit.max(1));
+
     let mut by_size: BTreeMap<u64, Vec<&FileFact>> = BTreeMap::new();
-    for file in files {
-        let Some(kind) = archive_kind(&file.path) else {
-            continue;
-        };
-        if source_blocked_reason(&file.path, kind, &file.content_metadata).is_none() {
-            by_size.entry(file.bytes).or_default().push(file);
-        }
+    for file in eligible {
+        by_size.entry(file.bytes).or_default().push(file);
     }
 
     let mut digests = BTreeMap::new();
@@ -4547,7 +4581,7 @@ fn prepare_cloud_archive_source_with_scan(
                 && selected_probe_paths.contains(&file.path)
                 && metadata_probe_started.elapsed() < METADATA_PROBE_TOTAL_TIMEOUT
             {
-                prepared.content_metadata = probe_content_metadata_with_general(
+                prepared.content_metadata = probe_content_metadata_for_planner(
                     &file.path,
                     batched_exiftool.get(&file.path).cloned(),
                 );
@@ -4563,7 +4597,7 @@ fn prepare_cloud_archive_source_with_scan(
     }
 
     #[cfg(not(coverage))]
-    let duplicate_digests = prehash_duplicate_candidates(&prepared_files);
+    let duplicate_digests = prehash_duplicate_candidates(&prepared_files, options.limit);
     CloudSourceSnapshot {
         source_root: source_root.to_path_buf(),
         prepared_at_ms: now_ms,
@@ -6606,6 +6640,30 @@ mod tests {
             candidate.dst == destination.to_string_lossy()
                 && candidate.blocked_reason.as_deref() == Some("destination-exists")
         }));
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn duplicate_prehash_respects_candidate_limit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let files = ["a.tgz", "b.tgz"]
+            .into_iter()
+            .map(|name| {
+                let path = tmp.path().join(name);
+                std::fs::write(&path, b"same-content").unwrap();
+                let metadata = std::fs::metadata(&path).unwrap();
+                FileFact {
+                    path,
+                    bytes: metadata.len(),
+                    created_ms: millis(metadata.created()),
+                    modified_ms: millis(metadata.modified()),
+                    content_metadata: ContentMetadata::default(),
+                }
+            })
+            .collect::<Vec<_>>();
+
+        assert!(prehash_duplicate_candidates(&files, 1).is_empty());
+        assert_eq!(prehash_duplicate_candidates(&files, 2).len(), 2);
     }
 
     #[cfg(not(coverage))]
