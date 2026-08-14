@@ -60,13 +60,18 @@ where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
+    let values: Vec<String> = args.into_iter().map(Into::into).collect();
+    if values.len() == 1 && matches!(values[0].as_str(), "--help" | "-h") {
+        return Err("help".into());
+    }
+
     let mut path = None;
     let mut baseline = None;
     let mut logical_removed_bytes = None;
-    let mut values = args.into_iter().map(Into::into);
+    let mut values = values.into_iter();
     while let Some(flag) = values.next() {
         match flag.as_str() {
-            "--help" | "-h" => return Err("help".into()),
+            "--help" | "-h" => return Err("local-volume-argument-unknown".into()),
             "--path" => {
                 if path.is_some() {
                     return Err("local-volume-path-duplicate".into());
