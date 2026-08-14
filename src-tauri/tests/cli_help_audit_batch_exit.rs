@@ -52,7 +52,7 @@ fn build_feature_gated_audit_binaries() -> (tempfile::TempDir, PathBuf, PathBuf)
     )
 }
 
-fn assert_help_success(binary: &Path, flag: &str, usage_marker: &str) {
+fn assert_help_success(binary: &Path, flag: &str, expected_usage: &str) {
     let output = Command::new(binary)
         .env_remove("HOME")
         .arg(flag)
@@ -70,9 +70,10 @@ fn assert_help_success(binary: &Path, flag: &str, usage_marker: &str) {
         "successful help must not be projected through stderr"
     );
     let stdout = String::from_utf8(output.stdout).expect("help output must be valid UTF-8");
-    assert!(
-        stdout.contains(usage_marker),
-        "help output must contain the stable usage synopsis"
+    assert_eq!(
+        stdout,
+        format!("{expected_usage}\n"),
+        "help output must equal the stable usage synopsis"
     );
 }
 
@@ -127,18 +128,18 @@ fn audit_cli_help_is_successful_and_invalid_arguments_are_bounded() {
     let (_target_dir, multipart_archive_audit, incomplete_download_audit) =
         build_feature_gated_audit_binaries();
 
-    for (binary, usage_marker) in [
+    for (binary, expected_usage) in [
         (
             multipart_archive_audit.as_path(),
-            "usage: disksage-multipart-archive-audit",
+            "usage: disksage-multipart-archive-audit --root ABSOLUTE_PATH [--max-entries 1..=200000] [--private-output ABSOLUTE_NEW_FILE.json]",
         ),
         (
             incomplete_download_audit.as_path(),
-            "usage: disksage-incomplete-download-audit",
+            "usage: disksage-incomplete-download-audit --root ABSOLUTE_PATH [--max-entries 1..=200000] [--stale-after-days 1..=3650] [--private-output ABSOLUTE_NEW_FILE.json]",
         ),
     ] {
-        assert_help_success(binary, "--help", usage_marker);
-        assert_help_success(binary, "-h", usage_marker);
+        assert_help_success(binary, "--help", expected_usage);
+        assert_help_success(binary, "-h", expected_usage);
         assert_invalid_argument_is_bounded(binary);
         assert_help_does_not_hide_invalid_argument(binary);
     }
