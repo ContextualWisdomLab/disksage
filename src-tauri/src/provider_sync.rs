@@ -969,6 +969,15 @@ mod tests {
         .unwrap();
         assert_eq!(evidence.sync_state, ProviderSyncState::PendingUpload);
         assert!(!evidence.sync_complete);
+
+        let mut record_evidence = evidence.clone();
+        record_evidence.receipt_id = "a".repeat(64);
+        record_evidence.destination_blake3 = "b".repeat(64);
+        let record = crate::provider_evidence::create_sync_evidence_record(&record_evidence)
+            .unwrap();
+        let blockers = crate::cloud_transfer::approve_local_eviction(&receipt, &record)
+            .expect_err("pending iCloud upload must not issue an eviction permit");
+        assert!(blockers.contains(&"provider-sync-incomplete".to_string()));
     }
 
     #[test]
