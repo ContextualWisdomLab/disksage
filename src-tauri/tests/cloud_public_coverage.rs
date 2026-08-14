@@ -160,6 +160,48 @@ fn source_snapshot_applies_selection_policy_and_reports_totals() {
 }
 
 #[test]
+fn source_snapshot_recognizes_supported_archive_families_without_io() {
+    const DAY_MS: u64 = 24 * 60 * 60 * 1_000;
+
+    let temp = tempfile::tempdir().unwrap();
+    let source_root = temp.path().join("source");
+    std::fs::create_dir(&source_root).unwrap();
+    let now_ms = 20 * DAY_MS;
+    let modified_ms = now_ms - DAY_MS;
+    let metadata = ContentMetadata::default();
+    let file = |name: &str| FileFact {
+        path: source_root.join(name),
+        bytes: 1,
+        created_ms: modified_ms,
+        modified_ms,
+        content_metadata: metadata.clone(),
+    };
+
+    let files = vec![
+        file("document.docx"),
+        file("media.mp4"),
+        file("archive.zip"),
+        file("dataset.csv"),
+        file("backup.bak"),
+        file("creative.psd"),
+        file("unsupported.rs"),
+    ];
+    let snapshot = prepare_cloud_archive_source(
+        &files,
+        &source_root,
+        now_ms,
+        CloudPlanOptions {
+            min_size_bytes: 1,
+            min_age_days: 0,
+            limit: files.len(),
+        },
+    );
+
+    assert_eq!(snapshot.candidate_count(), 6);
+    assert_eq!(snapshot.candidate_bytes(), 6);
+}
+
+#[test]
 fn discovery_classifies_synthetic_provider_roots_without_touching_real_accounts() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();
