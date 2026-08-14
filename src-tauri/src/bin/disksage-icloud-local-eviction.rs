@@ -73,7 +73,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                 record_dir = Some(PathBuf::from(value(args, &mut index, "--record-dir")?))
             }
             "--help" | "-h" => return Err(usage().into()),
-            unknown => return Err(format!("알 수 없는 인자: {unknown}")),
+            _unknown => return Err("icloud-local-eviction-unknown-argument".into()),
         }
         index += 1;
     }
@@ -166,6 +166,10 @@ fn print_json<T: serde::Serialize>(value: &T) -> Result<(), String> {
 #[cfg(not(coverage))]
 fn run() -> Result<(), String> {
     let raw: Vec<String> = std::env::args().skip(1).collect();
+    if raw.len() == 1 && matches!(raw[0].as_str(), "--help" | "-h") {
+        println!("{}", usage());
+        return Ok(());
+    }
     let args = parse_args(&raw)?;
     let roots = cloud::discover_cloud_roots(&home_dir()?);
     let root = select_root(&roots, &args.cloud_root)?.clone();
