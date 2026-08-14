@@ -94,7 +94,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
             }
             "--destination-plan" => {
                 if destination_plan.is_some() {
-                    return Err("--destination-plan는 한 번만 지정할 수 있음".replace("는", "은"));
+                    return Err("--destination-plan은 한 번만 지정할 수 있음".into());
                 }
                 destination_plan = Some(PathBuf::from(value(&mut index, "--destination-plan")?));
             }
