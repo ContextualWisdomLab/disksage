@@ -52,6 +52,57 @@ fn dataset_profile_fails_closed_on_invalid_utf8_header() {
 }
 
 #[test]
+fn dataset_profile_reports_ambiguous_headers_width_and_mixed_values() {
+    let temp_dir = tempfile::tempdir().expect("create dataset fixture directory");
+    let path = temp_dir.path().join("ambiguous.csv");
+    std::fs::write(&path, ",Name,name\n,1,alpha\n,word\n")
+        .expect("write ambiguous CSV fixture");
+
+    let profile = profile_dataset(&path);
+
+    assert_eq!(profile.format, "csv");
+    assert_eq!(profile.sampled_rows, 2);
+    assert!(!profile.profile_complete);
+    assert!(has_warning(&profile, "empty-column-name"));
+    assert!(has_warning(&profile, "duplicate-column-name"));
+    assert!(has_warning(&profile, "inconsistent-row-width"));
+    assert_eq!(profile.columns[0].name, "column_1");
+    assert_eq!(profile.columns[1].inferred_type, "mixed");
+    assert_eq!(profile.columns[2].missing_values, 1);
+}
+
+#[test]
+fn dataset_profile_jsonl_reports_malformed_nonobject_and_column_limit_records() {
+    let temp_dir = tempfile::tempdir().expect("create dataset fixture directory");
+    let path = temp_dir.path().join("structural.jsonl");
+    let mut file = std::fs::File::create(&path).expect("create JSONL fixture");
+    writeln!(file).expect("write blank JSONL line");
+    writeln!(file, "not-json").expect("write malformed JSONL line");
+    writeln!(file, "[]").expect("write non-object JSONL line");
+
+    let object = (0..130)
+        .map(|index| (format!("field_{index}"), serde_json::json!(index)))
+        .collect::<serde_json::Map<String, serde_json::Value>>();
+    writeln!(file, "{}", serde_json::Value::Object(object))
+        .expect("write oversized-column JSONL object");
+
+    let profile = profile_dataset(&path);
+
+    assert_eq!(profile.format, "jsonl");
+    assert_eq!(profile.sampled_rows, 2);
+    assert_eq!(profile.columns.len(), 128);
+    assert!(!profile.profile_complete);
+    assert!(has_warning(&profile, "blank-jsonl-line"));
+    assert!(has_warning(&profile, "record-parse-error"));
+    assert!(has_warning(&profile, "jsonl-record-not-object"));
+    assert!(has_warning(&profile, "column-limit-exceeded"));
+    assert!(profile
+        .columns
+        .iter()
+        .all(|column| column.missing_values == 1 && column.observed_values == 1));
+}
+
+#[test]
 fn dataset_profile_jsonl_covers_scalar_and_structured_value_kinds() {
     let temp_dir = tempfile::tempdir().expect("create dataset fixture directory");
     let path = temp_dir.path().join("typed.jsonl");
