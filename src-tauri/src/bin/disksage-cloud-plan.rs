@@ -2656,16 +2656,15 @@ fn reconcile_receipts(
                     evidence_record_count(&[evidence_dir.to_path_buf()], &receipt.receipt_id);
             }
             Err(error) => {
-                let projection_warnings =
-                    cloud_adr::ensure_initial_projection_pair_with_source_state(
+                let projection_outcome =
+                    cloud_adr::ensure_initial_projection_pair_with_source_state_outcome(
                         &receipt,
                         &adr_dir,
                         &goal_dir,
                         generated_at_ms,
                     );
-                if projection_warnings.is_empty() {
-                    report.mutation_performed = true;
-                }
+                let projection_warnings = projection_outcome.warnings;
+                report.mutation_performed |= projection_outcome.wrote;
                 let projection =
                     cloud_adr::read_projection_state(&receipt.receipt_id, &adr_dir, &goal_dir);
                 let entry = &mut report.entries[entry_index];

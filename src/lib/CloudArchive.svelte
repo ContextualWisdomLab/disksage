@@ -55,6 +55,7 @@
   let attestation: api.CloudAttestationOutput | null = $state(null);
   let reconciling = $state(false);
   let reconciliation: api.CloudReceiptReconciliationOutput | null = $state(null);
+  let reconciliationError = $state("");
   let evicting = $state(false);
   let evictionConfirmation = $state("");
   let evictionRationale = $state("");
@@ -324,11 +325,11 @@
 
   async function reconcileCloudReceipts() {
     reconciling = true;
-    loadError = "";
+    reconciliationError = "";
     try {
       reconciliation = await api.reconcileCloudReceipts();
     } catch (e) {
-      loadError = String(e);
+      reconciliationError = String(e);
     } finally {
       reconciling = false;
     }
@@ -529,6 +530,7 @@
         <span class="context">
           {reconciliation.receipts_seen}개 확인 · {reconciliation.attested_count}개 provider 증거 갱신 ·
           {reconciliation.pending_count}개 업로드 대기 · {reconciliation.error_count}개 확인 실패
+          {#if reconciliation.incomplete_reconciliation} · {reconciliation.unprocessed_count}개 미처리{/if}
         </span>
         {#if reconciliation.entries.length === 0}
           <p class="muted">저장된 cloud receipt가 없습니다.</p>
@@ -546,6 +548,7 @@
         <p class="muted">이 작업은 provider 증거와 동적 ADR/Goal만 갱신하며 클라우드 쓰기·원본 삭제는 수행하지 않습니다.</p>
       </div>
     {/if}
+    {#if reconciliationError}<p class="error" role="alert">{reconciliationError}</p>{/if}
     {#if roots.some((root) => !root.readable)}
       <p class="warning">
         접근 불가 클라우드 루트는 선택에서 제외했습니다. macOS 개인정보 보호 권한을 허용한 뒤 목록을 다시 불러오세요.

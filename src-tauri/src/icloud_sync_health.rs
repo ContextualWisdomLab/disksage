@@ -564,6 +564,7 @@ fn probe_native_status(observed_at_ms: u64) -> IcloudNativeStatusEvidence {
                                 ErrorKind::WouldBlock | ErrorKind::Interrupted
                             ) => {
                                 if Instant::now() >= drain_deadline {
+                                    kill_group();
                                     break;
                                 }
                                 thread::sleep(Duration::from_millis(5));

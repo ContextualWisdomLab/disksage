@@ -222,10 +222,10 @@ impl Default for CloudPlanOptions {
 
 /// Immutable, process-local evidence prepared once for one source corpus.
 ///
-/// Content metadata and duplicate digests are destination-independent and expensive to collect.
-/// A snapshot lets callers derive several destination plans without re-running probes or reading
-/// source content again. Destination existence, account scope, review fingerprints, capacity, and
-/// provider sync state are deliberately not cached.
+/// Content metadata is destination-independent and expensive to collect. A snapshot lets callers
+/// derive several destination plans without re-running probes. Destination existence, account
+/// scope, review fingerprints, capacity, provider sync state, and content digests are deliberately
+/// evaluated for each final destination-specific candidate set.
 #[derive(Debug, Clone)]
 pub struct CloudSourceSnapshot {
     source_root: PathBuf,
@@ -235,8 +235,6 @@ pub struct CloudSourceSnapshot {
     source_scan_complete: bool,
     source_scan_visited_entries: u64,
     source_scan_stop_reasons: Vec<String>,
-    #[cfg(not(coverage))]
-    duplicate_digests: BTreeMap<PathBuf, Result<ContentDigests, String>>,
     #[cfg(not(coverage))]
     verified_regular_files: BTreeSet<PathBuf>,
 }
@@ -1449,6 +1447,7 @@ enum MetadataProbeFailure {
     Spawn,
     Wait,
     Timeout,
+    FileLimit,
     Exit,
     Read,
     OutputTooLarge,
@@ -1462,6 +1461,7 @@ impl MetadataProbeFailure {
             Self::Spawn => "spawn-failed",
             Self::Wait => "wait-failed",
             Self::Timeout => "timeout",
+            Self::FileLimit => "file-limit-exceeded",
             Self::Exit => "nonzero-exit",
             Self::Read => "output-read-failed",
             Self::OutputTooLarge => "output-limit-exceeded",
@@ -3882,45 +3882,6 @@ fn hash_duplicate_candidate(path: &Path, expected_bytes: u64) -> Result<ContentD
 }
 
 #[cfg(not(coverage))]
-fn prehash_duplicate_candidates(
-    files: &[FileFact],
-    limit: usize,
-) -> BTreeMap<PathBuf, Result<ContentDigests, String>> {
-    let mut eligible = files
-        .iter()
-        .filter(|file| {
-            let Some(kind) = archive_kind(&file.path) else {
-                return false;
-            };
-            source_blocked_reason(&file.path, kind, &file.content_metadata).is_none()
-        })
-        .collect::<Vec<_>>();
-    eligible.sort_by(|left, right| {
-        right
-            .bytes
-            .cmp(&left.bytes)
-            .then_with(|| left.path.cmp(&right.path))
-    });
-    eligible.truncate(limit.max(1));
-
-    let mut by_size: BTreeMap<u64, Vec<&FileFact>> = BTreeMap::new();
-    for file in eligible {
-        by_size.entry(file.bytes).or_default().push(file);
-    }
-
-    let mut digests = BTreeMap::new();
-    for same_size in by_size.values().filter(|files| files.len() > 1) {
-        for file in same_size {
-            digests.insert(
-                file.path.clone(),
-                hash_duplicate_candidate(&file.path, file.bytes),
-            );
-        }
-    }
-    digests
-}
-
-#[cfg(not(coverage))]
 fn source_snapshot_file_unchanged(file: &FileFact) -> bool {
     let Ok(metadata) = std::fs::metadata(&file.path) else {
         return false;
@@ -4541,7 +4502,7 @@ fn prepare_cloud_archive_source_with_scan(
     source_scan_stop_reasons: Vec<String>,
 ) -> CloudSourceSnapshot {
     #[cfg(not(coverage))]
-    let (batched_exiftool, selected_probe_paths, metadata_probe_started) = {
+    let (batched_exiftool, probe_candidate_paths, selected_probe_paths, metadata_probe_started) = {
         let mut probe_candidates = files
             .iter()
             .filter(|file| {
@@ -4564,6 +4525,10 @@ fn prepare_cloud_archive_source_with_scan(
                 .cmp(&left.bytes)
                 .then_with(|| left.path.cmp(&right.path))
         });
+        let probe_candidate_paths = probe_candidates
+            .iter()
+            .map(|file| file.path.clone())
+            .collect::<BTreeSet<_>>();
         probe_candidates.truncate(MAX_METADATA_PROBE_FILES);
         let selected_probe_paths = probe_candidates
             .iter()
@@ -4577,6 +4542,7 @@ fn prepare_cloud_archive_source_with_scan(
         let metadata_probe_started = Instant::now();
         (
             exiftool_metadata_batch(&paths),
+            probe_candidate_paths,
             selected_probe_paths,
             metadata_probe_started,
         )
@@ -4618,18 +4584,23 @@ fn prepare_cloud_archive_source_with_scan(
                     batched_exiftool.get(&file.path).cloned(),
                 );
             } else if prepared.content_metadata == ContentMetadata::default() {
+                let failure = if probe_candidate_paths.contains(&file.path)
+                    && !selected_probe_paths.contains(&file.path)
+                {
+                    MetadataProbeFailure::FileLimit
+                } else {
+                    MetadataProbeFailure::Timeout
+                };
                 add_probe_warning(
                     &mut prepared.content_metadata,
                     "planner",
-                    MetadataProbeFailure::Timeout,
+                    failure,
                 );
             }
         }
         prepared_files.push(prepared);
     }
 
-    #[cfg(not(coverage))]
-    let duplicate_digests = prehash_duplicate_candidates(&prepared_files, options.limit);
     CloudSourceSnapshot {
         source_root: source_root.to_path_buf(),
         prepared_at_ms: now_ms,
@@ -4638,8 +4609,6 @@ fn prepare_cloud_archive_source_with_scan(
         source_scan_complete,
         source_scan_visited_entries,
         source_scan_stop_reasons,
-        #[cfg(not(coverage))]
-        duplicate_digests,
         #[cfg(not(coverage))]
         verified_regular_files,
     }
@@ -4873,7 +4842,7 @@ pub fn plan_cloud_archive_from_snapshot(
     let exact_duplicates = {
         candidates.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.src.cmp(&b.src)));
         candidates.truncate(options.limit);
-        mark_exact_duplicate_candidates(&mut candidates, Some(&snapshot.duplicate_digests))
+        mark_exact_duplicate_candidates(&mut candidates, None)
     };
     #[cfg(coverage)]
     let exact_duplicates = {
@@ -5000,6 +4969,7 @@ mod tests {
                 && evidence.value == "exiftool-batch:timeout"
                 && evidence.confidence == "high"
         }));
+        assert_eq!(MetadataProbeFailure::FileLimit.code(), "file-limit-exceeded");
     }
 
     #[cfg(all(not(coverage), unix))]
@@ -6608,7 +6578,7 @@ mod tests {
 
     #[cfg(not(coverage))]
     #[test]
-    fn source_snapshot_reuses_probes_and_hashes_but_refreshes_destination_state() {
+    fn source_snapshot_reuses_probes_and_rehashes_final_destination_candidates() {
         let tmp = tempfile::tempdir().unwrap();
         let source = tmp.path().join("source");
         let google = tmp.path().join("google");
@@ -6652,7 +6622,6 @@ mod tests {
         );
 
         assert_eq!(snapshot.candidate_count(), 2);
-        assert_eq!(snapshot.duplicate_digests.len(), 2);
         let google_report =
             plan_cloud_archive_from_snapshot(&snapshot, &root(CloudProvider::GoogleDrive, &google));
         let onedrive_report =
@@ -6672,30 +6641,6 @@ mod tests {
             candidate.dst == destination.to_string_lossy()
                 && candidate.blocked_reason.as_deref() == Some("destination-exists")
         }));
-    }
-
-    #[cfg(not(coverage))]
-    #[test]
-    fn duplicate_prehash_respects_candidate_limit() {
-        let tmp = tempfile::tempdir().unwrap();
-        let files = ["a.tgz", "b.tgz"]
-            .into_iter()
-            .map(|name| {
-                let path = tmp.path().join(name);
-                std::fs::write(&path, b"same-content").unwrap();
-                let metadata = std::fs::metadata(&path).unwrap();
-                FileFact {
-                    path,
-                    bytes: metadata.len(),
-                    created_ms: millis(metadata.created()),
-                    modified_ms: millis(metadata.modified()),
-                    content_metadata: ContentMetadata::default(),
-                }
-            })
-            .collect::<Vec<_>>();
-
-        assert!(prehash_duplicate_candidates(&files, 1).is_empty());
-        assert_eq!(prehash_duplicate_candidates(&files, 2).len(), 2);
     }
 
     #[cfg(not(coverage))]

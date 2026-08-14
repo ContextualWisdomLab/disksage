@@ -326,6 +326,14 @@ pub fn write_latest_goal_snapshot(
 
 /// Persist replaceable ADR/Goal projections without turning an authoritative receipt/evidence
 /// result into a failed operation. Immutable records remain the source of truth.
+#[derive(Debug)]
+pub struct ProjectionWriteOutcome {
+    pub adr_path: Option<PathBuf>,
+    pub goal_path: Option<PathBuf>,
+    pub warnings: Vec<String>,
+    pub wrote: bool,
+}
+
 pub fn write_projection_pair(
     adr_dir: &Path,
     adr: &CloudOffloadAdrSnapshot,
@@ -365,8 +373,35 @@ pub fn write_projection_pair_with_source_blocker(
     goal: &CloudOffloadGoalSnapshot,
     source_blocker: Option<&str>,
 ) -> (Option<PathBuf>, Option<PathBuf>, Vec<String>) {
+    let outcome = write_projection_pair_with_source_blocker_outcome(
+        adr_dir,
+        adr,
+        goal_dir,
+        goal,
+        source_blocker,
+    );
+    (outcome.adr_path, outcome.goal_path, outcome.warnings)
+}
+
+/// Write a projection pair and report whether either projection was actually changed.
+///
+/// The source-evicted terminal state deliberately returns existing paths with `wrote = false`;
+/// callers must not treat those paths as a mutation.
+pub fn write_projection_pair_with_source_blocker_outcome(
+    adr_dir: &Path,
+    adr: &CloudOffloadAdrSnapshot,
+    goal_dir: &Path,
+    goal: &CloudOffloadGoalSnapshot,
+    source_blocker: Option<&str>,
+) -> ProjectionWriteOutcome {
     let Some(source_blocker) = source_blocker else {
-        return write_projection_pair(adr_dir, adr, goal_dir, goal);
+        let (adr_path, goal_path, warnings) = write_projection_pair(adr_dir, adr, goal_dir, goal);
+        return ProjectionWriteOutcome {
+            wrote: adr_path.is_some() || goal_path.is_some(),
+            adr_path,
+            goal_path,
+            warnings,
+        };
     };
 
     let mut adr = adr.clone();
@@ -384,11 +419,12 @@ pub fn write_projection_pair_with_source_blocker(
         ),
     ) {
         if previous_goal.goal_state == CloudOffloadGoalState::SourceEvicted {
-            return (
-                Some(adr_dir.join(format!("{}-latest.json", goal.receipt_id))),
-                Some(goal_dir.join(format!("{}-latest.json", goal.receipt_id))),
-                Vec::new(),
-            );
+            return ProjectionWriteOutcome {
+                adr_path: Some(adr_dir.join(format!("{}-latest.json", goal.receipt_id))),
+                goal_path: Some(goal_dir.join(format!("{}-latest.json", goal.receipt_id))),
+                warnings: Vec::new(),
+                wrote: false,
+            };
         }
         if goal_state_rank(previous_goal.goal_state) > goal_state_rank(goal.goal_state) {
             adr.goal_state = previous_goal.goal_state;
@@ -424,7 +460,13 @@ pub fn write_projection_pair_with_source_blocker(
         adr.consequences
             .push("eviction-blocked-until-source-state".into());
     }
-    write_projection_pair(adr_dir, &adr, goal_dir, &goal)
+    let (adr_path, goal_path, warnings) = write_projection_pair(adr_dir, &adr, goal_dir, &goal);
+    ProjectionWriteOutcome {
+        wrote: adr_path.is_some() || goal_path.is_some(),
+        adr_path,
+        goal_path,
+        warnings,
+    }
 }
 
 /// Seed projections for a receipt whose provider evidence is not available yet.
@@ -460,6 +502,17 @@ pub fn ensure_initial_projection_pair_with_source_state(
     goal_dir: &Path,
     updated_at_ms: u64,
 ) -> Vec<String> {
+    ensure_initial_projection_pair_with_source_state_outcome(receipt, adr_dir, goal_dir, updated_at_ms)
+        .warnings
+}
+
+#[cfg(not(coverage))]
+pub fn ensure_initial_projection_pair_with_source_state_outcome(
+    receipt: &CloudCopyReceipt,
+    adr_dir: &Path,
+    goal_dir: &Path,
+    updated_at_ms: u64,
+) -> ProjectionWriteOutcome {
     let mut adr = initial_adr_snapshot(receipt, updated_at_ms);
     let mut goal = initial_goal_snapshot(receipt, updated_at_ms);
     let source_blocker =
@@ -471,18 +524,18 @@ pub fn ensure_initial_projection_pair_with_source_state(
         adr.consequences
             .push(format!("source-state-blocked:{blocker}"));
     }
-    let (_, _, mut warnings) = write_projection_pair_with_source_blocker(
+    let mut outcome = write_projection_pair_with_source_blocker_outcome(
         adr_dir,
         &adr,
         goal_dir,
         &goal,
         source_blocker,
     );
-    warnings.retain(|warning| {
+    outcome.warnings.retain(|warning| {
         !warning.ends_with("cloud-adr-state-regression")
             && !warning.ends_with("cloud-goal-state-regression")
     });
-    warnings
+    outcome
 }
 
 fn read_latest_projection<T: serde::de::DeserializeOwned>(
@@ -740,6 +793,16 @@ mod tests {
         assert!(warnings
             .iter()
             .any(|warning| warning == "goal-projection-write-failed:cloud-goal-state-regression"));
+
+        let outcome = write_projection_pair_with_source_blocker_outcome(
+            adr_directory.path(),
+            &initial_adr_snapshot(&receipt, 12),
+            goal_directory.path(),
+            &initial_goal_snapshot(&receipt, 12),
+            Some("source-not-present"),
+        );
+        assert!(!outcome.wrote);
+        assert!(outcome.warnings.is_empty());
     }
 
     #[test]

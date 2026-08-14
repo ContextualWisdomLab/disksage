@@ -8,6 +8,12 @@ pub struct BaseDirs {
     pub home: PathBuf,
 }
 
+fn absolute_env_path(name: &str) -> Option<PathBuf> {
+    std::env::var_os(name)
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+}
+
 impl BaseDirs {
     pub fn from_env() -> Option<BaseDirs> {
         let home = std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).ok()?;
@@ -19,7 +25,7 @@ impl BaseDirs {
         #[cfg(windows)]
         let local_data = std::env::var("LOCALAPPDATA").map(PathBuf::from).ok()?;
         #[cfg(not(windows))]
-        let local_data = home.join(".cache");
+        let local_data = absolute_env_path("XDG_CACHE_HOME").unwrap_or_else(|| home.join(".cache"));
         Some(BaseDirs { temp, local_data, home })
     }
 }
@@ -72,9 +78,15 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
     ];
 
     #[cfg(target_os = "macos")]
+    let uv = absolute_env_path("UV_CACHE_DIR").unwrap_or_else(|| bases.local_data.join("uv"));
+    #[cfg(target_os = "macos")]
+    let huggingface = absolute_env_path("HF_HUB_CACHE")
+        .or_else(|| absolute_env_path("HF_HOME").map(|path| path.join("hub")))
+        .unwrap_or_else(|| bases.local_data.join("huggingface"));
+    #[cfg(target_os = "macos")]
     entries.extend([
-        ("uv-cache", "uv 캐시", bases.local_data.join("uv")),
-        ("huggingface-cache", "Hugging Face 캐시", bases.local_data.join("huggingface")),
+        ("uv-cache", "uv 캐시", uv),
+        ("huggingface-cache", "Hugging Face 캐시", huggingface),
         ("codex-runtimes-cache", "Codex 런타임 캐시", bases.local_data.join("codex-runtimes")),
         ("gradle-cache", "Gradle 캐시", bases.home.join(".gradle").join("caches")),
     ]);

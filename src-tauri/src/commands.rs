@@ -3,6 +3,8 @@ use std::sync::atomic::AtomicBool;
 #[cfg(not(coverage))]
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
+#[cfg(not(coverage))]
+use std::time::{Duration, Instant};
 
 #[cfg(not(coverage))]
 use tauri::{AppHandle, Emitter, State};
@@ -1705,6 +1707,8 @@ pub struct CloudReceiptReconciliationOutput {
     pub eviction_ready_count: u64,
     pub error_count: u64,
     pub provider_evidence_written: u64,
+    pub unprocessed_count: u64,
+    pub incomplete_reconciliation: bool,
     pub entries: Vec<CloudReceiptReconciliationEntry>,
     pub cloud_write_executed: bool,
     pub source_eviction_authorized: bool,
@@ -1712,6 +1716,10 @@ pub struct CloudReceiptReconciliationOutput {
 
 #[cfg(not(coverage))]
 const MAX_CLOUD_RECEIPT_RECONCILIATION_ENTRIES: usize = 10_000;
+#[cfg(not(coverage))]
+const MAX_CLOUD_RECEIPTS_PER_RECONCILIATION: usize = 256;
+#[cfg(not(coverage))]
+const CLOUD_RECONCILIATION_MAX_DURATION: Duration = Duration::from_secs(30);
 
 #[cfg(not(coverage))]
 fn stable_reconciliation_error(error: &str) -> String {
@@ -1738,6 +1746,7 @@ fn reconcile_cloud_receipts_inner(
     connection_path: &Path,
     cloud_roots: &[cloud::CloudRoot],
 ) -> Result<CloudReceiptReconciliationOutput, String> {
+    let reconciliation_started = Instant::now();
     let receipt_metadata = match std::fs::symlink_metadata(receipt_dir) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -1750,6 +1759,8 @@ fn reconcile_cloud_receipts_inner(
                 eviction_ready_count: 0,
                 error_count: 0,
                 provider_evidence_written: 0,
+                unprocessed_count: 0,
+                incomplete_reconciliation: false,
                 entries: Vec::new(),
                 cloud_write_executed: false,
                 source_eviction_authorized: false,
@@ -1769,7 +1780,17 @@ fn reconcile_cloud_receipts_inner(
     if paths.len() > MAX_CLOUD_RECEIPT_RECONCILIATION_ENTRIES {
         return Err("cloud-receipt-directory-entry-limit-exceeded".into());
     }
-
+    let receipt_paths = paths
+        .into_iter()
+        .filter(|path| {
+            let Ok(metadata) = std::fs::symlink_metadata(path) else {
+                return false;
+            };
+            metadata.is_file()
+                && !metadata.file_type().is_symlink()
+                && path.extension().and_then(|value| value.to_str()) == Some("json")
+        })
+        .collect::<Vec<_>>();
     let mut output = CloudReceiptReconciliationOutput {
         schema_version: 1,
         observed_at_ms: cloud::system_now_ms(),
@@ -1779,21 +1800,22 @@ fn reconcile_cloud_receipts_inner(
         eviction_ready_count: 0,
         error_count: 0,
         provider_evidence_written: 0,
+        unprocessed_count: 0,
+        incomplete_reconciliation: false,
         entries: Vec::new(),
         cloud_write_executed: false,
         source_eviction_authorized: false,
     };
-    for path in paths {
-        let metadata = match std::fs::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(_) => continue,
-        };
-        let is_json = path.extension().and_then(|value| value.to_str()) == Some("json");
-        if metadata.file_type().is_symlink() || !metadata.is_file() || !is_json {
-            continue;
+    for (index, path) in receipt_paths.iter().enumerate() {
+        if index >= MAX_CLOUD_RECEIPTS_PER_RECONCILIATION
+            || reconciliation_started.elapsed() >= CLOUD_RECONCILIATION_MAX_DURATION
+        {
+            output.unprocessed_count = receipt_paths.len().saturating_sub(index) as u64;
+            output.incomplete_reconciliation = output.unprocessed_count > 0;
+            break;
         }
         output.receipts_seen = output.receipts_seen.saturating_add(1);
-        let receipt = match cloud_transfer::read_immutable_receipt(&path) {
+        let receipt = match cloud_transfer::read_immutable_receipt(path) {
             Ok(receipt) => receipt,
             Err(error) => {
                 output.error_count = output.error_count.saturating_add(1);
@@ -2603,6 +2625,30 @@ mod tests {
         assert_eq!(output.attested_count, 0);
         assert!(!output.cloud_write_executed);
         assert!(!output.source_eviction_authorized);
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn reconciliation_reports_receipts_left_after_entry_budget() {
+        let temporary = tempfile::tempdir().unwrap();
+        let receipts = temporary.path().join("receipts");
+        std::fs::create_dir(&receipts).unwrap();
+        for index in 0..=MAX_CLOUD_RECEIPTS_PER_RECONCILIATION {
+            std::fs::write(receipts.join(format!("{index:04}.json")), b"{}").unwrap();
+        }
+        let output = reconcile_cloud_receipts_inner(
+            &receipts,
+            &temporary.path().join("evidence"),
+            &temporary.path().join("adr"),
+            &temporary.path().join("goals"),
+            &temporary.path().join("oauth.json"),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(output.receipts_seen, MAX_CLOUD_RECEIPTS_PER_RECONCILIATION as u64);
+        assert_eq!(output.unprocessed_count, 1);
+        assert!(output.incomplete_reconciliation);
+        assert_eq!(output.error_count, MAX_CLOUD_RECEIPTS_PER_RECONCILIATION as u64);
     }
 
     #[cfg(not(coverage))]

@@ -14,6 +14,7 @@
   let results: api.CleanResult[] = $state([]);
   let busy = $state(false);
   let loadError = $state("");
+  let cacheRetryMessage = $state("");
   // ponytail: 배지는 개별 파일/디렉토리 후보(artifacts)에만 표시 — caches는 소수의 고정 규칙 카테고리라 LLM 판정 가치가 낮음.
   let verdicts: Record<string, api.Verdict> = $state({});
 
@@ -41,6 +42,7 @@
     if (busy || !candidate.exists || candidate.bytes === 0) return;
     busy = true;
     loadError = "";
+    cacheRetryMessage = "";
     try {
       const targets = await api.listCacheTargets(candidate.path);
       if (targets.length === 0) return;
@@ -54,7 +56,13 @@
       results = await api.cleanCacheContents(candidate.path, targets);
       await load();
     } catch (e) {
-      loadError = String(e);
+      const error = String(e);
+      if (error.includes("cache-cleanup-targets-stale")) {
+        await load();
+        cacheRetryMessage = "캐시 내용이 바뀌어 최신 목록을 불러왔습니다. 다시 휴지통으로를 눌러 검토하세요.";
+      } else {
+        loadError = error;
+      }
     } finally {
       busy = false;
     }
@@ -117,6 +125,7 @@
   <p class="notice" role="status">
     알려진 캐시 루트의 직계 항목만 객체 지문·크기·수정시각을 재검증한 뒤 휴지통으로 보냅니다. 캐시 루트 자체는 보존됩니다.
   </p>
+  {#if cacheRetryMessage}<p class="notice" role="status">{cacheRetryMessage}</p>{/if}
   <ul class="list">
     {#each caches as c (c.id)}
       <li>

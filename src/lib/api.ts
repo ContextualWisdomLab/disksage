@@ -844,6 +844,8 @@ export interface CloudReceiptReconciliationOutput {
   eviction_ready_count: number;
   error_count: number;
   provider_evidence_written: number;
+  unprocessed_count: number;
+  incomplete_reconciliation: boolean;
   entries: CloudReceiptReconciliationEntry[];
   cloud_write_executed: false;
   source_eviction_authorized: false;
