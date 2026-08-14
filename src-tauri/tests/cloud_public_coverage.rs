@@ -202,6 +202,39 @@ fn source_snapshot_recognizes_supported_archive_families_without_io() {
 }
 
 #[test]
+fn source_snapshot_enforces_the_candidate_limit_after_admission() {
+    const DAY_MS: u64 = 24 * 60 * 60 * 1_000;
+
+    let temp = tempfile::tempdir().unwrap();
+    let source_root = temp.path().join("source");
+    std::fs::create_dir(&source_root).unwrap();
+    let now_ms = 20 * DAY_MS;
+    let modified_ms = now_ms - DAY_MS;
+    let file = |name: &str| FileFact {
+        path: source_root.join(name),
+        bytes: 2,
+        created_ms: modified_ms,
+        modified_ms,
+        content_metadata: ContentMetadata::default(),
+    };
+    let files = vec![file("one.pdf"), file("two.pdf"), file("three.pdf")];
+
+    let snapshot = prepare_cloud_archive_source(
+        &files,
+        &source_root,
+        now_ms,
+        CloudPlanOptions {
+            min_size_bytes: 1,
+            min_age_days: 0,
+            limit: 2,
+        },
+    );
+
+    assert_eq!(snapshot.candidate_count(), 2);
+    assert_eq!(snapshot.candidate_bytes(), 4);
+}
+
+#[test]
 fn discovery_classifies_synthetic_provider_roots_without_touching_real_accounts() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();
