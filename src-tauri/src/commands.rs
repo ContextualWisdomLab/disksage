@@ -1157,6 +1157,24 @@ pub fn inspect_icloud_new_copy_admission(
     icloud_sync_health::inspect_new_copy_admission(&resolve_home(&app), cloud::system_now_ms())
 }
 
+/// Inspect the provider-wide File Provider queue for a non-iCloud cloud root.
+///
+/// This is read-only aggregate evidence. It never returns user paths and never authorizes a copy
+/// or source eviction; iCloud continues to use its specialized CloudDocs health command above.
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn inspect_cloud_provider_global_sync(
+    cloud_root: String,
+    app: AppHandle,
+) -> Result<provider_global_sync::ProviderGlobalSyncReport, String> {
+    let selected = selected_cloud_root(&app, &cloud_root)?;
+    cloud::validate_cloud_root_readable(&selected)?;
+    if selected.provider == cloud::CloudProvider::Icloud {
+        return Err("provider-global-sync-icloud-specialized".into());
+    }
+    provider_global_sync::inspect_new_copy_admission(selected.provider)
+}
+
 #[cfg(not(coverage))]
 struct CloudPlanningOutput {
     selected: cloud::CloudRoot,

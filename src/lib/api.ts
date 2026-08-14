@@ -616,6 +616,21 @@ export interface IcloudSyncHealthReport {
   local_eviction_authorized: boolean;
 }
 
+export type ProviderGlobalSyncState = "clear" | "pending" | "error" | "unavailable";
+
+export interface ProviderGlobalSyncReport {
+  schema_version: number;
+  provider: Exclude<CloudProvider, "icloud">;
+  evidence_kind: string;
+  evidence_complete: boolean;
+  state: ProviderGlobalSyncState;
+  upload_progress_present: boolean;
+  download_progress_present: boolean;
+  pending_indexable_count: number | null;
+  blockers: string[];
+  notices: string[];
+}
+
 export type CapacityEvidenceKind = "provider-api" | "provider-native-status" | "unavailable";
 export type CloudCapacityState =
   | "available"
@@ -962,6 +977,8 @@ export const verifyCloudProviderCapacity = (cloudRoot: string) =>
   invoke<CloudCapacitySnapshot>("verify_cloud_provider_capacity", { cloudRoot });
 export const inspectIcloudNewCopyAdmission = () =>
   invoke<IcloudSyncHealthReport>("inspect_icloud_new_copy_admission");
+export const inspectCloudProviderGlobalSync = (cloudRoot: string) =>
+  invoke<ProviderGlobalSyncReport>("inspect_cloud_provider_global_sync", { cloudRoot });
 export const listCloudReviewDecisions = () =>
   invoke<CloudReviewDecision[]>("list_cloud_review_decisions");
 export const connectCloudProvider = (cloudRoot: string, clientId: string) =>

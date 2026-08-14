@@ -66,6 +66,7 @@ describe("api wrappers", () => {
       [() => api.listCloudProviderConnections(), "list_cloud_provider_connections"],
       [() => api.verifyCloudProviderCapacity("/cloud"), "verify_cloud_provider_capacity", { cloudRoot: "/cloud" }],
       [() => api.inspectIcloudNewCopyAdmission(), "inspect_icloud_new_copy_admission"],
+      [() => api.inspectCloudProviderGlobalSync("/cloud"), "inspect_cloud_provider_global_sync", { cloudRoot: "/cloud" }],
       [() => api.listCloudReviewDecisions(), "list_cloud_review_decisions"],
       [() => api.connectCloudProvider("/cloud", "desktop-client-id"), "connect_cloud_provider", { cloudRoot: "/cloud", clientId: "desktop-client-id" }],
       [() => api.disconnectCloudProvider("/cloud"), "disconnect_cloud_provider", { cloudRoot: "/cloud" }],

@@ -59,6 +59,9 @@
   let icloudHealth: api.IcloudSyncHealthReport | null = $state(null);
   let icloudHealthError = $state("");
   let checkingIcloudHealth = $state(false);
+  let providerGlobalSync: api.ProviderGlobalSyncReport | null = $state(null);
+  let providerGlobalSyncError = $state("");
+  let checkingProviderGlobalSync = $state(false);
   let evicting = $state(false);
   let evictionConfirmation = $state("");
   let evictionRationale = $state("");
@@ -93,6 +96,7 @@
     const reconciliationTimer = setInterval(() => {
       if (!reconciling) void reconcileCloudReceipts();
       if (!checkingIcloudHealth) void refreshIcloudHealth();
+      if (!checkingProviderGlobalSync) void refreshProviderGlobalSync();
     }, RECONCILIATION_INTERVAL_MS);
     void (async () => {
       try {
@@ -102,7 +106,11 @@
         connections = await api.listCloudProviderConnections();
         reviewDecisions = await api.listCloudReviewDecisions();
         selectedRoot = roots.find((root) => root.readable)?.path ?? "";
-        await Promise.all([reconcileCloudReceipts(), refreshIcloudHealth()]);
+        await Promise.all([
+          reconcileCloudReceipts(),
+          refreshIcloudHealth(),
+          refreshProviderGlobalSync(),
+        ]);
       } catch (e) {
         loadError = String(e);
       }
@@ -351,6 +359,31 @@
     }
   }
 
+  async function refreshProviderGlobalSync() {
+    const root = selectedRootDetails();
+    if (!root || root.provider === "icloud") {
+      providerGlobalSync = null;
+      providerGlobalSyncError = "";
+      return;
+    }
+    checkingProviderGlobalSync = true;
+    providerGlobalSyncError = "";
+    try {
+      providerGlobalSync = await api.inspectCloudProviderGlobalSync(root.path);
+    } catch (e) {
+      providerGlobalSync = null;
+      providerGlobalSyncError = String(e);
+    } finally {
+      checkingProviderGlobalSync = false;
+    }
+  }
+
+  function providerSelectionChanged() {
+    providerGlobalSync = null;
+    providerGlobalSyncError = "";
+    void refreshProviderGlobalSync();
+  }
+
   function sourceEvictionReady(): boolean {
     return copied !== null
       && attestation?.permit !== null
@@ -502,6 +535,19 @@
     return labels[blocker] ?? blocker;
   }
 
+  function providerGlobalSyncBlockerLabel(blocker: string): string {
+    const labels: Record<string, string> = {
+      "provider-global-sync-transfer-active": "전역 파일 전송이 진행 중임",
+      "provider-global-sync-indexing-pending": "공급자 인덱싱이 끝나지 않음",
+      "provider-global-sync-reconciliation-pending": "공급자 reconciliation 대기 항목이 있음",
+      "provider-global-sync-filename-too-long": "파일명 제한 오류가 있음",
+      "provider-global-sync-temporarily-disconnected": "공급자가 일시적으로 연결 해제됨",
+      "provider-global-sync-server-unreachable": "공급자 서버에 연결할 수 없음",
+      "provider-global-sync-error": "공급자 전역 동기화 오류가 있음",
+    };
+    return labels[blocker] ?? blocker;
+  }
+
   function duration(ms: number): string {
     const totalMinutes = Math.floor(ms / 60_000);
     const hours = Math.floor(totalMinutes / 60);
@@ -531,7 +577,7 @@
     <div class="controls">
       <label>
         대상
-        <select bind:value={selectedRoot} disabled={busy}>
+        <select bind:value={selectedRoot} onchange={providerSelectionChanged} disabled={busy}>
           {#each roots as root (root.id)}
             <option value={root.path} disabled={!root.readable}>
               {root.label} · {accountScopeLabel(root.account_scope)}{root.readable ? "" : " · 접근 불가"}
@@ -602,6 +648,28 @@
       </div>
     {/if}
     {#if icloudHealthError}<p class="error" role="alert">iCloud 상태 확인: {icloudHealthError}</p>{/if}
+    {#if providerGlobalSync}
+      <div class="receipt-reconciliation" aria-live="polite">
+        <strong>{providerGlobalSync.provider} 전역 동기화 admission</strong>
+        <span class="context">
+          {providerGlobalSync.state === "clear" && providerGlobalSync.blockers.length === 0 ? "새 복사 허용 가능" : "새 복사 차단"} ·
+          업로드 전송 {providerGlobalSync.upload_progress_present ? "진행 중" : "없음"} ·
+          다운로드 전송 {providerGlobalSync.download_progress_present ? "진행 중" : "없음"}
+          {#if providerGlobalSync.pending_indexable_count !== null}
+            · 인덱싱 대기 {providerGlobalSync.pending_indexable_count}개
+          {/if}
+        </span>
+        {#if providerGlobalSync.blockers.length > 0}
+          <p class="warning">
+            차단 사유: {providerGlobalSync.blockers.map(providerGlobalSyncBlockerLabel).join(", ")}
+          </p>
+        {:else}
+          <p class="capacity-ok">공급자 전역 동기화 대기열이 비어 있습니다. 개별 파일은 별도 provider 증거가 필요합니다.</p>
+        {/if}
+        <p class="muted">읽기 전용 File Provider 집계 증거이며, 클라우드 쓰기·개별 파일 attestation·원본 삭제 권한을 대신 증명하지 않습니다.</p>
+      </div>
+    {/if}
+    {#if providerGlobalSyncError}<p class="error" role="alert">공급자 전역 동기화 상태 확인: {providerGlobalSyncError}</p>{/if}
     {#if roots.some((root) => !root.readable)}
       <p class="warning">
         접근 불가 클라우드 루트는 선택에서 제외했습니다. macOS 개인정보 보호 권한을 허용한 뒤 목록을 다시 불러오세요.
