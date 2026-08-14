@@ -1737,7 +1737,6 @@ fn stable_reconciliation_error(error: &str) -> String {
 }
 
 #[cfg(not(coverage))]
-#[cfg(not(coverage))]
 fn reconcile_cloud_receipts_inner(
     receipt_dir: &Path,
     evidence_dir: &Path,
