@@ -24,6 +24,12 @@ struct Args {
     record_root: PathBuf,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum ParseResult {
+    Run(Args),
+    Help,
+}
+
 fn next_utf8(args: &mut impl Iterator<Item = OsString>, option: &str) -> Result<String, String> {
     args.next()
         .ok_or_else(|| format!("{option} requires a value"))?
@@ -37,7 +43,7 @@ fn next_path(args: &mut impl Iterator<Item = OsString>, option: &str) -> Result<
         .ok_or_else(|| format!("{option} requires an absolute path"))
 }
 
-fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
+fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResult, String> {
     let mut repository_root = None;
     let mut retention_references = Vec::new();
     let mut plan_fingerprint = None;
@@ -68,7 +74,7 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Args, Stri
             Some("--reviewed-by") => reviewed_by = Some(next_utf8(&mut args, "--reviewed-by")?),
             Some("--rationale") => rationale = Some(next_utf8(&mut args, "--rationale")?),
             Some("--record-root") => record_root = Some(next_path(&mut args, "--record-root")?),
-            Some("-h" | "--help") => return Err(USAGE.into()),
+            Some("-h" | "--help") => return Ok(ParseResult::Help),
             Some(option) => return Err(format!("unknown option: {option}\n{USAGE}")),
             None => return Err("option must be valid UTF-8".into()),
         }
@@ -100,7 +106,7 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Args, Stri
         return Err("--record-root must be absolute".into());
     }
 
-    Ok(Args {
+    Ok(ParseResult::Run(Args {
         repository_root,
         retention_references,
         plan_fingerprint,
@@ -108,7 +114,7 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Args, Stri
         reviewed_by,
         rationale,
         record_root,
-    })
+    }))
 }
 
 #[derive(serde::Serialize)]
@@ -180,7 +186,11 @@ fn execute(args: Args) -> Result<RemovalOutput, String> {
 
 fn main() {
     let args = match parse_args(std::env::args_os().skip(1)) {
-        Ok(args) => args,
+        Ok(ParseResult::Run(args)) => args,
+        Ok(ParseResult::Help) => {
+            println!("{USAGE}");
+            return;
+        }
         Err(error) => {
             eprintln!("{error}");
             std::process::exit(64);
@@ -224,7 +234,15 @@ mod tests {
     #[test]
     fn parser_requires_explicit_mutation_boundary() {
         assert!(parse_args(Vec::<OsString>::new()).is_err());
-        assert!(parse_args(valid_args()).is_ok());
+        assert!(matches!(parse_args(valid_args()), Ok(ParseResult::Run(_))));
+    }
+
+    #[test]
+    fn help_is_a_successful_terminal_parse_result() {
+        assert_eq!(
+            parse_args([OsString::from("--help")]).unwrap(),
+            ParseResult::Help
+        );
     }
 
     #[test]
