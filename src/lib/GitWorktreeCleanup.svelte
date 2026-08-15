@@ -2,6 +2,14 @@
   import { confirm, open } from "@tauri-apps/plugin-dialog";
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
+  import {
+    GIT_WORKTREE_AUDIT_FAILURE,
+    GIT_WORKTREE_REMOVAL_FAILURE,
+    GIT_WORKTREE_REPOSITORY_SELECTION_FAILURE,
+    GIT_WORKTREE_RESULT_RECORD_FAILURE,
+    evidenceGapActions,
+    removalStoppedAction,
+  } from "./gitWorktreeFeedback";
 
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
@@ -56,8 +64,8 @@
       if (typeof selected !== "string") return;
       repositoryRoot = selected;
       resetDecision();
-    } catch (e) {
-      error = "Git 저장소 선택에 실패했습니다.";
+    } catch {
+      error = GIT_WORKTREE_REPOSITORY_SELECTION_FAILURE;
     }
   }
 
@@ -73,8 +81,8 @@
       retentionText = report.retention_references
         .map((binding) => binding.reference_ref)
         .join("\n");
-    } catch (e) {
-      error = "Git worktree 감사에 실패했습니다.";
+    } catch {
+      error = GIT_WORKTREE_AUDIT_FAILURE;
     } finally {
       planning = false;
     }
@@ -111,8 +119,8 @@
       );
       confirmationPhrase = "";
       rationale = "";
-    } catch (e) {
-      error = "Git worktree 제거에 실패했습니다.";
+    } catch {
+      error = GIT_WORKTREE_REMOVAL_FAILURE;
     } finally {
       executing = false;
     }
@@ -185,10 +193,17 @@
 
       {#if evidenceGapEntries().length > 0}
         <div class="blocked">
-          <strong>증거가 부족해 전체 실행을 차단했습니다.</strong>
+          <strong>증거가 부족해 전체 실행을 차단했습니다. 다음 항목을 확인하세요.</strong>
           <ul>
             {#each evidenceGapEntries() as entry (entry.path_fingerprint)}
-              <li><span class="path">{entry.path}</span> — {entry.blockers.join(", ")}</li>
+              <li>
+                <span class="path">{entry.path}</span>
+                <ul class="evidence-actions">
+                  {#each evidenceGapActions(entry.blockers) as action}
+                    <li>{action}</li>
+                  {/each}
+                </ul>
+              </li>
             {/each}
           </ul>
         </div>
@@ -201,8 +216,8 @@
             사전 할당량 기준 최대 {fmtBytes(removal.result.removed_allocated_bytes_upper_bound)}입니다.
           </p>
         {:else}
-          <p class="warning">
-            일부 또는 사후 검증이 완료되지 않았습니다: {removal.result.stopped_reason ?? "검증 불완전"}.
+          <p class="warning" role="alert">
+            {removalStoppedAction(removal.result.stopped_reason)}
             확인된 제거 {removal.result.removed_count}/{removal.result.planned_candidate_count}개입니다.
           </p>
         {/if}
@@ -210,9 +225,7 @@
         {#if removal.result_path}
           <p class="muted">결과 기록: {removal.result_path}</p>
         {:else}
-          <p class="error" role="alert">
-            실행 결과는 위와 같지만 결과 기록을 저장하지 못했습니다: {removal.result_record_error}
-          </p>
+          <p class="error" role="alert">{GIT_WORKTREE_RESULT_RECORD_FAILURE}</p>
         {/if}
       {:else if report.evidence_complete && report.exact_approval_phrase}
         <div class="approval">
@@ -265,7 +278,8 @@
   .worktrees li { padding: 0.45rem 0; border-bottom: 1px solid #d9e0e6; }
   .path { overflow-wrap: anywhere; color: #66717d; font-size: 0.78rem; }
   .blocked { padding: 0.6rem; border: 1px solid #b74a4a; background: #fff6f6; }
-  .blocked ul { margin-bottom: 0; }
+  .blocked > ul { margin-bottom: 0; }
+  .evidence-actions { margin: 0.25rem 0 0; }
   .approval { display: grid; gap: 0.55rem; justify-items: start; padding: 0.7rem; border: 1px solid #b78335; border-radius: 4px; background: #fffaf1; }
   .approval code { max-width: min(60rem, 90vw); overflow-wrap: anywhere; user-select: all; }
   .approval textarea { width: min(60rem, 90vw); resize: vertical; }
