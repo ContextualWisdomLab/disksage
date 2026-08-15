@@ -55,7 +55,8 @@ fn assert_non_utf8_argument_is_bounded(binary: &str) {
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
 
-    let opaque = OsString::from_vec(vec![b'-', b'-', b'o', b'p', b'a', b'q', b'u', b'e', 0xff]);
+    let opaque =
+        OsString::from_vec(vec![b'-', b'-', b'o', b'p', b'a', b'q', b'u', b'e', 0xff]);
     let output = Command::new(binary)
         .env_remove("HOME")
         .arg(opaque)
@@ -67,9 +68,17 @@ fn assert_non_utf8_argument_is_bounded(binary: &str) {
         Some(2),
         "invalid non-UTF-8 input must use the ordinary bounded argument-error exit"
     );
-    assert!(output.stdout.is_empty(), "invalid non-UTF-8 input must not emit successful output");
-    let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must remain valid UTF-8");
+    assert!(
+        output.stdout.is_empty(),
+        "invalid non-UTF-8 input must not emit successful output"
+    );
+    let stderr =
+        String::from_utf8(output.stderr).expect("CLI diagnostics must remain valid UTF-8");
     assert!(!stderr.is_empty(), "invalid non-UTF-8 input must remain visible");
+    assert!(
+        !stderr.contains("opaque"),
+        "invalid diagnostics must not echo opaque argument payloads"
+    );
     assert!(
         !stderr.contains("panicked") && !stderr.contains("thread 'main'"),
         "invalid host arguments must not escape through a Rust panic"
