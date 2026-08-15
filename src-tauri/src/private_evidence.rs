@@ -113,8 +113,15 @@ where
 
     before_create();
 
-    // Re-check the pathname immediately after the deterministic race seam. Publication itself is
-    // descriptor-relative, so even a later rename cannot redirect record creation to a new parent.
+    // Re-check both the opened object and its pathname immediately after the deterministic race
+    // seam. Publication itself is descriptor-relative, so a later rename cannot redirect record
+    // creation to a different parent.
+    let opened_parent_before_create = directory
+        .metadata()
+        .map_err(|_| "private-evidence-parent-unavailable".to_string())?;
+    if opened_parent_before_create.permissions().mode() & 0o022 != 0 {
+        return Err("private-evidence-parent-writable-by-others".into());
+    }
     let parent_before_create = std::fs::symlink_metadata(&canonical_parent)
         .map_err(|_| "private-evidence-parent-identity-drift".to_string())?;
     if parent_before_create.file_type().is_symlink()
@@ -123,6 +130,9 @@ where
         || parent_before_create.ino() != opened_parent_metadata.ino()
     {
         return Err("private-evidence-parent-identity-drift".into());
+    }
+    if parent_before_create.permissions().mode() & 0o022 != 0 {
+        return Err("private-evidence-parent-writable-by-others".into());
     }
 
     let file_fd = unsafe {
@@ -159,6 +169,12 @@ where
             .sync_all()
             .map_err(|_| "private-evidence-parent-sync-failed".to_string())?;
 
+        let opened_parent_after_sync = directory
+            .metadata()
+            .map_err(|_| "private-evidence-parent-unavailable".to_string())?;
+        if opened_parent_after_sync.permissions().mode() & 0o022 != 0 {
+            return Err("private-evidence-parent-writable-by-others".into());
+        }
         let final_parent_metadata = std::fs::symlink_metadata(&canonical_parent)
             .map_err(|_| "private-evidence-parent-identity-drift".to_string())?;
         if final_parent_metadata.file_type().is_symlink()
@@ -167,6 +183,9 @@ where
             || final_parent_metadata.ino() != opened_parent_metadata.ino()
         {
             return Err("private-evidence-parent-identity-drift".into());
+        }
+        if final_parent_metadata.permissions().mode() & 0o022 != 0 {
+            return Err("private-evidence-parent-writable-by-others".into());
         }
 
         let final_file_metadata = std::fs::symlink_metadata(&final_path)
