@@ -146,6 +146,10 @@ fn assert_non_utf8_argument_is_bounded(binary: &Path) {
     let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must remain valid UTF-8");
     assert!(!stderr.is_empty(), "invalid non-UTF-8 input must remain visible");
     assert!(
+        !stderr.contains("opaque"),
+        "invalid diagnostics must not echo opaque argument payloads"
+    );
+    assert!(
         !stderr.contains("panicked") && !stderr.contains("thread 'main'"),
         "invalid host arguments must not escape through a Rust panic"
     );
