@@ -4,18 +4,24 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const BINARIES: [(&str, &str); 3] = [
+const BINARIES: [(&str, &str, &str, &str); 3] = [
     (
         "disksage-icloud-local-eviction",
         "usage: disksage-icloud-local-eviction --cloud-root ABSOLUTE_PATH --path ABSOLUTE_FILE [--execute --approved-plan-fingerprint HEX64 --confirm-plan-fingerprint HEX64 --approved-by human:IDENTITY --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]",
+        "icloud-local-eviction-unknown-argument",
+        "icloud-local-eviction-invalid-utf8-argument",
     ),
     (
         "disksage-incomplete-download-destination-plan",
         "usage: disksage-incomplete-download-destination-plan --source-root ABSOLUTE_PATH --cloud-root ABSOLUTE_PATH --destination-subdirectory RELATIVE_PATH (--live-icloud-capacity | --capacity-snapshot ABSOLUTE.json) [--max-entries 1..=200000] [--stale-after-days 1..=3650] [--capacity-reserve-mib 0..=1048576] [--private-output ABSOLUTE_NEW_FILE.json]",
+        "incomplete-download-destination-plan-unknown-argument",
+        "incomplete-download-destination-plan-invalid-utf8-argument",
     ),
     (
         "disksage-icloud-local-eviction-batch",
         "usage: disksage-icloud-local-eviction-batch --cloud-root ABSOLUTE_PATH --manifest ABSOLUTE_JSON [--execute --approved-batch-fingerprint HEX64 --confirm-batch-fingerprint HEX64 --approved-by human:IDENTITY --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]",
+        "알 수 없는 인자",
+        "icloud-local-eviction-batch-invalid-utf8-argument",
     ),
 ];
 
@@ -26,7 +32,7 @@ fn build_feature_gated_binaries() -> (tempfile::TempDir, Vec<PathBuf>) {
     command
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .args(["build", "--locked", "--features", "cloud-cli"]);
-    for (binary, _) in BINARIES {
+    for (binary, _, _, _) in BINARIES {
         command.args(["--bin", binary]);
     }
     let status = command
@@ -41,7 +47,7 @@ fn build_feature_gated_binaries() -> (tempfile::TempDir, Vec<PathBuf>) {
 
     let binaries = BINARIES
         .iter()
-        .map(|(binary, _)| {
+        .map(|(binary, _, _, _)| {
             let path = target_dir
                 .path()
                 .join("debug")
@@ -86,7 +92,7 @@ fn assert_help_success(binary: &Path, expected_usage: &str, flag: &str) {
     );
 }
 
-fn assert_invalid_argument_is_bounded(binary: &Path) {
+fn assert_invalid_argument_is_bounded(binary: &Path, expected_diagnostic: &str) {
     let output = command(binary)
         .arg("--opaque-option=not-shown")
         .output()
@@ -102,6 +108,10 @@ fn assert_invalid_argument_is_bounded(binary: &Path) {
     );
     let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must be valid UTF-8");
     assert!(!stderr.is_empty(), "invalid invocation must remain visible");
+    assert!(
+        stderr.contains(expected_diagnostic),
+        "invalid invocation must emit its fixed bounded diagnostic"
+    );
     assert!(
         !stderr.contains("not-shown"),
         "invalid diagnostics must not echo arbitrary argument payloads"
@@ -131,7 +141,7 @@ fn assert_help_does_not_hide_invalid_argument(binary: &Path) {
 }
 
 #[cfg(unix)]
-fn assert_non_utf8_argument_is_bounded(binary: &Path) {
+fn assert_non_utf8_argument_is_bounded(binary: &Path, expected_diagnostic: &str) {
     use std::os::unix::ffi::OsStringExt;
 
     let opaque = OsString::from_vec(vec![b'-', b'-', b'o', b'p', b'a', b'q', b'u', b'e', 0xff]);
@@ -152,6 +162,10 @@ fn assert_non_utf8_argument_is_bounded(binary: &Path) {
     let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must remain valid UTF-8");
     assert!(!stderr.is_empty(), "invalid non-UTF-8 input must remain visible");
     assert!(
+        stderr.contains(expected_diagnostic),
+        "invalid non-UTF-8 input must emit its fixed bounded diagnostic"
+    );
+    assert!(
         !stderr.contains("panicked") && !stderr.contains("thread 'main'"),
         "invalid host arguments must not escape through a Rust panic"
     );
@@ -160,12 +174,14 @@ fn assert_non_utf8_argument_is_bounded(binary: &Path) {
 #[test]
 fn eviction_and_destination_help_are_successful_and_invalid_arguments_are_bounded() {
     let (_target_dir, binaries) = build_feature_gated_binaries();
-    for ((_, expected_usage), binary) in BINARIES.iter().zip(&binaries) {
+    for ((_, expected_usage, expected_unknown, expected_invalid_utf8), binary) in
+        BINARIES.iter().zip(&binaries)
+    {
         assert_help_success(binary, expected_usage, "--help");
         assert_help_success(binary, expected_usage, "-h");
-        assert_invalid_argument_is_bounded(binary);
+        assert_invalid_argument_is_bounded(binary, expected_unknown);
         assert_help_does_not_hide_invalid_argument(binary);
         #[cfg(unix)]
-        assert_non_utf8_argument_is_bounded(binary);
+        assert_non_utf8_argument_is_bounded(binary, expected_invalid_utf8);
     }
 }
