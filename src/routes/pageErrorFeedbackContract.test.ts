@@ -29,6 +29,13 @@ describe("main scan and navigation failure feedback", () => {
     expect(source).not.toContain('console.error("post-scan load failed:", e)');
     expect(source).not.toContain('console.error("getNode failed:", e)');
 
+    expect(mountScope).toContain('console.error("disk root load failed");');
+    expect(mountScope).toContain('console.error("post-scan result load failed");');
+    expect(mountScope).toContain('console.error("scan event registration failed");');
+    expect(scanScope).toContain('console.error("scan start failed");');
+    expect(openScope).toContain('console.error("folder navigation failed");');
+    expect(jumpScope).toContain('console.error("folder navigation failed");');
+
     expect(mountScope).toContain("디스크 루트 목록을 불러오지 못했습니다.");
     expect(mountScope).toContain("스캔 결과를 불러오지 못했습니다.");
     expect(mountScope).toContain("스캔 이벤트 연결을 준비하지 못했습니다.");
