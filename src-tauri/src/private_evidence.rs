@@ -269,6 +269,35 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn fails_closed_if_parent_becomes_shared_writable_after_authorization() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let source = tempfile::tempdir().unwrap();
+        let private = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(private.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = private.path().join("audit.json");
+        let parent_for_hook = private.path().to_path_buf();
+
+        let error = write_private_json_create_new_unix_with_hook(
+            source.path(),
+            &path,
+            &serde_json::json!({"private": true}),
+            move || {
+                std::fs::set_permissions(
+                    &parent_for_hook,
+                    std::fs::Permissions::from_mode(0o770),
+                )
+                .unwrap();
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "private-evidence-parent-writable-by-others");
+        assert!(!path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn fails_closed_if_private_parent_is_replaced_after_authorization() {
         use std::os::unix::fs::PermissionsExt;
 
