@@ -17,56 +17,15 @@ pub struct PrivateEvidenceReceipt {
     pub is_approval: bool,
 }
 
-/// Remove a failed publication only when the current directory entry still names the exact file
-/// object created by this writer.
-///
-/// A same-user actor can unlink the created record and install another object at the same name
-/// before final validation. Descriptor-relative cleanup must not delete that replacement. If the
-/// current entry cannot be inspected or its device/inode identity differs from the opened file,
-/// cleanup fails closed by leaving the current entry untouched.
-#[cfg(unix)]
-fn unlink_failed_record_if_same_identity(
-    directory: &std::fs::File,
-    file_name: &std::ffi::CString,
-    opened_file_metadata: &std::fs::Metadata,
-) {
-    use std::mem::MaybeUninit;
-    use std::os::fd::AsRawFd;
-    use std::os::unix::fs::MetadataExt;
-
-    let mut current_stat = MaybeUninit::<libc::stat>::uninit();
-    let stat_result = unsafe {
-        libc::fstatat(
-            directory.as_raw_fd(),
-            file_name.as_ptr(),
-            current_stat.as_mut_ptr(),
-            libc::AT_SYMLINK_NOFOLLOW,
-        )
-    };
-    if stat_result != 0 {
-        return;
-    }
-    let current_stat = unsafe { current_stat.assume_init() };
-    if current_stat.st_dev as u64 != opened_file_metadata.dev()
-        || current_stat.st_ino as u64 != opened_file_metadata.ino()
-    {
-        return;
-    }
-
-    let unlink_result = unsafe { libc::unlinkat(directory.as_raw_fd(), file_name.as_ptr(), 0) };
-    if unlink_result == 0 {
-        let _ = directory.sync_all();
-    }
-}
-
 /// Persist exact local evidence outside the audited source tree.
 ///
 /// The destination parent must already exist, must not be a symlink, and must not be writable by
 /// group or other principals. On Unix, publication is bound to the exact opened parent-directory
 /// object so a same-user pathname replacement cannot redirect the write after authorization. The
-/// file is created once with mode 0600, synced, and never overwritten. A failed publication removes
-/// only the exact record object created by this writer; an identity-mismatched replacement is left
-/// untouched.
+/// file is created once with mode 0600, synced, and never overwritten. After a post-create failure,
+/// the still-open record is truncated and synced through its descriptor. The pathname is
+/// deliberately not unlinked because a same-user process may already have replaced that name; this
+/// can leave a zero-length mode-0600 create-new tombstone that requires explicit operator cleanup.
 #[cfg(unix)]
 pub fn write_private_json_create_new(
     source_root: &Path,
@@ -248,10 +207,15 @@ where
     })();
 
     if let Err(error) = publication {
-        let opened_file_metadata = file.metadata().ok();
-        drop(file);
-        if let Some(opened_file_metadata) = opened_file_metadata.as_ref() {
-            unlink_failed_record_if_same_identity(&directory, &file_name_c, opened_file_metadata);
+        // Do not unlink by name here. No portable Unix primitive atomically proves that the name
+        // still identifies this open file at unlink time, so a stat-then-unlink sequence would
+        // retain a replacement race. Invalidate only the exact object held by this descriptor.
+        let invalidation = file
+            .set_len(0)
+            .and_then(|_| file.sync_all())
+            .and_then(|_| directory.sync_all());
+        if invalidation.is_err() {
+            return Err("private-evidence-invalidation-failed".into());
         }
         return Err(error);
     }
@@ -361,6 +325,38 @@ mod tests {
 
         assert_eq!(error, "private-evidence-parent-writable-by-others");
         assert!(!path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_post_create_validation_leaves_private_zero_length_tombstone() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let source = tempfile::tempdir().unwrap();
+        let private = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(private.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = private.path().join("audit.json");
+        let parent_for_hook = private.path().to_path_buf();
+
+        let error = write_private_json_create_new_unix_with_hooks(
+            source.path(),
+            &path,
+            &serde_json::json!({"private": true}),
+            || {},
+            move || {
+                std::fs::set_permissions(
+                    &parent_for_hook,
+                    std::fs::Permissions::from_mode(0o770),
+                )
+                .unwrap();
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "private-evidence-parent-writable-by-others");
+        let metadata = std::fs::metadata(&path).unwrap();
+        assert_eq!(metadata.len(), 0);
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
     }
 
     #[cfg(unix)]
