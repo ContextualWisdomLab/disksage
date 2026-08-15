@@ -25,6 +25,7 @@
       roots = await api.listRoots();
       selectedRoot = roots[0] ?? "";
     } catch {
+      console.error("disk root load failed");
       operationError = "디스크 루트 목록을 불러오지 못했습니다.";
     }
 
@@ -49,10 +50,12 @@
           if (resultSeq !== navSeq) return;
           node = null;
           top = [];
+          console.error("post-scan result load failed");
           operationError = "스캔 결과를 불러오지 못했습니다.";
         }
       });
     } catch {
+      console.error("scan event registration failed");
       operationError = "스캔 이벤트 연결을 준비하지 못했습니다.";
     }
   });
@@ -67,6 +70,7 @@
       await api.startScan(selectedRoot);
     } catch {
       scanning = false;
+      console.error("scan start failed");
       operationError = "스캔을 시작하지 못했습니다.";
     }
   }
@@ -81,6 +85,7 @@
       node = n;
     } catch {
       if (seq === navSeq) {
+        console.error("folder navigation failed");
         operationError = "폴더 내용을 불러오지 못했습니다.";
       }
     }
@@ -96,6 +101,7 @@
       node = n;
     } catch {
       if (seq === navSeq) {
+        console.error("folder navigation failed");
         operationError = "폴더 내용을 불러오지 못했습니다.";
       }
     }
