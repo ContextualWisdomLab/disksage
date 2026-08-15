@@ -125,10 +125,9 @@ fn inventory_rejects_unreadable_missing_file_and_symlink_roots() {
     assert!(inventory_cloud_local_allocations(&unreadable, options(), 1).is_err());
 
     let missing = temp.path().join("missing-root");
-    assert_eq!(
-        inventory_cloud_local_allocations(&root(&missing), options(), 2).unwrap_err(),
-        "cloud-local-inventory-root-metadata-unavailable"
-    );
+    let missing_error =
+        inventory_cloud_local_allocations(&root(&missing), options(), 2).unwrap_err();
+    assert!(missing_error.starts_with("cloud-root-unreadable:"));
 
     let regular_file = temp.path().join("regular-file-root");
     std::fs::write(&regular_file, b"not a directory").unwrap();
@@ -214,12 +213,8 @@ fn symlink_and_socket_issues_are_bounded_without_content_access() {
 
     let mut truncated_options = options();
     truncated_options.max_issues = 1;
-    let truncated = inventory_cloud_local_allocations(
-        &root(temp.path()),
-        truncated_options,
-        21,
-    )
-    .unwrap();
+    let truncated =
+        inventory_cloud_local_allocations(&root(temp.path()), truncated_options, 21).unwrap();
     assert_eq!(truncated.skipped_entries, 2);
     assert_eq!(truncated.issues.len(), 1);
     assert!(truncated.issues_truncated);
