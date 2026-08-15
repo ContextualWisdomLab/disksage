@@ -41,7 +41,7 @@
       userRulesError = "";
     } catch {
       userRulesCount = null;
-      userRulesError = "규칙 파일을 불러오지 못했습니다.";
+      userRulesError = "규칙 파일을 불러오지 못했습니다. DiskSage 데이터 폴더의 규칙 파일 권한과 형식을 확인한 뒤 인벤토리를 다시 집계하세요.";
     }
   }
 
@@ -49,6 +49,10 @@
     if (!scannedRoot) return;
     busy = true;
     loadError = "";
+    report = null;
+    summary = null;
+    summaryLoaded = false;
+    summaryError = "";
     insights = [];
     try {
       report = await api.diskInventory(scannedRoot);
@@ -57,7 +61,7 @@
       // 미분류 확장자 인사이트: 비차단(fire-and-forget) — 실패해도 인벤토리 표시를 막지 않음
       api.reasonUnknownExtensions(report.unknown_samples).then((r) => (insights = r)).catch(() => {});
     } catch {
-      loadError = "인벤토리 집계에 실패했습니다.";
+      loadError = "인벤토리 집계에 실패했습니다. 스캔 대상 폴더의 접근 권한을 확인하고 스캔을 다시 실행한 뒤 집계하세요.";
     } finally {
       busy = false;
     }
@@ -78,7 +82,7 @@
       await api.downloadModel();
       await loadModel();
     } catch {
-      modelError = "모델 다운로드에 실패했습니다.";
+      modelError = "모델 다운로드에 실패했습니다. 네트워크 연결과 DiskSage 데이터 폴더의 여유 공간을 확인한 뒤 다시 다운로드하세요.";
     } finally {
       modelBusy = false;
     }
@@ -94,7 +98,7 @@
     try {
       summary = await api.summarizeUnknownBucket(report?.unknown_samples ?? []);
     } catch {
-      summaryError = "미분류 요약에 실패했습니다.";
+      summaryError = "미분류 요약에 실패했습니다. 모델 설치 상태를 확인한 뒤 요약을 다시 실행하세요.";
     } finally {
       summaryLoaded = true;
       summaryBusy = false;
