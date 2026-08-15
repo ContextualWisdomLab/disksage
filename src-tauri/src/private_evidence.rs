@@ -30,18 +30,20 @@ pub fn write_private_json_create_new(
     path: &Path,
     value: &impl Serialize,
 ) -> Result<PrivateEvidenceReceipt, String> {
-    write_private_json_create_new_unix_with_hook(source_root, path, value, || {})
+    write_private_json_create_new_unix_with_hooks(source_root, path, value, || {}, || {})
 }
 
 #[cfg(unix)]
-fn write_private_json_create_new_unix_with_hook<F>(
+fn write_private_json_create_new_unix_with_hooks<F, G>(
     source_root: &Path,
     path: &Path,
     value: &impl Serialize,
     before_create: F,
+    before_finalize: G,
 ) -> Result<PrivateEvidenceReceipt, String>
 where
     F: FnOnce(),
+    G: FnOnce(),
 {
     use std::ffi::CString;
     use std::os::fd::{AsRawFd, FromRawFd};
@@ -168,6 +170,8 @@ where
         directory
             .sync_all()
             .map_err(|_| "private-evidence-parent-sync-failed".to_string())?;
+
+        before_finalize();
 
         let opened_parent_after_sync = directory
             .metadata()
@@ -297,7 +301,7 @@ mod tests {
         let path = private.path().join("audit.json");
         let parent_for_hook = private.path().to_path_buf();
 
-        let error = write_private_json_create_new_unix_with_hook(
+        let error = write_private_json_create_new_unix_with_hooks(
             source.path(),
             &path,
             &serde_json::json!({"private": true}),
@@ -308,6 +312,7 @@ mod tests {
                 )
                 .unwrap();
             },
+            || {},
         )
         .unwrap_err();
 
@@ -331,7 +336,7 @@ mod tests {
         let parent_for_hook = parent.clone();
         let moved_for_hook = moved_parent.clone();
 
-        let error = write_private_json_create_new_unix_with_hook(
+        let error = write_private_json_create_new_unix_with_hooks(
             source.path(),
             &path,
             &serde_json::json!({"private": true}),
@@ -344,11 +349,41 @@ mod tests {
                 )
                 .unwrap();
             },
+            || {},
         )
         .unwrap_err();
 
         assert_eq!(error, "private-evidence-parent-identity-drift");
         assert!(!replacement_parent.join("audit.json").exists());
         assert!(!moved_parent.join("audit.json").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_final_identity_check_preserves_unrelated_replacement_record() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let source = tempfile::tempdir().unwrap();
+        let private = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(private.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = private.path().join("audit.json");
+        let path_for_hook = path.clone();
+        let replacement = b"attacker-replacement".to_vec();
+        let replacement_for_hook = replacement.clone();
+
+        let error = write_private_json_create_new_unix_with_hooks(
+            source.path(),
+            &path,
+            &serde_json::json!({"private": true}),
+            || {},
+            move || {
+                std::fs::remove_file(&path_for_hook).unwrap();
+                std::fs::write(&path_for_hook, &replacement_for_hook).unwrap();
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "private-evidence-record-identity-drift");
+        assert_eq!(std::fs::read(&path).unwrap(), replacement);
     }
 }
