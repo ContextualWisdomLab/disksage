@@ -1,0 +1,312 @@
+name: Coverage local inventory private edges
+
+on:
+  push:
+    branches:
+      - ci/exact-head-coverage-evidence-v4
+    paths:
+      - .github/workflows/coverage-cloud-local-inventory-private.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: coverage-cloud-local-inventory-private-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  patch-and-verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact branch head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: stable
+          components: rustfmt
+      - name: Add focused private-edge tests
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src-tauri/src/cloud_local_inventory.rs")
+          text = path.read_text(encoding="utf-8")
+          marker = "fn stable_io_reason_maps_every_supported_kind_and_fallback()"
+          if marker in text:
+              raise SystemExit("focused tests are already present")
+          head, separator, tail = text.rpartition("\n}")
+          if not separator or tail.strip():
+              raise SystemExit("cloud_local_inventory test module terminator is not unique")
+          addition = r'''
+
+              #[test]
+              fn stable_io_reason_maps_every_supported_kind_and_fallback() {
+                  let cases = [
+                      (ErrorKind::NotFound, "not-found"),
+                      (ErrorKind::PermissionDenied, "permission-denied"),
+                      (ErrorKind::ConnectionRefused, "connection-refused"),
+                      (ErrorKind::ConnectionReset, "connection-reset"),
+                      (ErrorKind::ConnectionAborted, "connection-aborted"),
+                      (ErrorKind::NotConnected, "not-connected"),
+                      (ErrorKind::AddrInUse, "address-in-use"),
+                      (ErrorKind::AddrNotAvailable, "address-unavailable"),
+                      (ErrorKind::BrokenPipe, "broken-pipe"),
+                      (ErrorKind::AlreadyExists, "already-exists"),
+                      (ErrorKind::WouldBlock, "would-block"),
+                      (ErrorKind::InvalidInput, "invalid-input"),
+                      (ErrorKind::InvalidData, "invalid-data"),
+                      (ErrorKind::TimedOut, "timed-out"),
+                      (ErrorKind::WriteZero, "write-zero"),
+                      (ErrorKind::Interrupted, "interrupted"),
+                      (ErrorKind::Unsupported, "unsupported"),
+                      (ErrorKind::UnexpectedEof, "unexpected-eof"),
+                      (ErrorKind::OutOfMemory, "out-of-memory"),
+                  ];
+
+                  for (kind, expected) in cases {
+                      let error = Error::new(kind, "fixture");
+                      assert_eq!(stable_io_reason(&error), expected, "{kind:?}");
+                  }
+                  assert_eq!(
+                      stable_io_reason(&Error::other("fixture")),
+                      "other-io-error"
+                  );
+              }
+
+              #[test]
+              fn time_scope_and_issue_helpers_fail_closed_at_boundaries() {
+                  use std::time::{Duration, SystemTime};
+
+                  assert_eq!(
+                      system_time_ms(Err(Error::other("metadata clock unavailable"))),
+                      None
+                  );
+                  assert_eq!(
+                      system_time_ms(Ok(SystemTime::UNIX_EPOCH - Duration::from_millis(1))),
+                      None
+                  );
+                  assert_eq!(
+                      system_time_ms(Ok(SystemTime::UNIX_EPOCH + Duration::from_millis(42))),
+                      Some(42)
+                  );
+
+                  let root = Path::new("/cloud-root");
+                  assert_eq!(relative_scope(root, root), None);
+                  assert_eq!(relative_scope(root, Path::new("/outside")), None);
+                  assert_eq!(
+                      relative_scope(root, Path::new("/cloud-root/nested/file.bin")).as_deref(),
+                      Some("nested/file.bin")
+                  );
+
+                  let mut issues = Vec::new();
+                  let mut skipped_entries = u64::MAX;
+                  record_issue(
+                      &mut issues,
+                      &mut skipped_entries,
+                      1,
+                      root,
+                      root,
+                      "read-directory-failed",
+                      "other-io-error",
+                  );
+                  record_issue(
+                      &mut issues,
+                      &mut skipped_entries,
+                      1,
+                      root,
+                      Path::new("/outside"),
+                      "read-entry-failed",
+                      "other-io-error",
+                  );
+                  assert_eq!(skipped_entries, u64::MAX);
+                  assert_eq!(issues.len(), 1);
+                  assert_eq!(issues[0].relative_scope, None);
+              }
+
+              #[test]
+              fn checkpoint_cadence_emits_only_for_force_entries_time_or_issues() {
+                  let root_path = Path::new("/Cloud");
+                  let cloud_root = root(root_path);
+                  let context = InventoryContext {
+                      root: &cloud_root,
+                      root_path,
+                      options: options(),
+                      observed_at_ms: 1,
+                  };
+                  let mut state = InventoryState::default();
+                  let mut cadence = CheckpointCadence::default();
+                  let mut reports = Vec::new();
+                  let mut emit = |report: &CloudLocalAllocationInventory| {
+                      reports.push(report.clone());
+                      Ok(())
+                  };
+
+                  maybe_emit_checkpoint(context, &state, &mut cadence, 0, false, &mut emit)
+                      .unwrap();
+                  maybe_emit_checkpoint(context, &state, &mut cadence, 0, false, &mut emit)
+                      .unwrap();
+                  assert_eq!(reports.len(), 1);
+
+                  maybe_emit_checkpoint(
+                      context,
+                      &state,
+                      &mut cadence,
+                      CHECKPOINT_INTERVAL_MS,
+                      false,
+                      &mut emit,
+                  )
+                  .unwrap();
+                  state.skipped_entries = 1;
+                  maybe_emit_checkpoint(
+                      context,
+                      &state,
+                      &mut cadence,
+                      CHECKPOINT_INTERVAL_MS,
+                      false,
+                      &mut emit,
+                  )
+                  .unwrap();
+                  state.visited_entries = CHECKPOINT_ENTRY_INTERVAL;
+                  maybe_emit_checkpoint(
+                      context,
+                      &state,
+                      &mut cadence,
+                      CHECKPOINT_INTERVAL_MS,
+                      false,
+                      &mut emit,
+                  )
+                  .unwrap();
+                  maybe_emit_checkpoint(
+                      context,
+                      &state,
+                      &mut cadence,
+                      CHECKPOINT_INTERVAL_MS,
+                      true,
+                      &mut emit,
+                  )
+                  .unwrap();
+
+                  assert_eq!(reports.len(), 5);
+                  assert!(reports.iter().all(|report| {
+                      !report.evidence_complete
+                          && report
+                              .notices
+                              .iter()
+                              .any(|notice| notice == "inventory-checkpoint-not-terminal")
+                  }));
+              }
+
+              #[test]
+              fn checkpoint_recovery_validates_each_identity_field_and_is_idempotent() {
+                  let temp = tempfile::tempdir().unwrap();
+                  let cloud_root = root(temp.path());
+                  let inventory_options = options();
+                  let mut checkpoints = Vec::new();
+                  inventory_cloud_local_allocations_with_checkpoints(
+                      &cloud_root,
+                      inventory_options,
+                      10,
+                      |checkpoint| {
+                          checkpoints.push(checkpoint.clone());
+                          Ok(())
+                      },
+                  )
+                  .unwrap();
+                  let checkpoint = checkpoints.into_iter().next().unwrap();
+                  let assert_invalid = |candidate: CloudLocalAllocationInventory| {
+                      assert_eq!(
+                          hard_timeout_inventory_from_checkpoint(
+                              &cloud_root,
+                              inventory_options,
+                              candidate,
+                          )
+                          .unwrap_err(),
+                          "cloud-local-inventory-checkpoint-invalid"
+                      );
+                  };
+
+                  let mut drift = checkpoint.clone();
+                  drift.version = 3;
+                  assert_invalid(drift);
+                  let mut drift = checkpoint.clone();
+                  drift.cloud_root_id = "icloud:other".into();
+                  assert_invalid(drift);
+                  let mut drift = checkpoint.clone();
+                  drift.provider = CloudProvider::Onedrive;
+                  assert_invalid(drift);
+                  let mut drift = checkpoint.clone();
+                  drift.account_scope = CloudAccountScope::Organization;
+                  assert_invalid(drift);
+                  let mut drift = checkpoint.clone();
+                  drift.cloud_root = "/different".into();
+                  assert_invalid(drift);
+                  let mut drift = checkpoint.clone();
+                  drift.options.max_entries += 1;
+                  assert_invalid(drift);
+                  let mut drift = checkpoint.clone();
+                  drift.evidence_complete = true;
+                  assert_invalid(drift);
+                  let mut drift = checkpoint.clone();
+                  drift
+                      .notices
+                      .retain(|notice| notice != "inventory-checkpoint-not-terminal");
+                  assert_invalid(drift);
+
+                  let mut preannotated = checkpoint;
+                  preannotated.stop_reasons.push("hard-timeout-reached".into());
+                  preannotated.notices.extend([
+                      "inventory-incomplete".into(),
+                      "worker-hard-timeout".into(),
+                      "partial-inventory-recovered-from-worker-checkpoint".into(),
+                  ]);
+                  let recovered = hard_timeout_inventory_from_checkpoint(
+                      &cloud_root,
+                      inventory_options,
+                      preannotated,
+                  )
+                  .unwrap();
+                  for expected in [
+                      "hard-timeout-reached",
+                      "inventory-incomplete",
+                      "worker-hard-timeout",
+                      "partial-inventory-recovered-from-worker-checkpoint",
+                  ] {
+                      let count = recovered
+                          .stop_reasons
+                          .iter()
+                          .chain(recovered.notices.iter())
+                          .filter(|value| value.as_str() == expected)
+                          .count();
+                      assert_eq!(count, 1, "{expected}");
+                  }
+              }
+          '''
+          path.write_text(f"{head}{addition}\n}}\n", encoding="utf-8")
+          PY
+          cargo fmt --manifest-path src-tauri/Cargo.toml
+      - name: Run focused tests
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml cloud_local_inventory::tests::stable_io_reason_maps_every_supported_kind_and_fallback
+          cargo test --manifest-path src-tauri/Cargo.toml cloud_local_inventory::tests::time_scope_and_issue_helpers_fail_closed_at_boundaries
+          cargo test --manifest-path src-tauri/Cargo.toml cloud_local_inventory::tests::checkpoint_cadence_emits_only_for_force_entries_time_or_issues
+          cargo test --manifest-path src-tauri/Cargo.toml cloud_local_inventory::tests::checkpoint_recovery_validates_each_identity_field_and_is_idempotent
+      - name: Publish verified patch and remove one-shot workflow
+        env:
+          BRANCH_NAME: ${{ github.ref_name }}
+        run: |
+          rm .github/workflows/coverage-cloud-local-inventory-private.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src-tauri/src/cloud_local_inventory.rs .github/workflows/coverage-cloud-local-inventory-private.yml
+          git commit -m "test: cover local inventory private boundaries"
+          git push origin "HEAD:${BRANCH_NAME}"
