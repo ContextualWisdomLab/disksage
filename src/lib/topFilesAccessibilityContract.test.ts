@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, resolve } from "node:url";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -28,7 +28,7 @@ describe("TopFiles accessible data table", () => {
     const source = readSource("src/lib/TopFiles.svelte");
 
     expect(source).toContain(
-      '<div class="table-scroll" tabindex="0" aria-labelledby="top-files-heading">',
+      '<div class="table-scroll" role="region" tabindex="0" aria-labelledby="top-files-heading">',
     );
     expect(source).toContain(".table-scroll { max-height: 40vh; overflow-y: auto;");
     expect(source).not.toContain("section { max-height: 40vh; overflow-y: auto;");
