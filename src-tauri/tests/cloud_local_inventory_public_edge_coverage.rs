@@ -14,7 +14,7 @@ use disksage_lib::cloud_local_inventory::{
 };
 use std::fs::File;
 use std::io::Write;
-use std::os::unix::fs::symlink;
+use std::os::unix::fs::{symlink, PermissionsExt};
 use std::os::unix::net::UnixListener;
 use std::path::Path;
 
@@ -171,7 +171,7 @@ fn checkpoint_delivery_is_nonterminal_and_sink_failures_propagate() {
 
     assert!(report.evidence_complete);
     assert!(report.stop_reasons.is_empty());
-    assert!(!checkpoints.is_empty());
+    assert_eq!(checkpoints.len(), 1);
     assert!(checkpoints.iter().all(|checkpoint| {
         !checkpoint.evidence_complete
             && checkpoint
@@ -248,4 +248,66 @@ fn candidate_projection_sorts_by_allocation_and_marks_result_truncation() {
         .notices
         .iter()
         .any(|notice| notice == "candidate-output-truncated"));
+}
+
+#[test]
+fn equal_allocations_use_path_as_a_stable_tie_break() {
+    let temp = tempfile::tempdir().unwrap();
+    write_allocated(&temp.path().join("b.bin"), 8_192);
+    write_allocated(&temp.path().join("a.bin"), 8_192);
+
+    let report = inventory_cloud_local_allocations(&root(temp.path()), options(), 31).unwrap();
+
+    assert_eq!(report.candidates.len(), 2);
+    assert_eq!(
+        report.candidates[0].allocated_bytes,
+        report.candidates[1].allocated_bytes
+    );
+    assert!(report.candidates[0].path.ends_with("a.bin"));
+    assert!(report.candidates[1].path.ends_with("b.bin"));
+}
+
+#[test]
+fn empty_and_below_threshold_files_are_counted_but_not_candidates() {
+    let temp = tempfile::tempdir().unwrap();
+    File::create(temp.path().join("empty.bin")).unwrap();
+    write_allocated(&temp.path().join("small.bin"), 4_096);
+
+    let mut thresholded = options();
+    thresholded.min_allocated_bytes = 1024 * 1024;
+    let report =
+        inventory_cloud_local_allocations(&root(temp.path()), thresholded, 32).unwrap();
+
+    assert_eq!(report.visited_files, 2);
+    assert!(report.candidates.is_empty());
+    assert_eq!(report.allocated_candidate_bytes, 0);
+    assert!(report.evidence_complete);
+}
+
+#[test]
+fn unreadable_nested_directory_is_reported_without_aborting_root_inventory() {
+    let temp = tempfile::tempdir().unwrap();
+    let restricted = temp.path().join("restricted");
+    std::fs::create_dir(&restricted).unwrap();
+    std::fs::set_permissions(&restricted, std::fs::Permissions::from_mode(0o000)).unwrap();
+    write_allocated(&temp.path().join("visible.bin"), 8_192);
+
+    let result = inventory_cloud_local_allocations(&root(temp.path()), options(), 33);
+    std::fs::set_permissions(&restricted, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let report = result.unwrap();
+
+    assert_eq!(report.visited_directories, 1);
+    assert_eq!(report.skipped_entries, 1);
+    assert!(!report.evidence_complete);
+    assert!(report
+        .stop_reasons
+        .iter()
+        .any(|reason| reason == "entry-errors"));
+    assert!(report.issues.iter().any(|issue| {
+        issue.relative_scope.as_deref() == Some("restricted")
+            && issue.kind == "read-directory-failed"
+            && issue.reason == "permission-denied"
+    }));
+    assert_eq!(report.candidates.len(), 1);
+    assert!(report.candidates[0].path.ends_with("visible.bin"));
 }
