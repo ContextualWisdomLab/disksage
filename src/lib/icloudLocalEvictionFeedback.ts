@@ -41,7 +41,7 @@ const PLAN_BLOCKER_ACTIONS: Readonly<Record<string, string>> = {
   "icloud-file-provider-item-trashed-or-unconfirmed":
     "최근 삭제된 항목 여부를 확인하고 정상 위치로 복원한 뒤 다시 판정하세요.",
   "icloud-file-provider-eviction-capability-unconfirmed":
-    "macOS와 iCloud Drive를 최신 상태로 만든 뒤 다시 판정하세요.",
+    "Finder에서 ‘다운로드 제거’가 가능한 항목인지 확인한 뒤 다시 판정하세요.",
   "icloud-file-provider-document-size-mismatch":
     "파일 크기 동기화가 끝날 때까지 기다린 뒤 다시 판정하세요.",
   "icloud-file-provider-item-identity-unconfirmed":
@@ -49,7 +49,7 @@ const PLAN_BLOCKER_ACTIONS: Readonly<Record<string, string>> = {
   "active-use-evidence-incomplete": "파일을 사용하는 앱을 모두 닫고 다시 판정하세요.",
   "active-file-use-detected": "파일을 사용하는 앱을 모두 닫고 다시 판정하세요.",
   "human-local-eviction-approval-required":
-    "다른 차단 항목을 해결한 뒤 계획 지문과 사유로 최종 승인하세요.",
+    "표시된 상태를 확인한 뒤 계획 지문과 사유로 최종 승인하세요.",
 };
 
 const VERIFICATION_BLOCKER_ACTIONS: Readonly<Record<string, string>> = {
@@ -66,6 +66,8 @@ function uniqueActions(
   knownActions: Readonly<Record<string, string>>,
   unknownAction: string,
 ): string[] {
+  if (codes.length === 0) return [unknownAction];
+
   const seen = new Set<string>();
   const actions: string[] = [];
 
@@ -82,7 +84,7 @@ function uniqueActions(
 
 /**
  * Convert native plan blocker codes into deduplicated, bounded customer actions.
- * Unknown values are not reflected into the interface.
+ * Unknown or missing values are not reflected into the interface and still produce guidance.
  */
 export function planBlockerActions(codes: readonly string[]): string[] {
   return uniqueActions(codes, PLAN_BLOCKER_ACTIONS, UNKNOWN_PLAN_BLOCKER_ACTION);
@@ -90,7 +92,7 @@ export function planBlockerActions(codes: readonly string[]): string[] {
 
 /**
  * Convert post-operation verification blocker codes into bounded stop-and-check actions.
- * Unknown values are not reflected into the interface.
+ * Unknown or missing values are not reflected into the interface and still produce guidance.
  */
 export function verificationBlockerActions(codes: readonly string[]): string[] {
   return uniqueActions(
