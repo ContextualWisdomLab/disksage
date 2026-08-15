@@ -370,6 +370,11 @@ pub fn plan_incomplete_download_materialization(
     if !source_root.is_absolute() {
         return Err("materialization-root-must-be-absolute".into());
     }
+    let supplied_root_metadata = std::fs::symlink_metadata(source_root)
+        .map_err(|_| "materialization-root-unavailable".to_string())?;
+    if !supplied_root_metadata.is_dir() || supplied_root_metadata.file_type().is_symlink() {
+        return Err("materialization-root-unsafe".into());
+    }
     let canonical_root = std::fs::canonicalize(source_root)
         .map_err(|_| "materialization-root-unavailable".to_string())?;
     let root_metadata = std::fs::symlink_metadata(&canonical_root)
