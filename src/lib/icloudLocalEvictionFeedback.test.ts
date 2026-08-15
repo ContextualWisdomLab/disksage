@@ -53,7 +53,7 @@ describe("iCloud local eviction next-action feedback", () => {
       ],
       [
         "icloud-file-provider-eviction-capability-unconfirmed",
-        "macOS와 iCloud Drive를 최신 상태로 만든 뒤 다시 판정하세요.",
+        "Finder에서 ‘다운로드 제거’가 가능한 항목인지 확인한 뒤 다시 판정하세요.",
       ],
       [
         "icloud-file-provider-document-size-mismatch",
@@ -67,7 +67,7 @@ describe("iCloud local eviction next-action feedback", () => {
       ["active-file-use-detected", "파일을 사용하는 앱을 모두 닫고 다시 판정하세요."],
       [
         "human-local-eviction-approval-required",
-        "다른 차단 항목을 해결한 뒤 계획 지문과 사유로 최종 승인하세요.",
+        "표시된 상태를 확인한 뒤 계획 지문과 사유로 최종 승인하세요.",
       ],
     ];
 
@@ -110,8 +110,15 @@ describe("iCloud local eviction next-action feedback", () => {
     ]);
     expect(planBlockerActions([injected]).join(" ")).not.toContain(injected);
     expect(verificationBlockerActions([injected]).join(" ")).not.toContain(injected);
-    expect(planBlockerActions([])).toEqual([]);
-    expect(verificationBlockerActions([])).toEqual([]);
+  });
+
+  it("never leaves an ineligible or unverified state without a next action", () => {
+    expect(planBlockerActions([])).toEqual([
+      "파일의 iCloud 상태를 다시 확인한 뒤 새 판정을 시작하세요.",
+    ]);
+    expect(verificationBlockerActions([])).toEqual([
+      "Finder와 iCloud.com에서 파일 상태를 확인하고, 확인 전에는 작업을 반복하지 마세요.",
+    ]);
   });
 
   it("uses action-oriented bounded copy for operation and record failures", () => {
