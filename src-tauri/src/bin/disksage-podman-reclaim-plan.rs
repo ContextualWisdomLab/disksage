@@ -1,3 +1,8 @@
+//! Command-line entry point for read-only Podman reclaim evidence.
+//!
+//! The command accepts only bounded operational options, preserves a native filesystem path for
+//! the Podman executable, and never starts, stops, removes, prunes, or trims Podman resources.
+
 use disksage_lib::podman_reclaim::{
     probe_podman_reclaim, DEFAULT_PODMAN_MACHINE, DEFAULT_PROBE_TIMEOUT,
 };
@@ -7,6 +12,7 @@ use std::time::Duration;
 const USAGE: &str = "Usage: disksage-podman-reclaim-plan [--machine NAME] [--podman-bin PATH] [--timeout-seconds N] [--pretty]\n\
 Builds read-only Podman guest/raw allocation evidence. It never prunes, removes, trims, or stops anything.";
 
+/// Returns the next required argument as UTF-8 without reflecting malformed input.
 fn next_utf8_argument(
     args: &mut impl Iterator<Item = std::ffi::OsString>,
     missing_message: &str,
@@ -18,6 +24,7 @@ fn next_utf8_argument(
         .map_err(|_| invalid_message.to_string())
 }
 
+/// Parses the process argument stream and prints one read-only Podman evidence document.
 fn run() -> Result<(), String> {
     let raw_args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     if raw_args.len() == 1 && matches!(raw_args[0].to_str(), Some("-h") | Some("--help")) {
@@ -76,6 +83,7 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
+/// Runs the CLI and reports bounded argument or evidence failures with exit code 2.
 fn main() {
     if let Err(error) = run() {
         eprintln!("disksage-podman-reclaim-plan: {error}");
