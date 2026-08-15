@@ -137,7 +137,7 @@
     {#if results.some((r) => !r.ok)}
       <ul class="errors">
         {#each results.filter((r) => !r.ok) as r (r.path)}
-          <li title={r.path}>⚠ {r.path} — {r.error}</li>
+          <li title={r.path}>⚠ {r.path} — 일부 파일을 휴지통으로 보내지 못했습니다.</li>
         {/each}
       </ul>
     {/if}
