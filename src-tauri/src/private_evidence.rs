@@ -28,6 +28,19 @@ pub fn write_private_json_create_new(
     path: &Path,
     value: &impl Serialize,
 ) -> Result<PrivateEvidenceReceipt, String> {
+    write_private_json_create_new_unix_with_hook(source_root, path, value, || {})
+}
+
+#[cfg(unix)]
+fn write_private_json_create_new_unix_with_hook<F>(
+    source_root: &Path,
+    path: &Path,
+    value: &impl Serialize,
+    before_create: F,
+) -> Result<PrivateEvidenceReceipt, String>
+where
+    F: FnOnce(),
+{
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
     let parent = path
@@ -60,6 +73,7 @@ pub fn write_private_json_create_new(
         return Err("private-evidence-too-large".into());
     }
 
+    before_create();
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -163,5 +177,42 @@ mod tests {
 
         assert_eq!(error, "private-evidence-parent-writable-by-others");
         assert!(!path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fails_closed_if_private_parent_is_replaced_after_authorization() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let source = tempfile::tempdir().unwrap();
+        let fixture = tempfile::tempdir().unwrap();
+        let parent = fixture.path().join("records");
+        let moved_parent = fixture.path().join("authorized-records-moved");
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = parent.join("audit.json");
+        let replacement_parent = parent.clone();
+        let parent_for_hook = parent.clone();
+        let moved_for_hook = moved_parent.clone();
+
+        let error = write_private_json_create_new_unix_with_hook(
+            source.path(),
+            &path,
+            &serde_json::json!({"private": true}),
+            move || {
+                std::fs::rename(&parent_for_hook, &moved_for_hook).unwrap();
+                std::fs::create_dir(&parent_for_hook).unwrap();
+                std::fs::set_permissions(
+                    &parent_for_hook,
+                    std::fs::Permissions::from_mode(0o700),
+                )
+                .unwrap();
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "private-evidence-parent-identity-drift");
+        assert!(!replacement_parent.join("audit.json").exists());
+        assert!(!moved_parent.join("audit.json").exists());
     }
 }
