@@ -20,4 +20,13 @@ describe("application shell metadata", () => {
     expect(source).toContain("<title>DiskSage</title>");
     expect(source).not.toContain("Tauri + SvelteKit + Typescript App");
   });
+
+  it("loads the reviewable DiskSage vector icon instead of the Svelte starter favicon", () => {
+    const source = readAppShell();
+
+    expect(source).toContain(
+      '<link rel="icon" href="%sveltekit.assets%/favicon.svg" type="image/svg+xml" />',
+    );
+    expect(source).not.toContain("favicon.png");
+  });
 });
