@@ -162,7 +162,6 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 }
                 execute = true;
             }
-            "--help" | "-h" => return Err(usage()),
             _unknown => return Err("incomplete-download-materialize-unknown-argument".into()),
         }
         index += 1;
