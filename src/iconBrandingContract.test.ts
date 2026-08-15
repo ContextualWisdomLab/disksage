@@ -251,9 +251,10 @@ describe("DiskSage product icon identity", () => {
     );
   });
 
-  it("regenerates icons before both desktop development and package builds", () => {
+  it("regenerates icons before desktop commands and bundles the integrity manifest", () => {
     const config = readJson<{
       build: { beforeBuildCommand: string; beforeDevCommand: string };
+      bundle: { resources: string[] };
     }>(resolve(repositoryRoot, "src-tauri/tauri.conf.json"));
 
     expect(config.build.beforeDevCommand).toBe(
@@ -262,5 +263,6 @@ describe("DiskSage product icon identity", () => {
     expect(config.build.beforeBuildCommand).toBe(
       "node scripts/generate-icons.mjs && npm run build",
     );
+    expect(config.bundle.resources).toContain("icons/icon-manifest.json");
   });
 });
