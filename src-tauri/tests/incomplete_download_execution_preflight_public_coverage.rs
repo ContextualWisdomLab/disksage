@@ -314,3 +314,41 @@ fn execution_rejects_missing_and_non_directory_source_roots_without_output_mutat
     assert!(!receipt_dir.exists());
     assert!(cloud.path().join("Recovered").read_dir().is_err());
 }
+
+#[cfg(unix)]
+#[test]
+fn execution_rejects_symlink_source_root_without_output_mutation() {
+    use std::os::unix::fs::symlink;
+
+    let source = tempfile::tempdir().unwrap();
+    let cloud = tempfile::tempdir().unwrap();
+    let receipts = tempfile::tempdir().unwrap();
+    let (materialization, plan, approval) = planning_context(source.path(), cloud.path(), 7_000);
+    let linked_source = receipts.path().join("linked-source-root");
+    let receipt_dir = receipts.path().join("receipts");
+    symlink(source.path(), &linked_source).unwrap();
+
+    assert_eq!(
+        execute_incomplete_download_materialization(
+            &linked_source,
+            &materialization,
+            &plan,
+            &approval,
+            &plan.destination_plan_fingerprint,
+            capacity(7_002),
+            &receipt_dir,
+            7_003,
+        )
+        .unwrap_err(),
+        "materialization-execution-source-root-unsafe"
+    );
+
+    assert!(
+        std::fs::symlink_metadata(&linked_source)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(!receipt_dir.exists());
+    assert!(cloud.path().join("Recovered").read_dir().is_err());
+}
