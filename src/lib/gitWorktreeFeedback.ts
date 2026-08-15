@@ -75,5 +75,6 @@ export function evidenceGapActions(codes: readonly string[]): string[] {
  * Unknown or missing values never cross the UI boundary.
  */
 export function removalStoppedAction(reason: string | null): string {
-  return (reason && REMOVAL_STOP_ACTIONS[reason]) ?? UNKNOWN_REMOVAL_STOP_ACTION;
+  if (!reason) return UNKNOWN_REMOVAL_STOP_ACTION;
+  return REMOVAL_STOP_ACTIONS[reason] ?? UNKNOWN_REMOVAL_STOP_ACTION;
 }
