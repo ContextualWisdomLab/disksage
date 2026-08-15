@@ -124,6 +124,7 @@ describe("Git worktree privacy-safe failure feedback", () => {
       "제거 결과 검증이 불완전합니다. Git worktree 목록과 브랜치를 확인하고 추가 제거를 중단하세요.";
     expect(removalStoppedAction(injected)).toBe(fallback);
     expect(removalStoppedAction(null)).toBe(fallback);
+    expect(removalStoppedAction("")).toBe(fallback);
     expect(removalStoppedAction(injected)).not.toContain(injected);
   });
 
