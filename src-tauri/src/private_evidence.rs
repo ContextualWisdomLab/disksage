@@ -17,13 +17,56 @@ pub struct PrivateEvidenceReceipt {
     pub is_approval: bool,
 }
 
+/// Remove a failed publication only when the current directory entry still names the exact file
+/// object created by this writer.
+///
+/// A same-user actor can unlink the created record and install another object at the same name
+/// before final validation. Descriptor-relative cleanup must not delete that replacement. If the
+/// current entry cannot be inspected or its device/inode identity differs from the opened file,
+/// cleanup fails closed by leaving the current entry untouched.
+#[cfg(unix)]
+fn unlink_failed_record_if_same_identity(
+    directory: &std::fs::File,
+    file_name: &std::ffi::CString,
+    opened_file_metadata: &std::fs::Metadata,
+) {
+    use std::mem::MaybeUninit;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::MetadataExt;
+
+    let mut current_stat = MaybeUninit::<libc::stat>::uninit();
+    let stat_result = unsafe {
+        libc::fstatat(
+            directory.as_raw_fd(),
+            file_name.as_ptr(),
+            current_stat.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if stat_result != 0 {
+        return;
+    }
+    let current_stat = unsafe { current_stat.assume_init() };
+    if current_stat.st_dev as u64 != opened_file_metadata.dev()
+        || current_stat.st_ino as u64 != opened_file_metadata.ino()
+    {
+        return;
+    }
+
+    let unlink_result = unsafe { libc::unlinkat(directory.as_raw_fd(), file_name.as_ptr(), 0) };
+    if unlink_result == 0 {
+        let _ = directory.sync_all();
+    }
+}
+
 /// Persist exact local evidence outside the audited source tree.
 ///
 /// The destination parent must already exist, must not be a symlink, and must not be writable by
 /// group or other principals. On Unix, publication is bound to the exact opened parent-directory
 /// object so a same-user pathname replacement cannot redirect the write after authorization. The
-/// file is created once with mode 0600, synced, and never overwritten. A failed publication is
-/// cleaned through the authorized directory descriptor rather than through a mutable pathname.
+/// file is created once with mode 0600, synced, and never overwritten. A failed publication removes
+/// only the exact record object created by this writer; an identity-mismatched replacement is left
+/// untouched.
 #[cfg(unix)]
 pub fn write_private_json_create_new(
     source_root: &Path,
@@ -205,11 +248,11 @@ where
     })();
 
     if let Err(error) = publication {
+        let opened_file_metadata = file.metadata().ok();
         drop(file);
-        unsafe {
-            libc::unlinkat(directory.as_raw_fd(), file_name_c.as_ptr(), 0);
+        if let Some(opened_file_metadata) = opened_file_metadata.as_ref() {
+            unlink_failed_record_if_same_identity(&directory, &file_name_c, opened_file_metadata);
         }
-        let _ = directory.sync_all();
         return Err(error);
     }
 
