@@ -7,15 +7,15 @@ use std::process::Command;
 const BINARIES: [(&str, &str); 3] = [
     (
         "disksage-icloud-local-eviction",
-        "usage: disksage-icloud-local-eviction",
+        "usage: disksage-icloud-local-eviction --cloud-root ABSOLUTE_PATH --path ABSOLUTE_FILE [--execute --approved-plan-fingerprint HEX64 --confirm-plan-fingerprint HEX64 --approved-by human:IDENTITY --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]",
     ),
     (
         "disksage-incomplete-download-destination-plan",
-        "usage: disksage-incomplete-download-destination-plan",
+        "usage: disksage-incomplete-download-destination-plan --source-root ABSOLUTE_PATH --cloud-root ABSOLUTE_PATH --destination-subdirectory RELATIVE_PATH (--live-icloud-capacity | --capacity-snapshot ABSOLUTE.json) [--max-entries 1..=200000] [--stale-after-days 1..=3650] [--capacity-reserve-mib 0..=1048576] [--private-output ABSOLUTE_NEW_FILE.json]",
     ),
     (
         "disksage-icloud-local-eviction-batch",
-        "usage: disksage-icloud-local-eviction-batch",
+        "usage: disksage-icloud-local-eviction-batch --cloud-root ABSOLUTE_PATH --manifest ABSOLUTE_JSON [--execute --approved-batch-fingerprint HEX64 --confirm-batch-fingerprint HEX64 --approved-by human:IDENTITY --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]",
     ),
 ];
 
@@ -62,7 +62,7 @@ fn command(binary: &Path) -> Command {
     command
 }
 
-fn assert_help_success(binary: &Path, usage: &str, flag: &str) {
+fn assert_help_success(binary: &Path, expected_usage: &str, flag: &str) {
     let output = command(binary)
         .arg(flag)
         .output()
@@ -79,9 +79,10 @@ fn assert_help_success(binary: &Path, usage: &str, flag: &str) {
         "successful help must not be projected through stderr"
     );
     let stdout = String::from_utf8(output.stdout).expect("help output must be valid UTF-8");
-    assert!(
-        stdout.contains(usage),
-        "help output must contain the stable usage synopsis"
+    assert_eq!(
+        stdout,
+        format!("{expected_usage}\n"),
+        "help output must equal the complete stable usage contract"
     );
 }
 
@@ -159,9 +160,9 @@ fn assert_non_utf8_argument_is_bounded(binary: &Path) {
 #[test]
 fn eviction_and_destination_help_are_successful_and_invalid_arguments_are_bounded() {
     let (_target_dir, binaries) = build_feature_gated_binaries();
-    for ((_, usage), binary) in BINARIES.iter().zip(&binaries) {
-        assert_help_success(binary, usage, "--help");
-        assert_help_success(binary, usage, "-h");
+    for ((_, expected_usage), binary) in BINARIES.iter().zip(&binaries) {
+        assert_help_success(binary, expected_usage, "--help");
+        assert_help_success(binary, expected_usage, "-h");
         assert_invalid_argument_is_bounded(binary);
         assert_help_does_not_hide_invalid_argument(binary);
         #[cfg(unix)]
