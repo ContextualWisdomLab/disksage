@@ -2,3 +2,9 @@
 package-lock.json linguist-generated=true
 src-tauri/Cargo.lock linguist-generated=true
 src-tauri/gen/** linguist-generated=true
+
+# 아이콘 무결성 해시는 플랫폼별 체크아웃 변환과 무관하게 LF를 사용한다.
+src-tauri/icons/icon-source.svg text eol=lf
+static/favicon.svg text eol=lf
+src-tauri/icons/icon-contract.json text eol=lf
+scripts/generate-icons.mjs text eol=lf
