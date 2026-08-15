@@ -18,8 +18,10 @@ use std::time::Duration;
 
 #[cfg(unix)]
 fn write_executable(path: &Path, body: &str) {
-    fs::write(path, body).unwrap();
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+    let staging_path = path.with_extension("staging");
+    fs::write(&staging_path, body).unwrap();
+    fs::set_permissions(&staging_path, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::rename(&staging_path, path).unwrap();
 }
 
 #[cfg(unix)]
