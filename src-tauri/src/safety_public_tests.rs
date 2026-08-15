@@ -121,6 +121,23 @@ fn trash_delete_rejects_parent_traversal_before_journal_or_mutation() {
 }
 
 #[test]
+fn identity_bound_trash_rejects_parent_traversal_before_identity_or_journal_work() {
+    let root = tempfile::tempdir().unwrap();
+    let fixture = root.path().join("fixture");
+    std::fs::write(&fixture, b"keep").unwrap();
+    let expected_identity = filesystem_object_id(&fixture).unwrap();
+    let traversal = root.path().join("child").join("..").join("fixture");
+    let journal = root.path().join("cleanup-journal.jsonl");
+
+    let error =
+        trash_delete_if_identity(&traversal, &expected_identity, 4, &journal, 11).unwrap_err();
+
+    assert!(matches!(error, SafetyError::Protected(_)));
+    assert_eq!(std::fs::read(&fixture).unwrap(), b"keep");
+    assert!(!journal.exists());
+}
+
+#[test]
 fn identity_bound_trash_rejects_stale_identity_before_journal_or_staging() {
     let root = tempfile::tempdir().unwrap();
     let fixture = root.path().join("fixture");
@@ -129,12 +146,12 @@ fn identity_bound_trash_rejects_stale_identity_before_journal_or_staging() {
     let current_identity = filesystem_object_id(&fixture).unwrap();
     let stale_identity = format!("{current_identity}-stale");
 
-    let error = trash_delete_if_identity(&fixture, &stale_identity, 4, &journal, 11).unwrap_err();
+    let error = trash_delete_if_identity(&fixture, &stale_identity, 4, &journal, 12).unwrap_err();
 
     assert!(matches!(error, SafetyError::Trash(_)));
     assert_eq!(std::fs::read(&fixture).unwrap(), b"keep");
     assert!(!journal.exists());
-    let staging_prefix = format!(".disksage-trash-{}-11-", std::process::id());
+    let staging_prefix = format!(".disksage-trash-{}-12-", std::process::id());
     assert!(!std::fs::read_dir(root.path())
         .unwrap()
         .filter_map(Result::ok)
@@ -165,7 +182,7 @@ fn unix_protection_and_object_identity_cover_root_system_and_local_objects() {
 
 #[cfg(unix)]
 #[test]
-fn unix_same_volume_accepts_local_destination_parent_and_rejects_missing_source() {
+fn unix_same_volume_accepts_local_destination_parent_and_rejects_missing_metadata() {
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source");
     let destination_parent = root.path().join("nested");
@@ -175,4 +192,8 @@ fn unix_same_volume_accepts_local_destination_parent_and_rejects_missing_source(
 
     assert!(same_volume(&source, &destination));
     assert!(!same_volume(&root.path().join("missing"), &destination));
+    assert!(!same_volume(
+        &source,
+        &root.path().join("missing-parent").join("destination")
+    ));
 }
