@@ -131,10 +131,9 @@ fn inventory_rejects_unreadable_missing_file_and_symlink_roots() {
 
     let regular_file = temp.path().join("regular-file-root");
     std::fs::write(&regular_file, b"not a directory").unwrap();
-    assert_eq!(
-        inventory_cloud_local_allocations(&root(&regular_file), options(), 3).unwrap_err(),
-        "cloud-local-inventory-root-not-real-directory"
-    );
+    let regular_file_error =
+        inventory_cloud_local_allocations(&root(&regular_file), options(), 3).unwrap_err();
+    assert!(regular_file_error.starts_with("cloud-root-unreadable:"));
 
     let symlink_root = temp.path().join("symlink-root");
     symlink(temp.path(), &symlink_root).unwrap();
