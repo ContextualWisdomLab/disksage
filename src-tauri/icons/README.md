@@ -1,26 +1,33 @@
 # DiskSage icon set
 
-`icon-source.svg` is the reviewable source of truth for the DiskSage product identity. The same SVG is copied to `static/favicon.svg`; desktop and store PNGs, Windows ICO, and macOS ICNS are generated from that source.
+`icon-source.svg` is the reviewable source of truth for the DiskSage product identity. The same SVG is copied to `static/favicon.svg`. The mark combines a disk platter, a verified-action check, and a small insight spark so browser surfaces, installed packages, and operating-system launchers identify the actual product rather than the Svelte or Tauri starter templates.
 
-The mark combines a disk platter, a verified-action check, and a small insight spark. It intentionally avoids the starter Svelte and Tauri marks so installed packages, browser surfaces, and operating-system launchers identify the actual product.
+## Generation boundary
 
-## Integrity contract
+`icon-contract.json` is the tracked cross-platform contract. It fixes the canonical source digest, every required square RGBA PNG size, the ordered Windows ICO layers, and the modern macOS ICNS chunks.
 
-`icon-manifest.json` records the SHA-256 digest, dimensions, and color mode of every generated asset. `src/iconBrandingContract.test.ts` verifies that contract, including:
+`scripts/generate-icons.mjs` uses only Node.js standard-library APIs. It rasterizes the mark with alpha-correct supersampling, writes metadata-free PNGs, assembles ICO and ICNS containers, and emits `icon-manifest.json` with the SHA-256 digest of every generated asset. Generated binary files and the generated manifest are ignored by Git because the source, contract, generator, and tests are the auditable inputs.
 
-- identical canonical and favicon SVG content;
-- square, 8-bit RGBA PNGs at every configured platform size;
+Tauri runs the generator before both development and production builds. The production bundle also includes `icon-manifest.json` as an integrity resource. Generation failure stops the Tauri command rather than falling back to a starter icon.
+
+## Verification contract
+
+`src/iconBrandingContract.test.ts` generates a fresh icon set in a temporary directory and verifies:
+
+- identical canonical and favicon SVG content plus the exact source digest;
+- the intended navy, platter, ring, verified-action, and insight colors at stable interior pixels;
+- square, 8-bit RGBA PNGs at every contracted platform size;
 - the Windows ICO layer order `32, 16, 24, 48, 64, 256`, all 32-bit;
-- a structurally complete ICNS container;
-- exact generated-asset digests.
+- every contracted modern ICNS chunk and a valid container length;
+- a manifest digest matching every generated file;
+- fail-closed Tauri generation hooks for both development and package builds.
 
-An icon change is incomplete until the source, generated files, manifest, and contract test change together.
+## Safe change procedure
 
-## Regeneration baseline
-
-The checked-in set was rendered with CairoSVG 2.8.2 and Pillow 12.3.0, with ImageMagick 7.1.2-1 used to assemble the ordered ICO layers. Keep the source square and transparent-capable, then regenerate all tracked sizes and update the manifest only after visually checking 16 px, 32 px, 128 px, and 512 px output.
-
-Tauri's icon guidance warns that its default icon set is not intended for shipped products and documents the required platform formats and ICO layer sizes. The bundle configuration continues to reference the generated PNG, ICO, and ICNS assets.
+1. Edit `icon-source.svg` and mirror the same content to `static/favicon.svg`.
+2. Update `source_sha256` in `icon-contract.json`. If geometry or palette changes, update the corresponding generator constants and stable-pixel assertions.
+3. Run `node scripts/generate-icons.mjs` and visually inspect at least 16 px, 32 px, 128 px, and 512 px.
+4. Run `npm test`, `npm run build`, and a platform package build. Do not accept a package whose generated manifest is absent or whose icon contract fails.
 
 ## Reference
 
