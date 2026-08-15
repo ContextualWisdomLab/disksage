@@ -196,6 +196,18 @@ fn identity_bound_trash_rejects_missing_source_before_journal_or_staging() {
 
 #[cfg(unix)]
 #[test]
+fn unix_home_root_is_protected_while_home_descendants_remain_eligible() {
+    let home = std::env::var("HOME").expect("Unix desktop test runner must define HOME");
+    let home_path = Path::new(&home);
+
+    assert!(is_protected(home_path));
+    assert!(!is_protected(
+        &home_path.join("disksage-home-descendant-coverage")
+    ));
+}
+
+#[cfg(unix)]
+#[test]
 fn unix_protection_and_object_identity_cover_root_system_and_local_objects() {
     assert!(is_protected(Path::new("/")));
     assert!(is_protected(Path::new("/usr")));
