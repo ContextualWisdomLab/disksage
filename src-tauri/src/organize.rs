@@ -180,6 +180,20 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
     }
 
     #[test]
+    fn rejects_relative_target_folder_that_depends_on_process_cwd() {
+        let ttl = r#"
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix dm: <https://disksage.app/ontology#> .
+dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "relative/{class}" .
+"#;
+        let onto = parse_ttl(ttl).unwrap();
+        let home = Path::new("/home/u");
+        let plans = plan_moves(&[fe("/downloads/pic.png", 100)], &onto, home);
+        assert!(plans.is_empty(), "relative ontology targets must fail closed");
+    }
+
+    #[test]
     fn picker_choice_overrides_extension_classify() {
         // main.rs는 확장자로 "Code"(targetFolder 없음 → 평소 제외)로 분류되지만,
         // picker가 "Image"(targetFolder 있음)를 고르면 Image 목적지로 계획된다.
