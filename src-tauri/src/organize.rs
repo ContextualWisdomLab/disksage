@@ -60,7 +60,7 @@ pub fn plan_moves_with(
         let folder_path = Path::new(&folder);
         // targetFolder는 실행 프로세스의 cwd와 무관해야 한다. 상대 경로는 목적지가
         // 호출 환경에 따라 달라져 예측/실행 불일치를 만들 수 있으므로 fail closed 한다.
-        if !folder_path.has_root() {
+        if !folder_path.is_absolute() {
             continue;
         }
         let dst = folder_path.join(name);
@@ -149,7 +149,7 @@ dm:Installer a owl:Class ; rdfs:label "설치파일"@ko ; dm:targetFolder "~/Ins
 
     #[test]
     fn skips_path_with_no_filename() {
-        // 파일명 없는 경로(루트 등)는 filename 가드에서 걸러진다
+        // 파일명 없는 경로(루트)는 filename 가드에서 걸러진다
         let onto = parse_ttl(ONTO).unwrap();
         let home = Path::new("/home/u");
         assert!(plan_moves(&[fe("/", 100)], &onto, home).is_empty());
