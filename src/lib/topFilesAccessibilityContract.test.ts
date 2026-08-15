@@ -23,4 +23,24 @@ describe("TopFiles accessible data table", () => {
     expect(source).toContain('<th scope="col">크기</th>');
     expect(source).toContain('<th scope="col">경로</th>');
   });
+
+  it("puts the overflowing rows in a named sequential keyboard focus target", () => {
+    const source = readSource("src/lib/TopFiles.svelte");
+
+    expect(source).toContain(
+      '<div class="table-scroll" tabindex="0" aria-labelledby="top-files-heading">',
+    );
+    expect(source).toContain(".table-scroll { max-height: 40vh; overflow-y: auto;");
+    expect(source).not.toContain("section { max-height: 40vh; overflow-y: auto;");
+  });
+
+  it("replaces an empty table with guidance for the next scan", () => {
+    const source = readSource("src/lib/TopFiles.svelte");
+
+    expect(source).toContain("{#if files.length === 0}");
+    expect(source).toContain(
+      '<p class="empty" role="status">표시할 대용량 파일이 없습니다. 다른 폴더를 스캔하거나 스캔 범위를 넓히세요.</p>',
+    );
+    expect(source).toContain("{:else}");
+  });
 });
