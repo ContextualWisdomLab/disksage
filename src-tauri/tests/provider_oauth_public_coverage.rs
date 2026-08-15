@@ -5,8 +5,8 @@
 
 use disksage_lib::cloud::{CloudAccountScope, CloudProvider, CloudRoot};
 use disksage_lib::provider_oauth::{
-    connection_for_root, connections_path, load_connections, requested_scope, validate_client_id,
-    OAuthConnection,
+    connection_for_root, connections_path, load_connections, prepare_authorization, requested_scope,
+    validate_client_id, OAuthConnection,
 };
 use sha2::{Digest, Sha256};
 
@@ -136,6 +136,45 @@ fn provider_scopes_and_client_identifiers_fail_closed() {
     assert_eq!(
         validate_client_id(CloudProvider::Icloud, MICROSOFT_CLIENT_ID).unwrap_err(),
         "icloud-oauth-not-supported"
+    );
+}
+
+#[test]
+fn authorization_preparation_binds_loopback_provider_and_pkce_without_network() {
+    let microsoft = prepare_authorization(CloudProvider::Onedrive, MICROSOFT_CLIENT_ID).unwrap();
+    let microsoft_url = microsoft.authorization_url();
+    assert!(microsoft_url.starts_with(
+        "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?"
+    ));
+    assert!(microsoft_url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A"));
+    assert!(microsoft_url.contains("scope=Files.Read%20offline_access"));
+    assert!(microsoft_url.contains("code_challenge_method=S256"));
+    assert!(microsoft_url.contains("response_mode=query"));
+    assert!(microsoft_url.contains("prompt=select_account"));
+
+    let google = prepare_authorization(CloudProvider::GoogleDrive, GOOGLE_CLIENT_ID).unwrap();
+    let google_url = google.authorization_url();
+    assert!(google_url.starts_with("https://accounts.google.com/o/oauth2/v2/auth?"));
+    assert!(google_url.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A"));
+    assert!(google_url.contains(
+        "scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdrive.metadata.readonly"
+    ));
+    assert!(google_url.contains("code_challenge_method=S256"));
+    assert!(google_url.contains("access_type=offline"));
+    assert!(google_url.contains("prompt=consent"));
+    assert!(google_url.contains("include_granted_scopes=true"));
+
+    assert_eq!(
+        prepare_authorization(CloudProvider::Icloud, MICROSOFT_CLIENT_ID)
+            .err()
+            .unwrap(),
+        "icloud-oauth-not-supported"
+    );
+    assert_eq!(
+        prepare_authorization(CloudProvider::Onedrive, "not-a-guid")
+            .err()
+            .unwrap(),
+        "oauth-client-id-provider-format-invalid"
     );
 }
 
