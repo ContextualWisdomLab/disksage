@@ -352,3 +352,48 @@ fn execution_rejects_symlink_source_root_without_output_mutation() {
     assert!(!receipt_dir.exists());
     assert!(cloud.path().join("Recovered").read_dir().is_err());
 }
+
+#[cfg(unix)]
+#[test]
+fn execution_rejects_cloud_root_replacement_before_output_mutation() {
+    use std::os::unix::fs::symlink;
+
+    let source = tempfile::tempdir().unwrap();
+    let cloud_parent = tempfile::tempdir().unwrap();
+    let external = tempfile::tempdir().unwrap();
+    let receipts = tempfile::tempdir().unwrap();
+    let cloud_path = cloud_parent.path().join("cloud-root");
+    let moved_cloud_path = cloud_parent.path().join("authorized-cloud-root-moved");
+    let receipt_dir = receipts.path().join("receipts");
+    std::fs::create_dir(&cloud_path).unwrap();
+    let (materialization, plan, approval) = planning_context(source.path(), &cloud_path, 8_000);
+
+    std::fs::rename(&cloud_path, &moved_cloud_path).unwrap();
+    symlink(external.path(), &cloud_path).unwrap();
+
+    assert_eq!(
+        execute_incomplete_download_materialization(
+            source.path(),
+            &materialization,
+            &plan,
+            &approval,
+            &plan.destination_plan_fingerprint,
+            capacity(8_002),
+            &receipt_dir,
+            8_003,
+        )
+        .unwrap_err(),
+        "materialization-execution-cloud-root-unsafe"
+    );
+
+    assert!(
+        std::fs::symlink_metadata(&cloud_path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(moved_cloud_path.is_dir());
+    assert!(!receipt_dir.exists());
+    assert!(external.path().join("Recovered").read_dir().is_err());
+    assert!(moved_cloud_path.join("Recovered").read_dir().is_err());
+}
