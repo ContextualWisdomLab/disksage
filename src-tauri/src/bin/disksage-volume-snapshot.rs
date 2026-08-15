@@ -1,3 +1,8 @@
+//! Command-line entry point for bounded local-volume snapshots and comparisons.
+//!
+//! The command reads one local volume plus an optional immutable baseline snapshot. It emits JSON
+//! evidence only and never removes, truncates, or otherwise mutates filesystem content.
+
 use disksage_lib::volume_pressure::{compare_snapshots, snapshot_volume, LocalVolumeSnapshot};
 use std::ffi::OsString;
 use std::fs::File;
@@ -5,15 +10,21 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+/// Maximum accepted baseline JSON size, including the bounded-read recheck.
 const MAX_BASELINE_BYTES: u64 = 64 * 1024;
 
+/// Parsed arguments for one local-volume snapshot or comparison operation.
 #[derive(Debug, Eq, PartialEq)]
 struct Args {
+    /// Local filesystem path whose allocation evidence will be observed.
     path: PathBuf,
+    /// Optional prior snapshot used for a deterministic before/after comparison.
     baseline: Option<PathBuf>,
+    /// Optional logical-removal claim paired with a supplied baseline.
     logical_removed_bytes: Option<u64>,
 }
 
+/// Runs the CLI and maps help, validation, and evidence outcomes to stable exit codes.
 fn main() -> ExitCode {
     match run(std::env::args_os().skip(1)) {
         Ok(()) => ExitCode::SUCCESS,
@@ -31,6 +42,7 @@ fn main() -> ExitCode {
     }
 }
 
+/// Parses one argument stream, observes the current volume, and writes bounded JSON evidence.
 fn run<I, S>(args: I) -> Result<(), String>
 where
     I: IntoIterator<Item = S>,
@@ -56,6 +68,7 @@ where
     Ok(())
 }
 
+/// Parses bounded native arguments without reflecting unknown or malformed values.
 fn parse_args<I, S>(args: I) -> Result<Args, String>
 where
     I: IntoIterator<Item = S>,
@@ -117,6 +130,7 @@ where
     })
 }
 
+/// Reads and validates one bounded regular-file baseline without following symbolic links.
 fn read_baseline(path: PathBuf) -> Result<LocalVolumeSnapshot, String> {
     let metadata =
         std::fs::symlink_metadata(&path).map_err(|_| "local-volume-baseline-unavailable")?;
@@ -140,6 +154,7 @@ fn read_baseline(path: PathBuf) -> Result<LocalVolumeSnapshot, String> {
     Ok(snapshot)
 }
 
+/// Returns a positive Unix-epoch millisecond timestamp for evidence identity.
 fn now_ms() -> Result<u64, String> {
     let observed_at_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
