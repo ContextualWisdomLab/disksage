@@ -25,12 +25,14 @@
     if (!scannedRoot) return;
     busy = true;
     loadError = "";
+    plans = [];
+    verdicts = {};
     results = [];
     try {
       plans = await api.planOrganize(scannedRoot);
-      loadVerdicts(plans.map((p) => p.src));
+      await loadVerdicts(plans.map((p) => p.src));
     } catch {
-      loadError = "정리 계획을 만들지 못했습니다. 스캔을 다시 실행한 뒤 재시도하세요.";
+      loadError = "정리 계획을 만들지 못했습니다. 스캔 대상 폴더의 접근 권한을 확인하고 스캔을 다시 실행한 뒤 미리보기를 다시 만드세요.";
     } finally {
       busy = false;
     }
@@ -55,12 +57,17 @@
     );
     if (!okay) return;
     busy = true;
+    loadError = "";
+    results = [];
     try {
       const r = await api.executeMoves(plans);
       results = r;
       plans = [];
+      verdicts = {};
     } catch {
-      loadError = "파일 정리를 실행하지 못했습니다. 계획을 다시 만든 뒤 재시도하세요.";
+      plans = [];
+      verdicts = {};
+      loadError = "파일 정리를 실행하지 못했습니다. 파일이 열려 있는지와 대상 폴더의 접근 권한을 확인한 뒤 새 미리보기부터 진행하세요.";
     } finally {
       busy = false;
     }
@@ -68,11 +75,13 @@
 
   async function undoMoves() {
     busy = true;
+    loadError = "";
+    results = [];
     try {
       const r = await api.undoLastMoves();
       results = r;
     } catch {
-      loadError = "마지막 이동을 되돌리지 못했습니다. 파일 상태를 확인한 뒤 다시 시도하세요.";
+      loadError = "마지막 이동을 되돌리지 못했습니다. 이동한 파일의 현재 위치와 원래 폴더의 접근 권한을 확인한 뒤 다시 되돌리세요.";
     } finally {
       busy = false;
     }
@@ -121,11 +130,11 @@
   {/if}
 
   {#if results.length > 0}
-    <p role="status">{results.filter((r) => r.ok).length}/{results.length}개 완료 — 위 "되돌리기"로 복원할 수 있습니다.</p>
+    <p role="status">{results.filter((r) => r.ok).length}/{results.length}개 완료. 복원이 필요하면 위 ‘마지막 이동 되돌리기’를 사용하세요.</p>
     {#if results.some((r) => !r.ok)}
       <ul class="errors">
         {#each results.filter((r) => !r.ok) as r (r.path)}
-          <li title={r.path}>⚠ {r.path} — {r.error}</li>
+          <li title={r.path}>⚠ {r.path} — 파일이 사용 중인지와 대상 폴더의 접근 권한을 확인한 뒤 새 미리보기부터 진행하세요.</li>
         {/each}
       </ul>
     {/if}
