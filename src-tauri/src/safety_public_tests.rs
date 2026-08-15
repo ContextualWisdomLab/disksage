@@ -158,6 +158,25 @@ fn identity_bound_trash_rejects_stale_identity_before_journal_or_staging() {
         .any(|entry| entry.file_name().to_string_lossy().starts_with(&staging_prefix)));
 }
 
+#[test]
+fn identity_bound_trash_cleans_staging_when_journal_open_fails() {
+    let root = tempfile::tempdir().unwrap();
+    let fixture = root.path().join("fixture");
+    std::fs::write(&fixture, b"keep").unwrap();
+    let expected_identity = filesystem_object_id(&fixture).unwrap();
+    let staging_prefix = format!(".disksage-trash-{}-13-", std::process::id());
+
+    let error =
+        trash_delete_if_identity(&fixture, &expected_identity, 4, root.path(), 13).unwrap_err();
+
+    assert!(matches!(error, SafetyError::Journal(_)));
+    assert_eq!(std::fs::read(&fixture).unwrap(), b"keep");
+    assert!(!std::fs::read_dir(root.path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .any(|entry| entry.file_name().to_string_lossy().starts_with(&staging_prefix)));
+}
+
 #[cfg(unix)]
 #[test]
 fn unix_protection_and_object_identity_cover_root_system_and_local_objects() {
