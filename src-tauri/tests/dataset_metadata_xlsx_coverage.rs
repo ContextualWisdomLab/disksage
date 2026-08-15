@@ -154,7 +154,7 @@ fn valid_xlsx_profiles_schema_and_cell_failures_without_retaining_values() {
         .iter()
         .find(|column| column.name == "Secondary!amount")
         .expect("second worksheet column must be namespaced");
-    assert_eq!(amount.inferred_type, "integer");
+    assert_eq!(amount.inferred_type, "number");
 
     let serialized = serde_json::to_string(&profile).expect("serialize bounded profile");
     assert!(!serialized.contains("person@example.com"));
