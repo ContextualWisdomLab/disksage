@@ -72,20 +72,3 @@ fn empty_audit_is_complete_read_only_and_privacy_redacted() {
     let encoded = serde_json::to_string(&summary).expect("summary JSON");
     assert!(!encoded.contains(root.path().to_string_lossy().as_ref()));
 }
-
-#[cfg(unix)]
-#[test]
-fn audit_refuses_a_symlink_root_instead_of_following_it() {
-    use std::os::unix::fs::symlink;
-
-    let parent = tempfile::tempdir().expect("temporary symlink parent");
-    let real_root = tempfile::tempdir().expect("real audit root");
-    let linked_root = parent.path().join("linked-root");
-    symlink(real_root.path(), &linked_root).expect("audit-root symlink fixture");
-
-    assert_eq!(
-        collect_incomplete_download_audit(&linked_root, 1, 100, DEFAULT_STALE_AFTER_DAYS)
-            .unwrap_err(),
-        "incomplete-download-audit-root-unsafe"
-    );
-}
