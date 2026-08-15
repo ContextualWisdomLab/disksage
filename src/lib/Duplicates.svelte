@@ -28,6 +28,9 @@
     if (!scannedRoot) return;
     busy = true;
     loadError = "";
+    groups = [];
+    toDelete = new Set();
+    verdicts = {};
     results = [];
     try {
       groups = await api.findDuplicateFiles(scannedRoot);
@@ -39,7 +42,7 @@
       toDelete = next;
       loadVerdicts(groups.flatMap((g) => g.paths));
     } catch {
-      loadError = "중복 파일 검색에 실패했습니다.";
+      loadError = "중복 파일 검색에 실패했습니다. 스캔 대상 폴더의 접근 권한을 확인하고 스캔을 다시 실행한 뒤 중복 찾기를 다시 누르세요.";
     } finally {
       busy = false;
     }
@@ -49,6 +52,7 @@
     const next = new Set(toDelete);
     next.has(path) ? next.delete(path) : next.add(path);
     toDelete = next;
+    loadError = "";
   }
 
   let reclaimable = $derived(
@@ -61,9 +65,10 @@
   async function deleteSelected() {
     const paths = [...toDelete];
     if (paths.length === 0) return;
+    loadError = "";
     // 안전: 그룹 전체가 삭제 선택되면 최소 1개는 보존하도록 막는다
     if (blocksDeletion(groups, toDelete)) {
-      alert("중복 그룹 하나가 통째로 삭제 선택됐습니다. 각 그룹에서 최소 1개는 보존해야 합니다.");
+      loadError = "중복 그룹 전체가 삭제 대상으로 선택됐습니다. 각 그룹에서 최소 1개는 보존하도록 선택을 해제한 뒤 다시 시도하세요.";
       return;
     }
     const okay = await confirm(
@@ -78,7 +83,7 @@
       await scan();
       results = r;
     } catch {
-      loadError = "선택한 중복 파일을 휴지통으로 보내지 못했습니다.";
+      loadError = "선택한 중복 파일을 휴지통으로 보내지 못했습니다. 파일이 열려 있는지와 휴지통 접근 권한을 확인한 뒤 중복 찾기부터 다시 실행하세요.";
     } finally {
       busy = false;
     }
@@ -133,11 +138,11 @@
   {/if}
 
   {#if results.length > 0}
-    <p>{results.filter((r) => r.ok).length}/{results.length}개 휴지통으로 이동 — 복원 가능합니다.</p>
+    <p>{results.filter((r) => r.ok).length}/{results.length}개 휴지통으로 이동했습니다. 복원이 필요하면 휴지통에서 되돌리세요.</p>
     {#if results.some((r) => !r.ok)}
       <ul class="errors">
         {#each results.filter((r) => !r.ok) as r (r.path)}
-          <li title={r.path}>⚠ {r.path} — 일부 파일을 휴지통으로 보내지 못했습니다.</li>
+          <li title={r.path}>⚠ {r.path} — 파일이 사용 중인지와 접근 권한을 확인한 뒤 중복 찾기부터 다시 실행하세요.</li>
         {/each}
       </ul>
     {/if}
