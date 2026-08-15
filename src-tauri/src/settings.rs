@@ -44,4 +44,11 @@ mod tests {
     fn parse_explicit_true() {
         assert!(parse_settings(r#"{"online_mode":true}"#).online_mode);
     }
+    #[test]
+    fn unknown_keys_fail_closed_even_when_online_true() {
+        assert_eq!(
+            parse_settings(r#"{"online_mode":true,"unexpected_remote_setting":true}"#),
+            Settings::default()
+        );
+    }
 }
