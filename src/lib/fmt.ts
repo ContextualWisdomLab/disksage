@@ -1,8 +1,9 @@
 /**
  * Format a byte count with IEC 80000-13:2025 binary prefixes.
  *
- * Values below ten units retain one decimal place, while larger values use the
- * existing whole-number presentation so callers keep a compact, consistent UI.
+ * Scaled values below ten retain one decimal place. Byte values and scaled
+ * values of ten or more use the existing whole-number presentation so callers
+ * keep a compact, consistent UI.
  */
 export function fmtBytes(n: number): string {
   const units = [
