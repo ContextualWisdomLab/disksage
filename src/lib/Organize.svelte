@@ -29,8 +29,8 @@
     try {
       plans = await api.planOrganize(scannedRoot);
       loadVerdicts(plans.map((p) => p.src));
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "정리 계획을 만들지 못했습니다. 스캔을 다시 실행한 뒤 재시도하세요.";
     } finally {
       busy = false;
     }
@@ -59,8 +59,8 @@
       const r = await api.executeMoves(plans);
       results = r;
       plans = [];
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "파일 정리를 실행하지 못했습니다. 계획을 다시 만든 뒤 재시도하세요.";
     } finally {
       busy = false;
     }
@@ -71,8 +71,8 @@
     try {
       const r = await api.undoLastMoves();
       results = r;
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "마지막 이동을 되돌리지 못했습니다. 파일 상태를 확인한 뒤 다시 시도하세요.";
     } finally {
       busy = false;
     }
