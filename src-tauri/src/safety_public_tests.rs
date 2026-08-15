@@ -177,6 +177,23 @@ fn identity_bound_trash_cleans_staging_when_journal_open_fails() {
         .any(|entry| entry.file_name().to_string_lossy().starts_with(&staging_prefix)));
 }
 
+#[test]
+fn identity_bound_trash_rejects_missing_source_before_journal_or_staging() {
+    let root = tempfile::tempdir().unwrap();
+    let missing = root.path().join("missing-fixture");
+    let journal = root.path().join("cleanup-journal.jsonl");
+    let staging_prefix = format!(".disksage-trash-{}-14-", std::process::id());
+
+    let error = trash_delete_if_identity(&missing, "missing-object", 4, &journal, 14).unwrap_err();
+
+    assert!(matches!(error, SafetyError::Trash(_)));
+    assert!(!journal.exists());
+    assert!(!std::fs::read_dir(root.path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .any(|entry| entry.file_name().to_string_lossy().starts_with(&staging_prefix)));
+}
+
 #[cfg(unix)]
 #[test]
 fn unix_protection_and_object_identity_cover_root_system_and_local_objects() {
