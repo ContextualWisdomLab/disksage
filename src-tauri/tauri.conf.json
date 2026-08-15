@@ -5,9 +5,9 @@
   "identifier": "com.contextualwisdomlab.disksage",
   "mainBinaryName": "disksage",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "node scripts/generate-icons.mjs && npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "node scripts/generate-icons.mjs && npm run build",
     "frontendDist": "../build"
   },
   "app": {
@@ -65,6 +65,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": ["resources/ontology/default.ttl"]
+    "resources": [
+      "resources/ontology/default.ttl",
+      "icons/icon-manifest.json"
+    ]
   }
 }
