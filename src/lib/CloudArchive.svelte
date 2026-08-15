@@ -196,7 +196,7 @@
         [candidate.metadata_fingerprint]: false,
       };
     } catch {
-      loadError = "클라우드 후보 검토 결정을 저장하지 못했습니다. 사유와 조직 테넌트 권한 확인을 점검한 뒤 다시 저장하세요.";
+      loadError = "클라우드 후보 검토 결정을 저장하지 못했습니다. 사유와 조직 테넌트 권한을 확인한 뒤 다시 저장하세요.";
     } finally {
       reviewingFingerprint = "";
     }
