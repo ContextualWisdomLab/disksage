@@ -1,6 +1,10 @@
-//! Crash-recovery coverage for the destructive-operation audit journal without widening its API.
+//! Crash-recovery and fail-closed coverage for safety boundaries without widening their API.
 
-use crate::safety::{journal_append, journal_recent, JournalEntry};
+use crate::safety::{
+    filesystem_object_id, is_protected, journal_append, journal_recent, object_id_from_metadata,
+    JournalEntry, SafetyError,
+};
+use std::path::Path;
 
 #[test]
 fn append_repairs_missing_trailing_newline_without_merging_audit_records() {
@@ -40,4 +44,85 @@ fn append_repairs_missing_trailing_newline_without_merging_audit_records() {
     assert_eq!(recent[0].outcome, second.outcome);
     assert_eq!(recent[1].ts_ms, first.ts_ms);
     assert_eq!(recent[1].outcome, first.outcome);
+}
+
+#[test]
+fn recent_journal_ignores_malformed_records_and_honors_zero_and_bounded_limits() {
+    let root = tempfile::tempdir().unwrap();
+    let journal = root.path().join("cleanup-journal.jsonl");
+    let older = JournalEntry {
+        ts_ms: 1,
+        op: "trash_delete".into(),
+        path: "/tmp/older".into(),
+        bytes: 1,
+        outcome: "pending".into(),
+    };
+    let newer = JournalEntry {
+        ts_ms: 2,
+        op: "trash_delete".into(),
+        path: "/tmp/newer".into(),
+        bytes: 2,
+        outcome: "ok".into(),
+    };
+    std::fs::write(
+        &journal,
+        format!(
+            "{}\nnot-json\n{}\n",
+            serde_json::to_string(&older).unwrap(),
+            serde_json::to_string(&newer).unwrap()
+        ),
+    )
+    .unwrap();
+
+    assert!(journal_recent(&journal, 0).is_empty());
+    let one = journal_recent(&journal, 1);
+    assert_eq!(one.len(), 1);
+    assert_eq!(one[0].ts_ms, newer.ts_ms);
+    let all = journal_recent(&journal, 10);
+    assert_eq!(all.iter().map(|entry| entry.ts_ms).collect::<Vec<_>>(), vec![2, 1]);
+    assert!(journal_recent(&root.path().join("missing.jsonl"), 10).is_empty());
+}
+
+#[test]
+fn journal_open_failures_are_typed_and_displayed_without_panicking() {
+    let root = tempfile::tempdir().unwrap();
+    let entry = JournalEntry {
+        ts_ms: 3,
+        op: "trash_delete".into(),
+        path: "/tmp/example".into(),
+        bytes: 3,
+        outcome: "pending".into(),
+    };
+    let error = journal_append(root.path(), &entry).unwrap_err();
+    match &error {
+        SafetyError::Journal(message) => assert!(!message.is_empty()),
+        other => panic!("expected journal error, received {other}"),
+    }
+
+    let protected = SafetyError::Protected(root.path().to_path_buf());
+    assert!(protected.to_string().contains(root.path().to_string_lossy().as_ref()));
+    assert!(SafetyError::Trash("bounded".into()).to_string().contains("bounded"));
+    assert!(!error.to_string().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn unix_protection_and_object_identity_cover_root_system_and_local_objects() {
+    assert!(is_protected(Path::new("/")));
+    assert!(is_protected(Path::new("/usr")));
+    assert!(is_protected(Path::new("/usr/local/share")));
+
+    let root = tempfile::tempdir().unwrap();
+    let file = root.path().join("identity-fixture");
+    std::fs::write(&file, b"identity").unwrap();
+    assert!(!is_protected(&file));
+
+    let metadata = std::fs::symlink_metadata(&file).unwrap();
+    let from_metadata = object_id_from_metadata(&metadata).expect("Unix metadata has identity");
+    let from_path = filesystem_object_id(&file).unwrap();
+    assert_eq!(from_metadata, from_path);
+    assert!(from_path.starts_with("unix:"));
+
+    let missing = root.path().join("missing");
+    assert!(filesystem_object_id(&missing).is_err());
 }
