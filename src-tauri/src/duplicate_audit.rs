@@ -548,6 +548,11 @@ pub fn collect_exact_duplicate_audit(
     if !(1..=MAX_ENTRIES).contains(&max_entries) {
         return Err("duplicate-audit-max-entries-out-of-range".into());
     }
+    let supplied_root_metadata = std::fs::symlink_metadata(source_root)
+        .map_err(|_| "duplicate-audit-root-unavailable".to_string())?;
+    if !supplied_root_metadata.is_dir() || supplied_root_metadata.file_type().is_symlink() {
+        return Err("duplicate-audit-root-unsafe".into());
+    }
     let canonical_root = std::fs::canonicalize(source_root)
         .map_err(|_| "duplicate-audit-root-unavailable".to_string())?;
     let root_metadata = std::fs::symlink_metadata(&canonical_root)
