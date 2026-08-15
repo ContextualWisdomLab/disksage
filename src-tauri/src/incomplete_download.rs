@@ -843,6 +843,11 @@ pub fn collect_incomplete_download_audit(
     if !(1..=MAX_STALE_AFTER_DAYS).contains(&stale_after_days) {
         return Err("incomplete-download-stale-days-out-of-range".into());
     }
+    let supplied_root_metadata = std::fs::symlink_metadata(source_root)
+        .map_err(|_| "incomplete-download-audit-root-unavailable".to_string())?;
+    if !supplied_root_metadata.is_dir() || supplied_root_metadata.file_type().is_symlink() {
+        return Err("incomplete-download-audit-root-unsafe".into());
+    }
     let canonical_root = std::fs::canonicalize(source_root)
         .map_err(|_| "incomplete-download-audit-root-unavailable".to_string())?;
     let root_metadata = std::fs::symlink_metadata(&canonical_root)
