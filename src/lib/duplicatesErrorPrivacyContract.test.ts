@@ -14,15 +14,49 @@ describe("Duplicates privacy-safe failure feedback", () => {
     const source = readSource("src/lib/Duplicates.svelte");
 
     expect(source).not.toContain("String(e)");
+    expect(source).not.toContain("catch (e)");
     expect(source).not.toContain("{r.error}");
-    expect(source).toContain("중복 파일 검색에 실패했습니다.");
-    expect(source).toContain("선택한 중복 파일을 휴지통으로 보내지 못했습니다.");
-    expect(source).toContain("일부 파일을 휴지통으로 보내지 못했습니다.");
+    expect(source).toContain(
+      "중복 파일 검색에 실패했습니다. 스캔 대상 폴더의 접근 권한을 확인하고 스캔을 다시 실행한 뒤 중복 찾기를 다시 누르세요.",
+    );
+    expect(source).toContain(
+      "선택한 중복 파일을 휴지통으로 보내지 못했습니다. 파일이 열려 있는지와 휴지통 접근 권한을 확인한 뒤 중복 찾기부터 다시 실행하세요.",
+    );
+    expect(source).toContain(
+      "파일이 사용 중인지와 접근 권한을 확인한 뒤 중복 찾기부터 다시 실행하세요.",
+    );
   });
 
-  it("announces operation failures without changing focus", () => {
+  it("clears stale duplicate and verdict evidence before replacement discovery", () => {
+    const source = readSource("src/lib/Duplicates.svelte");
+    const scanStart = source.indexOf("async function scan()");
+    const duplicateCall = source.indexOf("groups = await api.findDuplicateFiles(scannedRoot)", scanStart);
+    const scanPrefix = source.slice(scanStart, duplicateCall);
+
+    expect(scanStart).toBeGreaterThanOrEqual(0);
+    expect(duplicateCall).toBeGreaterThan(scanStart);
+    expect(scanPrefix).toContain("groups = []");
+    expect(scanPrefix).toContain("toDelete = new Set()");
+    expect(scanPrefix).toContain("verdicts = {}");
+    expect(scanPrefix).toContain("results = []");
+  });
+
+  it("uses the accessible failure region for an invalid all-selected group", () => {
     const source = readSource("src/lib/Duplicates.svelte");
 
+    expect(source).not.toContain("alert(");
+    expect(source).toContain(
+      "중복 그룹 전체가 삭제 대상으로 선택됐습니다. 각 그룹에서 최소 1개는 보존하도록 선택을 해제한 뒤 다시 시도하세요.",
+    );
     expect(source).toContain('role="alert"');
+  });
+
+  it("keeps customer-selected paths but makes result copy actionable", () => {
+    const source = readSource("src/lib/Duplicates.svelte");
+
+    expect(source).toContain("<li title={r.path}>⚠ {r.path} —");
+    expect(source).toContain("복원이 필요하면 휴지통에서 되돌리세요.");
+    expect(source).toContain("api.findDuplicateFiles(scannedRoot)");
+    expect(source).toContain("api.cleanPaths(paths)");
   });
 });
