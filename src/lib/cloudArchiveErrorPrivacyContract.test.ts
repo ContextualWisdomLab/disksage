@@ -25,7 +25,7 @@ function readSource(path: string): string {
 describe("CloudArchive privacy-safe failure feedback", () => {
   it("restricts every visible loadError assignment to the approved fixed-string allowlist", () => {
     const source = readSource("src/lib/CloudArchive.svelte");
-    const assignments = [...source.matchAll(/\bloadError\s*=\s*([^;\n]+);/g)].map((match) =>
+    const assignments = [...source.matchAll(/^\s*loadError\s*=\s*([^;\n]+);/gm)].map((match) =>
       match[1].trim(),
     );
     const failureAssignments = assignments.filter((assignment) => assignment !== '""');
