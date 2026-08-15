@@ -93,6 +93,19 @@ fn valid_receipt() -> IncompleteDownloadMaterializationReceipt {
     receipt
 }
 
+macro_rules! assert_signed_rejected {
+    ($case:literal, $mutation:expr) => {{
+        let mut receipt = valid_receipt();
+        ($mutation)(&mut receipt);
+        sign(&mut receipt);
+        assert!(
+            !incomplete_download_materialization_receipt_integrity_valid(&receipt),
+            "tampered receipt was accepted: {}",
+            $case
+        );
+    }};
+}
+
 #[test]
 fn valid_public_receipt_round_trips_integrity_and_redacted_summary() {
     let receipt = valid_receipt();
@@ -161,5 +174,142 @@ fn receipt_integrity_rejects_overlap_duplicates_and_capacity_forgery() {
     forged_identity.receipt_id = "0".repeat(64);
     assert!(!incomplete_download_materialization_receipt_integrity_valid(
         &forged_identity
+    ));
+}
+
+#[test]
+fn receipt_integrity_rejects_authority_temporal_and_capacity_tampering() {
+    assert_signed_rejected!("schema-version", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.schema_version += 1;
+    });
+    assert_signed_rejected!("destination-plan-fingerprint", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.destination_plan_fingerprint.clear();
+    });
+    assert_signed_rejected!("materialization-plan-fingerprint", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.materialization_plan_fingerprint = "G".repeat(64);
+    });
+    assert_signed_rejected!("approval-id", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.approval_id = "short".into();
+    });
+    assert_signed_rejected!("unknown-account-scope", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.account_scope = CloudAccountScope::Unknown;
+    });
+    assert_signed_rejected!("relative-cloud-root", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.cloud_root = "relative/cloud".into();
+    });
+    assert_signed_rejected!("unsafe-destination-subdirectory", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.destination_subdirectory = "../escape".into();
+    });
+    assert_signed_rejected!("zero-source-count", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.source_file_count = 0;
+    });
+    assert_signed_rejected!("unit-count-mismatch", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.unit_count = 2;
+    });
+    assert_signed_rejected!("zero-materialized-bytes", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.materialized_bytes = 0;
+    });
+    assert_signed_rejected!("unverified-outputs", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.all_outputs_verified = false;
+    });
+    assert_signed_rejected!("provider-sync-authority", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.provider_sync_confirmed = true;
+    });
+    assert_signed_rejected!("source-eviction-authority", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.source_eviction_authorized = true;
+    });
+    assert_signed_rejected!("source-mutation", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.source_mutation_performed = true;
+    });
+    assert_signed_rejected!("production-time", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.production_time_ms = Some(100);
+    });
+    assert_signed_rejected!("production-time-source", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.production_time_source = Some("filename".into());
+    });
+    assert_signed_rejected!("capacity-not-fit", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.fresh_capacity.can_fit = Some(false);
+    });
+    assert_signed_rejected!("capacity-blocker", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.fresh_capacity.blockers.push("tampered".into());
+    });
+    assert_signed_rejected!("capacity-provider", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.fresh_capacity.snapshot.provider = CloudProvider::GoogleDrive;
+    });
+    assert_signed_rejected!("capacity-account-scope", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.fresh_capacity.snapshot.account_scope = Some(CloudAccountScope::Organization);
+    });
+    assert_signed_rejected!("capacity-observed-in-future", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.fresh_capacity.snapshot.observed_at_ms = receipt.executed_at_ms + 1;
+    });
+    assert_signed_rejected!("capacity-stale", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.executed_at_ms = u64::MAX;
+    });
+    assert_signed_rejected!("capacity-fingerprint", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.fresh_capacity.snapshot.evidence_fingerprint = None;
+    });
+}
+
+#[test]
+fn receipt_integrity_rejects_unit_shape_observation_and_aggregate_tampering() {
+    assert_signed_rejected!("unit-fingerprint", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.units[0].materialization_unit_fingerprint = "z".repeat(64);
+    });
+    assert_signed_rejected!("unsafe-source-path", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.units[0].source_relative_path = "../outside".into();
+    });
+    assert_signed_rejected!("unsafe-destination-path", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.units[0].destination_relative_path = "DiskSage/../outside".into();
+    });
+    assert_signed_rejected!("destination-parent", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.units[0].destination_relative_path = "Other/materialized.zip".into();
+    });
+    assert_signed_rejected!("empty-range", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.units[0].range_end = receipt.units[0].range_start;
+    });
+    assert_signed_rejected!("output-byte-count", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.units[0].output_bytes = 9;
+    });
+    assert_signed_rejected!("blake3-digest", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.units[0].content_digests.blake3 = "0".repeat(63);
+    });
+    assert_signed_rejected!("sha256-digest", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.units[0].content_digests.sha256 = "X".repeat(64);
+    });
+    assert_signed_rejected!("source-stability", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.units[0].source_stable = false;
+    });
+    assert_signed_rejected!("output-verification", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.units[0].output_verified = false;
+    });
+    assert_signed_rejected!("write-observation", |receipt: &mut IncompleteDownloadMaterializationReceipt| {
+        receipt.units[0].write_performed = false;
+    });
+
+    let mut duplicate_fingerprint = valid_receipt();
+    duplicate_fingerprint
+        .units
+        .push(unit('d', "DiskSage/materialized-2.zip", 10));
+    duplicate_fingerprint.unit_count = 2;
+    duplicate_fingerprint.materialized_bytes = 20;
+    duplicate_fingerprint.fresh_capacity = assess_capacity(capacity_snapshot(), 20, 10, 0);
+    sign(&mut duplicate_fingerprint);
+    assert!(!incomplete_download_materialization_receipt_integrity_valid(
+        &duplicate_fingerprint
+    ));
+
+    let mut source_count_mismatch = valid_receipt();
+    source_count_mismatch.source_file_count = 2;
+    sign(&mut source_count_mismatch);
+    assert!(!incomplete_download_materialization_receipt_integrity_valid(
+        &source_count_mismatch
+    ));
+
+    let mut total_mismatch = valid_receipt();
+    total_mismatch.materialized_bytes = 11;
+    total_mismatch.fresh_capacity = assess_capacity(capacity_snapshot(), 11, 10, 0);
+    sign(&mut total_mismatch);
+    assert!(!incomplete_download_materialization_receipt_integrity_valid(
+        &total_mismatch
     ));
 }
