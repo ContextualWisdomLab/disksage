@@ -1,7 +1,7 @@
 //! Fail-closed recovery coverage for candidates that must never reach content validation.
 //!
-//! The fixtures exercise evidence, active-use, and relative-path authority boundaries without
-//! opening candidate content or performing extraction, rename, discard, or any other mutation.
+//! The fixtures exercise evidence, active-use, path-identity, symlink, availability, and
+//! changed-since-audit boundaries without extraction, rename, discard, or any other mutation.
 
 use disksage_lib::cloud_local_eviction::ActiveUseEvidence;
 use disksage_lib::incomplete_download::{
@@ -183,4 +183,100 @@ fn recovery_skips_incomplete_active_and_unsafe_candidates_before_content_access(
     ] {
         assert!(!encoded.contains(sensitive), "summary leaked {sensitive}");
     }
+}
+
+#[test]
+fn recovery_fails_closed_for_missing_or_changed_candidates_before_validation() {
+    let temp = tempfile::tempdir().unwrap();
+    let canonical_root = std::fs::canonicalize(temp.path()).unwrap();
+    std::fs::write(temp.path().join("changed.crdownload"), b"short").unwrap();
+
+    let report = validate_incomplete_download_recovery(
+        temp.path(),
+        &audit(
+            canonical_root.to_string_lossy().into_owned(),
+            vec![
+                candidate(
+                    "a-missing",
+                    "missing.crdownload",
+                    true,
+                    active_use(true, false),
+                ),
+                candidate(
+                    "b-changed",
+                    "changed.crdownload",
+                    true,
+                    active_use(true, false),
+                ),
+            ],
+        ),
+        3,
+        RecoveryValidationLimits::default(),
+    )
+    .unwrap();
+
+    assert_eq!(report.skipped_count, 2);
+    assert!(!report.evidence_complete);
+    assert_eq!(
+        report.issue_counts.get("recovery-candidate-unavailable"),
+        Some(&1)
+    );
+    assert_eq!(
+        report.issue_counts.get("candidate-changed-since-audit"),
+        Some(&1)
+    );
+    assert_eq!(
+        report.items[0].status,
+        RecoveryItemStatus::SkippedEvidenceIncomplete
+    );
+    assert_eq!(
+        report.items[1].status,
+        RecoveryItemStatus::ChangedDuringValidation
+    );
+    assert!(report.items.iter().all(|item| item.validations.is_empty()));
+    assert!(!report.mutation_performed);
+    assert_eq!(std::fs::read(temp.path().join("changed.crdownload")).unwrap(), b"short");
+}
+
+#[cfg(unix)]
+#[test]
+fn recovery_rejects_symlink_candidates_before_following_them() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let outside_file = outside.path().join("outside.crdownload");
+    std::fs::write(&outside_file, b"outside-data").unwrap();
+    symlink(&outside_file, temp.path().join("linked.crdownload")).unwrap();
+    let canonical_root = std::fs::canonicalize(temp.path()).unwrap();
+
+    let report = validate_incomplete_download_recovery(
+        temp.path(),
+        &audit(
+            canonical_root.to_string_lossy().into_owned(),
+            vec![candidate(
+                "a-symlink",
+                "linked.crdownload",
+                true,
+                active_use(true, false),
+            )],
+        ),
+        4,
+        RecoveryValidationLimits::default(),
+    )
+    .unwrap();
+
+    assert_eq!(report.skipped_count, 1);
+    assert!(!report.evidence_complete);
+    assert_eq!(
+        report.issue_counts.get("recovery-candidate-symlink-rejected"),
+        Some(&1)
+    );
+    assert_eq!(
+        report.items[0].status,
+        RecoveryItemStatus::SkippedEvidenceIncomplete
+    );
+    assert!(report.items[0].validations.is_empty());
+    assert_eq!(std::fs::read(&outside_file).unwrap(), b"outside-data");
+    assert!(!report.mutation_performed);
 }
