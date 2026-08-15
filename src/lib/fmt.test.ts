@@ -16,7 +16,12 @@ describe("fmtBytes", () => {
   it("drops decimals at 10 and above", () => {
     expect(fmtBytes(10 * 1024)).toBe("10 KiB");
   });
-  it("keeps scaling beyond tebibytes instead of reporting thousands of TiB", () => {
+  it("uses the complete IEC 80000-13:2025 binary-prefix ladder", () => {
     expect(fmtBytes(1024 ** 5)).toBe("1.0 PiB");
+    expect(fmtBytes(1024 ** 6)).toBe("1.0 EiB");
+    expect(fmtBytes(1024 ** 7)).toBe("1.0 ZiB");
+    expect(fmtBytes(1024 ** 8)).toBe("1.0 YiB");
+    expect(fmtBytes(1024 ** 9)).toBe("1.0 RiB");
+    expect(fmtBytes(1024 ** 10)).toBe("1.0 QiB");
   });
 });
