@@ -1,7 +1,7 @@
 //! Credential-free coverage for OAuth authorization preparation.
 //!
 //! These tests bind only ephemeral loopback listeners. They do not open a browser, contact an
-//! OAuth provider, read the credential store, or authorize cloud mutation.
+//! OAuth provider, exchange a code, read the credential store, or authorize cloud mutation.
 
 use disksage_lib::cloud::CloudProvider;
 use disksage_lib::provider_oauth::prepare_authorization;
@@ -16,6 +16,25 @@ fn query_value<'a>(url: &'a str, key: &str) -> &'a str {
         .filter_map(|pair| pair.split_once('='))
         .find_map(|(candidate, value)| (candidate == key).then_some(value))
         .unwrap_or_else(|| panic!("missing OAuth query key: {key}"))
+}
+
+fn assert_urlsafe_random_parameter(value: &str) {
+    assert_eq!(value.len(), 43);
+    assert!(value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')));
+}
+
+fn assert_no_secret_material(url: &str) {
+    for secret_name in ["code_verifier", "access_token", "refresh_token"] {
+        assert!(!url.contains(secret_name));
+    }
+}
+
+fn authorization_error(provider: CloudProvider, client_id: &str) -> String {
+    prepare_authorization(provider, client_id)
+        .err()
+        .expect("invalid provider authorization request must fail closed")
 }
 
 #[test]
@@ -33,8 +52,9 @@ fn onedrive_preparation_uses_loopback_pkce_and_read_only_scope() {
     assert_eq!(query_value(url, "code_challenge_method"), "S256");
     assert_eq!(query_value(url, "response_mode"), "query");
     assert_eq!(query_value(url, "prompt"), "select_account");
-    assert_eq!(query_value(url, "code_challenge").len(), 43);
-    assert_eq!(query_value(url, "state").len(), 43);
+    assert_urlsafe_random_parameter(query_value(url, "code_challenge"));
+    assert_urlsafe_random_parameter(query_value(url, "state"));
+    assert_no_secret_material(url);
 }
 
 #[test]
@@ -45,6 +65,7 @@ fn google_preparation_uses_ipv4_loopback_pkce_and_metadata_scope() {
     assert!(url.starts_with("https://accounts.google.com/o/oauth2/v2/auth?"));
     assert_eq!(query_value(url, "client_id"), GOOGLE_CLIENT_ID);
     assert!(query_value(url, "redirect_uri").starts_with("http%3A%2F%2F127.0.0.1%3A"));
+    assert_eq!(query_value(url, "response_type"), "code");
     assert_eq!(
         query_value(url, "scope"),
         "https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdrive.metadata.readonly"
@@ -53,22 +74,23 @@ fn google_preparation_uses_ipv4_loopback_pkce_and_metadata_scope() {
     assert_eq!(query_value(url, "prompt"), "consent");
     assert_eq!(query_value(url, "include_granted_scopes"), "true");
     assert_eq!(query_value(url, "code_challenge_method"), "S256");
-    assert_eq!(query_value(url, "code_challenge").len(), 43);
-    assert_eq!(query_value(url, "state").len(), 43);
+    assert_urlsafe_random_parameter(query_value(url, "code_challenge"));
+    assert_urlsafe_random_parameter(query_value(url, "state"));
+    assert_no_secret_material(url);
 }
 
 #[test]
 fn unsupported_or_malformed_clients_fail_before_authorization() {
     assert_eq!(
-        prepare_authorization(CloudProvider::Icloud, MICROSOFT_CLIENT_ID)
-            .err()
-            .expect("iCloud OAuth must fail closed"),
+        authorization_error(CloudProvider::Icloud, MICROSOFT_CLIENT_ID),
         "icloud-oauth-not-supported"
     );
     assert_eq!(
-        prepare_authorization(CloudProvider::GoogleDrive, "not-a-google-client")
-            .err()
-            .expect("malformed Google client ID must fail closed"),
+        authorization_error(CloudProvider::GoogleDrive, "not-a-google-client"),
+        "oauth-client-id-provider-format-invalid"
+    );
+    assert_eq!(
+        authorization_error(CloudProvider::Onedrive, "not-a-microsoft-client"),
         "oauth-client-id-provider-format-invalid"
     );
 }
