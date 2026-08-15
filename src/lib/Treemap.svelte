@@ -53,22 +53,28 @@
   <canvas bind:this={canvas} width={W} height={H} onclick={click} aria-hidden="true"></canvas>
 
   <details class="accessible-tree">
-    <summary>접근 가능한 항목 목록</summary>
-    <ul>
-      {#each node.entries as entry (entry.path)}
-        <li>
-          {#if entry.is_dir}
-            <button type="button" onclick={() => onOpen(entry.path)}>
-              <span class="entry-name">{entry.name}</span>
-              <span class="entry-meta">디렉터리 · {fmtBytes(entry.size)}</span>
-            </button>
-          {:else}
-            <span class="entry-name">{entry.name}</span>
-            <span class="entry-meta">파일 · {fmtBytes(entry.size)}</span>
-          {/if}
-        </li>
-      {/each}
-    </ul>
+    <summary>키보드로 폴더 열기 및 파일 확인 ({node.entries.length}개)</summary>
+    <div class="entry-scroll" role="region" tabindex="0" aria-label="현재 폴더 항목 목록">
+      {#if node.entries.length === 0}
+        <p class="empty" role="status">표시할 항목이 없습니다. 상위 폴더로 이동하거나 다른 폴더를 스캔하세요.</p>
+      {:else}
+        <ul>
+          {#each node.entries as entry (entry.path)}
+            <li>
+              {#if entry.is_dir}
+                <button type="button" onclick={() => onOpen(entry.path)}>
+                  <span class="entry-name">{entry.name}</span>
+                  <span class="entry-meta">폴더 열기 · {fmtBytes(entry.size)}</span>
+                </button>
+              {:else}
+                <span class="entry-name">{entry.name}</span>
+                <span class="entry-meta">파일 · {fmtBytes(entry.size)}</span>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </div>
   </details>
 </div>
 
@@ -76,9 +82,12 @@
   canvas { max-width: 100%; cursor: pointer; }
   .accessible-tree { margin-top: 0.5rem; font-size: 0.85rem; }
   .accessible-tree summary { cursor: pointer; font-weight: 600; }
-  .accessible-tree ul { list-style: none; padding: 0; margin: 0.5rem 0 0; max-height: 14rem; overflow-y: auto; }
+  .entry-scroll { max-height: 14rem; overflow-y: auto; margin-top: 0.5rem; }
+  .entry-scroll:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+  .accessible-tree ul { list-style: none; padding: 0; margin: 0; }
   .accessible-tree li { display: flex; gap: 0.5rem; align-items: baseline; padding: 0.15rem 0; }
   .accessible-tree button { display: flex; gap: 0.5rem; align-items: baseline; max-width: 100%; text-align: left; }
   .entry-name { overflow-wrap: anywhere; }
   .entry-meta { color: #666; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .empty { margin: 0; color: #555; }
 </style>
