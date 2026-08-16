@@ -1,8 +1,9 @@
 //! Crash-recovery and fail-closed coverage for safety boundaries without widening their API.
 
 use crate::safety::{
-    filesystem_object_id, is_protected, journal_append, journal_recent, object_id_from_metadata,
-    same_volume, trash_delete, trash_delete_if_identity, JournalEntry, SafetyError,
+    filesystem_object_id, is_protected, journal_append, journal_recent, move_file,
+    object_id_from_metadata, same_volume, trash_delete, trash_delete_if_identity, JournalEntry,
+    SafetyError,
 };
 use std::path::Path;
 
@@ -322,4 +323,29 @@ fn unix_same_volume_accepts_local_destination_parent_and_rejects_missing_metadat
         &source,
         &root.path().join("missing-parent").join("destination")
     ));
+}
+
+#[test]
+fn public_move_creates_missing_parent_preserves_bytes_and_journals_success() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("source.bin");
+    let destination = root.path().join("nested").join("destination.bin");
+    let journal = root.path().join("move-journal.jsonl");
+    let payload = b"DiskSage public move coverage";
+    std::fs::write(&source, payload).unwrap();
+
+    move_file(&source, &destination, &journal, 20_001).unwrap();
+
+    assert!(!source.exists(), "successful move must vacate the source pathname");
+    assert_eq!(std::fs::read(&destination).unwrap(), payload);
+    let recent = journal_recent(&journal, 10);
+    assert_eq!(recent.len(), 2, "public move must record pending and terminal outcomes");
+    assert_eq!(recent[0].outcome, "ok");
+    assert_eq!(recent[1].outcome, "pending");
+    assert_eq!(recent[0].op, "move");
+    assert_eq!(recent[0].ts_ms, 20_001);
+    assert!(recent[0].path.contains(source.to_string_lossy().as_ref()));
+    assert!(recent[0]
+        .path
+        .contains(destination.to_string_lossy().as_ref()));
 }
