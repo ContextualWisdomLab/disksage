@@ -190,25 +190,35 @@ fn wait_for_inactive_source(path: &Path) {
 
 #[test]
 fn receipt_directory_rejects_relative_and_data_overlap_with_output_rollback() {
-    let fixture = fixture();
-
+    // Each late receipt-publication failure gets its own source identity. Reusing one source across
+    // sequential executions can make the next active-use preflight observe the immediately prior
+    // lsof/read activity, which tests probe timing instead of the intended receipt-path boundary.
+    let relative_fixture = fixture();
     assert_eq!(
-        fixture.execute(Path::new("relative-receipts")).unwrap_err(),
+        relative_fixture
+            .execute(Path::new("relative-receipts"))
+            .unwrap_err(),
         "materialization-execution-receipt-directory-unsafe"
     );
-    assert_source_preserved_and_output_rolled_back(&fixture);
+    assert_source_preserved_and_output_rolled_back(&relative_fixture);
 
+    let source_overlap_fixture = fixture();
     assert_eq!(
-        fixture.execute(fixture.source.path()).unwrap_err(),
+        source_overlap_fixture
+            .execute(source_overlap_fixture.source.path())
+            .unwrap_err(),
         "materialization-execution-receipt-directory-overlaps-data"
     );
-    assert_source_preserved_and_output_rolled_back(&fixture);
+    assert_source_preserved_and_output_rolled_back(&source_overlap_fixture);
 
+    let cloud_overlap_fixture = fixture();
     assert_eq!(
-        fixture.execute(fixture.cloud.path()).unwrap_err(),
+        cloud_overlap_fixture
+            .execute(cloud_overlap_fixture.cloud.path())
+            .unwrap_err(),
         "materialization-execution-receipt-directory-overlaps-data"
     );
-    assert_source_preserved_and_output_rolled_back(&fixture);
+    assert_source_preserved_and_output_rolled_back(&cloud_overlap_fixture);
 }
 
 #[test]
