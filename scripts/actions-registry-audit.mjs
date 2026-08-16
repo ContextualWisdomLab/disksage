@@ -126,6 +126,13 @@ function sameRepositoryHeadSnapshot(pullRequests, repository) {
   return [...headShas].sort();
 }
 
+function workflowRegistrySnapshot(records) {
+  classifyWorkflowRecords(records, new Set(), new Set());
+  return records
+    .map((record) => JSON.stringify([record.id, record.state, record.path]))
+    .sort();
+}
+
 function sameStringSnapshot(left, right) {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
@@ -151,33 +158,51 @@ export async function activePullRequestWorkflowPaths(fetchJson, repository, pull
   return workflowPaths;
 }
 
-/** Resolve workflow files from an exact, unmoved protected-main revision. */
-export async function protectedWorkflowPaths(fetchJson, repository, expectedMainSha) {
+async function currentProtectedMainSha(fetchJson, repository) {
   const repositoryMetadata = await fetchJson(`/repos/${repository}`);
   const defaultBranch = repositoryMetadata?.default_branch;
   if (typeof defaultBranch !== 'string' || defaultBranch.length === 0) {
     throw new Error('default-branch-unavailable');
   }
   const commit = await fetchJson(`/repos/${repository}/commits/${encodeURIComponent(defaultBranch)}`);
-  if (commit?.sha !== expectedMainSha) throw new Error('protected-main-moved');
+  return commit?.sha;
+}
+
+/** Resolve workflow files from an exact, unmoved protected-main revision. */
+export async function protectedWorkflowPaths(fetchJson, repository, expectedMainSha) {
+  const currentMainSha = await currentProtectedMainSha(fetchJson, repository);
+  if (currentMainSha !== expectedMainSha) throw new Error('protected-main-moved');
   const tree = await fetchJson(`/repos/${repository}/git/trees/${expectedMainSha}?recursive=1`);
   return new Set(workflowPathsFromTree(tree, 'protected-main-tree-incomplete'));
 }
 
-/** Build a fail-closed read-only registry audit tied to one protected-main SHA and stable open-PR snapshot. */
+/** Build a fail-closed read-only registry audit tied to stable protected-main, registry, and open-PR snapshots. */
 export async function auditActionsRegistry(fetchJson, repository, expectedMainSha) {
   const [records, mainPaths, pullRequests] = await Promise.all([
     listAllWorkflowRecords(fetchJson, repository),
     protectedWorkflowPaths(fetchJson, repository, expectedMainSha),
     listAllOpenPullRequests(fetchJson, repository),
   ]);
+  const initialRegistrySnapshot = workflowRegistrySnapshot(records);
   const initialHeadSnapshot = sameRepositoryHeadSnapshot(pullRequests, repository);
   const activePrPaths = await activePullRequestWorkflowPaths(fetchJson, repository, pullRequests);
-  const refreshedPullRequests = await listAllOpenPullRequests(fetchJson, repository);
+
+  const [refreshedRecords, refreshedPullRequests, finalMainSha] = await Promise.all([
+    listAllWorkflowRecords(fetchJson, repository),
+    listAllOpenPullRequests(fetchJson, repository),
+    currentProtectedMainSha(fetchJson, repository),
+  ]);
+  if (finalMainSha !== expectedMainSha) throw new Error('protected-main-moved');
+
+  const refreshedRegistrySnapshot = workflowRegistrySnapshot(refreshedRecords);
+  if (!sameStringSnapshot(initialRegistrySnapshot, refreshedRegistrySnapshot)) {
+    throw new Error('actions-workflow-snapshot-moved');
+  }
   const refreshedHeadSnapshot = sameRepositoryHeadSnapshot(refreshedPullRequests, repository);
   if (!sameStringSnapshot(initialHeadSnapshot, refreshedHeadSnapshot)) {
     throw new Error('open-pr-snapshot-moved');
   }
+
   const classifications = classifyWorkflowRecords(records, mainPaths, activePrPaths);
   return {
     schema_version: 1,
