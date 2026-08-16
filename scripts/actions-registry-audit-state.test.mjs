@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   activePullRequestWorkflowPaths,
+  auditActionsRegistry,
   classifyWorkflowRecord,
   protectedWorkflowPaths,
 } from './actions-registry-audit.mjs';
@@ -67,4 +68,40 @@ test('workflow trees require an explicit non-truncated provider assertion', asyn
     protectedWorkflowPaths(fetchJson, repo, expected),
     /protected-main-tree-incomplete/,
   );
+});
+
+test('audit fails closed when same-repository open-PR workflow ownership moves mid-audit', async () => {
+  const expected = sha('d');
+  const newHead = sha('e');
+  let pullReads = 0;
+  const fetchJson = async (url) => {
+    if (url.includes('/actions/workflows')) {
+      return {
+        total_count: 1,
+        workflows: [{ id: 10, state: 'active', path: '.github/workflows/pr-only.yml' }],
+      };
+    }
+    if (url.includes('/pulls?')) {
+      pullReads += 1;
+      return pullReads === 1
+        ? []
+        : [{ head: { sha: newHead, repo: { full_name: repo } } }];
+    }
+    if (url.endsWith('/disksage')) return { default_branch: 'main' };
+    if (url.endsWith('/commits/main')) return { sha: expected };
+    if (url.includes(`/git/trees/${expected}`)) return { truncated: false, tree: [] };
+    if (url.includes(`/git/trees/${newHead}`)) {
+      return {
+        truncated: false,
+        tree: [{ type: 'blob', path: '.github/workflows/pr-only.yml' }],
+      };
+    }
+    throw new Error(`unexpected URL ${url}`);
+  };
+
+  await assert.rejects(
+    auditActionsRegistry(fetchJson, repo, expected),
+    /open-pr-snapshot-moved/,
+  );
+  assert.equal(pullReads, 2);
 });
