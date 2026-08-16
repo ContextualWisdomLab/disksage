@@ -59,7 +59,9 @@ test('paginates complete workflow and open-PR collections', async () => {
   const workflowCalls = [];
   const records = await listAllWorkflowRecords(async (url) => {
     workflowCalls.push(url);
-    return url.endsWith('page=1') ? { workflows } : { workflows: [{ id: 101 }] };
+    return url.endsWith('page=1')
+      ? { total_count: 101, workflows }
+      : { total_count: 101, workflows: [{ id: 101 }] };
   }, repo);
   assert.equal(records.length, 101);
   assert.equal(workflowCalls.length, 2);
@@ -86,9 +88,33 @@ test('fails closed when workflow registry pagination is shorter than total_count
   assert.equal(workflowCalls.length, 1);
 });
 
+test('fails closed when workflow registry total_count moves across pages', async () => {
+  const workflows = Array.from({ length: 100 }, (_, index) => ({ id: index + 1 }));
+  await assert.rejects(
+    listAllWorkflowRecords(async (url) => url.endsWith('page=1')
+      ? { total_count: 101, workflows }
+      : { total_count: 102, workflows: [{ id: 101 }, { id: 102 }] }, repo),
+    /actions-workflow-list-moved/,
+  );
+});
+
+test('fails closed when workflow pages overshoot the announced total', async () => {
+  const workflows = Array.from({ length: 100 }, (_, index) => ({ id: index + 1 }));
+  await assert.rejects(
+    listAllWorkflowRecords(async (url) => url.endsWith('page=1')
+      ? { total_count: 101, workflows }
+      : { total_count: 101, workflows: [{ id: 101 }, { id: 102 }] }, repo),
+    /actions-workflow-list-incomplete/,
+  );
+});
+
 test('rejects malformed registry and open-PR list evidence', async () => {
   await assert.rejects(listAllWorkflowRecords(async () => null, repo), /actions-workflow-list-invalid/);
-  await assert.rejects(listAllWorkflowRecords(async () => ({ workflows: null }), repo), /actions-workflow-list-invalid/);
+  await assert.rejects(listAllWorkflowRecords(async () => ({ total_count: 0, workflows: null }), repo), /actions-workflow-list-invalid/);
+  await assert.rejects(listAllWorkflowRecords(async () => ({ workflows: [] }), repo), /actions-workflow-list-invalid/);
+  await assert.rejects(listAllWorkflowRecords(async () => ({ total_count: -1, workflows: [] }), repo), /actions-workflow-list-invalid/);
+  await assert.rejects(listAllWorkflowRecords(async () => ({ total_count: 0.5, workflows: [] }), repo), /actions-workflow-list-invalid/);
+  assert.deepEqual(await listAllWorkflowRecords(async () => ({ total_count: 0, workflows: [] }), repo), []);
   await assert.rejects(listAllOpenPullRequests(async () => null, repo), /open-pr-list-invalid/);
 });
 
@@ -163,7 +189,7 @@ test('builds a complete audit without disabling active-PR workflow owners', asyn
   const expected = sha('d');
   const prHead = sha('e');
   const fetchJson = async (url) => {
-    if (url.includes('/actions/workflows')) return { workflows: [
+    if (url.includes('/actions/workflows')) return { total_count: 3, workflows: [
       { id: 7, state: 'active', path: '.github/workflows/test.yml' },
       { id: 8, state: 'active', path: '.github/workflows/old-repair.yml' },
       { id: 9, state: 'active', path: '.github/workflows/repair-pr186.yml' },
