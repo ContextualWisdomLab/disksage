@@ -37,20 +37,24 @@ fn public_read_only_roots_bind_traversal_to_open_directory_identity() {
         ("incomplete_download_recovery", RECOVERY),
         ("incomplete_download_materialization", MATERIALIZATION),
     ] {
+        // These are source-contract assertions, so formatting-only rustfmt line wrapping must not
+        // turn a valid identity-binding implementation RED. Compact whitespace before matching
+        // chained calls while keeping the exact authority-bearing symbols in the contract.
+        let compact_source = source.split_whitespace().collect::<String>();
         assert!(
-            source.contains("BoundReadRoot::open(source_root)"),
+            compact_source.contains("BoundReadRoot::open(source_root)"),
             "{name} must bind the caller root with a no-follow directory handle"
         );
         assert!(
-            source.contains("root_guard.stable_path()"),
+            compact_source.contains("root_guard.stable_path()"),
             "{name} must perform filesystem I/O through the handle-bound root namespace"
         );
         assert!(
-            source.matches("root_guard.canonical_path()").count() >= 2,
+            compact_source.matches("root_guard.canonical_path()").count() >= 2,
             "{name} must revalidate the caller pathname before publishing evidence"
         );
         assert!(
-            !source.contains("std::fs::canonicalize(source_root)"),
+            !compact_source.contains("std::fs::canonicalize(source_root)"),
             "{name} must not re-resolve the caller root outside the bound-root guard"
         );
     }
