@@ -20,6 +20,8 @@ mod settings;
 mod safety;
 #[cfg(test)]
 mod safety_public_tests;
+#[cfg(test)]
+mod safety_edge_coverage_tests;
 #[cfg(all(test, target_os = "macos"))]
 mod macos_temp_guard_tests;
 #[cfg_attr(coverage, allow(dead_code))]
