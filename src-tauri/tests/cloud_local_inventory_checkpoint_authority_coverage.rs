@@ -79,6 +79,55 @@ fn checkpoint_recovery_rejects_provider_and_account_authority_drift() {
 }
 
 #[test]
+fn checkpoint_recovery_rejects_identity_state_and_contract_drift() {
+    let (root, options, checkpoint) = checkpoint_fixture();
+
+    let mut wrong_version = checkpoint.clone();
+    wrong_version.version = 1;
+    assert_eq!(
+        hard_timeout_inventory_from_checkpoint(&root, options, wrong_version).unwrap_err(),
+        "cloud-local-inventory-checkpoint-invalid"
+    );
+
+    let mut wrong_root_id = checkpoint.clone();
+    wrong_root_id.cloud_root_id = "icloud:other-root".into();
+    assert_eq!(
+        hard_timeout_inventory_from_checkpoint(&root, options, wrong_root_id).unwrap_err(),
+        "cloud-local-inventory-checkpoint-invalid"
+    );
+
+    let mut wrong_root_path = checkpoint.clone();
+    wrong_root_path.cloud_root = "/different/root".into();
+    assert_eq!(
+        hard_timeout_inventory_from_checkpoint(&root, options, wrong_root_path).unwrap_err(),
+        "cloud-local-inventory-checkpoint-invalid"
+    );
+
+    let mut wrong_options = checkpoint.clone();
+    wrong_options.options.max_results += 1;
+    assert_eq!(
+        hard_timeout_inventory_from_checkpoint(&root, options, wrong_options).unwrap_err(),
+        "cloud-local-inventory-checkpoint-invalid"
+    );
+
+    let mut terminal_claim = checkpoint.clone();
+    terminal_claim.evidence_complete = true;
+    assert_eq!(
+        hard_timeout_inventory_from_checkpoint(&root, options, terminal_claim).unwrap_err(),
+        "cloud-local-inventory-checkpoint-invalid"
+    );
+
+    let mut missing_checkpoint_notice = checkpoint;
+    missing_checkpoint_notice
+        .notices
+        .retain(|notice| notice != "inventory-checkpoint-not-terminal");
+    assert_eq!(
+        hard_timeout_inventory_from_checkpoint(&root, options, missing_checkpoint_notice).unwrap_err(),
+        "cloud-local-inventory-checkpoint-invalid"
+    );
+}
+
+#[test]
 fn hard_timeout_enforces_lower_option_bounds_and_accepts_zero_depth() {
     let root = cloud_root(Path::new("/Cloud"));
     let base = bounded_options();
@@ -121,7 +170,8 @@ fn hard_timeout_enforces_lower_option_bounds_and_accepts_zero_depth() {
         max_depth: 0,
         ..base
     };
-    let report = hard_timeout_inventory(&root, zero_depth, 2).expect("zero depth is a valid root-only inventory bound");
+    let report = hard_timeout_inventory(&root, zero_depth, 2)
+        .expect("zero depth is a valid root-only inventory bound");
     assert_eq!(report.options, zero_depth);
     assert!(!report.evidence_complete);
     assert_eq!(report.stop_reasons, vec!["hard-timeout-reached"]);
