@@ -170,6 +170,26 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn canonical_path_rejects_symlink_replacement_to_same_bound_directory() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let selected = root.path().join("selected");
+        let moved = root.path().join("moved");
+        std::fs::create_dir(&selected).unwrap();
+
+        let guard = BoundReadRoot::open(&selected).expect("selected directory must bind");
+        std::fs::rename(&selected, &moved).unwrap();
+        symlink(&moved, &selected).unwrap();
+
+        assert!(
+            guard.canonical_path().is_none(),
+            "caller pathname becoming a symlink must fail closed even when it resolves to the original directory"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn stable_namespace_keeps_original_object_and_detects_path_replacement() {
         let root = tempfile::tempdir().unwrap();
         let selected = root.path().join("selected");
