@@ -24,6 +24,10 @@ use crate::{
     provider_global_sync, provider_oauth, provider_sync, rules,
 };
 
+#[cfg(not(coverage))]
+#[path = "home_resolution.rs"]
+mod home_resolution;
+
 #[derive(Default)]
 pub struct AppState {
     pub result: Arc<Mutex<Option<ScanResult>>>,
@@ -302,10 +306,6 @@ fn user_rules_json(app: &AppHandle) -> String {
 #[cfg(not(coverage))]
 fn bundled_ontology_ttl(app: &AppHandle) -> Result<String, String> {
     use tauri::Manager;
-    // 사용자 설정 디렉토리 오버라이드 우선, 없으면 번들 리소스.
-    // 오버라이드 파일이 없으면(read 실패) 조용히 번들로 폴백하지만, 파일이 있어도
-    // parse가 실패하면(malformed) 상위 load_ontology_from이 에러를 낸다 — 의도적:
-    // 사용자가 편집한 잘못된 온톨로지를 조용히 무시하지 않고 알린다.
     if let Ok(dir) = app.path().app_config_dir() {
         let user_ttl = dir.join("ontology.ttl");
         if let Ok(s) = std::fs::read_to_string(&user_ttl) {
@@ -355,7 +355,6 @@ fn settings_file_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("settings.json"))
 }
 
-/// 현재 설정 조회. 파일 없으면 기본값(offline). 손상 파일은 parse_settings가 기본값으로 흡수.
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn get_settings(app: AppHandle) -> Result<crate::settings::Settings, String> {
@@ -366,7 +365,6 @@ pub fn get_settings(app: AppHandle) -> Result<crate::settings::Settings, String>
     }
 }
 
-/// online_mode 설정 후 영속. 반환은 저장된 설정.
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn set_settings(
@@ -379,7 +377,6 @@ pub fn set_settings(
     Ok(s)
 }
 
-// 아래 Tauri command 래퍼들은 coverage 빌드에서 제외 — 순수 로직(node_view 등)은 위에서 측정됨
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn start_scan(root: String, app: AppHandle, state: State<AppState>) -> Result<(), String> {
@@ -391,7 +388,6 @@ pub fn start_scan(root: String, app: AppHandle, state: State<AppState>) -> Resul
     let slot = state.result.clone();
     let scanning = state.scanning.clone();
     std::thread::spawn(move || {
-        // 패닉으로 스레드가 죽어도 scanning 플래그는 반드시 해제
         struct ScanningReset(Arc<AtomicBool>);
         impl Drop for ScanningReset {
             fn drop(&mut self) {
@@ -403,8 +399,8 @@ pub fn start_scan(root: String, app: AppHandle, state: State<AppState>) -> Resul
             let _ = app.emit("scan://progress", s.clone());
         });
         let stats = res.stats.clone();
-        *slot.lock().unwrap() = Some(res); // done 이벤트 전에 저장 (레이스 방지)
-        drop(_reset); // emit 전에 scanning 플래그 해제 (원래 순서 복원, 패닉 안전성은 Drop이 유지)
+        *slot.lock().unwrap() = Some(res);
+        drop(_reset);
         let _ = app.emit("scan://done", stats);
     });
     Ok(())
@@ -419,7 +415,6 @@ pub fn cancel_scan(state: State<AppState>) {
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn get_node(path: String, state: State<AppState>) -> Result<NodeView, String> {
-    // ponytail: lock held across read_dir I/O; snapshot dir_sizes and read outside the lock if this stalls on huge/network dirs
     let guard = state.result.lock().unwrap();
     let res = guard.as_ref().ok_or("no scan result")?;
     node_view(res, &PathBuf::from(path))
@@ -474,15 +469,12 @@ fn valid_brew_rationale(value: &str) -> bool {
         && !trimmed.chars().any(char::is_control)
 }
 
-/// Build a read-only Homebrew cleanup plan. The command is macOS-only and fixed in Rust.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub fn plan_brew_cleanup() -> Result<brew_cleanup::BrewCleanupPlan, String> {
     brew_cleanup::plan(now_ms())
 }
 
-/// Ask the verified local model whether the fixed cleanup is appropriate.
-/// A non-safe judgment is returned to the UI but is never stored as execution authority.
 #[cfg(not(coverage))]
 #[cfg_attr(not(feature = "llm-engine"), allow(unused_variables))]
 #[tauri::command(async)]
@@ -536,10 +528,6 @@ pub fn judge_brew_cleanup(
     }
 }
 
-/// Validate a binary or polytomous local-model judge against attributed human labels.
-///
-/// The agreement arithmetic is delegated to fast-mlsirm's Rust core; this command never calls an
-/// external model and never grants command execution authority by itself.
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn validate_judge_calibration(
@@ -563,7 +551,6 @@ pub fn validate_judge_calibration(
     Ok(result)
 }
 
-/// Re-plan immediately before running Homebrew, then consume the matching safe judgment once.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub fn execute_brew_cleanup(
@@ -708,7 +695,6 @@ pub fn recent_operations(
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn expand_clean_targets(dir: String) -> Vec<String> {
-    // 카탈로그 경로로만 스코프 — 임의 디렉토리 열람 IPC가 되지 않도록
     let Some(bases) = rules::BaseDirs::from_env() else {
         return Vec::new();
     };
@@ -729,37 +715,41 @@ pub fn find_duplicate_files(root: String) -> Result<Vec<dupes::DupeGroup>, Strin
     Ok(dupes::find_duplicates(files, 4096))
 }
 
-/// home 해석: app.path().home_dir() 우선, 실패 시 HOME/USERPROFILE 환경변수 폴백.
+/// Resolve a real absolute home directory or fail closed. Relative environment values are never
+/// accepted as path authority because they would make `~/...` destinations depend on the process
+/// working directory.
 #[cfg(not(coverage))]
-fn resolve_home(app: &AppHandle) -> PathBuf {
+fn resolve_home(app: &AppHandle) -> Result<PathBuf, String> {
     use tauri::Manager;
-    app.path()
-        .home_dir()
-        .ok()
-        .or_else(|| std::env::var("HOME").ok().map(PathBuf::from))
-        .or_else(|| std::env::var("USERPROFILE").ok().map(PathBuf::from))
-        .unwrap_or_else(|| PathBuf::from("."))
+    let app_home = app.path().home_dir().ok();
+    let home_env = std::env::var_os("HOME").map(PathBuf::from);
+    let user_profile = std::env::var_os("USERPROFILE").map(PathBuf::from);
+    #[cfg(windows)]
+    let drive_home = home_resolution::windows_home_drive_path();
+    #[cfg(not(windows))]
+    let drive_home: Option<PathBuf> = None;
+
+    home_resolution::select_absolute_home([app_home, home_env, user_profile, drive_home])
 }
 
-/// Candidate local roots exposed by iCloud Drive, OneDrive, and Google Drive, including their
-/// discovery-time readability evidence.
 #[cfg(not(coverage))]
 #[tauri::command]
-pub fn list_cloud_roots(app: AppHandle) -> Vec<cloud::CloudRoot> {
-    cloud::discover_cloud_roots(&resolve_home(&app))
+pub fn list_cloud_roots(app: AppHandle) -> Result<Vec<cloud::CloudRoot>, String> {
+    let home = resolve_home(&app)?;
+    Ok(cloud::discover_cloud_roots(&home))
 }
 
-/// Return selectable roots together with bounded provider/account discovery failures. This does
-/// not create a probe file, hydrate a placeholder, or contact a provider API.
 #[cfg(not(coverage))]
 #[tauri::command]
-pub fn inspect_cloud_roots(app: AppHandle) -> cloud::CloudRootDiscoveryReport {
-    cloud::discover_cloud_roots_report(&resolve_home(&app))
+pub fn inspect_cloud_roots(app: AppHandle) -> Result<cloud::CloudRootDiscoveryReport, String> {
+    let home = resolve_home(&app)?;
+    Ok(cloud::discover_cloud_roots_report(&home))
 }
 
 #[cfg(not(coverage))]
 fn selected_cloud_root(app: &AppHandle, cloud_root: &str) -> Result<cloud::CloudRoot, String> {
-    let matches: Vec<_> = cloud::discover_cloud_roots(&resolve_home(app))
+    let home = resolve_home(app)?;
+    let matches: Vec<_> = cloud::discover_cloud_roots(&home)
         .into_iter()
         .filter(|candidate| {
             cloud::cloud_root_path_matches(Path::new(&candidate.path), Path::new(cloud_root))
@@ -772,8 +762,6 @@ fn selected_cloud_root(app: &AppHandle, cloud_root: &str) -> Result<cloud::Cloud
     }
 }
 
-/// Build a read-only, exact-file iCloud local-cache eviction plan for display in the app.
-/// File content is not opened and no local or cloud mutation occurs.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub async fn plan_icloud_local_copy_eviction(
@@ -806,8 +794,6 @@ pub struct IcloudLocalCopyEvictionOutput {
     pub result_record_error: Option<String>,
 }
 
-/// Rebuild and approve the exact plan, request removal of only the local iCloud copy, then retain
-/// immutable approval/result records. The cloud object is never deleted by this command.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub async fn evict_icloud_local_copy(
@@ -890,7 +876,6 @@ pub async fn evict_icloud_local_copy(
     .map_err(|_| "icloud-local-eviction-task-failed".to_string())?
 }
 
-/// Build a read-only, reference-bound audit of all worktrees in one Git common directory.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub async fn plan_stale_git_worktrees(
@@ -921,8 +906,6 @@ pub struct StaleGitWorktreeRemovalOutput {
     pub result_record_error: Option<String>,
 }
 
-/// Rebuild the exact audit, bind an attributed human approval, and remove only worktrees that
-/// remain clean, merged, idle, and fingerprint-identical. Branch deletion and prune are excluded.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub async fn remove_stale_git_worktrees(
@@ -1015,8 +998,6 @@ fn cloud_review_directory(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|_| "app-data-directory-unavailable".to_string())
 }
 
-/// Return non-secret OAuth connection descriptors. Refresh tokens remain in the OS credential
-/// store and this command never reads or returns them.
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn list_cloud_provider_connections(
@@ -1025,7 +1006,6 @@ pub fn list_cloud_provider_connections(
     provider_oauth::load_connections(&oauth_connections_path(&app)?)
 }
 
-/// Return only the latest non-secret approve/hold decision for each candidate fingerprint.
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn list_cloud_review_decisions(
@@ -1034,9 +1014,6 @@ pub fn list_cloud_review_decisions(
     cloud_review::load_latest_decisions(&cloud_review_directory(&app)?)
 }
 
-/// Start a native browser authorization-code flow with PKCE and a random loopback port. The
-/// provider refresh token is committed to the OS credential store only after state validation and
-/// a successful token exchange. Client IDs are public desktop-app identifiers, not secrets.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub async fn connect_cloud_provider(
@@ -1068,8 +1045,6 @@ pub async fn connect_cloud_provider(
     .map_err(|_| "provider-oauth-task-failed".to_string())?
 }
 
-/// Remove the selected root's refresh token from the OS credential store and its non-secret local
-/// connection descriptor. This does not alter any cloud file.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub async fn disconnect_cloud_provider(cloud_root: String, app: AppHandle) -> Result<(), String> {
@@ -1085,11 +1060,6 @@ pub async fn disconnect_cloud_provider(cloud_root: String, app: AppHandle) -> Re
     .map_err(|_| "provider-oauth-task-failed".to_string())?
 }
 
-/// Revalidate a saved provider connection after launch without exposing access or refresh tokens.
-///
-/// This is deliberately opt-in because it reads the OS credential store and contacts the fixed
-/// provider capacity endpoint. Failures are returned as redacted, stable capacity evidence rather
-/// than raw OAuth or transport details.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub async fn verify_cloud_provider_capacity(
@@ -1145,8 +1115,6 @@ pub async fn verify_cloud_provider_capacity(
     Ok(snapshot)
 }
 
-/// Inspect the selected provider's local runtime prerequisite without returning process names,
-/// local paths, account identifiers, or any remote-capacity/synchronization claim.
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn inspect_cloud_provider_client_runtime(
@@ -1161,22 +1129,15 @@ pub fn inspect_cloud_provider_client_runtime(
     ))
 }
 
-/// Inspect the local, path-free iCloud upload-queue prerequisite for adding a new copy.
-///
-/// This reads only an immutable CloudDocs database snapshot. It does not contact iCloud, verify
-/// remote capacity, attest per-item upload, or authorize source eviction.
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn inspect_icloud_new_copy_admission(
     app: AppHandle,
 ) -> Result<icloud_sync_health::IcloudSyncHealthReport, String> {
-    icloud_sync_health::inspect_new_copy_admission(&resolve_home(&app), cloud::system_now_ms())
+    let home = resolve_home(&app)?;
+    icloud_sync_health::inspect_new_copy_admission(&home, cloud::system_now_ms())
 }
 
-/// Inspect the provider-wide File Provider queue for a non-iCloud cloud root.
-///
-/// This is read-only aggregate evidence. It never returns user paths and never authorizes a copy
-/// or source eviction; iCloud continues to use its specialized CloudDocs health command above.
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn inspect_cloud_provider_global_sync(
@@ -1210,7 +1171,8 @@ fn cloud_plan_for_inputs(
 ) -> Result<CloudPlanningOutput, String> {
     let root_path = PathBuf::from(root);
     cloud::validate_source_root_readable(&root_path)?;
-    let discovered = cloud::discover_cloud_roots(&resolve_home(app));
+    let home = resolve_home(app)?;
+    let discovered = cloud::discover_cloud_roots(&home);
     let selected = discovered
         .iter()
         .find(|candidate| candidate.path == cloud_root)
@@ -1260,11 +1222,7 @@ fn cloud_plan_for_inputs(
     provider_client_runtime::attach_runtime_notice(&mut report.notices, &runtime);
     let (icloud_health, provider_global_sync) = if selected.provider == cloud::CloudProvider::Icloud
     {
-        let health = icloud_sync_health::inspect_new_copy_admission(
-            &resolve_home(app),
-            cloud::system_now_ms(),
-        )
-        .ok();
+        let health = icloud_sync_health::inspect_new_copy_admission(&home, cloud::system_now_ms()).ok();
         icloud_sync_health::attach_new_copy_admission_notice(&mut report.notices, health.as_ref());
         (health, None)
     } else {
@@ -1371,9 +1329,6 @@ fn require_capacity_for_copy(
     }
 }
 
-/// Read-only cloud offload plan. The selected destination must be one of the roots discovered
-/// on this machine; this command never creates a folder or moves a file. Candidate approval text
-/// is generated by Rust and returned as presentation evidence, never reconstructed by the UI.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub async fn plan_cloud_archive(
@@ -1393,8 +1348,6 @@ pub async fn plan_cloud_archive(
     .map_err(|_| "cloud-plan-task-failed".to_string())?
 }
 
-/// Rebuild the plan and append an immutable approve/hold decision for the exact evidence shown by
-/// the UI. A stale UI cannot approve a changed metadata snapshot.
 #[cfg(not(coverage))]
 fn local_human_reviewer() -> String {
     let raw = std::env::var(if cfg!(windows) { "USERNAME" } else { "USER" })
@@ -1785,7 +1738,8 @@ fn create_cloud_candidate_provider_api_receipt(
         }
     };
     let mut goal_state = cloud_transfer::CloudOffloadGoalState::CopyVerified;
-    let cloud_roots = cloud::discover_cloud_roots(&resolve_home(app));
+    let home = resolve_home(app)?;
+    let cloud_roots = cloud::discover_cloud_roots(&home);
     let attestation_object_id = (selected.provider == cloud::CloudProvider::GoogleDrive)
         .then(|| upload.object_id.clone());
     match collect_cloud_attestation_for_receipt(
@@ -1845,8 +1799,6 @@ fn create_cloud_candidate_provider_api_receipt(
     })
 }
 
-/// Rebuild the plan from current metadata, then copy one uniquely matching safe candidate.
-/// The source is retained and no local-eviction API is exposed by this command.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub async fn copy_cloud_candidate(
@@ -1883,9 +1835,6 @@ pub async fn copy_cloud_candidate(
     .map_err(|_| "cloud-copy-task-failed".to_string())?
 }
 
-/// Upload one approved candidate directly through the provider API when the local File Provider
-/// cannot admit a new copy. The source is retained; the normal provider attestation and eviction
-/// gates still run afterwards.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub async fn copy_cloud_candidate_via_provider_api(
@@ -1921,8 +1870,6 @@ pub async fn copy_cloud_candidate_via_provider_api(
     .map_err(|_| "cloud-provider-api-copy-task-failed".to_string())?
 }
 
-/// Rebuild the plan and adopt an already-existing destination only after full content-digest
-/// equality is proven. Both source and destination remain in place.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub async fn adopt_existing_cloud_candidate(
@@ -2376,8 +2323,6 @@ fn collect_cloud_attestation_for_receipt(
     })
 }
 
-/// Read-only provider attestation. OneDrive and Google Drive access tokens are refreshed from an OS
-/// credential-store token, used once in memory, and never accepted from or returned to the UI.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub async fn attest_cloud_copy(
@@ -2400,7 +2345,8 @@ pub async fn attest_cloud_copy(
     let adr_dir = app_data_dir.join("cloud-adr");
     let goal_dir = app_data_dir.join("cloud-goals");
     let connection_path = oauth_connections_path(&app)?;
-    let cloud_roots = cloud::discover_cloud_roots(&resolve_home(&app));
+    let home = resolve_home(&app)?;
+    let cloud_roots = cloud::discover_cloud_roots(&home);
     tauri::async_runtime::spawn_blocking(move || {
         let receipt = cloud_transfer::read_immutable_receipt(&receipt_path)?;
         if receipt.receipt_id != receipt_id {
@@ -2417,9 +2363,6 @@ pub async fn attest_cloud_copy(
             false,
         );
         if let Err(error) = &result {
-            // Keep direct GUI attestation consistent with reconciliation: a failed provider
-            // observation still updates the replaceable ADR/Goal projection, while the immutable
-            // receipt and source-eviction authority remain unchanged.
             let provider_blocker = stable_reconciliation_error(error);
             let _ = cloud_adr::ensure_initial_projection_pair_with_provider_state_outcome(
                 &receipt,
@@ -2435,8 +2378,6 @@ pub async fn attest_cloud_copy(
     .map_err(|_| "cloud-attestation-task-failed".to_string())?
 }
 
-/// Re-attest every persisted cloud receipt after restart. This updates only local immutable
-/// provider evidence and dynamic ADR/Goal projections; it never copies, evicts, or deletes files.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub async fn reconcile_cloud_receipts(
@@ -2452,7 +2393,8 @@ pub async fn reconcile_cloud_receipts(
     let adr_dir = app_data_dir.join("cloud-adr");
     let goal_dir = app_data_dir.join("cloud-goals");
     let connection_path = oauth_connections_path(&app)?;
-    let cloud_roots = cloud::discover_cloud_roots(&resolve_home(&app));
+    let home = resolve_home(&app)?;
+    let cloud_roots = cloud::discover_cloud_roots(&home);
     tauri::async_runtime::spawn_blocking(move || {
         reconcile_cloud_receipts_inner(
             &receipt_dir,
@@ -2481,9 +2423,6 @@ pub struct CloudSourceEvictionOutput {
     pub projection_warnings: Vec<String>,
 }
 
-/// Recollect provider evidence and active-use evidence, bind an attributed human approval to the
-/// exact immutable receipt, then move only that verified source to the operating-system Trash.
-/// The cloud destination is never deleted and the Trash is never emptied by this command.
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub async fn trash_verified_cloud_source(
@@ -2513,7 +2452,8 @@ pub async fn trash_verified_cloud_source(
     let eviction_dir = app_data_dir.join("cloud-source-evictions");
     let journal_path = journal_file_path(&app)?;
     let connection_path = oauth_connections_path(&app)?;
-    let cloud_roots = cloud::discover_cloud_roots(&resolve_home(&app));
+    let home = resolve_home(&app)?;
+    let cloud_roots = cloud::discover_cloud_roots(&home);
     let approved_by = local_human_reviewer();
     tauri::async_runtime::spawn_blocking(move || {
         let receipt = cloud_transfer::read_immutable_receipt(&receipt_path)?;
@@ -2613,12 +2553,9 @@ pub fn plan_organize(
     state: State<AppState>,
 ) -> Result<Vec<organize::MovePlan>, String> {
     let onto = load_ontology_from(&bundled_ontology_ttl(&app)?)?;
-    let rules = crate::userrules::parse_rules(&user_rules_json(&app))?; // malformed → Err surfaced
+    let rules = crate::userrules::parse_rules(&user_rules_json(&app))?;
     let files = dupes::collect_files(Path::new(&root));
-    let home = resolve_home(&app);
-    // classify_prompt는 name/parent만 쓰므로 picker는 size 불필요(0으로 구성).
-    // ponytail: LLM picker는 파일마다 추론 1회 — 대규모 스캔 프리뷰에선 느릴 수 있음.
-    //           지금은 모델 있으면 전부 LLM 분류; 필요 시 후속에서 미분류 항목만으로 제한.
+    let home = resolve_home(&app)?;
     #[cfg(feature = "llm-engine")]
     {
         use tauri::Manager;
@@ -2656,14 +2593,12 @@ pub fn plan_organize(
     ))
 }
 
-/// 활성 사용자 규칙 조회(UI 표시용). 손상 파일은 Err.
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn user_rules(app: AppHandle) -> Result<Vec<crate::userrules::Rule>, String> {
     crate::userrules::parse_rules(&user_rules_json(&app))
 }
 
-/// MovePlan을 safety::move_file로 실행 — 항목별 결과, 하나 실패해도 나머지는 진행 (M2와 동일 원칙)
 #[cfg(not(coverage))]
 #[tauri::command(async)]
 pub fn execute_moves(
@@ -2674,7 +2609,6 @@ pub fn execute_moves(
     Ok(execute_moves_inner(&plans, &jp, now_ms()))
 }
 
-/// 최근 저널에서 op=="move"·outcome=="ok" 항목을 찾아 역이동(dst→src)한다.
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn undo_last_moves(limit: usize, app: AppHandle) -> Result<Vec<CleanResult>, String> {
@@ -2688,14 +2622,12 @@ pub struct ModelStatus {
     pub name: String,
 }
 
-/// 모델 파일 경로: <app_data>/models/<DEFAULT.name>.gguf
 pub fn model_file_path(app_data_dir: &Path) -> PathBuf {
     app_data_dir
         .join("models")
         .join(format!("{}.gguf", crate::llm::DEFAULT.name))
 }
 
-/// 모델 존재 여부 + 이름. 없으면 앱은 규칙 기반으로 동작(배지 미판정).
 pub fn model_status_for(model_path: &Path) -> ModelStatus {
     ModelStatus {
         present: model_path.exists(),
@@ -2703,7 +2635,6 @@ pub fn model_status_for(model_path: &Path) -> ModelStatus {
     }
 }
 
-/// 경로 + (이미 읽은) size·age로 FileMeta 구성. name/parent는 경로에서, 없으면 빈 문자열(패닉 없음).
 pub fn file_meta_at(path: &Path, size: u64, mtime_days: u64) -> crate::llm::FileMeta {
     let name = path
         .file_name()
@@ -2723,7 +2654,6 @@ pub fn file_meta_at(path: &Path, size: u64, mtime_days: u64) -> crate::llm::File
     }
 }
 
-/// 항목마다 캐시(path|size|mtime_ms) 확인 후 미스면 추론. 판정만 캐시(이유는 미스 시에만).
 pub fn verdicts_with(
     engine: &dyn crate::llm::InferenceEngine,
     cache: &mut crate::llm::VerdictCache,
@@ -2747,10 +2677,6 @@ pub fn verdicts_with(
     out
 }
 
-// --- M5: 모델 상태/다운로드, 캐시된 파일 판정, 미분류 뭉치 요약 IPC ---
-// 순수 로직(model_file_path/model_status_for/file_meta_at/verdicts_with)은 위(게이트 측정 대상)에 있음.
-// 아래는 io/엔진 수명주기를 다루는 얇은 래퍼 — coverage에서 제외.
-
 #[cfg(not(coverage))]
 fn meta_items(paths: &[String]) -> Vec<(crate::llm::FileMeta, u64)> {
     paths
@@ -2764,7 +2690,7 @@ fn meta_items(paths: &[String]) -> Vec<(crate::llm::FileMeta, u64)> {
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_millis() as u64)
                 .unwrap_or(0);
-            let age_days = now_ms().saturating_sub(mtime_ms) / 86_400_000; // 실제 파일 나이(프롬프트용); 캐시 키는 원시 mtime_ms 사용
+            let age_days = now_ms().saturating_sub(mtime_ms) / 86_400_000;
             Some((file_meta_at(path, md.len(), age_days), mtime_ms))
         })
         .collect()
@@ -2790,7 +2716,6 @@ pub fn download_model(app: AppHandle) -> Result<(), String> {
     crate::llm::download_to(&crate::llm::DEFAULT, &path)
 }
 
-/// 캐시된 파일 판정 — 엔진 있으면 실제 추론(세션 캐시 활용), 없으면(feature off/모델 없음/엔진 초기화 실패) 전부 Unrated로 완만히 저하.
 #[cfg(not(coverage))]
 #[cfg_attr(not(feature = "llm-engine"), allow(unused_variables))]
 #[tauri::command(async)]
@@ -2829,7 +2754,6 @@ pub fn file_verdicts(
         .collect())
 }
 
-/// 미분류 뭉치 한 줄 요약 — 엔진 없으면 None(스펙 §6 graceful degradation).
 #[cfg(not(coverage))]
 #[cfg_attr(not(feature = "llm-engine"), allow(unused_variables))]
 #[tauri::command(async)]
@@ -2863,8 +2787,6 @@ pub fn summarize_unknown_bucket(
     Ok(None)
 }
 
-/// 미분류 확장자 자문 추론. samples = InventoryReport.unknown_samples(경로). online_mode일 때만 웹 조회.
-/// LLM은 feature+모델 있을 때만; 웹은 online_mode일 때만(feature 무관). 둘 다 없으면 source="none".
 #[cfg(not(coverage))]
 #[cfg_attr(not(feature = "llm-engine"), allow(unused_variables))]
 #[tauri::command(async)]
@@ -2874,8 +2796,6 @@ pub fn reason_unknown_extensions(
     state: State<AppState>,
 ) -> Result<Vec<crate::reasoning::ExtInsight>, String> {
     let exts = crate::reasoning::distinct_extensions(&samples);
-
-    // opt-in 웹: online_mode일 때만 DdgLookup, 아니면 None → build_insights의 웹 분기 절대 미실행(default offline)
     let settings = get_settings(app.clone())?;
     let ddg = crate::web::DdgLookup;
     let web_fn = |ext: &str| -> Option<String> {
@@ -2887,13 +2807,11 @@ pub fn reason_unknown_extensions(
         None
     };
 
-    // 오프라인 LLM(feature+모델+엔진 있으면 실제; 그 블록에서 반환). 없으면 아래 fallback로 낙하.
     #[cfg(feature = "llm-engine")]
     {
         use tauri::Manager;
         let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
         if model_status_for(&model_file_path(&dir)).present {
-            // 온톨로지 로드는 LLM 경로에서만 필요 — 여기로 이동해 기본/웹전용 빌드가 malformed ontology.ttl로 실패하지 않게 함
             let onto = load_ontology_from(&bundled_ontology_ttl(&app)?)?;
             let candidates: Vec<String> = onto
                 .classes
@@ -2901,7 +2819,6 @@ pub fn reason_unknown_extensions(
                 .map(|c| c.id.rsplit(['#', '/']).next().unwrap_or(&c.id).to_string())
                 .collect();
             let cand_refs: Vec<&str> = candidates.iter().map(|s| s.as_str()).collect();
-
             let mut guard = state.engine.lock().unwrap();
             if guard.is_none() {
                 if let Ok(e) = crate::llm::LlamaEngine::new(&model_file_path(&dir)) {
@@ -2910,13 +2827,11 @@ pub fn reason_unknown_extensions(
             }
             if let Some(engine) = guard.as_ref() {
                 let reason = |ext: &str| crate::llm::reason_extension(engine, ext, &cand_refs);
-                // ponytail: engine lock held across the opt-in web lookups in build_insights (≤5s×N). Fine for the few distinct unknown exts; if a concurrent verdict call ever contends, split into a locked LLM pass + an unlocked web pass.
                 return Ok(crate::reasoning::build_insights(&exts, &reason, web));
             }
         }
     }
 
-    // fallback: LLM 없음(feature off/모델 없음/init 실패) — reason은 항상 None, 웹은 위 settings대로 적용
     let reason = |_: &str| -> Option<crate::llm::ExtReasoning> { None };
     Ok(crate::reasoning::build_insights(&exts, &reason, web))
 }
@@ -2928,7 +2843,6 @@ mod tests {
     use std::fs;
     use std::sync::atomic::AtomicBool;
 
-    // --- M5 LLM 커맨드 순수 헬퍼 ---
     use crate::llm::{InferenceEngine, Verdict, VerdictCache};
 
     struct CountingFake {
@@ -3046,7 +2960,6 @@ mod tests {
         assert_eq!(m.parent, "downloads");
         assert_eq!(m.size, 42);
         assert_eq!(m.mtime_days, 7);
-        // 파일명/부모 없는 경로 → 빈 문자열(패닉 없음)
         let root = file_meta_at(std::path::Path::new("/"), 0, 0);
         assert_eq!(root.name, "");
         assert_eq!(root.parent, "");
@@ -3060,15 +2973,11 @@ mod tests {
         };
         let mut cache = VerdictCache::new();
         let meta = file_meta_at(std::path::Path::new("/x/a.bin"), 100, 1);
-        let items = vec![(meta.clone(), 1700u64), (meta, 1700u64)]; // 같은 path|size|mtime → 두 번째는 캐시 히트
+        let items = vec![(meta.clone(), 1700u64), (meta, 1700u64)];
         let out = verdicts_with(&engine, &mut cache, &items);
         assert_eq!(out.len(), 2);
         assert!(out.iter().all(|fv| fv.verdict == Verdict::Safe));
-        assert_eq!(
-            engine.calls.get(),
-            1,
-            "두 번째 항목은 캐시 히트라 추론 1회만"
-        );
+        assert_eq!(engine.calls.get(), 1);
     }
 
     #[test]
@@ -3083,10 +2992,9 @@ mod tests {
         let out = verdicts_with(&engine, &mut cache, &[a, b]);
         assert_eq!(out.len(), 2);
         assert_eq!(engine.calls.get(), 2);
-        let _ = out; // FileVerdict used
+        let _ = out;
     }
 
-    // 간격 1로 스캔 — 진행 콜백(클로저)도 매 엔트리마다 실행돼 커버리지에 0으로 남지 않는다
     fn scan(root: &Path) -> ScanResult {
         scan_dir_with_interval(root, &AtomicBool::new(false), 1, |_| {})
     }
@@ -3115,10 +3023,8 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         fs::create_dir(root.join("sub")).unwrap();
         fs::write(root.join("sub").join("inner.bin"), vec![0u8; 500]).unwrap();
         fs::write(root.join("small.txt"), vec![0u8; 10]).unwrap();
-
         let res = scan(root);
         let view = node_view(&res, root).unwrap();
-
         assert_eq!(view.size, 510);
         assert_eq!(view.entries.len(), 2);
         assert_eq!(view.entries[0].name, "sub");
@@ -3139,14 +3045,12 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
     fn node_view_rejects_parent_dir_components() {
         let tmp = tempfile::tempdir().unwrap();
         let res = scan(tmp.path());
-        // lexical starts_with는 통과하지만 OS 해석은 루트 밖(실존 디렉토리)인 경로 — 가드 없으면 Ok
         let sneaky = tmp.path().join("..");
         assert!(node_view(&res, &sneaky).is_err());
     }
 
     #[test]
     fn node_view_rejects_sibling_path_outside_root() {
-        // '..' 없이 루트 밖인 경로 — 두 번째 가드(starts_with)를 직접 태운다
         let tmp = tempfile::tempdir().unwrap();
         let other = tempfile::tempdir().unwrap();
         let res = scan(tmp.path());
@@ -3176,7 +3080,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
     fn node_view_errors_on_unreadable_dir() {
         let tmp = tempfile::tempdir().unwrap();
         let res = scan(tmp.path());
-        assert!(node_view(&res, &tmp.path().join("missing")).is_err());
+        assert!(node_view(res.root.as_path(), &tmp.path().join("missing")).is_err());
     }
 
     #[cfg(unix)]
@@ -3221,8 +3125,6 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         let ok_dir = tmp.path().join("disksage-clean-fixture-dir");
         fs::create_dir(&ok_dir).unwrap();
         fs::write(ok_dir.join("inner.bin"), vec![0u8; 32]).unwrap();
-        // 단일 파일 대상 — bytes 분기의 metadata().map(|m| m.len()) 성공 경로를 태운다
-        // (missing은 metadata 실패만 태우고 성공은 태우지 않는다)
         let ok_file = tmp.path().join("disksage-clean-fixture-file.bin");
         fs::write(&ok_file, vec![0u8; 16]).unwrap();
         let missing = tmp.path().join("ghost");
@@ -3248,17 +3150,13 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
             .iter()
             .find(|e| e.outcome == "ok" && e.path.contains("disksage-clean-fixture-dir"))
             .unwrap();
-        assert_eq!(ok_entry.bytes, 32, "디렉토리는 재귀 크기로 저널링");
+        assert_eq!(ok_entry.bytes, 32);
         let ok_file_entry = recent
             .iter()
             .find(|e| e.outcome == "ok" && e.path.contains("disksage-clean-fixture-file"))
             .unwrap();
-        assert_eq!(
-            ok_file_entry.bytes, 16,
-            "단일 파일은 metadata 크기로 저널링"
-        );
+        assert_eq!(ok_file_entry.bytes, 16);
 
-        // 테스트 픽스처 휴지통 정리 (win/linux)
         #[cfg(any(windows, target_os = "linux"))]
         {
             let items: Vec<_> = trash::os_limited::list()
@@ -3282,15 +3180,12 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         fs::create_dir_all(&artifact).unwrap();
         fs::write(project.join("package.json"), b"{}").unwrap();
         fs::write(artifact.join("payload.bin"), b"old").unwrap();
-
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
         let observed = crate::dev_artifacts::find_artifacts(tmp.path(), 0, now);
         assert_eq!(observed.len(), 1);
-
-        // The path still exists, but its metadata manifest no longer matches the selection.
         fs::write(artifact.join("payload.bin"), b"recreated-with-different-size").unwrap();
         let results = clean_dev_artifacts_inner(
             &observed,
@@ -3299,7 +3194,6 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
             &tmp.path().join("journal.jsonl"),
             now,
         );
-
         assert_eq!(results.len(), 1);
         assert!(!results[0].ok);
         assert!(results[0].error.contains("다시 스캔"));
@@ -3313,7 +3207,6 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         let src_ok = tmp.path().join("a.bin");
         std::fs::write(&src_ok, vec![1u8; 16]).unwrap();
         let dst_ok = tmp.path().join("sub").join("a.bin");
-        // 하나는 성공(같은 볼륨 rename), 하나는 실패(존재하지 않는 src)
         let plans = vec![
             organize::MovePlan {
                 src: src_ok.to_string_lossy().into(),
@@ -3341,7 +3234,6 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         let a = tmp.path().join("a.bin");
         std::fs::write(&a, vec![2u8; 8]).unwrap();
         let a_moved = tmp.path().join("dest").join("a.bin");
-        // 먼저 이동 실행(저널에 move/ok 기록)
         let plans = vec![organize::MovePlan {
             src: a.to_string_lossy().into(),
             dst: a_moved.to_string_lossy().into(),
@@ -3350,11 +3242,10 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         execute_moves_inner(&plans, &jp, 5);
         assert!(!a.exists());
         assert!(a_moved.exists());
-        // 되돌리기 → 원위치 복원
         let undone = undo_last_moves_inner(10, &jp, 6);
         assert_eq!(undone.len(), 1);
         assert!(undone[0].ok);
-        assert!(a.exists(), "되돌리기로 원위치 복원");
+        assert!(a.exists());
         assert!(!a_moved.exists());
     }
 
@@ -3362,7 +3253,6 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
     fn undo_last_moves_inner_respects_limit_after_filtering() {
         let tmp = tempfile::tempdir().unwrap();
         let jp = tmp.path().join("j.jsonl");
-        // 두 번 이동 → 저널에 move/ok 2건(+pending 2건). limit=1이면 최신 1건만 되돌림.
         for name in ["x.bin", "y.bin"] {
             let s = tmp.path().join(name);
             std::fs::write(&s, b"z").unwrap();
@@ -3378,11 +3268,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
             );
         }
         let undone = undo_last_moves_inner(1, &jp, 9);
-        assert_eq!(
-            undone.len(),
-            1,
-            "filter-before-take: pending 라인이 실제 성공을 밀어내지 않음"
-        );
+        assert_eq!(undone.len(), 1);
     }
 
     #[test]
@@ -3399,14 +3285,10 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         }];
         execute_moves_inner(&plans, &jp, 1);
         assert!(a_moved.exists());
-        // 원래 자리에 새 파일이 다시 생겨 되돌리기 목적지가 막힘 → move_file이 실패해야 함
         std::fs::write(&a, b"blocker").unwrap();
         let undone = undo_last_moves_inner(1, &jp, 2);
         assert_eq!(undone.len(), 1);
-        assert!(
-            !undone[0].ok,
-            "목적지 재점유 시 되돌리기 실패를 보고해야 함"
-        );
-        assert!(a_moved.exists(), "실패 시 원본은 이동된 위치에 그대로 남음");
+        assert!(!undone[0].ok);
+        assert!(a_moved.exists());
     }
 }
