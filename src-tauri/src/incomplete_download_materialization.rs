@@ -5,7 +5,7 @@
 
 use crate::cloud_local_eviction::observe_path_active_use;
 use crate::content_digest::{ContentDigests, ContentHasher};
-use crate::duplicate_audit::bound_read_root::BoundReadRoot;
+use crate::bound_read_root::BoundReadRoot;
 use crate::incomplete_download::{
     incomplete_download_audit_integrity_valid, IncompleteDownloadAuditItem,
     IncompleteDownloadAuditReport,
