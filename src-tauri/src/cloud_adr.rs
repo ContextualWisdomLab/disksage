@@ -47,6 +47,10 @@ pub struct CloudOffloadGoalSnapshot {
     pub updated_at_ms: u64,
 }
 
+fn valid_receipt_id(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 fn decision_for(goal_state: CloudOffloadGoalState, sync_state: ProviderSyncState) -> String {
     match goal_state {
         CloudOffloadGoalState::CopyVerified => "retain-source-after-copy".into(),
@@ -189,6 +193,9 @@ pub fn write_latest_snapshot(
     directory: &Path,
     snapshot: &CloudOffloadAdrSnapshot,
 ) -> Result<PathBuf, String> {
+    if !valid_receipt_id(&snapshot.receipt_id) {
+        return Err("cloud-adr-receipt-id-invalid".into());
+    }
     secure_directory(directory)?;
     let path = directory.join(format!("{}-latest.json", snapshot.receipt_id));
     let temporary = directory.join(format!(
@@ -221,6 +228,9 @@ pub fn write_latest_goal_snapshot(
     directory: &Path,
     snapshot: &CloudOffloadGoalSnapshot,
 ) -> Result<PathBuf, String> {
+    if !valid_receipt_id(&snapshot.receipt_id) {
+        return Err("cloud-goal-receipt-id-invalid".into());
+    }
     secure_directory(directory)?;
     let path = directory.join(format!("{}-latest.json", snapshot.receipt_id));
     let temporary = directory.join(format!(
