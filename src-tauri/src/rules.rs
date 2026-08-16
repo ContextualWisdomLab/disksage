@@ -1,4 +1,4 @@
-use crate::duplicate_audit::bound_read_root::{BoundEntryKind, BoundReadRoot};
+use crate::bound_read_root::{BoundEntryKind, BoundReadRoot};
 use std::path::{Path, PathBuf};
 
 pub struct BaseDirs {
