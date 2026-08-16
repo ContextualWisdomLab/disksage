@@ -37,6 +37,8 @@ fn bound_root_replacement_cannot_redirect_descriptor_relative_traversal() {
     let moved = parent.path().join("moved");
     std::fs::create_dir(&selected).expect("create selected root");
     std::fs::write(selected.join("marker.txt"), b"original").expect("write original marker");
+    std::fs::write(selected.join("original-only.txt"), b"authorized")
+        .expect("write authorized-only marker");
 
     let guard = bound_read_root::BoundReadRoot::open(&selected)
         .expect("real directory must bind before the replacement race");
@@ -45,6 +47,29 @@ fn bound_root_replacement_cannot_redirect_descriptor_relative_traversal() {
     std::fs::create_dir(&selected).expect("install replacement directory");
     std::fs::write(selected.join("marker.txt"), b"replacement")
         .expect("write replacement marker");
+    std::fs::write(selected.join("replacement-only.txt"), b"unauthorized")
+        .expect("write replacement-only marker");
+
+    let names = guard
+        .read_dir_names(Path::new(""))
+        .expect("descriptor-relative enumeration must retain the authorized directory object");
+    assert!(
+        names.iter().any(|name| name == "marker.txt"),
+        "authorized child must remain visible through the bound descriptor"
+    );
+    assert!(
+        names.iter().any(|name| name == "original-only.txt"),
+        "children from the original bound directory must remain visible"
+    );
+    assert!(
+        !names.iter().any(|name| name == "replacement-only.txt"),
+        "replacement-path children must never enter the bound traversal namespace"
+    );
+    assert_eq!(
+        guard.entry_kind(Path::new("marker.txt")).expect("bound entry kind"),
+        bound_read_root::BoundEntryKind::File,
+        "child type inspection must remain descriptor-relative after root replacement"
+    );
 
     let mut file = guard
         .open_file(Path::new("marker.txt"))
@@ -100,7 +125,7 @@ fn migrated_read_only_consumers_use_descriptor_relative_child_io() {
 }
 
 #[test]
-fn not_yet_migrated_consumers_keep_explicit_root_revalidation() {
+fn not_yet_migrated_consumers_keep_ordered_identity_comparison_after_io() {
     assert!(
         DUPLICATE_AUDIT.contains("pub(crate) mod bound_read_root"),
         "duplicate_audit remains the temporary registration point until all legacy consumers migrate"
@@ -132,23 +157,34 @@ fn not_yet_migrated_consumers_keep_explicit_root_revalidation() {
         let open_position = compact_source
             .find("BoundReadRoot::open(source_root)")
             .unwrap_or_else(|| panic!("{name} must bind the caller root with a no-follow handle"));
+        let canonical_position = compact_source
+            .find("letcanonical_root=root_guard.canonical_path()")
+            .unwrap_or_else(|| panic!("{name} must capture the initially bound canonical identity"));
         let stable_position = compact_source
-            .find("root_guard.stable_path()")
+            .find("letstable_root=root_guard.stable_path()")
             .unwrap_or_else(|| panic!("{name} legacy path traversal must be explicit until migrated"));
         assert!(
-            stable_position > open_position,
-            "{name} must bind the root before obtaining any compatibility pathname"
+            open_position < canonical_position && canonical_position < stable_position,
+            "{name} must bind the root, capture its identity, then derive compatibility I/O authority"
+        );
+
+        let final_identity_check = format!(
+            "ifroot_guard.canonical_path().as_ref()!=Some(&canonical_root){{returnErr(\"{unsafe_error}\".into());}}"
         );
         let final_revalidation_position = compact_source
-            .rfind("root_guard.canonical_path()")
-            .unwrap_or_else(|| panic!("{name} must revalidate the caller pathname after traversal"));
+            .rfind(&final_identity_check)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{name} must compare the post-traversal bound identity with canonical_root and fail closed with {unsafe_error}"
+                )
+            });
         assert!(
             final_revalidation_position > stable_position,
-            "{name} must revalidate after compatibility-path traversal"
+            "{name} must perform the identity comparison after compatibility-path traversal"
         );
         assert!(
-            compact_source[final_revalidation_position..].contains(unsafe_error),
-            "{name} must fail closed with {unsafe_error} after final root revalidation"
+            compact_source[stable_position..final_revalidation_position].contains("stable_root"),
+            "{name} must actually use stable_root for I/O before the final identity comparison"
         );
         assert!(
             !compact_source.contains("std::fs::canonicalize(source_root)")
