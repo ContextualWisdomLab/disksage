@@ -112,6 +112,24 @@ export async function listAllOpenPullRequests(fetchJson, repository) {
   return listAll(fetchJson, `/repos/${repository}/pulls?state=open`, 'open-pr-list-invalid');
 }
 
+function sameRepositoryHeadSnapshot(pullRequests, repository) {
+  const headShas = new Set();
+  for (const pullRequest of pullRequests) {
+    const headRepository = pullRequest?.head?.repo?.full_name;
+    if (headRepository !== repository) continue;
+    const headSha = pullRequest?.head?.sha;
+    if (typeof headSha !== 'string' || !/^[0-9a-f]{40}$/.test(headSha)) {
+      throw new Error('open-pr-head-invalid');
+    }
+    headShas.add(headSha);
+  }
+  return [...headShas].sort();
+}
+
+function sameStringSnapshot(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
 function workflowPathsFromTree(tree, incompleteError = 'workflow-tree-incomplete') {
   if (!tree || tree.truncated !== false || !Array.isArray(tree.tree)) {
     throw new Error(incompleteError);
@@ -124,17 +142,7 @@ function workflowPathsFromTree(tree, incompleteError = 'workflow-tree-incomplete
 
 /** Resolve workflow paths carried by current same-repository open PR heads. */
 export async function activePullRequestWorkflowPaths(fetchJson, repository, pullRequests) {
-  const headShas = new Set();
-  for (const pullRequest of pullRequests) {
-    const headRepository = pullRequest?.head?.repo?.full_name;
-    if (headRepository !== repository) continue;
-    const headSha = pullRequest?.head?.sha;
-    if (typeof headSha !== 'string' || !/^[0-9a-f]{40}$/.test(headSha)) {
-      throw new Error('open-pr-head-invalid');
-    }
-    headShas.add(headSha);
-  }
-
+  const headShas = sameRepositoryHeadSnapshot(pullRequests, repository);
   const workflowPaths = new Set();
   for (const headSha of headShas) {
     const tree = await fetchJson(`/repos/${repository}/git/trees/${headSha}?recursive=1`);
@@ -156,14 +164,20 @@ export async function protectedWorkflowPaths(fetchJson, repository, expectedMain
   return new Set(workflowPathsFromTree(tree, 'protected-main-tree-incomplete'));
 }
 
-/** Build a fail-closed read-only registry audit tied to one protected-main SHA and open-PR snapshot. */
+/** Build a fail-closed read-only registry audit tied to one protected-main SHA and stable open-PR snapshot. */
 export async function auditActionsRegistry(fetchJson, repository, expectedMainSha) {
   const [records, mainPaths, pullRequests] = await Promise.all([
     listAllWorkflowRecords(fetchJson, repository),
     protectedWorkflowPaths(fetchJson, repository, expectedMainSha),
     listAllOpenPullRequests(fetchJson, repository),
   ]);
+  const initialHeadSnapshot = sameRepositoryHeadSnapshot(pullRequests, repository);
   const activePrPaths = await activePullRequestWorkflowPaths(fetchJson, repository, pullRequests);
+  const refreshedPullRequests = await listAllOpenPullRequests(fetchJson, repository);
+  const refreshedHeadSnapshot = sameRepositoryHeadSnapshot(refreshedPullRequests, repository);
+  if (!sameStringSnapshot(initialHeadSnapshot, refreshedHeadSnapshot)) {
+    throw new Error('open-pr-snapshot-moved');
+  }
   const classifications = classifyWorkflowRecords(records, mainPaths, activePrPaths);
   return {
     schema_version: 1,
