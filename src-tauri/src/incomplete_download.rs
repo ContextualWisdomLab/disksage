@@ -2,6 +2,7 @@
 use crate::cloud::probe_content_metadata_for_audit;
 use crate::cloud::ContentMetadata;
 use crate::cloud_local_eviction::{observe_path_active_use, ActiveUseEvidence};
+use crate::duplicate_audit::bound_read_root::BoundReadRoot;
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
@@ -521,13 +522,14 @@ fn build_item(
 
 #[cfg(not(coverage))]
 fn observe_item(
-    canonical_root: &Path,
+    display_root: &Path,
+    io_root: &Path,
     path: &Path,
     observed_at_ms: u64,
     stale_after_days: u64,
 ) -> Result<IncompleteDownloadAuditItem, String> {
     let relative = path
-        .strip_prefix(canonical_root)
+        .strip_prefix(io_root)
         .map_err(|_| "incomplete-download-relative-path-failed".to_string())?;
     if !valid_relative_path(relative) {
         return Err("incomplete-download-relative-path-unsafe".into());
@@ -559,7 +561,7 @@ fn observe_item(
         Some(sibling) => match std::fs::symlink_metadata(&sibling) {
             Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
                 let relative = sibling
-                    .strip_prefix(canonical_root)
+                    .strip_prefix(io_root)
                     .ok()
                     .filter(|relative| valid_relative_path(relative))
                     .map(|relative| normalized(&relative.to_string_lossy()));
@@ -588,7 +590,7 @@ fn observe_item(
     }
 
     Ok(build_item(
-        &canonical_root.to_string_lossy(),
+        &display_root.to_string_lossy(),
         normalized(&relative.to_string_lossy()),
         logical_bytes,
         allocated_bytes(&before),
@@ -848,19 +850,20 @@ pub fn collect_incomplete_download_audit(
     if !supplied_root_metadata.is_dir() || supplied_root_metadata.file_type().is_symlink() {
         return Err("incomplete-download-audit-root-unsafe".into());
     }
-    let canonical_root = std::fs::canonicalize(source_root)
-        .map_err(|_| "incomplete-download-audit-root-unavailable".to_string())?;
-    let root_metadata = std::fs::symlink_metadata(&canonical_root)
-        .map_err(|_| "incomplete-download-audit-root-unavailable".to_string())?;
-    if !root_metadata.is_dir() || root_metadata.file_type().is_symlink() {
-        return Err("incomplete-download-audit-root-unsafe".into());
-    }
+    let root_guard = BoundReadRoot::open(source_root)
+        .ok_or_else(|| "incomplete-download-audit-root-unsafe".to_string())?;
+    let canonical_root = root_guard
+        .canonical_path()
+        .ok_or_else(|| "incomplete-download-audit-root-unsafe".to_string())?;
+    let stable_root = root_guard
+        .stable_path()
+        .ok_or_else(|| "incomplete-download-audit-root-unsafe".to_string())?;
     let max_entries = max_entries.clamp(1, DEFAULT_MAX_ENTRIES);
     let mut evidence_complete = true;
     let mut issue_counts = BTreeMap::new();
     let mut entries_seen = 0usize;
     let mut items = Vec::new();
-    let mut pending = vec![(canonical_root.clone(), 0usize)];
+    let mut pending = vec![(stable_root.clone(), 0usize)];
 
     while let Some((directory, depth)) = pending.pop() {
         let entries = match std::fs::read_dir(&directory) {
@@ -917,7 +920,13 @@ pub fn collect_incomplete_download_audit(
             if !file_type.is_file() || !incomplete_download_name(&path) {
                 continue;
             }
-            match observe_item(&canonical_root, &path, observed_at_ms, stale_after_days) {
+            match observe_item(
+                &canonical_root,
+                &stable_root,
+                &path,
+                observed_at_ms,
+                stale_after_days,
+            ) {
                 Ok(item) => items.push(item),
                 Err(reason) => {
                     evidence_complete = false;
@@ -927,6 +936,9 @@ pub fn collect_incomplete_download_audit(
         }
     }
 
+    if root_guard.canonical_path().as_ref() != Some(&canonical_root) {
+        return Err("incomplete-download-audit-root-unsafe".into());
+    }
     Ok(build_report(
         canonical_root.to_string_lossy().into_owned(),
         observed_at_ms,
