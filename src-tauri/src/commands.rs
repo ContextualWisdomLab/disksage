@@ -3080,7 +3080,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
     fn node_view_errors_on_unreadable_dir() {
         let tmp = tempfile::tempdir().unwrap();
         let res = scan(tmp.path());
-        assert!(node_view(res.root.as_path(), &tmp.path().join("missing")).is_err());
+        assert!(node_view(&res, &tmp.path().join("missing")).is_err());
     }
 
     #[cfg(unix)]
