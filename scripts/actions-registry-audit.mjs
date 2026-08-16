@@ -2,6 +2,13 @@ import path from 'node:path';
 
 export const REPOSITORY_WORKFLOW_PREFIX = '.github/workflows/';
 
+const NON_ACTIVE_WORKFLOW_STATES = new Set([
+  'deleted',
+  'disabled_fork',
+  'disabled_inactivity',
+  'disabled_manually',
+]);
+
 /** Normalize a GitHub Actions workflow path without changing its case authority. */
 export function normalizeWorkflowPath(rawPath) {
   if (typeof rawPath !== 'string' || rawPath.length === 0) return null;
@@ -22,25 +29,31 @@ function isRepositoryWorkflowPath(workflowPath) {
 
 /** Classify one Actions registry record against exact protected-main and active-PR path authority. */
 export function classifyWorkflowRecord(record, protectedWorkflowPaths, activePullRequestWorkflowPaths = new Set()) {
-  const normalizedPath = normalizeWorkflowPath(record?.path);
-  if (record?.state !== 'active') {
-    return { classification: 'disabled', path: normalizedPath, workflow_id: record?.id ?? null };
+  if (!record || typeof record !== 'object' || typeof record.state !== 'string') {
+    throw new Error('actions-workflow-record-invalid');
+  }
+  const normalizedPath = normalizeWorkflowPath(record.path);
+  if (record.state !== 'active') {
+    if (!NON_ACTIVE_WORKFLOW_STATES.has(record.state)) {
+      throw new Error('actions-workflow-record-invalid');
+    }
+    return { classification: 'disabled', path: normalizedPath, workflow_id: record.id ?? null };
   }
   if (!normalizedPath || !normalizedPath.startsWith(REPOSITORY_WORKFLOW_PREFIX)) {
-    return { classification: 'github-dynamic', path: normalizedPath, workflow_id: record?.id ?? null };
+    return { classification: 'github-dynamic', path: normalizedPath, workflow_id: record.id ?? null };
   }
   if (protectedWorkflowPaths.has(normalizedPath)) {
-    return { classification: 'present', path: normalizedPath, workflow_id: record?.id ?? null };
+    return { classification: 'present', path: normalizedPath, workflow_id: record.id ?? null };
   }
   if (activePullRequestWorkflowPaths.has(normalizedPath)) {
     return {
       classification: 'unresolved',
       reason: 'active-pr-workflow',
       path: normalizedPath,
-      workflow_id: record?.id ?? null,
+      workflow_id: record.id ?? null,
     };
   }
-  return { classification: 'orphaned-deleted', path: normalizedPath, workflow_id: record?.id ?? null };
+  return { classification: 'orphaned-deleted', path: normalizedPath, workflow_id: record.id ?? null };
 }
 
 /** Classify a complete collection of Actions registry records. */
