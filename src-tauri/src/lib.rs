@@ -18,6 +18,8 @@ mod settings;
 mod safety;
 #[cfg(all(test, target_os = "macos"))]
 mod macos_temp_guard_tests;
+#[cfg(all(test, unix))]
+mod node_view_security_tests;
 #[cfg_attr(coverage, allow(dead_code))]
 mod rules;
 #[cfg_attr(coverage, allow(dead_code))]
