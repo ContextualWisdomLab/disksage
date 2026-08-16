@@ -31,6 +31,7 @@ describe("TopFiles accessible data table", () => {
       '<div class="table-scroll" role="region" tabindex="0" aria-labelledby="top-files-heading">',
     );
     expect(source).toContain(".table-scroll { max-height: 40vh; overflow-y: auto;");
+    expect(source).toContain(".table-scroll:focus-visible { outline: 2px solid currentColor;");
     expect(source).not.toContain("section { max-height: 40vh; overflow-y: auto;");
   });
 
