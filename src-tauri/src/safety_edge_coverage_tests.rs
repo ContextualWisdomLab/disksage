@@ -85,6 +85,28 @@ fn journal_failure_leaves_source_and_destination_untouched() {
     assert!(!destination.exists());
 }
 
+#[test]
+fn destination_parent_creation_failure_preserves_source_and_audit_state() {
+    let root = tempfile::tempdir().expect("temporary move root");
+    let source = root.path().join("source.bin");
+    let blocking_parent = root.path().join("not-a-directory");
+    let destination = blocking_parent.join("destination.bin");
+    let journal = root.path().join("move-journal.jsonl");
+    std::fs::write(&source, b"reviewed-source").expect("write source fixture");
+    std::fs::write(&blocking_parent, b"blocking-file").expect("write blocking parent fixture");
+
+    let error = move_file(&source, &destination, &journal, 30_005).unwrap_err();
+
+    assert!(matches!(error, SafetyError::Trash(_)));
+    assert_eq!(std::fs::read(&source).unwrap(), b"reviewed-source");
+    assert_eq!(std::fs::read(&blocking_parent).unwrap(), b"blocking-file");
+    assert!(!destination.exists());
+    assert!(
+        !journal.exists(),
+        "parent creation failure must occur before the pending move journal is written"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn protected_system_destination_is_rejected_before_any_mutation() {
@@ -97,7 +119,7 @@ fn protected_system_destination_is_rejected_before_any_mutation() {
         &source,
         Path::new("/usr/disksage-must-not-write.bin"),
         &journal,
-        30_005,
+        30_006,
     )
     .unwrap_err();
 
