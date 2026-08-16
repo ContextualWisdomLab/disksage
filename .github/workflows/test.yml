@@ -56,8 +56,8 @@ jobs:
         run: |
           cargo test --manifest-path src-tauri/Cargo.toml --test bound_read_root_macos_traversal
           cargo test --manifest-path src-tauri/Cargo.toml --test root_identity_binding_contract
-          cargo test --manifest-path src-tauri/Cargo.toml --lib bound_read_root::tests::stable_namespace_keeps_original_object_and_detects_path_replacement
-          cargo test --manifest-path src-tauri/Cargo.toml rules::tests::catalog_reports_sizes_and_existence
+          cargo test --manifest-path src-tauri/Cargo.toml --lib bound_read_root::tests::descriptor_relative_namespace_keeps_original_object_after_path_replacement -- --exact
+          cargo test --manifest-path src-tauri/Cargo.toml rules::tests::opened_catalog_root_reads_bound_object_but_does_not_publish_stale_cleanup_paths -- --exact
 
   llm-engine-build:
     runs-on: ubuntu-latest
