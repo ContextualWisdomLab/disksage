@@ -3,6 +3,7 @@
   import { confirm } from "@tauri-apps/plugin-dialog";
   import { fmtBytes } from "./fmt";
   import { verdictBadge } from "./verdictBadge";
+  import { locatedInRelation } from "./orphanRelation";
 
   let plan: api.OrphanPlan | null = $state(null);
   let selected: Set<string> = $state(new Set());
@@ -94,6 +95,7 @@
     {#if plan.notices.length}<ul class="notices">{#each plan.notices as notice}<li>{notice}</li>{/each}</ul>{/if}
     <ul class="list">
       {#each plan.candidates as candidate (candidate.path)}
+        {@const located = locatedInRelation(candidate.relations)}
         <li>
           <label class:disabled={!candidate.auto_trash_eligible}>
             <input
@@ -110,7 +112,7 @@
             {/if}
           </label>
           <span class="path" title={candidate.path}>{candidate.path}</span>
-          <span class="relation">{candidate.relations[1]?.predicate} → {candidate.relations[1]?.object}</span>
+          {#if located}<span class="relation">{located.predicate} → {located.object}</span>{/if}
           {#if candidate.review_reasons.length}<small>{candidate.review_reasons.join(" · ")}</small>{/if}
         </li>
       {/each}
