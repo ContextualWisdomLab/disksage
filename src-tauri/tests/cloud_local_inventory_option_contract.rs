@@ -21,12 +21,9 @@ fn root() -> CloudRoot {
     }
 }
 
-fn assert_invalid(mut options: CloudLocalInventoryOptions, expected: &str) {
+fn assert_invalid(options: CloudLocalInventoryOptions, expected: &str) {
     let error = hard_timeout_inventory(&root(), options, 101).unwrap_err();
     assert_eq!(error, expected);
-    // Keep the mutable parameter semantically live for clippy/readability if this helper gains
-    // additional cases later; the production call above consumes only Copy data.
-    options.min_allocated_bytes = options.min_allocated_bytes.saturating_add(0);
 }
 
 #[test]
