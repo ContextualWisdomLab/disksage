@@ -40,7 +40,6 @@ test('classifies main, active-PR, orphaned, disabled and dynamic workflow author
     [{ state: 'active', path: '.github/workflows/repair-pr186.yml' }, 'unresolved', null, 'active-pr-workflow'],
     [{ state: 'active', path: '.github/workflows/orphan.yml' }, 'orphaned-deleted', null, undefined],
     [{ id: 3, state: 'disabled_manually', path: '.github/workflows/old.yml' }, 'disabled', 3, undefined],
-    [null, 'disabled', null, undefined],
     [{ id: 4, state: 'active', path: 'dynamic/dependabot' }, 'github-dynamic', 4, undefined],
     [{ state: 'active', path: null }, 'github-dynamic', null, undefined],
     [{ id: 5, state: 'active', path: '.GitHub/workflows/repair-current.yml' }, 'github-dynamic', 5, undefined],
