@@ -120,6 +120,35 @@ fn trash_delete_rejects_parent_traversal_before_journal_or_mutation() {
     assert!(!journal.exists());
 }
 
+#[cfg(any(windows, target_os = "linux"))]
+#[test]
+fn trash_delete_success_records_pending_then_success_and_is_recoverable() {
+    let root = tempfile::tempdir().unwrap();
+    let unique = root.path().file_name().unwrap().to_string_lossy();
+    let fixture_name = format!("disksage-reversible-trash-{unique}.bin");
+    let fixture = root.path().join(&fixture_name);
+    let journal = root.path().join("cleanup-journal.jsonl");
+    std::fs::write(&fixture, b"reversible").unwrap();
+
+    trash_delete(&fixture, b"reversible".len() as u64, &journal, 10_001).unwrap();
+
+    assert!(!fixture.exists(), "successful trash must vacate the source pathname");
+    let recent = journal_recent(&journal, 10);
+    assert_eq!(recent.len(), 2);
+    assert_eq!(recent[0].outcome, "ok");
+    assert_eq!(recent[1].outcome, "pending");
+    assert_eq!(recent[0].path, fixture.to_string_lossy());
+    assert_eq!(recent[1].path, fixture.to_string_lossy());
+
+    let items: Vec<_> = trash::os_limited::list()
+        .unwrap()
+        .into_iter()
+        .filter(|item| item.name.to_string_lossy().as_ref() == fixture_name.as_str())
+        .collect();
+    assert_eq!(items.len(), 1, "the trashed fixture must remain reversibly identifiable");
+    trash::os_limited::purge_all(items).unwrap();
+}
+
 #[test]
 fn identity_bound_trash_rejects_parent_traversal_before_identity_or_journal_work() {
     let root = tempfile::tempdir().unwrap();
@@ -236,7 +265,7 @@ fn identity_bound_trash_success_stages_exact_object_and_journals_success() {
     let items: Vec<_> = trash::os_limited::list()
         .unwrap()
         .into_iter()
-        .filter(|item| item.name.to_string_lossy() == fixture_name)
+        .filter(|item| item.name.to_string_lossy().as_ref() == fixture_name.as_str())
         .collect();
     assert_eq!(items.len(), 1, "the exact staged object must be recoverable from trash");
     trash::os_limited::purge_all(items).unwrap();
