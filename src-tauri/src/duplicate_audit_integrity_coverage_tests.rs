@@ -57,6 +57,34 @@ fn collector_rejects_invalid_root_and_bounds_before_evidence() {
     );
 }
 
+#[test]
+fn collector_marks_depth_bound_incomplete_without_descending_past_policy() {
+    let root = tempfile::tempdir().expect("temporary duplicate-audit root");
+    let mut current = root.path().to_path_buf();
+    for index in 0..66 {
+        current.push(format!("d{index:02}"));
+        std::fs::create_dir(&current).expect("create bounded nested directory fixture");
+    }
+    std::fs::write(current.join("too-deep.bin"), b"must not be inspected")
+        .expect("write beyond-depth fixture");
+
+    let report = collect_exact_duplicate_audit(root.path(), 50_016, 1, 1_000)
+        .expect("depth exhaustion is represented as incomplete evidence, not an API error");
+
+    assert!(!report.evidence_complete);
+    assert_eq!(
+        report
+            .issue_counts
+            .get("duplicate-audit-depth-limit-reached")
+            .copied(),
+        Some(1)
+    );
+    assert_eq!(report.file_count, 0);
+    assert_eq!(report.content_hashed_file_count, 0);
+    assert!(report.clusters.is_empty());
+    assert!(exact_duplicate_audit_integrity_valid(&report));
+}
+
 #[cfg(unix)]
 #[test]
 fn collector_skips_socket_entries_without_following_or_hashing_them() {
@@ -68,7 +96,7 @@ fn collector_skips_socket_entries_without_following_or_hashing_them() {
     let socket_path = root.path().join("runtime.sock");
     let _listener = UnixListener::bind(&socket_path).expect("bind local socket fixture");
 
-    let report = collect_exact_duplicate_audit(root.path(), 50_016, 1, 100)
+    let report = collect_exact_duplicate_audit(root.path(), 50_017, 1, 100)
         .expect("socket entry must not make a read-only audit fail");
 
     assert!(report.evidence_complete);
