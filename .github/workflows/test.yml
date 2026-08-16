@@ -60,6 +60,17 @@ jobs:
           rustc --edition=2021 --test src-tauri/tests/home_resolution_contract.rs -o target/home-resolution-contract.exe
           & .\target\home-resolution-contract.exe
 
+  macos-bound-root:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - name: macOS bound-root traversal regression
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test bound_read_root_macos_traversal
+
   llm-engine-build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
