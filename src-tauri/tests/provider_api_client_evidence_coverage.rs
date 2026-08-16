@@ -10,7 +10,7 @@ use disksage_lib::cloud_transfer::{
 };
 use disksage_lib::content_digest::ContentDigests;
 use disksage_lib::provider_api_client::{
-    evidence_from_provider_api_json, ProviderRemoteLocator,
+    evidence_from_provider_api_json, onedrive_path_locator, ProviderRemoteLocator,
 };
 
 fn receipt(provider: CloudProvider) -> CloudCopyReceipt {
@@ -100,6 +100,34 @@ fn onedrive_json_becomes_content_bound_object_id_evidence() {
     assert_eq!(remote.checksum, "quick-xor");
     assert!(!remote.location_bound);
     assert_eq!(remote.location_proof, None);
+}
+
+#[test]
+fn onedrive_path_json_carries_exact_destination_location_proof() {
+    let root = tempfile::tempdir().unwrap();
+    let destination = root.path().join("Archive").join("report.pdf");
+    let locator = onedrive_path_locator(root.path(), &destination).unwrap();
+    let mut receipt = receipt(CloudProvider::Onedrive);
+    receipt.destination = destination.to_string_lossy().into_owned();
+    let json = r#"{
+        "id": "item-by-path",
+        "size": 42,
+        "eTag": "revision-path",
+        "file": {"hashes": {"quickXorHash": "quick-xor"}}
+    }"#;
+
+    let evidence =
+        evidence_from_provider_api_json(&receipt, &locator, json, &matching_digests(), 35).unwrap();
+
+    assert!(evidence.sync_complete);
+    let remote = evidence.remote_content.unwrap();
+    assert_eq!(remote.object_id, "item-by-path");
+    assert_eq!(remote.revision, "revision-path");
+    assert!(remote.location_bound);
+    assert!(remote
+        .location_proof
+        .as_deref()
+        .is_some_and(|proof| proof.starts_with("onedrive-path-v1:")));
 }
 
 #[test]
