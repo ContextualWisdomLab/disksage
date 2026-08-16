@@ -91,10 +91,12 @@ fn write_zip(path: &Path, payload: &[u8]) {
 fn fixture() -> Fixture {
     let source = tempfile::tempdir().unwrap();
     let cloud = tempfile::tempdir().unwrap();
+    let source_file = source.path().join("whole.zip.crdownload");
     write_zip(
-        &source.path().join("whole.zip.crdownload"),
+        &source_file,
         b"immutable receipt rollback coverage payload",
     );
+    wait_for_inactive_source(&source_file);
 
     let created = std::fs::metadata(source.path()).unwrap().modified().unwrap();
     let observed_at_ms = created
