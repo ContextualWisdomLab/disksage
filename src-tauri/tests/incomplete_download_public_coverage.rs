@@ -168,3 +168,49 @@ fn regular_crdownload_candidate_is_observed_without_mutation_or_discard_authorit
     assert!(!encoded.contains(root.path().to_string_lossy().as_ref()));
     assert!(!encoded.contains("archive.zip.crdownload"));
 }
+
+#[test]
+fn completed_sibling_is_recorded_as_recovery_evidence_without_authorizing_discard() {
+    let root = tempfile::tempdir().expect("temporary sibling audit root");
+    let partial = root.path().join("report.pdf.crdownload");
+    let completed = root.path().join("report.pdf");
+    std::fs::write(&partial, b"partial-download-bytes").expect("write partial fixture");
+    std::fs::write(&completed, b"completed-file-bytes").expect("write completed sibling fixture");
+    let modified_ms = std::fs::metadata(&partial)
+        .expect("partial metadata")
+        .modified()
+        .expect("partial modified time")
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("modified time after epoch")
+        .as_millis() as u64;
+
+    let report = collect_incomplete_download_audit(
+        root.path(),
+        modified_ms.saturating_add(1),
+        100,
+        DEFAULT_STALE_AFTER_DAYS,
+    )
+    .expect("read-only audit with completed sibling");
+
+    assert_eq!(report.entries_seen, 2);
+    assert_eq!(report.file_count, 1);
+    assert_eq!(report.final_sibling_count, 1);
+    assert!(!report.mutation_performed);
+    let item = &report.items[0];
+    assert_eq!(item.relative_path, "report.pdf.crdownload");
+    assert!(item.final_sibling_exists);
+    assert_eq!(item.final_sibling_relative_path.as_deref(), Some("report.pdf"));
+    assert_eq!(item.final_sibling_bytes, Some(20));
+    assert!(item.recovery_candidate);
+    assert!(item.requires_human_review);
+    assert!(!item.automatic_discard_allowed);
+
+    let summary = summarize_incomplete_download_audit(&report);
+    assert_eq!(summary.final_sibling_count, 1);
+    assert_eq!(summary.items.len(), 1);
+    assert!(!summary.mutation_performed);
+    assert!(!summary.automatic_discard_allowed);
+    let encoded = serde_json::to_string(&summary).expect("summary JSON");
+    assert!(!encoded.contains(root.path().to_string_lossy().as_ref()));
+    assert!(!encoded.contains("report.pdf"));
+}
