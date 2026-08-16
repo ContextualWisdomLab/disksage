@@ -79,6 +79,55 @@ fn checkpoint_recovery_rejects_provider_and_account_authority_drift() {
 }
 
 #[test]
+fn hard_timeout_enforces_lower_option_bounds_and_accepts_zero_depth() {
+    let root = cloud_root(Path::new("/Cloud"));
+    let base = bounded_options();
+    let invalid_cases = [
+        (
+            CloudLocalInventoryOptions {
+                max_entries: 0,
+                ..base
+            },
+            "cloud-local-inventory-max-entries-invalid",
+        ),
+        (
+            CloudLocalInventoryOptions {
+                max_results: 0,
+                ..base
+            },
+            "cloud-local-inventory-max-results-invalid",
+        ),
+        (
+            CloudLocalInventoryOptions {
+                max_duration_ms: 0,
+                ..base
+            },
+            "cloud-local-inventory-max-duration-invalid",
+        ),
+        (
+            CloudLocalInventoryOptions {
+                max_issues: 0,
+                ..base
+            },
+            "cloud-local-inventory-max-issues-invalid",
+        ),
+    ];
+
+    for (invalid, expected) in invalid_cases {
+        assert_eq!(hard_timeout_inventory(&root, invalid, 1).unwrap_err(), expected);
+    }
+
+    let zero_depth = CloudLocalInventoryOptions {
+        max_depth: 0,
+        ..base
+    };
+    let report = hard_timeout_inventory(&root, zero_depth, 2).expect("zero depth is a valid root-only inventory bound");
+    assert_eq!(report.options, zero_depth);
+    assert!(!report.evidence_complete);
+    assert_eq!(report.stop_reasons, vec!["hard-timeout-reached"]);
+}
+
+#[test]
 fn hard_timeout_enforces_upper_option_bounds_and_accepts_exact_maxima() {
     let root = cloud_root(Path::new("/Cloud"));
     let base = bounded_options();
