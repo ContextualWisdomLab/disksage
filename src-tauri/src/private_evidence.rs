@@ -17,6 +17,40 @@ pub struct PrivateEvidenceReceipt {
     pub is_approval: bool,
 }
 
+#[cfg(unix)]
+fn revalidate_private_parent(
+    directory: &std::fs::File,
+    canonical_parent: &Path,
+    expected_dev: u64,
+    expected_ino: u64,
+) -> Result<(), String> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let opened = directory
+        .metadata()
+        .map_err(|_| "private-evidence-parent-unavailable".to_string())?;
+    if !opened.is_dir() || opened.file_type().is_symlink() {
+        return Err("private-evidence-parent-unsafe".into());
+    }
+    if opened.permissions().mode() & 0o022 != 0 {
+        return Err("private-evidence-parent-writable-by-others".into());
+    }
+
+    let named = std::fs::symlink_metadata(canonical_parent)
+        .map_err(|_| "private-evidence-parent-identity-drift".to_string())?;
+    if named.file_type().is_symlink()
+        || !named.is_dir()
+        || named.dev() != expected_dev
+        || named.ino() != expected_ino
+    {
+        return Err("private-evidence-parent-identity-drift".into());
+    }
+    if named.permissions().mode() & 0o022 != 0 {
+        return Err("private-evidence-parent-writable-by-others".into());
+    }
+    Ok(())
+}
+
 /// Persist exact local evidence outside the audited source tree.
 ///
 /// The destination parent must already exist, must not be a symlink, and must not be writable by
@@ -99,45 +133,24 @@ where
     let opened_parent_metadata = directory
         .metadata()
         .map_err(|_| "private-evidence-parent-unavailable".to_string())?;
-    if !opened_parent_metadata.is_dir() || opened_parent_metadata.file_type().is_symlink() {
-        return Err("private-evidence-parent-unsafe".into());
-    }
-    if opened_parent_metadata.permissions().mode() & 0o022 != 0 {
-        return Err("private-evidence-parent-writable-by-others".into());
-    }
-    let current_parent_metadata = std::fs::symlink_metadata(&canonical_parent)
-        .map_err(|_| "private-evidence-parent-identity-drift".to_string())?;
-    if current_parent_metadata.file_type().is_symlink()
-        || !current_parent_metadata.is_dir()
-        || current_parent_metadata.dev() != opened_parent_metadata.dev()
-        || current_parent_metadata.ino() != opened_parent_metadata.ino()
-    {
-        return Err("private-evidence-parent-identity-drift".into());
-    }
+    revalidate_private_parent(
+        &directory,
+        &canonical_parent,
+        opened_parent_metadata.dev(),
+        opened_parent_metadata.ino(),
+    )?;
 
     before_create();
 
     // Re-check both the opened object and its pathname immediately after the deterministic race
     // seam. Publication itself is descriptor-relative, so a later rename cannot redirect record
     // creation to a different parent.
-    let opened_parent_before_create = directory
-        .metadata()
-        .map_err(|_| "private-evidence-parent-unavailable".to_string())?;
-    if opened_parent_before_create.permissions().mode() & 0o022 != 0 {
-        return Err("private-evidence-parent-writable-by-others".into());
-    }
-    let parent_before_create = std::fs::symlink_metadata(&canonical_parent)
-        .map_err(|_| "private-evidence-parent-identity-drift".to_string())?;
-    if parent_before_create.file_type().is_symlink()
-        || !parent_before_create.is_dir()
-        || parent_before_create.dev() != opened_parent_metadata.dev()
-        || parent_before_create.ino() != opened_parent_metadata.ino()
-    {
-        return Err("private-evidence-parent-identity-drift".into());
-    }
-    if parent_before_create.permissions().mode() & 0o022 != 0 {
-        return Err("private-evidence-parent-writable-by-others".into());
-    }
+    revalidate_private_parent(
+        &directory,
+        &canonical_parent,
+        opened_parent_metadata.dev(),
+        opened_parent_metadata.ino(),
+    )?;
 
     let file_fd = unsafe {
         libc::openat(
@@ -180,24 +193,12 @@ where
 
         before_finalize();
 
-        let opened_parent_after_sync = directory
-            .metadata()
-            .map_err(|_| "private-evidence-parent-unavailable".to_string())?;
-        if opened_parent_after_sync.permissions().mode() & 0o022 != 0 {
-            return Err("private-evidence-parent-writable-by-others".into());
-        }
-        let final_parent_metadata = std::fs::symlink_metadata(&canonical_parent)
-            .map_err(|_| "private-evidence-parent-identity-drift".to_string())?;
-        if final_parent_metadata.file_type().is_symlink()
-            || !final_parent_metadata.is_dir()
-            || final_parent_metadata.dev() != opened_parent_metadata.dev()
-            || final_parent_metadata.ino() != opened_parent_metadata.ino()
-        {
-            return Err("private-evidence-parent-identity-drift".into());
-        }
-        if final_parent_metadata.permissions().mode() & 0o022 != 0 {
-            return Err("private-evidence-parent-writable-by-others".into());
-        }
+        revalidate_private_parent(
+            &directory,
+            &canonical_parent,
+            opened_parent_metadata.dev(),
+            opened_parent_metadata.ino(),
+        )?;
 
         let final_file_metadata = std::fs::symlink_metadata(&final_path)
             .map_err(|_| "private-evidence-record-identity-drift".to_string())?;
