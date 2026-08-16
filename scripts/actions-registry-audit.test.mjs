@@ -74,6 +74,18 @@ test('paginates complete workflow and open-PR collections', async () => {
   assert.equal(pullCalls.length, 2);
 });
 
+test('fails closed when workflow registry pagination is shorter than total_count', async () => {
+  const workflowCalls = [];
+  await assert.rejects(
+    listAllWorkflowRecords(async (url) => {
+      workflowCalls.push(url);
+      return { total_count: 101, workflows: [{ id: 1 }] };
+    }, repo),
+    /actions-workflow-list-incomplete/,
+  );
+  assert.equal(workflowCalls.length, 1);
+});
+
 test('rejects malformed registry and open-PR list evidence', async () => {
   await assert.rejects(listAllWorkflowRecords(async () => null, repo), /actions-workflow-list-invalid/);
   await assert.rejects(listAllWorkflowRecords(async () => ({ workflows: null }), repo), /actions-workflow-list-invalid/);
