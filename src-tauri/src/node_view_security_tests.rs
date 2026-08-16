@@ -1,10 +1,10 @@
 //! Security regressions for scan-tree navigation.
 //!
-//! These tests exercise the same filesystem boundary as the Tauri `get_node` command without
-//! introducing GUI/runtime dependencies. A lexical descendant is not sufficient authority: the
-//! final directory object must still resolve within the canonical scanned root.
+//! These tests exercise the same filesystem boundary as the registered Tauri `get_node` command
+//! without introducing GUI/runtime dependencies. A lexical descendant is not sufficient authority:
+//! the final directory object must still resolve within the canonical scanned root.
 
-use crate::{commands, scanner};
+use crate::{node_navigation, scanner};
 use std::sync::atomic::AtomicBool;
 
 #[cfg(unix)]
@@ -25,7 +25,7 @@ fn node_view_rejects_final_directory_symlink_escape() {
         |_| {},
     );
 
-    let view = commands::node_view(&result, &escape);
+    let view = node_navigation::node_view(&result, &escape);
     assert!(
         view.is_err(),
         "a final directory symlink below the lexical root must not expose metadata outside the scanned root"
