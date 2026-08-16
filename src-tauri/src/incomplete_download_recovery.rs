@@ -1,5 +1,5 @@
 use crate::cloud_local_eviction::observe_path_active_use;
-use crate::duplicate_audit::bound_read_root::BoundReadRoot;
+use crate::bound_read_root::BoundReadRoot;
 use crate::incomplete_download::{
     IncompleteDownloadAuditItem, IncompleteDownloadAuditReport, IncompleteDownloadState,
 };
