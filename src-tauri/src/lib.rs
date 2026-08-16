@@ -38,7 +38,6 @@ mod reasoning;
 mod dataset_metadata;
 #[cfg_attr(coverage, allow(dead_code))]
 mod brew_cleanup;
-pub(crate) mod bound_read_root;
 pub mod archive_git_tree;
 #[cfg_attr(coverage, allow(dead_code))]
 pub mod cloud;
@@ -53,6 +52,7 @@ pub mod cloud_review;
 pub mod cloud_transfer;
 pub mod content_digest;
 pub mod duplicate_audit;
+pub(crate) use duplicate_audit::bound_read_root;
 pub mod icloud_sync_health;
 pub mod incomplete_download;
 pub mod incomplete_download_materialization;
