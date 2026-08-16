@@ -406,7 +406,7 @@ fn unix_identity(metadata: &Metadata) -> (u64, u64) {
 }
 
 fn observe_file(
-    canonical_root: &Path,
+    io_root: &Path,
     path: PathBuf,
     metadata: Metadata,
 ) -> Result<FileObservation, String> {
@@ -414,7 +414,7 @@ fn observe_file(
         return Err("duplicate-audit-file-unsafe".into());
     }
     let relative = path
-        .strip_prefix(canonical_root)
+        .strip_prefix(io_root)
         .map_err(|_| "duplicate-audit-relative-path-failed".to_string())?;
     if !valid_relative_path(relative) {
         return Err("duplicate-audit-relative-path-unsafe".into());
