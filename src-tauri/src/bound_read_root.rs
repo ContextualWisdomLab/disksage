@@ -3,9 +3,10 @@
 //! A caller-supplied path is not a stable authority boundary: the directory entry can be renamed
 //! or replaced between a path check and later traversal. `BoundReadRoot` opens the directory with
 //! no-follow/reparse-point semantics, verifies that a second open still names the same filesystem
-//! object, and keeps that handle alive for the whole audit. Unix traversal uses the open-handle
-//! namespace (`/proc/self/fd` or `/dev/fd`); Windows keeps a handle that deliberately excludes
-//! delete sharing so rename/delete replacement is blocked while evidence is collected.
+//! object, and keeps that handle alive for the whole audit. Linux traverses through `/proc/self/fd`;
+//! macOS resolves the currently opened directory with `F_GETPATH` because `/dev/fd/N` entries are
+//! not traversable directory roots there. Windows keeps a handle that deliberately excludes delete
+//! sharing so rename/delete replacement is blocked while evidence is collected.
 
 use same_file::Handle;
 use std::path::{Path, PathBuf};
@@ -69,7 +70,7 @@ fn open_directory_handle(path: &Path) -> Option<Handle> {
 }
 
 #[cfg(target_os = "linux")]
-fn handle_namespace_path(handle: &Handle, _display_path: &Path) -> Option<PathBuf> {
+fn handle_traversal_path(handle: &Handle, _display_path: &Path) -> Option<PathBuf> {
     use std::os::fd::AsRawFd;
     Some(PathBuf::from(format!(
         "/proc/self/fd/{}",
@@ -78,16 +79,34 @@ fn handle_namespace_path(handle: &Handle, _display_path: &Path) -> Option<PathBu
 }
 
 #[cfg(target_os = "macos")]
-fn handle_namespace_path(handle: &Handle, _display_path: &Path) -> Option<PathBuf> {
+fn handle_traversal_path(handle: &Handle, _display_path: &Path) -> Option<PathBuf> {
+    use std::ffi::{CStr, OsString};
     use std::os::fd::AsRawFd;
-    Some(PathBuf::from(format!(
-        "/dev/fd/{}",
-        handle.as_file().as_raw_fd()
-    )))
+    use std::os::unix::ffi::OsStringExt;
+
+    let mut buffer = vec![0 as libc::c_char; libc::PATH_MAX as usize];
+    let result = unsafe {
+        // SAFETY: `buffer` is writable for PATH_MAX bytes and the descriptor is held alive by
+        // `Handle`. F_GETPATH writes a NUL-terminated path on success and does not retain it.
+        libc::fcntl(
+            handle.as_file().as_raw_fd(),
+            libc::F_GETPATH,
+            buffer.as_mut_ptr(),
+        )
+    };
+    if result == -1 {
+        return None;
+    }
+    let path = unsafe {
+        // SAFETY: successful F_GETPATH guarantees a NUL-terminated string within the supplied
+        // PATH_MAX-sized buffer.
+        CStr::from_ptr(buffer.as_ptr())
+    };
+    Some(PathBuf::from(OsString::from_vec(path.to_bytes().to_vec())))
 }
 
 #[cfg(windows)]
-fn handle_namespace_path(_handle: &Handle, display_path: &Path) -> Option<PathBuf> {
+fn handle_traversal_path(_handle: &Handle, display_path: &Path) -> Option<PathBuf> {
     Some(display_path.to_path_buf())
 }
 
@@ -136,9 +155,13 @@ impl BoundReadRoot {
         (self.handle == canonical_handle).then_some(canonical)
     }
 
-    /// Return a path whose I/O is bound to the opened directory identity.
+    /// Return a traversable path that still resolves to the opened directory identity.
+    ///
+    /// Linux can address the live descriptor through `/proc/self/fd`. macOS resolves the opened
+    /// descriptor with `F_GETPATH` because `/dev/fd/N/child` is not a traversable directory path.
+    /// The returned path is re-opened and identity-checked before it is exposed to callers.
     pub(crate) fn stable_path(&self) -> Option<PathBuf> {
-        let stable = handle_namespace_path(&self.handle, &self.display_path)?;
+        let stable = handle_traversal_path(&self.handle, &self.display_path)?;
         let expected = Handle::from_file(self.handle.as_file().try_clone().ok()?).ok()?;
         #[cfg(windows)]
         let observed = open_directory_handle(&stable)?;
