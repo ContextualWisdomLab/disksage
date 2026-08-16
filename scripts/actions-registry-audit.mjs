@@ -64,19 +64,34 @@ async function listAll(fetchJson, endpoint, invalidError) {
   return records;
 }
 
-/** Read every page of the repository Actions workflow registry. */
+/** Read every page of the repository Actions workflow registry without accepting partial snapshots. */
 export async function listAllWorkflowRecords(fetchJson, repository) {
   const records = [];
   let page = 1;
-  let pageSize;
-  do {
+  let expectedTotal = null;
+  while (true) {
     const payload = await fetchJson(`/repos/${repository}/actions/workflows?per_page=100&page=${page}`);
-    if (!payload || !Array.isArray(payload.workflows)) throw new Error('actions-workflow-list-invalid');
+    const totalCount = payload?.total_count;
+    if (
+      !payload ||
+      !Array.isArray(payload.workflows) ||
+      !Number.isSafeInteger(totalCount) ||
+      totalCount < 0
+    ) {
+      throw new Error('actions-workflow-list-invalid');
+    }
+    if (expectedTotal === null) {
+      expectedTotal = totalCount;
+    } else if (totalCount !== expectedTotal) {
+      throw new Error('actions-workflow-list-moved');
+    }
     records.push(...payload.workflows);
-    pageSize = payload.workflows.length;
+    if (records.length === expectedTotal) return records;
+    if (records.length > expectedTotal || payload.workflows.length < 100) {
+      throw new Error('actions-workflow-list-incomplete');
+    }
     page += 1;
-  } while (pageSize === 100);
-  return records;
+  }
 }
 
 /** Read every open pull request so branch-only workflow ownership cannot be mistaken for deletion. */
