@@ -77,17 +77,54 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
 
     #[test]
-    fn parser_accepts_optional_id() {
-        assert_eq!(parse_args(&[]).unwrap(), Args::default());
+    fn parser_distinguishes_help_from_invalid_input() {
+        assert_eq!(parse_args(&[]).unwrap(), ParseOutcome::Run(Args::default()));
         assert_eq!(
-            parse_args(&["--id".into(), "trivy-cache".into()]).unwrap(),
-            Args {
-                id: Some("trivy-cache".into())
-            }
+            parse_args(&[OsString::from("--help")]).unwrap(),
+            ParseOutcome::Help
         );
-        assert!(parse_args(&["--id".into()]).is_err());
-        assert!(parse_args(&["--nope".into()]).is_err());
+        assert_eq!(
+            parse_args(&[OsString::from("-h")]).unwrap(),
+            ParseOutcome::Help
+        );
+        assert_eq!(
+            parse_args(&[OsString::from("--nope")]).unwrap_err(),
+            "알 수 없는 인자"
+        );
+    }
+
+    #[test]
+    fn parser_accepts_optional_utf8_cache_id() {
+        assert_eq!(
+            parse_args(&[OsString::from("--id"), OsString::from("trivy-cache")]).unwrap(),
+            ParseOutcome::Run(Args {
+                id: Some("trivy-cache".into())
+            })
+        );
+        assert_eq!(
+            parse_args(&[OsString::from("--id")]).unwrap_err(),
+            "--id 값이 필요함"
+        );
+        assert_eq!(
+            parse_args(&[OsString::from("--id"), OsString::from("")]).unwrap_err(),
+            "--id 값이 비어 있음"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parser_rejects_non_utf8_cache_id_and_redacts_non_utf8_unknown_argument() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let non_utf8 = OsString::from_vec(vec![0xff]);
+        assert_eq!(
+            parse_args(&[OsString::from("--id"), non_utf8]).unwrap_err(),
+            "--id 값은 UTF-8이어야 함"
+        );
+        let unknown = OsString::from_vec(vec![b'-', b'-', 0xff]);
+        assert_eq!(parse_args(&[unknown]).unwrap_err(), "알 수 없는 인자");
     }
 }
