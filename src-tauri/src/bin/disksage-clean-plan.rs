@@ -1,36 +1,45 @@
 //! Read-only cache cleanup plan. It exposes the same metadata-bound candidates as the GUI.
 
 use disksage_lib::rules::{cache_candidates, BaseDirs};
+use std::ffi::{OsStr, OsString};
+
+const USAGE: &str = "usage: disksage-clean-plan [--id CACHE_ID]";
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Args {
     id: Option<String>,
 }
 
-fn parse_args(args: &[String]) -> Result<Args, String> {
+#[derive(Debug, PartialEq, Eq)]
+enum ParseOutcome {
+    Run(Args),
+    Help,
+}
+
+fn parse_args(args: &[OsString]) -> Result<ParseOutcome, String> {
     let mut parsed = Args::default();
     let mut index = 0usize;
     while index < args.len() {
-        match args[index].as_str() {
-            "--id" => {
-                index += 1;
-                let id = args
-                    .get(index)
-                    .cloned()
-                    .ok_or_else(|| "--id 값이 필요함".to_string())?;
-                if id.is_empty() {
-                    return Err("--id 값이 비어 있음".into());
-                }
-                parsed.id = Some(id);
+        let argument = args[index].as_os_str();
+        if argument == OsStr::new("--id") {
+            index += 1;
+            let id = args
+                .get(index)
+                .ok_or_else(|| "--id 값이 필요함".to_string())?
+                .to_str()
+                .ok_or_else(|| "--id 값은 UTF-8이어야 함".to_string())?;
+            if id.is_empty() {
+                return Err("--id 값이 비어 있음".into());
             }
-            "--help" | "-h" => {
-                return Err("usage: disksage-clean-plan [--id CACHE_ID]".into());
-            }
-            unknown => return Err(format!("알 수 없는 인자: {unknown}")),
+            parsed.id = Some(id.to_owned());
+        } else if argument == OsStr::new("--help") || argument == OsStr::new("-h") {
+            return Ok(ParseOutcome::Help);
+        } else {
+            return Err("알 수 없는 인자".into());
         }
         index += 1;
     }
-    Ok(parsed)
+    Ok(ParseOutcome::Run(parsed))
 }
 
 fn now_ms() -> u64 {
@@ -40,12 +49,11 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn run(args: &[String]) -> Result<(), String> {
-    let parsed = parse_args(args)?;
+fn run(args: &Args) -> Result<(), String> {
     let bases = BaseDirs::from_env().ok_or("환경변수에서 기본 경로를 찾지 못함")?;
     let mut candidates = cache_candidates(&bases);
-    if let Some(id) = parsed.id {
-        candidates.retain(|candidate| candidate.id == id);
+    if let Some(id) = &args.id {
+        candidates.retain(|candidate| candidate.id == *id);
     }
     let mut notices = vec![
         "dry-run-only",
@@ -68,16 +76,25 @@ fn run(args: &[String]) -> Result<(), String> {
 }
 
 fn main() {
-    if let Err(error) = run(&std::env::args().skip(1).collect::<Vec<_>>()) {
-        eprintln!("{error}");
-        std::process::exit(2);
+    let raw: Vec<OsString> = std::env::args_os().skip(1).collect();
+    match parse_args(&raw) {
+        Ok(ParseOutcome::Help) => println!("{USAGE}"),
+        Ok(ParseOutcome::Run(args)) => {
+            if let Err(error) = run(&args) {
+                eprintln!("{error}");
+                std::process::exit(2);
+            }
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::OsString;
 
     #[test]
     fn parser_distinguishes_help_from_invalid_input() {
