@@ -52,4 +52,21 @@ mod tests {
             Settings::default()
         );
     }
+    #[test]
+    fn duplicate_online_mode_fails_closed_instead_of_accepting_ambiguous_authority() {
+        assert_eq!(
+            parse_settings(r#"{"online_mode":true,"online_mode":false}"#),
+            Settings::default()
+        );
+    }
+    #[test]
+    fn non_boolean_online_mode_fails_closed_instead_of_coercing_network_authority() {
+        for malformed in [
+            r#"{"online_mode":null}"#,
+            r#"{"online_mode":1}"#,
+            r#"{"online_mode":"true"}"#,
+        ] {
+            assert_eq!(parse_settings(malformed), Settings::default());
+        }
+    }
 }
