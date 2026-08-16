@@ -5,6 +5,7 @@ on:
     paths:
       - scripts/actions-registry-audit.mjs
       - scripts/actions-registry-audit.test.mjs
+      - scripts/actions-registry-audit-state.test.mjs
       - scripts/actions-registry-audit-workflow.test.mjs
       - .github/workflows/actions-registry-audit.yml
   push:
@@ -12,6 +13,7 @@ on:
     paths:
       - scripts/actions-registry-audit.mjs
       - scripts/actions-registry-audit.test.mjs
+      - scripts/actions-registry-audit-state.test.mjs
       - scripts/actions-registry-audit-workflow.test.mjs
       - .github/workflows/actions-registry-audit.yml
   workflow_dispatch:
@@ -42,6 +44,7 @@ jobs:
           --test-coverage-branches=100
           --test-coverage-functions=100
           --test scripts/actions-registry-audit.test.mjs
+          scripts/actions-registry-audit-state.test.mjs
           scripts/actions-registry-audit-workflow.test.mjs
 
   live-registry:
