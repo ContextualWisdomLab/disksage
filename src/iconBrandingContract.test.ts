@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -123,6 +124,33 @@ function pixelAt(image: PngImage, x: number, y: number): number[] {
   return [...image.rgba.subarray(offset, offset + 4)];
 }
 
+function runGenerator(
+  source: string,
+  contract: IconContract,
+): { generatedPath: string; rootPath: string } {
+  const rootPath = mkdtempSync(join(tmpdir(), "disksage-icon-variant-"));
+  const variantSourcePath = resolve(rootPath, "icon-source.svg");
+  const variantContractPath = resolve(rootPath, "icon-contract.json");
+  const generatedPath = resolve(rootPath, "generated");
+
+  writeFileSync(variantSourcePath, source);
+  writeFileSync(variantContractPath, `${JSON.stringify(contract, null, 2)}\n`);
+  execFileSync(
+    process.execPath,
+    [
+      generatorPath,
+      "--source",
+      variantSourcePath,
+      "--contract",
+      variantContractPath,
+      "--output",
+      generatedPath,
+    ],
+    { stdio: "pipe" },
+  );
+  return { generatedPath, rootPath };
+}
+
 beforeAll(() => {
   execFileSync(
     process.execPath,
@@ -156,6 +184,24 @@ describe("DiskSage product icon identity", () => {
     expect(source).toContain("#2F9E74");
     expect(source).toContain("#F2B134");
     expect(source).not.toMatch(/(?:Svelte|Tauri)/i);
+  });
+
+  it("uses the canonical SVG geometry and palette as native raster input", () => {
+    const originalSource = readFileSync(sourcePath, "utf8");
+    const originalContract = readJson<IconContract>(contractPath);
+    const variantSource = originalSource.replace("#F2B134", "#CC00FF");
+    const variantContract = {
+      ...originalContract,
+      source_sha256: sha256(Buffer.from(variantSource)),
+    };
+    const { generatedPath, rootPath } = runGenerator(variantSource, variantContract);
+
+    try {
+      const image = readPng(resolve(generatedPath, "icon.png"));
+      expect(pixelAt(image, 395, 139)).toEqual([204, 0, 255, 255]);
+    } finally {
+      rmSync(rootPath, { force: true, recursive: true });
+    }
   });
 
   it("renders the intended disk, verified-action, and insight colors", () => {
@@ -251,18 +297,19 @@ describe("DiskSage product icon identity", () => {
     );
   });
 
-  it("regenerates icons before desktop commands and bundles the integrity manifest", () => {
+  it("keeps canonical Tauri commands while npm lifecycle hooks generate icon resources", () => {
     const config = readJson<{
       build: { beforeBuildCommand: string; beforeDevCommand: string };
       bundle: { resources: string[] };
     }>(resolve(repositoryRoot, "src-tauri/tauri.conf.json"));
+    const packageJson = readJson<{
+      scripts: { prebuild?: string; predev?: string };
+    }>(resolve(repositoryRoot, "package.json"));
 
-    expect(config.build.beforeDevCommand).toBe(
-      "node scripts/generate-icons.mjs && npm run dev",
-    );
-    expect(config.build.beforeBuildCommand).toBe(
-      "node scripts/generate-icons.mjs && npm run build",
-    );
+    expect(config.build.beforeDevCommand).toBe("npm run dev");
+    expect(config.build.beforeBuildCommand).toBe("npm run build");
+    expect(packageJson.scripts.predev).toBe("node scripts/generate-icons.mjs");
+    expect(packageJson.scripts.prebuild).toBe("node scripts/generate-icons.mjs");
     expect(config.bundle.resources).toContain("icons/icon-manifest.json");
   });
 });
