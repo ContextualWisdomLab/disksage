@@ -1,46 +1,65 @@
 //! Read-only Git worktree audit. No prune/remove operation is exposed.
 
+use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
+
+const USAGE: &str = "usage: disksage-git-worktree-audit [--repo PATH]";
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Args {
     repository: Option<PathBuf>,
 }
 
-fn parse_args(args: &[String]) -> Result<Args, String> {
+#[derive(Debug, PartialEq, Eq)]
+enum ParseOutcome {
+    Run(Args),
+    Help,
+}
+
+fn parse_args(args: &[OsString]) -> Result<ParseOutcome, String> {
     let mut parsed = Args::default();
     let mut index = 0usize;
     while index < args.len() {
-        match args[index].as_str() {
-            "--repo" => {
-                index += 1;
-                parsed.repository = Some(PathBuf::from(
-                    args.get(index)
-                        .ok_or_else(|| "--repo 값이 필요함".to_string())?,
-                ));
-            }
-            "--help" | "-h" => {
-                return Err("usage: disksage-git-worktree-audit [--repo PATH]".into());
-            }
-            unknown => return Err(format!("알 수 없는 인자: {unknown}")),
+        let argument = args[index].as_os_str();
+        if argument == OsStr::new("--repo") {
+            index += 1;
+            parsed.repository = Some(PathBuf::from(
+                args.get(index)
+                    .ok_or_else(|| "--repo 값이 필요함".to_string())?,
+            ));
+        } else if argument == OsStr::new("--help") || argument == OsStr::new("-h") {
+            return Ok(ParseOutcome::Help);
+        } else {
+            return Err("알 수 없는 인자".into());
         }
         index += 1;
     }
-    Ok(parsed)
+    Ok(ParseOutcome::Run(parsed))
 }
 
 fn main() {
-    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let raw: Vec<OsString> = std::env::args_os().skip(1).collect();
     let args = match parse_args(&raw) {
-        Ok(args) => args,
+        Ok(ParseOutcome::Run(args)) => args,
+        Ok(ParseOutcome::Help) => {
+            println!("{USAGE}");
+            return;
+        }
         Err(error) => {
             eprintln!("{error}");
             std::process::exit(2);
         }
     };
-    let repository = args
-        .repository
-        .unwrap_or_else(|| std::env::current_dir().expect("현재 디렉터리를 확인할 수 없습니다"));
+    let repository = match args.repository {
+        Some(repository) => repository,
+        None => match std::env::current_dir() {
+            Ok(repository) => repository,
+            Err(_) => {
+                eprintln!("현재 디렉터리를 확인할 수 없습니다");
+                std::process::exit(2);
+            }
+        },
+    };
     let report =
         match disksage_lib::worktrees::audit(&repository, disksage_lib::worktrees::system_now_ms())
         {
@@ -59,7 +78,6 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::OsString;
 
     #[test]
     fn parser_distinguishes_help_from_invalid_input() {
