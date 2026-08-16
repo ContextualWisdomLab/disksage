@@ -7,6 +7,7 @@
 //! provider capacity evidence; no network or provider mutation is involved.
 
 use disksage_lib::cloud::{CloudAccountScope, CloudProvider, CloudRoot};
+use disksage_lib::cloud_local_eviction::observe_path_active_use;
 use disksage_lib::incomplete_download::{
     collect_incomplete_download_audit, DEFAULT_MAX_ENTRIES, DEFAULT_STALE_AFTER_DAYS,
 };
@@ -27,6 +28,7 @@ use disksage_lib::provider_capacity::{
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tempfile::TempDir;
 
 struct Fixture {
@@ -169,6 +171,21 @@ fn assert_source_preserved_and_output_rolled_back(fixture: &Fixture) {
     assert!(!fixture.output_file().exists());
 }
 
+fn wait_for_inactive_source(path: &Path) {
+    for _ in 0..80 {
+        let evidence = observe_path_active_use(path);
+        if evidence.evidence_complete && !evidence.active {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let evidence = observe_path_active_use(path);
+    panic!(
+        "source active-use evidence did not stabilize: complete={}, active={}, error={:?}",
+        evidence.evidence_complete, evidence.active, evidence.error
+    );
+}
+
 #[test]
 fn receipt_directory_rejects_relative_and_data_overlap_with_output_rollback() {
     let fixture = fixture();
@@ -235,6 +252,7 @@ fn receipt_create_new_collision_rolls_back_recreated_output_and_preserves_first_
     assert!(fixture.output_file().is_file());
 
     std::fs::remove_file(fixture.output_file()).unwrap();
+    wait_for_inactive_source(&fixture.source_file());
     let second_error = fixture.execute(&receipt_dir).unwrap_err();
     assert_eq!(
         second_error,
