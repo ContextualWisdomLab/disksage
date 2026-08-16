@@ -91,7 +91,19 @@ fn write_zip(path: &Path, payload: &[u8]) {
 fn fixture() -> Fixture {
     let source = tempfile::tempdir().unwrap();
     let cloud = tempfile::tempdir().unwrap();
-    let source_file = source.path().join("whole.zip.crdownload");
+    // These integration tests run concurrently. A shared basename such as
+    // `whole.zip.crdownload` lets one fixture's bounded `lsof` command appear to another
+    // fixture's process-command evidence as a false active-use match. Bind the basename to the
+    // already-unique temporary root so each fixture remains independent while exercising the
+    // production active-use boundary unchanged.
+    let source_identity = source
+        .path()
+        .file_name()
+        .expect("temporary source root has a basename")
+        .to_string_lossy();
+    let source_file = source
+        .path()
+        .join(format!("whole-{source_identity}.zip.crdownload"));
     write_zip(
         &source_file,
         b"immutable receipt rollback coverage payload",
