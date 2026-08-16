@@ -55,6 +55,7 @@ jobs:
       - name: macOS bound-root traversal regressions
         run: |
           cargo test --manifest-path src-tauri/Cargo.toml --test bound_read_root_macos_traversal
+          cargo test --manifest-path src-tauri/Cargo.toml --lib bound_read_root::tests::stable_namespace_keeps_original_object_and_detects_path_replacement
           cargo test --manifest-path src-tauri/Cargo.toml rules::tests::catalog_reports_sizes_and_existence
 
   llm-engine-build:
