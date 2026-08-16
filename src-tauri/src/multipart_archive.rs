@@ -5,7 +5,7 @@
 //! contiguous local sequence remains terminal-unverified without an authoritative manifest, so no
 //! result from this module authorizes automatic deletion.
 
-use crate::duplicate_audit::bound_read_root::{BoundEntryKind, BoundReadRoot};
+use crate::bound_read_root::{BoundEntryKind, BoundReadRoot};
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use unicode_normalization::UnicodeNormalization;
