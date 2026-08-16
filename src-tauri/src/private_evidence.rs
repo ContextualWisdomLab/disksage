@@ -157,6 +157,11 @@ where
     let mut file = unsafe { std::fs::File::from_raw_fd(file_fd) };
 
     let publication = (|| -> Result<(), String> {
+        // `openat` applies the process umask to its requested creation mode. Normalize the exact
+        // already-opened record descriptor before writing so restrictive masks cannot create an
+        // unreadable tombstone and permanently block this create-new evidence path.
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .map_err(|_| "private-evidence-mode-invalid".to_string())?;
         file.write_all(&encoded)
             .and_then(|_| file.sync_all())
             .map_err(|_| "private-evidence-write-failed".to_string())?;
