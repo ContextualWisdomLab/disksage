@@ -10,6 +10,7 @@
   let busy = $state(false);
   let loadError = $state("");
   let results: api.CleanResult[] = $state([]);
+  let resultAction: "move" | "undo" | null = $state(null);
   let verdicts: Record<string, api.Verdict> = $state({});
 
   async function loadVerdicts(paths: string[]) {
@@ -28,6 +29,7 @@
     plans = [];
     verdicts = {};
     results = [];
+    resultAction = null;
     try {
       plans = await api.planOrganize(scannedRoot);
       await loadVerdicts(plans.map((p) => p.src));
@@ -59,9 +61,11 @@
     busy = true;
     loadError = "";
     results = [];
+    resultAction = null;
     try {
       const r = await api.executeMoves(plans);
       results = r;
+      resultAction = "move";
       plans = [];
       verdicts = {};
     } catch {
@@ -77,9 +81,11 @@
     busy = true;
     loadError = "";
     results = [];
+    resultAction = null;
     try {
       const r = await api.undoLastMoves();
       results = r;
+      resultAction = "undo";
     } catch {
       loadError = "마지막 이동을 되돌리지 못했습니다. 이동한 파일의 현재 위치와 원래 폴더의 접근 권한을 확인한 뒤 다시 되돌리세요.";
     } finally {
@@ -130,11 +136,19 @@
   {/if}
 
   {#if results.length > 0}
-    <p role="status">{results.filter((r) => r.ok).length}/{results.length}개 완료. 복원이 필요하면 위 ‘마지막 이동 되돌리기’를 사용하세요.</p>
+    {#if resultAction === "undo"}
+      <p role="status">{results.filter((r) => r.ok).length}/{results.length}개 되돌리기를 완료했습니다. 다시 정리하려면 새 미리보기를 만드세요.</p>
+    {:else}
+      <p role="status">{results.filter((r) => r.ok).length}/{results.length}개 완료. 복원이 필요하면 위 ‘마지막 이동 되돌리기’를 사용하세요.</p>
+    {/if}
     {#if results.some((r) => !r.ok)}
       <ul class="errors">
         {#each results.filter((r) => !r.ok) as r (r.path)}
-          <li title={r.path}>⚠ {r.path} — 파일이 사용 중인지와 대상 폴더의 접근 권한을 확인한 뒤 새 미리보기부터 진행하세요.</li>
+          {#if resultAction === "undo"}
+            <li title={r.path}>⚠ {r.path} — 현재 파일 위치와 원래 폴더의 접근 권한을 확인한 뒤 ‘마지막 이동 되돌리기’를 다시 실행하세요.</li>
+          {:else}
+            <li title={r.path}>⚠ {r.path} — 파일이 사용 중인지와 대상 폴더의 접근 권한을 확인한 뒤 새 미리보기부터 진행하세요.</li>
+          {/if}
         {/each}
       </ul>
     {/if}
