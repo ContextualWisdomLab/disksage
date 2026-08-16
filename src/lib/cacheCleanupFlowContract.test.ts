@@ -24,4 +24,12 @@ describe("cache cleanup execution boundary", () => {
     expect(tauri).toContain("cache_cleanup::clean_cache_contents");
     expect(tauri).toContain("cache_cleanup::list_cache_targets");
   });
+
+  it("surfaces an actionable status when a cache candidate has no direct cleanup targets", () => {
+    const cleanup = readSource("src/lib/Cleanup.svelte");
+
+    expect(cleanup).toMatch(
+      /if \(targets\.length === 0\) \{[\s\S]*loadError = `\$\{candidate\.label\}에 정리할 직계 항목이 없습니다\.`;[\s\S]*return;/,
+    );
+  });
 });
