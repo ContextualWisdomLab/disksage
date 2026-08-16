@@ -57,8 +57,11 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
         ("os-temp", "OS 임시 폴더", bases.temp.clone()),
         ("npm-cache", "npm 캐시", npm),
         ("pip-cache", "pip 캐시", pip),
-        ("cargo-registry-cache", "cargo 레지스트리 캐시",
-            bases.home.join(".cargo").join("registry").join("cache")),
+        (
+            "cargo-registry-cache",
+            "cargo 레지스트리 캐시",
+            bases.home.join(".cargo").join("registry").join("cache"),
+        ),
     ];
 
     // Windows 진단 캐시 — 조용히 수십 GB로 자라는 것들. RDP 자동 추적(RdClientAutoTrace)의 .etl 로그가
@@ -66,12 +69,21 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
     // 사용자가 크기를 보고 그것만 콕 집어 정리하게 한다. WER/CrashDumps도 동류의 진단 산출물.
     #[cfg(windows)]
     entries.extend([
-        ("rdp-autotrace", "원격 데스크톱 추적 로그",
-            bases.temp.join("DiagOutputDir").join("RdClientAutoTrace")),
-        ("windows-crashdumps", "앱 크래시 덤프",
-            bases.local_data.join("CrashDumps")),
-        ("windows-wer", "Windows 오류 보고 (WER)",
-            bases.local_data.join("Microsoft").join("Windows").join("WER")),
+        (
+            "rdp-autotrace",
+            "원격 데스크톱 추적 로그",
+            bases.temp.join("DiagOutputDir").join("RdClientAutoTrace"),
+        ),
+        (
+            "windows-crashdumps",
+            "앱 크래시 덤프",
+            bases.local_data.join("CrashDumps"),
+        ),
+        (
+            "windows-wer",
+            "Windows 오류 보고 (WER)",
+            bases.local_data.join("Microsoft").join("Windows").join("WER"),
+        ),
     ]);
 
     entries
@@ -148,11 +160,28 @@ fn handle_namespace_path(handle: &Handle, _display_path: &Path) -> Option<PathBu
 
 #[cfg(target_os = "macos")]
 fn handle_namespace_path(handle: &Handle, _display_path: &Path) -> Option<PathBuf> {
+    use std::ffi::{CStr, OsString};
     use std::os::fd::AsRawFd;
-    Some(PathBuf::from(format!(
-        "/dev/fd/{}",
-        handle.as_file().as_raw_fd()
-    )))
+    use std::os::unix::ffi::OsStringExt;
+
+    let mut buffer = vec![0 as libc::c_char; libc::PATH_MAX as usize];
+    let result = unsafe {
+        // SAFETY: `buffer` is writable for PATH_MAX bytes and `handle` keeps the descriptor alive.
+        // F_GETPATH writes a NUL-terminated path on success and does not retain the pointer.
+        libc::fcntl(
+            handle.as_file().as_raw_fd(),
+            libc::F_GETPATH,
+            buffer.as_mut_ptr(),
+        )
+    };
+    if result == -1 {
+        return None;
+    }
+    let path = unsafe {
+        // SAFETY: successful F_GETPATH guarantees a NUL-terminated string in the supplied buffer.
+        CStr::from_ptr(buffer.as_ptr())
+    };
+    Some(PathBuf::from(OsString::from_vec(path.to_bytes().to_vec())))
 }
 
 #[cfg(windows)]
@@ -166,9 +195,10 @@ fn handle_namespace_path(_handle: &Handle, _display_path: &Path) -> Option<PathB
 }
 
 /// 카탈로그 루트의 경로명과 열린 디렉터리 핸들을 한 번의 권한 경계로 묶는다.
-/// Unix에서는 이후 I/O를 열린 fd namespace 경로로 수행하므로 원래 경로가 rename/symlink로
-/// 교체돼도 다른 디렉터리로 리다이렉트되지 않는다. Windows에서는 DELETE 공유를 제외한
-/// 디렉터리 핸들을 유지해 같은 기간 루트 rename/delete 교체를 차단한다.
+/// Linux에서는 이후 I/O를 열린 fd namespace 경로로 수행한다. macOS는 `/dev/fd/N`을
+/// 디렉터리 루트로 탐색할 수 없으므로 열린 핸들의 현재 경로를 F_GETPATH로 복구한 뒤 파일 ID를
+/// 재검증한다. Windows에서는 DELETE 공유를 제외한 디렉터리 핸들을 유지해 같은 기간 루트
+/// rename/delete 교체를 차단한다.
 struct CatalogRoot {
     handle: Handle,
     display_path: PathBuf,
@@ -209,13 +239,19 @@ impl CatalogRoot {
     }
 
     fn directory_size(&self) -> u64 {
-        let Some(stable) = self.stable_path() else { return 0 };
-        let Ok(entries) = std::fs::read_dir(stable) else { return 0 };
+        let Some(stable) = self.stable_path() else {
+            return 0;
+        };
+        let Ok(entries) = std::fs::read_dir(stable) else {
+            return 0;
+        };
         let mut bytes = 0u64;
 
         for entry in entries.filter_map(Result::ok) {
             let path = entry.path();
-            let Ok(metadata) = std::fs::symlink_metadata(&path) else { continue };
+            let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
             if metadata.file_type().is_symlink() {
                 continue;
             }
@@ -241,8 +277,12 @@ impl CatalogRoot {
     }
 
     fn child_paths(&self) -> Vec<PathBuf> {
-        let Some(stable) = self.stable_path() else { return Vec::new() };
-        let Ok(entries) = std::fs::read_dir(stable) else { return Vec::new() };
+        let Some(stable) = self.stable_path() else {
+            return Vec::new();
+        };
+        let Ok(entries) = std::fs::read_dir(stable) else {
+            return Vec::new();
+        };
 
         entries
             .filter_map(Result::ok)
@@ -323,7 +363,11 @@ mod tests {
         let bases = fake_bases(tmp.path());
         // npm 캐시만 실제로 만들어 둔다 (한 줄: 각 arm이 별도 라인이면 플랫폼별로 반대쪽이
         // 영구 미커버로 남는다 — is_protected의 home 변수명 선택과 동일한 관례)
-        let npm = if cfg!(windows) { bases.local_data.join("npm-cache") } else { bases.home.join(".npm") };
+        let npm = if cfg!(windows) {
+            bases.local_data.join("npm-cache")
+        } else {
+            bases.home.join(".npm")
+        };
         fs::create_dir_all(&npm).unwrap();
         fs::write(npm.join("blob.bin"), vec![0u8; 128]).unwrap();
 
