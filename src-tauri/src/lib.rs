@@ -72,6 +72,8 @@ pub mod incomplete_download;
 pub mod incomplete_download_materialization;
 pub mod incomplete_download_materialization_destination;
 pub mod incomplete_download_materialization_execution;
+#[cfg(test)]
+mod incomplete_download_execution_integrity_coverage_tests;
 pub mod incomplete_download_recovery;
 pub mod git_worktree;
 pub mod maven_cache;
