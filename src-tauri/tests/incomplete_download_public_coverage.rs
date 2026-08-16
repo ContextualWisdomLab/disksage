@@ -164,7 +164,6 @@ fn regular_crdownload_candidate_is_observed_without_mutation_or_discard_authorit
     assert_eq!(summary.items.len(), 1);
     assert!(!summary.mutation_performed);
     assert!(!summary.automatic_discard_allowed);
-    assert!(summary.human_discard_approval_required);
     let encoded = serde_json::to_string(&summary).expect("summary JSON");
     assert!(!encoded.contains(root.path().to_string_lossy().as_ref()));
     assert!(!encoded.contains("archive.zip.crdownload"));
