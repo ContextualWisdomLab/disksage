@@ -1,13 +1,16 @@
-//! Integrity-guard coverage for exact-duplicate evidence.
+//! Integrity-guard and collector-boundary coverage for exact-duplicate evidence.
 //!
 //! These regressions start from a real, valid duplicate audit and then tamper one contract field at
 //! a time. The validator must fail closed for every authority-bearing total, cluster invariant, and
 //! member-evidence invariant rather than accepting a report whose outer JSON shape still parses.
+//! Collector tests exercise real filesystem boundaries while remaining read-only with respect to
+//! the audited source tree.
 
 use crate::duplicate_audit::{
     collect_exact_duplicate_audit, exact_duplicate_audit_integrity_valid, ExactDuplicateAuditReport,
     MAX_ENTRIES,
 };
+use std::path::Path;
 
 fn valid_report() -> ExactDuplicateAuditReport {
     let root = tempfile::tempdir().expect("temporary duplicate-audit root");
@@ -19,6 +22,65 @@ fn valid_report() -> ExactDuplicateAuditReport {
     assert_eq!(report.clusters[0].members.len(), 2);
     assert!(exact_duplicate_audit_integrity_valid(&report));
     report
+}
+
+#[test]
+fn collector_rejects_invalid_root_and_bounds_before_evidence() {
+    let root = tempfile::tempdir().expect("temporary duplicate-audit root");
+    let file_root = root.path().join("file-root.bin");
+    std::fs::write(&file_root, b"not a directory").expect("write file root fixture");
+    let missing_root = root.path().join("missing-root");
+
+    assert_eq!(
+        collect_exact_duplicate_audit(Path::new("relative-root"), 50_010, 1, 100).unwrap_err(),
+        "duplicate-audit-root-must-be-absolute"
+    );
+    assert_eq!(
+        collect_exact_duplicate_audit(root.path(), 50_011, 0, 100).unwrap_err(),
+        "duplicate-audit-min-bytes-out-of-range"
+    );
+    assert_eq!(
+        collect_exact_duplicate_audit(root.path(), 50_012, 1, 0).unwrap_err(),
+        "duplicate-audit-max-entries-out-of-range"
+    );
+    assert_eq!(
+        collect_exact_duplicate_audit(root.path(), 50_013, 1, MAX_ENTRIES + 1).unwrap_err(),
+        "duplicate-audit-max-entries-out-of-range"
+    );
+    assert_eq!(
+        collect_exact_duplicate_audit(&missing_root, 50_014, 1, 100).unwrap_err(),
+        "duplicate-audit-root-unavailable"
+    );
+    assert_eq!(
+        collect_exact_duplicate_audit(&file_root, 50_015, 1, 100).unwrap_err(),
+        "duplicate-audit-root-unsafe"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn collector_skips_socket_entries_without_following_or_hashing_them() {
+    use std::os::unix::net::UnixListener;
+
+    let root = tempfile::tempdir().expect("temporary duplicate-audit root");
+    std::fs::write(root.path().join("a.bin"), b"same exact bytes").expect("write first duplicate");
+    std::fs::write(root.path().join("b.bin"), b"same exact bytes").expect("write second duplicate");
+    let socket_path = root.path().join("runtime.sock");
+    let _listener = UnixListener::bind(&socket_path).expect("bind local socket fixture");
+
+    let report = collect_exact_duplicate_audit(root.path(), 50_016, 1, 100)
+        .expect("socket entry must not make a read-only audit fail");
+
+    assert!(report.evidence_complete);
+    assert_eq!(report.file_count, 2);
+    assert_eq!(report.cluster_count, 1);
+    assert_eq!(report.clusters[0].members.len(), 2);
+    assert!(report
+        .clusters
+        .iter()
+        .flat_map(|cluster| &cluster.members)
+        .all(|member| member.relative_path != "runtime.sock"));
+    assert!(exact_duplicate_audit_integrity_valid(&report));
 }
 
 #[test]
