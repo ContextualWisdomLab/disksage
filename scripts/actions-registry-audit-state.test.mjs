@@ -31,6 +31,30 @@ test('malformed or unknown workflow state fails closed instead of being called d
   }
 });
 
+test('malformed workflow identity fails closed instead of becoming dynamic or nullable evidence', () => {
+  for (const record of [
+    { state: 'active', path: '.github/workflows/unknown.yml' },
+    { id: 0, state: 'active', path: '.github/workflows/unknown.yml' },
+    { id: -1, state: 'active', path: '.github/workflows/unknown.yml' },
+    { id: 1.5, state: 'active', path: '.github/workflows/unknown.yml' },
+    { id: '9', state: 'active', path: '.github/workflows/unknown.yml' },
+    { id: 9, state: 'active', path: null },
+    { id: 9, state: 'active', path: '' },
+    { id: 9, state: 'active', path: 42 },
+  ]) {
+    assert.throws(
+      () => classify(record),
+      /actions-workflow-record-invalid/,
+      `malformed workflow identity must fail closed: ${JSON.stringify(record)}`,
+    );
+  }
+
+  assert.deepEqual(
+    classify({ id: 10, state: 'active', path: 'dynamic/dependabot' }),
+    { classification: 'github-dynamic', path: 'dynamic/dependabot', workflow_id: 10 },
+  );
+});
+
 test('documented inactive workflow states remain non-actionable disabled records', () => {
   for (const state of [
     'deleted',
