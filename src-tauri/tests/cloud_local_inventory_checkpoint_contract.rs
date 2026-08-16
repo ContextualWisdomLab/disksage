@@ -64,7 +64,7 @@ fn rejects_every_checkpoint_identity_and_state_mismatch() {
     assert_invalid(&root, options, wrong_provider);
 
     let mut wrong_scope = checkpoint(&root, options);
-    wrong_scope.account_scope = CloudAccountScope::Business;
+    wrong_scope.account_scope = CloudAccountScope::Organization;
     assert_invalid(&root, options, wrong_scope);
 
     let mut wrong_path = checkpoint(&root, options);
