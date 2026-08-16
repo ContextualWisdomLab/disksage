@@ -124,9 +124,16 @@ impl BoundReadRoot {
 
     /// Return a durable canonical display path only while the caller path still names this object.
     pub(crate) fn canonical_path(&self) -> Option<PathBuf> {
+        if !path_is_real_directory(&self.display_path) {
+            return None;
+        }
         let canonical = std::fs::canonicalize(&self.display_path).ok()?;
-        let current = open_directory_handle(&canonical)?;
-        (self.handle == current).then_some(canonical)
+        let current = open_directory_handle(&self.display_path)?;
+        if self.handle != current {
+            return None;
+        }
+        let canonical_handle = open_directory_handle(&canonical)?;
+        (self.handle == canonical_handle).then_some(canonical)
     }
 
     /// Return a path whose I/O is bound to the opened directory identity.
