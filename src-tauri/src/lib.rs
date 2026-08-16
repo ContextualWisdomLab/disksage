@@ -7,6 +7,8 @@ mod dupes;
 #[cfg_attr(coverage, allow(dead_code))]
 mod commands;
 #[cfg_attr(coverage, allow(dead_code))]
+mod node_navigation;
+#[cfg_attr(coverage, allow(dead_code))]
 mod cache_cleanup;
 #[cfg_attr(coverage, allow(dead_code))]
 mod scanner;
@@ -96,7 +98,7 @@ pub fn run() {
             commands::list_roots,
             commands::start_scan,
             commands::cancel_scan,
-            commands::get_node,
+            node_navigation::get_node,
             commands::top_files,
             commands::list_cache_candidates,
             cache_cleanup::list_cache_targets,
