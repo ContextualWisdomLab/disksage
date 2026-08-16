@@ -9,41 +9,159 @@ import { deflateSync } from "node:zlib";
 const MODULE_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const REPOSITORY_ROOT = resolve(MODULE_DIRECTORY, "..");
 
-const DESIGN_SIZE = 1024;
 const MASTER_SIZE = 2048;
 const SAMPLE_SCALE = 4;
+const TRANSPARENT = Object.freeze([0, 0, 0, 0]);
 
-const COLORS = Object.freeze({
-  transparent: [0, 0, 0, 0],
-  navy: [0x12, 0x31, 0x4a, 0xff],
-  platter: [0xf4, 0xf7, 0xf9, 0xff],
-  ring: [0xdc, 0xe8, 0xee, 0xff],
-  green: [0x2f, 0x9e, 0x74, 0xff],
-  gold: [0xf2, 0xb1, 0x34, 0xff],
-});
-
-const STAR_POINTS = Object.freeze([
-  [790, 182],
-  [818, 250],
-  [886, 278],
-  [818, 306],
-  [790, 374],
-  [762, 306],
-  [694, 278],
-  [762, 250],
-]);
-
-/** Return a SHA-256 digest for a generated asset. */
+/** Return a SHA-256 digest for a source or generated asset. */
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-/** Return whether a normalized point falls inside the rounded product tile. */
-function insideRoundedTile(x, y) {
-  if (x < 64 || x > 960 || y < 64 || y > 960) return false;
-  const dx = Math.max(288 - x, 0, x - 736);
-  const dy = Math.max(288 - y, 0, y - 736);
-  return dx * dx + dy * dy <= 224 * 224;
+/** Parse one element's double-quoted SVG attributes into a plain object. */
+function parseAttributes(fragment) {
+  const attributes = {};
+  for (const match of fragment.matchAll(/([A-Za-z_:][\w:.-]*)="([^"]*)"/g)) {
+    attributes[match[1]] = match[2];
+  }
+  return attributes;
+}
+
+/** Parse one required finite numeric SVG attribute. */
+function numericAttribute(attributes, name, elementName) {
+  const value = Number(attributes[name]);
+  if (!Number.isFinite(value)) {
+    throw new Error(`${elementName} requires finite numeric attribute ${name}`);
+  }
+  return value;
+}
+
+/** Parse a #RRGGBB SVG color into opaque RGBA bytes. */
+function parseColor(value, elementName) {
+  const match = /^#([0-9a-fA-F]{6})$/.exec(value ?? "");
+  if (!match) {
+    throw new Error(`${elementName} requires an explicit #RRGGBB color`);
+  }
+  const numeric = Number.parseInt(match[1], 16);
+  return [
+    (numeric >>> 16) & 0xff,
+    (numeric >>> 8) & 0xff,
+    numeric & 0xff,
+    0xff,
+  ];
+}
+
+/** Parse coordinate pairs from the deliberately tiny path subset used by the product mark. */
+function parsePathPoints(pathData, elementName) {
+  const values = pathData.match(/-?(?:\d+(?:\.\d*)?|\.\d+)/g)?.map(Number) ?? [];
+  if (values.length < 4 || values.length % 2 !== 0 || values.some((value) => !Number.isFinite(value))) {
+    throw new Error(`${elementName} requires at least two finite coordinate pairs`);
+  }
+  const points = [];
+  for (let index = 0; index < values.length; index += 2) {
+    points.push([values[index], values[index + 1]]);
+  }
+  return points;
+}
+
+/**
+ * Parse the canonical icon SVG into the restricted geometry that the deterministic
+ * rasterizer supports. Unsupported or ambiguous shapes fail closed.
+ */
+function parseIconSource(sourceBytes) {
+  const source = Buffer.from(sourceBytes).toString("utf8");
+  const svgMatch = /<svg\b([^>]*)>/i.exec(source);
+  if (!svgMatch) throw new Error("icon source requires an <svg> root");
+  const svgAttributes = parseAttributes(svgMatch[1]);
+  const viewBox = (svgAttributes.viewBox ?? "").trim().split(/\s+/).map(Number);
+  if (
+    viewBox.length !== 4
+    || viewBox.some((value) => !Number.isFinite(value))
+    || viewBox[0] !== 0
+    || viewBox[1] !== 0
+    || viewBox[2] <= 0
+    || viewBox[2] !== viewBox[3]
+  ) {
+    throw new Error("icon source requires a positive square viewBox starting at 0 0");
+  }
+
+  const shapes = [];
+  const shapePattern = /<(rect|circle|path)\b([^>]*)\/?>/gi;
+  for (const match of source.matchAll(shapePattern)) {
+    const type = match[1].toLowerCase();
+    const attributes = parseAttributes(match[2]);
+    if (type === "rect") {
+      const rx = attributes.rx === undefined ? 0 : numericAttribute(attributes, "rx", "rect");
+      const ry = attributes.ry === undefined ? rx : numericAttribute(attributes, "ry", "rect");
+      if (rx !== ry || rx < 0) {
+        throw new Error("icon rect requires a non-negative equal rx/ry radius");
+      }
+      shapes.push({
+        type: "rounded_rect",
+        x: numericAttribute(attributes, "x", "rect"),
+        y: numericAttribute(attributes, "y", "rect"),
+        width: numericAttribute(attributes, "width", "rect"),
+        height: numericAttribute(attributes, "height", "rect"),
+        radius: rx,
+        color: parseColor(attributes.fill, "rect"),
+      });
+    } else if (type === "circle") {
+      shapes.push({
+        type: "circle",
+        cx: numericAttribute(attributes, "cx", "circle"),
+        cy: numericAttribute(attributes, "cy", "circle"),
+        radius: numericAttribute(attributes, "r", "circle"),
+        color: parseColor(attributes.fill, "circle"),
+      });
+    } else {
+      const points = parsePathPoints(attributes.d ?? "", "path");
+      const fill = attributes.fill ?? "";
+      const stroke = attributes.stroke ?? "";
+      if (fill !== "" && fill.toLowerCase() !== "none") {
+        if (!/[zZ]\s*$/.test(attributes.d ?? "")) {
+          throw new Error("filled icon paths must be explicitly closed");
+        }
+        shapes.push({
+          type: "polygon",
+          points,
+          color: parseColor(fill, "filled path"),
+        });
+      } else if (stroke !== "") {
+        const strokeWidth = numericAttribute(attributes, "stroke-width", "stroked path");
+        if (
+          strokeWidth <= 0
+          || (attributes["stroke-linecap"] ?? "round") !== "round"
+          || (attributes["stroke-linejoin"] ?? "round") !== "round"
+        ) {
+          throw new Error("stroked icon paths require positive width with round caps and joins");
+        }
+        shapes.push({
+          type: "polyline",
+          points,
+          radius: strokeWidth / 2,
+          color: parseColor(stroke, "stroked path"),
+        });
+      } else {
+        throw new Error("icon path requires either a fill or a stroke");
+      }
+    }
+  }
+
+  if (shapes.length === 0) throw new Error("icon source contains no supported geometry");
+  return { designSize: viewBox[2], shapes };
+}
+
+/** Return whether a point falls inside one rounded rectangle. */
+function insideRoundedRectangle(px, py, shape) {
+  const right = shape.x + shape.width;
+  const bottom = shape.y + shape.height;
+  if (px < shape.x || px > right || py < shape.y || py > bottom) return false;
+  if (shape.radius === 0) return true;
+  const centerX = Math.max(shape.x + shape.radius, Math.min(px, right - shape.radius));
+  const centerY = Math.max(shape.y + shape.radius, Math.min(py, bottom - shape.radius));
+  const dx = px - centerX;
+  const dy = py - centerY;
+  return dx * dx + dy * dy <= shape.radius * shape.radius;
 }
 
 /** Return squared distance from a point to a finite line segment. */
@@ -59,7 +177,7 @@ function squaredDistanceToSegment(px, py, ax, ay, bx, by) {
   return dx * dx + dy * dy;
 }
 
-/** Return whether a point falls inside the eight-point insight sparkle. */
+/** Return whether a point falls inside one polygon. */
 function insidePolygon(x, y, points) {
   let inside = false;
   for (let current = 0, previous = points.length - 1; current < points.length; previous = current++) {
@@ -72,42 +190,47 @@ function insidePolygon(x, y, points) {
   return inside;
 }
 
-/** Resolve the topmost opaque brand color at one normalized design-space point. */
-function colorAt(x, y) {
-  let color = COLORS.transparent;
-
-  if (insideRoundedTile(x, y)) color = COLORS.navy;
-
-  const centerX = x - 512;
-  const centerY = y - 512;
-  const radiusSquared = centerX * centerX + centerY * centerY;
-  if (radiusSquared <= 300 * 300) color = COLORS.platter;
-  if (radiusSquared <= 166 * 166) color = COLORS.ring;
-  if (radiusSquared <= 68 * 68) color = COLORS.navy;
-
-  const checkRadiusSquared = 39 * 39;
-  if (
-    squaredDistanceToSegment(x, y, 320, 525, 458, 663) <= checkRadiusSquared
-    || squaredDistanceToSegment(x, y, 458, 663, 720, 388) <= checkRadiusSquared
-  ) {
-    color = COLORS.green;
+/** Return whether a point falls inside the opaque coverage of one parsed shape. */
+function shapeContains(shape, x, y) {
+  if (shape.type === "rounded_rect") return insideRoundedRectangle(x, y, shape);
+  if (shape.type === "circle") {
+    const dx = x - shape.cx;
+    const dy = y - shape.cy;
+    return dx * dx + dy * dy <= shape.radius * shape.radius;
   }
+  if (shape.type === "polygon") return insidePolygon(x, y, shape.points);
+  if (shape.type === "polyline") {
+    const radiusSquared = shape.radius * shape.radius;
+    for (let index = 1; index < shape.points.length; index += 1) {
+      const [ax, ay] = shape.points[index - 1];
+      const [bx, by] = shape.points[index];
+      if (squaredDistanceToSegment(x, y, ax, ay, bx, by) <= radiusSquared) return true;
+    }
+    return false;
+  }
+  throw new Error(`unsupported parsed icon shape: ${shape.type}`);
+}
 
-  if (insidePolygon(x, y, STAR_POINTS)) color = COLORS.gold;
+/** Resolve the topmost opaque brand color at one design-space point. */
+function colorAt(sourceDefinition, x, y) {
+  let color = TRANSPARENT;
+  for (const shape of sourceDefinition.shapes) {
+    if (shapeContains(shape, x, y)) color = shape.color;
+  }
   return color;
 }
 
-/** Rasterize the brand directly at a sample-grid resolution. */
-function rasterizeSamples(size) {
+/** Rasterize the parsed canonical SVG directly at a sample-grid resolution. */
+function rasterizeSamples(size, sourceDefinition) {
   const pixels = new Uint8Array(size * size * 4);
-  const designPerPixel = DESIGN_SIZE / size;
+  const designPerPixel = sourceDefinition.designSize / size;
   let offset = 0;
 
   for (let y = 0; y < size; y += 1) {
     const normalizedY = (y + 0.5) * designPerPixel;
     for (let x = 0; x < size; x += 1) {
       const normalizedX = (x + 0.5) * designPerPixel;
-      const [red, green, blue, alpha] = colorAt(normalizedX, normalizedY);
+      const [red, green, blue, alpha] = colorAt(sourceDefinition, normalizedX, normalizedY);
       pixels[offset] = red;
       pixels[offset + 1] = green;
       pixels[offset + 2] = blue;
@@ -163,9 +286,9 @@ function downsample(source, sourceSize, targetSize) {
 }
 
 /** Generate one antialiased RGBA icon, reusing a high-resolution master where possible. */
-function renderIcon(size, master) {
+function renderIcon(size, master, sourceDefinition) {
   if (MASTER_SIZE % size === 0) return downsample(master, MASTER_SIZE, size);
-  const samples = rasterizeSamples(size * SAMPLE_SCALE);
+  const samples = rasterizeSamples(size * SAMPLE_SCALE, sourceDefinition);
   return downsample(samples, size * SAMPLE_SCALE, size);
 }
 
@@ -272,7 +395,7 @@ function encodeIcns(pngBySize, chunksContract) {
   return Buffer.concat([header, ...chunks]);
 }
 
-/** Generate every tracked desktop/store icon and an integrity manifest. */
+/** Generate every contracted desktop/store icon and an integrity manifest from the canonical SVG. */
 export function generateIconSet({ sourcePath, contractPath, outputDirectory }) {
   const source = readFileSync(sourcePath);
   const sourceDigest = sha256(source);
@@ -282,7 +405,9 @@ export function generateIconSet({ sourcePath, contractPath, outputDirectory }) {
       `icon source digest ${sourceDigest} does not match contract ${contract.source_sha256}`,
     );
   }
-  const master = rasterizeSamples(MASTER_SIZE);
+
+  const sourceDefinition = parseIconSource(source);
+  const master = rasterizeSamples(MASTER_SIZE, sourceDefinition);
   const requiredSizes = new Set([
     ...contract.png_assets.map(({ width }) => width),
     ...contract.ico.sizes,
@@ -291,7 +416,7 @@ export function generateIconSet({ sourcePath, contractPath, outputDirectory }) {
   const pngBySize = new Map();
 
   for (const size of [...requiredSizes].sort((left, right) => left - right)) {
-    const rgba = renderIcon(size, master);
+    const rgba = renderIcon(size, master, sourceDefinition);
     pngBySize.set(size, encodePng(size, size, rgba));
   }
 
