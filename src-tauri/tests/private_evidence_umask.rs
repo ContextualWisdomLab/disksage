@@ -28,22 +28,26 @@ fn restrictive_umask_still_publishes_mode_0600() {
         return;
     }
 
-    // Isolate the process-global umask in this child test process so concurrently executing tests
-    // cannot observe the temporary mask. Removing owner-write makes a raw openat(..., 0o600)
-    // create mode 0400 and reproduces the production failure boundary.
-    unsafe {
-        libc::umask(0o200);
-    }
-
+    // Build writable fixtures before changing the process-global umask. Applying 0o200 while
+    // tempfile creates its private directories can remove owner-write permission from the parent
+    // itself, which tests directory writability rather than the record-creation boundary.
     let source = tempfile::tempdir().expect("source tempdir");
     let private = tempfile::tempdir().expect("private tempdir");
     let path = private.path().join("audit.json");
-    let receipt = write_private_json_create_new(
+
+    // Isolate the process-global umask in this child test process so concurrently executing tests
+    // cannot observe the temporary mask. Removing owner-write makes a raw openat(..., 0o600)
+    // create mode 0400 and reproduces the production file-mode boundary.
+    let previous_umask = unsafe { libc::umask(0o200) };
+    let publication = write_private_json_create_new(
         source.path(),
         &path,
         &serde_json::json!({"private": true}),
-    )
-    .expect("publication must normalize the opened file to mode 0600");
+    );
+    unsafe {
+        libc::umask(previous_umask);
+    }
+    let receipt = publication.expect("publication must normalize the opened file to mode 0600");
 
     assert!(receipt.written);
     assert_eq!(receipt.unix_mode, "0600");
