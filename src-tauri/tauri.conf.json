@@ -5,9 +5,9 @@
   "identifier": "com.contextualwisdomlab.disksage",
   "mainBinaryName": "disksage",
   "build": {
-    "beforeDevCommand": "node scripts/generate-icons.mjs && npm run dev",
+    "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "node scripts/generate-icons.mjs && npm run build",
+    "beforeBuildCommand": "npm run build",
     "frontendDist": "../build"
   },
   "app": {
