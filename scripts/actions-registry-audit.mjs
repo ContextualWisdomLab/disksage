@@ -113,7 +113,7 @@ export async function listAllOpenPullRequests(fetchJson, repository) {
 }
 
 function workflowPathsFromTree(tree, incompleteError = 'workflow-tree-incomplete') {
-  if (!tree || tree.truncated === true || !Array.isArray(tree.tree)) {
+  if (!tree || tree.truncated !== false || !Array.isArray(tree.tree)) {
     throw new Error(incompleteError);
   }
   return tree.tree
