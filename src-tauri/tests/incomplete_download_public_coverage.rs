@@ -113,3 +113,59 @@ fn descendant_symlink_is_counted_but_never_followed() {
     assert_eq!(report.logical_bytes, 0);
     assert!(!report.mutation_performed);
 }
+
+#[test]
+fn regular_crdownload_candidate_is_observed_without_mutation_or_discard_authority() {
+    const DAY_MS: u64 = 86_400_000;
+
+    let root = tempfile::tempdir().expect("temporary candidate audit root");
+    let partial = root.path().join("archive.zip.crdownload");
+    // A real local partial-download fixture. The audit may derive type/recovery evidence from these
+    // bytes, but this contract only requires the stable read-only candidate boundary.
+    std::fs::write(
+        &partial,
+        [0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00, b'D', b'S'],
+    )
+    .expect("write partial-download fixture");
+    let modified_ms = std::fs::metadata(&partial)
+        .expect("partial metadata")
+        .modified()
+        .expect("partial modified time")
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("modified time after epoch")
+        .as_millis() as u64;
+    let observed_at_ms = modified_ms.saturating_add(40 * DAY_MS);
+
+    let report = collect_incomplete_download_audit(
+        root.path(),
+        observed_at_ms,
+        100,
+        DEFAULT_STALE_AFTER_DAYS,
+    )
+    .expect("read-only candidate audit");
+
+    assert_eq!(report.entries_seen, 1);
+    assert_eq!(report.file_count, 1);
+    assert_eq!(report.items.len(), 1);
+    assert!(!report.mutation_performed);
+    let item = &report.items[0];
+    assert_eq!(item.relative_path, "archive.zip.crdownload");
+    assert_eq!(item.logical_bytes, 10);
+    assert!(item.modified_age_days >= DEFAULT_STALE_AFTER_DAYS);
+    assert_eq!(item.candidate_fingerprint.len(), 64);
+    assert!(item.partial_content_recovery_possible);
+    assert!(item.requires_human_review);
+    assert!(!item.automatic_discard_allowed);
+    assert!(!item.final_sibling_exists);
+    assert!(item.final_sibling_relative_path.is_none());
+
+    let summary = summarize_incomplete_download_audit(&report);
+    assert_eq!(summary.file_count, 1);
+    assert_eq!(summary.items.len(), 1);
+    assert!(!summary.mutation_performed);
+    assert!(!summary.automatic_discard_allowed);
+    assert!(summary.human_discard_approval_required);
+    let encoded = serde_json::to_string(&summary).expect("summary JSON");
+    assert!(!encoded.contains(root.path().to_string_lossy().as_ref()));
+    assert!(!encoded.contains("archive.zip.crdownload"));
+}
