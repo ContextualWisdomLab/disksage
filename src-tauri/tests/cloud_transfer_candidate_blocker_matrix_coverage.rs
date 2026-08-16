@@ -7,7 +7,9 @@ use disksage_lib::cloud::{
     candidate_review_fingerprint, ArchiveKind, CloudAccountScope, CloudCandidate, CloudProvider,
     CloudRoot,
 };
-use disksage_lib::cloud_transfer::candidate_blockers_with_review;
+use disksage_lib::cloud_transfer::{
+    candidate_blockers_with_review, existing_copy_candidate_blockers_with_review,
+};
 
 #[cfg(windows)]
 const CLOUD_ROOT_PATH: &str = r"C:\cloud";
@@ -183,5 +185,61 @@ fn candidate_blockers_report_path_authority_failures() {
         &destination_outside_cloud,
         &cloud_root,
         "destination-outside-cloud-root",
+    );
+}
+
+#[test]
+fn existing_copy_admission_allows_only_the_exact_destination_exists_planner_state() {
+    let cloud_root = root();
+
+    let mut existing_destination = candidate();
+    existing_destination.blocked_reason = Some("destination-exists".into());
+    existing_destination.review_fingerprint = candidate_review_fingerprint(&existing_destination);
+    let blockers = existing_copy_candidate_blockers_with_review(
+        &existing_destination,
+        &cloud_root,
+        None,
+    );
+    assert!(
+        !blockers.iter().any(|blocker| blocker == "planner-blocked"),
+        "adoption may clear only the exact destination-exists planner blocker: {blockers:?}"
+    );
+    assert!(
+        !blockers
+            .iter()
+            .any(|blocker| blocker == "existing-destination-plan-required"),
+        "the existing destination plan must be accepted for adoption: {blockers:?}"
+    );
+
+    let ordinary_candidate = candidate();
+    let blockers = existing_copy_candidate_blockers_with_review(
+        &ordinary_candidate,
+        &cloud_root,
+        None,
+    );
+    assert!(
+        blockers
+            .iter()
+            .any(|blocker| blocker == "existing-destination-plan-required"),
+        "adoption must reject a candidate that was not planned for an existing destination: {blockers:?}"
+    );
+
+    let mut other_planner_failure = candidate();
+    other_planner_failure.blocked_reason = Some("source-read-failed".into());
+    other_planner_failure.review_fingerprint = candidate_review_fingerprint(&other_planner_failure);
+    let blockers = existing_copy_candidate_blockers_with_review(
+        &other_planner_failure,
+        &cloud_root,
+        None,
+    );
+    assert!(
+        blockers.iter().any(|blocker| blocker == "planner-blocked"),
+        "adoption must preserve unrelated planner blockers: {blockers:?}"
+    );
+    assert!(
+        blockers
+            .iter()
+            .any(|blocker| blocker == "existing-destination-plan-required"),
+        "adoption must also require the exact destination-exists planner state: {blockers:?}"
     );
 }
