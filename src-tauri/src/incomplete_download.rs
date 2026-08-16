@@ -2,7 +2,7 @@
 use crate::cloud::probe_content_metadata_for_audit;
 use crate::cloud::ContentMetadata;
 use crate::cloud_local_eviction::{observe_path_active_use, ActiveUseEvidence};
-use crate::duplicate_audit::bound_read_root::BoundReadRoot;
+use crate::bound_read_root::BoundReadRoot;
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
