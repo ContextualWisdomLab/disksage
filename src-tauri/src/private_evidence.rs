@@ -404,6 +404,50 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn post_create_parent_replacement_invalidates_only_authorized_record() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let source = tempfile::tempdir().unwrap();
+        let fixture = tempfile::tempdir().unwrap();
+        let parent = fixture.path().join("records");
+        let moved_parent = fixture.path().join("authorized-records-moved");
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = parent.join("audit.json");
+        let replacement_parent = parent.clone();
+        let parent_for_hook = parent.clone();
+        let moved_for_hook = moved_parent.clone();
+
+        let error = write_private_json_create_new_unix_with_hooks(
+            source.path(),
+            &path,
+            &serde_json::json!({"private": true}),
+            || {},
+            move || {
+                std::fs::rename(&parent_for_hook, &moved_for_hook).unwrap();
+                std::fs::create_dir(&parent_for_hook).unwrap();
+                std::fs::set_permissions(
+                    &parent_for_hook,
+                    std::fs::Permissions::from_mode(0o700),
+                )
+                .unwrap();
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "private-evidence-parent-identity-drift");
+        assert!(
+            !replacement_parent.join("audit.json").exists(),
+            "replacement directory must never receive the authorized record"
+        );
+        let tombstone = moved_parent.join("audit.json");
+        let metadata = std::fs::metadata(&tombstone).unwrap();
+        assert_eq!(metadata.len(), 0, "authorized record must be invalidated");
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn failed_final_identity_check_preserves_unrelated_replacement_record() {
         use std::os::unix::fs::PermissionsExt;
 
