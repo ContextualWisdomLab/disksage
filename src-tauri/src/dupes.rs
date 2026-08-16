@@ -346,4 +346,22 @@ mod tests {
         assert!(!names.contains(&"link.bin".to_string()), "심링크 제외");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn collect_files_rejects_caller_supplied_symlink_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real_root = tmp.path().join("real-root");
+        std::fs::create_dir(&real_root).unwrap();
+        write_file(&real_root, "outside.bin", b"must-not-cross-root-authority");
+        let supplied_root = tmp.path().join("supplied-root");
+        std::os::unix::fs::symlink(&real_root, &supplied_root).unwrap();
+
+        let files = collect_files(&supplied_root);
+
+        assert!(
+            files.is_empty(),
+            "caller-supplied symlink roots must not be traversed outside the selected root"
+        );
+    }
+
 }
