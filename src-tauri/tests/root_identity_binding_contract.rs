@@ -5,6 +5,7 @@ use std::io::Read;
 use std::path::Path;
 
 const BOUND_READ_ROOT: &str = include_str!("../src/bound_read_root.rs");
+const LIB: &str = include_str!("../src/lib.rs");
 const DUPLICATE_AUDIT: &str = include_str!("../src/duplicate_audit.rs");
 const MULTIPART_ARCHIVE: &str = include_str!("../src/multipart_archive.rs");
 const INCOMPLETE_DOWNLOAD: &str = include_str!("../src/incomplete_download.rs");
@@ -25,6 +26,30 @@ fn shared_root_guard_exposes_identity_bound_contract() {
         assert!(
             BOUND_READ_ROOT.contains(required),
             "bound_read_root.rs missing {required}"
+        );
+    }
+}
+
+#[test]
+fn crate_level_authority_decouples_consumers_from_duplicate_audit() {
+    assert!(
+        LIB.contains("pub(crate) use duplicate_audit::bound_read_root"),
+        "lib.rs must expose the shared bound-root authority at crate scope"
+    );
+    for (name, source) in [
+        ("multipart_archive", MULTIPART_ARCHIVE),
+        ("incomplete_download", INCOMPLETE_DOWNLOAD),
+        ("incomplete_download_recovery", RECOVERY),
+        ("incomplete_download_materialization", MATERIALIZATION),
+        ("rules", RULES),
+    ] {
+        assert!(
+            source.contains("crate::bound_read_root"),
+            "{name} must import the shared authority from crate scope"
+        );
+        assert!(
+            !source.contains("duplicate_audit::bound_read_root"),
+            "{name} must not depend on duplicate_audit module ownership"
         );
     }
 }
@@ -125,12 +150,7 @@ fn migrated_read_only_consumers_use_descriptor_relative_child_io() {
 }
 
 #[test]
-fn not_yet_migrated_consumers_keep_ordered_identity_comparison_after_io() {
-    assert!(
-        DUPLICATE_AUDIT.contains("pub(crate) mod bound_read_root"),
-        "duplicate_audit remains the temporary registration point until all legacy consumers migrate"
-    );
-
+fn compatibility_path_consumers_keep_ordered_identity_comparison_after_io() {
     for (name, source, unsafe_error) in [
         (
             "duplicate_audit",
@@ -162,7 +182,7 @@ fn not_yet_migrated_consumers_keep_ordered_identity_comparison_after_io() {
             .unwrap_or_else(|| panic!("{name} must capture the initially bound canonical identity"));
         let stable_position = compact_source
             .find("letstable_root=root_guard.stable_path()")
-            .unwrap_or_else(|| panic!("{name} legacy path traversal must be explicit until migrated"));
+            .unwrap_or_else(|| panic!("{name} compatibility path traversal must be explicit"));
         assert!(
             open_position < canonical_position && canonical_position < stable_position,
             "{name} must bind the root, capture its identity, then derive compatibility I/O authority"
