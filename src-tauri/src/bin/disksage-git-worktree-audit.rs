@@ -59,17 +59,55 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
+
+    #[test]
+    fn parser_distinguishes_help_from_invalid_input() {
+        assert_eq!(parse_args(&[]).unwrap(), ParseOutcome::Run(Args::default()));
+        assert_eq!(
+            parse_args(&[OsString::from("--help")]).unwrap(),
+            ParseOutcome::Help
+        );
+        assert_eq!(
+            parse_args(&[OsString::from("-h")]).unwrap(),
+            ParseOutcome::Help
+        );
+        assert_eq!(
+            parse_args(&[OsString::from("--unknown")]).unwrap_err(),
+            "알 수 없는 인자"
+        );
+    }
 
     #[test]
     fn parser_accepts_optional_repository() {
-        assert_eq!(parse_args(&[]).unwrap(), Args::default());
         assert_eq!(
-            parse_args(&["--repo".into(), "/repo".into()]).unwrap(),
-            Args {
+            parse_args(&[OsString::from("--repo"), OsString::from("/repo")]).unwrap(),
+            ParseOutcome::Run(Args {
                 repository: Some(PathBuf::from("/repo"))
-            }
+            })
         );
-        assert!(parse_args(&["--repo".into()]).is_err());
-        assert!(parse_args(&["--unknown".into()]).is_err());
+        assert_eq!(
+            parse_args(&[OsString::from("--repo")]).unwrap_err(),
+            "--repo 값이 필요함"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parser_preserves_non_utf8_repository_paths_and_redacts_unknown_arguments() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let repository = OsString::from_vec(vec![b'/', b'r', b'e', b'p', b'o', 0xff]);
+        assert_eq!(
+            parse_args(&[OsString::from("--repo"), repository.clone()]).unwrap(),
+            ParseOutcome::Run(Args {
+                repository: Some(PathBuf::from(repository))
+            })
+        );
+        let unknown = OsString::from_vec(vec![b'-', b'-', 0xff]);
+        assert_eq!(
+            parse_args(&[unknown]).unwrap_err(),
+            "알 수 없는 인자"
+        );
     }
 }
