@@ -1,6 +1,5 @@
+use crate::duplicate_audit::bound_read_root::{BoundEntryKind, BoundReadRoot};
 use std::path::{Path, PathBuf};
-
-use same_file::Handle;
 
 pub struct BaseDirs {
     pub temp: PathBuf,
@@ -89,220 +88,86 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
     entries
 }
 
-fn metadata_is_real_directory(metadata: &std::fs::Metadata) -> bool {
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        return false;
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            return false;
-        }
-    }
-    true
-}
-
-fn path_is_real_directory(path: &Path) -> bool {
-    std::fs::symlink_metadata(path)
-        .map(|metadata| metadata_is_real_directory(&metadata))
-        .unwrap_or(false)
-}
-
-#[cfg(windows)]
-fn open_directory_handle(path: &Path) -> Option<Handle> {
-    use std::os::windows::fs::OpenOptionsExt;
-    const FILE_SHARE_READ: u32 = 0x0000_0001;
-    const FILE_SHARE_WRITE: u32 = 0x0000_0002;
-    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
-
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
-        .open(path)
-        .ok()?;
-    Handle::from_file(file).ok()
-}
-
-#[cfg(target_os = "linux")]
-const NOFOLLOW_DIRECTORY_FLAGS: i32 = 0o600000; // O_DIRECTORY | O_NOFOLLOW
-#[cfg(target_os = "macos")]
-const NOFOLLOW_DIRECTORY_FLAGS: i32 = 0x0010_0100; // O_DIRECTORY | O_NOFOLLOW
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn open_directory_handle(path: &Path) -> Option<Handle> {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(NOFOLLOW_DIRECTORY_FLAGS)
-        .open(path)
-        .ok()?;
-    Handle::from_file(file).ok()
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-fn open_directory_handle(_path: &Path) -> Option<Handle> {
-    None
-}
-
-#[cfg(target_os = "linux")]
-fn handle_namespace_path(handle: &Handle, _display_path: &Path) -> Option<PathBuf> {
-    use std::os::fd::AsRawFd;
-    Some(PathBuf::from(format!(
-        "/proc/self/fd/{}",
-        handle.as_file().as_raw_fd()
-    )))
-}
-
-#[cfg(target_os = "macos")]
-fn handle_namespace_path(handle: &Handle, _display_path: &Path) -> Option<PathBuf> {
-    use std::ffi::{CStr, OsString};
-    use std::os::fd::AsRawFd;
-    use std::os::unix::ffi::OsStringExt;
-
-    let mut buffer = vec![0 as libc::c_char; libc::PATH_MAX as usize];
-    let result = unsafe {
-        // SAFETY: `buffer` is writable for PATH_MAX bytes and `handle` keeps the descriptor alive.
-        // F_GETPATH writes a NUL-terminated path on success and does not retain the pointer.
-        libc::fcntl(
-            handle.as_file().as_raw_fd(),
-            libc::F_GETPATH,
-            buffer.as_mut_ptr(),
-        )
-    };
-    if result == -1 {
-        return None;
-    }
-    let path = unsafe {
-        // SAFETY: successful F_GETPATH guarantees a NUL-terminated string in the supplied buffer.
-        CStr::from_ptr(buffer.as_ptr())
-    };
-    Some(PathBuf::from(OsString::from_vec(path.to_bytes().to_vec())))
-}
-
-#[cfg(windows)]
-fn handle_namespace_path(_handle: &Handle, display_path: &Path) -> Option<PathBuf> {
-    Some(display_path.to_path_buf())
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-fn handle_namespace_path(_handle: &Handle, _display_path: &Path) -> Option<PathBuf> {
-    None
-}
-
-/// 카탈로그 루트의 경로명과 열린 디렉터리 핸들을 한 번의 권한 경계로 묶는다.
-/// Linux에서는 이후 I/O를 열린 fd namespace 경로로 수행한다. macOS는 `/dev/fd/N`을
-/// 디렉터리 루트로 탐색할 수 없으므로 열린 핸들의 현재 경로를 F_GETPATH로 복구한 뒤 파일 ID를
-/// 재검증한다. Windows에서는 DELETE 공유를 제외한 디렉터리 핸들을 유지해 같은 기간 루트
-/// rename/delete 교체를 차단한다.
+/// Cache-catalog authority bound to one opened directory object.
+///
+/// Read-only sizing is descriptor-relative on Unix. Paths returned for later destructive cleanup
+/// are published only if the caller pathname still names the same canonical object after child
+/// enumeration, preventing a root replacement from redirecting a later cleanup operation.
 struct CatalogRoot {
-    handle: Handle,
+    guard: BoundReadRoot,
     display_path: PathBuf,
+    canonical_path: PathBuf,
 }
 
 impl CatalogRoot {
     fn open(path: &Path) -> Option<Self> {
-        // 1차 lstat: 명시적 symlink/reparse root를 즉시 거부.
-        if !path_is_real_directory(path) {
-            return None;
-        }
-
-        // 경로를 연 뒤 다시 lstat+open하고 두 핸들의 파일 ID를 비교한다. 이 순서로
-        // 검사 중 경로가 바뀌는 check/use 경합도 fail-closed 한다.
-        let handle = open_directory_handle(path)?;
-        if !path_is_real_directory(path) {
-            return None;
-        }
-        let current = open_directory_handle(path)?;
-        if handle != current {
-            return None;
-        }
-
+        let guard = BoundReadRoot::open(path)?;
+        let canonical_path = guard.canonical_path()?;
         Some(Self {
-            handle,
+            guard,
             display_path: path.to_path_buf(),
+            canonical_path,
         })
     }
 
-    fn stable_path(&self) -> Option<PathBuf> {
-        let stable = handle_namespace_path(&self.handle, &self.display_path)?;
-        let expected = Handle::from_file(self.handle.as_file().try_clone().ok()?).ok()?;
-        #[cfg(windows)]
-        let observed = open_directory_handle(&stable)?;
-        #[cfg(not(windows))]
-        let observed = Handle::from_path(&stable).ok()?;
-        (expected == observed).then_some(stable)
-    }
-
-    fn directory_size(&self) -> u64 {
-        let Some(stable) = self.stable_path() else {
-            return 0;
-        };
-        let Ok(entries) = std::fs::read_dir(stable) else {
+    fn directory_size_at(&self, relative: &Path) -> u64 {
+        let Ok(names) = self.guard.read_dir_names(relative) else {
             return 0;
         };
         let mut bytes = 0u64;
 
-        for entry in entries.filter_map(Result::ok) {
-            let path = entry.path();
-            let Ok(metadata) = std::fs::symlink_metadata(&path) else {
-                continue;
+        for name in names {
+            let child = if relative.as_os_str().is_empty() {
+                PathBuf::from(name)
+            } else {
+                relative.join(name)
             };
-            if metadata.file_type().is_symlink() {
-                continue;
-            }
-            #[cfg(windows)]
-            {
-                use std::os::windows::fs::MetadataExt;
-                const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-                if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-                    continue;
+            match self.guard.entry_kind(&child) {
+                Ok(BoundEntryKind::File) => {
+                    let Ok(file) = self.guard.open_file(&child) else {
+                        continue;
+                    };
+                    let Ok(metadata) = file.metadata() else {
+                        continue;
+                    };
+                    if metadata.is_file() {
+                        bytes = bytes.saturating_add(metadata.len());
+                    }
                 }
-            }
-
-            if metadata.is_file() {
-                bytes = bytes.saturating_add(metadata.len());
-            } else if metadata.is_dir() {
-                if let Some(child) = CatalogRoot::open(&path) {
-                    bytes = bytes.saturating_add(child.directory_size());
+                Ok(BoundEntryKind::Directory) => {
+                    bytes = bytes.saturating_add(self.directory_size_at(&child));
                 }
+                Ok(BoundEntryKind::Symlink | BoundEntryKind::Other) | Err(_) => {}
             }
         }
 
         bytes
     }
 
-    fn child_paths(&self) -> Vec<PathBuf> {
-        let Some(stable) = self.stable_path() else {
-            return Vec::new();
-        };
-        let Ok(entries) = std::fs::read_dir(stable) else {
-            return Vec::new();
-        };
+    fn directory_size(&self) -> u64 {
+        self.directory_size_at(Path::new(""))
+    }
 
-        entries
-            .filter_map(Result::ok)
-            .filter_map(|entry| {
-                let stable_child = entry.path();
-                let metadata = std::fs::symlink_metadata(&stable_child).ok()?;
-                if metadata.file_type().is_symlink() {
-                    return None;
-                }
-                #[cfg(windows)]
-                {
-                    use std::os::windows::fs::MetadataExt;
-                    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-                    if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-                        return None;
-                    }
-                }
-                Some(self.display_path.join(entry.file_name()))
+    fn child_paths(&self) -> Vec<PathBuf> {
+        let Ok(mut names) = self.guard.read_dir_names(Path::new("")) else {
+            return Vec::new();
+        };
+        names.sort();
+        let children = names
+            .into_iter()
+            .filter(|name| {
+                matches!(
+                    self.guard.entry_kind(Path::new(name)),
+                    Ok(BoundEntryKind::File | BoundEntryKind::Directory)
+                )
             })
-            .collect()
+            .map(|name| self.display_path.join(name))
+            .collect::<Vec<_>>();
+
+        if self.guard.canonical_path().as_ref() != Some(&self.canonical_path) {
+            return Vec::new();
+        }
+        children
     }
 }
 
@@ -330,7 +195,8 @@ pub fn is_catalog_path(bases: &BaseDirs, dir: &Path) -> bool {
 }
 
 /// 캐시 디렉토리 자체는 보존하고 내용물만 비우기 위한 직계 자식 열거.
-/// 루트는 열린 핸들에 고정하고 직계 자식 symlink/reparse point도 제외한다.
+/// 루트는 열린 핸들에 고정하고 직계 자식 symlink/reparse point도 제외한다. 반환 직전 루트
+/// pathname을 재검증해, 열거 도중 루트가 교체되면 파괴적 후속 작업에 경로를 게시하지 않는다.
 pub fn clean_targets(dir: &Path) -> Vec<PathBuf> {
     CatalogRoot::open(dir)
         .map(|root| root.child_paths())
@@ -450,7 +316,7 @@ mod tests {
         fs::create_dir(&real).unwrap();
         std::os::unix::fs::symlink(&real, &linked).unwrap();
 
-        assert!(open_directory_handle(&linked).is_none());
+        assert!(BoundReadRoot::open(&linked).is_none());
     }
 
     #[cfg(unix)]
@@ -491,7 +357,7 @@ mod tests {
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
-    fn opened_catalog_root_cannot_be_redirected_by_path_replacement() {
+    fn opened_catalog_root_reads_bound_object_but_does_not_publish_stale_cleanup_paths() {
         let tmp = tempfile::tempdir().unwrap();
         let catalog = tmp.path().join("catalog");
         let moved = tmp.path().join("catalog-original");
@@ -506,11 +372,9 @@ mod tests {
         std::os::unix::fs::symlink(&outside, &catalog).unwrap();
 
         assert_eq!(root.directory_size(), 7);
-        let names: Vec<String> = root
-            .child_paths()
-            .iter()
-            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(names, vec!["inside.bin"]);
+        assert!(
+            root.child_paths().is_empty(),
+            "mutation paths must fail closed after the caller root pathname is replaced"
+        );
     }
 }
