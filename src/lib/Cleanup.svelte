@@ -45,7 +45,10 @@
     cacheRetryMessage = "";
     try {
       const targets = await api.listCacheTargets(candidate.path);
-      if (targets.length === 0) return;
+      if (targets.length === 0) {
+        loadError = `${candidate.label}에 정리할 직계 항목이 없습니다.`;
+        return;
+      }
       const targetBytes = targets.reduce((sum, target) => sum + target.bytes, 0);
       const okay = await confirm(
         `${candidate.label}의 직계 캐시 ${targets.length}개(${fmtBytes(targetBytes)})를 휴지통으로 보냅니다.\n\n` +
