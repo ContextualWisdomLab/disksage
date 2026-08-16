@@ -97,8 +97,11 @@ pub(crate) fn node_view(res: &ScanResult, path: &Path) -> Result<NodeView, Strin
 
 /// Tauri boundary for identity-aware node navigation.
 #[cfg(not(coverage))]
-#[tauri::command]
-pub(crate) fn get_node(path: String, state: tauri::State<'_, AppState>) -> Result<NodeView, String> {
+#[tauri::command(rename = "get_node")]
+pub(crate) fn get_node_secure(
+    path: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<NodeView, String> {
     let guard = state
         .result
         .lock()

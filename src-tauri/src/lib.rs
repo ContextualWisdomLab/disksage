@@ -98,7 +98,7 @@ pub fn run() {
             commands::list_roots,
             commands::start_scan,
             commands::cancel_scan,
-            node_navigation::get_node,
+            node_navigation::get_node_secure,
             commands::top_files,
             commands::list_cache_candidates,
             cache_cleanup::list_cache_targets,
