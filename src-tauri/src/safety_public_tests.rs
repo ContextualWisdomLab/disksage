@@ -194,6 +194,55 @@ fn identity_bound_trash_rejects_missing_source_before_journal_or_staging() {
         .any(|entry| entry.file_name().to_string_lossy().starts_with(&staging_prefix)));
 }
 
+#[cfg(any(windows, target_os = "linux"))]
+#[test]
+fn identity_bound_trash_success_stages_exact_object_and_journals_success() {
+    let root = tempfile::tempdir().unwrap();
+    let unique = root.path().file_name().unwrap().to_string_lossy();
+    let fixture_name = format!("disksage-identity-bound-{unique}.bin");
+    let fixture = root.path().join(&fixture_name);
+    let journal = root.path().join("cleanup-journal.jsonl");
+    std::fs::write(&fixture, b"reviewed-object").unwrap();
+    let expected_identity = filesystem_object_id(&fixture).unwrap();
+    let staging_prefix = format!(".disksage-trash-{}-15-", std::process::id());
+
+    trash_delete_if_identity(
+        &fixture,
+        &expected_identity,
+        b"reviewed-object".len() as u64,
+        &journal,
+        15,
+    )
+    .unwrap();
+
+    assert!(!fixture.exists(), "reviewed source pathname must be vacated");
+    let recent = journal_recent(&journal, 10);
+    assert_eq!(recent.len(), 2);
+    assert_eq!(recent[0].outcome, "ok");
+    assert_eq!(recent[1].outcome, "pending");
+
+    let staging_dirs: Vec<_> = std::fs::read_dir(root.path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with(&staging_prefix))
+        .collect();
+    assert_eq!(staging_dirs.len(), 1, "successful identity trash keeps one undo parent");
+    assert_eq!(
+        std::fs::read_dir(staging_dirs[0].path()).unwrap().count(),
+        0,
+        "staging directory must be empty after OS trash accepts the object"
+    );
+
+    let items: Vec<_> = trash::os_limited::list()
+        .unwrap()
+        .into_iter()
+        .filter(|item| item.name.to_string_lossy() == fixture_name)
+        .collect();
+    assert_eq!(items.len(), 1, "the exact staged object must be recoverable from trash");
+    trash::os_limited::purge_all(items).unwrap();
+    std::fs::remove_dir(staging_dirs[0].path()).unwrap();
+}
+
 #[cfg(unix)]
 #[test]
 fn unix_home_root_is_protected_while_home_descendants_remain_eligible() {
