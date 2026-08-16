@@ -66,10 +66,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+<<<<<<< HEAD
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
-      - name: macOS bound-root traversal regression
-        run: cargo test --manifest-path src-tauri/Cargo.toml --test bound_read_root_macos_traversal
+      - name: macOS bound-root traversal regressions
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --test bound_read_root_macos_traversal
+          cargo test --manifest-path src-tauri/Cargo.toml rules::tests::catalog_reports_sizes_and_existence
 
   llm-engine-build:
     runs-on: ubuntu-latest
