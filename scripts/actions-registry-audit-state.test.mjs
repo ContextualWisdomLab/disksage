@@ -105,3 +105,67 @@ test('audit fails closed when same-repository open-PR workflow ownership moves m
   );
   assert.equal(pullReads, 2);
 });
+
+test('audit fails closed when workflow registry identity changes without a count change', async () => {
+  const expected = sha('f');
+  let workflowReads = 0;
+  const fetchJson = async (url) => {
+    if (url.includes('/actions/workflows')) {
+      workflowReads += 1;
+      return {
+        total_count: 1,
+        workflows: [{
+          id: 11,
+          state: 'active',
+          path: workflowReads === 1
+            ? '.github/workflows/orphan-a.yml'
+            : '.github/workflows/orphan-b.yml',
+        }],
+      };
+    }
+    if (url.includes('/pulls?')) return [];
+    if (url.endsWith('/disksage')) return { default_branch: 'main' };
+    if (url.endsWith('/commits/main')) return { sha: expected };
+    if (url.includes(`/git/trees/${expected}`)) return { truncated: false, tree: [] };
+    throw new Error(`unexpected URL ${url}`);
+  };
+
+  await assert.rejects(
+    auditActionsRegistry(fetchJson, repo, expected),
+    /actions-workflow-snapshot-moved/,
+  );
+  assert.equal(workflowReads, 2);
+});
+
+test('audit revalidates protected main after collecting mutable registry evidence', async () => {
+  const expected = sha('1');
+  const moved = sha('2');
+  let mainReads = 0;
+  const fetchJson = async (url) => {
+    if (url.includes('/actions/workflows')) {
+      return {
+        total_count: 1,
+        workflows: [{ id: 12, state: 'active', path: '.github/workflows/main.yml' }],
+      };
+    }
+    if (url.includes('/pulls?')) return [];
+    if (url.endsWith('/disksage')) return { default_branch: 'main' };
+    if (url.endsWith('/commits/main')) {
+      mainReads += 1;
+      return { sha: mainReads === 1 ? expected : moved };
+    }
+    if (url.includes(`/git/trees/${expected}`)) {
+      return {
+        truncated: false,
+        tree: [{ type: 'blob', path: '.github/workflows/main.yml' }],
+      };
+    }
+    throw new Error(`unexpected URL ${url}`);
+  };
+
+  await assert.rejects(
+    auditActionsRegistry(fetchJson, repo, expected),
+    /protected-main-moved/,
+  );
+  assert.equal(mainReads, 2);
+});
