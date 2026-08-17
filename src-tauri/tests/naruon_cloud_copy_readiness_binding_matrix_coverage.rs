@@ -14,7 +14,7 @@ use disksage_lib::naruon_cloud_copy_readiness::{
     CloudCopyReadinessState, CountBytes, NaruonCloudCopyReadinessEnvelope,
 };
 use disksage_lib::provider_capacity::{
-    assess_capacity, unavailable_capacity, DEFAULT_CAPACITY_RESERVE_BYTES,
+    assess_capacity, parse_onedrive_capacity, unavailable_capacity, DEFAULT_CAPACITY_RESERVE_BYTES,
 };
 use disksage_lib::provider_client_runtime::assess_provider_client_runtime;
 
@@ -235,7 +235,14 @@ fn capacity_binding_rejects_scope_size_and_time_drift() {
     let baseline = blocked_candidate_envelope();
 
     let mut scope = baseline.clone();
-    scope.capacity.snapshot.account_scope = Some(CloudAccountScope::Organization);
+    let snapshot = parse_onedrive_capacity(
+        r#"{"id":"drive-id","driveType":"business","quota":{"deleted":5,"remaining":4000,"state":"normal","total":10000,"used":6000}}"#,
+        10,
+    )
+    .unwrap();
+    let reserve = scope.capacity.reserve_bytes;
+    scope.capacity = assess_capacity(snapshot, 42, 42, reserve);
+    scope.remote_capacity_verified = true;
     assert_eq!(
         validate_naruon_cloud_copy_readiness(&scope).unwrap_err(),
         "naruon-copy-readiness-capacity-binding-invalid"
