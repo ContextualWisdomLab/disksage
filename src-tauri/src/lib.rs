@@ -46,6 +46,8 @@ mod reasoning;
 mod dataset_metadata;
 #[cfg_attr(coverage, allow(dead_code))]
 mod brew_cleanup;
+#[cfg(test)]
+mod brew_cleanup_public_coverage_tests;
 /// Privacy-safe dataset schema and quality evidence returned by the bounded profiler.
 pub use dataset_metadata::{DatasetColumnProfile, DatasetProfile};
 /// Profile a supported local dataset without returning sampled cell values.
