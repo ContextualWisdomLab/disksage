@@ -84,8 +84,9 @@ async function listAll(fetchJson, endpoint, invalidError) {
   const records = [];
   let page = 1;
   let pageSize;
+  const separator = endpoint.includes('?') ? '&' : '?';
   do {
-    const payload = await fetchJson(`${endpoint}&per_page=100&page=${page}`);
+    const payload = await fetchJson(`${endpoint}${separator}per_page=100&page=${page}`);
     if (!Array.isArray(payload)) throw new Error(invalidError);
     records.push(...payload);
     pageSize = payload.length;
@@ -167,13 +168,52 @@ function workflowPathsFromTree(tree, incompleteError = 'workflow-tree-incomplete
     .filter(isRepositoryWorkflowPath);
 }
 
-/** Resolve workflow paths carried by current same-repository open PR heads. */
+/** Resolve workflow paths semantically owned by current same-repository open PR heads. */
 export async function activePullRequestWorkflowPaths(fetchJson, repository, pullRequests) {
-  const headShas = sameRepositoryHeadSnapshot(pullRequests, repository);
+  sameRepositoryHeadSnapshot(pullRequests, repository);
   const workflowPaths = new Set();
-  for (const headSha of headShas) {
-    const tree = await fetchJson(`/repos/${repository}/git/trees/${headSha}?recursive=1`);
-    for (const workflowPath of workflowPathsFromTree(tree)) workflowPaths.add(workflowPath);
+  const headWorkflowPaths = new Map();
+
+  for (const pullRequest of pullRequests) {
+    const headRepository = pullRequest.head.repo.full_name;
+    if (headRepository !== repository) continue;
+    const pullNumber = pullRequest.number;
+    if (!Number.isSafeInteger(pullNumber) || pullNumber <= 0) {
+      throw new Error('open-pr-number-invalid');
+    }
+    const headSha = pullRequest.head.sha;
+    let currentHeadPaths = headWorkflowPaths.get(headSha);
+    if (!currentHeadPaths) {
+      const tree = await fetchJson(`/repos/${repository}/git/trees/${headSha}?recursive=1`);
+      currentHeadPaths = new Set(workflowPathsFromTree(tree));
+      headWorkflowPaths.set(headSha, currentHeadPaths);
+    }
+
+    const changedFiles = await listAll(
+      fetchJson,
+      `/repos/${repository}/pulls/${pullNumber}/files`,
+      'open-pr-files-invalid',
+    );
+    for (const file of changedFiles) {
+      if (
+        !file ||
+        typeof file !== 'object' ||
+        typeof file.filename !== 'string' ||
+        file.filename.length === 0 ||
+        typeof file.status !== 'string' ||
+        file.status.length === 0
+      ) {
+        throw new Error('open-pr-file-invalid');
+      }
+      if (file.status === 'removed') continue;
+      const workflowPath = normalizeWorkflowPath(file.filename);
+      if (
+        isRepositoryWorkflowPath(workflowPath) &&
+        currentHeadPaths.has(workflowPath)
+      ) {
+        workflowPaths.add(workflowPath);
+      }
+    }
   }
   return workflowPaths;
 }
