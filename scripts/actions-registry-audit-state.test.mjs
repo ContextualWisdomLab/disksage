@@ -101,6 +101,8 @@ test('malformed open-PR ownership records fail closed before workflow classifica
     [{ head: null }],
     [{ head: { repo: null } }],
     [{ head: { repo: {} } }],
+    [{ head: { repo: { full_name: '' } } }],
+    [{ head: { repo: { full_name: repo } } }],
   ]) {
     await assert.rejects(
       activePullRequestWorkflowPaths(async () => {
