@@ -94,6 +94,24 @@ test('workflow trees require an explicit non-truncated provider assertion', asyn
   );
 });
 
+test('malformed open-PR ownership records fail closed before workflow classification', async () => {
+  for (const pullRequests of [
+    [null],
+    [{}],
+    [{ head: null }],
+    [{ head: { repo: null } }],
+    [{ head: { repo: {} } }],
+  ]) {
+    await assert.rejects(
+      activePullRequestWorkflowPaths(async () => {
+        throw new Error('tree fetch must not run for malformed ownership evidence');
+      }, repo, pullRequests),
+      /open-pr-head-invalid/,
+      `malformed open-PR ownership evidence must fail closed: ${JSON.stringify(pullRequests)}`,
+    );
+  }
+});
+
 test('audit fails closed when same-repository open-PR workflow ownership moves mid-audit', async () => {
   const expected = sha('d');
   const newHead = sha('e');
