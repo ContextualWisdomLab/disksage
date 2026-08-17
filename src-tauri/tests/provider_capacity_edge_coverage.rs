@@ -6,8 +6,8 @@
 use disksage_lib::cloud::{CloudAccountScope, CloudProvider, CloudRoot};
 use disksage_lib::provider_capacity::{
     assess_capacity, parse_google_drive_capacity, parse_icloud_brctl_quota,
-    parse_onedrive_capacity, root_with_verified_capacity_scope, unavailable_capacity,
-    CapacityEvidenceKind, CloudCapacitySnapshot, CloudCapacityState, CAPACITY_SCHEMA_VERSION,
+    parse_onedrive_capacity, root_with_verified_capacity_scope, CapacityEvidenceKind,
+    CloudCapacitySnapshot, CloudCapacityState, CAPACITY_SCHEMA_VERSION,
 };
 
 fn root(scope: CloudAccountScope) -> CloudRoot {
@@ -117,12 +117,16 @@ fn assessment_distinguishes_exact_fit_insufficient_reserve_and_missing_reason() 
         vec!["cloud-capacity-insufficient-with-reserve".to_string()]
     );
 
-    let unavailable_without_reason = assess_capacity(
-        unavailable_capacity(CloudProvider::GoogleDrive, 1, "cloud-capacity-unavailable"),
-        1,
-        1,
-        1,
+    let mut unavailable_without_reason = snapshot(
+        CloudProvider::GoogleDrive,
+        CloudCapacityState::Unavailable,
+        None,
     );
+    unavailable_without_reason.evidence_kind = CapacityEvidenceKind::Unavailable;
+    unavailable_without_reason.total_bytes = None;
+    unavailable_without_reason.used_bytes = None;
+    unavailable_without_reason.unavailable_reason = None;
+    let unavailable_without_reason = assess_capacity(unavailable_without_reason, 1, 1, 1);
     assert_eq!(unavailable_without_reason.can_fit, None);
     assert_eq!(
         unavailable_without_reason.blockers,
