@@ -144,38 +144,53 @@ test('rejects malformed registry and open-PR list evidence', async () => {
   await assert.rejects(listAllOpenPullRequests(async () => null, repo), /open-pr-list-invalid/);
 });
 
-test('resolves only same-repository active-PR workflow paths from exact immutable heads', async () => {
+test('resolves only changed same-repository active-PR workflow paths from exact immutable heads', async () => {
+  const head = sha('b');
   const pulls = [
-    { head: { sha: sha('b'), repo: { full_name: repo } } },
-    { head: { sha: sha('b'), repo: { full_name: repo } } },
-    { head: { sha: sha('c'), repo: { full_name: 'fork/disksage' } } },
+    { number: 41, head: { sha: head, repo: { full_name: repo } } },
+    { number: 42, head: { sha: head, repo: { full_name: repo } } },
+    { number: 43, head: { sha: sha('c'), repo: { full_name: 'fork/disksage' } } },
   ];
   const calls = [];
   const paths = await activePullRequestWorkflowPaths(async (url) => {
     calls.push(url);
-    return {
-      truncated: false,
-      tree: [
-        { type: 'blob', path: '.github/workflows/repair-current.yml' },
-        { type: 'blob', path: '.github/workflows/readme.md' },
-        { type: 'tree', path: '.github/workflows' },
-      ],
-    };
+    if (url.includes(`/git/trees/${head}`)) {
+      return {
+        truncated: false,
+        tree: [
+          { type: 'blob', path: '.github/workflows/repair-current.yml' },
+          { type: 'blob', path: '.github/workflows/inherited.yml' },
+          { type: 'blob', path: '.github/workflows/readme.md' },
+          { type: 'tree', path: '.github/workflows' },
+        ],
+      };
+    }
+    if (url.includes('/pulls/41/files')) {
+      return [
+        { filename: '.github/workflows/repair-current.yml', status: 'modified' },
+        { filename: '.github/workflows/readme.md', status: 'modified' },
+        { filename: '.github/workflows/missing.yml', status: 'modified' },
+        { filename: '.github/workflows/removed.yml', status: 'removed' },
+      ];
+    }
+    if (url.includes('/pulls/42/files')) return [];
+    throw new Error(`unexpected URL ${url}`);
   }, repo, pulls);
   assert.deepEqual([...paths], ['.github/workflows/repair-current.yml']);
-  assert.equal(calls.length, 1);
+  assert.equal(calls.filter((url) => url.includes('/git/trees/')).length, 1);
+  assert.equal(calls.filter((url) => url.includes('/files?')).length, 2);
 });
 
 test('fails closed for malformed active-PR head or tree evidence', async () => {
   await assert.rejects(
     activePullRequestWorkflowPaths(async () => ({ truncated: false, tree: [] }), repo, [
-      { head: { sha: 'bad', repo: { full_name: repo } } },
+      { number: 1, head: { sha: 'bad', repo: { full_name: repo } } },
     ]),
     /open-pr-head-invalid/,
   );
   await assert.rejects(
     activePullRequestWorkflowPaths(async () => null, repo, [
-      { head: { sha: sha(), repo: { full_name: repo } } },
+      { number: 1, head: { sha: sha(), repo: { full_name: repo } } },
     ]),
     /workflow-tree-incomplete/,
   );
@@ -257,7 +272,10 @@ test('builds a complete audit without disabling active-PR workflow owners', asyn
       { id: 8, state: 'active', path: '.github/workflows/old-repair.yml' },
       { id: 9, state: 'active', path: '.github/workflows/repair-pr186.yml' },
     ] };
-    if (url.includes('/pulls?')) return [{ head: { sha: prHead, repo: { full_name: repo } } }];
+    if (url.includes('/pulls?')) return [{ number: 186, head: { sha: prHead, repo: { full_name: repo } } }];
+    if (url.includes('/pulls/186/files')) return [
+      { filename: '.github/workflows/repair-pr186.yml', status: 'added' },
+    ];
     if (url.endsWith('/disksage')) return { default_branch: 'main' };
     if (url.endsWith('/commits/main')) return { sha: expected };
     if (url.includes(`/git/trees/${expected}`)) return { truncated: false, tree: [{ type: 'blob', path: '.github/workflows/test.yml' }] };
