@@ -94,6 +94,25 @@ test('workflow trees require an explicit non-truncated provider assertion', asyn
   );
 });
 
+test('missing protected-main identity fields fail closed', async () => {
+  await assert.rejects(
+    protectedWorkflowPaths(async (url) => {
+      if (url.endsWith('/disksage')) return {};
+      throw new Error(`unexpected URL ${url}`);
+    }, repo, sha()),
+    /default-branch-unavailable/,
+  );
+
+  await assert.rejects(
+    protectedWorkflowPaths(async (url) => {
+      if (url.endsWith('/disksage')) return { default_branch: 'main' };
+      if (url.endsWith('/commits/main')) return {};
+      throw new Error(`unexpected URL ${url}`);
+    }, repo, sha()),
+    /protected-main-sha-unavailable/,
+  );
+});
+
 test('malformed open-PR ownership records fail closed before workflow classification', async () => {
   for (const pullRequests of [
     [null],
