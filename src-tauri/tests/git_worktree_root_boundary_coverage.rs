@@ -1,7 +1,7 @@
 //! Coverage for real-directory admission at the Git worktree audit boundary.
 //!
-//! The production audit rejects missing, symlinked, and non-directory repository roots before any
-//! Git command can act on them. The fixtures are temporary and never mutate user repositories.
+//! The production audit rejects missing, symlinked, non-directory, and non-repository roots before
+//! any worktree action can occur. The fixtures are temporary and never mutate user repositories.
 
 use disksage_lib::git_worktree::{audit_git_worktrees, GitWorktreeAuditOptions};
 
@@ -60,5 +60,21 @@ fn regular_file_repository_root_fails_closed_before_git_execution() {
         )
         .unwrap_err(),
         "worktree-path-not-real-directory"
+    );
+}
+
+#[test]
+fn real_directory_without_git_metadata_fails_closed() {
+    let directory = tempfile::tempdir().unwrap();
+
+    assert_eq!(
+        audit_git_worktrees(
+            directory.path(),
+            &["HEAD".into()],
+            GitWorktreeAuditOptions::default(),
+            8_002,
+        )
+        .unwrap_err(),
+        "git-common-dir-resolve-failed"
     );
 }
