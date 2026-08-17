@@ -184,6 +184,31 @@ test('binds workflow discovery to exact complete protected main', async () => {
   ]);
 });
 
+test('fails closed for malformed protected-main SHA identities', async () => {
+  for (const expected of [undefined, null, '', 'bad', 'A'.repeat(40)]) {
+    let fetchCalled = false;
+    await assert.rejects(
+      protectedWorkflowPaths(async () => {
+        fetchCalled = true;
+        throw new Error('provider must not be called for malformed expected SHA');
+      }, repo, expected),
+      /protected-main-sha-invalid/,
+    );
+    assert.equal(fetchCalled, false);
+  }
+
+  for (const observed of [undefined, null, '', 'bad', 'A'.repeat(40)]) {
+    await assert.rejects(
+      protectedWorkflowPaths(async (url) => {
+        if (url.endsWith('/disksage')) return { default_branch: 'main' };
+        if (url.endsWith('/commits/main')) return observed === undefined ? null : { sha: observed };
+        throw new Error(`unexpected URL ${url}`);
+      }, repo, sha()),
+      /protected-main-sha-unavailable/,
+    );
+  }
+});
+
 test('fails closed for default-branch, revision and protected-tree ambiguity', async () => {
   await assert.rejects(protectedWorkflowPaths(async () => null, repo, sha()), /default-branch-unavailable/);
   await assert.rejects(protectedWorkflowPaths(async () => ({ default_branch: '' }), repo, sha()), /default-branch-unavailable/);
@@ -196,7 +221,7 @@ test('fails closed for default-branch, revision and protected-tree ambiguity', a
       return null;
     }
     throw new Error(`unexpected URL ${url}`);
-  }, repo, sha()), /protected-main-moved/);
+  }, repo, sha()), /protected-main-sha-unavailable/);
   assert.equal(commitRead, true);
   await assert.rejects(protectedWorkflowPaths(protectedFetch(sha('b'), { truncated: false, tree: [] }), repo, sha()), /protected-main-moved/);
   await assert.rejects(protectedWorkflowPaths(protectedFetch(sha(), null), repo, sha()), /protected-main-tree-incomplete/);
