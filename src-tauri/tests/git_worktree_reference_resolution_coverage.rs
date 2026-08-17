@@ -1,8 +1,8 @@
 //! Real Git reference-resolution coverage for the worktree audit.
 //!
 //! These tests create only a temporary local repository. They exercise exact-OID retention
-//! bindings, validation/deduplication, and fail-closed symbolic resolution without fetching,
-//! pruning, deleting a branch, removing a worktree, or contacting a provider.
+//! bindings, reference-count limits, validation/deduplication, and fail-closed symbolic resolution
+//! without fetching, pruning, deleting a branch, removing a worktree, or contacting a provider.
 
 use disksage_lib::git_worktree::{audit_git_worktrees, GitWorktreeAuditOptions};
 use std::path::Path;
@@ -94,6 +94,23 @@ fn empty_retention_reference_set_fails_closed() {
             &[],
             GitWorktreeAuditOptions::default(),
             3,
+        )
+        .unwrap_err(),
+        "git-worktree-retention-reference-count-invalid"
+    );
+}
+
+#[test]
+fn excessive_retention_reference_count_fails_before_resolution() {
+    let root = initialized_repository();
+    let references = vec!["HEAD".to_string(); 10_001];
+
+    assert_eq!(
+        audit_git_worktrees(
+            root.path(),
+            &references,
+            GitWorktreeAuditOptions::default(),
+            3_001,
         )
         .unwrap_err(),
         "git-worktree-retention-reference-count-invalid"
