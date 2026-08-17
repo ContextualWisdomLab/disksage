@@ -79,9 +79,15 @@ fn missing_secondary_path_is_prunable_but_remains_an_evidence_gap() {
     assert!(entry
         .blockers
         .contains(&"git-status-evidence-incomplete".to_string()));
-    assert!(entry
-        .blockers
-        .contains(&"actor-cwd-evidence-incomplete".to_string()));
+    match entry.actor_cwd_inside {
+        Some(false) => assert!(!entry
+            .blockers
+            .contains(&"actor-cwd-evidence-incomplete".to_string())),
+        None => assert!(entry
+            .blockers
+            .contains(&"actor-cwd-evidence-incomplete".to_string())),
+        Some(true) => panic!("unrelated stale worktree must not contain the actor CWD"),
+    }
     assert!(entry
         .blockers
         .contains(&"size-evidence-incomplete".to_string()));
