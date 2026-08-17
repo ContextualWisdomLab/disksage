@@ -156,7 +156,7 @@ function workflowPathsFromTree(tree, incompleteError = 'workflow-tree-incomplete
   }
   return tree.tree
     .filter((entry) => entry?.type === 'blob')
-    .map((entry) => normalizeWorkflowPath(entry?.path))
+    .map((entry) => normalizeWorkflowPath(entry.path))
     .filter(isRepositoryWorkflowPath);
 }
 
