@@ -233,3 +233,29 @@ test('audit revalidates protected main after collecting mutable registry evidenc
   );
   assert.equal(mainReads, 2);
 });
+
+test('active PR ownership excludes stale inherited workflow paths that the PR did not change', async () => {
+  const head = sha('9');
+  const owned = '.github/workflows/owned-change.yml';
+  const inherited = '.github/workflows/stale-inherited.yml';
+  const calls = [];
+  const paths = await activePullRequestWorkflowPaths(async (url) => {
+    calls.push(url);
+    if (url.includes(`/git/trees/${head}`)) {
+      return {
+        truncated: false,
+        tree: [
+          { type: 'blob', path: inherited },
+          { type: 'blob', path: owned },
+        ],
+      };
+    }
+    if (url.includes('/pulls/42/files')) {
+      return [{ filename: owned, status: 'modified' }];
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }, repo, [{ number: 42, head: { sha: head, repo: { full_name: repo } } }]);
+
+  assert.deepEqual([...paths], [owned]);
+  assert.ok(calls.some((url) => url.includes('/pulls/42/files')));
+});
