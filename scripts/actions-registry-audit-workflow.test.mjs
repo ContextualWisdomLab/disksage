@@ -58,5 +58,9 @@ test('live registry uses the tested Node runtime and bounded transient GitHub AP
   assert.equal(liveVersion, contractsVersion, 'live audit runtime must match the tested contracts runtime');
   assert.match(liveRegistryJob, /AbortSignal\.timeout\(15_000\)/);
   assert.match(liveRegistryJob, /response\.status === 429 \|\| response\.status >= 500/);
+  assert.match(
+    liveRegistryJob,
+    /for \(let attempt = 1; attempt <= 3; attempt \+= 1\)/,
+  );
   assert.match(liveRegistryJob, /attempt >= 3/);
 });
