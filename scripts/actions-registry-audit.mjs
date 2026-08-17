@@ -1,6 +1,7 @@
 import path from 'node:path';
 
 export const REPOSITORY_WORKFLOW_PREFIX = '.github/workflows/';
+const COMMIT_SHA_PATTERN = /^[0-9a-f]{40}$/;
 
 const NON_ACTIVE_WORKFLOW_STATES = new Set([
   'deleted',
@@ -130,7 +131,7 @@ function sameRepositoryHeadSnapshot(pullRequests, repository) {
     }
     if (headRepository !== repository) continue;
     const headSha = pullRequest.head.sha;
-    if (typeof headSha !== 'string' || !/^[0-9a-f]{40}$/.test(headSha)) {
+    if (typeof headSha !== 'string' || !COMMIT_SHA_PATTERN.test(headSha)) {
       throw new Error('open-pr-head-invalid');
     }
     headShas.add(headSha);
@@ -177,11 +178,18 @@ async function currentProtectedMainSha(fetchJson, repository) {
     throw new Error('default-branch-unavailable');
   }
   const commit = await fetchJson(`/repos/${repository}/commits/${encodeURIComponent(defaultBranch)}`);
-  return commit?.sha;
+  const commitSha = commit?.sha;
+  if (typeof commitSha !== 'string' || !COMMIT_SHA_PATTERN.test(commitSha)) {
+    throw new Error('protected-main-sha-unavailable');
+  }
+  return commitSha;
 }
 
 /** Resolve workflow files from an exact, unmoved protected-main revision. */
 export async function protectedWorkflowPaths(fetchJson, repository, expectedMainSha) {
+  if (typeof expectedMainSha !== 'string' || !COMMIT_SHA_PATTERN.test(expectedMainSha)) {
+    throw new Error('protected-main-sha-invalid');
+  }
   const currentMainSha = await currentProtectedMainSha(fetchJson, repository);
   if (currentMainSha !== expectedMainSha) throw new Error('protected-main-moved');
   const tree = await fetchJson(`/repos/${repository}/git/trees/${expectedMainSha}?recursive=1`);
