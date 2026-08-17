@@ -170,6 +170,7 @@ test('binds workflow discovery to exact complete protected main', async () => {
 });
 
 test('fails closed for default-branch, revision and protected-tree ambiguity', async () => {
+  await assert.rejects(protectedWorkflowPaths(async () => null, repo, sha()), /default-branch-unavailable/);
   await assert.rejects(protectedWorkflowPaths(async () => ({ default_branch: '' }), repo, sha()), /default-branch-unavailable/);
   await assert.rejects(protectedWorkflowPaths(async () => ({ default_branch: null }), repo, sha()), /default-branch-unavailable/);
   await assert.rejects(protectedWorkflowPaths(protectedFetch(sha('b'), { truncated: false, tree: [] }), repo, sha()), /protected-main-moved/);
