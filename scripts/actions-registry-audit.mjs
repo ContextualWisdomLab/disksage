@@ -138,13 +138,13 @@ function sameRepositoryHeadSnapshot(pullRequests, repository) {
       throw new Error('open-pr-head-invalid');
     }
     if (headRepository !== repository) continue;
-    const pullNumber = pullRequest.number;
-    if (!Number.isSafeInteger(pullNumber) || pullNumber <= 0) {
-      throw new Error('open-pr-number-invalid');
-    }
     const headSha = pullRequest.head.sha;
     if (typeof headSha !== 'string' || !COMMIT_SHA_PATTERN.test(headSha)) {
       throw new Error('open-pr-head-invalid');
+    }
+    const pullNumber = pullRequest.number;
+    if (!Number.isSafeInteger(pullNumber) || pullNumber <= 0) {
+      throw new Error('open-pr-number-invalid');
     }
     pullSnapshots.add(JSON.stringify([pullNumber, headSha]));
   }
@@ -182,9 +182,6 @@ export async function activePullRequestWorkflowPaths(fetchJson, repository, pull
     const headRepository = pullRequest.head.repo.full_name;
     if (headRepository !== repository) continue;
     const pullNumber = pullRequest.number;
-    if (!Number.isSafeInteger(pullNumber) || pullNumber <= 0) {
-      throw new Error('open-pr-number-invalid');
-    }
     const headSha = pullRequest.head.sha;
     let currentHeadPaths = headWorkflowPaths.get(headSha);
     if (!currentHeadPaths) {
