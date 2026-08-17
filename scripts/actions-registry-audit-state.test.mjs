@@ -213,6 +213,44 @@ test('audit fails closed when same-repository open-PR workflow ownership moves m
   assert.equal(pullReads, 2);
 });
 
+test('audit fails closed when active PR identity changes at the same head', async () => {
+  const expected = sha('4');
+  const sharedHead = sha('5');
+  let pullReads = 0;
+  const fetchJson = async (url) => {
+    if (url.includes('/actions/workflows')) {
+      return {
+        total_count: 1,
+        workflows: [{ id: 13, state: 'active', path: '.github/workflows/pr-only.yml' }],
+      };
+    }
+    if (url.includes('/pulls?')) {
+      pullReads += 1;
+      const number = pullReads === 1 ? 42 : 43;
+      return [{ number, head: { sha: sharedHead, repo: { full_name: repo } } }];
+    }
+    if (url.includes('/pulls/42/files')) {
+      return [{ filename: '.github/workflows/pr-only.yml', status: 'added' }];
+    }
+    if (url.endsWith('/disksage')) return { default_branch: 'main' };
+    if (url.endsWith('/commits/main')) return { sha: expected };
+    if (url.includes(`/git/trees/${expected}`)) return { truncated: false, tree: [] };
+    if (url.includes(`/git/trees/${sharedHead}`)) {
+      return {
+        truncated: false,
+        tree: [{ type: 'blob', path: '.github/workflows/pr-only.yml' }],
+      };
+    }
+    throw new Error(`unexpected URL ${url}`);
+  };
+
+  await assert.rejects(
+    auditActionsRegistry(fetchJson, repo, expected),
+    /open-pr-snapshot-moved/,
+  );
+  assert.equal(pullReads, 2);
+});
+
 test('audit fails closed when workflow registry identity changes without a count change', async () => {
   const expected = sha('f');
   let workflowReads = 0;
