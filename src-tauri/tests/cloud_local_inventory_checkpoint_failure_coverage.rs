@@ -61,7 +61,10 @@ fn unix_socket_entry_is_reported_as_unsupported_without_following_or_opening_it(
     assert_eq!(report.visited_files, 0);
     assert_eq!(report.skipped_entries, 1);
     assert!(report.candidates.is_empty());
-    assert!(report.evidence_complete);
+    assert!(!report.evidence_complete);
+    assert!(report
+        .notices
+        .contains(&"inventory-incomplete".to_string()));
     assert_eq!(report.issues.len(), 1);
     assert_eq!(report.issues[0].relative_scope.as_deref(), Some("provider.sock"));
     assert_eq!(report.issues[0].kind, "unsupported-entry-type");
