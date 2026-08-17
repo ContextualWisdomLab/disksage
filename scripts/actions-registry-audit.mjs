@@ -131,20 +131,24 @@ export async function listAllOpenPullRequests(fetchJson, repository) {
 }
 
 function sameRepositoryHeadSnapshot(pullRequests, repository) {
-  const headShas = new Set();
+  const pullSnapshots = new Set();
   for (const pullRequest of pullRequests) {
     const headRepository = pullRequest?.head?.repo?.full_name;
     if (typeof headRepository !== 'string' || headRepository.length === 0) {
       throw new Error('open-pr-head-invalid');
     }
     if (headRepository !== repository) continue;
+    const pullNumber = pullRequest.number;
+    if (!Number.isSafeInteger(pullNumber) || pullNumber <= 0) {
+      throw new Error('open-pr-number-invalid');
+    }
     const headSha = pullRequest.head.sha;
     if (typeof headSha !== 'string' || !COMMIT_SHA_PATTERN.test(headSha)) {
       throw new Error('open-pr-head-invalid');
     }
-    headShas.add(headSha);
+    pullSnapshots.add(JSON.stringify([pullNumber, headSha]));
   }
-  return [...headShas].sort();
+  return [...pullSnapshots].sort();
 }
 
 function workflowRegistrySnapshot(records) {
