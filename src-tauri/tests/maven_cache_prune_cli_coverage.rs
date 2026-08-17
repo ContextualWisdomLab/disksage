@@ -1,8 +1,9 @@
 //! Executable-boundary coverage for the Maven cache prune CLI.
 //!
-//! These tests exercise the shipped command-line parser, fail-closed error surface, dry-run
+//! These tests exercise the shipped command-line parser's invalid-input boundary, dry-run
 //! execution, private create-new report publication, and repeat-write refusal without deleting
-//! Maven artifacts or enabling apply authority.
+//! Maven artifacts or enabling apply authority. Successful `--help` semantics are owned by #214
+//! / issue #210 and are intentionally not frozen to protected-main's current help-as-error behavior.
 
 use disksage_lib::maven_cache::{audit_maven_repository, MavenCacheAuditOptions};
 use std::process::{Command, Output};
@@ -21,13 +22,13 @@ fn stderr(output: &Output) -> String {
 
 #[test]
 fn cli_rejects_incomplete_or_unsafe_arguments_fail_closed() {
-    let help = run(&["--help"]);
-    assert_eq!(help.status.code(), Some(2));
-    assert!(stderr(&help).contains("usage: disksage-maven-cache-prune"));
-
     let missing_root_value = run(&["--repository-root"]);
     assert_eq!(missing_root_value.status.code(), Some(2));
     assert!(stderr(&missing_root_value).contains("--repository-root 값이 필요함"));
+
+    let missing_fingerprint = run(&["--repository-root", "/tmp"]);
+    assert_eq!(missing_fingerprint.status.code(), Some(2));
+    assert!(stderr(&missing_fingerprint).contains("--expected-candidate-set-fingerprint 값이 필요함"));
 
     let unknown = run(&["--unknown"]);
     assert_eq!(unknown.status.code(), Some(2));
