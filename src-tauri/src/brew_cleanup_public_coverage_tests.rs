@@ -92,6 +92,30 @@ fn judgment_is_bound_to_the_exact_plan_and_inference_failures_remain_unrated() {
     assert_ne!(unrated.judgment_id, safe_judgment.judgment_id);
 }
 
+#[test]
+fn judgment_preserves_non_safe_verdicts_and_bounds_model_reason_text() {
+    let plan = sample_plan();
+    let caution = FakeEngine(Ok(
+        r#"{"verdict":"caution","reason":"needs manual review"}"#.into(),
+    ));
+    let caution_judgment = judge(&caution, &plan, 200);
+    assert_eq!(caution_judgment.verdict, crate::llm::Verdict::Caution);
+    assert_eq!(caution_judgment.reason, "needs manual review");
+
+    let keep = FakeEngine(Ok(r#"{"verdict":"keep","reason":"retain it"}"#.into()));
+    let keep_judgment = judge(&keep, &plan, 201);
+    assert_eq!(keep_judgment.verdict, crate::llm::Verdict::Keep);
+    assert_eq!(keep_judgment.reason, "retain it");
+
+    let long_reason = "x".repeat(1_500);
+    let oversized = FakeEngine(Ok(format!(
+        r#"{{"verdict":"safe","reason":"{long_reason}"}}"#
+    )));
+    let bounded = judge(&oversized, &plan, 202);
+    assert_eq!(bounded.verdict, crate::llm::Verdict::Safe);
+    assert_eq!(bounded.reason.chars().count(), 1_000);
+}
+
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn non_macos_planning_and_execution_fail_closed() {
