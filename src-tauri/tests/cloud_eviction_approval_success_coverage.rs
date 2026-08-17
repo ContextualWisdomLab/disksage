@@ -79,7 +79,10 @@ fn fixture() -> (tempfile::TempDir, CloudCopyReceipt, LocalEvictionPermit) {
         readable: true,
         access_issue: None,
     };
-    let copy_approved_at_ms = modified_ms.saturating_add(1);
+    // The file modification time was just observed from the same local clock and is therefore a
+    // valid fresh approval timestamp. Do not add time to a wall-clock value: doing so can make the
+    // approval briefly future-dated and nondeterministically fail the production freshness gate.
+    let copy_approved_at_ms = modified_ms;
     let action = CloudCopyApprovalAction::CopyOnly;
     let copy_approval = create_cloud_copy_approval(
         &candidate,
