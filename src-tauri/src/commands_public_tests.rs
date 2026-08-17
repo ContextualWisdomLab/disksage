@@ -75,6 +75,22 @@ fn node_view_lists_files_and_directories_by_descending_size() {
 }
 
 #[test]
+fn node_view_defaults_unmeasured_directory_sizes_without_inventing_evidence() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    let unmeasured = root.join("unmeasured");
+    fs::create_dir_all(&unmeasured).unwrap();
+
+    let view = node_view(&result_for(&root, HashMap::new()), &root).unwrap();
+
+    assert_eq!(view.size, 0);
+    assert_eq!(view.entries.len(), 1);
+    assert_eq!(view.entries[0].name, "unmeasured");
+    assert!(view.entries[0].is_dir);
+    assert_eq!(view.entries[0].size, 0);
+}
+
+#[test]
 fn command_state_defaults_and_serializable_views_are_covered() {
     let state = AppState::default();
     assert!(state.result.lock().unwrap().is_none());
