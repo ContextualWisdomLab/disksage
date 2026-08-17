@@ -27,7 +27,7 @@ test('normalizes paths fail closed without case folding', () => {
   assert.equal(normalizeWorkflowPath('./.github//workflows/test.yml'), '.github/workflows/test.yml');
   assert.equal(normalizeWorkflowPath('.github\\workflows\\test.yaml'), '.github/workflows/test.yaml');
   assert.equal(normalizeWorkflowPath('././.github/workflows/a.yml'), '.github/workflows/a.yml');
-  for (const value of [null, 42, '', '.', '../escape.yml', '/absolute.yml']) assert.equal(normalizeWorkflowPath(value), null);
+  for (const value of [null, 42, '', '.', '..', '../escape.yml', '/absolute.yml']) assert.equal(normalizeWorkflowPath(value), null);
 });
 
 test('classifies main, active-PR, orphaned, disabled and dynamic workflow authority', () => {
