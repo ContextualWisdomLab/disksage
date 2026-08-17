@@ -65,7 +65,7 @@ fn clean_unretained_secondary_head_is_preserved() {
     assert_eq!(entry.disposition, GitWorktreeDisposition::Preserve);
     assert!(entry
         .blockers
-        .contains(&"head-not-contained-in-retention-set".to_string()));
+        .contains(&"reference-does-not-contain-head".to_string()));
     assert!(!entry.active_use.assessed);
     assert_eq!(report.removal_candidate_count, 0);
     assert!(report.evidence_complete);
