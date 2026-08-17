@@ -84,11 +84,15 @@ fn fixture() -> (tempfile::TempDir, CloudCopyReceipt, LocalEvictionPermit) {
         access_issue: None,
     };
     let action = CloudCopyApprovalAction::CopyOnly;
+    let approved_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
     let copy_approval = create_cloud_copy_approval(
         &candidate,
         &root,
         action,
-        modified_ms.saturating_add(1),
+        approved_at_ms,
         "human:local:coverage",
         "authorize exact local copy for source eviction approval guard coverage",
         &cloud_copy_approval_phrase(&candidate, action),
