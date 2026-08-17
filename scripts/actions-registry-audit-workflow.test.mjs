@@ -8,13 +8,24 @@ const workflow = readFileSync(
 );
 
 function jobSection(name) {
-  const start = new RegExp(`^  ${name}:\\n`, 'm').exec(workflow);
-  assert.ok(start, `workflow must define the ${name} job`);
-  const bodyStart = start.index + start[0].length;
-  const nextJob = /^  [A-Za-z0-9_-]+:\n/gm;
-  nextJob.lastIndex = bodyStart;
-  const next = nextJob.exec(workflow);
-  return workflow.slice(start.index, next?.index ?? workflow.length);
+  const marker = `  ${name}:\n`;
+  const startIndex = workflow.indexOf(marker);
+  assert.notEqual(startIndex, -1, `workflow must define the ${name} job`);
+  const bodyStart = startIndex + marker.length;
+  const tail = workflow.slice(bodyStart);
+  let offset = 0;
+  for (const line of tail.split('\n')) {
+    if (
+      line.startsWith('  ') &&
+      !line.startsWith('    ') &&
+      line.endsWith(':') &&
+      line.length > 3
+    ) {
+      return workflow.slice(startIndex, bodyStart + offset);
+    }
+    offset += line.length + 1;
+  }
+  return workflow.slice(startIndex);
 }
 
 const contractsJob = jobSection('contracts');
@@ -27,7 +38,7 @@ test('native coverage thresholds run on a Node release that implements every req
     '--test-coverage-branches=100',
     '--test-coverage-functions=100',
   ]) {
-    assert.match(contractsJob, new RegExp(flag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.ok(contractsJob.includes(flag), `contracts job must contain ${flag}`);
   }
 
   const versionMatch = contractsJob.match(/node-version:\s+(\d+)\.(\d+)\.(\d+)/);
