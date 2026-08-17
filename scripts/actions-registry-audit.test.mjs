@@ -65,6 +65,21 @@ test('defaults active-PR authority to an empty set when classification is called
   );
 });
 
+test('defaults collection active-PR authority to an empty set for non-empty records', () => {
+  const mainPaths = new Set();
+  assert.deepEqual(
+    classifyWorkflowRecords(
+      [{ id: 8, state: 'active', path: '.github/workflows/orphan-collection-default.yml' }],
+      mainPaths,
+    ),
+    [{
+      classification: 'orphaned-deleted',
+      path: '.github/workflows/orphan-collection-default.yml',
+      workflow_id: 8,
+    }],
+  );
+});
+
 test('paginates complete workflow and open-PR collections', async () => {
   const workflows = Array.from({ length: 100 }, (_, index) => ({ id: index + 1 }));
   const workflowCalls = [];
