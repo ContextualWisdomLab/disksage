@@ -1,8 +1,10 @@
 use std::path::Path;
 
 use crate::brew_cleanup::{
-    execute, plan as build_plan, write_audit_record, BrewCleanupAuditRecord, BrewCleanupPlan,
+    execute, judge, plan as build_plan, prompt, write_audit_record, BrewCleanupAuditRecord,
+    BrewCleanupPlan,
 };
+use crate::llm::InferenceEngine;
 
 fn sample_plan() -> BrewCleanupPlan {
     BrewCleanupPlan {
@@ -39,10 +41,55 @@ fn sample_record() -> BrewCleanupAuditRecord {
     }
 }
 
+struct FakeEngine(Result<String, String>);
+
+impl InferenceEngine for FakeEngine {
+    fn infer(&self, _prompt: &str) -> Result<String, String> {
+        self.0.clone()
+    }
+}
+
 #[test]
 fn approval_phrase_returns_the_exact_bound_phrase() {
     let plan = sample_plan();
     assert_eq!(plan.approval_phrase(), plan.exact_approval_phrase);
+}
+
+#[test]
+fn prompt_binds_the_fixed_command_and_marks_dry_run_as_untrusted_evidence() {
+    let mut plan = sample_plan();
+    plan.dry_run_output = "diagnostic-only: would remove one stale cache".into();
+
+    let rendered = prompt(&plan);
+
+    assert!(rendered.contains("untrusted diagnostic text"));
+    assert!(rendered.contains("Executable: /opt/homebrew/bin/brew"));
+    assert!(rendered.contains("Version: Homebrew 6.0.12"));
+    assert!(rendered.contains("Exact command: brew cleanup --prune-prefix"));
+    assert!(rendered.contains(&plan.dry_run_output));
+    assert!(rendered.contains("safe|caution|keep"));
+}
+
+#[test]
+fn judgment_is_bound_to_the_exact_plan_and_inference_failures_remain_unrated() {
+    let plan = sample_plan();
+    let safe = FakeEngine(Ok(
+        r#"{"verdict":"safe","reason":"bounded maintenance evidence"}"#.into(),
+    ));
+    let safe_judgment = judge(&safe, &plan, 123);
+
+    assert_eq!(safe_judgment.verdict, crate::llm::Verdict::Safe);
+    assert_eq!(safe_judgment.reason, "bounded maintenance evidence");
+    assert_eq!(safe_judgment.plan_fingerprint, plan.plan_fingerprint);
+    assert_eq!(safe_judgment.exact_approval_phrase, plan.exact_approval_phrase);
+    assert_eq!(safe_judgment.judged_at_ms, 123);
+    assert_eq!(safe_judgment.judgment_id.len(), 64);
+
+    let unavailable = FakeEngine(Err("model unavailable".into()));
+    let unrated = judge(&unavailable, &plan, 124);
+    assert_eq!(unrated.verdict, crate::llm::Verdict::Unrated);
+    assert!(unrated.reason.is_empty());
+    assert_ne!(unrated.judgment_id, safe_judgment.judgment_id);
 }
 
 #[cfg(not(target_os = "macos"))]
