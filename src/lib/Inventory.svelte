@@ -8,29 +8,35 @@
   let report: api.InventoryReport | null = $state(null);
   let busy = $state(false);
   let loadError = $state("");
+  let loadGeneration = 0;
 
   let model = $state<api.ModelStatus | null>(null);
   let modelBusy = $state(false);
   let modelError = $state("");
+  let modelStatusError = $state("");
   let summary = $state<string | null>(null);
   let summaryLoaded = $state(false);
   let summaryBusy = $state(false);
   let summaryError = $state("");
 
-  // 온톨로지 정합성(advisory) — 인벤토리 집계와 별개로 로드 실패해도 조용히 무시(게이트 아님)
+  // 온톨로지 정합성(advisory) — 집계는 막지 않지만 실패를 조용히 숨기지 않는다.
   let issues = $state<api.Issue[] | null>(null);
+  let coherenceError = $state("");
 
   // 활성 사용자 규칙 개수(advisory) — 손상된 규칙 파일은 조용히 무시하지 않고 안내만(게이트 아님)
   let userRulesCount = $state<number | null>(null);
   let userRulesError = $state("");
-  // 미분류 확장자 자문 인사이트(advisory) — 오프라인 LLM + (online_mode일 때만) 웹. 실패해도 조용히 무시(게이트 아님)
+  // 미분류 확장자 자문 인사이트(advisory) — 오프라인 LLM + (online_mode일 때만) 웹.
   let insights = $state<api.ExtInsight[]>([]);
+  let insightsError = $state("");
 
   async function loadCoherence() {
+    coherenceError = "";
     try {
       issues = await api.ontologyCoherence();
     } catch {
       issues = null;
+      coherenceError = "온톨로지 정합성 확인에 실패했습니다. DiskSage 리소스와 설정을 확인한 뒤 인벤토리를 다시 집계하세요.";
     }
   }
 
@@ -47,19 +53,37 @@
 
   async function load() {
     if (!scannedRoot) return;
+    const generation = ++loadGeneration;
     busy = true;
     loadError = "";
     report = null;
     summary = null;
     summaryLoaded = false;
     summaryError = "";
+    issues = null;
+    coherenceError = "";
+    userRulesCount = null;
+    userRulesError = "";
     insights = [];
+    insightsError = "";
     try {
       report = await api.diskInventory(scannedRoot);
       await loadCoherence();
       await loadUserRules();
-      // 미분류 확장자 인사이트: 비차단(fire-and-forget) — 실패해도 인벤토리 표시를 막지 않음
-      api.reasonUnknownExtensions(report.unknown_samples).then((r) => (insights = r)).catch(() => {});
+      // 미분류 확장자 인사이트: 비차단(fire-and-forget). 이전 집계 응답은 새 집계의 증거를 덮지 못한다.
+      void api.reasonUnknownExtensions(report.unknown_samples)
+        .then((nextInsights) => {
+          if (generation === loadGeneration) {
+            insights = nextInsights;
+            insightsError = "";
+          }
+        })
+        .catch(() => {
+          if (generation === loadGeneration) {
+            insights = [];
+            insightsError = "미분류 확장자 자문에 실패했습니다. 인벤토리는 그대로 사용할 수 있으며 필요하면 다시 집계해 자문을 재시도하세요.";
+          }
+        });
     } catch {
       loadError = "인벤토리 집계에 실패했습니다. 스캔 대상 폴더의 접근 권한을 확인하고 스캔을 다시 실행한 뒤 집계하세요.";
     } finally {
@@ -68,10 +92,12 @@
   }
 
   async function loadModel() {
+    modelStatusError = "";
     try {
       model = await api.modelStatus();
     } catch {
       model = null;
+      modelStatusError = "모델 상태를 확인하지 못했습니다. 모델 다운로드 여부를 다시 확인하거나 잠시 후 상태를 새로고침하세요.";
     }
   }
 
@@ -134,6 +160,7 @@
     {/if}
     <span class="muted small">판정은 참고용(자문)입니다 — 모델 없이도 규칙 기반으로 전체 기능이 동작합니다.</span>
     {#if modelError}<span class="error small" role="alert">{modelError}</span>{/if}
+    {#if modelStatusError}<span class="warn small" role="alert">{modelStatusError}</span>{/if}
   </div>
 
   <Settings />
@@ -164,6 +191,9 @@
               <span class="summary-text">{summary ?? "미판정 (모델 없음)"}</span>
             {/if}
           </div>
+          {#if insightsError}
+            <p class="warn small" role="alert">{insightsError}</p>
+          {/if}
           {#if insights.length > 0}
             <ul class="ext-insights">
               {#each insights as i (i.ext)}
@@ -178,7 +208,9 @@
       {/if}
     </ul>
 
-    {#if issues !== null}
+    {#if coherenceError}
+      <p class="warn small" role="alert">{coherenceError}</p>
+    {:else if issues !== null}
       <div class="coherence">
         {#if issues.length === 0}
           <span class="ok small">온톨로지 정합 ✓</span>
