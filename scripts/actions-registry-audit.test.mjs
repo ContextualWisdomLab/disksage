@@ -50,6 +50,21 @@ test('classifies main, active-PR, orphaned, disabled and dynamic workflow author
   assert.deepEqual(classifyWorkflowRecords([], mainPaths), []);
 });
 
+test('defaults active-PR authority to an empty set when classification is called directly', () => {
+  const mainPaths = new Set();
+  assert.deepEqual(
+    classifyWorkflowRecord(
+      { id: 7, state: 'active', path: '.github/workflows/orphan-by-default.yml' },
+      mainPaths,
+    ),
+    {
+      classification: 'orphaned-deleted',
+      path: '.github/workflows/orphan-by-default.yml',
+      workflow_id: 7,
+    },
+  );
+});
+
 test('paginates complete workflow and open-PR collections', async () => {
   const workflows = Array.from({ length: 100 }, (_, index) => ({ id: index + 1 }));
   const workflowCalls = [];
