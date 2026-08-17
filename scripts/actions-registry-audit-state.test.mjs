@@ -41,6 +41,7 @@ test('malformed workflow identity fails closed instead of becoming dynamic or nu
     { id: 9, state: 'active', path: null },
     { id: 9, state: 'active', path: '' },
     { id: 9, state: 'active', path: 42 },
+    { id: 9, state: 'active', path: '../escape.yml' },
   ]) {
     assert.throws(
       () => classify(record),
