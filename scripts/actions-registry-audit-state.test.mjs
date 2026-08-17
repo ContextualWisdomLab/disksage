@@ -75,7 +75,7 @@ test('workflow trees require an explicit non-truncated provider assertion', asyn
     activePullRequestWorkflowPaths(
       async () => ({ tree: [{ type: 'blob', path: '.github/workflows/pr.yml' }] }),
       repo,
-      [{ head: { sha: sha('b'), repo: { full_name: repo } } }],
+      [{ number: 1, head: { sha: sha('b'), repo: { full_name: repo } } }],
     ),
     /workflow-tree-incomplete/,
   );
@@ -132,6 +132,49 @@ test('malformed open-PR ownership records fail closed before workflow classifica
       `malformed open-PR ownership evidence must fail closed: ${JSON.stringify(pullRequests)}`,
     );
   }
+});
+
+test('malformed open-PR number and changed-file evidence fail closed', async () => {
+  const head = sha('7');
+  await assert.rejects(
+    activePullRequestWorkflowPaths(async () => {
+      throw new Error('provider must not run before PR number validation');
+    }, repo, [{ head: { sha: head, repo: { full_name: repo } } }]),
+    /open-pr-number-invalid/,
+  );
+
+  for (const invalidFile of [
+    null,
+    42,
+    {},
+    { filename: 42, status: 'modified' },
+    { filename: '', status: 'modified' },
+    { filename: '.github/workflows/test.yml', status: null },
+    { filename: '.github/workflows/test.yml', status: '' },
+  ]) {
+    await assert.rejects(
+      activePullRequestWorkflowPaths(async (url) => {
+        if (url.includes('/git/trees/')) {
+          return {
+            truncated: false,
+            tree: [{ type: 'blob', path: '.github/workflows/test.yml' }],
+          };
+        }
+        if (url.includes('/pulls/7/files')) return [invalidFile];
+        throw new Error(`unexpected URL ${url}`);
+      }, repo, [{ number: 7, head: { sha: head, repo: { full_name: repo } } }]),
+      /open-pr-file-invalid/,
+    );
+  }
+
+  await assert.rejects(
+    activePullRequestWorkflowPaths(async (url) => {
+      if (url.includes('/git/trees/')) return { truncated: false, tree: [] };
+      if (url.includes('/pulls/7/files')) return null;
+      throw new Error(`unexpected URL ${url}`);
+    }, repo, [{ number: 7, head: { sha: head, repo: { full_name: repo } } }]),
+    /open-pr-files-invalid/,
+  );
 });
 
 test('audit fails closed when same-repository open-PR workflow ownership moves mid-audit', async () => {
