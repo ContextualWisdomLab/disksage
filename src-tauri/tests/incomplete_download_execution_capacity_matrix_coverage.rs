@@ -233,7 +233,7 @@ fn execution_rejects_capacity_schema_scope_time_and_size_drift_before_source_acc
         );
     }
 
-    let stale_observed_at = 10_002u64.saturating_sub(MAX_CAPACITY_AGE_MS + 1);
+    let stale_execution_at = 10_001 + MAX_CAPACITY_AGE_MS + 1;
     assert_eq!(
         execute_incomplete_download_materialization(
             source.path(),
@@ -241,9 +241,9 @@ fn execution_rejects_capacity_schema_scope_time_and_size_drift_before_source_acc
             &plan,
             &approval,
             &plan.destination_plan_fingerprint,
-            capacity(stale_observed_at),
+            capacity(10_001),
             &receipt_dir,
-            10_002,
+            stale_execution_at,
         )
         .unwrap_err(),
         "materialization-execution-capacity-evidence-invalid"
