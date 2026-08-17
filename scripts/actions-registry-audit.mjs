@@ -125,8 +125,11 @@ function sameRepositoryHeadSnapshot(pullRequests, repository) {
   const headShas = new Set();
   for (const pullRequest of pullRequests) {
     const headRepository = pullRequest?.head?.repo?.full_name;
+    if (typeof headRepository !== 'string' || headRepository.length === 0) {
+      throw new Error('open-pr-head-invalid');
+    }
     if (headRepository !== repository) continue;
-    const headSha = pullRequest?.head?.sha;
+    const headSha = pullRequest.head.sha;
     if (typeof headSha !== 'string' || !/^[0-9a-f]{40}$/.test(headSha)) {
       throw new Error('open-pr-head-invalid');
     }
