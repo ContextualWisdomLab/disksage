@@ -102,7 +102,10 @@ fn expected_tree_mismatch_is_reported_without_rejecting_valid_content() {
     .unwrap();
 
     assert_eq!(report.matches_expected, Some(false));
-    assert_eq!(report.expected_git_tree_sha1.as_deref(), Some("0000000000000000000000000000000000000000"));
+    assert_eq!(
+        report.expected_git_tree_sha1.as_deref(),
+        Some("0000000000000000000000000000000000000000")
+    );
     assert_eq!(report.file_count, 1);
 }
 
@@ -127,19 +130,24 @@ fn identical_archives_are_proven_as_identical_inclusion() {
 }
 
 #[test]
-fn duplicate_logical_paths_fail_closed() {
+fn file_then_nested_file_path_conflict_reaches_the_production_guard() {
     let temp = tempfile::tempdir().unwrap();
     let file = File::create(temp.path().join("fixture.zip")).unwrap();
     let mut archive = zip::ZipWriter::new(file);
-    for contents in [b"first".as_slice(), b"second".as_slice()] {
-        archive
-            .start_file(
-                "same.txt",
-                SimpleFileOptions::default().unix_permissions(0o100644),
-            )
-            .unwrap();
-        archive.write_all(contents).unwrap();
-    }
+    archive
+        .start_file(
+            "same.txt",
+            SimpleFileOptions::default().unix_permissions(0o100644),
+        )
+        .unwrap();
+    archive.write_all(b"first").unwrap();
+    archive
+        .start_file(
+            "same.txt/child.bin",
+            SimpleFileOptions::default().unix_permissions(0o100644),
+        )
+        .unwrap();
+    archive.write_all(b"second").unwrap();
     archive.finish().unwrap();
 
     assert_eq!(
@@ -149,6 +157,6 @@ fn duplicate_logical_paths_fail_closed() {
             ArchiveTreeRootMode::KeepTopLevel,
         )
         .unwrap_err(),
-        "archive-entry-duplicate-or-type-conflict"
+        "archive-entry-file-directory-conflict"
     );
 }
