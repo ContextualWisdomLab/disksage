@@ -16,7 +16,14 @@ export function normalizeWorkflowPath(rawPath) {
   const slashNormalized = rawPath.replaceAll('\\', '/');
   const withoutDotPrefix = slashNormalized.replace(/^(?:\.\/)+/, '');
   const normalized = path.posix.normalize(withoutDotPrefix);
-  if (normalized === '.' || normalized.startsWith('../') || normalized.startsWith('/')) return null;
+  if (
+    normalized === '.' ||
+    normalized === '..' ||
+    normalized.startsWith('../') ||
+    normalized.startsWith('/')
+  ) {
+    return null;
+  }
   return normalized;
 }
 
@@ -29,7 +36,7 @@ function isRepositoryWorkflowPath(workflowPath) {
 }
 
 /** Classify one Actions registry record against exact protected-main and active-PR path authority. */
-export function classifyWorkflowRecord(record, protectedWorkflowPaths, activePullRequestWorkflowPaths = new Set()) {
+export function classifyWorkflowRecord(record, protectedWorkflowPaths, activePrPaths = new Set()) {
   if (
     !record ||
     typeof record !== 'object' ||
@@ -55,7 +62,7 @@ export function classifyWorkflowRecord(record, protectedWorkflowPaths, activePul
   if (protectedWorkflowPaths.has(normalizedPath)) {
     return { classification: 'present', path: normalizedPath, workflow_id: record.id };
   }
-  if (activePullRequestWorkflowPaths.has(normalizedPath)) {
+  if (activePrPaths.has(normalizedPath)) {
     return {
       classification: 'unresolved',
       reason: 'active-pr-workflow',
@@ -67,9 +74,9 @@ export function classifyWorkflowRecord(record, protectedWorkflowPaths, activePul
 }
 
 /** Classify a complete collection of Actions registry records. */
-export function classifyWorkflowRecords(records, protectedWorkflowPaths, activePullRequestWorkflowPaths = new Set()) {
+export function classifyWorkflowRecords(records, protectedWorkflowPaths, activePrPaths = new Set()) {
   return records.map((record) =>
-    classifyWorkflowRecord(record, protectedWorkflowPaths, activePullRequestWorkflowPaths),
+    classifyWorkflowRecord(record, protectedWorkflowPaths, activePrPaths),
   );
 }
 
