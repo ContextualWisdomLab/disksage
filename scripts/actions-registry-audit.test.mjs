@@ -173,6 +173,16 @@ test('fails closed for default-branch, revision and protected-tree ambiguity', a
   await assert.rejects(protectedWorkflowPaths(async () => null, repo, sha()), /default-branch-unavailable/);
   await assert.rejects(protectedWorkflowPaths(async () => ({ default_branch: '' }), repo, sha()), /default-branch-unavailable/);
   await assert.rejects(protectedWorkflowPaths(async () => ({ default_branch: null }), repo, sha()), /default-branch-unavailable/);
+  let commitRead = false;
+  await assert.rejects(protectedWorkflowPaths(async (url) => {
+    if (url.endsWith('/disksage')) return { default_branch: 'main' };
+    if (url.endsWith('/commits/main')) {
+      commitRead = true;
+      return null;
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }, repo, sha()), /protected-main-moved/);
+  assert.equal(commitRead, true);
   await assert.rejects(protectedWorkflowPaths(protectedFetch(sha('b'), { truncated: false, tree: [] }), repo, sha()), /protected-main-moved/);
   await assert.rejects(protectedWorkflowPaths(protectedFetch(sha(), null), repo, sha()), /protected-main-tree-incomplete/);
   await assert.rejects(protectedWorkflowPaths(protectedFetch(sha(), { truncated: true, tree: [] }), repo, sha()), /protected-main-tree-incomplete/);
