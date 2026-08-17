@@ -1,7 +1,7 @@
 //! Real Git reference-resolution coverage for the worktree audit.
 //!
 //! These tests create only a temporary local repository. They exercise exact-OID retention
-//! bindings and fail-closed resolution of a missing symbolic reference without fetching,
+//! bindings, validation/deduplication, and fail-closed symbolic resolution without fetching,
 //! pruning, deleting a branch, removing a worktree, or contacting a provider.
 
 use disksage_lib::git_worktree::{audit_git_worktrees, GitWorktreeAuditOptions};
@@ -68,6 +68,62 @@ fn exact_oid_retention_reference_is_bound_without_symbolic_resolution() {
 }
 
 #[test]
+fn duplicate_retention_reference_is_deduplicated_before_binding() {
+    let root = initialized_repository();
+    let head_oid = git_output(root.path(), &["rev-parse", "HEAD"]);
+
+    let report = audit_git_worktrees(
+        root.path(),
+        &[head_oid.clone(), head_oid.clone()],
+        GitWorktreeAuditOptions::default(),
+        2,
+    )
+    .unwrap();
+
+    assert_eq!(report.retention_references.len(), 1);
+    assert_eq!(report.retention_references[0].reference_ref, head_oid);
+}
+
+#[test]
+fn empty_retention_reference_set_fails_closed() {
+    let root = initialized_repository();
+
+    assert_eq!(
+        audit_git_worktrees(
+            root.path(),
+            &[],
+            GitWorktreeAuditOptions::default(),
+            3,
+        )
+        .unwrap_err(),
+        "git-worktree-retention-reference-count-invalid"
+    );
+}
+
+#[test]
+fn malformed_retention_references_fail_before_rev_parse() {
+    let root = initialized_repository();
+    let oversized = "r".repeat(1_025);
+    for invalid in [
+        String::new(),
+        "-dangerous-option-shaped-ref".to_string(),
+        "refs/heads/main\n".to_string(),
+        oversized,
+    ] {
+        assert_eq!(
+            audit_git_worktrees(
+                root.path(),
+                &[invalid],
+                GitWorktreeAuditOptions::default(),
+                4,
+            )
+            .unwrap_err(),
+            "git-worktree-reference-invalid"
+        );
+    }
+}
+
+#[test]
 fn missing_symbolic_retention_reference_fails_closed() {
     let root = initialized_repository();
 
@@ -76,7 +132,7 @@ fn missing_symbolic_retention_reference_fails_closed() {
             root.path(),
             &["refs/heads/does-not-exist".into()],
             GitWorktreeAuditOptions::default(),
-            2,
+            5,
         )
         .unwrap_err(),
         "git-reference-resolve-failed"
