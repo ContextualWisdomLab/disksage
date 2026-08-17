@@ -192,7 +192,7 @@ test('audit fails closed when same-repository open-PR workflow ownership moves m
       pullReads += 1;
       return pullReads === 1
         ? []
-        : [{ head: { sha: newHead, repo: { full_name: repo } } }];
+        : [{ number: 7, head: { sha: newHead, repo: { full_name: repo } } }];
     }
     if (url.endsWith('/disksage')) return { default_branch: 'main' };
     if (url.endsWith('/commits/main')) return { sha: expected };
