@@ -95,6 +95,9 @@ for checksum_file in "${checksum_files[@]}"; do
   fi
   recorded_digest="" recorded_name="" extra_field=""
   read -r recorded_digest recorded_name extra_field <<<"$checksum_line"
+  if [[ "$recorded_name" == \** ]]; then
+    recorded_name="${recorded_name#\*}"
+  fi
   if [[ ! "$recorded_digest" =~ ^[0-9a-fA-F]{64}$ ]] || [[ "$recorded_name" != "$expected_asset_name" ]] || [[ -n "$extra_field" ]]; then
     printf 'Checksum file %s must reference its adjacent operational CLI %s exactly once.\n' "$checksum_name" "$expected_asset_name" >&2
     exit 1
