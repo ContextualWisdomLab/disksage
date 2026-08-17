@@ -4,7 +4,9 @@
 //! They verify that collisions, malformed lexical paths, missing sources, and audit-journal
 //! failures stop before DiskSage can overwrite or silently lose user data.
 
-use crate::safety::{journal_recent, move_file, trash_delete, SafetyError};
+use crate::safety::{
+    journal_append, journal_recent, move_file, trash_delete, JournalEntry, SafetyError,
+};
 use std::path::Path;
 
 #[test]
@@ -178,4 +180,32 @@ fn trash_rejects_protected_system_path_before_journaling() {
 
     assert!(matches!(error, SafetyError::Protected(_)));
     assert!(!journal.exists());
+}
+
+#[test]
+fn journal_append_heals_torn_tail_before_appending_next_entry() {
+    let root = tempfile::tempdir().expect("temporary journal root");
+    let journal = root.path().join("safety-journal.jsonl");
+    std::fs::write(&journal, b"{\"ts_ms\":1")
+        .expect("write realistic crash-truncated journal tail");
+    let entry = JournalEntry {
+        ts_ms: 30_010,
+        op: "move_file".to_string(),
+        path: "/tmp/reviewed-source.bin".to_string(),
+        bytes: 23,
+        outcome: "pending".to_string(),
+    };
+
+    journal_append(&journal, &entry).expect("append after torn tail");
+
+    let raw = std::fs::read_to_string(&journal).expect("read healed journal");
+    assert!(
+        raw.starts_with("{\"ts_ms\":1\n"),
+        "the crash-truncated record must be separated from the next valid JSON line"
+    );
+    let recent = journal_recent(&journal, 10);
+    assert_eq!(recent.len(), 1, "malformed crash tail must not become audit evidence");
+    assert_eq!(recent[0].ts_ms, 30_010);
+    assert_eq!(recent[0].op, "move_file");
+    assert_eq!(recent[0].outcome, "pending");
 }
