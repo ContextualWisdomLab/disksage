@@ -262,3 +262,98 @@ fn prune_validation_rejects_uppercase_fingerprints_and_zero_entry_budgets() {
         "maven-cache-prune-max-entries-invalid"
     );
 }
+
+#[test]
+fn truncation_after_marker_discovery_holds_known_marker_without_auditing_it() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("_remote.repositories"),
+        "root-artifact.jar>central=\n",
+    )
+    .unwrap();
+    std::fs::write(temp.path().join("z-after-marker.bin"), b"later entry").unwrap();
+
+    let report = audit_maven_repository(
+        temp.path(),
+        MavenCacheAuditOptions {
+            max_entries: 1,
+            max_candidates: 500,
+            max_issues: 200,
+        },
+        2,
+    )
+    .unwrap();
+
+    assert!(report.scan_truncated);
+    assert!(report.truncated);
+    assert_eq!(report.scanned_entries, 1);
+    assert_eq!(report.marker_directories, 1);
+    assert_eq!(report.remote_recoverable_directories, 0);
+    assert_eq!(report.held_directories, 1);
+    assert_eq!(report.held_reason_counts.get("scan-truncated"), Some(&1));
+    assert!(report.candidates.is_empty());
+    assert!(report.issues.is_empty());
+}
+
+#[test]
+fn zero_issue_budget_suppresses_issue_details_without_erasing_hold_reason() {
+    let temp = tempfile::tempdir().unwrap();
+    let version = version_dir(temp.path(), "org/example/issue-budget/1.0.0");
+    std::fs::write(version.join("artifact.jar"), b"jar").unwrap();
+    std::fs::write(
+        version.join("_remote.repositories"),
+        "artifact.jar=central\n",
+    )
+    .unwrap();
+
+    let report = audit_maven_repository(
+        temp.path(),
+        MavenCacheAuditOptions {
+            max_entries: 10_000,
+            max_candidates: 500,
+            max_issues: 0,
+        },
+        3,
+    )
+    .unwrap();
+
+    assert_eq!(report.remote_recoverable_directories, 0);
+    assert_eq!(report.held_directories, 1);
+    assert_eq!(report.held_reason_counts.get("invalid-remote-marker"), Some(&1));
+    assert!(report.issues.is_empty());
+}
+
+#[test]
+fn non_utf8_remote_marker_is_held_with_explicit_issue_reason() {
+    let temp = tempfile::tempdir().unwrap();
+    let version = version_dir(temp.path(), "org/example/non-utf8-marker/1.0.0");
+    std::fs::write(version.join("artifact.jar"), b"jar").unwrap();
+    std::fs::write(version.join("_remote.repositories"), [0xff, 0xfe, 0xfd]).unwrap();
+
+    let report = audit(temp.path());
+    assert_eq!(report.remote_recoverable_directories, 0);
+    assert_eq!(report.held_directories, 1);
+    assert_eq!(report.held_reason_counts.get("invalid-remote-marker"), Some(&1));
+    assert_eq!(report.issues.len(), 1);
+    assert_eq!(report.issues[0].reason, "remote-marker-not-utf8");
+}
+
+#[test]
+fn repeated_identical_remote_attribution_remains_recoverable() {
+    let temp = tempfile::tempdir().unwrap();
+    let version = version_dir(temp.path(), "org/example/repeated-attribution/1.0.0");
+    std::fs::write(version.join("artifact.jar"), b"jar").unwrap();
+    std::fs::write(
+        version.join("_remote.repositories"),
+        "artifact.jar>central=\nartifact.jar>central=\n",
+    )
+    .unwrap();
+
+    let report = audit(temp.path());
+    assert_eq!(report.remote_recoverable_directories, 1);
+    assert_eq!(report.held_directories, 0);
+    assert_eq!(report.candidates.len(), 1);
+    assert_eq!(report.candidates[0].artifact_files, 1);
+    assert_eq!(report.candidates[0].repository_ids, vec!["central"]);
+    assert!(report.issues.is_empty());
+}
