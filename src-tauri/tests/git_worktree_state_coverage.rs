@@ -1,8 +1,8 @@
-//! Coverage for Git worktree states emitted by real porcelain output.
+//! Coverage for detached Git worktree state emitted by real porcelain output.
 //!
-//! These regressions use only isolated temporary repositories and worktrees. They exercise the
-//! production audit boundary for locked and detached registrations without deleting user data,
-//! branches, or repository history.
+//! Existing integration coverage owns locked-worktree behavior. This regression exercises the
+//! separate branchless detached-candidate path using only isolated temporary repositories and
+//! worktrees, without deleting user data, branches, or repository history.
 
 use disksage_lib::git_worktree::{
     audit_git_worktrees, GitWorktreeAuditOptions, GitWorktreeDisposition,
@@ -43,62 +43,14 @@ fn initialized_repository() -> tempfile::TempDir {
     temp
 }
 
-fn advance_retained_tip(root: &Path) {
-    std::fs::write(root.join("retained.txt"), b"retained\n").unwrap();
-    git(root, &["add", "retained.txt"]);
-    git(root, &["commit", "-q", "-m", "advance retained tip"]);
-}
-
-#[cfg(unix)]
-#[test]
-fn locked_secondary_worktree_is_preserved_with_lock_reason() {
-    let root = initialized_repository();
-    git(root.path(), &["branch", "locked-test-worktree"]);
-    advance_retained_tip(root.path());
-
-    let secondary_parent = tempfile::tempdir().unwrap();
-    let secondary = secondary_parent.path().join("locked-worktree");
-    let secondary_text = secondary.to_string_lossy().into_owned();
-    git(
-        root.path(),
-        &["worktree", "add", "-q", &secondary_text, "locked-test-worktree"],
-    );
-    git(
-        root.path(),
-        &["worktree", "lock", "--reason", "user-pinned", &secondary_text],
-    );
-
-    let report = audit_git_worktrees(
-        root.path(),
-        &["HEAD".into()],
-        GitWorktreeAuditOptions::default(),
-        2_000,
-    )
-    .unwrap();
-    let entry = report
-        .entries
-        .iter()
-        .find(|entry| entry.path == secondary_text)
-        .expect("locked secondary worktree must be audited");
-
-    assert!(entry.locked);
-    assert_eq!(entry.lock_reason.as_deref(), Some("user-pinned"));
-    assert_eq!(entry.disposition, GitWorktreeDisposition::Preserve);
-    assert!(entry.blockers.contains(&"worktree-locked".to_string()));
-    assert_eq!(report.removal_candidate_count, 0);
-    assert!(report.preserved_count >= 2);
-    assert!(!report.filesystem_mutation_executed);
-
-    git(root.path(), &["worktree", "unlock", &secondary_text]);
-    git(root.path(), &["worktree", "remove", "--force", &secondary_text]);
-}
-
 #[cfg(unix)]
 #[test]
 fn detached_merged_secondary_worktree_remains_a_branchless_candidate() {
     let root = initialized_repository();
     let initial_head = git_output(root.path(), &["rev-parse", "HEAD"]);
-    advance_retained_tip(root.path());
+    std::fs::write(root.path().join("retained.txt"), b"retained\n").unwrap();
+    git(root.path(), &["add", "retained.txt"]);
+    git(root.path(), &["commit", "-q", "-m", "advance retained tip"]);
 
     let secondary_parent = tempfile::tempdir().unwrap();
     let secondary = secondary_parent.path().join("detached-worktree");
