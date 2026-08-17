@@ -1,6 +1,7 @@
 use disksage_lib::cloud::CloudProvider;
 use disksage_lib::cloud_transfer::{
-    receipt_blockers, CloudCopyReceipt, LEGACY_RECEIPT_VERSION, RECEIPT_VERSION,
+    receipt_blockers, CloudCopyApprovalAction, CloudCopyReceipt, LEGACY_RECEIPT_VERSION,
+    RECEIPT_VERSION,
 };
 
 fn receipt() -> CloudCopyReceipt {
@@ -28,6 +29,15 @@ fn assert_has(blockers: &[String], expected: &str) {
     assert!(
         blockers.iter().any(|blocker| blocker == expected),
         "expected blocker {expected:?}, got {blockers:?}"
+    );
+}
+
+#[test]
+fn copy_approval_actions_keep_stable_receipt_wire_labels() {
+    assert_eq!(CloudCopyApprovalAction::CopyOnly.as_str(), "copy-only");
+    assert_eq!(
+        CloudCopyApprovalAction::AdoptExistingCopy.as_str(),
+        "adopt-existing-copy"
     );
 }
 
