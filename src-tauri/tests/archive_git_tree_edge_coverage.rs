@@ -160,3 +160,92 @@ fn file_then_nested_file_path_conflict_reaches_the_production_guard() {
         "archive-entry-file-directory-conflict"
     );
 }
+
+#[test]
+fn duplicate_file_path_is_rejected_before_manifest_evidence_can_be_ambiguous() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = File::create(temp.path().join("fixture.zip")).unwrap();
+    let mut archive = zip::ZipWriter::new(file);
+    for contents in [b"first".as_slice(), b"second".as_slice()] {
+        archive
+            .start_file(
+                "duplicate.txt",
+                SimpleFileOptions::default().unix_permissions(0o100644),
+            )
+            .unwrap();
+        archive.write_all(contents).unwrap();
+    }
+    archive.finish().unwrap();
+
+    assert_eq!(
+        inspect_zip_git_tree_with_mode(
+            &temp.path().join("fixture.zip"),
+            None,
+            ArchiveTreeRootMode::KeepTopLevel,
+        )
+        .unwrap_err(),
+        "archive-entry-duplicate-or-type-conflict"
+    );
+}
+
+#[test]
+fn hostile_archive_paths_fail_closed_at_the_public_inspection_boundary() {
+    let cases = [
+        ("/absolute.txt", "archive-entry-path-unsafe"),
+        ("parent/../escape.txt", "archive-entry-path-unsafe"),
+        ("double//separator.txt", "archive-entry-path-unsafe"),
+        ("dot/./component.txt", "archive-entry-path-unsafe"),
+        ("back\\slash.txt", "archive-entry-path-unsafe"),
+    ];
+
+    for (path, expected) in cases {
+        let fixture = single_file_zip(path, b"payload");
+        assert_eq!(
+            inspect_zip_git_tree_with_mode(
+                &fixture.path().join("fixture.zip"),
+                None,
+                ArchiveTreeRootMode::KeepTopLevel,
+            )
+            .unwrap_err(),
+            expected,
+            "path={path}"
+        );
+    }
+
+    let overlong = format!("{}.txt", "a".repeat(4_096));
+    let fixture = single_file_zip(&overlong, b"payload");
+    assert_eq!(
+        inspect_zip_git_tree_with_mode(
+            &fixture.path().join("fixture.zip"),
+            None,
+            ArchiveTreeRootMode::KeepTopLevel,
+        )
+        .unwrap_err(),
+        "archive-entry-path-invalid"
+    );
+}
+
+#[test]
+fn slash_suffixed_file_with_payload_is_rejected_as_a_malformed_directory_entry() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = File::create(temp.path().join("fixture.zip")).unwrap();
+    let mut archive = zip::ZipWriter::new(file);
+    archive
+        .start_file(
+            "pretend-directory/",
+            SimpleFileOptions::default().unix_permissions(0o100644),
+        )
+        .unwrap();
+    archive.write_all(b"payload").unwrap();
+    archive.finish().unwrap();
+
+    assert_eq!(
+        inspect_zip_git_tree_with_mode(
+            &temp.path().join("fixture.zip"),
+            None,
+            ArchiveTreeRootMode::KeepTopLevel,
+        )
+        .unwrap_err(),
+        "archive-directory-entry-has-payload"
+    );
+}
