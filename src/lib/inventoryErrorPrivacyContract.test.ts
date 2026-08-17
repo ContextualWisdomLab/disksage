@@ -60,4 +60,40 @@ describe("Inventory privacy-safe failure feedback", () => {
     expect(source).toContain("api.downloadModel()");
     expect(source).toContain("api.summarizeUnknownBucket(report?.unknown_samples ?? [])");
   });
+
+  it("keeps advisory failures non-blocking but visible with bounded next actions", () => {
+    const source = readSource("src/lib/Inventory.svelte");
+
+    expect(source).not.toContain(".catch(() => {})");
+    expect(source).toContain("coherenceError");
+    expect(source).toContain("modelStatusError");
+    expect(source).toContain("insightsError");
+    expect(source).toContain(
+      "온톨로지 정합성 확인에 실패했습니다. DiskSage 리소스와 설정을 확인한 뒤 인벤토리를 다시 집계하세요.",
+    );
+    expect(source).toContain(
+      "모델 상태를 확인하지 못했습니다. 모델 다운로드 여부를 다시 확인하거나 잠시 후 상태를 새로고침하세요.",
+    );
+    expect(source).toContain(
+      "미분류 확장자 자문에 실패했습니다. 인벤토리는 그대로 사용할 수 있으며 필요하면 다시 집계해 자문을 재시도하세요.",
+    );
+    expect(source).toContain("api.ontologyCoherence()");
+    expect(source).toContain("api.modelStatus()");
+    expect(source).toContain("api.reasonUnknownExtensions(report.unknown_samples)");
+  });
+
+  it("invalidates stale advisory state and ignores an older extension-reasoning response", () => {
+    const source = readSource("src/lib/Inventory.svelte");
+    const loadStart = source.indexOf("async function load()");
+    const inventoryCall = source.indexOf("report = await api.diskInventory(scannedRoot)", loadStart);
+    const loadPrefix = source.slice(loadStart, inventoryCall);
+
+    expect(source).toContain("let loadGeneration = 0");
+    expect(loadPrefix).toContain("const generation = ++loadGeneration");
+    expect(loadPrefix).toContain("issues = null");
+    expect(loadPrefix).toContain('coherenceError = ""');
+    expect(loadPrefix).toContain("insights = []");
+    expect(loadPrefix).toContain('insightsError = ""');
+    expect(source).toContain("generation === loadGeneration");
+  });
 });
