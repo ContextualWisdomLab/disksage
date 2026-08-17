@@ -1,5 +1,7 @@
 use disksage_lib::cloud::CloudProvider;
-use disksage_lib::cloud_transfer::{receipt_blockers, CloudCopyReceipt, RECEIPT_VERSION};
+use disksage_lib::cloud_transfer::{
+    receipt_blockers, CloudCopyReceipt, LEGACY_RECEIPT_VERSION, RECEIPT_VERSION,
+};
 
 fn receipt() -> CloudCopyReceipt {
     CloudCopyReceipt {
@@ -44,6 +46,17 @@ fn receipt_blockers_reject_unsupported_and_missing_lineage_shapes() {
 }
 
 #[test]
+fn legacy_receipts_reject_lineage_fields_that_did_not_exist_in_that_schema() {
+    let mut legacy = receipt();
+    legacy.version = LEGACY_RECEIPT_VERSION;
+    legacy.lineage_fingerprint = Some("d".repeat(64));
+
+    let blockers = receipt_blockers(&legacy);
+    assert_has(&blockers, "legacy-receipt-lineage-unexpected");
+    assert_has(&blockers, "receipt-integrity-mismatch");
+}
+
+#[test]
 fn receipt_blockers_reject_unverified_consumed_and_unsafe_paths() {
     let mut unverified = receipt();
     unverified.copy_verified = false;
@@ -60,10 +73,24 @@ fn receipt_blockers_reject_unverified_consumed_and_unsafe_paths() {
         "receipt-source-path-not-safe-absolute",
     );
 
+    let mut traversing_source = receipt();
+    traversing_source.source = "/tmp/disksage/../source.bin".into();
+    assert_has(
+        &receipt_blockers(&traversing_source),
+        "receipt-source-path-not-safe-absolute",
+    );
+
     let mut relative_destination = receipt();
     relative_destination.destination = "relative/destination.bin".into();
     assert_has(
         &receipt_blockers(&relative_destination),
+        "receipt-destination-path-not-safe-absolute",
+    );
+
+    let mut traversing_destination = receipt();
+    traversing_destination.destination = "/tmp/disksage/../destination.bin".into();
+    assert_has(
+        &receipt_blockers(&traversing_destination),
         "receipt-destination-path-not-safe-absolute",
     );
 
