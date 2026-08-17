@@ -5,7 +5,7 @@
 
 use disksage_lib::cloud::{CloudAccountScope, CloudProvider, CloudRoot};
 use disksage_lib::provider_oauth::{
-    connection_for_root, load_connections, requested_scope, OAuthConnection,
+    connection_for_root, connections_path, load_connections, requested_scope, OAuthConnection,
 };
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
@@ -157,6 +157,20 @@ fn persisted_connection_shape_validation_fails_closed_by_field() {
 }
 
 #[test]
+fn well_formed_but_wrong_connection_id_reaches_identity_binding_guard() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("connections.json");
+    let target = root(CloudProvider::Onedrive);
+    let mut wrong_id = connection(&target);
+    wrong_id.connection_id = "0".repeat(64);
+    assert_ne!(wrong_id.connection_id, stable_connection_id(&target));
+    let document = serde_json::json!({"version": 1, "connections": [wrong_id]});
+    std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+
+    assert_eq!(load_connections(&path).unwrap_err(), "oauth-connection-id-mismatch");
+}
+
+#[test]
 fn persisted_icloud_oauth_identity_fails_at_the_unsupported_provider_boundary() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("connections.json");
@@ -240,4 +254,32 @@ fn connection_document_admission_bounds_fail_closed_before_connection_use() {
             "oauth-connection-document-not-regular-file"
         );
     }
+}
+
+#[test]
+fn connections_path_is_stably_scoped_under_application_data() {
+    let temp = tempfile::tempdir().unwrap();
+    assert_eq!(
+        connections_path(temp.path()),
+        temp.path().join("cloud-oauth-connections.json")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn unreadable_connection_document_fails_closed_after_metadata_admission() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("connections.json");
+    std::fs::write(&path, br#"{"version":1,"connections":[]}"#).unwrap();
+    let original = std::fs::metadata(&path).unwrap().permissions();
+    let mut denied = original.clone();
+    denied.set_mode(0o000);
+    std::fs::set_permissions(&path, denied).unwrap();
+
+    let result = load_connections(&path);
+
+    std::fs::set_permissions(&path, original).unwrap();
+    assert_eq!(result.unwrap_err(), "oauth-connection-document-unreadable");
 }
