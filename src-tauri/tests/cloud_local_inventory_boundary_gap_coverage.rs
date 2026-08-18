@@ -34,10 +34,7 @@ fn bounded_options() -> CloudLocalInventoryOptions {
     }
 }
 
-fn assert_invalid(
-    options: CloudLocalInventoryOptions,
-    expected: &str,
-) {
+fn assert_invalid(options: CloudLocalInventoryOptions, expected: &str) {
     let error = hard_timeout_inventory(&root(Path::new("/Cloud")), options, 1).unwrap_err();
     assert_eq!(error, expected);
 }
@@ -120,12 +117,8 @@ fn public_timeout_checkpoint_rejects_identity_and_terminal_state_drift() {
         .iter()
         .any(|notice| notice == "inventory-checkpoint-not-terminal"));
 
-    let recovered = hard_timeout_inventory_from_checkpoint(
-        &cloud_root,
-        options,
-        checkpoint.clone(),
-    )
-    .unwrap();
+    let recovered =
+        hard_timeout_inventory_from_checkpoint(&cloud_root, options, checkpoint.clone()).unwrap();
     assert!(!recovered.evidence_complete);
     assert!(recovered
         .stop_reasons
@@ -151,11 +144,11 @@ fn public_timeout_checkpoint_rejects_identity_and_terminal_state_drift() {
     cases.push(wrong_id);
 
     let mut wrong_provider = checkpoint.clone();
-    wrong_provider.provider = CloudProvider::Dropbox;
+    wrong_provider.provider = CloudProvider::Onedrive;
     cases.push(wrong_provider);
 
     let mut wrong_scope = checkpoint.clone();
-    wrong_scope.account_scope = CloudAccountScope::Team;
+    wrong_scope.account_scope = CloudAccountScope::Organization;
     cases.push(wrong_scope);
 
     let mut wrong_path = checkpoint.clone();
