@@ -1,8 +1,8 @@
-use disksage::cloud::CloudProvider;
-use disksage::cloud_transfer::{
+use disksage_lib::cloud::CloudProvider;
+use disksage_lib::cloud_transfer::{
     ProviderSyncEvidence, RemoteChecksumAlgorithm, RemoteContentProof, SyncEvidenceKind,
 };
-use disksage::provider_evidence::{
+use disksage_lib::provider_evidence::{
     create_sync_evidence_record, validate_sync_evidence_record, PROVIDER_EVIDENCE_RECORD_VERSION,
 };
 
