@@ -105,7 +105,22 @@ fn exporter_rejects_malformed_provider_global_sync_evidence() {
         25,
     );
 
+    let mut schema_drift = global_sync(
+        CloudProvider::Onedrive,
+        ProviderGlobalSyncState::Clear,
+        true,
+        &[],
+    );
+    schema_drift.schema_version = schema_drift.schema_version.saturating_add(1);
+
     let variants = [
+        schema_drift,
+        global_sync(
+            CloudProvider::Onedrive,
+            ProviderGlobalSyncState::Pending,
+            true,
+            &["-invalid"],
+        ),
         global_sync(CloudProvider::Onedrive, ProviderGlobalSyncState::Clear, false, &[]),
         global_sync(
             CloudProvider::Onedrive,
