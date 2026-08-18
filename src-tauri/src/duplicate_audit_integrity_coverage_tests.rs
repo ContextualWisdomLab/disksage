@@ -112,6 +112,58 @@ fn collector_skips_socket_entries_without_following_or_hashing_them() {
 }
 
 #[test]
+fn collector_filters_below_minimum_and_hashes_same_size_nonduplicates_without_false_cluster() {
+    let root = tempfile::tempdir().expect("temporary duplicate-audit root");
+    std::fs::write(root.path().join("tiny-a.bin"), b"x").expect("write first tiny fixture");
+    std::fs::write(root.path().join("tiny-b.bin"), b"x").expect("write second tiny fixture");
+    std::fs::write(root.path().join("candidate-a.bin"), b"abcdefgh")
+        .expect("write first same-size candidate");
+    std::fs::write(root.path().join("candidate-b.bin"), b"abcdefgi")
+        .expect("write second same-size candidate");
+
+    let report = collect_exact_duplicate_audit(root.path(), 50_018, 2, 100)
+        .expect("bounded collector must distinguish size collision from exact duplication");
+
+    assert!(report.evidence_complete);
+    assert_eq!(report.entries_seen, 4);
+    assert_eq!(report.file_count, 4);
+    assert_eq!(report.size_collision_candidate_count, 2);
+    assert_eq!(report.content_hashed_file_count, 2);
+    assert_eq!(report.cluster_count, 0);
+    assert_eq!(report.duplicate_file_count, 0);
+    assert_eq!(report.logical_duplicate_bytes, 0);
+    assert_eq!(report.logical_redundant_bytes, 0);
+    assert!(report.issue_counts.is_empty());
+    assert!(exact_duplicate_audit_integrity_valid(&report));
+}
+
+#[test]
+fn empty_duplicate_summary_stays_redacted_and_requires_no_canonical_selection() {
+    let root = tempfile::tempdir().expect("temporary duplicate-audit root");
+    std::fs::write(root.path().join("unique.bin"), b"unique payload")
+        .expect("write unique fixture");
+    let report = collect_exact_duplicate_audit(root.path(), 50_019, 1, 100)
+        .expect("single-file audit must remain a valid no-duplicate report");
+    assert!(exact_duplicate_audit_integrity_valid(&report));
+
+    let summary = crate::duplicate_audit::summarize_exact_duplicate_audit(&report);
+
+    assert_eq!(summary.cluster_count, 0);
+    assert_eq!(summary.duplicate_file_count, 0);
+    assert!(!summary.requires_human_canonical_selection);
+    assert!(!summary.local_paths_included);
+    assert!(!summary.content_digests_included);
+    assert!(!summary.exact_content_match_is_delete_approval);
+    assert!(!summary.automatic_delete_allowed);
+    assert!(!summary.mutation_performed);
+    assert_eq!(summary.physical_reclaimable_bytes, None);
+    assert!(summary
+        .notices
+        .iter()
+        .any(|notice| notice == "content-hashes-and-relative-paths-redacted-from-summary"));
+}
+
+#[test]
 fn validator_rejects_each_top_level_authority_and_total_tamper() {
     let report = valid_report();
 
