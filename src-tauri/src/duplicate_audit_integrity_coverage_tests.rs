@@ -6,6 +6,7 @@
 //! Collector tests exercise real filesystem boundaries while remaining read-only with respect to
 //! the audited source tree.
 
+use crate::cloud::MetadataEvidence;
 use crate::duplicate_audit::{
     collect_exact_duplicate_audit, exact_duplicate_audit_integrity_valid, ExactDuplicateAuditReport,
     MAX_ENTRIES,
@@ -161,6 +162,23 @@ fn empty_duplicate_summary_stays_redacted_and_requires_no_canonical_selection() 
         .notices
         .iter()
         .any(|notice| notice == "content-hashes-and-relative-paths-redacted-from-summary"));
+}
+
+#[test]
+fn validator_rejects_nested_metadata_tamper_with_authors_context_and_embedded_evidence() {
+    let report = valid_report();
+    let mut tampered = report;
+    let metadata = &mut tampered.clusters[0].members[0].production_metadata;
+    metadata.authors = vec!["author-claim".into()];
+    metadata.context = vec!["context-claim".into()];
+    metadata.embedded_evidence.push(MetadataEvidence {
+        field: "production-time".into(),
+        value: "123".into(),
+        source: "embedded:test".into(),
+        confidence: "high".into(),
+    });
+
+    assert!(!exact_duplicate_audit_integrity_valid(&tampered));
 }
 
 #[test]
