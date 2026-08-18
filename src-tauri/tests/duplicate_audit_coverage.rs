@@ -90,6 +90,32 @@ fn directory_depth_limit_marks_evidence_incomplete_without_descending() {
     assert!(exact_duplicate_audit_integrity_valid(&report));
 }
 
+#[cfg(unix)]
+#[test]
+fn non_unicode_entry_is_reported_without_content_or_delete_authority() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let opaque_name = OsString::from_vec(vec![b'o', b'p', b'a', b'q', b'u', b'e', 0x80]);
+    std::fs::write(root.path().join(opaque_name), b"same").unwrap();
+
+    let report = collect_exact_duplicate_audit(root.path(), 42, 1, 100).unwrap();
+    assert!(!report.evidence_complete);
+    assert_eq!(report.file_count, 1);
+    assert_eq!(report.content_hashed_file_count, 0);
+    assert_eq!(report.cluster_count, 0);
+    assert_eq!(
+        report
+            .issue_counts
+            .get("duplicate-audit-relative-path-non-unicode"),
+        Some(&1)
+    );
+    assert!(!report.automatic_delete_allowed);
+    assert!(!report.mutation_performed);
+    assert!(exact_duplicate_audit_integrity_valid(&report));
+}
+
 #[test]
 fn integrity_rejects_public_report_authority_and_count_tampering() {
     let root = tempfile::tempdir().unwrap();
