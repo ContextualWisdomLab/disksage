@@ -142,3 +142,46 @@ fn identity_bound_trash_fails_closed_when_private_staging_namespace_is_exhausted
         "staging namespace exhaustion must fail before mutation journaling"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn identity_bound_trash_preserves_source_when_staging_parent_is_read_only() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let root = tempfile::tempdir().expect("temporary identity-trash root");
+    let reviewed_source = root.path().join("reviewed-source.bin");
+    let journal = root.path().join("identity-trash-journal.jsonl");
+    let payload = b"reviewed-source-must-survive-read-only-parent";
+    std::fs::write(&reviewed_source, payload).expect("write reviewed source fixture");
+    let expected_identity = filesystem_object_id(&reviewed_source)
+        .expect("reviewed source has a stable filesystem identity");
+    let original_mode = std::fs::metadata(root.path())
+        .expect("read staging parent metadata")
+        .mode();
+
+    std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o500))
+        .expect("make staging parent read-only");
+    let result = trash_delete_if_identity(
+        &reviewed_source,
+        &expected_identity,
+        payload.len() as u64,
+        &journal,
+        50_006,
+    );
+    std::fs::set_permissions(
+        root.path(),
+        std::fs::Permissions::from_mode(original_mode),
+    )
+    .expect("restore staging parent permissions");
+
+    let error = result.expect_err("read-only staging parent must fail closed");
+    assert!(matches!(error, SafetyError::Trash(_)));
+    assert_eq!(
+        std::fs::read(&reviewed_source).expect("reviewed source remains readable"),
+        payload
+    );
+    assert!(
+        !journal.exists(),
+        "staging permission failure must happen before mutation journaling"
+    );
+}
