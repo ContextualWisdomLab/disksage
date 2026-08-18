@@ -72,13 +72,17 @@ fn clear_global_sync() -> ProviderGlobalSyncReport {
     }
 }
 
-fn ready_envelope() -> disksage_lib::naruon_cloud_copy_readiness::NaruonCloudCopyReadinessEnvelope {
+fn report_with_capacity_remaining(remaining: u64) -> CloudPlanReport {
+    let total = 10_000_000_000u64;
+    let used = total.saturating_sub(remaining);
     let snapshot = parse_onedrive_capacity(
-        r#"{"id":"drive-id","driveType":"personal","quota":{"deleted":0,"remaining":9000000000,"state":"normal","total":10000000000,"used":1000000000}}"#,
+        &format!(
+            "{{\"id\":\"drive-id\",\"driveType\":\"personal\",\"quota\":{{\"deleted\":0,\"remaining\":{remaining},\"state\":\"normal\",\"total\":{total},\"used\":{used}}}}}"
+        ),
         10,
     )
     .unwrap();
-    let report = CloudPlanReport {
+    CloudPlanReport {
         cloud_root: CloudRoot {
             id: "ready-gate-coverage-root".into(),
             provider: CloudProvider::Onedrive,
@@ -105,7 +109,11 @@ fn ready_envelope() -> disksage_lib::naruon_cloud_copy_readiness::NaruonCloudCop
             DEFAULT_CAPACITY_RESERVE_BYTES,
         )),
         notices: Vec::new(),
-    };
+    }
+}
+
+fn ready_envelope() -> disksage_lib::naruon_cloud_copy_readiness::NaruonCloudCopyReadinessEnvelope {
+    let report = report_with_capacity_remaining(9_000_000_000);
     let runtime = assess_provider_client_runtime(
         CloudProvider::Onedrive,
         Some(b"OneDrive Sync Service\n"),
@@ -146,6 +154,35 @@ fn blocked_candidate_set_must_carry_the_runtime_blocker_from_its_snapshot() {
         validate_naruon_cloud_copy_readiness(&envelope).unwrap_err(),
         "naruon-copy-readiness-runtime-binding-invalid"
     );
+}
+
+#[test]
+fn verified_but_insufficient_capacity_blocks_copy_admission() {
+    let report = report_with_capacity_remaining(1);
+    let runtime = assess_provider_client_runtime(
+        CloudProvider::Onedrive,
+        Some(b"OneDrive Sync Service\n"),
+        25,
+    );
+    let envelope = export_naruon_cloud_copy_readiness_with_global_sync(
+        &report,
+        &runtime,
+        None,
+        Some(&clear_global_sync()),
+    )
+    .unwrap();
+
+    assert!(envelope.remote_capacity_verified);
+    assert_eq!(envelope.readiness_state, CloudCopyReadinessState::Blocked);
+    assert_eq!(envelope.ready_without_new_review, CountBytes::default());
+    assert_eq!(
+        envelope
+            .candidate_blocker_counts
+            .get("cloud-capacity-insufficient-with-reserve"),
+        Some(&CountBytes { count: 1, bytes: 42 })
+    );
+    assert!(!envelope.cloud_write_executed);
+    assert!(!envelope.source_eviction_authorized);
 }
 
 #[test]
