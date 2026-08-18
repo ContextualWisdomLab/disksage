@@ -215,6 +215,62 @@ fn developer_artifact_cleanup_rejects_stale_manifest_and_preserves_current_objec
     assert_eq!(fs::read(target.join("artifact.bin")).unwrap(), b"preserve-me");
 }
 
+#[cfg(any(windows, target_os = "linux"))]
+#[test]
+fn developer_artifact_cleanup_recycles_current_identity_and_records_success() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("identity-success-project");
+    let target = project.join("target");
+    fs::create_dir_all(&target).unwrap();
+    fs::write(
+        project.join("Cargo.toml"),
+        b"[package]\nname = \"identity-success-fixture\"\n",
+    )
+    .unwrap();
+    fs::write(target.join("artifact.bin"), b"recycle-me").unwrap();
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let mut discovered = crate::dev_artifacts::find_artifacts(temp.path(), 0, now_ms);
+    assert_eq!(discovered.len(), 1);
+    let current = discovered.pop().unwrap();
+    assert!(current.scan_complete);
+    assert!(!current.object_id.is_empty());
+
+    let journal = temp.path().join("operations.jsonl");
+    let result = clean_dev_artifacts_inner(
+        &[current],
+        temp.path(),
+        0,
+        &journal,
+        now_ms,
+    );
+
+    assert_eq!(result.len(), 1);
+    assert!(result[0].ok, "{}", result[0].error);
+    assert!(result[0].error.is_empty());
+    assert!(!target.exists(), "reviewed artifact must leave its source path");
+
+    let recent = crate::safety::journal_recent(&journal, 10);
+    assert_eq!(recent.len(), 2);
+    assert_eq!(recent[0].outcome, "ok");
+    assert_eq!(recent[1].outcome, "pending");
+
+    // The identity-bound trash authority first moves the reviewed `target` into a private sibling
+    // staging directory. Match both that original parent and the item name so this cleanup can
+    // never purge unrelated user trash that happens to contain a directory named `target`.
+    let items: Vec<_> = trash::os_limited::list()
+        .unwrap()
+        .into_iter()
+        .filter(|item| item.name == std::ffi::OsStr::new("target"))
+        .filter(|item| item.original_parent.starts_with(&project))
+        .collect();
+    assert_eq!(items.len(), 1, "exact staged fixture must be present in trash");
+    trash::os_limited::purge_all(items).unwrap();
+}
+
 #[test]
 fn developer_artifact_cleanup_rejects_each_mutable_request_identity_field() {
     let temp = tempfile::tempdir().unwrap();
