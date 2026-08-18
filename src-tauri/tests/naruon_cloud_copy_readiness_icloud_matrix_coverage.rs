@@ -239,3 +239,138 @@ fn icloud_summary_arithmetic_and_shape_fail_closed_independently() {
         );
     }
 }
+
+#[test]
+fn icloud_export_rejects_schema_privacy_and_authority_claim_drift() {
+    let plan = report();
+    let runtime = assess_provider_client_runtime(CloudProvider::Icloud, None, 25);
+    let mut variants = Vec::new();
+
+    let mut value = fully_blocked_health();
+    value.schema_version = value.schema_version.saturating_add(1);
+    variants.push(value);
+
+    let mut value = fully_blocked_health();
+    value.provider = "onedrive".into();
+    variants.push(value);
+
+    let mut value = fully_blocked_health();
+    value.output_mode = "wrong-output-mode".into();
+    variants.push(value);
+
+    let mut value = fully_blocked_health();
+    value.evidence_kind = "wrong-evidence-kind".into();
+    variants.push(value);
+
+    let mut value = fully_blocked_health();
+    value.paths_redacted = false;
+    variants.push(value);
+
+    let mut value = fully_blocked_health();
+    value.user_filenames_read = true;
+    variants.push(value);
+
+    let mut value = fully_blocked_health();
+    value.user_file_contents_read = true;
+    variants.push(value);
+
+    let mut value = fully_blocked_health();
+    value.remote_capacity_verified = true;
+    variants.push(value);
+
+    let mut value = fully_blocked_health();
+    value.provider_sync_attested = true;
+    variants.push(value);
+
+    let mut value = fully_blocked_health();
+    value.local_eviction_authorized = true;
+    variants.push(value);
+
+    let mut value = fully_blocked_health();
+    value.mutation_performed = true;
+    variants.push(value);
+
+    let mut value = fully_blocked_health();
+    value.database_sidecar_write_permitted = true;
+    variants.push(value);
+
+    let mut value = fully_blocked_health();
+    value.evidence_complete = false;
+    variants.push(value);
+
+    for health in variants {
+        assert_eq!(
+            export_naruon_cloud_copy_readiness(&plan, &runtime, Some(&health)).unwrap_err(),
+            "naruon-copy-readiness-icloud-claim-invalid"
+        );
+    }
+}
+
+#[test]
+fn icloud_export_arithmetic_overflow_fails_at_input_projection_boundary() {
+    let plan = report();
+    let runtime = assess_provider_client_runtime(CloudProvider::Icloud, None, 25);
+
+    let mut count_overflow = fully_blocked_health();
+    count_overflow.upload_queue.scheduled_waiting_count = u64::MAX;
+    count_overflow.upload_queue.scheduled_active_count = 1;
+    assert_eq!(
+        export_naruon_cloud_copy_readiness(&plan, &runtime, Some(&count_overflow)).unwrap_err(),
+        "naruon-copy-readiness-icloud-count-overflow"
+    );
+
+    let mut bytes_overflow = fully_blocked_health();
+    bytes_overflow.upload_queue.scheduled_waiting_bytes = u64::MAX;
+    bytes_overflow.upload_queue.scheduled_active_bytes = 1;
+    assert_eq!(
+        export_naruon_cloud_copy_readiness(&plan, &runtime, Some(&bytes_overflow)).unwrap_err(),
+        "naruon-copy-readiness-icloud-bytes-overflow"
+    );
+
+    let mut item_error_overflow = fully_blocked_health();
+    item_error_overflow
+        .upload_queue
+        .item_error_octagon_not_signed_in_count = u64::MAX;
+    item_error_overflow.upload_queue.item_error_unclassified_count = 1;
+    assert_eq!(
+        export_naruon_cloud_copy_readiness(&plan, &runtime, Some(&item_error_overflow)).unwrap_err(),
+        "naruon-copy-readiness-icloud-item-error-overflow"
+    );
+}
+
+#[test]
+fn incomplete_icloud_evidence_exports_unavailable_admission_without_authority() {
+    let plan = report();
+    let runtime = assess_provider_client_runtime(CloudProvider::Icloud, None, 25);
+    let mut health = fully_blocked_health();
+    health.evidence_complete = false;
+    health.database_snapshot_includes_wal = false;
+    health
+        .new_copy_admission_blockers
+        .insert(0, "icloud-sync-health-evidence-incomplete".into());
+    health
+        .blockers
+        .insert(0, "icloud-sync-health-evidence-incomplete".into());
+
+    let envelope = export_naruon_cloud_copy_readiness(&plan, &runtime, Some(&health)).unwrap();
+    let admission = envelope
+        .icloud_new_copy_admission
+        .as_ref()
+        .expect("incomplete iCloud evidence must remain visible as a blocked admission summary");
+
+    assert_eq!(admission.state, "blocked");
+    assert!(!admission.evidence_complete);
+    assert!(!admission.database_snapshot_includes_wal);
+    assert!(admission
+        .blockers
+        .iter()
+        .any(|blocker| blocker == "icloud-sync-health-evidence-incomplete"));
+    assert!(admission
+        .blockers
+        .iter()
+        .any(|blocker| blocker == "icloud-new-copy-admission-evidence-unavailable"));
+    assert_eq!(envelope.icloud_new_copy_admission_met, Some(false));
+    assert!(!envelope.cloud_write_executed);
+    assert!(!envelope.source_eviction_authorized);
+    assert!(validate_naruon_cloud_copy_readiness(&envelope).is_ok());
+}
