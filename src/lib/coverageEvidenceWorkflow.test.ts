@@ -63,11 +63,12 @@ describe('Test workflow coverage evidence contract', () => {
     );
   });
 
-  it('identifies the largest exact-head Rust coverage gaps without leaking runner paths', () => {
+  it('identifies enough exact-head Rust coverage gaps to keep work-conserving target selection useful without leaking runner paths', () => {
     expect(workflow).toContain('top_uncovered_files');
     expect(workflow).toContain("const marker = '/src-tauri/'");
     expect(workflow).toContain("return `src-tauri/${normalized.slice(markerIndex + marker.length)}`");
-    expect(workflow).toContain('.slice(0, 20)');
+    expect(workflow).toContain('.slice(0, 100)');
+    expect(workflow).not.toContain('.slice(0, 20)');
     expect(workflow).toContain('uncovered_regions');
     expect(workflow).toContain('uncovered_branches');
     expect(workflow).toContain('uncovered_functions');
