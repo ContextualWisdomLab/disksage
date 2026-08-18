@@ -189,14 +189,22 @@ fn selection_provider_capacity_and_icloud_bindings_fail_closed() {
 
 #[test]
 fn blocker_bounds_aggregate_state_and_fingerprint_checks_are_independent() {
-    let mut invalid_reason = valid_empty_envelope();
-    invalid_reason
-        .candidate_blocker_counts
-        .insert("-invalid".into(), CountBytes::default());
-    assert_eq!(
-        validate_naruon_cloud_copy_readiness(&invalid_reason).unwrap_err(),
-        "naruon-copy-readiness-blocker-invalid"
-    );
+    for reason in [
+        "-invalid".to_string(),
+        "invalid-".to_string(),
+        "invalid--reason".to_string(),
+        "Invalid".to_string(),
+        "a".repeat(129),
+    ] {
+        let mut invalid_reason = valid_empty_envelope();
+        invalid_reason
+            .candidate_blocker_counts
+            .insert(reason, CountBytes::default());
+        assert_eq!(
+            validate_naruon_cloud_copy_readiness(&invalid_reason).unwrap_err(),
+            "naruon-copy-readiness-blocker-invalid"
+        );
+    }
 
     let mut bounds = valid_empty_envelope();
     bounds.candidate_count = 1_001;
