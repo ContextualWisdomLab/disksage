@@ -4,7 +4,10 @@
 //! phantom blank records, and a symlink into a protected system tree must never become a trash
 //! target merely because the caller supplied a local-looking pathname.
 
-use crate::safety::{journal_append, journal_recent, trash_delete, JournalEntry, SafetyError};
+use crate::safety::{
+    filesystem_object_id, journal_append, journal_recent, trash_delete, trash_delete_if_identity,
+    JournalEntry, SafetyError,
+};
 
 #[test]
 fn journal_append_to_complete_record_does_not_insert_a_blank_audit_line() {
@@ -60,5 +63,39 @@ fn trash_rejects_local_symlink_that_resolves_into_protected_system_tree() {
     assert!(
         !journal.exists(),
         "protected symlink aliases must fail before mutation journaling"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn identity_bound_trash_rejects_protected_symlink_before_identity_or_journal_work() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempfile::tempdir().expect("temporary identity-trash root");
+    let protected_alias = root.path().join("protected-identity-source");
+    let journal = root.path().join("identity-trash-journal.jsonl");
+    symlink("/usr/bin", &protected_alias).expect("create protected-system symlink fixture");
+    let expected_identity = filesystem_object_id(&protected_alias)
+        .expect("caller-supplied symlink has a stable filesystem identity");
+
+    let error = trash_delete_if_identity(
+        &protected_alias,
+        &expected_identity,
+        0,
+        &journal,
+        50_004,
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, SafetyError::Protected(_)));
+    assert!(
+        std::fs::symlink_metadata(&protected_alias)
+            .expect("caller-owned symlink must remain")
+            .file_type()
+            .is_symlink()
+    );
+    assert!(
+        !journal.exists(),
+        "protected identity-bound aliases must fail before identity mutation journaling"
     );
 }
