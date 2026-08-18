@@ -5,8 +5,8 @@
 //! have exhausted hosted-runner resources while entering later feature
 //! batches. These tests keep the repair reviewable: the workflow must release
 //! reusable Cargo build space between large batches and must not compile every
-//! integration-test target merely to exercise the exact-duplicate library
-//! surface under `cloud-cli`.
+//! integration-test target merely to exercise a focused feature-gated library
+//! surface.
 
 use std::fs;
 use std::path::PathBuf;
@@ -71,5 +71,31 @@ fn duplicate_audit_feature_batch_builds_only_the_intended_library_and_cli_target
             "cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-duplicate-audit"
         ),
         "the dedicated duplicate-audit CLI proof must remain explicit"
+    );
+}
+
+#[test]
+fn archive_feature_batch_builds_only_the_intended_library_and_cli_targets() {
+    let workflow = workflow_source();
+    let archive = workflow
+        .find("- name: Extraction-free archive tree proof tests")
+        .expect("archive proof batch must remain in the Test job");
+    let node_setup = workflow[archive..]
+        .find("- uses: actions/setup-node@")
+        .map(|offset| archive + offset)
+        .expect("Node setup must remain after the archive proof batch");
+    let archive_block = &workflow[archive..node_setup];
+
+    assert!(
+        archive_block.contains(
+            "cargo test --manifest-path src-tauri/Cargo.toml --lib --features archive-cli archive_git_tree"
+        ),
+        "the archive-cli library proof must use --lib so Cargo does not relink every integration-test target"
+    );
+    assert!(
+        archive_block.contains(
+            "cargo test --manifest-path src-tauri/Cargo.toml --features archive-cli --bin disksage-archive-tree"
+        ),
+        "the dedicated archive-tree CLI proof must remain explicit"
     );
 }
