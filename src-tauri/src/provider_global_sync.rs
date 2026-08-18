@@ -394,6 +394,27 @@ sync engine state:
     }
 
     #[test]
+    fn forged_report_identity_cannot_authorize_new_copy() {
+        let baseline = parse_dump(CloudProvider::Onedrive, QUIET_DUMP).unwrap();
+
+        let mut schema_drift = baseline.clone();
+        schema_drift.schema_version = schema_drift.schema_version.saturating_add(1);
+
+        let mut evidence_kind_drift = baseline.clone();
+        evidence_kind_drift.evidence_kind = "forged-global-sync-evidence".into();
+
+        let mut provider_drift = baseline;
+        provider_drift.provider = CloudProvider::Icloud;
+
+        for report in [schema_drift, evidence_kind_drift, provider_drift] {
+            assert_eq!(
+                require_new_copy_admission(&report).unwrap_err(),
+                "provider-global-sync-evidence-invalid"
+            );
+        }
+    }
+
+    #[test]
     fn active_transfer_and_indexing_block_new_copy() {
         let report = parse_dump(CloudProvider::GoogleDrive, ACTIVE_DUMP).unwrap();
         assert_eq!(report.state, ProviderGlobalSyncState::Pending);
