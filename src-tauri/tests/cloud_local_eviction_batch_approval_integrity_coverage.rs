@@ -1,7 +1,8 @@
 //! Exact-head coverage for fail-closed iCloud local-eviction batch approval integrity.
 //!
-//! These tests exercise the public execution boundary only. Tampered approval records must be
-//! rejected before any preflight filesystem probe or immutable record publication can occur.
+//! These tests exercise the public approval and execution boundaries only. Invalid approval
+//! requests and tampered approval records must fail before filesystem mutation or authority-record
+//! publication can occur.
 
 use disksage_lib::cloud::{CloudAccountScope, CloudProvider, CloudRoot};
 use disksage_lib::cloud_local_eviction::{
@@ -59,6 +60,10 @@ fn batch_fingerprint(plan: &IcloudLocalEvictionBatchPlan) -> String {
         hash_field(&mut hasher, item.plan.plan_fingerprint.as_bytes());
         hasher.update(&item.plan.logical_bytes.to_le_bytes());
         hasher.update(&item.plan.allocated_bytes.to_le_bytes());
+    }
+    for unavailable in &plan.unavailable {
+        hasher.update(&unavailable.input_index.to_le_bytes());
+        hash_field(&mut hasher, unavailable.error_code.as_bytes());
     }
     hasher.finalize().to_hex().to_string()
 }
@@ -149,6 +154,26 @@ fn valid_approval(plan: &IcloudLocalEvictionBatchPlan) -> IcloudLocalEvictionBat
     .expect("fixture must produce a valid attributed approval")
 }
 
+fn assert_approval_error(
+    plan: &IcloudLocalEvictionBatchPlan,
+    approved_batch_fingerprint: &str,
+    approved_at_ms: u64,
+    approved_by: &str,
+    rationale: &str,
+    expected: &str,
+) {
+    let error = approve_icloud_local_eviction_batch(
+        plan,
+        &root(),
+        approved_batch_fingerprint,
+        approved_at_ms,
+        approved_by,
+        rationale,
+    )
+    .expect_err("invalid approval request must fail closed");
+    assert_eq!(error, expected);
+}
+
 fn assert_integrity_rejection(
     plan: &IcloudLocalEvictionBatchPlan,
     approval: &IcloudLocalEvictionBatchApproval,
@@ -175,6 +200,86 @@ fn assert_integrity_rejection(
         !record_dir.exists(),
         "approval-integrity rejection must not publish authority records"
     );
+}
+
+#[test]
+fn approval_rejects_wrong_authority_attribution_rationale_and_time() {
+    let plan = eligible_plan();
+
+    assert_approval_error(
+        &plan,
+        &"f".repeat(64),
+        21,
+        "human:operator",
+        "reviewed exact batch",
+        "icloud-local-eviction-batch-fingerprint-mismatch",
+    );
+    assert_approval_error(
+        &plan,
+        &plan.batch_fingerprint,
+        21,
+        "agent:operator",
+        "reviewed exact batch",
+        "icloud-local-eviction-batch-human-attribution-required",
+    );
+    assert_approval_error(
+        &plan,
+        &plan.batch_fingerprint,
+        21,
+        "human:",
+        "reviewed exact batch",
+        "icloud-local-eviction-batch-human-attribution-required",
+    );
+    assert_approval_error(
+        &plan,
+        &plan.batch_fingerprint,
+        21,
+        "human:operator",
+        "   ",
+        "icloud-local-eviction-batch-rationale-invalid",
+    );
+    assert_approval_error(
+        &plan,
+        &plan.batch_fingerprint,
+        21,
+        "human:operator",
+        &"x".repeat(1_025),
+        "icloud-local-eviction-batch-rationale-invalid",
+    );
+    assert_approval_error(
+        &plan,
+        &plan.batch_fingerprint,
+        19,
+        "human:operator",
+        "reviewed exact batch",
+        "icloud-local-eviction-batch-approval-predates-plan",
+    );
+
+    let mut ineligible = plan.clone();
+    ineligible.items[0].plan.active_use.active = true;
+    ineligible.blockers = vec!["icloud-local-eviction-batch-item-not-eligible".into()];
+    ineligible.eligible_after_human_approval = false;
+    ineligible.batch_fingerprint = batch_fingerprint(&ineligible);
+    assert_approval_error(
+        &ineligible,
+        &ineligible.batch_fingerprint,
+        21,
+        "human:operator",
+        "reviewed exact batch",
+        "icloud-local-eviction-batch-fingerprint-mismatch",
+    );
+
+    let normalized = approve_icloud_local_eviction_batch(
+        &plan,
+        &root(),
+        &plan.batch_fingerprint,
+        21,
+        "  human:operator  ",
+        "  reviewed exact batch  ",
+    )
+    .expect("bounded surrounding whitespace is normalized before durable approval");
+    assert_eq!(normalized.approved_by, "human:operator");
+    assert_eq!(normalized.rationale, "reviewed exact batch");
 }
 
 #[test]
