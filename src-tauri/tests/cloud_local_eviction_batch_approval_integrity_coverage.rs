@@ -236,3 +236,51 @@ fn execution_rejects_each_tampered_batch_approval_guard_before_preflight() {
     oversized_rationale.approval_id = approval_id(&oversized_rationale);
     assert_integrity_rejection(&plan, &oversized_rationale, &plan.batch_fingerprint);
 }
+
+#[test]
+fn valid_approval_still_replans_missing_item_before_any_record_publication() {
+    let temp = tempfile::tempdir().expect("temporary isolated root");
+    let root_path = temp.path().join("icloud-root");
+    std::fs::create_dir(&root_path).expect("create isolated cloud-shaped root");
+    let missing_path = root_path.join("reviewed-item-that-disappeared.bin");
+    let custom_root = CloudRoot {
+        id: "icloud:batch-preflight".into(),
+        provider: CloudProvider::Icloud,
+        account_scope: CloudAccountScope::Personal,
+        label: "iCloud batch preflight".into(),
+        path: root_path.to_string_lossy().into_owned(),
+        readable: true,
+        access_issue: None,
+    };
+    let mut plan = eligible_plan();
+    plan.cloud_root = custom_root.path.clone();
+    plan.items[0].plan.cloud_root = custom_root.path.clone();
+    plan.items[0].plan.path = missing_path.to_string_lossy().into_owned();
+    plan.batch_fingerprint = batch_fingerprint(&plan);
+    let approval = approve_icloud_local_eviction_batch(
+        &plan,
+        &custom_root,
+        &plan.batch_fingerprint,
+        21,
+        "human:operator",
+        "reviewed exact item before it disappeared",
+    )
+    .expect("batch approval should be valid before live preflight");
+    let record_dir = temp.path().join("records-must-not-exist");
+
+    let error = execute_icloud_local_eviction_batch(
+        &custom_root,
+        &plan,
+        &approval,
+        &plan.batch_fingerprint,
+        &record_dir,
+        22,
+    )
+    .expect_err("missing live item must fail re-plan before record publication");
+
+    assert_eq!(error, "icloud-local-eviction-batch-preflight-item-unavailable");
+    assert!(
+        !record_dir.exists(),
+        "preflight failure must not publish batch or per-item approval records"
+    );
+}
