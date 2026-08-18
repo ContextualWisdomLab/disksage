@@ -53,6 +53,12 @@ fn make_read_only(path: &Path) {
     std::fs::set_permissions(path, permissions).unwrap();
 }
 
+fn make_writable(path: &Path) {
+    let mut permissions = std::fs::metadata(path).unwrap().permissions();
+    permissions.set_readonly(false);
+    std::fs::set_permissions(path, permissions).unwrap();
+}
+
 #[test]
 fn immutable_provider_evidence_round_trip_collision_and_rename_are_fail_closed() {
     let temp = tempfile::tempdir().unwrap();
@@ -128,6 +134,50 @@ fn immutable_provider_evidence_write_rejects_record_over_the_durable_size_bound(
         "provider-evidence-record-too-large"
     );
     assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 0);
+}
+
+#[test]
+fn immutable_provider_evidence_read_revalidates_version_fields_and_digest_after_disk_tamper() {
+    let temp = tempfile::tempdir().unwrap();
+
+    let version_directory = temp.path().join("version-tamper");
+    let (version_record, version_path) =
+        write_immutable_sync_evidence(&version_directory, &provider_api_evidence()).unwrap();
+    let mut version_json = serde_json::to_value(&version_record).unwrap();
+    version_json["version"] = serde_json::json!(version_record.version + 1);
+    make_writable(&version_path);
+    std::fs::write(&version_path, serde_json::to_vec_pretty(&version_json).unwrap()).unwrap();
+    make_read_only(&version_path);
+    assert_eq!(
+        read_immutable_sync_evidence(&version_path).unwrap_err(),
+        "provider-evidence-record-version-unsupported"
+    );
+
+    let digest_directory = temp.path().join("digest-tamper");
+    let (digest_record, digest_path) =
+        write_immutable_sync_evidence(&digest_directory, &provider_api_evidence()).unwrap();
+    let mut digest_json = serde_json::to_value(&digest_record).unwrap();
+    digest_json["evidence"]["observed_bytes"] = serde_json::json!(43);
+    make_writable(&digest_path);
+    std::fs::write(&digest_path, serde_json::to_vec_pretty(&digest_json).unwrap()).unwrap();
+    make_read_only(&digest_path);
+    assert_eq!(
+        read_immutable_sync_evidence(&digest_path).unwrap_err(),
+        "provider-evidence-record-integrity-mismatch"
+    );
+
+    let shape_directory = temp.path().join("shape-tamper");
+    let (shape_record, shape_path) =
+        write_immutable_sync_evidence(&shape_directory, &provider_api_evidence()).unwrap();
+    let mut shape_json = serde_json::to_value(&shape_record).unwrap();
+    shape_json["evidence"]["destination_blake3"] = serde_json::json!("z".repeat(64));
+    make_writable(&shape_path);
+    std::fs::write(&shape_path, serde_json::to_vec_pretty(&shape_json).unwrap()).unwrap();
+    make_read_only(&shape_path);
+    assert_eq!(
+        read_immutable_sync_evidence(&shape_path).unwrap_err(),
+        "provider-evidence-destination-hash-invalid"
+    );
 }
 
 #[cfg(unix)]
