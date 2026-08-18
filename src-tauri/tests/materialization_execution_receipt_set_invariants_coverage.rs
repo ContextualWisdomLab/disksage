@@ -1,9 +1,9 @@
-//! Public-boundary coverage for materialization receipt set invariants.
+//! Public-boundary coverage for materialization receipt aggregate invariants.
 //!
-//! Receipt integrity must fail closed when otherwise well-formed units duplicate identities or
-//! destinations, overlap byte ranges for the same source, disagree with aggregate source/byte
-//! counts, or carry a capacity assessment that no longer matches the materialized unit set. These
-//! cases use only the public receipt validator and deterministic provider-capacity evidence.
+//! Existing exact-head tests already cover duplicate unit fingerprints, duplicate destinations,
+//! and overlapping ranges. These regressions deliberately target the remaining aggregate checks:
+//! source cardinality, total materialized bytes, and recomputed capacity assessment. They use only
+//! the public receipt validator and deterministic provider-capacity evidence.
 
 use disksage_lib::cloud::{CloudAccountScope, CloudProvider};
 use disksage_lib::content_digest::ContentDigests;
@@ -61,9 +61,8 @@ fn receipt(
 
     IncompleteDownloadMaterializationReceipt {
         schema_version: INCOMPLETE_DOWNLOAD_EXECUTION_VERSION,
-        // A syntactically valid placeholder intentionally leaves the final receipt-id equality
-        // check available after the set invariant being exercised. Each test below must fail
-        // earlier at its named invariant.
+        // Syntactically valid but intentionally non-authoritative so each aggregate mutation can
+        // be rejected before the final content-derived receipt-id equality check.
         receipt_id: "0".repeat(64),
         destination_plan_fingerprint: "1".repeat(64),
         materialization_plan_fingerprint: "2".repeat(64),
@@ -87,82 +86,29 @@ fn receipt(
     }
 }
 
-#[test]
-fn receipt_integrity_rejects_duplicate_unit_fingerprints_and_destinations() {
-    let duplicate_fingerprint = receipt(
-        vec![
-            unit('a', "first.zip", "source.zip.crdownload", 0, 10),
-            unit('a', "second.zip", "source.zip.crdownload", 10, 20),
-        ],
-        1,
-        20,
-    );
-    assert!(!incomplete_download_materialization_receipt_integrity_valid(
-        &duplicate_fingerprint
-    ));
-
-    let duplicate_destination = receipt(
-        vec![
-            unit('a', "same.zip", "source.zip.crdownload", 0, 10),
-            unit('b', "same.zip", "source.zip.crdownload", 10, 20),
-        ],
-        1,
-        20,
-    );
-    assert!(!incomplete_download_materialization_receipt_integrity_valid(
-        &duplicate_destination
-    ));
+fn two_adjacent_units() -> Vec<IncompleteDownloadMaterializedUnit> {
+    vec![
+        unit('a', "first.zip", "source.zip.crdownload", 0, 10),
+        unit('b', "second.zip", "source.zip.crdownload", 10, 20),
+    ]
 }
 
 #[test]
-fn receipt_integrity_rejects_overlapping_ranges_and_aggregate_drift() {
-    let overlapping_ranges = receipt(
-        vec![
-            unit('a', "first.zip", "source.zip.crdownload", 0, 10),
-            unit('b', "second.zip", "source.zip.crdownload", 5, 15),
-        ],
-        1,
-        20,
-    );
-    assert!(!incomplete_download_materialization_receipt_integrity_valid(
-        &overlapping_ranges
-    ));
-
-    let source_count_drift = receipt(
-        vec![
-            unit('a', "first.zip", "source.zip.crdownload", 0, 10),
-            unit('b', "second.zip", "source.zip.crdownload", 10, 20),
-        ],
-        2,
-        20,
-    );
+fn receipt_integrity_rejects_source_and_byte_aggregate_drift() {
+    let source_count_drift = receipt(two_adjacent_units(), 2, 20);
     assert!(!incomplete_download_materialization_receipt_integrity_valid(
         &source_count_drift
     ));
 
-    let byte_count_drift = receipt(
-        vec![
-            unit('a', "first.zip", "source.zip.crdownload", 0, 10),
-            unit('b', "second.zip", "source.zip.crdownload", 10, 20),
-        ],
-        1,
-        21,
-    );
+    let byte_count_drift = receipt(two_adjacent_units(), 1, 21);
     assert!(!incomplete_download_materialization_receipt_integrity_valid(
         &byte_count_drift
     ));
 }
 
 #[test]
-fn receipt_integrity_rejects_capacity_assessment_drift() {
-    let mut assessment_drift = receipt(
-        vec![
-            unit('a', "first.zip", "source.zip.crdownload", 0, 10),
-            unit('b', "second.zip", "source.zip.crdownload", 10, 20),
-        ],
-        1,
-        20,
-    );
+fn receipt_integrity_rejects_recomputed_capacity_assessment_drift() {
+    let mut assessment_drift = receipt(two_adjacent_units(), 1, 20);
     assessment_drift.fresh_capacity.largest_candidate_bytes += 1;
 
     assert!(!incomplete_download_materialization_receipt_integrity_valid(
