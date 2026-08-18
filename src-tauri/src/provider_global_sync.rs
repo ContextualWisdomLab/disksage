@@ -298,6 +298,12 @@ pub fn inspect_new_copy_admission(
 }
 
 pub fn require_new_copy_admission(report: &ProviderGlobalSyncReport) -> Result<(), String> {
+    if report.schema_version != PROVIDER_GLOBAL_SYNC_SCHEMA_VERSION
+        || report.evidence_kind != "fileproviderctl-global-dump"
+        || provider_identifier(report.provider).is_none()
+    {
+        return Err("provider-global-sync-evidence-invalid".into());
+    }
     if !report.evidence_complete {
         return Err("provider-global-sync-evidence-incomplete".into());
     }
