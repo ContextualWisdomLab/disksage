@@ -185,3 +185,44 @@ fn identity_bound_trash_preserves_source_when_staging_parent_is_read_only() {
         "staging permission failure must happen before mutation journaling"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn identity_bound_trash_self_descendant_staging_failure_preserves_reviewed_tree() {
+    let root = tempfile::tempdir().expect("temporary identity-trash root");
+    let reviewed_alias = root.path().join(".");
+    let journal = root.path().join("identity-trash-journal.jsonl");
+    let sentinel = root.path().join("sentinel.bin");
+    let payload = b"reviewed-tree-must-survive-self-descendant-staging";
+    std::fs::write(&sentinel, payload).expect("write reviewed tree sentinel");
+    let expected_identity = filesystem_object_id(&reviewed_alias)
+        .expect("reviewed directory alias has a stable filesystem identity");
+    let now_ms = 50_007;
+    let staging_prefix = format!(".disksage-trash-{}-{now_ms}-", std::process::id());
+
+    let error = trash_delete_if_identity(
+        &reviewed_alias,
+        &expected_identity,
+        payload.len() as u64,
+        &journal,
+        now_ms,
+    )
+    .expect_err("a directory cannot be atomically staged inside itself");
+
+    assert!(matches!(error, SafetyError::Trash(_)));
+    assert_eq!(
+        std::fs::read(&sentinel).expect("reviewed tree sentinel remains readable"),
+        payload
+    );
+    let recent = journal_recent(&journal, 10);
+    assert_eq!(recent.len(), 2, "failed staging must retain pending and terminal evidence");
+    assert!(recent[0].outcome.starts_with("error:"));
+    assert_eq!(recent[1].outcome, "pending");
+    assert!(
+        !std::fs::read_dir(root.path())
+            .expect("read reviewed tree after failed staging")
+            .filter_map(Result::ok)
+            .any(|entry| entry.file_name().to_string_lossy().starts_with(&staging_prefix)),
+        "failed self-descendant staging must clean its private directory"
+    );
+}
