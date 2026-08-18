@@ -1,13 +1,16 @@
 //! Public-boundary coverage for materialization receipt aggregate invariants.
 //!
 //! Existing exact-head tests already cover duplicate unit fingerprints, duplicate destinations,
-//! and overlapping ranges. These regressions deliberately target the remaining aggregate checks:
-//! source cardinality, total materialized bytes, and recomputed capacity assessment. They use only
-//! the public receipt validator and deterministic provider-capacity evidence.
+//! overlapping ranges, future-dated capacity evidence, and basic capacity-field mismatches. These
+//! regressions deliberately target remaining aggregate and freshness checks: source cardinality,
+//! total materialized bytes, recomputed capacity assessment, and provider evidence that has aged
+//! beyond the execution admission window. They use only the public receipt validator and
+//! deterministic provider-capacity evidence.
 
 use disksage_lib::cloud::{CloudAccountScope, CloudProvider};
 use disksage_lib::content_digest::ContentDigests;
 use disksage_lib::incomplete_download_materialization::MaterializationUnitKind;
+use disksage_lib::incomplete_download_materialization_destination::MAX_CAPACITY_AGE_MS;
 use disksage_lib::incomplete_download_materialization_execution::{
     incomplete_download_materialization_receipt_integrity_valid,
     IncompleteDownloadMaterializationReceipt, IncompleteDownloadMaterializedUnit,
@@ -113,5 +116,15 @@ fn receipt_integrity_rejects_recomputed_capacity_assessment_drift() {
 
     assert!(!incomplete_download_materialization_receipt_integrity_valid(
         &assessment_drift
+    ));
+}
+
+#[test]
+fn receipt_integrity_rejects_capacity_evidence_older_than_execution_window() {
+    let mut stale_capacity = receipt(two_adjacent_units(), 1, 20);
+    stale_capacity.executed_at_ms = OBSERVED_AT_MS + MAX_CAPACITY_AGE_MS + 1;
+
+    assert!(!incomplete_download_materialization_receipt_integrity_valid(
+        &stale_capacity
     ));
 }
