@@ -29,6 +29,23 @@ fn single_file_zip(path: &str, contents: &[u8]) -> tempfile::TempDir {
     temp
 }
 
+fn multi_file_zip(files: &[(&str, &[u8], u32)]) -> tempfile::TempDir {
+    let temp = tempfile::tempdir().unwrap();
+    let file = File::create(temp.path().join("fixture.zip")).unwrap();
+    let mut archive = zip::ZipWriter::new(file);
+    for (path, contents, mode) in files {
+        archive
+            .start_file(
+                *path,
+                SimpleFileOptions::default().unix_permissions(*mode),
+            )
+            .unwrap();
+        archive.write_all(contents).unwrap();
+    }
+    archive.finish().unwrap();
+    temp
+}
+
 fn wrapped_file_zip(path: &str, contents: &[u8]) -> tempfile::TempDir {
     single_file_zip(&format!("repo/{path}"), contents)
 }
@@ -110,6 +127,22 @@ fn expected_tree_mismatch_is_reported_without_rejecting_valid_content() {
 }
 
 #[test]
+fn valid_expected_tree_is_trimmed_lowercased_and_matches_the_computed_tree() {
+    let fixture = wrapped_file_zip("a.txt", b"hello\n");
+    let archive_path = fixture.path().join("fixture.zip");
+    let baseline = inspect_zip_git_tree(&archive_path, None).unwrap();
+    let decorated = format!("  {}  ", baseline.git_tree_sha1.to_ascii_uppercase());
+
+    let report = inspect_zip_git_tree(&archive_path, Some(&decorated)).unwrap();
+
+    assert_eq!(
+        report.expected_git_tree_sha1.as_deref(),
+        Some(baseline.git_tree_sha1.as_str())
+    );
+    assert_eq!(report.matches_expected, Some(true));
+}
+
+#[test]
 fn identical_archives_are_proven_as_identical_inclusion() {
     let subset = single_file_zip("a.txt", b"same bytes");
     let superset = single_file_zip("a.txt", b"same bytes");
@@ -127,6 +160,88 @@ fn identical_archives_are_proven_as_identical_inclusion() {
     assert!(report.missing_paths.is_empty());
     assert!(report.changed_paths.is_empty());
     assert!(report.additional_paths.is_empty());
+}
+
+#[test]
+fn changed_and_additional_files_are_distinguished_from_matching_content() {
+    let subset = multi_file_zip(&[
+        ("same.txt", b"same", 0o100644),
+        ("changed.txt", b"old", 0o100644),
+    ]);
+    let superset = multi_file_zip(&[
+        ("same.txt", b"same", 0o100644),
+        ("changed.txt", b"new", 0o100644),
+        ("extra.txt", b"extra", 0o100644),
+    ]);
+
+    let report = compare_zip_content_inclusion(
+        &subset.path().join("fixture.zip"),
+        &superset.path().join("fixture.zip"),
+        ArchiveTreeRootMode::KeepTopLevel,
+    )
+    .unwrap();
+
+    assert_eq!(report.matching_file_count, 1);
+    assert_eq!(report.missing_file_count, 0);
+    assert_eq!(report.changed_file_count, 1);
+    assert_eq!(report.additional_file_count, 1);
+    assert_eq!(report.changed_paths, ["changed.txt"]);
+    assert_eq!(report.additional_paths, ["extra.txt"]);
+    assert!(!report.subset_content_included);
+    assert!(!report.archives_identical);
+    assert!(!report.paths_truncated);
+    assert_ne!(report.subset_manifest_sha256, report.superset_manifest_sha256);
+}
+
+#[test]
+fn case_collisions_make_inclusion_evidence_ambiguous_and_fail_closed() {
+    let subset = multi_file_zip(&[
+        ("Readme.txt", b"first", 0o100644),
+        ("README.txt", b"second", 0o100644),
+    ]);
+    let superset = single_file_zip("Readme.txt", b"first");
+
+    assert_eq!(
+        compare_zip_content_inclusion(
+            &subset.path().join("fixture.zip"),
+            &superset.path().join("fixture.zip"),
+            ArchiveTreeRootMode::KeepTopLevel,
+        )
+        .unwrap_err(),
+        "archive-case-collision-ambiguous"
+    );
+}
+
+#[test]
+fn executable_and_regular_files_are_both_representable_in_the_git_tree() {
+    let fixture = multi_file_zip(&[
+        ("script.sh", b"#!/bin/sh\nexit 0\n", 0o100755),
+        ("notes.txt", b"plain\n", 0o100644),
+    ]);
+
+    let report = inspect_zip_git_tree_with_mode(
+        &fixture.path().join("fixture.zip"),
+        None,
+        ArchiveTreeRootMode::KeepTopLevel,
+    )
+    .unwrap();
+
+    assert_eq!(report.file_count, 2);
+    assert_eq!(report.root_prefix, ".");
+    assert_eq!(report.matches_expected, None);
+}
+
+#[test]
+fn mixed_shared_roots_are_rejected_before_a_tree_can_be_attested() {
+    let fixture = multi_file_zip(&[
+        ("repo/a.txt", b"a", 0o100644),
+        ("other/b.txt", b"b", 0o100644),
+    ]);
+
+    assert_eq!(
+        inspect_zip_git_tree(&fixture.path().join("fixture.zip"), None).unwrap_err(),
+        "archive-shared-root-mismatch"
+    );
 }
 
 #[test]
@@ -158,6 +273,24 @@ fn file_then_nested_file_path_conflict_reaches_the_production_guard() {
         )
         .unwrap_err(),
         "archive-entry-file-directory-conflict"
+    );
+}
+
+#[test]
+fn nested_file_then_parent_file_path_conflict_is_rejected_without_overwrite() {
+    let fixture = multi_file_zip(&[
+        ("same.txt/child.bin", b"nested", 0o100644),
+        ("same.txt", b"parent", 0o100644),
+    ]);
+
+    assert_eq!(
+        inspect_zip_git_tree_with_mode(
+            &fixture.path().join("fixture.zip"),
+            None,
+            ArchiveTreeRootMode::KeepTopLevel,
+        )
+        .unwrap_err(),
+        "archive-entry-duplicate-or-type-conflict"
     );
 }
 
