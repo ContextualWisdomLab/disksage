@@ -34,7 +34,7 @@ jobs:
         run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-cloud-plan
       - name: Exact duplicate audit tests
         run: |
-          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli duplicate_audit
+          cargo test --manifest-path src-tauri/Cargo.toml --lib --features cloud-cli duplicate_audit
           cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-duplicate-audit
       - name: Reclaim Rust test build space before archive proofs
         run: |
