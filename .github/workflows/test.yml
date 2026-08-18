@@ -27,6 +27,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri
+          cache-targets: false
       - name: Rust tests (includes unix symlink test)
         run: cargo test --manifest-path src-tauri/Cargo.toml
       - name: Headless cloud planner tests
@@ -172,6 +173,7 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: src-tauri
+          cache-targets: false
       - name: Measure exact-head Rust coverage
         id: rust-coverage
         run: |
@@ -366,5 +368,6 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri
+          cache-targets: false
       - name: Build with llm-engine (compiles real llama.cpp CPU + engine.rs FFI)
         run: cargo test --manifest-path src-tauri/Cargo.toml --features llm-engine --lib --no-run
