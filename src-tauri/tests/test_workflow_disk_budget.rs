@@ -1,12 +1,12 @@
-//! Regression contract for bounded GitHub-hosted runner disk usage.
+//! Regression contracts for bounded GitHub-hosted runner disk and linker usage.
 //!
 //! The ordinary `Test` job deliberately compiles several large Rust feature
-//! combinations before it reaches the frontend checks. A real exact-head run
-//! exhausted the hosted runner filesystem while entering the archive proof
-//! stage. This test keeps the repair reviewable: the workflow must release the
-//! reusable Cargo build directory after the duplicate-audit batch and before
-//! compiling the archive feature batch, without deleting or skipping either
-//! test family.
+//! combinations before it reaches the frontend checks. Real exact-head runs
+//! have exhausted hosted-runner resources while entering later feature
+//! batches. These tests keep the repair reviewable: the workflow must release
+//! reusable Cargo build space between large batches and must not compile every
+//! integration-test target merely to exercise the exact-duplicate library
+//! surface under `cloud-cli`.
 
 use std::fs;
 use std::path::PathBuf;
@@ -46,5 +46,30 @@ fn test_job_reclaims_rust_build_space_before_archive_feature_batch() {
     assert!(
         reclaim_block.contains("df -h ."),
         "reclamation must leave bounded disk-availability evidence in the job log"
+    );
+}
+
+#[test]
+fn duplicate_audit_feature_batch_builds_only_the_intended_library_and_cli_targets() {
+    let workflow = workflow_source();
+    let duplicate = workflow
+        .find("- name: Exact duplicate audit tests")
+        .expect("duplicate-audit batch must remain in the Test job");
+    let reclaim = workflow
+        .find("- name: Reclaim Rust test build space before archive proofs")
+        .expect("duplicate-audit batch must remain bounded before reclamation");
+    let duplicate_block = &workflow[duplicate..reclaim];
+
+    assert!(
+        duplicate_block.contains(
+            "cargo test --manifest-path src-tauri/Cargo.toml --lib --features cloud-cli duplicate_audit"
+        ),
+        "the cloud-cli duplicate-audit library proof must use --lib so Cargo does not relink every integration-test target"
+    );
+    assert!(
+        duplicate_block.contains(
+            "cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-duplicate-audit"
+        ),
+        "the dedicated duplicate-audit CLI proof must remain explicit"
     );
 }
