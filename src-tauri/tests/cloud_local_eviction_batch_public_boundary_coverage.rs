@@ -1,12 +1,14 @@
-//! Public-boundary exact-head coverage for iCloud local-eviction batch planning.
+//! Public-boundary exact-head coverage for iCloud local-eviction batch planning and execution.
 //!
-//! The batch planner must reject invalid authority/count inputs before filesystem work and must
-//! convert a genuinely unavailable iCloud item into bounded, path-free evidence instead of
-//! silently treating it as executable.
+//! The batch planner must reject invalid authority/count inputs before filesystem work, unavailable
+//! items must become bounded path-free evidence, and the public execution boundary must reject an
+//! invalid plan before it creates any authority record.
 
 use disksage_lib::cloud::{CloudAccountScope, CloudProvider, CloudRoot};
 use disksage_lib::cloud_local_eviction_batch::{
-    plan_icloud_local_eviction_batch, MAX_BATCH_ITEMS,
+    execute_icloud_local_eviction_batch, plan_icloud_local_eviction_batch,
+    IcloudLocalEvictionBatchApproval, IcloudLocalEvictionBatchPlan,
+    ICLOUD_LOCAL_EVICTION_BATCH_VERSION, MAX_BATCH_ITEMS,
 };
 use std::path::PathBuf;
 
@@ -83,5 +85,57 @@ fn public_batch_planner_projects_missing_item_as_bounded_unavailable_evidence() 
     assert!(
         plan.unavailable[0].error_code.len() <= 128,
         "unavailable evidence must stay bounded"
+    );
+}
+
+#[test]
+fn public_batch_execution_rejects_invalid_plan_before_record_publication() {
+    let record_parent = tempfile::tempdir().expect("temporary record parent");
+    let record_dir = record_parent.path().join("records-that-must-not-be-created");
+    let root = cloud_root(
+        CloudProvider::Icloud,
+        record_parent.path().join("icloud-root").to_string_lossy().into_owned(),
+    );
+    let invalid_plan = IcloudLocalEvictionBatchPlan {
+        version: ICLOUD_LOCAL_EVICTION_BATCH_VERSION,
+        provider: CloudProvider::Icloud,
+        account_scope: CloudAccountScope::Personal,
+        cloud_root: root.path.clone(),
+        observed_at_ms: 70_005,
+        input_count: 0,
+        planned_count: 0,
+        unavailable_count: 0,
+        total_logical_bytes: 0,
+        total_allocated_bytes: 0,
+        items: Vec::new(),
+        unavailable: Vec::new(),
+        batch_fingerprint: "0".repeat(64),
+        eligible_after_human_approval: false,
+        blockers: Vec::new(),
+        notices: Vec::new(),
+    };
+    let approval = IcloudLocalEvictionBatchApproval {
+        version: ICLOUD_LOCAL_EVICTION_BATCH_VERSION,
+        approval_id: "1".repeat(64),
+        batch_fingerprint: invalid_plan.batch_fingerprint.clone(),
+        approved_at_ms: 70_006,
+        approved_by: "human:coverage-operator".into(),
+        rationale: "Reject invalid batch before publication".into(),
+    };
+
+    let error = execute_icloud_local_eviction_batch(
+        &root,
+        &invalid_plan,
+        &approval,
+        &invalid_plan.batch_fingerprint,
+        &record_dir,
+        70_007,
+    )
+    .expect_err("an invalid plan must fail before record publication");
+
+    assert_eq!(error, "icloud-local-eviction-batch-plan-shape-invalid");
+    assert!(
+        !record_dir.exists(),
+        "invalid execution input must not create an authority-record directory"
     );
 }
