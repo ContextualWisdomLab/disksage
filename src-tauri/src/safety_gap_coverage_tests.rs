@@ -226,3 +226,23 @@ fn identity_bound_trash_self_descendant_staging_failure_preserves_reviewed_tree(
         "failed self-descendant staging must clean its private directory"
     );
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn trash_missing_source_records_terminal_error_after_pending_evidence() {
+    let root = tempfile::tempdir().expect("temporary vanished-source root");
+    let missing = root.path().join("vanished-before-trash.bin");
+    let journal = root.path().join("trash-journal.jsonl");
+
+    let error = trash_delete(&missing, 0, &journal, 50_008)
+        .expect_err("a vanished reviewed source must fail closed");
+
+    assert!(matches!(error, SafetyError::Trash(_)));
+    assert!(!missing.exists());
+    let recent = journal_recent(&journal, 10);
+    assert_eq!(recent.len(), 2, "failure must retain pending and terminal audit evidence");
+    assert!(recent[0].outcome.starts_with("error:"));
+    assert_eq!(recent[1].outcome, "pending");
+    assert_eq!(recent[0].path, missing.to_string_lossy());
+    assert_eq!(recent[1].path, missing.to_string_lossy());
+}
