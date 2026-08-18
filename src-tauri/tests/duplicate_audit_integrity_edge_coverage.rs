@@ -5,6 +5,7 @@
 
 use disksage_lib::duplicate_audit::{
     collect_exact_duplicate_audit, exact_duplicate_audit_integrity_valid, ExactDuplicateAuditReport,
+    MAX_ENTRIES,
 };
 
 fn duplicate_report() -> ExactDuplicateAuditReport {
@@ -21,6 +22,10 @@ fn cluster_and_member_contract_tampering_fail_closed_independently() {
 
     let mut tampered = report.clone();
     tampered.clusters[0].file_count = 1;
+    assert!(!exact_duplicate_audit_integrity_valid(&tampered));
+
+    let mut tampered = report.clone();
+    tampered.clusters[0].file_count = tampered.clusters[0].members.len() + 1;
     assert!(!exact_duplicate_audit_integrity_valid(&tampered));
 
     let mut tampered = report.clone();
@@ -96,6 +101,14 @@ fn derived_report_contract_tampering_fail_closed_independently() {
     let mut tampered = report;
     tampered.source_scope_fingerprint = "0".repeat(64);
     assert!(!exact_duplicate_audit_integrity_valid(&tampered));
+}
+
+#[test]
+fn upper_entry_bound_tampering_fails_closed() {
+    let mut report = duplicate_report();
+    assert!(exact_duplicate_audit_integrity_valid(&report));
+    report.max_entries = MAX_ENTRIES + 1;
+    assert!(!exact_duplicate_audit_integrity_valid(&report));
 }
 
 #[cfg(unix)]
