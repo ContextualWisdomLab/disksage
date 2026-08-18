@@ -73,10 +73,11 @@ fn public_batch_planner_projects_missing_item_as_bounded_unavailable_evidence() 
         vec!["icloud-local-eviction-batch-has-no-planned-items"]
     );
     assert_eq!(plan.unavailable[0].input_index, 0);
+    let missing_display = missing.to_string_lossy();
     assert!(
         !plan.unavailable[0]
             .error_code
-            .contains(&missing.to_string_lossy().to_string()),
+            .contains(missing_display.as_ref()),
         "unavailable evidence must not disclose the reviewed path"
     );
     assert!(
