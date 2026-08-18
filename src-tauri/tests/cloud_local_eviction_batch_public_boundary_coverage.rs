@@ -1,14 +1,14 @@
 //! Public-boundary exact-head coverage for iCloud local-eviction batch planning and execution.
 //!
 //! The batch planner must reject invalid authority/count inputs before filesystem work, unavailable
-//! items must become bounded path-free evidence, and the public execution boundary must reject an
-//! invalid plan before it creates any authority record.
+//! items must become bounded path-free evidence, and the public approval/execution boundaries must
+//! reject plans that are incomplete or otherwise non-authoritative before they can create records.
 
 use disksage_lib::cloud::{CloudAccountScope, CloudProvider, CloudRoot};
 use disksage_lib::cloud_local_eviction_batch::{
-    execute_icloud_local_eviction_batch, plan_icloud_local_eviction_batch,
-    IcloudLocalEvictionBatchApproval, IcloudLocalEvictionBatchPlan,
-    ICLOUD_LOCAL_EVICTION_BATCH_VERSION, MAX_BATCH_ITEMS,
+    approve_icloud_local_eviction_batch, execute_icloud_local_eviction_batch,
+    plan_icloud_local_eviction_batch, IcloudLocalEvictionBatchApproval,
+    IcloudLocalEvictionBatchPlan, ICLOUD_LOCAL_EVICTION_BATCH_VERSION, MAX_BATCH_ITEMS,
 };
 use std::path::PathBuf;
 
@@ -55,6 +55,18 @@ fn public_batch_planner_rejects_empty_and_oversized_manifests_before_path_probe(
 }
 
 #[test]
+fn public_batch_planner_rejects_duplicate_manifest_paths_before_path_probe() {
+    let root = cloud_root(CloudProvider::Icloud, "/not-a-real-icloud-root".into());
+    let repeated = PathBuf::from("/not-a-real-icloud-root/reviewed-item.bin");
+    let paths = vec![repeated.clone(), repeated];
+
+    let error = plan_icloud_local_eviction_batch(&root, &paths, 70_003)
+        .expect_err("one manifest path must not be represented twice in one human approval scope");
+
+    assert_eq!(error, "icloud-local-eviction-batch-duplicate-input-path");
+}
+
+#[test]
 fn public_batch_planner_projects_missing_item_as_bounded_unavailable_evidence() {
     let root_dir = tempfile::tempdir().expect("temporary iCloud-shaped root");
     let missing = root_dir.path().join("missing-reviewed-item.bin");
@@ -89,6 +101,31 @@ fn public_batch_planner_projects_missing_item_as_bounded_unavailable_evidence() 
 }
 
 #[test]
+fn public_batch_approval_rejects_a_valid_but_noneligible_unavailable_only_plan() {
+    let root_dir = tempfile::tempdir().expect("temporary iCloud-shaped root");
+    let missing = root_dir.path().join("missing-reviewed-item.bin");
+    let root = cloud_root(
+        CloudProvider::Icloud,
+        root_dir.path().to_string_lossy().into_owned(),
+    );
+    let plan = plan_icloud_local_eviction_batch(&root, std::slice::from_ref(&missing), 70_005)
+        .expect("missing input should produce a valid but non-executable evidence record");
+
+    assert!(!plan.eligible_after_human_approval);
+    let error = approve_icloud_local_eviction_batch(
+        &plan,
+        &root,
+        &plan.batch_fingerprint,
+        70_006,
+        "human:coverage-operator",
+        "Reviewed the exact unavailable-only plan",
+    )
+    .expect_err("human attribution cannot make an evidence-incomplete batch executable");
+
+    assert_eq!(error, "icloud-local-eviction-batch-fingerprint-mismatch");
+}
+
+#[test]
 fn public_batch_execution_rejects_invalid_plan_before_record_publication() {
     let record_parent = tempfile::tempdir().expect("temporary record parent");
     let record_dir = record_parent.path().join("records-that-must-not-be-created");
@@ -101,7 +138,7 @@ fn public_batch_execution_rejects_invalid_plan_before_record_publication() {
         provider: CloudProvider::Icloud,
         account_scope: CloudAccountScope::Personal,
         cloud_root: root.path.clone(),
-        observed_at_ms: 70_005,
+        observed_at_ms: 70_007,
         input_count: 0,
         planned_count: 0,
         unavailable_count: 0,
@@ -118,7 +155,7 @@ fn public_batch_execution_rejects_invalid_plan_before_record_publication() {
         version: ICLOUD_LOCAL_EVICTION_BATCH_VERSION,
         approval_id: "1".repeat(64),
         batch_fingerprint: invalid_plan.batch_fingerprint.clone(),
-        approved_at_ms: 70_006,
+        approved_at_ms: 70_008,
         approved_by: "human:coverage-operator".into(),
         rationale: "Reject invalid batch before publication".into(),
     };
@@ -129,7 +166,7 @@ fn public_batch_execution_rejects_invalid_plan_before_record_publication() {
         &approval,
         &invalid_plan.batch_fingerprint,
         &record_dir,
-        70_007,
+        70_009,
     )
     .expect_err("an invalid plan must fail before record publication");
 
