@@ -117,10 +117,16 @@ fn report(candidates: Vec<CloudCandidate>) -> CloudPlanReport {
 
 #[test]
 fn mixed_ready_and_review_candidates_export_partially_ready_with_all_time_buckets() {
+    // Only embedded high-confidence production time can pass without an exact human review.
+    // Exercise every exported production-time bucket while keeping one genuinely no-review-ready
+    // candidate so the aggregate state is PartiallyReady rather than incorrectly treating
+    // filename/filesystem/unclassified evidence as autonomous copy authority.
     let plan = report(vec![
-        candidate("filename:2026-08-18", false, 'a'),
-        candidate("filesystem:modified-fallback", true, 'b'),
-        candidate("unclassified:test-source", false, 'c'),
+        candidate("embedded:exiftool:CreateDate", false, 'a'),
+        candidate("filename:2026-08-18", false, 'b'),
+        candidate("filesystem:created", false, 'c'),
+        candidate("filesystem:modified-fallback", true, 'd'),
+        candidate("unclassified:test-source", false, 'e'),
     ]);
     let runtime = assess_provider_client_runtime(
         CloudProvider::Onedrive,
@@ -138,10 +144,18 @@ fn mixed_ready_and_review_candidates_export_partially_ready_with_all_time_bucket
     .unwrap();
 
     assert_eq!(envelope.readiness_state, CloudCopyReadinessState::PartiallyReady);
-    assert_eq!(envelope.candidate_count, 3);
-    assert_eq!(envelope.candidate_bytes, 126);
+    assert_eq!(envelope.candidate_count, 5);
+    assert_eq!(envelope.candidate_bytes, 210);
+    assert_eq!(
+        envelope.production_time_evidence.embedded_metadata,
+        CountBytes { count: 1, bytes: 42 }
+    );
     assert_eq!(
         envelope.production_time_evidence.explicit_filename_date,
+        CountBytes { count: 1, bytes: 42 }
+    );
+    assert_eq!(
+        envelope.production_time_evidence.filesystem_created,
         CountBytes { count: 1, bytes: 42 }
     );
     assert_eq!(
@@ -154,11 +168,20 @@ fn mixed_ready_and_review_candidates_export_partially_ready_with_all_time_bucket
     );
     assert_eq!(
         envelope.ready_without_new_review,
-        CountBytes { count: 2, bytes: 84 }
+        CountBytes { count: 1, bytes: 42 }
     );
     assert_eq!(
         envelope.requires_human_review,
         CountBytes { count: 1, bytes: 42 }
+    );
+    assert_eq!(
+        envelope
+            .candidate_blocker_counts
+            .get("embedded-high-confidence-date-required"),
+        Some(&CountBytes {
+            count: 4,
+            bytes: 168,
+        })
     );
     assert_eq!(
         envelope.candidate_blocker_counts.get("review-required"),
@@ -175,7 +198,7 @@ fn mixed_ready_and_review_candidates_export_partially_ready_with_all_time_bucket
 fn all_clear_candidates_export_ready_without_new_review() {
     let plan = report(vec![
         candidate("embedded:exiftool:CreateDate", false, 'd'),
-        candidate("filesystem:created", false, 'e'),
+        candidate("embedded:pdf:CreationDate", false, 'e'),
     ]);
     let runtime = assess_provider_client_runtime(
         CloudProvider::Onedrive,
