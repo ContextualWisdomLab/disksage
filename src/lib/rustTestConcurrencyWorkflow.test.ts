@@ -26,6 +26,14 @@ describe('native Rust test concurrency contract', () => {
     expect(workflow.split('RUST_TEST_THREADS: "1"').length - 1).toBe(2);
   });
 
+  it('does not restore compiled target artifacts into exact-head Rust evidence jobs', () => {
+    const rustCacheUses = workflow.split('uses: Swatinem/rust-cache@').length - 1;
+    const registryOnlyCaches = workflow.split('cache-targets: false').length - 1;
+
+    expect(rustCacheUses).toBeGreaterThan(0);
+    expect(registryOnlyCaches).toBe(rustCacheUses);
+  });
+
   it('keeps exact-head identity and exact coverage thresholds unchanged while serializing tests', () => {
     expect(workflow).toContain(
       'HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}',
