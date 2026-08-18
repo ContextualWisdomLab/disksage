@@ -8,6 +8,8 @@ mod dupes;
 mod commands;
 #[cfg(test)]
 mod commands_public_tests;
+#[cfg(test)]
+mod commands_env_coverage_tests;
 #[cfg_attr(coverage, allow(dead_code))]
 mod cache_cleanup;
 #[cfg_attr(coverage, allow(dead_code))]
