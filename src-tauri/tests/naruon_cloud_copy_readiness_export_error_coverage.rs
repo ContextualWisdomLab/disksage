@@ -4,8 +4,8 @@
 //! contact cloud APIs, write cloud state, or authorize source eviction.
 
 use disksage_lib::cloud::{
-    CloudAccountScope, CloudPlanOptions, CloudPlanReport, CloudProvider, CloudRoot,
-    ExactDuplicateSummary,
+    candidate_review_fingerprint, ArchiveKind, CloudAccountScope, CloudCandidate, CloudPlanOptions,
+    CloudPlanReport, CloudProvider, CloudRoot, ExactDuplicateSummary, MetadataEvidence,
 };
 use disksage_lib::naruon_cloud_copy_readiness::{
     export_naruon_cloud_copy_readiness, export_naruon_cloud_copy_readiness_with_global_sync,
@@ -54,6 +54,44 @@ fn report(provider: CloudProvider) -> CloudPlanReport {
     }
 }
 
+fn candidate(bytes: u64, name: &str) -> CloudCandidate {
+    let mut candidate = CloudCandidate {
+        metadata_fingerprint: "a".repeat(64),
+        review_fingerprint: String::new(),
+        src: format!("/private/source/{name}.bin"),
+        dst: format!("/private/cloud/DiskSage Archive/2026/08/other/{name}.bin"),
+        provider: CloudProvider::Onedrive,
+        destination_account_scope: CloudAccountScope::Personal,
+        kind: ArchiveKind::Other,
+        bytes,
+        age_days: 100,
+        created_ms: 1,
+        modified_ms: 2,
+        production_time_ms: 3,
+        production_time_source: "embedded:coverage".into(),
+        production_time_confidence: "high".into(),
+        source_root: "/private/source".into(),
+        relative_path: format!("{name}.bin"),
+        source_context: "downloads".into(),
+        requires_review: false,
+        review_reasons: Vec::new(),
+        content_title: None,
+        content_authors: Vec::new(),
+        content_context: Vec::new(),
+        duration_ms: None,
+        dataset_profile: None,
+        metadata_evidence: vec![MetadataEvidence {
+            field: "production-date".into(),
+            value: "redacted-test-value".into(),
+            source: "embedded:coverage".into(),
+            confidence: "high".into(),
+        }],
+        blocked_reason: None,
+    };
+    candidate.review_fingerprint = candidate_review_fingerprint(&candidate);
+    candidate
+}
+
 fn global_sync(
     provider: CloudProvider,
     state: ProviderGlobalSyncState,
@@ -93,6 +131,30 @@ fn exporter_rejects_runtime_provider_mismatch_and_missing_selection_policy() {
     assert_eq!(
         export_naruon_cloud_copy_readiness(&missing_policy, &onedrive_runtime, None).unwrap_err(),
         "naruon-copy-readiness-selection-policy-missing"
+    );
+}
+
+#[test]
+fn exporter_fails_closed_when_candidate_evidence_bytes_overflow() {
+    let mut plan = report(CloudProvider::Onedrive);
+    plan.candidates = vec![candidate(u64::MAX, "max"), candidate(1, "overflow")];
+    plan.candidate_bytes = u64::MAX;
+    plan.potentially_reclaimable_bytes = u64::MAX;
+    plan.capacity = Some(assess_capacity(
+        unavailable_capacity(CloudProvider::Onedrive, 10, "capacity-unavailable"),
+        u64::MAX,
+        u64::MAX,
+        DEFAULT_CAPACITY_RESERVE_BYTES,
+    ));
+    let runtime = assess_provider_client_runtime(
+        CloudProvider::Onedrive,
+        Some(b"OneDrive Sync Service\n"),
+        25,
+    );
+
+    assert_eq!(
+        export_naruon_cloud_copy_readiness(&plan, &runtime, None).unwrap_err(),
+        "naruon-copy-readiness-bytes-overflow"
     );
 }
 
