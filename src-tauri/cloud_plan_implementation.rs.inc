@@ -4012,6 +4012,8 @@ mod tests {
                 "goal-state:copy-verified".into(),
                 "provider-sync-state:unknown".into(),
                 "provider-sync-complete:false".into(),
+                "filename-dates-auxiliary".into(),
+                "production-time-precedence:embedded-metadata>explicit-filename-date>filesystem-created>filesystem-modified".into(),
                 "provider-evidence-authoritative".into(),
                 "source-retained-until-explicit-trash-step".into(),
             ],

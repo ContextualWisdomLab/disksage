@@ -55,6 +55,8 @@ fn context_for(
         format!("goal-state:{}", goal_state.as_str()),
         format!("provider-sync-state:{}", sync_state.as_str()),
         format!("provider-sync-complete:{sync_complete}"),
+        "filename-dates-auxiliary".into(),
+        "production-time-precedence:embedded-metadata>explicit-filename-date>filesystem-created>filesystem-modified".into(),
         "provider-evidence-authoritative".into(),
         "source-retained-until-explicit-trash-step".into(),
     ]
