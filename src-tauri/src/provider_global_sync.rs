@@ -297,17 +297,37 @@ pub fn inspect_new_copy_admission(
     ))
 }
 
+fn report_identity_is_valid(report: &ProviderGlobalSyncReport) -> bool {
+    report.schema_version == PROVIDER_GLOBAL_SYNC_SCHEMA_VERSION
+        && report.evidence_kind == "fileproviderctl-global-dump"
+        && provider_identifier(report.provider).is_some()
+}
+
+fn report_has_pending_aggregate_evidence(report: &ProviderGlobalSyncReport) -> bool {
+    report.upload_progress_present
+        || report.download_progress_present
+        || report.pending_indexable_count.is_some_and(|count| count > 0)
+}
+
+fn report_is_authoritative_clear(report: &ProviderGlobalSyncReport) -> bool {
+    report_identity_is_valid(report)
+        && report.evidence_complete
+        && report.state == ProviderGlobalSyncState::Clear
+        && report.blockers.is_empty()
+        && !report_has_pending_aggregate_evidence(report)
+}
+
 pub fn require_new_copy_admission(report: &ProviderGlobalSyncReport) -> Result<(), String> {
-    if report.schema_version != PROVIDER_GLOBAL_SYNC_SCHEMA_VERSION
-        || report.evidence_kind != "fileproviderctl-global-dump"
-        || provider_identifier(report.provider).is_none()
+    if !report_identity_is_valid(report)
+        || (report.state == ProviderGlobalSyncState::Clear
+            && report_has_pending_aggregate_evidence(report))
     {
         return Err("provider-global-sync-evidence-invalid".into());
     }
     if !report.evidence_complete {
         return Err("provider-global-sync-evidence-incomplete".into());
     }
-    if report.state == ProviderGlobalSyncState::Clear && report.blockers.is_empty() {
+    if report_is_authoritative_clear(report) {
         Ok(())
     } else if report.blockers.is_empty() {
         Err(format!("provider-global-sync-{}", report.state.as_str()))
@@ -330,13 +350,7 @@ pub fn attach_new_copy_admission_notice(
 ) {
     notices.retain(|notice| !notice.starts_with("provider-global-sync-"));
     let admission_notice = match report {
-        Some(report)
-            if report.evidence_complete
-                && report.state == ProviderGlobalSyncState::Clear
-                && report.blockers.is_empty() =>
-        {
-            "provider-global-sync-clear"
-        }
+        Some(report) if report_is_authoritative_clear(report) => "provider-global-sync-clear",
         Some(_) => "provider-global-sync-blocked",
         None => "provider-global-sync-evidence-unavailable",
     }
