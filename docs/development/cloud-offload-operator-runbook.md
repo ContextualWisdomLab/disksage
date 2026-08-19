@@ -29,6 +29,7 @@ The runtime sequence is:
 4. `is_local_current=true` with `is_uploaded=false` is `pending-upload`; the source remains and
    no eviction permit is issued.
    iCloud native `needs-sync-up` and `needs-sync-down` states are also explicit admission blockers;
+   a timeout while collecting native status is an admission blocker as well;
    the latter means the provider still has remote changes to materialize.
    Third-party File Provider dumps also block new copies while upload/download progress,
    non-zero reconciliation backlogs (`provider-global-sync-reconciliation-pending`), provider

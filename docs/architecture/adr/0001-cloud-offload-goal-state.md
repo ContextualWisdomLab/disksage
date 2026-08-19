@@ -73,6 +73,8 @@ clear evidence.
 - A timed-out provider-wide dump may explain active transfer or reconciliation markers, but its incomplete evidence never admits a new copy.
 - An iCloud native `needs-sync-up` or `needs-sync-down` state blocks new-copy admission until the
   bounded native status is quiet; neither direction is treated as completed provider evidence.
+- A timeout while collecting the bounded iCloud native status also blocks new-copy admission;
+  timeout is not interpreted as a quiet provider.
 - A `source-not-present`, `source-content-not-local`, or unsafe-source observation blocks the Goal
   even when provider sync is complete; DiskSage never infers that an externally removed or
   File-Provider-dataless source was safely evicted.

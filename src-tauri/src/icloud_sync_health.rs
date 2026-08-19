@@ -1085,6 +1085,24 @@ fn attach_native_status_admission(report: &mut IcloudSyncHealthReport) {
     if report
         .native_status
         .as_ref()
+        .is_some_and(|status| status.timed_out)
+        && !report
+            .new_copy_admission_blockers
+            .iter()
+            .any(|blocker| blocker == "icloud-native-status-command-timeout")
+    {
+        report.sync_backlog_present = true;
+        report
+            .new_copy_admission_blockers
+            .push("icloud-native-status-command-timeout".into());
+        report.new_copy_admission_state = "blocked".into();
+        report
+            .blockers
+            .insert(0, "icloud-native-status-command-timeout".into());
+    }
+    if report
+        .native_status
+        .as_ref()
         .is_some_and(native_sync_up_pending)
         && !report
             .new_copy_admission_blockers
@@ -1443,12 +1461,39 @@ mod tests {
         assert_eq!(report.new_copy_admission_state, "blocked");
         assert_eq!(
             report.new_copy_admission_blockers,
-            ["icloud-native-status-evidence-incomplete"]
+            [
+                "icloud-native-status-evidence-incomplete",
+                "icloud-native-status-command-timeout"
+            ]
         );
         assert_eq!(
             require_new_copy_admission(&report).unwrap_err(),
-            "icloud-native-status-evidence-incomplete"
+            "icloud-native-status-evidence-incomplete,icloud-native-status-command-timeout"
         );
+    }
+
+    #[test]
+    fn native_status_timeout_blocks_new_copy_even_with_bounded_summary() {
+        let mut report =
+            build_report(1, vec![], IcloudUploadQueueSummary::default(), true, true).unwrap();
+        report.native_status = Some(parse_native_status_output(
+            "1 containers matching '*'\n\
+             foreground {client:needs-sync server:full-sync sync:needs-sync-down last-sync:now}\n",
+            1,
+            false,
+            true,
+            false,
+        ));
+        attach_native_status_admission(&mut report);
+
+        assert_eq!(
+            report.new_copy_admission_blockers,
+            [
+                "icloud-native-status-command-timeout",
+                "icloud-native-sync-down-pending"
+            ]
+        );
+        assert!(require_new_copy_admission(&report).is_err());
     }
 
     #[test]

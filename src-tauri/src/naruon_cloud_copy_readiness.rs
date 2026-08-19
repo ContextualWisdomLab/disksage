@@ -30,7 +30,7 @@ const RUNTIME_BLOCKERS: [&str; 2] = [
     "provider-client-runtime-not-observed",
     "provider-client-runtime-evidence-unavailable",
 ];
-const ICLOUD_ADMISSION_BLOCKERS: [&str; 11] = [
+const ICLOUD_ADMISSION_BLOCKERS: [&str; 12] = [
     "icloud-sync-health-evidence-incomplete",
     "icloud-upload-queue-nonempty",
     "icloud-upload-in-flight",
@@ -39,6 +39,7 @@ const ICLOUD_ADMISSION_BLOCKERS: [&str; 11] = [
     "icloud-upload-queue-state-unclassified",
     "icloud-local-sync-item-error-present",
     "icloud-native-status-evidence-incomplete",
+    "icloud-native-status-command-timeout",
     "icloud-native-sync-up-pending",
     "icloud-native-sync-down-pending",
     "icloud-new-copy-admission-evidence-unavailable",
@@ -281,6 +282,13 @@ fn expected_icloud_admission_blockers(report: &IcloudSyncHealthReport) -> Vec<St
         .is_some_and(|status| !status.evidence_complete)
     {
         blockers.push("icloud-native-status-evidence-incomplete".into());
+    }
+    if report
+        .native_status
+        .as_ref()
+        .is_some_and(|status| status.timed_out)
+    {
+        blockers.push("icloud-native-status-command-timeout".into());
     }
     if report.native_status.as_ref().is_some_and(native_sync_up_pending) {
         blockers.push("icloud-native-sync-up-pending".into());
@@ -1013,6 +1021,13 @@ fn validate_icloud_admission_summary(
     {
         expected.push("icloud-native-status-evidence-incomplete".to_string());
     }
+    if summary
+        .native_status
+        .as_ref()
+        .is_some_and(|status| status.timed_out)
+    {
+        expected.push("icloud-native-status-command-timeout".to_string());
+    }
     if summary.native_status.as_ref().is_some_and(native_sync_up_pending) {
         expected.push("icloud-native-sync-up-pending".to_string());
     }
@@ -1493,14 +1508,26 @@ mod tests {
         let mut health = icloud_health(false);
         health.native_status = Some(native_sync_up_status());
         health.new_copy_admission_state = "blocked".into();
-        health.new_copy_admission_blockers = vec!["icloud-native-sync-up-pending".into()];
-        health.blockers = vec!["icloud-native-sync-up-pending".into()];
+        health.new_copy_admission_blockers = vec![
+            "icloud-native-status-command-timeout".into(),
+            "icloud-native-sync-up-pending".into(),
+        ];
+        health.blockers = vec![
+            "icloud-native-status-command-timeout".into(),
+            "icloud-native-sync-up-pending".into(),
+        ];
 
         let envelope =
             export_naruon_cloud_copy_readiness(&report, &runtime, Some(&health)).unwrap();
         let admission = envelope.icloud_new_copy_admission.as_ref().unwrap();
         assert_eq!(envelope.icloud_new_copy_admission_met, Some(false));
-        assert_eq!(admission.blockers, vec!["icloud-native-sync-up-pending"]);
+        assert_eq!(
+            admission.blockers,
+            vec![
+                "icloud-native-status-command-timeout",
+                "icloud-native-sync-up-pending"
+            ]
+        );
         assert_eq!(
             admission
                 .native_status
@@ -1520,14 +1547,26 @@ mod tests {
         native.sync_state = Some("needs-sync-down".into());
         health.native_status = Some(native);
         health.new_copy_admission_state = "blocked".into();
-        health.new_copy_admission_blockers = vec!["icloud-native-sync-down-pending".into()];
-        health.blockers = vec!["icloud-native-sync-down-pending".into()];
+        health.new_copy_admission_blockers = vec![
+            "icloud-native-status-command-timeout".into(),
+            "icloud-native-sync-down-pending".into(),
+        ];
+        health.blockers = vec![
+            "icloud-native-status-command-timeout".into(),
+            "icloud-native-sync-down-pending".into(),
+        ];
 
         let envelope =
             export_naruon_cloud_copy_readiness(&report, &runtime, Some(&health)).unwrap();
         let admission = envelope.icloud_new_copy_admission.as_ref().unwrap();
         assert_eq!(envelope.icloud_new_copy_admission_met, Some(false));
-        assert_eq!(admission.blockers, vec!["icloud-native-sync-down-pending"]);
+        assert_eq!(
+            admission.blockers,
+            vec![
+                "icloud-native-status-command-timeout",
+                "icloud-native-sync-down-pending"
+            ]
+        );
         assert!(validate_naruon_cloud_copy_readiness(&envelope).is_ok());
     }
 
