@@ -36,20 +36,18 @@ fn clean_cache_contents_inner(
         return Err("cache-cleanup-targets-stale".into());
     }
 
-    // One recursive probe covers the whole catalog root. Re-probing every child would multiply
-    // the bounded lsof cost by thousands of cache entries while adding no stronger snapshot.
-    let active_use = crate::git_worktree::active_use_evidence(
-        dir,
-        crate::reclaim::ACTIVE_USE_PROBE_TIMEOUT_MS,
-        crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
-        true,
-    );
-    let active_use_error = active_use_blocker(&active_use);
-
     Ok(expected
         .into_iter()
         .map(|target| {
-            if let Some(error) = active_use_error {
+            // Probe each reviewed child independently: a live MCP/uv process must not prevent
+            // reclaiming unrelated, inactive cache archives in the same catalog root.
+            let active_use = crate::git_worktree::active_use_evidence(
+                Path::new(&target.path),
+                crate::reclaim::ACTIVE_USE_PROBE_TIMEOUT_MS,
+                crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
+                true,
+            );
+            if let Some(error) = active_use_blocker(&active_use) {
                 return CleanResult {
                     path: target.path,
                     ok: false,
