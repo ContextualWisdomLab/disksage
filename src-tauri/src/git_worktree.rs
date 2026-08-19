@@ -2356,6 +2356,31 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn admin_fallback_with_valid_oid_and_clean_path_stays_evidence_gap() {
+        let temp = tempfile::tempdir().unwrap();
+        let common_dir = temp.path().join(".git");
+        let worktree = temp.path().join("linked");
+        fs::create_dir_all(&worktree).unwrap();
+        let admin = common_dir.join("worktrees").join("linked");
+        fs::create_dir_all(&admin).unwrap();
+        fs::write(admin.join("gitdir"), format!("{}/.git\n", worktree.display())).unwrap();
+        fs::write(admin.join("HEAD"), format!("{}\n", oid('a'))).unwrap();
+
+        let (entries, _) =
+            admin_fallback_worktrees(&common_dir, GitWorktreeAuditOptions::default());
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, worktree);
+        assert!(is_oid(&entries[0].head));
+        assert!(entries[0].path.is_dir());
+        assert!(entries[0].fallback_evidence_incomplete);
+        assert_eq!(
+            disposition(&["git-worktree-admin-fallback-evidence-incomplete".into()]),
+            GitWorktreeDisposition::EvidenceGap
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn admin_fallback_file_rejects_symlinks_and_bounds_reads() {
         let temp = tempfile::tempdir().unwrap();
         let symlink = temp.path().join("symlink");
