@@ -18,7 +18,7 @@ use std::os::unix::io::AsRawFd;
 #[cfg(windows)]
 use std::os::windows::fs::OpenOptionsExt;
 
-pub const CLOUD_ADR_SCHEMA_VERSION: u32 = 2;
+pub const CLOUD_ADR_SCHEMA_VERSION: u32 = 3;
 pub const CLOUD_GOAL_SCHEMA_VERSION: u32 = 1;
 const MAX_PROJECTION_BYTES: u64 = 256 * 1024;
 
@@ -36,10 +36,28 @@ pub struct CloudOffloadAdrSnapshot {
     pub goal_state: CloudOffloadGoalState,
     pub provider_sync_state: ProviderSyncState,
     pub sync_complete: bool,
+    /// Dynamic ADR context; old v2 projections deserialize with an empty context.
+    #[serde(default)]
+    pub context: Vec<String>,
     pub decision: String,
     pub consequences: Vec<String>,
     pub evidence_record_id: Option<String>,
     pub updated_at_ms: u64,
+}
+
+fn context_for(
+    goal_state: CloudOffloadGoalState,
+    sync_state: ProviderSyncState,
+    sync_complete: bool,
+) -> Vec<String> {
+    vec![
+        "metadata-first-lineage".into(),
+        format!("goal-state:{}", goal_state.as_str()),
+        format!("provider-sync-state:{}", sync_state.as_str()),
+        format!("provider-sync-complete:{sync_complete}"),
+        "provider-evidence-authoritative".into(),
+        "source-retained-until-explicit-trash-step".into(),
+    ]
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -105,6 +123,7 @@ pub fn snapshot_from_evidence(
         goal_state,
         provider_sync_state: evidence.sync_state,
         sync_complete: evidence.sync_complete,
+        context: context_for(goal_state, evidence.sync_state, evidence.sync_complete),
         decision: decision_for(goal_state, evidence.sync_state),
         consequences,
         evidence_record_id: Some(record.record_id.clone()),
@@ -125,6 +144,11 @@ pub fn initial_adr_snapshot(
         goal_state: CloudOffloadGoalState::CopyVerified,
         provider_sync_state: ProviderSyncState::Unknown,
         sync_complete: false,
+        context: context_for(
+            CloudOffloadGoalState::CopyVerified,
+            ProviderSyncState::Unknown,
+            false,
+        ),
         decision: decision_for(
             CloudOffloadGoalState::CopyVerified,
             ProviderSyncState::Unknown,
@@ -956,6 +980,22 @@ mod tests {
         assert_eq!(snapshot.provider_sync_state, ProviderSyncState::Unknown);
         assert_eq!(snapshot.evidence_record_id, None);
         assert_eq!(snapshot.adr_id, format!("cloud-offload:{}", "a".repeat(64)));
+        assert!(snapshot
+            .context
+            .contains(&"goal-state:copy-verified".to_string()));
+        assert!(snapshot
+            .context
+            .contains(&"metadata-first-lineage".to_string()));
+    }
+
+    #[test]
+    fn adr_v2_projection_deserializes_without_context() {
+        let mut value = serde_json::to_value(initial_adr_snapshot(&receipt(), 5)).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("context");
+        object.insert("schema_version".into(), serde_json::json!(2));
+        let parsed: CloudOffloadAdrSnapshot = serde_json::from_value(value).unwrap();
+        assert!(parsed.context.is_empty());
     }
 
     #[test]

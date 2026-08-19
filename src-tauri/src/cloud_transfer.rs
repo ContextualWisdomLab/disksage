@@ -120,6 +120,16 @@ pub enum CloudOffloadGoalState {
 }
 
 impl CloudOffloadGoalState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CopyVerified => "copy-verified",
+            Self::PendingProviderSync => "pending-provider-sync",
+            Self::ProviderSyncConfirmed => "provider-sync-confirmed",
+            Self::EvictionReady => "eviction-ready",
+            Self::SourceEvicted => "source-evicted",
+        }
+    }
+
     pub fn after_attestation(evidence: &ProviderSyncEvidence, permit_available: bool) -> Self {
         if !evidence.sync_complete || !evidence.sync_state.is_complete() {
             return Self::PendingProviderSync;
