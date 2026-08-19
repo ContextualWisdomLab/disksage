@@ -138,6 +138,30 @@ export interface MovePlan {
 export const planOrganize = (root: string) =>
   invoke<MovePlan[]>("plan_organize", { root });
 
+export interface OrganizationLineageItem {
+  lineage_fingerprint: string;
+  source_size: number;
+  source_mtime_ms: number;
+  production_time_ms: number;
+  production_time_source: string;
+  production_time_confidence: "high" | "medium" | "low" | "unknown";
+  ontology_class: string;
+  destination_relation: "targetFolder";
+  action: "move";
+}
+
+export interface OrganizationLineageBatch {
+  schema: "disksage.organization-lineage-batch";
+  version: 1;
+  generated_at_ms: number;
+  complete: true;
+  batch_fingerprint_sha256: string;
+  items: OrganizationLineageItem[];
+}
+
+export const exportOrganizationLineage = (plans: MovePlan[]) =>
+  invoke<OrganizationLineageBatch>("export_organization_lineage", { plans });
+
 export interface RuleMatch {
   ext: string | null;
   name_contains: string | null;

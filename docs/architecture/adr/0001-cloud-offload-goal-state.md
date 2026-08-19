@@ -96,3 +96,7 @@ timeout; a health check cannot remain stuck behind a provider copy.
   plan carries a path-free lineage fingerprint plus the source size/mtime snapshot and is rejected
   if the source changes; File Provider dataless sources are not moved. The organization walk is
   bounded at 10,000 entries or 10 seconds and rejects partial results.
+- A complete organization plan can be exported as `disksage.organization-lineage-batch` v1. The
+  handoff contains only lineage fingerprints, size/mtime, production-time evidence, ontology class,
+  `targetFolder`, and the planned `move` action. Naruon stores it encrypted and returns a redacted
+  summary; it never receives paths, names, OAuth material, or move/eviction authority.

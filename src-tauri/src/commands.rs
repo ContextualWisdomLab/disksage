@@ -20,6 +20,7 @@ use crate::safety;
 use crate::{
     brew_cleanup, cloud, cloud_adr, cloud_eviction, cloud_local_eviction, cloud_plan_view,
     cloud_review, cloud_transfer, dev_artifacts, dupes, git_worktree, icloud_sync_health,
+    organization_lineage,
     provider_api_client, provider_api_write, provider_capacity, provider_client_runtime, provider_evidence,
     provider_global_sync, provider_oauth, provider_sync, rules,
 };
@@ -2632,6 +2633,14 @@ pub fn plan_organize(
         &|_, _| None,
         &organize::lineage_metadata_for_path,
     ))
+}
+
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn export_organization_lineage(
+    plans: Vec<organize::MovePlan>,
+) -> Result<organization_lineage::OrganizationLineageBatch, String> {
+    organization_lineage::export_move_plans(&plans, now_ms())
 }
 
 #[cfg(not(coverage))]

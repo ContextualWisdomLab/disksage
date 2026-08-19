@@ -11,6 +11,7 @@
   let loadError = $state("");
   let results: api.CleanResult[] = $state([]);
   let verdicts: Record<string, api.Verdict> = $state({});
+  let exportStatus = $state("");
 
   async function loadVerdicts(paths: string[]) {
     try {
@@ -77,6 +78,21 @@
       busy = false;
     }
   }
+
+  async function copyLineageHandoff() {
+    if (plans.length === 0) return;
+    busy = true;
+    exportStatus = "";
+    try {
+      const batch = await api.exportOrganizationLineage(plans);
+      await navigator.clipboard.writeText(JSON.stringify(batch, null, 2));
+      exportStatus = "경로 없는 계보 계약을 클립보드에 복사했습니다.";
+    } catch (e) {
+      exportStatus = `계보 내보내기 실패: ${String(e)}`;
+    } finally {
+      busy = false;
+    }
+  }
 </script>
 
 <section>
@@ -123,7 +139,11 @@
       <button onclick={executeSelected} disabled={busy}>
         {plans.length}개 파일 정리
       </button>
+      <button onclick={copyLineageHandoff} disabled={busy}>
+        계보 계약 복사
+      </button>
     </div>
+    {#if exportStatus}<p class="muted">{exportStatus}</p>{/if}
   {/if}
 
   {#if results.length > 0}

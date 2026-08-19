@@ -70,6 +70,8 @@ pub mod multipart_archive;
 pub mod naruon_capacity;
 pub mod naruon_cloud_copy_readiness;
 pub mod naruon_lineage;
+/// Path-free ontology organization lineage handoff for Naruon/semantic-data-portal.
+pub mod organization_lineage;
 /// Read-only, fail-closed Podman VM/store reclaim evidence.
 pub mod podman_reclaim;
 pub mod provider_api_client;
@@ -113,6 +115,7 @@ pub fn run() {
             commands::disk_inventory,
             commands::ontology_coherence,
             commands::plan_organize,
+            commands::export_organization_lineage,
             commands::user_rules,
             commands::execute_moves,
             commands::undo_last_moves,
