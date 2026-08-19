@@ -92,10 +92,12 @@ physical reclaim proof; prune, trim, stop, and delete remain outside the inspect
 - An oversized CloudDocs `client.db` produces incomplete, fail-closed evidence without running a
   long SQLite fallback query; the File Provider probe still reports whether the provider is stalled.
 - Podman reclaim evidence reports the VM/store candidates and requires separate human review for
-  unused images or volumes. The only executable Podman action is a fresh, exact-fingerprint-bound
-  `image prune --force` for untagged images with zero container references; it never prunes volumes,
-  containers, tagged images, or the VM, and host-space recovery is reported only from before/after
-  filesystem observations. User-data volumes are not moved to a provider or deleted by inspection.
+  unused images or volumes. The executable image-cleanup boundary revalidates the exact reviewed
+  candidate fingerprint immediately before mutation and removes only those immutable image IDs with
+  `image rm --no-prune`; it never invokes broad `image prune`, never uses `--force`, never removes
+  parent images, containers, volumes, tagged candidates, or the VM, and host-space recovery is
+  reported only from before/after filesystem observations. User-data volumes are not moved to a
+  provider or deleted by inspection.
 - A `source-not-present`, `source-content-not-local`, or unsafe-source observation blocks the Goal
   even when provider sync is complete; DiskSage never infers that an externally removed or
   File-Provider-dataless source was safely evicted.
