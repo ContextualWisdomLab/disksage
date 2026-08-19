@@ -4,11 +4,157 @@ use crate::dupes::FileEntry;
 use crate::inventory::classify;
 use crate::ontology::Ontology;
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+// ponytail: cap metadata probes per organize request; raise only with measured bounded latency.
+const MAX_LINEAGE_PROBES: usize = 32;
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+pub struct LineageMetadata {
+    pub production_time_ms: Option<u64>,
+    pub production_time_source: Option<String>,
+    pub production_time_confidence: Option<String>,
+    pub lineage_fingerprint: String,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct MovePlan {
     pub src: String,
     pub dst: String,
     pub class_id: String,
+    #[serde(default)]
+    pub source_size: Option<u64>,
+    #[serde(default)]
+    pub source_mtime_ms: Option<u64>,
+    #[serde(default)]
+    pub lineage: LineageMetadata,
+}
+
+#[cfg(not(coverage))]
+pub fn lineage_metadata_for_path(path: &Path) -> Option<LineageMetadata> {
+    if crate::cloud::source_content_is_dataless(path) {
+        return None;
+    }
+    let file_metadata = std::fs::symlink_metadata(path).ok()?;
+    if file_metadata.file_type().is_symlink() || !file_metadata.is_file() {
+        return None;
+    }
+    let content = crate::cloud::probe_content_metadata_for_audit(path);
+    let filesystem_created_ms = file_metadata
+        .created()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or_default();
+    let filesystem_modified_ms = file_metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or_default();
+    let (production_time_ms, production_time_source, production_time_confidence) =
+        if let Some(value) = content.production_time_ms {
+            (
+                Some(value),
+                content.production_time_source,
+                content.production_time_confidence,
+            )
+        } else if let Some(value) = crate::cloud::filename_date_ms(path) {
+            (Some(value), Some("filename:path-token".into()), Some("low".into()))
+        } else if filesystem_created_ms > 0 {
+            (
+                Some(filesystem_created_ms),
+                Some("filesystem:created".into()),
+                Some("low".into()),
+            )
+        } else if filesystem_modified_ms > 0 {
+            (
+                Some(filesystem_modified_ms),
+                Some("filesystem:modified-fallback".into()),
+                Some("low".into()),
+            )
+        } else {
+            (None, None, None)
+        };
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage-organize-lineage-v1\0");
+    for value in [
+        production_time_ms.unwrap_or_default().to_string(),
+        production_time_source.clone().unwrap_or_default(),
+        production_time_confidence.clone().unwrap_or_default(),
+        content.title.unwrap_or_default(),
+        content.authors.join("\0"),
+        content.context.join("\0"),
+    ] {
+        hasher.update(value.as_bytes());
+        hasher.update(&[0]);
+    }
+    for evidence in content.evidence {
+        for value in [evidence.field, evidence.value, evidence.source, evidence.confidence] {
+            hasher.update(value.as_bytes());
+            hasher.update(&[0]);
+        }
+    }
+    Some(LineageMetadata {
+        production_time_ms,
+        production_time_source,
+        production_time_confidence,
+        lineage_fingerprint: hasher.finalize().to_hex().to_string(),
+    })
+}
+
+fn plan_moves_impl(
+    files: &[FileEntry],
+    onto: &Ontology,
+    home: &Path,
+    now_ms: u64,
+    rules: &[crate::userrules::Rule],
+    pick: &dyn Fn(&Path, &[&str]) -> Option<String>,
+    lineage_probe: Option<&dyn Fn(&Path) -> Option<LineageMetadata>>,
+) -> Vec<MovePlan> {
+    let candidates: Vec<&str> = onto.classes.iter().map(|c| local_name(&c.id)).collect();
+    let reasoner = crate::ontology::Reasoner::build(onto);
+    let mut plans = Vec::new();
+    let mut lineage_probe_count = 0;
+    for f in files {
+        let Some(name) = f.path.file_name() else { continue };
+        let age_days = now_ms.saturating_sub(f.mtime_ms) / 86_400_000;
+        let local: String = match crate::userrules::classify_by_rules(rules, &f.path, f.size, age_days) {
+            Some(c) => c,
+            None => match pick(&f.path, &candidates) {
+                Some(picked) => picked,
+                None => match classify(&f.path) {
+                    Some(c) => c.to_string(),
+                    None => continue,
+                },
+            },
+        };
+        let Some(class) = onto.classes.iter().find(|c| local_name(&c.id) == local) else { continue };
+        let Some(template) = onto.resolve_target_with(&reasoner, &class.id) else { continue };
+        let folder = template
+            .replacen('~', &home.to_string_lossy(), 1)
+            .replace("{class}", &local);
+        let dst = Path::new(&folder).join(name);
+        if f.path.parent() == Some(Path::new(&folder)) {
+            continue;
+        }
+        let lineage = match lineage_probe {
+            Some(probe) if lineage_probe_count < MAX_LINEAGE_PROBES => {
+                lineage_probe_count += 1;
+                probe(&f.path)
+            }
+            Some(_) => None,
+            None => Some(LineageMetadata::default()),
+        };
+        let Some(lineage) = lineage else { continue };
+        plans.push(MovePlan {
+            src: f.path.to_string_lossy().into_owned(),
+            dst: dst.to_string_lossy().into_owned(),
+            class_id: class.id.clone(),
+            source_size: lineage_probe.map(|_| f.size),
+            source_mtime_ms: lineage_probe.map(|_| f.mtime_ms),
+            lineage,
+        });
+    }
+    plans
 }
 
 /// 후보 클래스 로컬명(온톨로지에서). picker에 전달.
@@ -30,45 +176,60 @@ pub fn plan_moves_with(
     rules: &[crate::userrules::Rule],
     pick: &dyn Fn(&Path, &[&str]) -> Option<String>,
 ) -> Vec<MovePlan> {
-    let candidates: Vec<&str> = onto.classes.iter().map(|c| local_name(&c.id)).collect();
-    // spec §6: build the Reasoner once per plan, reuse across every file (not per file).
-    let reasoner = crate::ontology::Reasoner::build(onto);
-    let mut plans = Vec::new();
-    for f in files {
-        // filename을 classify보다 먼저 확인 — 파일명 없는 경로(루트 등)는 여기서 걸러진다.
-        // (classify 뒤에 두면 이 분기가 도달 불가라 커버리지 사각이 됨)
-        let Some(name) = f.path.file_name() else { continue };
-        let age_days = now_ms.saturating_sub(f.mtime_ms) / 86_400_000;
-        // precedence: 사용자 규칙 → picker(LLM) → 확장자 classify → 제외
-        let local: String = match crate::userrules::classify_by_rules(rules, &f.path, f.size, age_days) {
-            Some(c) => c,
-            None => match pick(&f.path, &candidates) {
-                Some(picked) => picked,
-                None => match classify(&f.path) {
-                    Some(c) => c.to_string(),
-                    None => continue,
-                },
-            },
-        };
-        // 로컬명 → 온톨로지 클래스
-        let Some(class) = onto.classes.iter().find(|c| local_name(&c.id) == local) else { continue };
-        let Some(template) = onto.resolve_target_with(&reasoner, &class.id) else { continue };
-        // 템플릿 치환: ~ → home, {class} → 로컬명
-        let folder = template
-            .replacen('~', &home.to_string_lossy(), 1)
-            .replace("{class}", &local);
-        let dst = Path::new(&folder).join(name);
-        // 이미 목적지 폴더에 있으면 제외
-        if f.path.parent() == Some(Path::new(&folder)) {
-            continue;
-        }
-        plans.push(MovePlan {
-            src: f.path.to_string_lossy().into_owned(),
-            dst: dst.to_string_lossy().into_owned(),
-            class_id: class.id.clone(),
-        });
+    plan_moves_impl(files, onto, home, now_ms, rules, pick, None)
+}
+
+pub fn plan_moves_with_metadata(
+    files: &[FileEntry],
+    onto: &Ontology,
+    home: &Path,
+    now_ms: u64,
+    rules: &[crate::userrules::Rule],
+    pick: &dyn Fn(&Path, &[&str]) -> Option<String>,
+    lineage_probe: &dyn Fn(&Path) -> Option<LineageMetadata>,
+) -> Vec<MovePlan> {
+    plan_moves_impl(
+        files,
+        onto,
+        home,
+        now_ms,
+        rules,
+        pick,
+        Some(lineage_probe),
+    )
+}
+
+pub fn validate_move_source(plan: &MovePlan) -> Result<(), String> {
+    let path = Path::new(&plan.src);
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|_| "organize-source-unavailable".to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("organize-source-not-regular-file".into());
     }
-    plans
+    if plan.source_size.is_some_and(|size| size != metadata.len()) {
+        return Err("organize-source-size-changed".into());
+    }
+    let modified_ms = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or_default();
+    if plan
+        .source_mtime_ms
+        .is_some_and(|mtime_ms| mtime_ms != modified_ms)
+    {
+        return Err("organize-source-mtime-changed".into());
+    }
+    #[cfg(not(coverage))]
+    if !plan.lineage.lineage_fingerprint.is_empty() {
+        let current = lineage_metadata_for_path(path)
+            .ok_or_else(|| "organize-source-lineage-unavailable".to_string())?;
+        if current.lineage_fingerprint != plan.lineage.lineage_fingerprint {
+            return Err("organize-source-lineage-changed".into());
+        }
+    }
+    Ok(())
 }
 
 /// 확장자 규칙만 사용(picker 없음) — 기존 동작 유지.
@@ -80,6 +241,7 @@ pub fn plan_moves(files: &[FileEntry], onto: &Ontology, home: &Path) -> Vec<Move
 mod tests {
     use super::*;
     use crate::ontology::parse_ttl;
+    use std::cell::Cell;
     use std::path::{Path, PathBuf};
 
     const ONTO: &str = r#"
@@ -111,6 +273,69 @@ dm:Installer a owl:Class ; rdfs:label "설치파일"@ko ; dm:targetFolder "~/Ins
         let expected_dst = Path::new("/home/u/Media/Image").join("pic.png");
         assert_eq!(plans[0].dst, expected_dst.to_string_lossy().to_string());
         assert!(plans[0].class_id.ends_with("Image"));
+    }
+
+    #[test]
+    fn metadata_aware_plan_binds_lineage_and_rejects_source_drift() {
+        let onto = parse_ttl(ONTO).unwrap();
+        let home = Path::new("/home/u");
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("pic.png");
+        std::fs::write(&source, b"image").unwrap();
+        let files = vec![FileEntry {
+            path: source.clone(),
+            size: 5,
+            mtime_ms: std::fs::metadata(&source)
+                .unwrap()
+                .modified()
+                .unwrap()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64,
+        }];
+        let lineage = LineageMetadata {
+            production_time_ms: Some(1_700_000_000_000),
+            production_time_source: Some("embedded:exiftool:CreateDate".into()),
+            production_time_confidence: Some("high".into()),
+            lineage_fingerprint: String::new(),
+        };
+        let plans = plan_moves_with_metadata(
+            &files,
+            &onto,
+            home,
+            1_800_000_000_000,
+            &[],
+            &|_, _| None,
+            &|_| Some(lineage.clone()),
+        );
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].lineage.production_time_source.as_deref(), Some("embedded:exiftool:CreateDate"));
+        assert!(validate_move_source(&plans[0]).is_ok());
+        std::fs::write(&source, b"changed").unwrap();
+        assert_eq!(validate_move_source(&plans[0]), Err("organize-source-size-changed".into()));
+    }
+
+    #[test]
+    fn metadata_probe_is_bounded_per_plan() {
+        let onto = parse_ttl(ONTO).unwrap();
+        let files = (0..MAX_LINEAGE_PROBES + 1)
+            .map(|i| fe(&format!("/downloads/{i}.png"), 1))
+            .collect::<Vec<_>>();
+        let probes = Cell::new(0);
+        let plans = plan_moves_with_metadata(
+            &files,
+            &onto,
+            Path::new("/home/u"),
+            1_800_000_000_000,
+            &[],
+            &|_, _| None,
+            &|_| {
+                probes.set(probes.get() + 1);
+                Some(LineageMetadata::default())
+            },
+        );
+        assert_eq!(probes.get(), MAX_LINEAGE_PROBES);
+        assert_eq!(plans.len(), MAX_LINEAGE_PROBES);
     }
 
     #[test]

@@ -223,7 +223,10 @@ pub fn execute_moves_inner(
     plans
         .iter()
         .map(|p| {
-            match safety::move_file(Path::new(&p.src), Path::new(&p.dst), journal_path, now_ms) {
+            match organize::validate_move_source(p).and_then(|_| {
+                safety::move_file(Path::new(&p.src), Path::new(&p.dst), journal_path, now_ms)
+                    .map_err(|error| error.to_string())
+            }) {
                 Ok(()) => CleanResult {
                     path: p.src.clone(),
                     ok: true,
@@ -2599,24 +2602,26 @@ pub fn plan_organize(
                     let meta = file_meta_at(p, 0, 0);
                     crate::llm::pick_class(engine, &meta, cands)
                 };
-                return Ok(organize::plan_moves_with(
+                return Ok(organize::plan_moves_with_metadata(
                     &files,
                     &onto,
                     &home,
                     now_ms(),
                     &rules,
                     &pick,
+                    &organize::lineage_metadata_for_path,
                 ));
             }
         }
     }
-    Ok(organize::plan_moves_with(
+    Ok(organize::plan_moves_with_metadata(
         &files,
         &onto,
         &home,
         now_ms(),
         &rules,
         &|_, _| None,
+        &organize::lineage_metadata_for_path,
     ))
 }
 
@@ -3239,11 +3244,13 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
                 src: src_ok.to_string_lossy().into(),
                 dst: dst_ok.to_string_lossy().into(),
                 class_id: "x".into(),
+                ..Default::default()
             },
             organize::MovePlan {
                 src: tmp.path().join("ghost").to_string_lossy().into(),
                 dst: tmp.path().join("g2").to_string_lossy().into(),
                 class_id: "x".into(),
+                ..Default::default()
             },
         ];
         let results = execute_moves_inner(&plans, &jp, 1);
@@ -3265,6 +3272,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
             src: a.to_string_lossy().into(),
             dst: a_moved.to_string_lossy().into(),
             class_id: "x".into(),
+            ..Default::default()
         }];
         execute_moves_inner(&plans, &jp, 5);
         assert!(!a.exists());
@@ -3289,6 +3297,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
                     src: s.to_string_lossy().into(),
                     dst: d.to_string_lossy().into(),
                     class_id: "x".into(),
+                    ..Default::default()
                 }],
                 &jp,
                 1,
@@ -3309,6 +3318,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
             src: a.to_string_lossy().into(),
             dst: a_moved.to_string_lossy().into(),
             class_id: "x".into(),
+            ..Default::default()
         }];
         execute_moves_inner(&plans, &jp, 1);
         assert!(a_moved.exists());

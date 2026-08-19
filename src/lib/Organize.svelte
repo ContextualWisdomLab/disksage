@@ -104,6 +104,12 @@
               {@const b = verdictBadge(verdicts[p.src])}
               <span class={b.cls} title={b.title}>{b.label}</span>
             {/if}
+            {#if p.lineage?.production_time_ms}
+              <span class="lineage" title={p.lineage.lineage_fingerprint}>
+                생산 {new Date(p.lineage.production_time_ms).toISOString().slice(0, 10)}
+                · {p.lineage.production_time_source ?? "미상"}
+              </span>
+            {/if}
             <span class="arrow">→</span>
             <span class="path" title={p.dst}>{p.dst}</span>
           </li>
@@ -141,6 +147,7 @@
   .group li { padding: 1px 0; display: flex; gap: 0.5rem; align-items: center; }
   .path { overflow-wrap: anywhere; flex: 1; }
   .arrow { color: #999; flex-shrink: 0; }
+  .lineage { color: #666; font-size: 0.75rem; flex-shrink: 0; }
   .muted { color: #999; }
   .error { color: #b00; }
   .errors { color: #b00; font-size: 0.85rem; list-style: none; padding: 0; }

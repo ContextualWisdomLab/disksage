@@ -125,6 +125,14 @@ export interface MovePlan {
   src: string;
   dst: string;
   class_id: string;
+  source_size?: number | null;
+  source_mtime_ms?: number | null;
+  lineage?: {
+    production_time_ms?: number | null;
+    production_time_source?: string | null;
+    production_time_confidence?: string | null;
+    lineage_fingerprint: string;
+  };
 }
 
 export const planOrganize = (root: string) =>

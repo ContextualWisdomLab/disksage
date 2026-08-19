@@ -4,6 +4,10 @@ DiskSage plans cloud copies from embedded metadata first, then filename date, fi
 time, and modification time. Filename tokens such as `2026-04-28` or `251210` are secondary
 evidence and never establish production time by themselves.
 
+Ontology-based local organization uses the same precedence. Its preview records a path-free
+lineage fingerprint and source size/mtime snapshot; execution rechecks both immediately before a
+move and skips File Provider `dataless` sources.
+
 The runtime sequence is:
 
 1. A verified copy writes `cloud-goals/<receipt-id>-latest.json` with provider and evidence gates

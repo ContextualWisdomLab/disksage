@@ -83,3 +83,7 @@ clear evidence.
   File-Provider-dataless source was safely evicted.
 - `eviction-ready` permits only the separately approved, reversible OS-Trash operation.
 - A stale projection is replaceable state and must be reconciled against immutable evidence.
+- Ontology-based local organization uses the same lineage precedence as cloud planning (embedded
+  metadata, explicit filename date, filesystem creation time, then modification time). Its move
+  plan carries a path-free lineage fingerprint plus the source size/mtime snapshot and is rejected
+  if the source changes; File Provider dataless sources are not moved.
