@@ -1,6 +1,6 @@
 use std::{env, fs, path::PathBuf};
 
-const CLOUD_PLAN_IMPLEMENTATION: &str = "src/bin/disksage-cloud-plan-implementation.rs.inc";
+const CLOUD_PLAN_IMPLEMENTATION: &str = "cloud_plan_implementation.rs.inc";
 const EMBED_PLIST_CALL: &str =
     "embed_plist::embed_info_plist!(\"../../disksage-cloud-plan.Info.plist\");";
 const GENERATED_EMBED_PLIST_CALL: &str =
