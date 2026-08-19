@@ -201,7 +201,7 @@ fn lineage_export_rejects_inconsistent_review_shapes_and_future_reviews() {
         .lineage
         .as_mut()
         .expect("fixture lineage")
-        .review_disposition = Some(CloudReviewDisposition::Rejected);
+        .review_disposition = Some(CloudReviewDisposition::Held);
     assert_eq!(
         export_naruon_file_lineage(&rejected_review, None).unwrap_err(),
         "naruon-lineage-review-decision-invalid"
