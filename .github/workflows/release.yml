@@ -84,6 +84,11 @@ jobs:
         if: matrix.os == 'macos-latest'
         run: brew install cmake
 
+      - name: Enable Windows Script Host for WiX MSI
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: Enable-WindowsOptionalFeature -Online -FeatureName VBSCRIPT -All -NoRestart
+
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 20
