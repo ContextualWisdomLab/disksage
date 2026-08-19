@@ -128,6 +128,7 @@ pub fn run() {
             commands::reason_unknown_extensions,
             commands::plan_brew_cleanup,
             commands::inspect_podman_reclaim,
+            commands::execute_podman_dangling_image_prune,
             commands::judge_brew_cleanup,
             commands::validate_judge_calibration,
             commands::execute_brew_cleanup,

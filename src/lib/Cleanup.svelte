@@ -18,6 +18,11 @@
   let podmanPlan: api.PodmanReclaimPlan | null = $state(null);
   let podmanBusy = $state(false);
   let podmanError = $state("");
+  let podmanPruneBusy = $state(false);
+  let podmanPruneError = $state("");
+  let podmanPrunePhrase = $state("");
+  let podmanPruneRationale = $state("");
+  let podmanPruneExecution: api.PodmanDanglingImagePruneExecution | null = $state(null);
   // ponytail: 배지는 개별 파일/디렉토리 후보(artifacts)에만 표시 — caches는 소수의 고정 규칙 카테고리라 LLM 판정 가치가 낮음.
   let verdicts: Record<string, api.Verdict> = $state({});
 
@@ -52,6 +57,39 @@
       podmanPlan = null;
     } finally {
       podmanBusy = false;
+    }
+  }
+
+  function podmanPruneReady(): boolean {
+    const phrase = podmanPlan?.dangling_prune_approval_phrase;
+    return phrase !== null
+      && phrase !== undefined
+      && podmanPrunePhrase.trim() === phrase
+      && podmanPruneRationale.trim().length > 0
+      && !podmanPruneBusy;
+  }
+
+  async function prunePodmanDanglingImages() {
+    if (!podmanPlan || !podmanPruneReady()) return;
+    const okay = await confirm(
+      "참조 컨테이너가 없고 tag가 없는 Podman 이미지만 삭제합니다. volume·컨테이너·tagged image·VM은 건드리지 않습니다.\n\n실행 직전에 이미지 목록을 다시 읽어 지문을 검증합니다.",
+      { title: "DiskSage Podman 정리", kind: "warning" },
+    );
+    if (!okay) return;
+    podmanPruneBusy = true;
+    podmanPruneError = "";
+    try {
+      podmanPruneExecution = await api.executePodmanDanglingImagePrune(
+        podmanPrunePhrase.trim(),
+        podmanPruneRationale.trim(),
+      );
+      podmanPrunePhrase = "";
+      podmanPruneRationale = "";
+      podmanPlan = await api.inspectPodmanReclaim();
+    } catch (e) {
+      podmanPruneError = String(e);
+    } finally {
+      podmanPruneBusy = false;
     }
   }
 
@@ -234,6 +272,29 @@
       {#if podmanPlan.unused_images}
         <p>미사용 이미지 {podmanPlan.unused_images.unused_records}개 · exact record 합계 {fmtBytes(podmanPlan.unused_images.candidate_record_size_sum)}</p>
       {/if}
+      {#if podmanPlan.dangling_prune_approval_phrase}
+        <div class="podman-prune">
+          <p>dangling 이미지(무tag·참조 컨테이너 0)만 실행 대상으로 확인되었습니다.</p>
+          <label>정확한 승인 문구
+            <input bind:value={podmanPrunePhrase} placeholder={podmanPlan.dangling_prune_approval_phrase} disabled={podmanPruneBusy} />
+          </label>
+          <label>정리 사유
+            <textarea bind:value={podmanPruneRationale} maxlength="1000" placeholder="예: 재생성 가능한 미사용 dangling 이미지라 정리함" disabled={podmanPruneBusy}></textarea>
+          </label>
+          <button onclick={prunePodmanDanglingImages} disabled={!podmanPruneReady()}>
+            {podmanPruneBusy ? "재검증 후 dangling 이미지 정리 중…" : "dangling 이미지 정리"}
+          </button>
+          {#if podmanPruneError}<p class="error" role="alert">{podmanPruneError}</p>{/if}
+        </div>
+      {/if}
+      {#if podmanPruneExecution}
+        <p class="notice">
+          실행 결과: {podmanPruneExecution.executed ? "성공" : `실패(${podmanPruneExecution.status_code})`} ·
+          호스트 가용 공간 증가 관측 {podmanPruneExecution.observed_available_gain_bytes === null
+            ? "미확인"
+            : fmtBytes(podmanPruneExecution.observed_available_gain_bytes)}
+        </p>
+      {/if}
       {#if podmanPlan.system_df}
         <p>연결 없는 volume 후보 {fmtBytes(podmanPlan.system_df.local_volumes.reclaimable_bytes)}</p>
       {/if}
@@ -260,6 +321,9 @@
   .error, .errors { color: #b00; }
   .errors { font-size: 0.85rem; }
   .podman-evidence { margin-top: 0.75rem; padding: 0.75rem; border: 1px solid #b7c6d8; border-radius: 4px; background: #f8fafc; }
+  .podman-prune { margin-top: 0.75rem; display: grid; gap: 0.5rem; }
+  .podman-prune label { display: grid; gap: 0.25rem; }
+  .podman-prune input, .podman-prune textarea { width: 100%; box-sizing: border-box; }
   .badge-safe, .badge-caution, .badge-keep, .badge-unrated {
     display: inline-block; margin-left: 0.4rem; padding: 1px 6px; border-radius: 8px;
     font-size: 0.75rem; color: #fff;

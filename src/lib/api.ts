@@ -107,6 +107,7 @@ export interface PodmanReclaimPlan {
     candidate_record_size_sum: number;
     candidate_set_sha256: string;
   } | null;
+  dangling_prune_approval_phrase: string | null;
   assessment: {
     physically_reclaimable_bytes: number | null;
     podman_reported_reclaimable_bytes: number | null;
@@ -124,6 +125,30 @@ export interface PodmanReclaimPlan {
 
 export const inspectPodmanReclaim = () =>
   invoke<PodmanReclaimPlan>("inspect_podman_reclaim");
+
+export interface PodmanDanglingImagePruneExecution {
+  schema_version: number;
+  candidate_set_sha256: string;
+  command: string[];
+  status_code: number;
+  stdout: string;
+  stderr: string;
+  output_truncated: boolean;
+  executed: boolean;
+  executed_at_ms: number;
+  before_available_bytes: number | null;
+  after_available_bytes: number | null;
+  observed_available_gain_bytes: number | null;
+  rationale: string;
+}
+
+export const executePodmanDanglingImagePrune = (
+  confirmationPhrase: string,
+  rationale: string,
+) => invoke<PodmanDanglingImagePruneExecution>("execute_podman_dangling_image_prune", {
+  confirmationPhrase,
+  rationale,
+});
 
 export const onScanProgress = (cb: (s: ScanStats) => void) =>
   listen<ScanStats>("scan://progress", (e) => cb(e.payload));

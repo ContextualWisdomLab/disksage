@@ -506,6 +506,25 @@ pub fn inspect_podman_reclaim() -> podman_reclaim::PodmanReclaimPlan {
     )
 }
 
+/// Freshly revalidates and removes only untagged, unreferenced Podman images.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn execute_podman_dangling_image_prune(
+    confirmation_phrase: String,
+    rationale: String,
+) -> Result<podman_reclaim::PodmanDanglingImagePruneExecution, String> {
+    if !valid_brew_rationale(&rationale) {
+        return Err("podman-prune-rationale-invalid".into());
+    }
+    podman_reclaim::prune_dangling_images(
+        &podman_binary(),
+        podman_reclaim::DEFAULT_PODMAN_MACHINE,
+        &confirmation_phrase,
+        &rationale,
+        now_ms(),
+    )
+}
+
 #[cfg(not(coverage))]
 #[cfg_attr(not(feature = "llm-engine"), allow(unused_variables))]
 #[tauri::command(async)]
