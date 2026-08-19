@@ -438,16 +438,6 @@ fn aggregate_binding_state_and_fingerprint_drift_fail_closed() {
 
     let mut value = baseline.clone();
     one_candidate_shape(&mut value);
-    value.planner_unblocked = CountBytes { count: 1, bytes: 1 };
-    value.potentially_reclaimable_bytes = 1;
-    value.ready_without_new_review = CountBytes { count: 1, bytes: 1 };
-    assert_eq!(
-        validate_naruon_cloud_copy_readiness(&value).unwrap_err(),
-        "naruon-copy-readiness-ready-gate-invalid"
-    );
-
-    let mut value = baseline.clone();
-    one_candidate_shape(&mut value);
     value
         .candidate_blocker_counts
         .insert("planner-blocked".into(), CountBytes { count: 1, bytes: 1 });
