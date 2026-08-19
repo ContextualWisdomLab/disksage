@@ -402,12 +402,22 @@ pub fn judge(
 
 pub fn execute(
     plan: &BrewCleanupPlan,
-    judgment_id: &str,
+    judgment: &BrewCleanupJudgment,
     executed_at_ms: u64,
 ) -> Result<BrewCleanupExecution, String> {
+    if judgment.plan != *plan
+        || judgment.plan_fingerprint != plan.plan_fingerprint
+        || judgment.exact_approval_phrase != plan.exact_approval_phrase
+        || judgment.verdict != crate::llm::Verdict::Safe
+        || !judgment.has_successful_calibration()
+        || executed_at_ms.saturating_sub(judgment.judged_at_ms) > MAX_JUDGMENT_AGE_MS
+    {
+        return Err("brew-cleanup-llm-judgment-stale-or-not-safe".into());
+    }
+
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (plan, judgment_id, executed_at_ms);
+        let _ = (plan, judgment, executed_at_ms);
         return Err("brew-cleanup-unsupported-platform".into());
     }
 
@@ -425,7 +435,7 @@ pub fn execute(
         Ok(BrewCleanupExecution {
             schema_version: SCHEMA_VERSION,
             plan_fingerprint: plan.plan_fingerprint.clone(),
-            judgment_id: judgment_id.to_string(),
+            judgment_id: judgment.judgment_id.clone(),
             command: std::iter::once(EXECUTABLE.to_string())
                 .chain(EXECUTE_ARGUMENTS.iter().map(|arg| (*arg).to_string()))
                 .collect(),
@@ -606,6 +616,19 @@ mod tests {
         judgment.calibration.as_mut().unwrap().judgment_id = judgment.judgment_id.clone();
         judgment.calibration.as_mut().unwrap().passed = false;
         assert!(!judgment.has_successful_calibration());
+    }
+
+    #[test]
+    fn execute_rejects_uncalibrated_judgment_before_platform_dispatch() {
+        let judgment = judge(
+            &Fake(Ok(r#"{"verdict":"safe","reason":"fixed"}"#.into())),
+            &plan(),
+            20,
+        );
+        assert_eq!(
+            execute(&plan(), &judgment, 21).unwrap_err(),
+            "brew-cleanup-llm-judgment-stale-or-not-safe"
+        );
     }
 
     #[test]

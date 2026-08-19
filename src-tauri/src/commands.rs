@@ -594,7 +594,7 @@ pub fn execute_brew_cleanup(
     }
 
     let executed_at_ms = now_ms();
-    let mut execution = match brew_cleanup::execute(&plan, &judgment_id, executed_at_ms) {
+    let mut execution = match brew_cleanup::execute(&plan, &judgment, executed_at_ms) {
         Ok(execution) => execution,
         Err(error) => {
             *stored = None;
