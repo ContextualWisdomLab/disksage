@@ -224,6 +224,25 @@ impl FileProviderStatusSnapshot {
     }
 }
 
+/// Return the stable blocker used when a provider-native destination exists locally but has not
+/// reached a complete remote-sync state. This is diagnostic only; it never authorizes eviction.
+fn incomplete_sync_blocker(sync_complete: bool) -> Option<&'static str> {
+    (!sync_complete).then_some("provider-sync-incomplete")
+}
+
+fn icloud_sync_blocker(snapshot: &IcloudStatusSnapshot) -> Option<&'static str> {
+    incomplete_sync_blocker(
+        snapshot.is_ubiquitous
+            && snapshot.is_current
+            && !snapshot.is_uploading
+            && snapshot.is_uploaded,
+    )
+}
+
+fn file_provider_sync_blocker(snapshot: &FileProviderItemStatus) -> Option<&'static str> {
+    incomplete_sync_blocker(snapshot.is_sync_complete())
+}
+
 fn file_provider_sync_state(snapshot: &FileProviderStatusSnapshot) -> ProviderSyncState {
     if snapshot.item.is_excluded_from_sync {
         ProviderSyncState::ExcludedFromSync
@@ -763,6 +782,50 @@ pub(crate) fn file_providerctl_status(path: &str) -> Result<String, String> {
     String::from_utf8(output).map_err(|_| "file-provider-status-output-not-utf8".into())
 }
 
+/// Inspect an already-existing destination during planning without retaining provider paths or
+/// identifiers. A failed probe deliberately falls back to the ordinary collision blocker.
+#[cfg(all(target_os = "macos", not(coverage)))]
+pub fn existing_destination_sync_blocker(
+    provider: CloudProvider,
+    destination: &std::path::Path,
+    expected_bytes: u64,
+) -> Option<&'static str> {
+    let metadata = std::fs::symlink_metadata(destination).ok()?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() != expected_bytes
+    {
+        return None;
+    }
+    let path = destination.to_str()?;
+    match provider {
+        CloudProvider::Icloud => {
+            let (is_ubiquitous, is_uploaded, is_uploading, is_current) =
+                foundation_icloud_status(path).ok()?;
+            icloud_sync_blocker(&IcloudStatusSnapshot {
+                is_ubiquitous,
+                is_uploaded,
+                is_uploading,
+                is_current,
+                observed_bytes: expected_bytes,
+                destination_blake3: String::new(),
+            })
+        }
+        CloudProvider::Onedrive | CloudProvider::GoogleDrive => {
+            let output = file_providerctl_status(path).ok()?;
+            let status = parse_file_providerctl_item_status(&output, expected_bytes).ok()?;
+            file_provider_sync_blocker(&status)
+        }
+    }
+}
+
+#[cfg(any(not(target_os = "macos"), coverage))]
+pub fn existing_destination_sync_blocker(
+    _provider: CloudProvider,
+    _destination: &std::path::Path,
+    _expected_bytes: u64,
+) -> Option<&'static str> {
+    None
+}
+
 /// Read macOS File Provider status for a OneDrive or Google Drive destination and bind it to the
 /// verified local copy. This never hydrates, evicts, uploads, or mutates the file.
 #[cfg(all(target_os = "macos", not(coverage)))]
@@ -981,6 +1044,28 @@ mod tests {
     }
 
     #[test]
+    fn planner_marks_local_current_but_not_uploaded_as_incomplete() {
+        let snapshot = IcloudStatusSnapshot {
+            is_ubiquitous: true,
+            is_uploaded: false,
+            is_uploading: false,
+            is_current: true,
+            observed_bytes: 42,
+            destination_blake3: String::new(),
+        };
+        assert_eq!(
+            icloud_sync_blocker(&snapshot),
+            Some("provider-sync-incomplete")
+        );
+
+        let uploaded = IcloudStatusSnapshot {
+            is_uploaded: true,
+            ..snapshot
+        };
+        assert_eq!(icloud_sync_blocker(&uploaded), None);
+    }
+
+    #[test]
     fn timeliness_distinguishes_complete_pending_and_overdue_without_approving() {
         let receipt = receipt(CloudProvider::Icloud);
         let mut snapshot = IcloudStatusSnapshot {
@@ -1111,6 +1196,13 @@ mod tests {
                 .unwrap_err(),
             "third-party-file-provider-receipt-required"
         );
+    }
+
+    #[test]
+    fn planner_marks_pending_file_provider_item_as_incomplete() {
+        let output = uploaded_file_provider_output().replace("isUploaded = 1", "isUploaded = 0");
+        let snapshot = parse_file_providerctl_snapshot(&output, 42, "content-hash").unwrap();
+        assert_eq!(file_provider_sync_blocker(&snapshot.item), Some("provider-sync-incomplete"));
     }
 
     #[test]

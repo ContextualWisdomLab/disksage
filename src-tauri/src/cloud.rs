@@ -3831,9 +3831,19 @@ fn planner_blocked_reason(
     kind: ArchiveKind,
     metadata: &ContentMetadata,
     destination: &Path,
+    provider: CloudProvider,
+    expected_bytes: u64,
 ) -> Option<String> {
     if destination.exists() {
-        return Some("destination-exists".into());
+        return Some(
+            crate::provider_sync::existing_destination_sync_blocker(
+                provider,
+                destination,
+                expected_bytes,
+            )
+            .unwrap_or("destination-exists")
+            .into(),
+        );
     }
     source_blocked_reason(path, kind, metadata)
 }
@@ -4756,10 +4766,19 @@ pub fn plan_cloud_archive_from_snapshot(
         let blocked_reason = if source_snapshot_stale {
             Some("source-snapshot-stale".into())
         } else {
-            source_scan_blocker.clone().or_else(|| {
-                planner_blocked_reason(&file.path, kind, &lineage_metadata, &dst)
-            })
-            .or_else(|| provider_destination_path_blocked_reason(cloud_root, &dst))
+            source_scan_blocker
+                .clone()
+                .or_else(|| {
+                    planner_blocked_reason(
+                        &file.path,
+                        kind,
+                        &lineage_metadata,
+                        &dst,
+                        cloud_root.provider,
+                        file.bytes,
+                    )
+                })
+                .or_else(|| provider_destination_path_blocked_reason(cloud_root, &dst))
         };
         let source_context = relative
             .parent()
@@ -5508,6 +5527,8 @@ mod tests {
                 ArchiveKind::IncompleteDownload,
                 &metadata,
                 Path::new("/definitely/missing/disksage-destination"),
+                CloudProvider::Icloud,
+                0,
             )
             .as_deref(),
             Some("incomplete-download")
@@ -5753,6 +5774,8 @@ mod tests {
                 ArchiveKind::Archive,
                 &metadata,
                 Path::new("/definitely/missing/disksage-destination"),
+                CloudProvider::Icloud,
+                0,
             )
             .as_deref(),
             Some("archive-index-unreadable")
@@ -5769,6 +5792,8 @@ mod tests {
                 ArchiveKind::IncompleteDownload,
                 &ContentMetadata::default(),
                 destination,
+                CloudProvider::Icloud,
+                0,
             )
             .as_deref(),
             Some("incomplete-download")
@@ -5779,6 +5804,8 @@ mod tests {
                 ArchiveKind::Archive,
                 &ContentMetadata::default(),
                 destination,
+                CloudProvider::Icloud,
+                0,
             )
             .as_deref(),
             Some("multipart-archive-atomic-copy-required")
@@ -5796,6 +5823,8 @@ mod tests {
                 ArchiveKind::Archive,
                 &metadata,
                 destination,
+                CloudProvider::Icloud,
+                0,
             )
             .as_deref(),
             Some("archive-index-unreadable")
@@ -5811,6 +5840,8 @@ mod tests {
                 ArchiveKind::Dataset,
                 &ContentMetadata::default(),
                 destination,
+                CloudProvider::Icloud,
+                0,
             )
             .as_deref(),
             Some("system-managed-photos-library-data")
@@ -5821,6 +5852,8 @@ mod tests {
                 ArchiveKind::Dataset,
                 &ContentMetadata::default(),
                 destination,
+                CloudProvider::Icloud,
+                0,
             ),
             None
         );
@@ -5838,6 +5871,8 @@ mod tests {
                 ArchiveKind::Media,
                 &ContentMetadata::default(),
                 destination,
+                CloudProvider::Icloud,
+                0,
             )
             .as_deref(),
             Some("system-managed-file-provider-storage")
@@ -5848,6 +5883,8 @@ mod tests {
                 ArchiveKind::Media,
                 &ContentMetadata::default(),
                 destination,
+                CloudProvider::Icloud,
+                0,
             ),
             None
         );
