@@ -117,11 +117,15 @@ pub fn parse_dump(
     let mut has_filename_too_long = false;
     let mut has_temporarily_disconnected = false;
     let mut has_server_unreachable = false;
+    let mut hidden_default_domain = false;
 
     for line in output.lines() {
         let trimmed = line.trim();
         let marker = trimmed.strip_prefix("+ ").unwrap_or(trimmed).trim();
         let marker_lower = marker.to_ascii_lowercase();
+        if marker.starts_with("domain: ") {
+            hidden_default_domain = marker.contains("(default)") && marker.contains("(hidden)");
+        }
         upload_progress_present |= line_has_active_progress(marker, "upload progress:");
         download_progress_present |= line_has_active_progress(marker, "download progress:");
         if let Some(count) = parse_pending_indexable_count(marker) {
@@ -142,7 +146,7 @@ pub fn parse_dump(
         if has_filename_too_long
             || has_temporarily_disconnected
             || has_server_unreachable
-            || marker.contains("user-disabled")
+            || (marker.contains("user-disabled") && !hidden_default_domain)
             || marker.contains("can't dump the extension")
             || marker.contains("Error Domain=")
             || (marker.contains("error:'") && !marker.contains("error:'<nil>'"))
@@ -306,7 +310,9 @@ fn report_identity_is_valid(report: &ProviderGlobalSyncReport) -> bool {
 fn report_has_pending_aggregate_evidence(report: &ProviderGlobalSyncReport) -> bool {
     report.upload_progress_present
         || report.download_progress_present
-        || report.pending_indexable_count.is_some_and(|count| count > 0)
+        || report
+            .pending_indexable_count
+            .is_some_and(|count| count > 0)
 }
 
 fn report_is_authoritative_clear(report: &ProviderGlobalSyncReport) -> bool {
@@ -404,6 +410,25 @@ sync engine state:
     + reconciliation (277399 entries):
 "#;
 
+    const HIDDEN_DEFAULT_USER_DISABLED_DUMP: &str = r#"
+com.microsoft.OneDrive.FileProvider
+domain: (default) (hidden)
+  + (user-disabled)
+domain: personal
+sync engine state:
+    + pending-indexable-count: 0
+    + scheduling state: idle
+"#;
+
+    const ACTIVE_USER_DISABLED_DUMP: &str = r#"
+com.microsoft.OneDrive.FileProvider
+domain: personal
+  + (user-disabled)
+sync engine state:
+    + pending-indexable-count: 0
+    + scheduling state: idle
+"#;
+
     #[test]
     fn quiet_dump_is_clear_without_retaining_paths() {
         let report = parse_dump(CloudProvider::Onedrive, QUIET_DUMP).unwrap();
@@ -465,6 +490,25 @@ sync engine state:
         assert!(report
             .blockers
             .contains(&"provider-global-sync-reconciliation-pending".into()));
+        assert!(require_new_copy_admission(&report).is_err());
+    }
+
+    #[test]
+    fn hidden_default_domain_user_disabled_marker_is_not_global_error() {
+        let report =
+            parse_dump(CloudProvider::Onedrive, HIDDEN_DEFAULT_USER_DISABLED_DUMP).unwrap();
+        assert_eq!(report.state, ProviderGlobalSyncState::Clear);
+        assert!(report.blockers.is_empty());
+        assert!(require_new_copy_admission(&report).is_ok());
+    }
+
+    #[test]
+    fn active_domain_user_disabled_marker_still_blocks() {
+        let report = parse_dump(CloudProvider::Onedrive, ACTIVE_USER_DISABLED_DUMP).unwrap();
+        assert_eq!(report.state, ProviderGlobalSyncState::Error);
+        assert!(report
+            .blockers
+            .contains(&"provider-global-sync-error".into()));
         assert!(require_new_copy_admission(&report).is_err());
     }
 
