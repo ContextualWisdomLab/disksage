@@ -50,6 +50,12 @@ returns an incomplete scan with `source-scan-managed-file-provider-root` and pro
 candidate. This prevents DiskSage diagnostics from competing with, or materializing, provider
 state.
 
+Provider-wide File Provider dumps are bounded by both output size and wall-clock time. If a timed-out
+dump has already emitted safe aggregate markers, DiskSage may retain only those markers as
+incomplete evidence; it records `provider-global-sync-probe-timeout`, marks the provider state
+`unavailable`, and continues to block new copies. A partial dump can never become authoritative
+clear evidence.
+
 ## Consequences
 
 - `is_local_current=true` and `is_uploaded=false` produces `pending-upload` and no eviction permit.
@@ -57,6 +63,7 @@ state.
 - Filename dates can place a candidate in a provisional archive period, but never authorize automatic transfer or eviction.
 - A personal native-client copy may proceed without OAuth quota evidence only while the matching desktop client is observed running; provider sync attestation still gates eviction.
 - Managed File Provider roots are never recursively scanned; the explicit incomplete-scan blocker is non-overridable.
+- A timed-out provider-wide dump may explain active transfer or reconciliation markers, but its incomplete evidence never admits a new copy.
 - A `source-not-present`, `source-content-not-local`, or unsafe-source observation blocks the Goal
   even when provider sync is complete; DiskSage never infers that an externally removed or
   File-Provider-dataless source was safely evicted.

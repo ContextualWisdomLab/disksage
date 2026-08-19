@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 // room for real OneDrive/Google Drive dumps while retaining a hard memory ceiling.
 const MAX_DUMP_BYTES: u64 = 32 * 1024 * 1024;
 const PROBE_TIMEOUT_MS: u64 = 20_000;
+const PROBE_TIMEOUT_MARKER: &str = "provider-global-sync-probe-timeout: yes";
+const PROBE_TIMEOUT_NOTICE: &str = "provider-global-sync-probe-timeout";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -107,6 +109,12 @@ pub fn parse_dump(
     if !output.contains(identifier) || !output.contains("sync engine state:") {
         return Err("provider-global-sync-dump-incomplete".into());
     }
+    let probe_timed_out = output.lines().any(|line| {
+        line.trim()
+            .strip_prefix("+ ")
+            .unwrap_or_else(|| line.trim())
+            == PROBE_TIMEOUT_MARKER
+    });
 
     let mut upload_progress_present = false;
     let mut download_progress_present = false;
@@ -167,7 +175,9 @@ pub fn parse_dump(
         || needs_indexing
         || pending_indexable_count.is_some_and(|count| count > 0)
         || reconciliation_pending;
-    let state = if has_error {
+    let state = if probe_timed_out {
+        ProviderGlobalSyncState::Unavailable
+    } else if has_error {
         ProviderGlobalSyncState::Error
     } else if pending {
         ProviderGlobalSyncState::Pending
@@ -196,21 +206,43 @@ pub fn parse_dump(
     if has_error {
         blockers.push("provider-global-sync-error".into());
     }
+    if probe_timed_out {
+        blockers.push(PROBE_TIMEOUT_NOTICE.into());
+    }
+    let mut notices = vec![
+        "provider-global-sync-dump-read-only".into(),
+        "provider-global-sync-user-paths-not-retained".into(),
+    ];
+    if probe_timed_out {
+        notices.push(PROBE_TIMEOUT_NOTICE.into());
+    }
     Ok(ProviderGlobalSyncReport {
         schema_version: PROVIDER_GLOBAL_SYNC_SCHEMA_VERSION,
         provider,
         evidence_kind: "fileproviderctl-global-dump".into(),
-        evidence_complete: true,
+        evidence_complete: !probe_timed_out,
         state,
         upload_progress_present,
         download_progress_present,
         pending_indexable_count,
         blockers,
-        notices: vec![
-            "provider-global-sync-dump-read-only".into(),
-            "provider-global-sync-user-paths-not-retained".into(),
-        ],
+        notices,
     })
+}
+
+#[cfg(target_os = "macos")]
+fn partial_dump_after_timeout(bytes: Vec<u8>, identifier: &str) -> Option<String> {
+    if probe_output_is_truncated(bytes.len()) {
+        return None;
+    }
+    let mut output = String::from_utf8(bytes).ok()?;
+    if !output.contains(identifier) || !output.contains("sync engine state:") {
+        return None;
+    }
+    output.push_str("\n+ ");
+    output.push_str(PROBE_TIMEOUT_MARKER);
+    output.push('\n');
+    Some(output)
 }
 
 #[cfg(target_os = "macos")]
@@ -259,7 +291,12 @@ fn run_dump(provider: CloudProvider) -> Result<String, String> {
             Ok(None) if Instant::now() >= deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
-                let _ = reader.join();
+                let partial = reader.join().ok().and_then(Result::ok);
+                if let Some(output) =
+                    partial.and_then(|bytes| partial_dump_after_timeout(bytes, identifier))
+                {
+                    return Ok(output);
+                }
                 return Err("provider-global-sync-probe-timeout".into());
             }
             Ok(None) => thread::sleep(Duration::from_millis(50)),
@@ -567,6 +604,23 @@ sync engine state:
     fn bounded_probe_rejects_output_beyond_limit() {
         assert!(!probe_output_is_truncated(MAX_DUMP_BYTES as usize));
         assert!(probe_output_is_truncated(MAX_DUMP_BYTES as usize + 1));
+    }
+
+    #[test]
+    fn timed_out_partial_dump_is_incomplete_and_fails_closed() {
+        let report = parse_dump(
+            CloudProvider::Onedrive,
+            &format!("{QUIET_DUMP}\n+ {PROBE_TIMEOUT_MARKER}\n"),
+        )
+        .unwrap();
+        assert_eq!(report.state, ProviderGlobalSyncState::Unavailable);
+        assert!(!report.evidence_complete);
+        assert!(report.blockers.contains(&PROBE_TIMEOUT_NOTICE.into()));
+        assert_eq!(
+            require_new_copy_admission(&report).unwrap_err(),
+            "provider-global-sync-evidence-incomplete"
+        );
+        assert!(report.notices.contains(&PROBE_TIMEOUT_NOTICE.into()));
     }
 
     #[test]
