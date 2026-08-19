@@ -2433,6 +2433,18 @@ fn attach_local_copy_prerequisites(report: &mut cloud::CloudPlanReport, home: &P
         cloud::system_now_ms(),
     );
     provider_client_runtime::attach_runtime_notice(&mut report.notices, &runtime);
+    if report.capacity.as_ref().is_some_and(|assessment| {
+        provider_capacity::native_personal_client_copy_capacity_exception(
+            report.cloud_root.provider,
+            report.cloud_root.account_scope,
+            runtime.copy_prerequisite_met,
+            &assessment.snapshot,
+        )
+    }) {
+        report
+            .notices
+            .push("native-client-copy-capacity-unverified".into());
+    }
     if report.cloud_root.provider == CloudProvider::Icloud {
         let health =
             icloud_sync_health::inspect_new_copy_admission(home, cloud::system_now_ms()).ok();
@@ -3603,7 +3615,7 @@ fn run() -> Result<(), String> {
                 .ok_or_else(|| "--confirm-copy-phrase가 필요함".to_string())?,
         )?;
         if !adopt_existing {
-            provider_client_runtime::require_provider_client_runtime(
+            let runtime = provider_client_runtime::require_provider_client_runtime(
                 selected.provider,
                 cloud::system_now_ms(),
             )?;
@@ -3629,7 +3641,14 @@ fn run() -> Result<(), String> {
                 candidate.bytes,
                 args.capacity_reserve_mib.saturating_mul(1024 * 1024),
             );
-            if assessment.can_fit != Some(true) {
+            let native_client_mode =
+                provider_capacity::native_personal_client_copy_capacity_exception(
+                    selected.provider,
+                    selected.account_scope,
+                    runtime.copy_prerequisite_met,
+                    &assessment.snapshot,
+                );
+            if assessment.can_fit != Some(true) && !native_client_mode {
                 return Err(if assessment.blockers.is_empty() {
                     "cloud-capacity-verification-required".into()
                 } else {

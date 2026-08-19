@@ -36,11 +36,19 @@ low confidence and force review when they are selected; they are planning eviden
 cloud sync, ownership, or permission to evict the source. An embedded/filename disagreement is
 also retained as a review blocker rather than silently resolved.
 
+For personal OneDrive and Google Drive roots, a running native desktop client may admit the
+copy-only step when the only missing evidence is the separate OAuth quota connection. This mode is
+explicitly marked as capacity-unverified, requires a fresh provider-wide sync admission, and
+retains the source until per-item native sync evidence is attested. It never authorizes API upload,
+remote-capacity claims, or source eviction; organization/shared roots and other OAuth failures
+remain blocked.
+
 ## Consequences
 
 - `is_local_current=true` and `is_uploaded=false` produces `pending-upload` and no eviction permit.
 - Goal completion gates remain false until their corresponding evidence exists.
 - Filename dates can place a candidate in a provisional archive period, but never authorize automatic transfer or eviction.
+- A personal native-client copy may proceed without OAuth quota evidence only while the matching desktop client is observed running; provider sync attestation still gates eviction.
 - A `source-not-present`, `source-content-not-local`, or unsafe-source observation blocks the Goal
   even when provider sync is complete; DiskSage never infers that an externally removed or
   File-Provider-dataless source was safely evicted.

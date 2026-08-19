@@ -1220,6 +1220,17 @@ fn cloud_plan_for_inputs(
         cloud::system_now_ms(),
     );
     provider_client_runtime::attach_runtime_notice(&mut report.notices, &runtime);
+    let native_client_mode = report.capacity.as_ref().is_some_and(|assessment| {
+        provider_capacity::native_personal_client_copy_capacity_exception(
+            selected.provider,
+            selected.account_scope,
+            runtime.copy_prerequisite_met,
+            &assessment.snapshot,
+        )
+    });
+    if native_client_mode {
+        report.notices.push("native-client-copy-capacity-unverified".into());
+    }
     let (icloud_health, provider_global_sync) = if selected.provider == cloud::CloudProvider::Icloud
     {
         let health = icloud_sync_health::inspect_new_copy_admission(&home, cloud::system_now_ms()).ok();
@@ -1311,6 +1322,7 @@ fn attach_capacity_assessment(
 fn require_capacity_for_copy(
     candidate: &cloud::CloudCandidate,
     snapshot: &provider_capacity::CloudCapacitySnapshot,
+    allow_native_personal_client_exception: bool,
 ) -> Result<(), String> {
     let assessment = provider_capacity::assess_capacity(
         snapshot.clone(),
@@ -1318,7 +1330,15 @@ fn require_capacity_for_copy(
         candidate.bytes,
         provider_capacity::DEFAULT_CAPACITY_RESERVE_BYTES,
     );
-    if assessment.can_fit == Some(true) {
+    if assessment.can_fit == Some(true)
+        || (allow_native_personal_client_exception
+            && provider_capacity::native_personal_client_copy_capacity_exception(
+                candidate.provider,
+                candidate.destination_account_scope,
+                true,
+                snapshot,
+            ))
+    {
         Ok(())
     } else {
         Err(if assessment.blockers.is_empty() {
@@ -1505,7 +1525,7 @@ fn create_cloud_candidate_receipt(
         exact_confirmation_phrase,
     )?;
     if !adopt_existing {
-        provider_client_runtime::require_provider_client_runtime(
+        let runtime = provider_client_runtime::require_provider_client_runtime(
             selected.provider,
             cloud::system_now_ms(),
         )?;
@@ -1524,7 +1544,14 @@ fn create_cloud_candidate_receipt(
             .capacity
             .as_ref()
             .ok_or_else(|| "cloud-capacity-verification-required".to_string())?;
-        require_capacity_for_copy(candidate, &snapshot.snapshot)?;
+        let native_client_mode =
+            provider_capacity::native_personal_client_copy_capacity_exception(
+                selected.provider,
+                selected.account_scope,
+                runtime.copy_prerequisite_met,
+                &snapshot.snapshot,
+            );
+        require_capacity_for_copy(candidate, &snapshot.snapshot, native_client_mode)?;
     }
     let (receipt, receipt_path) = if adopt_existing {
         cloud_transfer::adopt_existing_cloud_copy_with_approval(
@@ -1645,7 +1672,7 @@ fn create_cloud_candidate_provider_api_receipt(
         .capacity
         .as_ref()
         .ok_or_else(|| "cloud-capacity-verification-required".to_string())?;
-    require_capacity_for_copy(candidate, &capacity.snapshot)?;
+    require_capacity_for_copy(candidate, &capacity.snapshot, false)?;
     let review_decision = if candidate.requires_review {
         cloud_review::load_latest_decisions(&cloud_review_directory(app)?)?
             .into_iter()

@@ -695,6 +695,21 @@ export function cloudCapacityAllowsCopy(
     && assessment.snapshot.evidence_kind !== "unavailable";
 }
 
+/** Personal native-client mode permits copy-only when the desktop sync app is running. */
+export function cloudNativeClientCopyAllowed(
+  assessment: CloudCapacityAssessment | null | undefined,
+  root: Pick<CloudRoot, "provider" | "account_scope"> | null | undefined,
+  notices: readonly string[],
+): boolean {
+  return root?.account_scope === "personal"
+    && root.provider !== "icloud"
+    && notices.includes("provider-client-runtime-observed")
+    && notices.includes("native-client-copy-capacity-unverified")
+    && assessment?.can_fit === null
+    && assessment.snapshot.evidence_kind === "unavailable"
+    && assessment.snapshot.unavailable_reason === "provider-oauth-connection-missing";
+}
+
 export interface ExactDuplicateSummary {
   cluster_count: number;
   candidate_count: number;

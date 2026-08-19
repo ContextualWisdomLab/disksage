@@ -217,4 +217,25 @@ describe("cloud capacity copy gate", () => {
       },
     })).toBe(false);
   });
+
+  it("allows personal native-client copy-only mode only with the explicit runtime notice", () => {
+    const unavailable: api.CloudCapacityAssessment = {
+      ...assessment,
+      can_fit: null,
+      snapshot: {
+        ...snapshot,
+        provider: "google-drive",
+        evidence_kind: "unavailable",
+        state: "unavailable",
+        remaining_bytes: null,
+        evidence_fingerprint: null,
+        unavailable_reason: "provider-oauth-connection-missing",
+      },
+    };
+    const root = { provider: "google-drive" as const, account_scope: "personal" as const };
+    const notices = ["provider-client-runtime-observed", "native-client-copy-capacity-unverified"];
+    expect(api.cloudNativeClientCopyAllowed(unavailable, root, notices)).toBe(true);
+    expect(api.cloudNativeClientCopyAllowed(unavailable, { ...root, account_scope: "organization" }, notices)).toBe(false);
+    expect(api.cloudNativeClientCopyAllowed(unavailable, root, notices.slice(0, 1))).toBe(false);
+  });
 });

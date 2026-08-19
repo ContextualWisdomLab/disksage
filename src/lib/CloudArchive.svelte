@@ -170,7 +170,8 @@
     const exactApproval = decision?.disposition === "approved";
     const embeddedHighConfidence = candidate.production_time_confidence === "high"
       && candidate.production_time_source.startsWith("embedded:");
-    const capacityEvidenceAvailable = api.cloudCapacityAllowsCopy(report?.capacity);
+    const capacityEvidenceAvailable = api.cloudCapacityAllowsCopy(report?.capacity)
+      || api.cloudNativeClientCopyAllowed(report?.capacity, selectedRootDetails(), report?.notices ?? []);
     const approvalPhrase = api.cloudCopyApprovalPhrase(candidate, "copy-only");
     const providerAdmissionBlocked = report
       ? hasProviderAdmissionBlocker(report.notices)
@@ -909,7 +910,11 @@
       {:else}
         <p class="warning">
           원격 quota를 검증할 수 없음: {report.capacity.snapshot.unavailable_reason ?? "cloud-capacity-unavailable"}.
-          OneDrive·Google Drive는 읽기 전용 OAuth 연결 후 다시 계획해야 복사할 수 있습니다.
+          {#if api.cloudNativeClientCopyAllowed(report.capacity, selectedRootDetails(), report.notices)}
+            개인 native-client 모드: 실행 중인 OneDrive·Google Drive 앱으로 copy-only를 진행하고, 개별 sync 증거 전에는 원본을 보존합니다.
+          {:else}
+            OneDrive·Google Drive는 읽기 전용 OAuth 연결 후 다시 계획해야 복사할 수 있습니다.
+          {/if}
           iCloud는 macOS 네이티브 계정 상태 확인 후 다시 계획해야 복사할 수 있습니다.
         </p>
       {/if}
