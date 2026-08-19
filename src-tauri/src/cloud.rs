@@ -973,6 +973,14 @@ pub fn collect_archive_files_bounded(
     max_entries: u64,
     max_duration: Duration,
 ) -> ArchiveFileCollection {
+    if path_inside_managed_file_provider_storage(root) {
+        return ArchiveFileCollection {
+            files: Vec::new(),
+            visited_entries: 0,
+            complete: false,
+            stop_reasons: vec!["source-scan-managed-file-provider-root".into()],
+        };
+    }
     let excluded = excluded_roots.to_vec();
     let mut files = Vec::new();
     let mut visited_entries = 0_u64;
@@ -3810,9 +3818,15 @@ fn source_blocked_reason(
 /// File Provider's private storage and download staging trees are owned by macOS. Their files
 /// are implementation state, not user payloads; only a provider-aware operation may reclaim them.
 fn path_inside_managed_file_provider_storage(path: &Path) -> bool {
+    let mut previous = String::new();
     path.components().any(|component| {
         let name = normalized_account_text(&component.as_os_str().to_string_lossy());
-        name == "file provider storage"
+        let managed = name == "file provider storage"
+            || (previous == "library"
+                && matches!(name.as_str(), "mobile documents" | "cloudstorage"))
+            || (previous == "application support" && name == "fileprovider");
+        previous = name;
+        managed
     })
 }
 
@@ -5339,6 +5353,29 @@ mod tests {
                 .as_ref()
                 .map(|snapshot| snapshot.schema_version),
             Some(crate::volume_pressure::LOCAL_VOLUME_SNAPSHOT_SCHEMA_VERSION)
+        );
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn bounded_source_scan_rejects_managed_file_provider_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source_root = tmp.path().join("Library/Mobile Documents");
+        std::fs::create_dir_all(&source_root).unwrap();
+        std::fs::write(source_root.join("report.pdf"), b"pdf").unwrap();
+
+        let collection = collect_archive_files_bounded(
+            &source_root,
+            &[],
+            100,
+            Duration::from_secs(30),
+        );
+
+        assert!(!collection.complete);
+        assert!(collection.files.is_empty());
+        assert_eq!(
+            collection.stop_reasons,
+            vec!["source-scan-managed-file-provider-root".to_string()]
         );
     }
 
