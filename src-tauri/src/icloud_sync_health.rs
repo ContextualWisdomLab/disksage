@@ -35,11 +35,18 @@ const MAX_STDERR_BYTES: usize = 4 * 1024;
 const BRCTL_STATUS_PATH: &str = "/usr/bin/brctl";
 const BRCTL_STATUS_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_BRCTL_STATUS_BYTES: usize = 64 * 1024;
+#[cfg(target_os = "macos")]
+const FILEPROVIDERCTL_PATH: &str = "/usr/bin/fileproviderctl";
+#[cfg(target_os = "macos")]
+const FILEPROVIDER_DUMP_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(target_os = "macos")]
+const MAX_FILEPROVIDER_DUMP_BYTES: usize = 256 * 1024;
 const ITEM_ERROR_AGE_NOTICE_MS: u64 = 86_400_000;
 static SNAPSHOT_NONCE: AtomicU64 = AtomicU64::new(0);
 
-pub const ICLOUD_SYNC_HEALTH_SCHEMA_VERSION: u32 = 4;
+pub const ICLOUD_SYNC_HEALTH_SCHEMA_VERSION: u32 = 5;
 pub const ICLOUD_NATIVE_STATUS_SCHEMA_VERSION: u32 = 1;
+pub const ICLOUD_FILE_PROVIDER_ACTIVITY_SCHEMA_VERSION: u32 = 1;
 
 const QUEUE_QUERY: &str = r#"
 PRAGMA query_only=ON;
@@ -119,6 +126,36 @@ pub struct IcloudNativeStatusEvidence {
     pub notices: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IcloudFileProviderActivityEvidence {
+    pub schema_version: u32,
+    pub observed_at_ms: u64,
+    pub command_succeeded: bool,
+    pub timed_out: bool,
+    pub output_truncated: bool,
+    pub no_progress_fetch_count: u64,
+    pub notices: Vec<String>,
+}
+
+pub fn validate_file_provider_activity_evidence(
+    evidence: &IcloudFileProviderActivityEvidence,
+) -> Result<(), String> {
+    if evidence.schema_version != ICLOUD_FILE_PROVIDER_ACTIVITY_SCHEMA_VERSION
+        || evidence.notices.is_empty()
+        || evidence.notices.iter().any(|notice| {
+            notice.is_empty()
+                || notice.len() > 128
+                || !notice
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        })
+    {
+        return Err("icloud-file-provider-activity-shape-invalid".into());
+    }
+    Ok(())
+}
+
 pub fn validate_native_status_evidence(
     evidence: &IcloudNativeStatusEvidence,
 ) -> Result<(), String> {
@@ -189,6 +226,8 @@ pub struct IcloudSyncHealthReport {
     pub upload_queue: IcloudUploadQueueSummary,
     #[serde(default)]
     pub native_status: Option<IcloudNativeStatusEvidence>,
+    #[serde(default)]
+    pub file_provider_activity: Option<IcloudFileProviderActivityEvidence>,
     pub sync_backlog_present: bool,
     /// Admission state for adding a new local item to iCloud Drive.
     ///
@@ -485,6 +524,145 @@ fn native_status_summary_complete(output: &[u8]) -> bool {
             && line.contains(" last-sync:")
     });
     container_count && summary
+}
+
+fn parse_file_provider_activity_output(
+    output: &str,
+    observed_at_ms: u64,
+    command_succeeded: bool,
+    timed_out: bool,
+    output_truncated: bool,
+) -> IcloudFileProviderActivityEvidence {
+    let no_progress_fetch_count = output
+        .lines()
+        .filter(|line| {
+            let line = line.to_ascii_lowercase();
+            line.contains("fetchcontentsforitemwithid") && line.contains("no progress")
+        })
+        .count() as u64;
+    let mut notices = if command_succeeded {
+        vec!["icloud-file-provider-dump-observed".into()]
+    } else {
+        vec!["icloud-file-provider-dump-unavailable".into()]
+    };
+    if timed_out {
+        notices.push("icloud-file-provider-dump-timeout".into());
+    }
+    if output_truncated {
+        notices.push("icloud-file-provider-dump-output-truncated".into());
+    }
+    if no_progress_fetch_count > 0 {
+        notices.push("icloud-file-provider-no-progress-fetch-observed".into());
+    }
+    IcloudFileProviderActivityEvidence {
+        schema_version: ICLOUD_FILE_PROVIDER_ACTIVITY_SCHEMA_VERSION,
+        observed_at_ms,
+        command_succeeded,
+        timed_out,
+        output_truncated,
+        no_progress_fetch_count,
+        notices,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn probe_file_provider_activity(observed_at_ms: u64) -> IcloudFileProviderActivityEvidence {
+    use std::os::unix::process::CommandExt;
+
+    let mut command = Command::new(FILEPROVIDERCTL_PATH);
+    command
+        .args(["dump", "com.apple.CloudDocs.iCloudDriveFileProvider", "-l"])
+        .env("LANG", "C")
+        .env("LC_ALL", "C")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(_) => {
+            return parse_file_provider_activity_output("", observed_at_ms, false, false, false)
+        }
+    };
+    let child_pid = child.id();
+    let kill_group = || unsafe {
+        let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
+    };
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            kill_group();
+            let _ = child.kill();
+            let _ = child.wait();
+            return parse_file_provider_activity_output("", observed_at_ms, false, false, false);
+        }
+    };
+    let output_reader = thread::spawn(move || {
+        let mut output = Vec::new();
+        let read_result = stdout
+            .take((MAX_FILEPROVIDER_DUMP_BYTES + 1) as u64)
+            .read_to_end(&mut output);
+        (read_result.is_ok(), output)
+    });
+    let deadline = Instant::now() + FILEPROVIDER_DUMP_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(25)),
+            Ok(None) => {
+                kill_group();
+                let _ = child.kill();
+                let _ = child.wait();
+                let (_read_ok, output) = output_reader.join().unwrap_or((false, Vec::new()));
+                let output_truncated = output.len() > MAX_FILEPROVIDER_DUMP_BYTES;
+                let output = String::from_utf8_lossy(
+                    &output[..output.len().min(MAX_FILEPROVIDER_DUMP_BYTES)],
+                );
+                return parse_file_provider_activity_output(
+                    &output,
+                    observed_at_ms,
+                    false,
+                    true,
+                    output_truncated,
+                );
+            }
+            Err(_) => {
+                kill_group();
+                let _ = child.kill();
+                let _ = child.wait();
+                let (_read_ok, output) = output_reader.join().unwrap_or((false, Vec::new()));
+                let output_truncated = output.len() > MAX_FILEPROVIDER_DUMP_BYTES;
+                let output = String::from_utf8_lossy(
+                    &output[..output.len().min(MAX_FILEPROVIDER_DUMP_BYTES)],
+                );
+                return parse_file_provider_activity_output(
+                    &output,
+                    observed_at_ms,
+                    false,
+                    false,
+                    output_truncated,
+                );
+            }
+        }
+    };
+    kill_group();
+    let (read_ok, output) = output_reader.join().unwrap_or((false, Vec::new()));
+    let output_truncated = output.len() > MAX_FILEPROVIDER_DUMP_BYTES;
+    let output = String::from_utf8_lossy(&output[..output.len().min(MAX_FILEPROVIDER_DUMP_BYTES)]);
+    parse_file_provider_activity_output(
+        &output,
+        observed_at_ms,
+        read_ok && status.is_some_and(|status| status.success()),
+        false,
+        output_truncated,
+    )
 }
 
 #[cfg(target_os = "macos")]
@@ -1052,6 +1230,7 @@ fn build_report(
         managed_database_allocated_bytes,
         upload_queue,
         native_status: None,
+        file_provider_activity: None,
         sync_backlog_present,
         new_copy_admission_state: new_copy_admission_state.into(),
         new_copy_admission_blockers,
@@ -1135,6 +1314,31 @@ fn attach_native_status_admission(report: &mut IcloudSyncHealthReport) {
         report
             .blockers
             .insert(0, "icloud-native-sync-down-pending".into());
+    }
+    if let Some(activity) = report.file_provider_activity.as_ref() {
+        let blocker = if activity.no_progress_fetch_count > 0 {
+            Some("icloud-file-provider-no-progress")
+        } else if activity.timed_out {
+            Some("icloud-file-provider-dump-timeout")
+        } else if activity.output_truncated {
+            Some("icloud-file-provider-dump-output-truncated")
+        } else if !activity.command_succeeded {
+            Some("icloud-file-provider-evidence-unavailable")
+        } else {
+            None
+        };
+        if let Some(blocker) = blocker {
+            if !report
+                .new_copy_admission_blockers
+                .iter()
+                .any(|existing| existing == blocker)
+            {
+                report.new_copy_admission_blockers.push(blocker.into());
+                report.new_copy_admission_state = "blocked".into();
+                report.sync_backlog_present = true;
+                report.blockers.insert(0, blocker.into());
+            }
+        }
     }
 }
 
@@ -1229,6 +1433,10 @@ pub fn probe_icloud_sync_health(
                 includes_wal,
             )?;
             report.native_status = native_status;
+            #[cfg(target_os = "macos")]
+            {
+                report.file_provider_activity = Some(probe_file_provider_activity(observed_at_ms));
+            }
             attach_native_status_admission(&mut report);
             Ok(report)
         }
@@ -1246,6 +1454,10 @@ pub fn probe_icloud_sync_health(
                 .notices
                 .push("consistent-copy-on-write-snapshot-unavailable".into());
             report.native_status = native_status;
+            #[cfg(target_os = "macos")]
+            {
+                report.file_provider_activity = Some(probe_file_provider_activity(observed_at_ms));
+            }
             attach_native_status_admission(&mut report);
             Ok(report)
         }
@@ -1356,6 +1568,23 @@ mod tests {
         assert!(!serde_json::to_string(&evidence)
             .unwrap()
             .contains("/Users/"));
+    }
+
+    #[test]
+    fn file_provider_parser_counts_redacted_no_progress_fetches() {
+        let evidence = parse_file_provider_activity_output(
+            "fetchContentsForItemWithID: (no timeout), no progress\nfetchContentsForItemWithID: (no timeout), no progress\n",
+            42,
+            false,
+            true,
+            false,
+        );
+        assert_eq!(evidence.no_progress_fetch_count, 2);
+        assert!(evidence.timed_out);
+        assert!(evidence
+            .notices
+            .contains(&"icloud-file-provider-no-progress-fetch-observed".to_string()));
+        assert!(validate_file_provider_activity_evidence(&evidence).is_ok());
     }
 
     #[test]

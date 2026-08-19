@@ -629,6 +629,13 @@ export interface IcloudSyncHealthReport {
     out_of_quota_count: number;
     item_error_count: number;
   };
+  file_provider_activity?: {
+    command_succeeded: boolean;
+    timed_out: boolean;
+    output_truncated: boolean;
+    no_progress_fetch_count: number;
+    notices: string[];
+  } | null;
   sync_backlog_present: boolean;
   new_copy_admission_state: "clear" | "blocked";
   new_copy_admission_blockers: string[];

@@ -30,6 +30,8 @@ The runtime sequence is:
    no eviction permit is issued.
    iCloud native `needs-sync-up` and `needs-sync-down` states are also explicit admission blockers;
    a timeout while collecting native status is an admission blocker as well;
+   the bounded iCloud File Provider activity probe likewise blocks when it sees redacted
+   `no progress` fetches or times out;
    the latter means the provider still has remote changes to materialize.
    Third-party File Provider dumps also block new copies while upload/download progress,
    non-zero reconciliation backlogs (`provider-global-sync-reconciliation-pending`), provider

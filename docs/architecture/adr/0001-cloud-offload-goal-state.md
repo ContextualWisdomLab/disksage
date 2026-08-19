@@ -75,6 +75,9 @@ clear evidence.
   bounded native status is quiet; neither direction is treated as completed provider evidence.
 - A timeout while collecting the bounded iCloud native status also blocks new-copy admission;
   timeout is not interpreted as a quiet provider.
+- The bounded iCloud File Provider activity probe records only the count of redacted `no progress`
+  fetch markers. Any such marker, a probe timeout, or unavailable probe evidence blocks new-copy
+  admission; no path, filename, item identifier, or content is retained.
 - A `source-not-present`, `source-content-not-local`, or unsafe-source observation blocks the Goal
   even when provider sync is complete; DiskSage never infers that an externally removed or
   File-Provider-dataless source was safely evicted.
