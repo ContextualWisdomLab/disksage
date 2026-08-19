@@ -1,4 +1,4 @@
-//! Contradictory provider-global-sync evidence must never authorize a new copy.
+//! Contradictory provider-global-sync evidence must never authorize or advertise a new copy.
 //!
 //! `ProviderGlobalSyncReport` is a public data contract and callers can construct it directly.
 //! A `Clear` report is therefore authoritative only when its aggregate progress fields also prove
@@ -6,8 +6,8 @@
 
 use disksage_lib::cloud::CloudProvider;
 use disksage_lib::provider_global_sync::{
-    require_new_copy_admission, ProviderGlobalSyncReport, ProviderGlobalSyncState,
-    PROVIDER_GLOBAL_SYNC_SCHEMA_VERSION,
+    attach_new_copy_admission_notice, require_new_copy_admission, ProviderGlobalSyncReport,
+    ProviderGlobalSyncState, PROVIDER_GLOBAL_SYNC_SCHEMA_VERSION,
 };
 
 fn clear_report() -> ProviderGlobalSyncReport {
@@ -44,5 +44,26 @@ fn clear_state_requires_quiet_aggregate_progress_evidence() {
             require_new_copy_admission(&contradictory).unwrap_err(),
             "provider-global-sync-evidence-invalid"
         );
+
+        let mut notices = Vec::new();
+        attach_new_copy_admission_notice(&mut notices, Some(&contradictory));
+        assert!(notices.contains(&"provider-global-sync-blocked".to_string()));
+        assert!(!notices.contains(&"provider-global-sync-clear".to_string()));
     }
+}
+
+#[test]
+fn forged_identity_is_never_advertised_as_clear() {
+    let mut forged = clear_report();
+    forged.evidence_kind = "caller-asserted-clear-state".into();
+
+    assert_eq!(
+        require_new_copy_admission(&forged).unwrap_err(),
+        "provider-global-sync-evidence-invalid"
+    );
+
+    let mut notices = Vec::new();
+    attach_new_copy_admission_notice(&mut notices, Some(&forged));
+    assert!(notices.contains(&"provider-global-sync-blocked".to_string()));
+    assert!(!notices.contains(&"provider-global-sync-clear".to_string()));
 }
