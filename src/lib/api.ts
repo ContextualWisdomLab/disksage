@@ -85,6 +85,46 @@ export const recentOperations = (limit = 20) =>
 export const findDuplicateFiles = (root: string) =>
   invoke<DupeGroup[]>("find_duplicate_files", { root });
 
+export interface PodmanReclaimPlan {
+  schema_kind: "disksage.podman-reclaim-plan";
+  schema_version: number;
+  platform: string;
+  evidence_complete: boolean;
+  elapsed_ms: number;
+  machine: { name: string; state: string; configured_disk_bytes: number | null } | null;
+  guest_filesystem: { total_bytes: number; used_bytes: number; available_bytes: number } | null;
+  system_df: {
+    images: { total: number; active: number; size_bytes: number; reclaimable_bytes: number };
+    containers: { total: number; active: number; size_bytes: number; reclaimable_bytes: number };
+    local_volumes: { total: number; active: number; size_bytes: number; reclaimable_bytes: number };
+  } | null;
+  unused_images: {
+    total_records: number;
+    referenced_records: number;
+    unused_records: number;
+    unused_untagged_records: number;
+    unused_tagged_records: number;
+    candidate_record_size_sum: number;
+    candidate_set_sha256: string;
+  } | null;
+  assessment: {
+    physically_reclaimable_bytes: number | null;
+    podman_reported_reclaimable_bytes: number | null;
+    raw_allocated_minus_guest_used_bytes: number | null;
+    status: string;
+    reason_codes: string[];
+    recommended_actions: Array<{
+      kind: string;
+      requires_human_approval: boolean;
+      rationale: string;
+    }>;
+  };
+  issues: string[];
+}
+
+export const inspectPodmanReclaim = () =>
+  invoke<PodmanReclaimPlan>("inspect_podman_reclaim");
+
 export const onScanProgress = (cb: (s: ScanStats) => void) =>
   listen<ScanStats>("scan://progress", (e) => cb(e.payload));
 export const onScanDone = (cb: (s: ScanStats) => void) =>

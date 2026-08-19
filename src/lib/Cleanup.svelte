@@ -15,6 +15,9 @@
   let busy = $state(false);
   let loadError = $state("");
   let cacheRetryMessage = $state("");
+  let podmanPlan: api.PodmanReclaimPlan | null = $state(null);
+  let podmanBusy = $state(false);
+  let podmanError = $state("");
   // ponytail: 배지는 개별 파일/디렉토리 후보(artifacts)에만 표시 — caches는 소수의 고정 규칙 카테고리라 LLM 판정 가치가 낮음.
   let verdicts: Record<string, api.Verdict> = $state({});
 
@@ -35,6 +38,20 @@
       loadVerdicts(artifacts.map((a) => a.path));
     } catch (e) {
       loadError = String(e);
+    }
+  }
+
+  async function inspectPodman() {
+    if (podmanBusy) return;
+    podmanBusy = true;
+    podmanError = "";
+    try {
+      podmanPlan = await api.inspectPodmanReclaim();
+    } catch (e) {
+      podmanError = String(e);
+      podmanPlan = null;
+    } finally {
+      podmanBusy = false;
     }
   }
 
@@ -195,6 +212,40 @@
 
   <GitWorktreeCleanup {scannedRoot} />
   <BrewCleanup />
+
+  <h3>Podman VM 저장소</h3>
+  <p class="notice">
+    게스트·이미지·volume 증거만 읽습니다. prune, 삭제, trim, 중지는 이 화면에서 실행하지 않습니다.
+    실제 물리 회수량은 전후 호스트 관측 없이는 확정하지 않습니다.
+  </p>
+  <button onclick={inspectPodman} disabled={podmanBusy}>
+    {podmanBusy ? "확인 중…" : "Podman 상태 확인"}
+  </button>
+  {#if podmanError}<p class="error" role="alert">{podmanError}</p>{/if}
+  {#if podmanPlan}
+    <div class="podman-evidence" aria-live="polite">
+      <p>
+        {podmanPlan.evidence_complete ? "증거 완전" : "증거 불완전"} ·
+        게스트 여유 {podmanPlan.guest_filesystem ? fmtBytes(podmanPlan.guest_filesystem.available_bytes) : "확인 불가"} ·
+        보고 reclaimable {podmanPlan.assessment.podman_reported_reclaimable_bytes === null
+          ? "미확인"
+          : fmtBytes(podmanPlan.assessment.podman_reported_reclaimable_bytes)}
+      </p>
+      {#if podmanPlan.unused_images}
+        <p>미사용 이미지 {podmanPlan.unused_images.unused_records}개 · exact record 합계 {fmtBytes(podmanPlan.unused_images.candidate_record_size_sum)}</p>
+      {/if}
+      {#if podmanPlan.system_df}
+        <p>연결 없는 volume 후보 {fmtBytes(podmanPlan.system_df.local_volumes.reclaimable_bytes)}</p>
+      {/if}
+      {#if podmanPlan.assessment.recommended_actions.length > 0}
+        <ul class="errors">
+          {#each podmanPlan.assessment.recommended_actions as action (action.kind)}
+            <li>{action.kind}: {action.rationale}</li>
+          {/each}
+        </ul>
+      {/if}
+    </div>
+  {/if}
 </section>
 
 <style>
@@ -208,6 +259,7 @@
   .notice { color: #555; font-size: 0.9rem; }
   .error, .errors { color: #b00; }
   .errors { font-size: 0.85rem; }
+  .podman-evidence { margin-top: 0.75rem; padding: 0.75rem; border: 1px solid #b7c6d8; border-radius: 4px; background: #f8fafc; }
   .badge-safe, .badge-caution, .badge-keep, .badge-unrated {
     display: inline-block; margin-left: 0.4rem; padding: 1px 6px; border-radius: 8px;
     font-size: 0.75rem; color: #fff;

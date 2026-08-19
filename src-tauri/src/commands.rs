@@ -21,8 +21,9 @@ use crate::{
     brew_cleanup, cloud, cloud_adr, cloud_eviction, cloud_local_eviction, cloud_plan_view,
     cloud_review, cloud_transfer, dev_artifacts, dupes, git_worktree, icloud_sync_health,
     organization_lineage,
-    provider_api_client, provider_api_write, provider_capacity, provider_client_runtime, provider_evidence,
-    provider_global_sync, provider_oauth, provider_sync, rules,
+    podman_reclaim, provider_api_client, provider_api_write, provider_capacity,
+    provider_client_runtime, provider_evidence, provider_global_sync, provider_oauth, provider_sync,
+    rules,
 };
 
 #[cfg(not(coverage))]
@@ -477,6 +478,32 @@ fn valid_brew_rationale(value: &str) -> bool {
 #[tauri::command(async)]
 pub fn plan_brew_cleanup() -> Result<brew_cleanup::BrewCleanupPlan, String> {
     brew_cleanup::plan(now_ms())
+}
+
+fn podman_binary() -> PathBuf {
+    [
+        "/opt/homebrew/bin/podman",
+        "/usr/local/bin/podman",
+        "/usr/bin/podman",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .find(|path| {
+        std::fs::symlink_metadata(path)
+            .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+    })
+    .unwrap_or_else(|| PathBuf::from("podman"))
+}
+
+/// Read-only Podman VM/store evidence. The command never prunes, removes, trims, or stops.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn inspect_podman_reclaim() -> podman_reclaim::PodmanReclaimPlan {
+    podman_reclaim::probe_podman_reclaim(
+        &podman_binary(),
+        podman_reclaim::DEFAULT_PODMAN_MACHINE,
+        podman_reclaim::DEFAULT_PROBE_TIMEOUT,
+    )
 }
 
 #[cfg(not(coverage))]

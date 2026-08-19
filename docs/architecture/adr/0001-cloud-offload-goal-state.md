@@ -67,6 +67,11 @@ returns incomplete evidence, and still runs the bounded File Provider activity p
 are non-blocking and every provider subprocess is terminated with its private process group on
 timeout; a health check cannot remain stuck behind a provider copy.
 
+Podman VM storage is a separate local reclaim domain, not cloud data. DiskSage exposes read-only
+machine, guest-filesystem, image, container, volume, and raw-image evidence through the same
+cleanup surface. Shared layers, sparse VM allocation, and unlinked volumes are never treated as
+physical reclaim proof; prune, trim, stop, and delete remain outside the inspection command.
+
 ## Consequences
 
 - `is_local_current=true` and `is_uploaded=false` produces `pending-upload` and no eviction permit.
@@ -86,6 +91,9 @@ timeout; a health check cannot remain stuck behind a provider copy.
   admission; no path, filename, item identifier, or content is retained.
 - An oversized CloudDocs `client.db` produces incomplete, fail-closed evidence without running a
   long SQLite fallback query; the File Provider probe still reports whether the provider is stalled.
+- Podman reclaim evidence reports the VM/store candidates and requires separate human review for
+  unused images or volumes. Reproducible dangling images may be cleaned as local generated
+  artifacts, but user-data volumes are not moved to a provider or deleted by inspection.
 - A `source-not-present`, `source-content-not-local`, or unsafe-source observation blocks the Goal
   even when provider sync is complete; DiskSage never infers that an externally removed or
   File-Provider-dataless source was safely evicted.
