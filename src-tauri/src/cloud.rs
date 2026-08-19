@@ -4626,7 +4626,9 @@ fn prepare_cloud_archive_source_with_scan(
                     &file.path,
                     batched_exiftool.get(&file.path).cloned(),
                 );
-            } else if prepared.content_metadata == ContentMetadata::default() {
+            } else if prepared.content_metadata == ContentMetadata::default()
+                && !source_content_is_dataless(&file.path)
+            {
                 let failure = if probe_candidate_paths.contains(&file.path)
                     && !selected_probe_paths.contains(&file.path)
                 {
@@ -5319,6 +5321,62 @@ mod tests {
                 .map(|snapshot| snapshot.schema_version),
             Some(crate::volume_pressure::LOCAL_VOLUME_SNAPSHOT_SCHEMA_VERSION)
         );
+    }
+
+    #[cfg(all(target_os = "macos", not(coverage)))]
+    #[test]
+    fn dataless_files_are_not_misreported_as_metadata_probe_timeouts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let cloud = tmp.path().join("cloud");
+        writable_dir(&source);
+        writable_dir(&cloud);
+        let path = source.join("mail-backup.zip");
+        std::fs::write(&path, b"placeholder").unwrap();
+        let mark = std::process::Command::new("chflags")
+            .args(["dataless", path.to_str().unwrap()])
+            .status()
+            .unwrap();
+        if !mark.success() || !source_content_is_dataless(&path) {
+            let _ = std::process::Command::new("chflags")
+                .args(["nodataless", path.to_str().unwrap()])
+                .status();
+            return;
+        }
+
+        let file_metadata = std::fs::metadata(&path).unwrap();
+        let snapshot = prepare_cloud_archive_source(
+            &[FileFact {
+                path: path.clone(),
+                bytes: file_metadata.len(),
+                created_ms: millis(file_metadata.created()),
+                modified_ms: millis(file_metadata.modified()),
+                content_metadata: ContentMetadata::default(),
+            }],
+            &source,
+            system_now_ms(),
+            CloudPlanOptions {
+                min_size_bytes: 1,
+                min_age_days: 0,
+                limit: 10,
+            },
+        );
+        let report = plan_cloud_archive_from_snapshot(
+            &snapshot,
+            &root(CloudProvider::GoogleDrive, &cloud),
+        );
+        assert!(report.candidates[0]
+            .metadata_evidence
+            .iter()
+            .all(|evidence| evidence.value != "planner:timeout"));
+        assert_eq!(
+            report.candidates[0].blocked_reason.as_deref(),
+            Some("source-content-not-local")
+        );
+
+        let _ = std::process::Command::new("chflags")
+            .args(["nodataless", path.to_str().unwrap()])
+            .status();
     }
 
     #[test]
