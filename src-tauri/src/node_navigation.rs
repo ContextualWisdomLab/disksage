@@ -51,6 +51,14 @@ fn entry_is_link_or_reparse(path: &Path, file_type: &std::fs::FileType) -> bool 
 /// canonical scanned root.
 pub(crate) fn node_view(res: &ScanResult, path: &Path) -> Result<NodeView, String> {
     let canonical_path = canonical_navigation_path(res, path)?;
+    let canonical_root =
+        std::fs::canonicalize(&res.root).map_err(|_| OUTSIDE_ROOT.to_string())?;
+    let relative = canonical_path
+        .strip_prefix(&canonical_root)
+        .map_err(|_| OUTSIDE_ROOT.to_string())?;
+    // macOS canonicalizes `/var` to `/private/var`; keep scanner keys and UI paths in
+    // the original namespace while reading entries through the verified canonical path.
+    let display_path = res.root.join(relative);
     let mut entries = Vec::new();
     for entry in std::fs::read_dir(&canonical_path).map_err(|_| "node directory unavailable".to_string())? {
         let Ok(entry) = entry else { continue };
@@ -62,7 +70,8 @@ pub(crate) fn node_view(res: &ScanResult, path: &Path) -> Result<NodeView, Strin
         let (size, is_dir) = if file_type.is_dir() {
             (
                 res.dir_sizes
-                    .get(&entry_path)
+                    .get(&display_path.join(entry.file_name()))
+                    .or_else(|| res.dir_sizes.get(&entry_path))
                     .copied()
                     .unwrap_or_default(),
                 true,
@@ -77,7 +86,10 @@ pub(crate) fn node_view(res: &ScanResult, path: &Path) -> Result<NodeView, Strin
         };
         entries.push(EntryView {
             name: entry.file_name().to_string_lossy().into_owned(),
-            path: entry_path.to_string_lossy().into_owned(),
+            path: display_path
+                .join(entry.file_name())
+                .to_string_lossy()
+                .into_owned(),
             size,
             is_dir,
         });
@@ -87,7 +99,8 @@ pub(crate) fn node_view(res: &ScanResult, path: &Path) -> Result<NodeView, Strin
         path: path.to_string_lossy().into_owned(),
         size: res
             .dir_sizes
-            .get(&canonical_path)
+            .get(&display_path)
+            .or_else(|| res.dir_sizes.get(&canonical_path))
             .or_else(|| res.dir_sizes.get(path))
             .copied()
             .unwrap_or_default(),
