@@ -16,7 +16,8 @@ lineage and must not be uploaded to a cloud provider merely to reclaim local spa
 DiskSage exposes known cache roots through the existing cache catalog, including the macOS uv
 cache. Cleanup uses the reviewed child manifest (`path`, byte count, modification time, and object
 identity) and revalidates that manifest immediately before mutation. Active-use evidence is
-collected independently for each reviewed child with bounded, path-local `lsof` evidence:
+collected independently for each reviewed child with bounded, path-local `lsof` evidence
+(recursive for directories and direct for regular files):
 
 - incomplete evidence or an active process leaves that child untouched and returns a stable blocker;
 - an inactive child may be moved through DiskSage's identity-bound OS-Trash path;
