@@ -61,6 +61,12 @@ incomplete evidence; it records `provider-global-sync-probe-timeout`, marks the 
 `unavailable`, and continues to block new copies. A partial dump can never become authoritative
 clear evidence.
 
+The local CloudDocs client database is also bounded before any query or snapshot. When `client.db`
+exceeds the snapshot ceiling, DiskSage skips both the expensive snapshot and the fallback query,
+returns incomplete evidence, and still runs the bounded File Provider activity probe. Pipe readers
+are non-blocking and every provider subprocess is terminated with its private process group on
+timeout; a health check cannot remain stuck behind a provider copy.
+
 ## Consequences
 
 - `is_local_current=true` and `is_uploaded=false` produces `pending-upload` and no eviction permit.
@@ -78,6 +84,8 @@ clear evidence.
 - The bounded iCloud File Provider activity probe records only the count of redacted `no progress`
   fetch markers. Any such marker, a probe timeout, or unavailable probe evidence blocks new-copy
   admission; no path, filename, item identifier, or content is retained.
+- An oversized CloudDocs `client.db` produces incomplete, fail-closed evidence without running a
+  long SQLite fallback query; the File Provider probe still reports whether the provider is stalled.
 - A `source-not-present`, `source-content-not-local`, or unsafe-source observation blocks the Goal
   even when provider sync is complete; DiskSage never infers that an externally removed or
   File-Provider-dataless source was safely evicted.

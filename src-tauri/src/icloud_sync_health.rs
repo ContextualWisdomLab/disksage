@@ -363,6 +363,18 @@ fn run_queue_probe_with_uri(
     if source_immutable {
         command.arg("-readonly");
     }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setpgid(0, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
     let mut child = command
         .arg(client_db_uri)
         .arg(QUEUE_QUERY)
@@ -371,36 +383,96 @@ fn run_queue_probe_with_uri(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|_| "icloud-sync-health-sqlite3-spawn-failed".to_string())?;
+    let child_pid = child.id();
+    #[cfg(unix)]
+    let kill_group = || unsafe {
+        let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
+    };
+    #[cfg(not(unix))]
+    let kill_group = || {};
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            kill_group();
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("icloud-sync-health-query-stdout-unavailable".into());
+        }
+    };
+    let stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            kill_group();
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("icloud-sync-health-query-stderr-unavailable".into());
+        }
+    };
+    let stdout_reader = thread::spawn(move || {
+        let mut output = Vec::new();
+        let read_ok = stdout
+            .take((MAX_STDOUT_BYTES + 1) as u64)
+            .read_to_end(&mut output)
+            .is_ok();
+        (read_ok, output)
+    });
+    let stderr_reader = thread::spawn(move || {
+        let mut output = Vec::new();
+        let read_ok = stderr
+            .take((MAX_STDERR_BYTES + 1) as u64)
+            .read_to_end(&mut output)
+            .is_ok();
+        (read_ok, output)
+    });
     let deadline = Instant::now() + PROBE_TIMEOUT;
     loop {
         match child.try_wait() {
-            Ok(Some(_)) => break,
+            Ok(Some(_)) => {
+                kill_group();
+                break;
+            }
             Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(20)),
             Ok(None) => {
+                kill_group();
                 let _ = child.kill();
                 let _ = child.wait();
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
                 return Err("icloud-sync-health-query-timeout".into());
             }
             Err(_) => {
+                kill_group();
                 let _ = child.kill();
                 let _ = child.wait();
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
                 return Err("icloud-sync-health-query-wait-failed".into());
             }
         }
     }
-    let output = child
-        .wait_with_output()
+    let (stdout_ok, stdout) = stdout_reader
+        .join()
         .map_err(|_| "icloud-sync-health-query-output-failed".to_string())?;
-    if output.stdout.len() > MAX_STDOUT_BYTES || output.stderr.len() > MAX_STDERR_BYTES {
+    let (stderr_ok, stderr) = stderr_reader
+        .join()
+        .map_err(|_| "icloud-sync-health-query-output-failed".to_string())?;
+    if !stdout_ok || !stderr_ok {
+        return Err("icloud-sync-health-query-output-failed".into());
+    }
+    if stdout.len() > MAX_STDOUT_BYTES || stderr.len() > MAX_STDERR_BYTES {
         return Err("icloud-sync-health-query-output-oversized".into());
     }
-    if !output.status.success() {
+    let status = child
+        .try_wait()
+        .map_err(|_| "icloud-sync-health-query-wait-failed".to_string())?
+        .ok_or_else(|| "icloud-sync-health-query-wait-failed".to_string())?;
+    if !status.success() {
         return Err("icloud-sync-health-schema-unsupported".into());
     }
-    if !output.stderr.is_empty() {
+    if !stderr.is_empty() {
         return Err("icloud-sync-health-query-stderr-present".into());
     }
-    String::from_utf8(output.stdout).map_err(|_| "icloud-sync-health-query-output-not-utf8".into())
+    String::from_utf8(stdout).map_err(|_| "icloud-sync-health-query-output-not-utf8".into())
 }
 
 fn run_queue_probe(client_db: &Path) -> Result<String, String> {
@@ -595,7 +667,7 @@ fn probe_file_provider_activity(observed_at_ms: u64) -> IcloudFileProviderActivi
     let kill_group = || unsafe {
         let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
     };
-    let stdout = match child.stdout.take() {
+    let mut stdout = match child.stdout.take() {
         Some(stdout) => stdout,
         None => {
             kill_group();
@@ -604,63 +676,67 @@ fn probe_file_provider_activity(observed_at_ms: u64) -> IcloudFileProviderActivi
             return parse_file_provider_activity_output("", observed_at_ms, false, false, false);
         }
     };
-    let output_reader = thread::spawn(move || {
-        let mut output = Vec::new();
-        let read_result = stdout
-            .take((MAX_FILEPROVIDER_DUMP_BYTES + 1) as u64)
-            .read_to_end(&mut output);
-        (read_result.is_ok(), output)
-    });
+    use std::io::ErrorKind;
+    use std::os::fd::AsRawFd;
+    let fd = stdout.as_raw_fd();
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        kill_group();
+        let _ = child.kill();
+        let _ = child.wait();
+        return parse_file_provider_activity_output("", observed_at_ms, false, false, false);
+    }
+    let mut output = Vec::new();
+    let mut read_failed = false;
+    let mut timed_out = false;
+    let mut status = None;
     let deadline = Instant::now() + FILEPROVIDER_DUMP_TIMEOUT;
-    let status = loop {
+    loop {
+        let mut buffer = [0_u8; 16 * 1024];
+        match stdout.read(&mut buffer) {
+            Ok(read) if read > 0 => {
+                let remaining = MAX_FILEPROVIDER_DUMP_BYTES + 1 - output.len();
+                output.extend_from_slice(&buffer[..read.min(remaining)]);
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == ErrorKind::WouldBlock => {}
+            Err(_) => {
+                read_failed = true;
+                break;
+            }
+        }
         match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
+            Ok(Some(child_status)) => {
+                status = Some(child_status);
+                break;
+            }
             Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(25)),
             Ok(None) => {
+                timed_out = true;
                 kill_group();
                 let _ = child.kill();
                 let _ = child.wait();
-                let (_read_ok, output) = output_reader.join().unwrap_or((false, Vec::new()));
-                let output_truncated = output.len() > MAX_FILEPROVIDER_DUMP_BYTES;
-                let output = String::from_utf8_lossy(
-                    &output[..output.len().min(MAX_FILEPROVIDER_DUMP_BYTES)],
-                );
-                return parse_file_provider_activity_output(
-                    &output,
-                    observed_at_ms,
-                    false,
-                    true,
-                    output_truncated,
-                );
+                break;
             }
             Err(_) => {
                 kill_group();
                 let _ = child.kill();
                 let _ = child.wait();
-                let (_read_ok, output) = output_reader.join().unwrap_or((false, Vec::new()));
-                let output_truncated = output.len() > MAX_FILEPROVIDER_DUMP_BYTES;
-                let output = String::from_utf8_lossy(
-                    &output[..output.len().min(MAX_FILEPROVIDER_DUMP_BYTES)],
-                );
-                return parse_file_provider_activity_output(
-                    &output,
-                    observed_at_ms,
-                    false,
-                    false,
-                    output_truncated,
-                );
+                read_failed = true;
+                break;
             }
         }
-    };
-    kill_group();
-    let (read_ok, output) = output_reader.join().unwrap_or((false, Vec::new()));
+    }
+    if timed_out || read_failed {
+        kill_group();
+    }
     let output_truncated = output.len() > MAX_FILEPROVIDER_DUMP_BYTES;
     let output = String::from_utf8_lossy(&output[..output.len().min(MAX_FILEPROVIDER_DUMP_BYTES)]);
     parse_file_provider_activity_output(
         &output,
         observed_at_ms,
-        read_ok && status.is_some_and(|status| status.success()),
-        false,
+        !timed_out && !read_failed && status.is_some_and(|status| status.success()),
+        timed_out,
         output_truncated,
     )
 }
@@ -1423,6 +1499,9 @@ pub fn probe_icloud_sync_health(
     let native_status = bounded_native_status(db_dir, observed_at_ms);
     #[cfg(not(target_os = "macos"))]
     let native_status = Some(probe_native_status(observed_at_ms));
+    let source_database_too_large = managed_database_files
+        .iter()
+        .any(|file| file.role == "client.db" && file.logical_bytes > MAX_SNAPSHOT_SOURCE_BYTES);
     match run_consistent_snapshot_queue_probe(db_dir) {
         Ok((output, includes_wal)) => {
             let mut report = build_report(
@@ -1432,6 +1511,25 @@ pub fn probe_icloud_sync_health(
                 true,
                 includes_wal,
             )?;
+            report.native_status = native_status;
+            #[cfg(target_os = "macos")]
+            {
+                report.file_provider_activity = Some(probe_file_provider_activity(observed_at_ms));
+            }
+            attach_native_status_admission(&mut report);
+            Ok(report)
+        }
+        Err(_) if source_database_too_large => {
+            let mut report = build_report(
+                observed_at_ms,
+                managed_database_files,
+                IcloudUploadQueueSummary::default(),
+                false,
+                false,
+            )?;
+            report
+                .notices
+                .push("icloud-sync-health-source-database-too-large".into());
             report.native_status = native_status;
             #[cfg(target_os = "macos")]
             {

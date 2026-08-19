@@ -40,6 +40,9 @@ The runtime sequence is:
    the bounded iCloud File Provider activity probe likewise blocks when it sees redacted
    `no progress` fetches or times out;
    the latter means the provider still has remote changes to materialize.
+   If CloudDocs `client.db` exceeds the bounded snapshot ceiling, DiskSage skips the expensive
+   SQLite fallback and reports incomplete evidence instead of waiting indefinitely; the File Provider
+   probe remains bounded and still blocks new copies.
    Third-party File Provider dumps also block new copies while upload/download progress,
    non-zero reconciliation backlogs (`provider-global-sync-reconciliation-pending`), provider
    disconnection, or path errors are present; the stable blocker codes are shown in the plan and
