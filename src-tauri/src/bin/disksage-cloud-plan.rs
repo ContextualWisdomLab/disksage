@@ -6,7 +6,7 @@
 
 #[cfg(not(coverage))]
 mod implementation {
-    include!(concat!(env!("OUT_DIR"), "/disksage-cloud-plan-implementation.rs"));
+    include!("disksage-cloud-plan-implementation.rs.inc");
 
     pub(crate) mod entry {
         use std::path::Path;
