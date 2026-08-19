@@ -121,6 +121,70 @@ fn admission_requires_complete_clear_unblocked_evidence() {
 }
 
 #[test]
+fn state_labels_and_parser_edge_markers_are_covered() {
+    assert_eq!(ProviderGlobalSyncState::Clear.as_str(), "clear");
+    assert_eq!(ProviderGlobalSyncState::Pending.as_str(), "pending");
+    assert_eq!(ProviderGlobalSyncState::Error.as_str(), "error");
+
+    let progress = parse_dump(
+        CloudProvider::GoogleDrive,
+        "com.google.drivefs.fpext\nsync engine state:\n + upload progress: queued\n + download progress: active\n",
+    )
+    .unwrap();
+    assert_eq!(progress.state, ProviderGlobalSyncState::Pending);
+    assert!(progress.upload_progress_present);
+    assert!(progress.download_progress_present);
+    assert_eq!(
+        progress.blockers,
+        vec!["provider-global-sync-transfer-active"]
+    );
+
+    let max_pending = parse_dump(
+        CloudProvider::Onedrive,
+        "com.microsoft.OneDrive.FileProvider\nsync engine state:\n + pending-indexable-count: 2\n + pending-indexable-count: 9\n + needs-indexing: yes\n + errors: not-a-number\n",
+    )
+    .unwrap();
+    assert_eq!(max_pending.pending_indexable_count, Some(9));
+    assert_eq!(max_pending.state, ProviderGlobalSyncState::Pending);
+    assert_eq!(
+        max_pending.blockers,
+        vec!["provider-global-sync-indexing-pending"]
+    );
+
+    let explicit_error = parse_dump(
+        CloudProvider::Onedrive,
+        "com.microsoft.OneDrive.FileProvider\nsync engine state:\n + error:'provider failure'\n",
+    )
+    .unwrap();
+    assert_eq!(explicit_error.state, ProviderGlobalSyncState::Error);
+}
+
+#[test]
+fn clear_state_with_a_blocker_remains_blocked_in_notice_and_admission() {
+    let mut contradictory = report(
+        ProviderGlobalSyncState::Clear,
+        true,
+        &["provider-global-sync-indexing-pending"],
+    );
+    assert_eq!(
+        require_new_copy_admission(&contradictory).unwrap_err(),
+        "provider-global-sync-indexing-pending"
+    );
+
+    contradictory.notices.push("keep-this-notice".into());
+    attach_new_copy_admission_notice(&mut contradictory.notices, Some(&contradictory.clone()));
+    assert!(contradictory
+        .notices
+        .contains(&"provider-global-sync-blocked".to_string()));
+    assert!(contradictory
+        .notices
+        .contains(&"keep-this-notice".to_string()));
+    assert!(!contradictory
+        .notices
+        .contains(&"provider-global-sync-clear".to_string()));
+}
+
+#[test]
 fn notice_projection_replaces_only_provider_global_sync_state() {
     let baseline = vec![
         "keep-this-notice".to_string(),
