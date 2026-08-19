@@ -43,12 +43,20 @@ retains the source until per-item native sync evidence is attested. It never aut
 remote-capacity claims, or source eviction; organization/shared roots and other OAuth failures
 remain blocked.
 
+Source enumeration is also forbidden inside managed File Provider trees (`Library/Mobile
+Documents`, `Library/CloudStorage`, `Library/Application Support/FileProvider`, and
+`File Provider Storage`). If one of these trees is supplied as the scan root, the bounded collector
+returns an incomplete scan with `source-scan-managed-file-provider-root` and produces no transfer
+candidate. This prevents DiskSage diagnostics from competing with, or materializing, provider
+state.
+
 ## Consequences
 
 - `is_local_current=true` and `is_uploaded=false` produces `pending-upload` and no eviction permit.
 - Goal completion gates remain false until their corresponding evidence exists.
 - Filename dates can place a candidate in a provisional archive period, but never authorize automatic transfer or eviction.
 - A personal native-client copy may proceed without OAuth quota evidence only while the matching desktop client is observed running; provider sync attestation still gates eviction.
+- Managed File Provider roots are never recursively scanned; the explicit incomplete-scan blocker is non-overridable.
 - A `source-not-present`, `source-content-not-local`, or unsafe-source observation blocks the Goal
   even when provider sync is complete; DiskSage never infers that an externally removed or
   File-Provider-dataless source was safely evicted.
