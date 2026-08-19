@@ -667,6 +667,21 @@ fn projection_state(path: &Path, kind: &str, receipt_id: &str) -> &'static str {
 }
 
 #[cfg(not(coverage))]
+fn refresh_projection_issues(entry: &mut ReceiptReconciliationEntry) {
+    entry.issues.retain(|issue| {
+        !issue.starts_with("adr-projection-") && !issue.starts_with("goal-projection-")
+    });
+    for (kind, state) in [
+        ("adr", entry.adr_projection_state.as_deref()),
+        ("goal", entry.goal_projection_state.as_deref()),
+    ] {
+        if let Some(state) = state.filter(|state| *state != "valid") {
+            entry.issues.push(format!("{kind}-projection-{state}"));
+        }
+    }
+}
+
+#[cfg(not(coverage))]
 fn evidence_record_count(evidence_dirs: &[PathBuf], receipt_id: &str) -> u64 {
     let prefix = format!("{receipt_id}-");
     let mut names = BTreeMap::new();
@@ -3049,6 +3064,7 @@ fn reconcile_receipts(
                     evidence_record_count(&[evidence_dir.to_path_buf()], &receipt.receipt_id);
             }
         }
+        refresh_projection_issues(&mut report.entries[entry_index]);
     }
     report.incomplete_projection_count = report
         .entries
@@ -3956,6 +3972,44 @@ mod tests {
         )
         .unwrap();
         assert!(validate_action_args(&missing_evidence).is_err());
+    }
+
+    #[test]
+    fn reconciliation_refreshes_projection_issues_after_writing_projections() {
+        let mut entry = ReceiptReconciliationEntry {
+            file_name: "receipt.json".into(),
+            receipt_id: Some("receipt".into()),
+            provider: Some(CloudProvider::Icloud),
+            bytes: Some(1),
+            source_state: Some("present".into()),
+            destination_state: Some("present".into()),
+            adr_projection_state: Some("valid".into()),
+            goal_projection_state: Some("valid".into()),
+            goal_status: Some("blocked".into()),
+            goal_state: None,
+            provider_sync_state: None,
+            eviction_permit: false,
+            attestation_error: None,
+            evidence_record_count: 0,
+            issues: vec![
+                "adr-projection-invalid-schema".into(),
+                "goal-projection-missing".into(),
+                "provider-attestation-incomplete".into(),
+            ],
+        };
+
+        refresh_projection_issues(&mut entry);
+        assert_eq!(entry.issues, vec!["provider-attestation-incomplete"]);
+
+        entry.goal_projection_state = Some("missing".into());
+        refresh_projection_issues(&mut entry);
+        assert_eq!(
+            entry.issues,
+            vec![
+                "provider-attestation-incomplete",
+                "goal-projection-missing"
+            ]
+        );
     }
 
     #[test]
