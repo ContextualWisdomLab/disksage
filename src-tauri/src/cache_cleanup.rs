@@ -41,11 +41,14 @@ fn clean_cache_contents_inner(
         .map(|target| {
             // Probe each reviewed child independently: a live MCP/uv process must not prevent
             // reclaiming unrelated, inactive cache archives in the same catalog root.
+            let recursive = std::fs::symlink_metadata(&target.path)
+                .map(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+                .unwrap_or(false);
             let active_use = crate::git_worktree::active_use_evidence(
                 Path::new(&target.path),
                 crate::reclaim::ACTIVE_USE_PROBE_TIMEOUT_MS,
                 crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
-                true,
+                recursive,
             );
             if let Some(error) = active_use_blocker(&active_use) {
                 return CleanResult {
