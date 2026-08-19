@@ -115,6 +115,30 @@ jobs:
       - name: Tauri build (with embedded LLM)
         run: npm run tauri -- build --features llm-engine
 
+      - name: Diagnose WiX MSI linker failure
+        if: failure() && matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          $light = Join-Path $env:LOCALAPPDATA 'tauri\WixTools314\light.exe'
+          $wix_dir = Join-Path $env:GITHUB_WORKSPACE 'src-tauri\target\release\wix\x64'
+          if (!(Test-Path -LiteralPath $light) -or !(Test-Path -LiteralPath $wix_dir)) {
+            Write-Host 'WiX diagnostic inputs are unavailable.'
+            exit 0
+          }
+          $wixobjs = @(Get-ChildItem -LiteralPath $wix_dir -Filter '*.wixobj' -File)
+          $locale = Join-Path $wix_dir 'locale.wxl'
+          $output = Join-Path $env:RUNNER_TEMP 'disksage-wix-diagnostic.msi'
+          $arguments = @(
+            '-ext', 'WixUIExtension',
+            '-ext', 'WixUtilExtension',
+            '-o', $output,
+            '-cultures:en-us',
+            '-loc', $locale
+          ) + @($wixobjs.FullName) + @('-v')
+          & $light @arguments
+          Write-Host "WiX diagnostic exit code: $LASTEXITCODE"
+          exit 0
+
       - name: Build operational CLIs
         run: >-
           cargo build --manifest-path src-tauri/Cargo.toml --release --features cloud-cli
