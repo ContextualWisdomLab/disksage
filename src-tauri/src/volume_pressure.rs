@@ -6,6 +6,10 @@ use std::path::Path;
 
 pub const LOCAL_VOLUME_SNAPSHOT_SCHEMA_VERSION: u32 = 1;
 pub const LOCAL_VOLUME_COMPARISON_SCHEMA_VERSION: u32 = 1;
+/// Keep enough local space for File Provider staging and filesystem metadata while copying one
+/// candidate. This is separate from remote cloud capacity and is checked again at the mutation
+/// boundary.
+pub const LOCAL_COPY_RESERVE_BYTES: u64 = 1024 * 1024 * 1024;
 
 const LIMITATIONS: [&str; 3] = [
     "shared-filesystem-concurrency-unattributed",
@@ -95,6 +99,12 @@ pub fn snapshot_volume(path: &Path, observed_at_ms: u64) -> Result<LocalVolumeSn
         stats.allocation_granularity(),
         observed_at_ms,
     )
+}
+
+pub fn has_copy_headroom(available_bytes: u64, candidate_bytes: u64) -> bool {
+    candidate_bytes
+        .checked_add(LOCAL_COPY_RESERVE_BYTES)
+        .is_some_and(|required| available_bytes >= required)
 }
 
 pub fn validate_snapshot(snapshot: &LocalVolumeSnapshot) -> Result<(), String> {
@@ -374,6 +384,13 @@ mod tests {
             snapshot(1_000, 400, 201, 1).pressure,
             LocalVolumePressure::Normal
         );
+    }
+
+    #[test]
+    fn copy_headroom_requires_candidate_and_reserve_without_overflow() {
+        assert!(has_copy_headroom(LOCAL_COPY_RESERVE_BYTES + 10, 10));
+        assert!(!has_copy_headroom(LOCAL_COPY_RESERVE_BYTES + 9, 10));
+        assert!(!has_copy_headroom(u64::MAX, u64::MAX));
     }
 
     #[test]

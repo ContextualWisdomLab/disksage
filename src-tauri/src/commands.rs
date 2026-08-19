@@ -1400,6 +1400,19 @@ fn require_capacity_for_copy(
 }
 
 #[cfg(not(coverage))]
+fn require_local_copy_headroom(candidate: &cloud::CloudCandidate) -> Result<(), String> {
+    let snapshot = crate::volume_pressure::snapshot_volume(
+        Path::new(&candidate.src),
+        cloud::system_now_ms(),
+    )?;
+    if crate::volume_pressure::has_copy_headroom(snapshot.available_bytes, candidate.bytes) {
+        Ok(())
+    } else {
+        Err("local-volume-headroom-insufficient".into())
+    }
+}
+
+#[cfg(not(coverage))]
 #[tauri::command(async)]
 pub async fn plan_cloud_archive(
     root: String,
@@ -1574,6 +1587,10 @@ fn create_cloud_candidate_receipt(
         approval_rationale.trim(),
         exact_confirmation_phrase,
     )?;
+    // Native File Provider copies can materialize placeholders and stage more than the source
+    // bytes. Re-check local headroom immediately before any mutation; provider API uploads use a
+    // separate path and do not create a destination staging file here.
+    require_local_copy_headroom(candidate)?;
     if !adopt_existing {
         let runtime = provider_client_runtime::require_provider_client_runtime(
             selected.provider,
