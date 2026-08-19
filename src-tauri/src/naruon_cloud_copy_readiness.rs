@@ -625,6 +625,7 @@ fn validate_provider_global_sync_input(
     };
     if report.schema_version != provider_global_sync::PROVIDER_GLOBAL_SYNC_SCHEMA_VERSION
         || report.provider != provider
+        || report.evidence_kind != "fileproviderctl-global-dump"
         || !report.evidence_complete
         || report
             .blockers
