@@ -253,11 +253,15 @@ fn provider_capacity_and_icloud_binding_drift_fail_closed() {
     );
 
     let mut value = baseline;
-    value
+    let generated_at_ms = value.generated_at_ms;
+    let admission = value
         .icloud_new_copy_admission
         .as_mut()
-        .expect("iCloud admission must exist")
-        .observed_at_ms = value.generated_at_ms.saturating_add(1);
+        .expect("iCloud admission must exist");
+    admission.observed_at_ms = generated_at_ms.saturating_add(1);
+    admission.newest_item_error_age_ms = admission
+        .newest_item_error_timestamp_ms
+        .and_then(|timestamp| admission.observed_at_ms.checked_sub(timestamp));
     assert_eq!(
         validate_naruon_cloud_copy_readiness(&value).unwrap_err(),
         "naruon-copy-readiness-icloud-binding-invalid"
@@ -419,6 +423,9 @@ fn aggregate_binding_state_and_fingerprint_drift_fail_closed() {
     one_candidate_shape(&mut value);
     value.planner_unblocked = CountBytes { count: 1, bytes: 1 };
     value.potentially_reclaimable_bytes = 1;
+    let capacity_snapshot = value.capacity.snapshot.clone();
+    let capacity_reserve_bytes = value.capacity.reserve_bytes;
+    value.capacity = assess_capacity(capacity_snapshot, 1, 1, capacity_reserve_bytes);
     value.requires_human_review = CountBytes { count: 1, bytes: 1 };
     value.ready_without_new_review = CountBytes { count: 1, bytes: 1 };
     value
