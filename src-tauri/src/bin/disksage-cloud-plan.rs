@@ -8,15 +8,15 @@
 mod implementation {
     include!("disksage-cloud-plan-implementation.rs.inc");
 
-    pub(super) mod entry {
+    pub(crate) mod entry {
         use std::path::Path;
 
-        pub(super) fn help_text() -> String {
+        pub(crate) fn help_text() -> String {
             super::parse_args(&["--help".to_string()], Path::new("/"))
                 .expect_err("the implementation parser must expose the stable help synopsis")
         }
 
-        pub(super) fn run() -> Result<(), String> {
+        pub(crate) fn run() -> Result<(), String> {
             super::run()
         }
     }
