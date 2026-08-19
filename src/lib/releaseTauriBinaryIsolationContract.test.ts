@@ -47,4 +47,17 @@ describe('release Tauri binary isolation', () => {
     expect(workflow).toContain("throw 'VBScript engine is unavailable on this runner.'");
     expect(workflow.indexOf(registrationStep)).toBeLessThan(workflow.indexOf(tauriBuildStep));
   });
+
+  it('never restores a configured Cargo target directory into a release build', () => {
+    const workflow = readRepositoryFile('.github/workflows/release.yml');
+    const rustCacheStep = 'uses: Swatinem/rust-cache@';
+    const tauriBuildStep = 'Tauri build (with embedded LLM)';
+    const cacheStart = workflow.indexOf(rustCacheStep);
+    const buildStart = workflow.indexOf(tauriBuildStep);
+
+    expect(cacheStart).toBeGreaterThanOrEqual(0);
+    expect(buildStart).toBeGreaterThan(cacheStart);
+    const releaseCacheBlock = workflow.slice(cacheStart, buildStart);
+    expect(releaseCacheBlock).toContain('cache-targets: false');
+  });
 });
