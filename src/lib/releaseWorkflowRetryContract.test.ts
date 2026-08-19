@@ -27,6 +27,12 @@ describe('release workflow retry contract', () => {
     ).toBe(2);
   });
 
+  it('pins the Windows installer build to the stable VS2022 runner', () => {
+    const workflow = readRepositoryFile('.github/workflows/release.yml');
+    expect(workflow).toContain('- os: windows-2022');
+    expect(workflow).not.toContain('- os: windows-latest');
+  });
+
   it('documents retry-safe concurrency in authoritative evidence', () => {
     const doctoring = readRepositoryFile('docs/doctoring/release-artifact-provenance.md');
     const changelog = readRepositoryFile('CHANGELOG.md');
