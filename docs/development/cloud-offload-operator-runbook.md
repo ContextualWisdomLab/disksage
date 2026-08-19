@@ -4,9 +4,12 @@ DiskSage plans cloud copies from embedded metadata first, then filename date, fi
 time, and modification time. Filename tokens such as `2026-04-28` or `251210` are secondary
 evidence and never establish production time by themselves.
 
-Ontology-based local organization uses the same precedence. Its preview records a path-free
-lineage fingerprint and source size/mtime snapshot; execution rechecks both immediately before a
-move and skips File Provider `dataless` sources.
+Ontology-based local organization uses the same precedence. Its preview performs a complete
+bounded scan (10,000 entries or 10 seconds), records a path-free lineage fingerprint and source
+size/mtime snapshot; execution rechecks both immediately before a move and skips File Provider
+`dataless` sources. When the local model is enabled, its class prompt receives the same bounded
+production-time evidence; metadata probing is capped at 32 files per planning pass. A partial scan
+is rejected rather than producing a partial move plan.
 
 The runtime sequence is:
 

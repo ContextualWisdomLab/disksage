@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::io::Read;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
 pub struct FileEntry {
@@ -133,9 +134,59 @@ pub fn collect_files(root: &Path) -> Vec<FileEntry> {
         .collect()
 }
 
+/// Collect files for an organizing plan without allowing an unbounded walk. A partial
+/// organization plan is unsafe, so either the complete bounded walk succeeds or the caller gets
+/// a stable blocker.
+pub fn collect_files_bounded(
+    root: &Path,
+    max_entries: usize,
+    max_duration: Duration,
+) -> Result<Vec<FileEntry>, String> {
+    let metadata = std::fs::symlink_metadata(root)
+        .map_err(|_| "organize-root-unavailable".to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("organize-root-not-directory".into());
+    }
+    if max_entries == 0 || max_duration.is_zero() {
+        return Err("organize-scan-bound-invalid".into());
+    }
+    let started = Instant::now();
+    let mut seen = 0usize;
+    let walker = jwalk::WalkDir::new(root)
+        .follow_links(false)
+        .skip_hidden(false)
+        .process_read_dir(|_d, _p, _s, children| {
+            children.retain(|r| r.as_ref().map(crate::scanner::keep_entry).unwrap_or(true));
+        });
+    let mut files = Vec::new();
+    for entry in walker {
+        if started.elapsed() >= max_duration {
+            return Err("organize-scan-timeout".into());
+        }
+        if seen >= max_entries {
+            return Err("organize-scan-entry-limit".into());
+        }
+        seen += 1;
+        let Ok(entry) = entry else { continue };
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let Some(metadata) = entry.metadata().ok() else {
+            continue;
+        };
+        files.push(FileEntry {
+            path: entry.path(),
+            size: metadata.len(),
+            mtime_ms: mtime_millis(&metadata),
+        });
+    }
+    Ok(files)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
     use std::path::PathBuf;
     use std::io::Write;
 
@@ -324,6 +375,22 @@ mod tests {
         write_file(tmp.path(), "x.bin", b"data");
         let files = collect_files(tmp.path());
         assert!(files.iter().any(|f| f.mtime_ms > 0), "mtime_ms filled for a real file");
+    }
+
+    #[test]
+    fn bounded_collection_rejects_partial_walks() {
+        let d = tempfile::tempdir().unwrap();
+        for i in 0..3 {
+            std::fs::write(d.path().join(format!("{i}.txt")), b"x").unwrap();
+        }
+        assert_eq!(
+            collect_files_bounded(d.path(), 2, Duration::from_secs(1)).unwrap_err(),
+            "organize-scan-entry-limit"
+        );
+        assert_eq!(
+            collect_files_bounded(d.path(), 10, Duration::ZERO).unwrap_err(),
+            "organize-scan-bound-invalid"
+        );
     }
 
     #[cfg(unix)]

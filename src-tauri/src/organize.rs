@@ -5,7 +5,7 @@ use crate::inventory::classify;
 use crate::ontology::Ontology;
 
 // ponytail: cap metadata probes per organize request; raise only with measured bounded latency.
-const MAX_LINEAGE_PROBES: usize = 32;
+pub(crate) const MAX_LINEAGE_PROBES: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 pub struct LineageMetadata {

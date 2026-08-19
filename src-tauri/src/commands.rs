@@ -2584,7 +2584,7 @@ pub fn plan_organize(
 ) -> Result<Vec<organize::MovePlan>, String> {
     let onto = load_ontology_from(&bundled_ontology_ttl(&app)?)?;
     let rules = crate::userrules::parse_rules(&user_rules_json(&app))?;
-    let files = dupes::collect_files(Path::new(&root));
+    let files = dupes::collect_files_bounded(Path::new(&root), 10_000, Duration::from_secs(10))?;
     let home = resolve_home(&app)?;
     #[cfg(feature = "llm-engine")]
     {
@@ -2598,8 +2598,17 @@ pub fn plan_organize(
                 }
             }
             if let Some(engine) = guard.as_ref() {
+                let lineage_probe_count = std::cell::Cell::new(0usize);
                 let pick = |p: &Path, cands: &[&str]| {
-                    let meta = file_meta_at(p, 0, 0);
+                    let mut meta = file_meta_at(p, 0, 0);
+                    if lineage_probe_count.get() < organize::MAX_LINEAGE_PROBES {
+                        lineage_probe_count.set(lineage_probe_count.get() + 1);
+                        if let Some(lineage) = organize::lineage_metadata_for_path(p) {
+                            meta.production_time_ms = lineage.production_time_ms;
+                            meta.production_time_source = lineage.production_time_source;
+                            meta.production_time_confidence = lineage.production_time_confidence;
+                        }
+                    }
                     crate::llm::pick_class(engine, &meta, cands)
                 };
                 return Ok(organize::plan_moves_with_metadata(
@@ -2683,6 +2692,9 @@ pub fn file_meta_at(path: &Path, size: u64, mtime_days: u64) -> crate::llm::File
         size,
         mtime_days,
         parent,
+        production_time_ms: None,
+        production_time_source: None,
+        production_time_confidence: None,
     }
 }
 

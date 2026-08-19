@@ -86,4 +86,5 @@ clear evidence.
 - Ontology-based local organization uses the same lineage precedence as cloud planning (embedded
   metadata, explicit filename date, filesystem creation time, then modification time). Its move
   plan carries a path-free lineage fingerprint plus the source size/mtime snapshot and is rejected
-  if the source changes; File Provider dataless sources are not moved.
+  if the source changes; File Provider dataless sources are not moved. The organization walk is
+  bounded at 10,000 entries or 10 seconds and rejects partial results.
