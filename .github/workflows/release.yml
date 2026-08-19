@@ -43,7 +43,7 @@ jobs:
             cloud_cli_asset: src-tauri/target/release/disksage-cloud-plan-linux-x86_64
             duplicate_cli_source: src-tauri/target/release/disksage-duplicate-audit
             duplicate_cli_asset: src-tauri/target/release/disksage-duplicate-audit-linux-x86_64
-          - os: windows-latest
+          - os: windows-2022
             bundles: |
               src-tauri/target/release/bundle/msi/*.msi
               src-tauri/target/release/bundle/nsis/*.exe
