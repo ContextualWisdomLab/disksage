@@ -34,4 +34,17 @@ describe('release Tauri binary isolation', () => {
     );
     expect(workflow).toContain('--bin disksage-cloud-plan --bin disksage-duplicate-audit');
   });
+
+  it('registers the Windows VBScript engine before WiX MSI packaging', () => {
+    const workflow = readRepositoryFile('.github/workflows/release.yml');
+    const registrationStep = 'Enable Windows Script Host for WiX MSI';
+    const tauriBuildStep = 'Tauri build (with embedded LLM)';
+
+    expect(workflow).toContain(registrationStep);
+    expect(workflow).toContain("Join-Path $env:windir 'System32\\vbscript.dll'");
+    expect(workflow).toContain("Join-Path $env:windir 'SysWOW64\\vbscript.dll'");
+    expect(workflow).toContain("Start-Process -FilePath $regsvr32 -ArgumentList @('/s', $engine) -Wait -PassThru");
+    expect(workflow).toContain("throw 'VBScript engine is unavailable on this runner.'");
+    expect(workflow.indexOf(registrationStep)).toBeLessThan(workflow.indexOf(tauriBuildStep));
+  });
 });
