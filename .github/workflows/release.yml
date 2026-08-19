@@ -93,7 +93,7 @@ jobs:
           workspaces: src-tauri
 
       - name: Tauri build (with embedded LLM)
-        run: npm run tauri -- build --features llm-engine
+        run: npm run tauri -- build --features llm-engine,volume-cli,cloud-cli,archive-cli
 
       - name: Build operational CLIs
         run: >-
