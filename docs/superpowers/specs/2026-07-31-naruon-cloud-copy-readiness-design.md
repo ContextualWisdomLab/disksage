@@ -30,7 +30,7 @@ a provider, attests synchronization, or authorizes local source eviction.
 - the complete provider-authoritative capacity assessment;
 - for iCloud, waiting and active upload queue counts/bytes plus the remaining
   admission blocker inputs and a bounded native `brctl status` summary
-  (`needs-sync-up` is itself a blocker, even when the private queue is quiet).
+  (`needs-sync-up` and `needs-sync-down` are blockers, even when the private queue is quiet).
 - for OneDrive and Google Drive, bounded provider-wide File Provider transfer
   and indexing state, without retaining provider paths or filenames.
 
