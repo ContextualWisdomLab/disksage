@@ -1,22 +1,22 @@
 //! Process boundary for the DiskSage cloud planner CLI.
 //!
 //! Host arguments are screened before any HOME/provider/filesystem work. The implementation stays
-//! in the sibling include so the process contract can fail closed on non-UTF-8 input and terminate
-//! help successfully even when no user-home environment is available.
+//! behind a generated include so the process contract can fail closed on non-UTF-8 input and
+//! terminate help successfully even when no user-home environment is available.
 
 #[cfg(not(coverage))]
 mod implementation {
-    include!("disksage-cloud-plan-implementation.rs.inc");
+    include!(concat!(env!("OUT_DIR"), "/disksage-cloud-plan-implementation.rs"));
 
-    pub(super) mod entry {
+    pub(crate) mod entry {
         use std::path::Path;
 
-        pub(super) fn help_text() -> String {
+        pub(crate) fn help_text() -> String {
             super::parse_args(&["--help".to_string()], Path::new("/"))
                 .expect_err("the implementation parser must expose the stable help synopsis")
         }
 
-        pub(super) fn run() -> Result<(), String> {
+        pub(crate) fn run() -> Result<(), String> {
             super::run()
         }
     }
