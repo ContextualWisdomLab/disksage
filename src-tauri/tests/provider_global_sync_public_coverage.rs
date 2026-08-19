@@ -172,7 +172,8 @@ fn clear_state_with_a_blocker_remains_blocked_in_notice_and_admission() {
     );
 
     contradictory.notices.push("keep-this-notice".into());
-    attach_new_copy_admission_notice(&mut contradictory.notices, Some(&contradictory.clone()));
+    let report_snapshot = contradictory.clone();
+    attach_new_copy_admission_notice(&mut contradictory.notices, Some(&report_snapshot));
     assert!(contradictory
         .notices
         .contains(&"provider-global-sync-blocked".to_string()));
