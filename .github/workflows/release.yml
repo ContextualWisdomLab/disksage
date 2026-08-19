@@ -97,9 +97,9 @@ jobs:
           }
           foreach ($engine in $engines) {
             $regsvr32 = Join-Path (Split-Path $engine) 'regsvr32.exe'
-            & $regsvr32 /s $engine
-            if ($LASTEXITCODE -ne 0) {
-              throw "VBScript engine registration failed: $engine ($LASTEXITCODE)"
+            $registration = Start-Process -FilePath $regsvr32 -ArgumentList @('/s', $engine) -Wait -PassThru
+            if ($registration.ExitCode -ne 0) {
+              throw "VBScript engine registration failed: $engine ($($registration.ExitCode))"
             }
           }
 
