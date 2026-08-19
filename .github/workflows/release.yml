@@ -88,11 +88,19 @@ jobs:
         if: matrix.os == 'windows-2022'
         shell: pwsh
         run: |
-          $capabilityName = 'VBScript~~~~0.0.1.0'
-          Add-WindowsCapability -Online -Name $capabilityName
-          $installed = Get-WindowsCapability -Online -Name $capabilityName
-          if ($installed.State -ne 'Installed') {
-            throw "VBScript Windows Capability is not installed: $($installed.State)"
+          $engines = @(
+            (Join-Path $env:windir 'System32\vbscript.dll'),
+            (Join-Path $env:windir 'SysWOW64\vbscript.dll')
+          ) | Where-Object { Test-Path $_ }
+          if ($engines.Count -eq 0) {
+            throw 'VBScript engine is unavailable on this runner.'
+          }
+          foreach ($engine in $engines) {
+            $regsvr32 = Join-Path (Split-Path $engine) 'regsvr32.exe'
+            & $regsvr32 /s $engine
+            if ($LASTEXITCODE -ne 0) {
+              throw "VBScript engine registration failed: $engine ($LASTEXITCODE)"
+            }
           }
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
