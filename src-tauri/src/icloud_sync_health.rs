@@ -462,6 +462,23 @@ fn parse_native_status_output(
     }
 }
 
+fn native_status_summary_complete(output: &[u8]) -> bool {
+    let output = String::from_utf8_lossy(output);
+    let container_count = output.lines().any(|line| {
+        let mut parts = line.split_whitespace();
+        parts.next().and_then(|value| value.parse::<u64>().ok()).is_some()
+            && parts.next() == Some("containers")
+            && parts.next() == Some("matching")
+    });
+    let summary = output.lines().any(|line| {
+        line.contains("{client:")
+            && line.contains(" server:")
+            && line.contains(" sync:")
+            && line.contains(" last-sync:")
+    });
+    container_count && summary
+}
+
 #[cfg(target_os = "macos")]
 fn probe_native_status(observed_at_ms: u64) -> IcloudNativeStatusEvidence {
     use std::io::ErrorKind;
@@ -517,6 +534,7 @@ fn probe_native_status(observed_at_ms: u64) -> IcloudNativeStatusEvidence {
     let mut timed_out = false;
     let mut output_truncated = false;
     let mut read_failed = false;
+    let mut bounded_after_summary = false;
     let status = loop {
         match stdout.read(&mut buffer) {
             Ok(0) => {}
@@ -540,6 +558,13 @@ fn probe_native_status(observed_at_ms: u64) -> IcloudNativeStatusEvidence {
                 let _ = child.wait();
                 break None;
             }
+        }
+        if native_status_summary_complete(&output) {
+            bounded_after_summary = true;
+            kill_group();
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
         }
         match child.try_wait() {
             Ok(Some(status)) => {
@@ -597,7 +622,8 @@ fn probe_native_status(observed_at_ms: u64) -> IcloudNativeStatusEvidence {
     parse_native_status_output(
         &output,
         observed_at_ms,
-        !read_failed && status.is_some_and(|status| status.success()),
+        !read_failed
+            && (bounded_after_summary || status.is_some_and(|status| status.success())),
         timed_out,
         output_truncated,
     )
@@ -828,6 +854,13 @@ fn clone_client_database_snapshot(db_dir: &Path) -> Result<ClientDatabaseSnapsho
         }
     }
     Err("icloud-sync-health-snapshot-source-unstable".into())
+}
+
+#[cfg(target_os = "macos")]
+fn bounded_native_status(db_dir: &Path, observed_at_ms: u64) -> Option<IcloudNativeStatusEvidence> {
+    let identity = source_file_identity(&db_dir.join("client.db"), true).ok().flatten()?;
+    (identity.logical_bytes <= MAX_SNAPSHOT_SOURCE_BYTES)
+        .then(|| probe_native_status(observed_at_ms))
 }
 
 fn run_consistent_snapshot_queue_probe(db_dir: &Path) -> Result<(String, bool), String> {
@@ -1138,7 +1171,10 @@ pub fn probe_icloud_sync_health(
         .iter()
         .map(|(role, required)| database_file_evidence(db_dir, role, *required))
         .collect::<Result<Vec<_>, _>>()?;
-    let native_status = probe_native_status(observed_at_ms);
+    #[cfg(target_os = "macos")]
+    let native_status = bounded_native_status(db_dir, observed_at_ms);
+    #[cfg(not(target_os = "macos"))]
+    let native_status = Some(probe_native_status(observed_at_ms));
     match run_consistent_snapshot_queue_probe(db_dir) {
         Ok((output, includes_wal)) => {
             let mut report = build_report(
@@ -1148,7 +1184,7 @@ pub fn probe_icloud_sync_health(
                 true,
                 includes_wal,
             )?;
-            report.native_status = Some(native_status);
+            report.native_status = native_status;
             attach_native_status_admission(&mut report);
             Ok(report)
         }
@@ -1165,7 +1201,7 @@ pub fn probe_icloud_sync_health(
             report
                 .notices
                 .push("consistent-copy-on-write-snapshot-unavailable".into());
-            report.native_status = Some(native_status);
+            report.native_status = native_status;
             attach_native_status_admission(&mut report);
             Ok(report)
         }
@@ -1239,6 +1275,13 @@ mod tests {
         assert!(!serde_json::to_string(&evidence)
             .unwrap()
             .contains("requestID"));
+    }
+
+    #[test]
+    fn stops_native_probe_after_summary_before_detail_stream() {
+        let summary = b"1 containers matching '*'\\nforeground {client:needs-sync server:full-sync sync:needs-sync-up last-sync:now}\\n";
+        assert!(native_status_summary_complete(summary));
+        assert!(!native_status_summary_complete(b"1 containers matching '*'\\n"));
     }
 
     #[test]
@@ -1417,6 +1460,17 @@ mod tests {
             Err(error) => error,
         };
         assert_eq!(error, "icloud-sync-health-snapshot-source-too-large");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn oversized_cloud_docs_database_skips_expensive_native_status_probe() {
+        let source = tempfile::tempdir().unwrap();
+        fs::File::create(source.path().join("client.db"))
+            .unwrap()
+            .set_len(MAX_SNAPSHOT_SOURCE_BYTES + 1)
+            .unwrap();
+        assert!(bounded_native_status(source.path(), 1).is_none());
     }
 
     #[cfg(target_os = "macos")]
