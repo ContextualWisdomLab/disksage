@@ -50,6 +50,11 @@ returns an incomplete scan with `source-scan-managed-file-provider-root` and pro
 candidate. This prevents DiskSage diagnostics from competing with, or materializing, provider
 state.
 
+DiskSage repositories, Git worktrees, and temporary evidence are operated from a local volume
+outside managed File Provider roots. A provider-domain marker on the parent or a dataless `.git`
+entry is treated as provider materialization evidence, not as proof of a stale worktree; the
+worktree audit stops and must be relocated before it can continue.
+
 Provider-wide File Provider dumps are bounded by both output size and wall-clock time. If a timed-out
 dump has already emitted safe aggregate markers, DiskSage may retain only those markers as
 incomplete evidence; it records `provider-global-sync-probe-timeout`, marks the provider state
@@ -63,6 +68,8 @@ clear evidence.
 - Filename dates can place a candidate in a provisional archive period, but never authorize automatic transfer or eviction.
 - A personal native-client copy may proceed without OAuth quota evidence only while the matching desktop client is observed running; provider sync attestation still gates eviction.
 - Managed File Provider roots are never recursively scanned; the explicit incomplete-scan blocker is non-overridable.
+- Worktree audits stop on provider-managed parents or dataless Git metadata; stale-worktree removal
+  is never inferred from a materialization wait.
 - A timed-out provider-wide dump may explain active transfer or reconciliation markers, but its incomplete evidence never admits a new copy.
 - A `source-not-present`, `source-content-not-local`, or unsafe-source observation blocks the Goal
   even when provider sync is complete; DiskSage never infers that an externally removed or
