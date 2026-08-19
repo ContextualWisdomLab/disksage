@@ -87,7 +87,19 @@ jobs:
       - name: Enable Windows Script Host for WiX MSI
         if: matrix.os == 'windows-2022'
         shell: pwsh
-        run: Enable-WindowsOptionalFeature -Online -FeatureName VBSCRIPT -All -NoRestart
+        run: |
+          $capability = Get-WindowsCapability -Online -Name 'VBScript*' |
+            Select-Object -First 1
+          if ($null -eq $capability) {
+            throw 'VBScript Windows Capability is unavailable on this runner.'
+          }
+          if ($capability.State -ne 'Installed') {
+            Add-WindowsCapability -Online -Name $capability.Name
+          }
+          $installed = Get-WindowsCapability -Online -Name $capability.Name
+          if ($installed.State -ne 'Installed') {
+            throw "VBScript Windows Capability is not installed: $($installed.State)"
+          }
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
