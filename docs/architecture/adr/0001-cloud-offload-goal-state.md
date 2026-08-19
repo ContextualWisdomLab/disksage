@@ -29,10 +29,18 @@ preserved while the replaceable Goal is updated to `blocked` and its explicit ev
 revoked; a terminal `source-evicted` projection is not rewritten merely because its original path
 is now absent.
 
+Production-time lineage is recorded with explicit precedence: embedded file metadata first, then an
+unambiguous filename date token, then filesystem creation time, and finally filesystem modification
+time. Tokens such as `2026-04-28` or `251210` are stored as `filename:path-token` evidence with
+low confidence and force review when they are selected; they are planning evidence, not proof of
+cloud sync, ownership, or permission to evict the source. An embedded/filename disagreement is
+also retained as a review blocker rather than silently resolved.
+
 ## Consequences
 
 - `is_local_current=true` and `is_uploaded=false` produces `pending-upload` and no eviction permit.
 - Goal completion gates remain false until their corresponding evidence exists.
+- Filename dates can place a candidate in a provisional archive period, but never authorize automatic transfer or eviction.
 - A `source-not-present`, `source-content-not-local`, or unsafe-source observation blocks the Goal
   even when provider sync is complete; DiskSage never infers that an externally removed or
   File-Provider-dataless source was safely evicted.
