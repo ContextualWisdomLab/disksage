@@ -657,12 +657,17 @@ fn validate_provider_global_sync_input(
     };
     if report.schema_version != provider_global_sync::PROVIDER_GLOBAL_SYNC_SCHEMA_VERSION
         || report.provider != provider
+        || report.evidence_kind != "fileproviderctl-global-dump"
         || !report.evidence_complete
         || report
             .blockers
             .iter()
             .any(|blocker| !is_reason_code(blocker))
         || (report.state == ProviderGlobalSyncState::Clear && !report.blockers.is_empty())
+        || (report.state == ProviderGlobalSyncState::Clear
+            && (report.upload_progress_present
+                || report.download_progress_present
+                || report.pending_indexable_count.is_some_and(|count| count > 0)))
         || (report.state != ProviderGlobalSyncState::Clear && report.blockers.is_empty())
     {
         return Err("naruon-copy-readiness-provider-global-sync-invalid".into());
@@ -1105,7 +1110,7 @@ mod tests {
 
     fn report(provider: CloudProvider) -> CloudPlanReport {
         let scope = if provider == CloudProvider::GoogleDrive {
-            CloudAccountScope::Unknown
+            crate::cloud::CloudAccountScope::Unknown
         } else {
             CloudAccountScope::Personal
         };
