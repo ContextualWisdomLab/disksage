@@ -443,7 +443,7 @@ fn aggregate_binding_state_and_fingerprint_drift_fail_closed() {
         .insert("planner-blocked".into(), CountBytes { count: 1, bytes: 1 });
     assert_eq!(
         validate_naruon_cloud_copy_readiness(&value).unwrap_err(),
-        "naruon-copy-readiness-runtime-binding-invalid"
+        "naruon-copy-readiness-capacity-binding-invalid"
     );
 
     let mut value = baseline.clone();
