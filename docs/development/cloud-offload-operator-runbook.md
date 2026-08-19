@@ -45,6 +45,11 @@ The runtime sequence is:
    `system-managed-photos-library-data` blockers; individual SQLite members are never copied.
 7. Only a fresh attestation plus the separate receipt-bound human approval may move the source to
    the OS Trash. The destination and Trash are never emptied by DiskSage.
+8. Keep DiskSage repositories, Git worktrees, and temporary evidence outside macOS-managed
+   File Provider roots (for example `~/Documents` when it carries a provider-domain marker).
+   A dataless `.git` file or a Git operation that waits on materialization is provider evidence,
+   not a stale-worktree deletion signal; stop the audit and relocate the worktree to a local
+   volume such as `/private/tmp` before continuing.
 
 The Goal and ADR files are replaceable projections. Agents or operators must compare them with the
 immutable receipt/evidence record before any mutation. Naruon receives lineage/provider evidence,
