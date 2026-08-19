@@ -611,6 +611,7 @@
       "icloud-upload-queue-state-unclassified": "분류되지 않은 iCloud 대기 상태가 있음",
       "icloud-local-sync-item-error-present": "iCloud 로컬 동기화 오류가 있음",
       "icloud-native-sync-up-pending": "macOS iCloud sync-up이 아직 끝나지 않음",
+      "icloud-native-sync-down-pending": "macOS iCloud sync-down이 아직 끝나지 않음",
       "icloud-native-status-evidence-incomplete": "macOS iCloud 상태 증거가 불완전함",
       "icloud-item-error-octagon-not-signed-in": "iCloud 계정 인증이 필요함",
       "icloud-item-error-older-than-24h": "iCloud 동기화 오류가 24시간 이상 지속됨",

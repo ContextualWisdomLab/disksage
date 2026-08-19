@@ -28,6 +28,8 @@ The runtime sequence is:
    the same action; the returned receipt/object ID is the hand-off for a later attestation.
 4. `is_local_current=true` with `is_uploaded=false` is `pending-upload`; the source remains and
    no eviction permit is issued.
+   iCloud native `needs-sync-up` and `needs-sync-down` states are also explicit admission blockers;
+   the latter means the provider still has remote changes to materialize.
    Third-party File Provider dumps also block new copies while upload/download progress,
    non-zero reconciliation backlogs (`provider-global-sync-reconciliation-pending`), provider
    disconnection, or path errors are present; the stable blocker codes are shown in the plan and

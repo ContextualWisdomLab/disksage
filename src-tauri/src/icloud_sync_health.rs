@@ -164,6 +164,14 @@ pub fn native_sync_up_pending(evidence: &IcloudNativeStatusEvidence) -> bool {
             .is_some_and(|state| state.split('|').any(|value| value == "needs-sync-up"))
 }
 
+pub fn native_sync_down_pending(evidence: &IcloudNativeStatusEvidence) -> bool {
+    evidence.status_observed
+        && evidence
+            .sync_state
+            .as_deref()
+            .is_some_and(|state| state.split('|').any(|value| value == "needs-sync-down"))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IcloudSyncHealthReport {
     pub schema_version: u32,
@@ -1092,6 +1100,24 @@ fn attach_native_status_admission(report: &mut IcloudSyncHealthReport) {
             .blockers
             .insert(0, "icloud-native-sync-up-pending".into());
     }
+    if report
+        .native_status
+        .as_ref()
+        .is_some_and(native_sync_down_pending)
+        && !report
+            .new_copy_admission_blockers
+            .iter()
+            .any(|blocker| blocker == "icloud-native-sync-down-pending")
+    {
+        report.sync_backlog_present = true;
+        report
+            .new_copy_admission_blockers
+            .push("icloud-native-sync-down-pending".into());
+        report.new_copy_admission_state = "blocked".into();
+        report
+            .blockers
+            .insert(0, "icloud-native-sync-down-pending".into());
+    }
 }
 
 /// Require a quiet local iCloud upload queue before adding another local copy.
@@ -1275,6 +1301,20 @@ mod tests {
         assert!(!serde_json::to_string(&evidence)
             .unwrap()
             .contains("requestID"));
+    }
+
+    #[test]
+    fn native_sync_down_pending_is_detected_from_bounded_summary() {
+        let evidence = parse_native_status_output(
+            "1 containers matching '*'\n\
+             foreground {client:needs-sync server:full-sync sync:needs-sync-down last-sync:now}\n",
+            42,
+            false,
+            true,
+            false,
+        );
+        assert!(native_sync_down_pending(&evidence));
+        assert!(!native_sync_up_pending(&evidence));
     }
 
     #[test]
