@@ -83,7 +83,7 @@
   (last activity roughly 2h40m old) in the same Google Drive domain. The provider parser now emits
   `provider-global-sync-item-not-found` and the UI labels it as a missing-provider-item error;
   queue-count changes do not reset the same-blocker duration.
-- The current implementation head for this loop is `9b1c8ad`; generated CodeGraph indexes are now
+- The current implementation head for this loop is `59b53ae`; generated CodeGraph indexes are now
   included in the bounded, identity-checked development-artifact cleanup, and provider evidence
   directories now reject shared-writable authority while records are private from creation; the
   authority regression fixture also binds the current provider `sync_state` contract.
@@ -99,7 +99,7 @@
   privacy contract passes locally (Vitest 2/2; svelte-check 0 errors/0 warnings). Its hosted checks
   are running and a fresh approval is still required. PR #189 is its rebased base PR at `f748769f`;
   both branches remain protected from bypass merges. PR #235 completed its
-  protected squash merge at `5f7c7ae`. PR #213 remains open at current head `9b1c8ad`; hosted
+  protected squash merge at `5f7c7ae`. PR #213 remains open at current head `59b53ae`; hosted
   release, test, security, and review checks are authoritative, and no source eviction was claimed.
 - Independent CLI/UI/dependency PRs #212, #214, #215, #217, #218, #220, #222, #230, #232,
   #234, and #238 were rebased to current `main` `5f7c7ae`; their fresh checks are queued or in
