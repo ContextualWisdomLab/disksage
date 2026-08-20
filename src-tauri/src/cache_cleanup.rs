@@ -6,8 +6,11 @@ fn sort_targets(targets: &mut Vec<rules::CacheTarget>) {
     targets.sort_by(|left, right| left.path.cmp(&right.path));
 }
 
-/// macOS roots observed during the current low-disk incident and safe to regenerate.
-pub const AUTO_REGENERABLE_CACHE_IDS: [&str; 3] = ["pnpm-cache", "adobe-cache", "edge-cache"];
+/// Local caches observed during the current low-disk incident and safe to regenerate.
+/// npm's content-addressed cache is rebuilt by npm on demand; it is included only after the same
+/// per-child identity and active-use checks as the other caches.
+pub const AUTO_REGENERABLE_CACHE_IDS: [&str; 4] =
+    ["npm-cache", "pnpm-cache", "adobe-cache", "edge-cache"];
 
 fn active_use_blocker(
     evidence: &crate::git_worktree::GitWorktreeActiveUseEvidence,

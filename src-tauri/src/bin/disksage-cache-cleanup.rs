@@ -1,7 +1,7 @@
-//! Headless execution entry point for the narrow, observed macOS cache policy.
+//! Headless execution entry point for the narrow, observed cache policy.
 //!
 //! Without `--execute` this command is read-only. With it, the library path moves only inactive,
-//! identity-bound children of the pnpm, Adobe, and Edge cache roots to OS Trash.
+//! identity-bound children of the npm, pnpm, Adobe, and Edge cache roots to OS Trash.
 
 use disksage_lib::cache_cleanup::clean_regenerable_caches_headless;
 use std::ffi::OsString;
@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 const USAGE: &str = "Usage: disksage-cache-cleanup [--execute] [--journal-path PATH]\n\
 Without --execute it reports the command is a no-op. With --execute it moves only observed,\n\
-inactive regenerable macOS cache children to OS Trash.";
+inactive regenerable cache children to OS Trash.";
 
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
