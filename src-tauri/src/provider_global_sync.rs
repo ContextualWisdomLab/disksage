@@ -270,6 +270,8 @@ fn run_dump(provider: CloudProvider) -> Result<String, String> {
     let mut command = Command::new("/usr/bin/fileproviderctl");
     command
         .args(["dump", identifier, "-l"])
+        .env("LANG", "C")
+        .env("LC_ALL", "C")
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     // File Provider helpers can outlive the command leader and retain stdout. Keep the
