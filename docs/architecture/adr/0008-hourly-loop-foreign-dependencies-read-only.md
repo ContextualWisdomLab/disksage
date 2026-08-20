@@ -60,5 +60,5 @@ OAuth, Copilot, or local mutation fallback.
 ## Related decisions
 
 - [ADR-0005](0005-hourly-agent-loop-is-advisory.md) — original advisory loop
-  contract.
+  contract, superseded by this decision.
 - [ADR-0007](0007-pre-copy-evidence-cohort.md) — fail-closed evidence cohort.
