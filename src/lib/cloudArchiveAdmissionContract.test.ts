@@ -43,4 +43,12 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("공급자 전역 상태 진단과 고정된 데스크톱 클라이언트 복구만 허용");
     expect(source).toContain("!selectedRootDetails()?.readable");
   });
+
+  it("defaults provider OAuth consent to read-only until write access is explicitly selected", () => {
+    const source = readFileSync(resolve(repositoryRoot, "src/lib/CloudArchive.svelte"), "utf8");
+    expect(source).toContain("let oauthWriteAccess = $state(false);");
+    expect(source).not.toContain("let oauthWriteAccess = $state(true);");
+    expect(source).toContain("bind:checked={oauthWriteAccess}");
+    expect(source).toContain("oauthWriteAccess,");
+  });
 });
