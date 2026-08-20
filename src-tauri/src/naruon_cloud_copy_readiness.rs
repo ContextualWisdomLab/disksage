@@ -11,7 +11,7 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-use crate::cloud::{CloudPlanOptions, CloudPlanReport, CloudProvider};
+use crate::cloud::{CloudPlanOptions, CloudPlanReport, CloudProvider, PreCopyEvidenceCohort};
 use crate::cloud_transfer;
 use crate::icloud_sync_health::{
     native_sync_down_pending, native_sync_up_pending, validate_native_status_evidence,
@@ -23,7 +23,7 @@ use crate::provider_capacity::{self, CapacityEvidenceKind, CloudCapacityAssessme
 use crate::provider_client_runtime::{self, ProviderClientRuntimeSnapshot};
 use crate::provider_global_sync::{self, ProviderGlobalSyncReport, ProviderGlobalSyncState};
 
-pub const NARUON_CLOUD_COPY_READINESS_SCHEMA_VERSION: u32 = 6;
+pub const NARUON_CLOUD_COPY_READINESS_SCHEMA_VERSION: u32 = 7;
 pub const NARUON_CLOUD_COPY_READINESS_MAX_INPUT_BYTES: u64 = 1024 * 1024;
 const NARUON_CLOUD_COPY_READINESS_SCHEMA_KIND: &str = "disksage.naruon.cloud-copy-readiness";
 const FINGERPRINT_CANONICALIZATION: &str = "lexicographic-json-object-keys-utf8-no-whitespace";
@@ -49,6 +49,7 @@ const ICLOUD_ADMISSION_BLOCKERS: [&str; 16] = [
     "icloud-file-provider-evidence-unavailable",
     "icloud-new-copy-admission-evidence-unavailable",
 ];
+const PRE_COPY_EVIDENCE_BLOCKER: &str = "pre-copy-evidence-cohort-unavailable";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -128,10 +129,14 @@ pub struct NaruonCloudCopyReadinessEnvelope {
     pub provider_runtime: ProviderClientRuntimeSnapshot,
     pub capacity: CloudCapacityAssessment,
     pub icloud_new_copy_admission: Option<IcloudNewCopyAdmissionSummary>,
+    /// Integrity-checked freshness cohort required before a new native iCloud copy.
+    #[serde(default)]
+    pub pre_copy_evidence: Option<PreCopyEvidenceCohort>,
     pub provider_global_sync: Option<ProviderGlobalSyncReport>,
     pub provider_runtime_prerequisite_met: bool,
     pub remote_capacity_verified: bool,
     pub icloud_new_copy_admission_met: Option<bool>,
+    pub pre_copy_evidence_met: Option<bool>,
     pub human_review_decisions_applied: bool,
     pub metadata_policy: Vec<String>,
     pub filename_dates_are_auxiliary: bool,
@@ -516,6 +521,22 @@ fn add_blocker(
     add_count_bytes(counts.entry(blocker).or_default(), bytes)
 }
 
+fn pre_copy_evidence_is_complete(cohort: Option<&PreCopyEvidenceCohort>) -> bool {
+    let Some(cohort) = cohort else {
+        return false;
+    };
+    if cohort.schema_version != crate::cloud::PRE_COPY_EVIDENCE_COHORT_SCHEMA_VERSION {
+        return false;
+    }
+    let recomputed = crate::cloud::compare_pre_copy_evidence(cohort.observations.clone());
+    recomputed.observed_at_ms == cohort.observed_at_ms
+        && recomputed.complete == cohort.complete
+        && recomputed.blockers == cohort.blockers
+        && recomputed.cohort_fingerprint == cohort.cohort_fingerprint
+        && cohort.complete
+        && cohort.blockers.is_empty()
+}
+
 pub fn export_naruon_cloud_copy_readiness(
     report: &CloudPlanReport,
     runtime: &ProviderClientRuntimeSnapshot,
@@ -546,6 +567,13 @@ pub fn export_naruon_cloud_copy_readiness_with_global_sync(
         capacity.snapshot.evidence_kind != CapacityEvidenceKind::Unavailable;
     let (icloud_new_copy_admission, icloud_new_copy_admission_met) =
         validate_icloud_health(report.cloud_root.provider, icloud_health)?;
+    let pre_copy_evidence_met = if report.cloud_root.provider == CloudProvider::Icloud {
+        Some(pre_copy_evidence_is_complete(
+            report.pre_copy_evidence.as_ref(),
+        ))
+    } else {
+        None
+    };
     let (provider_global_sync, provider_global_sync_blockers) =
         validate_provider_global_sync_input(report.cloud_root.provider, provider_global_sync)?;
 
@@ -597,6 +625,9 @@ pub fn export_naruon_cloud_copy_readiness_with_global_sync(
                 Some(admission) => blockers.extend(admission.blockers.clone()),
                 None => blockers.push("icloud-new-copy-admission-evidence-unavailable".into()),
             }
+            if pre_copy_evidence_met != Some(true) {
+                blockers.push(PRE_COPY_EVIDENCE_BLOCKER.into());
+            }
         } else {
             blockers.extend(provider_global_sync_blockers.iter().cloned());
         }
@@ -634,6 +665,13 @@ pub fn export_naruon_cloud_copy_readiness_with_global_sync(
                     .as_ref()
                     .map(|value| value.observed_at_ms)
                     .unwrap_or_default(),
+            )
+            .max(
+                report
+                    .pre_copy_evidence
+                    .as_ref()
+                    .map(|value| value.observed_at_ms)
+                    .unwrap_or_default(),
             ),
         decision_batch_fingerprint_version: crate::cloud::CLOUD_DECISION_BATCH_FINGERPRINT_VERSION,
         decision_batch_fingerprint: crate::cloud::cloud_decision_batch_fingerprint(report),
@@ -654,10 +692,12 @@ pub fn export_naruon_cloud_copy_readiness_with_global_sync(
         provider_runtime: runtime.clone(),
         capacity,
         icloud_new_copy_admission,
+        pre_copy_evidence: report.pre_copy_evidence.clone(),
         provider_global_sync,
         provider_runtime_prerequisite_met: runtime.copy_prerequisite_met,
         remote_capacity_verified,
         icloud_new_copy_admission_met,
+        pre_copy_evidence_met,
         human_review_decisions_applied: false,
         metadata_policy: vec![
             "embedded-metadata".into(),
@@ -797,6 +837,31 @@ pub fn validate_naruon_cloud_copy_readiness(
         (_, None, None) => {}
         _ => return Err("naruon-copy-readiness-icloud-binding-invalid".into()),
     }
+    match (
+        envelope.provider,
+        envelope.pre_copy_evidence.as_ref(),
+        envelope.pre_copy_evidence_met,
+    ) {
+        (CloudProvider::Icloud, Some(cohort), Some(met)) => {
+            let recomputed = crate::cloud::compare_pre_copy_evidence(cohort.observations.clone());
+            if cohort.schema_version != crate::cloud::PRE_COPY_EVIDENCE_COHORT_SCHEMA_VERSION
+                || recomputed.observed_at_ms != cohort.observed_at_ms
+                || recomputed.complete != cohort.complete
+                || recomputed.blockers != cohort.blockers
+                || recomputed.cohort_fingerprint != cohort.cohort_fingerprint
+                || met != pre_copy_evidence_is_complete(Some(cohort))
+                || envelope.generated_at_ms < cohort.observed_at_ms
+            {
+                return Err("naruon-copy-readiness-pre-copy-evidence-invalid".into());
+            }
+        }
+        (CloudProvider::Icloud, None, Some(false)) => {}
+        (CloudProvider::Icloud, None, _) => {
+            return Err("naruon-copy-readiness-pre-copy-evidence-invalid".into())
+        }
+        (_, None, None) => {}
+        _ => return Err("naruon-copy-readiness-pre-copy-evidence-invalid".into()),
+    }
     for blocker in envelope.candidate_blocker_counts.keys() {
         if !is_reason_code(blocker) {
             return Err("naruon-copy-readiness-blocker-invalid".into());
@@ -895,6 +960,7 @@ pub fn validate_naruon_cloud_copy_readiness(
         if !envelope.provider_runtime_prerequisite_met
             || !envelope.remote_capacity_verified
             || envelope.icloud_new_copy_admission_met == Some(false)
+            || envelope.pre_copy_evidence_met == Some(false)
         {
             return Err("naruon-copy-readiness-ready-gate-invalid".into());
         }
@@ -956,11 +1022,33 @@ pub fn validate_naruon_cloud_copy_readiness(
         {
             return Err("naruon-copy-readiness-icloud-binding-invalid".into());
         }
+        match envelope.pre_copy_evidence_met {
+            Some(false)
+                if envelope
+                    .candidate_blocker_counts
+                    .get(PRE_COPY_EVIDENCE_BLOCKER)
+                    == Some(&expected) => {}
+            Some(true)
+                if envelope
+                    .candidate_blocker_counts
+                    .contains_key(PRE_COPY_EVIDENCE_BLOCKER) =>
+            {
+                return Err("naruon-copy-readiness-pre-copy-evidence-invalid".into())
+            }
+            Some(false) => return Err("naruon-copy-readiness-pre-copy-evidence-invalid".into()),
+            Some(true) => {}
+            None => return Err("naruon-copy-readiness-pre-copy-evidence-invalid".into()),
+        }
     } else if ICLOUD_ADMISSION_BLOCKERS
         .iter()
         .any(|blocker| envelope.candidate_blocker_counts.contains_key(*blocker))
     {
         return Err("naruon-copy-readiness-icloud-binding-invalid".into());
+    } else if envelope
+        .candidate_blocker_counts
+        .contains_key(PRE_COPY_EVIDENCE_BLOCKER)
+    {
+        return Err("naruon-copy-readiness-pre-copy-evidence-invalid".into());
     }
     let expected_provider_global_sync_blockers = validate_provider_global_sync_input(
         envelope.provider,
@@ -1125,7 +1213,7 @@ mod tests {
     use super::*;
     use crate::cloud::{
         ArchiveKind, CloudAccountScope, CloudCandidate, CloudRoot, ExactDuplicateSummary,
-        MetadataEvidence,
+        MetadataEvidence, PreCopyEvidenceObservation,
     };
     use crate::icloud_sync_health::{
         IcloudNativeStatusEvidence, IcloudUploadQueueSummary, ManagedDatabaseFileEvidence,
@@ -1225,9 +1313,32 @@ mod tests {
                 DEFAULT_CAPACITY_RESERVE_BYTES,
             )),
             local_volume: None,
-            pre_copy_evidence: None,
+            pre_copy_evidence: (provider == CloudProvider::Icloud).then(pre_copy_evidence),
             notices: Vec::new(),
         }
+    }
+
+    fn pre_copy_evidence() -> PreCopyEvidenceCohort {
+        crate::cloud::compare_pre_copy_evidence(vec![
+            PreCopyEvidenceObservation {
+                stream: "icloud-sync-health-evidence".into(),
+                observed_at_ms: 30,
+                evidence_complete: true,
+                fingerprint: "a".repeat(64),
+            },
+            PreCopyEvidenceObservation {
+                stream: "provider-client-runtime-evidence".into(),
+                observed_at_ms: 30,
+                evidence_complete: true,
+                fingerprint: "b".repeat(64),
+            },
+            PreCopyEvidenceObservation {
+                stream: "volume-pressure-evidence".into(),
+                observed_at_ms: 30,
+                evidence_complete: true,
+                fingerprint: "c".repeat(64),
+            },
+        ])
     }
 
     fn icloud_health(blocked: bool) -> IcloudSyncHealthReport {
@@ -1591,6 +1702,22 @@ mod tests {
     }
 
     #[test]
+    fn missing_pre_copy_cohort_blocks_naruon_readiness() {
+        let mut report = report(CloudProvider::Icloud);
+        report.pre_copy_evidence = None;
+        let runtime = assess_provider_client_runtime(CloudProvider::Icloud, None, 25);
+        let envelope =
+            export_naruon_cloud_copy_readiness(&report, &runtime, Some(&icloud_health(false)))
+                .unwrap();
+        assert_eq!(envelope.pre_copy_evidence_met, Some(false));
+        assert!(envelope
+            .candidate_blocker_counts
+            .contains_key(PRE_COPY_EVIDENCE_BLOCKER));
+        assert_eq!(envelope.readiness_state, CloudCopyReadinessState::Blocked);
+        assert!(validate_naruon_cloud_copy_readiness(&envelope).is_ok());
+    }
+
+    #[test]
     fn native_sync_down_blocks_new_copy_admission() {
         let report = report(CloudProvider::Icloud);
         let runtime = assess_provider_client_runtime(CloudProvider::Icloud, None, 25);
@@ -1889,7 +2016,7 @@ mod tests {
         assert_eq!(envelope.readiness_fingerprint_sha256, expected);
         assert_eq!(
             envelope.readiness_fingerprint_sha256,
-            "b358ff5627ac2ab9b263f972a96e6dba319c46f382a13360bbbe9336e97efc42"
+            "958f7a8e2e595f119bfd38f0ee231436217e3cb97c4d2745fdcfb5e29b5a299c"
         );
     }
 }

@@ -25,6 +25,10 @@ attestation. It never grants cloud-write, source-eviction, or remote-capacity
 authority. Provider-native per-item evidence and the existing human approval
 remain mandatory.
 
+The path-free Naruon readiness envelope carries this cohort and an explicit
+`pre_copy_evidence_met` binding (schema version 7). A Naruon consumer therefore
+cannot treat a quiet provider queue or a missing cohort as copy readiness.
+
 ## Consequences
 
 ### Positive

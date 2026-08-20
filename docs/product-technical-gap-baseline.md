@@ -49,6 +49,20 @@
 - Dynamic Goal/ADR projections are replaceable views over receipts; they cannot authorize mutation.
 - Rust remains the computation and security boundary. Noema, contextual-orchestrator, semantic-data-portal, pg-erd-cloud, fast-mlsirm, or Gemma are added only when a measured gap requires them and their boundary is documented first.
 
+## 2026-08-21 loop evidence
+
+- The implementation head observed before this documentation update was `4fceb2d`: existing-copy
+  adoption no longer requires native-copy staging headroom, so a low-disk user can verify and adopt
+  an already-present cloud copy without creating local staging data.
+- Naruon cloud-copy readiness is now schema version 7 and carries the path-free pre-copy evidence
+  cohort plus `pre_copy_evidence_met`; missing or incomplete iCloud evidence remains a blocker in
+  the exported contract. Focused Rust readiness tests passed: 14 passed, 0 failed.
+- Only stale generated CodeGraph databases were removed from unrelated temporary worktrees during
+  this loop; source files and user data were not deleted. The local volume measured about 8.3 GiB
+  free after that generated-artifact cleanup.
+- PR #213 remains open on the new implementation line; hosted release, test, security, and review
+  checks are still the authoritative gates, and no protected merge or source eviction was claimed.
+
 ## Loop update rule
 
 At each scheduled or operator loop, update this file only with new dated evidence: current head, open-PR/check state, provider receipt state, disk headroom, and the smallest acceptance proof completed. Do not convert an incomplete provider probe, filename date, model answer, or GitHub review comment into a transfer or deletion authority.
