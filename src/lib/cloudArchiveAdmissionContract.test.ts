@@ -14,5 +14,7 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("시스템 관리 데이터를 삭제하지 않습니다");
     expect(source).toContain("icloud-item-error-octagon-not-signed-in");
     expect(source).toContain("동기화 진단:");
+    expect(source).toContain("no_progress_create_count");
+    expect(source).toContain("Finder에 남은 복사 대기는 취소");
   });
 });

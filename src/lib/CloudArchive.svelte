@@ -749,12 +749,21 @@
           진행 {icloudHealth.upload_queue.scheduled_active_count}개 ·
           sync-up 차단 {icloudHealth.upload_queue.blocked_on_sync_up_count}개 ·
           오류 {icloudHealth.upload_queue.item_error_count}개
+          {#if icloudHealth.file_provider_activity}
+            · File Provider 무진행 fetch {icloudHealth.file_provider_activity.no_progress_fetch_count}개 / create {icloudHealth.file_provider_activity.no_progress_create_count}개
+          {/if}
         </span>
         {#if icloudHealth.new_copy_admission_blockers.length > 0}
           <p class="warning">
             차단 사유:
             {icloudHealth.new_copy_admission_blockers.map(icloudBlockerLabel).join(", ")}
           </p>
+          {#if icloudHealth.file_provider_activity && (icloudHealth.file_provider_activity.no_progress_fetch_count > 0 || icloudHealth.file_provider_activity.no_progress_create_count > 0)}
+            <p class="warning">
+              File Provider의 복사 요청이 진행률 없이 만료되었습니다. Finder에 남은 복사 대기는 취소하고,
+              File Provider 상태가 정상으로 관찰된 뒤 DiskSage에서 새 계획을 다시 실행해야 합니다.
+            </p>
+          {/if}
         {:else}
           <p class="capacity-ok">iCloud 전역 업로드 대기열이 비어 있습니다. 개별 파일은 별도 provider 증거가 필요합니다.</p>
         {/if}
