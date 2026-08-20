@@ -15,6 +15,8 @@ use std::path::PathBuf;
 pub const PROVIDER_EVIDENCE_RECORD_VERSION: u32 = 1;
 #[cfg(not(coverage))]
 const MAX_PROVIDER_EVIDENCE_RECORD_BYTES: u64 = 64 * 1024;
+#[cfg(not(coverage))]
+pub const MAX_PROVIDER_EVIDENCE_RECORDS_PER_RECEIPT: usize = 128;
 const MAX_EVIDENCE_ID_BYTES: usize = 1_024;
 const MAX_DESTINATION_BYTES: usize = 32 * 1024;
 
@@ -129,10 +131,80 @@ fn secure_evidence_directory(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(not(coverage))]
+fn remove_retained_evidence_file(path: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    let original_permissions = {
+        let metadata = std::fs::symlink_metadata(path)
+            .map_err(|_| "provider-evidence-retention-metadata-failed".to_string())?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err("provider-evidence-retention-file-unsafe".into());
+        }
+        let original = metadata.permissions();
+        let mut writable = original.clone();
+        writable.set_readonly(false);
+        std::fs::set_permissions(path, writable)
+            .map_err(|_| "provider-evidence-retention-permissions-failed".to_string())?;
+        original
+    };
+
+    if std::fs::remove_file(path).is_err() {
+        #[cfg(windows)]
+        let _ = std::fs::set_permissions(path, original_permissions);
+        return Err("provider-evidence-retention-delete-failed".into());
+    }
+    Ok(())
+}
+
+#[cfg(not(coverage))]
+fn prune_receipt_evidence_history(directory: &Path, receipt_id: &str) -> Result<(), String> {
+    let prefix = format!("{receipt_id}-");
+    let mut records = Vec::<(u64, String, PathBuf)>::new();
+    for entry in std::fs::read_dir(directory)
+        .map_err(|_| "provider-evidence-retention-read-failed".to_string())?
+    {
+        let entry = entry.map_err(|_| "provider-evidence-retention-read-failed".to_string())?;
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if !name.starts_with(&prefix)
+            || path.extension().and_then(|value| value.to_str()) != Some("json")
+        {
+            continue;
+        }
+        let Ok(record) = read_immutable_sync_evidence(&path) else {
+            continue;
+        };
+        if record.evidence.receipt_id != receipt_id {
+            continue;
+        }
+        records.push((
+            record.evidence.confirmed_at_ms,
+            record.record_id,
+            path,
+        ));
+    }
+    if records.len() <= MAX_PROVIDER_EVIDENCE_RECORDS_PER_RECEIPT {
+        return Ok(());
+    }
+    records.sort_by(|left, right| (left.0, left.1.as_str()).cmp(&(right.0, right.1.as_str())));
+    let prune_count = records.len() - MAX_PROVIDER_EVIDENCE_RECORDS_PER_RECEIPT;
+    for (_, _, path) in records.into_iter().take(prune_count) {
+        remove_retained_evidence_file(&path)?;
+    }
+    #[cfg(unix)]
+    std::fs::File::open(directory)
+        .and_then(|dir| dir.sync_all())
+        .map_err(|_| "provider-evidence-retention-directory-sync-failed".to_string())?;
+    Ok(())
+}
+
 /// Persist the full provider claim before it is used to authorize source eviction.
 ///
 /// The file is create-only, read-only, fsynced, and named by the receipt, observation time, and
-/// integrity digest. Existing evidence is never overwritten.
+/// integrity digest. Existing evidence is never overwritten. Repeated attestations retain the
+/// newest bounded per-receipt history so background reconciliation cannot grow storage forever.
 #[cfg(not(coverage))]
 pub fn write_immutable_sync_evidence(
     directory: &Path,
@@ -177,6 +249,11 @@ pub fn write_immutable_sync_evidence(
     if let Err(error) = result {
         drop(file);
         let _ = std::fs::remove_file(&path);
+        return Err(error);
+    }
+    drop(file);
+    if let Err(error) = prune_receipt_evidence_history(directory, &record.evidence.receipt_id) {
+        let _ = remove_retained_evidence_file(&path);
         return Err(error);
     }
     Ok((record, path))
