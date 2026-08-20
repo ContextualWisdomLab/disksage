@@ -637,7 +637,7 @@
       "icloud-native-sync-down-pending": "macOS iCloud sync-down이 아직 끝나지 않음",
       "icloud-native-status-evidence-incomplete": "macOS iCloud 상태 증거가 불완전함",
       "icloud-native-status-command-timeout": "macOS iCloud 상태 확인이 시간 초과되어 복사를 보류함",
-      "icloud-file-provider-no-progress": "File Provider fetch 요청이 진행률 없이 정지함",
+      "icloud-file-provider-no-progress": "File Provider fetch/create 요청이 진행률 없이 정지함",
       "icloud-file-provider-dump-timeout": "File Provider 상태 확인이 시간 초과됨",
       "icloud-file-provider-dump-output-truncated": "File Provider 상태 증거가 잘려 불완전함",
       "icloud-file-provider-evidence-unavailable": "File Provider 상태 증거를 확인할 수 없음",
