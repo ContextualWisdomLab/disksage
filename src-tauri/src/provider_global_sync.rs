@@ -154,6 +154,10 @@ pub fn parse_dump(
             || marker_lower.contains("code=-1004");
         has_local_disk_full |= marker_lower.contains("odresult_errno 28")
             || marker_lower.contains("errno 28")
+            || marker_lower.contains("enospc")
+            || marker_lower.contains("code=28")
+            || marker_lower.contains("code 28")
+            || marker_lower.contains("osstatus -34")
             || marker_lower.contains("no space left on device")
             || marker_lower.contains("disk full");
         if has_filename_too_long
@@ -592,6 +596,21 @@ sync engine state:
             .blockers
             .contains(&"provider-global-sync-local-disk-full".into()));
         assert!(require_new_copy_admission(&report).is_err());
+    }
+
+    #[test]
+    fn common_posix_disk_full_markers_are_classified() {
+        for marker in [
+            "NSError: POSIX Code=28",
+            "write failed: ENOSPC",
+            "OSStatus -34 (disk full)",
+        ] {
+            let dump = format!("com.google.drivefs.fpext\nsync engine state:\n error:'{marker}'\n");
+            let report = parse_dump(CloudProvider::GoogleDrive, &dump).unwrap();
+            assert!(report
+                .blockers
+                .contains(&"provider-global-sync-local-disk-full".into()));
+        }
     }
 
     #[test]
