@@ -18,11 +18,15 @@ describe("BrewCleanup privacy-safe failure feedback", () => {
     expect(source).not.toContain("record_error");
     expect(source).not.toContain("저장하지 못했습니다: {");
     expect(source).not.toMatch(/\{execution\.record_error\}/);
+    expect(evictionSource).not.toContain("String(e)");
     expect(evictionSource).not.toContain("result_record_error");
     expect(evictionSource).not.toMatch(/\{eviction\.result_record_error\}/);
+    expect(evictionSource).toContain("파일 선택 창을 열지 못했습니다.");
+    expect(evictionSource).toContain("iCloud 로컬 사본 상태를 확인하지 못했습니다.");
+    expect(evictionSource).toContain("iCloud 로컬 사본 축출을 실행하지 못했습니다.");
     expect(source).toContain("Homebrew 정리 계획을 만들지 못했습니다.");
     expect(source).toContain("Homebrew 정리를 실행하지 못했습니다.");
-    expect(source).toContain('role="alert"');
+    expect(source).toContain('role=\"alert\"');
   });
 
   it("preserves the existing judgment and execution authority calls", () => {
