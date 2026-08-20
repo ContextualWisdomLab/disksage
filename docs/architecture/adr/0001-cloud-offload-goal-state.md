@@ -182,6 +182,11 @@ no-progress requests explains the Finder “preparing” stall; it does not auth
 copy retry, cloud mutation, or source eviction. DiskSage therefore keeps the Finder cancel-only
 guidance and fail-closed admission until a fresh bounded observation is quiet and complete.
 
+The provider-evidence authority boundary was also tightened at source fix `b9fe4f0`: lookup of an
+API object identifier now rejects group- or other-writable evidence directories before reading any
+record. This is a fail-closed integrity check only; it neither deletes evidence nor changes cloud
+or source-eviction authority.
+
 ## Consequences
 
 - `is_local_current=true` and `is_uploaded=false` produces `pending-upload` and no eviction permit.
