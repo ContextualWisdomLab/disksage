@@ -60,6 +60,11 @@ fn write_document(path: &std::path::Path, connections: &[OAuthConnection]) {
         .unwrap(),
     )
     .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
 }
 
 #[cfg(windows)]
