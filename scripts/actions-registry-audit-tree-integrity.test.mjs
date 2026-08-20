@@ -36,6 +36,22 @@ test('protected-main workflow discovery rejects unsafe normalized blob identity 
   );
 });
 
+test('protected-main workflow discovery ignores empty blob paths without granting authority', async () => {
+  const paths = await protectedWorkflowPaths(
+    protectedMainFetch({
+      truncated: false,
+      tree: [
+        { type: 'blob', path: '' },
+        { type: 'blob', path: '.github/workflows/test.yml' },
+      ],
+    }),
+    repository,
+    protectedMainSha,
+  );
+
+  assert.deepEqual([...paths], ['.github/workflows/test.yml']);
+});
+
 test('protected-main workflow discovery rejects duplicate normalized workflow identities', async () => {
   await assert.rejects(
     protectedWorkflowPaths(
