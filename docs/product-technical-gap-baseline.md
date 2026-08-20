@@ -337,3 +337,15 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   shared symlink/reparse filter plus fail-closed traversal-error accounting remain in place. The
   migration is bound to implementation head `1d8c5caccce26b976f6324164ec74177c71b48a9`; hosted
   Rust compilation and the dependency contract remain authoritative.
+
+## 2026-08-21 sensitive-config boundary
+
+- At implementation head `dc448af600bf35b8bbcd6a4a6ec3a14bd6bf0035`, direct credential-bearing
+  names are inventoried as `sensitive-config` candidates without opening their contents. `.env`
+  and `.env.*` (except documented examples), credential/private-key names, and key/certificate
+  extensions receive the shared `sensitive-config-file` blocker; they are excluded from metadata
+  probing and contribute zero potentially reclaimable bytes. The Rust planner regression test
+  covers synthetic `.env.api` and `credentials.json` names only. The new wire kind is represented
+  in the TypeScript API, review reason labels, and Naruon ontology mapping. This is filename-based
+  coverage, not proof that every secret-bearing file is recognizable; hosted Rust checks remain
+  authoritative for the exact branch head.
