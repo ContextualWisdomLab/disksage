@@ -34,8 +34,8 @@
       if (typeof selected !== "string") return;
       path = selected;
       resetDecision();
-    } catch (e) {
-      error = String(e);
+    } catch {
+      error = "iCloud 파일 선택을 완료하지 못했습니다. 다시 시도하십시오.";
     }
   }
 
@@ -46,8 +46,8 @@
     resetDecision();
     try {
       plan = await api.planIcloudLocalCopyEviction(cloudRoot, selectedPath);
-    } catch (e) {
-      error = String(e);
+    } catch {
+      error = "iCloud 로컬 사본 상태를 확인하지 못했습니다. 다시 시도하십시오.";
     } finally {
       planning = false;
     }
@@ -82,8 +82,8 @@
       );
       confirmation = "";
       rationale = "";
-    } catch (e) {
-      error = String(e);
+    } catch {
+      error = "iCloud 로컬 사본을 회수하지 못했습니다. 상태를 다시 확인하십시오.";
     } finally {
       executing = false;
     }
@@ -99,6 +99,33 @@
     if (state.is_uploaded && !state.is_uploading) return "완료";
     if (state.is_uploading) return "업로드 중";
     return "미완료";
+  }
+
+  function syncLabel(state: api.IcloudLocalState): string {
+    if (state.downloading_status_current && !state.is_uploaded && !state.is_uploading) {
+      return "로컬 최신본·업로드 미확인";
+    }
+    if (state.is_uploaded && !state.is_uploading) return "공급자 동기화 완료";
+    if (state.is_uploading) return "공급자 업로드 중";
+    return "공급자 동기화 미완료";
+  }
+
+  function blockerLabel(blocker: string): string {
+    const labels: Record<string, string> = {
+      "icloud-upload-not-confirmed": "로컬 최신본이지만 공급자 업로드가 아직 확인되지 않았습니다.",
+      "icloud-upload-still-running": "공급자 업로드가 진행 중입니다.",
+      "icloud-current-version-unconfirmed": "로컬 최신본 여부를 확인하지 못했습니다.",
+      "icloud-file-provider-native-status-unavailable": "File Provider 상태 증거가 완전하지 않습니다.",
+      "icloud-file-provider-sync-paused-or-unconfirmed": "File Provider 동기화가 일시중지됐거나 상태가 미확인입니다.",
+      "icloud-unresolved-conflict": "동기화 충돌이 해결되지 않았습니다.",
+      "active-file-use-detected": "현재 사용 중인 파일이라 회수할 수 없습니다.",
+      "active-use-evidence-incomplete": "파일 사용 상태를 완전히 확인하지 못했습니다.",
+    };
+    return labels[blocker] ?? "필수 iCloud 상태 증거가 완전하지 않아 회수할 수 없습니다.";
+  }
+
+  function blockerSummary(blockers: string[]): string {
+    return [...new Set(blockers.map(blockerLabel))].join(" ");
   }
 </script>
 
@@ -137,6 +164,7 @@
       </div>
       <div class="status-grid">
         <span>업로드 {uploadLabel(plan.icloud_state)}</span>
+        <span>공급자 상태 {syncLabel(plan.icloud_state)}</span>
         <span>로컬 current {plan.icloud_state.downloading_status_current ? "예" : "아니오"}</span>
         <span>충돌 {plan.icloud_state.has_unresolved_conflicts ? "있음" : "없음"}</span>
         <span>활성 사용 {plan.active_use.active ? "감지" : "없음"}</span>
@@ -166,7 +194,7 @@
           <p class="muted">결과 기록: {eviction.result_path}</p>
         {:else}
           <p class="error" role="alert">
-            축출 결과는 위와 같지만 결과 기록을 저장하지 못했습니다: {eviction.result_record_error}
+            축출 결과는 위와 같지만 결과 기록을 저장하지 못했습니다.
           </p>
         {/if}
       {:else if plan.eligible_after_human_approval}
@@ -200,7 +228,7 @@
           </button>
         </div>
       {:else}
-        <p class="warning">현재 축출 불가: {plan.blockers.join(", ")}</p>
+        <p class="warning" role="status">현재 축출 불가: {blockerSummary(plan.blockers)}</p>
       {/if}
     </div>
   {/if}
