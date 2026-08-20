@@ -16,6 +16,27 @@ fn result_for(root: &Path) -> ScanResult {
     }
 }
 
+#[test]
+fn node_view_preserves_scanned_paths_and_sizes_for_authorized_directories() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    let child = root.join("child");
+    fs::create_dir_all(&child).unwrap();
+    fs::write(child.join("payload.bin"), b"payload").unwrap();
+
+    let mut scan = result_for(&root);
+    scan.dir_sizes.insert(root.clone(), 7);
+    scan.dir_sizes.insert(child.clone(), 7);
+
+    let view = node_view(&scan, &root).expect("ordinary scanned directory must remain visible");
+    assert_eq!(view.path, root.to_string_lossy());
+    assert_eq!(view.size, 7);
+    assert_eq!(view.entries.len(), 1);
+    assert_eq!(view.entries[0].path, child.to_string_lossy());
+    assert_eq!(view.entries[0].size, 7);
+    assert!(view.entries[0].is_dir);
+}
+
 #[cfg(unix)]
 #[test]
 fn node_view_rejects_symlinked_directory_that_escapes_scanned_root() {
