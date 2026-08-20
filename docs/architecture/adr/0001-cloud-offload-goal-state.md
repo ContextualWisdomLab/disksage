@@ -135,6 +135,10 @@ The 2026-08-21 incident observation also recorded a `real_datasets` Finder copy 
 after hours, Google Drive `temporarily disconnected`/`needs-indexing` with File Provider `-1004`,
 and only 150 MiB of local headroom; the operator guidance is to cancel that pending Finder copy
 before any new DiskSage plan is attempted.
+The follow-up bounded dump also exposed repeated File Provider `-1005 itemNotFound` entries while
+Google Drive upload/download and reconciliation were still active; DiskSage classifies that
+path-free condition as `provider-global-sync-item-not-found` and keeps copy, attestation, and
+eviction fail-closed.
 The provider UI keeps a path-free blocker fingerprint across bounded observations and escalates
 the operator guidance after 15 minutes of the same blocker; this is advisory state only and never
 authorizes a cloud write, provider restart, or source eviction.
@@ -151,6 +155,9 @@ authorizes a cloud write, provider restart, or source eviction.
 - A timed-out provider-wide dump may explain active transfer or reconciliation markers, but its incomplete evidence never admits a new copy.
 - A provider-wide `errno 28`/disk-full marker is retained as
   `provider-global-sync-local-disk-full`; it blocks new copies until local headroom is restored.
+- A provider-wide File Provider `-1005 itemNotFound` marker is retained as
+  `provider-global-sync-item-not-found`; it is an error blocker even when the provider reports
+  active transfer or reconciliation progress.
 - Every cloud plan attempts to persist a redacted local-volume snapshot for incident comparison;
   a persistence failure is surfaced as `local-volume-evidence-persistence-failed` and does not
   grant or revoke transfer authority by itself.

@@ -79,6 +79,13 @@
   and download progress plus a 168-entry reconciliation backlog (`needs-indexing: no`). This is
   still `provider-global-sync-transfer-active`/`provider-global-sync-reconciliation-pending`, so
   the Finder copy remains unsafe to retry until a fresh quiet probe is authoritative.
+- A subsequent bounded probe also reported repeated File Provider `-1005 itemNotFound` entries
+  (last activity roughly 2h40m old) in the same Google Drive domain. The provider parser now emits
+  `provider-global-sync-item-not-found` and the UI labels it as a missing-provider-item error;
+  queue-count changes do not reset the same-blocker duration.
+- The current implementation head for this loop is `4a7ea3d`; frontend tests remain 25 files / 117
+  tests and `svelte-check` remains 0 errors / 0 warnings. Hosted Rust, security, and review gates
+  remain authoritative before any protected merge.
 - PR #209 current head `2a6ed44` now bounds Homebrew and iCloud eviction error feedback and its
   privacy contract passes locally (Vitest 2/2; svelte-check 0 errors/0 warnings). Its hosted checks
   are running and the old review decision remains until a fresh approval. PR #235 completed its
