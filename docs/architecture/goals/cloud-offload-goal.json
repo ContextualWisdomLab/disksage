@@ -24,5 +24,18 @@
   ],
   "pre_copy_evidence_rule": "compare one canonical three-stream cohort; missing, malformed, incomplete, or skewed evidence remains blocked",
   "pre_copy_evidence_max_skew_ms": 300000,
+  "lineage_relation_graph": [
+    "source",
+    "metadata-evidence",
+    "production-evidence",
+    "archive",
+    "destination",
+    "receipt",
+    "review-decision",
+    "provider-sync-state",
+    "provider-evidence",
+    "remote-object"
+  ],
+  "lineage_relation_identifier_rule": "deterministic-domain-separated-digest; never a raw local or provider path",
   "safety_invariant": "source-retained-until-an-explicit-trash-step"
 }
