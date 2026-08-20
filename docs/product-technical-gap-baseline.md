@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-21 (Asia/Seoul)
-**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` source through `a3c6e31`; this
+**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` source through `7765a4b`; this
 baseline records the current loop's runtime and integration evidence.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.  
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
@@ -223,3 +223,7 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   `400 Endpoint does not support method`, so the added DCMI and provenance references remain a
   dry-run manifest handoff and no Zotero item or attachment was mutated. PR #213 hosted checks
   remain queued/in progress and the protected merge gate is unchanged.
+- At `2026-08-21 06:10 +0900`, the frontend coverage gate passed at 100% statements, branches,
+  functions, and lines (26 files / 118 tests) on source head `7765a4b`; the repository-wide Rust
+  coverage percentage remains unclaimed because the local APFS headroom is below a safe full Cargo
+  target build threshold. Hosted Rust coverage and required checks remain authoritative.
