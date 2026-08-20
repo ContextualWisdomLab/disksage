@@ -1018,6 +1018,12 @@
         상태가 정상으로 관찰된 뒤 다시 계획하십시오.
       </p>
     {/if}
+    {#if report.pre_copy_evidence && !report.pre_copy_evidence.complete}
+      <p class="warning">
+        사전 복사 증거 시점/무결성 cohort가 완성되지 않아 새 복사를 차단합니다:
+        {report.pre_copy_evidence.blockers.join(", ")}
+      </p>
+    {/if}
     {#if report.capacity}
       {#if report.capacity.can_fit === true}
         <p class="capacity-ok">

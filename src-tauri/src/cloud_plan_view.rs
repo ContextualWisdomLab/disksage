@@ -7,6 +7,7 @@
 
 use crate::cloud::{
     CloudCandidate, CloudPlanOptions, CloudPlanReport, CloudRoot, ExactDuplicateSummary,
+    PreCopyEvidenceCohort,
 };
 use crate::cloud_transfer::{
     cloud_copy_approval_phrase, CloudCopyApprovalAction, MAX_CLOUD_COPY_APPROVAL_AGE_MS,
@@ -70,6 +71,9 @@ pub struct CloudPlanReportView {
     /// Native source-volume pressure observed while preparing this plan.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_volume: Option<LocalVolumeSnapshot>,
+    /// Freshness/integrity cohort for the pre-copy evidence streams.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_copy_evidence: Option<PreCopyEvidenceCohort>,
     /// Stable operator notices produced by the planner and provider gates.
     pub notices: Vec<String>,
 }
@@ -86,6 +90,7 @@ impl From<CloudPlanReport> for CloudPlanReportView {
             exact_duplicates,
             capacity,
             local_volume,
+            pre_copy_evidence,
             notices,
         } = report;
         Self {
@@ -101,6 +106,7 @@ impl From<CloudPlanReport> for CloudPlanReportView {
             exact_duplicates,
             capacity,
             local_volume,
+            pre_copy_evidence,
             notices,
         }
     }
@@ -210,6 +216,7 @@ mod tests {
             exact_duplicates: ExactDuplicateSummary::default(),
             capacity: None,
             local_volume: None,
+            pre_copy_evidence: None,
             notices: vec!["cloud-quota-provider-native-verified".into()],
         };
         let view = CloudPlanReportView::from(report);

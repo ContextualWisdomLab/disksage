@@ -260,6 +260,7 @@ mod tests {
             exact_duplicates: ExactDuplicateSummary::default(),
             capacity: Some(assess_capacity(snapshot, 100, 0, 10)),
             local_volume: None,
+            pre_copy_evidence: None,
             notices: Vec::new(),
         }
     }

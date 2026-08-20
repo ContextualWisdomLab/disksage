@@ -316,7 +316,143 @@ pub struct CloudPlanReport {
     /// Native source-volume pressure observed while preparing this plan.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_volume: Option<crate::volume_pressure::LocalVolumeSnapshot>,
+    /// Path-free freshness/integrity comparison of the observations used before a native copy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_copy_evidence: Option<PreCopyEvidenceCohort>,
     pub notices: Vec<String>,
+}
+
+pub const PRE_COPY_EVIDENCE_COHORT_SCHEMA_VERSION: u32 = 1;
+pub const PRE_COPY_EVIDENCE_MAX_SKEW_MS: u64 = 5 * 60 * 1000;
+const PRE_COPY_EVIDENCE_REQUIRED_STREAMS: [&str; 3] = [
+    "icloud-sync-health-evidence",
+    "provider-client-runtime-evidence",
+    "volume-pressure-evidence",
+];
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreCopyEvidenceObservation {
+    pub stream: String,
+    pub observed_at_ms: u64,
+    pub evidence_complete: bool,
+    pub fingerprint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreCopyEvidenceCohort {
+    pub schema_version: u32,
+    pub observed_at_ms: u64,
+    pub observations: Vec<PreCopyEvidenceObservation>,
+    pub complete: bool,
+    pub blockers: Vec<String>,
+    pub cohort_fingerprint: String,
+}
+
+fn valid_evidence_fingerprint(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn cohort_fingerprint(cohort: &PreCopyEvidenceCohort) -> String {
+    let mut unsigned = cohort.clone();
+    unsigned.cohort_fingerprint.clear();
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage.pre-copy-evidence-cohort\0v1\0");
+    for observation in &unsigned.observations {
+        for value in [
+            observation.stream.as_bytes(),
+            &observation.observed_at_ms.to_le_bytes(),
+            &[observation.evidence_complete as u8],
+            observation.fingerprint.as_bytes(),
+        ] {
+            hasher.update(&(value.len() as u64).to_le_bytes());
+            hasher.update(value);
+        }
+    }
+    for blocker in &unsigned.blockers {
+        hasher.update(&(blocker.len() as u64).to_le_bytes());
+        hasher.update(blocker.as_bytes());
+    }
+    hasher.update(&unsigned.observed_at_ms.to_le_bytes());
+    hasher.update(&[unsigned.complete as u8]);
+    hasher.finalize().to_hex().to_string()
+}
+
+/// Compare the bounded observations that precede a native provider copy.
+///
+/// This is deliberately a freshness/integrity cohort, not a cloud-sync assertion. Any missing,
+/// incomplete, duplicated, malformed, or materially skewed stream remains blocked.
+pub fn compare_pre_copy_evidence(
+    mut observations: Vec<PreCopyEvidenceObservation>,
+) -> PreCopyEvidenceCohort {
+    observations.sort_by(|left, right| left.stream.cmp(&right.stream));
+    let mut blockers = Vec::new();
+    let mut previous_stream: Option<&str> = None;
+    let mut minimum = u64::MAX;
+    let mut maximum = 0_u64;
+    for observation in &observations {
+        if observation.stream.is_empty()
+            || !observation
+                .stream
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        {
+            blockers.push("pre-copy-evidence-stream-name-invalid".into());
+        }
+        if previous_stream == Some(observation.stream.as_str()) {
+            blockers.push("pre-copy-evidence-stream-duplicate".into());
+        }
+        previous_stream = Some(observation.stream.as_str());
+        if observation.observed_at_ms == 0 {
+            blockers.push("pre-copy-evidence-observation-time-invalid".into());
+        } else {
+            minimum = minimum.min(observation.observed_at_ms);
+            maximum = maximum.max(observation.observed_at_ms);
+        }
+        if !valid_evidence_fingerprint(&observation.fingerprint) {
+            blockers.push("pre-copy-evidence-fingerprint-invalid".into());
+        }
+        if !observation.evidence_complete {
+            blockers.push(format!(
+                "pre-copy-evidence-stream-incomplete-{}",
+                observation.stream
+            ));
+        }
+    }
+    for required_stream in PRE_COPY_EVIDENCE_REQUIRED_STREAMS {
+        if !observations
+            .iter()
+            .any(|observation| observation.stream == required_stream)
+        {
+            blockers.push(format!(
+                "pre-copy-evidence-stream-missing-{required_stream}"
+            ));
+        }
+    }
+    for observation in &observations {
+        if !PRE_COPY_EVIDENCE_REQUIRED_STREAMS.contains(&observation.stream.as_str()) {
+            blockers.push("pre-copy-evidence-stream-unexpected".into());
+        }
+    }
+    if observations.is_empty() {
+        blockers.push("pre-copy-evidence-cohort-empty".into());
+    }
+    if minimum != u64::MAX && maximum.saturating_sub(minimum) > PRE_COPY_EVIDENCE_MAX_SKEW_MS {
+        blockers.push("pre-copy-evidence-observation-time-skew".into());
+    }
+    blockers.sort();
+    blockers.dedup();
+    let mut cohort = PreCopyEvidenceCohort {
+        schema_version: PRE_COPY_EVIDENCE_COHORT_SCHEMA_VERSION,
+        observed_at_ms: maximum,
+        observations,
+        complete: blockers.is_empty(),
+        blockers,
+        cohort_fingerprint: String::new(),
+    };
+    cohort.cohort_fingerprint = cohort_fingerprint(&cohort);
+    cohort
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -5114,6 +5250,7 @@ pub fn plan_cloud_archive_from_snapshot(
         exact_duplicates,
         capacity: None,
         local_volume,
+        pre_copy_evidence: None,
         notices,
     }
 }
@@ -7412,5 +7549,72 @@ mod tests {
         }
         assert_eq!(archive_kind(Path::new("x.zip.part04")), None);
         assert_eq!(archive_kind(Path::new("README")), None);
+    }
+
+    #[test]
+    fn pre_copy_evidence_cohort_is_sorted_and_fingerprinted() {
+        let cohort = compare_pre_copy_evidence(vec![
+            PreCopyEvidenceObservation {
+                stream: "icloud-sync-health-evidence".into(),
+                observed_at_ms: 1_000,
+                evidence_complete: true,
+                fingerprint: "c".repeat(64),
+            },
+            PreCopyEvidenceObservation {
+                stream: "volume-pressure-evidence".into(),
+                observed_at_ms: 900,
+                evidence_complete: true,
+                fingerprint: "a".repeat(64),
+            },
+            PreCopyEvidenceObservation {
+                stream: "provider-client-runtime-evidence".into(),
+                observed_at_ms: 950,
+                evidence_complete: true,
+                fingerprint: "b".repeat(64),
+            },
+        ]);
+        assert!(cohort.complete);
+        assert_eq!(cohort.observed_at_ms, 1_000);
+        assert_eq!(
+            cohort
+                .observations
+                .iter()
+                .map(|observation| observation.stream.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "icloud-sync-health-evidence",
+                "provider-client-runtime-evidence",
+                "volume-pressure-evidence"
+            ]
+        );
+        assert!(valid_evidence_fingerprint(&cohort.cohort_fingerprint));
+    }
+
+    #[test]
+    fn pre_copy_evidence_cohort_blocks_incomplete_and_skewed_observations() {
+        let cohort = compare_pre_copy_evidence(vec![
+            PreCopyEvidenceObservation {
+                stream: "volume-pressure-evidence".into(),
+                observed_at_ms: 1,
+                evidence_complete: true,
+                fingerprint: "a".repeat(64),
+            },
+            PreCopyEvidenceObservation {
+                stream: "icloud-sync-health-evidence".into(),
+                observed_at_ms: PRE_COPY_EVIDENCE_MAX_SKEW_MS + 2,
+                evidence_complete: false,
+                fingerprint: "b".repeat(64),
+            },
+        ]);
+        assert!(!cohort.complete);
+        assert!(cohort
+            .blockers
+            .contains(&"pre-copy-evidence-observation-time-skew".into()));
+        assert!(cohort
+            .blockers
+            .contains(&"pre-copy-evidence-stream-incomplete-icloud-sync-health-evidence".into()));
+        assert!(cohort
+            .blockers
+            .contains(&"pre-copy-evidence-stream-missing-provider-client-runtime-evidence".into()));
     }
 }

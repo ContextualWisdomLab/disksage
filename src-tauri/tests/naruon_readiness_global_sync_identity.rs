@@ -46,6 +46,7 @@ fn empty_onedrive_plan() -> CloudPlanReport {
             DEFAULT_CAPACITY_RESERVE_BYTES,
         )),
         local_volume: None,
+        pre_copy_evidence: None,
         notices: Vec::new(),
     }
 }

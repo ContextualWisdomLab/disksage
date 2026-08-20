@@ -33,6 +33,11 @@ The runtime sequence is:
    the same human-attributed copy phrase and review gates, re-hashes the source after upload, and
    immediately attempts provider-API attestation. It never supports iCloud or local eviction in
    the same action; the returned receipt/object ID is the hand-off for a later attestation.
+   For iCloud plans, `pre_copy_evidence` also exposes a path-free cohort of
+   volume-pressure, provider-runtime, and iCloud-health observations. Missing,
+   incomplete, malformed, or more-than-five-minute-skewed observations produce
+   stable blockers and prevent a new copy. This cohort is a freshness check;
+   it is not per-item upload attestation or an eviction permit.
    Native File Provider copy buttons are admitted only when the current source volume has the
    candidate size plus a 1 GiB staging reserve available. The same check is repeated immediately
    before the copy; `local-volume-headroom-insufficient` is fail-closed and must not be worked

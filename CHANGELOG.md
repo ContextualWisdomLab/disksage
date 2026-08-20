@@ -16,6 +16,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Persist redacted iCloud queue and File Provider activity summaries as bounded, create-only,
   timestamped evidence records, without retaining raw CloudDocs databases or provider dumps;
   surface persistence failure without changing copy or eviction authority.
+- Gate iCloud copy plans on a path-free three-stream evidence cohort with deterministic
+  fingerprints and a five-minute observation-skew ceiling; incomplete, malformed, or stale
+  observations remain blocked and never become cloud-write or eviction authority.
 - Show the last read-only iCloud File Provider evidence timestamp beside the
   new-copy admission state, so a stalled `no progress`/`hard expired` queue has
   an actionable retry context without exposing provider paths.

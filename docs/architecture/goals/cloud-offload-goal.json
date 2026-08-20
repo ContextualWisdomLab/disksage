@@ -22,6 +22,7 @@
     "provider-client-runtime-evidence",
     "icloud-sync-health-evidence"
   ],
-  "pre_copy_evidence_rule": "compare observation timestamps and fingerprints; stale or incomplete evidence remains blocked",
+  "pre_copy_evidence_rule": "compare one canonical three-stream cohort; missing, malformed, incomplete, or skewed evidence remains blocked",
+  "pre_copy_evidence_max_skew_ms": 300000,
   "safety_invariant": "source-retained-until-an-explicit-trash-step"
 }

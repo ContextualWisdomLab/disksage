@@ -697,7 +697,24 @@ export interface CloudPlanReport {
   exact_duplicates: ExactDuplicateSummary;
   capacity?: CloudCapacityAssessment;
   local_volume?: LocalVolumeSnapshot;
+  pre_copy_evidence?: PreCopyEvidenceCohort;
   notices: string[];
+}
+
+export interface PreCopyEvidenceObservation {
+  stream: string;
+  observed_at_ms: number;
+  evidence_complete: boolean;
+  fingerprint: string;
+}
+
+export interface PreCopyEvidenceCohort {
+  schema_version: number;
+  observed_at_ms: number;
+  observations: PreCopyEvidenceObservation[];
+  complete: boolean;
+  blockers: string[];
+  cohort_fingerprint: string;
 }
 
 /** Native File Provider copies need the candidate plus a safety reserve for staging. */

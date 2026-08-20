@@ -35,8 +35,9 @@ The writer is advisory evidence only. Copy admission still requires the live fai
 health report, current local headroom, capacity evidence, review approval, and per-item provider
 attestation. A persistence failure is surfaced to the UI and does not grant or revoke authority.
 The timestamped records are the third evidence stream alongside `volume-pressure-evidence` and
-`provider-client-runtime-evidence`, allowing later loops to compare observation freshness without
-reconstructing a provider dump.
+`provider-client-runtime-evidence`. iCloud plans combine the three records with the bounded
+freshness comparator in [ADR-0007](0007-pre-copy-evidence-cohort.md); a missing, incomplete,
+malformed, or skewed stream remains blocked without reconstructing a provider dump.
 
 ## Consequences
 

@@ -1233,6 +1233,57 @@ fn persist_icloud_health_evidence(
 }
 
 #[cfg(not(coverage))]
+fn attach_pre_copy_evidence_cohort(
+    report: &mut cloud::CloudPlanReport,
+    runtime: &provider_client_runtime::ProviderClientRuntimeSnapshot,
+    health: Option<&icloud_sync_health::IcloudSyncHealthReport>,
+) {
+    let local = report
+        .local_volume
+        .as_ref()
+        .map(|snapshot| cloud::PreCopyEvidenceObservation {
+            stream: "volume-pressure-evidence".into(),
+            observed_at_ms: snapshot.observed_at_ms,
+            evidence_complete: crate::volume_pressure::validate_snapshot(snapshot).is_ok(),
+            fingerprint: snapshot.evidence_fingerprint.clone(),
+        })
+        .unwrap_or_else(|| cloud::PreCopyEvidenceObservation {
+            stream: "volume-pressure-evidence".into(),
+            observed_at_ms: 0,
+            evidence_complete: false,
+            fingerprint: "0".repeat(64),
+        });
+    let runtime = cloud::PreCopyEvidenceObservation {
+        stream: "provider-client-runtime-evidence".into(),
+        observed_at_ms: runtime.observed_at_ms,
+        evidence_complete: runtime.process_observation_complete,
+        fingerprint: runtime.snapshot_fingerprint_sha256.clone(),
+    };
+    let health = health
+        .and_then(|value| icloud_sync_health::health_evidence_snapshot_from_report(value).ok())
+        .map(|snapshot| cloud::PreCopyEvidenceObservation {
+            stream: "icloud-sync-health-evidence".into(),
+            observed_at_ms: snapshot.observed_at_ms,
+            evidence_complete: snapshot.evidence_complete,
+            fingerprint: snapshot.evidence_fingerprint_sha256,
+        })
+        .unwrap_or_else(|| cloud::PreCopyEvidenceObservation {
+            stream: "icloud-sync-health-evidence".into(),
+            observed_at_ms: 0,
+            evidence_complete: false,
+            fingerprint: "0".repeat(64),
+        });
+    let cohort = cloud::compare_pre_copy_evidence(vec![local, runtime, health]);
+    if cohort.complete {
+        report.notices.push("pre-copy-evidence-cohort-complete".into());
+    } else {
+        report.notices.push("pre-copy-evidence-cohort-blocked".into());
+        report.notices.extend(cohort.blockers.iter().cloned());
+    }
+    report.pre_copy_evidence = Some(cohort);
+}
+
+#[cfg(not(coverage))]
 fn cloud_plan_for_inputs(
     root: &str,
     cloud_root: &str,
@@ -1352,6 +1403,9 @@ fn cloud_plan_for_inputs(
         );
         (None, global_sync)
     };
+    if selected.provider == cloud::CloudProvider::Icloud {
+        attach_pre_copy_evidence_cohort(&mut report, &runtime, icloud_health.as_ref());
+    }
     Ok(CloudPlanningOutput {
         selected,
         report,
