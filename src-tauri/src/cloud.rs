@@ -7641,6 +7641,28 @@ mod tests {
     }
 
     #[test]
+    fn sensitive_config_name_detection_keeps_examples_out_and_covers_key_markers() {
+        for (name, expected) in [
+            (".env", true),
+            (".env.collector", true),
+            (".env.example", false),
+            (".env.sample", false),
+            (".env.template", false),
+            ("credentials.json", true),
+            ("private-key.pem", true),
+            ("server.p12", true),
+            ("signing.key", true),
+            ("README", false),
+        ] {
+            assert_eq!(
+                is_sensitive_config_path(Path::new(name)),
+                expected,
+                "unexpected sensitive-config classification for {name}"
+            );
+        }
+    }
+
+    #[test]
     fn pre_copy_evidence_cohort_is_sorted_and_fingerprinted() {
         let cohort = compare_pre_copy_evidence(vec![
             PreCopyEvidenceObservation {
