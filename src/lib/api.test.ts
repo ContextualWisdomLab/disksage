@@ -150,6 +150,30 @@ describe("cloud root identity", () => {
   });
 });
 
+describe("native cloud copy headroom", () => {
+  const volume: api.LocalVolumeSnapshot = {
+    schema_version: 1,
+    observed_at_ms: 1,
+    total_bytes: 10_000,
+    free_bytes: 9_000,
+    available_bytes: api.LOCAL_COPY_RESERVE_BYTES + 10,
+    used_bytes: 1_000,
+    available_basis_points: 9_000,
+    allocation_granularity_bytes: 4_096,
+    pressure: "normal",
+    evidence_kind: "filesystem-native-statvfs",
+    limitations: [],
+    evidence_fingerprint: "a".repeat(64),
+  };
+
+  it("requires the candidate and reserve without numeric overflow", () => {
+    expect(api.localCopyHasHeadroom(volume, 10)).toBe(true);
+    expect(api.localCopyHasHeadroom({ ...volume, available_bytes: api.LOCAL_COPY_RESERVE_BYTES + 9 }, 10)).toBe(false);
+    expect(api.localCopyHasHeadroom(volume, Number.MAX_SAFE_INTEGER)).toBe(false);
+    expect(api.localCopyHasHeadroom(undefined, 1)).toBe(false);
+  });
+});
+
 describe("cloud copy approval phrase", () => {
   const exactPhrase = `DiskSage cloud copy-only ${"a".repeat(64)} 승인`;
 

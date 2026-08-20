@@ -698,6 +698,18 @@ export interface CloudPlanReport {
   notices: string[];
 }
 
+/** Native File Provider copies need the candidate plus a safety reserve for staging. */
+export const LOCAL_COPY_RESERVE_BYTES = 1024 * 1024 * 1024;
+
+export function localCopyHasHeadroom(
+  localVolume: LocalVolumeSnapshot | undefined,
+  candidateBytes: number,
+): boolean {
+  if (!localVolume || !Number.isSafeInteger(candidateBytes) || candidateBytes < 0) return false;
+  if (candidateBytes > Number.MAX_SAFE_INTEGER - LOCAL_COPY_RESERVE_BYTES) return false;
+  return localVolume.available_bytes >= candidateBytes + LOCAL_COPY_RESERVE_BYTES;
+}
+
 export type LocalVolumePressure = "normal" | "elevated" | "high" | "critical";
 
 export interface LocalVolumeSnapshot {

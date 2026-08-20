@@ -182,9 +182,14 @@
       && (!candidate.requires_review || exactApproval)
       && (embeddedHighConfidence || exactApproval)
       && capacityEvidenceAvailable
+      && api.localCopyHasHeadroom(report?.local_volume, candidate.bytes)
       && !providerAdmissionBlocked
       && !icloudAdmissionBlocked
       && approvalPhrase !== null;
+  }
+
+  function nativeCopyHeadroomBlocked(candidate: api.CloudCandidate): boolean {
+    return !api.localCopyHasHeadroom(report?.local_volume, candidate.bytes);
   }
 
   function providerApiWriteConnected(): boolean {
@@ -898,6 +903,12 @@
         {fmtBytes(report.local_volume.available_bytes)}
         ({(report.local_volume.available_basis_points / 100).toFixed(2)}%)
       </p>
+      {#if report.candidates.some(nativeCopyHeadroomBlocked)}
+        <p class="warning">
+          네이티브 File Provider 복사는 후보 크기와 {fmtBytes(api.LOCAL_COPY_RESERVE_BYTES)} 여유공간을 함께 확보해야 합니다.
+          현재 여유공간이 부족한 후보는 버튼을 비활성화합니다. 명시적 OAuth 공급자 API 업로드는 별도 경로입니다.
+        </p>
+      {/if}
     {/if}
     {#if report.capacity}
       {#if report.capacity.can_fit === true}
