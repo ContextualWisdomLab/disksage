@@ -10,9 +10,14 @@ mod provider_oauth_cli {
     }
 
     #[cfg(not(coverage))]
+    fn absolute_home() -> std::path::PathBuf {
+        std::env::temp_dir().join("disksage-provider-oauth-harness-home")
+    }
+
+    #[cfg(not(coverage))]
     #[test]
     fn sole_help_flags_are_successful_terminal_parse_results() {
-        let home = Some(implementation::absolute_home());
+        let home = Some(absolute_home());
         assert!(matches!(
             parse_terminal_args(&os_strings(&["--help"]), home.clone()).unwrap(),
             TerminalParse::Help
@@ -34,7 +39,7 @@ mod provider_oauth_cli {
 
         let error = parse_terminal_args(
             &[std::ffi::OsString::from_vec(vec![0xff, b'x'])],
-            Some(implementation::absolute_home()),
+            Some(absolute_home()),
         )
         .unwrap_err();
 
