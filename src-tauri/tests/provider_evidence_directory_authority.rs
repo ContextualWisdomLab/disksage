@@ -2,7 +2,8 @@
 fn valid_provider_evidence() -> disksage_lib::cloud_transfer::ProviderSyncEvidence {
     use disksage_lib::cloud::CloudProvider;
     use disksage_lib::cloud_transfer::{
-        ProviderSyncEvidence, RemoteChecksumAlgorithm, RemoteContentProof, SyncEvidenceKind,
+        ProviderSyncEvidence, ProviderSyncState, RemoteChecksumAlgorithm, RemoteContentProof,
+        SyncEvidenceKind,
     };
 
     ProviderSyncEvidence {
@@ -15,6 +16,7 @@ fn valid_provider_evidence() -> disksage_lib::cloud_transfer::ProviderSyncEviden
         kind: SyncEvidenceKind::ProviderApi,
         evidence_id: format!("provider-api:{}", "c".repeat(64)),
         sync_complete: true,
+        sync_state: ProviderSyncState::Complete,
         remote_content: Some(RemoteContentProof {
             object_id: "remote-id".into(),
             revision: "revision-1".into(),
