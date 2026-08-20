@@ -153,7 +153,7 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 
 ## 2026-08-21 lineage graph update
 
-- Source head `2e396ca9e953922f5b25eed94740543408586719` now exports path-free ontology relations for
+- Source head `7bd2d1ff5e6c1da12ca0f76c1dbe3fe07c5c6b2f` now exports path-free ontology relations for
   source, metadata and production evidence, archive, destination, receipt, review decision,
   provider sync state, provider evidence, and remote object when present. The legacy `archivedTo`
   relation remains for compatibility; missing evidence emits `unknown` and no attestation edge.
@@ -161,6 +161,9 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   content and metadata nodes remain distinct. Hosted Rust checks are authoritative for this latest
   head. This closes the export-side P1 lineage relation gap; the UI still shows provider-item/
   receipt/permit details only when those runtime records exist.
+- Legacy provider evidence with `sync_complete=true` but `sync_state=unknown` now remains
+  unconfirmed in the Naruon export; only explicit `complete` state can support provider-sync
+  confirmation or any downstream eviction gate.
 - The local APFS volume had about 2.6 GiB available after removing only Cargo-generated build
   artifacts. No user file, CloudDocs database, provider process, Finder operation, or cloud object
   was removed. PR #213 remains protected and awaits fresh exact-head review/check results.
