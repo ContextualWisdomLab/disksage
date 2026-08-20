@@ -164,6 +164,10 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - The local APFS volume had about 2.6 GiB available after removing only Cargo-generated build
   artifacts. No user file, CloudDocs database, provider process, Finder operation, or cloud object
   was removed. PR #213 remains protected and awaits fresh exact-head review/check results.
+- A subsequent low-space loop used the already-catalogued regenerable pnpm store boundary: `pnpm
+  store prune` removed 30,315 stale files / 602 packages (about 1.08 GB). No user files, provider
+  databases, CloudDocs data, active processes, or cloud objects were touched; the product's
+  `pnpm-cache` cleanup domain remains the reproducible-cache implementation boundary.
 
 ## 2026-08-21 follow-up loop evidence
 
