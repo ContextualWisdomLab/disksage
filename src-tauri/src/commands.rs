@@ -1163,7 +1163,8 @@ pub fn inspect_cloud_provider_client_runtime(
     app: AppHandle,
 ) -> Result<provider_client_runtime::ProviderClientRuntimeSnapshot, String> {
     let selected = selected_cloud_root(&app, &cloud_root)?;
-    cloud::validate_cloud_root_readable(&selected)?;
+    // Runtime observation must remain available while a File Provider root is temporarily
+    // disconnected; this command reads the fixed provider client state, not the destination.
     Ok(provider_client_runtime::collect_provider_client_runtime(
         selected.provider,
         cloud::system_now_ms(),
@@ -1177,7 +1178,8 @@ pub fn recover_cloud_provider_client(
     app: AppHandle,
 ) -> Result<provider_recovery::ProviderRecoveryOutput, String> {
     let selected = selected_cloud_root(&app, &cloud_root)?;
-    cloud::validate_cloud_root_readable(&selected)?;
+    // Recovery targets only the verified, fixed desktop client. A disconnected root is the
+    // condition recovery is meant to repair, so destination readability is not a precondition.
     provider_recovery::recover_provider_client(selected.provider, cloud::system_now_ms())
 }
 
@@ -1203,7 +1205,8 @@ pub fn inspect_cloud_provider_global_sync(
     app: AppHandle,
 ) -> Result<provider_global_sync::ProviderGlobalSyncReport, String> {
     let selected = selected_cloud_root(&app, &cloud_root)?;
-    cloud::validate_cloud_root_readable(&selected)?;
+    // The read-only provider dump is the evidence needed to explain an unreadable/disconnected
+    // root; requiring directory access first would hide the very blocker we need to report.
     if selected.provider == cloud::CloudProvider::Icloud {
         return Err("provider-global-sync-icloud-specialized".into());
     }
