@@ -153,12 +153,14 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 
 ## 2026-08-21 lineage graph update
 
-- Source head `ade5e2eb1be12549d680812db3850148b0b52e7f` now exports path-free ontology relations for
+- Source head `80f3cd1c1fa04bf190f36480bc190a3f0dbd9dcb` now exports path-free ontology relations for
   source, metadata and production evidence, archive, destination, receipt, review decision,
   provider sync state, provider evidence, and remote object when present. The legacy `archivedTo`
   relation remains for compatibility; missing evidence emits `unknown` and no attestation edge.
-- The focused Rust export test passed 1/1. This closes the export-side P1 lineage relation gap;
-  the UI still shows provider-item/receipt/permit details only when those runtime records exist.
+- The preceding focused Rust export test passed 1/1; the current head adds an assertion that the
+  content and metadata nodes remain distinct. Hosted Rust checks are authoritative for this latest
+  head. This closes the export-side P1 lineage relation gap; the UI still shows provider-item/
+  receipt/permit details only when those runtime records exist.
 - The local APFS volume had about 2.6 GiB available after removing only Cargo-generated build
   artifacts. No user file, CloudDocs database, provider process, Finder operation, or cloud object
   was removed. PR #213 remains protected and awaits fresh exact-head review/check results.
