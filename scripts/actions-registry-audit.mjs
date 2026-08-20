@@ -153,7 +153,23 @@ export async function listAllWorkflowRecords(fetchJson, repository) {
 
 /** Read every open pull request so branch-only workflow ownership cannot be mistaken for deletion. */
 export async function listAllOpenPullRequests(fetchJson, repository) {
-  return listAll(fetchJson, `/repos/${repository}/pulls?state=open`, 'open-pr-list-invalid');
+  const records = await listAll(
+    fetchJson,
+    `/repos/${repository}/pulls?state=open`,
+    'open-pr-list-invalid',
+  );
+  const seenPullNumbers = new Set();
+  for (const pullRequest of records) {
+    const pullNumber = pullRequest?.number;
+    if (!Number.isSafeInteger(pullNumber) || pullNumber <= 0) {
+      throw new Error('open-pr-number-invalid');
+    }
+    if (seenPullNumbers.has(pullNumber)) {
+      throw new Error('open-pr-list-duplicate');
+    }
+    seenPullNumbers.add(pullNumber);
+  }
+  return records;
 }
 
 function sameRepositoryHeadSnapshot(pullRequests, repository) {
