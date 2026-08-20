@@ -45,6 +45,7 @@ const GOOGLE_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_SCOPE: &str = "https://www.googleapis.com/auth/drive.metadata.readonly";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OAuthConnection {
     pub connection_id: String,
     pub provider: CloudProvider,
@@ -56,6 +57,7 @@ pub struct OAuthConnection {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ConnectionDocument {
     version: u32,
     connections: Vec<OAuthConnection>,
@@ -965,7 +967,7 @@ pub fn refreshed_access_token(
     let connections = load_connections(connection_document_path)?;
     let connection = connection_for_root(&connections, root)?;
     let refresh_token = read_refresh_token(&connection.connection_id)?;
-    let grant = refresh_grant(&connection, &refresh_token)?;
+    let grant = refresh_grant(&connection, &refresh_token, false)?;
     if let Some(rotated) = grant.refresh_token.as_deref() {
         store_refresh_token(&connection.connection_id, rotated)?;
     }
