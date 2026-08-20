@@ -126,6 +126,7 @@ pub fn parse_dump(
     let mut has_temporarily_disconnected = false;
     let mut has_server_unreachable = false;
     let mut has_local_disk_full = false;
+    let mut has_item_not_found = false;
     let mut hidden_default_domain = false;
 
     for line in output.lines() {
@@ -152,6 +153,9 @@ pub fn parse_dump(
         has_server_unreachable |= marker_lower.contains("serverunreachable")
             || marker_lower.contains("server unreachable")
             || marker_lower.contains("code=-1004");
+        has_item_not_found |= marker_lower.contains("code=-1005")
+            || marker_lower.contains("itemnotfound")
+            || marker.contains("파일이 존재하지 않습니다");
         has_local_disk_full |= marker_lower.contains("odresult_errno 28")
             || marker_lower.contains("errno 28")
             || marker_lower.contains("enospc")
@@ -164,6 +168,7 @@ pub fn parse_dump(
             || has_temporarily_disconnected
             || has_server_unreachable
             || has_local_disk_full
+            || has_item_not_found
             || (marker.contains("user-disabled") && !hidden_default_domain)
             || marker.contains("can't dump the extension")
             || marker.contains("Error Domain=")
@@ -215,6 +220,9 @@ pub fn parse_dump(
     }
     if has_local_disk_full {
         blockers.push("provider-global-sync-local-disk-full".into());
+    }
+    if has_item_not_found {
+        blockers.push("provider-global-sync-item-not-found".into());
     }
     if has_error {
         blockers.push("provider-global-sync-error".into());
@@ -607,6 +615,17 @@ sync engine state:
             .notices
             .iter()
             .all(|notice| !notice.contains("server unreachable")));
+    }
+
+    #[test]
+    fn item_not_found_error_is_classified_without_retaining_provider_paths() {
+        let dump = "com.google.drivefs.fpext\nsync engine state:\n error:'NSFileProviderErrorDomain Code=-1005 itemNotFound'\n";
+        let report = parse_dump(CloudProvider::GoogleDrive, dump).unwrap();
+        assert_eq!(report.state, ProviderGlobalSyncState::Error);
+        assert!(report
+            .blockers
+            .contains(&"provider-global-sync-item-not-found".into()));
+        assert!(require_new_copy_admission(&report).is_err());
     }
 
     #[test]

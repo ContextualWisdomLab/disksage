@@ -723,6 +723,7 @@
       "provider-global-sync-temporarily-disconnected": "공급자가 일시적으로 연결 해제됨",
       "provider-global-sync-server-unreachable": "공급자 서버에 연결할 수 없음",
       "provider-global-sync-local-disk-full": "로컬 디스크 공간 부족으로 공급자 작업이 실패함",
+      "provider-global-sync-item-not-found": "공급자가 요청한 항목을 찾지 못함",
       "provider-global-sync-error": "공급자 전역 동기화 오류가 있음",
       "provider-global-sync-probe-timeout": "공급자 동기화 상태 확인이 시간 초과됨",
     };
