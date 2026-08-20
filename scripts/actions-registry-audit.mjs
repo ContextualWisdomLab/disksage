@@ -228,14 +228,35 @@ function sortedSetSnapshot(values) {
   return [...values].sort();
 }
 
-function workflowPathsFromTree(tree, incompleteError = 'workflow-tree-incomplete') {
+function workflowPathsFromTree(
+  tree,
+  incompleteError = 'workflow-tree-incomplete',
+  invalidEntryError = 'workflow-tree-entry-invalid',
+) {
   if (!tree || tree.truncated !== false || !Array.isArray(tree.tree)) {
     throw new Error(incompleteError);
   }
-  return tree.tree
-    .filter((entry) => entry?.type === 'blob')
-    .map((entry) => normalizeWorkflowPath(entry.path))
-    .filter(isRepositoryWorkflowPath);
+  const workflowPaths = [];
+  const seenWorkflowPaths = new Set();
+  for (const entry of tree.tree) {
+    if (
+      !entry ||
+      typeof entry !== 'object' ||
+      typeof entry.type !== 'string' ||
+      typeof entry.path !== 'string' ||
+      entry.path.length === 0
+    ) {
+      throw new Error(invalidEntryError);
+    }
+    if (entry.type !== 'blob') continue;
+    const normalizedPath = normalizeWorkflowPath(entry.path);
+    if (!normalizedPath) throw new Error(invalidEntryError);
+    if (!isRepositoryWorkflowPath(normalizedPath)) continue;
+    if (seenWorkflowPaths.has(normalizedPath)) throw new Error(invalidEntryError);
+    seenWorkflowPaths.add(normalizedPath);
+    workflowPaths.push(normalizedPath);
+  }
+  return workflowPaths;
 }
 
 /** Resolve workflow paths semantically owned by current same-repository open PR heads. */
@@ -308,7 +329,11 @@ export async function protectedWorkflowPaths(fetchJson, repository, expectedMain
   const currentMainSha = await currentProtectedMainSha(fetchJson, repository);
   if (currentMainSha !== expectedMainSha) throw new Error('protected-main-moved');
   const tree = await fetchJson(`/repos/${repository}/git/trees/${expectedMainSha}?recursive=1`);
-  return new Set(workflowPathsFromTree(tree, 'protected-main-tree-incomplete'));
+  return new Set(workflowPathsFromTree(
+    tree,
+    'protected-main-tree-incomplete',
+    'protected-main-tree-entry-invalid',
+  ));
 }
 
 /** Build a fail-closed read-only registry audit tied to stable protected-main, registry, and open-PR snapshots. */
