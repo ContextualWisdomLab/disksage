@@ -114,3 +114,31 @@ The runtime sequence is:
 The Goal and ADR files are replaceable projections. Agents or operators must compare them with the
 immutable receipt/evidence record before any mutation. Naruon receives lineage/provider evidence,
 not a second independent deletion authority.
+
+## Standards basis (APA 7)
+
+The File Provider boundary follows Apple's distinction between dataless metadata and materialized
+content, and its requirement that working-set changes be enumerated and synchronized; a quiet
+Finder window therefore cannot substitute for per-item provider evidence (Apple, n.d.-a, n.d.-b).
+Lineage exports use PROV-O entities, activities, and relations, while catalog projections use DCAT
+3 dataset and distribution concepts (Albertoni et al., 2024; Lebo et al., 2013). The access,
+integrity, and audit boundaries are aligned with NIST SP 800-53 Rev. 5 (Joint Task Force, 2020).
+
+### References
+
+Albertoni, R., Browning, D., Cox, S. J., Gonzalez Beltran, A., Perego, A., & Winstanley, P.
+(Eds.). (2024). *Data Catalog Vocabulary (DCAT) - Version 3*. W3C Recommendation.
+https://www.w3.org/TR/vocab-dcat-3/
+
+Apple. (n.d.-a). *Defining your File Provider's content*. Apple Developer Documentation.
+Retrieved August 21, 2026, from https://developer.apple.com/documentation/FileProvider/defining-your-file-provider-s-content
+
+Apple. (n.d.-b). *Synchronizing the File Provider extension*. Apple Developer Documentation.
+Retrieved August 21, 2026, from https://developer.apple.com/documentation/fileprovider/synchronizing-the-file-provider-extension
+
+Joint Task Force. (2020). *Security and privacy controls for information systems and organizations*
+(NIST Special Publication 800-53, Revision 5). National Institute of Standards and Technology.
+https://doi.org/10.6028/NIST.SP.800-53r5
+
+Lebo, T., Sahoo, S., & McGuinness, D. (Eds.). (2013). *PROV-O: The PROV ontology*.
+W3C Recommendation. https://www.w3.org/TR/prov-o/
