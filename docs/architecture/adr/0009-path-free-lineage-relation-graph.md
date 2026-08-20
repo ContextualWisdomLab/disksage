@@ -1,6 +1,6 @@
 # ADR-0009: Export a path-free lineage relation graph
 
-**Status:** Accepted  
+**Status:** Accepted
 **Date:** 2026-08-21
 
 ## Context
