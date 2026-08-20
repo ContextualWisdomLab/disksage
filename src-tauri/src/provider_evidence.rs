@@ -354,6 +354,13 @@ pub fn latest_api_object_id(
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return None;
     }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o022 != 0 {
+            return None;
+        }
+    }
     let prefix = format!("{receipt_id}-");
     let mut latest: Option<(u64, String, String)> = None;
     for entry in std::fs::read_dir(directory).ok()?.take(4_096) {
