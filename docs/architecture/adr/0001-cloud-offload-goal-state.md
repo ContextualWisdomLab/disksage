@@ -192,7 +192,7 @@ requests marked `no progress` in five seconds. Because `fileproviderctl` exposes
 cancellation operation, the product surfaces the Finder cancel control as the only operator action;
 it must not kill `fileproviderd` or `bird`, write a raw provider dump, retry the copy, or infer
 eviction authority. This incomplete observation keeps new-copy admission, attestation, and source
-eviction fail-closed and is bound to source head `d29056b`, not to this replaceable ADR text.
+eviction fail-closed and is bound to source head `0582592`, not to this replaceable ADR text.
 
 ## Consequences
 
