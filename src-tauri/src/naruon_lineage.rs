@@ -463,7 +463,8 @@ pub fn export_naruon_file_lineage(
                 .map(|approval| approval.rationale.clone()),
             local_copy_verified: receipt.copy_verified,
             provider_write_executed: false,
-            provider_sync_confirmed: evidence.is_some_and(|item| item.sync_complete),
+            provider_sync_confirmed: evidence
+                .is_some_and(|item| item.sync_complete && item.sync_state.is_complete()),
             provider_sync_state: evidence
                 .map(|item| item.sync_state)
                 .unwrap_or(ProviderSyncState::Unknown),
