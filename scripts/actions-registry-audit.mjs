@@ -15,6 +15,7 @@ const NON_ACTIVE_WORKFLOW_STATES = new Set([
 export function normalizeWorkflowPath(rawPath) {
   if (typeof rawPath !== 'string' || rawPath.length === 0) return null;
   const slashNormalized = rawPath.replaceAll('\\', '/');
+  if (slashNormalized.split('/').includes('..')) return null;
   const withoutDotPrefix = slashNormalized.replace(/^(?:\.\/)+/, '');
   const normalized = path.posix.normalize(withoutDotPrefix);
   if (
@@ -62,7 +63,7 @@ export function classifyWorkflowRecord(record, protectedWorkflowPaths, activePrP
     }
     return { classification: 'disabled', path: normalizedPath, workflow_id: record.id };
   }
-  if (!normalizedPath.startsWith(REPOSITORY_WORKFLOW_PREFIX)) {
+  if (!isRepositoryWorkflowPath(normalizedPath)) {
     if (!isTrustedGithubDynamicWorkflowPath(normalizedPath)) {
       throw new Error('actions-workflow-path-untrusted');
     }
