@@ -1043,6 +1043,48 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_same_timestamp_pair_writers_preserve_pair_identity() {
+        let temporary = tempfile::tempdir().unwrap();
+        let adr_dir = temporary.path().join("adr");
+        let goal_dir = temporary.path().join("goals");
+        let receipt = receipt();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let mut writers = Vec::new();
+        for index in 0..8 {
+            let barrier = std::sync::Arc::clone(&barrier);
+            let adr_dir = adr_dir.clone();
+            let goal_dir = goal_dir.clone();
+            let receipt = receipt.clone();
+            writers.push(std::thread::spawn(move || {
+                barrier.wait();
+                let token = format!("writer-{index}");
+                let mut adr = initial_adr_snapshot(&receipt, 42);
+                adr.evidence_record_id = Some(token.clone());
+                let mut goal = initial_goal_snapshot(&receipt, 42);
+                goal.evidence_record_id = Some(token);
+                let (_, _, warnings) = write_projection_pair(&adr_dir, &adr, &goal_dir, &goal);
+                assert!(warnings.is_empty());
+            }));
+        }
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        let persisted_adr: CloudOffloadAdrSnapshot = serde_json::from_slice(
+            &std::fs::read(adr_dir.join(format!("{}-latest.json", receipt.receipt_id))).unwrap(),
+        )
+        .unwrap();
+        let persisted_goal: CloudOffloadGoalSnapshot = serde_json::from_slice(
+            &std::fs::read(goal_dir.join(format!("{}-latest.json", receipt.receipt_id))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(persisted_adr.updated_at_ms, persisted_goal.updated_at_ms);
+        assert_eq!(
+            persisted_adr.evidence_record_id,
+            persisted_goal.evidence_record_id
+        );
+    }
+
+    #[test]
     fn snapshot_writer_rejects_path_like_receipt_ids() {
         let directory = tempfile::tempdir().unwrap();
         let mut snapshot = initial_goal_snapshot(&receipt(), 5);
