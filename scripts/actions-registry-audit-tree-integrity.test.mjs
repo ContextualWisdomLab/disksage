@@ -36,6 +36,23 @@ test('protected-main workflow discovery rejects unsafe normalized blob identity 
   );
 });
 
+test('protected-main workflow discovery rejects duplicate normalized workflow identities', async () => {
+  await assert.rejects(
+    protectedWorkflowPaths(
+      protectedMainFetch({
+        truncated: false,
+        tree: [
+          { type: 'blob', path: '.github/workflows/test.yml' },
+          { type: 'blob', path: './.github/workflows/test.yml' },
+        ],
+      }),
+      repository,
+      protectedMainSha,
+    ),
+    /protected-main-tree-entry-invalid/,
+  );
+});
+
 test('active-PR workflow discovery rejects unsafe exact-head blob identity evidence', async () => {
   const pullRequests = [
     {
