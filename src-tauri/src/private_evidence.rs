@@ -66,20 +66,22 @@ pub fn write_private_json_create_new(
     path: &Path,
     value: &impl Serialize,
 ) -> Result<PrivateEvidenceReceipt, String> {
-    write_private_json_create_new_unix_with_hooks(source_root, path, value, || {}, || {})
+    write_private_json_create_new_unix_with_hooks(source_root, path, value, || {}, || {}, || {})
 }
 
 #[cfg(unix)]
-fn write_private_json_create_new_unix_with_hooks<F, G>(
+fn write_private_json_create_new_unix_with_hooks<F, G, H>(
     source_root: &Path,
     path: &Path,
     value: &impl Serialize,
-    before_create: F,
-    before_finalize: G,
+    before_parent_open: F,
+    before_create: G,
+    before_finalize: H,
 ) -> Result<PrivateEvidenceReceipt, String>
 where
     F: FnOnce(),
     G: FnOnce(),
+    H: FnOnce(),
 {
     use std::ffi::CString;
     use std::os::fd::{AsRawFd, FromRawFd};
@@ -98,6 +100,9 @@ where
     if parent_metadata.permissions().mode() & 0o022 != 0 {
         return Err("private-evidence-parent-writable-by-others".into());
     }
+
+    before_parent_open();
+
     let canonical_parent = std::fs::canonicalize(parent)
         .map_err(|_| "private-evidence-parent-unavailable".to_string())?;
     let canonical_source = std::fs::canonicalize(source_root)
@@ -305,6 +310,44 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn fails_closed_if_parent_is_replaced_before_open() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let source = tempfile::tempdir().unwrap();
+        let fixture = tempfile::tempdir().unwrap();
+        let parent = fixture.path().join("records");
+        let moved_parent = fixture.path().join("authorized-records-moved");
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = parent.join("audit.json");
+        let parent_for_hook = parent.clone();
+        let moved_for_hook = moved_parent.clone();
+
+        let error = write_private_json_create_new_unix_with_hooks(
+            source.path(),
+            &path,
+            &serde_json::json!({"private": true}),
+            move || {
+                std::fs::rename(&parent_for_hook, &moved_for_hook).unwrap();
+                std::fs::create_dir(&parent_for_hook).unwrap();
+                std::fs::set_permissions(
+                    &parent_for_hook,
+                    std::fs::Permissions::from_mode(0o700),
+                )
+                .unwrap();
+            },
+            || {},
+            || {},
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "private-evidence-parent-identity-drift");
+        assert!(!parent.join("audit.json").exists());
+        assert!(!moved_parent.join("audit.json").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn fails_closed_if_parent_becomes_shared_writable_after_authorization() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -318,6 +361,7 @@ mod tests {
             source.path(),
             &path,
             &serde_json::json!({"private": true}),
+            || {},
             move || {
                 std::fs::set_permissions(
                     &parent_for_hook,
@@ -348,6 +392,7 @@ mod tests {
             source.path(),
             &path,
             &serde_json::json!({"private": true}),
+            || {},
             || {},
             move || {
                 std::fs::set_permissions(
@@ -385,6 +430,7 @@ mod tests {
             source.path(),
             &path,
             &serde_json::json!({"private": true}),
+            || {},
             move || {
                 std::fs::rename(&parent_for_hook, &moved_for_hook).unwrap();
                 std::fs::create_dir(&parent_for_hook).unwrap();
@@ -423,6 +469,7 @@ mod tests {
             source.path(),
             &path,
             &serde_json::json!({"private": true}),
+            || {},
             || {},
             move || {
                 std::fs::rename(&parent_for_hook, &moved_for_hook).unwrap();
@@ -464,6 +511,7 @@ mod tests {
             source.path(),
             &path,
             &serde_json::json!({"private": true}),
+            || {},
             || {},
             move || {
                 std::fs::remove_file(&path_for_hook).unwrap();
