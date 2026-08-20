@@ -87,6 +87,7 @@
   let icloudHealthNextCheckAt = 0;
   let providerGlobalSync: api.ProviderGlobalSyncReport | null = $state(null);
   let providerGlobalSyncError = $state("");
+  let providerGlobalSyncObservedAtMs = $state(0);
   let checkingProviderGlobalSync = $state(false);
   let recoveringProvider = $state(false);
   let providerRecovery: api.ProviderRecoveryOutput | null = $state(null);
@@ -474,15 +475,18 @@
     if (!root || root.provider === "icloud") {
       providerGlobalSync = null;
       providerGlobalSyncError = "";
+      providerGlobalSyncObservedAtMs = 0;
       return;
     }
     checkingProviderGlobalSync = true;
     providerGlobalSyncError = "";
     try {
       providerGlobalSync = await api.inspectCloudProviderGlobalSync(root.path);
+      providerGlobalSyncObservedAtMs = Date.now();
     } catch (e) {
       providerGlobalSync = null;
       providerGlobalSyncError = boundedCloudArchiveErrorMessage("provider-sync", e);
+      providerGlobalSyncObservedAtMs = Date.now();
     } finally {
       checkingProviderGlobalSync = false;
     }
@@ -507,6 +511,7 @@
   function providerSelectionChanged() {
     providerGlobalSync = null;
     providerGlobalSyncError = "";
+    providerGlobalSyncObservedAtMs = 0;
     void refreshProviderGlobalSync();
   }
 
@@ -852,6 +857,7 @@
           {#if providerGlobalSync.pending_indexable_count !== null}
             · 인덱싱 대기 {providerGlobalSync.pending_indexable_count}개
           {/if}
+          · 마지막 관찰 {evidenceObservedAt(providerGlobalSyncObservedAtMs)} · 1분 후 자동 재확인
         </span>
         {#if providerGlobalSync.blockers.length > 0}
           <p class="warning">

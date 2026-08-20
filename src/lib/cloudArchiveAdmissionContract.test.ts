@@ -25,5 +25,8 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("ICLOUD_HEALTH_BLOCKED_RETRY_INTERVAL_MS");
     expect(source).toContain("icloudHealthNextCheckAt");
     expect(source).toContain("refreshIcloudHealth(true)");
+    expect(source).toContain("providerGlobalSyncObservedAtMs = Date.now();");
+    expect(source).toContain("마지막 관찰 {evidenceObservedAt(providerGlobalSyncObservedAtMs)}");
+    expect(source).toContain("1분 후 자동 재확인");
   });
 });
