@@ -125,7 +125,9 @@ physical reclaim proof; prune, trim, stop, and delete remain outside the inspect
   admission; no path, filename, item identifier, or content is retained.
 - When iCloud evidence is blocked or unavailable, the UI backs off automatic File Provider probes
   to five minutes; a quiet provider returns to the normal one-minute refresh. This prevents
-  DiskSage from adding repeated database readers while preserving fail-closed copy admission.
+  DiskSage from adding repeated database readers while preserving fail-closed copy admission. An
+  operator may explicitly trigger one bounded read-only refresh; this never restarts `bird`, writes
+  cloud data, or authorizes source eviction.
 - An oversized CloudDocs `client.db` produces incomplete, fail-closed evidence without running a
   long SQLite fallback query; the File Provider probe still reports whether the provider is stalled.
 - A provider-client recovery request can restart only the fixed user-space OneDrive or Google Drive

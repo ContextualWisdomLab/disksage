@@ -46,7 +46,9 @@ The runtime sequence is:
    the latter means the provider still has remote changes to materialize.
    While this evidence is blocked or unavailable, automatic probes back off to five-minute
    intervals so DiskSage does not add repeated readers to an already busy File Provider database;
-   copy admission remains fail-closed during the backoff.
+   copy admission remains fail-closed during the backoff. The UI's explicit `iCloud 상태 즉시
+   재확인` action may perform one bounded read-only probe after the operator cancels a stuck Finder
+   copy; it does not restart `bird`, write cloud data, or evict a source.
    If CloudDocs `client.db` exceeds the bounded snapshot ceiling, DiskSage skips the expensive
    SQLite fallback and reports incomplete evidence instead of waiting indefinitely; the File Provider
    probe remains bounded and still blocks new copies.
