@@ -255,7 +255,7 @@ fn valid_document_binds_exact_root_and_duplicate_matches_are_ambiguous() {
 
     let loaded = load_connections(&path).unwrap();
     assert_eq!(loaded, vec![expected.clone()]);
-    assert_eq!(connection_for_root(&loaded, &root).unwrap(), expected);
+    assert_eq!(connection_for_root(&loaded, &root).unwrap(), &expected);
 
     let ambiguous = vec![loaded[0].clone(), loaded[0].clone()];
     assert_eq!(
