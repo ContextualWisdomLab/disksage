@@ -97,7 +97,7 @@ async function listAll(fetchJson, endpoint, invalidError) {
   const records = [];
   let page = 1;
   let pageSize;
-  const separator = endpoint.includes('?') ? '&' : '?';
+  const separator = '&';
   do {
     if (page > MAX_LIST_PAGES) throw new Error('actions-list-page-limit-exceeded');
     const payload = await fetchJson(`${endpoint}${separator}per_page=100&page=${page}`);
