@@ -989,8 +989,14 @@ pub fn refreshed_access_token(
     Ok(grant.access_token)
 }
 
-#[cfg(not(coverage))]
-pub fn disconnect(connection_document_path: &Path, root: &CloudRoot) -> Result<(), String> {
+fn disconnect_with_delete<F>(
+    connection_document_path: &Path,
+    root: &CloudRoot,
+    mut delete_token: F,
+) -> Result<(), String>
+where
+    F: FnMut(&str) -> Result<(), String>,
+{
     let original = load_connections(connection_document_path)?;
     let connection = connection_for_root(&original, root)?;
     let updated: Vec<_> = original
@@ -999,13 +1005,18 @@ pub fn disconnect(connection_document_path: &Path, root: &CloudRoot) -> Result<(
         .cloned()
         .collect();
     save_connections(connection_document_path, &updated)?;
-    if let Err(error) = delete_refresh_token(&connection.connection_id) {
+    if let Err(error) = delete_token(&connection.connection_id) {
         if save_connections(connection_document_path, &original).is_err() {
             return Err("provider-oauth-keyring-delete-and-config-rollback-failed".into());
         }
         return Err(error);
     }
     Ok(())
+}
+
+#[cfg(not(coverage))]
+pub fn disconnect(connection_document_path: &Path, root: &CloudRoot) -> Result<(), String> {
+    disconnect_with_delete(connection_document_path, root, delete_refresh_token)
 }
 
 #[cfg(test)]
@@ -1238,6 +1249,35 @@ mod tests {
             connection_for_root(&[tampered], &requested_root).unwrap_err(),
             "provider-oauth-connection-missing"
         );
+    }
+
+    #[test]
+    fn disconnect_removes_every_canonical_and_legacy_record_for_the_same_root() {
+        let saved_root = unicode_root(CloudProvider::GoogleDrive, true);
+        let requested_root = unicode_root(CloudProvider::GoogleDrive, false);
+        let mut legacy = connection(CloudProvider::GoogleDrive);
+        legacy.cloud_root_id = saved_root.id.clone();
+        legacy.cloud_root_path = saved_root.path.clone();
+        legacy.connection_id = legacy_connection_id(&saved_root);
+        legacy.connected_at_ms = 100;
+        let mut current = legacy.clone();
+        current.connection_id = connection_id(&saved_root);
+        current.connected_at_ms = 200;
+        assert_ne!(legacy.connection_id, current.connection_id);
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("connections.json");
+        save_connections(&path, &[legacy.clone(), current.clone()]).unwrap();
+        let mut deleted = Vec::new();
+
+        disconnect_with_delete(&path, &requested_root, |connection_id| {
+            deleted.push(connection_id.to_string());
+            Ok(())
+        })
+        .unwrap();
+
+        assert!(load_connections(&path).unwrap().is_empty());
+        assert_eq!(deleted, vec![current.connection_id, legacy.connection_id]);
     }
 
     #[cfg(unix)]
