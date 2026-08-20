@@ -6,6 +6,9 @@ fn sort_targets(targets: &mut Vec<rules::CacheTarget>) {
     targets.sort_by(|left, right| left.path.cmp(&right.path));
 }
 
+/// macOS roots observed during the current low-disk incident and safe to regenerate.
+pub const AUTO_REGENERABLE_CACHE_IDS: [&str; 3] = ["pnpm-cache", "adobe-cache", "edge-cache"];
+
 fn active_use_blocker(
     evidence: &crate::git_worktree::GitWorktreeActiveUseEvidence,
 ) -> Option<&'static str> {
@@ -77,6 +80,50 @@ pub(crate) fn clean_cache_contents_inner(
             }
         })
         .collect())
+}
+
+pub(crate) fn clean_regenerable_caches_inner(
+    bases: &rules::BaseDirs,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Vec<CleanResult> {
+    rules::cache_candidates(bases)
+        .into_iter()
+        .filter(|candidate| {
+            AUTO_REGENERABLE_CACHE_IDS.contains(&candidate.id.as_str()) && candidate.exists
+        })
+        .flat_map(|candidate| {
+            let path = std::path::PathBuf::from(&candidate.path);
+            match rules::cache_targets(&path) {
+                Ok(targets) if targets.is_empty() => Vec::new(),
+                Ok(targets) => {
+                    clean_cache_contents_inner(bases, &path, &targets, journal_path, now_ms)
+                        .unwrap_or_else(|error| {
+                            vec![CleanResult {
+                                path: candidate.path,
+                                ok: false,
+                                error,
+                            }]
+                        })
+                }
+                Err(error) => vec![CleanResult {
+                    path: candidate.path,
+                    ok: false,
+                    error,
+                }],
+            }
+        })
+        .collect()
+}
+
+/// Headless entry point used by the audited CLI; it returns only local execution evidence.
+pub fn clean_regenerable_caches_headless(
+    journal_path: &Path,
+    now_ms: u64,
+) -> Result<serde_json::Value, String> {
+    let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
+    serde_json::to_value(clean_regenerable_caches_inner(&bases, journal_path, now_ms))
+        .map_err(|error| error.to_string())
 }
 
 /// Read the exact cache children that may be included in a later identity-bound Trash request.

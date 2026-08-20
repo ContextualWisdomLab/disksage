@@ -695,47 +695,12 @@ pub fn list_cache_candidates() -> Result<Vec<rules::CacheCandidate>, String> {
 }
 
 #[cfg(not(coverage))]
-const AUTO_REGENERABLE_CACHE_IDS: [&str; 3] = ["pnpm-cache", "adobe-cache", "edge-cache"];
-
-#[cfg(not(coverage))]
 fn clean_regenerable_caches_inner(
     bases: &rules::BaseDirs,
     journal_path: &Path,
     now_ms: u64,
 ) -> Vec<CleanResult> {
-    // These are the macOS cache roots observed during the current low-disk incident. The root
-    // itself is never removed; each child still passes the identity and active-use guards.
-    rules::cache_candidates(bases)
-        .into_iter()
-        .filter(|candidate| {
-            AUTO_REGENERABLE_CACHE_IDS.contains(&candidate.id.as_str()) && candidate.exists
-        })
-        .flat_map(|candidate| {
-            let path = PathBuf::from(&candidate.path);
-            match rules::cache_targets(&path) {
-                Ok(targets) if targets.is_empty() => Vec::new(),
-                Ok(targets) => crate::cache_cleanup::clean_cache_contents_inner(
-                    bases,
-                    &path,
-                    &targets,
-                    journal_path,
-                    now_ms,
-                )
-                .unwrap_or_else(|error| {
-                    vec![CleanResult {
-                        path: candidate.path,
-                        ok: false,
-                        error,
-                    }]
-                }),
-                Err(error) => vec![CleanResult {
-                    path: candidate.path,
-                    ok: false,
-                    error,
-                }],
-            }
-        })
-        .collect()
+    crate::cache_cleanup::clean_regenerable_caches_inner(bases, journal_path, now_ms)
 }
 
 /// Move only observed, regenerable macOS cache children to Trash without an extra approval step.
@@ -3350,7 +3315,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
     #[test]
     fn automatic_cache_cleanup_uses_only_observed_macos_cache_ids() {
         assert_eq!(
-            AUTO_REGENERABLE_CACHE_IDS,
+            crate::cache_cleanup::AUTO_REGENERABLE_CACHE_IDS,
             ["pnpm-cache", "adobe-cache", "edge-cache"]
         );
         let tmp = tempfile::tempdir().unwrap();
@@ -3359,7 +3324,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
             local_data: tmp.path().join("local"),
             home: tmp.path().join("home"),
         };
-        for id in AUTO_REGENERABLE_CACHE_IDS {
+        for id in crate::cache_cleanup::AUTO_REGENERABLE_CACHE_IDS {
             let path = match id {
                 "pnpm-cache" => bases.home.join("Library/Caches/pnpm"),
                 "adobe-cache" => bases.home.join("Library/Caches/Adobe"),

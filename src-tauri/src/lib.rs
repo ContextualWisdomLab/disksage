@@ -9,7 +9,7 @@ mod commands;
 #[cfg_attr(coverage, allow(dead_code))]
 mod node_navigation;
 #[cfg_attr(coverage, allow(dead_code))]
-mod cache_cleanup;
+pub mod cache_cleanup;
 #[cfg_attr(coverage, allow(dead_code))]
 mod scanner;
 #[cfg_attr(coverage, allow(dead_code))]

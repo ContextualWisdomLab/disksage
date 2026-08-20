@@ -103,6 +103,10 @@ name = "disksage-reclaim-plan"
 path = "src/bin/disksage-reclaim-plan.rs"
 
 [[bin]]
+name = "disksage-cache-cleanup"
+path = "src/bin/disksage-cache-cleanup.rs"
+
+[[bin]]
 name = "disksage-provider-client-runtime"
 path = "src/bin/disksage-provider-client-runtime.rs"
 required-features = ["cloud-cli"]
