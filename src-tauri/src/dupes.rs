@@ -118,19 +118,20 @@ pub fn find_duplicates(files: Vec<FileEntry>, prefix_len: usize) -> Vec<DupeGrou
     out
 }
 
-/// jwalk로 파일만 수집 — 심링크/reparse는 scanner::keep_entry가 순회에서 제외.
+/// walkdir로 파일만 수집 — 심링크/reparse는 scanner::keep_entry가 순회에서 제외.
 /// 콤비네이터 형태: 순회/메타데이터 오류는 조용히 건너뜀(수집기는 skipped를 집계하지 않음).
 pub fn collect_files(root: &Path) -> Vec<FileEntry> {
-    jwalk::WalkDir::new(root)
+    walkdir::WalkDir::new(root)
         .follow_links(false)
-        .skip_hidden(false)
-        .process_read_dir(|_d, _p, _s, children| {
-            children.retain(|r| r.as_ref().map(crate::scanner::keep_entry).unwrap_or(true));
-        })
         .into_iter()
+        .filter_entry(crate::scanner::keep_entry)
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file())
-        .filter_map(|e| e.metadata().ok().map(|md| FileEntry { path: e.path(), size: md.len(), mtime_ms: mtime_millis(&md) }))
+        .filter_map(|e| e.metadata().ok().map(|md| FileEntry {
+            path: e.path().to_path_buf(),
+            size: md.len(),
+            mtime_ms: mtime_millis(&md),
+        }))
         .collect()
 }
 
@@ -152,12 +153,10 @@ pub fn collect_files_bounded(
     }
     let started = Instant::now();
     let mut seen = 0usize;
-    let walker = jwalk::WalkDir::new(root)
+    let walker = walkdir::WalkDir::new(root)
         .follow_links(false)
-        .skip_hidden(false)
-        .process_read_dir(|_d, _p, _s, children| {
-            children.retain(|r| r.as_ref().map(crate::scanner::keep_entry).unwrap_or(true));
-        });
+        .into_iter()
+        .filter_entry(crate::scanner::keep_entry);
     let mut files = Vec::new();
     for entry in walker {
         if started.elapsed() >= max_duration {
@@ -175,7 +174,7 @@ pub fn collect_files_bounded(
             continue;
         };
         files.push(FileEntry {
-            path: entry.path(),
+            path: entry.path().to_path_buf(),
             size: metadata.len(),
             mtime_ms: mtime_millis(&metadata),
         });
