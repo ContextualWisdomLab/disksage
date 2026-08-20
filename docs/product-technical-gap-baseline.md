@@ -204,3 +204,7 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - Follow-up source head `037a9b3` removes the model identifier from the GitHub Step Summary, leaving
   only fixed status/hash/byte fields visible in logs; the model id remains inside the short-lived,
   bounded JSON artifact. The focused contract and `actionlint` checks still pass.
+- PR #212 exact head `7f1ac61` had one Strix attempt fail before repository analysis because the
+  runner's Caido bootstrap could not connect to `127.0.0.1:48080` after ten attempts; the job log
+  contains no source finding. A rerun is queued as job `96570913837`, so the PR remains unmerged and
+  its security gate is not treated as passed until that exact job produces a terminal result.
