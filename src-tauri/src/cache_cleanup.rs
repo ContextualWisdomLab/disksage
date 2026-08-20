@@ -1,4 +1,5 @@
-use std::path::Path;
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 use crate::{commands::CleanResult, rules, safety};
 
@@ -17,6 +18,207 @@ pub const AUTO_REGENERABLE_CACHE_IDS: [&str; 6] = [
     "uv-cache",
     "trivy-cache",
 ];
+
+const PROVEN_CACHE_TRASH_NAMES: [&str; 9] = [
+    "_cacache",
+    "v11",
+    "Default",
+    "simple-v21",
+    "typequest",
+    "wheels-v6",
+    "sdists-v9",
+    "builds-v0",
+    "db",
+];
+const MAX_CACHE_TRASH_ENTRIES: usize = 1_000_000;
+
+/// A cache directory already in OS Trash whose structure is still recognizable without reading
+/// user file contents. Permanent removal is intentionally limited to these signatures.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CacheTrashCandidate {
+    pub name: String,
+    pub path: String,
+    pub bytes: u64,
+    pub signature: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CacheTrashPurgeResult {
+    pub name: String,
+    pub path: String,
+    pub bytes: u64,
+    pub signature: String,
+    pub purged: bool,
+    pub error: String,
+}
+
+fn direct_child_is_dir(path: &Path, name: &str) -> bool {
+    let child = path.join(name);
+    std::fs::symlink_metadata(child)
+        .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+}
+
+fn direct_child_is_file(path: &Path, name: &str) -> bool {
+    let child = path.join(name);
+    std::fs::symlink_metadata(child)
+        .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+}
+
+fn looks_like_proven_cache_trash(path: &Path, name: &str) -> Option<&'static str> {
+    let signature = match name {
+        "_cacache"
+            if direct_child_is_dir(path, "content-v2") && direct_child_is_dir(path, "tmp") =>
+        {
+            "npm-cacache"
+        }
+        "v11"
+            if direct_child_is_dir(path, "metadata")
+                && direct_child_is_dir(path, "metadata-full") =>
+        {
+            "pnpm-store-v11"
+        }
+        "Default"
+            if direct_child_is_dir(path, "Cache") && direct_child_is_dir(path, "Code Cache") =>
+        {
+            "edge-profile-cache"
+        }
+        "simple-v21" if direct_child_is_dir(path, "pypi") => "uv-simple-index-cache",
+        "typequest" if direct_child_is_dir(path, "common") && direct_child_is_dir(path, ".2") => {
+            "uv-typequest-cache"
+        }
+        "wheels-v6" if direct_child_is_dir(path, "pypi") => "uv-wheel-cache",
+        "sdists-v9"
+            if direct_child_is_dir(path, "pypi") && direct_child_is_dir(path, "editable") =>
+        {
+            "uv-sdist-cache"
+        }
+        "builds-v0" => {
+            let has_build = std::fs::read_dir(path)
+                .ok()
+                .into_iter()
+                .flatten()
+                .filter_map(Result::ok)
+                .any(|entry| {
+                    let child = entry.path();
+                    entry.file_name().to_string_lossy().starts_with(".tmp")
+                        && direct_child_is_dir(path, &entry.file_name().to_string_lossy())
+                        && direct_child_is_file(&child, "pyvenv.cfg")
+                });
+            has_build.then_some("uv-build-cache")?
+        }
+        "db" if direct_child_is_file(path, "trivy.db")
+            && direct_child_is_file(path, "metadata.json") =>
+        {
+            "trivy-database-cache"
+        }
+        _ => return None,
+    };
+    Some(signature)
+}
+
+fn bounded_tree_size(path: &Path, entries: &mut usize) -> Result<u64, String> {
+    *entries = entries.saturating_add(1);
+    if *entries > MAX_CACHE_TRASH_ENTRIES {
+        return Err("cache-trash-entry-limit-exceeded".into());
+    }
+    let metadata =
+        std::fs::symlink_metadata(path).map_err(|_| "cache-trash-stat-failed".to_string())?;
+    if metadata.file_type().is_symlink() {
+        return Err("cache-trash-symlink-rejected".into());
+    }
+    if metadata.is_file() {
+        return Ok(metadata.len());
+    }
+    if !metadata.is_dir() {
+        return Err("cache-trash-object-type-unsupported".into());
+    }
+    let mut total = 0u64;
+    for entry in std::fs::read_dir(path).map_err(|_| "cache-trash-read-dir-failed".to_string())? {
+        let entry = entry.map_err(|_| "cache-trash-read-entry-failed".to_string())?;
+        total = total.saturating_add(bounded_tree_size(&entry.path(), entries)?);
+    }
+    Ok(total)
+}
+
+/// Return only direct OS-Trash children whose cache signature is proven by structure and whose
+/// size can be bounded without following symlinks or reading file contents.
+pub fn proven_cache_trash_candidates(home: &Path) -> Vec<CacheTrashCandidate> {
+    let trash = home.join(".Trash");
+    let Ok(entries) = std::fs::read_dir(&trash) else {
+        return Vec::new();
+    };
+    let mut candidates = Vec::new();
+    for entry in entries.filter_map(Result::ok) {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !PROVEN_CACHE_TRASH_NAMES.contains(&name.as_str()) {
+            continue;
+        }
+        let path = entry.path();
+        let Some(signature) = looks_like_proven_cache_trash(&path, &name) else {
+            continue;
+        };
+        let mut count = 0;
+        let Ok(bytes) = bounded_tree_size(&path, &mut count) else {
+            continue;
+        };
+        candidates.push(CacheTrashCandidate {
+            name,
+            path: path.to_string_lossy().into_owned(),
+            bytes,
+            signature: signature.into(),
+        });
+    }
+    candidates.sort_by(|left, right| left.path.cmp(&right.path));
+    candidates
+}
+
+/// Permanently remove only the proven cache directories in OS Trash. The explicit CLI flag is the
+/// approval boundary; each object is rechecked immediately before removal and journaled.
+pub fn purge_proven_cache_trash(
+    home: &Path,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Result<Vec<CacheTrashPurgeResult>, String> {
+    let planned = proven_cache_trash_candidates(home);
+    let mut results = Vec::with_capacity(planned.len());
+    for candidate in planned {
+        let path = PathBuf::from(&candidate.path);
+        let mut entry = crate::safety::JournalEntry {
+            ts_ms: now_ms,
+            op: "permanent_cache_trash_delete".into(),
+            path: candidate.path.clone(),
+            bytes: candidate.bytes,
+            outcome: "pending".into(),
+        };
+        crate::safety::journal_append(journal_path, &entry).map_err(|error| error.to_string())?;
+        let outcome = if looks_like_proven_cache_trash(&path, &candidate.name)
+            .is_some_and(|signature| signature == candidate.signature)
+        {
+            match std::fs::remove_dir_all(&path) {
+                Ok(()) => Ok(()),
+                Err(error) => Err(error.to_string()),
+            }
+        } else {
+            Err("cache-trash-signature-changed".into())
+        };
+        entry.outcome = match &outcome {
+            Ok(()) => "ok".into(),
+            Err(error) => format!("error:{error}"),
+        };
+        crate::safety::journal_append(journal_path, &entry).map_err(|error| error.to_string())?;
+        results.push(CacheTrashPurgeResult {
+            name: candidate.name,
+            path: candidate.path,
+            bytes: candidate.bytes,
+            signature: candidate.signature,
+            purged: outcome.is_ok(),
+            error: outcome.err().unwrap_or_default(),
+        });
+    }
+    Ok(results)
+}
 
 fn active_use_blocker(
     evidence: &crate::git_worktree::GitWorktreeActiveUseEvidence,
@@ -240,6 +442,34 @@ mod tests {
             active_use_blocker(&active),
             Some("cache-target-active-use-detected")
         );
+    }
+
+    #[test]
+    fn proven_cache_trash_requires_signature_and_journals_purge() {
+        let tmp = tempfile::tempdir().unwrap();
+        let trash = tmp.path().join(".Trash");
+        fs::create_dir(&trash).unwrap();
+        let npm = trash.join("_cacache");
+        fs::create_dir_all(npm.join("content-v2")).unwrap();
+        fs::create_dir(npm.join("tmp")).unwrap();
+        fs::write(npm.join("content-v2").join("entry"), b"cache").unwrap();
+        let unrelated = trash.join("Default");
+        fs::create_dir(&unrelated).unwrap();
+        fs::create_dir(unrelated.join("Cache")).unwrap();
+
+        let candidates = proven_cache_trash_candidates(tmp.path());
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].signature, "npm-cacache");
+        assert_eq!(candidates[0].bytes, 5);
+
+        let journal = tmp.path().join("journal.jsonl");
+        let results = purge_proven_cache_trash(tmp.path(), &journal, 7).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].purged);
+        assert!(!npm.exists());
+        let journal_text = fs::read_to_string(journal).unwrap();
+        assert!(journal_text.contains("permanent_cache_trash_delete"));
+        assert!(journal_text.contains("\"outcome\":\"ok\""));
     }
 
     #[cfg(unix)]

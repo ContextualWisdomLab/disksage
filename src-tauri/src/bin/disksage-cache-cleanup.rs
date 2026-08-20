@@ -3,25 +3,33 @@
 //! Without `--execute` this command is read-only. With it, the library path moves only inactive,
 //! identity-bound children of the npm, pnpm, Adobe, Edge, uv, and Trivy cache roots to OS Trash.
 
-use disksage_lib::cache_cleanup::clean_regenerable_caches_headless;
+use disksage_lib::cache_cleanup::{
+    clean_regenerable_caches_headless, proven_cache_trash_candidates, purge_proven_cache_trash,
+};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-const USAGE: &str = "Usage: disksage-cache-cleanup [--execute] [--journal-path PATH]\n\
+const USAGE: &str = "Usage: disksage-cache-cleanup [--execute] [--purge-proven-cache-trash] [--journal-path PATH]\n\
 Without --execute it reports the command is a no-op. With --execute it moves only observed,\n\
-inactive regenerable cache children to OS Trash.";
+inactive regenerable cache children to OS Trash. --purge-proven-cache-trash permanently removes\n\
+only structurally proven cache directories already in OS Trash.";
 
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
     execute: bool,
+    purge_proven_cache_trash: bool,
     journal_path: PathBuf,
 }
 
-fn default_journal_path() -> Result<PathBuf, String> {
-    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+fn home_directory() -> Result<PathBuf, String> {
+    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
-        .ok_or_else(|| "home-directory-unavailable".to_string())?;
+        .ok_or_else(|| "home-directory-unavailable".to_string())
+}
+
+fn default_journal_path() -> Result<PathBuf, String> {
+    let home = home_directory()?;
     #[cfg(target_os = "macos")]
     let path = home
         .join("Library")
@@ -47,11 +55,13 @@ fn default_journal_path() -> Result<PathBuf, String> {
 
 fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Args>, String> {
     let mut execute = false;
+    let mut purge_proven_cache_trash = false;
     let mut journal_path = default_journal_path()?;
     let mut args = raw_args.into_iter();
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--execute") => execute = true,
+            Some("--purge-proven-cache-trash") => purge_proven_cache_trash = true,
             Some("--journal-path") => {
                 journal_path = PathBuf::from(
                     args.next()
@@ -68,6 +78,7 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
     }
     Ok(Some(Args {
         execute,
+        purge_proven_cache_trash,
         journal_path,
     }))
 }
@@ -85,11 +96,19 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
         return Ok(());
     };
     if !args.execute {
+        let cache_trash = if args.purge_proven_cache_trash {
+            serde_json::to_value(proven_cache_trash_candidates(&home_directory()?))
+                .map_err(|error| error.to_string())?
+        } else {
+            serde_json::Value::Array(Vec::new())
+        };
         println!(
             "{}",
             serde_json::json!({
                 "executed": false,
                 "journal_path": args.journal_path,
+                "purge_proven_cache_trash": args.purge_proven_cache_trash,
+                "proven_cache_trash": cache_trash,
                 "notice": "pass --execute to perform the guarded OS-Trash operation"
             })
         );
@@ -97,6 +116,19 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
     }
     if let Some(parent) = args.journal_path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    if args.purge_proven_cache_trash {
+        let results = purge_proven_cache_trash(&home_directory()?, &args.journal_path, now_ms())?;
+        println!(
+            "{}",
+            serde_json::json!({
+                "executed": true,
+                "purge_proven_cache_trash": true,
+                "journal_path": args.journal_path,
+                "results": results
+            })
+        );
+        return Ok(());
     }
     let evidence = clean_regenerable_caches_headless(&args.journal_path, now_ms())?;
     println!(
@@ -134,5 +166,14 @@ mod tests {
         ])
         .unwrap_err();
         assert_eq!(error, "--journal-path must be absolute");
+    }
+
+    #[test]
+    fn purge_cache_trash_flag_is_explicit() {
+        let args = parse_args([OsString::from("--purge-proven-cache-trash")])
+            .unwrap()
+            .unwrap();
+        assert!(!args.execute);
+        assert!(args.purge_proven_cache_trash);
     }
 }

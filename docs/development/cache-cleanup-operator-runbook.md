@@ -22,6 +22,15 @@ The same guarded path is available without the GUI as
 Omit `--execute` for a no-op check; pass an absolute `--journal-path` when running outside the
 installed application so the operation remains auditable.
 
+If the Trash is consuming space, inspect only structurally proven cache entries first:
+
+`cargo run --locked --manifest-path src-tauri/Cargo.toml --bin disksage-cache-cleanup -- --purge-proven-cache-trash --journal-path /ABSOLUTE/journal.jsonl`
+
+The command is read-only until both `--execute` and `--purge-proven-cache-trash` are supplied.
+That explicit path permanently removes only the known cache signatures already in OS Trash; it
+does not empty Trash generally and never targets cloud placeholders or user files. Review its JSON
+result and journal before treating the reported bytes as reclaimed.
+
 The cache catalog includes the macOS `uv`, Hugging Face, Codex runtime, Gradle, npm, pip, and Cargo
 registry caches when present. Cache contents are not cloud candidates: they are reproducible local
 artifacts, while user files continue through the metadata-first cloud planner and its provider
