@@ -64,8 +64,11 @@
 - A fresh read-only macOS observation reported iCloud `needs-sync-up`; iCloud quota still had about
   4.3 TB remaining, so DiskSage keeps native copy and eviction blocked on provider state rather than
   quota. A bounded Google Drive File Provider dump reported active upload/download markers and a
-  14,558-entry reconciliation backlog; the existing `provider-global-sync-*` blockers cover this
-  Finder "copy preparing" failure mode without terminating `bird` or `fileproviderd`.
+  14,558-entry reconciliation backlog; the latest dump additionally reports Google Drive
+  `temporarily disconnected`, `needs-indexing`, and File Provider error `-1004`. The existing
+  `provider-global-sync-*` blockers cover this Finder "copy preparing" failure mode without
+  terminating `bird` or `fileproviderd`; provider diagnostics and bounded client recovery remain
+  available even while the destination root is unreadable.
 - PR #209 current head `2a6ed44` now bounds Homebrew and iCloud eviction error feedback and its
   privacy contract passes locally (Vitest 2/2; svelte-check 0 errors/0 warnings). Its hosted checks
   are running and the old review decision remains until a fresh approval. PR #235 completed its
