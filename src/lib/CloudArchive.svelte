@@ -618,6 +618,12 @@
     return new Date(ms).toLocaleDateString();
   }
 
+  function evidenceObservedAt(ms: number): string {
+    return Number.isFinite(ms) && ms > 0
+      ? new Date(ms).toLocaleString()
+      : "확인 시각 미상";
+  }
+
   function syncStateLabel(state: api.ProviderSyncState | undefined): string {
     const labels: Record<api.ProviderSyncState, string> = {
       complete: "공급자 동기화 완료",
@@ -768,6 +774,7 @@
             활성 upload {icloudHealth.file_provider_activity.active_upload_count}개 / download {icloudHealth.file_provider_activity.active_download_count}개
           {/if}
         </span>
+        <p class="muted">마지막 증거 확인: {evidenceObservedAt(icloudHealth.observed_at_ms)}</p>
         {#if icloudHealth.new_copy_admission_blockers.length > 0}
           <p class="warning">
             차단 사유:
