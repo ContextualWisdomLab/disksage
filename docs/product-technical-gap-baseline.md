@@ -134,6 +134,11 @@
   evidence remains incomplete and new-copy admission stays blocked. CloudArchive now fingerprints
   iCloud blocker/progress state, displays the same-blocker duration, and directs Finder-copy
   cancellation after 15 minutes; the focused contract test and `svelte-check` both pass.
+- A live low-space observation reached 133 MiB free while iCloud probing was still active. The
+  current process table and Git worktree registry showed no holder for the temporary
+  `/private/tmp/disksage-pr228-current` review worktree, so it was removed with the normal
+  `git worktree remove` path; APFS headroom recovered to 4.3 GiB. Other repositories' worktrees
+  were not deleted, and provider data/processes were not touched.
 - To restore the emergency local headroom without touching user or provider data, only Podman
   dangling (untagged and unreferenced) images were pruned; the one active container and all volumes
   were retained. Host APFS free space rose from roughly 150 MiB to 1.8 GiB, matching the bounded

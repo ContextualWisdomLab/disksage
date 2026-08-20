@@ -142,6 +142,10 @@ eviction fail-closed.
 The same incident reclaimed only generated local artifacts; `.codegraph` indexes are now included
 in the bounded development-artifact inventory and identity-checked OS-Trash path, never in cloud
 offload or provider-managed cleanup.
+On 2026-08-21, a temporary DiskSage review worktree was first checked against the live process
+table and current worktree registry, then removed with `git worktree remove` because no process
+held it. This reclaimed the worktree's generated build state and raised APFS headroom from 133 MiB
+to 4.3 GiB; unrelated repository worktrees remain untouched.
 The provider UI keeps a path-free blocker fingerprint across bounded observations and escalates
 the operator guidance after 15 minutes of the same blocker; this is advisory state only and never
 authorizes a cloud write, provider restart, or source eviction.
