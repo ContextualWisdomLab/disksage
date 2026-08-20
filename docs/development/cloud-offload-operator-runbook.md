@@ -56,6 +56,11 @@ The runtime sequence is:
    and records whether the process is observed afterward. A missing post-restart observation still
    blocks copying; the action performs no cloud write, attestation, or source eviction. iCloud's
    system-managed `bird` process is intentionally not terminated by DiskSage.
+   The identical bounded action is available headlessly:
+   `cargo run --features cloud-cli --bin disksage-provider-recovery -- --provider google-drive`
+   (or `onedrive`). A non-zero result such as `provider-recovery-quit-request-failed` is evidence
+   that the provider remains blocked; do not fall back to Finder folder copies or force-kill the
+   provider. Use `--output ABSOLUTE_NEW_FILE.json` when a 0600 recovery receipt is needed.
 5. If the destination is valid but the receipt source is missing, unsafe, or macOS reports it as a
    File Provider `dataless` object, reconciliation writes a blocked Goal/ADR projection and records
    `source-not-present`, `source-content-not-local`, or the precise source-state blocker; it never

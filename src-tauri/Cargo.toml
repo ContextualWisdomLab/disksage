@@ -112,6 +112,11 @@ path = "src/bin/disksage-provider-client-runtime.rs"
 required-features = ["cloud-cli"]
 
 [[bin]]
+name = "disksage-provider-recovery"
+path = "src/bin/disksage-provider-recovery.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
 name = "disksage-podman-reclaim-plan"
 path = "src/bin/disksage-podman-reclaim-plan.rs"
 

@@ -79,6 +79,10 @@ application bundle, asks the client to quit through `osascript`, waits for the p
 clear, and launches the same bundle through `/usr/bin/open`. iCloud `bird` is system-managed and is
 never force-terminated. The recovery result is diagnostic only: it records whether the launch was
 observed afterward and can never claim cloud write, upload attestation, or source-eviction authority.
+The same recovery contract is available to automation through the
+`disksage-provider-recovery --provider onedrive|google-drive` CLI. Its optional 0600 output is a
+recovery receipt, not a cloud-transfer receipt; a quit timeout or failed quit remains a blocker and
+must not be retried through Finder or a force-kill.
 
 Podman VM storage is a separate local reclaim domain, not cloud data. DiskSage exposes read-only
 machine, guest-filesystem, image, container, volume, and raw-image evidence through the same
