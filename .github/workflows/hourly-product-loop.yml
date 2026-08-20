@@ -76,7 +76,7 @@ jobs:
 
   contextual-orchestrator-opencode:
     needs: bootstrap-contextual-orchestrator-credentials
-    if: needs.bootstrap-contextual-orchestrator-credentials.result != 'failure'
+    if: ${{ always() && needs.bootstrap-contextual-orchestrator-credentials.result != 'failure' }}
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     env:
