@@ -60,6 +60,19 @@ test('native coverage thresholds run on a Node release that implements every req
   );
 });
 
+test('PR files cap regression is both workflow-triggering and executed by exact audit coverage', () => {
+  const regression = 'scripts/actions-registry-audit-pr-files-cap.test.mjs';
+  const occurrences = workflow.split(regression).length - 1;
+  assert.ok(
+    occurrences >= 3,
+    'the PR-files cap regression must trigger pull/push runs and execute in contracts coverage',
+  );
+  assert.ok(
+    contractsJob.includes(regression),
+    'exact audit-module coverage must execute the PR-files cap regression',
+  );
+});
+
 test('live registry uses the tested Node runtime and bounded transient GitHub API retries', () => {
   const contractsVersion = contractsJob.match(/node-version:\s+(\d+\.\d+\.\d+)/)?.[1];
   const liveVersion = liveRegistryJob.match(/node-version:\s+(\d+\.\d+\.\d+)/)?.[1];
