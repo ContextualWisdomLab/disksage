@@ -1198,8 +1198,12 @@ fn copy_and_verify(
     if before.len() != candidate.bytes || before_modified_ms != candidate.modified_ms {
         return Err("source-changed-since-plan".into());
     }
-    if destination.exists() {
-        return Err("destination-already-exists".into());
+    match std::fs::symlink_metadata(destination) {
+        Ok(_) => return Err("destination-already-exists".into()),
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            return Err("destination-state-unavailable".into())
+        }
+        Err(_) => {}
     }
     let parent = destination
         .parent()
