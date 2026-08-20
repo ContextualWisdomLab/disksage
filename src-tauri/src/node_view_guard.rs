@@ -53,10 +53,11 @@ pub fn node_view(res: &ScanResult, path: &Path) -> Result<NodeView, String> {
     })
 }
 
-/// Hardened Tauri boundary for node inspection.
+/// Hardened Tauri boundary for node inspection. The Rust symbol is intentionally distinct from
+/// the legacy private command macro while the public IPC command remains `get_node`.
 #[cfg(not(coverage))]
-#[tauri::command]
-pub fn get_node(path: String, state: tauri::State<AppState>) -> Result<NodeView, String> {
+#[tauri::command(rename = "get_node")]
+pub fn get_node_guarded(path: String, state: tauri::State<AppState>) -> Result<NodeView, String> {
     let guard = state.result.lock().unwrap();
     let result = guard.as_ref().ok_or("no scan result")?;
     node_view(result, &PathBuf::from(path))
