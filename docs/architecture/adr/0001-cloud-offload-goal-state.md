@@ -146,6 +146,10 @@ The latest bounded observation still reports the same transfer/reconciliation an
 missing-item cohort with only about 1.2 GiB of local headroom; a Homebrew cleanup dry-run found no
 reclaimable entries, so DiskSage keeps the Finder copy cancellation and provider-quietness gate in
 force rather than inventing a local cleanup authority.
+The one-minute reconciliation loop may refresh provider state and replaceable projections, but
+immutable per-item evidence history is bounded to 128 records per receipt. The Naruon readiness
+validator also mirrors the iCloud health contract for active File Provider upload/download
+progress, exporting a blocked envelope instead of failing validation.
 
 ## Consequences
 

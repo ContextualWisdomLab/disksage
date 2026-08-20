@@ -115,6 +115,10 @@
   pending copy and wait for a quiet provider observation before retrying.
 - Provider probe failures now show the same fail-closed Finder-cancel guidance as a blocked
   aggregate report, preventing an unavailable diagnostic from looking like a safe retry state.
+- Background reconciliation now retains at most 128 immutable provider evidence records per
+  receipt, so the one-minute UI loop cannot grow the evidence directory without bound. Active
+  iCloud File Provider upload/download progress is also accepted as a blocked Naruon readiness
+  envelope.
 - A fresh bounded macOS observation on this loop measured about 1.2 GiB available (91% used) and
   Google Drive still reporting upload/download progress, a 168-entry reconciliation backlog,
   `error generation: 403`, and repeated File Provider `-1005 itemNotFound` entries. The
