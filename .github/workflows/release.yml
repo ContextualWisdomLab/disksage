@@ -156,9 +156,20 @@ jobs:
             local asset_path="$2"
             local usage_marker="$3"
             cp "$source_path" "$asset_path"
-            local help_output
-            help_output="$("$asset_path" --help 2>&1 || true)"
-            grep -F "$usage_marker" <<<"$help_output"
+            local help_stdout help_stderr
+            help_stderr="$(mktemp)"
+            if ! help_stdout="$("$asset_path" --help 2>"$help_stderr")"; then
+              rm -f "$help_stderr"
+              echo "operational-cli-help-failed" >&2
+              return 1
+            fi
+            if [[ -s "$help_stderr" ]]; then
+              rm -f "$help_stderr"
+              echo "operational-cli-help-wrote-stderr" >&2
+              return 1
+            fi
+            rm -f "$help_stderr"
+            grep -F "$usage_marker" <<<"$help_stdout"
             local asset_dir asset_name
             asset_dir="$(dirname "$asset_path")"
             asset_name="$(basename "$asset_path")"
