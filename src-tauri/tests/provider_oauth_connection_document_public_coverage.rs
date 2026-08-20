@@ -120,6 +120,12 @@ fn connection_document_path_and_missing_document_are_non_authorizing() {
     let path = connections_path(temp.path());
     assert_eq!(path, temp.path().join("cloud-oauth-connections.json"));
     assert!(load_connections(&path).unwrap().is_empty());
+
+    let first_run_path = temp.path().join("not-created-yet").join("connections.json");
+    assert!(
+        load_connections(&first_run_path).unwrap().is_empty(),
+        "a missing app-data parent on first use must remain an empty, non-authorizing document"
+    );
 }
 
 #[test]
