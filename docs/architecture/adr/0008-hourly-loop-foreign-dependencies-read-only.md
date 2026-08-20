@@ -40,6 +40,19 @@ workflow, copied into its KV, passed to the advisory Agent, or printed in
 logs. A missing orchestrator URL/token produces a visible skip; there is no
 OAuth, Copilot, or local mutation fallback.
 
+## Operational evidence
+
+On 2026-08-21, the latest central scheduled runs (including
+[`31991358711`](https://github.com/ContextualWisdomLab/.github/actions/runs/31991358711))
+ended in `startup_failure` before creating a job. The called scheduler requests
+`id-token: write`, while the caller exposed only `contents: read`; the missing
+caller permission prevented the OpenCode OIDC exchange from starting. The
+minimal repair is tracked in
+[`ContextualWisdomLab/.github#1180`](https://github.com/ContextualWisdomLab/.github/pull/1180)
+at head `25efbca56f5749cf99f3a5d532070c1b01c6c79d`. Until that PR is normally
+merged and a scheduled run completes, the hourly cadence is not claimed as
+operational evidence.
+
 ## Consequences
 
 - The GitHub workflow cannot change a foreign database or repository and does

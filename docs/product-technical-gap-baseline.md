@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-21 (Asia/Seoul)
-**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` source through `c0ae0d8`; this
+**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` source through `11ec131`; this
 baseline records the current loop's runtime and integration evidence.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.  
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
@@ -272,3 +272,9 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   `svelte-check` reports 0 errors / 0 warnings, and `actionlint` passes. The current PR head is
   `c0ae0d8b68d72ba3b9214cb77f9bca365ccaaa00`; hosted checks have restarted and no merge gate is
   bypassed.
+- The central `.github` DiskSage hourly workflow has repeated scheduled `startup_failure` runs,
+  including `31991358711`, before any job was created. The called scheduler requires
+  `id-token: write`, which the caller lacked; central repair PR #1180 adds only that permission,
+  passed its hourly-cadence contract check, and is awaiting the normal required checks/review.
+  Until a post-merge scheduled run completes, the hourly loop remains an identified gap rather
+  than a proven live capability.
