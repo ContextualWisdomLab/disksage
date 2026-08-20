@@ -85,22 +85,30 @@ fn provider_evidence_is_owner_read_only_and_create_once_at_runtime() {
 
 #[cfg(unix)]
 #[test]
-fn provider_evidence_file_is_private_from_creation_not_only_after_path_chmod() {
-    let source = std::fs::read_to_string(
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/provider_evidence.rs"),
-    )
-    .expect("provider evidence source must be readable");
+fn provider_evidence_symlink_directory_fails_closed_without_publication() {
+    use disksage_lib::provider_evidence::write_immutable_sync_evidence;
+    use std::os::unix::fs::{symlink, PermissionsExt};
 
-    assert!(
-        source.contains("options.mode(0o400);"),
-        "provider evidence must be created with read-only owner mode atomically, so a crash before post-write chmod cannot leave a broader evidence file"
-    );
-    assert!(
-        source.contains("file.set_permissions(permissions)"),
-        "post-write hardening must remain bound to the opened evidence object rather than re-resolving its pathname"
-    );
-    assert!(
-        !source.contains("std::fs::set_permissions(&path, permissions)"),
-        "provider evidence hardening must not chmod a pathname that can be replaced after create_new"
+    let fixture = tempfile::tempdir().expect("temporary provider evidence fixture");
+    let real_directory = fixture.path().join("real-provider-evidence");
+    let linked_directory = fixture.path().join("linked-provider-evidence");
+    std::fs::create_dir(&real_directory).expect("create real provider evidence directory");
+    std::fs::set_permissions(
+        &real_directory,
+        std::fs::Permissions::from_mode(0o700),
+    )
+    .expect("make provider evidence directory private");
+    symlink(&real_directory, &linked_directory).expect("create provider evidence symlink");
+
+    let error = write_immutable_sync_evidence(&linked_directory, &valid_provider_evidence())
+        .expect_err("symlink provider evidence authority must fail closed");
+
+    assert_eq!(error, "provider-evidence-directory-unsafe");
+    assert_eq!(
+        std::fs::read_dir(&real_directory)
+            .expect("real provider evidence directory remains readable")
+            .count(),
+        0,
+        "symlink refusal must not publish through its target"
     );
 }
