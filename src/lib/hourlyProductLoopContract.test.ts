@@ -39,6 +39,8 @@ describe("hourly contextual-orchestrator loop contract", () => {
     expect(workflow).toContain("response_sha256");
     expect(workflow).toContain("hourly-product-loop-receipt-${{ github.run_id }}");
     expect(workflow).toContain("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a");
+    expect(workflow).toContain('status=" + .status');
+    expect(workflow).not.toContain('model=" + .model + " status=');
     expect(workflow).not.toContain("/tmp/agent-ok.txt");
   });
 
