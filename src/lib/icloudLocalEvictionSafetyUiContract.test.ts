@@ -14,7 +14,7 @@ describe("iCloud local eviction safety UI", () => {
     const source = readSource();
 
     expect(source).toContain("로컬 최신본·업로드 미확인");
-    expect(source).toContain("로컬 최신본이지만 공급자 업로드가 아직 확인되지 않았습니다.");
+    expect(source).toContain("로컬 최신본이지만 공급자 업로드가 아직 확인되지 않았습니다. 업로드 완료 후 다시 확인하십시오.");
     expect(source).toContain('role="status"');
     expect(source).not.toContain("String(e)");
     expect(source).not.toContain("result_record_error");
