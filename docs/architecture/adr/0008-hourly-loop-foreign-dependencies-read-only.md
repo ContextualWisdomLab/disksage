@@ -37,6 +37,9 @@ OAuth, Copilot, or local mutation fallback.
 - Provider credentials must be configured where contextual-orchestrator is
   deployed; this repository cannot prove that external deployment state.
 - Exact event-SHA context prevents the loop from reviewing a stale `main` tree.
+- Source revision `9b1c270` additionally uploads a seven-day, path-free advisory receipt when the
+  endpoint is configured. The receipt contains only schema version, event SHA, model identifier,
+  status, response byte count, and response hash; the model response body is never persisted.
 
 ## Rejected alternatives
 
