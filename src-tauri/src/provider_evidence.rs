@@ -7,9 +7,16 @@ use crate::cloud_transfer::{ProviderSyncEvidence, SyncEvidenceKind};
 use std::path::Path;
 
 #[cfg(not(coverage))]
-use std::io::{Read, Write};
+use std::io::Read;
+#[cfg(all(not(coverage), not(unix)))]
+use std::io::Write;
 #[cfg(not(coverage))]
 use std::path::PathBuf;
+
+#[cfg(all(not(coverage), unix))]
+use crate::private_evidence::{
+    write_object_bound_bytes_create_new_with_hooks, ObjectBoundPublicationError,
+};
 
 pub const PROVIDER_EVIDENCE_RECORD_VERSION: u32 = 1;
 #[cfg(not(coverage))]
@@ -130,10 +137,42 @@ fn secure_evidence_directory(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(all(not(coverage), unix))]
+fn map_object_bound_publication_error(error: ObjectBoundPublicationError) -> String {
+    match error {
+        ObjectBoundPublicationError::ParentWritableByOthers => {
+            "provider-evidence-directory-writable-by-others"
+        }
+        ObjectBoundPublicationError::ParentIdentityDrift => {
+            "provider-evidence-directory-identity-drift"
+        }
+        ObjectBoundPublicationError::ParentMissing
+        | ObjectBoundPublicationError::ParentUnavailable
+        | ObjectBoundPublicationError::ParentUnsafe
+        | ObjectBoundPublicationError::ForbiddenRootUnavailable
+        | ObjectBoundPublicationError::InsideForbiddenRoot => "provider-evidence-directory-unsafe",
+        ObjectBoundPublicationError::NameInvalid | ObjectBoundPublicationError::CreateFailed => {
+            "provider-evidence-record-create-failed"
+        }
+        ObjectBoundPublicationError::ModeInvalid => "provider-evidence-record-permissions-failed",
+        ObjectBoundPublicationError::WriteFailed => "provider-evidence-record-write-failed",
+        ObjectBoundPublicationError::MetadataFailed => "provider-evidence-record-metadata-failed",
+        ObjectBoundPublicationError::ParentSyncFailed => "provider-evidence-directory-sync-failed",
+        ObjectBoundPublicationError::RecordIdentityDrift => {
+            "provider-evidence-record-identity-drift"
+        }
+        ObjectBoundPublicationError::InvalidationFailed => {
+            "provider-evidence-record-invalidation-failed"
+        }
+    }
+    .to_string()
+}
+
 /// Persist the full provider claim before it is used to authorize source eviction.
 ///
-/// The file is create-only, read-only, fsynced, and named by the receipt, observation time, and
-/// integrity digest. Existing evidence is never overwritten.
+/// On Unix the final create/write/fsync/identity checks are performed relative to the exact opened
+/// private evidence directory object. A same-user rename-and-replace race therefore cannot redirect
+/// immutable provider evidence to another directory. Existing evidence is never overwritten.
 #[cfg(not(coverage))]
 pub fn write_immutable_sync_evidence(
     directory: &Path,
@@ -185,13 +224,11 @@ pub fn write_immutable_sync_evidence(
 fn write_immutable_sync_evidence_unix_with_hook<F>(
     directory: &Path,
     evidence: &ProviderSyncEvidence,
-    before_publish: F,
+    before_create: F,
 ) -> Result<(ProviderSyncEvidenceRecord, PathBuf), String>
 where
     F: FnOnce(),
 {
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-
     let record = create_sync_evidence_record(evidence)?;
     secure_evidence_directory(directory)?;
     let path = directory.join(record_filename(&record));
@@ -201,36 +238,17 @@ where
         return Err("provider-evidence-record-too-large".into());
     }
 
-    before_publish();
+    write_object_bound_bytes_create_new_with_hooks(
+        &path,
+        &encoded,
+        0o400,
+        None,
+        || {},
+        before_create,
+        || {},
+    )
+    .map_err(map_object_bound_publication_error)?;
 
-    // This deliberately preserves the pre-repair pathname publication for the RED regression below.
-    // The following commit replaces this block with the shared object-bound publication primitive.
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true).mode(0o400);
-    let mut file = options
-        .open(&path)
-        .map_err(|_| "provider-evidence-record-create-failed".to_string())?;
-    let result = (|| -> Result<(), String> {
-        file.write_all(&encoded)
-            .and_then(|_| file.sync_all())
-            .map_err(|_| "provider-evidence-record-write-failed".to_string())?;
-        let mut permissions = file
-            .metadata()
-            .map_err(|_| "provider-evidence-record-metadata-failed".to_string())?
-            .permissions();
-        permissions.set_mode(0o400);
-        file.set_permissions(permissions)
-            .map_err(|_| "provider-evidence-record-permissions-failed".to_string())?;
-        std::fs::File::open(directory)
-            .and_then(|dir| dir.sync_all())
-            .map_err(|_| "provider-evidence-directory-sync-failed".to_string())?;
-        Ok(())
-    })();
-    if let Err(error) = result {
-        drop(file);
-        let _ = std::fs::remove_file(&path);
-        return Err(error);
-    }
     Ok((record, path))
 }
 
