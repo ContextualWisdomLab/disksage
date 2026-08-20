@@ -165,6 +165,14 @@ immutable per-item evidence history is bounded to 128 records per receipt. The N
 validator also mirrors the iCloud health contract for active File Provider upload/download
 progress, exporting a blocked envelope instead of failing validation.
 
+The follow-up read-only observation at `2026-08-21 04:31:47 +0900` retained only aggregate evidence
+from the bounded iCloud dump: 97 `createItemBasedOnTemplate` and 46 `fetchContentsForItemWithID`
+requests reported `no progress`, with no upload/download progress marker in the retained output.
+The local volume subsequently measured about 2.3 GiB available while `bird` and `fileproviderd`
+were active. This confirms the Finder “preparing” symptom is a provider-stall signal, not a safe
+copy completion; DiskSage keeps the source, cancels only through the operator-visible Finder
+control, and never treats the probe or process activity as write, attestation, or eviction authority.
+
 ## Consequences
 
 - `is_local_current=true` and `is_uploaded=false` produces `pending-upload` and no eviction permit.

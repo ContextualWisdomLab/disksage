@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-21 (Asia/Seoul)
-**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` implementation @ `2a33ed5`; documentation @ `097e7db` (latest committed baseline before this evidence update)
+**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` implementation and documentation @ `9d8f21c`.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.  
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
 
@@ -149,3 +149,20 @@
 ## Loop update rule
 
 At each scheduled or operator loop, update this file only with new dated evidence: current head, open-PR/check state, provider receipt state, disk headroom, and the smallest acceptance proof completed. Do not convert an incomplete provider probe, filename date, model answer, or GitHub review comment into a transfer or deletion authority.
+
+## 2026-08-21 follow-up loop evidence
+
+- Current implementation/documentation head is `9d8f21c`; the worktree is clean and the only local
+  DiskSage worktree is `/private/tmp/disksage-current`. The temporary PR #189 worktree was removed
+  after its focused test passed, so no stale DiskSage worktree remains.
+- A bounded read-only iCloud File Provider dump captured at `2026-08-21 04:31:47 +0900` contained
+  97 `createItemBasedOnTemplate` and 46 `fetchContentsForItemWithID` requests marked `no progress`;
+  no upload/download progress marker was retained in that bounded output. This is incomplete
+  provider evidence, so Finder-copy cancellation and new-copy admission remain blocked.
+- The local APFS volume currently has about 2.3 GiB available (79% used) while `bird` and
+  `fileproviderd` remain active. DiskSage has not terminated provider processes, Finder, or user
+  data; the observed pressure is not a deletion authority.
+- PR #189 advanced to exact head `635d918` with the missing executed/non-executed Homebrew result
+  contract assertions; its focused Vitest passed 5/5 and hosted checks/review are rerunning. PR
+  #213 remains at `9d8f21c` with hosted checks pending and its old review decision not yet replaced
+  by a fresh approval. No protected merge or source eviction is claimed.
