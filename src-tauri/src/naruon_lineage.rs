@@ -148,6 +148,106 @@ fn ontology_class(kind: ArchiveKind) -> String {
     format!("{ONTOLOGY_NAMESPACE}{label}")
 }
 
+/// Return a deterministic, path-free node identifier for the exported relation graph.
+///
+/// The envelope still carries the legacy relative/destination paths for compatibility, but graph
+/// edges must not repeat private paths as identifiers. A domain-separated digest keeps IDs stable
+/// for the same receipt while avoiding accidental disclosure in catalog consumers.
+fn opaque_node(kind: &str, value: impl AsRef<[u8]>) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage-file-lineage-node\0");
+    hasher.update(kind.as_bytes());
+    hasher.update(&[0]);
+    hasher.update(value.as_ref());
+    format!("{kind}:{}", hasher.finalize().to_hex())
+}
+
+fn relation(subject: String, predicate: &str, object: String) -> NaruonFileLineageRelation {
+    NaruonFileLineageRelation {
+        subject,
+        predicate: format!("{ONTOLOGY_NAMESPACE}{predicate}"),
+        object,
+        source: "disksage.cloud-offload".into(),
+    }
+}
+
+fn lineage_relations(
+    receipt: &CloudCopyReceipt,
+    lineage: &crate::cloud_transfer::CloudLineageSnapshot,
+    evidence_record: Option<&ProviderSyncEvidenceRecord>,
+    remote_content: Option<&crate::cloud_transfer::RemoteContentProof>,
+) -> Vec<NaruonFileLineageRelation> {
+    let source = opaque_node("source", &receipt.candidate_fingerprint);
+    let metadata = opaque_node("metadata", &lineage.review_fingerprint);
+    let archive = opaque_node(
+        "archive",
+        receipt.lineage_fingerprint.as_deref().unwrap_or_default(),
+    );
+    let destination = opaque_node("destination", receipt.destination.as_bytes());
+    let receipt_node = opaque_node("receipt", &receipt.receipt_id);
+    let provider = format!("{ONTOLOGY_NAMESPACE}Provider/{}", receipt.provider.as_str());
+    let mut relations = vec![
+        relation(source.clone(), "hasMetadataEvidence", metadata),
+        relation(
+            source.clone(),
+            "hasProductionEvidence",
+            opaque_node(
+                "production",
+                format!(
+                    "{}:{}:{}",
+                    lineage.production_time_ms,
+                    lineage.production_time_source,
+                    lineage.production_time_confidence
+                ),
+            ),
+        ),
+        NaruonFileLineageRelation {
+            subject: source.clone(),
+            predicate: format!("{ONTOLOGY_NAMESPACE}classifiedAs"),
+            object: ontology_class(lineage.kind),
+            source: "disksage.cloud-offload".into(),
+        },
+        relation(source, "archivedTo", archive.clone()),
+        relation(archive.clone(), "materializedAt", destination),
+        relation(archive.clone(), "hasReceipt", receipt_node.clone()),
+        relation(archive.clone(), "managedBy", provider),
+        relation(
+            receipt_node.clone(),
+            "hasSyncState",
+            opaque_node(
+                "sync-state",
+                evidence_record.map_or("unknown", |record| record.evidence.sync_state.as_str()),
+            ),
+        ),
+    ];
+    if let Some(decision_id) = lineage.review_decision_id.as_deref() {
+        relations.push(relation(
+            receipt_node.clone(),
+            "reviewedBy",
+            opaque_node("review", decision_id),
+        ));
+    }
+    if let Some(record) = evidence_record {
+        let evidence_node = opaque_node("provider-evidence", &record.record_id);
+        relations.push(relation(
+            receipt_node.clone(),
+            "attestedBy",
+            evidence_node.clone(),
+        ));
+        if let Some(remote) = remote_content {
+            relations.push(relation(
+                evidence_node,
+                "hasRemoteObject",
+                opaque_node(
+                    "remote-object",
+                    format!("{}:{}", remote.object_id, remote.revision),
+                ),
+            ));
+        }
+    }
+    relations
+}
+
 fn source_filename(relative_path: &str) -> Result<String, String> {
     if relative_path.is_empty() || relative_path.chars().any(char::is_control) {
         return Err("naruon-lineage-source-relative-path-invalid".into());
@@ -300,12 +400,7 @@ pub fn export_naruon_file_lineage(
         source_relative_path: lineage.relative_path.clone(),
         source_context: lineage.source_context.clone(),
         ontology_class: ontology_class(lineage.kind),
-        ontology_relations: vec![NaruonFileLineageRelation {
-            subject: "source".into(),
-            predicate: format!("{ONTOLOGY_NAMESPACE}archivedTo"),
-            object: "destination".into(),
-            source: "disksage.cloud-offload".into(),
-        }],
+        ontology_relations: lineage_relations(receipt, lineage, evidence_record, remote_content),
         raw_content_sha256: receipt.sha256.clone(),
         raw_content_blake3: receipt.blake3.clone(),
         bytes: receipt.bytes,
@@ -593,10 +688,19 @@ mod tests {
             envelope.ontology_class,
             "https://disksage.app/ontology#Document"
         );
-        assert_eq!(
-            envelope.ontology_relations[0].predicate,
-            "https://disksage.app/ontology#archivedTo"
-        );
+        assert!(envelope
+            .ontology_relations
+            .iter()
+            .any(|edge| { edge.predicate == "https://disksage.app/ontology#archivedTo" }));
+        assert!(envelope
+            .ontology_relations
+            .iter()
+            .any(|edge| { edge.predicate == "https://disksage.app/ontology#attestedBy" }));
+        assert!(envelope
+            .ontology_relations
+            .iter()
+            .flat_map(|edge| [&edge.subject, &edge.object])
+            .all(|node| !node.contains("/source/") && !node.contains("/cloud/")));
         assert_eq!(envelope.raw_content_sha256, "d".repeat(64));
         assert_eq!(envelope.metadata_evidence[0].field, "production-date");
         assert_eq!(
