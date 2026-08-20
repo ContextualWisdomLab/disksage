@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Surface the existing read-only Podman reclaim probe in the desktop Cleanup workflow through a versioned privacy-safe schema that keeps configured capacity, raw logical size, host allocation, guest usage, logical cleanup candidates, and verified physical reclaimability semantically separate; local paths, machine names, image identifiers, command output, and dynamic failures are redacted before the frontend boundary, and image/container/volume review domains remain independent.
+
 ### Changed
 
 - Bind Tauri packaging to a fail-closed cross-manifest release-version verifier so `package.json`, `Cargo.toml`, `tauri.conf.json`, and any `v*` release tag must agree on one valid Semantic Version before a bundle is built.
@@ -26,6 +30,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Security
 
+- Harden the Podman desktop IPC boundary so schema-v1 notices are accepted only as the two exact privacy-safe statements, platform display values are limited to `linux`, `macos`, or `windows`, any projected issue forces incomplete evidence in Rust, contradictory complete-plus-issues payloads are rejected by the frontend, contradictory `unverified` physical-reclaim claims are removed in Rust with stable issue evidence, complete exact-image observations require their candidate-set fingerprint, detached fingerprints are rejected, and positive image/container/volume candidates conservatively force their own independent review boundary before frontend display.
 - Add buyer-verifiable release artifact provenance with read-only platform build jobs, a tag-only least-privilege attestation job, exact 17-file admission, adjacent operational-CLI SHA-256 verification, preserved artifact namespaces, non-regular-entry rejection, and a separate publication job that cannot publish before attestation succeeds.
 - Require explicit organization-tenant authority when either the destination account scope is organization-owned or the canonical organization-sensitive review reason is present; fail closed in both frontend projection and durable Rust transfer authorization even when the ordinary review flag is absent, and regression-test contradictory signal combinations.
 - Enable an explicit fail-closed Tauri Content Security Policy to keep executable scripts and fonts local, grant production network authority only to the Tauri IPC transport, confine Vite WebSocket HMR to a separate development-only CSP, deny object/frame/base-URI authority, deny form submissions with explicit `form-action 'none'`, deny unused worker, media, and web-app-manifest fetch authority with explicit `'none'` directives, and regression-test against null, wildcard, remote-script/style, eval, and development-authority leakage.
