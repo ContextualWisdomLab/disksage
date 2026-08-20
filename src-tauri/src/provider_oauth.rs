@@ -999,9 +999,14 @@ where
 {
     let original = load_connections(connection_document_path)?;
     let connection = connection_for_root(&original, root)?;
+    let matching_ids: Vec<_> = original
+        .iter()
+        .filter(|entry| connection_matches_root(entry, root))
+        .map(|entry| entry.connection_id.clone())
+        .collect();
     let updated: Vec<_> = original
         .iter()
-        .filter(|entry| entry.connection_id != connection.connection_id)
+        .filter(|entry| !connection_matches_root(entry, root))
         .cloned()
         .collect();
     save_connections(connection_document_path, &updated)?;
@@ -1010,6 +1015,12 @@ where
             return Err("provider-oauth-keyring-delete-and-config-rollback-failed".into());
         }
         return Err(error);
+    }
+    for stale_id in matching_ids
+        .iter()
+        .filter(|connection_id| **connection_id != connection.connection_id)
+    {
+        let _ = delete_token(stale_id);
     }
     Ok(())
 }
