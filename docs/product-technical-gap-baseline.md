@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-21 (Asia/Seoul)
-**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` source through `9b1c270`; this
+**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` source through `037a9b3`; this
 baseline records the current loop's runtime and integration evidence.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.  
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
@@ -201,3 +201,6 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   contract passed 2/2, the full frontend suite passed 26 files/118 tests, and `svelte-check`
   reported 0 errors/0 warnings. PR #213 exact head at this capture was `6ef85e4`; its hosted
   build/security/review checks remain authoritative and no protected merge is claimed.
+- Follow-up source head `037a9b3` removes the model identifier from the GitHub Step Summary, leaving
+  only fixed status/hash/byte fields visible in logs; the model id remains inside the short-lived,
+  bounded JSON artifact. The focused contract and `actionlint` checks still pass.
