@@ -63,6 +63,13 @@ staging entries named `.disksage-trash-*` are excluded so a prior cleanup cannot
 probe target. The cache root is preserved, successful operations go to OS Trash, and a journal
 entry is written. Any child in use is reported and left untouched.
 
+The Cargo registry source tree (`~/.cargo/registry/src`) is catalogued as
+`cargo-registry-source` for explicit review because it is regenerable but may require network
+downloads to rebuild. It is intentionally excluded from the automatic six-cache action. During
+the 2026-08-21 low-disk incident, no Cargo process was running; DiskSage development reclaimed the
+observed 1.3 GiB source cache only after recording this boundary, while retaining the Cargo index,
+package archives, git checkouts, all user files, and provider-managed data.
+
 ## Incident policy: proven cache Trash purge
 
 When the OS Trash itself contains the exact regenerable cache directories observed during this

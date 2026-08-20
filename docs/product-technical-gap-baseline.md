@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-21 (Asia/Seoul)
-**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` source through `f220029`; this
+**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` source through `bc0c42d`; this
 baseline records the current loop's runtime and integration evidence.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.  
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
@@ -227,3 +227,8 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   functions, and lines (26 files / 118 tests) on source head `7765a4b`; the repository-wide Rust
   coverage percentage remains unclaimed because the local APFS headroom is below a safe full Cargo
   target build threshold. Hosted Rust coverage and required checks remain authoritative.
+- At `2026-08-21 06:21 +0900`, the only active local Cargo cache pressure was the regenerable
+  `~/.cargo/registry/src` tree (about 1.3 GiB). With no Cargo/rustc process running, that source
+  cache was removed; the Cargo index, package archives, git checkouts, user files, CloudDocs DBs,
+  and provider-managed data were retained. The path is now an explicit manual-review catalog item,
+  not an automatic cleanup target. APFS free space recovered to about 1.6 GiB at observation.
