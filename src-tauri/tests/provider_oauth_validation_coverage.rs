@@ -86,6 +86,19 @@ fn structurally_valid_but_unbound_connection() -> OAuthConnection {
     }
 }
 
+fn make_private(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+}
+
+fn write_private(path: &std::path::Path, bytes: impl AsRef<[u8]>) {
+    fs::write(path, bytes).unwrap();
+    make_private(path);
+}
+
 #[test]
 fn client_identifier_admission_rejects_generic_and_provider_specific_malformed_values() {
     assert!(validate_client_id(CloudProvider::Onedrive, MICROSOFT_CLIENT_ID).is_ok());
@@ -156,15 +169,14 @@ fn valid_connection_document_round_trips_and_duplicate_current_ids_fail_closed()
     let target = root(CloudProvider::Onedrive);
     let connection = bound_connection(CloudProvider::Onedrive);
 
-    fs::write(
+    write_private(
         &path,
         serde_json::to_vec(&json!({
             "version": 1,
             "connections": [connection.clone()]
         }))
         .unwrap(),
-    )
-    .unwrap();
+    );
     let loaded = load_connections(&path).unwrap();
     assert_eq!(loaded, vec![connection.clone()]);
     assert_eq!(connection_for_root(&loaded, &target).unwrap(), connection);
@@ -238,47 +250,45 @@ fn connection_document_rejects_non_regular_oversized_invalid_and_unsupported_doc
     let oversized = fs::File::create(&path).unwrap();
     oversized.set_len(256 * 1024 + 1).unwrap();
     drop(oversized);
+    make_private(&path);
     assert_eq!(
         load_connections(&path).unwrap_err(),
         "oauth-connection-document-too-large"
     );
 
-    fs::write(&path, b"not-json").unwrap();
+    write_private(&path, b"not-json");
     assert_eq!(
         load_connections(&path).unwrap_err(),
         "oauth-connection-document-invalid"
     );
 
-    fs::write(
+    write_private(
         &path,
         serde_json::to_vec(&json!({"version": 2, "connections": []})).unwrap(),
-    )
-    .unwrap();
+    );
     assert_eq!(
         load_connections(&path).unwrap_err(),
         "oauth-connection-document-version-or-count-invalid"
     );
 
     let too_many = vec![structurally_valid_but_unbound_connection(); 33];
-    fs::write(
+    write_private(
         &path,
         serde_json::to_vec(&json!({"version": 1, "connections": too_many})).unwrap(),
-    )
-    .unwrap();
+    );
     assert_eq!(
         load_connections(&path).unwrap_err(),
         "oauth-connection-document-version-or-count-invalid"
     );
 
-    fs::write(
+    write_private(
         &path,
         serde_json::to_vec(&json!({
             "version": 1,
             "connections": [structurally_valid_but_unbound_connection()]
         }))
         .unwrap(),
-    )
-    .unwrap();
+    );
     assert_eq!(
         load_connections(&path).unwrap_err(),
         "oauth-connection-id-mismatch"
@@ -317,15 +327,14 @@ fn connection_document_rejects_each_structural_authority_field_before_root_match
     malformed.push((connection, "oauth-client-id-provider-format-invalid"));
 
     for (connection, expected_error) in malformed {
-        fs::write(
+        write_private(
             &path,
             serde_json::to_vec(&json!({
                 "version": 1,
                 "connections": [connection]
             }))
             .unwrap(),
-        )
-        .unwrap();
+        );
         assert_eq!(load_connections(&path).unwrap_err(), expected_error);
     }
 }
