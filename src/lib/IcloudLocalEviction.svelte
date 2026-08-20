@@ -94,6 +94,12 @@
       ? "macOS File Provider"
       : "Foundation ubiquitous item";
   }
+
+  function uploadLabel(state: api.IcloudLocalState): string {
+    if (state.is_uploaded && !state.is_uploading) return "완료";
+    if (state.is_uploading) return "업로드 중";
+    return "미완료";
+  }
 </script>
 
 <div class="local-eviction-panel">
@@ -130,8 +136,8 @@
         · {observationLabel(plan.icloud_state.observation_method)}
       </div>
       <div class="status-grid">
-        <span>업로드 {plan.icloud_state.is_uploaded && !plan.icloud_state.is_uploading ? "완료" : "미완료"}</span>
-        <span>최신 버전 {plan.icloud_state.downloading_status_current ? "확인" : "미확인"}</span>
+        <span>업로드 {uploadLabel(plan.icloud_state)}</span>
+        <span>로컬 current {plan.icloud_state.downloading_status_current ? "예" : "아니오"}</span>
         <span>충돌 {plan.icloud_state.has_unresolved_conflicts ? "있음" : "없음"}</span>
         <span>활성 사용 {plan.active_use.active ? "감지" : "없음"}</span>
         <span>동기화 일시정지 {plan.icloud_state.is_sync_paused === false ? "아님" : "미확인/해당"}</span>
