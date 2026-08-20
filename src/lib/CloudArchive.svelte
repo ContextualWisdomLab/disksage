@@ -22,6 +22,7 @@
   // fileproviderctl can spend tens of seconds inside the system provider database while iCloud is
   // already unhealthy. Back off automatic probes so DiskSage does not add another hot reader.
   const ICLOUD_HEALTH_BLOCKED_RETRY_INTERVAL_MS = 5 * 60_000;
+  const PROVIDER_STALL_WARNING_MS = 15 * 60_000;
   const PROVIDER_ADMISSION_BLOCKERS = new Set([
     "icloud-new-copy-admission-blocked",
     "provider-global-sync-blocked",
@@ -88,6 +89,8 @@
   let providerGlobalSync: api.ProviderGlobalSyncReport | null = $state(null);
   let providerGlobalSyncError = $state("");
   let providerGlobalSyncObservedAtMs = $state(0);
+  let providerGlobalSyncBlockedSinceMs = $state(0);
+  let providerGlobalSyncFingerprint = $state("");
   let checkingProviderGlobalSync = $state(false);
   let recoveringProvider = $state(false);
   let providerRecovery: api.ProviderRecoveryOutput | null = $state(null);
@@ -476,17 +479,41 @@
       providerGlobalSync = null;
       providerGlobalSyncError = "";
       providerGlobalSyncObservedAtMs = 0;
+      providerGlobalSyncBlockedSinceMs = 0;
+      providerGlobalSyncFingerprint = "";
       return;
     }
     checkingProviderGlobalSync = true;
     providerGlobalSyncError = "";
     try {
-      providerGlobalSync = await api.inspectCloudProviderGlobalSync(root.path);
-      providerGlobalSyncObservedAtMs = Date.now();
+      const observedAtMs = Date.now();
+      const next = await api.inspectCloudProviderGlobalSync(root.path);
+      const fingerprint = [
+        next.provider,
+        next.state,
+        next.blockers.join(","),
+        next.upload_progress_present,
+        next.download_progress_present,
+        next.pending_indexable_count ?? "",
+      ].join("|");
+      if (next.blockers.length === 0) {
+        providerGlobalSyncBlockedSinceMs = 0;
+        providerGlobalSyncFingerprint = "";
+      } else if (providerGlobalSyncFingerprint !== fingerprint) {
+        providerGlobalSyncBlockedSinceMs = observedAtMs;
+        providerGlobalSyncFingerprint = fingerprint;
+      }
+      providerGlobalSync = next;
+      providerGlobalSyncObservedAtMs = observedAtMs;
     } catch (e) {
+      const observedAtMs = Date.now();
       providerGlobalSync = null;
       providerGlobalSyncError = boundedCloudArchiveErrorMessage("provider-sync", e);
-      providerGlobalSyncObservedAtMs = Date.now();
+      if (providerGlobalSyncFingerprint !== "error") {
+        providerGlobalSyncBlockedSinceMs = observedAtMs;
+        providerGlobalSyncFingerprint = "error";
+      }
+      providerGlobalSyncObservedAtMs = observedAtMs;
     } finally {
       checkingProviderGlobalSync = false;
     }
@@ -512,6 +539,8 @@
     providerGlobalSync = null;
     providerGlobalSyncError = "";
     providerGlobalSyncObservedAtMs = 0;
+    providerGlobalSyncBlockedSinceMs = 0;
+    providerGlobalSyncFingerprint = "";
     void refreshProviderGlobalSync();
   }
 
@@ -870,11 +899,20 @@
             · 인덱싱 대기 {providerGlobalSync.pending_indexable_count}개
           {/if}
           · 마지막 관찰 {evidenceObservedAt(providerGlobalSyncObservedAtMs)} · 1분 후 자동 재확인
+          {#if providerGlobalSyncBlockedSinceMs > 0}
+            · 동일 차단 지속 {duration(Math.max(0, providerGlobalSyncObservedAtMs - providerGlobalSyncBlockedSinceMs))}
+          {/if}
         </span>
         {#if providerGlobalSync.blockers.length > 0}
           <p class="warning">
             차단 사유: {providerGlobalSync.blockers.map(providerGlobalSyncBlockerLabel).join(", ")}
           </p>
+          {#if providerGlobalSyncBlockedSinceMs > 0 && providerGlobalSyncObservedAtMs - providerGlobalSyncBlockedSinceMs >= PROVIDER_STALL_WARNING_MS}
+            <p class="warning">
+              동일한 공급자 차단 상태가 15분 이상 지속되었습니다. Finder에 남은 복사 대기를 취소하고,
+              공급자 앱을 재기동한 뒤 상태가 clear가 될 때까지 새 복사·attestation·원본 정리를 시작하지 마십시오.
+            </p>
+          {/if}
           {#if selectedRootDetails()?.provider !== "icloud"}
             <button onclick={recoverProviderClient} disabled={recoveringProvider || checkingProviderGlobalSync}>
               {recoveringProvider ? "공급자 앱 재기동 중…" : "공급자 앱 재기동 후 상태 재확인"}
