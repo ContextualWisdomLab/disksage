@@ -75,6 +75,10 @@
   cancel the Finder operation, records any new copy as failed until a fresh plan exists, preserves
   the source, and keeps provider copy, attestation, and eviction disabled until a bounded probe
   reports usable headroom and a readable destination.
+- A later bounded probe observed the Google Drive domain readable again but still with active upload
+  and download progress plus a 168-entry reconciliation backlog (`needs-indexing: no`). This is
+  still `provider-global-sync-transfer-active`/`provider-global-sync-reconciliation-pending`, so
+  the Finder copy remains unsafe to retry until a fresh quiet probe is authoritative.
 - PR #209 current head `2a6ed44` now bounds Homebrew and iCloud eviction error feedback and its
   privacy contract passes locally (Vitest 2/2; svelte-check 0 errors/0 warnings). Its hosted checks
   are running and the old review decision remains until a fresh approval. PR #235 completed its
