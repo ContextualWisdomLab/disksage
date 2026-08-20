@@ -154,12 +154,22 @@ jobs:
             local asset_path="$2"
             local usage_marker="$3"
             cp "$source_path" "$asset_path"
-            local help_output
-            help_output="$("$asset_path" --help 2>&1 || true)"
-            grep -F "$usage_marker" <<<"$help_output"
-            local asset_dir asset_name
+            local asset_dir asset_name help_stdout help_stderr
             asset_dir="$(dirname "$asset_path")"
             asset_name="$(basename "$asset_path")"
+            help_stdout="$RUNNER_TEMP/${asset_name}.help.stdout"
+            help_stderr="$RUNNER_TEMP/${asset_name}.help.stderr"
+            if ! "$asset_path" --help >"$help_stdout" 2>"$help_stderr"; then
+              printf '%s --help must exit successfully.\n' "$asset_name" >&2
+              cat "$help_stderr" >&2
+              return 1
+            fi
+            if [[ -s "$help_stderr" ]]; then
+              printf '%s --help wrote to stderr on the successful path.\n' "$asset_name" >&2
+              cat "$help_stderr" >&2
+              return 1
+            fi
+            grep -F "$usage_marker" "$help_stdout"
             if command -v sha256sum >/dev/null 2>&1; then
               (cd "$asset_dir" && sha256sum "$asset_name") >"$asset_path.sha256"
             else
@@ -218,21 +228,45 @@ jobs:
           path: release-artifacts
           merge-multiple: false
 
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - name: Generate and validate source-bound SBOM
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          cargo metadata --locked --format-version=1 >"$RUNNER_TEMP/disksage-cargo-metadata.json"
+          mkdir -p release-artifacts/sbom
+          node scripts/ci/generate-release-sbom.mjs \
+            --cargo-metadata "$RUNNER_TEMP/disksage-cargo-metadata.json" \
+            --npm-lock package-lock.json \
+            --source-revision "$GITHUB_SHA" \
+            --created "$(git show -s --format=%cI "$GITHUB_SHA")" \
+            --output release-artifacts/sbom/disksage.spdx.json
+          node scripts/ci/generate-release-sbom.mjs \
+            --validate release-artifacts/sbom/disksage.spdx.json
+
       - name: Verify release artifact checksums
         shell: bash
         run: |
           set -euo pipefail
           require_exactly_one_path() {
-            local path_pattern="$1" label="$2" count=0 matched_path=""
-            while IFS= read -r -d '' matched_path; do count=$((count + 1)); done < <(find release-artifacts -type f -path "$path_pattern" -print0)
+            local path_pattern="$1" label="$2" count=0
+            while IFS= read -r -d ''; do count=$((count + 1)); done < <(find release-artifacts -type f -path "$path_pattern" -print0)
             if [[ $count -ne 1 ]]; then
               printf 'Expected exactly one %s, found %s.\n' "$label" "$count" >&2
               exit 1
             fi
           }
           require_exactly_one_file() {
-            local file_name="$1" count=0 matched_path=""
-            while IFS= read -r -d '' matched_path; do count=$((count + 1)); done < <(find release-artifacts -type f -name "$file_name" -print0)
+            local file_name="$1" count=0
+            while IFS= read -r -d ''; do count=$((count + 1)); done < <(find release-artifacts -type f -name "$file_name" -print0)
             if [[ $count -ne 1 ]]; then
               printf 'Expected exactly one release artifact named %s, found %s.\n' "$file_name" "$count" >&2
               exit 1
@@ -288,16 +322,17 @@ jobs:
               exit 1
             fi
           done
+          require_exactly_one_file disksage.spdx.json
+          node "$GITHUB_WORKSPACE/scripts/ci/generate-release-sbom.mjs" --validate "$(find release-artifacts -type f -name 'disksage.spdx.json' -print -quit)"
           unexpected_entry="$(find release-artifacts -mindepth 1 ! -type d ! -type f -print -quit)"
           if [[ -n "$unexpected_entry" ]]; then
             printf 'Unexpected release artifact entries: non-regular path %s is not publishable.\n' "$unexpected_entry" >&2
             exit 1
           fi
           regular_file_count=0
-          matched_path=""
-          while IFS= read -r -d '' matched_path; do regular_file_count=$((regular_file_count + 1)); done < <(find release-artifacts -type f -print0)
-          if [[ $regular_file_count -ne 17 ]]; then
-            printf 'Unexpected release artifact entries: expected exactly 17 regular files, found %s.\n' "$regular_file_count" >&2
+          while IFS= read -r -d ''; do regular_file_count=$((regular_file_count + 1)); done < <(find release-artifacts -type f -print0)
+          if [[ $regular_file_count -ne 18 ]]; then
+            printf 'Unexpected release artifact entries: expected exactly 18 regular files, found %s.\n' "$regular_file_count" >&2
             exit 1
           fi
 
@@ -389,7 +424,7 @@ jobs:
         if: always()
         shell: bash
         run: |
-          echo "== target/release top =="; ls -la src-tauri/target/release/ 2>/dev/null | head -40 || true
+          echo "== target/release top =="; find src-tauri/target/release/ -maxdepth 1 -mindepth 1 -print 2>/dev/null | head -40 || true
           echo "== ggml/llama/cuda/vulkan libs under target =="; find src-tauri/target -maxdepth 8 -iregex '.*\(ggml\|llama\|cudart\|vulkan\).*\.\(dll\|so\|dylib\)' 2>/dev/null | head -60 || true
           echo "== out/backends dirs =="; find src-tauri/target -type d -name backends 2>/dev/null | head || true
           echo "== CUDA runtime dll/so =="; find "${CUDA_PATH:-/usr/local/cuda}" -iname 'cudart*' 2>/dev/null | head || true
@@ -400,7 +435,12 @@ jobs:
           set +e +o pipefail
           mkdir -p gpu-run
           find src-tauri/target/release -maxdepth 1 -type f \( -name 'disksage' -o -name 'disksage.exe' -o -name 'DiskSage' -o -name 'DiskSage.exe' \) -exec cp {} gpu-run/ \; 2>/dev/null || true
-          tb=$(ls -t src-tauri/target/release/deps/disksage_lib-* 2>/dev/null | grep -viE '\.(d|pdb)$' | head -1)
+          tb=""
+          for candidate in src-tauri/target/release/deps/disksage_lib-*; do
+            [ -f "$candidate" ] || continue
+            [[ "$candidate" =~ \.(d|pdb)$ ]] && continue
+            if [ -z "$tb" ] || [ "$candidate" -nt "$tb" ]; then tb="$candidate"; fi
+          done
           [ -n "$tb" ] && cp "$tb" "gpu-run/engine_smoketest${{ matrix.os == 'windows-2022' && '.exe' || '' }}" 2>/dev/null || true
           find src-tauri/target -maxdepth 8 -iregex '.*\(ggml\|llama\).*\(\.dll\|\.so\|\.so\..*\)' -exec cp {} gpu-run/ \; 2>/dev/null || true
           for pat in 'cudart64_*.dll' 'cublas64_*.dll' 'cublasLt64_*.dll'; do
