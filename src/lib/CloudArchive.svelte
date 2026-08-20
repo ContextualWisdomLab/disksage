@@ -494,7 +494,7 @@
         next.blockers.join(","),
         next.upload_progress_present,
         next.download_progress_present,
-        next.pending_indexable_count ?? "",
+        next.pending_indexable_count !== null && next.pending_indexable_count > 0,
       ].join("|");
       if (next.blockers.length === 0) {
         providerGlobalSyncBlockedSinceMs = 0;
