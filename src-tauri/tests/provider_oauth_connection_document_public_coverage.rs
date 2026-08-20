@@ -50,6 +50,19 @@ fn connection(root: &CloudRoot) -> OAuthConnection {
     }
 }
 
+fn make_private(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+}
+
+fn write_private(path: &std::path::Path, bytes: impl AsRef<[u8]>) {
+    std::fs::write(path, bytes).unwrap();
+    make_private(path);
+}
+
 #[test]
 fn provider_oauth_public_identity_inputs_are_bounded_and_provider_specific() {
     assert_eq!(
@@ -140,18 +153,17 @@ fn malformed_directory_version_count_and_size_fail_closed_before_lookup() {
     );
 
     let invalid_json = temp.path().join("invalid.json");
-    std::fs::write(&invalid_json, b"not-json").unwrap();
+    write_private(&invalid_json, b"not-json");
     assert_eq!(
         load_connections(&invalid_json).unwrap_err(),
         "oauth-connection-document-invalid"
     );
 
     let wrong_version = temp.path().join("wrong-version.json");
-    std::fs::write(
+    write_private(
         &wrong_version,
         serde_json::to_vec(&serde_json::json!({"version": 2, "connections": []})).unwrap(),
-    )
-    .unwrap();
+    );
     assert_eq!(
         load_connections(&wrong_version).unwrap_err(),
         "oauth-connection-document-version-or-count-invalid"
@@ -159,11 +171,10 @@ fn malformed_directory_version_count_and_size_fail_closed_before_lookup() {
 
     let too_many = temp.path().join("too-many.json");
     let entries: Vec<_> = (0..33).map(|_| serde_json::json!({})).collect();
-    std::fs::write(
+    write_private(
         &too_many,
         serde_json::to_vec(&serde_json::json!({"version": 1, "connections": entries})).unwrap(),
-    )
-    .unwrap();
+    );
     assert_eq!(
         load_connections(&too_many).unwrap_err(),
         "oauth-connection-document-version-or-count-invalid"
@@ -172,6 +183,7 @@ fn malformed_directory_version_count_and_size_fail_closed_before_lookup() {
     let oversized = temp.path().join("oversized.json");
     let file = std::fs::File::create(&oversized).unwrap();
     file.set_len(256 * 1024 + 1).unwrap();
+    make_private(&oversized);
     assert_eq!(
         load_connections(&oversized).unwrap_err(),
         "oauth-connection-document-too-large"
@@ -211,15 +223,14 @@ fn connection_document_rejects_invalid_connection_authority_fields() {
 
     for (index, (candidate, expected_error)) in cases.into_iter().enumerate() {
         let path = temp.path().join(format!("invalid-connection-{index}.json"));
-        std::fs::write(
+        write_private(
             &path,
             serde_json::to_vec(&serde_json::json!({
                 "version": 1,
                 "connections": [candidate]
             }))
             .unwrap(),
-        )
-        .unwrap();
+        );
         assert_eq!(load_connections(&path).unwrap_err(), expected_error);
     }
 }
@@ -233,15 +244,14 @@ fn valid_document_binds_exact_root_and_duplicate_matches_are_ambiguous() {
     let root = google_root("/Cloud/Drive".into());
     let expected = connection(&root);
     let path = temp.path().join("connections.json");
-    std::fs::write(
+    write_private(
         &path,
         serde_json::to_vec(&serde_json::json!({
             "version": 1,
             "connections": [expected.clone()]
         }))
         .unwrap(),
-    )
-    .unwrap();
+    );
 
     let loaded = load_connections(&path).unwrap();
     assert_eq!(loaded, vec![expected.clone()]);
