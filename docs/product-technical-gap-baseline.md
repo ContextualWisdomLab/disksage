@@ -69,6 +69,12 @@
   `provider-global-sync-*` blockers cover this Finder "copy preparing" failure mode without
   terminating `bird` or `fileproviderd`; provider diagnostics and bounded client recovery remain
   available even while the destination root is unreadable.
+- The follow-up observation of the user-visible `real_datasets` Finder copy still showed “준비 중”
+  after hours while the same Google Drive domain remained temporarily disconnected; the local APFS
+  volume measured only 150 MiB available (99% full). DiskSage therefore instructs the operator to
+  cancel the Finder operation, records any new copy as failed until a fresh plan exists, preserves
+  the source, and keeps provider copy, attestation, and eviction disabled until a bounded probe
+  reports usable headroom and a readable destination.
 - PR #209 current head `2a6ed44` now bounds Homebrew and iCloud eviction error feedback and its
   privacy contract passes locally (Vitest 2/2; svelte-check 0 errors/0 warnings). Its hosted checks
   are running and the old review decision remains until a fresh approval. PR #235 completed its
