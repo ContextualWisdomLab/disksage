@@ -311,14 +311,20 @@ fn connection_document_parent(path: &Path) -> &Path {
 }
 
 fn validate_connection_document_parent(parent: &Path, allow_missing: bool) -> Result<(), String> {
-    match std::fs::symlink_metadata(parent) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-            Err("oauth-connection-directory-unsafe".into())
+    for ancestor in parent
+        .ancestors()
+        .filter(|ancestor| !ancestor.as_os_str().is_empty())
+    {
+        match std::fs::symlink_metadata(ancestor) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err("oauth-connection-directory-unsafe".into());
+            }
+            Ok(_) => {}
+            Err(error) if allow_missing && error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err("oauth-connection-directory-unavailable".into()),
         }
-        Ok(_) => Ok(()),
-        Err(error) if allow_missing && error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(_) => Err("oauth-connection-directory-unavailable".into()),
     }
+    Ok(())
 }
 
 pub fn load_connections(path: &Path) -> Result<Vec<OAuthConnection>, String> {
@@ -1213,6 +1219,34 @@ mod tests {
         symlink(&target, &link).unwrap();
         assert!(load_connections(&link).is_err());
         assert!(save_connections(&link, &[]).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn connection_document_rejects_symlinked_directory_ancestors_for_read_and_write() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let outside = temp.path().join("outside-ancestor");
+        let outside_parent = outside.join("nested");
+        std::fs::create_dir_all(&outside_parent).unwrap();
+        let outside_document = outside_parent.join("connections.json");
+        let original = b"{\"version\":1,\"connections\":[]}";
+        std::fs::write(&outside_document, original).unwrap();
+
+        let alias = temp.path().join("app-data-alias");
+        symlink(&outside, &alias).unwrap();
+        let path = alias.join("nested").join("connections.json");
+
+        assert_eq!(
+            load_connections(&path).unwrap_err(),
+            "oauth-connection-directory-unsafe"
+        );
+        assert_eq!(
+            save_connections(&path, &[]).unwrap_err(),
+            "oauth-connection-directory-unsafe"
+        );
+        assert_eq!(std::fs::read(&outside_document).unwrap(), original);
     }
 
     #[test]
