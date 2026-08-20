@@ -153,7 +153,7 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 
 ## 2026-08-21 lineage graph update
 
-- Source head `7bd2d1ff5e6c1da12ca0f76c1dbe3fe07c5c6b2f` now exports path-free ontology relations for
+- Source head `677042467b3398866757f39b9475bd0b267abc75` now exports path-free ontology relations for
   source, metadata and production evidence, archive, destination, receipt, review decision,
   provider sync state, provider evidence, and remote object when present. The legacy `archivedTo`
   relation remains for compatibility; missing evidence emits `unknown` and no attestation edge.

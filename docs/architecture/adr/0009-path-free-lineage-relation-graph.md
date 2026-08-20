@@ -45,6 +45,6 @@ exported as unconfirmed; an explicit `complete` provider state is required.
 ## Evidence
 
 The implementation and focused regression test are in `src-tauri/src/naruon_lineage.rs` at source
-head `7bd2d1ff5e6c1da12ca0f76c1dbe3fe07c5c6b2f`; the focused relation tests are kept alongside
+head `677042467b3398866757f39b9475bd0b267abc75`; the focused relation tests are kept alongside
 the export contract. The design preserves the
 metadata-first precedence and the fail-closed provider-sync contract from ADR-0001.
