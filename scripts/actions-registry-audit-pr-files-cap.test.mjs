@@ -14,11 +14,12 @@ function changedFile(page, index) {
   };
 }
 
-test('fails closed when pull-request changed-file evidence reaches GitHub REST 3000-file cap', async () => {
+test('fails closed at the GitHub REST 3000-file cap without requesting an unsupported page', async () => {
   const pullRequests = [{
     number: pullNumber,
     head: { sha: headSha, repo: { full_name: repository } },
   }];
+  let filePageReads = 0;
 
   await assert.rejects(
     activePullRequestWorkflowPaths(async (url) => {
@@ -29,16 +30,23 @@ test('fails closed when pull-request changed-file evidence reaches GitHub REST 3
         };
       }
       if (url.includes(`/pulls/${pullNumber}/files`)) {
+        filePageReads += 1;
         const match = /[?&]page=(\d+)/.exec(url);
         const page = Number(match?.[1]);
         if (page >= 1 && page <= 30) {
           return Array.from({ length: 100 }, (_, index) => changedFile(page, index));
         }
-        if (page === 31) return [];
+        throw new Error(`unsupported PR-files page ${page}`);
       }
       throw new Error(`unexpected URL ${url}`);
     }, repository, pullRequests),
     /open-pr-files-limit-exceeded/,
+  );
+
+  assert.equal(
+    filePageReads,
+    30,
+    'the audit must fail at 3000 records instead of depending on an unavailable page 31 response',
   );
 });
 
