@@ -244,6 +244,7 @@ function workflowPathsFromTree(
     const normalizedPath = normalizeWorkflowPath(entry.path);
     if (!normalizedPath) throw new Error(invalidEntryError);
     if (!isRepositoryWorkflowPath(normalizedPath)) continue;
+    if (entry.mode === '120000') throw new Error(invalidEntryError);
     if (seenWorkflowPaths.has(normalizedPath)) throw new Error(invalidEntryError);
     seenWorkflowPaths.add(normalizedPath);
     workflowPaths.push(normalizedPath);
