@@ -5,6 +5,7 @@ const GITHUB_DYNAMIC_WORKFLOW_PREFIX = 'dynamic/';
 const COMMIT_SHA_PATTERN = /^[0-9a-f]{40}$/;
 const MAX_LIST_PAGES = 100;
 const MAX_LIST_RECORDS = MAX_LIST_PAGES * 100;
+const MAX_PULL_REQUEST_FILES = 3000;
 
 const NON_ACTIVE_WORKFLOW_STATES = new Set([
   'deleted',
@@ -237,6 +238,12 @@ export async function activePullRequestWorkflowPaths(fetchJson, repository, pull
       `/repos/${repository}/pulls/${pullNumber}/files`,
       'open-pr-files-invalid',
     );
+    // GitHub's REST endpoint exposes at most 3000 PR files. Reaching that
+    // ceiling is ambiguous, so ownership evidence must fail closed rather
+    // than classify an omitted workflow as orphaned-deleted.
+    if (changedFiles.length >= MAX_PULL_REQUEST_FILES) {
+      throw new Error('open-pr-files-limit-exceeded');
+    }
     for (const file of changedFiles) {
       if (
         !file ||
