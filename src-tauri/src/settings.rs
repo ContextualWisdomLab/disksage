@@ -69,4 +69,10 @@ mod tests {
             assert_eq!(parse_settings(malformed), Settings::default());
         }
     }
+    #[test]
+    fn oversized_document_fails_closed_instead_of_enabling_network_authority() {
+        let mut oversized = String::from(r#"{"online_mode":true}"#);
+        oversized.push_str(&" ".repeat(64 * 1024));
+        assert_eq!(parse_settings(&oversized), Settings::default());
+    }
 }
