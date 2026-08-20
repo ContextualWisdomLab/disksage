@@ -38,3 +38,8 @@ blocked until an independent cloud receipt exists.
   https://www.zotero.org/support/dev/web_api/v3/local_api
 - Zotero Documentation. (2026, July 29). *Zotero Web API file uploads*.
   https://www.zotero.org/support/dev/web_api/v3/file_upload
+- DCMI Usage Board. (2020). *DCMI Metadata Terms*. DCMI Recommendation.
+  https://www.dublincore.org/specifications/dublin-core/dcmi-terms/2020-01-20/
+- Alam, M. M., & Wang, W. (2021). A comprehensive survey on the state-of-the-art data provenance
+  approaches for security enforcement. *Journal of Computer Security, 29*(4), 423–446.
+  https://doi.org/10.3233/JCS-200108

@@ -217,3 +217,9 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   eviction blocked. APFS free space fluctuated from roughly 406 MiB to 2.5 GiB; only a clean
   temporary Naruon worktree and regenerable package-manager caches were removed, while user files,
   CloudDocs databases, and provider-managed data were retained.
+- At `2026-08-21 06:02 +0900`, the current source head `7be4eb3` passed the frontend suite
+  (26 files / 118 tests), `svelte-check` (0 errors / 0 warnings), and the production Vite build.
+  The loopback Zotero endpoint still reports 9.0.6 and 8,312 items; a bounded invalid POST returns
+  `400 Endpoint does not support method`, so the added DCMI and provenance references remain a
+  dry-run manifest handoff and no Zotero item or attachment was mutated. PR #213 hosted checks
+  remain queued/in progress and the protected merge gate is unchanged.

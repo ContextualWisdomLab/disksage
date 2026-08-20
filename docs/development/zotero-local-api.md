@@ -29,6 +29,12 @@ The current installed Zotero 9 endpoint reports `Endpoint does not support metho
 DiskSage maps that response to `zotero-local-api-write-unsupported`; it does not upgrade Zotero or
 fall back to OAuth. Zotero 10+ is required for local writes and local file uploads.
 
+On 2026-08-21, the loopback endpoint answered `GET /api/users/0/items?limit=1` with Zotero 9.0.6,
+`Zotero-API-Version: 3`, and `Total-Results: 8312`. A bounded invalid `POST` probe returned
+`400 Endpoint does not support method`, confirming that this installation is read-only; no library
+item or attachment was changed. The manifest therefore remains a dry-run handoff until Zotero 10+
+or another explicitly supported local write route is available.
+
 ## APA 7 references
 
 Joint Task Force. (2020). *Security and privacy controls for information systems and organizations*
@@ -49,3 +55,10 @@ W3C Recommendation. https://www.w3.org/TR/prov-o/
 Albertoni, R., Browning, D., Cox, S. J., Gonzalez Beltran, A., Perego, A., & Winstanley, P.
 (Eds.). (2024). *Data Catalog Vocabulary (DCAT) - Version 3*. W3C Recommendation.
 https://www.w3.org/TR/vocab-dcat-3/
+
+DCMI Usage Board. (2020). *DCMI Metadata Terms*. DCMI Recommendation.
+https://www.dublincore.org/specifications/dublin-core/dcmi-terms/2020-01-20/
+
+Alam, M. M., & Wang, W. (2021). A comprehensive survey on the state-of-the-art data provenance
+approaches for security enforcement. *Journal of Computer Security, 29*(4), 423–446.
+https://doi.org/10.3233/JCS-200108

@@ -66,5 +66,31 @@
     "date": "2024-08-22",
     "url": "https://www.w3.org/TR/vocab-dcat-3/",
     "extra": "APA 7: Albertoni, R., Browning, D., Cox, S. J., Gonzalez Beltran, A., Perego, A., & Winstanley, P. (Eds.). (2024). Data Catalog Vocabulary (DCAT) - Version 3. W3C Recommendation."
+  },
+  {
+    "itemType": "report",
+    "title": "DCMI Metadata Terms",
+    "creators": [
+      { "creatorType": "author", "name": "DCMI Usage Board" }
+    ],
+    "date": "2020-01-20",
+    "url": "https://www.dublincore.org/specifications/dublin-core/dcmi-terms/2020-01-20/",
+    "extra": "APA 7: DCMI Usage Board. (2020). DCMI Metadata Terms. DCMI Recommendation."
+  },
+  {
+    "itemType": "journalArticle",
+    "title": "A Comprehensive Survey on the State-of-the-art Data Provenance Approaches for Security Enforcement",
+    "creators": [
+      { "creatorType": "author", "firstName": "Md Morshed", "lastName": "Alam" },
+      { "creatorType": "author", "firstName": "Weichao", "lastName": "Wang" }
+    ],
+    "date": "2021",
+    "DOI": "10.3233/JCS-200108",
+    "url": "https://arxiv.org/abs/2107.01678",
+    "publicationTitle": "Journal of Computer Security",
+    "volume": "29",
+    "issue": "4",
+    "pages": "423-446",
+    "extra": "APA 7: Alam, M. M., & Wang, W. (2021). A comprehensive survey on the state-of-the-art data provenance approaches for security enforcement. Journal of Computer Security, 29(4), 423–446. https://doi.org/10.3233/JCS-200108"
   }
 ]
