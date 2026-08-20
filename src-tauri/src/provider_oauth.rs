@@ -345,6 +345,13 @@ pub fn load_connections(path: &Path) -> Result<Vec<OAuthConnection>, String> {
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err("oauth-connection-document-not-regular-file".into());
     }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err("oauth-connection-document-permissions-unsafe".into());
+        }
+    }
     if metadata.len() > MAX_CONNECTION_DOCUMENT_BYTES {
         return Err("oauth-connection-document-too-large".into());
     }
@@ -1305,7 +1312,7 @@ mod tests {
     fn token_documents_require_bearer_resource_scope_and_refresh_on_consent() {
         let microsoft = parse_token_document(
             CloudProvider::Onedrive,
-            r#"{"access_token":"access","refresh_token":"refresh","token_type":"Bearer","expires_in":3599,"scope":"Files.Read offline_access"}"#,
+            r#"{\"access_token\":\"access\",\"refresh_token\":\"refresh\",\"token_type\":\"Bearer\",\"expires_in\":3599,\"scope\":\"Files.Read offline_access\"}"#,
             true,
         )
         .unwrap();
@@ -1314,17 +1321,17 @@ mod tests {
 
         let google = parse_token_document(
             CloudProvider::GoogleDrive,
-            r#"{"access_token":"access","token_type":"bearer","expires_in":3600,"scope":"https://www.googleapis.com/auth/drive.metadata.readonly"}"#,
+            r#"{\"access_token\":\"access\",\"token_type\":\"bearer\",\"expires_in\":3600,\"scope\":\"https://www.googleapis.com/auth/drive.metadata.readonly\"}"#,
             false,
         )
         .unwrap();
         assert!(google.refresh_token.is_none());
 
         for invalid in [
-            r#"{"access_token":"access","token_type":"MAC","refresh_token":"refresh"}"#,
-            r#"{"access_token":"access","token_type":"Bearer","refresh_token":"refresh","scope":"https://www.googleapis.com/auth/drive.file"}"#,
-            r#"{"error":"invalid_grant"}"#,
-            r#"{"access_token":"access","token_type":"Bearer","expires_in":0}"#,
+            r#"{\"access_token\":\"access\",\"token_type\":\"MAC\",\"refresh_token\":\"refresh\"}"#,
+            r#"{\"access_token\":\"access\",\"token_type\":\"Bearer\",\"refresh_token\":\"refresh\",\"scope\":\"https://www.googleapis.com/auth/drive.file\"}"#,
+            r#"{\"error\":\"invalid_grant\"}"#,
+            r#"{\"access_token\":\"access\",\"token_type\":\"Bearer\",\"expires_in\":0}"#,
         ] {
             assert!(parse_token_document(CloudProvider::GoogleDrive, invalid, true).is_err());
         }
