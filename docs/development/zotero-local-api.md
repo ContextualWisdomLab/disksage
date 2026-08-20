@@ -20,8 +20,14 @@ ZOTERO_LOCAL_API_KEY='provided-by-zotero' cargo run --locked \
 ```
 
 This updates bibliographic metadata and the original source URL through `127.0.0.1:23119`.
-It does not claim that a full-text attachment was uploaded; full-text attachment upload remains a
-separate operation so a local source cannot be silently copied or exposed.
+To attach an original document, add an absolute `fullTextPath` to an individual manifest record.
+The field is never sent as metadata; with `--execute`, DiskSage hashes and size-checks the regular
+file, then performs Zotero's local three-phase upload (bounded to 4 GiB). No attachment is copied
+in preview mode, and an upload failure stops before any source eviction.
+
+The current installed Zotero 9 endpoint reports `Endpoint does not support method` for writes.
+DiskSage maps that response to `zotero-local-api-write-unsupported`; it does not upgrade Zotero or
+fall back to OAuth. Zotero 10+ is required for local writes and local file uploads.
 
 ## APA 7 references
 

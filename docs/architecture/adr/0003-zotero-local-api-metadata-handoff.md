@@ -8,7 +8,8 @@
 The cloud-offload workflow needs a durable bibliographic record for standards and academic
 sources, but a personal Zotero installation must not receive OAuth credentials or arbitrary local
 paths. The Zotero application already exposes a loopback Local API. Its write contract is versioned
-and may require a user-granted local API key.
+and may require a user-granted local API key. Zotero 10+ also exposes a local three-phase file
+upload flow for stored attachments.
 
 ## Decision
 
@@ -16,15 +17,17 @@ DiskSage provides `disksage-zotero-local`. It accepts a bounded JSON manifest, v
 creators, DOI/URL fields, and original source URLs in Rust, and defaults to a read-only preview.
 Only an explicit `--execute` reads `ZOTERO_LOCAL_API_KEY` from the environment and POSTs metadata to
 `http://127.0.0.1:23119/api/users/0/items`. The key is never accepted in the manifest or command
-line. The manifest stores the original source URL and APA 7 rationale; it does not claim a full
-text attachment was uploaded. A future attachment operation must have its own bounded, content
-verified receipt.
+line. The manifest stores the original source URL and APA 7 rationale. An optional absolute
+`fullTextPath` is accepted only for explicit execution; DiskSage rejects symlinks, regular-file
+violations, and files over 4 GiB, computes MD5 and size before upload, and uses the local API's
+three-phase stored-file flow. Preview mode never reads attachment contents. Source eviction remains
+blocked until an independent cloud receipt exists.
 
 ## Consequences
 
 - Zotero updates remain local and do not use OAuth or an external LLM.
 - A missing local API key, unsupported Zotero version, or non-loopback endpoint fails closed before
-  any write.
+  any write or attachment upload.
 - The handoff is reproducible and auditable, while the cloud-transfer receipt remains the authority
   for cloud copies and source eviction.
 
