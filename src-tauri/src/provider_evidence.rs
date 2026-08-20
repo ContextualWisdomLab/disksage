@@ -98,7 +98,9 @@ pub fn create_sync_evidence_record(
     })
 }
 
-pub fn validate_sync_evidence_record(record: &ProviderSyncEvidenceRecord) -> Result<(), String> {
+fn validate_sync_evidence_record_compat(
+    record: &ProviderSyncEvidenceRecord,
+) -> Result<(), String> {
     if record.version != PROVIDER_EVIDENCE_RECORD_VERSION {
         return Err("provider-evidence-record-version-unsupported".into());
     }
@@ -107,6 +109,19 @@ pub fn validate_sync_evidence_record(record: &ProviderSyncEvidenceRecord) -> Res
         || record.record_id != record_id_for(record.version, &record.evidence)?
     {
         return Err("provider-evidence-record-integrity-mismatch".into());
+    }
+    Ok(())
+}
+
+/// Validate evidence for current authorization decisions.
+///
+/// Historical records that predate `sync_state` remain readable through
+/// `read_immutable_sync_evidence`, but an omitted/unknown explicit state can never authorize a
+/// destructive source-eviction permit even when the legacy `sync_complete` bit is true.
+pub fn validate_sync_evidence_record(record: &ProviderSyncEvidenceRecord) -> Result<(), String> {
+    validate_sync_evidence_record_compat(record)?;
+    if record.evidence.sync_complete && record.evidence.sync_state.is_unknown() {
+        return Err("provider-sync-incomplete".into());
     }
     Ok(())
 }
@@ -329,7 +344,7 @@ pub fn read_immutable_sync_evidence(path: &Path) -> Result<ProviderSyncEvidenceR
     }
     let record: ProviderSyncEvidenceRecord = serde_json::from_slice(&encoded)
         .map_err(|_| "provider-evidence-record-json-invalid".to_string())?;
-    validate_sync_evidence_record(&record)?;
+    validate_sync_evidence_record_compat(&record)?;
     if path.file_name().and_then(|name| name.to_str()) != Some(record_filename(&record).as_str()) {
         return Err("provider-evidence-record-filename-id-mismatch".into());
     }
@@ -443,6 +458,18 @@ mod tests {
         assert_eq!(
             validate_sync_evidence_record(&changed).unwrap_err(),
             "provider-evidence-record-integrity-mismatch"
+        );
+    }
+
+    #[test]
+    fn legacy_unknown_complete_record_remains_compatible_but_cannot_authorize() {
+        let mut legacy = evidence();
+        legacy.sync_state = crate::cloud_transfer::ProviderSyncState::Unknown;
+        let record = create_sync_evidence_record(&legacy).unwrap();
+        validate_sync_evidence_record_compat(&record).unwrap();
+        assert_eq!(
+            validate_sync_evidence_record(&record).unwrap_err(),
+            "provider-sync-incomplete"
         );
     }
 
