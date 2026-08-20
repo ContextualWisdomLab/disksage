@@ -33,6 +33,21 @@ describe("Homebrew cleanup safety UX", () => {
     expect(executeCleanup).toContain("judgment = null;");
   });
 
+  it("distinguishes executed and non-executed result states", () => {
+    const source = readSource("src/lib/BrewCleanup.svelte");
+    const start = source.indexOf("{#if execution}");
+    const end = source.indexOf("{/if}", start);
+    const executionResult = source.slice(start, end);
+
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    expect(executionResult).toContain("execution.executed");
+    expect(executionResult).toContain("실행 성공 (종료 코드");
+    expect(executionResult).toContain("실행 실패 (종료 코드");
+    expect(executionResult).toContain("실행되지 않음");
+    expect(executionResult).not.toContain("실행 완료</p>");
+  });
+
   it("normalizes the approval phrase and explains why execution is unavailable", () => {
     const source = readSource("src/lib/BrewCleanup.svelte");
 
