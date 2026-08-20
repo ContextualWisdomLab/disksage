@@ -93,6 +93,10 @@
 - The provider-global-sync panel now shows the last local evidence observation and its bounded
   one-minute automatic recheck, so a Finder “copy preparing” incident has an actionable next step
   instead of an indefinite spinner.
+- To restore the emergency local headroom without touching user or provider data, only Podman
+  dangling (untagged and unreferenced) images were pruned; the one active container and all volumes
+  were retained. Host APFS free space rose from roughly 150 MiB to 1.8 GiB, matching the bounded
+  `prune_dangling_images` reclaim boundary.
 - Unreadable provider roots remain selectable for diagnosis/recovery while preview, copy,
   attestation, and eviction controls stay disabled until the root is readable again.
 
