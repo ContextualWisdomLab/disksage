@@ -125,6 +125,7 @@ pub fn parse_dump(
     let mut has_filename_too_long = false;
     let mut has_temporarily_disconnected = false;
     let mut has_server_unreachable = false;
+    let mut has_local_disk_full = false;
     let mut hidden_default_domain = false;
 
     for line in output.lines() {
@@ -151,6 +152,10 @@ pub fn parse_dump(
         has_server_unreachable |= marker_lower.contains("serverunreachable")
             || marker_lower.contains("server unreachable")
             || marker_lower.contains("code=-1004");
+        has_local_disk_full |= marker_lower.contains("odresult_errno 28")
+            || marker_lower.contains("errno 28")
+            || marker_lower.contains("no space left on device")
+            || marker_lower.contains("disk full");
         if has_filename_too_long
             || has_temporarily_disconnected
             || has_server_unreachable
@@ -202,6 +207,9 @@ pub fn parse_dump(
     }
     if has_server_unreachable {
         blockers.push("provider-global-sync-server-unreachable".into());
+    }
+    if has_local_disk_full {
+        blockers.push("provider-global-sync-local-disk-full".into());
     }
     if has_error {
         blockers.push("provider-global-sync-error".into());
@@ -572,6 +580,18 @@ sync engine state:
             .notices
             .iter()
             .all(|notice| !notice.contains("server unreachable")));
+    }
+
+    #[test]
+    fn local_disk_full_error_is_classified_without_retaining_provider_paths() {
+        let dump =
+            "com.microsoft.OneDrive.FileProvider\nsync engine state:\n error:'NSError: ODResult_Errno 28'\n";
+        let report = parse_dump(CloudProvider::Onedrive, dump).unwrap();
+        assert_eq!(report.state, ProviderGlobalSyncState::Error);
+        assert!(report
+            .blockers
+            .contains(&"provider-global-sync-local-disk-full".into()));
+        assert!(require_new_copy_admission(&report).is_err());
     }
 
     #[test]

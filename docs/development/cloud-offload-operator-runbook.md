@@ -49,7 +49,7 @@ The runtime sequence is:
    probe remains bounded and still blocks new copies.
    Third-party File Provider dumps also block new copies while upload/download progress,
    non-zero reconciliation backlogs (`provider-global-sync-reconciliation-pending`), provider
-   disconnection, or path errors are present; the stable blocker codes are shown in the plan and
+   disconnection, local disk-full (`provider-global-sync-local-disk-full`), or path errors are present; the stable blocker codes are shown in the plan and
    are never a reason to bypass the gate.
    The UI's `공급자 앱 재기동 후 상태 재확인` action is available for those OneDrive/Google Drive
    blockers. It targets only the verified desktop-app bundle, requests a bounded quit and relaunch,

@@ -113,6 +113,8 @@ physical reclaim proof; prune, trim, stop, and delete remain outside the inspect
 - Worktree audits stop on provider-managed parents or dataless Git metadata; stale-worktree removal
   is never inferred from a materialization wait.
 - A timed-out provider-wide dump may explain active transfer or reconciliation markers, but its incomplete evidence never admits a new copy.
+- A provider-wide `errno 28`/disk-full marker is retained as
+  `provider-global-sync-local-disk-full`; it blocks new copies until local headroom is restored.
 - An iCloud native `needs-sync-up` or `needs-sync-down` state blocks new-copy admission until the
   bounded native status is quiet; neither direction is treated as completed provider evidence.
 - A timeout while collecting the bounded iCloud native status also blocks new-copy admission;
