@@ -36,4 +36,14 @@ describe("hourly contextual-orchestrator loop contract", () => {
     expect(workflow).toContain("gh pr list --state open --limit 100");
     expect(workflow).not.toContain("COPILOT_GITHUB_TOKEN");
   });
+
+  it("binds repository context to the exact scheduled or manually dispatched commit", () => {
+    const workflow = readFileSync(
+      resolve(repositoryRoot, ".github/workflows/hourly-product-loop.yml"),
+      "utf8",
+    );
+
+    expect(workflow).toContain('ref: ${{ github.sha }}');
+    expect(workflow).not.toContain("ref: main");
+  });
 });
