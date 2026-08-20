@@ -321,3 +321,29 @@ fn unsafe_parent_precedes_external_leaf_metadata_and_size_observation() {
         "parent authority must fail before observing the external target's file size"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn connection_document_symlinked_ancestor_is_rejected_even_when_immediate_parent_is_real() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let outside = temp.path().join("outside-ancestor");
+    let outside_parent = outside.join("nested");
+    std::fs::create_dir_all(&outside_parent).unwrap();
+    std::fs::write(
+        outside_parent.join("connections.json"),
+        b"{\"version\":1,\"connections\":[]}",
+    )
+    .unwrap();
+
+    let alias = temp.path().join("app-data-alias");
+    symlink(&outside, &alias).unwrap();
+    let path = alias.join("nested").join("connections.json");
+
+    assert_eq!(
+        load_connections(&path).unwrap_err(),
+        "oauth-connection-directory-unsafe",
+        "every existing ancestor in the connection-document authority chain must be non-symlink"
+    );
+}
