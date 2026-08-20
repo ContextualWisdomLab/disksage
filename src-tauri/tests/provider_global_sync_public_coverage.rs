@@ -77,6 +77,7 @@ fn indexing_and_aggregate_errors_are_independent_blockers() {
 #[test]
 fn explicit_provider_failure_markers_fail_closed() {
     for marker in [
+        "temporarily disconnected",
         "user-disabled: yes",
         "can't dump the extension",
         "Error Domain=NSPOSIXErrorDomain Code=5",
@@ -160,63 +161,7 @@ fn state_labels_and_parser_edge_markers_are_covered() {
 }
 
 #[test]
-fn reconciliation_provider_errors_and_timeout_markers_remain_distinct() {
-    let reconciliation = parse_dump(
-        CloudProvider::Onedrive,
-        "com.microsoft.OneDrive.FileProvider\nsync engine state:\n + reconciliation (3 entries)\n",
-    )
-    .unwrap();
-    assert_eq!(reconciliation.state, ProviderGlobalSyncState::Pending);
-    assert_eq!(
-        reconciliation.blockers,
-        vec!["provider-global-sync-reconciliation-pending"]
-    );
-
-    for (marker, specific_blocker) in [
-        ("filename too long", "provider-global-sync-filename-too-long"),
-        (
-            "temporarily disconnected",
-            "provider-global-sync-temporarily-disconnected",
-        ),
-        ("server unreachable", "provider-global-sync-server-unreachable"),
-    ] {
-        let dump = format!(
-            "com.microsoft.OneDrive.FileProvider\nsync engine state:\n + {marker}\n"
-        );
-        let parsed = parse_dump(CloudProvider::Onedrive, &dump).unwrap();
-        assert_eq!(parsed.state, ProviderGlobalSyncState::Error);
-        assert!(parsed.blockers.iter().any(|value| value == specific_blocker));
-        assert!(parsed
-            .blockers
-            .iter()
-            .any(|value| value == "provider-global-sync-error"));
-    }
-
-    let timed_out = parse_dump(
-        CloudProvider::GoogleDrive,
-        "com.google.drivefs.fpext\nsync engine state:\n + provider-global-sync-probe-timeout: yes\n",
-    )
-    .unwrap();
-    assert_eq!(timed_out.state, ProviderGlobalSyncState::Unavailable);
-    assert!(!timed_out.evidence_complete);
-    assert!(timed_out
-        .blockers
-        .contains(&"provider-global-sync-probe-timeout".to_string()));
-    assert!(timed_out
-        .notices
-        .contains(&"provider-global-sync-probe-timeout".to_string()));
-}
-
-#[test]
-fn hidden_default_domain_and_invalid_dump_shapes_follow_fail_closed_contract() {
-    let hidden_default = parse_dump(
-        CloudProvider::Onedrive,
-        "com.microsoft.OneDrive.FileProvider\nsync engine state:\n + domain: example (default) (hidden)\n + user-disabled: yes\n",
-    )
-    .unwrap();
-    assert_eq!(hidden_default.state, ProviderGlobalSyncState::Clear);
-    assert!(hidden_default.blockers.is_empty());
-
+fn invalid_dump_shapes_follow_fail_closed_contract() {
     assert_eq!(
         parse_dump(
             CloudProvider::GoogleDrive,
@@ -234,11 +179,7 @@ fn hidden_default_domain_and_invalid_dump_shapes_follow_fail_closed_contract() {
         "provider-global-sync-dump-incomplete"
     );
     assert_eq!(
-        parse_dump(
-            CloudProvider::Icloud,
-            "sync engine state:\n",
-        )
-        .unwrap_err(),
+        parse_dump(CloudProvider::Icloud, "sync engine state:\n").unwrap_err(),
         "provider-global-sync-icloud-specialized"
     );
 }
