@@ -5,7 +5,9 @@
 //! deterministic without touching a browser, credential store, provider API, or network socket.
 
 use disksage_lib::cloud::{CloudAccountScope, CloudProvider, CloudRoot};
-use disksage_lib::provider_oauth::{connection_for_root, load_connections, requested_scope, OAuthConnection};
+use disksage_lib::provider_oauth::{
+    connection_for_root, load_connections, requested_scope, OAuthConnection,
+};
 use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization;
 
@@ -39,7 +41,11 @@ fn connection_id(provider: CloudProvider, root_id: &str, root_path: &str, normal
         hasher.update(value.as_bytes());
         hasher.update([0]);
     }
-    format!("{:x}", hasher.finalize())
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn connection(root: &CloudRoot, normalize_id: bool) -> OAuthConnection {
