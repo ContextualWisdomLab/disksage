@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-20 (Asia/Seoul)  
-**Repository head:** `feat/provider-sync-dynamic-goals` @ `c76870f923efe16d58858eef896ff601b2d83f93`  
+**Repository head:** `feat/provider-sync-dynamic-goals` @ `0cf3d27`  
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.  
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
 
@@ -17,7 +17,7 @@
 
 | Priority | Gap / observable symptom | Evidence | Acceptance criterion |
 | --- | --- | --- | --- |
-| P0 | Cloud offload can remain blocked while a provider is syncing or reports `local-current`/`is_uploaded=false`; the user sees no safe reclaim despite free cloud capacity. | Existing provider-global and iCloud native-state gates; current machine has about 1.5 GiB free while `bird` is active. | UI explains the exact blocker, last evidence time, and next bounded retry; a verified provider attestation alone can advance a candidate, never a stale projection. |
+| P0 | Cloud offload can remain blocked while a provider is syncing or reports `local-current`/`is_uploaded=false`; the user sees no safe reclaim despite free cloud capacity. | Existing provider-global and iCloud native-state gates; current machine has under 1 GiB free while `bird` remains near 100% CPU. | UI explains the exact blocker, last evidence time, and next bounded retry; a verified provider attestation alone can advance a candidate, never a stale projection. |
 | P0 | A long Finder/provider copy can appear hung and consume the remaining local headroom. | Bounded `/bin/cp`/`mkdir` groups and headroom gate exist; no end-to-end provider receipt is currently available. | Preview shows required bytes + staging reserve; timeout cleans only the child-created destination and leaves a durable receipt. |
 | P1 | Personal desktop-client capacity is not the same as API quota; OAuth is unnecessarily implied for a single-user installation. | ADR-0001 permits copy-only desktop-client mode marked `capacity-unverified`. | Settings clearly distinguish local desktop client, API quota, and organization OAuth; no OAuth prompt is required for the local-only path. |
 | P1 | Users cannot yet see a compact lineage graph connecting source, metadata, archive member, provider item, receipt, Goal, and eviction decision. | Naruon/semantic export contracts exist, but there is no buyer-facing graph view. | Export and UI show stable content IDs, provenance edges, confidence, and blockers without exposing raw private paths. |
