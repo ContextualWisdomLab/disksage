@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-21 (Asia/Seoul)
-**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` implementation @ `ef1d418`; documentation @ `8378a98` (latest incident evidence)
+**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` implementation @ `91acea2`; documentation @ `95243b8` (latest committed baseline before this evidence update)
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.  
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
 
@@ -83,7 +83,7 @@
   (last activity roughly 2h40m old) in the same Google Drive domain. The provider parser now emits
   `provider-global-sync-item-not-found` and the UI labels it as a missing-provider-item error;
   queue-count changes do not reset the same-blocker duration.
-- The current implementation head for this loop is `59b53ae`; generated CodeGraph indexes are now
+- The current implementation head for this loop is `91acea2`; generated CodeGraph indexes are now
   included in the bounded, identity-checked development-artifact cleanup, and provider evidence
   directories now reject shared-writable authority while records are private from creation; the
   authority regression fixture also binds the current provider `sync_state` contract.
@@ -99,7 +99,7 @@
   privacy contract passes locally (Vitest 2/2; svelte-check 0 errors/0 warnings). Its hosted checks
   are running and a fresh approval is still required. PR #189 is its rebased base PR at `f748769f`;
   both branches remain protected from bypass merges. PR #235 completed its
-  protected squash merge at `5f7c7ae`. PR #213 remains open at current head `59b53ae`; hosted
+  protected squash merge at `5f7c7ae`. PR #213 remains open at current head `91acea2`; hosted
   release, test, security, and review checks are authoritative, and no source eviction was claimed.
 - Independent CLI/UI/dependency PRs #212, #214, #215, #217, #218, #220, #222, #230, #232,
   #234, and #238 were rebased to current `main` `5f7c7ae`; their fresh checks are queued or in
@@ -128,6 +128,12 @@
   `error generation: 403`, and repeated File Provider `-1005 itemNotFound` entries. The
   `brew cleanup --prune-prefix --dry-run --verbose` probe returned no reclaimable Homebrew items;
   no provider process, Finder operation, or user data was terminated or deleted.
+- A fresh iCloud File Provider observation reported an active upload at 95.24% (28,124,151,529 of
+  29,530,341,516 bytes) and an active download at 0% (0 of 1,066,167,994 bytes), with scheduling
+  still running and error generation 1143. The bounded probe exceeded its wall-clock limit, so the
+  evidence remains incomplete and new-copy admission stays blocked. CloudArchive now fingerprints
+  iCloud blocker/progress state, displays the same-blocker duration, and directs Finder-copy
+  cancellation after 15 minutes; the focused contract test and `svelte-check` both pass.
 - To restore the emergency local headroom without touching user or provider data, only Podman
   dangling (untagged and unreferenced) images were pruned; the one active container and all volumes
   were retained. Host APFS free space rose from roughly 150 MiB to 1.8 GiB, matching the bounded

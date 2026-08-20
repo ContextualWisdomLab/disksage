@@ -149,6 +149,13 @@ The latest bounded observation still reports the same transfer/reconciliation an
 missing-item cohort with only about 1.2 GiB of local headroom; a Homebrew cleanup dry-run found no
 reclaimable entries, so DiskSage keeps the Finder copy cancellation and provider-quietness gate in
 force rather than inventing a local cleanup authority.
+The latest iCloud File Provider read-only probe also exposed an active upload at fraction `0.9524`
+(28,124,151,529 of 29,530,341,516 bytes) and an active download at fraction `0.0000`
+(0 of 1,066,167,994 bytes), with scheduling still `running` and error generation `1143`. The
+bounded probe did not finish within its wall-clock limit, so this partial observation is retained
+as incomplete evidence and cannot admit a retry. CloudArchive now fingerprints the iCloud blocker
+and transfer progress across refreshes, reports the duration, and escalates the same-blocker
+guidance after 15 minutes; this remains advisory and never cancels Finder or restarts `bird`.
 The one-minute reconciliation loop may refresh provider state and replaceable projections, but
 immutable per-item evidence history is bounded to 128 records per receipt. The Naruon readiness
 validator also mirrors the iCloud health contract for active File Provider upload/download
