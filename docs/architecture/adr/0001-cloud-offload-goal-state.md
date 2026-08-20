@@ -211,6 +211,22 @@ cloud objects were retained. Reproducible caches are not uploaded to a provider 
 This evidence is bound to source head `e71ecd13e8c91acf10093271fd58414cae5fe349`; the Finder cancel
 control remains the only supported cancellation action.
 
+The current-head follow-up at `2026-08-21 08:21 +0900` found the Finder target labelled
+`real_datasets` on the local volume, containing 14 ZIP files totalling about 7.2 GiB while the
+volume reported about 2.3 GiB available. No process held an open handle below that target during
+the bounded check. CloudDocs logs retained user-initiated download operations that had run for
+about 5,535 seconds before ending as cancelled with `CKInternalError`; the default route was
+`utun4`, while bounded HTTPS checks to iCloud, Apple, and Google endpoints still completed. This
+is incomplete provider-transfer evidence, not a successful copy or a DiskSage process failure:
+the source remains retained, the Finder cancel control remains the only supported cancellation
+action, and local headroom plus a fresh quiet provider observation remain required before retry.
+
+At source head `6b9cd694ac9d34e8abc40de47b2ec1106ec55d90`, historical provider evidence remains
+readable through the compatibility parser, but an evidence record with `sync_complete=true` and
+an explicit `sync_state=unknown` is rejected at the current authorization boundary. It therefore
+cannot produce a provider-sync confirmation or an eviction permit; the regression is covered by
+the real public-boundary test `provider_sync_legacy_eviction_fail_closed.rs`.
+
 ## Consequences
 
 - `is_local_current=true` and `is_uploaded=false` produces `pending-upload` and no eviction permit.
@@ -239,6 +255,9 @@ control remains the only supported cancellation action.
   bounded native status is quiet; neither direction is treated as completed provider evidence.
 - A timeout while collecting the bounded iCloud native status also blocks new-copy admission;
   timeout is not interpreted as a quiet provider.
+- A legacy provider record may be read for compatibility and re-check purposes, but an unknown
+  explicit sync state never authorizes provider confirmation or source eviction, even when the
+  legacy completion bit is true.
 - The bounded iCloud File Provider activity probe records only redacted aggregate evidence: counts
   of `no progress` fetch/create markers and active upload/download progress fractions. Any such
   marker, an active transfer, a probe timeout, or unavailable probe evidence blocks new-copy

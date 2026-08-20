@@ -303,3 +303,29 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   passed its hourly-cadence contract check, and is awaiting the normal required checks/review.
   Until a post-merge scheduled run completes, the hourly loop remains an identified gap rather
   than a proven live capability.
+
+## 2026-08-21 current-head incident and authority follow-up
+
+- The live DiskSage branch is `6b9cd694ac9d34e8abc40de47b2ec1106ec55d90`, fast-forwarded from the
+  remote branch without force-push. The provider-evidence authority boundary now rejects
+  `sync_complete=true` paired with `sync_state=unknown` for authorization while preserving bounded
+  compatibility reads; `src-tauri/tests/provider_sync_legacy_eviction_fail_closed.rs` proves that
+  the public eviction boundary returns `provider-sync-incomplete`. This closes the legacy-state
+  authorization gap without granting cloud-write or source-eviction authority.
+- PR #213 is open at this exact head. Required build, analysis, security, Noema, Strix, and review
+  jobs are queued or in progress; no terminal failure was observed, but the protected merge state
+  remains blocked. No unresolved, non-outdated review thread is present at this head, while the
+  prior `CHANGES_REQUESTED` decision is stale; an exact-head OpenCode review was requested and no
+  approval or merge bypass was used.
+- The bounded runtime observation at `2026-08-21 08:21 +0900` found the user-visible Finder
+  `real_datasets` target on the local volume with 14 ZIP files totalling about 7.2 GiB and only
+  2.3 GiB available. CloudDocs retained user-initiated downloads that ran for roughly 5,535
+  seconds before `cancelled`/`CKInternalError`; the default route was `utun4`, although bounded
+  HTTPS checks to iCloud, Apple, and Google endpoints completed. No DiskSage, Finder, `bird`,
+  `fileproviderd`, OneDrive, or Google Drive process was terminated, and no provider or user data
+  was deleted. The incident remains `provider-sync-incomplete`: Finder cancellation, sufficient
+  staging headroom, and a fresh quiet provider observation are required before retry.
+- `git diff --check` passes for the current worktree. A repository-wide `cargo fmt --check` still
+  reports pre-existing formatting differences across unrelated files, so it is not treated as
+  evidence for the new authorization behavior; hosted Rust checks remain authoritative for the
+  exact head.
