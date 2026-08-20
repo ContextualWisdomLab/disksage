@@ -49,6 +49,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   creating local staging data.
 - Make `disksage-duplicate-audit --help` exit successfully so release staging can
   verify its usage contract without treating a help request as a failed audit.
+- Publish the source-bound SPDX SBOM as a separately named artifact only after
+  provenance succeeds, then download it in the release publication job so the
+  attested 18-file release set cannot silently omit its component inventory.
 - Isolate the macOS global File Provider dump helper in a private process group and terminate the
   whole group on timeout, preventing descendant helpers from retaining a pipe after a stalled
   Finder/provider copy.
