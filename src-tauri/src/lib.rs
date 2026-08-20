@@ -118,7 +118,7 @@ pub fn run() {
             commands::list_roots,
             commands::start_scan,
             commands::cancel_scan,
-            node_view_guard::get_node,
+            node_view_guard::get_node_guarded,
             commands::top_files,
             commands::list_cache_candidates,
             commands::list_dev_artifacts,
