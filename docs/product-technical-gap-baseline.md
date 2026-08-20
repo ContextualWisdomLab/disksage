@@ -179,3 +179,7 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   not a DiskSage transfer completion. The source is retained; only the Finder progress cancel
   control is an operator action, and new copy, attestation, and eviction remain blocked until a
   fresh complete quiet-provider observation.
+- Naruon PR #1434 at exact head `2ed3ec0` now accepts DiskSage readiness schema versions 6 and 7
+  in its explicit handoff allowlist; the focused handoff contract passed 46/46. The change keeps
+  the redacted, path-free protocol and grants no cloud-write or source-eviction authority. Hosted
+  Naruon security, review, and build checks remain authoritative before merge.
