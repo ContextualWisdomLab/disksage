@@ -171,6 +171,10 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   store prune` removed 30,315 stale files / 602 packages (about 1.08 GB). No user files, provider
   databases, CloudDocs data, active processes, or cloud objects were touched; the product's
   `pnpm-cache` cleanup domain remains the reproducible-cache implementation boundary.
+- A stale-worktree audit found no process holding the two Naruon review worktrees; only their
+  ignored, regenerable `frontend/node_modules` directories were removed after dry-run identity
+  checks. Tracked `.Jules/palette.md` edits were preserved, and no branch, source file, provider
+  database, or cloud object was removed.
 
 ## 2026-08-21 follow-up loop evidence
 
