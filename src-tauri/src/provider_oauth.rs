@@ -322,6 +322,7 @@ fn validate_connection_document_parent(parent: &Path, allow_missing: bool) -> Re
 }
 
 pub fn load_connections(path: &Path) -> Result<Vec<OAuthConnection>, String> {
+    validate_connection_document_parent(connection_document_parent(path), false)?;
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -333,7 +334,6 @@ pub fn load_connections(path: &Path) -> Result<Vec<OAuthConnection>, String> {
     if metadata.len() > MAX_CONNECTION_DOCUMENT_BYTES {
         return Err("oauth-connection-document-too-large".into());
     }
-    validate_connection_document_parent(connection_document_parent(path), false)?;
     let bytes = std::fs::read(path).map_err(|_| "oauth-connection-document-unreadable")?;
     let document: ConnectionDocument =
         serde_json::from_slice(&bytes).map_err(|_| "oauth-connection-document-invalid")?;
