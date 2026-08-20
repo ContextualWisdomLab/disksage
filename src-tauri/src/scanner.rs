@@ -44,13 +44,10 @@ pub fn scan_dir_with_interval(
     let mut cancelled = false;
     let mut seen: u64 = 0;
 
-    let walker = jwalk::WalkDir::new(root)
+    let walker = walkdir::WalkDir::new(root)
         .follow_links(false)
-        .skip_hidden(false)
-        .process_read_dir(|_depth, _path, _state, children| {
-            // 에러 엔트리는 유지해서 skipped로 집계
-            children.retain(|r| r.as_ref().map(keep_entry).unwrap_or(true));
-        });
+        .into_iter()
+        .filter_entry(keep_entry);
 
     for entry in walker {
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
@@ -63,18 +60,13 @@ pub fn scan_dir_with_interval(
         let Ok(e) = entry else { stats.skipped += 1; continue };
         if e.file_type().is_dir() {
             stats.dirs += 1;
-            // jwalk는 하위 목록 읽기 실패를 Err 항목이 아니라 디렉토리 엔트리의
-            // read_children_error에 담아 전달한다 — 놓치면 스킵 집계가 새는 버그
-            if e.read_children_error.is_some() {
-                stats.skipped += 1;
-            }
-            dir_sizes.entry(e.path()).or_insert(0);
+            dir_sizes.entry(e.path().to_path_buf()).or_insert(0);
         } else if e.file_type().is_file() {
             let Ok(md) = e.metadata() else { stats.skipped += 1; continue };
             let size = md.len();
             stats.files += 1;
             stats.bytes += size;
-            top.push(std::cmp::Reverse((size, e.path())));
+            top.push(std::cmp::Reverse((size, e.path().to_path_buf())));
             if top.len() > TOP_FILES_CAP {
                 top.pop();
             }
@@ -113,7 +105,7 @@ pub fn scan_dir_with_interval(
 
 /// 심링크(전 플랫폼)와 reparse point(Windows 정션 등)를 순회에서 제외
 /// (crate 내 다른 순회 지점 — dev_artifacts 등 — 에서도 재사용)
-pub(crate) fn keep_entry(e: &jwalk::DirEntry<((), ())>) -> bool {
+pub(crate) fn keep_entry(e: &walkdir::DirEntry) -> bool {
     if e.file_type().is_symlink() {
         return false;
     }
@@ -121,7 +113,7 @@ pub(crate) fn keep_entry(e: &jwalk::DirEntry<((), ())>) -> bool {
     {
         use std::os::windows::fs::MetadataExt;
         const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-        if let Ok(md) = e.metadata() {
+        if let Ok(md) = std::fs::symlink_metadata(e.path()) {
             if md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
                 return false;
             }
