@@ -5,6 +5,7 @@
   import { confirm } from "@tauri-apps/plugin-dialog";
   import GitWorktreeCleanup from "./GitWorktreeCleanup.svelte";
   import PodmanEvidence from "./PodmanEvidence.svelte";
+  import BrewCleanup from "./BrewCleanup.svelte";
 
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
@@ -158,6 +159,7 @@
 
   <PodmanEvidence />
   <GitWorktreeCleanup {scannedRoot} />
+  <BrewCleanup />
 </section>
 
 <style>
