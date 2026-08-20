@@ -248,6 +248,7 @@ export async function activePullRequestWorkflowPaths(fetchJson, repository, pull
     if (changedFiles.length >= MAX_PULL_REQUEST_FILES) {
       throw new Error('open-pr-files-limit-exceeded');
     }
+    const seenChangedFilenames = new Set();
     for (const file of changedFiles) {
       if (
         !file ||
@@ -259,6 +260,10 @@ export async function activePullRequestWorkflowPaths(fetchJson, repository, pull
       ) {
         throw new Error('open-pr-file-invalid');
       }
+      if (seenChangedFilenames.has(file.filename)) {
+        throw new Error('open-pr-files-duplicate');
+      }
+      seenChangedFilenames.add(file.filename);
       if (file.status === 'removed') continue;
       const workflowPath = normalizeWorkflowPath(file.filename);
       if (
