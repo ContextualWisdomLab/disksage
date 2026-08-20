@@ -32,6 +32,29 @@ mod provider_oauth_cli {
         );
     }
 
+    #[cfg(not(coverage))]
+    #[test]
+    fn windows_home_resolution_uses_userprofile_only_as_a_home_fallback() {
+        let home = std::ffi::OsString::from("explicit-home");
+        let profile = std::ffi::OsString::from("windows-user-profile");
+
+        assert_eq!(
+            environment_home_from(Some(home.clone()), Some(profile.clone()), true),
+            Some(std::path::PathBuf::from(home)),
+            "HOME remains authoritative when both environment variables exist"
+        );
+        assert_eq!(
+            environment_home_from(None, Some(profile.clone()), true),
+            Some(std::path::PathBuf::from(profile.clone())),
+            "Windows must accept USERPROFILE when GitHub/desktop process environments omit HOME"
+        );
+        assert_eq!(
+            environment_home_from(None, Some(profile), false),
+            None,
+            "non-Windows platforms must not silently acquire USERPROFILE semantics"
+        );
+    }
+
     #[cfg(all(not(coverage), unix))]
     #[test]
     fn non_utf8_host_argument_is_bounded_before_string_argument_iteration() {
