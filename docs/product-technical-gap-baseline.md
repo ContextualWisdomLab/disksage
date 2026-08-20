@@ -306,10 +306,10 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 
 ## 2026-08-21 current-head incident and authority follow-up
 
-- The live DiskSage branch is `222f8fb59744896132e76651ad9a7983050c9dfa`, fast-forwarded from the
+- The live DiskSage branch is `c6a1524a457e139eeebb766f405bec1858d64717`, fast-forwarded from the
   remote branch without force-push. Its preceding implementation head
-  `6b9cd694ac9d34e8abc40de47b2ec1106ec55d90` introduced the provider-evidence authority boundary,
-  which now rejects
+  `1d8c5caccce26b976f6324164ec74177c71b48a9` contains the maintained walker and authority fixes;
+  the provider-evidence boundary introduced at `6b9cd694ac9d34e8abc40de47b2ec1106ec55d90` now rejects
   `sync_complete=true` paired with `sync_state=unknown` for authorization while preserving bounded
   compatibility reads; `src-tauri/tests/provider_sync_legacy_eviction_fail_closed.rs` proves that
   the public eviction boundary returns `provider-sync-incomplete`. This closes the legacy-state
