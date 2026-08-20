@@ -41,3 +41,30 @@ test('fails closed when pull-request changed-file evidence reaches GitHub REST 3
     /open-pr-files-limit-exceeded/,
   );
 });
+
+test('fails closed on duplicate changed-file identities instead of accepting a shifted pagination snapshot', async () => {
+  const workflowPath = '.github/workflows/owned-by-pr.yml';
+  const pullRequests = [{
+    number: pullNumber,
+    head: { sha: headSha, repo: { full_name: repository } },
+  }];
+
+  await assert.rejects(
+    activePullRequestWorkflowPaths(async (url) => {
+      if (url.includes(`/git/trees/${headSha}`)) {
+        return {
+          truncated: false,
+          tree: [{ type: 'blob', path: workflowPath }],
+        };
+      }
+      if (url.includes(`/pulls/${pullNumber}/files`)) {
+        return [
+          { filename: workflowPath, status: 'added' },
+          { filename: workflowPath, status: 'added' },
+        ];
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }, repository, pullRequests),
+    /open-pr-files-duplicate/,
+  );
+});
