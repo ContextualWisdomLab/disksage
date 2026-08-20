@@ -31,4 +31,14 @@ describe('Test workflow supersession', () => {
     expect(concurrencyBlock).not.toContain('github.sha');
     expect(concurrencyBlock).not.toContain('pull_request.head.sha');
   });
+
+  it('bounds every Test job so a stuck dependency or native build cannot occupy a runner indefinitely', () => {
+    const workflow = readTestWorkflow();
+
+    for (const jobName of ['test', 'coverage-evidence', 'llm-engine-build']) {
+      expect(workflow).toMatch(
+        new RegExp(`\\n  ${jobName}:\\n    runs-on: ubuntu-latest\\n    timeout-minutes: 60\\n`),
+      );
+    }
+  });
 });
