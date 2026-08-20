@@ -176,5 +176,8 @@ fn connection_document_symlinked_parent_is_rejected_before_reading_outside_data(
     let alias = temp.path().join("app-data");
     symlink(&outside, &alias).unwrap();
 
-    assert!(load_connections(&alias.join("connections.json")).is_err());
+    assert_eq!(
+        load_connections(&alias.join("connections.json")).unwrap_err(),
+        "oauth-connection-directory-unsafe"
+    );
 }
