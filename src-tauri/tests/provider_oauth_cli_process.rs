@@ -79,6 +79,27 @@ fn read_only_list_keeps_machine_json_on_stdout() {
     assert_eq!(value["source_eviction_executed"], false);
 }
 
+#[cfg(windows)]
+#[test]
+fn read_only_list_uses_userprofile_when_windows_home_is_absent() {
+    let temp = tempfile::tempdir().expect("temporary Windows profile root should be created");
+    let output = command()
+        .env_remove("HOME")
+        .env("USERPROFILE", temp.path())
+        .arg("--list")
+        .output()
+        .expect("provider OAuth CLI should start");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("list stdout should remain JSON");
+    assert_eq!(value["action"], "list");
+    assert_eq!(value["connection_count"], 0);
+    assert_eq!(value["connection_document_effect"], "none");
+    assert_eq!(value["credential_store_effect"], "none");
+}
+
 #[cfg(unix)]
 #[test]
 fn non_utf8_host_argument_is_rejected_without_panic_or_reflection() {
