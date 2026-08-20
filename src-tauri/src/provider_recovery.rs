@@ -38,17 +38,49 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 #[cfg(not(coverage))]
-fn app_name(provider: CloudProvider) -> Option<&'static str> {
+fn app_spec(provider: CloudProvider) -> Option<(&'static str, &'static str)> {
     match provider {
-        CloudProvider::Onedrive => Some("OneDrive"),
-        CloudProvider::GoogleDrive => Some("Google Drive"),
+        CloudProvider::Onedrive => Some(("OneDrive", "com.microsoft.OneDrive")),
+        CloudProvider::GoogleDrive => Some(("Google Drive", "com.google.drivefs")),
         CloudProvider::Icloud => None,
     }
 }
 
 #[cfg(not(coverage))]
+fn app_name(provider: CloudProvider) -> Option<&'static str> {
+    app_spec(provider).map(|(name, _)| name)
+}
+
+#[cfg(not(coverage))]
+#[cfg(target_os = "macos")]
+fn verified_bundle(path: &Path, expected_bundle_id: &str) -> bool {
+    let info = path.join("Contents/Info.plist");
+    let Ok(metadata) = std::fs::symlink_metadata(&info) else {
+        return false;
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return false;
+    }
+    let Ok(plist) = plist::Value::from_file(&info) else {
+        return false;
+    };
+    plist
+        .as_dictionary()
+        .and_then(|dictionary| dictionary.get("CFBundleIdentifier"))
+        .and_then(plist::Value::as_string)
+        == Some(expected_bundle_id)
+}
+
+#[cfg(not(coverage))]
+#[cfg(not(target_os = "macos"))]
+fn verified_bundle(_path: &Path, _expected_bundle_id: &str) -> bool {
+    false
+}
+
+#[cfg(not(coverage))]
 fn app_path(provider: CloudProvider) -> Result<PathBuf, String> {
-    let name = app_name(provider).ok_or_else(|| "provider-recovery-system-managed".to_string())?;
+    let (name, bundle_id) =
+        app_spec(provider).ok_or_else(|| "provider-recovery-system-managed".to_string())?;
     let mut candidates = vec![PathBuf::from("/Applications").join(format!("{name}.app"))];
     if let Some(home) = std::env::var_os("HOME") {
         candidates.push(
@@ -63,6 +95,7 @@ fn app_path(provider: CloudProvider) -> Result<PathBuf, String> {
             std::fs::symlink_metadata(path)
                 .map(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
                 .unwrap_or(false)
+                && verified_bundle(path, bundle_id)
         })
         .ok_or_else(|| "provider-recovery-client-app-not-found".to_string())
 }
@@ -136,42 +169,51 @@ pub fn recover_provider_client(
     provider: CloudProvider,
     observed_at_ms: u64,
 ) -> Result<ProviderRecoveryOutput, String> {
-    let app = app_name(provider).ok_or_else(|| "provider-recovery-system-managed".to_string())?;
-    let path = app_path(provider)?;
-    let pre_runtime_observed = runtime_observed(provider, observed_at_ms);
-    request_quit(app)?;
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (provider, observed_at_ms);
+        return Err("provider-recovery-platform-unsupported".into());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let app =
+            app_name(provider).ok_or_else(|| "provider-recovery-system-managed".to_string())?;
+        let path = app_path(provider)?;
+        let pre_runtime_observed = runtime_observed(provider, observed_at_ms);
+        request_quit(app)?;
 
-    let quit_deadline = Instant::now() + Duration::from_secs(10);
-    while runtime_observed(provider, observed_at_ms) && Instant::now() < quit_deadline {
-        std::thread::sleep(Duration::from_millis(250));
-    }
-    if runtime_observed(provider, observed_at_ms) {
-        return Err("provider-recovery-quit-timeout".into());
-    }
+        let quit_deadline = Instant::now() + Duration::from_secs(10);
+        while runtime_observed(provider, observed_at_ms) && Instant::now() < quit_deadline {
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        if runtime_observed(provider, observed_at_ms) {
+            return Err("provider-recovery-quit-timeout".into());
+        }
 
-    let path_string = path
-        .to_str()
-        .ok_or_else(|| "provider-recovery-client-path-invalid".to_string())?;
-    if !run_bounded(Path::new("/usr/bin/open"), &["-a", path_string])? {
-        return Err("provider-recovery-launch-failed".into());
+        let path_string = path
+            .to_str()
+            .ok_or_else(|| "provider-recovery-client-path-invalid".to_string())?;
+        if !run_bounded(Path::new("/usr/bin/open"), &["-a", path_string])? {
+            return Err("provider-recovery-launch-failed".into());
+        }
+        std::thread::sleep(Duration::from_secs(1));
+        let post_runtime_observed = Some(runtime_observed(provider, observed_at_ms));
+        let blockers = (!post_runtime_observed.unwrap_or(false))
+            .then(|| vec!["provider-client-runtime-not-observed-after-restart".into()])
+            .unwrap_or_default();
+        Ok(ProviderRecoveryOutput {
+            schema_version: PROVIDER_RECOVERY_SCHEMA_VERSION,
+            provider,
+            action: "restart-provider-client".into(),
+            pre_runtime_observed,
+            quit_requested: true,
+            launch_requested: true,
+            post_runtime_observed,
+            blockers,
+            cloud_write_executed: false,
+            source_eviction_executed: false,
+        })
     }
-    std::thread::sleep(Duration::from_secs(1));
-    let post_runtime_observed = Some(runtime_observed(provider, observed_at_ms));
-    let blockers = (!post_runtime_observed.unwrap_or(false))
-        .then(|| vec!["provider-client-runtime-not-observed-after-restart".into()])
-        .unwrap_or_default();
-    Ok(ProviderRecoveryOutput {
-        schema_version: PROVIDER_RECOVERY_SCHEMA_VERSION,
-        provider,
-        action: "restart-provider-client".into(),
-        pre_runtime_observed,
-        quit_requested: true,
-        launch_requested: true,
-        post_runtime_observed,
-        blockers,
-        cloud_write_executed: false,
-        source_eviction_executed: false,
-    })
 }
 
 #[cfg(test)]
