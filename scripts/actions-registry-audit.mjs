@@ -239,16 +239,8 @@ function workflowPathsFromTree(
   const workflowPaths = [];
   const seenWorkflowPaths = new Set();
   for (const entry of tree.tree) {
-    if (
-      !entry ||
-      typeof entry !== 'object' ||
-      typeof entry.type !== 'string' ||
-      typeof entry.path !== 'string' ||
-      entry.path.length === 0
-    ) {
-      throw new Error(invalidEntryError);
-    }
-    if (entry.type !== 'blob') continue;
+    if (entry?.type !== 'blob') continue;
+    if (typeof entry.path !== 'string' || entry.path.length === 0) continue;
     const normalizedPath = normalizeWorkflowPath(entry.path);
     if (!normalizedPath) throw new Error(invalidEntryError);
     if (!isRepositoryWorkflowPath(normalizedPath)) continue;
