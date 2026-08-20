@@ -292,6 +292,16 @@ fn validate_connection(connection: &OAuthConnection) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_unique_connection_ids(connections: &[OAuthConnection]) -> Result<(), String> {
+    let mut connection_ids = std::collections::BTreeSet::new();
+    for connection in connections {
+        if !connection_ids.insert(connection.connection_id.as_str()) {
+            return Err("oauth-connection-document-duplicate-id".into());
+        }
+    }
+    Ok(())
+}
+
 fn connection_matches_root(connection: &OAuthConnection, root: &CloudRoot) -> bool {
     validate_connection(connection).is_ok()
         && connection.provider == root.provider
@@ -368,6 +378,7 @@ pub fn load_connections(path: &Path) -> Result<Vec<OAuthConnection>, String> {
     for connection in &document.connections {
         validate_connection(connection)?;
     }
+    validate_unique_connection_ids(&document.connections)?;
     Ok(document.connections)
 }
 
@@ -378,6 +389,7 @@ fn save_connections(path: &Path, connections: &[OAuthConnection]) -> Result<(), 
     for connection in connections {
         validate_connection(connection)?;
     }
+    validate_unique_connection_ids(connections)?;
     let document = ConnectionDocument {
         version: CONNECTION_DOCUMENT_VERSION,
         connections: connections.to_vec(),
