@@ -15,6 +15,7 @@ const emptyPaths = new Set();
 test('unexpected active workflow namespaces fail closed at every classifier boundary', () => {
   for (const path of [
     '.GitHub/workflows/case-mismatch.yml',
+    '.github/workflows/readme.md',
     'scripts/unexpected-workflow.yml',
     'workflows/unexpected-workflow.yml',
     'dynamicx/dependabot',
@@ -54,4 +55,23 @@ test('unexpected active workflow namespaces fail closed at every classifier boun
     ),
     [trustedDynamic],
   );
+});
+
+test('parent traversal aliases never normalize into workflow authority', () => {
+  for (const path of [
+    'dynamic/../.github/workflows/forged.yml',
+    '.github/workflows/nested/../forged.yml',
+  ]) {
+    const record = { id: 9003, state: 'active', path };
+    assert.throws(
+      () => classifyWorkflowRecord(record, emptyPaths, emptyPaths),
+      /actions-workflow-record-invalid/,
+      `single-record classifier must reject traversal alias ${path}`,
+    );
+    assert.throws(
+      () => classifyWorkflowRecords([record], emptyPaths, emptyPaths),
+      /actions-workflow-record-invalid/,
+      `collection classifier must reject traversal alias ${path}`,
+    );
+  }
 });
