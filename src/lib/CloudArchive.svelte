@@ -18,6 +18,9 @@
   import IcloudLocalEviction from "./IcloudLocalEviction.svelte";
 
   const RECONCILIATION_INTERVAL_MS = 60_000;
+  // fileproviderctl can spend tens of seconds inside the system provider database while iCloud is
+  // already unhealthy. Back off automatic probes so DiskSage does not add another hot reader.
+  const ICLOUD_HEALTH_BLOCKED_RETRY_INTERVAL_MS = 5 * 60_000;
   const PROVIDER_ADMISSION_BLOCKERS = new Set([
     "icloud-new-copy-admission-blocked",
     "provider-global-sync-blocked",
@@ -68,6 +71,7 @@
   let icloudHealth: api.IcloudSyncHealthReport | null = $state(null);
   let icloudHealthError = $state("");
   let checkingIcloudHealth = $state(false);
+  let icloudHealthNextCheckAt = 0;
   let providerGlobalSync: api.ProviderGlobalSyncReport | null = $state(null);
   let providerGlobalSyncError = $state("");
   let checkingProviderGlobalSync = $state(false);
@@ -431,13 +435,19 @@
   }
 
   async function refreshIcloudHealth() {
+    if (checkingIcloudHealth || Date.now() < icloudHealthNextCheckAt) return;
     checkingIcloudHealth = true;
     icloudHealthError = "";
     try {
       icloudHealth = await api.inspectIcloudNewCopyAdmission();
+      icloudHealthNextCheckAt = Date.now()
+        + (icloudHealth.new_copy_admission_state === "clear"
+          ? RECONCILIATION_INTERVAL_MS
+          : ICLOUD_HEALTH_BLOCKED_RETRY_INTERVAL_MS);
     } catch (e) {
       icloudHealth = null;
       icloudHealthError = String(e);
+      icloudHealthNextCheckAt = Date.now() + ICLOUD_HEALTH_BLOCKED_RETRY_INTERVAL_MS;
     } finally {
       checkingIcloudHealth = false;
     }
