@@ -77,7 +77,10 @@ Provider-wide File Provider dumps are bounded by both output size and wall-clock
 dump has already emitted safe aggregate markers, DiskSage may retain only those markers as
 incomplete evidence; it records `provider-global-sync-probe-timeout`, marks the provider state
 `unavailable`, and continues to block new copies. A partial dump can never become authoritative
-clear evidence.
+clear evidence. The iCloud activity probe also drains residual pipe output for at most one second
+after normal or graceful child exit, never retaining more than 256 KiB; a stalled drain terminates
+the private process group and remains incomplete evidence. Raw provider dumps are never written to
+disk by the product.
 
 The local CloudDocs client database is also bounded before any query or snapshot. When `client.db`
 exceeds the snapshot ceiling, DiskSage skips both the expensive snapshot and the fallback query,
