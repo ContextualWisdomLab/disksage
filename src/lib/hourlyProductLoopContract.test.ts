@@ -26,5 +26,11 @@ describe("hourly contextual-orchestrator loop contract", () => {
     expect(workflow).toContain("ref: e226e1197bdfc890c9d8e5b9b648c78857d7e465");
     expect(workflow).toContain("always() && needs.bootstrap-contextual-orchestrator-credentials.result != 'failure'");
     expect(workflow).not.toContain("COPILOT_GITHUB_TOKEN");
+
+    const runtimeAgentJob = workflow.split("contextual-orchestrator-opencode:", 2)[1];
+    expect(runtimeAgentJob).not.toContain("BYTEZ_API_KEY");
+    expect(runtimeAgentJob).not.toContain("NVIDIA_NIM_API_KEY");
+    expect(runtimeAgentJob).not.toContain("OPENROUTER_API_KEY");
+    expect(runtimeAgentJob).not.toContain("OPENAI_API_KEY");
   });
 });
