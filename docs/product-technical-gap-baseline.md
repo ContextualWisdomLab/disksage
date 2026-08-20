@@ -86,6 +86,11 @@
 - The current implementation head for this loop is `4a7ea3d`; frontend tests remain 25 files / 117
   tests and `svelte-check` remains 0 errors / 0 warnings. Hosted Rust, security, and review gates
   remain authoritative before any protected merge.
+- The local Zotero endpoint is readable (`GET 200`, Zotero `9.0.6`, 8,312-item library), but the
+  documented Zotero 9 write route remains `zotero-local-api-write-unsupported` and no local API
+  key is present in this environment. DiskSage therefore does not duplicate or mutate references;
+  the manifest remains a bounded, explicit handoff until Zotero 10+ and an operator-provided key
+  are available.
 - PR #209 current head `2a6ed44` now bounds Homebrew and iCloud eviction error feedback and its
   privacy contract passes locally (Vitest 2/2; svelte-check 0 errors/0 warnings). Its hosted checks
   are running and the old review decision remains until a fresh approval. PR #235 completed its
