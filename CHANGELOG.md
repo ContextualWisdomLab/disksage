@@ -13,6 +13,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   warning when incident-comparison evidence cannot be written without changing copy authority.
 - Persist path-free provider-client process observations with the same bounded, create-only
   evidence contract so a stalled File Provider incident can be compared across planning loops.
+- Persist redacted iCloud queue and File Provider activity summaries as bounded, create-only,
+  timestamped evidence records, without retaining raw CloudDocs databases or provider dumps;
+  surface persistence failure without changing copy or eviction authority.
 - Show the last read-only iCloud File Provider evidence timestamp beside the
   new-copy admission state, so a stalled `no progress`/`hard expired` queue has
   an actionable retry context without exposing provider paths.

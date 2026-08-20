@@ -43,6 +43,10 @@
     return notices.includes("provider-client-runtime-evidence-persistence-failed");
   }
 
+  function hasIcloudHealthEvidencePersistenceFailure(notices: readonly string[]): boolean {
+    return notices.includes("icloud-sync-health-evidence-persistence-failed");
+  }
+
   function localPressureLabel(pressure: api.LocalVolumePressure): string {
     return {
       normal: "정상",
@@ -783,6 +787,12 @@
           {/if}
         </span>
         <p class="muted">마지막 증거 확인: {evidenceObservedAt(icloudHealth.observed_at_ms)}</p>
+        {#if hasIcloudHealthEvidencePersistenceFailure(icloudHealth.notices)}
+          <p class="warning">
+            iCloud 동기화 요약 증거를 저장하지 못했습니다. 이번 관찰값은 표시하되 장기 비교에는 사용하지 않으며,
+            복사·원본 정리 판정은 현재 증거가 다시 저장될 때까지 보수적으로 유지합니다.
+          </p>
+        {/if}
         {#if icloudHealth.new_copy_admission_blockers.length > 0}
           <p class="warning">
             차단 사유:
@@ -1000,6 +1010,12 @@
     {#if hasRuntimeEvidencePersistenceFailure(report.notices)}
       <p class="warning">
         공급자 클라이언트 관찰 증거를 저장하지 못했습니다. 프로세스 이력은 남지 않으며, 복사·동기화 판정은 현재 관찰값으로만 제한됩니다.
+      </p>
+    {/if}
+    {#if hasIcloudHealthEvidencePersistenceFailure(report.notices)}
+      <p class="warning">
+        iCloud 동기화 요약 증거를 저장하지 못했습니다. 이번 계획은 표시하되 장기 비교용 provider 이력은 남지 않습니다.
+        상태가 정상으로 관찰된 뒤 다시 계획하십시오.
       </p>
     {/if}
     {#if report.capacity}

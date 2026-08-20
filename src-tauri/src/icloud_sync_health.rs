@@ -5,6 +5,7 @@
 //! local eviction.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,10 +14,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-#[cfg(target_os = "macos")]
 use std::io::Read;
-#[cfg(not(target_os = "macos"))]
-use std::io::{Read, Write};
+#[cfg(not(coverage))]
+use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
@@ -49,6 +49,10 @@ static SNAPSHOT_NONCE: AtomicU64 = AtomicU64::new(0);
 pub const ICLOUD_SYNC_HEALTH_SCHEMA_VERSION: u32 = 5;
 pub const ICLOUD_NATIVE_STATUS_SCHEMA_VERSION: u32 = 1;
 pub const ICLOUD_FILE_PROVIDER_ACTIVITY_SCHEMA_VERSION: u32 = 1;
+pub const ICLOUD_SYNC_HEALTH_EVIDENCE_SCHEMA_VERSION: u32 = 1;
+pub const ICLOUD_SYNC_HEALTH_EVIDENCE_DIRECTORY: &str = "icloud-sync-health-evidence";
+const MAX_PERSISTED_HEALTH_SNAPSHOTS: usize = 128;
+const MAX_PERSISTED_HEALTH_SNAPSHOT_BYTES: usize = 64 * 1024;
 
 const QUEUE_QUERY: &str = r#"
 PRAGMA query_only=ON;
@@ -260,6 +264,297 @@ pub struct IcloudSyncHealthReport {
     pub provider_sync_attested: bool,
     pub local_eviction_authorized: bool,
     pub mutation_performed: bool,
+}
+
+/// Path-free, aggregate iCloud health evidence retained for cross-loop comparison.
+///
+/// This projection deliberately excludes managed database filenames, paths, item identifiers,
+/// and raw provider output. It is a durable observation only: it never claims remote capacity,
+/// per-item upload completion, cloud write, or source-eviction authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IcloudSyncHealthEvidenceSnapshot {
+    pub schema_version: u32,
+    pub observed_at_ms: u64,
+    pub evidence_complete: bool,
+    pub database_snapshot_includes_wal: bool,
+    pub managed_database_allocated_bytes: u64,
+    pub upload_queue: IcloudUploadQueueSummary,
+    pub sync_backlog_present: bool,
+    pub new_copy_admission_state: String,
+    pub new_copy_admission_blockers: Vec<String>,
+    pub blockers: Vec<String>,
+    #[serde(default)]
+    pub native_status: Option<IcloudNativeStatusEvidence>,
+    #[serde(default)]
+    pub file_provider_activity: Option<IcloudFileProviderActivityEvidence>,
+    pub evidence_fingerprint_sha256: String,
+}
+
+fn health_evidence_code_is_valid(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value.bytes().enumerate().all(|(index, byte)| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || (byte == b'-' && index > 0)
+        })
+        && !value.ends_with('-')
+        && !value.contains("--")
+}
+
+fn health_evidence_fingerprint(
+    snapshot: &IcloudSyncHealthEvidenceSnapshot,
+) -> Result<String, String> {
+    let mut unsigned = snapshot.clone();
+    unsigned.evidence_fingerprint_sha256.clear();
+    let encoded = serde_json::to_vec(&unsigned)
+        .map_err(|_| "icloud-sync-health-evidence-fingerprint-encode-failed".to_string())?;
+    let digest = Sha256::digest(encoded);
+    Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+/// Project a live report into the bounded, path-free durable evidence shape.
+pub fn health_evidence_snapshot_from_report(
+    report: &IcloudSyncHealthReport,
+) -> Result<IcloudSyncHealthEvidenceSnapshot, String> {
+    let managed_database_roles_valid = report.managed_database_files.iter().all(|file| {
+        matches!(
+            file.role.as_str(),
+            "client.db"
+                | "client.db-shm"
+                | "client.db-wal"
+                | "server.db"
+                | "server.db-shm"
+                | "server.db-wal"
+        )
+    });
+    let admission_state_valid = matches!(
+        report.new_copy_admission_state.as_str(),
+        "clear" | "blocked"
+    );
+    let admission_blockers_consistent = (report.new_copy_admission_state == "clear")
+        == report.new_copy_admission_blockers.is_empty();
+    let blocker_codes_valid = report
+        .new_copy_admission_blockers
+        .iter()
+        .chain(report.blockers.iter())
+        .all(|code| health_evidence_code_is_valid(code));
+    if report.schema_version != ICLOUD_SYNC_HEALTH_SCHEMA_VERSION
+        || report.output_mode != "icloud-local-sync-health"
+        || report.provider != "icloud"
+        || report.evidence_kind != "supplementary-local-cloud-docs-private-schema"
+        || report.observed_at_ms == 0
+        || report.database_sidecar_write_permitted
+        || !report.paths_redacted
+        || report.user_filenames_read
+        || report.user_file_contents_read
+        || report.remote_capacity_verified
+        || report.provider_sync_attested
+        || report.local_eviction_authorized
+        || report.mutation_performed
+        || !managed_database_roles_valid
+        || !admission_state_valid
+        || !admission_blockers_consistent
+        || !blocker_codes_valid
+    {
+        return Err("icloud-sync-health-evidence-claim-invalid".into());
+    }
+    let managed_database_allocated_bytes = report
+        .managed_database_files
+        .iter()
+        .try_fold(0_u64, |total, file| {
+            total
+                .checked_add(file.allocated_bytes)
+                .ok_or_else(|| "icloud-sync-health-evidence-bytes-overflow".to_string())
+        })?;
+    if managed_database_allocated_bytes != report.managed_database_allocated_bytes {
+        return Err("icloud-sync-health-evidence-bytes-mismatch".into());
+    }
+    if let Some(native_status) = report.native_status.as_ref() {
+        validate_native_status_evidence(native_status)
+            .map_err(|_| "icloud-sync-health-evidence-native-status-invalid".to_string())?;
+        if native_status.observed_at_ms != report.observed_at_ms {
+            return Err("icloud-sync-health-evidence-native-status-time-mismatch".into());
+        }
+    }
+    if let Some(activity) = report.file_provider_activity.as_ref() {
+        validate_file_provider_activity_evidence(activity)
+            .map_err(|_| "icloud-sync-health-evidence-file-provider-activity-invalid".to_string())?;
+        if activity.observed_at_ms != report.observed_at_ms {
+            return Err("icloud-sync-health-evidence-file-provider-activity-time-mismatch".into());
+        }
+    }
+    let mut snapshot = IcloudSyncHealthEvidenceSnapshot {
+        schema_version: ICLOUD_SYNC_HEALTH_EVIDENCE_SCHEMA_VERSION,
+        observed_at_ms: report.observed_at_ms,
+        evidence_complete: report.evidence_complete,
+        database_snapshot_includes_wal: report.database_snapshot_includes_wal,
+        managed_database_allocated_bytes,
+        upload_queue: report.upload_queue.clone(),
+        sync_backlog_present: report.sync_backlog_present,
+        new_copy_admission_state: report.new_copy_admission_state.clone(),
+        new_copy_admission_blockers: report.new_copy_admission_blockers.clone(),
+        blockers: report.blockers.clone(),
+        native_status: report.native_status.clone(),
+        file_provider_activity: report.file_provider_activity.clone(),
+        evidence_fingerprint_sha256: String::new(),
+    };
+    snapshot.evidence_fingerprint_sha256 = health_evidence_fingerprint(&snapshot)?;
+    Ok(snapshot)
+}
+
+pub fn validate_icloud_sync_health_evidence_snapshot(
+    snapshot: &IcloudSyncHealthEvidenceSnapshot,
+) -> Result<(), String> {
+    if snapshot.schema_version != ICLOUD_SYNC_HEALTH_EVIDENCE_SCHEMA_VERSION
+        || snapshot.observed_at_ms == 0
+        || !matches!(snapshot.new_copy_admission_state.as_str(), "clear" | "blocked")
+        || ((snapshot.new_copy_admission_state == "clear")
+            != snapshot.new_copy_admission_blockers.is_empty())
+        || snapshot
+            .new_copy_admission_blockers
+            .iter()
+            .chain(snapshot.blockers.iter())
+            .any(|code| !health_evidence_code_is_valid(code))
+    {
+        return Err("icloud-sync-health-evidence-shape-invalid".into());
+    }
+    if let Some(native_status) = snapshot.native_status.as_ref() {
+        validate_native_status_evidence(native_status)
+            .map_err(|_| "icloud-sync-health-evidence-native-status-invalid".to_string())?;
+        if native_status.observed_at_ms != snapshot.observed_at_ms {
+            return Err("icloud-sync-health-evidence-native-status-time-mismatch".into());
+        }
+    }
+    if let Some(activity) = snapshot.file_provider_activity.as_ref() {
+        validate_file_provider_activity_evidence(activity)
+            .map_err(|_| "icloud-sync-health-evidence-file-provider-activity-invalid".to_string())?;
+        if activity.observed_at_ms != snapshot.observed_at_ms {
+            return Err("icloud-sync-health-evidence-file-provider-activity-time-mismatch".into());
+        }
+    }
+    let expected = health_evidence_fingerprint(snapshot)?;
+    if snapshot.evidence_fingerprint_sha256 != expected {
+        return Err("icloud-sync-health-evidence-fingerprint-invalid".into());
+    }
+    Ok(())
+}
+
+/// Persist one bounded, path-free iCloud health observation for later incident comparison.
+#[cfg(not(coverage))]
+pub fn write_icloud_sync_health_evidence(
+    app_data_dir: &Path,
+    report: &IcloudSyncHealthReport,
+) -> Result<PathBuf, String> {
+    let snapshot = health_evidence_snapshot_from_report(report)?;
+    validate_icloud_sync_health_evidence_snapshot(&snapshot)?;
+    let directory = health_evidence_directory(app_data_dir)?;
+    let path = directory.join(format!(
+        "{:020}-{}.json",
+        snapshot.observed_at_ms, snapshot.evidence_fingerprint_sha256
+    ));
+    let encoded = serde_json::to_vec_pretty(&snapshot)
+        .map_err(|_| "icloud-sync-health-evidence-encode-failed".to_string())?;
+    if encoded.len() > MAX_PERSISTED_HEALTH_SNAPSHOT_BYTES {
+        return Err("icloud-sync-health-evidence-too-large".into());
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o400);
+    }
+    let mut file = options
+        .open(&path)
+        .map_err(|_| "icloud-sync-health-evidence-create-failed".to_string())?;
+    let result = (|| -> Result<(), String> {
+        file.write_all(&encoded)
+            .and_then(|_| file.sync_all())
+            .map_err(|_| "icloud-sync-health-evidence-write-failed".to_string())?;
+        #[cfg(not(unix))]
+        file.set_len(encoded.len() as u64)
+            .map_err(|_| "icloud-sync-health-evidence-write-failed".to_string())?;
+        #[cfg(unix)]
+        std::fs::File::open(&directory)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|_| "icloud-sync-health-evidence-directory-sync-failed".to_string())?;
+        Ok(())
+    })();
+    if let Err(error) = result {
+        drop(file);
+        let _ = std::fs::remove_file(&path);
+        return Err(error);
+    }
+    prune_health_evidence(&directory)?;
+    Ok(path)
+}
+
+#[cfg(not(coverage))]
+fn health_evidence_directory(app_data_dir: &Path) -> Result<PathBuf, String> {
+    if !app_data_dir.is_absolute()
+        || app_data_dir
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err("icloud-sync-health-evidence-parent-invalid".into());
+    }
+    std::fs::create_dir_all(app_data_dir)
+        .map_err(|_| "icloud-sync-health-evidence-parent-create-failed".to_string())?;
+    let parent = std::fs::symlink_metadata(app_data_dir)
+        .map_err(|_| "icloud-sync-health-evidence-parent-unavailable".to_string())?;
+    if parent.file_type().is_symlink() || !parent.is_dir() {
+        return Err("icloud-sync-health-evidence-parent-unsafe".into());
+    }
+    let directory = app_data_dir.join(ICLOUD_SYNC_HEALTH_EVIDENCE_DIRECTORY);
+    std::fs::create_dir_all(&directory)
+        .map_err(|_| "icloud-sync-health-evidence-directory-create-failed".to_string())?;
+    let metadata = std::fs::symlink_metadata(&directory)
+        .map_err(|_| "icloud-sync-health-evidence-directory-unavailable".to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("icloud-sync-health-evidence-directory-unsafe".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+            .map_err(|_| "icloud-sync-health-evidence-directory-permissions-failed".to_string())?;
+    }
+    Ok(directory)
+}
+
+#[cfg(not(coverage))]
+fn is_health_evidence_record_name(name: &str) -> bool {
+    let Some(stem) = name.strip_suffix(".json") else {
+        return false;
+    };
+    let Some((timestamp, fingerprint)) = stem.split_once('-') else {
+        return false;
+    };
+    timestamp.len() == 20
+        && timestamp.bytes().all(|byte| byte.is_ascii_digit())
+        && fingerprint.len() == 64
+        && fingerprint
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+#[cfg(not(coverage))]
+fn prune_health_evidence(directory: &Path) -> Result<(), String> {
+    let mut records = std::fs::read_dir(directory)
+        .map_err(|_| "icloud-sync-health-evidence-directory-read-failed".to_string())?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            is_health_evidence_record_name(&name).then_some((name, entry.path()))
+        })
+        .collect::<Vec<_>>();
+    records.sort_by(|left, right| left.0.cmp(&right.0));
+    while records.len() > MAX_PERSISTED_HEALTH_SNAPSHOTS {
+        let (_, path) = records.remove(0);
+        std::fs::remove_file(path)
+            .map_err(|_| "icloud-sync-health-evidence-retention-failed")?;
+    }
+    Ok(())
 }
 
 fn system_time_ms(time: SystemTime) -> Option<u64> {
@@ -2144,6 +2439,87 @@ mod tests {
                 "cloud-sync-unverified",
                 "icloud-new-copy-admission-evidence-unavailable"
             ]
+        );
+    }
+
+    #[test]
+    fn health_evidence_projection_is_path_free_and_integrity_bound() {
+        let report = build_report(
+            1,
+            vec![ManagedDatabaseFileEvidence {
+                role: "client.db".into(),
+                present: true,
+                logical_bytes: 4,
+                allocated_bytes: 8,
+                modified_ms: Some(1),
+            }],
+            parse_queue_rows(queue_output()).unwrap(),
+            false,
+            false,
+        )
+        .unwrap();
+        let snapshot = health_evidence_snapshot_from_report(&report).unwrap();
+        validate_icloud_sync_health_evidence_snapshot(&snapshot).unwrap();
+        let encoded = serde_json::to_string(&snapshot).unwrap();
+        assert!(!encoded.contains("/Users/"));
+        assert!(!encoded.contains("client.db"));
+
+        let mut tampered = snapshot;
+        tampered.sync_backlog_present = !tampered.sync_backlog_present;
+        assert_eq!(
+            validate_icloud_sync_health_evidence_snapshot(&tampered).unwrap_err(),
+            "icloud-sync-health-evidence-fingerprint-invalid"
+        );
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn health_evidence_is_create_only_and_bounded() {
+        let directory = tempfile::tempdir().unwrap();
+        let report = build_report(1, vec![], IcloudUploadQueueSummary::default(), true, true)
+            .unwrap();
+        let first = write_icloud_sync_health_evidence(directory.path(), &report).unwrap();
+        assert!(first.exists());
+        assert!(write_icloud_sync_health_evidence(directory.path(), &report).is_err());
+
+        for observed_at_ms in 2..=(MAX_PERSISTED_HEALTH_SNAPSHOTS as u64 + 1) {
+            let report = build_report(
+                observed_at_ms,
+                vec![],
+                IcloudUploadQueueSummary::default(),
+                true,
+                true,
+            )
+            .unwrap();
+            write_icloud_sync_health_evidence(directory.path(), &report).unwrap();
+        }
+        let records = std::fs::read_dir(
+            directory
+                .path()
+                .join(ICLOUD_SYNC_HEALTH_EVIDENCE_DIRECTORY),
+        )
+        .unwrap()
+        .filter_map(Result::ok)
+        .count();
+        assert_eq!(records, MAX_PERSISTED_HEALTH_SNAPSHOTS);
+        assert!(!first.exists());
+    }
+
+    #[test]
+    fn health_evidence_rejects_unsafe_report_claims() {
+        let mut report =
+            build_report(1, vec![], IcloudUploadQueueSummary::default(), true, true).unwrap();
+        report.paths_redacted = false;
+        assert_eq!(
+            health_evidence_snapshot_from_report(&report).unwrap_err(),
+            "icloud-sync-health-evidence-claim-invalid"
+        );
+
+        report.paths_redacted = true;
+        report.new_copy_admission_blockers.push("test-blocker".into());
+        assert_eq!(
+            health_evidence_snapshot_from_report(&report).unwrap_err(),
+            "icloud-sync-health-evidence-claim-invalid"
         );
     }
 }

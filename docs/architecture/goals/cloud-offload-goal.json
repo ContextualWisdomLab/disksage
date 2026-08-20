@@ -17,5 +17,11 @@
     "immutable-evidence-record-valid",
     "explicit-eviction-permit"
   ],
+  "pre_copy_evidence_streams": [
+    "volume-pressure-evidence",
+    "provider-client-runtime-evidence",
+    "icloud-sync-health-evidence"
+  ],
+  "pre_copy_evidence_rule": "compare observation timestamps and fingerprints; stale or incomplete evidence remains blocked",
   "safety_invariant": "source-retained-until-an-explicit-trash-step"
 }
