@@ -74,6 +74,9 @@
   are running and the old review decision remains until a fresh approval. PR #235 completed its
   protected squash merge at `5f7c7ae`. PR #213 remains open; hosted release, test, security, and
   review checks are authoritative, and no source eviction was claimed.
+- Independent CLI/UI/dependency PRs #212, #214, #215, #217, #218, #220, #222, #230, #232,
+  #234, and #238 were rebased to current `main` `5f7c7ae`; their fresh checks are queued or in
+  progress, and no new failure is treated as resolved until the exact rebased head is green.
 - CloudArchive now routes all 15 user-visible asynchronous failure phases through bounded,
   operation-specific messages. The exact-head frontend suite passed 25 files / 117 tests and
   `svelte-check` passed with 0 errors and 0 warnings; raw backend exception details remain
