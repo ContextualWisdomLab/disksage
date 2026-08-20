@@ -162,6 +162,7 @@ pub enum ArchiveKind {
     Backup,
     Creative,
     IncompleteDownload,
+    SensitiveConfig,
 }
 
 impl ArchiveKind {
@@ -174,6 +175,7 @@ impl ArchiveKind {
             Self::Backup => "backups",
             Self::Creative => "creative",
             Self::IncompleteDownload => "incomplete-downloads",
+            Self::SensitiveConfig => "sensitive-config",
         }
     }
 }
@@ -1045,6 +1047,9 @@ pub fn discover_cloud_roots(home: &Path) -> Vec<CloudRoot> {
 }
 
 fn archive_kind(path: &Path) -> Option<ArchiveKind> {
+    if is_sensitive_config_path(path) {
+        return Some(ArchiveKind::SensitiveConfig);
+    }
     let ext = path.extension()?.to_string_lossy().to_ascii_lowercase();
     match ext.as_str() {
         "pdf" | "doc" | "docx" | "ppt" | "pptx" | "xls" | "xlsx" | "xlsm" | "xlsb" | "odt"
@@ -1067,6 +1072,30 @@ fn archive_kind(path: &Path) -> Option<ArchiveKind> {
         _ if multipart_archive_part(path).is_some() => Some(ArchiveKind::Archive),
         _ => None,
     }
+}
+
+/// Classify credential-bearing names without opening the file. These entries stay visible in a
+/// plan for diagnosis, but the shared source blocker prevents metadata probing, cloud copy, and
+/// source eviction.
+fn is_sensitive_config_path(path: &Path) -> bool {
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let file_name = file_name.to_ascii_lowercase();
+    let env_secret = (file_name == ".env" || file_name.starts_with(".env."))
+        && !matches!(
+            file_name.as_str(),
+            ".env.example" | ".env.sample" | ".env.template"
+        );
+    let extension = path
+        .extension()
+        .map(|extension| extension.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    env_secret
+        || matches!(extension.as_str(), "key" | "pem" | "p12" | "pfx")
+        || file_name.contains("credential")
+        || file_name.contains("private_key")
+        || file_name.contains("private-key")
 }
 
 fn multipart_archive_part(path: &Path) -> Option<(String, u32)> {
@@ -3766,6 +3795,7 @@ fn should_probe_general_metadata(path: &Path) -> bool {
         .map(|extension| extension.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
     archive_kind(path) != Some(ArchiveKind::IncompleteDownload)
+        && archive_kind(path) != Some(ArchiveKind::SensitiveConfig)
         && multipart_archive_part(path).is_none()
         && !matches!(
             extension.as_str(),
@@ -4086,6 +4116,9 @@ fn source_blocked_reason(
     kind: ArchiveKind,
     metadata: &ContentMetadata,
 ) -> Option<String> {
+    if kind == ArchiveKind::SensitiveConfig || is_sensitive_config_path(path) {
+        return Some("sensitive-config-file".into());
+    }
     if path_inside_managed_file_provider_storage(path) {
         return Some("system-managed-file-provider-storage".into());
     }
@@ -4881,6 +4914,7 @@ fn prepare_cloud_archive_source_with_scan(
                     && file.modified_ms > 0
                     && now_ms.saturating_sub(file.modified_ms) / DAY_MS >= options.min_age_days
                     && archive_kind(&file.path).is_some()
+                    && archive_kind(&file.path) != Some(ArchiveKind::SensitiveConfig)
                     && file
                         .path
                         .strip_prefix(source_root)
@@ -7568,6 +7602,42 @@ mod tests {
         }
         assert_eq!(archive_kind(Path::new("x.zip.part04")), None);
         assert_eq!(archive_kind(Path::new("README")), None);
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn sensitive_config_files_are_visible_but_never_reclaimable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let cloud = tmp.path().join("cloud");
+        writable_dir(&source);
+        writable_dir(&cloud);
+        for name in [".env.api", "credentials.json"] {
+            std::fs::write(source.join(name), b"redacted-test-fixture").unwrap();
+        }
+
+        assert_eq!(
+            archive_kind(&source.join(".env.api")),
+            Some(ArchiveKind::SensitiveConfig)
+        );
+        assert!(!should_probe_general_metadata(&source.join(".env.api")));
+        let report = plan_cloud_archive(
+            &collect_archive_files(&source, &[]),
+            &source,
+            &root(CloudProvider::Icloud, &cloud),
+            system_now_ms(),
+            CloudPlanOptions {
+                min_size_bytes: 1,
+                min_age_days: 0,
+                limit: 10,
+            },
+        );
+        assert_eq!(report.candidates.len(), 2);
+        assert!(report
+            .candidates
+            .iter()
+            .all(|candidate| candidate.blocked_reason.as_deref() == Some("sensitive-config-file")));
+        assert_eq!(report.potentially_reclaimable_bytes, 0);
     }
 
     #[test]

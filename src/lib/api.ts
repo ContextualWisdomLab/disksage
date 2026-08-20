@@ -361,7 +361,8 @@ export type ArchiveKind =
   | "dataset"
   | "backup"
   | "creative"
-  | "incomplete-download";
+  | "incomplete-download"
+  | "sensitive-config";
 
 export interface CloudRoot {
   id: string;

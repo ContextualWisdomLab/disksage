@@ -227,6 +227,13 @@ an explicit `sync_state=unknown` is rejected at the current authorization bounda
 cannot produce a provider-sync confirmation or an eviction permit; the regression is covered by
 the real public-boundary test `provider_sync_legacy_eviction_fail_closed.rs`.
 
+Direct credential-bearing configuration files are now a first-class `sensitive-config` inventory
+kind. Filename-only markers (`.env`/`.env.*` except examples, credential names, private-key names,
+and key/certificate extensions) are collected for visibility without opening their contents, then
+blocked at the shared planner boundary as `sensitive-config-file`. They never enter metadata
+probing, cloud-copy approval, potentially-reclaimable-byte totals, or source eviction. This is a
+name-based safety boundary, not a claim that every secret-bearing file can be recognized.
+
 ## Consequences
 
 - `is_local_current=true` and `is_uploaded=false` produces `pending-upload` and no eviction permit.
@@ -258,6 +265,9 @@ the real public-boundary test `provider_sync_legacy_eviction_fail_closed.rs`.
 - A legacy provider record may be read for compatibility and re-check purposes, but an unknown
   explicit sync state never authorizes provider confirmation or source eviction, even when the
   legacy completion bit is true.
+- Credential-bearing configuration names are visible as blocked `sensitive-config` candidates,
+  but their contents are never opened and they cannot be copied, counted as reclaimable, or
+  evicted automatically; unrecognized secret material remains an explicit review limitation.
 - The bounded iCloud File Provider activity probe records only redacted aggregate evidence: counts
   of `no progress` fetch/create markers and active upload/download progress fractions. Any such
   marker, an active transfer, a probe timeout, or unavailable probe evidence blocks new-copy

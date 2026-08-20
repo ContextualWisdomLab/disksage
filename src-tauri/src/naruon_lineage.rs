@@ -144,6 +144,7 @@ fn ontology_class(kind: ArchiveKind) -> String {
         ArchiveKind::Backup => "Backup",
         ArchiveKind::Creative => "Creative",
         ArchiveKind::IncompleteDownload => "IncompleteDownload",
+        ArchiveKind::SensitiveConfig => "SensitiveConfig",
     };
     format!("{ONTOLOGY_NAMESPACE}{label}")
 }

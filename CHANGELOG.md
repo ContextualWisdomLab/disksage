@@ -64,6 +64,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Replace the unmaintained direct `jwalk` production dependency with the maintained `walkdir`
   backend across scanner, duplicate, artifact, cloud, and reclaim traversals; preserve symlink/
   reparse filtering and fail-closed traversal-error accounting with a locked dependency contract.
+- Inventory direct credential-bearing configuration names as blocked `sensitive-config` entries;
+  never open them for metadata probing or include them in cloud-copy or source-eviction authority.
 - Bound one-minute background reconciliation to 128 immutable provider evidence records per
   receipt, and validate active iCloud File Provider transfers as blocked readiness evidence.
 - Hardened iCloud local-copy batch eviction with fresh per-item timestamps, deterministic planner/executor/recorder/clock seams, fail-closed immutable checkpoint handling, bounded manifest admission, symlink-safe control-path validation, and distinct operator diagnostics.
