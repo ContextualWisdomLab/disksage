@@ -43,6 +43,6 @@ attestation or remote-object edge.
 ## Evidence
 
 The implementation and focused regression test are in `src-tauri/src/naruon_lineage.rs` at source
-head `80f3cd1c1fa04bf190f36480bc190a3f0dbd9dcb`; the focused relation test is kept alongside the
-export contract. The design preserves the
+head `2e396ca9e953922f5b25eed94740543408586719`; the focused relation tests are kept alongside
+the export contract. The design preserves the
 metadata-first precedence and the fail-closed provider-sync contract from ADR-0001.
