@@ -48,11 +48,20 @@ describe('Test workflow coverage evidence contract', () => {
     expect(workflow).toContain('lines: totals?.lines ?? null');
   });
 
-  it('preserves a bounded sanitized command diagnostic when measurement itself fails', () => {
+  it('preserves both ends of a bounded sanitized command diagnostic when measurement itself fails', () => {
     expect(workflow).toContain('id: rust-coverage');
     expect(workflow).toContain('coverage-command.raw.log');
+    expect(workflow).toContain('coverage-command.bounded.log');
     expect(workflow).toContain('coverage-command-diagnostic.log');
     expect(workflow).toContain('MAX_COVERAGE_COMMAND_DIAGNOSTIC_BYTES=32768');
+    expect(workflow).toContain('COVERAGE_COMMAND_DIAGNOSTIC_EDGE_BYTES=16000');
+    expect(workflow).toContain(
+      'head -c "$COVERAGE_COMMAND_DIAGNOSTIC_EDGE_BYTES" coverage-command.raw.log',
+    );
+    expect(workflow).toContain(
+      'tail -c "$COVERAGE_COMMAND_DIAGNOSTIC_EDGE_BYTES" coverage-command.raw.log',
+    );
+    expect(workflow).toContain('--- bounded diagnostic tail ---');
     expect(workflow).toContain("replaceAll(workspace, '<repo>')");
     expect(workflow).toContain("replaceAll(home, '<home>')");
     expect(workflow).toContain(
