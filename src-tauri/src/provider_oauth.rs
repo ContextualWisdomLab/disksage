@@ -322,7 +322,7 @@ fn validate_connection_document_parent(parent: &Path, allow_missing: bool) -> Re
 }
 
 pub fn load_connections(path: &Path) -> Result<Vec<OAuthConnection>, String> {
-    validate_connection_document_parent(connection_document_parent(path), false)?;
+    validate_connection_document_parent(connection_document_parent(path), true)?;
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
