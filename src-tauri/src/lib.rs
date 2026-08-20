@@ -6,6 +6,8 @@ compile_error!("DiskSage supports only Windows, Linux, and macOS targets.");
 mod dupes;
 #[cfg_attr(coverage, allow(dead_code))]
 mod commands;
+#[cfg_attr(coverage, allow(dead_code))]
+mod node_view_guard;
 #[cfg(test)]
 mod commands_public_tests;
 #[cfg(test)]
@@ -116,7 +118,7 @@ pub fn run() {
             commands::list_roots,
             commands::start_scan,
             commands::cancel_scan,
-            commands::get_node,
+            node_view_guard::get_node,
             commands::top_files,
             commands::list_cache_candidates,
             commands::list_dev_artifacts,
