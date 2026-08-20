@@ -13,6 +13,7 @@ new numbered record rather than rewriting history.
 | [0005](0005-hourly-agent-loop-is-advisory.md) | Hourly agent loop is advisory | Accepted |
 | [0006](0006-redacted-icloud-health-evidence.md) | Persist redacted iCloud health evidence | Accepted |
 | [0007](0007-pre-copy-evidence-cohort.md) | Gate iCloud plans on a fresh evidence cohort | Accepted |
+| [0008](0008-hourly-loop-foreign-dependencies-read-only.md) | Keep the hourly loop read-only at foreign dependency boundaries | Accepted |
 
 New records must state context, decision, consequences, rejected alternatives, and the evidence or
 standard that led to the decision. A record never grants cloud-write or source-eviction authority;
