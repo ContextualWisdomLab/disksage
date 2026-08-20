@@ -43,6 +43,10 @@ retains the source until per-item native sync evidence is attested. It never aut
 remote-capacity claims, or source eviction; organization/shared roots and other OAuth failures
 remain blocked.
 
+Cloud-provider OAuth consent is read-only by default in the personal desktop UI. A user must
+explicitly enable the write-access checkbox before an OAuth connection may request upload scope;
+the default path does not prompt for organization credentials or imply API upload authority.
+
 Native File Provider copies also require a fresh source-volume headroom check: available bytes must
 cover the candidate plus a fixed 1 GiB staging reserve. DiskSage applies this gate in the preview
 UI and immediately before the copy, returning `local-volume-headroom-insufficient` rather than
@@ -192,7 +196,7 @@ requests marked `no progress` in five seconds. Because `fileproviderctl` exposes
 cancellation operation, the product surfaces the Finder cancel control as the only operator action;
 it must not kill `fileproviderd` or `bird`, write a raw provider dump, retry the copy, or infer
 eviction authority. This incomplete observation keeps new-copy admission, attestation, and source
-eviction fail-closed and is bound to source head `7765a4b`, not to this replaceable ADR text.
+eviction fail-closed and is bound to source head `f0dff03`, not to this replaceable ADR text.
 
 ## Consequences
 
