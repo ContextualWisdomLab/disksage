@@ -4,14 +4,6 @@ on:
   push:
     tags: ["v*"]
   pull_request:
-    paths:
-      - ".github/workflows/release.yml"
-      - "src-tauri/**"
-      - "!src-tauri/tests/**"
-      - "src/**"
-      - "!src/**/*.test.ts"
-      - "package.json"
-      - "package-lock.json"
   workflow_dispatch:
 
 concurrency:
