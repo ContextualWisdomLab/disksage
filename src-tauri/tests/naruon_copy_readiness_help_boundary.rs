@@ -6,6 +6,14 @@ mod verifier {
         "/src/bin/disksage-naruon-copy-readiness-verify.rs"
     ));
 
+    fn absolute_fixture() -> std::path::PathBuf {
+        if cfg!(windows) {
+            std::path::PathBuf::from(r"C:\readiness.json")
+        } else {
+            std::path::PathBuf::from("/readiness.json")
+        }
+    }
+
     #[test]
     fn sole_help_is_terminal_success_but_mixed_help_remains_invalid() {
         assert!(matches!(
@@ -17,18 +25,19 @@ mod verifier {
             Ok(TerminalRequest::Help)
         ));
         assert_eq!(
-            parse_args(&["--help".into(), "/readiness.json".into()]).unwrap_err(),
+            parse_args(&["--help".into(), "relative.json".into()]).unwrap_err(),
             "naruon-copy-readiness-verifier-usage-invalid"
         );
     }
 
     #[test]
     fn absolute_readiness_path_keeps_verify_authority_separate_from_help() {
-        let request = parse_args(&[std::path::Path::new("/readiness.json").as_os_str().into()])
+        let absolute = absolute_fixture();
+        let request = parse_args(&[absolute.as_os_str().to_owned()])
             .expect("absolute readiness path should remain valid");
         match request {
             TerminalRequest::Verify(path) => {
-                assert_eq!(path, std::path::Path::new("/readiness.json"));
+                assert_eq!(path, absolute);
             }
             TerminalRequest::Help => panic!("an absolute readiness path must not become help"),
         }
