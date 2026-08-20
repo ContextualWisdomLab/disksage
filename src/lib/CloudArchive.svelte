@@ -852,7 +852,13 @@
         <p class="muted">읽기 전용 로컬 증거이며, 원격 용량·개별 파일 업로드 완료·원본 삭제 권한을 대신 증명하지 않습니다.</p>
       </div>
     {/if}
-    {#if icloudHealthError}<p class="error" role="alert">iCloud 상태 확인: {icloudHealthError}</p>{/if}
+    {#if icloudHealthError}
+      <p class="error" role="alert">iCloud 상태 확인: {icloudHealthError}</p>
+      <p class="warning">
+        iCloud File Provider 증거를 확인하지 못했습니다. Finder에 남은 복사 대기를 취소하고,
+        로컬 여유공간을 확보한 뒤 DiskSage에서 상태를 다시 확인하십시오.
+      </p>
+    {/if}
     {#if providerGlobalSync}
       <div class="receipt-reconciliation" aria-live="polite">
         <strong>{providerGlobalSync.provider} 전역 동기화 admission</strong>
