@@ -154,3 +154,16 @@ physical reclaim proof; prune, trim, stop, and delete remain outside the inspect
   handoff contains only lineage fingerprints, size/mtime, production-time evidence, ontology class,
   `targetFolder`, and the planned `move` action. Naruon stores it encrypted and returns a redacted
   summary; it never receives paths, names, OAuth material, or move/eviction authority.
+
+## Standards references
+
+The lineage vocabulary is aligned with PROV-O's Entity/Activity/Agent and derivation relations;
+catalog exports use DCAT 3 concepts for datasets, distributions, checksums, and versioning. These
+standards describe interchange semantics only; they do not grant cloud-write or source-eviction
+authority. The APA 7 records and original URLs are kept in the Zotero Local API manifest.
+
+- Lebo, T., Sahoo, S., & McGuinness, D. (Eds.). (2013). *PROV-O: The PROV ontology*. W3C
+  Recommendation. https://www.w3.org/TR/prov-o/
+- Albertoni, R., Browning, D., Cox, S. J., Gonzalez Beltran, A., Perego, A., & Winstanley, P.
+  (Eds.). (2024). *Data Catalog Vocabulary (DCAT) - Version 3*. W3C Recommendation.
+  https://www.w3.org/TR/vocab-dcat-3/

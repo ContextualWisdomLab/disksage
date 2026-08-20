@@ -42,3 +42,10 @@ Zotero Documentation. (2026, July 29). *Zotero Local API*. https://www.zotero.or
 
 Zotero Documentation. (2026, July 29). *Zotero Web API file uploads*.
 https://www.zotero.org/support/dev/web_api/v3/file_upload
+
+Lebo, T., Sahoo, S., & McGuinness, D. (Eds.). (2013). *PROV-O: The PROV ontology*.
+W3C Recommendation. https://www.w3.org/TR/prov-o/
+
+Albertoni, R., Browning, D., Cox, S. J., Gonzalez Beltran, A., Perego, A., & Winstanley, P.
+(Eds.). (2024). *Data Catalog Vocabulary (DCAT) - Version 3*. W3C Recommendation.
+https://www.w3.org/TR/vocab-dcat-3/

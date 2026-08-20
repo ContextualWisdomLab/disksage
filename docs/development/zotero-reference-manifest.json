@@ -39,5 +39,32 @@
     "DOI": "10.6028/NIST.SP.800-53r5",
     "url": "https://doi.org/10.6028/NIST.SP.800-53r5",
     "extra": "APA 7: Joint Task Force. (2020). Security and privacy controls for information systems and organizations (NIST SP 800-53 Rev. 5). National Institute of Standards and Technology."
+  },
+  {
+    "itemType": "report",
+    "title": "PROV-O: The PROV Ontology",
+    "creators": [
+      { "creatorType": "editor", "firstName": "Timothy", "lastName": "Lebo" },
+      { "creatorType": "editor", "firstName": "Satya", "lastName": "Sahoo" },
+      { "creatorType": "editor", "firstName": "Deborah", "lastName": "McGuinness" }
+    ],
+    "date": "2013-04-30",
+    "url": "https://www.w3.org/TR/prov-o/",
+    "extra": "APA 7: Lebo, T., Sahoo, S., & McGuinness, D. (Eds.). (2013). PROV-O: The PROV ontology. W3C Recommendation."
+  },
+  {
+    "itemType": "report",
+    "title": "Data Catalog Vocabulary (DCAT) - Version 3",
+    "creators": [
+      { "creatorType": "editor", "firstName": "Riccardo", "lastName": "Albertoni" },
+      { "creatorType": "editor", "firstName": "David", "lastName": "Browning" },
+      { "creatorType": "editor", "firstName": "Simon J", "lastName": "Cox" },
+      { "creatorType": "editor", "firstName": "Alejandra", "lastName": "Gonzalez Beltran" },
+      { "creatorType": "editor", "firstName": "Andrea", "lastName": "Perego" },
+      { "creatorType": "editor", "firstName": "Peter", "lastName": "Winstanley" }
+    ],
+    "date": "2024-08-22",
+    "url": "https://www.w3.org/TR/vocab-dcat-3/",
+    "extra": "APA 7: Albertoni, R., Browning, D., Cox, S. J., Gonzalez Beltran, A., Perego, A., & Winstanley, P. (Eds.). (2024). Data Catalog Vocabulary (DCAT) - Version 3. W3C Recommendation."
   }
 ]
