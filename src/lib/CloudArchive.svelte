@@ -196,6 +196,8 @@
       : true;
     const icloudAdmissionBlocked = selectedRootDetails()?.provider === "icloud"
       && icloudHealth?.new_copy_admission_state !== "clear";
+    const icloudPreCopyEvidenceBlocked = selectedRootDetails()?.provider === "icloud"
+      && report?.pre_copy_evidence?.complete !== true;
     return candidate.blocked_reason === null
       && (!candidate.requires_review || exactApproval)
       && (embeddedHighConfidence || exactApproval)
@@ -203,6 +205,7 @@
       && api.localCopyHasHeadroom(report?.local_volume, candidate.bytes)
       && !providerAdmissionBlocked
       && !icloudAdmissionBlocked
+      && !icloudPreCopyEvidenceBlocked
       && approvalPhrase !== null;
   }
 
