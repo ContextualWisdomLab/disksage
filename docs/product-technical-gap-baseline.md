@@ -152,9 +152,9 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 
 ## 2026-08-21 follow-up loop evidence
 
-- Current implementation/documentation head is `b7a41a4`; the worktree is clean and the only local
-  DiskSage worktree is `/private/tmp/disksage-current`. The temporary PR #189 worktree was removed
-  after its focused test passed, so no stale DiskSage worktree remains.
+- Current implementation head remains `b7a41a4`; this evidence update is the next documentation
+  revision. The only local DiskSage worktree is `/private/tmp/disksage-current`; the temporary PR
+  #189 worktree was removed after its focused test passed, so no stale DiskSage worktree remains.
 - A bounded read-only iCloud File Provider dump captured at `2026-08-21 04:31:47 +0900` contained
   97 `createItemBasedOnTemplate` and 46 `fetchContentsForItemWithID` requests marked `no progress`;
   no upload/download progress marker was retained in that bounded output. This is incomplete
@@ -172,3 +172,10 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   could not complete a full target build because the disk reached `ENOSPC`; generated Cargo target
   state was then removed with `cargo clean`, recovering about 729 MiB. Hosted exact-head checks are
   authoritative for the final proof.
+- A newer bounded iCloud observation at `2026-08-21 04:59:17 +0900` retained 125 aggregate
+  fetch/create `no progress` markers, upload progress `28,136,385,681/29,543,186,689` (95.24%),
+  download progress `0/1,060,097,218`, scheduler `running`, and error generation `1143`; APFS
+  free space was about 3.9 GiB. The Finder “real_datasets” copy remains a File Provider stall,
+  not a DiskSage transfer completion. The source is retained; only the Finder progress cancel
+  control is an operator action, and new copy, attestation, and eviction remain blocked until a
+  fresh complete quiet-provider observation.

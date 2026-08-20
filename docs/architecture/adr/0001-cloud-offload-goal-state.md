@@ -173,6 +173,15 @@ were active. This confirms the Finder “preparing” symptom is a provider-stal
 copy completion; DiskSage keeps the source, cancels only through the operator-visible Finder
 control, and never treats the probe or process activity as write, attestation, or eviction authority.
 
+The next bounded read-only observation at `2026-08-21 04:59:17 +0900` retained 125 aggregate
+`no progress` fetch/create markers, an active upload at `0.9524` (28,136,385,681 of
+29,543,186,689 bytes), and an active download at `0.0000` (0 of 1,060,097,218 bytes), while
+the provider scheduler remained `running` with error generation `1143`. Local APFS headroom was
+about 3.9 GiB. The coexistence of a large active upload, a zero-progress download, and repeated
+no-progress requests explains the Finder “preparing” stall; it does not authorize a process kill,
+copy retry, cloud mutation, or source eviction. DiskSage therefore keeps the Finder cancel-only
+guidance and fail-closed admission until a fresh bounded observation is quiet and complete.
+
 ## Consequences
 
 - `is_local_current=true` and `is_uploaded=false` produces `pending-upload` and no eviction permit.
