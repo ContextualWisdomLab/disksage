@@ -761,11 +761,13 @@ fn probe_file_provider_activity(observed_at_ms: u64) -> IcloudFileProviderActivi
     let mut timed_out = false;
     let mut status = None;
     let deadline = Instant::now() + FILEPROVIDER_DUMP_TIMEOUT;
+    let mut buffer = [0_u8; 16 * 1024];
     loop {
-        let mut buffer = [0_u8; 16 * 1024];
         match stdout.read(&mut buffer) {
             Ok(read) if read > 0 => {
-                let remaining = MAX_FILEPROVIDER_DUMP_BYTES + 1 - output.len();
+                let remaining = MAX_FILEPROVIDER_DUMP_BYTES
+                    .saturating_add(1)
+                    .saturating_sub(output.len());
                 output.extend_from_slice(&buffer[..read.min(remaining)]);
             }
             Ok(_) => {}
@@ -778,6 +780,38 @@ fn probe_file_provider_activity(observed_at_ms: u64) -> IcloudFileProviderActivi
         match child.try_wait() {
             Ok(Some(child_status)) => {
                 status = Some(child_status);
+                let drain_deadline = Instant::now() + Duration::from_secs(1);
+                loop {
+                    match stdout.read(&mut buffer) {
+                        Ok(0) => break,
+                        Ok(read) => {
+                            let remaining = MAX_FILEPROVIDER_DUMP_BYTES
+                                .saturating_add(1)
+                                .saturating_sub(output.len());
+                            output.extend_from_slice(&buffer[..read.min(remaining)]);
+                            if read > remaining {
+                                kill_group();
+                                break;
+                            }
+                        }
+                        Err(error)
+                            if matches!(
+                                error.kind(),
+                                ErrorKind::WouldBlock | ErrorKind::Interrupted
+                            ) =>
+                        {
+                            if Instant::now() >= drain_deadline {
+                                kill_group();
+                                break;
+                            }
+                            thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(_) => {
+                            read_failed = true;
+                            break;
+                        }
+                    }
+                }
                 break;
             }
             Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(25)),
@@ -817,14 +851,30 @@ fn probe_file_provider_activity(observed_at_ms: u64) -> IcloudFileProviderActivi
             kill_group();
             let _ = child.wait();
         }
+        let drain_deadline = Instant::now() + Duration::from_secs(1);
         loop {
-            let mut buffer = [0_u8; 16 * 1024];
             match stdout.read(&mut buffer) {
                 Ok(read) if read > 0 => {
-                    let remaining = MAX_FILEPROVIDER_DUMP_BYTES + 1 - output.len();
+                    let remaining = MAX_FILEPROVIDER_DUMP_BYTES
+                        .saturating_add(1)
+                        .saturating_sub(output.len());
                     output.extend_from_slice(&buffer[..read.min(remaining)]);
+                    if read > remaining {
+                        kill_group();
+                        break;
+                    }
                 }
-                Ok(_) | Err(_) => break,
+                Ok(0) => break,
+                Err(error)
+                    if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) =>
+                {
+                    if Instant::now() >= drain_deadline {
+                        kill_group();
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(_) => break,
             }
         }
     }
