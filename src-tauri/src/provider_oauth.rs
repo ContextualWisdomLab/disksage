@@ -967,7 +967,7 @@ pub fn refreshed_access_token(
     let connections = load_connections(connection_document_path)?;
     let connection = connection_for_root(&connections, root)?;
     let refresh_token = read_refresh_token(&connection.connection_id)?;
-    let grant = refresh_grant(&connection, &refresh_token, false)?;
+    let grant = refresh_grant(&connection, &refresh_token)?;
     if let Some(rotated) = grant.refresh_token.as_deref() {
         store_refresh_token(&connection.connection_id, rotated)?;
     }
