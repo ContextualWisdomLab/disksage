@@ -10,10 +10,12 @@ identity-bound staging primitive and journal. The Trash is not emptied, so the o
 reversible.
 
 For the current macOS low-disk incident, the **관측된 재생성 캐시 자동 정리** action invokes
-`clean_regenerable_caches`. It is intentionally limited to `~/Library/Caches/pnpm`, Adobe, and
-Microsoft Edge. No extra approval phrase is needed for these catalogued regenerable roots, but
+`clean_regenerable_caches`. It is intentionally limited to npm (`~/.npm`), uv (`~/.cache/uv` or
+`UV_CACHE_DIR`), pnpm, Adobe, Microsoft Edge, and Trivy. No extra approval phrase is needed for
+these catalogued regenerable roots, but
 the per-child identity, size/mtime, and complete inactive-use checks remain mandatory. A child
-that is active or changed is skipped; the root and OS Trash are retained.
+that is active, changed, or is DiskSage's own `.disksage-trash-*` staging directory is skipped; the
+root and OS Trash are retained.
 
 The same guarded path is available without the GUI as
 `cargo run --locked --manifest-path src-tauri/Cargo.toml --bin disksage-cache-cleanup -- --execute`.
