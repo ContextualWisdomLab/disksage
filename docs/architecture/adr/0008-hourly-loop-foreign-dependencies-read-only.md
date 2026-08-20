@@ -14,12 +14,24 @@ orchestrator deployment owns its own runtime configuration.
 
 ## Decision
 
-The workflow uses only contextual-orchestrator's published HTTP API. It reads
-`CONTEXTUAL_ORCHESTRATOR_URL` and `CONTEXTUAL_ORCHESTRATOR_TOKEN`, discovers a
-model through `/v1/models`, and sends bounded repository context to
-`/v1/chat/completions`. It checks out the exact scheduled or manually
-dispatched `github.sha`, keeps repository and pull-request permissions
-read-only, and never checks out or mutates the foreign orchestrator repository.
+The repository-local advisory workflow uses only contextual-orchestrator's
+published HTTP API. It reads `CONTEXTUAL_ORCHESTRATOR_URL` and
+`CONTEXTUAL_ORCHESTRATOR_TOKEN`, discovers a model through `/v1/models`, and
+sends bounded repository context to `/v1/chat/completions`. It checks out the
+exact manually-dispatched `github.sha`, keeps repository and pull-request
+permissions read-only, and never checks out or mutates the foreign
+orchestrator repository.
+
+The repository-local workflow is intentionally **manual-only**. A direct HTTP
+model call is not a pinned OpenCode review worker, so a repository-local
+schedule would create an unpinned autonomous reviewer. The hourly product and
+PR review loop is owned by the trusted central workflow
+[`disksage-hourly-review-repair.yml`](https://github.com/ContextualWisdomLab/.github/blob/main/.github/workflows/disksage-hourly-review-repair.yml)
+at `37 * * * *`. That caller dispatches the pinned reusable scheduler at
+[`a3fdaa1aacaba9443a18573f3c309fe1841fc2f0`](https://github.com/ContextualWisdomLab/.github/blob/a3fdaa1aacaba9443a18573c309fe1841fc2f0/.github/workflows/pr-review-fix-scheduler.yml),
+which performs its own OpenCode OIDC exchange and exact-head lease. This keeps
+the hourly requirement live without making DiskSage's local advisory workflow
+an unpinned mutation authority.
 
 The five provider credentials (`BYTEZ_API_KEY`, both NVIDIA NIM keys,
 `OPENROUTER_API_KEY`, and `OPENAI_API_KEY`) remain deployment-side
@@ -36,7 +48,7 @@ OAuth, Copilot, or local mutation fallback.
   is configured, while the standalone personal installation remains OAuth-free.
 - Provider credentials must be configured where contextual-orchestrator is
   deployed; this repository cannot prove that external deployment state.
-- Exact event-SHA context prevents the loop from reviewing a stale `main` tree.
+- Exact event-SHA context prevents either loop from reviewing a stale `main` tree.
 - Source revision `9b1c270` additionally uploads a seven-day, path-free advisory receipt when the
   endpoint is configured. The receipt contains only schema version, event SHA, model identifier,
   status, response byte count, and response hash; the model response body is never persisted.
@@ -50,6 +62,9 @@ OAuth, Copilot, or local mutation fallback.
   in this repository.
 - **Pass provider secrets to the Agent prompt:** rejected because advisory
   review does not need provider credentials and must remain redaction-safe.
+- **Restore a schedule to the repository-local HTTP advisory:** rejected because
+  it would be an unpinned autonomous reviewer; the central pinned OpenCode
+  scheduler already provides the required hourly loop.
 
 ## Evidence basis
 

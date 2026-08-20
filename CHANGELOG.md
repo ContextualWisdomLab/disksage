@@ -25,6 +25,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Keep the hourly contextual-orchestrator loop on its published read-only API, bind context to
   the exact event commit, and remove foreign-repository checkout, KV mutation, and provider-secret
   ingestion from DiskSage Actions.
+- Keep the repository-local contextual-orchestrator advisory workflow manual-only and bind the
+  hourly OpenCode review/repair schedule to the trusted central `.github` scheduler, avoiding an
+  unpinned autonomous model reviewer while retaining exact-head, read-only evidence boundaries.
 - Show the last read-only iCloud File Provider evidence timestamp beside the
   new-copy admission state, so a stalled `no progress`/`hard expired` queue has
   an actionable retry context without exposing provider paths.

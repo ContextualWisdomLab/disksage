@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-21 (Asia/Seoul)
-**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` source through `bc0c42d`; this
+**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` source through `b091fc6`; this
 baseline records the current loop's runtime and integration evidence.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.  
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
@@ -31,7 +31,7 @@ baseline records the current loop's runtime and integration evidence.
 | --- | --- | --- | --- |
 | P0 | Provider end-to-end receipt is absent for the current iCloud incident. | Global probe can time out and CloudDocs state is intentionally not force-killed or deleted; the native copy boundary now requires an integrity-checked three-stream pre-copy cohort before mutation. | Capture a bounded fresh provider evidence receipt after sync settles; keep transfer/eviction disabled until it is complete. |
 | P0 | Disk pressure telemetry and provider queue evidence must remain comparable across loops without retaining raw provider output. | Cloud plans and explicit iCloud health refreshes persist bounded, path-free `LocalVolumeSnapshot`, `ProviderClientRuntimeSnapshot`, and `IcloudSyncHealthEvidenceSnapshot` records under `volume-pressure-evidence`, `provider-client-runtime-evidence`, and `icloud-sync-health-evidence`; iCloud plans now combine them into a timestamp/fingerprint-bound cohort. | Missing, incomplete, malformed, or more-than-five-minute-skewed cohort observations remain blocked; a fresh exact-head native incident plan is still needed to compare the emitted cohort with the live incident. |
-| P1 | Hourly product-development/review loop is not yet live in this repository environment. | `.github/workflows/hourly-product-loop.yml` is scheduled, uses only contextual-orchestrator's published `/v1/models` and `/v1/chat/completions` APIs against the exact event SHA, and now uploads a seven-day path-free receipt when configured; no external endpoint or deployment receipt is available here. | Configure the orchestrator URL/token in its deployment and run once manually; verify the bounded receipt artifact without importing provider secrets or enabling mutation. |
+| P1 | Hourly product-development/review loop is not yet live in this repository environment. | The repository-local `.github/workflows/hourly-product-loop.yml` is intentionally `workflow_dispatch`-only because its direct contextual-orchestrator HTTP call is advisory and not a pinned OpenCode worker. The trusted central [`disksage-hourly-review-repair.yml`](https://github.com/ContextualWisdomLab/.github/blob/main/.github/workflows/disksage-hourly-review-repair.yml) runs at `37 * * * *` and dispatches the pinned scheduler `a3fdaa1aacaba9443a18573f3c309fe1841fc2f0`, which performs the OpenCode OIDC exchange. The local workflow still uploads a seven-day path-free receipt when manually configured; no external endpoint or deployment receipt is available here. | Verify one central scheduler receipt and one local manual advisory receipt; preserve read-only permissions, exact-head binding, and no provider-secret import or mutation. |
 | P1 | Open PR queue prevents a clean protected release line. | At this loop capture PR #213 was exact head `6ef85e4` on `main`, with build jobs in progress and required analysis/security/review jobs queued; its review decision remained `CHANGES_REQUESTED`. PR #189 is at `635d918`, PR #209 at `0fc67a4`, PR #228 at `1eb947e`, PR #179 at `9ef9b1b`, and Naruon PR #1434 at `c0848017`; all remain unmerged pending exact-head checks/review. | Process one PR at a time: current-head review → fix → required checks → fresh approval → normal protected merge; never bypass or self-approve. |
 | P1 | Current UI coverage is contract-heavy rather than runtime E2E for native File Provider states. | The UI now displays `로컬 최신본·업로드 미확인` and maps blockers without backend detail; provider operations are not safely reproducible on this full disk. Rust fixtures now cover `local-current + is_uploaded=false`, provider timeout, timeliness transitions, and receipt/evidence invalidation; native runtime E2E remains unavailable while the provider is unhealthy. | Keep the fixture-backed state machine green and add a bounded native E2E receipt only after a quiet provider observation is authoritative. |
 | P1 | Ontology/catalog integrations are export boundaries, not deployed services. | Naruon/semantic catalog and Zotero local API docs/contracts exist; no Noema/contextual-orchestrator runtime dependency is required. | Keep integrations optional and path-free; add live service tests only when a concrete consumer and secret boundary exist. |
@@ -248,3 +248,21 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   protected merge state remains blocked pending fresh review/required checks. PR #244 has all
   required build, test, security, and coverage checks terminal-successful except its OpenCode
   review remains queued; no review or merge gate was bypassed.
+
+## 2026-08-21 current-head follow-up
+
+- The live DiskSage branch is `b091fc69799baecc360a9399677fcdd8196745a0`. The repository-local
+  hourly advisory contract test passed 2/2 and `svelte-check` reported 0 errors / 0 warnings.
+  The local workflow is manual-only by design; the central `.github` scheduler owns the hourly
+  OpenCode review/repair cadence at `37 * * * *` using workflow SHA
+  `d1868bc20d419a121d59df303428bf633f651e75` and reusable scheduler SHA
+  `a3fdaa1aacaba9443a18573f3c309fe1841fc2f0`.
+- PR #213 is at exact head `b091fc69799baecc360a9399677fcdd8196745a0`; its build checks are
+  in progress and analysis/security/review checks are queued, so no protected merge is claimed.
+  PR #244 remains exact-head `321c4518399129f5dd78f8a7bc5e68edc8c3e2b8` with all terminal
+  required checks successful except its OpenCode review, which remains queued.
+- The current APFS volume has about 6.5 GiB available. `StreamingUnzipService` has exited, the
+  `real_datasets` target remained 7.2 GiB / 14 files across a bounded 20-second observation, and
+  `fileproviderd`/`bird` remain active. No provider process, Finder operation, CloudDocs database,
+  cloud object, or user file was terminated or deleted; only the explicitly regenerable pnpm
+  cache was removed after confirming no pnpm process was running.
