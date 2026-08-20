@@ -15,6 +15,7 @@ test('unexpected active workflow namespaces fail closed instead of becoming trus
     'scripts/unexpected-workflow.yml',
     'workflows/unexpected-workflow.yml',
     'dynamicx/dependabot',
+    'dynamic/',
   ]) {
     assert.throws(
       () => classifyWorkflowRecords(
