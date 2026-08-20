@@ -163,6 +163,7 @@ pub fn parse_dump(
         if has_filename_too_long
             || has_temporarily_disconnected
             || has_server_unreachable
+            || has_local_disk_full
             || (marker.contains("user-disabled") && !hidden_default_domain)
             || marker.contains("can't dump the extension")
             || marker.contains("Error Domain=")
