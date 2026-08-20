@@ -165,7 +165,14 @@ pub fn clean_dev_artifacts_inner(
         .map(|result| CleanResult {
             path: result.path,
             ok: result.ok,
-            error: result.error,
+            error: if result
+                .error
+                .starts_with("development artifact changed or its bounded manifest is incomplete")
+            {
+                "개발 아티팩트가 변경되었거나 bounded manifest가 불완전합니다. 다시 스캔하세요".into()
+            } else {
+                result.error
+            },
         })
         .collect()
 }
