@@ -29,15 +29,24 @@ struct VerificationSummary {
     icloud_native_status_timed_out: Option<bool>,
 }
 
-fn parse_args(args: &[OsString]) -> Result<PathBuf, String> {
-    if args.len() != 1 || args[0] == OsStr::new("-h") || args[0] == OsStr::new("--help") {
+#[derive(Debug, PartialEq, Eq)]
+enum TerminalRequest {
+    Help,
+    Verify(PathBuf),
+}
+
+fn parse_args(args: &[OsString]) -> Result<TerminalRequest, String> {
+    if args.len() == 1 && (args[0] == OsStr::new("-h") || args[0] == OsStr::new("--help")) {
+        return Ok(TerminalRequest::Help);
+    }
+    if args.len() != 1 {
         return Err("naruon-copy-readiness-verifier-usage-invalid".into());
     }
     let path = PathBuf::from(&args[0]);
     if !path.is_absolute() {
         return Err("naruon-copy-readiness-input-path-not-absolute".into());
     }
-    Ok(path)
+    Ok(TerminalRequest::Verify(path))
 }
 
 fn verification_summary(envelope: NaruonCloudCopyReadinessEnvelope) -> VerificationSummary {
@@ -80,7 +89,11 @@ fn print_json(value: &impl serde::Serialize) {
 fn main() {
     let args = std::env::args_os().skip(1).collect::<Vec<_>>();
     let path = match parse_args(&args) {
-        Ok(path) => path,
+        Ok(TerminalRequest::Help) => {
+            println!("{USAGE}");
+            return;
+        }
+        Ok(TerminalRequest::Verify(path)) => path,
         Err(error_code) => {
             print_json(&serde_json::json!({ "ok": false, "error_code": error_code }));
             eprintln!("{USAGE}");
@@ -100,14 +113,27 @@ fn main() {
 mod tests {
     use super::*;
 
+    fn absolute_fixture() -> PathBuf {
+        if cfg!(windows) {
+            PathBuf::from(r"C:\readiness.json")
+        } else {
+            PathBuf::from("/readiness.json")
+        }
+    }
+
     #[test]
-    fn parser_requires_exactly_one_absolute_path() {
+    fn parser_requires_exactly_one_absolute_path_or_sole_help() {
         assert!(parse_args(&[]).is_err());
         assert!(parse_args(&["relative.json".into()]).is_err());
-        assert!(parse_args(&["/one.json".into(), "/two.json".into()]).is_err());
+        assert!(parse_args(&["one.json".into(), "two.json".into()]).is_err());
+        assert_eq!(parse_args(&["--help".into()]).unwrap(), TerminalRequest::Help);
+        assert_eq!(parse_args(&["-h".into()]).unwrap(), TerminalRequest::Help);
+        assert!(parse_args(&["--help".into(), "relative.json".into()]).is_err());
+
+        let absolute = absolute_fixture();
         assert_eq!(
-            parse_args(&["/readiness.json".into()]).unwrap(),
-            Path::new("/readiness.json")
+            parse_args(&[absolute.as_os_str().to_owned()]).unwrap(),
+            TerminalRequest::Verify(absolute)
         );
     }
 }
