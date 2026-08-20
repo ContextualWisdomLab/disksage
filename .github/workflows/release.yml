@@ -221,13 +221,6 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - name: Download exact release artifact set
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
-        with:
-          pattern: release-disksage-*-${{ github.run_attempt }}
-          path: release-artifacts
-          merge-multiple: false
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
@@ -236,6 +229,14 @@ jobs:
         with:
           node-version: 20
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
+      - name: Download exact release artifact set
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: release-disksage-*-${{ github.run_attempt }}
+          path: release-artifacts
+          merge-multiple: false
+
       - name: Generate and validate source-bound SBOM
         shell: bash
         run: |
