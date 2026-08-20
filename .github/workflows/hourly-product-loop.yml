@@ -95,7 +95,7 @@ jobs:
             --arg observed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg response_sha256 "$response_sha256" --argjson response_bytes "$response_bytes" \
             '{schema_version:1,repository:$repository,head_sha:$head_sha,model:$model,observed_at:$observed_at,status:"completed",response_sha256:$response_sha256,response_bytes:$response_bytes}' > "$receipt"
-          jq -r '"contextual-orchestrator OpenCode Agent completed: model=" + .model + " status=" + .status + " response_sha256=" + .response_sha256 + " bytes=" + (.response_bytes|tostring)' "$receipt" >> "$GITHUB_STEP_SUMMARY"
+          jq -r '"contextual-orchestrator OpenCode Agent completed: status=" + .status + " response_sha256=" + (.response_sha256 // "none") + " bytes=" + ((.response_bytes // 0)|tostring)' "$receipt" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload bounded hourly advisory receipt
         if: always() && steps.config.outputs.configured == 'true'
