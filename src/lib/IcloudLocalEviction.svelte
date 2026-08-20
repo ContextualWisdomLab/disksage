@@ -34,8 +34,8 @@
       if (typeof selected !== "string") return;
       path = selected;
       resetDecision();
-    } catch (e) {
-      error = String(e);
+    } catch {
+      error = "파일 선택 창을 열지 못했습니다.";
     }
   }
 
@@ -46,8 +46,8 @@
     resetDecision();
     try {
       plan = await api.planIcloudLocalCopyEviction(cloudRoot, selectedPath);
-    } catch (e) {
-      error = String(e);
+    } catch {
+      error = "iCloud 로컬 사본 상태를 확인하지 못했습니다.";
     } finally {
       planning = false;
     }
@@ -82,8 +82,8 @@
       );
       confirmation = "";
       rationale = "";
-    } catch (e) {
-      error = String(e);
+    } catch {
+      error = "iCloud 로컬 사본 축출을 실행하지 못했습니다.";
     } finally {
       executing = false;
     }
@@ -160,7 +160,7 @@
           <p class="muted">결과 기록: {eviction.result_path}</p>
         {:else}
           <p class="error" role="alert">
-            축출 결과는 위와 같지만 결과 기록을 저장하지 못했습니다: {eviction.result_record_error}
+            축출 결과는 위와 같지만 결과 기록을 저장하지 못했습니다.
           </p>
         {/if}
       {:else if plan.eligible_after_human_approval}
