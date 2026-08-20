@@ -59,6 +59,36 @@ fn shared_writable_provider_evidence_directory_fails_closed() {
 
 #[cfg(unix)]
 #[test]
+fn latest_api_object_id_rejects_directory_that_became_shared_writable() {
+    use disksage_lib::cloud::CloudProvider;
+    use disksage_lib::provider_evidence::{latest_api_object_id, write_immutable_sync_evidence};
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().expect("temporary provider evidence directory");
+    let evidence = valid_provider_evidence();
+    let (record, _) = write_immutable_sync_evidence(directory.path(), &evidence)
+        .expect("valid provider evidence must be written before authority drift");
+
+    let mut permissions = std::fs::metadata(directory.path())
+        .expect("provider evidence directory metadata")
+        .permissions();
+    permissions.set_mode(0o720);
+    std::fs::set_permissions(directory.path(), permissions)
+        .expect("make provider evidence directory group-writable after publication");
+
+    assert_eq!(
+        latest_api_object_id(
+            directory.path(),
+            &record.evidence.receipt_id,
+            CloudProvider::Onedrive,
+        ),
+        None,
+        "locator recovery must not trust evidence after directory authority becomes shared-writable"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn provider_evidence_is_owner_read_only_and_create_once_at_runtime() {
     use disksage_lib::provider_evidence::{
         read_immutable_sync_evidence, write_immutable_sync_evidence,
