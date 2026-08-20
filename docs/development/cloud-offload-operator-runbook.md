@@ -33,6 +33,10 @@ The runtime sequence is:
    the same human-attributed copy phrase and review gates, re-hashes the source after upload, and
    immediately attempts provider-API attestation. It never supports iCloud or local eviction in
    the same action; the returned receipt/object ID is the hand-off for a later attestation.
+   Native File Provider copy buttons are admitted only when the current source volume has the
+   candidate size plus a 1 GiB staging reserve available. The same check is repeated immediately
+   before the copy; `local-volume-headroom-insufficient` is fail-closed and must not be worked
+   around with Finder folder copies. Provider-API upload is the explicit non-staging fallback.
 4. `is_local_current=true` with `is_uploaded=false` is `pending-upload`; the source remains and
    no eviction permit is issued.
    iCloud native `needs-sync-up` and `needs-sync-down` states are also explicit admission blockers;

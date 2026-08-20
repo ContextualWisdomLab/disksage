@@ -43,6 +43,12 @@ retains the source until per-item native sync evidence is attested. It never aut
 remote-capacity claims, or source eviction; organization/shared roots and other OAuth failures
 remain blocked.
 
+Native File Provider copies also require a fresh source-volume headroom check: available bytes must
+cover the candidate plus a fixed 1 GiB staging reserve. DiskSage applies this gate in the preview
+UI and immediately before the copy, returning `local-volume-headroom-insufficient` rather than
+leaving Finder or a provider staging operation waiting indefinitely. Explicit provider-API uploads
+are a separate path and do not use this local staging requirement.
+
 Source enumeration is also forbidden inside managed File Provider trees (`Library/Mobile
 Documents`, `Library/CloudStorage`, `Library/Application Support/FileProvider`, and
 `File Provider Storage`). If one of these trees is supplied as the scan root, the bounded collector
