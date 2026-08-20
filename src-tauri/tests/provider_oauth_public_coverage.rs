@@ -63,16 +63,28 @@ fn connection(root: &CloudRoot) -> OAuthConnection {
     }
 }
 
+fn make_private(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+}
+
+fn write_private_bytes(path: &std::path::Path, bytes: impl AsRef<[u8]>) {
+    std::fs::write(path, bytes).unwrap();
+    make_private(path);
+}
+
 fn write_document(path: &std::path::Path, connections: &[OAuthConnection]) {
-    std::fs::write(
+    write_private_bytes(
         path,
         serde_json::to_vec(&serde_json::json!({
             "version": 1,
             "connections": connections,
         }))
         .unwrap(),
-    )
-    .unwrap();
+    );
 }
 
 #[test]
@@ -192,22 +204,22 @@ fn connection_document_admission_rejects_unsafe_files_and_malformed_documents() 
     );
     std::fs::remove_dir(&path).unwrap();
 
-    std::fs::write(&path, b"not-json").unwrap();
+    write_private_bytes(&path, b"not-json");
     assert_eq!(
         load_connections(&path).unwrap_err(),
         "oauth-connection-document-invalid"
     );
 
-    std::fs::write(&path, br#"{"version":2,"connections":[]}"#).unwrap();
+    write_private_bytes(&path, br#"{"version":2,"connections":[]}"#);
     assert_eq!(
         load_connections(&path).unwrap_err(),
         "oauth-connection-document-version-or-count-invalid"
     );
 
-    std::fs::write(&path, br#"{"version":1,"connections":[]}"#).unwrap();
+    write_private_bytes(&path, br#"{"version":1,"connections":[]}"#);
     assert!(load_connections(&path).unwrap().is_empty());
 
-    std::fs::write(&path, vec![b'x'; 256 * 1024 + 1]).unwrap();
+    write_private_bytes(&path, vec![b'x'; 256 * 1024 + 1]);
     assert_eq!(
         load_connections(&path).unwrap_err(),
         "oauth-connection-document-too-large"
