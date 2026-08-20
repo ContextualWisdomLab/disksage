@@ -69,6 +69,19 @@ fn connection(root: &CloudRoot) -> OAuthConnection {
     }
 }
 
+fn make_private(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+}
+
+fn write_private(path: &std::path::Path, bytes: impl AsRef<[u8]>) {
+    std::fs::write(path, bytes).unwrap();
+    make_private(path);
+}
+
 #[test]
 fn exact_connection_is_selected_and_duplicate_exact_connections_fail_ambiguous() {
     let target = root(CloudProvider::Onedrive);
@@ -94,7 +107,7 @@ fn valid_connection_document_round_trips_and_nonmatching_provider_is_ignored() {
         "version": 1,
         "connections": [connection(&onedrive), connection(&google)]
     });
-    std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+    write_private(&path, serde_json::to_vec(&document).unwrap());
 
     let loaded = load_connections(&path).unwrap();
     assert_eq!(loaded.len(), 2);
@@ -151,7 +164,7 @@ fn persisted_connection_shape_validation_fails_closed_by_field() {
 
     for invalid in cases {
         let document = serde_json::json!({"version": 1, "connections": [invalid]});
-        std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+        write_private(&path, serde_json::to_vec(&document).unwrap());
         assert!(load_connections(&path).is_err());
     }
 }
@@ -165,7 +178,7 @@ fn well_formed_but_wrong_connection_id_reaches_identity_binding_guard() {
     wrong_id.connection_id = "0".repeat(64);
     assert_ne!(wrong_id.connection_id, stable_connection_id(&target));
     let document = serde_json::json!({"version": 1, "connections": [wrong_id]});
-    std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+    write_private(&path, serde_json::to_vec(&document).unwrap());
 
     assert_eq!(load_connections(&path).unwrap_err(), "oauth-connection-id-mismatch");
 }
@@ -185,7 +198,7 @@ fn persisted_icloud_oauth_identity_fails_at_the_unsupported_provider_boundary() 
         connected_at_ms: 7,
     };
     let document = serde_json::json!({"version": 1, "connections": [invalid]});
-    std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+    write_private(&path, serde_json::to_vec(&document).unwrap());
 
     assert_eq!(
         load_connections(&path).unwrap_err(),
@@ -207,18 +220,17 @@ fn connection_document_admission_bounds_fail_closed_before_connection_use() {
     );
 
     let malformed = temp.path().join("malformed.json");
-    std::fs::write(&malformed, b"{not-json").unwrap();
+    write_private(&malformed, b"{not-json");
     assert_eq!(
         load_connections(&malformed).unwrap_err(),
         "oauth-connection-document-invalid"
     );
 
     let wrong_version = temp.path().join("wrong-version.json");
-    std::fs::write(
+    write_private(
         &wrong_version,
         serde_json::to_vec(&serde_json::json!({"version": 2, "connections": []})).unwrap(),
-    )
-    .unwrap();
+    );
     assert_eq!(
         load_connections(&wrong_version).unwrap_err(),
         "oauth-connection-document-version-or-count-invalid"
@@ -226,18 +238,17 @@ fn connection_document_admission_bounds_fail_closed_before_connection_use() {
 
     let too_many = temp.path().join("too-many.json");
     let repeated = vec![connection(&root(CloudProvider::Onedrive)); 33];
-    std::fs::write(
+    write_private(
         &too_many,
         serde_json::to_vec(&serde_json::json!({"version": 1, "connections": repeated})).unwrap(),
-    )
-    .unwrap();
+    );
     assert_eq!(
         load_connections(&too_many).unwrap_err(),
         "oauth-connection-document-version-or-count-invalid"
     );
 
     let oversized = temp.path().join("oversized.json");
-    std::fs::write(&oversized, vec![b' '; 256 * 1024 + 1]).unwrap();
+    write_private(&oversized, vec![b' '; 256 * 1024 + 1]);
     assert_eq!(
         load_connections(&oversized).unwrap_err(),
         "oauth-connection-document-too-large"
