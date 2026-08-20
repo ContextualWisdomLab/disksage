@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-21 (Asia/Seoul)
-**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` source through `037a9b3`; this
+**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` source through `d29056b`; this
 baseline records the current loop's runtime and integration evidence.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.  
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
@@ -205,6 +205,15 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   only fixed status/hash/byte fields visible in logs; the model id remains inside the short-lived,
   bounded JSON artifact. The focused contract and `actionlint` checks still pass.
 - PR #212 exact head `7f1ac61` had one Strix attempt fail before repository analysis because the
-  runner's Caido bootstrap could not connect to `127.0.0.1:48080` after ten attempts; the job log
+  runner Caido bootstrap could not connect to `127.0.0.1:48080` after ten attempts; the job log
   contains no source finding. A rerun is queued as job `96570913837`, so the PR remains unmerged and
   its security gate is not treated as passed until that exact job produces a terminal result.
+
+- The bounded read-only probe at `2026-08-21 05:42 +0900` retained at least 71
+  `fetchContentsForItemWithID` and 161 `createItemBasedOnTemplate` requests marked `no progress`
+  within five seconds; output was capped and no raw dump was written. `fileproviderctl help`
+  exposes no supported cancellation command, so DiskSage keeps the Finder cancel control as the
+  only operator action, never terminates `fileproviderd`/`bird`, and keeps copy, attestation, and
+  eviction blocked. APFS free space fluctuated from roughly 406 MiB to 2.5 GiB; only a clean
+  temporary Naruon worktree and regenerable package-manager caches were removed, while user files,
+  CloudDocs databases, and provider-managed data were retained.

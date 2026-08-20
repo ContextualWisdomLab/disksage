@@ -187,6 +187,13 @@ API object identifier now rejects group- or other-writable evidence directories 
 record. This is a fail-closed integrity check only; it neither deletes evidence nor changes cloud
 or source-eviction authority.
 
+The bounded follow-up probe at `2026-08-21 05:42 +0900` observed at least 71 fetch and 161 create
+requests marked `no progress` in five seconds. Because `fileproviderctl` exposes no supported
+cancellation operation, the product surfaces the Finder cancel control as the only operator action;
+it must not kill `fileproviderd` or `bird`, write a raw provider dump, retry the copy, or infer
+eviction authority. This incomplete observation keeps new-copy admission, attestation, and source
+eviction fail-closed and is bound to source head `d29056b`, not to this replaceable ADR text.
+
 ## Consequences
 
 - `is_local_current=true` and `is_uploaded=false` produces `pending-upload` and no eviction permit.
