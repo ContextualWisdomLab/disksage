@@ -139,6 +139,59 @@ pub fn write_immutable_sync_evidence(
     directory: &Path,
     evidence: &ProviderSyncEvidence,
 ) -> Result<(ProviderSyncEvidenceRecord, PathBuf), String> {
+    #[cfg(unix)]
+    {
+        return write_immutable_sync_evidence_unix_with_hook(directory, evidence, || {});
+    }
+
+    #[cfg(not(unix))]
+    {
+        let record = create_sync_evidence_record(evidence)?;
+        secure_evidence_directory(directory)?;
+        let path = directory.join(record_filename(&record));
+        let encoded = serde_json::to_vec_pretty(&record)
+            .map_err(|_| "provider-evidence-json-invalid".to_string())?;
+        if encoded.len() as u64 > MAX_PROVIDER_EVIDENCE_RECORD_BYTES {
+            return Err("provider-evidence-record-too-large".into());
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|_| "provider-evidence-record-create-failed".to_string())?;
+        let result = (|| -> Result<(), String> {
+            file.write_all(&encoded)
+                .and_then(|_| file.sync_all())
+                .map_err(|_| "provider-evidence-record-write-failed".to_string())?;
+            let mut permissions = file
+                .metadata()
+                .map_err(|_| "provider-evidence-record-metadata-failed".to_string())?
+                .permissions();
+            permissions.set_readonly(true);
+            file.set_permissions(permissions)
+                .map_err(|_| "provider-evidence-record-permissions-failed".to_string())?;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            drop(file);
+            let _ = std::fs::remove_file(&path);
+            return Err(error);
+        }
+        Ok((record, path))
+    }
+}
+
+#[cfg(all(not(coverage), unix))]
+fn write_immutable_sync_evidence_unix_with_hook<F>(
+    directory: &Path,
+    evidence: &ProviderSyncEvidence,
+    before_publish: F,
+) -> Result<(ProviderSyncEvidenceRecord, PathBuf), String>
+where
+    F: FnOnce(),
+{
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
     let record = create_sync_evidence_record(evidence)?;
     secure_evidence_directory(directory)?;
     let path = directory.join(record_filename(&record));
@@ -147,13 +200,13 @@ pub fn write_immutable_sync_evidence(
     if encoded.len() as u64 > MAX_PROVIDER_EVIDENCE_RECORD_BYTES {
         return Err("provider-evidence-record-too-large".into());
     }
+
+    before_publish();
+
+    // This deliberately preserves the pre-repair pathname publication for the RED regression below.
+    // The following commit replaces this block with the shared object-bound publication primitive.
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o400);
-    }
+    options.write(true).create_new(true).mode(0o400);
     let mut file = options
         .open(&path)
         .map_err(|_| "provider-evidence-record-create-failed".to_string())?;
@@ -165,16 +218,9 @@ pub fn write_immutable_sync_evidence(
             .metadata()
             .map_err(|_| "provider-evidence-record-metadata-failed".to_string())?
             .permissions();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            permissions.set_mode(0o400);
-        }
-        #[cfg(not(unix))]
-        permissions.set_readonly(true);
+        permissions.set_mode(0o400);
         file.set_permissions(permissions)
             .map_err(|_| "provider-evidence-record-permissions-failed".to_string())?;
-        #[cfg(unix)]
         std::fs::File::open(directory)
             .and_then(|dir| dir.sync_all())
             .map_err(|_| "provider-evidence-directory-sync-failed".to_string())?;
@@ -328,5 +374,38 @@ mod tests {
             read_immutable_sync_evidence(&renamed).unwrap_err(),
             "provider-evidence-record-filename-id-mismatch"
         );
+    }
+
+    #[cfg(all(not(coverage), unix))]
+    #[test]
+    fn provider_publication_rejects_parent_replacement_after_directory_admission() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let fixture = tempfile::tempdir().unwrap();
+        let directory = fixture.path().join("provider-evidence");
+        let moved = fixture.path().join("provider-evidence-authorized-moved");
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let directory_for_hook = directory.clone();
+        let moved_for_hook = moved.clone();
+
+        let error = write_immutable_sync_evidence_unix_with_hook(
+            &directory,
+            &evidence(),
+            move || {
+                std::fs::rename(&directory_for_hook, &moved_for_hook).unwrap();
+                std::fs::create_dir(&directory_for_hook).unwrap();
+                std::fs::set_permissions(
+                    &directory_for_hook,
+                    std::fs::Permissions::from_mode(0o700),
+                )
+                .unwrap();
+            },
+        )
+        .expect_err("provider evidence must not publish into a replacement directory");
+
+        assert_eq!(error, "provider-evidence-directory-identity-drift");
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 0);
+        assert_eq!(std::fs::read_dir(&moved).unwrap().count(), 0);
     }
 }
