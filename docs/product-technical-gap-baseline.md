@@ -331,3 +331,9 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   reports pre-existing formatting differences across unrelated files, so it is not treated as
   evidence for the new authorization behavior; hosted Rust checks remain authoritative for the
   exact head.
+- The production filesystem traversal is now fully migrated from unmaintained `jwalk` to the
+  maintained `walkdir` backend across scanner, duplicate, development-artifact, cloud, and
+  reclaim paths. The locked Cargo metadata resolves without a direct `jwalk` dependency, and the
+  shared symlink/reparse filter plus fail-closed traversal-error accounting remain in place. The
+  migration is bound to implementation head `1d8c5caccce26b976f6324164ec74177c71b48a9`; hosted
+  Rust compilation and the dependency contract remain authoritative.
