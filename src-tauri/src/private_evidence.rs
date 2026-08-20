@@ -54,12 +54,13 @@ fn revalidate_private_parent(
 /// Persist exact local evidence outside the audited source tree.
 ///
 /// The destination parent must already exist, must not be a symlink, and must not be writable by
-/// group or other principals. On Unix, publication is bound to the exact opened parent-directory
-/// object so a same-user pathname replacement cannot redirect the write after authorization. The
-/// file is created once with mode 0600, synced, and never overwritten. After a post-create failure,
-/// the still-open record is truncated and synced through its descriptor. The pathname is
-/// deliberately not unlinked because a same-user process may already have replaced that name; this
-/// can leave a zero-length mode-0600 create-new tombstone that requires explicit operator cleanup.
+/// group or other principals. On Unix, publication is bound to the exact caller-supplied parent
+/// directory object admitted before canonicalization, so a same-user pathname replacement cannot
+/// redirect either canonicalization or the later write. The file is created once with mode 0600,
+/// synced, and never overwritten. After a post-create failure, the still-open record is truncated
+/// and synced through its descriptor. The pathname is deliberately not unlinked because a same-user
+/// process may already have replaced that name; this can leave a zero-length mode-0600 create-new
+/// tombstone that requires explicit operator cleanup.
 #[cfg(unix)]
 pub fn write_private_json_create_new(
     source_root: &Path,
@@ -100,11 +101,44 @@ where
     if parent_metadata.permissions().mode() & 0o022 != 0 {
         return Err("private-evidence-parent-writable-by-others".into());
     }
+    let expected_parent_dev = parent_metadata.dev();
+    let expected_parent_ino = parent_metadata.ino();
 
     before_parent_open();
 
-    let canonical_parent = std::fs::canonicalize(parent)
+    // Open the caller-supplied pathname before canonicalizing it and bind all later authority to
+    // the object admitted above. If the pathname was replaced in this window, O_NOFOLLOW rejects a
+    // symlink replacement and the device/inode comparison rejects a different directory object.
+    let parent_c = CString::new(parent.as_os_str().as_bytes())
         .map_err(|_| "private-evidence-parent-unavailable".to_string())?;
+    let directory_fd = unsafe {
+        libc::open(
+            parent_c.as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+        )
+    };
+    if directory_fd < 0 {
+        return Err("private-evidence-parent-identity-drift".into());
+    }
+    let directory = unsafe { std::fs::File::from_raw_fd(directory_fd) };
+    let opened_parent_metadata = directory
+        .metadata()
+        .map_err(|_| "private-evidence-parent-unavailable".to_string())?;
+    if opened_parent_metadata.dev() != expected_parent_dev
+        || opened_parent_metadata.ino() != expected_parent_ino
+    {
+        return Err("private-evidence-parent-identity-drift".into());
+    }
+
+    let canonical_parent = std::fs::canonicalize(parent)
+        .map_err(|_| "private-evidence-parent-identity-drift".to_string())?;
+    revalidate_private_parent(
+        &directory,
+        &canonical_parent,
+        expected_parent_dev,
+        expected_parent_ino,
+    )?;
+
     let canonical_source = std::fs::canonicalize(source_root)
         .map_err(|_| "private-evidence-source-root-unavailable".to_string())?;
     if canonical_parent.starts_with(&canonical_source) {
@@ -121,29 +155,8 @@ where
         return Err("private-evidence-too-large".into());
     }
 
-    let parent_c = CString::new(canonical_parent.as_os_str().as_bytes())
-        .map_err(|_| "private-evidence-parent-unavailable".to_string())?;
     let file_name_c = CString::new(file_name.as_bytes())
         .map_err(|_| "private-evidence-name-invalid".to_string())?;
-    let directory_fd = unsafe {
-        libc::open(
-            parent_c.as_ptr(),
-            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW,
-        )
-    };
-    if directory_fd < 0 {
-        return Err("private-evidence-parent-unavailable".into());
-    }
-    let directory = unsafe { std::fs::File::from_raw_fd(directory_fd) };
-    let opened_parent_metadata = directory
-        .metadata()
-        .map_err(|_| "private-evidence-parent-unavailable".to_string())?;
-    revalidate_private_parent(
-        &directory,
-        &canonical_parent,
-        opened_parent_metadata.dev(),
-        opened_parent_metadata.ino(),
-    )?;
 
     before_create();
 
@@ -153,8 +166,8 @@ where
     revalidate_private_parent(
         &directory,
         &canonical_parent,
-        opened_parent_metadata.dev(),
-        opened_parent_metadata.ino(),
+        expected_parent_dev,
+        expected_parent_ino,
     )?;
 
     let file_fd = unsafe {
@@ -201,8 +214,8 @@ where
         revalidate_private_parent(
             &directory,
             &canonical_parent,
-            opened_parent_metadata.dev(),
-            opened_parent_metadata.ino(),
+            expected_parent_dev,
+            expected_parent_ino,
         )?;
 
         let final_file_metadata = std::fs::symlink_metadata(&final_path)
