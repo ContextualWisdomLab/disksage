@@ -111,6 +111,7 @@ async function listAll(fetchJson, endpoint, invalidError) {
 /** Read every page of the repository Actions workflow registry without accepting partial snapshots. */
 export async function listAllWorkflowRecords(fetchJson, repository) {
   const records = [];
+  const seenWorkflowIds = new Set();
   let page = 1;
   let expectedTotal = null;
   while (true) {
@@ -132,6 +133,14 @@ export async function listAllWorkflowRecords(fetchJson, repository) {
       expectedTotal = totalCount;
     } else if (totalCount !== expectedTotal) {
       throw new Error('actions-workflow-list-moved');
+    }
+    for (const workflow of payload.workflows) {
+      const workflowId = workflow?.id;
+      if (!Number.isSafeInteger(workflowId) || workflowId <= 0) continue;
+      if (seenWorkflowIds.has(workflowId)) {
+        throw new Error('actions-workflow-list-duplicate');
+      }
+      seenWorkflowIds.add(workflowId);
     }
     records.push(...payload.workflows);
     if (records.length === expectedTotal) return records;
