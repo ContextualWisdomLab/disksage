@@ -1699,11 +1699,11 @@ fn create_cloud_candidate_receipt(
         approval_rationale.trim(),
         exact_confirmation_phrase,
     )?;
-    // Native File Provider copies can materialize placeholders and stage more than the source
-    // bytes. Re-check local headroom immediately before any mutation; provider API uploads use a
-    // separate path and do not create a destination staging file here.
-    require_local_copy_headroom(candidate)?;
     if !adopt_existing {
+        // Native File Provider copies can materialize placeholders and stage more than the source
+        // bytes. Re-check local headroom immediately before any mutation; adoption only verifies
+        // an existing destination and does not create a local staging file.
+        require_local_copy_headroom(candidate)?;
         let runtime = provider_client_runtime::require_provider_client_runtime(
             selected.provider,
             cloud::system_now_ms(),

@@ -43,6 +43,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Keep the local staging-headroom gate on new native copies only; existing-copy adoption now
+  remains available on low-disk volumes because it verifies an already-present destination without
+  creating local staging data.
 - Make `disksage-duplicate-audit --help` exit successfully so release staging can
   verify its usage contract without treating a help request as a failed audit.
 - Isolate the macOS global File Provider dump helper in a private process group and terminate the
