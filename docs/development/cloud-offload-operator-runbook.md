@@ -91,6 +91,11 @@ The runtime sequence is:
    manifests fail closed. This command never writes a cloud provider or authorizes source
    eviction; do not use it to remove a provider-managed File Provider tree.
 
+10. For archive lineage, inspect embedded content before trusting the archive filename or central
+    directory timestamp. ZIP `.eml` headers are streamed with bounded Rust reads and their RFC 5322
+    `Date` is preferred when the inner scan is complete; a bounded or malformed inner scan creates
+    a metadata warning and keeps the candidate blocked.
+
 The Goal and ADR files are replaceable projections. Agents or operators must compare them with the
 immutable receipt/evidence record before any mutation. Naruon receives lineage/provider evidence,
 not a second independent deletion authority.

@@ -58,6 +58,12 @@ const MAX_ZIP_CONTEXT_NAMES: usize = 16;
 #[cfg(not(coverage))]
 const MAX_ZIP_CENTRAL_DIRECTORY_BYTES: u64 = 16 * 1024 * 1024;
 #[cfg(not(coverage))]
+const MAX_ZIP_EMAIL_METADATA_ENTRIES: usize = 4_096;
+#[cfg(not(coverage))]
+const MAX_ZIP_EMAIL_METADATA_BYTES: u64 = 32 * 1024 * 1024;
+#[cfg(not(coverage))]
+const MAX_ZIP_EMAIL_HEADER_BYTES: usize = 64 * 1024;
+#[cfg(not(coverage))]
 const INCOMPLETE_DOWNLOAD_SCAN_CHUNK_BYTES: usize = 1024 * 1024;
 #[cfg(not(coverage))]
 const MAX_INCOMPLETE_DOWNLOAD_SCAN_BYTES: u64 = 4 * 1024 * 1024 * 1024;
@@ -2493,8 +2499,15 @@ fn zip_archive_metadata(path: &Path) -> ContentMetadata {
     let mut unsafe_path_entries = 0u64;
     let mut top_level_names = BTreeSet::new();
     let mut content_classes = BTreeSet::new();
+    let mut email_entry_count = 0usize;
+    let mut email_scanned_count = 0usize;
+    let mut email_header_bytes = 0u64;
+    let mut email_header_parse_failures = 0usize;
+    let mut email_scan_bounded = false;
+    let mut earliest_email_date_ms = None;
+    let mut latest_email_date_ms = None;
     for index in 0..entry_count {
-        let entry = match archive.by_index_raw(index) {
+        let mut entry = match archive.by_index(index) {
             Ok(entry) => entry,
             Err(_) => {
                 add_evidence(
@@ -2562,6 +2575,60 @@ fn zip_archive_metadata(path: &Path) -> ContentMetadata {
             .and_then(|extension| extension.to_str())
             .map(str::to_ascii_lowercase)
             .unwrap_or_default();
+        if extension == "eml" {
+            content_classes.insert("email");
+            email_entry_count = email_entry_count.saturating_add(1);
+            let remaining = MAX_ZIP_EMAIL_METADATA_BYTES.saturating_sub(email_header_bytes);
+            if email_scanned_count >= MAX_ZIP_EMAIL_METADATA_ENTRIES || remaining == 0 {
+                email_scan_bounded = true;
+            } else {
+                let read_limit = MAX_ZIP_EMAIL_HEADER_BYTES.min(remaining as usize);
+                let mut header = Vec::with_capacity(read_limit.saturating_add(1));
+                let read_result = entry
+                    .by_ref()
+                    .take((read_limit.saturating_add(1)) as u64)
+                    .read_to_end(&mut header);
+                match read_result {
+                    Ok(_) => {
+                        let truncated = header.len() > read_limit;
+                        header.truncate(read_limit);
+                        email_header_bytes = email_header_bytes
+                            .saturating_add(header.len() as u64);
+                        email_scanned_count = email_scanned_count.saturating_add(1);
+                        let email_metadata = email_metadata_from_header(
+                            &header,
+                            truncated,
+                            "embedded:zip-entry:rfc5322-header",
+                            "embedded:zip-entry:rfc5322:date",
+                            "local:metadata-probe:rust-zip-email",
+                        );
+                        if email_metadata
+                            .evidence
+                            .iter()
+                            .any(|evidence| evidence.field == "metadata-probe-warning")
+                        {
+                            email_header_parse_failures =
+                                email_header_parse_failures.saturating_add(1);
+                        }
+                        if let Some(epoch_ms) = email_metadata.production_time_ms {
+                            earliest_email_date_ms = Some(
+                                earliest_email_date_ms
+                                    .map_or(epoch_ms, |current: u64| current.min(epoch_ms)),
+                            );
+                            latest_email_date_ms = Some(
+                                latest_email_date_ms
+                                    .map_or(epoch_ms, |current: u64| current.max(epoch_ms)),
+                            );
+                        }
+                    }
+                    Err(_) => {
+                        email_header_parse_failures =
+                            email_header_parse_failures.saturating_add(1);
+                        email_scan_bounded = true;
+                    }
+                }
+            }
+        }
         if matches!(
             extension.as_str(),
             "csv"
@@ -2656,6 +2723,64 @@ fn zip_archive_metadata(path: &Path) -> ContentMetadata {
             "embedded:zip-central-directory:latest-entry-modified",
             "medium",
         );
+    }
+    if email_entry_count > 0 {
+        add_evidence(
+            &mut metadata,
+            "archive-email-entry-count",
+            email_entry_count.to_string(),
+            "embedded:zip-central-directory",
+            "high",
+        );
+        add_evidence(
+            &mut metadata,
+            "archive-email-header-scanned-count",
+            email_scanned_count.to_string(),
+            "embedded:zip-entry:rfc5322-header",
+            "high",
+        );
+        add_evidence(
+            &mut metadata,
+            "archive-email-header-scanned-bytes",
+            email_header_bytes.to_string(),
+            "embedded:zip-entry:rfc5322-header",
+            "high",
+        );
+        if let Some(epoch_ms) = earliest_email_date_ms {
+            add_evidence(
+                &mut metadata,
+                "archive-earliest-email-date",
+                date_value(epoch_ms),
+                "embedded:zip-entry:rfc5322:date",
+                "high",
+            );
+        }
+        if let Some(epoch_ms) = latest_email_date_ms {
+            set_production_time(
+                &mut metadata,
+                epoch_ms,
+                "embedded:zip-entry:rfc5322:latest-date",
+                "high",
+            );
+        }
+        if email_scan_bounded {
+            add_evidence(
+                &mut metadata,
+                "metadata-probe-warning",
+                "zip-email-header:bounded-scan-incomplete",
+                "local:metadata-probe:rust-zip-email",
+                "high",
+            );
+        }
+        if email_header_parse_failures > 0 {
+            add_evidence(
+                &mut metadata,
+                "metadata-probe-warning",
+                format!("zip-email-header:parse-failures:{email_header_parse_failures}"),
+                "local:metadata-probe:rust-zip-email",
+                "high",
+            );
+        }
     }
     for name in top_level_names {
         push_context(
@@ -3079,25 +3204,17 @@ fn email_header_end(bytes: &[u8]) -> Option<usize> {
         })
 }
 
-/// Read only the bounded RFC 5322 header block. Message bodies and attachments are deliberately
+/// Parse only a bounded RFC 5322 header block. Message bodies and attachments are deliberately
 /// not parsed because the planner needs lineage metadata, not message contents.
 #[cfg(not(coverage))]
-fn email_metadata(path: &Path) -> ContentMetadata {
+fn email_metadata_from_header(
+    bytes: &[u8],
+    truncated: bool,
+    evidence_source: &str,
+    date_source: &str,
+    warning_source: &str,
+) -> ContentMetadata {
     let mut metadata = ContentMetadata::default();
-    let source = "embedded:rfc5322-header";
-    let (bytes, truncated) = match read_bounded_prefix(path, MAX_EMAIL_HEADER_BYTES) {
-        Ok(value) => value,
-        Err(reason) => {
-            add_evidence(
-                &mut metadata,
-                "metadata-probe-warning",
-                format!("email-header:{reason}"),
-                "local:metadata-probe:rust-rfc5322",
-                "high",
-            );
-            return metadata;
-        }
-    };
     let Some(header_end) = email_header_end(&bytes) else {
         add_evidence(
             &mut metadata,
@@ -3107,7 +3224,7 @@ fn email_metadata(path: &Path) -> ContentMetadata {
             } else {
                 "email-header:header-terminator-not-found"
             },
-            "local:metadata-probe:rust-rfc5322",
+            warning_source,
             "high",
         );
         return metadata;
@@ -3118,7 +3235,7 @@ fn email_metadata(path: &Path) -> ContentMetadata {
             &mut metadata,
             "metadata-probe-warning",
             "email-header:rfc5322-parse-failed",
-            "local:metadata-probe:rust-rfc5322",
+            warning_source,
             "high",
         );
         return metadata;
@@ -3128,20 +3245,20 @@ fn email_metadata(path: &Path) -> ContentMetadata {
         &mut metadata,
         "email-header-bytes-inspected",
         header_end.to_string(),
-        "local:metadata-probe:bounded-rfc5322-header",
+        evidence_source,
         "high",
     );
     add_evidence(
         &mut metadata,
         "email-body-inspected",
         "false",
-        "local:metadata-probe:bounded-rfc5322-header",
+        evidence_source,
         "high",
     );
     if let Some(date) = message.date() {
         if let Ok(seconds) = u64::try_from(date.to_timestamp()) {
             if let Some(epoch_ms) = seconds.checked_mul(1_000) {
-                set_production_time(&mut metadata, epoch_ms, "embedded:rfc5322:date", "high");
+                set_production_time(&mut metadata, epoch_ms, date_source, "high");
             }
         }
     }
@@ -3152,14 +3269,14 @@ fn email_metadata(path: &Path) -> ContentMetadata {
     {
         let bounded = subject.chars().take(500).collect::<String>();
         metadata.title = Some(bounded.clone());
-        push_context(&mut metadata, "email-subject", &bounded, source);
+        push_context(&mut metadata, "email-subject", &bounded, evidence_source);
     }
     if let Some(thread) = message
         .thread_name()
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        push_context(&mut metadata, "email-thread", thread, source);
+        push_context(&mut metadata, "email-thread", thread, evidence_source);
     }
     if let Some(author) = message
         .return_address()
@@ -3168,7 +3285,13 @@ fn email_metadata(path: &Path) -> ContentMetadata {
     {
         let bounded = author.chars().take(320).collect::<String>();
         metadata.authors.push(bounded.clone());
-        add_evidence(&mut metadata, "email-author", bounded, source, "high");
+        add_evidence(
+            &mut metadata,
+            "email-author",
+            bounded,
+            evidence_source,
+            "high",
+        );
     }
     for (field, value) in [
         ("email-message-id", message.message_id()),
@@ -3180,12 +3303,38 @@ fn email_metadata(path: &Path) -> ContentMetadata {
                 &mut metadata,
                 field,
                 value.chars().take(500).collect::<String>(),
-                source,
+                evidence_source,
                 "high",
             );
         }
     }
     metadata
+}
+
+/// Read only the bounded RFC 5322 header block from a standalone message.
+#[cfg(not(coverage))]
+fn email_metadata(path: &Path) -> ContentMetadata {
+    let (bytes, truncated) = match read_bounded_prefix(path, MAX_EMAIL_HEADER_BYTES) {
+        Ok(value) => value,
+        Err(reason) => {
+            let mut metadata = ContentMetadata::default();
+            add_evidence(
+                &mut metadata,
+                "metadata-probe-warning",
+                format!("email-header:{reason}"),
+                "local:metadata-probe:rust-rfc5322",
+                "high",
+            );
+            return metadata;
+        }
+    };
+    email_metadata_from_header(
+        &bytes,
+        truncated,
+        "local:metadata-probe:bounded-rfc5322-header",
+        "embedded:rfc5322:date",
+        "local:metadata-probe:rust-rfc5322",
+    )
 }
 
 #[cfg(not(coverage))]
@@ -5792,6 +5941,63 @@ mod tests {
         }
         assert!(!tmp.path().join("dataset").exists());
         assert!(!tmp.path().join("audio").exists());
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn zip_archive_metadata_prefers_bounded_embedded_email_dates() {
+        use zip::write::SimpleFileOptions;
+        use zip::{CompressionMethod, DateTime, ZipWriter};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("mail-backup.zip");
+        let file = std::fs::File::create(&path).unwrap();
+        let mut writer = ZipWriter::new(file);
+        for (name, date, timestamp) in [
+            (
+                "mail/00000.eml",
+                "Date: Mon, 3 Aug 2026 12:34:56 +0900",
+                DateTime::from_date_and_time(2026, 6, 1, 10, 0, 0).unwrap(),
+            ),
+            (
+                "mail/00001.eml",
+                "Date: Mon, 10 Aug 2026 12:34:56 +0900",
+                DateTime::from_date_and_time(2026, 6, 1, 10, 0, 0).unwrap(),
+            ),
+        ] {
+            writer
+                .start_file(
+                    name,
+                    SimpleFileOptions::default()
+                        .compression_method(CompressionMethod::Deflated)
+                        .last_modified_time(timestamp),
+                )
+                .unwrap();
+            writer
+                .write_all(format!("{date}\r\nFrom: sender@example.com\r\n\r\nbody\n").as_bytes())
+                .unwrap();
+        }
+        writer.finish().unwrap();
+
+        let metadata = zip_archive_metadata(&path);
+        assert_eq!(
+            metadata.production_time_source.as_deref(),
+            Some("embedded:zip-entry:rfc5322:latest-date")
+        );
+        assert_eq!(metadata.production_time_confidence.as_deref(), Some("high"));
+        assert_eq!(date_parts(metadata.production_time_ms.unwrap()), (2026, 8, 10));
+        assert!(metadata.context.iter().any(|value| value == "archive-content-class=email"));
+        assert!(metadata.evidence.iter().any(|evidence| {
+            evidence.field == "archive-email-entry-count" && evidence.value == "2"
+        }));
+        assert!(metadata.evidence.iter().any(|evidence| {
+            evidence.field == "archive-email-header-scanned-count" && evidence.value == "2"
+        }));
+        assert!(!metadata
+            .evidence
+            .iter()
+            .any(|evidence| evidence.field == "metadata-probe-warning"));
+        assert!(!tmp.path().join("mail").exists());
     }
 
     #[cfg(not(coverage))]

@@ -62,6 +62,12 @@ OS-Trash operation: inventory is read-only by default, and `--execute` requires 
 an unchanged filesystem object identity, and a journal path. It never removes source data,
 provider-managed trees, or cloud placeholders, and it never claims cloud write or source eviction.
 
+Archive production time is metadata-first inside the container as well as at the filesystem
+boundary. ZIP central-directory timestamps are context evidence; bounded embedded formats such as
+RFC 5322 `.eml` headers are inspected without extraction and take precedence when complete. If an
+archive's bounded inner-header scan is incomplete or malformed, metadata evidence is incomplete
+and the candidate remains blocked until a complete review is available.
+
 DiskSage repositories, Git worktrees, and temporary evidence are operated from a local volume
 outside managed File Provider roots. A provider-domain marker on the parent or a dataless `.git`
 entry is treated as provider materialization evidence, not as proof of a stale worktree; the
