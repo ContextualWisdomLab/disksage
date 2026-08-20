@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   boundedCloudArchiveErrorMessage,
@@ -21,6 +24,8 @@ const operations = [
   "connect",
   "disconnect",
 ] as const satisfies readonly CloudArchiveErrorOperation[];
+
+const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
 describe("CloudArchive bounded error feedback", () => {
   it("drops arbitrary backend details for every user-visible failure phase", () => {
@@ -47,5 +52,14 @@ describe("CloudArchive bounded error feedback", () => {
     );
 
     expect(messages.size).toBe(operations.length);
+  });
+
+  it("routes every CloudArchive catch boundary through bounded feedback", () => {
+    const source = readFileSync(resolve(repositoryRoot, "src/lib/CloudArchive.svelte"), "utf8");
+
+    expect(source).not.toContain("String(e)");
+    for (const operation of operations) {
+      expect(source).toContain(`boundedCloudArchiveErrorMessage(\"${operation}\"`);
+    }
   });
 });
