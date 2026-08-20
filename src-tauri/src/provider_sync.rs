@@ -47,7 +47,7 @@ pub fn assess_provider_sync_timeliness(
     if evidence.confirmed_at_ms < receipt.copied_at_ms {
         return Err("provider-sync-timeliness-time-order-invalid".into());
     }
-    if evidence.sync_complete {
+    if evidence.sync_complete && evidence.sync_state.is_complete() {
         return Ok(ProviderSyncTimelinessAssessment {
             state: ProviderSyncTimeliness::Complete,
             pending_age_ms: 0,
@@ -1036,8 +1036,8 @@ mod tests {
         let mut record_evidence = evidence.clone();
         record_evidence.receipt_id = "a".repeat(64);
         record_evidence.destination_blake3 = "b".repeat(64);
-        let record = crate::provider_evidence::create_sync_evidence_record(&record_evidence)
-            .unwrap();
+        let record =
+            crate::provider_evidence::create_sync_evidence_record(&record_evidence).unwrap();
         let blockers = crate::cloud_transfer::approve_local_eviction(&receipt, &record)
             .expect_err("pending iCloud upload must not issue an eviction permit");
         assert!(blockers.contains(&"provider-sync-incomplete".to_string()));
@@ -1124,6 +1124,30 @@ mod tests {
     }
 
     #[test]
+    fn legacy_unknown_sync_state_is_not_timely_complete() {
+        let receipt = receipt(CloudProvider::GoogleDrive);
+        let evidence = ProviderSyncEvidence {
+            receipt_id: receipt.receipt_id.clone(),
+            provider: receipt.provider,
+            destination: receipt.destination.clone(),
+            observed_bytes: receipt.bytes,
+            destination_blake3: receipt.blake3.clone(),
+            confirmed_at_ms: receipt.copied_at_ms + 1,
+            kind: SyncEvidenceKind::ProviderNativeStatus,
+            evidence_id: "legacy-unknown".into(),
+            sync_complete: true,
+            sync_state: ProviderSyncState::Unknown,
+            remote_content: None,
+        };
+        let assessment = assess_provider_sync_timeliness(&receipt, &evidence).unwrap();
+        assert_eq!(assessment.state, ProviderSyncTimeliness::Pending);
+        assert_eq!(
+            assessment.reason_codes,
+            ["provider-sync-confirmation-pending"]
+        );
+    }
+
+    #[test]
     fn timeliness_rejects_mismatched_or_time_reversed_evidence() {
         let receipt = receipt(CloudProvider::Icloud);
         let snapshot = IcloudStatusSnapshot {
@@ -1202,19 +1226,19 @@ mod tests {
     fn planner_marks_pending_file_provider_item_as_incomplete() {
         let output = uploaded_file_provider_output().replace("isUploaded = 1", "isUploaded = 0");
         let snapshot = parse_file_providerctl_snapshot(&output, 42, "content-hash").unwrap();
-        assert_eq!(file_provider_sync_blocker(&snapshot.item), Some("provider-sync-incomplete"));
+        assert_eq!(
+            file_provider_sync_blocker(&snapshot.item),
+            Some("provider-sync-incomplete")
+        );
     }
 
     #[test]
     fn trashed_file_provider_item_remains_incomplete() {
         let output = uploaded_file_provider_output().replace("isTrashed = 0", "isTrashed = 1");
         let snapshot = parse_file_providerctl_snapshot(&output, 42, "content-hash").unwrap();
-        let evidence = evidence_from_file_provider_snapshot(
-            &receipt(CloudProvider::Onedrive),
-            &snapshot,
-            30,
-        )
-        .unwrap();
+        let evidence =
+            evidence_from_file_provider_snapshot(&receipt(CloudProvider::Onedrive), &snapshot, 30)
+                .unwrap();
         assert!(!snapshot.is_sync_complete());
         assert!(!evidence.sync_complete);
         assert_eq!(evidence.sync_state, ProviderSyncState::RemoteUnavailable);
