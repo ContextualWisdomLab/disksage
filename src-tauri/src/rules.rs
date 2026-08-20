@@ -81,6 +81,8 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
         ("pip-cache", "pip 캐시", pip),
         ("cargo-registry-cache", "cargo 레지스트리 캐시",
             bases.home.join(".cargo").join("registry").join("cache")),
+        ("cargo-registry-source", "cargo 레지스트리 소스 캐시",
+            bases.home.join(".cargo").join("registry").join("src")),
     ];
 
     #[cfg(target_os = "macos")]
@@ -560,6 +562,8 @@ mod tests {
         let temp_c = cands.iter().find(|c| c.id == "os-temp").unwrap();
         assert!(!temp_c.exists);
         assert_eq!(temp_c.bytes, 0);
+        let cargo_source = cands.iter().find(|c| c.id == "cargo-registry-source").unwrap();
+        assert!(cargo_source.path.ends_with(".cargo/registry/src"));
         // 카탈로그에 최소 4개 규칙
         assert!(cands.len() >= 4);
     }

@@ -32,6 +32,7 @@ does not empty Trash generally and never targets cloud placeholders or user file
 result and journal before treating the reported bytes as reclaimed.
 
 The cache catalog includes the macOS `uv`, Hugging Face, Codex runtime, Gradle, npm, pip, and Cargo
-registry caches when present. Cache contents are not cloud candidates: they are reproducible local
-artifacts, while user files continue through the metadata-first cloud planner and its provider
-sync/eviction gates.
+registry cache/source roots when present. The Cargo registry source root is catalogued for explicit
+review but is not part of the automatic six-cache action because rebuilding it may require network
+downloads. Cache contents are not cloud candidates: they are reproducible local artifacts, while
+user files continue through the metadata-first cloud planner and its provider sync/eviction gates.
