@@ -86,6 +86,8 @@
   let icloudHealthError = $state("");
   let checkingIcloudHealth = $state(false);
   let icloudHealthNextCheckAt = 0;
+  let icloudHealthBlockedSinceMs = $state(0);
+  let icloudHealthFingerprint = $state("");
   let providerGlobalSync: api.ProviderGlobalSyncReport | null = $state(null);
   let providerGlobalSyncError = $state("");
   let providerGlobalSyncObservedAtMs = $state(0);
@@ -459,7 +461,29 @@
     checkingIcloudHealth = true;
     icloudHealthError = "";
     try {
-      icloudHealth = await api.inspectIcloudNewCopyAdmission();
+      const observedAtMs = Date.now();
+      const next = await api.inspectIcloudNewCopyAdmission();
+      const activity = next.file_provider_activity;
+      const fingerprint = [
+        next.new_copy_admission_state,
+        next.new_copy_admission_blockers.join(","),
+        activity?.no_progress_fetch_count ?? 0,
+        activity?.no_progress_create_count ?? 0,
+        activity?.active_upload_count ?? 0,
+        activity?.active_download_count ?? 0,
+        activity?.active_upload_progress_millionths ?? "",
+        activity?.active_download_progress_millionths ?? "",
+        activity?.timed_out ?? false,
+      ].join("|");
+      if (next.new_copy_admission_state === "clear"
+        && next.new_copy_admission_blockers.length === 0) {
+        icloudHealthBlockedSinceMs = 0;
+        icloudHealthFingerprint = "";
+      } else if (icloudHealthFingerprint !== fingerprint) {
+        icloudHealthBlockedSinceMs = observedAtMs;
+        icloudHealthFingerprint = fingerprint;
+      }
+      icloudHealth = next;
       icloudHealthNextCheckAt = Date.now()
         + (icloudHealth.new_copy_admission_state === "clear"
           ? RECONCILIATION_INTERVAL_MS
@@ -467,6 +491,10 @@
     } catch (e) {
       icloudHealth = null;
       icloudHealthError = boundedCloudArchiveErrorMessage("icloud-health", e);
+      if (icloudHealthFingerprint !== "error") {
+        icloudHealthBlockedSinceMs = Date.now();
+        icloudHealthFingerprint = "error";
+      }
       icloudHealthNextCheckAt = Date.now() + ICLOUD_HEALTH_BLOCKED_RETRY_INTERVAL_MS;
     } finally {
       checkingIcloudHealth = false;
@@ -832,6 +860,11 @@
           {/if}
         </span>
         <p class="muted">마지막 증거 확인: {evidenceObservedAt(icloudHealth.observed_at_ms)}</p>
+        {#if icloudHealthBlockedSinceMs > 0}
+          <p class="muted">
+            동일 차단 지속: {duration(Math.max(0, icloudHealth.observed_at_ms - icloudHealthBlockedSinceMs))}
+          </p>
+        {/if}
         {#if hasIcloudHealthEvidencePersistenceFailure(icloudHealth.notices)}
           <p class="warning">
             iCloud 동기화 요약 증거를 저장하지 못했습니다. 이번 관찰값은 표시하되 장기 비교에는 사용하지 않으며,
@@ -859,6 +892,12 @@
             <p class="warning">
               iCloud에 기존 전송이 진행 중입니다. 기존 upload/download가 끝나고 새 복사 admission이
               clear가 될 때까지 Finder 복사와 원본 정리를 진행하지 않습니다.
+            </p>
+          {/if}
+          {#if icloudHealthBlockedSinceMs > 0 && icloudHealth.observed_at_ms - icloudHealthBlockedSinceMs >= PROVIDER_STALL_WARNING_MS}
+            <p class="warning">
+              동일한 iCloud 차단 상태가 15분 이상 지속되었습니다. Finder에 남은 복사 대기를 취소하고,
+              iCloud 상태가 clear가 될 때까지 새 복사·attestation·원본 정리를 시작하지 마십시오.
             </p>
           {/if}
         {:else}
