@@ -26,6 +26,13 @@ pub struct DevArtifact {
     pub age_days: u64,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DevArtifactCleanResult {
+    pub path: String,
+    pub ok: bool,
+    pub error: String,
+}
+
 /// (아티팩트 디렉토리명, 같은 부모에 있어야 하는 프로젝트 마커들)
 const ARTIFACT_KINDS: &[(&str, &[&str])] = &[
     ("node_modules", &["package.json"]),
@@ -247,6 +254,68 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
     found
 }
 
+/// Re-scan and move only unchanged development artifacts to OS Trash.
+///
+/// The request manifest is deliberately compared against a fresh bounded scan. A path match is
+/// not sufficient because a recreated `target` or `node_modules` directory could otherwise cause
+/// an unrelated artifact to be removed.
+pub fn clean_artifacts(
+    requests: &[DevArtifact],
+    root: &Path,
+    min_age_days: u64,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Vec<DevArtifactCleanResult> {
+    let current = find_artifacts(root, min_age_days, now_ms);
+    requests
+        .iter()
+        .map(|request| {
+            let matches = current.iter().find(|candidate| {
+                candidate.path == request.path
+                    && candidate.kind == request.kind
+                    && candidate.project == request.project
+                    && candidate.bytes == request.bytes
+                    && candidate.files == request.files
+                    && candidate.skipped == request.skipped
+                    && candidate.scan_complete
+                    && request.scan_complete
+                    && request.skipped == 0
+                    && candidate.fingerprint == request.fingerprint
+                    && !request.object_id.is_empty()
+                    && candidate.object_id == request.object_id
+                    && candidate.age_days >= request.age_days
+            });
+
+            if matches.is_none() {
+                return DevArtifactCleanResult {
+                    path: request.path.clone(),
+                    ok: false,
+                    error: "development artifact changed or its bounded manifest is incomplete; rescan before cleanup".into(),
+                };
+            }
+
+            match crate::safety::trash_delete_if_identity(
+                Path::new(&request.path),
+                &request.object_id,
+                request.bytes,
+                journal_path,
+                now_ms,
+            ) {
+                Ok(()) => DevArtifactCleanResult {
+                    path: request.path.clone(),
+                    ok: true,
+                    error: String::new(),
+                },
+                Err(error) => DevArtifactCleanResult {
+                    path: request.path.clone(),
+                    ok: false,
+                    error: error.to_string(),
+                },
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,5 +379,26 @@ mod tests {
         fs::write(nm.join("dep").join("package.json"), b"{}").unwrap();
 
         assert_eq!(find_artifacts(tmp.path(), 0, u64::MAX).len(), 1);
+    }
+
+    #[test]
+    fn cleanup_fails_closed_when_artifact_identity_changes() {
+        let tmp = tempfile::tempdir().unwrap();
+        project(tmp.path(), "app", "package.json", "node_modules");
+        let candidates = find_artifacts(tmp.path(), 0, u64::MAX);
+        assert_eq!(candidates.len(), 1);
+        let journal = tmp.path().join("journal.jsonl");
+        let original = tmp.path().join("original-node-modules");
+        let live = tmp.path().join("app/node_modules");
+        std::fs::rename(&live, &original).unwrap();
+        std::fs::create_dir(&live).unwrap();
+        std::fs::write(live.join("replacement.bin"), b"replacement").unwrap();
+        let results = clean_artifacts(&candidates, tmp.path(), 0, &journal, 1);
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].ok);
+        assert!(results[0].error.contains("changed"));
+        assert!(live.exists());
+        assert!(original.exists());
+        assert!(!journal.exists(), "stale identity must not create a journal");
     }
 }

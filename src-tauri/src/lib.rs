@@ -25,7 +25,7 @@ mod node_view_security_tests;
 #[cfg_attr(coverage, allow(dead_code))]
 mod rules;
 #[cfg_attr(coverage, allow(dead_code))]
-mod dev_artifacts;
+pub mod dev_artifacts;
 #[cfg_attr(coverage, allow(dead_code))]
 mod ontology;
 #[cfg_attr(coverage, allow(dead_code))]

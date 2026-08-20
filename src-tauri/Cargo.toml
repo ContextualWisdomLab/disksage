@@ -107,6 +107,10 @@ name = "disksage-cache-cleanup"
 path = "src/bin/disksage-cache-cleanup.rs"
 
 [[bin]]
+name = "disksage-dev-artifacts"
+path = "src/bin/disksage-dev-artifacts.rs"
+
+[[bin]]
 name = "disksage-provider-client-runtime"
 path = "src/bin/disksage-provider-client-runtime.rs"
 required-features = ["cloud-cli"]

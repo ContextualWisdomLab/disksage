@@ -56,6 +56,12 @@ returns an incomplete scan with `source-scan-managed-file-provider-root` and pro
 candidate. This prevents DiskSage diagnostics from competing with, or materializing, provider
 state.
 
+Regenerable development artifacts are a separate local reclaim domain. The headless
+`disksage-dev-artifacts` command reuses the GUI's bounded metadata manifest and identity-bound
+OS-Trash operation: inventory is read-only by default, and `--execute` requires a fresh rescan,
+an unchanged filesystem object identity, and a journal path. It never removes source data,
+provider-managed trees, or cloud placeholders, and it never claims cloud write or source eviction.
+
 DiskSage repositories, Git worktrees, and temporary evidence are operated from a local volume
 outside managed File Provider roots. A provider-domain marker on the parent or a dataless `.git`
 entry is treated as provider materialization evidence, not as proof of a stale worktree; the

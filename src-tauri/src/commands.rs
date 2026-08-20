@@ -160,51 +160,12 @@ pub fn clean_dev_artifacts_inner(
     journal_path: &Path,
     now_ms: u64,
 ) -> Vec<CleanResult> {
-    let current = dev_artifacts::find_artifacts(root, min_age_days, now_ms);
-    requests
-        .iter()
-        .map(|request| {
-            let matches = current.iter().find(|candidate| {
-                candidate.path == request.path
-                    && candidate.kind == request.kind
-                    && candidate.project == request.project
-                    && candidate.bytes == request.bytes
-                    && candidate.files == request.files
-                    && candidate.skipped == request.skipped
-                    && candidate.scan_complete
-                    && request.scan_complete
-                    && request.skipped == 0
-                    && candidate.fingerprint == request.fingerprint
-                    && !request.object_id.is_empty()
-                    && candidate.object_id == request.object_id
-                    && candidate.age_days >= request.age_days
-            });
-            if matches.is_none() {
-                return CleanResult {
-                    path: request.path.clone(),
-                    ok: false,
-                    error: "개발 아티팩트가 변경되었거나 메타데이터 스캔이 불완전합니다. 정리 전에 다시 스캔하세요".into(),
-                };
-            }
-
-            match safety::trash_delete_if_identity(
-                Path::new(&request.path),
-                &request.object_id,
-                request.bytes,
-                journal_path,
-                now_ms,
-            ) {
-                Ok(()) => CleanResult {
-                    path: request.path.clone(),
-                    ok: true,
-                    error: String::new(),
-                },
-                Err(error) => CleanResult {
-                    path: request.path.clone(),
-                    ok: false,
-                    error: error.to_string(),
-                },
-            }
+    dev_artifacts::clean_artifacts(requests, root, min_age_days, journal_path, now_ms)
+        .into_iter()
+        .map(|result| CleanResult {
+            path: result.path,
+            ok: result.ok,
+            error: result.error,
         })
         .collect()
 }

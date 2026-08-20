@@ -83,6 +83,14 @@ The runtime sequence is:
    not a stale-worktree deletion signal; stop the audit and relocate the worktree to a local
    volume such as `/private/tmp` before continuing.
 
+9. Regenerable development artifacts (`target`, `node_modules`, virtual environments, and
+   `__pycache__`) can be inventoried headlessly with
+   `disksage-dev-artifacts --root ABSOLUTE_PATH --min-age-days N`. The default is read-only;
+   `--execute --journal-path ABSOLUTE_PATH` performs a fresh bounded manifest and moves only
+   unchanged, identity-matching artifacts to OS Trash. Protected/system paths and incomplete
+   manifests fail closed. This command never writes a cloud provider or authorizes source
+   eviction; do not use it to remove a provider-managed File Provider tree.
+
 The Goal and ADR files are replaceable projections. Agents or operators must compare them with the
 immutable receipt/evidence record before any mutation. Naruon receives lineage/provider evidence,
 not a second independent deletion authority.
