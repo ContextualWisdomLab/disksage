@@ -35,6 +35,11 @@ describe("hourly contextual-orchestrator loop contract", () => {
     expect(workflow).toContain("persist-credentials: false");
     expect(workflow).toContain("gh pr list --state open --limit 100");
     expect(workflow).not.toContain("COPILOT_GITHUB_TOKEN");
+    expect(workflow).toContain("--max-filesize 65536");
+    expect(workflow).toContain("response_sha256");
+    expect(workflow).toContain("hourly-product-loop-receipt-${{ github.run_id }}");
+    expect(workflow).toContain("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a");
+    expect(workflow).not.toContain("/tmp/agent-ok.txt");
   });
 
   it("binds repository context to the exact scheduled or manually dispatched commit", () => {
