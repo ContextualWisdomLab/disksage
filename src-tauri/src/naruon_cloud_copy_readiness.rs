@@ -31,7 +31,7 @@ const RUNTIME_BLOCKERS: [&str; 2] = [
     "provider-client-runtime-not-observed",
     "provider-client-runtime-evidence-unavailable",
 ];
-const ICLOUD_ADMISSION_BLOCKERS: [&str; 16] = [
+const ICLOUD_ADMISSION_BLOCKERS: [&str; 17] = [
     "icloud-sync-health-evidence-incomplete",
     "icloud-upload-queue-nonempty",
     "icloud-upload-in-flight",
@@ -44,6 +44,7 @@ const ICLOUD_ADMISSION_BLOCKERS: [&str; 16] = [
     "icloud-native-sync-up-pending",
     "icloud-native-sync-down-pending",
     "icloud-file-provider-no-progress",
+    "icloud-file-provider-transfer-active",
     "icloud-file-provider-dump-timeout",
     "icloud-file-provider-dump-output-truncated",
     "icloud-file-provider-evidence-unavailable",
@@ -315,6 +316,8 @@ fn expected_icloud_admission_blockers(report: &IcloudSyncHealthReport) -> Vec<St
     if let Some(activity) = report.file_provider_activity.as_ref() {
         if activity.no_progress_fetch_count > 0 || activity.no_progress_create_count > 0 {
             blockers.push("icloud-file-provider-no-progress".into());
+        } else if activity.active_upload_count > 0 || activity.active_download_count > 0 {
+            blockers.push("icloud-file-provider-transfer-active".into());
         } else if activity.timed_out {
             blockers.push("icloud-file-provider-dump-timeout".into());
         } else if activity.output_truncated {
@@ -1155,6 +1158,8 @@ fn validate_icloud_admission_summary(
     if let Some(activity) = summary.file_provider_activity.as_ref() {
         if activity.no_progress_fetch_count > 0 || activity.no_progress_create_count > 0 {
             expected.push("icloud-file-provider-no-progress".to_string());
+        } else if activity.active_upload_count > 0 || activity.active_download_count > 0 {
+            expected.push("icloud-file-provider-transfer-active".to_string());
         } else if activity.timed_out {
             expected.push("icloud-file-provider-dump-timeout".to_string());
         } else if activity.output_truncated {
