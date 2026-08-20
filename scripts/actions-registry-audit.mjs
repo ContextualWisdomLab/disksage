@@ -3,6 +3,8 @@ import path from 'node:path';
 export const REPOSITORY_WORKFLOW_PREFIX = '.github/workflows/';
 const GITHUB_DYNAMIC_WORKFLOW_PREFIX = 'dynamic/';
 const COMMIT_SHA_PATTERN = /^[0-9a-f]{40}$/;
+const MAX_LIST_PAGES = 100;
+const MAX_LIST_RECORDS = MAX_LIST_PAGES * 100;
 
 const NON_ACTIVE_WORKFLOW_STATES = new Set([
   'deleted',
@@ -96,6 +98,7 @@ async function listAll(fetchJson, endpoint, invalidError) {
   let pageSize;
   const separator = endpoint.includes('?') ? '&' : '?';
   do {
+    if (page > MAX_LIST_PAGES) throw new Error('actions-list-page-limit-exceeded');
     const payload = await fetchJson(`${endpoint}${separator}per_page=100&page=${page}`);
     if (!Array.isArray(payload)) throw new Error(invalidError);
     records.push(...payload);
@@ -111,6 +114,7 @@ export async function listAllWorkflowRecords(fetchJson, repository) {
   let page = 1;
   let expectedTotal = null;
   while (true) {
+    if (page > MAX_LIST_PAGES) throw new Error('actions-list-page-limit-exceeded');
     const payload = await fetchJson(`/repos/${repository}/actions/workflows?per_page=100&page=${page}`);
     const totalCount = payload?.total_count;
     if (
@@ -120,6 +124,9 @@ export async function listAllWorkflowRecords(fetchJson, repository) {
       totalCount < 0
     ) {
       throw new Error('actions-workflow-list-invalid');
+    }
+    if (totalCount > MAX_LIST_RECORDS) {
+      throw new Error('actions-list-page-limit-exceeded');
     }
     if (expectedTotal === null) {
       expectedTotal = totalCount;
