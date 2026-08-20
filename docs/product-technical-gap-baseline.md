@@ -1,8 +1,8 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-21 (Asia/Seoul)
-**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` @ `3148d71` (provider-evidence
-authority fix `b9fe4f0` plus this documentation revision).
+**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` source through `9b1c270`; this
+baseline records the current loop's runtime and integration evidence.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.  
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
 
@@ -32,7 +32,7 @@ authority fix `b9fe4f0` plus this documentation revision).
 | P0 | Provider end-to-end receipt is absent for the current iCloud incident. | Global probe can time out and CloudDocs state is intentionally not force-killed or deleted; the native copy boundary now requires an integrity-checked three-stream pre-copy cohort before mutation. | Capture a bounded fresh provider evidence receipt after sync settles; keep transfer/eviction disabled until it is complete. |
 | P0 | Disk pressure telemetry and provider queue evidence must remain comparable across loops without retaining raw provider output. | Cloud plans and explicit iCloud health refreshes persist bounded, path-free `LocalVolumeSnapshot`, `ProviderClientRuntimeSnapshot`, and `IcloudSyncHealthEvidenceSnapshot` records under `volume-pressure-evidence`, `provider-client-runtime-evidence`, and `icloud-sync-health-evidence`; iCloud plans now combine them into a timestamp/fingerprint-bound cohort. | Missing, incomplete, malformed, or more-than-five-minute-skewed cohort observations remain blocked; a fresh exact-head native incident plan is still needed to compare the emitted cohort with the live incident. |
 | P1 | Hourly product-development/review loop is not yet live in this repository environment. | `.github/workflows/hourly-product-loop.yml` is scheduled, uses only contextual-orchestrator's published `/v1/models` and `/v1/chat/completions` APIs against the exact event SHA, and now uploads a seven-day path-free receipt when configured; no external endpoint or deployment receipt is available here. | Configure the orchestrator URL/token in its deployment and run once manually; verify the bounded receipt artifact without importing provider secrets or enabling mutation. |
-| P1 | Open PR queue prevents a clean protected release line. | PR #213 is at exact head `3148d71` on `main`, with build jobs in progress and required analysis/security/review jobs queued; its review decision remains `CHANGES_REQUESTED`. PR #189 is at `635d918`, PR #209 at `0fc67a4`, PR #228 at `1eb947e`, PR #179 at `9ef9b1b`, and Naruon PR #1434 at `c0848017`; all remain unmerged pending exact-head checks/review. | Process one PR at a time: current-head review → fix → required checks → fresh approval → normal protected merge; never bypass or self-approve. |
+| P1 | Open PR queue prevents a clean protected release line. | At this loop capture PR #213 was exact head `6ef85e4` on `main`, with build jobs in progress and required analysis/security/review jobs queued; its review decision remained `CHANGES_REQUESTED`. PR #189 is at `635d918`, PR #209 at `0fc67a4`, PR #228 at `1eb947e`, PR #179 at `9ef9b1b`, and Naruon PR #1434 at `c0848017`; all remain unmerged pending exact-head checks/review. | Process one PR at a time: current-head review → fix → required checks → fresh approval → normal protected merge; never bypass or self-approve. |
 | P1 | Current UI coverage is contract-heavy rather than runtime E2E for native File Provider states. | The UI now displays `로컬 최신본·업로드 미확인` and maps blockers without backend detail; provider operations are not safely reproducible on this full disk. Rust fixtures now cover `local-current + is_uploaded=false`, provider timeout, timeliness transitions, and receipt/evidence invalidation; native runtime E2E remains unavailable while the provider is unhealthy. | Keep the fixture-backed state machine green and add a bounded native E2E receipt only after a quiet provider observation is authoritative. |
 | P1 | Ontology/catalog integrations are export boundaries, not deployed services. | Naruon/semantic catalog and Zotero local API docs/contracts exist; no Noema/contextual-orchestrator runtime dependency is required. | Keep integrations optional and path-free; add live service tests only when a concrete consumer and secret boundary exist. |
 | P2 | 100% documentation/docstring and edge-case coverage is not yet evidenced. | Existing checks cover core Rust/TS behavior, not a repository-wide percentage claim. | Publish measured coverage per language and close high-risk edge paths before claiming 100%. |
@@ -195,3 +195,9 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   provider-evidence directories; the documentation change was rebased onto it as exact PR #213
   head `3148d71`. This preserves the remote agent's change without force-push and keeps provider
   evidence fail-closed when directory authority drifts.
+- Source head `9b1c270` now retains a bounded hourly contextual-orchestrator receipt: only schema,
+  exact event SHA, model id, status, response byte count, and response SHA-256 are uploaded for
+  seven days; the advisory response body is never persisted. `actionlint` passed, the focused loop
+  contract passed 2/2, the full frontend suite passed 26 files/118 tests, and `svelte-check`
+  reported 0 errors/0 warnings. PR #213 exact head at this capture was `6ef85e4`; its hosted
+  build/security/review checks remain authoritative and no protected merge is claimed.
