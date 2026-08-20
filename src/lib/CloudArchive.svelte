@@ -14,6 +14,7 @@
     type CloudReviewQueueFilter,
     type CloudReviewQueueSort,
   } from "./cloudReviewQueue";
+  import { boundedCloudArchiveErrorMessage } from "./cloudArchiveErrorFeedback";
   import { fmtBytes } from "./fmt";
   import IcloudLocalEviction from "./IcloudLocalEviction.svelte";
 
@@ -140,7 +141,7 @@
           refreshProviderGlobalSync(),
         ]);
       } catch (e) {
-        loadError = String(e);
+        loadError = boundedCloudArchiveErrorMessage("initialize", e);
       }
     })();
     return () => clearInterval(reconciliationTimer);
@@ -177,7 +178,7 @@
         connectionCapacityRoot = selectedRoot;
       }
     } catch (e) {
-      loadError = String(e);
+      loadError = boundedCloudArchiveErrorMessage("preview", e);
     } finally {
       busy = false;
     }
@@ -301,7 +302,7 @@
         [candidate.metadata_fingerprint]: false,
       };
     } catch (e) {
-      loadError = String(e);
+      loadError = boundedCloudArchiveErrorMessage("review", e);
     } finally {
       reviewingFingerprint = "";
     }
@@ -338,7 +339,7 @@
       );
       objectId = copied.provider_object_id ?? "";
     } catch (e) {
-      loadError = String(e);
+      loadError = boundedCloudArchiveErrorMessage("copy", e);
     } finally {
       copyingFingerprint = "";
     }
@@ -375,7 +376,7 @@
       );
       objectId = copied.provider_object_id ?? "";
     } catch (e) {
-      loadError = String(e);
+      loadError = boundedCloudArchiveErrorMessage("provider-api-copy", e);
     } finally {
       copyingFingerprint = "";
     }
@@ -414,7 +415,7 @@
         200,
       );
     } catch (e) {
-      loadError = String(e);
+      loadError = boundedCloudArchiveErrorMessage("adopt", e);
     } finally {
       copyingFingerprint = "";
     }
@@ -431,7 +432,7 @@
         copied.receipt.provider === "google-drive" ? objectId.trim() || null : null,
       );
     } catch (e) {
-      loadError = String(e);
+      loadError = boundedCloudArchiveErrorMessage("attest", e);
     } finally {
       attesting = false;
     }
@@ -443,7 +444,7 @@
     try {
       reconciliation = await api.reconcileCloudReceipts();
     } catch (e) {
-      reconciliationError = String(e);
+      reconciliationError = boundedCloudArchiveErrorMessage("reconcile", e);
     } finally {
       reconciling = false;
     }
@@ -461,7 +462,7 @@
           : ICLOUD_HEALTH_BLOCKED_RETRY_INTERVAL_MS);
     } catch (e) {
       icloudHealth = null;
-      icloudHealthError = String(e);
+      icloudHealthError = boundedCloudArchiveErrorMessage("icloud-health", e);
       icloudHealthNextCheckAt = Date.now() + ICLOUD_HEALTH_BLOCKED_RETRY_INTERVAL_MS;
     } finally {
       checkingIcloudHealth = false;
@@ -481,7 +482,7 @@
       providerGlobalSync = await api.inspectCloudProviderGlobalSync(root.path);
     } catch (e) {
       providerGlobalSync = null;
-      providerGlobalSyncError = String(e);
+      providerGlobalSyncError = boundedCloudArchiveErrorMessage("provider-sync", e);
     } finally {
       checkingProviderGlobalSync = false;
     }
@@ -497,7 +498,7 @@
       providerRecovery = await api.recoverCloudProviderClient(root.path);
       await refreshProviderGlobalSync();
     } catch (e) {
-      providerGlobalSyncError = String(e);
+      providerGlobalSyncError = boundedCloudArchiveErrorMessage("provider-recovery", e);
     } finally {
       recoveringProvider = false;
     }
@@ -534,7 +535,7 @@
       evictionConfirmation = "";
       evictionRationale = "";
     } catch (e) {
-      loadError = String(e);
+      loadError = boundedCloudArchiveErrorMessage("evict", e);
     } finally {
       evicting = false;
     }
@@ -580,7 +581,7 @@
       connectionCapacity = await api.verifyCloudProviderCapacity(root.path);
       connectionCapacityRoot = root.path;
     } catch (e) {
-      loadError = String(e);
+      loadError = boundedCloudArchiveErrorMessage("capacity", e);
     } finally {
       checkingCapacity = false;
     }
@@ -605,7 +606,7 @@
       connectionCapacity = await api.verifyCloudProviderCapacity(root.path);
       connectionCapacityRoot = root.path;
     } catch (e) {
-      loadError = String(e);
+      loadError = boundedCloudArchiveErrorMessage("connect", e);
     } finally {
       connecting = false;
     }
@@ -623,7 +624,7 @@
       connectionCapacity = null;
       connectionCapacityRoot = "";
     } catch (e) {
-      loadError = String(e);
+      loadError = boundedCloudArchiveErrorMessage("disconnect", e);
     } finally {
       disconnecting = false;
     }
