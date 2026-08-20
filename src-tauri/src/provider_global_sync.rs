@@ -260,19 +260,37 @@ fn partial_dump_after_timeout(bytes: Vec<u8>, identifier: &str) -> Option<String
 #[cfg(target_os = "macos")]
 fn run_dump(provider: CloudProvider) -> Result<String, String> {
     use std::io::Read;
+    use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
     use std::thread;
     use std::time::{Duration, Instant};
 
     let identifier = provider_identifier(provider)
         .ok_or_else(|| "provider-global-sync-icloud-specialized".to_string())?;
-    let mut child = Command::new("/usr/bin/fileproviderctl")
+    let mut command = Command::new("/usr/bin/fileproviderctl");
+    command
         .args(["dump", identifier, "-l"])
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    // File Provider helpers can outlive the command leader and retain stdout. Keep the
+    // entire probe in a private group so timeout cleanup can close the pipe and join it.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = command
         .spawn()
         .map_err(|_| "provider-global-sync-probe-unavailable".to_string())?;
+    let child_pid = child.id();
+    let kill_group = || unsafe {
+        let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
+    };
     let Some(stdout) = child.stdout.take() else {
+        kill_group();
         let _ = child.kill();
         let _ = child.wait();
         return Err("provider-global-sync-probe-stdout-unavailable".into());
@@ -301,6 +319,7 @@ fn run_dump(provider: CloudProvider) -> Result<String, String> {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() >= deadline => {
+                kill_group();
                 let _ = child.kill();
                 let _ = child.wait();
                 let partial = reader.join().ok().and_then(Result::ok);
@@ -313,6 +332,7 @@ fn run_dump(provider: CloudProvider) -> Result<String, String> {
             }
             Ok(None) => thread::sleep(Duration::from_millis(50)),
             Err(_) => {
+                kill_group();
                 let _ = child.kill();
                 let _ = child.wait();
                 let _ = reader.join();
