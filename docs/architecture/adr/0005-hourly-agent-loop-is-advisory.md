@@ -49,5 +49,6 @@ local Rust evidence contracts.
 ## Evidence
 
 - `.github/workflows/hourly-product-loop.yml`
+- `src/lib/hourlyProductLoopContract.test.ts`
 - `docs/product-technical-gap-baseline.md`
 - `docs/architecture/adr/0001-cloud-offload-goal-state.md`
