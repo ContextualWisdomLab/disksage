@@ -135,6 +135,9 @@ The 2026-08-21 incident observation also recorded a `real_datasets` Finder copy 
 after hours, Google Drive `temporarily disconnected`/`needs-indexing` with File Provider `-1004`,
 and only 150 MiB of local headroom; the operator guidance is to cancel that pending Finder copy
 before any new DiskSage plan is attempted.
+The provider UI keeps a path-free blocker fingerprint across bounded observations and escalates
+the operator guidance after 15 minutes of the same blocker; this is advisory state only and never
+authorizes a cloud write, provider restart, or source eviction.
 
 ## Consequences
 
