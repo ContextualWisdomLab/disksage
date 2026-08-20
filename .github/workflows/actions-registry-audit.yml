@@ -60,6 +60,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -68,13 +69,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
+          EXPECTED_MAIN_SHA: ${{ github.sha }}
         run: |
           node --input-type=module <<'NODE'
           import { auditActionsRegistry } from './scripts/actions-registry-audit.mjs';
 
           const repository = process.env.REPOSITORY;
           const token = process.env.GH_TOKEN;
-          if (!repository || !token) throw new Error('actions-registry-audit-input-missing');
+          const expectedMainSha = process.env.EXPECTED_MAIN_SHA;
+          if (!repository || !token || !expectedMainSha) {
+            throw new Error('actions-registry-audit-input-missing');
+          }
 
           const pause = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
           const fetchJson = async (pathname) => {
@@ -103,11 +108,7 @@ jobs:
             throw new Error('github-api-retry-exhausted');
           };
 
-          const metadata = await fetchJson(`/repos/${repository}`);
-          const liveMain = await fetchJson(
-            `/repos/${repository}/commits/${encodeURIComponent(metadata.default_branch)}`,
-          );
-          const report = await auditActionsRegistry(fetchJson, repository, liveMain.sha);
+          const report = await auditActionsRegistry(fetchJson, repository, expectedMainSha);
           console.log(JSON.stringify(report, null, 2));
           if (report.orphaned_records.length > 0) {
             throw new Error(`orphaned-actions-workflows:${report.orphaned_records.length}`);
