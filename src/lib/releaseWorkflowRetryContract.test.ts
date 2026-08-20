@@ -33,6 +33,19 @@ describe('release workflow retry contract', () => {
     expect(workflow).not.toContain('- os: windows-latest');
   });
 
+  it('does not spend native packaging runners on test-only source changes', () => {
+    const workflow = readRepositoryFile('.github/workflows/release.yml');
+    const rustSource = workflow.indexOf('      - "src-tauri/**"');
+    const rustTests = workflow.indexOf('      - "!src-tauri/tests/**"');
+    const frontendSource = workflow.indexOf('      - "src/**"');
+    const frontendTests = workflow.indexOf('      - "!src/**/*.test.ts"');
+
+    expect(rustSource).toBeGreaterThanOrEqual(0);
+    expect(rustTests).toBeGreaterThan(rustSource);
+    expect(frontendSource).toBeGreaterThanOrEqual(0);
+    expect(frontendTests).toBeGreaterThan(frontendSource);
+  });
+
   it('documents retry-safe concurrency in authoritative evidence', () => {
     const doctoring = readRepositoryFile('docs/doctoring/release-artifact-provenance.md');
     const changelog = readRepositoryFile('CHANGELOG.md');
