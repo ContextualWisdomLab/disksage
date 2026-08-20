@@ -129,8 +129,10 @@ pub(crate) fn write_object_bound_bytes_create_new(
     )
 }
 
+/// Internal deterministic seam for dependent authority writers to prove directory-replacement
+/// handling while exercising the same descriptor-bound publication implementation used in production.
 #[cfg(unix)]
-fn write_object_bound_bytes_create_new_with_hooks<F, G, H>(
+pub(crate) fn write_object_bound_bytes_create_new_with_hooks<F, G, H>(
     path: &Path,
     encoded: &[u8],
     unix_mode: u32,
