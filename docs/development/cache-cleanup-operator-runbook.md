@@ -15,6 +15,11 @@ Microsoft Edge. No extra approval phrase is needed for these catalogued regenera
 the per-child identity, size/mtime, and complete inactive-use checks remain mandatory. A child
 that is active or changed is skipped; the root and OS Trash are retained.
 
+The same guarded path is available without the GUI as
+`cargo run --locked --manifest-path src-tauri/Cargo.toml --bin disksage-cache-cleanup -- --execute`.
+Omit `--execute` for a no-op check; pass an absolute `--journal-path` when running outside the
+installed application so the operation remains auditable.
+
 The cache catalog includes the macOS `uv`, Hugging Face, Codex runtime, Gradle, npm, pip, and Cargo
 registry caches when present. Cache contents are not cloud candidates: they are reproducible local
 artifacts, while user files continue through the metadata-first cloud planner and its provider
