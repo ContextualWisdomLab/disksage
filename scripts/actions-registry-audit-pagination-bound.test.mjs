@@ -42,3 +42,20 @@ test('workflow registry pagination rejects an externally claimed total beyond th
   );
   assert.ok(calls <= 100, `expected bounded workflow pagination, observed ${calls} requests`);
 });
+
+test('workflow registry pagination rejects duplicate workflow identities before completeness can be forged', async () => {
+  const repeated = {
+    id: 77,
+    state: 'active',
+    path: '.github/workflows/current.yml',
+  };
+  const fetchJson = async () => ({
+    total_count: 2,
+    workflows: [repeated, { ...repeated }],
+  });
+
+  await assert.rejects(
+    listAllWorkflowRecords(fetchJson, repo),
+    /actions-workflow-list-duplicate/,
+  );
+});
