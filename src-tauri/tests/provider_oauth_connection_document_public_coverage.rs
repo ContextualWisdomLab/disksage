@@ -293,3 +293,25 @@ fn connection_document_symlinked_parent_is_rejected_before_reading_outside_data(
         "oauth-connection-directory-unsafe"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn unsafe_parent_precedes_external_leaf_metadata_and_size_observation() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let outside = temp.path().join("outside-oversized");
+    std::fs::create_dir(&outside).unwrap();
+    let outside_document = outside.join("connections.json");
+    let file = std::fs::File::create(&outside_document).unwrap();
+    file.set_len(256 * 1024 + 1).unwrap();
+
+    let alias = temp.path().join("app-data-oversized");
+    symlink(&outside, &alias).unwrap();
+
+    assert_eq!(
+        load_connections(&alias.join("connections.json")).unwrap_err(),
+        "oauth-connection-directory-unsafe",
+        "parent authority must fail before observing the external target's file size"
+    );
+}
