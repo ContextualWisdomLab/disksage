@@ -931,7 +931,13 @@
         <p class="muted">읽기 전용 File Provider 집계 증거이며, 클라우드 쓰기·개별 파일 attestation·원본 삭제 권한을 대신 증명하지 않습니다.</p>
       </div>
     {/if}
-    {#if providerGlobalSyncError}<p class="error" role="alert">공급자 전역 동기화 상태 확인: {providerGlobalSyncError}</p>{/if}
+    {#if providerGlobalSyncError}
+      <p class="error" role="alert">공급자 전역 동기화 상태 확인: {providerGlobalSyncError}</p>
+      <p class="warning">
+        공급자 전역 증거를 확인하지 못했습니다. Finder에 남은 복사 대기를 취소하고,
+        공급자 앱이 정상으로 관찰될 때까지 새 복사·attestation·원본 정리를 시작하지 마십시오.
+      </p>
+    {/if}
     {#if roots.some((root) => !root.readable)}
       <p class="warning">
         접근 불가 클라우드 루트는 선택에서 제외했습니다. macOS 개인정보 보호 권한을 허용한 뒤 목록을 다시 불러오세요.
