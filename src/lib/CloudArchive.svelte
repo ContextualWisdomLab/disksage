@@ -39,6 +39,10 @@
     return notices.includes("local-volume-evidence-persistence-failed");
   }
 
+  function hasRuntimeEvidencePersistenceFailure(notices: readonly string[]): boolean {
+    return notices.includes("provider-client-runtime-evidence-persistence-failed");
+  }
+
   function localPressureLabel(pressure: api.LocalVolumePressure): string {
     return {
       normal: "정상",
@@ -992,6 +996,11 @@
           현재 여유공간이 부족한 후보는 버튼을 비활성화합니다. 명시적 OAuth 공급자 API 업로드는 별도 경로입니다.
         </p>
       {/if}
+    {/if}
+    {#if hasRuntimeEvidencePersistenceFailure(report.notices)}
+      <p class="warning">
+        공급자 클라이언트 관찰 증거를 저장하지 못했습니다. 프로세스 이력은 남지 않으며, 복사·동기화 판정은 현재 관찰값으로만 제한됩니다.
+      </p>
     {/if}
     {#if report.capacity}
       {#if report.capacity.can_fit === true}

@@ -1287,6 +1287,19 @@ fn cloud_plan_for_inputs(
         selected.provider,
         cloud::system_now_ms(),
     );
+    let runtime_evidence_persisted = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .and_then(|app_data_dir| {
+            provider_client_runtime::write_runtime_snapshot_evidence(&app_data_dir, &runtime).ok()
+        })
+        .is_some();
+    if !runtime_evidence_persisted {
+        report
+            .notices
+            .push("provider-client-runtime-evidence-persistence-failed".into());
+    }
     provider_client_runtime::attach_runtime_notice(&mut report.notices, &runtime);
     let native_client_mode = report.capacity.as_ref().is_some_and(|assessment| {
         provider_capacity::native_personal_client_copy_capacity_exception(
