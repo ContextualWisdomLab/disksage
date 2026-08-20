@@ -12,6 +12,7 @@ const INCOMPLETE_DOWNLOAD: &str = include_str!("../src/incomplete_download.rs");
 const RECOVERY: &str = include_str!("../src/incomplete_download_recovery.rs");
 const MATERIALIZATION: &str = include_str!("../src/incomplete_download_materialization.rs");
 const RULES: &str = include_str!("../src/rules.rs");
+const TEST_WORKFLOW: &str = include_str!("../../.github/workflows/test.yml");
 
 #[test]
 fn shared_root_guard_exposes_identity_bound_contract() {
@@ -52,6 +53,19 @@ fn crate_level_authority_decouples_consumers_from_duplicate_audit() {
             "{name} must not depend on duplicate_audit module ownership"
         );
     }
+}
+
+#[test]
+fn macos_bound_root_job_never_restores_workspace_target_artifacts() {
+    let section = TEST_WORKFLOW
+        .split("  macos-bound-root:\n")
+        .nth(1)
+        .and_then(|tail| tail.split("\n  llm-engine-build:\n").next())
+        .expect("test workflow must retain the macos-bound-root job");
+    assert!(
+        section.contains("cache-targets: false"),
+        "macOS security regressions must compile from the exact source head instead of restored workspace targets"
+    );
 }
 
 #[cfg(unix)]
