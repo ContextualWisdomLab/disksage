@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  # A fresh first attempt supersedes stale work, while an explicit rerun attempt
+  # must not cancel itself inside the same concurrency group.
+  cancel-in-progress: ${{ github.run_attempt == 1 }}
+
 permissions:
   contents: read
 
