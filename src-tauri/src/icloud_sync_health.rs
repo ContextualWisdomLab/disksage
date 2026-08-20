@@ -38,7 +38,9 @@ const MAX_BRCTL_STATUS_BYTES: usize = 64 * 1024;
 #[cfg(target_os = "macos")]
 const FILEPROVIDERCTL_PATH: &str = "/usr/bin/fileproviderctl";
 #[cfg(target_os = "macos")]
-const FILEPROVIDER_DUMP_TIMEOUT: Duration = Duration::from_secs(5);
+// fileproviderctl prints global sync-engine progress after the per-item detail section. Keep the
+// probe bounded, but allow enough time to observe that active-transfer evidence before failing.
+const FILEPROVIDER_DUMP_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(target_os = "macos")]
 const MAX_FILEPROVIDER_DUMP_BYTES: usize = 256 * 1024;
 const ITEM_ERROR_AGE_NOTICE_MS: u64 = 86_400_000;
@@ -137,6 +139,14 @@ pub struct IcloudFileProviderActivityEvidence {
     pub no_progress_fetch_count: u64,
     #[serde(default)]
     pub no_progress_create_count: u64,
+    #[serde(default)]
+    pub active_upload_count: u64,
+    #[serde(default)]
+    pub active_download_count: u64,
+    #[serde(default)]
+    pub active_upload_progress_millionths: Option<u32>,
+    #[serde(default)]
+    pub active_download_progress_millionths: Option<u32>,
     pub notices: Vec<String>,
 }
 
@@ -152,6 +162,10 @@ pub fn validate_file_provider_activity_evidence(
                     .bytes()
                     .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
         })
+        || evidence.active_upload_progress_millionths.is_some_and(|value| value > 1_000_000)
+        || evidence
+            .active_download_progress_millionths
+            .is_some_and(|value| value > 1_000_000)
     {
         return Err("icloud-file-provider-activity-shape-invalid".into());
     }
@@ -621,6 +635,16 @@ fn parse_file_provider_activity_output(
             line.contains("createitembasedontemplate") && line.contains("no progress")
         })
         .count() as u64;
+    let active_upload_count = output
+        .lines()
+        .filter(|line| line.to_ascii_lowercase().contains("upload progress:"))
+        .count() as u64;
+    let active_download_count = output
+        .lines()
+        .filter(|line| line.to_ascii_lowercase().contains("download progress:"))
+        .count() as u64;
+    let active_upload_progress_millionths = progress_millionths(output, "upload progress:");
+    let active_download_progress_millionths = progress_millionths(output, "download progress:");
     let mut notices = if command_succeeded {
         vec!["icloud-file-provider-dump-observed".into()]
     } else {
@@ -638,6 +662,12 @@ fn parse_file_provider_activity_output(
     if no_progress_create_count > 0 {
         notices.push("icloud-file-provider-no-progress-create-observed".into());
     }
+    if active_upload_count > 0 {
+        notices.push("icloud-file-provider-active-upload".into());
+    }
+    if active_download_count > 0 {
+        notices.push("icloud-file-provider-active-download".into());
+    }
     IcloudFileProviderActivityEvidence {
         schema_version: ICLOUD_FILE_PROVIDER_ACTIVITY_SCHEMA_VERSION,
         observed_at_ms,
@@ -646,8 +676,35 @@ fn parse_file_provider_activity_output(
         output_truncated,
         no_progress_fetch_count,
         no_progress_create_count,
+        active_upload_count,
+        active_download_count,
+        active_upload_progress_millionths,
+        active_download_progress_millionths,
         notices,
     }
+}
+
+fn progress_millionths(output: &str, operation: &str) -> Option<u32> {
+    output.lines().find_map(|line| {
+        if !line.to_ascii_lowercase().contains(operation) {
+            return None;
+        }
+        let value = line.split_once("Fraction completed:")?.1.trim_start();
+        let value = value.split_whitespace().next()?;
+        let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
+        let whole = whole.parse::<u32>().ok()?;
+        if whole > 1 || fraction.bytes().any(|byte| !byte.is_ascii_digit()) {
+            return None;
+        }
+        let mut scaled = fraction.bytes().take(6).fold(0_u32, |value, byte| {
+            value.saturating_mul(10).saturating_add(u32::from(byte - b'0'))
+        });
+        for _ in fraction.len().min(6)..6 {
+            scaled = scaled.saturating_mul(10);
+        }
+        let result = whole.saturating_mul(1_000_000).saturating_add(scaled);
+        (result <= 1_000_000).then_some(result)
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -726,8 +783,23 @@ fn probe_file_provider_activity(observed_at_ms: u64) -> IcloudFileProviderActivi
             Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(25)),
             Ok(None) => {
                 timed_out = true;
-                kill_group();
-                let _ = child.kill();
+                // fileproviderctl flushes its sync-engine summary during a graceful shutdown;
+                // retain that bounded output before falling back to a process-group kill.
+                unsafe {
+                    let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGTERM);
+                }
+                let graceful_deadline = Instant::now() + Duration::from_secs(2);
+                while status.is_none() && Instant::now() < graceful_deadline {
+                    match child.try_wait() {
+                        Ok(Some(child_status)) => status = Some(child_status),
+                        Ok(None) => thread::sleep(Duration::from_millis(25)),
+                        Err(_) => break,
+                    }
+                }
+                if status.is_none() {
+                    kill_group();
+                    let _ = child.kill();
+                }
                 let _ = child.wait();
                 break;
             }
@@ -741,7 +813,20 @@ fn probe_file_provider_activity(observed_at_ms: u64) -> IcloudFileProviderActivi
         }
     }
     if timed_out || read_failed {
-        kill_group();
+        if read_failed || status.is_none() {
+            kill_group();
+            let _ = child.wait();
+        }
+        loop {
+            let mut buffer = [0_u8; 16 * 1024];
+            match stdout.read(&mut buffer) {
+                Ok(read) if read > 0 => {
+                    let remaining = MAX_FILEPROVIDER_DUMP_BYTES + 1 - output.len();
+                    output.extend_from_slice(&buffer[..read.min(remaining)]);
+                }
+                Ok(_) | Err(_) => break,
+            }
+        }
     }
     let output_truncated = output.len() > MAX_FILEPROVIDER_DUMP_BYTES;
     let output = String::from_utf8_lossy(&output[..output.len().min(MAX_FILEPROVIDER_DUMP_BYTES)]);
@@ -1409,6 +1494,8 @@ fn attach_native_status_admission(report: &mut IcloudSyncHealthReport) {
             || activity.no_progress_create_count > 0
         {
             Some("icloud-file-provider-no-progress")
+        } else if activity.active_upload_count > 0 || activity.active_download_count > 0 {
+            Some("icloud-file-provider-transfer-active")
         } else if activity.timed_out {
             Some("icloud-file-provider-dump-timeout")
         } else if activity.output_truncated {
@@ -1715,6 +1802,30 @@ mod tests {
         assert!(evidence
             .notices
             .contains(&"icloud-file-provider-no-progress-create-observed".to_string()));
+        assert!(validate_file_provider_activity_evidence(&evidence).is_ok());
+    }
+
+    #[test]
+    fn file_provider_parser_records_active_transfer_progress() {
+        let evidence = parse_file_provider_activity_output(
+            "sync engine state:\n\
+             + upload progress: <progress> Fraction completed: 0.9524\n\
+             + download progress: <progress> Fraction completed: 0.0000\n",
+            42,
+            true,
+            false,
+            false,
+        );
+        assert_eq!(evidence.active_upload_count, 1);
+        assert_eq!(evidence.active_download_count, 1);
+        assert_eq!(evidence.active_upload_progress_millionths, Some(952_400));
+        assert_eq!(evidence.active_download_progress_millionths, Some(0));
+        assert!(evidence
+            .notices
+            .contains(&"icloud-file-provider-active-upload".to_string()));
+        assert!(evidence
+            .notices
+            .contains(&"icloud-file-provider-active-download".to_string()));
         assert!(validate_file_provider_activity_evidence(&evidence).is_ok());
     }
 

@@ -42,7 +42,7 @@ The runtime sequence is:
    iCloud native `needs-sync-up` and `needs-sync-down` states are also explicit admission blockers;
    a timeout while collecting native status is an admission blocker as well;
    the bounded iCloud File Provider activity probe likewise blocks when it sees redacted
-   `no progress` fetches or times out;
+   `no progress` fetches, active upload/download progress, or times out;
    the latter means the provider still has remote changes to materialize.
    If CloudDocs `client.db` exceeds the bounded snapshot ceiling, DiskSage skips the expensive
    SQLite fallback and reports incomplete evidence instead of waiting indefinitely; the File Provider
