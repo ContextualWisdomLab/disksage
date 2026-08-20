@@ -1,6 +1,7 @@
 import path from 'node:path';
 
 export const REPOSITORY_WORKFLOW_PREFIX = '.github/workflows/';
+const GITHUB_DYNAMIC_WORKFLOW_PREFIX = 'dynamic/';
 const COMMIT_SHA_PATTERN = /^[0-9a-f]{40}$/;
 
 const NON_ACTIVE_WORKFLOW_STATES = new Set([
@@ -33,6 +34,11 @@ function isRepositoryWorkflowPath(workflowPath) {
     workflowPath.startsWith(REPOSITORY_WORKFLOW_PREFIX) &&
     /\.ya?ml$/.test(workflowPath),
   );
+}
+
+function isTrustedGithubDynamicWorkflowPath(workflowPath) {
+  return workflowPath.startsWith(GITHUB_DYNAMIC_WORKFLOW_PREFIX)
+    && workflowPath.length > GITHUB_DYNAMIC_WORKFLOW_PREFIX.length;
 }
 
 /** Classify one Actions registry record against exact protected-main and active-PR path authority. */
@@ -73,11 +79,24 @@ export function classifyWorkflowRecord(record, protectedWorkflowPaths, activePrP
   return { classification: 'orphaned-deleted', path: normalizedPath, workflow_id: record.id };
 }
 
-/** Classify a complete collection of Actions registry records. */
+/**
+ * Classify a complete registry snapshot and reject active non-repository namespaces unless they
+ * use GitHub's explicit dynamic-workflow namespace. A single-record classification is structural;
+ * this collection boundary is the fail-closed authority used by the live audit.
+ */
 export function classifyWorkflowRecords(records, protectedWorkflowPaths, activePrPaths = new Set()) {
-  return records.map((record) =>
+  const classifications = records.map((record) =>
     classifyWorkflowRecord(record, protectedWorkflowPaths, activePrPaths),
   );
+  for (const entry of classifications) {
+    if (
+      entry.classification === 'github-dynamic'
+      && !isTrustedGithubDynamicWorkflowPath(entry.path)
+    ) {
+      throw new Error('actions-workflow-path-untrusted');
+    }
+  }
+  return classifications;
 }
 
 async function listAll(fetchJson, endpoint, invalidError) {
