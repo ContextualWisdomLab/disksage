@@ -8,6 +8,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Persist bounded, path-free local-volume snapshots from cloud plans with create-only files,
+  content fingerprints, Unix `0400`/`0700` permissions, and shape-limited retention; surface a
+  warning when incident-comparison evidence cannot be written without changing copy authority.
 - Show the last read-only iCloud File Provider evidence timestamp beside the
   new-copy admission state, so a stalled `no progress`/`hard expired` queue has
   an actionable retry context without exposing provider paths.

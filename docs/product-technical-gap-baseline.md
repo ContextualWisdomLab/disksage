@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-20 (Asia/Seoul)  
-**Repository head:** `feat/provider-sync-dynamic-goals` @ `4b86341` (evidence commit, 2026-08-20T20:39:16+09:00)
+**Repository head:** `feat/provider-sync-dynamic-goals` @ `e981ad8` (provider-recovery evidence commit, 2026-08-20)
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.  
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
 
@@ -29,7 +29,7 @@
 | Priority | Gap | Current state | Smallest next proof |
 | --- | --- | --- | --- |
 | P0 | Provider end-to-end receipt is absent for the current iCloud incident. | Global probe can time out and CloudDocs state is intentionally not force-killed or deleted. | Capture a bounded fresh provider evidence receipt after sync settles; keep transfer/eviction disabled until it is complete. |
-| P0 | Disk pressure telemetry is not durable enough for incident comparison. | `df`, process, and bounded probe results are operator evidence only. | Store redacted capacity/process summaries with timestamp and evidence hash, never raw provider dumps. |
+| P0 | Disk pressure telemetry is only partly durable for incident comparison. | Cloud plans now persist bounded, path-free `LocalVolumeSnapshot` records under `volume-pressure-evidence`; process and provider probe summaries remain separate operator/provider receipts. | Persist redacted capacity and process summaries with timestamp and evidence hash, never raw provider dumps; keep provider admission fail-closed. |
 | P1 | Hourly product-development/review loop is not yet live in this repository environment. | `.github/workflows/hourly-product-loop.yml` is scheduled and secret-gated; its bootstrap now registers all five provider keys into contextual-orchestrator KV, but no live receipt or configured secret names are available here. | Configure the orchestrator URL/token, KV DSN/passphrase, and five provider secrets; run once manually and retain a bounded completion receipt without enabling mutation. |
 | P1 | Open PR queue prevents a clean protected release line. | 50 PRs are open; #240 merged normally. #187 was rebased to protected main and its fresh checks are pending; #213 current head `4b86341` has release builds in progress and remaining checks queued, with review still marked `CHANGES_REQUESTED`; #209 is unstable. | Process one PR at a time: current-head review → fix → required checks → normal protected merge; never bypass or self-approve. |
 | P1 | Current UI coverage is contract-heavy rather than runtime E2E for native File Provider states. | The UI now displays `로컬 최신본·업로드 미확인` and maps blockers without backend detail; provider operations are not safely reproducible on this full disk. | Add a deterministic Rust fixture-backed state machine test for `local-current + is_uploaded=false`, provider timeout, and receipt invalidation. |

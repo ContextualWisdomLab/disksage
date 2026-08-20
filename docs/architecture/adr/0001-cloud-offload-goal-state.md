@@ -114,6 +114,14 @@ machine, guest-filesystem, image, container, volume, and raw-image evidence thro
 cleanup surface. Shared layers, sparse VM allocation, and unlinked volumes are never treated as
 physical reclaim proof; prune, trim, stop, and delete remain outside the inspection command.
 
+Capacity observations produced during a cloud plan are also persisted as path-free, create-only
+records below the app-data directory in `volume-pressure-evidence`. Each record is bounded to
+64 KiB, content-fingerprinted, fsynced, permissioned `0400` (directory `0700` on Unix), and
+retained for at most 128 DiskSage-shaped snapshots. Retention only removes those exact record
+names; unrelated app-data files and all provider databases are outside the cleanup boundary.
+Process and provider activity evidence remains a separate bounded receipt and is never copied into
+these capacity records or reconstructed from an incomplete probe.
+
 ## Consequences
 
 - `is_local_current=true` and `is_uploaded=false` produces `pending-upload` and no eviction permit.
@@ -126,6 +134,9 @@ physical reclaim proof; prune, trim, stop, and delete remain outside the inspect
 - A timed-out provider-wide dump may explain active transfer or reconciliation markers, but its incomplete evidence never admits a new copy.
 - A provider-wide `errno 28`/disk-full marker is retained as
   `provider-global-sync-local-disk-full`; it blocks new copies until local headroom is restored.
+- Every cloud plan attempts to persist a redacted local-volume snapshot for incident comparison;
+  a persistence failure is surfaced as `local-volume-evidence-persistence-failed` and does not
+  grant or revoke transfer authority by itself.
 - A macOS copy helper timeout is a failed copy, not a partial success: the destination is removed,
   the source is retained, and provider attestation cannot begin until a fresh plan is made.
 - An iCloud native `needs-sync-up` or `needs-sync-down` state blocks new-copy admission until the

@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 #[cfg(not(coverage))]
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[cfg(not(coverage))]
 use crate::scanner;
@@ -1266,6 +1266,22 @@ fn cloud_plan_for_inputs(
         },
     );
     let mut report = cloud::plan_cloud_archive_from_snapshot(&snapshot, &selected);
+    if let Some(local_volume) = report.local_volume.as_ref() {
+        let evidence_persisted = app
+            .path()
+            .app_data_dir()
+            .map_err(|error| error.to_string())
+            .and_then(|app_data_dir| {
+                crate::volume_pressure::write_snapshot_evidence(&app_data_dir, local_volume)
+                    .map(|_| ())
+            })
+            .is_ok();
+        if !evidence_persisted {
+            report
+                .notices
+                .push("local-volume-evidence-persistence-failed".into());
+        }
+    }
     attach_capacity_assessment(&mut report, capacity_snapshot)?;
     let runtime = provider_client_runtime::collect_provider_client_runtime(
         selected.provider,

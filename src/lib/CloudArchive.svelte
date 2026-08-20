@@ -35,6 +35,10 @@
     return notices.includes("source-scan-incomplete");
   }
 
+  function hasLocalEvidencePersistenceFailure(notices: readonly string[]): boolean {
+    return notices.includes("local-volume-evidence-persistence-failed");
+  }
+
   function localPressureLabel(pressure: api.LocalVolumePressure): string {
     return {
       normal: "정상",
@@ -977,6 +981,11 @@
         {fmtBytes(report.local_volume.available_bytes)}
         ({(report.local_volume.available_basis_points / 100).toFixed(2)}%)
       </p>
+      {#if hasLocalEvidencePersistenceFailure(report.notices)}
+        <p class="warning">
+          디스크 용량 증거를 저장하지 못했습니다. 이번 계획은 실행할 수 있지만, 사고 비교용 용량 이력은 남지 않습니다.
+        </p>
+      {/if}
       {#if report.candidates.some(nativeCopyHeadroomBlocked)}
         <p class="warning">
           네이티브 File Provider 복사는 후보 크기와 {fmtBytes(api.LOCAL_COPY_RESERVE_BYTES)} 여유공간을 함께 확보해야 합니다.
