@@ -282,6 +282,9 @@ impl CatalogRoot {
         #[cfg(not(target_os = "macos"))]
         for entry in entries.filter_map(Result::ok) {
             let path = entry.path();
+            if is_disksage_trash_staging(&path) {
+                continue;
+            }
             let Ok(metadata) = std::fs::symlink_metadata(&path) else { continue };
             if metadata.file_type().is_symlink() {
                 continue;
@@ -438,13 +441,8 @@ impl CatalogRoot {
         };
         names
             .into_iter()
-            .filter_map(|name| {
-                let path = self.display_path.join(&name);
-                if is_disksage_trash_staging(&path) {
-                    return None;
-                }
-                self.open_child(&name).map(|(child, _)| child.display_path)
-            })
+            .filter(|name| !is_disksage_trash_staging(&self.display_path.join(name)))
+            .filter_map(|name| self.open_child(&name).map(|(child, _)| child.display_path))
             .collect()
     }
 }
