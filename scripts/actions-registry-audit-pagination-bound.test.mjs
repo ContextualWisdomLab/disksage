@@ -23,6 +23,15 @@ test('open PR pagination fails closed before pathological full pages can loop in
   assert.ok(calls <= 100, `expected bounded pagination, observed ${calls} requests`);
 });
 
+test('open PR pagination rejects malformed pull request identities', async () => {
+  const fetchJson = async () => [{ number: 0 }];
+
+  await assert.rejects(
+    listAllOpenPullRequests(fetchJson, repo),
+    /open-pr-number-invalid/,
+  );
+});
+
 test('open PR pagination rejects duplicate identities before active workflow ownership can be undercounted', async () => {
   const firstPage = Array.from({ length: 100 }, (_, index) => ({ number: index + 1 }));
   const secondPage = [{ number: 100 }, { number: 101 }];
