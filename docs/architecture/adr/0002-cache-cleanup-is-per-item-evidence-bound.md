@@ -70,6 +70,12 @@ the 2026-08-21 low-disk incident, no Cargo process was running; DiskSage develop
 observed 1.3 GiB source cache only after recording this boundary, while retaining the Cargo index,
 package archives, git checkouts, all user files, and provider-managed data.
 
+The observed `~/.cache/node`, `~/.cache/torch`, `~/.cache/prisma`, and `~/.cache/gh` trees are
+catalogued as explicit manual-review targets for the same reason. Their paths are now stable
+catalog identities, but they are deliberately excluded from `AUTO_REGENERABLE_CACHE_IDS`; the
+automatic action remains limited to the six incident-approved roots until each tool's rebuild and
+active-use contract is independently established.
+
 The same incident later reached 289 MiB of APFS availability while a Finder/File Provider copy was
 still preparing. A bounded read-only provider dump showed progress markers and stale `itemNotFound`
 errors, so the operation remained blocked. DiskSage reclaimed only explicitly regenerable package/tool

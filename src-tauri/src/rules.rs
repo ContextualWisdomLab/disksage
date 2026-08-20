@@ -105,6 +105,26 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
             bases.home.join("Library").join("Caches").join("pnpm"),
         ),
         (
+            "node-cache",
+            "Node.js 캐시",
+            bases.local_data.join("node"),
+        ),
+        (
+            "torch-cache",
+            "PyTorch 캐시",
+            bases.local_data.join("torch"),
+        ),
+        (
+            "prisma-cache",
+            "Prisma 캐시",
+            bases.local_data.join("prisma"),
+        ),
+        (
+            "gh-cache",
+            "GitHub CLI 캐시",
+            bases.local_data.join("gh"),
+        ),
+        (
             "adobe-cache",
             "Adobe 캐시",
             bases.home.join("Library").join("Caches").join("Adobe"),
@@ -604,6 +624,10 @@ mod tests {
         let candidates = cache_candidates(&bases);
         for (id, suffix) in [
             ("pnpm-cache", "Library/Caches/pnpm"),
+            ("node-cache", "local/node"),
+            ("torch-cache", "local/torch"),
+            ("prisma-cache", "local/prisma"),
+            ("gh-cache", "local/gh"),
             ("adobe-cache", "Library/Caches/Adobe"),
             ("edge-cache", "Library/Caches/Microsoft Edge"),
             ("trivy-cache", "Library/Caches/trivy"),
