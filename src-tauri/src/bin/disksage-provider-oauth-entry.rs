@@ -32,16 +32,19 @@ mod implementation {
 
 /// Resolve the platform home authority supplied to the existing OAuth parser.
 ///
-/// This initial extraction intentionally preserves the predecessor behavior: only `HOME` is used.
-/// The function is pure so the Windows authority contract can be exercised on every CI host before
-/// changing shipped behavior.
+/// Windows follows the same authority as DiskSage core (`USERPROFILE`). Other platforms keep
+/// `HOME`. Missing canonical authority fails closed instead of borrowing another platform's
+/// environment convention.
 pub(crate) fn environment_home_from(
     home: Option<PathBuf>,
     user_profile: Option<PathBuf>,
     windows: bool,
 ) -> Option<PathBuf> {
-    let _ = (user_profile, windows);
-    home
+    if windows {
+        user_profile
+    } else {
+        home
+    }
 }
 
 #[cfg(not(coverage))]
