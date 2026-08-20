@@ -431,6 +431,23 @@ pub fn execute(
 
 const MAX_AUDIT_BYTES: usize = 128 * 1024;
 
+fn validate_audit_parent_ancestors(app_data_dir: &Path, allow_missing: bool) -> Result<(), String> {
+    for ancestor in app_data_dir
+        .ancestors()
+        .filter(|ancestor| !ancestor.as_os_str().is_empty())
+    {
+        match std::fs::symlink_metadata(ancestor) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err("brew-cleanup-audit-parent-unsafe".into());
+            }
+            Ok(_) => {}
+            Err(error) if allow_missing && error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err("brew-cleanup-audit-parent-unavailable".into()),
+        }
+    }
+    Ok(())
+}
+
 fn audit_directory(app_data_dir: &Path) -> Result<PathBuf, String> {
     if !app_data_dir.is_absolute()
         || app_data_dir
@@ -439,8 +456,10 @@ fn audit_directory(app_data_dir: &Path) -> Result<PathBuf, String> {
     {
         return Err("brew-cleanup-audit-directory-invalid".into());
     }
+    validate_audit_parent_ancestors(app_data_dir, true)?;
     std::fs::create_dir_all(app_data_dir)
         .map_err(|_| "brew-cleanup-audit-parent-create-failed".to_string())?;
+    validate_audit_parent_ancestors(app_data_dir, false)?;
     let parent = std::fs::symlink_metadata(app_data_dir)
         .map_err(|_| "brew-cleanup-audit-parent-unavailable".to_string())?;
     if parent.file_type().is_symlink() || !parent.is_dir() {

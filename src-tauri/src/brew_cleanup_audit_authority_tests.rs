@@ -72,6 +72,27 @@ fn shared_writable_app_data_parent_fails_closed_without_creating_audit_storage()
 }
 
 #[test]
+fn symlinked_app_data_ancestor_fails_closed_before_creating_external_storage() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().expect("temporary authority root");
+    let outside = temp.path().join("outside");
+    std::fs::create_dir(&outside).expect("create external target directory");
+    let alias = temp.path().join("app-data-alias");
+    symlink(&outside, &alias).expect("create symlinked app-data ancestor");
+    let app_data = alias.join("nested-app-data");
+
+    let error = write_audit_record(&app_data, &valid_record())
+        .expect_err("symlinked app-data ancestor must fail closed");
+
+    assert_eq!(error, "brew-cleanup-audit-parent-unsafe");
+    assert!(
+        !outside.join("nested-app-data").exists(),
+        "authority admission must reject the symlink before creating storage outside app-data"
+    );
+}
+
+#[test]
 fn shared_writable_audit_directory_fails_closed_without_creating_a_record() {
     for unsafe_write_bit in [0o020, 0o002] {
         let app_data = tempfile::tempdir().expect("temporary app-data directory");
