@@ -54,6 +54,15 @@ fn connection(root: &CloudRoot, normalize_id: bool) -> OAuthConnection {
     }
 }
 
+fn write_private(path: &std::path::Path, bytes: impl AsRef<[u8]>) {
+    std::fs::write(path, bytes).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+}
+
 #[test]
 fn valid_looking_but_unbound_connection_id_is_rejected_at_document_load() {
     let temp = tempfile::tempdir().unwrap();
@@ -64,15 +73,14 @@ fn valid_looking_but_unbound_connection_id_is_rejected_at_document_load() {
     let mut forged = connection(&root, true);
     forged.connection_id = "0".repeat(64);
     let path = temp.path().join("connections.json");
-    std::fs::write(
+    write_private(
         &path,
         serde_json::to_vec(&serde_json::json!({
             "version": 1,
             "connections": [forged]
         }))
         .unwrap(),
-    )
-    .unwrap();
+    );
 
     assert_eq!(
         load_connections(&path).unwrap_err(),
