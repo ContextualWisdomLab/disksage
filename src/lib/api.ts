@@ -1136,6 +1136,20 @@ export const inspectIcloudNewCopyAdmission = () =>
   invoke<IcloudSyncHealthReport>("inspect_icloud_new_copy_admission");
 export const inspectCloudProviderGlobalSync = (cloudRoot: string) =>
   invoke<ProviderGlobalSyncReport>("inspect_cloud_provider_global_sync", { cloudRoot });
+export interface ProviderRecoveryOutput {
+  schema_version: number;
+  provider: Exclude<CloudProvider, "icloud">;
+  action: string;
+  pre_runtime_observed: boolean;
+  quit_requested: boolean;
+  launch_requested: boolean;
+  post_runtime_observed: boolean | null;
+  blockers: string[];
+  cloud_write_executed: boolean;
+  source_eviction_executed: boolean;
+}
+export const recoverCloudProviderClient = (cloudRoot: string) =>
+  invoke<ProviderRecoveryOutput>("recover_cloud_provider_client", { cloudRoot });
 export const listCloudReviewDecisions = () =>
   invoke<CloudReviewDecision[]>("list_cloud_review_decisions");
 export const connectCloudProvider = (cloudRoot: string, clientId: string, writeAccess = false) =>

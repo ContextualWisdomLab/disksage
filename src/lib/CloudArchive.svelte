@@ -71,6 +71,8 @@
   let providerGlobalSync: api.ProviderGlobalSyncReport | null = $state(null);
   let providerGlobalSyncError = $state("");
   let checkingProviderGlobalSync = $state(false);
+  let recoveringProvider = $state(false);
+  let providerRecovery: api.ProviderRecoveryOutput | null = $state(null);
   let evicting = $state(false);
   let evictionConfirmation = $state("");
   let evictionRationale = $state("");
@@ -460,6 +462,22 @@
     }
   }
 
+  async function recoverProviderClient() {
+    const root = selectedRootDetails();
+    if (!root || root.provider === "icloud") return;
+    recoveringProvider = true;
+    providerRecovery = null;
+    providerGlobalSyncError = "";
+    try {
+      providerRecovery = await api.recoverCloudProviderClient(root.path);
+      await refreshProviderGlobalSync();
+    } catch (e) {
+      providerGlobalSyncError = String(e);
+    } finally {
+      recoveringProvider = false;
+    }
+  }
+
   function providerSelectionChanged() {
     providerGlobalSync = null;
     providerGlobalSyncError = "";
@@ -773,8 +791,20 @@
           <p class="warning">
             차단 사유: {providerGlobalSync.blockers.map(providerGlobalSyncBlockerLabel).join(", ")}
           </p>
+          {#if selectedRootDetails()?.provider !== "icloud"}
+            <button onclick={recoverProviderClient} disabled={recoveringProvider || checkingProviderGlobalSync}>
+              {recoveringProvider ? "공급자 앱 재기동 중…" : "공급자 앱 재기동 후 상태 재확인"}
+            </button>
+          {/if}
         {:else}
           <p class="capacity-ok">공급자 전역 동기화 대기열이 비어 있습니다. 개별 파일은 별도 provider 증거가 필요합니다.</p>
+        {/if}
+        {#if providerRecovery}
+          <p class:warning={providerRecovery.blockers.length > 0} class="muted">
+            앱 종료·재기동 요청 완료 · 재관찰
+            {providerRecovery.post_runtime_observed === true ? "확인됨" : "아직 확인되지 않음"}
+            {#if providerRecovery.blockers.length > 0} · {providerRecovery.blockers.join(", ")}{/if}
+          </p>
         {/if}
         <p class="muted">읽기 전용 File Provider 집계 증거이며, 클라우드 쓰기·개별 파일 attestation·원본 삭제 권한을 대신 증명하지 않습니다.</p>
       </div>

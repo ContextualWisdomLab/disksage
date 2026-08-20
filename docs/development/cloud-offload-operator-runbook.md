@@ -51,6 +51,11 @@ The runtime sequence is:
    non-zero reconciliation backlogs (`provider-global-sync-reconciliation-pending`), provider
    disconnection, or path errors are present; the stable blocker codes are shown in the plan and
    are never a reason to bypass the gate.
+   The UI's `공급자 앱 재기동 후 상태 재확인` action is available for those OneDrive/Google Drive
+   blockers. It targets only the verified desktop-app bundle, requests a bounded quit and relaunch,
+   and records whether the process is observed afterward. A missing post-restart observation still
+   blocks copying; the action performs no cloud write, attestation, or source eviction. iCloud's
+   system-managed `bird` process is intentionally not terminated by DiskSage.
 5. If the destination is valid but the receipt source is missing, unsafe, or macOS reports it as a
    File Provider `dataless` object, reconciliation writes a blocked Goal/ADR projection and records
    `source-not-present`, `source-content-not-local`, or the precise source-state blocker; it never

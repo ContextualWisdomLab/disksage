@@ -22,8 +22,8 @@ use crate::{
     cloud_review, cloud_transfer, dev_artifacts, dupes, git_worktree, icloud_sync_health,
     organization_lineage,
     podman_reclaim, provider_api_client, provider_api_write, provider_capacity,
-    provider_client_runtime, provider_evidence, provider_global_sync, provider_oauth, provider_sync,
-    rules,
+    provider_client_runtime, provider_evidence, provider_global_sync, provider_oauth,
+    provider_recovery, provider_sync, rules,
 };
 
 #[cfg(not(coverage))]
@@ -1200,6 +1200,17 @@ pub fn inspect_cloud_provider_client_runtime(
         selected.provider,
         cloud::system_now_ms(),
     ))
+}
+
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn recover_cloud_provider_client(
+    cloud_root: String,
+    app: AppHandle,
+) -> Result<provider_recovery::ProviderRecoveryOutput, String> {
+    let selected = selected_cloud_root(&app, &cloud_root)?;
+    cloud::validate_cloud_root_readable(&selected)?;
+    provider_recovery::recover_provider_client(selected.provider, cloud::system_now_ms())
 }
 
 #[cfg(not(coverage))]

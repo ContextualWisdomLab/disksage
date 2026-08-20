@@ -73,6 +73,13 @@ returns incomplete evidence, and still runs the bounded File Provider activity p
 are non-blocking and every provider subprocess is terminated with its private process group on
 timeout; a health check cannot remain stuck behind a provider copy.
 
+When provider-wide evidence reports a user-space OneDrive or Google Drive client failure, DiskSage
+may request a bounded desktop-client recovery from the UI. The action uses only the fixed, verified
+application bundle, asks the client to quit through `osascript`, waits for the process observation to
+clear, and launches the same bundle through `/usr/bin/open`. iCloud `bird` is system-managed and is
+never force-terminated. The recovery result is diagnostic only: it records whether the launch was
+observed afterward and can never claim cloud write, upload attestation, or source-eviction authority.
+
 Podman VM storage is a separate local reclaim domain, not cloud data. DiskSage exposes read-only
 machine, guest-filesystem, image, container, volume, and raw-image evidence through the same
 cleanup surface. Shared layers, sparse VM allocation, and unlinked volumes are never treated as
@@ -97,6 +104,9 @@ physical reclaim proof; prune, trim, stop, and delete remain outside the inspect
   admission; no path, filename, item identifier, or content is retained.
 - An oversized CloudDocs `client.db` produces incomplete, fail-closed evidence without running a
   long SQLite fallback query; the File Provider probe still reports whether the provider is stalled.
+- A provider-client recovery request can restart only the fixed user-space OneDrive or Google Drive
+  bundle. A missing post-restart process observation remains a blocker, and recovery never changes a
+  receipt, writes cloud data, or authorizes source eviction. iCloud system services remain untouched.
 - Podman reclaim evidence reports the VM/store candidates and requires separate human review for
   unused images or volumes. The executable image-cleanup boundary revalidates the exact reviewed
   candidate fingerprint immediately before mutation and removes only those immutable image IDs with
