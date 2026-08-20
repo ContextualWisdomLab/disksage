@@ -135,6 +135,8 @@ pub struct IcloudFileProviderActivityEvidence {
     pub timed_out: bool,
     pub output_truncated: bool,
     pub no_progress_fetch_count: u64,
+    #[serde(default)]
+    pub no_progress_create_count: u64,
     pub notices: Vec<String>,
 }
 
@@ -612,6 +614,13 @@ fn parse_file_provider_activity_output(
             line.contains("fetchcontentsforitemwithid") && line.contains("no progress")
         })
         .count() as u64;
+    let no_progress_create_count = output
+        .lines()
+        .filter(|line| {
+            let line = line.to_ascii_lowercase();
+            line.contains("createitembasedontemplate") && line.contains("no progress")
+        })
+        .count() as u64;
     let mut notices = if command_succeeded {
         vec!["icloud-file-provider-dump-observed".into()]
     } else {
@@ -626,6 +635,9 @@ fn parse_file_provider_activity_output(
     if no_progress_fetch_count > 0 {
         notices.push("icloud-file-provider-no-progress-fetch-observed".into());
     }
+    if no_progress_create_count > 0 {
+        notices.push("icloud-file-provider-no-progress-create-observed".into());
+    }
     IcloudFileProviderActivityEvidence {
         schema_version: ICLOUD_FILE_PROVIDER_ACTIVITY_SCHEMA_VERSION,
         observed_at_ms,
@@ -633,6 +645,7 @@ fn parse_file_provider_activity_output(
         timed_out,
         output_truncated,
         no_progress_fetch_count,
+        no_progress_create_count,
         notices,
     }
 }
@@ -1392,7 +1405,9 @@ fn attach_native_status_admission(report: &mut IcloudSyncHealthReport) {
             .insert(0, "icloud-native-sync-down-pending".into());
     }
     if let Some(activity) = report.file_provider_activity.as_ref() {
-        let blocker = if activity.no_progress_fetch_count > 0 {
+        let blocker = if activity.no_progress_fetch_count > 0
+            || activity.no_progress_create_count > 0
+        {
             Some("icloud-file-provider-no-progress")
         } else if activity.timed_out {
             Some("icloud-file-provider-dump-timeout")
@@ -1678,10 +1693,28 @@ mod tests {
             false,
         );
         assert_eq!(evidence.no_progress_fetch_count, 2);
+        assert_eq!(evidence.no_progress_create_count, 0);
         assert!(evidence.timed_out);
         assert!(evidence
             .notices
             .contains(&"icloud-file-provider-no-progress-fetch-observed".to_string()));
+        assert!(validate_file_provider_activity_evidence(&evidence).is_ok());
+    }
+
+    #[test]
+    fn file_provider_parser_counts_redacted_no_progress_creates() {
+        let evidence = parse_file_provider_activity_output(
+            "createItemBasedOnTemplate: (no timeout), no progress\n",
+            42,
+            true,
+            false,
+            false,
+        );
+        assert_eq!(evidence.no_progress_fetch_count, 0);
+        assert_eq!(evidence.no_progress_create_count, 1);
+        assert!(evidence
+            .notices
+            .contains(&"icloud-file-provider-no-progress-create-observed".to_string()));
         assert!(validate_file_provider_activity_evidence(&evidence).is_ok());
     }
 

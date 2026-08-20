@@ -745,6 +745,7 @@ export interface IcloudSyncHealthReport {
     timed_out: boolean;
     output_truncated: boolean;
     no_progress_fetch_count: number;
+    no_progress_create_count: number;
     notices: string[];
   } | null;
   sync_backlog_present: boolean;

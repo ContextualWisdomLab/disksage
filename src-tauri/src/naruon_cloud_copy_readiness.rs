@@ -308,7 +308,7 @@ fn expected_icloud_admission_blockers(report: &IcloudSyncHealthReport) -> Vec<St
         blockers.push("icloud-native-sync-down-pending".into());
     }
     if let Some(activity) = report.file_provider_activity.as_ref() {
-        if activity.no_progress_fetch_count > 0 {
+        if activity.no_progress_fetch_count > 0 || activity.no_progress_create_count > 0 {
             blockers.push("icloud-file-provider-no-progress".into());
         } else if activity.timed_out {
             blockers.push("icloud-file-provider-dump-timeout".into());
@@ -1065,7 +1065,7 @@ fn validate_icloud_admission_summary(
         expected.push("icloud-native-sync-down-pending".to_string());
     }
     if let Some(activity) = summary.file_provider_activity.as_ref() {
-        if activity.no_progress_fetch_count > 0 {
+        if activity.no_progress_fetch_count > 0 || activity.no_progress_create_count > 0 {
             expected.push("icloud-file-provider-no-progress".to_string());
         } else if activity.timed_out {
             expected.push("icloud-file-provider-dump-timeout".to_string());

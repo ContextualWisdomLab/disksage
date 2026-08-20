@@ -117,9 +117,9 @@ physical reclaim proof; prune, trim, stop, and delete remain outside the inspect
   bounded native status is quiet; neither direction is treated as completed provider evidence.
 - A timeout while collecting the bounded iCloud native status also blocks new-copy admission;
   timeout is not interpreted as a quiet provider.
-- The bounded iCloud File Provider activity probe records only the count of redacted `no progress`
-  fetch markers. Any such marker, a probe timeout, or unavailable probe evidence blocks new-copy
-  admission; no path, filename, item identifier, or content is retained.
+- The bounded iCloud File Provider activity probe records only counts of redacted `no progress`
+  fetch and create markers. Any such marker, a probe timeout, or unavailable probe evidence blocks
+  new-copy admission; no path, filename, item identifier, or content is retained.
 - An oversized CloudDocs `client.db` produces incomplete, fail-closed evidence without running a
   long SQLite fallback query; the File Provider probe still reports whether the provider is stalled.
 - A provider-client recovery request can restart only the fixed user-space OneDrive or Google Drive
