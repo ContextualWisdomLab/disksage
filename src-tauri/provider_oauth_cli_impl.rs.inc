@@ -1,8 +1,8 @@
-//! Headless OAuth lifecycle for read-only OneDrive and Google Drive evidence.
-//!
-//! Refresh tokens remain in the operating-system credential store. This command emits only
-//! non-secret connection descriptors and provider capacity evidence; it never performs a cloud
-//! file write or source eviction.
+// Headless OAuth lifecycle for read-only OneDrive and Google Drive evidence.
+//
+// Refresh tokens remain in the operating-system credential store. This command emits only
+// non-secret connection descriptors and provider capacity evidence; it never performs a cloud
+// file write or source eviction.
 
 #[cfg(not(coverage))]
 use std::path::{Path, PathBuf};
