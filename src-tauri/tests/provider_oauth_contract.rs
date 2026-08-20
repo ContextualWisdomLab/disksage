@@ -58,12 +58,25 @@ fn connection(root: &CloudRoot) -> OAuthConnection {
     }
 }
 
+fn make_private(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+}
+
+fn write_private(path: &std::path::Path, bytes: impl AsRef<[u8]>) {
+    std::fs::write(path, bytes).unwrap();
+    make_private(path);
+}
+
 fn write_connection_document(path: &std::path::Path, connections: &[OAuthConnection]) {
     let document = serde_json::json!({
         "version": 1,
         "connections": connections,
     });
-    std::fs::write(path, serde_json::to_vec(&document).unwrap()).unwrap();
+    write_private(path, serde_json::to_vec(&document).unwrap());
 }
 
 #[test]
@@ -144,13 +157,13 @@ fn connection_document_admission_is_fail_closed_before_identity_use() {
     );
     std::fs::remove_dir(&path).unwrap();
 
-    std::fs::write(&path, vec![b'x'; 256 * 1024 + 1]).unwrap();
+    write_private(&path, vec![b'x'; 256 * 1024 + 1]);
     assert_eq!(
         load_connections(&path).unwrap_err(),
         "oauth-connection-document-too-large"
     );
 
-    std::fs::write(&path, br#"{"version":2,"connections":[]}"#).unwrap();
+    write_private(&path, br#"{"version":2,"connections":[]}"#);
     assert_eq!(
         load_connections(&path).unwrap_err(),
         "oauth-connection-document-version-or-count-invalid"
@@ -162,7 +175,7 @@ fn connection_document_admission_is_fail_closed_before_identity_use() {
         "version": 1,
         "connections": vec![valid; 33]
     });
-    std::fs::write(&path, serde_json::to_vec(&too_many).unwrap()).unwrap();
+    write_private(&path, serde_json::to_vec(&too_many).unwrap());
     assert_eq!(
         load_connections(&path).unwrap_err(),
         "oauth-connection-document-version-or-count-invalid"
@@ -176,7 +189,7 @@ fn connection_document_validation_covers_identity_and_scope_boundaries() {
     let requested = root(CloudProvider::GoogleDrive, "validation");
     let valid = connection(&requested);
 
-    std::fs::write(&path, b"not-json").unwrap();
+    write_private(&path, b"not-json");
     assert_eq!(
         load_connections(&path).unwrap_err(),
         "oauth-connection-document-invalid"
