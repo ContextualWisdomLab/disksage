@@ -159,3 +159,22 @@ fn connection_document_file_symlink_is_rejected_without_following_it() {
         "oauth-connection-document-not-regular-file"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn connection_document_symlinked_parent_is_rejected_before_reading_outside_data() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let outside = temp.path().join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    std::fs::write(
+        outside.join("connections.json"),
+        b"{\"version\":1,\"connections\":[]}",
+    )
+    .unwrap();
+    let alias = temp.path().join("app-data");
+    symlink(&outside, &alias).unwrap();
+
+    assert!(load_connections(&alias.join("connections.json")).is_err());
+}
