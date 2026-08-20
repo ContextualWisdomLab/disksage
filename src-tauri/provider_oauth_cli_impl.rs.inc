@@ -1,8 +1,8 @@
-//! Headless OAuth lifecycle for read-only OneDrive and Google Drive evidence.
-//!
-//! Refresh tokens remain in the operating-system credential store. This command emits only
-//! non-secret connection descriptors and provider capacity evidence; it never performs a cloud
-//! file write or source eviction.
+// Headless OAuth lifecycle for read-only OneDrive and Google Drive evidence.
+//
+// Refresh tokens remain in the operating-system credential store. This command emits only
+// non-secret connection descriptors and provider capacity evidence; it never performs a cloud
+// file write or source eviction.
 
 #[cfg(not(coverage))]
 use std::path::{Path, PathBuf};
@@ -381,8 +381,25 @@ fn execute(args: Args) -> Result<Output, String> {
 }
 
 #[cfg(not(coverage))]
+fn command_line_args() -> Result<Vec<String>, String> {
+    std::env::args_os()
+        .skip(1)
+        .map(|argument| {
+            argument
+                .into_string()
+                .map_err(|_| "provider-oauth-invalid-utf8-argument".to_string())
+        })
+        .collect()
+}
+
+#[cfg(not(coverage))]
 fn run() -> Result<(), String> {
-    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    let args = command_line_args()?;
+    if matches!(args.as_slice(), [flag] if flag == "--help" || flag == "-h") {
+        println!("{}", usage());
+        return Ok(());
+    }
+
     let parsed = parse_args(&args, std::env::var_os("HOME").map(PathBuf::from))?;
     let output = execute(parsed)?;
     println!(
@@ -396,8 +413,13 @@ fn run() -> Result<(), String> {
 #[cfg(not(coverage))]
 fn main() {
     if let Err(error) = run() {
+        let exit_code = if error == "provider-oauth-invalid-utf8-argument" {
+            2
+        } else {
+            1
+        };
         eprintln!("{error}");
-        std::process::exit(1);
+        std::process::exit(exit_code);
     }
 }
 

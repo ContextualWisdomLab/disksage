@@ -45,7 +45,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
                     "usage: disksage-icloud-sync-health [--db-dir ABSOLUTE_CLOUDDOCS_DB_DIR] [--output ABSOLUTE_NEW_FILE.json]".into(),
                 );
             }
-            flag => return Err(format!("unknown argument: {flag}")),
+            _unknown => return Err("icloud-sync-health-unknown-argument".into()),
         }
         index += 1;
     }
@@ -84,11 +84,30 @@ fn write_create_new(path: &Path, encoded: &[u8]) -> Result<(), String> {
         .map_err(|_| "icloud-sync-health-output-write-failed".to_string())
 }
 
+fn command_line_args() -> Result<Vec<String>, String> {
+    std::env::args_os()
+        .skip(1)
+        .map(|argument| {
+            argument
+                .into_string()
+                .map_err(|_| "icloud-sync-health-invalid-utf8-argument".to_string())
+        })
+        .collect()
+}
+
 fn run() -> Result<(), String> {
+    let cli_args = command_line_args()?;
+    if matches!(cli_args.as_slice(), [flag] if flag == "--help" || flag == "-h") {
+        println!(
+            "usage: disksage-icloud-sync-health [--db-dir ABSOLUTE_CLOUDDOCS_DB_DIR] [--output ABSOLUTE_NEW_FILE.json]"
+        );
+        return Ok(());
+    }
+
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or_else(|| "HOME is unavailable".to_string())?;
-    let args = parse_args(&std::env::args().skip(1).collect::<Vec<_>>(), &home)?;
+    let args = parse_args(&cli_args, &home)?;
     let report = probe_icloud_sync_health(&args.db_dir, now_ms()?)?;
     let encoded = serde_json::to_vec_pretty(&report)
         .map_err(|_| "icloud-sync-health-json-invalid".to_string())?;
@@ -104,8 +123,13 @@ fn run() -> Result<(), String> {
 
 fn main() {
     if let Err(error) = run() {
+        let exit_code = if error == "icloud-sync-health-invalid-utf8-argument" {
+            2
+        } else {
+            1
+        };
         eprintln!("DiskSage iCloud sync health: {error}");
-        std::process::exit(1);
+        std::process::exit(exit_code);
     }
 }
 
