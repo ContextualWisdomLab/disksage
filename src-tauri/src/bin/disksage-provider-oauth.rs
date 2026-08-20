@@ -1,7 +1,7 @@
 //! Provider OAuth CLI entrypoint with a successful terminal help contract.
 //!
-//! The full OAuth lifecycle implementation remains in the adjacent implementation module. This
-//! thin entrypoint intercepts only a sole `--help` or `-h` request so help exits successfully on
+//! The full OAuth lifecycle implementation remains in the adjacent non-binary include. This thin
+//! entrypoint intercepts only a sole `--help` or `-h` request so help exits successfully on
 //! stdout; every domain action and invalid request continues through the existing fail-closed
 //! implementation unchanged.
 
@@ -11,7 +11,7 @@ use std::path::PathBuf;
 mod implementation {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/src/bin/disksage-provider-oauth-impl.rs"
+        "/provider_oauth_cli_impl.rs.inc"
     ));
 
     #[cfg(not(coverage))]
