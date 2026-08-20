@@ -205,6 +205,10 @@ function sameStringSnapshot(left, right) {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
+function sortedSetSnapshot(values) {
+  return [...values].sort();
+}
+
 function workflowPathsFromTree(tree, incompleteError = 'workflow-tree-incomplete') {
   if (!tree || tree.truncated !== false || !Array.isArray(tree.tree)) {
     throw new Error(incompleteError);
@@ -318,6 +322,21 @@ export async function auditActionsRegistry(fetchJson, repository, expectedMainSh
   const refreshedHeadSnapshot = sameRepositoryHeadSnapshot(refreshedPullRequests, repository);
   if (!sameStringSnapshot(initialHeadSnapshot, refreshedHeadSnapshot)) {
     throw new Error('open-pr-snapshot-moved');
+  }
+
+  // A PR's changed-file set can move while its number and source head remain unchanged (for
+  // example when its base advances). Re-read semantic workflow ownership and reject any drift
+  // before an active registry identity can be misclassified as orphaned-deleted.
+  const refreshedActivePrPaths = await activePullRequestWorkflowPaths(
+    fetchJson,
+    repository,
+    refreshedPullRequests,
+  );
+  if (!sameStringSnapshot(
+    sortedSetSnapshot(activePrPaths),
+    sortedSetSnapshot(refreshedActivePrPaths),
+  )) {
+    throw new Error('open-pr-workflow-ownership-moved');
   }
 
   const classifications = classifyWorkflowRecords(records, mainPaths, activePrPaths);
