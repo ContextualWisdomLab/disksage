@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-21 (Asia/Seoul)
-**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` source through `b091fc6`; this
+**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` source through `c0ae0d8`; this
 baseline records the current loop's runtime and integration evidence.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.  
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
@@ -266,3 +266,9 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   `fileproviderd`/`bird` remain active. No provider process, Finder operation, CloudDocs database,
   cloud object, or user file was terminated or deleted; only the explicitly regenerable pnpm
   cache was removed after confirming no pnpm process was running.
+- The release workflow now uploads the source-bound SPDX SBOM only after GitHub provenance
+  succeeds and downloads the same run-attempt artifact before publication. The focused SBOM and
+  hourly-workflow contracts pass 3/3, the full frontend suite passes 28 files / 122 tests,
+  `svelte-check` reports 0 errors / 0 warnings, and `actionlint` passes. The current PR head is
+  `c0ae0d8b68d72ba3b9214cb77f9bca365ccaaa00`; hosted checks have restarted and no merge gate is
+  bypassed.
