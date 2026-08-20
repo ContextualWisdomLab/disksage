@@ -14,6 +14,17 @@ fn command() -> Command {
     Command::new(env!("CARGO_BIN_EXE_disksage-provider-oauth"))
 }
 
+fn assert_bounded_failure(args: &[&str], expected: &str) {
+    let output = command()
+        .args(args)
+        .output()
+        .expect("provider OAuth CLI should start");
+
+    assert_eq!(output.status.code(), Some(1), "args: {args:?}");
+    assert!(output.stdout.is_empty(), "args: {args:?}");
+    assert_eq!(output.stderr, format!("{expected}\n").as_bytes(), "args: {args:?}");
+}
+
 #[test]
 fn sole_help_flags_exit_zero_on_stdout_without_stderr() {
     for flag in ["--help", "-h"] {
@@ -27,14 +38,21 @@ fn sole_help_flags_exit_zero_on_stdout_without_stderr() {
 
 #[test]
 fn help_mixed_with_domain_arguments_remains_a_bounded_failure() {
-    let output = command()
-        .args(["--help", "--list"])
-        .output()
-        .expect("provider OAuth CLI should start");
+    assert_bounded_failure(&["--help", "--list"], "help must be used alone");
+}
 
-    assert_eq!(output.status.code(), Some(1));
-    assert!(output.stdout.is_empty());
-    assert_eq!(output.stderr, b"help must be used alone\n");
+#[test]
+fn malformed_and_conflicting_requests_keep_static_nonzero_diagnostics() {
+    assert_bounded_failure(&["--definitely-unknown"], "unknown argument");
+    assert_bounded_failure(&["--home"], "--home requires a value");
+    assert_bounded_failure(
+        &["--list", "--disconnect"],
+        "actions are mutually exclusive",
+    );
+    assert_bounded_failure(
+        &["--home", "relative-home", "--list"],
+        "--home must be absolute",
+    );
 }
 
 #[test]
