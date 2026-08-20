@@ -109,6 +109,25 @@ async function listAll(fetchJson, endpoint, invalidError) {
   return records;
 }
 
+async function listPullRequestFiles(fetchJson, repository, pullNumber) {
+  const records = [];
+  let page = 1;
+  while (true) {
+    const payload = await fetchJson(
+      `/repos/${repository}/pulls/${pullNumber}/files?per_page=100&page=${page}`,
+    );
+    if (!Array.isArray(payload)) throw new Error('open-pr-files-invalid');
+    records.push(...payload);
+    // GitHub exposes at most 3000 PR files. Do not issue a page-31 request whose behavior cannot
+    // prove completeness; the exact cap itself is ambiguous evidence and therefore fails closed.
+    if (records.length >= MAX_PULL_REQUEST_FILES) {
+      throw new Error('open-pr-files-limit-exceeded');
+    }
+    if (payload.length < 100) return records;
+    page += 1;
+  }
+}
+
 /** Read every page of the repository Actions workflow registry without accepting partial snapshots. */
 export async function listAllWorkflowRecords(fetchJson, repository) {
   const records = [];
@@ -237,17 +256,7 @@ export async function activePullRequestWorkflowPaths(fetchJson, repository, pull
       headWorkflowPaths.set(headSha, currentHeadPaths);
     }
 
-    const changedFiles = await listAll(
-      fetchJson,
-      `/repos/${repository}/pulls/${pullNumber}/files`,
-      'open-pr-files-invalid',
-    );
-    // GitHub's REST endpoint exposes at most 3000 PR files. Reaching that
-    // ceiling is ambiguous, so ownership evidence must fail closed rather
-    // than classify an omitted workflow as orphaned-deleted.
-    if (changedFiles.length >= MAX_PULL_REQUEST_FILES) {
-      throw new Error('open-pr-files-limit-exceeded');
-    }
+    const changedFiles = await listPullRequestFiles(fetchJson, repository, pullNumber);
     const seenChangedFilenames = new Set();
     for (const file of changedFiles) {
       if (
