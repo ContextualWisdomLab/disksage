@@ -18,6 +18,8 @@ use std::path::Path;
 
 #[cfg(not(coverage))]
 use crate::content_digest::{ContentDigests, ContentHasher};
+#[cfg(all(not(coverage), target_os = "macos"))]
+use std::ffi::OsStr;
 #[cfg(not(coverage))]
 use std::io::{Read, Write};
 #[cfg(not(coverage))]
@@ -1127,17 +1129,15 @@ fn copy_timeout_for_bytes(bytes: u64) -> Duration {
     )
 }
 
-/// Run the macOS copy outside the UI process so a File Provider materialization/write cannot
-/// leave the Tauri command waiting forever. The parent verifies the bytes and hashes after this
-/// child exits; a timeout only removes the child-created destination and never touches the source.
+/// Run one fixed macOS filesystem helper outside the UI process so a File Provider
+/// materialization/write cannot leave the Tauri command waiting forever.
 #[cfg(all(not(coverage), target_os = "macos"))]
-fn bounded_macos_copy(source: &Path, destination: &Path, timeout: Duration) -> Result<(), String> {
+fn bounded_macos_command(program: &Path, args: &[&OsStr], timeout: Duration) -> Result<(), String> {
     use std::os::unix::process::CommandExt;
 
-    let mut command = Command::new("/bin/cp");
+    let mut command = Command::new(program);
     command
-        .arg(source)
-        .arg(destination)
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -1180,6 +1180,25 @@ fn bounded_macos_copy(source: &Path, destination: &Path, timeout: Duration) -> R
     }
 }
 
+#[cfg(all(not(coverage), target_os = "macos"))]
+fn bounded_macos_mkdir(path: &Path, timeout: Duration) -> Result<(), String> {
+    bounded_macos_command(
+        Path::new("/bin/mkdir"),
+        &[OsStr::new("-p"), path.as_os_str()],
+        timeout,
+    )
+}
+
+/// Copy outside the UI process; the parent verifies bytes and hashes after the child exits.
+#[cfg(all(not(coverage), target_os = "macos"))]
+fn bounded_macos_copy(source: &Path, destination: &Path, timeout: Duration) -> Result<(), String> {
+    bounded_macos_command(
+        Path::new("/bin/cp"),
+        &[source.as_os_str(), destination.as_os_str()],
+        timeout,
+    )
+}
+
 #[cfg(not(coverage))]
 fn copy_and_verify(
     candidate: &CloudCandidate,
@@ -1208,6 +1227,9 @@ fn copy_and_verify(
     let parent = destination
         .parent()
         .ok_or_else(|| "destination-parent-missing".to_string())?;
+    #[cfg(target_os = "macos")]
+    bounded_macos_mkdir(parent, copy_timeout_for_bytes(candidate.bytes))?;
+    #[cfg(not(target_os = "macos"))]
     std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     let canonical_root =
         std::fs::canonicalize(&cloud_root.path).map_err(|error| error.to_string())?;

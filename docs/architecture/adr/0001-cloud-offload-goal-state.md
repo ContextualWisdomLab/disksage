@@ -50,11 +50,12 @@ leaving Finder or a provider staging operation waiting indefinitely. Explicit pr
 are a separate path and do not use this local staging requirement.
 
 On macOS, a DiskSage-initiated native copy does not delegate the transfer to a Finder folder
-operation. It invokes the fixed `/bin/cp` helper in a private process group with a size-derived
-timeout capped at 30 minutes, then re-hashes both source and destination and rechecks the source
-identity. A timeout or helper failure removes only the child-created destination and records
-`cloud-copy-timeout` or `cloud-copy-helper-failed`; the source and all provider evidence remain
-unchanged. This bounds File Provider writes without turning a timed-out copy into an attestation.
+operation. It invokes fixed `/bin/mkdir -p` and `/bin/cp` helpers in private process groups with a
+size-derived timeout capped at 30 minutes, then re-hashes both source and destination and rechecks
+the source identity. A timeout or helper failure removes only the child-created destination and
+records `cloud-copy-timeout` or `cloud-copy-helper-failed`; the source and all provider evidence
+remain unchanged. This bounds File Provider writes without turning a timed-out copy into an
+attestation.
 
 Source enumeration is also forbidden inside managed File Provider trees (`Library/Mobile
 Documents`, `Library/CloudStorage`, `Library/Application Support/FileProvider`, and

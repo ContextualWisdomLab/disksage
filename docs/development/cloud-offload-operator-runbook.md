@@ -37,9 +37,10 @@ The runtime sequence is:
    candidate size plus a 1 GiB staging reserve available. The same check is repeated immediately
    before the copy; `local-volume-headroom-insufficient` is fail-closed and must not be worked
    around with Finder folder copies. Provider-API upload is the explicit non-staging fallback.
-   On macOS, DiskSage's own native copy runs through a bounded `/bin/cp` child process rather than a
-   Finder folder operation. The timeout is derived from the candidate size and capped at 30 minutes;
-   timeout/helper failure removes only the partial destination, returns `cloud-copy-timeout` or
+   On macOS, DiskSage's own native copy prepares the destination with bounded `/bin/mkdir -p` and
+   runs `/bin/cp` in private child processes rather than using a Finder folder operation. The
+   timeout is derived from the candidate size and capped at 30 minutes; timeout/helper failure
+   removes only the partial destination, returns `cloud-copy-timeout` or
    `cloud-copy-helper-failed`, and leaves the source unmodified for a fresh plan.
 4. `is_local_current=true` with `is_uploaded=false` is `pending-upload`; the source remains and
    no eviction permit is issued.
