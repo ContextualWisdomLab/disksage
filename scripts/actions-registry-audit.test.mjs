@@ -30,7 +30,7 @@ test('normalizes paths fail closed without case folding', () => {
   for (const value of [null, 42, '', '.', '..', '../escape.yml', '/absolute.yml']) assert.equal(normalizeWorkflowPath(value), null);
 });
 
-test('classifies main, active-PR, orphaned, disabled and dynamic workflow authority', () => {
+test('classifies main, active-PR, orphaned, disabled and trusted dynamic workflow authority', () => {
   const mainPaths = new Set(['.github/workflows/repair-current.yml']);
   const activePrPaths = new Set(['.github/workflows/repair-pr186.yml']);
   const cases = [
@@ -39,7 +39,6 @@ test('classifies main, active-PR, orphaned, disabled and dynamic workflow author
     [{ id: 3, state: 'active', path: '.github/workflows/orphan.yml' }, 'orphaned-deleted', 3, undefined],
     [{ id: 4, state: 'disabled_manually', path: '.github/workflows/old.yml' }, 'disabled', 4, undefined],
     [{ id: 5, state: 'active', path: 'dynamic/dependabot' }, 'github-dynamic', 5, undefined],
-    [{ id: 6, state: 'active', path: '.GitHub/workflows/repair-current.yml' }, 'github-dynamic', 6, undefined],
   ];
   for (const [record, classification, workflowId, reason] of cases) {
     const result = classifyWorkflowRecord(record, mainPaths, activePrPaths);
@@ -47,6 +46,14 @@ test('classifies main, active-PR, orphaned, disabled and dynamic workflow author
     assert.equal(result.workflow_id, workflowId);
     assert.equal(result.reason, reason);
   }
+  assert.throws(
+    () => classifyWorkflowRecord(
+      { id: 6, state: 'active', path: '.GitHub/workflows/repair-current.yml' },
+      mainPaths,
+      activePrPaths,
+    ),
+    /actions-workflow-path-untrusted/,
+  );
   assert.deepEqual(classifyWorkflowRecords([], mainPaths), []);
 });
 
