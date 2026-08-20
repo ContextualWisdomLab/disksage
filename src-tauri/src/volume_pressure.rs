@@ -116,7 +116,6 @@ pub fn write_snapshot_evidence(
 ) -> Result<PathBuf, String> {
     validate_snapshot(snapshot)?;
     let directory = snapshot_evidence_directory(app_data_dir)?;
-    prune_snapshot_evidence(&directory)?;
     let path = directory.join(format!(
         "{:020}-{}.json",
         snapshot.observed_at_ms, snapshot.evidence_fingerprint
@@ -154,6 +153,7 @@ pub fn write_snapshot_evidence(
         let _ = std::fs::remove_file(&path);
         return Err(error);
     }
+    prune_snapshot_evidence(&directory)?;
     Ok(path)
 }
 
@@ -211,7 +211,7 @@ fn prune_snapshot_evidence(directory: &Path) -> Result<(), String> {
         })
         .collect::<Vec<_>>();
     records.sort_by(|left, right| left.0.cmp(&right.0));
-    while records.len() >= MAX_PERSISTED_SNAPSHOTS {
+    while records.len() > MAX_PERSISTED_SNAPSHOTS {
         let (_, path) = records.remove(0);
         std::fs::remove_file(path).map_err(|_| "local-volume-evidence-retention-failed")?;
     }
