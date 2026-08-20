@@ -142,6 +142,10 @@ eviction fail-closed.
 The provider UI keeps a path-free blocker fingerprint across bounded observations and escalates
 the operator guidance after 15 minutes of the same blocker; this is advisory state only and never
 authorizes a cloud write, provider restart, or source eviction.
+The latest bounded observation still reports the same transfer/reconciliation and `-1005`
+missing-item cohort with only about 1.2 GiB of local headroom; a Homebrew cleanup dry-run found no
+reclaimable entries, so DiskSage keeps the Finder copy cancellation and provider-quietness gate in
+force rather than inventing a local cleanup authority.
 
 ## Consequences
 

@@ -83,7 +83,7 @@
   (last activity roughly 2h40m old) in the same Google Drive domain. The provider parser now emits
   `provider-global-sync-item-not-found` and the UI labels it as a missing-provider-item error;
   queue-count changes do not reset the same-blocker duration.
-- The current implementation head for this loop is `4a7ea3d`; frontend tests remain 25 files / 117
+- The current implementation head for this loop is `560e86a`; frontend tests remain 25 files / 117
   tests and `svelte-check` remains 0 errors / 0 warnings. Hosted Rust, security, and review gates
   remain authoritative before any protected merge.
 - The local Zotero endpoint is readable (`GET 200`, Zotero `9.0.6`, 8,312-item library), but the
@@ -95,8 +95,8 @@
   privacy contract passes locally (Vitest 2/2; svelte-check 0 errors/0 warnings). Its hosted checks
   are running and a fresh approval is still required. PR #189 is its rebased base PR at `f748769f`;
   both branches remain protected from bypass merges. PR #235 completed its
-  protected squash merge at `5f7c7ae`. PR #213 remains open; hosted release, test, security, and
-  review checks are authoritative, and no source eviction was claimed.
+  protected squash merge at `5f7c7ae`. PR #213 remains open at current head `560e86a`; hosted
+  release, test, security, and review checks are authoritative, and no source eviction was claimed.
 - Independent CLI/UI/dependency PRs #212, #214, #215, #217, #218, #220, #222, #230, #232,
   #234, and #238 were rebased to current `main` `5f7c7ae`; their fresh checks are queued or in
   progress, and no new failure is treated as resolved until the exact rebased head is green.
@@ -115,6 +115,11 @@
   pending copy and wait for a quiet provider observation before retrying.
 - Provider probe failures now show the same fail-closed Finder-cancel guidance as a blocked
   aggregate report, preventing an unavailable diagnostic from looking like a safe retry state.
+- A fresh bounded macOS observation on this loop measured about 1.2 GiB available (91% used) and
+  Google Drive still reporting upload/download progress, a 168-entry reconciliation backlog,
+  `error generation: 403`, and repeated File Provider `-1005 itemNotFound` entries. The
+  `brew cleanup --prune-prefix --dry-run --verbose` probe returned no reclaimable Homebrew items;
+  no provider process, Finder operation, or user data was terminated or deleted.
 - To restore the emergency local headroom without touching user or provider data, only Podman
   dangling (untagged and unreferenced) images were pruned; the one active container and all volumes
   were retained. Host APFS free space rose from roughly 150 MiB to 1.8 GiB, matching the bounded
