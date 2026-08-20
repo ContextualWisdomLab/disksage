@@ -1,11 +1,11 @@
-//! Provider OAuth CLI entrypoint with a successful terminal help contract.
-//!
-//! The full OAuth lifecycle implementation remains in the adjacent non-binary include. This thin
-//! entrypoint consumes host arguments as `OsString`, rejects undecodable host input before the
-//! legacy string parser can panic, resolves the platform home directory before domain work, and
-//! intercepts only a sole `--help` or `-h` request so help exits successfully on stdout. Every
-//! domain action and other invalid request continues through the existing fail-closed
-//! implementation unchanged.
+// Provider OAuth CLI entrypoint with a successful terminal help contract.
+//
+// The full OAuth lifecycle implementation remains in the adjacent non-binary include. This thin
+// entrypoint consumes host arguments as `OsString`, rejects undecodable host input before the
+// legacy string parser can panic, resolves the platform home directory before domain work, and
+// intercepts only a sole `--help` or `-h` request so help exits successfully on stdout. Every
+// domain action and other invalid request continues through the existing fail-closed
+// implementation unchanged.
 
 #[cfg(not(coverage))]
 use std::ffi::{OsStr, OsString};
