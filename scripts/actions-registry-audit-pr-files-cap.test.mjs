@@ -1,0 +1,43 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { activePullRequestWorkflowPaths } from './actions-registry-audit.mjs';
+
+const repository = 'ContextualWisdomLab/disksage';
+const headSha = 'a'.repeat(40);
+const pullNumber = 4242;
+const cappedWorkflowPath = '.github/workflows/owned-beyond-api-cap.yml';
+
+function changedFile(page, index) {
+  return {
+    filename: `src/capped-page-${page}/file-${index}.rs`,
+    status: 'modified',
+  };
+}
+
+test('fails closed when pull-request changed-file evidence reaches GitHub REST 3000-file cap', async () => {
+  const pullRequests = [{
+    number: pullNumber,
+    head: { sha: headSha, repo: { full_name: repository } },
+  }];
+
+  await assert.rejects(
+    activePullRequestWorkflowPaths(async (url) => {
+      if (url.includes(`/git/trees/${headSha}`)) {
+        return {
+          truncated: false,
+          tree: [{ type: 'blob', path: cappedWorkflowPath }],
+        };
+      }
+      if (url.includes(`/pulls/${pullNumber}/files`)) {
+        const match = /[?&]page=(\d+)/.exec(url);
+        const page = Number(match?.[1]);
+        if (page >= 1 && page <= 30) {
+          return Array.from({ length: 100 }, (_, index) => changedFile(page, index));
+        }
+        if (page === 31) return [];
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }, repository, pullRequests),
+    /open-pr-files-limit-exceeded/,
+  );
+});
