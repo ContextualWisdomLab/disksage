@@ -786,6 +786,12 @@
               File Provider 상태가 정상으로 관찰된 뒤 DiskSage에서 새 계획을 다시 실행해야 합니다.
             </p>
           {/if}
+          {#if icloudHealth.file_provider_activity?.timed_out}
+            <p class="warning">
+              File Provider 상태 확인이 제한시간을 넘었습니다. Finder에 남은 복사 대기를 취소하고,
+              DiskSage에서 상태를 다시 확인한 뒤 admission이 clear일 때만 새 복사를 시작하십시오.
+            </p>
+          {/if}
           {#if icloudHealth.file_provider_activity && (icloudHealth.file_provider_activity.active_upload_count > 0 || icloudHealth.file_provider_activity.active_download_count > 0)}
             <p class="warning">
               iCloud에 기존 전송이 진행 중입니다. 기존 upload/download가 끝나고 새 복사 admission이
