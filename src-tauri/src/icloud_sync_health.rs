@@ -854,7 +854,10 @@ fn probe_file_provider_activity(observed_at_ms: u64) -> IcloudFileProviderActivi
         let drain_deadline = Instant::now() + Duration::from_secs(1);
         loop {
             match stdout.read(&mut buffer) {
-                Ok(read) if read > 0 => {
+                Ok(read) => {
+                    if read == 0 {
+                        break;
+                    }
                     let remaining = MAX_FILEPROVIDER_DUMP_BYTES
                         .saturating_add(1)
                         .saturating_sub(output.len());
@@ -864,7 +867,6 @@ fn probe_file_provider_activity(observed_at_ms: u64) -> IcloudFileProviderActivi
                         break;
                     }
                 }
-                Ok(0) => break,
                 Err(error)
                     if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) =>
                 {

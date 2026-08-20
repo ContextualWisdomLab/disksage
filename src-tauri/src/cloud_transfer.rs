@@ -22,6 +22,10 @@ use crate::content_digest::{ContentDigests, ContentHasher};
 use std::io::{Read, Write};
 #[cfg(not(coverage))]
 use std::path::PathBuf;
+#[cfg(all(not(coverage), target_os = "macos"))]
+use std::process::{Command, Stdio};
+#[cfg(all(not(coverage), target_os = "macos"))]
+use std::time::{Duration, Instant};
 
 /// Legacy receipt schema version retained for backward-compatible reads.
 pub const LEGACY_RECEIPT_VERSION: u32 = 2;
@@ -1105,6 +1109,77 @@ fn remove_created_file(path: &Path) {
     let _ = std::fs::remove_file(path);
 }
 
+#[cfg(all(not(coverage), target_os = "macos"))]
+const COPY_TIMEOUT_BASE_SECS: u64 = 120;
+#[cfg(all(not(coverage), target_os = "macos"))]
+const COPY_TIMEOUT_MAX_SECS: u64 = 30 * 60;
+#[cfg(all(not(coverage), target_os = "macos"))]
+const COPY_EXPECTED_BYTES_PER_SEC: u64 = 4 * 1024 * 1024;
+
+#[cfg(all(not(coverage), target_os = "macos"))]
+fn copy_timeout_for_bytes(bytes: u64) -> Duration {
+    let transfer_secs =
+        bytes.saturating_add(COPY_EXPECTED_BYTES_PER_SEC - 1) / COPY_EXPECTED_BYTES_PER_SEC;
+    Duration::from_secs(
+        COPY_TIMEOUT_BASE_SECS
+            .saturating_add(transfer_secs)
+            .min(COPY_TIMEOUT_MAX_SECS),
+    )
+}
+
+/// Run the macOS copy outside the UI process so a File Provider materialization/write cannot
+/// leave the Tauri command waiting forever. The parent verifies the bytes and hashes after this
+/// child exits; a timeout only removes the child-created destination and never touches the source.
+#[cfg(all(not(coverage), target_os = "macos"))]
+fn bounded_macos_copy(source: &Path, destination: &Path, timeout: Duration) -> Result<(), String> {
+    use std::os::unix::process::CommandExt;
+
+    let mut command = Command::new("/bin/cp");
+    command
+        .arg(source)
+        .arg(destination)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|_| "cloud-copy-helper-failed".to_string())?;
+    let child_pid = child.id();
+    let kill_group = || unsafe {
+        let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
+    };
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(_)) => return Err("cloud-copy-helper-failed".into()),
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Ok(None) => {
+                kill_group();
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("cloud-copy-timeout".into());
+            }
+            Err(_) => {
+                kill_group();
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("cloud-copy-helper-failed".into());
+            }
+        }
+    }
+}
+
 #[cfg(not(coverage))]
 fn copy_and_verify(
     candidate: &CloudCandidate,
@@ -1141,14 +1216,33 @@ fn copy_and_verify(
         return Err("source-already-in-cloud-root".into());
     }
 
-    let mut source_file = std::fs::File::open(source).map_err(|error| error.to_string())?;
-    let mut destination_file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(destination)
-        .map_err(|error| error.to_string())?;
-
+    #[cfg(target_os = "macos")]
     let copy_result = (|| -> Result<(u64, ContentDigests), String> {
+        bounded_macos_copy(source, destination, copy_timeout_for_bytes(candidate.bytes))?;
+        let source_hashes = hash_file(source)?;
+        let destination_hashes = hash_file(destination)?;
+        let after = std::fs::symlink_metadata(source).map_err(|error| error.to_string())?;
+        let unchanged = after.is_file()
+            && !after.file_type().is_symlink()
+            && after.len() == before.len()
+            && modified_ms(&after)? == before_modified_ms;
+        let destination_len = std::fs::metadata(destination)
+            .map_err(|error| error.to_string())?
+            .len();
+        if !unchanged || destination_len != candidate.bytes || source_hashes != destination_hashes {
+            return Err("copy-verification-failed".into());
+        }
+        Ok((destination_len, destination_hashes))
+    })();
+
+    #[cfg(not(target_os = "macos"))]
+    let copy_result = (|| -> Result<(u64, ContentDigests), String> {
+        let mut source_file = std::fs::File::open(source).map_err(|error| error.to_string())?;
+        let mut destination_file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(destination)
+            .map_err(|error| error.to_string())?;
         let mut source_hasher = ContentHasher::default();
         let mut copied = 0_u64;
         let mut buffer = vec![0_u8; 1024 * 1024];
@@ -1729,6 +1823,17 @@ mod tests {
 
     fn refresh_review_fingerprint(candidate: &mut CloudCandidate) {
         candidate.review_fingerprint = candidate_review_fingerprint(candidate);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_copy_timeout_scales_but_has_a_hard_ceiling() {
+        assert_eq!(copy_timeout_for_bytes(0), Duration::from_secs(120));
+        assert!(copy_timeout_for_bytes(4 * 1024 * 1024) > copy_timeout_for_bytes(0));
+        assert_eq!(
+            copy_timeout_for_bytes(u64::MAX),
+            Duration::from_secs(COPY_TIMEOUT_MAX_SECS)
+        );
     }
 
     fn receipt() -> CloudCopyReceipt {

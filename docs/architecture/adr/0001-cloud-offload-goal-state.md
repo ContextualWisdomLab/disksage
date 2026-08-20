@@ -49,6 +49,13 @@ UI and immediately before the copy, returning `local-volume-headroom-insufficien
 leaving Finder or a provider staging operation waiting indefinitely. Explicit provider-API uploads
 are a separate path and do not use this local staging requirement.
 
+On macOS, a DiskSage-initiated native copy does not delegate the transfer to a Finder folder
+operation. It invokes the fixed `/bin/cp` helper in a private process group with a size-derived
+timeout capped at 30 minutes, then re-hashes both source and destination and rechecks the source
+identity. A timeout or helper failure removes only the child-created destination and records
+`cloud-copy-timeout` or `cloud-copy-helper-failed`; the source and all provider evidence remain
+unchanged. This bounds File Provider writes without turning a timed-out copy into an attestation.
+
 Source enumeration is also forbidden inside managed File Provider trees (`Library/Mobile
 Documents`, `Library/CloudStorage`, `Library/Application Support/FileProvider`, and
 `File Provider Storage`). If one of these trees is supplied as the scan root, the bounded collector
@@ -118,6 +125,8 @@ physical reclaim proof; prune, trim, stop, and delete remain outside the inspect
 - A timed-out provider-wide dump may explain active transfer or reconciliation markers, but its incomplete evidence never admits a new copy.
 - A provider-wide `errno 28`/disk-full marker is retained as
   `provider-global-sync-local-disk-full`; it blocks new copies until local headroom is restored.
+- A macOS copy helper timeout is a failed copy, not a partial success: the destination is removed,
+  the source is retained, and provider attestation cannot begin until a fresh plan is made.
 - An iCloud native `needs-sync-up` or `needs-sync-down` state blocks new-copy admission until the
   bounded native status is quiet; neither direction is treated as completed provider evidence.
 - A timeout while collecting the bounded iCloud native status also blocks new-copy admission;
