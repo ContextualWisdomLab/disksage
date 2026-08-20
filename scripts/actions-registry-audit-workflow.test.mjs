@@ -31,6 +31,15 @@ function jobSection(name) {
 const contractsJob = jobSection('contracts');
 const liveRegistryJob = jobSection('live-registry');
 
+test('contracts checkout binds pull-request evidence to the immutable source head', () => {
+  assert.match(
+    contractsJob,
+    /ref:\s+\$\{\{\s*github\.event\.pull_request\.head\.sha\s*\|\|\s*github\.sha\s*\}\}/,
+    'PR contracts must checkout the exact source head instead of GitHub synthetic merge ref',
+  );
+  assert.match(contractsJob, /persist-credentials:\s+false/);
+});
+
 test('native coverage thresholds run on a Node release that implements every required flag', () => {
   for (const flag of [
     "--test-coverage-include='scripts/actions-registry-audit.mjs'",
