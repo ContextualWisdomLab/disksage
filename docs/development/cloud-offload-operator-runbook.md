@@ -98,8 +98,8 @@ The runtime sequence is:
    not a stale-worktree deletion signal; stop the audit and relocate the worktree to a local
    volume such as `/private/tmp` before continuing.
 
-9. Regenerable development artifacts (`target`, `node_modules`, virtual environments, and
-   `__pycache__`) can be inventoried headlessly with
+9. Regenerable development artifacts (`target`, `node_modules`, virtual environments,
+   `__pycache__`, and `.codegraph` indexes) can be inventoried headlessly with
    `disksage-dev-artifacts --root ABSOLUTE_PATH --min-age-days N`. The default is read-only;
    `--execute --journal-path ABSOLUTE_PATH` performs a fresh bounded manifest and moves only
    unchanged, identity-matching artifacts to OS Trash. Protected/system paths and incomplete

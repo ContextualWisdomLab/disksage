@@ -40,6 +40,7 @@ const ARTIFACT_KINDS: &[(&str, &[&str])] = &[
     (".venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
     ("venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
     ("__pycache__", &[]), // 마커 불필요 — 이름 자체가 파이썬 캐시
+    (".codegraph", &[]), // 재생성 가능한 CodeGraph 인덱스
 ];
 
 fn artifact_kind(name: &str) -> Option<&'static (&'static str, &'static [&'static str])> {
@@ -353,6 +354,20 @@ mod tests {
         assert_eq!(nm.project, "webapp");
         assert_eq!(nm.bytes, 256);
         assert_eq!(nm.age_days, 0, "sentinel now_ms는 age_days 0으로 보고");
+    }
+
+    #[test]
+    fn finds_regenerable_codegraph_indexes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let index = tmp.path().join("repo/.codegraph");
+        fs::create_dir_all(&index).unwrap();
+        fs::write(index.join("db"), b"generated").unwrap();
+
+        let found = find_artifacts(tmp.path(), 0, u64::MAX);
+
+        assert!(found.iter().any(|artifact| {
+            artifact.kind == ".codegraph" && artifact.path == index.to_string_lossy()
+        }));
     }
 
     #[test]
