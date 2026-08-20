@@ -124,10 +124,14 @@ pub fn collect_files(root: &Path) -> Vec<FileEntry> {
     walkdir::WalkDir::new(root)
         .follow_links(false)
         .into_iter()
-        .filter_entry(|entry| entry.depth() == 0 || crate::scanner::keep_entry(entry))
+        .filter_entry(crate::scanner::keep_entry)
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file())
-        .filter_map(|e| e.metadata().ok().map(|md| FileEntry { path: e.path(), size: md.len(), mtime_ms: mtime_millis(&md) }))
+        .filter_map(|e| e.metadata().ok().map(|md| FileEntry {
+            path: e.path().to_path_buf(),
+            size: md.len(),
+            mtime_ms: mtime_millis(&md),
+        }))
         .collect()
 }
 
@@ -152,7 +156,7 @@ pub fn collect_files_bounded(
     let walker = walkdir::WalkDir::new(root)
         .follow_links(false)
         .into_iter()
-        .filter_entry(|entry| entry.depth() == 0 || crate::scanner::keep_entry(entry));
+        .filter_entry(crate::scanner::keep_entry);
     let mut files = Vec::new();
     for entry in walker {
         if started.elapsed() >= max_duration {
@@ -170,7 +174,7 @@ pub fn collect_files_bounded(
             continue;
         };
         files.push(FileEntry {
-            path: entry.path(),
+            path: entry.path().to_path_buf(),
             size: metadata.len(),
             mtime_ms: mtime_millis(&metadata),
         });
