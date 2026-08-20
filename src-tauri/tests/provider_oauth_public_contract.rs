@@ -58,6 +58,19 @@ fn connection(provider: CloudProvider) -> OAuthConnection {
     }
 }
 
+fn make_private(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+}
+
+fn write_private(path: &std::path::Path, bytes: impl AsRef<[u8]>) {
+    std::fs::write(path, bytes).unwrap();
+    make_private(path);
+}
+
 #[test]
 fn public_provider_scope_and_client_id_admission_fail_closed() {
     assert_eq!(
@@ -126,16 +139,16 @@ fn public_connection_document_reader_rejects_unsafe_or_invalid_shapes() {
     assert_eq!(path, temp.path().join("cloud-oauth-connections.json"));
     assert!(load_connections(&path).unwrap().is_empty());
 
-    std::fs::write(&path, b"{\"version\":1,\"connections\":[]}").unwrap();
+    write_private(&path, b"{\"version\":1,\"connections\":[]}");
     assert!(load_connections(&path).unwrap().is_empty());
 
-    std::fs::write(&path, b"{\"version\":2,\"connections\":[]}").unwrap();
+    write_private(&path, b"{\"version\":2,\"connections\":[]}");
     assert_eq!(
         load_connections(&path).unwrap_err(),
         "oauth-connection-document-version-or-count-invalid"
     );
 
-    std::fs::write(&path, b"not-json").unwrap();
+    write_private(&path, b"not-json");
     assert_eq!(
         load_connections(&path).unwrap_err(),
         "oauth-connection-document-invalid"
@@ -156,43 +169,40 @@ fn public_connection_document_reader_rejects_invalid_records_and_excess_count() 
 
     let mut invalid = connection(CloudProvider::Onedrive);
     invalid.connection_id = "0".repeat(63);
-    std::fs::write(
+    write_private(
         &path,
         serde_json::to_vec(&serde_json::json!({
             "version": 1,
             "connections": [invalid],
         }))
         .unwrap(),
-    )
-    .unwrap();
+    );
     assert_eq!(load_connections(&path).unwrap_err(), "oauth-connection-invalid");
 
     let mut mismatched = connection(CloudProvider::Onedrive);
     mismatched.connection_id = "0".repeat(64);
-    std::fs::write(
+    write_private(
         &path,
         serde_json::to_vec(&serde_json::json!({
             "version": 1,
             "connections": [mismatched],
         }))
         .unwrap(),
-    )
-    .unwrap();
+    );
     assert_eq!(
         load_connections(&path).unwrap_err(),
         "oauth-connection-id-mismatch"
     );
 
     let repeated = vec![connection(CloudProvider::GoogleDrive); 33];
-    std::fs::write(
+    write_private(
         &path,
         serde_json::to_vec(&serde_json::json!({
             "version": 1,
             "connections": repeated,
         }))
         .unwrap(),
-    )
-    .unwrap();
+    );
     assert_eq!(
         load_connections(&path).unwrap_err(),
         "oauth-connection-document-version-or-count-invalid"
@@ -205,6 +215,7 @@ fn public_connection_document_reader_bounds_size_before_reading() {
     let path = connections_path(temp.path());
     let file = std::fs::File::create(&path).unwrap();
     file.set_len(256 * 1024 + 1).unwrap();
+    make_private(&path);
 
     assert_eq!(
         load_connections(&path).unwrap_err(),
