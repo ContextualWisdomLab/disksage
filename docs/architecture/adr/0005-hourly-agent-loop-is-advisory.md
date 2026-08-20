@@ -1,7 +1,10 @@
 # ADR-0005: Keep the hourly agent loop advisory and secret-gated
 
-**Status:** Accepted  
+**Status:** Superseded by [ADR-0008](0008-hourly-loop-foreign-dependencies-read-only.md)
 **Date:** 2026-08-20
+
+> This record preserves the original bootstrap design for historical traceability. The shipped
+> workflow follows ADR-0008 and does not perform the credential/KV bootstrap described below.
 
 ## Context
 
