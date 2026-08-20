@@ -1,0 +1,73 @@
+name: Hourly product loop
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  contextual-orchestrator-opencode:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    env:
+      ORCHESTRATOR_URL: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_URL }}
+      ORCHESTRATOR_TOKEN: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_TOKEN }}
+    steps:
+      - name: Check orchestrator configuration
+        id: config
+        run: |
+          if [ -n "$ORCHESTRATOR_URL" ] && [ -n "$ORCHESTRATOR_TOKEN" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout current main
+        if: steps.config.outputs.configured == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Collect bounded repository context
+        if: steps.config.outputs.configured == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh pr list --state open --limit 100 \
+            --json number,title,isDraft,mergeStateStatus,reviewDecision,headRefOid \
+            > /tmp/open-prs.json
+          jq -n \
+            --arg sha "$(git rev-parse HEAD)" \
+            --slurpfile prs /tmp/open-prs.json \
+            --rawfile baseline docs/product-technical-gap-baseline.md \
+            '{repository:"ContextualWisdomLab/disksage", head_sha:$sha, open_prs:$prs[0], baseline:$baseline}' \
+            > /tmp/context.json
+
+      - name: Discover model and run OpenCode Agent review
+        if: steps.config.outputs.configured == 'true'
+        run: |
+          set -euo pipefail
+          base="${ORCHESTRATOR_URL%/}"
+          auth=(-H "Authorization: Bearer ${ORCHESTRATOR_TOKEN}")
+          model="$(curl --fail-with-body --silent --show-error --max-time 30 "${auth[@]}" "${base}/v1/models" \
+            | jq -er '.data | map(select(.id | type == "string" and length > 0)) | .[0].id')"
+          jq -n --arg model "$model" --rawfile context /tmp/context.json '{model:$model,messages:[
+            {role:"system",content:"You are the contextual-orchestrator OpenCode Agent for DiskSage. Return at most 8 short JSON-safe lines: blocker, one evidence-backed next action, and whether a protected PR is merge-ready. Never request or reveal secrets, tokens, raw private paths, or cloud file contents. Do not authorize deletion or eviction."},
+            {role:"user",content:("Review this bounded repository context and update the hourly loop message:\n" + $context)}
+          ],stream:false}' > /tmp/request.json
+          curl --fail-with-body --silent --show-error --max-time 120 \
+            "${auth[@]}" -H 'Content-Type: application/json' \
+            --data-binary @/tmp/request.json "${base}/v1/chat/completions" \
+            | jq -er '.choices[0].message.content | strings | length > 0' > /tmp/agent-ok.txt
+          echo "contextual-orchestrator OpenCode Agent completed with model ${model}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Explain missing orchestrator configuration
+        if: steps.config.outputs.configured != 'true'
+        run: |
+          echo "Hourly loop skipped: CONTEXTUAL_ORCHESTRATOR_URL and CONTEXTUAL_ORCHESTRATOR_TOKEN are required; no fallback agent or Copilot token is used." >> "$GITHUB_STEP_SUMMARY"
