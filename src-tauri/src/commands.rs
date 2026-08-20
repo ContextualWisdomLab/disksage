@@ -3288,7 +3288,14 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
     fn automatic_cache_cleanup_uses_only_observed_macos_cache_ids() {
         assert_eq!(
             crate::cache_cleanup::AUTO_REGENERABLE_CACHE_IDS,
-            ["npm-cache", "pnpm-cache", "adobe-cache", "edge-cache"]
+            [
+                "npm-cache",
+                "pnpm-cache",
+                "adobe-cache",
+                "edge-cache",
+                "uv-cache",
+                "trivy-cache",
+            ]
         );
         let tmp = tempfile::tempdir().unwrap();
         let bases = crate::rules::BaseDirs {
@@ -3302,13 +3309,15 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
                 "pnpm-cache" => bases.home.join("Library/Caches/pnpm"),
                 "adobe-cache" => bases.home.join("Library/Caches/Adobe"),
                 "edge-cache" => bases.home.join("Library/Caches/Microsoft Edge"),
+                "uv-cache" => bases.local_data.join("uv"),
+                "trivy-cache" => bases.home.join("Library/Caches/trivy"),
                 _ => unreachable!(),
             };
             fs::create_dir_all(&path).unwrap();
             fs::write(path.join("fixture.bin"), b"regenerable").unwrap();
         }
         let results = clean_regenerable_caches_inner(&bases, &tmp.path().join("journal.jsonl"), 7);
-        assert_eq!(results.len(), 4);
+        assert_eq!(results.len(), 6);
         assert!(results.iter().all(|result| result.ok));
     }
 

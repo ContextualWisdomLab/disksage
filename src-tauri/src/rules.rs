@@ -49,6 +49,12 @@ pub struct CacheTarget {
 
 const MAX_CACHE_TARGETS: usize = 4_096;
 
+fn is_disksage_trash_staging(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with(".disksage-trash-"))
+}
+
 /// 정적 캐시 카탈로그 (스펙 §4 rules). 항목 = (id, 라벨, 베이스 기준 상대경로).
 /// ponytail: 브라우저 캐시는 프로필 글롭이 필요해 M2 범위 밖 — 카탈로그에 추가만 하면 확장됨
 fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
@@ -105,6 +111,11 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
             "edge-cache",
             "Microsoft Edge 캐시",
             bases.home.join("Library").join("Caches").join("Microsoft Edge"),
+        ),
+        (
+            "trivy-cache",
+            "Trivy 취약점 스캔 캐시",
+            bases.home.join("Library").join("Caches").join("trivy"),
         ),
     ]);
 
@@ -313,6 +324,9 @@ impl CatalogRoot {
             .filter_map(Result::ok)
             .filter_map(|entry| {
                 let stable_child = entry.path();
+                if is_disksage_trash_staging(&stable_child) {
+                    return None;
+                }
                 let metadata = std::fs::symlink_metadata(&stable_child).ok()?;
                 if metadata.file_type().is_symlink() {
                     return None;
@@ -424,7 +438,13 @@ impl CatalogRoot {
         };
         names
             .into_iter()
-            .filter_map(|name| self.open_child(&name).map(|(child, _)| child.display_path))
+            .filter_map(|name| {
+                let path = self.display_path.join(&name);
+                if is_disksage_trash_staging(&path) {
+                    return None;
+                }
+                self.open_child(&name).map(|(child, _)| child.display_path)
+            })
             .collect()
     }
 }
@@ -584,6 +604,7 @@ mod tests {
             ("pnpm-cache", "Library/Caches/pnpm"),
             ("adobe-cache", "Library/Caches/Adobe"),
             ("edge-cache", "Library/Caches/Microsoft Edge"),
+            ("trivy-cache", "Library/Caches/trivy"),
         ] {
             let candidate = candidates
                 .iter()
@@ -591,6 +612,11 @@ mod tests {
                 .unwrap_or_else(|| panic!("{id} cache must be catalogued"));
             assert!(candidate.path.ends_with(suffix), "{id}");
         }
+        let uv = candidates
+            .iter()
+            .find(|candidate| candidate.id == "uv-cache")
+            .expect("uv cache must be catalogued");
+        assert!(uv.path.ends_with("local/uv"));
     }
 
     #[test]
@@ -636,6 +662,22 @@ mod tests {
                 .bytes,
             4
         );
+    }
+
+    #[test]
+    fn cache_targets_ignore_disksage_trash_staging() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("keep.bin"), b"keep").unwrap();
+        fs::create_dir(tmp.path().join(".disksage-trash-fixture")).unwrap();
+        fs::write(
+            tmp.path().join(".disksage-trash-fixture").join("staged.bin"),
+            b"staged",
+        )
+        .unwrap();
+
+        let targets = cache_targets(tmp.path()).unwrap();
+        assert_eq!(targets.len(), 1);
+        assert!(targets[0].path.ends_with("keep.bin"));
     }
 
     #[test]
