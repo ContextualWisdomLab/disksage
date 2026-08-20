@@ -434,8 +434,8 @@
     }
   }
 
-  async function refreshIcloudHealth() {
-    if (checkingIcloudHealth || Date.now() < icloudHealthNextCheckAt) return;
+  async function refreshIcloudHealth(force = false) {
+    if (checkingIcloudHealth || (!force && Date.now() < icloudHealthNextCheckAt)) return;
     checkingIcloudHealth = true;
     icloudHealthError = "";
     try {
@@ -724,7 +724,10 @@
       <button onclick={reconcileCloudReceipts} disabled={reconciling || busy}>
         {reconciling ? "기존 영수증 재검증 중…" : "기존 영수증·ADR/Goal 재검증"}
       </button>
-      <span class="muted">화면이 열려 있는 동안 60초마다 클라우드 쓰기·원본 삭제 없이 provider 증거와 ADR/Goal 갱신</span>
+      <button onclick={() => refreshIcloudHealth(true)} disabled={checkingIcloudHealth || busy}>
+        {checkingIcloudHealth ? "iCloud 상태 확인 중…" : "iCloud 상태 즉시 재확인"}
+      </button>
+      <span class="muted">화면이 열려 있는 동안 클라우드 쓰기·원본 삭제 없이 provider 증거와 ADR/Goal을 갱신합니다. iCloud가 막히면 자동 확인은 최대 5분 간격으로 줄어듭니다.</span>
     </div>
     {#if reconciliation}
       <div class="receipt-reconciliation" aria-live="polite">
