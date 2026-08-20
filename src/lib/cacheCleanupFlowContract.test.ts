@@ -17,12 +17,14 @@ describe("cache cleanup execution boundary", () => {
 
     expect(cleanup).toContain("api.listCacheTargets(candidate.path)");
     expect(cleanup).toContain("api.cleanCacheContents(candidate.path, targets)");
+    expect(cleanup).toContain("api.cleanRegenerableCaches()");
     expect(cleanup).toContain("객체 지문·크기·수정시각");
     expect(backend).toContain("pub fn clean_cache_contents(");
     expect(backend).toContain("cache-cleanup-targets-stale");
     expect(backend).toContain("trash_delete_if_identity(");
     expect(tauri).toContain("cache_cleanup::clean_cache_contents");
     expect(tauri).toContain("cache_cleanup::list_cache_targets");
+    expect(tauri).toContain("commands::clean_regenerable_caches");
   });
 
   it("surfaces an actionable status when a cache candidate has no direct cleanup targets", () => {

@@ -69,6 +69,8 @@ export interface DupeGroup {
 }
 
 export const listCacheCandidates = () => invoke<CacheCandidate[]>("list_cache_candidates");
+export const cleanRegenerableCaches = () =>
+  invoke<CleanResult[]>("clean_regenerable_caches");
 export const listCacheTargets = (dir: string) =>
   invoke<CacheTarget[]>("list_cache_targets", { dir });
 export const cleanCacheContents = (dir: string, targets: CacheTarget[]) =>

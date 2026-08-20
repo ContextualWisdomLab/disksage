@@ -695,6 +695,64 @@ pub fn list_cache_candidates() -> Result<Vec<rules::CacheCandidate>, String> {
 }
 
 #[cfg(not(coverage))]
+const AUTO_REGENERABLE_CACHE_IDS: [&str; 3] = ["pnpm-cache", "adobe-cache", "edge-cache"];
+
+#[cfg(not(coverage))]
+fn clean_regenerable_caches_inner(
+    bases: &rules::BaseDirs,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Vec<CleanResult> {
+    // These are the macOS cache roots observed during the current low-disk incident. The root
+    // itself is never removed; each child still passes the identity and active-use guards.
+    rules::cache_candidates(bases)
+        .into_iter()
+        .filter(|candidate| {
+            AUTO_REGENERABLE_CACHE_IDS.contains(&candidate.id.as_str()) && candidate.exists
+        })
+        .flat_map(|candidate| {
+            let path = PathBuf::from(&candidate.path);
+            match rules::cache_targets(&path) {
+                Ok(targets) if targets.is_empty() => Vec::new(),
+                Ok(targets) => crate::cache_cleanup::clean_cache_contents_inner(
+                    bases,
+                    &path,
+                    &targets,
+                    journal_path,
+                    now_ms,
+                )
+                .unwrap_or_else(|error| {
+                    vec![CleanResult {
+                        path: candidate.path,
+                        ok: false,
+                        error,
+                    }]
+                }),
+                Err(error) => vec![CleanResult {
+                    path: candidate.path,
+                    ok: false,
+                    error,
+                }],
+            }
+        })
+        .collect()
+}
+
+/// Move only observed, regenerable macOS cache children to Trash without an extra approval step.
+/// Identity and active-use checks remain mandatory for every child, and the cache roots remain.
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn clean_regenerable_caches(app: AppHandle) -> Result<Vec<CleanResult>, String> {
+    let bases = rules::BaseDirs::from_env().ok_or("환경변수에서 기본 경로를 찾지 못함")?;
+    let journal_path = journal_file_path(&app)?;
+    Ok(clean_regenerable_caches_inner(
+        &bases,
+        &journal_path,
+        now_ms(),
+    ))
+}
+
+#[cfg(not(coverage))]
 #[tauri::command]
 pub fn list_dev_artifacts(
     root: String,
@@ -3286,6 +3344,34 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
                 .collect();
             trash::os_limited::purge_all(items).unwrap();
         }
+    }
+
+    #[cfg(all(not(coverage), target_os = "macos"))]
+    #[test]
+    fn automatic_cache_cleanup_uses_only_observed_macos_cache_ids() {
+        assert_eq!(
+            AUTO_REGENERABLE_CACHE_IDS,
+            ["pnpm-cache", "adobe-cache", "edge-cache"]
+        );
+        let tmp = tempfile::tempdir().unwrap();
+        let bases = crate::rules::BaseDirs {
+            temp: tmp.path().join("tmp"),
+            local_data: tmp.path().join("local"),
+            home: tmp.path().join("home"),
+        };
+        for id in AUTO_REGENERABLE_CACHE_IDS {
+            let path = match id {
+                "pnpm-cache" => bases.home.join("Library/Caches/pnpm"),
+                "adobe-cache" => bases.home.join("Library/Caches/Adobe"),
+                "edge-cache" => bases.home.join("Library/Caches/Microsoft Edge"),
+                _ => unreachable!(),
+            };
+            fs::create_dir_all(&path).unwrap();
+            fs::write(path.join("fixture.bin"), b"regenerable").unwrap();
+        }
+        let results = clean_regenerable_caches_inner(&bases, &tmp.path().join("journal.jsonl"), 7);
+        assert_eq!(results.len(), 3);
+        assert!(results.iter().all(|result| result.ok));
     }
 
     #[test]

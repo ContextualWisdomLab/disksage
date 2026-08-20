@@ -9,6 +9,12 @@ any child changed. Each child is then moved to the operating-system Trash throug
 identity-bound staging primitive and journal. The Trash is not emptied, so the operation remains
 reversible.
 
+For the current macOS low-disk incident, the **관측된 재생성 캐시 자동 정리** action invokes
+`clean_regenerable_caches`. It is intentionally limited to `~/Library/Caches/pnpm`, Adobe, and
+Microsoft Edge. No extra approval phrase is needed for these catalogued regenerable roots, but
+the per-child identity, size/mtime, and complete inactive-use checks remain mandatory. A child
+that is active or changed is skipped; the root and OS Trash are retained.
+
 The cache catalog includes the macOS `uv`, Hugging Face, Codex runtime, Gradle, npm, pip, and Cargo
 registry caches when present. Cache contents are not cloud candidates: they are reproducible local
 artifacts, while user files continue through the metadata-first cloud planner and its provider

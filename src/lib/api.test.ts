@@ -28,6 +28,7 @@ describe("api wrappers", () => {
       [() => api.topFiles(), "top_files", { limit: 200 }],
       [() => api.topFiles(5), "top_files", { limit: 5 }],
       [() => api.listCacheCandidates(), "list_cache_candidates"],
+      [() => api.cleanRegenerableCaches(), "clean_regenerable_caches"],
       [() => api.listCacheTargets("/cache"), "list_cache_targets", { dir: "/cache" }],
       [() => api.cleanCacheContents("/cache", []), "clean_cache_contents", { dir: "/cache", targets: [] }],
       [() => api.listDevArtifacts("/repo"), "list_dev_artifacts", { root: "/repo", minAgeDays: 30 }],

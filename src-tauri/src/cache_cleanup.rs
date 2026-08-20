@@ -18,7 +18,7 @@ fn active_use_blocker(
     }
 }
 
-fn clean_cache_contents_inner(
+pub(crate) fn clean_cache_contents_inner(
     bases: &rules::BaseDirs,
     dir: &Path,
     requested_targets: &[rules::CacheTarget],

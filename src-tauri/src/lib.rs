@@ -104,6 +104,7 @@ pub fn run() {
             node_navigation::get_node_secure,
             commands::top_files,
             commands::list_cache_candidates,
+            commands::clean_regenerable_caches,
             cache_cleanup::list_cache_targets,
             commands::list_dev_artifacts,
             commands::clean_paths,

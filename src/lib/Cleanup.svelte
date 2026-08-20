@@ -126,6 +126,20 @@
     }
   }
 
+  async function cleanRegenerableCaches() {
+    if (busy) return;
+    busy = true;
+    loadError = "";
+    try {
+      results = await api.cleanRegenerableCaches();
+      await load();
+    } catch (e) {
+      loadError = String(e);
+    } finally {
+      busy = false;
+    }
+  }
+
   function toggle(set: Set<string>, key: string) {
     const next = new Set(set);
     next.has(key) ? next.delete(key) : next.add(key);
@@ -182,6 +196,12 @@
   <h3>캐시</h3>
   <p class="notice" role="status">
     알려진 캐시 루트의 직계 항목만 객체 지문·크기·수정시각을 재검증한 뒤 휴지통으로 보냅니다. 캐시 루트 자체는 보존됩니다.
+  </p>
+  <button onclick={cleanRegenerableCaches} disabled={busy}>
+    {busy ? "재생성 캐시 확인 중…" : "관측된 재생성 캐시 자동 정리"}
+  </button>
+  <p class="notice" role="status">
+    pnpm·Adobe·Edge 캐시만 대상으로 하며, 사용 중이거나 증거가 바뀐 항목은 자동으로 건너뜁니다.
   </p>
   {#if cacheRetryMessage}<p class="notice" role="status">{cacheRetryMessage}</p>{/if}
   <ul class="list">

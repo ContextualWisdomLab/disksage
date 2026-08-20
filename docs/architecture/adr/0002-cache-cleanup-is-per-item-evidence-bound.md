@@ -44,6 +44,16 @@ treated as evidence that the inactive entry is safe without its own probe.
 - **Copying caches to iCloud/OneDrive/Google Drive:** wastes cloud capacity for reproducible data and
   conflates cache cleanup with user-file lineage.
 
+## Incident policy: observed macOS regenerable caches
+
+When provider upload is blocked and local pressure is high, DiskSage may run the
+`clean_regenerable_caches` command without a second approval prompt for the three caches observed
+in the incident (`pnpm`, Adobe, and Microsoft Edge). This is a narrow policy, not a general
+path-based delete rule: each direct child is still bound to its reviewed object identity, byte
+count, and modification time, and the active-use probe must be complete and idle. The cache root
+is preserved, successful operations go to OS Trash, and a journal entry is written. Edge or any
+other child in use is reported and left untouched.
+
 ## References
 
 - [ADR-0001: Provider evidence drives the cloud-offload Goal](0001-cloud-offload-goal-state.md)
