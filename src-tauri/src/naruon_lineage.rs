@@ -177,8 +177,8 @@ fn lineage_relations(
     evidence_record: Option<&ProviderSyncEvidenceRecord>,
     remote_content: Option<&crate::cloud_transfer::RemoteContentProof>,
 ) -> Vec<NaruonFileLineageRelation> {
-    let source = opaque_node("source", &receipt.candidate_fingerprint);
-    let metadata = opaque_node("metadata", &lineage.review_fingerprint);
+    let source = opaque_node("source", &receipt.blake3);
+    let metadata = opaque_node("metadata", &receipt.candidate_fingerprint);
     let archive = opaque_node(
         "archive",
         receipt.lineage_fingerprint.as_deref().unwrap_or_default(),
@@ -696,6 +696,12 @@ mod tests {
             .ontology_relations
             .iter()
             .any(|edge| { edge.predicate == "https://disksage.app/ontology#attestedBy" }));
+        let metadata_edge = envelope
+            .ontology_relations
+            .iter()
+            .find(|edge| edge.predicate == "https://disksage.app/ontology#hasMetadataEvidence")
+            .unwrap();
+        assert_ne!(metadata_edge.subject, metadata_edge.object);
         assert!(envelope
             .ontology_relations
             .iter()
