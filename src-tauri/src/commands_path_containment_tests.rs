@@ -1,10 +1,10 @@
-//! Real-filesystem regressions for the scanned-root authority enforced by `commands::node_view`.
+//! Real-filesystem regressions for the hardened node-view scanned-root authority.
 
-use crate::commands::node_view;
+use crate::node_view_guard::node_view;
 use crate::scanner::{ScanResult, ScanStats};
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 fn result_for(root: &Path) -> ScanResult {
     ScanResult {
