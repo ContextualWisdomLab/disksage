@@ -91,6 +91,21 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
         ("gradle-cache", "Gradle 캐시", bases.home.join(".gradle").join("caches")),
         ("macos-app-support-cache", "macOS 응용 프로그램 업데이트 캐시",
             bases.home.join("Library").join("Application Support").join("Caches")),
+        (
+            "pnpm-cache",
+            "pnpm 캐시",
+            bases.home.join("Library").join("Caches").join("pnpm"),
+        ),
+        (
+            "adobe-cache",
+            "Adobe 캐시",
+            bases.home.join("Library").join("Caches").join("Adobe"),
+        ),
+        (
+            "edge-cache",
+            "Microsoft Edge 캐시",
+            bases.home.join("Library").join("Caches").join("Microsoft Edge"),
+        ),
     ]);
 
     // Windows 진단 캐시 — 조용히 수십 GB로 자라는 것들. RDP 자동 추적(RdClientAutoTrace)의 .etl 로그가
@@ -557,6 +572,25 @@ mod tests {
             .find(|candidate| candidate.id == "macos-app-support-cache")
             .expect("macOS application-support cache must be catalogued");
         assert!(candidate.path.ends_with("Library/Application Support/Caches"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn catalog_includes_observed_regenerable_macos_caches() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bases = fake_bases(tmp.path());
+        let candidates = cache_candidates(&bases);
+        for (id, suffix) in [
+            ("pnpm-cache", "Library/Caches/pnpm"),
+            ("adobe-cache", "Library/Caches/Adobe"),
+            ("edge-cache", "Library/Caches/Microsoft Edge"),
+        ] {
+            let candidate = candidates
+                .iter()
+                .find(|candidate| candidate.id == id)
+                .unwrap_or_else(|| panic!("{id} cache must be catalogued"));
+            assert!(candidate.path.ends_with(suffix), "{id}");
+        }
     }
 
     #[test]
