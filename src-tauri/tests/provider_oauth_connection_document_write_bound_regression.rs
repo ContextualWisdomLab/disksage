@@ -13,7 +13,8 @@ mod cloud {
 #[test]
 fn connection_document_writer_rejects_oversized_payload_before_publication() {
     let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("connections.json");
+    let parent = temp.path().join("first-use-app-data");
+    let path = parent.join("connections.json");
 
     #[cfg(windows)]
     let cloud_path = r"C:\Cloud".to_string();
@@ -42,6 +43,10 @@ fn connection_document_writer_rejects_oversized_payload_before_publication() {
     assert_eq!(
         save_connections(&path, &[connection]).unwrap_err(),
         "oauth-connection-document-too-large"
+    );
+    assert!(
+        !parent.exists(),
+        "rejected oversized metadata must not create its first-use authority directory"
     );
     assert!(
         !path.exists(),
