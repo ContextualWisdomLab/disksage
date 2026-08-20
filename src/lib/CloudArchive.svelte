@@ -102,7 +102,7 @@
   let eviction: api.CloudSourceEvictionOutput | null = $state(null);
   let objectId = $state("");
   let oauthClientId = $state("");
-  let oauthWriteAccess = $state(true);
+  let oauthWriteAccess = $state(false);
   let connecting = $state(false);
   let disconnecting = $state(false);
   let checkingCapacity = $state(false);
