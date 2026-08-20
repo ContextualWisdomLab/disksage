@@ -113,7 +113,19 @@ fn system_now_ms() -> u64 {
 
 #[cfg(not(coverage))]
 fn run() -> Result<(), String> {
-    let args = parse_args(&std::env::args().skip(1).collect::<Vec<_>>())?;
+    let raw = std::env::args_os()
+        .skip(1)
+        .map(|argument| {
+            argument
+                .into_string()
+                .map_err(|_| "duplicate-audit-argument-invalid".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if raw.len() == 1 && matches!(raw[0].as_str(), "--help" | "-h") {
+        println!("{}", usage());
+        return Ok(());
+    }
+    let args = parse_args(&raw)?;
     let report = collect_exact_duplicate_audit(
         &args.root,
         system_now_ms(),
