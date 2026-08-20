@@ -1,13 +1,16 @@
 //! Platform-aware entrypoint for the provider OAuth operational CLI.
 //!
-//! The domain implementation stays in `disksage-provider-oauth.rs`. This entry owns only host
-//! argument decoding, terminal help, and platform home-directory selection before delegating to
-//! the existing parser and OAuth execution boundary.
+//! The domain implementation stays outside `src/bin` so Cargo/Tauri binary discovery sees only
+//! this real entrypoint. This entry owns host argument decoding, terminal help, and platform
+//! home-directory selection before delegating to the existing OAuth execution boundary.
 
 use std::path::PathBuf;
 
 mod implementation {
-    include!("disksage-provider-oauth.rs");
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/provider_oauth_cli_impl.rs.inc"
+    ));
 
     #[cfg(not(coverage))]
     pub(super) fn usage_text() -> String {
