@@ -135,7 +135,7 @@
         rootIssues = discovery.issues;
         connections = await api.listCloudProviderConnections();
         reviewDecisions = await api.listCloudReviewDecisions();
-        selectedRoot = roots.find((root) => root.readable)?.path ?? "";
+        selectedRoot = roots.find((root) => root.readable)?.path ?? roots[0]?.path ?? "";
         await Promise.all([
           reconcileCloudReceipts(),
           refreshIcloudHealth(),
@@ -724,15 +724,15 @@
   </p>
 
   {#if roots.length === 0}
-    <p class="warning">쓰기 가능한 클라우드 루트를 찾지 못했습니다.</p>
+    <p class="warning">탐지된 클라우드 루트가 없습니다.</p>
   {:else}
     <div class="controls">
       <label>
         대상
         <select bind:value={selectedRoot} onchange={providerSelectionChanged} disabled={busy}>
           {#each roots as root (root.id)}
-            <option value={root.path} disabled={!root.readable}>
-              {root.label} · {accountScopeLabel(root.account_scope)}{root.readable ? "" : " · 접근 불가"}
+            <option value={root.path}>
+              {root.label} · {accountScopeLabel(root.account_scope)}{root.readable ? "" : " · 접근 불가·진단만 가능"}
             </option>
           {/each}
         </select>
@@ -745,7 +745,7 @@
         마지막 수정 후 최소 일수
         <input type="number" min="0" step="1" bind:value={minAgeDays} disabled={busy} />
       </label>
-      <button onclick={preview} disabled={busy || !scannedRoot || !selectedRoot}>
+      <button onclick={preview} disabled={busy || !scannedRoot || !selectedRoot || !selectedRootDetails()?.readable}>
         {busy ? "계획 중…" : "오프로드 후보 미리보기"}
       </button>
       <button onclick={reconcileCloudReceipts} disabled={reconciling || busy}>
@@ -756,6 +756,12 @@
       </button>
       <span class="muted">화면이 열려 있는 동안 클라우드 쓰기·원본 삭제 없이 provider 증거와 ADR/Goal을 갱신합니다. iCloud가 막히면 자동 확인은 최대 5분 간격으로 줄어듭니다.</span>
     </div>
+    {#if selectedRootDetails() && !selectedRootDetails()?.readable}
+      <p class="warning">
+        이 File Provider 루트는 현재 읽을 수 없습니다. 공급자 전역 상태 진단과 고정된 데스크톱 클라이언트 복구만 허용하며,
+        복사·attestation·원본 정리는 루트가 다시 읽힐 때까지 차단합니다.
+      </p>
+    {/if}
     {#if reconciliation}
       <div class="receipt-reconciliation" aria-live="polite">
         <strong>재시작 후 영수증 재검증</strong>

@@ -28,5 +28,8 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("providerGlobalSyncObservedAtMs = Date.now();");
     expect(source).toContain("마지막 관찰 {evidenceObservedAt(providerGlobalSyncObservedAtMs)}");
     expect(source).toContain("1분 후 자동 재확인");
+    expect(source).toContain("접근 불가·진단만 가능");
+    expect(source).toContain("공급자 전역 상태 진단과 고정된 데스크톱 클라이언트 복구만 허용");
+    expect(source).toContain("!selectedRootDetails()?.readable");
   });
 });
