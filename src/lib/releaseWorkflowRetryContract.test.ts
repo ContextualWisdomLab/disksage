@@ -33,20 +33,16 @@ describe('release workflow retry contract', () => {
     expect(workflow).not.toContain('- os: windows-latest');
   });
 
-  it('does not spend native packaging runners on test-only source changes', () => {
+  it('runs release evidence on every pull-request head including test-only changes', () => {
     const workflow = readRepositoryFile('.github/workflows/release.yml');
-    const rustSource = workflow.indexOf('      - "src-tauri/**"');
-    const rustTests = workflow.indexOf('      - "!src-tauri/tests/**"');
-    const frontendSource = workflow.indexOf('      - "src/**"');
-    const frontendTests = workflow.indexOf('      - "!src/**/*.test.ts"');
+    const pullRequestSection = workflow.split('  pull_request:\n', 2)[1]?.split(
+      '  workflow_dispatch:',
+      1,
+    )[0];
 
-    expect(rustSource).toBeGreaterThanOrEqual(0);
-    expect(rustTests).toBeGreaterThan(rustSource);
-    expect(frontendSource).toBeGreaterThanOrEqual(0);
-    expect(frontendTests).toBeGreaterThan(frontendSource);
-    expect(workflow).toContain('      - ".github/workflows/release.yml"');
-    expect(workflow).toContain('      - "package.json"');
-    expect(workflow).toContain('      - "package-lock.json"');
+    expect(pullRequestSection).toBe('');
+    expect(workflow).not.toContain('!src-tauri/tests/**');
+    expect(workflow).not.toContain('!src/**/*.test.ts');
   });
 
   it('fails closed when an operational CLI help smoke exits nonzero or writes stderr', () => {
