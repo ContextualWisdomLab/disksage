@@ -231,7 +231,7 @@ where
                 | libc::O_EXCL
                 | libc::O_CLOEXEC
                 | libc::O_NOFOLLOW,
-            unix_mode as libc::mode_t,
+            unix_mode as libc::c_uint,
         )
     };
     if file_fd < 0 {
