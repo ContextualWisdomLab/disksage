@@ -131,6 +131,10 @@ temporarily disconnected or unreadable File Provider root must not prevent the r
 diagnostic or the fixed OneDrive/Google Drive client-recovery request from running; destination
 readability remains mandatory for copy, attestation, and eviction mutations. This keeps a Finder
 “copy preparing” incident actionable without treating a recovery request as cloud-write evidence.
+The 2026-08-21 incident observation also recorded a `real_datasets` Finder copy still preparing
+after hours, Google Drive `temporarily disconnected`/`needs-indexing` with File Provider `-1004`,
+and only 150 MiB of local headroom; the operator guidance is to cancel that pending Finder copy
+before any new DiskSage plan is attempted.
 
 ## Consequences
 
