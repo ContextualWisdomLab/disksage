@@ -198,6 +198,19 @@ it must not kill `fileproviderd` or `bird`, write a raw provider dump, retry the
 eviction authority. This incomplete observation keeps new-copy admission, attestation, and source
 eviction fail-closed and is bound to source head `f0dff03`, not to this replaceable ADR text.
 
+At `2026-08-21 06:25:37 +0900`, a read-only `fileproviderctl dump -l 20` observation returned
+progress markers and old File Provider `itemNotFound` errors while the Finder `real_datasets`
+operation remained in “preparing”. The bounded dump was written to a temporary file and removed;
+raw provider output, paths, item identifiers, and contents were not retained. APFS available space
+was only 289 MiB (98–100% reported on the data volume), so DiskSage did not retry the copy or
+interpret the provider activity as completion. After confirming no npm/uv/cargo cleanup operation
+was active, only regenerable package/tool caches were removed, recovering approximately 1.6 GiB;
+the subsequent bounded observation fluctuated between 1.7 and 1.9 GiB. The Cargo source cache,
+CloudDocs databases, File Provider data, user files, active processes, Finder operation, and all
+cloud objects were retained. Reproducible caches are not uploaded to a provider during an incident.
+This evidence is bound to source head `e71ecd13e8c91acf10093271fd58414cae5fe349`; the Finder cancel
+control remains the only supported cancellation action.
+
 ## Consequences
 
 - `is_local_current=true` and `is_uploaded=false` produces `pending-upload` and no eviction permit.

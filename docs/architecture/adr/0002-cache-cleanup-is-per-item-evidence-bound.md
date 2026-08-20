@@ -70,6 +70,16 @@ the 2026-08-21 low-disk incident, no Cargo process was running; DiskSage develop
 observed 1.3 GiB source cache only after recording this boundary, while retaining the Cargo index,
 package archives, git checkouts, all user files, and provider-managed data.
 
+The same incident later reached 289 MiB of APFS availability while a Finder/File Provider copy was
+still preparing. A bounded read-only provider dump showed progress markers and stale `itemNotFound`
+errors, so the operation remained blocked. DiskSage reclaimed only explicitly regenerable package/tool
+caches (pnpm, npm's `_npx`/`_cacache`, and node/torch/prisma/gh caches), recovering roughly 1.6 GiB;
+active uv/cargo processes and the Cargo registry source tree were not touched in this pass. No cache
+was uploaded to iCloud, OneDrive, or Google Drive: reproducible build caches are a cleanup domain,
+not user-file lineage, and sending them through a stalled provider would consume additional staging
+space. The provider process, Finder copy, CloudDocs database, cloud objects, and user files remained
+untouched. This observation is bound to source head `e71ecd13e8c91acf10093271fd58414cae5fe349`.
+
 ## Incident policy: proven cache Trash purge
 
 When the OS Trash itself contains the exact regenerable cache directories observed during this

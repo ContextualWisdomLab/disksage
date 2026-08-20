@@ -232,3 +232,13 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   cache was removed; the Cargo index, package archives, git checkouts, user files, CloudDocs DBs,
   and provider-managed data were retained. The path is now an explicit manual-review catalog item,
   not an automatic cleanup target. APFS free space recovered to about 1.6 GiB at observation.
+- At `2026-08-21 06:25:37 +0900`, APFS availability reached 289 MiB while the Finder
+  `real_datasets` copy remained in “준비 중”. A bounded read-only `fileproviderctl dump -l 20`
+  contained upload/download progress markers and old File Provider `itemNotFound` errors; its
+  temporary 317 KiB output was removed without retaining paths or item identifiers. Only
+  regenerable package/tool caches were removed (no provider process, Finder operation, CloudDocs
+  database, cloud object, user file, or active Cargo/uv runtime was touched), recovering about
+  1.6 GiB. APFS then fluctuated between 1.7 and 1.9 GiB, so the operation remains blocked and the
+  Finder cancel control is still the only supported cancellation action. Caches were not uploaded
+  to a provider because they are reproducible cleanup data, not user-file lineage. Evidence is
+  bound to source head `e71ecd13e8c91acf10093271fd58414cae5fe349`.
