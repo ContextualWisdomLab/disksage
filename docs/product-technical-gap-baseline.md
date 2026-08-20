@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-20 (Asia/Seoul)  
-**Repository head:** `feat/provider-sync-dynamic-goals` @ `7849920`  
+**Repository head:** `feat/provider-sync-dynamic-goals` @ `HEAD` (snapshot refreshed with each loop)
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.  
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
 
