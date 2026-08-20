@@ -160,7 +160,7 @@
           <p class="muted">결과 기록: {eviction.result_path}</p>
         {:else}
           <p class="error" role="alert">
-            축출 결과는 위와 같지만 결과 기록을 저장하지 못했습니다: {eviction.result_record_error}
+            축출 결과는 위와 같지만 결과 기록을 저장하지 못했습니다.
           </p>
         {/if}
       {:else if plan.eligible_after_human_approval}
