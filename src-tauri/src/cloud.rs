@@ -455,6 +455,30 @@ pub fn compare_pre_copy_evidence(
     cohort
 }
 
+/// Require the exact cohort produced by the current iCloud plan before a native copy mutates the
+/// destination. Recompute the fingerprint so a serialized or caller-provided cohort cannot bypass
+/// the fail-closed gate.
+pub fn require_pre_copy_evidence_cohort(
+    cohort: Option<&PreCopyEvidenceCohort>,
+) -> Result<(), String> {
+    let cohort = cohort.ok_or_else(|| "pre-copy-evidence-cohort-unavailable".to_string())?;
+    if cohort.schema_version != PRE_COPY_EVIDENCE_COHORT_SCHEMA_VERSION {
+        return Err("pre-copy-evidence-cohort-schema-unsupported".into());
+    }
+    let recomputed = compare_pre_copy_evidence(cohort.observations.clone());
+    if recomputed.cohort_fingerprint != cohort.cohort_fingerprint
+        || recomputed.observed_at_ms != cohort.observed_at_ms
+        || recomputed.complete != cohort.complete
+        || recomputed.blockers != cohort.blockers
+    {
+        return Err("pre-copy-evidence-cohort-integrity-invalid".into());
+    }
+    if !cohort.complete || !cohort.blockers.is_empty() {
+        return Err("pre-copy-evidence-cohort-blocked".into());
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ExactDuplicateSummary {
     pub cluster_count: usize,
@@ -7616,5 +7640,32 @@ mod tests {
         assert!(cohort
             .blockers
             .contains(&"pre-copy-evidence-stream-missing-provider-client-runtime-evidence".into()));
+    }
+
+    #[test]
+    fn pre_copy_evidence_cohort_is_required_and_integrity_bound() {
+        assert_eq!(
+            require_pre_copy_evidence_cohort(None).unwrap_err(),
+            "pre-copy-evidence-cohort-unavailable"
+        );
+        let valid = compare_pre_copy_evidence(
+            PRE_COPY_EVIDENCE_REQUIRED_STREAMS
+                .iter()
+                .enumerate()
+                .map(|(index, stream)| PreCopyEvidenceObservation {
+                    stream: (*stream).into(),
+                    observed_at_ms: 100 + index as u64,
+                    evidence_complete: true,
+                    fingerprint: format!("{index:x}").repeat(64),
+                })
+                .collect(),
+        );
+        assert!(require_pre_copy_evidence_cohort(Some(&valid)).is_ok());
+        let mut tampered = valid.clone();
+        tampered.observed_at_ms += 1;
+        assert_eq!(
+            require_pre_copy_evidence_cohort(Some(&tampered)).unwrap_err(),
+            "pre-copy-evidence-cohort-integrity-invalid"
+        );
     }
 }

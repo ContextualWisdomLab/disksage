@@ -28,7 +28,7 @@
 
 | Priority | Gap | Current state | Smallest next proof |
 | --- | --- | --- | --- |
-| P0 | Provider end-to-end receipt is absent for the current iCloud incident. | Global probe can time out and CloudDocs state is intentionally not force-killed or deleted. | Capture a bounded fresh provider evidence receipt after sync settles; keep transfer/eviction disabled until it is complete. |
+| P0 | Provider end-to-end receipt is absent for the current iCloud incident. | Global probe can time out and CloudDocs state is intentionally not force-killed or deleted; the native copy boundary now requires an integrity-checked three-stream pre-copy cohort before mutation. | Capture a bounded fresh provider evidence receipt after sync settles; keep transfer/eviction disabled until it is complete. |
 | P0 | Disk pressure telemetry and provider queue evidence must remain comparable across loops without retaining raw provider output. | Cloud plans and explicit iCloud health refreshes persist bounded, path-free `LocalVolumeSnapshot`, `ProviderClientRuntimeSnapshot`, and `IcloudSyncHealthEvidenceSnapshot` records under `volume-pressure-evidence`, `provider-client-runtime-evidence`, and `icloud-sync-health-evidence`; iCloud plans now combine them into a timestamp/fingerprint-bound cohort. | Missing, incomplete, malformed, or more-than-five-minute-skewed cohort observations remain blocked; a fresh exact-head native incident plan is still needed to compare the emitted cohort with the live incident. |
 | P1 | Hourly product-development/review loop is not yet live in this repository environment. | `.github/workflows/hourly-product-loop.yml` is scheduled and secret-gated; its bootstrap now registers all five provider keys into contextual-orchestrator KV, but no live receipt or configured secret names are available here. | Configure the orchestrator URL/token, KV DSN/passphrase, and five provider secrets; run once manually and retain a bounded completion receipt without enabling mutation. |
 | P1 | Open PR queue prevents a clean protected release line. | PR #213 is at exact head `c818fa4`; the new-head required checks are queued and GitHub still reports `CHANGES_REQUESTED` from a stale review, so no protected merge has occurred. | Process one PR at a time: current-head review → fix → required checks → fresh approval → normal protected merge; never bypass or self-approve. |
@@ -44,6 +44,7 @@
 - ADR-0003 defines the local Zotero metadata handoff and keeps cloud receipts independent.
 - ADR-0004 defines bounded fixed Homebrew maintenance execution and process-group cleanup.
 - ADR-0006 defines bounded, redacted iCloud health evidence persistence and timestamped comparison.
+- ADR-0007 defines the integrity-checked three-stream cohort at the native-copy mutation boundary.
 - Dynamic Goal/ADR projections are replaceable views over receipts; they cannot authorize mutation.
 - Rust remains the computation and security boundary. Noema, contextual-orchestrator, semantic-data-portal, pg-erd-cloud, fast-mlsirm, or Gemma are added only when a measured gap requires them and their boundary is documented first.
 

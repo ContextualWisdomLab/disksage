@@ -1709,6 +1709,7 @@ fn create_cloud_candidate_receipt(
             cloud::system_now_ms(),
         )?;
         if selected.provider == cloud::CloudProvider::Icloud {
+            cloud::require_pre_copy_evidence_cohort(report.pre_copy_evidence.as_ref())?;
             let health = icloud_health
                 .as_ref()
                 .ok_or_else(|| "icloud-new-copy-admission-evidence-unavailable".to_string())?;
