@@ -475,8 +475,9 @@
         activity?.active_download_progress_millionths ?? "",
         activity?.timed_out ?? false,
       ].join("|");
-      if (next.new_copy_admission_state === "clear"
-        && next.new_copy_admission_blockers.length === 0) {
+      const admissionClear = next.new_copy_admission_state === "clear"
+        && next.new_copy_admission_blockers.length === 0;
+      if (admissionClear) {
         icloudHealthBlockedSinceMs = 0;
         icloudHealthFingerprint = "";
       } else if (icloudHealthFingerprint !== fingerprint) {
@@ -484,10 +485,8 @@
         icloudHealthFingerprint = fingerprint;
       }
       icloudHealth = next;
-      icloudHealthNextCheckAt = Date.now()
-        + (icloudHealth.new_copy_admission_state === "clear"
-          ? RECONCILIATION_INTERVAL_MS
-          : ICLOUD_HEALTH_BLOCKED_RETRY_INTERVAL_MS);
+      icloudHealthNextCheckAt = observedAtMs
+        + (admissionClear ? RECONCILIATION_INTERVAL_MS : ICLOUD_HEALTH_BLOCKED_RETRY_INTERVAL_MS);
     } catch (e) {
       icloudHealth = null;
       icloudHealthError = boundedCloudArchiveErrorMessage("icloud-health", e);
