@@ -49,6 +49,15 @@ describe('release workflow retry contract', () => {
     expect(workflow).toContain('      - "package-lock.json"');
   });
 
+  it('fails closed when an operational CLI help smoke exits nonzero or writes stderr', () => {
+    const workflow = readRepositoryFile('.github/workflows/release.yml');
+    expect(workflow).not.toContain('2>&1 || true');
+    expect(workflow).toContain('help_stderr="$(mktemp)"');
+    expect(workflow).toContain('if ! help_stdout="$("$asset_path" --help 2>"$help_stderr")"; then');
+    expect(workflow).toContain('if [[ -s "$help_stderr" ]]; then');
+    expect(workflow).toContain('rm -f "$help_stderr"');
+  });
+
   it('documents retry-safe concurrency in authoritative evidence', () => {
     const doctoring = readRepositoryFile('docs/doctoring/release-artifact-provenance.md');
     const changelog = readRepositoryFile('CHANGELOG.md');
