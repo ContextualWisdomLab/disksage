@@ -82,12 +82,10 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
     }
     manifest.object_id = root_object_id.unwrap_or_default();
     let deadline = Instant::now() + ARTIFACT_MANIFEST_BUDGET;
-    let walker = jwalk::WalkDir::new(root)
+    let walker = walkdir::WalkDir::new(root)
         .follow_links(false)
-        .skip_hidden(false)
-        .process_read_dir(|_depth, _path, _state, children| {
-            children.retain(|r| r.as_ref().map(scanner::keep_entry).unwrap_or(true));
-        });
+        .into_iter()
+        .filter_entry(|entry| entry.depth() == 0 || scanner::keep_entry(entry));
 
     for entry in walker {
         if Instant::now() >= deadline || manifest.records.len() >= ARTIFACT_MANIFEST_MAX_RECORDS {
@@ -99,10 +97,6 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
             manifest.scan_complete = false;
             continue;
         };
-        if entry.read_children_error.is_some() {
-            manifest.skipped = manifest.skipped.saturating_add(1);
-            manifest.scan_complete = false;
-        }
         let entry_path = entry.path();
         let relative = entry_path
             .strip_prefix(root)
@@ -178,7 +172,7 @@ fn metadata_fingerprint(records: &[String]) -> String {
 
 /// 마커 인접 아티팩트 디렉토리를 찾아 mtime 나이로 걸러 크기 내림차순으로 반환.
 ///
-/// 2패스로 나눈 이유: jwalk는 병렬로 디렉토리를 순회해 부모/자식 방문 순서를
+/// 2패스로 나눈 이유: 순회 백엔드의 방문 순서에 의존하지 않고 부모/자식 관계를
 /// 보장하지 않는다. 그래서 "이미 찾은 아티팩트의 하위는 건너뛴다" 식으로 순회
 /// 도중 걸러내면, 중첩 node_modules의 자식이 부모보다 먼저 방문될 경우 둘 다
 /// 별도 항목으로 남는다. 1패스에서는 마커 인접 검증까지만 마친 후보 경로를 전부
@@ -186,12 +180,12 @@ fn metadata_fingerprint(records: &[String]) -> String {
 /// 계산해 중첩분을 이중 계산하지 않는다.
 pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArtifact> {
     let mut candidates: Vec<PathBuf> = Vec::new();
-    let walker = jwalk::WalkDir::new(root)
+    let walker = walkdir::WalkDir::new(root)
         .follow_links(false)
-        .skip_hidden(false)
-        .process_read_dir(|_depth, _path, _state, children| {
+        .into_iter()
+        .filter_entry(|entry| {
             // 심링크/reparse point 제외 — scanner의 순회 전반 패턴과 동일
-            children.retain(|r| r.as_ref().map(scanner::keep_entry).unwrap_or(true));
+            entry.depth() == 0 || scanner::keep_entry(entry)
         });
 
     for entry in walker {

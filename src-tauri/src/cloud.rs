@@ -1155,34 +1155,29 @@ pub fn collect_archive_files_bounded(
     let max_entries = max_entries.max(1);
     let max_duration = max_duration.max(Duration::from_millis(1));
     let mut complete = true;
-    let walker = jwalk::WalkDir::new(root)
+    let walker = walkdir::WalkDir::new(root)
         .follow_links(false)
-        .skip_hidden(false)
-        .parallelism(jwalk::Parallelism::Serial)
-        .process_read_dir(move |_depth, _path, _state, children| {
-            children.retain(|result| {
-                result
-                    .as_ref()
-                    .map(|entry| {
-                        let path = entry.path();
-                        if excluded.iter().any(|cloud| path.starts_with(cloud)) {
-                            return false;
-                        }
-                        if entry.file_type().is_dir()
-                            && entry
-                                .file_name()
-                                .to_str()
-                                .map(pruned_directory)
-                                .unwrap_or(true)
-                        {
-                            return false;
-                        }
-                        crate::scanner::keep_entry(entry)
-                    })
+        .into_iter()
+        .filter_entry(move |entry| {
+            if entry.depth() == 0 {
+                return true;
+            }
+            let path = entry.path();
+            if excluded.iter().any(|cloud| path.starts_with(cloud)) {
+                return false;
+            }
+            if entry.file_type().is_dir()
+                && entry
+                    .file_name()
+                    .to_str()
+                    .map(pruned_directory)
                     .unwrap_or(true)
-            });
+            {
+                return false;
+            }
+            crate::scanner::keep_entry(entry)
         });
-    for result in walker.into_iter() {
+    for result in walker {
         if visited_entries >= max_entries {
             complete = false;
             stop_reasons.push("source-scan-entry-limit".into());
