@@ -16,6 +16,9 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("동기화 진단:");
     expect(source).toContain("no_progress_create_count");
     expect(source).toContain("Finder에 남은 복사 대기는 취소");
+    expect(source).toContain("Lineage 연결관계");
+    expect(source).toContain("검증 복사 영수증 → provider attestation → Goal/ADR");
+    expect(source).toContain("candidate.metadata_fingerprint");
     expect(source).toContain("마지막 증거 확인:");
     expect(source).toContain("evidenceObservedAt(icloudHealth.observed_at_ms)");
     expect(source).toContain("ICLOUD_HEALTH_BLOCKED_RETRY_INTERVAL_MS");

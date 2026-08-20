@@ -1249,6 +1249,25 @@
             <div class="context">
               맥락: {candidate.source_context} · 대상 계정: {accountScopeLabel(candidate.destination_account_scope)} · lineage: {candidate.metadata_fingerprint.slice(0, 12)}
             </div>
+            <details class="lineage">
+              <summary>Lineage 연결관계</summary>
+              <ol>
+                <li>
+                  원본 Entity · <code>{candidate.metadata_fingerprint}</code> · {candidate.source_context}
+                </li>
+                <li>
+                  생산 시각 Activity · {candidate.production_time_source} · 신뢰도 {candidate.production_time_confidence}
+                </li>
+                <li>아카이브 Entity · {candidate.kind} · {fmtBytes(candidate.bytes)}</li>
+                <li>공급자 Entity · {candidate.provider} · {candidate.destination_account_scope} · {candidate.dst}</li>
+              </ol>
+              <p class="context">
+                검증 복사 영수증 → provider attestation → Goal/ADR → 명시적 휴지통 이동 순서로 연결됩니다.
+                {candidate.blocked_reason
+                  ? ` 현재 관계 차단: ${cloudDecisionReasonLabel(candidate.blocked_reason)}.`
+                  : " 아직 영수증이 없어 provider item과 eviction permit은 확정되지 않았습니다."}
+              </p>
+            </details>
             {#if candidate.requires_review}
               <div class="review-controls">
                 {#if matchingReviewDecision(candidate)?.disposition === "approved"}
