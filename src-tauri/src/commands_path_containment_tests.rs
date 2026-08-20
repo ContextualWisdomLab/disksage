@@ -29,10 +29,10 @@ fn node_view_preserves_scanned_paths_and_sizes_for_authorized_directories() {
     scan.dir_sizes.insert(child.clone(), 7);
 
     let view = node_view(&scan, &root).expect("ordinary scanned directory must remain visible");
-    assert_eq!(view.path, root.to_string_lossy());
+    assert_eq!(view.path, root.to_string_lossy().into_owned());
     assert_eq!(view.size, 7);
     assert_eq!(view.entries.len(), 1);
-    assert_eq!(view.entries[0].path, child.to_string_lossy());
+    assert_eq!(view.entries[0].path, child.to_string_lossy().into_owned());
     assert_eq!(view.entries[0].size, 7);
     assert!(view.entries[0].is_dir);
 }
