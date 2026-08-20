@@ -20,6 +20,7 @@ use disksage_lib::provider_recovery::{self, ProviderRecoveryOutput};
 struct Args {
     provider: CloudProvider,
     output: Option<PathBuf>,
+    allow_graceful_term: bool,
 }
 
 #[cfg(not(coverage))]
@@ -36,6 +37,7 @@ fn parse_provider(value: &str) -> Result<CloudProvider, String> {
 fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut provider = None;
     let mut output = None;
+    let mut allow_graceful_term = false;
     let mut index = 0usize;
     while index < args.len() {
         match args[index].as_str() {
@@ -61,9 +63,15 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                     return Err("--output may be supplied once".into());
                 }
             }
+            "--allow-graceful-term" => {
+                if allow_graceful_term {
+                    return Err("--allow-graceful-term may be supplied once".into());
+                }
+                allow_graceful_term = true;
+            }
             "--help" | "-h" => {
                 return Err(
-                    "usage: disksage-provider-recovery --provider onedrive|google-drive [--output ABSOLUTE_NEW_FILE.json]"
+                    "usage: disksage-provider-recovery --provider onedrive|google-drive [--allow-graceful-term] [--output ABSOLUTE_NEW_FILE.json]"
                         .into(),
                 )
             }
@@ -75,7 +83,11 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     if !provider_recovery::recovery_supported(provider) {
         return Err("provider-recovery-not-supported".into());
     }
-    Ok(Args { provider, output })
+    Ok(Args {
+        provider,
+        output,
+        allow_graceful_term,
+    })
 }
 
 #[cfg(not(coverage))]
@@ -106,7 +118,11 @@ fn write_create_new(path: &Path, output: &ProviderRecoveryOutput) -> Result<(), 
 #[cfg(not(coverage))]
 fn run(args: &[String]) -> Result<(), String> {
     let args = parse_args(args)?;
-    let output = provider_recovery::recover_provider_client(args.provider, cloud::system_now_ms())?;
+    let output = provider_recovery::recover_provider_client_with_options(
+        args.provider,
+        cloud::system_now_ms(),
+        args.allow_graceful_term,
+    )?;
     if let Some(path) = args.output.as_deref() {
         write_create_new(path, &output)?;
     }
@@ -163,6 +179,24 @@ mod tests {
             "/tmp/one.json".into(),
             "--output".into(),
             "/tmp/two.json".into(),
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn graceful_term_is_explicit_and_not_duplicable() {
+        let args = parse_args(&[
+            "--provider".into(),
+            "google-drive".into(),
+            "--allow-graceful-term".into(),
+        ])
+        .unwrap();
+        assert!(args.allow_graceful_term);
+        assert!(parse_args(&[
+            "--provider".into(),
+            "google-drive".into(),
+            "--allow-graceful-term".into(),
+            "--allow-graceful-term".into(),
         ])
         .is_err());
     }

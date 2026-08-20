@@ -82,7 +82,9 @@ observed afterward and can never claim cloud write, upload attestation, or sourc
 The same recovery contract is available to automation through the
 `disksage-provider-recovery --provider onedrive|google-drive` CLI. Its optional 0600 output is a
 recovery receipt, not a cloud-transfer receipt; a quit timeout or failed quit remains a blocker and
-must not be retried through Finder or a force-kill.
+must not be retried through Finder or a force-kill. An operator may explicitly add
+`--allow-graceful-term` to request SIGTERM for that same verified app when AppleScript cannot quit
+it; SIGKILL, arbitrary PID selection, and iCloud termination remain unavailable.
 
 Podman VM storage is a separate local reclaim domain, not cloud data. DiskSage exposes read-only
 machine, guest-filesystem, image, container, volume, and raw-image evidence through the same

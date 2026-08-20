@@ -160,6 +160,26 @@ fn request_quit(app: &str) -> Result<(), String> {
 }
 
 #[cfg(not(coverage))]
+fn request_graceful_term(app: &str) -> Result<(), String> {
+    // `app` comes only from the fixed provider map. SIGTERM is a graceful request; SIGKILL is
+    // intentionally never used because an active desktop client may still be flushing state.
+    let ok = run_bounded(Path::new("/usr/bin/killall"), &["-TERM", "--", app])?;
+    if !ok
+        && runtime_observed(
+            if app == "OneDrive" {
+                CloudProvider::Onedrive
+            } else {
+                CloudProvider::GoogleDrive
+            },
+            0,
+        )
+    {
+        return Err("provider-recovery-graceful-term-failed".into());
+    }
+    Ok(())
+}
+
+#[cfg(not(coverage))]
 /// Request a bounded restart of a user-space provider client.
 ///
 /// iCloud is deliberately rejected because its daemon is system-managed.  A successful return
@@ -168,6 +188,17 @@ fn request_quit(app: &str) -> Result<(), String> {
 pub fn recover_provider_client(
     provider: CloudProvider,
     observed_at_ms: u64,
+) -> Result<ProviderRecoveryOutput, String> {
+    recover_provider_client_with_options(provider, observed_at_ms, false)
+}
+
+#[cfg(not(coverage))]
+/// Request a bounded provider restart, optionally escalating a failed AppleScript quit to an
+/// explicit, graceful SIGTERM of the fixed verified desktop client.
+pub fn recover_provider_client_with_options(
+    provider: CloudProvider,
+    observed_at_ms: u64,
+    allow_graceful_term: bool,
 ) -> Result<ProviderRecoveryOutput, String> {
     #[cfg(not(target_os = "macos"))]
     {
@@ -180,7 +211,12 @@ pub fn recover_provider_client(
             app_name(provider).ok_or_else(|| "provider-recovery-system-managed".to_string())?;
         let path = app_path(provider)?;
         let pre_runtime_observed = runtime_observed(provider, observed_at_ms);
-        request_quit(app)?;
+        if let Err(quit_error) = request_quit(app) {
+            if !allow_graceful_term {
+                return Err(quit_error);
+            }
+            request_graceful_term(app)?;
+        }
 
         let quit_deadline = Instant::now() + Duration::from_secs(10);
         while runtime_observed(provider, observed_at_ms) && Instant::now() < quit_deadline {
@@ -204,7 +240,11 @@ pub fn recover_provider_client(
         Ok(ProviderRecoveryOutput {
             schema_version: PROVIDER_RECOVERY_SCHEMA_VERSION,
             provider,
-            action: "restart-provider-client".into(),
+            action: if allow_graceful_term {
+                "restart-provider-client-with-graceful-term".into()
+            } else {
+                "restart-provider-client".into()
+            },
             pre_runtime_observed,
             quit_requested: true,
             launch_requested: true,
