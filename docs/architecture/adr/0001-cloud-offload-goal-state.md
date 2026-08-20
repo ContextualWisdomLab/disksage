@@ -123,6 +123,15 @@ names; unrelated app-data files and all provider databases are outside the clean
 Provider activity evidence remains a separate bounded receipt and is never copied into these
 capacity/process records or reconstructed from an incomplete probe.
 
+### Operational amendment (2026-08-21)
+
+The provider-global-sync panel records the local observation time returned by each bounded
+diagnostic and tells the operator that the next automatic recheck is one minute later. A
+temporarily disconnected or unreadable File Provider root must not prevent the read-only provider
+diagnostic or the fixed OneDrive/Google Drive client-recovery request from running; destination
+readability remains mandatory for copy, attestation, and eviction mutations. This keeps a Finder
+“copy preparing” incident actionable without treating a recovery request as cloud-write evidence.
+
 ## Consequences
 
 - `is_local_current=true` and `is_uploaded=false` produces `pending-upload` and no eviction permit.
