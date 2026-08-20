@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-20 (Asia/Seoul)  
-**Repository head:** `feat/provider-sync-dynamic-goals` @ `0cf3d27`  
+**Repository head:** `feat/provider-sync-dynamic-goals` @ `7849920`  
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.  
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
 
@@ -30,7 +30,7 @@
 | --- | --- | --- | --- |
 | P0 | Provider end-to-end receipt is absent for the current iCloud incident. | Global probe can time out and CloudDocs state is intentionally not force-killed or deleted. | Capture a bounded fresh provider evidence receipt after sync settles; keep transfer/eviction disabled until it is complete. |
 | P0 | Disk pressure telemetry is not durable enough for incident comparison. | `df`, process, and bounded probe results are operator evidence only. | Store redacted capacity/process summaries with timestamp and evidence hash, never raw provider dumps. |
-| P1 | No hourly product-development/review loop is declared in this repository. | `.github/workflows` currently contains release and test workflows; no `schedule` trigger was found. | Add one minimal scheduled workflow only after its contextual-orchestrator/OpenCode Agent contract, secret allow-list, and no-COPILOT policy are reviewed. |
+| P1 | Hourly product-development/review loop is not yet live in this repository environment. | `.github/workflows/hourly-product-loop.yml` is now scheduled and secret-gated; the first live agent receipt and configured secret names are not available here. | Configure only `CONTEXTUAL_ORCHESTRATOR_URL` and `CONTEXTUAL_ORCHESTRATOR_TOKEN`, run once manually, and retain a bounded completion receipt without enabling mutation. |
 | P1 | Open PR queue prevents a clean protected release line. | At snapshot, 50 PRs are open; #240 merged normally. #213 and #209 still need current-head review/check convergence. | Process one PR at a time: current-head review → fix → required checks → normal protected merge; never bypass or self-approve. |
 | P1 | Current UI coverage is contract-heavy rather than runtime E2E for native File Provider states. | Rust and Svelte contract suites pass in CI; provider operations are not safely reproducible on this full disk. | Add a deterministic fixture-backed state machine test for `local-current + is_uploaded=false`, provider timeout, and receipt invalidation. |
 | P1 | Ontology/catalog integrations are export boundaries, not deployed services. | Naruon/semantic catalog and Zotero local API docs/contracts exist; no Noema/contextual-orchestrator runtime dependency is required. | Keep integrations optional and path-free; add live service tests only when a concrete consumer and secret boundary exist. |
