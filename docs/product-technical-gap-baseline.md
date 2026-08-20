@@ -242,3 +242,9 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   Finder cancel control is still the only supported cancellation action. Caches were not uploaded
   to a provider because they are reproducible cleanup data, not user-file lineage. Evidence is
   bound to source head `e71ecd13e8c91acf10093271fd58414cae5fe349`.
+- At `2026-08-21 06:43 +0900`, DiskSage PR #213 advanced to exact head
+  `41d27dfa8bd66b5986d00ce84d20c7f7b2cdb3b0` with the observed-cache catalog and incident ADR
+  evidence. Its exact-head hosted checks restarted (no terminal failure observed yet), while the
+  protected merge state remains blocked pending fresh review/required checks. PR #244 has all
+  required build, test, security, and coverage checks terminal-successful except its OpenCode
+  review remains queued; no review or merge gate was bypassed.
