@@ -1,10 +1,13 @@
 //! Provider OAuth CLI entrypoint with a successful terminal help contract.
 //!
 //! The full OAuth lifecycle implementation remains in the adjacent non-binary include. This thin
-//! entrypoint intercepts only a sole `--help` or `-h` request so help exits successfully on
-//! stdout; every domain action and invalid request continues through the existing fail-closed
-//! implementation unchanged.
+//! entrypoint consumes host arguments as `OsString`, rejects undecodable host input before the
+//! legacy string parser can panic, and intercepts only a sole `--help` or `-h` request so help
+//! exits successfully on stdout. Every domain action and other invalid request continues through
+//! the existing fail-closed implementation unchanged.
 
+#[cfg(not(coverage))]
+use std::ffi::{OsStr, OsString};
 #[cfg(not(coverage))]
 use std::path::PathBuf;
 
@@ -33,13 +36,21 @@ enum TerminalParse {
 }
 
 #[cfg(not(coverage))]
+fn is_help_argument(value: &OsStr) -> bool {
+    value == OsStr::new("--help") || value == OsStr::new("-h")
+}
+
+#[cfg(not(coverage))]
 fn parse_terminal_args(
-    args: &[String],
+    args: &[OsString],
     _environment_home: Option<PathBuf>,
 ) -> Result<TerminalParse, String> {
+    if args.iter().any(|value| value.to_str().is_none()) {
+        return Err("argument-encoding-invalid".into());
+    }
     match args {
-        [flag] if flag == "--help" || flag == "-h" => Ok(TerminalParse::Help),
-        values if values.iter().any(|value| value == "--help" || value == "-h") => {
+        [flag] if is_help_argument(flag) => Ok(TerminalParse::Help),
+        values if values.iter().any(|value| is_help_argument(value)) => {
             Err("help must be used alone".into())
         }
         _ => Ok(TerminalParse::Run),
@@ -48,7 +59,7 @@ fn parse_terminal_args(
 
 #[cfg(not(coverage))]
 fn main() {
-    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    let args = std::env::args_os().skip(1).collect::<Vec<_>>();
     match parse_terminal_args(&args, std::env::var_os("HOME").map(PathBuf::from)) {
         Ok(TerminalParse::Help) => println!("{}", implementation::usage_text()),
         Ok(TerminalParse::Run) => implementation::invoke_main(),
