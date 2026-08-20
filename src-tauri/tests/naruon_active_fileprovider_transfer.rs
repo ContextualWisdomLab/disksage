@@ -1,4 +1,6 @@
-use disksage_lib::cloud::{CloudPlanReport, CloudProvider, CloudRoot, ExactDuplicateSummary};
+use disksage_lib::cloud::{
+    CloudPlanOptions, CloudPlanReport, CloudProvider, CloudRoot, ExactDuplicateSummary,
+};
 use disksage_lib::icloud_sync_health::{
     IcloudFileProviderActivityEvidence, IcloudSyncHealthReport, IcloudUploadQueueSummary,
     ManagedDatabaseFileEvidence, ICLOUD_FILE_PROVIDER_ACTIVITY_SCHEMA_VERSION,
@@ -25,7 +27,11 @@ fn icloud_report() -> CloudPlanReport {
             access_issue: None,
         },
         generated_at_ms: 20,
-        source_selection_policy: None,
+        source_selection_policy: Some(CloudPlanOptions {
+            min_size_bytes: 90 * 1024 * 1024,
+            min_age_days: 30,
+            limit: 200,
+        }),
         candidates: Vec::new(),
         candidate_bytes: 0,
         potentially_reclaimable_bytes: 0,
