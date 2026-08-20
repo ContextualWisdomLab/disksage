@@ -44,6 +44,9 @@ describe('release workflow retry contract', () => {
     expect(rustTests).toBeGreaterThan(rustSource);
     expect(frontendSource).toBeGreaterThanOrEqual(0);
     expect(frontendTests).toBeGreaterThan(frontendSource);
+    expect(workflow).toContain('      - ".github/workflows/release.yml"');
+    expect(workflow).toContain('      - "package.json"');
+    expect(workflow).toContain('      - "package-lock.json"');
   });
 
   it('documents retry-safe concurrency in authoritative evidence', () => {
