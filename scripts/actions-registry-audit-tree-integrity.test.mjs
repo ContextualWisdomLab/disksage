@@ -19,14 +19,14 @@ function protectedMainFetch(tree) {
   };
 }
 
-test('protected-main workflow discovery rejects malformed blob identity evidence', async () => {
+test('protected-main workflow discovery rejects unsafe normalized blob identity evidence', async () => {
   await assert.rejects(
     protectedWorkflowPaths(
       protectedMainFetch({
         truncated: false,
         tree: [
           { type: 'blob', path: '.github/workflows/test.yml' },
-          { type: 'blob', path: null },
+          { type: 'blob', path: '../.github/workflows/escape.yml' },
         ],
       }),
       repository,
@@ -36,7 +36,7 @@ test('protected-main workflow discovery rejects malformed blob identity evidence
   );
 });
 
-test('active-PR workflow discovery rejects malformed exact-head blob identity evidence', async () => {
+test('active-PR workflow discovery rejects unsafe exact-head blob identity evidence', async () => {
   const pullRequests = [
     {
       number: 192,
@@ -54,7 +54,7 @@ test('active-PR workflow discovery rejects malformed exact-head blob identity ev
           truncated: false,
           tree: [
             { type: 'blob', path: '.github/workflows/actions-registry-audit.yml' },
-            { type: 'blob', path: null },
+            { type: 'blob', path: '../.github/workflows/escape.yml' },
           ],
         };
       }
