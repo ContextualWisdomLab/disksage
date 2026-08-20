@@ -139,6 +139,9 @@ The follow-up bounded dump also exposed repeated File Provider `-1005 itemNotFou
 Google Drive upload/download and reconciliation were still active; DiskSage classifies that
 path-free condition as `provider-global-sync-item-not-found` and keeps copy, attestation, and
 eviction fail-closed.
+The same incident reclaimed only generated local artifacts; `.codegraph` indexes are now included
+in the bounded development-artifact inventory and identity-checked OS-Trash path, never in cloud
+offload or provider-managed cleanup.
 The provider UI keeps a path-free blocker fingerprint across bounded observations and escalates
 the operator guidance after 15 minutes of the same blocker; this is advisory state only and never
 authorizes a cloud write, provider restart, or source eviction.
