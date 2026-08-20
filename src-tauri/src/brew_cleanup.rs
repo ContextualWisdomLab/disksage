@@ -175,10 +175,21 @@ fn open_verified_brew(path: &Path) -> Result<VerifiedBrewExecutable, String> {
 
 #[cfg(target_os = "macos")]
 fn run_command(mut command: std::process::Command) -> Result<CommandOutput, String> {
+    use std::os::unix::process::CommandExt;
     use std::process::Stdio;
     use std::thread;
     use std::time::{Duration, Instant};
 
+    // Keep the verified brew wrapper and any descendants in one private group so a timeout cannot
+    // leave a maintenance child holding the output pipes or continuing after the gate fails.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
     let mut child = command
         .env("HOMEBREW_NO_AUTO_UPDATE", "1")
         .stdout(Stdio::piped())
@@ -195,12 +206,17 @@ fn run_command(mut command: std::process::Command) -> Result<CommandOutput, Stri
         .ok_or_else(|| "brew-cleanup-stderr-unavailable".to_string())?;
     let stdout_reader = thread::spawn(move || read_bounded(&mut stdout));
     let stderr_reader = thread::spawn(move || read_bounded(&mut stderr));
+    let child_pid = child.id();
+    let kill_group = || unsafe {
+        let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
+    };
 
     let deadline = Instant::now() + Duration::from_millis(COMMAND_TIMEOUT_MS);
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() >= deadline => {
+                kill_group();
                 let _ = child.kill();
                 let _ = child.wait();
                 drop(stdout_reader);
@@ -209,6 +225,7 @@ fn run_command(mut command: std::process::Command) -> Result<CommandOutput, Stri
             }
             Ok(None) => thread::sleep(Duration::from_millis(50)),
             Err(_) => {
+                kill_group();
                 let _ = child.kill();
                 let _ = child.wait();
                 drop(stdout_reader);
