@@ -304,6 +304,23 @@ pub fn connections_path(app_data_dir: &Path) -> PathBuf {
     app_data_dir.join("cloud-oauth-connections.json")
 }
 
+fn connection_document_parent(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+fn validate_connection_document_parent(parent: &Path, allow_missing: bool) -> Result<(), String> {
+    match std::fs::symlink_metadata(parent) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            Err("oauth-connection-directory-unsafe".into())
+        }
+        Ok(_) => Ok(()),
+        Err(error) if allow_missing && error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err("oauth-connection-directory-unavailable".into()),
+    }
+}
+
 pub fn load_connections(path: &Path) -> Result<Vec<OAuthConnection>, String> {
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -316,6 +333,7 @@ pub fn load_connections(path: &Path) -> Result<Vec<OAuthConnection>, String> {
     if metadata.len() > MAX_CONNECTION_DOCUMENT_BYTES {
         return Err("oauth-connection-document-too-large".into());
     }
+    validate_connection_document_parent(connection_document_parent(path), false)?;
     let bytes = std::fs::read(path).map_err(|_| "oauth-connection-document-unreadable")?;
     let document: ConnectionDocument =
         serde_json::from_slice(&bytes).map_err(|_| "oauth-connection-document-invalid")?;
@@ -337,10 +355,10 @@ fn save_connections(path: &Path, connections: &[OAuthConnection]) -> Result<(), 
     for connection in connections {
         validate_connection(connection)?;
     }
-    let parent = path
-        .parent()
-        .ok_or_else(|| "oauth-connection-directory-invalid".to_string())?;
+    let parent = connection_document_parent(path);
+    validate_connection_document_parent(parent, true)?;
     std::fs::create_dir_all(parent).map_err(|_| "oauth-connection-directory-unavailable")?;
+    validate_connection_document_parent(parent, false)?;
     if let Ok(metadata) = std::fs::symlink_metadata(path) {
         if metadata.file_type().is_symlink() || !metadata.is_file() {
             return Err("oauth-connection-document-not-regular-file".into());
