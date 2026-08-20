@@ -73,3 +73,26 @@ test('live registry uses the tested Node runtime and bounded transient GitHub AP
   );
   assert.match(liveRegistryJob, /attempt >= 3/);
 });
+
+test('live registry binds executed audit code and protected-main evidence to one immutable SHA', () => {
+  assert.match(
+    liveRegistryJob,
+    /ref:\s+\$\{\{\s*github\.sha\s*\}\}/,
+    'live audit must execute the exact triggering protected-main source revision',
+  );
+  assert.match(liveRegistryJob, /persist-credentials:\s+false/);
+  assert.match(
+    liveRegistryJob,
+    /EXPECTED_MAIN_SHA:\s+\$\{\{\s*github\.sha\s*\}\}/,
+    'the same immutable source revision must be passed into protected-main drift validation',
+  );
+  assert.match(
+    liveRegistryJob,
+    /auditActionsRegistry\(fetchJson, repository, expectedMainSha\)/,
+  );
+  assert.doesNotMatch(
+    liveRegistryJob,
+    /commits\/\$\{encodeURIComponent\(metadata\.default_branch\)\}/,
+    'live audit must not silently retarget evidence to a newer main than the executed audit code',
+  );
+});
