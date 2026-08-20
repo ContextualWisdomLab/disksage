@@ -53,6 +53,22 @@ test('protected-main workflow discovery rejects duplicate normalized workflow id
   );
 });
 
+test('protected-main workflow discovery rejects symlink-mode workflow blobs', async () => {
+  await assert.rejects(
+    protectedWorkflowPaths(
+      protectedMainFetch({
+        truncated: false,
+        tree: [
+          { type: 'blob', mode: '120000', path: '.github/workflows/test.yml' },
+        ],
+      }),
+      repository,
+      protectedMainSha,
+    ),
+    /protected-main-tree-entry-invalid/,
+  );
+});
+
 test('active-PR workflow discovery rejects unsafe exact-head blob identity evidence', async () => {
   const pullRequests = [
     {
@@ -72,6 +88,42 @@ test('active-PR workflow discovery rejects unsafe exact-head blob identity evide
           tree: [
             { type: 'blob', path: '.github/workflows/actions-registry-audit.yml' },
             { type: 'blob', path: '../.github/workflows/escape.yml' },
+          ],
+        };
+      }
+      if (url.includes('/pulls/192/files')) {
+        return [
+          { filename: '.github/workflows/actions-registry-audit.yml', status: 'modified' },
+        ];
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }, repository, pullRequests),
+    /workflow-tree-entry-invalid/,
+  );
+});
+
+test('active-PR workflow discovery rejects symlink-mode exact-head workflow blobs', async () => {
+  const pullRequests = [
+    {
+      number: 192,
+      head: {
+        sha: pullHeadSha,
+        repo: { full_name: repository },
+      },
+    },
+  ];
+
+  await assert.rejects(
+    activePullRequestWorkflowPaths(async (url) => {
+      if (url.includes(`/git/trees/${pullHeadSha}`)) {
+        return {
+          truncated: false,
+          tree: [
+            {
+              type: 'blob',
+              mode: '120000',
+              path: '.github/workflows/actions-registry-audit.yml',
+            },
           ],
         };
       }
