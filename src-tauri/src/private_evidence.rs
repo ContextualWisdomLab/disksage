@@ -18,35 +18,274 @@ pub struct PrivateEvidenceReceipt {
 }
 
 #[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ObjectBoundPublicationError {
+    ParentMissing,
+    ParentUnavailable,
+    ParentUnsafe,
+    ParentWritableByOthers,
+    ParentIdentityDrift,
+    ForbiddenRootUnavailable,
+    InsideForbiddenRoot,
+    NameInvalid,
+    CreateFailed,
+    ModeInvalid,
+    WriteFailed,
+    MetadataFailed,
+    ParentSyncFailed,
+    RecordIdentityDrift,
+    InvalidationFailed,
+}
+
+#[cfg(unix)]
 fn revalidate_private_parent(
     directory: &std::fs::File,
     canonical_parent: &Path,
     expected_dev: u64,
     expected_ino: u64,
-) -> Result<(), String> {
+) -> Result<(), ObjectBoundPublicationError> {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
     let opened = directory
         .metadata()
-        .map_err(|_| "private-evidence-parent-unavailable".to_string())?;
+        .map_err(|_| ObjectBoundPublicationError::ParentUnavailable)?;
     if !opened.is_dir() || opened.file_type().is_symlink() {
-        return Err("private-evidence-parent-unsafe".into());
+        return Err(ObjectBoundPublicationError::ParentUnsafe);
     }
     if opened.permissions().mode() & 0o022 != 0 {
-        return Err("private-evidence-parent-writable-by-others".into());
+        return Err(ObjectBoundPublicationError::ParentWritableByOthers);
     }
 
     let named = std::fs::symlink_metadata(canonical_parent)
-        .map_err(|_| "private-evidence-parent-identity-drift".to_string())?;
+        .map_err(|_| ObjectBoundPublicationError::ParentIdentityDrift)?;
     if named.file_type().is_symlink()
         || !named.is_dir()
         || named.dev() != expected_dev
         || named.ino() != expected_ino
     {
-        return Err("private-evidence-parent-identity-drift".into());
+        return Err(ObjectBoundPublicationError::ParentIdentityDrift);
     }
     if named.permissions().mode() & 0o022 != 0 {
-        return Err("private-evidence-parent-writable-by-others".into());
+        return Err(ObjectBoundPublicationError::ParentWritableByOthers);
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn publication_error_string(error: ObjectBoundPublicationError) -> String {
+    match error {
+        ObjectBoundPublicationError::ParentMissing => "private-evidence-parent-missing",
+        ObjectBoundPublicationError::ParentUnavailable => "private-evidence-parent-unavailable",
+        ObjectBoundPublicationError::ParentUnsafe => "private-evidence-parent-unsafe",
+        ObjectBoundPublicationError::ParentWritableByOthers => {
+            "private-evidence-parent-writable-by-others"
+        }
+        ObjectBoundPublicationError::ParentIdentityDrift => {
+            "private-evidence-parent-identity-drift"
+        }
+        ObjectBoundPublicationError::ForbiddenRootUnavailable => {
+            "private-evidence-source-root-unavailable"
+        }
+        ObjectBoundPublicationError::InsideForbiddenRoot => "private-evidence-inside-source-root",
+        ObjectBoundPublicationError::NameInvalid => "private-evidence-name-invalid",
+        ObjectBoundPublicationError::CreateFailed => "private-evidence-create-failed",
+        ObjectBoundPublicationError::ModeInvalid => "private-evidence-mode-invalid",
+        ObjectBoundPublicationError::WriteFailed => "private-evidence-write-failed",
+        ObjectBoundPublicationError::MetadataFailed => "private-evidence-metadata-failed",
+        ObjectBoundPublicationError::ParentSyncFailed => "private-evidence-parent-sync-failed",
+        ObjectBoundPublicationError::RecordIdentityDrift => {
+            "private-evidence-record-identity-drift"
+        }
+        ObjectBoundPublicationError::InvalidationFailed => {
+            "private-evidence-invalidation-failed"
+        }
+    }
+    .to_string()
+}
+
+/// Create and durably publish one immutable byte record relative to the exact private parent
+/// directory object admitted by the caller-supplied pathname.
+///
+/// The parent must already exist and must not be writable by group or other principals. The
+/// pathname is opened with `O_NOFOLLOW` before canonicalization and the opened directory is bound to
+/// the device/inode observed during initial admission. Record creation is descriptor-relative and
+/// create-new. `forbidden_root`, when present, is checked only after the opened parent has been bound
+/// and revalidated, so a pathname replacement cannot redirect publication into that root.
+#[cfg(unix)]
+pub(crate) fn write_object_bound_bytes_create_new(
+    path: &Path,
+    encoded: &[u8],
+    unix_mode: u32,
+    forbidden_root: Option<&Path>,
+) -> Result<(), ObjectBoundPublicationError> {
+    write_object_bound_bytes_create_new_with_hooks(
+        path,
+        encoded,
+        unix_mode,
+        forbidden_root,
+        || {},
+        || {},
+        || {},
+    )
+}
+
+#[cfg(unix)]
+fn write_object_bound_bytes_create_new_with_hooks<F, G, H>(
+    path: &Path,
+    encoded: &[u8],
+    unix_mode: u32,
+    forbidden_root: Option<&Path>,
+    before_parent_open: F,
+    before_create: G,
+    before_finalize: H,
+) -> Result<(), ObjectBoundPublicationError>
+where
+    F: FnOnce(),
+    G: FnOnce(),
+    H: FnOnce(),
+{
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or(ObjectBoundPublicationError::ParentMissing)?;
+    let parent_metadata = std::fs::symlink_metadata(parent)
+        .map_err(|_| ObjectBoundPublicationError::ParentUnavailable)?;
+    if !parent_metadata.is_dir() || parent_metadata.file_type().is_symlink() {
+        return Err(ObjectBoundPublicationError::ParentUnsafe);
+    }
+    if parent_metadata.permissions().mode() & 0o022 != 0 {
+        return Err(ObjectBoundPublicationError::ParentWritableByOthers);
+    }
+    let expected_parent_dev = parent_metadata.dev();
+    let expected_parent_ino = parent_metadata.ino();
+
+    before_parent_open();
+
+    let parent_c = CString::new(parent.as_os_str().as_bytes())
+        .map_err(|_| ObjectBoundPublicationError::ParentUnavailable)?;
+    let directory_fd = unsafe {
+        libc::open(
+            parent_c.as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+        )
+    };
+    if directory_fd < 0 {
+        return Err(ObjectBoundPublicationError::ParentIdentityDrift);
+    }
+    let directory = unsafe { std::fs::File::from_raw_fd(directory_fd) };
+    let opened_parent_metadata = directory
+        .metadata()
+        .map_err(|_| ObjectBoundPublicationError::ParentUnavailable)?;
+    if opened_parent_metadata.dev() != expected_parent_dev
+        || opened_parent_metadata.ino() != expected_parent_ino
+    {
+        return Err(ObjectBoundPublicationError::ParentIdentityDrift);
+    }
+
+    let canonical_parent = std::fs::canonicalize(parent)
+        .map_err(|_| ObjectBoundPublicationError::ParentIdentityDrift)?;
+    revalidate_private_parent(
+        &directory,
+        &canonical_parent,
+        expected_parent_dev,
+        expected_parent_ino,
+    )?;
+
+    if let Some(forbidden_root) = forbidden_root {
+        let canonical_forbidden = std::fs::canonicalize(forbidden_root)
+            .map_err(|_| ObjectBoundPublicationError::ForbiddenRootUnavailable)?;
+        if canonical_parent.starts_with(canonical_forbidden) {
+            return Err(ObjectBoundPublicationError::InsideForbiddenRoot);
+        }
+    }
+
+    let file_name = path
+        .file_name()
+        .filter(|name| !name.is_empty())
+        .ok_or(ObjectBoundPublicationError::NameInvalid)?;
+    let final_path = canonical_parent.join(file_name);
+    let file_name_c = CString::new(file_name.as_bytes())
+        .map_err(|_| ObjectBoundPublicationError::NameInvalid)?;
+
+    before_create();
+    revalidate_private_parent(
+        &directory,
+        &canonical_parent,
+        expected_parent_dev,
+        expected_parent_ino,
+    )?;
+
+    let file_fd = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            file_name_c.as_ptr(),
+            libc::O_WRONLY
+                | libc::O_CREAT
+                | libc::O_EXCL
+                | libc::O_CLOEXEC
+                | libc::O_NOFOLLOW,
+            unix_mode as libc::mode_t,
+        )
+    };
+    if file_fd < 0 {
+        return Err(ObjectBoundPublicationError::CreateFailed);
+    }
+    let mut file = unsafe { std::fs::File::from_raw_fd(file_fd) };
+
+    let publication = (|| -> Result<(), ObjectBoundPublicationError> {
+        file.set_permissions(std::fs::Permissions::from_mode(unix_mode))
+            .map_err(|_| ObjectBoundPublicationError::ModeInvalid)?;
+        file.write_all(encoded)
+            .and_then(|_| file.sync_all())
+            .map_err(|_| ObjectBoundPublicationError::WriteFailed)?;
+        let opened_file_metadata = file
+            .metadata()
+            .map_err(|_| ObjectBoundPublicationError::MetadataFailed)?;
+        if !opened_file_metadata.is_file()
+            || opened_file_metadata.file_type().is_symlink()
+            || opened_file_metadata.permissions().mode() & 0o777 != unix_mode
+        {
+            return Err(ObjectBoundPublicationError::ModeInvalid);
+        }
+        directory
+            .sync_all()
+            .map_err(|_| ObjectBoundPublicationError::ParentSyncFailed)?;
+
+        before_finalize();
+
+        revalidate_private_parent(
+            &directory,
+            &canonical_parent,
+            expected_parent_dev,
+            expected_parent_ino,
+        )?;
+
+        let final_file_metadata = std::fs::symlink_metadata(&final_path)
+            .map_err(|_| ObjectBoundPublicationError::RecordIdentityDrift)?;
+        if final_file_metadata.file_type().is_symlink()
+            || !final_file_metadata.is_file()
+            || final_file_metadata.dev() != opened_file_metadata.dev()
+            || final_file_metadata.ino() != opened_file_metadata.ino()
+        {
+            return Err(ObjectBoundPublicationError::RecordIdentityDrift);
+        }
+        Ok(())
+    })();
+
+    if let Err(error) = publication {
+        let invalidation = file
+            .set_len(0)
+            .and_then(|_| file.sync_all())
+            .and_then(|_| directory.sync_all());
+        if invalidation.is_err() {
+            return Err(ObjectBoundPublicationError::InvalidationFailed);
+        }
+        return Err(error);
     }
     Ok(())
 }
@@ -84,165 +323,22 @@ where
     G: FnOnce(),
     H: FnOnce(),
 {
-    use std::ffi::CString;
-    use std::os::fd::{AsRawFd, FromRawFd};
-    use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
-
-    let parent = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .ok_or_else(|| "private-evidence-parent-missing".to_string())?;
-    let parent_metadata = std::fs::symlink_metadata(parent)
-        .map_err(|_| "private-evidence-parent-unavailable".to_string())?;
-    if !parent_metadata.is_dir() || parent_metadata.file_type().is_symlink() {
-        return Err("private-evidence-parent-unsafe".into());
-    }
-    if parent_metadata.permissions().mode() & 0o022 != 0 {
-        return Err("private-evidence-parent-writable-by-others".into());
-    }
-    let expected_parent_dev = parent_metadata.dev();
-    let expected_parent_ino = parent_metadata.ino();
-
-    before_parent_open();
-
-    // Open the caller-supplied pathname before canonicalizing it and bind all later authority to
-    // the object admitted above. If the pathname was replaced in this window, O_NOFOLLOW rejects a
-    // symlink replacement and the device/inode comparison rejects a different directory object.
-    let parent_c = CString::new(parent.as_os_str().as_bytes())
-        .map_err(|_| "private-evidence-parent-unavailable".to_string())?;
-    let directory_fd = unsafe {
-        libc::open(
-            parent_c.as_ptr(),
-            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW,
-        )
-    };
-    if directory_fd < 0 {
-        return Err("private-evidence-parent-identity-drift".into());
-    }
-    let directory = unsafe { std::fs::File::from_raw_fd(directory_fd) };
-    let opened_parent_metadata = directory
-        .metadata()
-        .map_err(|_| "private-evidence-parent-unavailable".to_string())?;
-    if opened_parent_metadata.dev() != expected_parent_dev
-        || opened_parent_metadata.ino() != expected_parent_ino
-    {
-        return Err("private-evidence-parent-identity-drift".into());
-    }
-
-    let canonical_parent = std::fs::canonicalize(parent)
-        .map_err(|_| "private-evidence-parent-identity-drift".to_string())?;
-    revalidate_private_parent(
-        &directory,
-        &canonical_parent,
-        expected_parent_dev,
-        expected_parent_ino,
-    )?;
-
-    let canonical_source = std::fs::canonicalize(source_root)
-        .map_err(|_| "private-evidence-source-root-unavailable".to_string())?;
-    if canonical_parent.starts_with(&canonical_source) {
-        return Err("private-evidence-inside-source-root".into());
-    }
-    let file_name = path
-        .file_name()
-        .filter(|name| !name.is_empty())
-        .ok_or_else(|| "private-evidence-name-invalid".to_string())?;
-    let final_path = canonical_parent.join(file_name);
     let encoded = serde_json::to_vec_pretty(value)
         .map_err(|_| "private-evidence-json-invalid".to_string())?;
     if encoded.len() > MAX_PRIVATE_EVIDENCE_BYTES {
         return Err("private-evidence-too-large".into());
     }
 
-    let file_name_c = CString::new(file_name.as_bytes())
-        .map_err(|_| "private-evidence-name-invalid".to_string())?;
-
-    before_create();
-
-    // Re-check both the opened object and its pathname immediately after the deterministic race
-    // seam. Publication itself is descriptor-relative, so a later rename cannot redirect record
-    // creation to a different parent.
-    revalidate_private_parent(
-        &directory,
-        &canonical_parent,
-        expected_parent_dev,
-        expected_parent_ino,
-    )?;
-
-    let file_fd = unsafe {
-        libc::openat(
-            directory.as_raw_fd(),
-            file_name_c.as_ptr(),
-            libc::O_WRONLY
-                | libc::O_CREAT
-                | libc::O_EXCL
-                | libc::O_CLOEXEC
-                | libc::O_NOFOLLOW,
-            0o600,
-        )
-    };
-    if file_fd < 0 {
-        return Err("private-evidence-create-failed".into());
-    }
-    let mut file = unsafe { std::fs::File::from_raw_fd(file_fd) };
-
-    let publication = (|| -> Result<(), String> {
-        // `openat` applies the process umask to its requested creation mode. Normalize the exact
-        // already-opened record descriptor before writing so restrictive masks cannot create an
-        // unreadable tombstone and permanently block this create-new evidence path.
-        file.set_permissions(std::fs::Permissions::from_mode(0o600))
-            .map_err(|_| "private-evidence-mode-invalid".to_string())?;
-        file.write_all(&encoded)
-            .and_then(|_| file.sync_all())
-            .map_err(|_| "private-evidence-write-failed".to_string())?;
-        let opened_file_metadata = file
-            .metadata()
-            .map_err(|_| "private-evidence-metadata-failed".to_string())?;
-        if !opened_file_metadata.is_file()
-            || opened_file_metadata.file_type().is_symlink()
-            || opened_file_metadata.permissions().mode() & 0o777 != 0o600
-        {
-            return Err("private-evidence-mode-invalid".into());
-        }
-        directory
-            .sync_all()
-            .map_err(|_| "private-evidence-parent-sync-failed".to_string())?;
-
-        before_finalize();
-
-        revalidate_private_parent(
-            &directory,
-            &canonical_parent,
-            expected_parent_dev,
-            expected_parent_ino,
-        )?;
-
-        let final_file_metadata = std::fs::symlink_metadata(&final_path)
-            .map_err(|_| "private-evidence-record-identity-drift".to_string())?;
-        if final_file_metadata.file_type().is_symlink()
-            || !final_file_metadata.is_file()
-            || final_file_metadata.dev() != opened_file_metadata.dev()
-            || final_file_metadata.ino() != opened_file_metadata.ino()
-        {
-            return Err("private-evidence-record-identity-drift".into());
-        }
-        Ok(())
-    })();
-
-    if let Err(error) = publication {
-        // Do not unlink by name here. No portable Unix primitive atomically proves that the name
-        // still identifies this open file at unlink time, so a stat-then-unlink sequence would
-        // retain a replacement race. Invalidate only the exact object held by this descriptor.
-        let invalidation = file
-            .set_len(0)
-            .and_then(|_| file.sync_all())
-            .and_then(|_| directory.sync_all());
-        if invalidation.is_err() {
-            return Err("private-evidence-invalidation-failed".into());
-        }
-        return Err(error);
-    }
+    write_object_bound_bytes_create_new_with_hooks(
+        path,
+        &encoded,
+        0o600,
+        Some(source_root),
+        before_parent_open,
+        before_create,
+        before_finalize,
+    )
+    .map_err(publication_error_string)?;
 
     let sha256 = Sha256::digest(&encoded)
         .iter()
