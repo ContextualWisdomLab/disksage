@@ -323,7 +323,8 @@ Escape. The command accepts no path, script, or process identifier, uses a five-
 never kills `bird`, `fileproviderd`, a provider client, a cloud object, or a source file. A successful
 request is only an operator-action receipt; a fresh quiet provider observation is still required
 before any copy, attestation, or source eviction. This action is implemented at source head
-`356363035f9ab97874be6f0fddaa369308c8aab7`.
+`df097743eb75b9cc919d631db0ebdeffad8b7995`, with a regression test that preserves the newline
+separator between Finder activation and the System Events Escape command.
 
 ## Amendment: provider-runtime recovery evidence (2026-08-21)
 

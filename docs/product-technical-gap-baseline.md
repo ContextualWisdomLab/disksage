@@ -394,7 +394,9 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - The prior manual Finder workaround is now a product action: a macOS-only, fixed-script
   `cancel_finder_copy` command sends Escape with a five-second bound and no user-controlled input.
   The UI exposes it only alongside concrete iCloud File Provider activity evidence; its success
-  does not clear admission and the next bounded provider observation remains authoritative.
+  does not clear admission and the next bounded provider observation remains authoritative. The
+  fixed script's two-statement separator is regression-tested at source head
+  `df097743eb75b9cc919d631db0ebdeffad8b7995`.
 - The Finder `real_datasets` incident remains provider-sync-incomplete. The 7.2 GiB target did not
   change, diagnostic dumps totaling about 1.6 GiB were removed without touching provider state,
   and the local volume recovered to about 1.6 GiB free. The already-running Finder operation must
