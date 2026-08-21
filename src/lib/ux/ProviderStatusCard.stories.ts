@@ -59,10 +59,13 @@ export const CheckingWithoutAction: Story = {
     state: "checking",
     details: "공급자 전역 증거를 읽기 전용으로 확인하고 있습니다.",
     canCancel: true,
+    onCancel: fn(),
   },
-  play: async ({ canvasElement }) => {
+  play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement);
     await expect(canvas.getByRole("button", { name: "복사 취소 요청" })).toBeDisabled();
+    await userEvent.click(canvas.getByRole("button", { name: "복사 취소 요청" }));
+    await expect(args.onCancel).not.toHaveBeenCalled();
   },
 };
 
