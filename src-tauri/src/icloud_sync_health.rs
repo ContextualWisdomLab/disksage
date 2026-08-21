@@ -42,7 +42,7 @@ const FILEPROVIDERCTL_PATH: &str = "/usr/bin/fileproviderctl";
 // probe bounded, but allow enough time to observe that active-transfer evidence before failing.
 const FILEPROVIDER_DUMP_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(target_os = "macos")]
-// Keep the sync summary and the bounded tail of provider errors together; iCloud places
+// Keep the sync summary and a larger bounded provider-error window together; iCloud places
 // filename/root exclusion diagnostics after the aggregate summary in large dumps.
 const MAX_FILEPROVIDER_DUMP_BYTES: usize = 1024 * 1024;
 const ITEM_ERROR_AGE_NOTICE_MS: u64 = 86_400_000;
