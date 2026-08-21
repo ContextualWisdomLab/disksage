@@ -375,7 +375,8 @@ fn installed_bundle_ids(roots: &[PathBuf]) -> (BTreeSet<String>, bool) {
 #[cfg(target_os = "macos")]
 fn collect_bundle_ids(root: &Path, depth: usize, ids: &mut BTreeSet<String>) -> bool {
     if depth > MAX_BUNDLE_SCAN_DEPTH {
-        return true;
+        // An unvisited subtree cannot prove that the installed-app inventory is complete.
+        return false;
     }
     let entries = match std::fs::read_dir(root) {
         Ok(entries) => entries,
@@ -735,6 +736,19 @@ mod tests {
         let serialized = serde_json::to_string(&plan.candidates[0]).unwrap();
         assert!(!serialized.contains("/private/nonexistent"));
         assert!(serialized.contains("actual-object"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn deep_installed_application_inventory_is_incomplete() {
+        let tmp = tempfile::tempdir().unwrap();
+        let deep = tmp
+            .path()
+            .join("one/two/three/four/com.example.installed.app/Contents");
+        std::fs::create_dir_all(&deep).unwrap();
+        let mut ids = BTreeSet::new();
+        assert!(!collect_bundle_ids(tmp.path(), 0, &mut ids));
+        assert!(!ids.contains("com.example.installed"));
     }
 
     #[cfg(target_os = "macos")]
