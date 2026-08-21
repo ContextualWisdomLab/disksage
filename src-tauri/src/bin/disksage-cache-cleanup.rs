@@ -54,10 +54,22 @@ fn default_journal_path() -> Result<PathBuf, String> {
 }
 
 fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Args>, String> {
+    let mut args = raw_args.into_iter();
+    let first_arg = args.next();
+    if matches!(
+        first_arg.as_ref().and_then(|arg| arg.to_str()),
+        Some("-h" | "--help")
+    ) {
+        if args.next().is_none() {
+            return Ok(None);
+        }
+        return Err(format!("--help must be used alone\n{USAGE}"));
+    }
+
     let mut execute = false;
     let mut purge_proven_cache_trash = false;
     let mut journal_path = default_journal_path()?;
-    let mut args = raw_args.into_iter();
+    let mut args = first_arg.into_iter().chain(args);
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--execute") => execute = true,
@@ -71,7 +83,7 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
                     return Err("--journal-path must be absolute".into());
                 }
             }
-            Some("-h" | "--help") => return Ok(None),
+            Some("-h" | "--help") => return Err(format!("--help must be used alone\n{USAGE}")),
             Some(value) => return Err(format!("unknown option: {value}\n{USAGE}")),
             None => return Err(format!("invalid UTF-8 option\n{USAGE}")),
         }
@@ -156,6 +168,16 @@ mod tests {
     #[test]
     fn help_is_non_mutating() {
         assert!(parse_args([OsString::from("--help")]).unwrap().is_none());
+    }
+
+    #[test]
+    fn help_must_be_used_alone() {
+        let error = parse_args([
+            OsString::from("--help"),
+            OsString::from("--execute"),
+        ])
+        .unwrap_err();
+        assert!(error.starts_with("--help must be used alone"));
     }
 
     #[test]
