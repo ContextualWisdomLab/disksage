@@ -47,6 +47,8 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("cancellingFinderCopy || checkingIcloudHealth");
     expect(source).toContain("canCancelFinderCopyForProviderGlobalSync");
     expect(source).toContain("provider-global-sync-reconciliation-pending");
+    expect(source).toContain("provider-global-sync-local-disk-full");
+    expect(source).toContain("provider-global-sync-item-not-found");
     expect(source).toContain("cancellingFinderCopy || checkingProviderGlobalSync");
     expect(source).toContain("finderCopyCancelStatus = \"Finder 복사 취소 요청을 보냈습니다. 상태를 다시 확인하십시오.\"");
   });

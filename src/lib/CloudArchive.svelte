@@ -33,6 +33,8 @@
     "provider-global-sync-reconciliation-pending",
     "provider-global-sync-temporarily-disconnected",
     "provider-global-sync-server-unreachable",
+    "provider-global-sync-local-disk-full",
+    "provider-global-sync-item-not-found",
     "provider-global-sync-error",
     "provider-global-sync-probe-timeout",
   ]);
