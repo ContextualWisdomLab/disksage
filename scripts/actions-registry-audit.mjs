@@ -6,6 +6,15 @@ const COMMIT_SHA_PATTERN = /^[0-9a-f]{40}$/;
 const MAX_LIST_PAGES = 100;
 const MAX_LIST_RECORDS = MAX_LIST_PAGES * 100;
 const MAX_PULL_REQUEST_FILES = 3000;
+const PULL_REQUEST_FILE_STATUSES = new Set([
+  'added',
+  'removed',
+  'modified',
+  'renamed',
+  'copied',
+  'changed',
+  'unchanged',
+]);
 
 const NON_ACTIVE_WORKFLOW_STATES = new Set([
   'deleted',
@@ -279,7 +288,7 @@ export async function activePullRequestWorkflowPaths(fetchJson, repository, pull
         typeof file.filename !== 'string' ||
         file.filename.length === 0 ||
         typeof file.status !== 'string' ||
-        file.status.length === 0
+        !PULL_REQUEST_FILE_STATUSES.has(file.status)
       ) {
         throw new Error('open-pr-file-invalid');
       }
