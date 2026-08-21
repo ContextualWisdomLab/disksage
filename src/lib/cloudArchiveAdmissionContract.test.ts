@@ -8,6 +8,7 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
 describe("CloudArchive iCloud admission contract", () => {
   it("clears stale health evidence when refresh fails", () => {
     const source = readFileSync(resolve(repositoryRoot, "src/lib/CloudArchive.svelte"), "utf8");
+    const apiSource = readFileSync(resolve(repositoryRoot, "src/lib/api.ts"), "utf8");
     expect(source).toContain("icloudHealth = null;");
     expect(source).toContain("icloudHealth?.new_copy_admission_state !== \"clear\"");
     expect(source).toContain("managed_database_allocated_bytes");
@@ -32,6 +33,8 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("icloudHealthBlockedSinceMs");
     expect(source).toContain("icloudHealthFingerprint");
     expect(source).toContain("const admissionClear = next.new_copy_admission_state === \"clear\"");
+    expect(source).toContain("next.admission_blocked_since_ms ?? observedAtMs");
+    expect(apiSource).toContain("admission_blocked_since_ms?: number | null;");
     expect(source).toContain("동일한 iCloud 차단 상태가 15분 이상 지속되었습니다.");
     expect(source).toContain("refreshIcloudHealth(true)");
     expect(source).toContain("refreshProviderGlobalSync(true)");

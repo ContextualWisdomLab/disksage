@@ -53,6 +53,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Consume the persisted iCloud `admission_blocked_since_ms` diagnostic in the UI stall clock, so a
+  system or application restart preserves the visible duration of an unchanged provider block;
+  durable evidence remains advisory and fail-closed.
+
 - Keep the shipped Naruon readiness verifier source includable by its integration boundary test;
   the terminal parser contract now compiles in both the binary and test-module contexts.
 

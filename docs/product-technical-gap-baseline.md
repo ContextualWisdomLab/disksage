@@ -795,3 +795,15 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   source mutation. The runtime Goal remains `provider-sync-incomplete`; copy, attestation, and
   source eviction remain blocked until a fresh complete quiet observation and independent
   per-item evidence exist.
+
+## 2026-08-22 persisted stall-duration wiring
+
+- The current bounded probe at `2026-08-21 20:21:04 +0000` still reports two no-progress fetches,
+  `pending-indexable-count=31882`, unchanged aggregate upload/download counters, and active disk
+  import. The iCloud health command already derives `admission_blocked_since_ms` from the
+  integrity-checked evidence journal, but the frontend previously ignored that field and restarted
+  its 15-minute clock after a UI/system restart.
+- DiskSage now carries the field through the TypeScript report contract and uses it as the UI stall
+  clock origin, with a current-observation fallback only when persistence is unavailable. This
+  makes the screenshot's long-running “복사 준비 중” state remain visible as a stall after restart;
+  it does not cancel Finder, write provider state, or authorize copy, attestation, or eviction.

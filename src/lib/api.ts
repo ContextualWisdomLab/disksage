@@ -826,6 +826,8 @@ export interface LocalVolumeSnapshot {
 
 export interface IcloudSyncHealthReport {
   observed_at_ms: number;
+  /** Earliest retained observation for the current admission-blocker run. */
+  admission_blocked_since_ms?: number | null;
   evidence_complete: boolean;
   managed_database_allocated_bytes?: number;
   upload_queue: {

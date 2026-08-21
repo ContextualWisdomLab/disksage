@@ -38,12 +38,19 @@ The timestamped records are the third evidence stream alongside `volume-pressure
 `provider-client-runtime-evidence`. iCloud plans combine the three records with the bounded
 freshness comparator in [ADR-0007](0007-pre-copy-evidence-cohort.md); a missing, incomplete,
 malformed, or skewed stream remains blocked without reconstructing a provider dump.
+After the current observation is written, the command returns the earliest retained timestamp for
+the same admission-blocker set as `admission_blocked_since_ms`. The UI uses that diagnostic value
+when starting its stall clock, falling back to the current observation only when durable evidence
+is unavailable. This preserves a visible stall duration across an application or system restart;
+it never changes copy, attestation, or eviction authority.
 
 ## Consequences
 
 ### Positive
 
 - The current iCloud incident remains comparable after a restart or UI refresh.
+- A restarted UI retains the provider stall duration when the bounded evidence journal is readable,
+  instead of presenting a long-running Finder preparation as a newly observed block.
 - Provider evidence is durable without copying private provider databases or raw output.
 - Bounded create-only records preserve provenance and fail closed on malformed claims.
 - The UI can tell the operator when current evidence was observed and when durable comparison failed.
