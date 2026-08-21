@@ -83,10 +83,14 @@ test('workflow registry pagination rejects duplicate workflow identities before 
 });
 
 test('workflow registry pagination rejects malformed workflow identities at the pagination boundary', async () => {
-  for (const id of [0, '1']) {
+  for (const workflow of [
+    { id: 0, state: 'active', path: '.github/workflows/current.yml' },
+    { id: '1', state: 'active', path: '.github/workflows/current.yml' },
+    null,
+  ]) {
     const fetchJson = async () => ({
       total_count: 1,
-      workflows: [{ id, state: 'active', path: '.github/workflows/current.yml' }],
+      workflows: [workflow],
     });
 
     await assert.rejects(
