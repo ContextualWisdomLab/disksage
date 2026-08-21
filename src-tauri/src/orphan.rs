@@ -677,6 +677,66 @@ mod tests {
         assert_eq!(error, "orphan-plan-not-authoritative");
     }
 
+    #[test]
+    fn move_to_trash_rejects_candidate_identity_mismatch_without_mutation() {
+        let candidate = OrphanCandidate {
+            candidate_id: "candidate".into(),
+            kind: "cache".into(),
+            bundle_id: Some("com.example.old".into()),
+            bytes: 1,
+            files: 1,
+            skipped: 0,
+            scan_complete: true,
+            object_id: "actual-object".into(),
+            metadata_fingerprint: "metadata".into(),
+            ontology_class: format!("{ONTOLOGY_NAMESPACE}RegenerableCache"),
+            confidence: "high".into(),
+            active_use_evidence_complete: true,
+            active_use: false,
+            relations: Vec::new(),
+            review_reasons: Vec::new(),
+            auto_trash_eligible: true,
+            path: PathBuf::from("/private/nonexistent/disksage-orphan-candidate"),
+        };
+        let plan = OrphanPlan {
+            schema_kind: ORPHAN_SCHEMA_KIND.into(),
+            schema_version: ORPHAN_SCHEMA_VERSION,
+            generated_at_ms: 1,
+            root_fingerprint: "a".repeat(64),
+            plan_fingerprint: "b".repeat(64),
+            candidate_count: 1,
+            candidate_bytes: 1,
+            scan_complete: true,
+            candidates: vec![candidate],
+            notices: Vec::new(),
+            local_paths_included: false,
+            mutation_performed: false,
+            exact_approval_phrase: "phrase".into(),
+        };
+        let request = OrphanCleanupRequest {
+            candidate_id: "candidate".into(),
+            metadata_fingerprint: "metadata".into(),
+            bytes: 1,
+            files: 1,
+            skipped: 0,
+            scan_complete: true,
+            object_id: "replacement-object".into(),
+        };
+        let error = move_to_trash(
+            &plan,
+            &[request],
+            "phrase",
+            "operator review",
+            Path::new("/private/nonexistent/journal"),
+            2,
+        )
+        .unwrap_err();
+        assert_eq!(error, "orphan-candidate-safety-gate-blocked");
+        let serialized = serde_json::to_string(&plan.candidates[0]).unwrap();
+        assert!(!serialized.contains("/private/nonexistent"));
+        assert!(serialized.contains("actual-object"));
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn plan_relations_are_path_free_and_application_support_is_review_only() {
