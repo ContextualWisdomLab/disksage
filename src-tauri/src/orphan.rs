@@ -27,6 +27,7 @@ const MAX_CANDIDATES: usize = 256;
 const MAX_MANIFEST_RECORDS: usize = 100_000;
 const MAX_BUNDLE_SCAN_DEPTH: usize = 3;
 const MAX_MANIFEST_DEPTH: usize = 64;
+const EXECUTION_MANIFEST_REVALIDATION_BUDGET_MS: u64 = 5_000;
 const MAX_BUNDLE_METADATA_BYTES: u64 = 1_048_576;
 #[cfg(all(target_os = "macos", not(test)))]
 const MAX_LAUNCH_SERVICES_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
@@ -246,6 +247,19 @@ pub fn move_to_trash(
         return Err("orphan-rationale-invalid".into());
     }
     let prepared = validate_cleanup_requests(plan, requests)?;
+    #[cfg(target_os = "macos")]
+    {
+        let deadline = std::time::Instant::now()
+            .checked_add(std::time::Duration::from_millis(
+                EXECUTION_MANIFEST_REVALIDATION_BUDGET_MS,
+            ))
+            .ok_or_else(|| "orphan-manifest-revalidation-deadline-overflow".to_string())?;
+        for candidate in &prepared {
+            if !candidate_manifest_is_unchanged(candidate, deadline) {
+                return Err("orphan-candidate-metadata-changed".into());
+            }
+        }
+    }
     let mut items = Vec::with_capacity(prepared.len());
     let mut moved_count = 0usize;
     for candidate in prepared {
@@ -290,6 +304,35 @@ pub fn move_to_trash(
             "rationale-is-audit-context-only".into(),
         ],
     })
+}
+
+#[cfg(target_os = "macos")]
+fn candidate_manifest_is_unchanged(candidate: &OrphanCandidate, deadline: std::time::Instant) -> bool {
+    // A disappeared path is left to the identity-bound trash boundary, which reports the
+    // operation failure without exposing a local path. Existing directories must still match the
+    // reviewed metadata manifest before any batch mutation begins.
+    let Ok(metadata) = std::fs::symlink_metadata(&candidate.path) else {
+        return true;
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return false;
+    }
+    let manifest = bounded_manifest(&candidate.path, deadline);
+    if !manifest.complete
+        || manifest.skipped != 0
+        || manifest.bytes != candidate.bytes
+        || manifest.files != candidate.files
+    {
+        return false;
+    }
+    let fingerprint = digest_values(
+        &manifest
+            .records
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+    );
+    fingerprint == candidate.metadata_fingerprint
 }
 
 #[cfg(target_os = "macos")]
@@ -361,7 +404,7 @@ pub fn plan_for_roots(
                 continue;
             }
             let manifest = bounded_manifest(&path, deadline);
-            let active_use = crate::cloud_local_eviction::observe_path_active_use(&path);
+            let active_use = crate::cloud_local_eviction::observe_path_active_use_until(&path, deadline);
             let candidate = directory_candidate(
                 &path,
                 kind,
@@ -1105,5 +1148,39 @@ mod tests {
             .find(|candidate| candidate.kind == "cache")
             .unwrap();
         assert!(cache_candidate.auto_trash_eligible);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn execution_rejects_metadata_change_before_trash() {
+        let tmp = tempfile::tempdir().unwrap();
+        let caches = tmp.path().join("Library/Caches/com.example.old");
+        std::fs::create_dir_all(&caches).unwrap();
+        std::fs::write(caches.join("cache.bin"), b"cache").unwrap();
+        let application_roots = [tmp.path().join("Applications")];
+        std::fs::create_dir_all(&application_roots[0]).unwrap();
+        let plan = plan_for_roots(
+            tmp.path(),
+            &[(tmp.path().join("Library/Caches"), "cache")],
+            &application_roots,
+            42,
+        )
+        .unwrap();
+        let candidate = plan.candidates.first().unwrap();
+        let request = request_for(candidate);
+        std::fs::write(caches.join("cache.bin"), b"changed-cache").unwrap();
+        assert_eq!(
+            move_to_trash(
+                &plan,
+                &[request],
+                &plan.exact_approval_phrase,
+                "operator review",
+                &tmp.path().join("journal.jsonl"),
+                43,
+            )
+            .unwrap_err(),
+            "orphan-candidate-metadata-changed"
+        );
+        assert!(caches.exists());
     }
 }

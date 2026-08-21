@@ -452,7 +452,7 @@ fn lsof_stderr_is_benign(stderr: &[u8], target: &Path) -> bool {
 }
 
 #[cfg(all(unix, not(coverage)))]
-fn observe_lsof_active_use(path: &Path) -> ActiveUseEvidence {
+fn observe_lsof_active_use(path: &Path, deadline: Instant) -> ActiveUseEvidence {
     let mut command = Command::new("lsof");
     command.arg("-F").arg("p");
     if path.is_dir() {
@@ -503,14 +503,10 @@ fn observe_lsof_active_use(path: &Path) -> ActiveUseEvidence {
     };
     let reader = drain_bounded(stdout);
     let error_reader = drain_bounded(stderr);
-    let started = Instant::now();
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break Some(status),
-            Ok(None)
-                if u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
-                    < ACTIVE_USE_TIMEOUT_MS =>
-            {
+            Ok(None) if Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(25));
             }
             Ok(None) => {
@@ -653,7 +649,7 @@ fn parse_process_command_references(output: &[u8], path: &Path, own_pid: u32) ->
 }
 
 #[cfg(all(unix, not(coverage)))]
-fn observe_process_command_use(path: &Path) -> ActiveUseEvidence {
+fn observe_process_command_use(path: &Path, deadline: Instant) -> ActiveUseEvidence {
     let mut child = match Command::new("ps")
         .args(["-axo", "pid=,ppid=,command="])
         .stdin(Stdio::null())
@@ -684,14 +680,10 @@ fn observe_process_command_use(path: &Path) -> ActiveUseEvidence {
         };
     };
     let reader = drain_bounded(stdout);
-    let started = Instant::now();
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break Some(status),
-            Ok(None)
-                if u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
-                    < ACTIVE_USE_TIMEOUT_MS =>
-            {
+            Ok(None) if Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(25));
             }
             Ok(None) => {
@@ -722,9 +714,9 @@ fn observe_process_command_use(path: &Path) -> ActiveUseEvidence {
 }
 
 #[cfg(all(unix, not(coverage)))]
-fn observe_active_use(path: &Path) -> ActiveUseEvidence {
-    let lsof = observe_lsof_active_use(path);
-    let process_commands = observe_process_command_use(path);
+fn observe_active_use_until(path: &Path, deadline: Instant) -> ActiveUseEvidence {
+    let lsof = observe_lsof_active_use(path, deadline);
+    let process_commands = observe_process_command_use(path, deadline);
     let mut pids = lsof.observed_pids;
     pids.extend(process_commands.observed_pids);
     pids.sort_unstable();
@@ -752,7 +744,7 @@ fn observe_active_use(path: &Path) -> ActiveUseEvidence {
 }
 
 #[cfg(any(not(unix), coverage))]
-fn observe_active_use(_path: &Path) -> ActiveUseEvidence {
+fn observe_active_use_until(_path: &Path, _deadline: Instant) -> ActiveUseEvidence {
     ActiveUseEvidence {
         method: "unsupported".into(),
         evidence_complete: false,
@@ -767,7 +759,17 @@ fn observe_active_use(_path: &Path) -> ActiveUseEvidence {
 /// bytes may be released. Unsupported or incomplete platforms remain explicit and fail closed at
 /// the caller.
 pub fn observe_path_active_use(path: &Path) -> ActiveUseEvidence {
-    observe_active_use(path)
+    observe_active_use_until(
+        path,
+        Instant::now() + Duration::from_millis(
+            ACTIVE_USE_TIMEOUT_MS.saturating_mul(2),
+        ),
+    )
+}
+
+/// Observe open handles without allowing the probe to outlive an enclosing plan deadline.
+pub fn observe_path_active_use_until(path: &Path, deadline: Instant) -> ActiveUseEvidence {
+    observe_active_use_until(path, deadline)
 }
 
 #[cfg(all(target_os = "macos", not(coverage)))]
@@ -935,7 +937,7 @@ pub fn plan_icloud_local_eviction(
 ) -> Result<IcloudLocalEvictionPlan, String> {
     let file = observe_local_file(root, path)?;
     let state = observe_icloud_state(path, file.logical_bytes)?;
-    let active_use = observe_active_use(path);
+    let active_use = observe_path_active_use(path);
     Ok(build_plan(
         root,
         path,
