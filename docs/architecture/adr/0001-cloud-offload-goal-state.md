@@ -327,6 +327,8 @@ Goal projection cannot silently omit the protection.
   handoff contains only lineage fingerprints, size/mtime, production-time evidence, ontology class,
   `targetFolder`, and the planned `move` action. Naruon stores it encrypted and returns a redacted
   summary; it never receives paths, names, OAuth material, or move/eviction authority.
+- The bounded lineage probe count is aligned to the export limit of 200 items, so a realistic
+  multi-file organize plan cannot contain unmaterialized default lineage after planning.
 
 ## Amendment: receipt-scoped API locator recovery (2026-08-21)
 

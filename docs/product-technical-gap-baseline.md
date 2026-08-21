@@ -177,6 +177,9 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - Legacy provider evidence with `sync_complete=true` but `sync_state=unknown` now remains
   unconfirmed in the Naruon export; only explicit `complete` state can support provider-sync
   confirmation or any downstream eviction gate.
+- Organization lineage probing now remains bounded at the 200-item export limit; plans larger
+  than the bound are rejected by the existing batch-size contract rather than emitting default
+  metadata that would make an otherwise realistic export fail late.
 - The local APFS volume had about 2.6 GiB available after removing only Cargo-generated build
   artifacts. No user file, CloudDocs database, provider process, Finder operation, or cloud object
   was removed. PR #213 remains protected and awaits fresh exact-head review/check results.
