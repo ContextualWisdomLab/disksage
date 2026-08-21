@@ -443,6 +443,7 @@ impl CatalogRoot {
         };
         names
             .into_iter()
+            .filter(|name| !is_disksage_trash_staging(&self.display_path.join(name)))
             .filter_map(|name| {
                 let (child, metadata) = self.open_child(&name)?;
                 if metadata.is_file() {
