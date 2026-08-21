@@ -174,8 +174,11 @@ export async function listAllWorkflowRecords(fetchJson, repository) {
       seenWorkflowIds.add(workflowId);
     }
     records.push(...payload.workflows);
-    if (records.length === expectedTotal) return records;
-    if (records.length > expectedTotal || payload.workflows.length < 100) {
+    if (records.length > expectedTotal) {
+      throw new Error('actions-workflow-list-incomplete');
+    }
+    if (payload.workflows.length < 100) {
+      if (records.length === expectedTotal) return records;
       throw new Error('actions-workflow-list-incomplete');
     }
     page += 1;
