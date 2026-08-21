@@ -433,9 +433,14 @@ fn drain_bounded<R: Read + Send + 'static>(
 
 #[cfg(all(unix, not(coverage)))]
 fn observe_lsof_active_use(path: &Path) -> ActiveUseEvidence {
-    let mut child = match Command::new("lsof")
-        .arg("-F")
-        .arg("p")
+    let mut command = Command::new("lsof");
+    command.arg("-F").arg("p");
+    if path.is_dir() {
+        // `lsof PATH` only proves the directory itself is referenced. Recursive +D is required
+        // for a cache directory whose open files live below the directory entry.
+        command.arg("+D");
+    }
+    let mut child = match command
         .arg(path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

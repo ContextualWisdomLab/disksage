@@ -55,12 +55,15 @@
       selectedCandidates.length === 0 ||
       confirmationPhrase !== plan.exact_approval_phrase
     ) return;
+    busy = true;
     const okay = await confirm(
       `${selectedCandidates.length}개의 완전 스캔된 미사용 캐시(${fmtBytes(selectedBytes)})만 휴지통으로 보냅니다. Application Support와 불완전·사용 중 후보는 포함되지 않습니다.`,
       { title: "DiskSage 관계 기반 고아 정리", kind: "warning" },
     );
-    if (!okay) return;
-    busy = true;
+    if (!okay) {
+      busy = false;
+      return;
+    }
     error = "";
     try {
       const outcome = await cleanAndRefreshOrphanPlan(

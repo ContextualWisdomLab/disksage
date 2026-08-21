@@ -9,6 +9,8 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
+use std::fs::File;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 pub const ORPHAN_SCHEMA_VERSION: u32 = 1;
@@ -19,6 +21,7 @@ const MAX_CANDIDATES: usize = 256;
 const MAX_MANIFEST_RECORDS: usize = 100_000;
 const MAX_BUNDLE_SCAN_DEPTH: usize = 3;
 const MAX_MANIFEST_DEPTH: usize = 64;
+const MAX_BUNDLE_METADATA_BYTES: u64 = 1_048_576;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -291,7 +294,7 @@ pub fn plan_for_roots(
     let deadline = std::time::Instant::now()
         .checked_add(std::time::Duration::from_millis(PLAN_BUDGET_MS))
         .ok_or_else(|| "orphan-plan-deadline-overflow".to_string())?;
-    let (installed, installed_complete) = installed_bundle_ids(application_roots);
+    let (installed, installed_complete) = installed_bundle_ids(application_roots, deadline);
     let mut candidates = Vec::new();
     let mut scan_complete = installed_complete;
     let mut notices = vec![
@@ -411,18 +414,26 @@ fn bundle_id_from_name(path: &Path) -> Option<String> {
 }
 
 #[cfg(target_os = "macos")]
-fn installed_bundle_ids(roots: &[PathBuf]) -> (BTreeSet<String>, bool) {
+fn installed_bundle_ids(
+    roots: &[PathBuf],
+    deadline: std::time::Instant,
+) -> (BTreeSet<String>, bool) {
     let mut ids = BTreeSet::new();
     let mut complete = true;
     for root in roots {
-        complete &= collect_bundle_ids(root, 0, &mut ids);
+        complete &= collect_bundle_ids(root, 0, deadline, &mut ids);
     }
     (ids, complete)
 }
 
 #[cfg(target_os = "macos")]
-fn collect_bundle_ids(root: &Path, depth: usize, ids: &mut BTreeSet<String>) -> bool {
-    if depth > MAX_BUNDLE_SCAN_DEPTH {
+fn collect_bundle_ids(
+    root: &Path,
+    depth: usize,
+    deadline: std::time::Instant,
+    ids: &mut BTreeSet<String>,
+) -> bool {
+    if depth > MAX_BUNDLE_SCAN_DEPTH || std::time::Instant::now() >= deadline {
         // An unvisited subtree cannot prove that the installed-app inventory is complete.
         return false;
     }
@@ -433,6 +444,10 @@ fn collect_bundle_ids(root: &Path, depth: usize, ids: &mut BTreeSet<String>) -> 
     };
     let mut complete = true;
     for entry in entries {
+        if std::time::Instant::now() >= deadline {
+            complete = false;
+            break;
+        }
         let entry = match entry {
             Ok(entry) => entry,
             Err(_) => {
@@ -455,7 +470,7 @@ fn collect_bundle_ids(root: &Path, depth: usize, ids: &mut BTreeSet<String>) -> 
                 complete = false;
             }
         } else {
-            complete &= collect_bundle_ids(&path, depth + 1, ids);
+            complete &= collect_bundle_ids(&path, depth + 1, deadline, ids);
         }
     }
     complete
@@ -463,8 +478,18 @@ fn collect_bundle_ids(root: &Path, depth: usize, ids: &mut BTreeSet<String>) -> 
 
 #[cfg(target_os = "macos")]
 fn read_bundle_id(app: &Path) -> Option<String> {
-    let bytes = std::fs::read(app.join("Contents/Info.plist")).ok()?;
-    if bytes.len() > 1_048_576 {
+    let plist_path = app.join("Contents/Info.plist");
+    let metadata = std::fs::metadata(&plist_path).ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_BUNDLE_METADATA_BYTES {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    File::open(plist_path)
+        .ok()?
+        .take(MAX_BUNDLE_METADATA_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > MAX_BUNDLE_METADATA_BYTES {
         return None;
     }
     let value = plist::Value::from_reader(std::io::Cursor::new(bytes)).ok()?;
@@ -619,6 +644,9 @@ fn directory_candidate(
     }
     if !manifest.complete || manifest.skipped != 0 {
         review_reasons.push("metadata-manifest-incomplete".into());
+    }
+    if active_use.error.is_some() {
+        review_reasons.push("active-use-evidence-error".into());
     }
     if !active_use.evidence_complete || active_use.active || active_use.results_truncated {
         review_reasons.push("active-use-evidence-not-clear".into());
@@ -912,7 +940,12 @@ mod tests {
             .join("one/two/three/four/com.example.installed.app/Contents");
         std::fs::create_dir_all(&deep).unwrap();
         let mut ids = BTreeSet::new();
-        assert!(!collect_bundle_ids(tmp.path(), 0, &mut ids));
+        assert!(!collect_bundle_ids(
+            tmp.path(),
+            0,
+            std::time::Instant::now() + std::time::Duration::from_secs(1),
+            &mut ids,
+        ));
         assert!(!ids.contains("com.example.installed"));
     }
 

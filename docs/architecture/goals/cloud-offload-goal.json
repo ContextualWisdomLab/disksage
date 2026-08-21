@@ -30,8 +30,8 @@
   "runtime_evidence_failure_policy": "fail-closed; unavailable provider-client runtime evidence is not process absence",
   "operator_actions": [
     "cancel-finder-copy",
-    "inspect-orphan-lineage",
-    "trash-orphan-cache"
+    "plan_orphan_cleanup",
+    "clean_orphan_candidates"
   ],
   "lineage_relation_graph": [
     "source",

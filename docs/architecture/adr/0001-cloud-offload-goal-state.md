@@ -371,6 +371,12 @@ metadata manifest as non-authoritative. Directory-iteration errors and recursion
 recorded as incomplete evidence, so an unvisited subtree can never make a cache eligible for
 automatic Trash movement; the focused macOS Rust safety tests cover both bounded scans.
 
+The planner's installed-application traversal now shares the five-second plan deadline, caps
+Info.plist reads before parsing, and uses recursive `lsof +D` evidence for directory candidates;
+timeouts, read failures, and active-use errors remain review-only. The replaceable Goal names the
+actual Tauri commands `plan_orphan_cleanup` and `clean_orphan_candidates`, so operator automation
+cannot drift from the registered command boundary.
+
 The cleanup mutation result is authoritative once the OS Trash operation succeeds. A follow-up
 read-only plan refresh is deliberately separate: if it fails, the UI preserves the successful
 cleanup receipt, clears the stale selection, and asks the operator to re-run the relationship
