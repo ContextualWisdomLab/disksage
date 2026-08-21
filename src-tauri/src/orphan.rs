@@ -692,7 +692,13 @@ mod tests {
         std::fs::create_dir_all(&application_roots[0]).unwrap();
         let plan = plan_for_roots(
             tmp.path(),
-            &[(caches, "cache"), (support, "application-support")],
+            &[
+                (tmp.path().join("Library/Caches"), "cache"),
+                (
+                    tmp.path().join("Library/Application Support"),
+                    "application-support",
+                ),
+            ],
             &application_roots,
             42,
         )
