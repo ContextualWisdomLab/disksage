@@ -130,3 +130,25 @@ test('workflow registry pagination rejects malformed workflow identities at the 
     );
   }
 });
+
+test('workflow registry pagination rejects records beyond a stale under-reported total_count', async () => {
+  const firstPage = Array.from({ length: 100 }, (_, index) => ({
+    id: index + 1,
+    state: 'active',
+    path: `.github/workflows/workflow-${index + 1}.yml`,
+  }));
+  const secondPage = [{
+    id: 101,
+    state: 'active',
+    path: '.github/workflows/workflow-101.yml',
+  }];
+  const fetchJson = async (pathname) => ({
+    total_count: 100,
+    workflows: /[?&]page=1$/.test(pathname) ? firstPage : secondPage,
+  });
+
+  await assert.rejects(
+    listAllWorkflowRecords(fetchJson, repo),
+    /actions-workflow-list-incomplete/,
+  );
+});
