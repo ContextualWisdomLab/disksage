@@ -256,7 +256,7 @@ fn hash_optional_string(hasher: &mut blake3::Hasher, value: Option<&str>) {
             hasher.update(value.as_bytes());
             hasher.update(&[0]);
         }
-    };
+    }
 }
 
 fn plan_fingerprint(
@@ -715,8 +715,20 @@ fn observe_process_command_use(path: &Path, deadline: Instant) -> ActiveUseEvide
 
 #[cfg(all(unix, not(coverage)))]
 fn observe_active_use_until(path: &Path, deadline: Instant) -> ActiveUseEvidence {
-    let lsof = observe_lsof_active_use(path, deadline);
-    let process_commands = observe_process_command_use(path, deadline);
+    let started = Instant::now();
+    let remaining = deadline.saturating_duration_since(started);
+    let per_probe_budget = std::cmp::min(
+        remaining / 2,
+        Duration::from_millis(ACTIVE_USE_TIMEOUT_MS),
+    );
+    // Reserve an independent bounded slice for each source. A recursive `lsof +D` may consume its
+    // entire allocation; it must not starve the process-command probe and hide an active PID.
+    let lsof = observe_lsof_active_use(path, started + per_probe_budget);
+    let ps_started = Instant::now();
+    let process_commands = observe_process_command_use(
+        path,
+        std::cmp::min(deadline, ps_started + per_probe_budget),
+    );
     let mut pids = lsof.observed_pids;
     pids.extend(process_commands.observed_pids);
     pids.sort_unstable();
