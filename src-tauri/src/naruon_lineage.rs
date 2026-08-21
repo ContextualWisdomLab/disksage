@@ -619,7 +619,10 @@ mod tests {
             (ArchiveKind::IncompleteDownload, "IncompleteDownload"),
             (ArchiveKind::SensitiveConfig, "SensitiveConfig"),
         ] {
-            assert_eq!(ontology_class(kind), format!("{ONTOLOGY_NAMESPACE}{expected}"));
+            assert_eq!(
+                ontology_class(kind),
+                format!("{ONTOLOGY_NAMESPACE}{expected}")
+            );
         }
     }
 
