@@ -5,8 +5,8 @@
 //! target merely because the caller supplied a local-looking pathname.
 
 use crate::safety::{
-    filesystem_object_id, journal_append, journal_recent, trash_delete, trash_delete_if_identity,
-    JournalEntry, SafetyError,
+    filesystem_object_id, journal_append, journal_recent, same_volume, trash_delete,
+    trash_delete_if_identity, JournalEntry, SafetyError,
 };
 
 #[test]
@@ -39,6 +39,61 @@ fn journal_append_to_complete_record_does_not_insert_a_blank_audit_line() {
     assert_eq!(recent.len(), 2);
     assert_eq!(recent[0].ts_ms, second.ts_ms);
     assert_eq!(recent[1].ts_ms, first.ts_ms);
+}
+
+#[test]
+fn journal_recent_is_bounded_and_ignores_unparseable_records() {
+    let root = tempfile::tempdir().expect("temporary journal root");
+    let missing = root.path().join("missing.jsonl");
+    assert!(journal_recent(&missing, 5).is_empty());
+
+    let journal = root.path().join("mixed-journal.jsonl");
+    let first = serde_json::to_string(&JournalEntry {
+        ts_ms: 51_001,
+        op: "trash_delete".into(),
+        path: "/tmp/first.bin".into(),
+        bytes: 1,
+        outcome: "pending".into(),
+    })
+    .expect("serialize first fixture");
+    let second = serde_json::to_string(&JournalEntry {
+        ts_ms: 51_002,
+        op: "trash_delete".into(),
+        path: "/tmp/second.bin".into(),
+        bytes: 2,
+        outcome: "ok".into(),
+    })
+    .expect("serialize second fixture");
+    std::fs::write(&journal, format!("{first}\nnot-json\n{second}\n"))
+        .expect("write mixed journal fixture");
+
+    let recent = journal_recent(&journal, 1);
+    assert_eq!(recent.len(), 1);
+    assert_eq!(recent[0].ts_ms, 51_002);
+    assert!(journal_recent(&journal, 0).is_empty());
+}
+
+#[test]
+fn safety_error_display_preserves_actionable_operator_context() {
+    let protected = SafetyError::Protected(std::path::PathBuf::from("/system/path")).to_string();
+    let trash = SafetyError::Trash("provider refused mutation".into()).to_string();
+    let journal = SafetyError::Journal("disk full".into()).to_string();
+
+    assert!(protected.contains("/system/path"));
+    assert!(trash.contains("provider refused mutation"));
+    assert!(journal.contains("disk full"));
+}
+
+#[cfg(unix)]
+#[test]
+fn same_volume_uses_existing_source_and_destination_parent() {
+    let root = tempfile::tempdir().expect("temporary volume root");
+    let source = root.path().join("source.bin");
+    let destination = root.path().join("nested-output.bin");
+    std::fs::write(&source, b"source").expect("write source fixture");
+
+    assert!(same_volume(&source, &destination));
+    assert!(!same_volume(&root.path().join("missing-source.bin"), &destination));
 }
 
 #[cfg(unix)]
