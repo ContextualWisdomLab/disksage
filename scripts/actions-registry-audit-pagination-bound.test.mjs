@@ -81,3 +81,17 @@ test('workflow registry pagination rejects duplicate workflow identities before 
     /actions-workflow-list-duplicate/,
   );
 });
+
+test('workflow registry pagination rejects malformed workflow identities at the pagination boundary', async () => {
+  for (const id of [0, '1']) {
+    const fetchJson = async () => ({
+      total_count: 1,
+      workflows: [{ id, state: 'active', path: '.github/workflows/current.yml' }],
+    });
+
+    await assert.rejects(
+      listAllWorkflowRecords(fetchJson, repo),
+      /actions-workflow-record-invalid/,
+    );
+  }
+});
