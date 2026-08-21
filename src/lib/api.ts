@@ -84,7 +84,6 @@ export interface OrphanPlan {
   schema_kind: "disksage.orphan-plan/v1";
   schema_version: number;
   generated_at_ms: number;
-  root_fingerprint: string;
   plan_fingerprint: string;
   candidate_count: number;
   candidate_bytes: number;
