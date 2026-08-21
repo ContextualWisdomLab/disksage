@@ -459,6 +459,7 @@ pub fn delete_uploaded_object(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Seek, SeekFrom, Write};
 
     #[test]
     fn upload_session_urls_encode_each_path_segment() {
@@ -471,5 +472,17 @@ mod tests {
     #[test]
     fn google_query_escapes_drive_expression_literals() {
         assert_eq!(google_query_escape(r"a\\b'c"), r"a\\\\b\'c");
+    }
+
+    #[test]
+    fn chunk_reader_rewinds_to_server_acknowledged_offset() {
+        let mut source = tempfile::tempfile().unwrap();
+        source.write_all(b"0123456789").unwrap();
+        source.seek(SeekFrom::Start(8)).unwrap();
+        let mut buffer = [0_u8; 4];
+
+        read_source_chunk_at(&mut source, 2, &mut buffer).unwrap();
+
+        assert_eq!(&buffer, b"2345");
     }
 }
