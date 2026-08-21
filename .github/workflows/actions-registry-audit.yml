@@ -48,20 +48,72 @@ jobs:
           # Native test include/threshold coverage flags require Node >=22.8.0.
           node-version: 22.18.0
       - name: Exact audit-module coverage
-        run: >-
-          node --experimental-test-coverage
-          --test-coverage-include='scripts/actions-registry-audit.mjs'
-          --test-coverage-lines=100
-          --test-coverage-branches=100
-          --test-coverage-functions=100
-          --test scripts/actions-registry-audit.test.mjs
-          scripts/actions-registry-audit-state.test.mjs
-          scripts/actions-registry-audit-path-authority.test.mjs
-          scripts/actions-registry-audit-pagination-bound.test.mjs
-          scripts/actions-registry-audit-pr-files-cap.test.mjs
-          scripts/actions-registry-audit-pr-ownership-snapshot.test.mjs
-          scripts/actions-registry-audit-tree-integrity.test.mjs
-          scripts/actions-registry-audit-workflow.test.mjs
+        env:
+          NODE_V8_COVERAGE: .coverage/actions-registry-audit
+        run: |
+          set +e
+          node --experimental-test-coverage \
+            --test-coverage-include='scripts/actions-registry-audit.mjs' \
+            --test-coverage-lines=100 \
+            --test-coverage-branches=100 \
+            --test-coverage-functions=100 \
+            --test scripts/actions-registry-audit.test.mjs \
+            scripts/actions-registry-audit-state.test.mjs \
+            scripts/actions-registry-audit-path-authority.test.mjs \
+            scripts/actions-registry-audit-pagination-bound.test.mjs \
+            scripts/actions-registry-audit-pr-files-cap.test.mjs \
+            scripts/actions-registry-audit-pr-ownership-snapshot.test.mjs \
+            scripts/actions-registry-audit-tree-integrity.test.mjs \
+            scripts/actions-registry-audit-workflow.test.mjs
+          coverage_status=$?
+          set -e
+
+          node --input-type=module <<'NODE'
+          import { readFileSync, readdirSync } from 'node:fs';
+          import { resolve } from 'node:path';
+
+          const coverageDir = resolve('.coverage/actions-registry-audit');
+          const sourcePath = resolve('scripts/actions-registry-audit.mjs');
+          const source = readFileSync(sourcePath, 'utf8');
+          const ranges = new Map();
+          for (const filename of readdirSync(coverageDir)) {
+            const payload = JSON.parse(readFileSync(resolve(coverageDir, filename), 'utf8'));
+            for (const script of payload.result ?? []) {
+              if (!script.url.endsWith('/scripts/actions-registry-audit.mjs')) continue;
+              for (const fn of script.functions ?? []) {
+                for (const range of fn.ranges ?? []) {
+                  const key = `${range.startOffset}:${range.endOffset}`;
+                  const existing = ranges.get(key) ?? {
+                    startOffset: range.startOffset,
+                    endOffset: range.endOffset,
+                    count: 0,
+                  };
+                  existing.count += range.count;
+                  ranges.set(key, existing);
+                }
+              }
+            }
+          }
+          const zeroRanges = [...ranges.values()]
+            .filter((range) => range.count === 0)
+            .map((range) => {
+              const prefix = source.slice(0, range.startOffset);
+              const line = prefix.split('\n').length;
+              const lastNewline = prefix.lastIndexOf('\n');
+              const column = range.startOffset - lastNewline;
+              return {
+                line,
+                column,
+                start_offset: range.startOffset,
+                end_offset: range.endOffset,
+                snippet: source.slice(range.startOffset, Math.min(range.endOffset, range.startOffset + 160)),
+              };
+            })
+            .sort((left, right) => left.start_offset - right.start_offset);
+          console.log(`actions-registry-zero-count-ranges=${JSON.stringify(zeroRanges)}`);
+          NODE
+
+          exit "$coverage_status"
 
   live-registry:
     if: github.event_name != 'pull_request'
