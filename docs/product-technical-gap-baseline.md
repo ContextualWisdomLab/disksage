@@ -583,3 +583,15 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   The Finder “준비 중” operation therefore remains provider-sync-incomplete; DiskSage must not
   treat it as a successful copy or authorize eviction. No provider daemon, cloud object, or source
   file was changed.
+
+## 2026-08-21 13:38 +0900 iCloud active-transfer observation
+
+- A bounded 16 KiB head of a read-only `fileproviderctl dump com.apple.CloudDocs.iCloudDriveFileProvider -l`
+  showed Finder enumerators alive for the iCloud domain, sync scheduling `running`, upload progress
+  at 95.24% (118,950,548,354 / 124,897,444,934 bytes), and download progress at 2.78%
+  (30,311,669 / 1,091,221,225 bytes). `bird` and `fileproviderd` were still running. Because the
+  diagnostic head was intentionally capped, it is active-transfer evidence, not a complete quiet
+  provider attestation; copy, attestation, and eviction remain blocked.
+- The bounded diagnostic was terminated without touching provider daemons, cloud objects, or source
+  files. Subsequent scans must avoid raw cloud-placeholder paths because metadata inspection can
+  request File Provider materialization even when the command is read-only.

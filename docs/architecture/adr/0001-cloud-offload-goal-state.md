@@ -386,6 +386,15 @@ disconnect, and server-error blockers authoritative; a Finder “준비 중” d
 completion. DiskSage must offer only the fixed bounded Finder Escape cancellation and a later fresh
 quiet observation, never a daemon kill, cloud mutation, retry, or source eviction.
 
+## Amendment: iCloud active-transfer observation (2026-08-21 13:38 +0900)
+
+A capped read-only iCloud File Provider dump observed live Finder enumerators, `scheduling state:
+running`, upload progress of 95.24% (118,950,548,354 of 124,897,444,934 bytes), and download
+progress of 2.78% (30,311,669 of 1,091,221,225 bytes). This bounded head is not a quiet provider
+attestation. The observation command was stopped without changing a provider daemon, cloud object,
+or source file; raw cloud-placeholder scans remain prohibited because metadata inspection can
+request materialization.
+
 ## Amendment: provider-runtime recovery evidence (2026-08-21)
 
 OneDrive and Google Drive client recovery now requires an explicit runtime observation before
