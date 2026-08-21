@@ -637,3 +637,11 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   ADR/Goal pair lock as writers. The projection files remain replaceable and non-authoritative;
   immutable receipts/evidence still decide copy, attestation, and eviction. The focused cloud ADR
   suite passes 20/20, including same-timestamp concurrent pair writers and late-state regression.
+
+## 2026-08-21 OneDrive post-headroom provider observation
+
+- Local APFS headroom recovered to about 39 GiB, but OneDrive still reported `needs-indexing=yes`,
+  77,393 pending indexable items, 81,524 reconciliation entries, active upload/download progress,
+  and retained SQLite `databaseInitError` code 11. The provider is therefore still not quiet or
+  complete; DiskSage keeps copy, attestation, and eviction fail-closed. This separates the active
+  provider-index backlog from the earlier low-space pressure incident.
