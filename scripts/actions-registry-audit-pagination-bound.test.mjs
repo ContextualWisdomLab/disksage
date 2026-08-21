@@ -45,6 +45,26 @@ test('open PR pagination rejects duplicate identities before active workflow own
   );
 });
 
+test('open PR pagination rejects membership drift across opposite created-order reads', async () => {
+  const ascendingFirst = Array.from({ length: 100 }, (_, index) => ({ number: index + 1 }));
+  const ascendingSecond = [{ number: 102 }];
+  const descendingFirst = Array.from({ length: 100 }, (_, index) => ({ number: 102 - index }));
+  const descendingSecond = [{ number: 2 }, { number: 1 }];
+  const fetchJson = async (pathname) => {
+    const pageTwo = /[?&]page=2$/.test(pathname);
+    if (pathname.includes('direction=asc')) return pageTwo ? ascendingSecond : ascendingFirst;
+    if (pathname.includes('direction=desc')) return pageTwo ? descendingSecond : descendingFirst;
+    // The predecessor one-pass implementation has no direction binding and therefore silently
+    // accepts this incomplete snapshot instead of detecting membership drift.
+    return [{ number: 1 }];
+  };
+
+  await assert.rejects(
+    listAllOpenPullRequests(fetchJson, repo),
+    /open-pr-list-moved/,
+  );
+});
+
 test('workflow registry pagination rejects an externally claimed total beyond the read budget', async () => {
   let calls = 0;
   const fullPage = Array.from({ length: 100 }, (_, index) => ({
