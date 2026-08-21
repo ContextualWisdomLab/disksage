@@ -535,3 +535,14 @@ The shipped Naruon readiness verifier uses a plain source comment rather than a 
 comment so the same parser can be included by its integration boundary test module. This is a
 compile-boundary repair only; the verifier's path-redacted output and readiness authority do not
 change.
+
+## Amendment: bound active-use probes without touching provider state (2026-08-22)
+
+The exact-head macOS fix `a6ec6e2` starts the bounded `lsof` active-use probe in its own Unix
+process group. On timeout, the group is killed before bounded stdout/stderr readers are joined,
+so a shell wrapper or descendant cannot keep a pipe open and starve the independent `ps` probe.
+Only the command group created for the diagnostic is terminated; Finder, `bird`, `fileproviderd`,
+File Provider databases, cloud objects, and user files remain outside the mutation boundary. The
+focused Rust regression test passed 3/3. A timeout remains incomplete active-use evidence and
+keeps cache cleanup and cloud eviction fail-closed; this process-group cleanup is not a provider
+recovery or copy-cancellation operation.
