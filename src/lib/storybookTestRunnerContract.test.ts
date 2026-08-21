@@ -24,10 +24,10 @@ describe("Storybook test-runner viewport isolation", () => {
 
     mockedGetStoryContext
       .mockResolvedValueOnce({
-        globals: { viewport: { value: "mobile", isRotated: false } },
+        storyGlobals: { viewport: { value: "mobile", isRotated: false } },
       } as never)
       .mockResolvedValueOnce({
-        globals: { viewport: { value: "desktop", isRotated: false } },
+        storyGlobals: { viewport: { value: "desktop", isRotated: false } },
       } as never);
 
     await config.preVisit?.(page, story("mobile"));
