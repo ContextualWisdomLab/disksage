@@ -66,7 +66,6 @@ jobs:
             scripts/actions-registry-audit-tree-integrity.test.mjs \
             scripts/actions-registry-audit-workflow.test.mjs
           coverage_status=$?
-          set -e
 
           node --input-type=module <<'NODE'
           import { readFileSync, readdirSync } from 'node:fs';
@@ -112,7 +111,12 @@ jobs:
             .sort((left, right) => left.start_offset - right.start_offset);
           console.log(`actions-registry-zero-count-ranges=${JSON.stringify(zeroRanges)}`);
           NODE
+          diagnostic_status=$?
+          set -e
 
+          if [ "$diagnostic_status" -ne 0 ]; then
+            echo "::warning::actions registry coverage diagnostic failed with status $diagnostic_status"
+          fi
           exit "$coverage_status"
 
   live-registry:
