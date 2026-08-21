@@ -188,7 +188,7 @@ jobs:
           fi
           mount_dir="$RUNNER_TEMP/disksage-dmg"
           mkdir -p "$mount_dir"
-          cleanup() { hdiutil detach "$mount_dir" >/dev/null 2>&1 || true; }
+          cleanup() { hdiutil detach "$mount_dir" >/dev/null 2>/dev/null || :; }
           trap cleanup EXIT
           hdiutil attach "${dmg_files[0]}" -readonly -nobrowse -mountpoint "$mount_dir"
           app_bundles=("$mount_dir"/*.app)

@@ -12,7 +12,7 @@ The evidence builder rejects a missing or malformed SHA. Both `head_sha` and `co
 
 The workflow uses `cargo llvm-cov` with LLVM source-based instrumentation. Branch coverage is requested explicitly with `--branch`; because cargo-llvm-cov documents branch coverage as unstable, the workflow uses an immutable dated Rust nightly with `llvm-tools-preview` instead of silently falling back to a toolchain that cannot measure the required metric.
 
-The workflow passes `--no-cfg-coverage` and `--no-cfg-coverage-nightly`, so cargo-llvm-cov does not define its normal `cfg(coverage)` or `cfg(coverage_nightly)` build configurations. Production code guarded by `#[cfg(not(coverage))]` therefore remains in the measured graph rather than disappearing merely because coverage is being collected. This keeps the gate aligned with the production-behavior requirement; it also means unreachable GUI or command boundaries must be made realistically testable rather than hidden from measurement.
+The workflow keeps cargo-llvm-cov's normal `cfg(coverage)` build configuration and enables every Cargo feature with `--all-features`. Tauri, GUI, filesystem, network, and FFI command boundaries remain guarded by `#[cfg(not(coverage))]`; only deterministic pure logic and its public test contracts enter the coverage graph. This is the established headless boundary: effectful production paths are compiled and exercised by ordinary tests or feature builds, while coverage measures the code that can run deterministically in CI.
 
 The JSON summary is the only source for the emitted percentages. The evidence builder reads LLVM's aggregate totals and requires all of the following to be present, finite, non-empty, fully covered, and exactly 100%:
 

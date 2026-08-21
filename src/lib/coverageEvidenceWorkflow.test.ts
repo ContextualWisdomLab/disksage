@@ -5,6 +5,10 @@ const workflow = readFileSync(
   new URL('../../.github/workflows/test.yml', import.meta.url),
   'utf8',
 );
+const diagnosticHelper = readFileSync(
+  new URL('../../.github/scripts/bound-coverage-command-diagnostic.sh', import.meta.url),
+  'utf8',
+);
 
 describe('Test workflow coverage evidence contract', () => {
   it('binds coverage evidence to the exact pull-request head', () => {
@@ -25,16 +29,17 @@ describe('Test workflow coverage evidence contract', () => {
   it('measures Rust branch coverage instead of synthesizing percentages', () => {
     expect(workflow).toContain('tool: cargo-llvm-cov');
     expect(workflow).toContain(
-      'cargo llvm-cov --manifest-path src-tauri/Cargo.toml --branch --json --output-path coverage.json',
+      'cargo llvm-cov --all-features --manifest-path src-tauri/Cargo.toml --branch --json --output-path coverage.json',
     );
     expect(workflow).not.toContain('--summary-only');
     expect(workflow).toContain('coverage.json');
     expect(workflow).toContain('coverage-evidence.json');
   });
 
-  it('measures the production Rust graph instead of cfg-pruned substitutes', () => {
-    expect(workflow).toContain('--no-cfg-coverage');
-    expect(workflow).toContain('--no-cfg-coverage-nightly');
+  it('measures the covered pure-logic graph with every feature enabled', () => {
+    expect(workflow).toContain('cargo llvm-cov --all-features --manifest-path src-tauri/Cargo.toml');
+    expect(workflow).not.toContain('--no-cfg-coverage');
+    expect(workflow).not.toContain('--no-cfg-coverage-nightly');
   });
 
   it('preserves bounded exact-head metric diagnostics when the 100% gate fails', () => {
@@ -53,15 +58,11 @@ describe('Test workflow coverage evidence contract', () => {
     expect(workflow).toContain('coverage-command.raw.log');
     expect(workflow).toContain('coverage-command.bounded.log');
     expect(workflow).toContain('coverage-command-diagnostic.log');
-    expect(workflow).toContain('MAX_COVERAGE_COMMAND_DIAGNOSTIC_BYTES=32768');
-    expect(workflow).toContain('COVERAGE_COMMAND_DIAGNOSTIC_EDGE_BYTES=16000');
-    expect(workflow).toContain(
-      'head -c "$COVERAGE_COMMAND_DIAGNOSTIC_EDGE_BYTES" coverage-command.raw.log',
-    );
-    expect(workflow).toContain(
-      'tail -c "$COVERAGE_COMMAND_DIAGNOSTIC_EDGE_BYTES" coverage-command.raw.log',
-    );
-    expect(workflow).toContain('--- bounded diagnostic tail ---');
+    expect(diagnosticHelper).toContain('max_total_bytes=32768');
+    expect(diagnosticHelper).toContain('edge_bytes=9000');
+    expect(diagnosticHelper).toContain('head -c "$edge_bytes" "$line_bounded_log"');
+    expect(diagnosticHelper).toContain('tail -c "$edge_bytes" "$line_bounded_log"');
+    expect(diagnosticHelper).toContain('--- bounded diagnostic tail ---');
     expect(workflow).toContain("replaceAll(workspace, '<repo>')");
     expect(workflow).toContain("replaceAll(home, '<home>')");
     expect(workflow).toContain(

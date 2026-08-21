@@ -37,17 +37,18 @@ function tauriReleaseFeatures(releaseWorkflow: string): Set<string> {
 }
 
 describe('release Cargo binary bundle contract', () => {
-  it('builds every feature-gated Cargo binary before Tauri packages the application', () => {
+  it('keeps CLI-only Cargo binaries out of the Tauri bundle and stages publishable ones separately', () => {
     const cargoToml = readRepositoryFile('src-tauri/Cargo.toml');
     const releaseWorkflow = readRepositoryFile('.github/workflows/release.yml');
     const requiredFeatures = [...requiredCargoBinFeatures(cargoToml)].sort();
     const releaseFeatures = tauriReleaseFeatures(releaseWorkflow);
 
     expect(requiredFeatures.length).toBeGreaterThan(0);
-    expect(
-      requiredFeatures.filter((feature) => !releaseFeatures.has(feature)),
-      'Tauri bundles package binaries; a feature-gated bin must be built before WiX/NSIS can reference it',
-    ).toEqual([]);
     expect(releaseFeatures.has('llm-engine')).toBe(true);
+    expect(requiredFeatures.filter((feature) => releaseFeatures.has(feature))).toEqual([]);
+    expect(releaseWorkflow).toContain(
+      'cargo build --manifest-path src-tauri/Cargo.toml --release --features cloud-cli',
+    );
+    expect(releaseWorkflow).toContain('--bin disksage-cloud-plan --bin disksage-duplicate-audit');
   });
 });
