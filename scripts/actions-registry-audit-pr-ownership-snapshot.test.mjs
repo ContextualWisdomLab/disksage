@@ -51,7 +51,11 @@ test('fails closed when same-head PR workflow ownership changes during the audit
     /open-pr-workflow-ownership-moved/,
   );
 
-  assert.equal(pullReads, 2, 'open PR identities must be re-read');
+  assert.equal(
+    pullReads,
+    4,
+    'open PR identities must be re-read in both creation orders',
+  );
   assert.equal(
     changedFileReads,
     2,
