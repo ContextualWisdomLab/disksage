@@ -92,13 +92,13 @@ function npmPackages(lockfile) {
     throw new Error("npm-lock-shape-invalid");
   }
   const records = new Map();
-  const ids = new Map();
+  const pathIds = new Map();
   for (const [packagePath, pkg] of Object.entries(lockfile.packages)) {
     if (!packagePath || !pkg?.version) continue;
     const name = packagePath.split("node_modules/").at(-1);
     if (!name || name.startsWith(".")) throw new Error("npm-package-name-invalid");
     const spdxId = id("Npm", `${packagePath}\0${pkg.version}`);
-    ids.set(`${name}\0${pkg.version}`, spdxId);
+    pathIds.set(packagePath, spdxId);
     records.set(spdxId, packageRecord(
       spdxId,
       `npm:${name}`,
@@ -107,7 +107,28 @@ function npmPackages(lockfile) {
       pkg.license ? String(pkg.license) : "NOASSERTION",
     ));
   }
-  return { records, ids };
+  return { records, pathIds };
+}
+
+function resolveNpmDependencyPath(packages, packagePath, dependencyName) {
+  let scope = packagePath;
+  while (true) {
+    const candidate = scope
+      ? `${scope}/node_modules/${dependencyName}`
+      : `node_modules/${dependencyName}`;
+    if (packages[candidate]?.version) return candidate;
+
+    const parentBoundary = scope.lastIndexOf("/node_modules/");
+    if (parentBoundary >= 0) {
+      scope = scope.slice(0, parentBoundary);
+      continue;
+    }
+    if (scope) {
+      scope = "";
+      continue;
+    }
+    return null;
+  }
 }
 
 function addRelationship(relationships, left, relationship, right) {
@@ -147,10 +168,10 @@ function buildDocument(args, metadata, lockfile) {
   }
   for (const [packagePath, pkg] of Object.entries(lockfile.packages)) {
     if (!packagePath || !pkg?.version) continue;
-    const name = packagePath.split("node_modules/").at(-1);
-    const left = npm.ids.get(`${name}\0${pkg.version}`);
-    for (const [dependencyName, dependencyVersion] of Object.entries(pkg.dependencies ?? {})) {
-      const right = npm.ids.get(`${dependencyName}\0${dependencyVersion}`);
+    const left = npm.pathIds.get(packagePath);
+    for (const dependencyName of Object.keys(pkg.dependencies ?? {})) {
+      const dependencyPath = resolveNpmDependencyPath(lockfile.packages, packagePath, dependencyName);
+      const right = dependencyPath ? npm.pathIds.get(dependencyPath) : undefined;
       addRelationship(relationships, left, "DEPENDS_ON", right);
     }
   }
