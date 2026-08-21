@@ -184,23 +184,41 @@ export async function listAllWorkflowRecords(fetchJson, repository) {
 
 /** Read every open pull request so branch-only workflow ownership cannot be mistaken for deletion. */
 export async function listAllOpenPullRequests(fetchJson, repository) {
-  const records = await listAll(
+  // GitHub's REST pull-request pagination is offset based and exposes no total_count. A PR closing
+  // between pages can shift a record into an already-read page and silently omit it. Read the same
+  // membership in opposite explicit creation orders and require the identity sets to agree before
+  // any branch-only workflow can receive authority.
+  const ascendingRecords = await listAll(
     fetchJson,
-    `/repos/${repository}/pulls?state=open`,
+    `/repos/${repository}/pulls?state=open&sort=created&direction=asc`,
     'open-pr-list-invalid',
   );
-  const seenPullNumbers = new Set();
-  for (const pullRequest of records) {
-    const pullNumber = pullRequest?.number;
-    if (!Number.isSafeInteger(pullNumber) || pullNumber <= 0) {
-      throw new Error('open-pr-number-invalid');
+  const descendingRecords = await listAll(
+    fetchJson,
+    `/repos/${repository}/pulls?state=open&sort=created&direction=desc`,
+    'open-pr-list-invalid',
+  );
+
+  for (const records of [ascendingRecords, descendingRecords]) {
+    const seenPullNumbers = new Set();
+    for (const pullRequest of records) {
+      const pullNumber = pullRequest?.number;
+      if (!Number.isSafeInteger(pullNumber) || pullNumber <= 0) {
+        throw new Error('open-pr-number-invalid');
+      }
+      if (seenPullNumbers.has(pullNumber)) {
+        throw new Error('open-pr-list-duplicate');
+      }
+      seenPullNumbers.add(pullNumber);
     }
-    if (seenPullNumbers.has(pullNumber)) {
-      throw new Error('open-pr-list-duplicate');
-    }
-    seenPullNumbers.add(pullNumber);
   }
-  return records;
+
+  const ascendingSnapshot = ascendingRecords.map((pullRequest) => pullRequest.number).sort((a, b) => a - b);
+  const descendingSnapshot = descendingRecords.map((pullRequest) => pullRequest.number).sort((a, b) => a - b);
+  if (!sameStringSnapshot(ascendingSnapshot, descendingSnapshot)) {
+    throw new Error('open-pr-list-moved');
+  }
+  return ascendingRecords;
 }
 
 function sameRepositoryHeadSnapshot(pullRequests, repository) {
