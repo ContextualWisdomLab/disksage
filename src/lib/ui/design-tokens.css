@@ -54,7 +54,96 @@
   --ds-panel-gap: var(--ds-space-4);
 }
 
-/* Dark semantic values remain opt-in until legacy light-only panels are migrated. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ds-surface: var(--ds-slate-950);
+    --ds-surface-muted: var(--ds-slate-800);
+    --ds-text: var(--ds-slate-100);
+    --ds-text-muted: var(--ds-slate-300);
+    --ds-border: var(--ds-slate-700);
+    --ds-action: #7dd3fc;
+    --ds-action-hover: #bae6fd;
+    --ds-success-surface: #14532d;
+    --ds-success-text: #bbf7d0;
+    --ds-warning-surface: #78350f;
+    --ds-warning-text: #fde68a;
+    --ds-danger-surface: #7f1d1d;
+    --ds-danger-text: #fecaca;
+  }
+
+  /* Legacy Svelte panels keep their readable foreground/background pairing. */
+  .report,
+  .oauth-panel,
+  .receipt-reconciliation,
+  .review-queue,
+  .dataset-profile,
+  .copy-approval,
+  .podman-evidence {
+    border-color: var(--ds-border);
+    background: var(--ds-surface-muted);
+    color: var(--ds-text);
+  }
+
+  .approval,
+  .approval-controls,
+  .eviction-controls {
+    border-color: var(--ds-warning-text);
+    background: var(--ds-warning-surface);
+    color: var(--ds-text);
+  }
+
+  .blocked,
+  .candidates li.blocked {
+    border-color: var(--ds-danger-text);
+    background: var(--ds-danger-surface);
+    color: var(--ds-text);
+  }
+
+  .receipt,
+  .plan,
+  .candidates li.adoptable {
+    border-color: var(--ds-success-text);
+    background: var(--ds-success-surface);
+    color: var(--ds-text);
+  }
+
+  .muted,
+  .context,
+  .path,
+  .metadata,
+  .fingerprint,
+  .oid,
+  .review-counts,
+  .arrow,
+  .size {
+    color: var(--ds-text-muted);
+  }
+
+  .warning {
+    color: var(--ds-warning-text);
+  }
+
+  .safe,
+  .success,
+  .approved {
+    color: var(--ds-success-text);
+  }
+
+  .error,
+  .errors {
+    color: var(--ds-danger-text);
+  }
+
+  pre {
+    background: var(--ds-slate-700);
+    color: var(--ds-text);
+  }
+
+  th {
+    background: var(--ds-slate-800);
+    color: var(--ds-text);
+  }
+}
 
 *,
 *::before,

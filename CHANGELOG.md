@@ -53,9 +53,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - Use the provider observation timestamp consistently for stall thresholds and durations so the
   summary card and detailed evidence panel cannot disagree during blocked-probe backoff.
-- Keep legacy light-only panels readable by deferring automatic dark-scheme surface inversion;
-  disable provider cancel actions during in-flight probes and show non-iCloud probe errors in the
-  shared status card without changing copy or eviction authority.
+- Keep legacy light-only panels readable with dark-scheme token overrides; disable provider cancel
+  actions during in-flight probes and show non-iCloud probe errors in the shared status card without
+  changing copy or eviction authority.
 
 - Cover the `sensitive-config` archive-kind wire label in the generated cloud-plan implementation,
   so the macOS/Linux/Windows cloud-plan binaries compile after the sensitive-config safety

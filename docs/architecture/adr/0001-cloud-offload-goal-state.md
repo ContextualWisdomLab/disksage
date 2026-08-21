@@ -557,8 +557,8 @@ authority. The latest UX safety follow-up is tracked at DiskSage PR #246 head `9
 
 ## Amendment: legacy panel contrast and probe-action consistency (2026-08-21)
 
-Automatic dark-scheme surface inversion remains deferred because pre-existing cleanup and cloud
-panels still use light-only backgrounds; this keeps OS dark mode readable instead of producing
-light text on light panels. The running provider card now keeps its cancel action disabled during an
-in-flight probe and remains visible when a non-iCloud provider probe fails, while retaining the
-same observation-time stall clock and fail-closed mutation boundary.
+Automatic dark-scheme surface inversion is enabled with global overrides for the pre-existing
+light-only cleanup and cloud panels, preserving readable foreground/background pairs in both
+schemes. The running provider card now keeps its cancel action disabled during an in-flight probe
+and remains visible when a non-iCloud provider probe fails, while retaining the same
+observation-time stall clock and fail-closed mutation boundary.
