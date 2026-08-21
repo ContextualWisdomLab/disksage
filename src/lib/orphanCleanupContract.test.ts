@@ -46,4 +46,13 @@ describe("orphan cleanup safety contract", () => {
     expect(orphan).toContain("validate_cleanup_requests(plan, requests)?");
     expect(orphan).toContain("for candidate in prepared");
   });
+
+  it("owns the child component styles it relies on instead of inheriting scoped parent CSS", () => {
+    const component = readFileSync(resolve(root, "src/lib/OrphanCleanup.svelte"), "utf8");
+
+    expect(component).toContain("<style>");
+    for (const selector of [".notice", ".list", ".error", ".muted", ".disabled"]) {
+      expect(component).toContain(selector);
+    }
+  });
 });
