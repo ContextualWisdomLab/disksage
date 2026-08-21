@@ -36,10 +36,10 @@ describe('Test workflow coverage evidence contract', () => {
     expect(workflow).toContain('coverage-evidence.json');
   });
 
-  it('measures the covered pure-logic graph with every feature enabled', () => {
+  it('measures the production/test configuration without synthetic coverage-only cfg changes', () => {
     expect(workflow).toContain('cargo llvm-cov --all-features --manifest-path src-tauri/Cargo.toml');
-    expect(workflow).not.toContain('--no-cfg-coverage');
-    expect(workflow).not.toContain('--no-cfg-coverage-nightly');
+    expect(workflow).toContain('--no-cfg-coverage');
+    expect(workflow).toContain('--no-cfg-coverage-nightly');
   });
 
   it('preserves bounded exact-head metric diagnostics when the 100% gate fails', () => {
