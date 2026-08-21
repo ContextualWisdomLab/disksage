@@ -520,7 +520,7 @@ as a completed cloud copy until a fresh complete, quiet observation and immutabl
 ## Amendment: iCloud sync-exclusion evidence for Finder preparation stalls (2026-08-21)
 
 A fresh bounded iCloud File Provider dump recorded active upload and download progress together
-with repeated `Excluded From Sync Due To Filename` and `Excluded From Sync Under Root` errors.
+with 18 `Excluded From Sync Due To Filename` and 2 `Excluded From Sync Under Root` errors.
 These are aggregate, path-free provider evidence: DiskSage records only the two counts and redacted
 notices, never filenames, item identifiers, or raw provider output. Either count adds a dedicated
 new-copy admission blocker (`icloud-file-provider-filename-excluded` or
