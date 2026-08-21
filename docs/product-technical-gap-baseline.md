@@ -388,6 +388,9 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - Provider evidence lookup remains advisory locator recovery only. It does not grant cloud-write or
   source-eviction authority: remote revalidation, destination binding, content hash, explicit
   provider-sync state, and the existing approval gates still decide authorization.
+- Provider-client recovery now distinguishes `runtime_observed=false` from unavailable runtime
+  evidence. OneDrive/Google Drive quit, graceful-term, and post-restart decisions fail closed on
+  unavailable observations; the regression is bound to source head `ac299095854f4cd16f124a2b5dcb44023d8fffe5`.
 - The prior manual Finder workaround is now a product action: a macOS-only, fixed-script
   `cancel_finder_copy` command sends Escape with a five-second bound and no user-controlled input.
   The UI exposes it only alongside concrete iCloud File Provider activity evidence; its success

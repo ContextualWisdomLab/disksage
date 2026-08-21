@@ -325,6 +325,16 @@ request is only an operator-action receipt; a fresh quiet provider observation i
 before any copy, attestation, or source eviction. This action is implemented at source head
 `356363035f9ab97874be6f0fddaa369308c8aab7`.
 
+## Amendment: provider-runtime recovery evidence (2026-08-21)
+
+OneDrive and Google Drive client recovery now requires an explicit runtime observation before
+accepting a quit, graceful termination, or post-restart state. An unavailable observation is a
+distinct blocker (`provider-recovery-runtime-evidence-unavailable` or
+`provider-client-runtime-evidence-unavailable-after-restart`); it is never coerced to process
+absence and never authorizes a retry, cloud mutation, or source eviction. This fail-closed boundary
+is implemented at source head `ac299095854f4cd16f124a2b5dcb44023d8fffe5`, with regression coverage
+for unavailable post-restart evidence.
+
 ## Standards references
 
 The lineage vocabulary is aligned with PROV-O's Entity/Activity/Agent and derivation relations;

@@ -74,6 +74,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   receipts in a shared evidence directory cannot hide a valid Google Drive or OneDrive locator.
 - Add an explicit macOS Finder-copy cancellation command that sends only a bounded Escape request;
   it never accepts scripts or paths and never terminates iCloud/File Provider services.
+- Fail closed when OneDrive or Google Drive runtime evidence is unavailable during client recovery;
+  an unknown observation is no longer treated as proof that the provider process is absent.
 - Hardened iCloud local-copy batch eviction with fresh per-item timestamps, deterministic planner/executor/recorder/clock seams, fail-closed immutable checkpoint handling, bounded manifest admission, symlink-safe control-path validation, and distinct operator diagnostics.
 - Restored the cloud-copy public documentation regression contract after a temporary repair path removed it, so CI continues to fail when the new Rust or TypeScript approval surfaces lose beginner-readable documentation.
 
