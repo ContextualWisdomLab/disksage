@@ -2,6 +2,7 @@
   import { confirm } from "@tauri-apps/plugin-dialog";
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
+  import { cleanAndRefreshOrphanPlan } from "./orphanCleanupFlow";
 
   let plan: api.OrphanPlan | null = $state(null);
   let selected: Set<string> = $state(new Set());
@@ -62,24 +63,31 @@
     busy = true;
     error = "";
     try {
-      result = await api.cleanOrphanCandidates(
-        plan.plan_fingerprint,
-        selectedCandidates.map((candidate) => ({
-          candidate_id: candidate.candidate_id,
-          metadata_fingerprint: candidate.metadata_fingerprint,
-          bytes: candidate.bytes,
-          files: candidate.files,
-          skipped: candidate.skipped,
-          scan_complete: candidate.scan_complete,
-          object_id: candidate.object_id,
-        })),
-        confirmationPhrase,
-        rationale.trim(),
+      const outcome = await cleanAndRefreshOrphanPlan(
+        () => api.cleanOrphanCandidates(
+          plan!.plan_fingerprint,
+          selectedCandidates.map((candidate) => ({
+            candidate_id: candidate.candidate_id,
+            metadata_fingerprint: candidate.metadata_fingerprint,
+            bytes: candidate.bytes,
+            files: candidate.files,
+            skipped: candidate.skipped,
+            scan_complete: candidate.scan_complete,
+            object_id: candidate.object_id,
+          })),
+          confirmationPhrase,
+          rationale.trim(),
+        ),
+        () => api.planOrphanCleanup(),
       );
-      plan = await api.planOrphanCleanup();
+      result = outcome.result;
+      plan = outcome.plan;
       selected = new Set();
       confirmationPhrase = "";
       rationale = "";
+      if (outcome.refresh_failed) {
+        error = "휴지통 이동 요청은 처리됐지만 새 후보 목록을 불러오지 못했습니다. 이동 결과를 확인한 뒤 고아 관계 조사를 다시 실행하세요.";
+      }
     } catch {
       error = "선택 캐시를 휴지통으로 이동하지 못했습니다. 후보를 다시 조사한 뒤 재시도하세요.";
     } finally {
