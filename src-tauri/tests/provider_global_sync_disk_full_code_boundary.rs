@@ -18,10 +18,16 @@ fn code_28_marker_requires_a_numeric_boundary() {
         .blockers
         .contains(&"provider-global-sync-local-disk-full".into()));
 
-    let disk_full = "com.google.drivefs.fpext\nsync engine state:\n error:'NSFileProviderErrorDomain Code=28 write failed'\n";
-    let disk_full_report = parse_dump(CloudProvider::GoogleDrive, disk_full).unwrap();
-    assert_eq!(disk_full_report.state, ProviderGlobalSyncState::Error);
-    assert!(disk_full_report
-        .blockers
-        .contains(&"provider-global-sync-local-disk-full".into()));
+    for marker in [
+        "NSFileProviderErrorDomain Code=28 write failed",
+        "NSFileProviderErrorDomain Code 28 write failed",
+        "NSFileProviderErrorDomain Code=28",
+    ] {
+        let dump = format!("com.google.drivefs.fpext\nsync engine state:\n {marker}\n");
+        let report = parse_dump(CloudProvider::GoogleDrive, &dump).unwrap();
+        assert_eq!(report.state, ProviderGlobalSyncState::Error);
+        assert!(report
+            .blockers
+            .contains(&"provider-global-sync-local-disk-full".into()));
+    }
 }
