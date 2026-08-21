@@ -597,4 +597,4 @@ request. It does not kill `fileproviderd`, `bird`, or Finder, modify CloudDocs/p
 convert this observation into copy, attestation, or eviction authority. A complete quiet observation
 and independent per-item provider evidence remain required. This evidence was observed while PR #246
 was at `fc9f4a4c465fc5ef355f7fbf552ff4295cf4f609` and PR #247 at
-`43944c248ff5b59c18939716a2f85007f947e7b1`; hosted checks remain authoritative.
+`45214018dff43c6ba7c71253bc50e8c0eab0e1bd`; hosted checks remain authoritative.
