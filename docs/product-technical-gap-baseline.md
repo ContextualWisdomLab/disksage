@@ -180,7 +180,7 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   eviction fail-closed until a fresh complete quiet observation and per-item provider evidence
   exist. No Finder/provider daemon, CloudDocs database, cloud object, or source file was changed.
 - Current exact PR heads are UX #246 `fc9f4a4c465fc5ef355f7fbf552ff4295cf4f609` and provider
-  #247 `347f699fa14fcbf7c94a7586b26e2ce00ec28359`; their hosted checks remain pending, while
+  #247 `43944c248ff5b59c18939716a2f85007f947e7b1`; their hosted checks remain pending, while
   local Rust/UX validation is green. The live observation does not authorize a protected merge.
 
 ## 2026-08-21 lineage graph update
