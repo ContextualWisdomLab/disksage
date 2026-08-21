@@ -4,7 +4,8 @@ use disksage_lib::cloud::{
 };
 use disksage_lib::cloud_review::{create_attributed_decision, CloudReviewDisposition};
 use disksage_lib::cloud_transfer::{
-    prepare_cloud_copy_with_review, ProviderSyncEvidence, ProviderSyncState, SyncEvidenceKind,
+    cloud_copy_approval_phrase, create_cloud_copy_approval, prepare_cloud_copy_with_approval,
+    CloudCopyApprovalAction, ProviderSyncEvidence, ProviderSyncState, SyncEvidenceKind,
 };
 use disksage_lib::naruon_lineage::export_naruon_file_lineage;
 use disksage_lib::provider_evidence::create_sync_evidence_record;
@@ -79,12 +80,26 @@ fn legacy_unknown_sync_state_never_exports_confirmed_provider_sync() {
         access_issue: None,
     };
 
-    let receipt = prepare_cloud_copy_with_review(
+    let approval_time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let copy_approval = create_cloud_copy_approval(
+        &candidate,
+        &root,
+        CloudCopyApprovalAction::CopyOnly,
+        approval_time,
+        "human:local:test",
+        "authorize exact test cloud copy",
+        &cloud_copy_approval_phrase(&candidate, CloudCopyApprovalAction::CopyOnly),
+    )
+    .unwrap();
+    let receipt = prepare_cloud_copy_with_approval(
         &candidate,
         &root,
         &tmp.path().join("receipts"),
-        30,
         Some(&decision),
+        &copy_approval,
     )
     .unwrap()
     .0;
@@ -103,11 +118,9 @@ fn legacy_unknown_sync_state_never_exports_confirmed_provider_sync() {
     })
     .unwrap();
 
-    let envelope = export_naruon_file_lineage(&receipt, Some(&record)).unwrap();
-
-    assert_eq!(envelope.cloud_copy.provider_sync_state, ProviderSyncState::Unknown);
-    assert!(
-        !envelope.cloud_copy.provider_sync_confirmed,
-        "legacy evidence without an explicit complete sync state must remain unconfirmed"
+    let error = export_naruon_file_lineage(&receipt, Some(&record)).unwrap_err();
+    assert_eq!(
+        error, "provider-sync-incomplete",
+        "legacy evidence without an explicit complete sync state must fail closed"
     );
 }
