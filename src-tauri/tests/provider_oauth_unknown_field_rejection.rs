@@ -46,7 +46,11 @@ fn connection_id(root: &CloudRoot) -> String {
         hasher.update(value.as_bytes());
         hasher.update([0]);
     }
-    format!("{:x}", hasher.finalize())
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn connection(root: &CloudRoot) -> OAuthConnection {
