@@ -77,6 +77,8 @@ fn active_transfer_health() -> IcloudSyncHealthReport {
             output_truncated: false,
             no_progress_fetch_count: 0,
             no_progress_create_count: 0,
+            materialization_failure_count: 0,
+            staged_item_missing_count: 0,
             active_upload_count: 1,
             active_download_count: 0,
             active_upload_progress_millionths: Some(500_000),

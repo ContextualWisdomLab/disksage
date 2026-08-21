@@ -485,6 +485,8 @@
         next.new_copy_admission_blockers.join(","),
         activity?.no_progress_fetch_count ?? 0,
         activity?.no_progress_create_count ?? 0,
+        activity?.materialization_failure_count ?? 0,
+        activity?.staged_item_missing_count ?? 0,
         activity?.active_upload_count ?? 0,
         activity?.active_download_count ?? 0,
         activity?.active_upload_progress_millionths ?? "",
@@ -769,6 +771,7 @@
       "icloud-native-status-evidence-incomplete": "macOS iCloud 상태 증거가 불완전함",
       "icloud-native-status-command-timeout": "macOS iCloud 상태 확인이 시간 초과되어 복사를 보류함",
       "icloud-file-provider-no-progress": "File Provider fetch/create 요청이 진행률 없이 정지함",
+      "icloud-file-provider-materialization-failed": "File Provider 파일 materialization이 실패함(staged item 없음)",
       "icloud-file-provider-transfer-active": "File Provider 기존 upload/download가 진행 중임",
       "icloud-file-provider-dump-timeout": "File Provider 상태 확인이 시간 초과됨",
       "icloud-file-provider-dump-output-truncated": "File Provider 상태 증거가 잘려 불완전함",
@@ -893,6 +896,7 @@
           오류 {icloudHealth.upload_queue.item_error_count}개
           {#if icloudHealth.file_provider_activity}
             · File Provider 무진행 fetch {icloudHealth.file_provider_activity.no_progress_fetch_count}개 / create {icloudHealth.file_provider_activity.no_progress_create_count}개 ·
+            materialization 실패 {icloudHealth.file_provider_activity.materialization_failure_count}개 / staged item 없음 {icloudHealth.file_provider_activity.staged_item_missing_count}개 ·
             활성 upload {icloudHealth.file_provider_activity.active_upload_count}개 / download {icloudHealth.file_provider_activity.active_download_count}개
           {/if}
         </span>
@@ -916,6 +920,8 @@
           {#if icloudHealth.file_provider_activity && (
             icloudHealth.file_provider_activity.no_progress_fetch_count > 0
             || icloudHealth.file_provider_activity.no_progress_create_count > 0
+            || icloudHealth.file_provider_activity.materialization_failure_count > 0
+            || icloudHealth.file_provider_activity.staged_item_missing_count > 0
             || icloudHealth.file_provider_activity.timed_out
             || icloudHealth.file_provider_activity.active_upload_count > 0
             || icloudHealth.file_provider_activity.active_download_count > 0
@@ -929,6 +935,12 @@
             <p class="warning">
               File Provider의 복사 요청이 진행률 없이 만료되었습니다. Finder에 남은 복사 대기는 취소하고,
               File Provider 상태가 정상으로 관찰된 뒤 DiskSage에서 새 계획을 다시 실행해야 합니다.
+            </p>
+          {/if}
+          {#if icloudHealth.file_provider_activity && (icloudHealth.file_provider_activity.materialization_failure_count > 0 || icloudHealth.file_provider_activity.staged_item_missing_count > 0)}
+            <p class="warning">
+              File Provider가 파일 materialization에 실패했거나 staged item을 잃었습니다. 현재 복사는 완료로 간주하지 않으며,
+              새 복사·attestation·원본 정리는 상태가 정상화될 때까지 차단합니다.
             </p>
           {/if}
           {#if icloudHealth.file_provider_activity?.timed_out}

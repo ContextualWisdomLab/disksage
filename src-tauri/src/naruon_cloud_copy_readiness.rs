@@ -314,15 +314,25 @@ fn expected_icloud_admission_blockers(report: &IcloudSyncHealthReport) -> Vec<St
         blockers.push("icloud-native-sync-down-pending".into());
     }
     if let Some(activity) = report.file_provider_activity.as_ref() {
-        if activity.no_progress_fetch_count > 0 || activity.no_progress_create_count > 0 {
+        let no_progress = activity.no_progress_fetch_count > 0
+            || activity.no_progress_create_count > 0;
+        let materialization_failed = activity.materialization_failure_count > 0
+            || activity.staged_item_missing_count > 0;
+        if no_progress {
             blockers.push("icloud-file-provider-no-progress".into());
-        } else if activity.active_upload_count > 0 || activity.active_download_count > 0 {
+        }
+        if materialization_failed {
+            blockers.push("icloud-file-provider-materialization-failed".into());
+        }
+        if !no_progress && !materialization_failed
+            && (activity.active_upload_count > 0 || activity.active_download_count > 0)
+        {
             blockers.push("icloud-file-provider-transfer-active".into());
-        } else if activity.timed_out {
+        } else if !no_progress && !materialization_failed && activity.timed_out {
             blockers.push("icloud-file-provider-dump-timeout".into());
-        } else if activity.output_truncated {
+        } else if !no_progress && !materialization_failed && activity.output_truncated {
             blockers.push("icloud-file-provider-dump-output-truncated".into());
-        } else if !activity.command_succeeded {
+        } else if !no_progress && !materialization_failed && !activity.command_succeeded {
             blockers.push("icloud-file-provider-evidence-unavailable".into());
         }
     }
@@ -1156,15 +1166,25 @@ fn validate_icloud_admission_summary(
         expected.push("icloud-native-sync-down-pending".to_string());
     }
     if let Some(activity) = summary.file_provider_activity.as_ref() {
-        if activity.no_progress_fetch_count > 0 || activity.no_progress_create_count > 0 {
+        let no_progress = activity.no_progress_fetch_count > 0
+            || activity.no_progress_create_count > 0;
+        let materialization_failed = activity.materialization_failure_count > 0
+            || activity.staged_item_missing_count > 0;
+        if no_progress {
             expected.push("icloud-file-provider-no-progress".to_string());
-        } else if activity.active_upload_count > 0 || activity.active_download_count > 0 {
+        }
+        if materialization_failed {
+            expected.push("icloud-file-provider-materialization-failed".to_string());
+        }
+        if !no_progress && !materialization_failed
+            && (activity.active_upload_count > 0 || activity.active_download_count > 0)
+        {
             expected.push("icloud-file-provider-transfer-active".to_string());
-        } else if activity.timed_out {
+        } else if !no_progress && !materialization_failed && activity.timed_out {
             expected.push("icloud-file-provider-dump-timeout".to_string());
-        } else if activity.output_truncated {
+        } else if !no_progress && !materialization_failed && activity.output_truncated {
             expected.push("icloud-file-provider-dump-output-truncated".to_string());
-        } else if !activity.command_succeeded {
+        } else if !no_progress && !materialization_failed && !activity.command_succeeded {
             expected.push("icloud-file-provider-evidence-unavailable".to_string());
         }
     }

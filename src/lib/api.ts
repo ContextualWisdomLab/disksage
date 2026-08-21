@@ -764,6 +764,8 @@ export interface IcloudSyncHealthReport {
     output_truncated: boolean;
     no_progress_fetch_count: number;
     no_progress_create_count: number;
+    materialization_failure_count: number;
+    staged_item_missing_count: number;
     active_upload_count: number;
     active_download_count: number;
     active_upload_progress_millionths?: number | null;

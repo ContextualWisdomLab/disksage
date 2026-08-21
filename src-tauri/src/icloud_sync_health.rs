@@ -48,7 +48,7 @@ static SNAPSHOT_NONCE: AtomicU64 = AtomicU64::new(0);
 
 pub const ICLOUD_SYNC_HEALTH_SCHEMA_VERSION: u32 = 5;
 pub const ICLOUD_NATIVE_STATUS_SCHEMA_VERSION: u32 = 1;
-pub const ICLOUD_FILE_PROVIDER_ACTIVITY_SCHEMA_VERSION: u32 = 1;
+pub const ICLOUD_FILE_PROVIDER_ACTIVITY_SCHEMA_VERSION: u32 = 2;
 pub const ICLOUD_SYNC_HEALTH_EVIDENCE_SCHEMA_VERSION: u32 = 1;
 pub const ICLOUD_SYNC_HEALTH_EVIDENCE_DIRECTORY: &str = "icloud-sync-health-evidence";
 const MAX_PERSISTED_HEALTH_SNAPSHOTS: usize = 128;
@@ -143,6 +143,10 @@ pub struct IcloudFileProviderActivityEvidence {
     pub no_progress_fetch_count: u64,
     #[serde(default)]
     pub no_progress_create_count: u64,
+    #[serde(default)]
+    pub materialization_failure_count: u64,
+    #[serde(default)]
+    pub staged_item_missing_count: u64,
     #[serde(default)]
     pub active_upload_count: u64,
     #[serde(default)]
@@ -930,6 +934,14 @@ fn parse_file_provider_activity_output(
             line.contains("createitembasedontemplate") && line.contains("no progress")
         })
         .count() as u64;
+    let materialization_failure_count = output
+        .lines()
+        .filter(|line| line.to_ascii_lowercase().contains("materializationfailed"))
+        .count() as u64;
+    let staged_item_missing_count = output
+        .lines()
+        .filter(|line| line.to_ascii_lowercase().contains("stageditemmissing"))
+        .count() as u64;
     let active_upload_count = output
         .lines()
         .filter(|line| line.to_ascii_lowercase().contains("upload progress:"))
@@ -957,6 +969,12 @@ fn parse_file_provider_activity_output(
     if no_progress_create_count > 0 {
         notices.push("icloud-file-provider-no-progress-create-observed".into());
     }
+    if materialization_failure_count > 0 {
+        notices.push("icloud-file-provider-materialization-failed-observed".into());
+    }
+    if staged_item_missing_count > 0 {
+        notices.push("icloud-file-provider-staged-item-missing-observed".into());
+    }
     if active_upload_count > 0 {
         notices.push("icloud-file-provider-active-upload".into());
     }
@@ -971,6 +989,8 @@ fn parse_file_provider_activity_output(
         output_truncated,
         no_progress_fetch_count,
         no_progress_create_count,
+        materialization_failure_count,
+        staged_item_missing_count,
         active_upload_count,
         active_download_count,
         active_upload_progress_millionths,
@@ -1837,22 +1857,11 @@ fn attach_native_status_admission(report: &mut IcloudSyncHealthReport) {
             .insert(0, "icloud-native-sync-down-pending".into());
     }
     if let Some(activity) = report.file_provider_activity.as_ref() {
-        let blocker = if activity.no_progress_fetch_count > 0
-            || activity.no_progress_create_count > 0
-        {
-            Some("icloud-file-provider-no-progress")
-        } else if activity.active_upload_count > 0 || activity.active_download_count > 0 {
-            Some("icloud-file-provider-transfer-active")
-        } else if activity.timed_out {
-            Some("icloud-file-provider-dump-timeout")
-        } else if activity.output_truncated {
-            Some("icloud-file-provider-dump-output-truncated")
-        } else if !activity.command_succeeded {
-            Some("icloud-file-provider-evidence-unavailable")
-        } else {
-            None
-        };
-        if let Some(blocker) = blocker {
+        let no_progress = activity.no_progress_fetch_count > 0
+            || activity.no_progress_create_count > 0;
+        let materialization_failed = activity.materialization_failure_count > 0
+            || activity.staged_item_missing_count > 0;
+        let mut add_blocker = |blocker: &str| {
             if !report
                 .new_copy_admission_blockers
                 .iter()
@@ -1862,6 +1871,23 @@ fn attach_native_status_admission(report: &mut IcloudSyncHealthReport) {
                 report.new_copy_admission_state = "blocked".into();
                 report.sync_backlog_present = true;
                 report.blockers.insert(0, blocker.into());
+            }
+        };
+        if no_progress {
+            add_blocker("icloud-file-provider-no-progress");
+        }
+        if materialization_failed {
+            add_blocker("icloud-file-provider-materialization-failed");
+        }
+        if !no_progress && !materialization_failed {
+            if activity.active_upload_count > 0 || activity.active_download_count > 0 {
+                add_blocker("icloud-file-provider-transfer-active");
+            } else if activity.timed_out {
+                add_blocker("icloud-file-provider-dump-timeout");
+            } else if activity.output_truncated {
+                add_blocker("icloud-file-provider-dump-output-truncated");
+            } else if !activity.command_succeeded {
+                add_blocker("icloud-file-provider-evidence-unavailable");
             }
         }
     }
@@ -2174,6 +2200,27 @@ mod tests {
             .notices
             .contains(&"icloud-file-provider-active-download".to_string()));
         assert!(validate_file_provider_activity_evidence(&evidence).is_ok());
+    }
+
+    #[test]
+    fn file_provider_parser_records_materialization_failures_without_paths() {
+        let evidence = parse_file_provider_activity_output(
+            "itemMaterializationFailed(... stagedItemMissing ...)\nmaterializationFailed stagedItemMissing\n",
+            42,
+            true,
+            false,
+            false,
+        );
+        assert_eq!(evidence.materialization_failure_count, 2);
+        assert_eq!(evidence.staged_item_missing_count, 2);
+        assert!(evidence
+            .notices
+            .contains(&"icloud-file-provider-materialization-failed-observed".to_string()));
+        assert!(evidence
+            .notices
+            .contains(&"icloud-file-provider-staged-item-missing-observed".to_string()));
+        assert!(validate_file_provider_activity_evidence(&evidence).is_ok());
+        assert!(!serde_json::to_string(&evidence).unwrap().contains("stagedItemMissing"));
     }
 
     #[test]
