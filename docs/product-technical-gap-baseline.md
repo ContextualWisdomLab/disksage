@@ -14,7 +14,7 @@ baseline records the current loop's runtime and integration evidence.
 4. Regenerable caches are a separate reclaim domain. They are per-child, identity-bound, active-use checked, journaled, and moved to OS Trash; they are not uploaded as user data.
 5. Deterministic Rust gates own safety. A local model may judge only the fixed maintenance command after dry-run evidence, calibration, and explicit human confirmation. No external LLM or OAuth service is a runtime prerequisite for the standalone product.
 
-## Buyer-observable product gaps
+## User-observable product gaps
 
 | Priority | Gap / observable symptom | Evidence | Acceptance criterion |
 | --- | --- | --- | --- |
@@ -23,7 +23,7 @@ baseline records the current loop's runtime and integration evidence.
 | P1 | Personal desktop-client capacity is not the same as API quota; OAuth is unnecessarily implied for a single-user installation. | ADR-0001 permits copy-only desktop-client mode marked `capacity-unverified`; the cloud connection UI defaults to read-only OAuth consent and requires an explicit write-access opt-in. | Settings clearly distinguish local desktop client, API quota, and organization OAuth; no OAuth prompt is required for the local-only path. |
 | P1 | Users cannot yet see a full lineage graph connecting source, metadata, archive member, provider item, receipt, Goal, and eviction decision. | The candidate UI now exposes a compact source→metadata→archive→provider lineage panel using the stable fingerprint, confidence, and blocker state; provider item/receipt/permit remain explicitly pending until their evidence exists. | Export and UI show stable content IDs, provenance edges, confidence, and blockers without exposing raw private paths. |
 | P1 | “Orphan”/duplicate cleanup is difficult to trust because relationship evidence is not visible before action. | Ontology and duplicate/orphan PRs are open; current default path remains fail-closed. | Every proposed removal has an explainable parent/child/duplicate relation, identity recheck, reversible Trash action, and a no-candidate result when evidence is incomplete. |
-| P2 | Cross-platform behavior and accessibility are not presented as one release contract. | macOS/Linux/Windows release checks exist; several UI accessibility PRs remain open. | Release notes and UI expose platform capability matrix, keyboard/assistive labels, and bounded failure messages for each action. |
+| P2 | Cross-platform behavior and accessibility are not presented as one release contract. | macOS/Linux/Windows release checks exist; the Svelte shell now has a token-driven keyboard/live-feedback contract and Storybook provider-state scenes. | Release notes and UI expose platform capability matrix, keyboard/assistive labels, and bounded failure messages for each action; complete VoiceOver/zoom/native-provider acceptance remains open. |
 
 ## Technical and operational gaps
 
@@ -49,6 +49,24 @@ baseline records the current loop's runtime and integration evidence.
 - ADR-0008 keeps the hourly contextual-orchestrator integration read-only at the foreign-repository and provider-secret boundaries.
 - Dynamic Goal/ADR projections are replaceable views over receipts; they cannot authorize mutation.
 - Rust remains the computation and security boundary. Noema, contextual-orchestrator, semantic-data-portal, pg-erd-cloud, fast-mlsirm, or Gemma are added only when a measured gap requires them and their boundary is documented first.
+
+## 2026-08-21 accessible Storybook UX contract
+
+- The Svelte shell now imports a primitive → semantic → component token hierarchy from
+  `src/lib/ui/design-tokens.css`, including dark preference, forced-colors focus, reduced motion,
+  and 44px controls. The layout adds a skip link and the scan shell adds labelled controls,
+  keyboard-safe buttons, live completion feedback, and alert feedback without browser `alert()`.
+- `ProviderStatusCard` and Storybook 10.5 scenes cover clear, checking, incomplete provider
+  evidence, materialization stall, cancel callback, disabled action, mobile viewport, and reduced
+  motion states. The a11y addon is configured to fail a story on detected violations; Storybook is
+  development-only and cannot authorize cloud writes or source eviction.
+- Local evidence at this implementation snapshot: `npm test` 30 files/128 tests, `svelte-check`
+  0 errors/0 warnings, `npm run build` passed, `npm run build-storybook` passed, and production
+  dependency audit reported 0 vulnerabilities. The Storybook bundle emits a non-blocking >500 KiB
+  axe chunk advisory; no runtime bundle includes Storybook.
+- Standards adopted for this slice are WCAG 2.2, WAI-ARIA APG, Design Tokens Format Module
+  2025.10, and Storybook accessibility testing. No Figma File ID exists for this change; ADR-0010
+  records that boundary and requires a superseding ADR when a Figma handoff is approved.
 
 ## 2026-08-21 loop evidence
 

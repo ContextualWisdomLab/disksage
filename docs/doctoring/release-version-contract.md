@@ -2,7 +2,7 @@
 
 ## Decision
 
-DiskSage fails closed before packaging when its buyer-visible release versions are not identical. `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json` must each expose one identical Semantic Versioning value. A tag-triggered release must additionally use the exact tag `v<manifest version>`.
+DiskSage fails closed before packaging when its release-consumer-visible versions are not identical. `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json` must each expose one identical Semantic Versioning value. A tag-triggered release must additionally use the exact tag `v<manifest version>`.
 
 The authoritative executable policy is `scripts/ci/release-version.mjs`. The package `build` command runs that policy before Vite compilation. Tauri executes `npm run build` through `beforeBuildCommand`, so the same check precedes Linux, Windows, and macOS bundle creation without relying on one operating system's shell syntax. Exact production coverage remains an independent CI authority owned by the coverage workflow contract; the release-version gate does not duplicate or weaken it.
 
