@@ -393,3 +393,11 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   and the local volume recovered to about 1.6 GiB free. The already-running Finder operation must
   be cancelled from its UI and must not be retried until the local headroom and a fresh quiet
   File Provider observation satisfy the plan gates.
+
+## 2026-08-21 immediate disk-pressure follow-up
+
+- A second bounded inventory found an old, unreferenced temporary `trusted.tar.gz` archive under
+  the macOS temporary directory; it was removed after the open-handle check, recovering about
+  217 MiB. The Node compile cache, active worktrees, iCloud/File Provider state, OneDrive state,
+  Google Drive support data, and all user/provider files remain untouched. APFS availability then
+  measured about 2.3 GiB, while the 7.2 GiB Finder materialization remains unsafe to retry.
