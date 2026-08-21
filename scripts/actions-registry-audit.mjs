@@ -27,13 +27,14 @@ const NON_ACTIVE_WORKFLOW_STATES = new Set([
 export function normalizeWorkflowPath(rawPath) {
   if (typeof rawPath !== 'string' || rawPath.length === 0) return null;
   const slashNormalized = rawPath.replaceAll('\\', '/');
+  // Reject traversal before normalization. Once every `..` segment is excluded, posix.normalize
+  // cannot synthesize a leading parent traversal, so retaining later `..`/`../` guards would be
+  // unreachable defensive branches rather than additional authority checks.
   if (slashNormalized.split('/').includes('..')) return null;
   const withoutDotPrefix = slashNormalized.replace(/^(?:\.\/)+/, '');
   const normalized = path.posix.normalize(withoutDotPrefix);
   if (
     normalized === '.' ||
-    normalized === '..' ||
-    normalized.startsWith('../') ||
     normalized.startsWith('/')
   ) {
     return null;
