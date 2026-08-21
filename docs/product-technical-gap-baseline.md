@@ -563,6 +563,7 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   attestation, and eviction remain blocked. Local APFS availability recovered to about 8.9 GiB
   during the observation. The fixed Finder Escape action remains the only supported cancellation;
   no daemon, cloud object, or source file was touched.
-- PR #245 exact head `ed9790464e890c8c9e7265b98b349bfbd981e1df` adds the ontology-bound orphan cache
-  action; frontend checks passed locally (30 files, 124 tests), while hosted Rust/security/review
-  checks remain authoritative and pending. PR #213's live base head is `6f424af`.
+- PR #245 exact head `d5b084e` adds the ontology-bound orphan cache action; frontend checks passed
+  locally (30 files, 124 tests) and the focused Rust orphan tests pass (3/3). Hosted full Rust,
+  security, and review checks remain authoritative and pending. PR #213's live base head is
+  `6f424af`.
