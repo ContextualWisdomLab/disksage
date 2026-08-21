@@ -108,6 +108,38 @@ describe('bounded Rust coverage command diagnostic', () => {
     }
   });
 
+  it('preserves ANSI-colored Rust errors emitted by the coverage runner', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'disksage-coverage-diagnostic-ansi-'));
+    try {
+      const rawLog = join(directory, 'raw.log');
+      const boundedLog = join(directory, 'bounded.log');
+      const compilerDiagnostic =
+        '\u001b[31merror[E0425]\u001b[0m: cannot find value `missing` in this scope\n' +
+        '\u001b[34m --> \u001b[0msrc-tauri/src/lib.rs:777:9\n';
+      const prefixNoise = Array.from(
+        { length: 500 },
+        (_, index) => `prefix-noise-${String(index).padStart(4, '0')} ${'x'.repeat(80)}`,
+      ).join('\n');
+      const suffixNoise = Array.from(
+        { length: 500 },
+        (_, index) => `suffix-noise-${String(index).padStart(4, '0')} ${'y'.repeat(80)}`,
+      ).join('\n');
+      writeFileSync(
+        rawLog,
+        `${prefixNoise}\n${compilerDiagnostic}${suffixNoise}\n`,
+      );
+
+      execFileSync('bash', [diagnosticHelper, rawLog, boundedLog]);
+
+      const diagnostic = readFileSync(boundedLog, 'utf8');
+      expect(diagnostic).toContain('error[E0425]');
+      expect(diagnostic).toContain('src-tauri/src/lib.rs:777:9');
+      expect(Buffer.byteLength(diagnostic)).toBeLessThanOrEqual(32_768);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('wires the exact coverage step through the executable helper', () => {
     expect(workflow).toContain(
       'bash .github/scripts/bound-coverage-command-diagnostic.sh coverage-command.raw.log coverage-command.bounded.log',
