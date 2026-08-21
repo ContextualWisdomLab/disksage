@@ -12,6 +12,7 @@ const RELEASE_WORKFLOW: &str = include_str!("../../.github/workflows/release.yml
 const DEPENDABOT: &str = include_str!("../../.github/dependabot.yml");
 const RUST_TOOLCHAIN_ACTION: &str = "dtolnay/rust-toolchain@";
 
+/// Remove one layer of TOML/YAML quoting from a scalar value.
 fn unquote(value: &str) -> &str {
     let value = value.trim();
     if value.len() >= 2
@@ -24,6 +25,7 @@ fn unquote(value: &str) -> &str {
     }
 }
 
+/// Read one scalar from the requested TOML table only.
 fn toml_scalar(source: &str, target_table: &str, target_key: &str) -> Option<String> {
     let mut current_table = None;
     for raw_line in source.lines() {
@@ -46,10 +48,12 @@ fn toml_scalar(source: &str, target_table: &str, target_key: &str) -> Option<Str
     None
 }
 
+/// Count leading ASCII spaces used by the repository's two-space YAML style.
 fn leading_spaces(line: &str) -> usize {
     line.len() - line.trim_start_matches(' ').len()
 }
 
+/// Read a scalar whose key is an immediate child of a YAML mapping block.
 fn yaml_scalar_in_block(
     lines: &[&str],
     block_start: usize,
@@ -78,6 +82,7 @@ fn yaml_scalar_in_block(
     None
 }
 
+/// Read a scalar from a named immediate child mapping, never from deeper nesting.
 fn yaml_nested_scalar_in_block(
     lines: &[&str],
     block_start: usize,
@@ -105,6 +110,7 @@ fn yaml_nested_scalar_in_block(
     None
 }
 
+/// Collect `toolchain` values from each reviewed Rust toolchain action block.
 fn action_toolchains(source: &str) -> Vec<Option<String>> {
     let lines: Vec<_> = source.lines().collect();
     let mut values = Vec::new();
@@ -127,6 +133,7 @@ fn action_toolchains(source: &str) -> Vec<Option<String>> {
     values
 }
 
+/// Return one Dependabot update item for the requested ecosystem.
 fn dependabot_entry<'a>(source: &'a str, ecosystem: &str) -> Option<Vec<&'a str>> {
     let lines: Vec<_> = source.lines().collect();
     for (index, line) in lines.iter().enumerate() {
@@ -155,11 +162,16 @@ fn dependabot_entry<'a>(source: &'a str, ecosystem: &str) -> Option<Vec<&'a str>
     None
 }
 
+/// Read a direct scalar field from one bounded Dependabot item.
 fn entry_scalar(entry: &[&str], target_key: &str) -> Option<String> {
     let item_indent = entry.first().map(|line| leading_spaces(line))?;
     let expected_indent = item_indent + 2;
     for line in &entry[1..] {
-        if leading_spaces(line) != expected_indent {
+        let indent = leading_spaces(line);
+        if indent <= item_indent {
+            break;
+        }
+        if indent != expected_indent {
             continue;
         }
         let trimmed = line.trim();
@@ -173,11 +185,16 @@ fn entry_scalar(entry: &[&str], target_key: &str) -> Option<String> {
     None
 }
 
+/// Read a scalar from a direct nested mapping in one bounded Dependabot item.
 fn entry_nested_scalar(entry: &[&str], parent_key: &str, target_key: &str) -> Option<String> {
     let item_indent = entry.first().map(|line| leading_spaces(line))?;
     let expected_indent = item_indent + 2;
     for (index, line) in entry.iter().enumerate().skip(1) {
-        if leading_spaces(line) != expected_indent {
+        let indent = leading_spaces(line);
+        if indent <= item_indent {
+            break;
+        }
+        if indent != expected_indent {
             continue;
         }
         let trimmed = line.trim();
@@ -189,6 +206,7 @@ fn entry_nested_scalar(entry: &[&str], parent_key: &str, target_key: &str) -> Op
     None
 }
 
+/// Verify the local manifest and every CI Rust action use the exact compiler baseline.
 #[test]
 fn local_package_and_ci_use_the_same_exact_compiler() {
     assert_eq!(
@@ -210,6 +228,7 @@ fn local_package_and_ci_use_the_same_exact_compiler() {
     );
 }
 
+/// Verify release jobs inherit the repository toolchain instead of overriding it.
 #[test]
 fn release_commands_remain_under_the_root_toolchain_override() {
     let release_toolchains = action_toolchains(RELEASE_WORKFLOW);
@@ -229,6 +248,7 @@ fn release_commands_remain_under_the_root_toolchain_override() {
     assert!(!RELEASE_WORKFLOW.contains("working-directory: src-tauri"));
 }
 
+/// Verify Dependabot exposes a bounded, reviewable compiler update policy.
 #[test]
 fn compiler_updates_are_reviewable() {
     let rust_update = dependabot_entry(DEPENDABOT, "rust-toolchain")
@@ -244,6 +264,7 @@ fn compiler_updates_are_reviewable() {
     );
 }
 
+/// Prove comments, sibling mappings, and deeper mappings cannot satisfy the contract.
 #[test]
 fn structural_readers_reject_decoys_and_wrong_hierarchy() {
     let toml_decoy = r#"
