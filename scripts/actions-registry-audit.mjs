@@ -227,12 +227,20 @@ export async function listAllOpenPullRequests(fetchJson, repository) {
 function sameRepositoryHeadSnapshot(pullRequests, repository) {
   const pullSnapshots = new Set();
   for (const pullRequest of pullRequests) {
-    const headRepository = pullRequest?.head?.repo?.full_name;
+    const head = pullRequest?.head;
+    if (!head || typeof head !== 'object') {
+      throw new Error('open-pr-head-invalid');
+    }
+    // GitHub legitimately returns `head.repo: null` when an open PR's source fork was deleted.
+    // Such a PR cannot own a same-repository workflow path, so exclude it from ownership evidence
+    // rather than turning one dead fork into a permanent scheduled-audit outage.
+    if (head.repo === null) continue;
+    const headRepository = head.repo?.full_name;
     if (typeof headRepository !== 'string' || headRepository.length === 0) {
       throw new Error('open-pr-head-invalid');
     }
     if (headRepository !== repository) continue;
-    const headSha = pullRequest.head.sha;
+    const headSha = head.sha;
     if (typeof headSha !== 'string' || !COMMIT_SHA_PATTERN.test(headSha)) {
       throw new Error('open-pr-head-invalid');
     }
@@ -291,6 +299,7 @@ export async function activePullRequestWorkflowPaths(fetchJson, repository, pull
   const headWorkflowPaths = new Map();
 
   for (const pullRequest of pullRequests) {
+    if (pullRequest.head.repo === null) continue;
     const headRepository = pullRequest.head.repo.full_name;
     if (headRepository !== repository) continue;
     const pullNumber = pullRequest.number;
