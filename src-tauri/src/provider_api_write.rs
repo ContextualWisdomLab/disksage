@@ -563,7 +563,6 @@ mod tests {
             next_upload_offset(308, Some("bytes=0-42"), 1023).unwrap(),
             43
         );
-        assert_eq!(next_upload_offset(202, None, 1023).unwrap(), 1024);
         assert_eq!(
             next_upload_offset(308, Some("bytes=0-2048"), 1023).unwrap_err(),
             "provider-api-upload-range-invalid"
@@ -571,6 +570,14 @@ mod tests {
         assert_eq!(
             next_upload_offset(308, Some("nonsense-42"), 1023).unwrap_err(),
             "provider-api-upload-range-invalid"
+        );
+    }
+
+    #[test]
+    fn onedrive_202_requires_explicit_server_acknowledgement() {
+        assert_eq!(
+            next_upload_offset(202, None, 1023).unwrap_err(),
+            "provider-api-upload-next-range-required"
         );
     }
 }
