@@ -3,6 +3,8 @@
 //! Fixtures are ordinary local temporary files. The audit is read-only, never attempts reassembly,
 //! and never grants discard authority from a locally contiguous or incomplete part set.
 
+#![cfg(not(coverage))]
+
 use disksage_lib::multipart_archive::{
     collect_multipart_archive_audit, parse_multipart_archive_name, summarize_multipart_audit,
     MultipartSetState,

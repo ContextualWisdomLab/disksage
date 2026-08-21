@@ -4,6 +4,8 @@
 //! but never launches a browser, waits for a callback, accesses the credential store, or sends a
 //! provider network request.
 
+#![cfg(not(coverage))]
+
 use disksage_lib::cloud::CloudProvider;
 use disksage_lib::provider_oauth::prepare_authorization;
 

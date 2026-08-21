@@ -4,6 +4,8 @@
 //! case-insensitive for supported formats and fail-closed for host paths that cannot be represented
 //! as a supported UTF-8 extension.
 
+#![cfg(not(coverage))]
+
 use disksage_lib::profile_dataset;
 
 #[test]

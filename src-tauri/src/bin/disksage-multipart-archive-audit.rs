@@ -1,6 +1,7 @@
-use disksage_lib::multipart_archive::{
-    collect_multipart_archive_audit, summarize_multipart_audit, DEFAULT_MAX_ENTRIES,
-};
+use disksage_lib::multipart_archive::DEFAULT_MAX_ENTRIES;
+#[cfg(not(coverage))]
+use disksage_lib::multipart_archive::{collect_multipart_archive_audit, summarize_multipart_audit};
+#[cfg(not(coverage))]
 use disksage_lib::private_evidence::write_private_json_create_new;
 use std::path::{Component, Path, PathBuf};
 
@@ -123,7 +124,7 @@ fn main() {
 #[cfg(coverage)]
 fn main() {}
 
-#[cfg(test)]
+#[cfg(all(test, not(coverage)))]
 mod tests {
     use super::*;
 

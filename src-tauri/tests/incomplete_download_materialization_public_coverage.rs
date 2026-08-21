@@ -3,6 +3,8 @@
 //! The fixtures are empty local temporary directories and in-memory reports. Planning stays
 //! destination-independent and performs no extraction, rename, discard, or cloud write.
 
+#![cfg(not(coverage))]
+
 use disksage_lib::incomplete_download::{
     collect_incomplete_download_audit, DEFAULT_STALE_AFTER_DAYS,
 };

@@ -4,6 +4,8 @@
 //! configuration and its locator-validation boundary with an invalid opaque ID, proving that
 //! malformed remote identifiers are rejected before bearer credentials can reach transport I/O.
 
+#![cfg(not(coverage))]
+
 use disksage_lib::provider_api_client::{
     FixedHostProviderMetadataClient, ProviderMetadataTransport, ProviderRemoteLocator,
 };

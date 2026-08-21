@@ -3,6 +3,8 @@
 //! These tests bind only ephemeral loopback listeners. They do not open a browser, contact an
 //! OAuth provider, exchange a code, read the credential store, or authorize cloud mutation.
 
+#![cfg(not(coverage))]
+
 use disksage_lib::cloud::CloudProvider;
 use disksage_lib::provider_oauth::prepare_authorization;
 

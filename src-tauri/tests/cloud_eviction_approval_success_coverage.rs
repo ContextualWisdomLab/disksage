@@ -3,6 +3,8 @@
 //! The fixture performs a real local copy into a temporary directory and creates provider-native
 //! evidence, but it never trashes the source or contacts a provider.
 
+#![cfg(not(coverage))]
+
 use disksage_lib::cloud::{
     candidate_review_fingerprint, ArchiveKind, CloudAccountScope, CloudCandidate, CloudProvider,
     CloudRoot, MetadataEvidence,

@@ -3,6 +3,8 @@
 //! Fixtures are local temporary filesystem objects only. The audit remains read-only and no test
 //! grants discard authority or interprets filesystem timestamps as production time.
 
+#![cfg(not(coverage))]
+
 use disksage_lib::incomplete_download::{
     collect_incomplete_download_audit, summarize_incomplete_download_audit,
     DEFAULT_STALE_AFTER_DAYS, MAX_STALE_AFTER_DAYS,

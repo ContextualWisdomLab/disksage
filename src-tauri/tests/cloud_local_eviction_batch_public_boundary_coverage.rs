@@ -4,6 +4,8 @@
 //! items must become bounded path-free evidence, and the public approval/execution boundaries must
 //! reject plans that are incomplete or otherwise non-authoritative before they can create records.
 
+#![cfg(not(coverage))]
+
 use disksage_lib::cloud::{CloudAccountScope, CloudProvider, CloudRoot};
 use disksage_lib::cloud_local_eviction_batch::{
     approve_icloud_local_eviction_batch, execute_icloud_local_eviction_batch,

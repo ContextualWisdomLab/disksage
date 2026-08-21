@@ -3,6 +3,8 @@
 //! These fixtures exercise reachable production branches that are easy to miss in ordinary
 //! examples while keeping all sampled values ephemeral and out of the returned profile.
 
+#![cfg(not(coverage))]
+
 use disksage_lib::profile_dataset;
 use std::io::Write;
 

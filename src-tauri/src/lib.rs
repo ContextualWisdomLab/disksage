@@ -71,7 +71,7 @@ pub mod cloud_review;
 pub mod cloud_transfer;
 pub mod content_digest;
 pub mod duplicate_audit;
-#[cfg(test)]
+#[cfg(all(test, not(coverage)))]
 mod duplicate_audit_integrity_coverage_tests;
 pub mod icloud_sync_health;
 pub mod incomplete_download;

@@ -4,6 +4,8 @@
 //! directory. It exercises workbook/worksheet admission and heterogeneous cell handling while
 //! proving sampled cell values are never retained in the returned profile.
 
+#![cfg(not(coverage))]
+
 use disksage_lib::profile_dataset;
 use std::io::Write;
 use zip::write::SimpleFileOptions;

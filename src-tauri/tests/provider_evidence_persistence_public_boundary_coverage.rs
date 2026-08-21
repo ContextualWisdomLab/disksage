@@ -3,6 +3,8 @@
 //! These tests exercise the production persistence API with real temporary filesystem
 //! objects so create-only, bounded, read-only, identity-bound evidence stays fail closed.
 
+#![cfg(not(coverage))]
+
 use disksage_lib::cloud::CloudProvider;
 use disksage_lib::cloud_transfer::{
     ProviderSyncEvidence, RemoteChecksumAlgorithm, RemoteContentProof, SyncEvidenceKind,

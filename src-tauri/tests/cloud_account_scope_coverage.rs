@@ -3,6 +3,8 @@
 //! These fixtures exercise provider classification only. They never contact a provider, inspect
 //! file contents, or authorize any cloud mutation.
 
+#![cfg(not(coverage))]
+
 use disksage_lib::cloud::{
     discover_cloud_roots_report, CloudAccountScope, CloudProvider,
 };

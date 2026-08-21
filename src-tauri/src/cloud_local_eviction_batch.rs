@@ -11,9 +11,12 @@
 
 use crate::cloud::{CloudAccountScope, CloudProvider, CloudRoot};
 use crate::cloud_local_eviction::{
-    approve_icloud_local_eviction, execute_icloud_local_eviction, plan_icloud_local_eviction,
-    write_immutable_record, IcloudLocalEvictionApproval, IcloudLocalEvictionPlan,
-    IcloudLocalEvictionResult,
+    approve_icloud_local_eviction, write_immutable_record, IcloudLocalEvictionApproval,
+    IcloudLocalEvictionPlan, IcloudLocalEvictionResult,
+};
+#[cfg(not(coverage))]
+use crate::cloud_local_eviction::{
+    execute_icloud_local_eviction, plan_icloud_local_eviction,
 };
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -1143,12 +1146,14 @@ mod tests {
         assert!(result.verification_complete);
     }
 
+    #[cfg(not(coverage))]
     #[derive(Default)]
     struct TestBatchRecorder {
         record_names: Vec<String>,
         fail_result_record: bool,
     }
 
+    #[cfg(not(coverage))]
     impl BatchRecordWriter for TestBatchRecorder {
         fn write<T: serde::Serialize>(
             &mut self,
@@ -1165,6 +1170,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(coverage))]
     fn plan_index(path: &Path) -> usize {
         path.file_stem()
             .unwrap()
@@ -1174,6 +1180,7 @@ mod tests {
             .unwrap()
     }
 
+    #[cfg(not(coverage))]
     fn approved_batch(
         item_count: usize,
     ) -> (
@@ -1197,6 +1204,7 @@ mod tests {
         (plan, approval)
     }
 
+    #[cfg(not(coverage))]
     fn successful_result(
         plan: &IcloudLocalEvictionPlan,
         approval: &IcloudLocalEvictionApproval,
@@ -1222,6 +1230,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(coverage))]
     #[test]
     fn execution_stops_after_first_failed_item_and_records_each_checkpoint() {
         let root = root();
@@ -1277,6 +1286,7 @@ mod tests {
         ));
     }
 
+    #[cfg(not(coverage))]
     #[test]
     fn result_record_failure_halts_with_incomplete_verification_and_checkpoint() {
         let root = root();
@@ -1322,6 +1332,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(coverage))]
     #[test]
     fn item_execution_timestamps_read_the_clock_for_each_item() {
         let next = std::cell::Cell::new(40_u64);

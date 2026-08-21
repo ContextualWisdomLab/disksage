@@ -1,19 +1,25 @@
+#[cfg(not(coverage))]
 use disksage_lib::cloud::{discover_cloud_roots_report, CloudProvider, CloudRoot};
-use disksage_lib::incomplete_download::{
-    collect_incomplete_download_audit, DEFAULT_MAX_ENTRIES, DEFAULT_STALE_AFTER_DAYS,
-    MAX_STALE_AFTER_DAYS,
-};
+use disksage_lib::incomplete_download::{DEFAULT_MAX_ENTRIES, DEFAULT_STALE_AFTER_DAYS,
+    MAX_STALE_AFTER_DAYS};
+#[cfg(not(coverage))]
+use disksage_lib::incomplete_download::collect_incomplete_download_audit;
+#[cfg(not(coverage))]
 use disksage_lib::incomplete_download_materialization::plan_incomplete_download_materialization;
+#[cfg(not(coverage))]
 use disksage_lib::incomplete_download_materialization_destination::{
     plan_incomplete_download_destination, summarize_incomplete_download_destination,
 };
+#[cfg(not(coverage))]
 use disksage_lib::incomplete_download_recovery::{
     validate_incomplete_download_recovery, RecoveryValidationLimits,
 };
+#[cfg(not(coverage))]
 use disksage_lib::private_evidence::write_private_json_create_new;
-use disksage_lib::provider_capacity::{
-    collect_icloud_native_capacity, CloudCapacitySnapshot, DEFAULT_CAPACITY_RESERVE_BYTES,
-};
+use disksage_lib::provider_capacity::DEFAULT_CAPACITY_RESERVE_BYTES;
+#[cfg(not(coverage))]
+use disksage_lib::provider_capacity::{collect_icloud_native_capacity, CloudCapacitySnapshot};
+#[cfg(not(coverage))]
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
@@ -204,6 +210,7 @@ fn system_now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+#[cfg(not(coverage))]
 fn select_discovered_root(home: &Path, requested: &Path) -> Result<CloudRoot, String> {
     let canonical_requested = std::fs::canonicalize(requested)
         .map_err(|_| "materialization-cloud-root-unavailable".to_string())?;
@@ -222,6 +229,7 @@ fn select_discovered_root(home: &Path, requested: &Path) -> Result<CloudRoot, St
     Ok(matches.remove(0))
 }
 
+#[cfg(not(coverage))]
 fn read_capacity_snapshot(path: &Path) -> Result<CloudCapacitySnapshot, String> {
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|_| "materialization-capacity-snapshot-unavailable".to_string())?;

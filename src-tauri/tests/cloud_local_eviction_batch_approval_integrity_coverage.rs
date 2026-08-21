@@ -4,6 +4,8 @@
 //! requests and tampered approval records must fail before filesystem mutation or authority-record
 //! publication can occur.
 
+#![cfg(not(coverage))]
+
 use disksage_lib::cloud::{CloudAccountScope, CloudProvider, CloudRoot};
 use disksage_lib::cloud_local_eviction::{
     ActiveUseEvidence, IcloudLocalEvictionPlan, IcloudLocalState, IcloudStateObservationMethod,

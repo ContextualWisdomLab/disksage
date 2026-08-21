@@ -4,6 +4,8 @@
 //! provider network API. The matrix deliberately exercises every public approval guard so exact
 //! production coverage can distinguish a genuinely tested denial path from a merely compiled one.
 
+#![cfg(not(coverage))]
+
 use disksage_lib::cloud::{
     candidate_review_fingerprint, ArchiveKind, CloudAccountScope, CloudCandidate, CloudProvider,
     CloudRoot, MetadataEvidence,

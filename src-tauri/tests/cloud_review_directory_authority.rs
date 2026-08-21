@@ -1,3 +1,5 @@
+#![cfg(not(coverage))]
+
 #[cfg(unix)]
 #[test]
 fn shared_writable_cloud_review_directory_fails_closed() {

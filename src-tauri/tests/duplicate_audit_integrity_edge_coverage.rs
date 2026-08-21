@@ -3,6 +3,8 @@
 //! Fixtures are temporary local files only. These regressions exercise the public fail-closed
 //! integrity validator and never authorize or perform deletion.
 
+#![cfg(not(coverage))]
+
 use disksage_lib::duplicate_audit::{
     collect_exact_duplicate_audit, exact_duplicate_audit_integrity_valid, ExactDuplicateAuditReport,
     MAX_ENTRIES,

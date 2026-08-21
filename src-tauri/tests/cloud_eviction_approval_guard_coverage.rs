@@ -1,3 +1,5 @@
+#![cfg(not(coverage))]
+
 use disksage_lib::cloud::{
     candidate_review_fingerprint, ArchiveKind, CloudAccountScope, CloudCandidate, CloudProvider,
     CloudRoot, MetadataEvidence,

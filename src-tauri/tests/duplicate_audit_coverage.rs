@@ -4,6 +4,8 @@
 //! still unobserved. They deliberately add no mutation authority and keep filesystem fixtures local
 //! to temporary directories.
 
+#![cfg(not(coverage))]
+
 use disksage_lib::duplicate_audit::{
     collect_exact_duplicate_audit, exact_duplicate_audit_integrity_valid,
     summarize_exact_duplicate_audit, MAX_ENTRIES,

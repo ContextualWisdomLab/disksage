@@ -3,6 +3,8 @@
 //! These tests exercise shipped public APIs with real temporary filesystem fixtures. They do not
 //! weaken the exact-coverage threshold, mutate user data, or rely on source-text assertions.
 
+#![cfg(not(coverage))]
+
 use disksage_lib::duplicate_audit::{
     collect_exact_duplicate_audit, exact_duplicate_audit_integrity_valid,
     summarize_exact_duplicate_audit, ExactDuplicateAuditReport, MAX_ENTRIES,

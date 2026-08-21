@@ -6,6 +6,8 @@
 //! real ZIP, real temporary directories, exact planning lineage, explicit human approval, and fresh
 //! provider capacity evidence; no network or provider mutation is involved.
 
+#![cfg(not(coverage))]
+
 use disksage_lib::cloud::{CloudAccountScope, CloudProvider, CloudRoot};
 use disksage_lib::cloud_local_eviction::observe_path_active_use;
 use disksage_lib::incomplete_download::{

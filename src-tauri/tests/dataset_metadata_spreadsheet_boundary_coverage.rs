@@ -2,6 +2,8 @@
 //!
 //! These tests exercise metadata and workbook admission without reading user cell values.
 
+#![cfg(not(coverage))]
+
 use disksage_lib::profile_dataset;
 use std::io::Write;
 

@@ -3,6 +3,8 @@
 //! The tests use temporary local directories only. They do not discover real cloud accounts,
 //! invoke provider APIs, mutate files, or require credentials.
 
+#![cfg(not(coverage))]
+
 use disksage_lib::cloud::{
     cloud_root_path_matches, discover_cloud_roots, discover_cloud_roots_report,
     plan_cloud_archive_from_snapshot, prepare_cloud_archive_source, validate_cloud_root_readable,

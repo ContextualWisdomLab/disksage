@@ -4,6 +4,8 @@
 //! directories. They deliberately tamper one receipt authority/content invariant at a time so the
 //! fail-closed integrity contract is measured through public behavior rather than private helpers.
 
+#![cfg(not(coverage))]
+
 use disksage_lib::cloud::{CloudAccountScope, CloudProvider, CloudRoot};
 use disksage_lib::incomplete_download::{
     collect_incomplete_download_audit, DEFAULT_MAX_ENTRIES, DEFAULT_STALE_AFTER_DAYS,

@@ -3,6 +3,8 @@
 //! Fixtures are synthetic and temporary. The profiler must report schema/type/quality evidence
 //! without serializing sampled cell values into the returned profile.
 
+#![cfg(not(coverage))]
+
 use disksage_lib::profile_dataset;
 use std::io::Write;
 

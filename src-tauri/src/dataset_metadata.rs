@@ -762,6 +762,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(coverage))]
     #[test]
     fn row_and_format_limits_fail_closed() {
         let mut input = String::from("id\n");

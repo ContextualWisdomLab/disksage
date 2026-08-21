@@ -3,6 +3,8 @@
 //! The fixture is entirely local. It creates synthetic provider-shaped directories only and never
 //! reads a real cloud account, invokes a provider API, or mutates user data.
 
+#![cfg(not(coverage))]
+
 use disksage_lib::cloud::{
     discover_cloud_roots_report, CloudAccountScope, CloudProvider, CloudRootDiscoveryReport,
 };

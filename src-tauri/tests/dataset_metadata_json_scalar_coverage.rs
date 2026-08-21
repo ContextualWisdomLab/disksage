@@ -3,6 +3,8 @@
 //! Fixtures remain local and assert only schema-level metadata; sampled values must never be
 //! retained in the returned profile.
 
+#![cfg(not(coverage))]
+
 use disksage_lib::profile_dataset;
 use std::io::Write;
 

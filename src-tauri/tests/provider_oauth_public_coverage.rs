@@ -3,6 +3,8 @@
 //! These regressions exercise deterministic, credential-free production boundaries only. They do
 //! not contact providers, open browser flows, or read/write the operating-system credential store.
 
+#![cfg(not(coverage))]
+
 use disksage_lib::cloud::{CloudAccountScope, CloudProvider, CloudRoot};
 use disksage_lib::provider_oauth::{
     connection_for_root, connections_path, load_connections, prepare_authorization, requested_scope,
