@@ -489,3 +489,16 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - PR #213 is at this exact head with checks running/queued, no open non-outdated review thread,
   and a stale `CHANGES_REQUESTED` review decision. The protected merge gate remains unchanged;
   no approval or merge bypass is claimed.
+
+## 2026-08-21 protected-PR and scheduler audit
+
+- The current DiskSage PR #213 head is `31798a4`, with the iCloud stall implementation and ADR
+  binding pushed. Its checks are running or queued; the protected merge state remains blocked
+  because the prior `CHANGES_REQUESTED` decision is stale and no fresh approval exists.
+- Central `.github` PR #1153 is at `035343c8a68e880a4abf27f7c947bfed9dbaafcf` and carries the
+  fail-closed Strix infrastructure-unavailable repair. Central `.github` PR #1188 is at
+  `82cd117d279a9b870f185b136984d82bb3ac5236` and carries the reusable-workflow OIDC caller
+  permission repair. Both have normal protected checks in progress; neither is claimed merged.
+- DiskSage PR #222 has a current Strix failure from the known `127.0.0.1:48080` Caido startup
+  outage. It is an infrastructure failure, not a source finding; the canonical remediation is
+  #1153. No Strix failure was reclassified as a source pass, and no check was bypassed.
