@@ -18,6 +18,8 @@ describe("orphan cleanup safety contract", () => {
     expect(component).toContain("plan.exact_approval_phrase");
     expect(component).toContain("candidate.metadata_fingerprint");
     expect(component).not.toContain("candidate.path");
+    expect(component).toContain("cleanAndRefreshOrphanPlan");
+    expect(component).toContain("outcome.refresh_failed");
 
     // HOME identity must not exist in either the public TypeScript contract or the Rust wire type.
     expect(api).not.toContain("root_fingerprint");
