@@ -7,6 +7,7 @@
 use disksage_lib::cloud::{CloudAccountScope, CloudProvider, CloudRoot};
 use disksage_lib::provider_oauth::{connection_for_root, requested_scope, OAuthConnection};
 use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
 use unicode_normalization::UnicodeNormalization;
 
 const GOOGLE_CLIENT_ID: &str = "1234567890-abcxyz.apps.googleusercontent.com";
@@ -29,7 +30,12 @@ fn connection_id_for_values(provider: &str, root_id: &str, root_path: &str) -> S
         hasher.update(value.as_bytes());
         hasher.update([0]);
     }
-    format!("{:x}", hasher.finalize())
+    let digest = hasher.finalize();
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(&mut encoded, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    encoded
 }
 
 fn canonical_connection_id(root: &CloudRoot) -> String {
