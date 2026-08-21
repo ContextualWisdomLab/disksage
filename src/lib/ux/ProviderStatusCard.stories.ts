@@ -42,6 +42,7 @@ export const MaterializationStalled: Story = {
   },
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement);
+    expect(canvasElement.ownerDocument.defaultView?.innerWidth).toBe(375);
     await expect(canvas.getByRole("status")).toHaveTextContent("파일 materialization 정체");
     await userEvent.click(canvas.getByRole("button", { name: "복사 취소 요청" }));
     await expect(args.onCancel).toHaveBeenCalledOnce();
