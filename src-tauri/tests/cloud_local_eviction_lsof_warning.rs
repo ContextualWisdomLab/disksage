@@ -1,4 +1,4 @@
-#![cfg(all(unix, not(coverage)))]
+#![cfg(unix)]
 
 use disksage_lib::cloud_local_eviction::{observe_path_active_use, observe_path_active_use_until};
 use std::ffi::OsString;
