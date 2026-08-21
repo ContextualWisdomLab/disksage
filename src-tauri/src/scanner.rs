@@ -29,6 +29,21 @@ pub fn scan_dir(
     scan_dir_with_interval(root, cancel, 8192, on_progress)
 }
 
+fn read_only_traversal_root(root: &Path) -> PathBuf {
+    match std::fs::symlink_metadata(root) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf())
+        }
+        _ => root.to_path_buf(),
+    }
+}
+
+fn logical_scan_path(path: &Path, traversal_root: &Path, requested_root: &Path) -> PathBuf {
+    path.strip_prefix(traversal_root)
+        .map(|relative| requested_root.join(relative))
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
 /// ponytail: progress 간격을 파라미터로 뺀 것은 테스트 주입용, 외부 API는 scan_dir
 pub fn scan_dir_with_interval(
     root: &Path,
@@ -43,8 +58,9 @@ pub fn scan_dir_with_interval(
     let mut stats = ScanStats::default();
     let mut cancelled = false;
     let mut seen: u64 = 0;
+    let traversal_root = read_only_traversal_root(root);
 
-    let walker = walkdir::WalkDir::new(root)
+    let walker = walkdir::WalkDir::new(&traversal_root)
         .follow_links(false)
         .into_iter()
         .filter_entry(keep_entry);
@@ -58,22 +74,23 @@ pub fn scan_dir_with_interval(
         // 순회/메타데이터 오류는 skipped로 집계 — 한 줄 let-else (오류 분기가 플랫폼별 테스트에만
         // 잡히더라도 라인 자체는 항상 실행돼 커버리지가 안정적)
         let Ok(e) = entry else { stats.skipped += 1; continue };
+        let logical_path = logical_scan_path(e.path(), &traversal_root, root);
         if e.file_type().is_dir() {
             stats.dirs += 1;
-            dir_sizes.entry(e.path().to_path_buf()).or_insert(0);
+            dir_sizes.entry(logical_path).or_insert(0);
         } else if e.file_type().is_file() {
             let Ok(md) = e.metadata() else { stats.skipped += 1; continue };
             let size = md.len();
             stats.files += 1;
             stats.bytes += size;
-            top.push(std::cmp::Reverse((size, e.path().to_path_buf())));
+            top.push(std::cmp::Reverse((size, logical_path.clone())));
             if top.len() > TOP_FILES_CAP {
                 top.pop();
             }
             // 파일 크기를 root까지의 모든 조상 디렉토리에 누적
             // ponytail: PathBuf 키 HashMap — 초대형 드라이브에서 스캔이 수십 초를
             // 넘기면 인터닝된 디렉토리 인덱스로 교체
-            let mut anc = e.path().parent().map(|p| p.to_path_buf());
+            let mut anc = logical_path.parent().map(|p| p.to_path_buf());
             while let Some(d) = anc {
                 *dir_sizes.entry(d.clone()).or_insert(0) += size;
                 if d == root {
