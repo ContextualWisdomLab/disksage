@@ -36,3 +36,11 @@ fn public_plan_fingerprint_does_not_encode_home_scope() {
     assert!(!serialized.contains("root_fingerprint"));
     assert!(!serialized.contains(&home_a.path().to_string_lossy().to_string()));
 }
+
+#[test]
+fn launch_services_timeout_owns_descendants_before_reader_join() {
+    let source = include_str!("../src/orphan.rs");
+    assert!(source.contains("setpgid(0, 0)"));
+    assert!(source.contains("kill_launch_services_group"));
+    assert!(source.contains("reader.join()"));
+}

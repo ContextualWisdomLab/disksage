@@ -481,18 +481,43 @@ fn installed_bundle_ids(
 }
 
 #[cfg(all(target_os = "macos", not(test)))]
+fn kill_launch_services_group(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    unsafe {
+        let _ = libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[cfg(all(target_os = "macos", not(test)))]
 fn launch_services_bundle_ids(deadline: Instant) -> (BTreeSet<String>, bool) {
-    let mut child = match Command::new("/usr/bin/mdfind")
+    let mut command = Command::new("/usr/bin/mdfind");
+    command
         .args(["-0", "kMDItemContentType == 'com.apple.application-bundle'"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
+        .stderr(Stdio::null());
+    #[cfg(unix)]
     {
+        use std::os::unix::process::CommandExt;
+        // Keep descendants in a private group so a deadline cannot leave a writer holding the
+        // bounded stdout reader open after the direct mdfind process is killed.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setpgid(0, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    let mut child = match command.spawn() {
         Ok(child) => child,
         Err(_) => return (BTreeSet::new(), false),
     };
     let Some(stdout) = child.stdout.take() else {
+        kill_launch_services_group(&mut child);
         return (BTreeSet::new(), false);
     };
     let reader = std::thread::spawn(move || {
@@ -513,13 +538,11 @@ fn launch_services_bundle_ids(deadline: Instant) -> (BTreeSet<String>, bool) {
             }
             Ok(None) => {
                 timed_out = true;
-                let _ = child.kill();
-                let _ = child.wait();
+                kill_launch_services_group(&mut child);
                 break None;
             }
             Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                kill_launch_services_group(&mut child);
                 break None;
             }
         }
