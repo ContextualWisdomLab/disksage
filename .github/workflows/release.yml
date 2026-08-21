@@ -242,7 +242,7 @@ jobs:
         run: |
           set -euo pipefail
           npm ci --ignore-scripts --no-audit --no-fund
-          cargo metadata --locked --format-version=1 >"$RUNNER_TEMP/disksage-cargo-metadata.json"
+          cargo metadata --locked --format-version=1 --manifest-path src-tauri/Cargo.toml >"$RUNNER_TEMP/disksage-cargo-metadata.json"
           mkdir -p release-artifacts/sbom
           node scripts/ci/generate-release-sbom.mjs \
             --cargo-metadata "$RUNNER_TEMP/disksage-cargo-metadata.json" \
