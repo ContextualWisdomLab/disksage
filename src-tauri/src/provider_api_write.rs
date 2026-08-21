@@ -18,6 +18,7 @@ const GOOGLE_UPLOAD_FILES: &str = "https://www.googleapis.com/upload/drive/v3/fi
 const MAX_BEARER_TOKEN_BYTES: usize = 64 * 1024;
 const MAX_RESPONSE_BYTES: u64 = 256 * 1024;
 const MAX_NEXT_EXPECTED_RANGES: usize = 128;
+const MAX_UPLOAD_NO_PROGRESS_RESPONSES: usize = 3;
 const GOOGLE_CHUNK_BYTES: usize = 8 * 1024 * 1024;
 const ONEDRIVE_CHUNK_BYTES: usize = 320 * 1024 * 10;
 
@@ -195,6 +196,23 @@ fn google_next_upload_offset(range: Option<&str>, sent_end: u64) -> Result<u64, 
     }
     // Google Drive specifies that a 308 without Range means the session has committed no bytes.
     Ok(0)
+}
+
+fn guard_upload_progress(
+    proposed_offset: u64,
+    highest_offset: &mut u64,
+    no_progress_responses: &mut usize,
+) -> Result<u64, String> {
+    if proposed_offset > *highest_offset {
+        *highest_offset = proposed_offset;
+        *no_progress_responses = 0;
+    } else {
+        *no_progress_responses = no_progress_responses.saturating_add(1);
+        if *no_progress_responses >= MAX_UPLOAD_NO_PROGRESS_RESPONSES {
+            return Err("provider-api-upload-no-progress".into());
+        }
+    }
+    Ok(proposed_offset)
 }
 
 fn response_location(response: &ureq::http::Response<ureq::Body>) -> Result<String, String> {
@@ -383,6 +401,8 @@ fn upload_chunks(
     authorization: Option<&str>,
 ) -> Result<String, String> {
     let mut offset = 0_u64;
+    let mut highest_offset = 0_u64;
+    let mut no_progress_responses = 0_usize;
     let mut buffer = vec![0_u8; chunk_bytes];
     while offset < bytes {
         let want = (bytes - offset).min(chunk_bytes as u64) as usize;
@@ -410,12 +430,22 @@ fn upload_chunks(
                     .ok_or_else(|| "provider-api-upload-object-id-missing".into());
             }
             UploadResponseKind::Progress if status == 202 => {
-                offset = read_onedrive_progress_offset(&mut response, end)?;
+                let proposed_offset = read_onedrive_progress_offset(&mut response, end)?;
+                offset = guard_upload_progress(
+                    proposed_offset,
+                    &mut highest_offset,
+                    &mut no_progress_responses,
+                )?;
             }
             UploadResponseKind::Progress => {
                 let range = response.headers().get("Range").and_then(|value| value.to_str().ok());
-                offset = google_next_upload_offset(range, end)?;
+                let proposed_offset = google_next_upload_offset(range, end)?;
                 drain_response_body(&mut response)?;
+                offset = guard_upload_progress(
+                    proposed_offset,
+                    &mut highest_offset,
+                    &mut no_progress_responses,
+                )?;
             }
         }
     }
@@ -617,6 +647,46 @@ mod tests {
             google_next_upload_offset(Some("nonsense-42"), 1023).unwrap_err(),
             "provider-api-upload-range-invalid"
         );
+    }
+
+    #[test]
+    fn resumable_upload_progress_is_bounded_when_server_never_advances() {
+        let mut highest_offset = 0;
+        let mut no_progress_responses = 0;
+
+        assert_eq!(
+            guard_upload_progress(0, &mut highest_offset, &mut no_progress_responses).unwrap(),
+            0
+        );
+        assert_eq!(
+            guard_upload_progress(0, &mut highest_offset, &mut no_progress_responses).unwrap(),
+            0
+        );
+        assert_eq!(
+            guard_upload_progress(0, &mut highest_offset, &mut no_progress_responses).unwrap_err(),
+            "provider-api-upload-no-progress"
+        );
+    }
+
+    #[test]
+    fn resumable_upload_progress_resets_only_after_a_new_high_watermark() {
+        let mut highest_offset = 0;
+        let mut no_progress_responses = 0;
+
+        assert_eq!(
+            guard_upload_progress(512, &mut highest_offset, &mut no_progress_responses).unwrap(),
+            512
+        );
+        assert_eq!(
+            guard_upload_progress(256, &mut highest_offset, &mut no_progress_responses).unwrap(),
+            256
+        );
+        assert_eq!(no_progress_responses, 1);
+        assert_eq!(
+            guard_upload_progress(768, &mut highest_offset, &mut no_progress_responses).unwrap(),
+            768
+        );
+        assert_eq!(no_progress_responses, 0);
     }
 
     #[test]
