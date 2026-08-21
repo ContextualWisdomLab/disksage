@@ -605,6 +605,13 @@ blocker-code list. The backend currently validates state/code consistency, but t
 fail-closed if a provider report is partial or malformed. This keeps copy, attestation, and eviction
 guidance conservative and is tracked in DiskSage PR #246.
 
+## Amendment: keep the readiness verifier boundary testable (2026-08-22)
+
+The shipped Naruon readiness verifier uses a plain source comment rather than a crate-inner doc
+comment so the same parser can be included by its integration boundary test module. This is a
+compile-boundary repair only; the verifier's path-redacted output and readiness authority do not
+change.
+
 ## Amendment: progress-aware iCloud stall clock (2026-08-21 23:38 +0900)
 
 The UX stall clock now distinguishes an admission-blocker run from transfer progress. After an

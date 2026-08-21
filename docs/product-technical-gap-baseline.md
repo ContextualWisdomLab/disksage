@@ -744,3 +744,9 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - The iCloud card now uses the explicit admission state as a blocker signal in addition to blocker
   codes. This prevents a partial provider report with `blocked` and an empty code list from showing
   a misleading clear status; copy, attestation, and eviction gates remain unchanged.
+
+## 2026-08-22 readiness verifier integration boundary
+
+- The Naruon readiness verifier's source comment is now valid both as a standalone binary and when
+  included by the integration test that locks its `--help`/absolute-path parser boundary. This
+  repairs the exact-head Rust test failure without changing readiness, copy, or eviction authority.

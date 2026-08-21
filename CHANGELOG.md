@@ -69,6 +69,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   first scan does not recursively enumerate iCloud/OneDrive File Provider trees by accident.
 - Keep the iCloud status card blocked when the admission state is `blocked` even if a malformed or
   partially populated provider report temporarily has no blocker codes.
+- Keep the shipped Naruon readiness verifier source includable by its integration boundary test;
+  the terminal parser contract now compiles in both the binary and test-module contexts.
 
 - Cover the `sensitive-config` archive-kind wire label in the generated cloud-plan implementation,
   so the macOS/Linux/Windows cloud-plan binaries compile after the sensitive-config safety
