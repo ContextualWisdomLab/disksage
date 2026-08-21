@@ -2,7 +2,8 @@
 
 **Snapshot:** 2026-08-21 (Asia/Seoul)
 **Repository heads at snapshot:** DiskSage PR #213 remains at protected remote head
-`108bba0e4737b09b1c09f6c3b5a86a43be22223e`; PR #246 is at `278b62bd127a9afee7a9f5c3b34894f0945e494d`.
+`108bba0e4737b09b1c09f6c3b5a86a43be22223e`; PR #246 implementation remains at `52a0c22`, with
+latest docs/test binding head `5126c8760ba7f117b8fd3dbc1e077092b881c1d4`.
 The local provider follow-up `a394ba2` is not published because the active PR-only ruleset rejects
 direct branch updates; this baseline records the current loop's runtime and integration evidence.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
@@ -676,8 +677,8 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   provider-index backlog from the earlier low-space pressure incident.
 ## 2026-08-21 exact-head ecosystem audit
 
-- DiskSage PR #246 current exact head is `278b62bd127a9afee7a9f5c3b34894f0945e494d`; the branch
-  remains open with `UNSTABLE` checks in progress/queued and no qualifying approval. The UX now renders
+- DiskSage PR #246 implementation head remains `52a0c22`; later test/documentation commits keep the
+  branch open with `UNSTABLE` checks in progress/queued and no qualifying approval. The UX now renders
   `ProviderStatusCard` in the running CloudArchive screen, so a stuck Finder copy is visible as a
   provider-sync-incomplete/materialization-stalled state with elapsed time and a bounded cancel
   request. This is cancellation guidance only; it grants no copy, attestation, or eviction authority.
