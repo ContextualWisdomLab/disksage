@@ -141,7 +141,7 @@ fn plan_moves_impl(
                 lineage_probe_count += 1;
                 probe(&f.path)
             }
-            Some(_) => None,
+            Some(_) => Some(LineageMetadata::default()),
             None => Some(LineageMetadata::default()),
         };
         let Some(lineage) = lineage else { continue };
