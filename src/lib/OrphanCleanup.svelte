@@ -12,7 +12,7 @@
   let result: api.OrphanCleanupResult | null = $state(null);
 
   let selectedCandidates: api.OrphanCandidate[] = $derived.by(() =>
-    plan
+    plan?.scan_complete
       ? plan.candidates.filter(
           (candidate) => selected.has(candidate.candidate_id) && candidate.auto_trash_eligible,
         )
@@ -32,9 +32,9 @@
       plan = await api.planOrphanCleanup();
       confirmationPhrase = "";
       rationale = "";
-    } catch (e) {
+    } catch {
       plan = null;
-      error = String(e);
+      error = "고아 후보를 조사하지 못했습니다. macOS Library 접근 권한을 확인한 뒤 다시 시도하세요.";
     } finally {
       busy = false;
     }
@@ -47,7 +47,13 @@
   }
 
   async function clean() {
-    if (!plan || busy || selectedCandidates.length === 0 || confirmationPhrase !== plan.exact_approval_phrase) return;
+    if (
+      !plan ||
+      !plan.scan_complete ||
+      busy ||
+      selectedCandidates.length === 0 ||
+      confirmationPhrase !== plan.exact_approval_phrase
+    ) return;
     const okay = await confirm(
       `${selectedCandidates.length}개의 완전 스캔된 미사용 캐시(${fmtBytes(selectedBytes)})만 휴지통으로 보냅니다. Application Support와 불완전·사용 중 후보는 포함되지 않습니다.`,
       { title: "DiskSage 관계 기반 고아 정리", kind: "warning" },
@@ -68,14 +74,14 @@
           object_id: candidate.object_id,
         })),
         confirmationPhrase,
-        rationale,
+        rationale.trim(),
       );
       plan = await api.planOrphanCleanup();
       selected = new Set();
       confirmationPhrase = "";
       rationale = "";
-    } catch (e) {
-      error = String(e);
+    } catch {
+      error = "선택 캐시를 휴지통으로 이동하지 못했습니다. 후보를 다시 조사한 뒤 재시도하세요.";
     } finally {
       busy = false;
     }
@@ -85,7 +91,8 @@
 <section>
   <h3>관계 기반 macOS 고아 후보</h3>
   <p class="notice">
-    설치된 앱 bundle ID와 Library 메타데이터만 비교합니다. 공개 증거에는 로컬 경로가 없고,
+    설치 앱의 제한된 Info.plist 메타데이터와 Library 후보의 파일시스템 메타데이터만 비교합니다.
+    Library 후보의 파일 내용은 읽지 않으며 공개 증거에는 로컬 경로가 없습니다.
     Application Support·불완전 스캔·사용 중 후보는 자동 정리하지 않습니다.
   </p>
   <button onclick={inspect} disabled={busy}>{busy ? "고아 관계 조사 중…" : "고아 관계 조사"}</button>
@@ -98,10 +105,10 @@
     <ul class="list">
       {#each plan.candidates as candidate (candidate.candidate_id)}
         <li>
-          <label class:disabled={!candidate.auto_trash_eligible}>
+          <label class:disabled={!plan.scan_complete || !candidate.auto_trash_eligible}>
             <input
               type="checkbox"
-              disabled={busy || !candidate.auto_trash_eligible}
+              disabled={busy || !plan.scan_complete || !candidate.auto_trash_eligible}
               checked={selected.has(candidate.candidate_id)}
               onchange={() => toggle(candidate.candidate_id)}
             />
@@ -119,7 +126,7 @@
       <label>검토 사유 <input bind:value={rationale} maxlength="1000" /></label>
       <button
         onclick={clean}
-        disabled={busy || confirmationPhrase !== plan.exact_approval_phrase || rationale.trim().length === 0}
+        disabled={busy || !plan.scan_complete || confirmationPhrase !== plan.exact_approval_phrase || rationale.trim().length === 0}
       >
         {busy ? "휴지통 이동 중…" : "선택 캐시를 휴지통으로"}
       </button>
