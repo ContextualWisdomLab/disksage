@@ -378,6 +378,10 @@ timeouts, read failures, and active-use errors remain review-only. The replaceab
 actual Tauri commands `plan_orphan_cleanup` and `clean_orphan_candidates`, so operator automation
 cannot drift from the registered command boundary.
 
+The Launch Services `mdfind` probe also runs in a private process group; timeout cleanup kills the
+group before the bounded stdout reader is joined, so a descendant cannot hold the planner past its
+deadline.
+
 The active-use probes share the enclosing planner deadline rather than starting an independent
 timeout per candidate. Immediately before a Trash batch, existing candidate directories are
 re-scanned against the reviewed metadata manifest; a changed, incomplete, or unsafe manifest

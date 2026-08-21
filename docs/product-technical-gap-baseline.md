@@ -575,6 +575,8 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   metadata-change, and object identity replacement rejection). Active-use probes share the
   enclosing five-second plan deadline, and the pre-trash batch revalidates the metadata manifest
   without reading cache contents or materializing provider placeholders.
+  Launch Services timeout cleanup now terminates the private mdfind process group before joining
+  stdout, preventing descendants from holding the planner past its deadline.
   The post-Trash read-only refresh is now separate from the mutation result, so a refresh failure
   preserves the successful cleanup receipt and clears stale UI selection.
   Hosted full Rust,
