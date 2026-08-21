@@ -119,7 +119,6 @@ test('malformed open-PR ownership records fail closed before workflow classifica
     [null],
     [{}],
     [{ head: null }],
-    [{ head: { repo: null } }],
     [{ head: { repo: {} } }],
     [{ head: { repo: { full_name: '' } } }],
     [{ head: { repo: { full_name: repo } } }],
@@ -132,6 +131,28 @@ test('malformed open-PR ownership records fail closed before workflow classifica
       `malformed open-PR ownership evidence must fail closed: ${JSON.stringify(pullRequests)}`,
     );
   }
+});
+
+test('deleted-fork open PRs do not block same-repository workflow ownership', async () => {
+  const head = sha('6');
+  const owned = '.github/workflows/owned-from-live-pr.yml';
+  const paths = await activePullRequestWorkflowPaths(async (url) => {
+    if (url.includes(`/git/trees/${head}`)) {
+      return {
+        truncated: false,
+        tree: [{ type: 'blob', path: owned }],
+      };
+    }
+    if (url.includes('/pulls/42/files')) {
+      return [{ filename: owned, status: 'added' }];
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }, repo, [
+    { number: 41, head: { sha: null, repo: null } },
+    { number: 42, head: { sha: head, repo: { full_name: repo } } },
+  ]);
+
+  assert.deepEqual([...paths], [owned]);
 });
 
 test('malformed open-PR number and changed-file evidence fail closed', async () => {
