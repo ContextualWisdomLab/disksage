@@ -30,6 +30,14 @@ pub fn recovery_supported(provider: CloudProvider) -> bool {
     )
 }
 
+fn post_runtime_blockers(runtime_observed: Option<bool>) -> Vec<String> {
+    match runtime_observed {
+        Some(true) => Vec::new(),
+        Some(false) => vec!["provider-client-runtime-not-observed-after-restart".into()],
+        None => vec!["provider-client-runtime-evidence-unavailable-after-restart".into()],
+    }
+}
+
 /// Request Finder to cancel its active copy/materialization dialog without touching any provider
 /// daemon, cloud object, or source file. The fixed AppleScript sends only Escape; it accepts no
 /// user-provided script, path, or process identifier.
@@ -165,10 +173,18 @@ fn run_bounded(program: &Path, args: &[&str]) -> Result<bool, String> {
 }
 
 #[cfg(not(coverage))]
-fn runtime_observed(provider: CloudProvider, observed_at_ms: u64) -> bool {
+fn runtime_observation(provider: CloudProvider, observed_at_ms: u64) -> Option<bool> {
     crate::provider_client_runtime::collect_provider_client_runtime(provider, observed_at_ms)
         .runtime_observed
-        .unwrap_or(false)
+}
+
+#[cfg(not(coverage))]
+fn require_runtime_observation(
+    provider: CloudProvider,
+    observed_at_ms: u64,
+) -> Result<bool, String> {
+    runtime_observation(provider, observed_at_ms)
+        .ok_or_else(|| "provider-recovery-runtime-evidence-unavailable".to_string())
 }
 
 #[cfg(not(coverage))]
@@ -176,18 +192,14 @@ fn request_quit(app: &str) -> Result<(), String> {
     // The app name is selected from the fixed provider map above; no user path or shell is parsed.
     let script = format!("tell application \"{app}\" to quit");
     let ok = run_bounded(Path::new("/usr/bin/osascript"), &["-e", script.as_str()])?;
-    // AppleScript returns non-zero when the app was already absent.  The subsequent runtime
-    // observation is authoritative, so an absent client is still a valid precondition.
-    if !ok
-        && runtime_observed(
-            if app == "OneDrive" {
-                CloudProvider::Onedrive
-            } else {
-                CloudProvider::GoogleDrive
-            },
-            0,
-        )
-    {
+    // AppleScript returns non-zero when the app was already absent. The subsequent runtime
+    // observation is authoritative; unavailable evidence must never be treated as process absence.
+    let provider = if app == "OneDrive" {
+        CloudProvider::Onedrive
+    } else {
+        CloudProvider::GoogleDrive
+    };
+    if !ok && require_runtime_observation(provider, 0)? {
         return Err("provider-recovery-quit-request-failed".into());
     }
     Ok(())
@@ -198,16 +210,12 @@ fn request_graceful_term(app: &str) -> Result<(), String> {
     // `app` comes only from the fixed provider map. SIGTERM is a graceful request; SIGKILL is
     // intentionally never used because an active desktop client may still be flushing state.
     let ok = run_bounded(Path::new("/usr/bin/killall"), &["-TERM", "--", app])?;
-    if !ok
-        && runtime_observed(
-            if app == "OneDrive" {
-                CloudProvider::Onedrive
-            } else {
-                CloudProvider::GoogleDrive
-            },
-            0,
-        )
-    {
+    let provider = if app == "OneDrive" {
+        CloudProvider::Onedrive
+    } else {
+        CloudProvider::GoogleDrive
+    };
+    if !ok && require_runtime_observation(provider, 0)? {
         return Err("provider-recovery-graceful-term-failed".into());
     }
     Ok(())
@@ -244,7 +252,7 @@ pub fn recover_provider_client_with_options(
         let app =
             app_name(provider).ok_or_else(|| "provider-recovery-system-managed".to_string())?;
         let path = app_path(provider)?;
-        let pre_runtime_observed = runtime_observed(provider, observed_at_ms);
+        let pre_runtime_observed = require_runtime_observation(provider, observed_at_ms)?;
         if let Err(quit_error) = request_quit(app) {
             if !allow_graceful_term {
                 return Err(quit_error);
@@ -253,11 +261,15 @@ pub fn recover_provider_client_with_options(
         }
 
         let quit_deadline = Instant::now() + Duration::from_secs(10);
-        while runtime_observed(provider, observed_at_ms) && Instant::now() < quit_deadline {
+        loop {
+            let runtime_observed = require_runtime_observation(provider, observed_at_ms)?;
+            if !runtime_observed {
+                break;
+            }
+            if Instant::now() >= quit_deadline {
+                return Err("provider-recovery-quit-timeout".into());
+            }
             std::thread::sleep(Duration::from_millis(250));
-        }
-        if runtime_observed(provider, observed_at_ms) {
-            return Err("provider-recovery-quit-timeout".into());
         }
 
         let path_string = path
@@ -267,10 +279,8 @@ pub fn recover_provider_client_with_options(
             return Err("provider-recovery-launch-failed".into());
         }
         std::thread::sleep(Duration::from_secs(1));
-        let post_runtime_observed = Some(runtime_observed(provider, observed_at_ms));
-        let blockers = (!post_runtime_observed.unwrap_or(false))
-            .then(|| vec!["provider-client-runtime-not-observed-after-restart".into()])
-            .unwrap_or_default();
+        let post_runtime_observed = runtime_observation(provider, observed_at_ms);
+        let blockers = post_runtime_blockers(post_runtime_observed);
         Ok(ProviderRecoveryOutput {
             schema_version: PROVIDER_RECOVERY_SCHEMA_VERSION,
             provider,
