@@ -495,8 +495,8 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 
 ## 2026-08-21 iCloud filename/root exclusion follow-up
 
-- The current bounded iCloud File Provider dump contains active upload/download progress and
-  repeated `Excluded From Sync Due To Filename` / `Excluded From Sync Under Root` errors. DiskSage
+- The current bounded iCloud File Provider dump contains active upload/download progress and 18
+  `Excluded From Sync Due To Filename` / 2 `Excluded From Sync Under Root` errors. DiskSage
   now retains only aggregate counters and redacted notices, exposes dedicated admission blockers,
   and keeps the Finder preparation state fail-closed. No filename, provider item ID, provider dump,
   Finder process, or cloud object is mutated by this observation.
