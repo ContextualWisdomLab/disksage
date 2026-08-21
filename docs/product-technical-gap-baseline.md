@@ -563,7 +563,7 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   attestation, and eviction remain blocked. Local APFS availability recovered to about 8.9 GiB
   during the observation. The fixed Finder Escape action remains the only supported cancellation;
   no daemon, cloud object, or source file was touched.
-- PR #245 implementation head `3d2406c` adds the ontology-bound orphan cache action and fails closed when
+- PR #245 current head `00d3d5d` adds the ontology-bound orphan cache action and fails closed when
   installed-app inventory or metadata manifests are truncated, too deep, or contain directory
   iteration errors. Frontend checks passed locally (31 files, 127 tests); focused Rust orphan tests
   pass (11/11 unit plus 2/2 privacy-boundary integration tests, including deep inventory/manifest
