@@ -91,7 +91,7 @@
   .status-card.danger { border-inline-start-color: var(--ds-danger-text); }
 
   .status-heading { display: flex; gap: var(--ds-space-3); align-items: baseline; justify-content: space-between; flex-wrap: wrap; }
-  h2 { margin: 0; font-size: 1.1rem; }
+  h1, h2 { margin: 0; font-size: 1.1rem; }
   p { margin: 0; }
   .state { font-weight: 700; }
   .metadata { color: var(--ds-text-muted); font-size: 0.9rem; }
