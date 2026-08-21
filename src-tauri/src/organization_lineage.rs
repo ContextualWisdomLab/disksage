@@ -187,4 +187,14 @@ mod tests {
             "organization-lineage-production-time-missing"
         );
     }
+
+    #[test]
+    fn export_accepts_a_realistic_multi_file_batch() {
+        let plans = (0..33)
+            .map(|index| plan(&format!("{index:064x}")))
+            .collect::<Vec<_>>();
+        let batch = export_move_plans(&plans, 1_000).unwrap();
+        assert_eq!(batch.items.len(), 33);
+        assert!(batch.complete);
+    }
 }

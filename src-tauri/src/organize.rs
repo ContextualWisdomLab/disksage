@@ -4,8 +4,9 @@ use crate::dupes::FileEntry;
 use crate::inventory::classify;
 use crate::ontology::Ontology;
 
-// ponytail: cap metadata probes per organize request; raise only with measured bounded latency.
-pub(crate) const MAX_LINEAGE_PROBES: usize = 32;
+// Keep the probe cap aligned with the path-free export contract so every exportable plan has
+// complete production metadata. The 200-item batch limit remains the bounded latency ceiling.
+pub(crate) const MAX_LINEAGE_PROBES: usize = 200;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 pub struct LineageMetadata {
