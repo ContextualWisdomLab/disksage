@@ -191,24 +191,7 @@ jobs:
           cargo llvm-cov --manifest-path src-tauri/Cargo.toml --branch --json --output-path coverage.json --no-cfg-coverage --no-cfg-coverage-nightly >coverage-command.raw.log 2>&1
           coverage_status=$?
           set -e
-          MAX_COVERAGE_COMMAND_DIAGNOSTIC_BYTES=32768
-          COVERAGE_COMMAND_DIAGNOSTIC_EDGE_BYTES=16000
-          MAX_COVERAGE_COMMAND_DIAGNOSTIC_LINE_BYTES=2048
-          LC_ALL=C awk -v max_bytes="$MAX_COVERAGE_COMMAND_DIAGNOSTIC_LINE_BYTES" '{
-            if (length($0) > max_bytes) {
-              print substr($0, 1, max_bytes) " ... [line truncated]"
-            } else {
-              print
-            }
-          }' coverage-command.raw.log > coverage-command.line-bounded.log
-          coverage_command_bytes="$(wc -c < coverage-command.line-bounded.log | tr -d ' ')"
-          if (( coverage_command_bytes <= MAX_COVERAGE_COMMAND_DIAGNOSTIC_BYTES )); then
-            cp coverage-command.line-bounded.log coverage-command.bounded.log
-          else
-            head -c "$COVERAGE_COMMAND_DIAGNOSTIC_EDGE_BYTES" coverage-command.line-bounded.log > coverage-command.bounded.log
-            printf '\n--- bounded diagnostic tail ---\n' >> coverage-command.bounded.log
-            tail -c "$COVERAGE_COMMAND_DIAGNOSTIC_EDGE_BYTES" coverage-command.line-bounded.log >> coverage-command.bounded.log
-          fi
+          bash .github/scripts/bound-coverage-command-diagnostic.sh coverage-command.raw.log coverage-command.bounded.log
           node --input-type=module <<'NODE'
           import { readFileSync, writeFileSync } from 'node:fs';
 
@@ -221,7 +204,7 @@ jobs:
           if (runnerTemp) diagnostic = diagnostic.replaceAll(runnerTemp, '<runner-temp>');
           writeFileSync('coverage-command-diagnostic.log', diagnostic);
           NODE
-          rm -f coverage-command.raw.log coverage-command.line-bounded.log coverage-command.bounded.log
+          rm -f coverage-command.raw.log coverage-command.bounded.log
           exit "$coverage_status"
       - name: Upload bounded coverage command diagnostic
         if: failure() && steps.rust-coverage.outcome == 'failure'
