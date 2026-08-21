@@ -460,6 +460,17 @@ fn observe_lsof_active_use(path: &Path, deadline: Instant) -> ActiveUseEvidence 
         // for a cache directory whose open files live below the directory entry.
         command.arg("+D");
     }
+    // A bounded lsof probe may be a shell wrapper in tests or on user systems. Kill its process
+    // group on timeout so descendants cannot keep the stdout pipe alive and starve the ps probe.
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
     let mut child = match command
         .arg(path)
         .stdin(Stdio::null())
@@ -503,6 +514,10 @@ fn observe_lsof_active_use(path: &Path, deadline: Instant) -> ActiveUseEvidence 
     };
     let reader = drain_bounded(stdout);
     let error_reader = drain_bounded(stderr);
+    let child_pid = child.id();
+    let kill_group = || unsafe {
+        let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
+    };
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break Some(status),
@@ -510,6 +525,7 @@ fn observe_lsof_active_use(path: &Path, deadline: Instant) -> ActiveUseEvidence 
                 std::thread::sleep(Duration::from_millis(25));
             }
             Ok(None) => {
+                kill_group();
                 let _ = child.kill();
                 let _ = child.wait();
                 break None;
