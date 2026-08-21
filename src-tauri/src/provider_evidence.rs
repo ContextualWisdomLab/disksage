@@ -279,11 +279,10 @@ pub fn write_immutable_sync_evidence(
         return Err(error);
     }
     drop(file);
-    if let Err(error) = prune_receipt_evidence_history(directory, &record.evidence.receipt_id) {
+    if let Err(_error) = prune_receipt_evidence_history(directory, &record.evidence.receipt_id) {
         // Retention is maintenance, not part of the attestation's authority. Keep the
         // fsynced record so a transient directory/read/delete failure cannot discard valid proof;
         // the next reconciliation pass can retry bounded pruning.
-        return Err(error);
     }
     Ok((record, path))
 }
