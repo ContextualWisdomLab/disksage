@@ -113,35 +113,43 @@ fn canonical_identity_is_preferred_over_an_equivalent_legacy_record() {
 }
 
 #[test]
-fn duplicate_canonical_identities_fail_closed_as_ambiguous() {
+fn duplicate_canonical_identities_fail_closed_in_memory_and_on_disk() {
     let temp = tempfile::tempdir().unwrap();
     let path = connections_path(temp.path());
     let canonical_root = root("Caf\u{e9}", COMPOSED_PATH);
     let canonical = connection(&canonical_root);
-
-    write_document(&path, &[canonical.clone(), canonical]);
-    let loaded = load_connections(&path).unwrap();
+    let duplicates = [canonical.clone(), canonical];
 
     assert_eq!(
-        connection_for_root(&loaded, &canonical_root).unwrap_err(),
+        connection_for_root(&duplicates, &canonical_root).unwrap_err(),
         "provider-oauth-connection-ambiguous"
+    );
+
+    write_document(&path, &duplicates);
+    assert_eq!(
+        load_connections(&path).unwrap_err(),
+        "oauth-connection-document-duplicate-id"
     );
 }
 
 #[test]
-fn duplicate_legacy_identities_fail_closed_as_ambiguous() {
+fn duplicate_legacy_identities_fail_closed_in_memory_and_on_disk() {
     let temp = tempfile::tempdir().unwrap();
     let path = connections_path(temp.path());
     let decomposed = root("Cafe\u{301}", DECOMPOSED_PATH);
     let canonical = root("Caf\u{e9}", COMPOSED_PATH);
     let legacy = connection(&decomposed);
-
-    write_document(&path, &[legacy.clone(), legacy]);
-    let loaded = load_connections(&path).unwrap();
+    let duplicates = [legacy.clone(), legacy];
 
     assert_eq!(
-        connection_for_root(&loaded, &canonical).unwrap_err(),
+        connection_for_root(&duplicates, &canonical).unwrap_err(),
         "provider-oauth-connection-ambiguous"
+    );
+
+    write_document(&path, &duplicates);
+    assert_eq!(
+        load_connections(&path).unwrap_err(),
+        "oauth-connection-document-duplicate-id"
     );
 }
 
