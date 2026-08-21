@@ -627,6 +627,6 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   OneDrive client was stopped after a restart attempt reduced available space to 340 MiB; only
   regenerable package cache and an unreferenced temporary clone were removed, and no Finder,
   provider daemon, cloud object, or user file was touched.
-- PR #213 now points to exact head `3704dd1`; hosted checks/review are authoritative and a
+- PR #213 now points to exact head `e6c6e34`; hosted checks/review are authoritative and a
   protected approval is still required. The remaining gap is a fresh complete, quiet provider
   receipt plus runtime E2E under safe headroom.
