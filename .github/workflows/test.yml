@@ -188,7 +188,7 @@ jobs:
         id: rust-coverage
         run: |
           set +e
-          cargo llvm-cov --all-features --manifest-path src-tauri/Cargo.toml --branch --json --output-path coverage.json >coverage-command.raw.log 2>&1
+          cargo llvm-cov --no-cfg-coverage --no-cfg-coverage-nightly --all-features --manifest-path src-tauri/Cargo.toml --branch --json --output-path coverage.json >coverage-command.raw.log 2>&1
           coverage_status=$?
           set -e
           bash .github/scripts/bound-coverage-command-diagnostic.sh coverage-command.raw.log coverage-command.bounded.log
