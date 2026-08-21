@@ -328,7 +328,10 @@ fn run_dump(provider: CloudProvider) -> Result<String, String> {
     let deadline = Instant::now() + Duration::from_millis(PROBE_TIMEOUT_MS);
     let status = loop {
         match child.try_wait() {
-            Ok(Some(status)) => break status,
+            Ok(Some(status)) => {
+                kill_group();
+                break status;
+            }
             Ok(None) if Instant::now() >= deadline => {
                 kill_group();
                 let _ = child.kill();
