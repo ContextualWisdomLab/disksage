@@ -49,7 +49,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm run storybook -- --ci --no-open --port 6006 > /tmp/disksage-storybook.log 2>&1 &
+          python3 -m http.server 6006 --directory storybook-static > /tmp/disksage-storybook.log 2>&1 &
           server_pid=$!
           cleanup() { kill "$server_pid" 2>/dev/null || true; }
           trap cleanup EXIT

@@ -11,6 +11,7 @@
     cancelLabel?: string;
     onCancel?: () => void;
     statusId: string;
+    headingLevel?: "h1" | "h2";
   };
 
   let {
@@ -23,6 +24,7 @@
     cancelLabel = "복사 취소 요청",
     onCancel,
     statusId,
+    headingLevel = "h2",
   }: Props = $props();
 
   const stateLabel: Record<ProviderStatusState, string> = {
@@ -47,7 +49,7 @@
   aria-describedby={`${statusId}-details`}
 >
   <div class="status-heading">
-    <h2 id={`${statusId}-title`}>{provider} 전역 동기화</h2>
+    <svelte:element this={headingLevel} id={`${statusId}-title`}>{provider} 전역 동기화</svelte:element>
     <span class="state" role="status" aria-live="polite">{stateLabel[state]}</span>
   </div>
   <p id={`${statusId}-details`}>{details}</p>

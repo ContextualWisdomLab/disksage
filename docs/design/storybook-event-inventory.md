@@ -49,6 +49,7 @@ eviction authority: every destructive action remains behind the Rust evidence an
 ```bash
 npm run storybook
 npm run build-storybook
+python3 -m http.server 6006 --directory storybook-static
 npm run test-storybook -- --ci --url http://127.0.0.1:6006 --browsers chromium --testTimeout 30000
 ```
 
