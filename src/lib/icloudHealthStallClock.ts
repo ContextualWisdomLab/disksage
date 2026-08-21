@@ -23,6 +23,33 @@ function progressFingerprint(report: IcloudSyncHealthReport): string {
   ].join("|");
 }
 
+function activeTransferFingerprint(report: IcloudSyncHealthReport): string {
+  const activity = report.file_provider_activity;
+  return [
+    activity?.active_upload_count ?? 0,
+    activity?.active_download_count ?? 0,
+    activity?.active_upload_progress_millionths ?? "",
+    activity?.active_download_progress_millionths ?? "",
+  ].join("|");
+}
+
+function indexingBacklogDrained(
+  previousReport: IcloudSyncHealthReport,
+  next: IcloudSyncHealthReport,
+): boolean {
+  const previous = previousReport.file_provider_activity?.pending_indexable_count;
+  const current = next.file_provider_activity?.pending_indexable_count;
+  return previous != null && current != null && current < previous;
+}
+
+function hasRealProgress(
+  previousReport: IcloudSyncHealthReport,
+  next: IcloudSyncHealthReport,
+): boolean {
+  return activeTransferFingerprint(previousReport) !== activeTransferFingerprint(next)
+    || indexingBacklogDrained(previousReport, next);
+}
+
 export function icloudHealthStallClockFingerprint(report: IcloudSyncHealthReport): string {
   return [admissionFingerprint(report), progressFingerprint(report)].join("|");
 }
@@ -47,7 +74,7 @@ export function updateIcloudHealthStallClock(
     };
   }
 
-  if (previousClock.fingerprint !== fingerprint) {
+  if (previousClock.fingerprint !== fingerprint && hasRealProgress(previousReport, next)) {
     return { blockedSinceMs: observedAtMs, fingerprint };
   }
 

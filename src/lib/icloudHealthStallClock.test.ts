@@ -90,6 +90,48 @@ describe("iCloud health stall clock", () => {
     expect(unchanged.blockedSinceMs).toBe(2_000);
   });
 
+  it("does not reset when the indexing backlog grows", () => {
+    const previous = report(activity({ pending_indexable_count: 12 }));
+    const previousFingerprint = icloudHealthStallClockFingerprint(previous);
+    const next = report(activity({ pending_indexable_count: 20 }), { observed_at_ms: 2_000 });
+
+    const clock = updateIcloudHealthStallClock(
+      previous,
+      { blockedSinceMs: 1_200, fingerprint: previousFingerprint },
+      next,
+      2_000,
+    );
+
+    expect(clock.blockedSinceMs).toBe(1_200);
+    expect(clock.fingerprint).toBe(icloudHealthStallClockFingerprint(next));
+  });
+
+  it("resets when the indexing backlog drains", () => {
+    const previous = report(activity({ pending_indexable_count: 20 }));
+    const previousFingerprint = icloudHealthStallClockFingerprint(previous);
+    const next = report(activity({ pending_indexable_count: 12 }), { observed_at_ms: 2_000 });
+
+    expect(updateIcloudHealthStallClock(
+      previous,
+      { blockedSinceMs: 1_200, fingerprint: previousFingerprint },
+      next,
+      2_000,
+    ).blockedSinceMs).toBe(2_000);
+  });
+
+  it("does not treat an unknown indexing backlog as progress", () => {
+    const previous = report(activity({ pending_indexable_count: 12 }));
+    const previousFingerprint = icloudHealthStallClockFingerprint(previous);
+    const next = report(activity({ pending_indexable_count: null }), { observed_at_ms: 2_000 });
+
+    expect(updateIcloudHealthStallClock(
+      previous,
+      { blockedSinceMs: 1_200, fingerprint: previousFingerprint },
+      next,
+      2_000,
+    ).blockedSinceMs).toBe(1_200);
+  });
+
   it("uses the provider blocker timestamp when the blocker first appears", () => {
     const next = report(activity(), { admission_blocked_since_ms: 700 });
 
