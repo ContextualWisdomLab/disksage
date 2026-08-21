@@ -60,6 +60,31 @@ test('native coverage thresholds run on a Node release that implements every req
   );
 });
 
+test('coverage diagnostics cannot mask the authoritative coverage exit status', () => {
+  const coverageStatus = contractsJob.indexOf('coverage_status=$?');
+  const diagnosticStart = contractsJob.indexOf("node --input-type=module <<'NODE'");
+  const diagnosticStatus = contractsJob.indexOf('diagnostic_status=$?');
+  const strictModeRestore = contractsJob.indexOf('set -e', diagnosticStart);
+  const finalExit = contractsJob.indexOf('exit "$coverage_status"');
+
+  assert.ok(coverageStatus >= 0, 'contracts must capture the primary coverage status');
+  assert.ok(diagnosticStart > coverageStatus, 'diagnostics must run only after coverage status is captured');
+  assert.ok(
+    diagnosticStatus > diagnosticStart,
+    'diagnostic failure must be captured instead of aborting the step under set -e',
+  );
+  assert.ok(
+    strictModeRestore > diagnosticStatus,
+    'strict shell mode must be restored only after diagnostic status is captured',
+  );
+  assert.ok(finalExit > strictModeRestore, 'the step must finish with the original coverage status');
+  assert.match(
+    contractsJob,
+    /if \[ "\$diagnostic_status" -ne 0 \]; then[\s\S]*::warning::actions registry coverage diagnostic failed/,
+    'diagnostic failure should remain visible without replacing the authoritative coverage failure',
+  );
+});
+
 test('PR files cap regression is both workflow-triggering and executed by exact audit coverage', () => {
   const regression = 'scripts/actions-registry-audit-pr-files-cap.test.mjs';
   const occurrences = workflow.split(regression).length - 1;
