@@ -826,6 +826,7 @@ export interface LocalVolumeSnapshot {
 
 export interface IcloudSyncHealthReport {
   observed_at_ms: number;
+  admission_blocked_since_ms?: number | null;
   evidence_complete: boolean;
   managed_database_allocated_bytes?: number;
   upload_queue: {

@@ -513,8 +513,8 @@
       if (admissionClear) {
         icloudHealthBlockedSinceMs = 0;
         icloudHealthFingerprint = "";
-      } else if (icloudHealthFingerprint !== fingerprint) {
-        icloudHealthBlockedSinceMs = next.observed_at_ms;
+      } else {
+        icloudHealthBlockedSinceMs = next.admission_blocked_since_ms ?? observedAtMs;
         icloudHealthFingerprint = fingerprint;
       }
       icloudHealth = next;
