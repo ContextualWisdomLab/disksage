@@ -60,10 +60,11 @@ baseline records the current loop's runtime and integration evidence.
   evidence, materialization stall, cancel callback, disabled action, mobile viewport, and reduced
   motion states. The a11y addon is configured to fail a story on detected violations; Storybook is
   development-only and cannot authorize cloud writes or source eviction.
-- Local evidence at this implementation snapshot: `npm test` 30 files/128 tests, `svelte-check`
-  0 errors/0 warnings, `npm run build` passed, `npm run build-storybook` passed, and production
-  dependency audit reported 0 vulnerabilities. The Storybook bundle emits a non-blocking >500 KiB
-  axe chunk advisory; no runtime bundle includes Storybook.
+- Local evidence at this implementation snapshot: `npm test` 30 files/129 tests, `svelte-check`
+  0 errors/0 warnings, `npm run build` passed, `npm run build-storybook` passed, and the
+  Storybook test runner passed 4 smoke/interaction stories in Chromium. The production and
+  development dependency audit reported 0 vulnerabilities after the uuid override. The Storybook
+  bundle emits a non-blocking >500 KiB axe chunk advisory; no runtime bundle includes Storybook.
 - Standards adopted for this slice are WCAG 2.2, WAI-ARIA APG, Design Tokens Format Module
   2025.10, and Storybook accessibility testing. No Figma File ID exists for this change; ADR-0010
   records that boundary and requires a superseding ADR when a Figma handoff is approved.

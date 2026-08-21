@@ -28,6 +28,7 @@ export const Clear: Story = {
 };
 
 export const MaterializationStalled: Story = {
+  parameters: { viewport: { defaultViewport: "mobile" } },
   args: {
     provider: "iCloud",
     state: "materialization-stalled",

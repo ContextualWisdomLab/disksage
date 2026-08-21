@@ -49,6 +49,7 @@ eviction authority: every destructive action remains behind the Rust evidence an
 ```bash
 npm run storybook
 npm run build-storybook
+npm run test-storybook -- --ci --url http://127.0.0.1:6006 --browsers chromium --testTimeout 30000
 ```
 
 The a11y addon is configured with `a11y.test = "error"`. The interaction stories assert the
