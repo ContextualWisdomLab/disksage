@@ -396,7 +396,7 @@ impl BoundReadRoot {
         }
     }
 
-    /// Open one relative child for read-only evidence without following any parent or final symlink.
+    /// Open one relative child for regular-file evidence without following any parent or final symlink.
     pub(crate) fn open_file(&self, relative: &Path) -> std::io::Result<std::fs::File> {
         #[cfg(unix)]
         {
@@ -407,7 +407,8 @@ impl BoundReadRoot {
             let parent = open_directory_components(self.handle.as_file(), &components)?;
             let fd = unsafe {
                 // SAFETY: parent is a live directory descriptor and name is NUL-terminated. O_NOFOLLOW
-                // rejects a final symlink; O_NONBLOCK prevents audit code from hanging on a FIFO.
+                // rejects a final symlink; O_NONBLOCK prevents a special file from blocking before
+                // its opened descriptor can be classified and rejected below.
                 libc::openat(
                     parent.as_raw_fd(),
                     name.as_ptr(),
@@ -417,10 +418,18 @@ impl BoundReadRoot {
             if fd < 0 {
                 return Err(std::io::Error::last_os_error());
             }
-            return Ok(unsafe {
+            let file = unsafe {
                 // SAFETY: fd was freshly returned by openat and is transferred exactly once.
                 std::fs::File::from_raw_fd(fd)
-            });
+            };
+            let metadata = file.metadata()?;
+            if !metadata.is_file() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "bound root regular-file evidence rejected a non-regular entry",
+                ));
+            }
+            return Ok(file);
         }
 
         #[cfg(windows)]
