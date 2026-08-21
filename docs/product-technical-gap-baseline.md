@@ -568,3 +568,13 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   identity replacement rejection). Hosted full Rust,
   security, and review checks remain authoritative and pending. PR #213's live base head is
   `6f424af`.
+
+## 2026-08-21 12:35 +0900 repeated provider-stall observation
+
+- A fresh bounded `fileproviderctl dump com.google.drivefs.fpext -l` returned about 5.16 MB of
+  read-only evidence. Multiple Google Drive domains remained temporarily disconnected with File
+  Provider `-1004` server-unreachable errors, active upload/download markers, and reconciliation
+  queues of 14,558, 2,000, 201, and 168 entries. `bird` and `fileproviderd` remained CPU-active.
+  The Finder “준비 중” operation therefore remains provider-sync-incomplete; DiskSage must not
+  treat it as a successful copy or authorize eviction. No provider daemon, cloud object, or source
+  file was changed.

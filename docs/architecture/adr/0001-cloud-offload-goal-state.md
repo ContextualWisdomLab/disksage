@@ -366,6 +366,16 @@ existing reversible OS Trash boundary. Cloud providers, File Provider state, sou
 Trash contents are never mutated by the planner. A stale plan or missing active-use evidence fails
 closed.
 
+## Amendment: repeated provider-stall evidence remains blocking (2026-08-21 12:35 +0900)
+
+A fresh bounded read-only Google Drive File Provider dump still reported temporarily disconnected
+domains, File Provider `-1004` server-unreachable errors, simultaneous upload/download progress,
+and reconciliation queues of 14,558, 2,000, 201, and 168 entries. `bird` and `fileproviderd`
+were CPU-active. This repeated observation keeps the provider-global transfer, reconciliation,
+disconnect, and server-error blockers authoritative; a Finder “준비 중” dialog is not copy
+completion. DiskSage must offer only the fixed bounded Finder Escape cancellation and a later fresh
+quiet observation, never a daemon kill, cloud mutation, retry, or source eviction.
+
 ## Amendment: provider-runtime recovery evidence (2026-08-21)
 
 OneDrive and Google Drive client recovery now requires an explicit runtime observation before
