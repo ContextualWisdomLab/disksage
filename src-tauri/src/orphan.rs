@@ -59,10 +59,6 @@ pub struct OrphanPlan {
     pub schema_kind: String,
     pub schema_version: u32,
     pub generated_at_ms: u64,
-    /// Execution-only scope binding. A digest of a low-entropy HOME path is still identifying
-    /// metadata and therefore must not cross the IPC/shareable-evidence boundary.
-    #[serde(skip)]
-    root_fingerprint: String,
     pub plan_fingerprint: String,
     pub candidate_count: usize,
     pub candidate_bytes: u64,
@@ -270,7 +266,7 @@ pub fn move_to_trash(
 
 #[cfg(target_os = "macos")]
 pub fn plan_for_roots(
-    home: &Path,
+    _home: &Path,
     watched: &[(PathBuf, &str)],
     application_roots: &[PathBuf],
     now_ms: u64,
@@ -354,14 +350,12 @@ pub fn plan_for_roots(
     let candidate_bytes = candidates.iter().fold(0u64, |total, candidate| {
         total.saturating_add(candidate.bytes)
     });
-    let root_fingerprint = digest_values(&[&home.to_string_lossy()]);
-    let plan_fingerprint = plan_fingerprint(&candidates, &root_fingerprint);
+    let plan_fingerprint = plan_fingerprint(&candidates);
     let exact_approval_phrase = format!("DiskSage orphan cleanup 승인 {plan_fingerprint}");
     Ok(OrphanPlan {
         schema_kind: ORPHAN_SCHEMA_KIND.into(),
         schema_version: ORPHAN_SCHEMA_VERSION,
         generated_at_ms: now_ms,
-        root_fingerprint,
         plan_fingerprint,
         candidate_count: candidates.len(),
         candidate_bytes,
@@ -376,14 +370,21 @@ pub fn plan_for_roots(
 
 #[cfg(target_os = "macos")]
 fn valid_bundle_id(value: &str) -> bool {
+    fn valid_part(part: &str) -> bool {
+        !part.is_empty()
+            && part
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    }
+
     let mut parts = value.split('.');
-    matches!(parts.next(), Some("com" | "org" | "net" | "io" | "app"))
-        && parts.all(|part| {
-            !part.is_empty()
-                && part
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-        })
+    let Some(first) = parts.next() else {
+        return false;
+    };
+    let Some(second) = parts.next() else {
+        return false;
+    };
+    valid_part(first) && valid_part(second) && parts.all(valid_part)
 }
 
 #[cfg(target_os = "macos")]
@@ -677,13 +678,13 @@ fn digest_values(values: &[&str]) -> String {
 }
 
 #[cfg(target_os = "macos")]
-fn plan_fingerprint(candidates: &[OrphanCandidate], root_fingerprint: &str) -> String {
-    let mut values = vec![root_fingerprint];
-    let candidate_values = candidates
-        .iter()
-        .map(|candidate| candidate.candidate_id.as_str())
-        .collect::<Vec<_>>();
-    values.extend(candidate_values);
+fn plan_fingerprint(candidates: &[OrphanCandidate]) -> String {
+    let mut values = vec!["plan"];
+    values.extend(
+        candidates
+            .iter()
+            .map(|candidate| candidate.candidate_id.as_str()),
+    );
     digest_values(&values)
 }
 
@@ -696,7 +697,6 @@ mod tests {
             schema_kind: ORPHAN_SCHEMA_KIND.into(),
             schema_version: ORPHAN_SCHEMA_VERSION,
             generated_at_ms: 1,
-            root_fingerprint: "a".repeat(64),
             plan_fingerprint: "b".repeat(64),
             candidate_count: 1,
             candidate_bytes: candidate.bytes,
@@ -725,7 +725,6 @@ mod tests {
             schema_kind: ORPHAN_SCHEMA_KIND.into(),
             schema_version: ORPHAN_SCHEMA_VERSION,
             generated_at_ms: 1,
-            root_fingerprint: "a".repeat(64),
             plan_fingerprint: "b".repeat(64),
             candidate_count: 0,
             candidate_bytes: 0,
@@ -844,12 +843,11 @@ mod tests {
     }
 
     #[test]
-    fn serialized_plan_does_not_expose_home_fingerprint() {
+    fn serialized_plan_has_no_home_scope_field() {
         let plan = OrphanPlan {
             schema_kind: ORPHAN_SCHEMA_KIND.into(),
             schema_version: ORPHAN_SCHEMA_VERSION,
             generated_at_ms: 1,
-            root_fingerprint: "home-derived-secret".into(),
             plan_fingerprint: "b".repeat(64),
             candidate_count: 0,
             candidate_bytes: 0,
@@ -862,7 +860,6 @@ mod tests {
         };
         let serialized = serde_json::to_string(&plan).unwrap();
         assert!(!serialized.contains("root_fingerprint"));
-        assert!(!serialized.contains("home-derived-secret"));
     }
 
     #[cfg(target_os = "macos")]
@@ -873,6 +870,18 @@ mod tests {
         assert!(!planner_home_scope_is_safe(Path::new("/System")));
         assert!(!planner_home_scope_is_safe(Path::new("/Library")));
         assert!(!planner_home_scope_is_safe(Path::new("/Applications")));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn bundle_id_validation_accepts_general_reverse_dns_shape() {
+        assert!(valid_bundle_id("dev.example.editor"));
+        assert!(valid_bundle_id("co.example.editor"));
+        assert!(valid_bundle_id("com.example.editor"));
+        assert!(!valid_bundle_id("com"));
+        assert!(!valid_bundle_id(".example.editor"));
+        assert!(!valid_bundle_id("com..editor"));
+        assert!(!valid_bundle_id("com.example/editor"));
     }
 
     #[cfg(target_os = "macos")]
