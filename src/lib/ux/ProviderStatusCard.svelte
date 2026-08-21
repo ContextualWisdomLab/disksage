@@ -61,7 +61,12 @@
     </p>
   {/if}
   {#if canCancel}
-    <button type="button" onclick={onCancel} disabled={!onCancel} aria-disabled={!onCancel}>
+    <button
+      type="button"
+      onclick={onCancel}
+      disabled={state === "checking" || !onCancel}
+      aria-disabled={state === "checking" || !onCancel}
+    >
       {cancelLabel}
     </button>
   {/if}
