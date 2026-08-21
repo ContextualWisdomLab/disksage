@@ -529,6 +529,17 @@ new-copy admission blocker (`icloud-file-provider-filename-excluded` or
 The Finder preparation dialog therefore remains an incomplete provider operation, not a successful
 copy receipt, and copy, attestation, and eviction stay fail-closed until the provider is quiet.
 
+## Amendment: current iCloud indexing and transfer receipt (2026-08-21 22:22 +0900)
+
+A fresh bounded read-only `fileproviderctl` observation completed at `2026-08-21 22:22:53 +0900`.
+The path-free aggregate reported `needs-indexing=no`, `pending-indexable-count=13,737`, a
+12,449-entry reconciliation backlog, one active upload marker, one active download marker with
+99.16% observed progress, one no-progress fetch, and 18 filename plus 2 root sync exclusions.
+The parser retained `icloud-file-provider-indexing-pending`, transfer, no-progress, and exclusion
+admission blockers; the bounded dump was truncated and no mutation was performed. This is still
+provider-sync-incomplete evidence: the Finder preparation dialog is not a completed copy receipt,
+and native copy, attestation, and eviction remain blocked.
+
 ## Amendment: bounded planning and attestation-retention edge cases (2026-08-21)
 
 Exact-content duplicate clusters are now computed before the presentation `limit` is applied. A

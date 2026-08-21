@@ -690,3 +690,12 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   and 2 root exclusions. DiskSage now exports the aggregate indexing backlog, blocks new-copy
   admission with `icloud-file-provider-indexing-pending`, and surfaces the count in the Finder
   “복사 준비 중” warning. No provider or source mutation was performed.
+
+## 2026-08-21 current iCloud indexing and transfer receipt
+
+- A fresh bounded read-only `fileproviderctl` observation completed at `2026-08-21 22:22:53 +0900`.
+  It reported `needs-indexing=no`, pending indexable `13737`, a `12449`-entry reconciliation
+  backlog, active upload/download markers, one no-progress fetch, and filename/root exclusions
+  `18/2`. The bounded dump was truncated; DiskSage persisted only path-free aggregate evidence and
+  set no-progress, indexing-pending, transfer, and exclusion blockers. `mutation_performed=false`;
+  Finder preparation is not a copy receipt.
