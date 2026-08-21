@@ -94,6 +94,14 @@ fn make_private(path: &std::path::Path) {
     }
 }
 
+fn make_private_directory(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+}
+
 fn write_private(path: &std::path::Path, bytes: impl AsRef<[u8]>) {
     fs::write(path, bytes).unwrap();
     make_private(path);
@@ -241,9 +249,12 @@ fn legacy_unicode_connection_id_matches_canonical_equivalent_root() {
 fn connection_document_rejects_non_regular_oversized_invalid_and_unsupported_documents() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("connections.json");
+    let document_directory = temp.path().join("connections-directory");
+    fs::create_dir(&document_directory).unwrap();
+    make_private_directory(&document_directory);
 
     assert_eq!(
-        load_connections(temp.path()).unwrap_err(),
+        load_connections(&document_directory).unwrap_err(),
         "oauth-connection-document-not-regular-file"
     );
 
