@@ -432,6 +432,26 @@ fn drain_bounded<R: Read + Send + 'static>(
 }
 
 #[cfg(all(unix, not(coverage)))]
+fn lsof_stderr_is_benign(stderr: &[u8], target: &Path) -> bool {
+    let Ok(text) = std::str::from_utf8(stderr) else {
+        return false;
+    };
+    let target = target.to_string_lossy();
+    let mut warning_seen = false;
+    text.lines().all(|line| {
+        let line = line.trim();
+        if line.is_empty() {
+            return true;
+        }
+        if line.starts_with("lsof: WARNING:") {
+            warning_seen = true;
+            return !line.contains(target.as_ref());
+        }
+        warning_seen && line == "Output information may be incomplete."
+    })
+}
+
+#[cfg(all(unix, not(coverage)))]
 fn observe_lsof_active_use(path: &Path) -> ActiveUseEvidence {
     let mut command = Command::new("lsof");
     command.arg("-F").arg("p");
@@ -542,8 +562,8 @@ fn observe_lsof_active_use(path: &Path) -> ActiveUseEvidence {
     }
     let success = status.is_some_and(|value| value.success());
     let no_matches = status.and_then(|value| value.code()) == Some(1) && pids.is_empty();
-    let stderr_nonempty = !error_output.is_empty();
-    let evidence_complete = !stderr_nonempty && (success || no_matches);
+    let stderr_benign = lsof_stderr_is_benign(&error_output, path);
+    let evidence_complete = stderr_benign && (success || no_matches);
     ActiveUseEvidence {
         method: "lsof-fp".into(),
         evidence_complete,
@@ -1552,6 +1572,21 @@ mod tests {
         assert!(plan
             .blockers
             .contains(&"active-use-evidence-incomplete".into()));
+    }
+
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
+    fn lsof_unrelated_warnings_are_benign_but_target_warnings_block() {
+        let target = Path::new("/Users/test/Library/Caches/example");
+        assert!(lsof_stderr_is_benign(
+            b"lsof: WARNING: can't stat() /Volumes/Other\n",
+            target,
+        ));
+        assert!(!lsof_stderr_is_benign(
+            b"lsof: WARNING: can't stat() /Users/test/Library/Caches/example/nested\n",
+            target,
+        ));
+        assert!(!lsof_stderr_is_benign(b"lsof: error: permission denied\n", target));
     }
 
     #[cfg(all(unix, not(coverage)))]
