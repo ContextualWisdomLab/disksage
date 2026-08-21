@@ -5,6 +5,20 @@ import { describe, expect, it } from "vitest";
 const root = resolve(import.meta.dirname, "../..");
 const read = (relativePath: string) => readFileSync(resolve(root, relativePath), "utf8");
 
+type CssRule = { selector: string; body: string };
+
+const cssRules = (css: string): CssRule[] =>
+  [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((match) => ({
+    selector: match[1].trim(),
+    body: match[2],
+  }));
+
+const ruleHasBareControlSelector = ({ selector }: CssRule) =>
+  selector
+    .split(",")
+    .map((part) => part.trim())
+    .some((part) => /^(?:button|select|input|textarea)$/.test(part));
+
 describe("UI/UX design and Storybook contract", () => {
   it("keeps primitive, semantic, and component tokens with preference fallbacks", () => {
     const tokens = read("src/lib/ui/design-tokens.css");
@@ -20,17 +34,43 @@ describe("UI/UX design and Storybook contract", () => {
     const tokens = read("src/lib/ui/design-tokens.css");
     const page = read("src/routes/+page.svelte");
     const providerStatus = read("src/lib/ux/ProviderStatusCard.svelte");
-    const globalButtonRule = tokens.match(/(?:^|\n)button\s*\{([\s\S]*?)\}/m)?.[1] ?? "";
-    const globalControlSizingRule = tokens.match(/button,\s*\nselect,\s*\ninput,\s*\ntextarea\s*\{([\s\S]*?)\}/m)?.[1] ?? "";
+    const bareControlRules = cssRules(tokens).filter(ruleHasBareControlSelector);
 
-    expect(globalButtonRule).not.toMatch(/\b(?:border|background|padding)\s*:/);
-    expect(globalControlSizingRule).not.toContain("min-height");
+    // Keep at least the typography normalization rule in scope so this assertion
+    // cannot pass merely because the selector parser matched nothing.
+    expect(bareControlRules.length).toBeGreaterThan(0);
+    for (const { body } of bareControlRules) {
+      expect(body).not.toMatch(/\b(?:min-height|border|background|padding)\s*:/);
+    }
+
     expect(tokens).toMatch(/\.ds-control\s*\{[\s\S]*?min-height:\s*var\(--ds-control-min-size\)/);
     expect(tokens).toMatch(/\.ds-control\s*\{[\s\S]*?border:\s*1px solid var\(--ds-border\)/);
     expect(tokens).toMatch(/\.ds-control:hover:not\(:disabled\)/);
     expect(page).toContain('class="ds-control scan-action"');
     expect(providerStatus).toContain('class="ds-control"');
     expect(providerStatus).toContain("h1, h2 { margin: 0; font-size: 1.1rem; }");
+  });
+
+  it("rejects a bare-control sizing regression instead of passing vacuously", () => {
+    const unsafeCss = `
+button,
+select,
+input,
+textarea {
+  font: inherit;
+}
+
+button,
+select,
+input,
+textarea {
+  min-height: var(--ds-control-min-size);
+}
+`;
+    const unsafeBareRules = cssRules(unsafeCss).filter(ruleHasBareControlSelector);
+
+    expect(unsafeBareRules.length).toBe(2);
+    expect(unsafeBareRules.some(({ body }) => /\bmin-height\s*:/.test(body))).toBe(true);
   });
 
   it("keeps the shell keyboard and live-feedback boundaries explicit", () => {
