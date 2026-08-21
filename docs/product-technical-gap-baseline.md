@@ -56,7 +56,8 @@ baseline records the current loop's runtime and integration evidence.
   boundary was added: the generated `disksage-cloud-plan` implementation omitted the new
   `ArchiveKind::SensitiveConfig` wire label. The source was fixed in the single generated-source
   owner (`src-tauri/cloud_plan_implementation.rs.inc`) and now has a focused label contract test;
-  local `cargo check --locked --features cloud-cli --bin disksage-cloud-plan` passes. The hosted
+  the same generated test fixtures bind the new `pre_copy_evidence` field, and the targeted
+  `cargo test --locked --features cloud-cli --bin disksage-cloud-plan` passes (1 test). The hosted
   matrix must be rerun on the resulting head before any protected merge; this correction grants
   no copy, cloud-write, or eviction authority.
 

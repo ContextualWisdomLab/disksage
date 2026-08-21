@@ -4431,6 +4431,7 @@ mod tests {
             exact_duplicates: cloud::ExactDuplicateSummary::default(),
             capacity: None,
             local_volume: None,
+            pre_copy_evidence: None,
             notices: vec!["dry-run-only".into()],
         };
 
@@ -5020,6 +5021,7 @@ mod tests {
             },
             capacity: None,
             local_volume: None,
+            pre_copy_evidence: None,
             notices: vec!["dry-run-only".into()],
         };
 
@@ -5327,6 +5329,7 @@ mod tests {
             exact_duplicates: cloud::ExactDuplicateSummary::default(),
             capacity: None,
             local_volume: None,
+            pre_copy_evidence: None,
             notices: vec!["dry-run-only".into(), "cloud-quota-unverified".into()],
         };
 
