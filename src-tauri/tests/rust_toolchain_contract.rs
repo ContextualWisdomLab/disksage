@@ -253,6 +253,15 @@ steps:
 "#;
     assert_eq!(action_toolchains(yaml_decoy), vec![None]);
 
+    let nested_yaml_decoy = r#"
+steps:
+  - uses: dtolnay/rust-toolchain@deadbeef
+    with:
+      nested:
+        toolchain: 1.97.1
+"#;
+    assert_eq!(action_toolchains(nested_yaml_decoy), vec![None]);
+
     let dependabot_decoy = r#"
 updates:
   - package-ecosystem: "cargo"
@@ -271,4 +280,18 @@ updates:
         entry_nested_scalar(&entry, "schedule", "interval").as_deref(),
         Some("daily")
     );
+
+    let nested_dependabot_decoy = r#"
+updates:
+  - package-ecosystem: "rust-toolchain"
+    metadata:
+      directory: "/"
+    schedule:
+      nested:
+        interval: "weekly"
+    open-pull-requests-limit: 1
+"#;
+    let nested_entry = dependabot_entry(nested_dependabot_decoy, "rust-toolchain").unwrap();
+    assert_eq!(entry_scalar(&nested_entry, "directory"), None);
+    assert_eq!(entry_nested_scalar(&nested_entry, "schedule", "interval"), None);
 }
