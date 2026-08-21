@@ -849,7 +849,8 @@ fn read_latest_projection<T: serde::de::DeserializeOwned>(
         .map_err(|_| format!("cloud-{kind}-existing-invalid"))
 }
 
-/// Read the last paired ADR/Goal state without creating or mutating anything.
+/// Read the last paired ADR/Goal state under the same receipt lock used by writers.
+/// The lock file is bounded internal coordination metadata; projection files remain untouched.
 /// A partial or divergent pair is treated as unavailable so callers cannot mistake stale state for
 /// a fresh provider attestation.
 pub fn read_projection_state(
@@ -860,6 +861,7 @@ pub fn read_projection_state(
     if !valid_receipt_id(receipt_id) {
         return Err("cloud-snapshot-receipt-id-invalid".into());
     }
+    let _pair_lock = acquire_projection_pair_lock(adr_dir, receipt_id)?;
     let adr = read_latest_projection::<CloudOffloadAdrSnapshot>(adr_dir, receipt_id, "adr")?;
     let goal = read_latest_projection::<CloudOffloadGoalSnapshot>(goal_dir, receipt_id, "goal")?;
     match (adr, goal) {
