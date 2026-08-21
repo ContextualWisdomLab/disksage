@@ -56,6 +56,7 @@ fn yaml_scalar_in_block(
     block_indent: usize,
     target_key: &str,
 ) -> Option<String> {
+    let expected_indent = block_indent + 2;
     for line in &lines[block_start + 1..] {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
@@ -64,6 +65,9 @@ fn yaml_scalar_in_block(
         let indent = leading_spaces(line);
         if indent <= block_indent {
             break;
+        }
+        if indent != expected_indent {
+            continue;
         }
         if let Some((key, value)) = trimmed.split_once(':') {
             if key.trim() == target_key && !value.trim().is_empty() {
@@ -81,6 +85,7 @@ fn yaml_nested_scalar_in_block(
     parent_key: &str,
     target_key: &str,
 ) -> Option<String> {
+    let expected_indent = block_indent + 2;
     for (offset, line) in lines[block_start + 1..].iter().enumerate() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
@@ -89,6 +94,9 @@ fn yaml_nested_scalar_in_block(
         let indent = leading_spaces(line);
         if indent <= block_indent {
             break;
+        }
+        if indent != expected_indent {
+            continue;
         }
         if trimmed == format!("{parent_key}:") {
             return yaml_scalar_in_block(lines, block_start + 1 + offset, indent, target_key);
@@ -148,9 +156,14 @@ fn dependabot_entry<'a>(source: &'a str, ecosystem: &str) -> Option<Vec<&'a str>
 }
 
 fn entry_scalar(entry: &[&str], target_key: &str) -> Option<String> {
-    for line in entry {
+    let item_indent = entry.first().map(|line| leading_spaces(line))?;
+    let expected_indent = item_indent + 2;
+    for line in &entry[1..] {
+        if leading_spaces(line) != expected_indent {
+            continue;
+        }
         let trimmed = line.trim();
-        let Some((key, value)) = trimmed.strip_prefix("- ").unwrap_or(trimmed).split_once(':') else {
+        let Some((key, value)) = trimmed.split_once(':') else {
             continue;
         };
         if key.trim() == target_key && !value.trim().is_empty() {
@@ -161,12 +174,17 @@ fn entry_scalar(entry: &[&str], target_key: &str) -> Option<String> {
 }
 
 fn entry_nested_scalar(entry: &[&str], parent_key: &str, target_key: &str) -> Option<String> {
-    for (index, line) in entry.iter().enumerate() {
+    let item_indent = entry.first().map(|line| leading_spaces(line))?;
+    let expected_indent = item_indent + 2;
+    for (index, line) in entry.iter().enumerate().skip(1) {
+        if leading_spaces(line) != expected_indent {
+            continue;
+        }
         let trimmed = line.trim();
         if trimmed != format!("{parent_key}:") {
             continue;
         }
-        return yaml_scalar_in_block(entry, index, leading_spaces(line), target_key);
+        return yaml_scalar_in_block(entry, index, expected_indent, target_key);
     }
     None
 }
