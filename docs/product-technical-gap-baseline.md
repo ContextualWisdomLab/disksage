@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-21 (Asia/Seoul)
-**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` source through `c731687`; this
+**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` source through `df09774`; this
 baseline records the current loop's runtime and integration evidence.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
@@ -371,18 +371,20 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   serialization branch.
 - Head `a4de13e65b6711f97a51eb857642da585f1d0b09` leaves the ontology coverage assertion
   rustfmt-clean; no behavior or authority boundary changed.
-- The current source-and-documentation line is `c731687ae08a5278fac396ccc9a5c5ed36b6ce42`; the
-  final docs-only binding commit keeps the snapshot's source-head statement unchanged.
+- The current source-and-documentation line is `ef96322baceaa3089193a9549c47c79d94de93a3`; the
+  implementation head is `df097743eb75b9cc919d631db0ebdeffad8b7995` and the final docs-only
+  binding commit records that distinction.
 
 ## 2026-08-21 current-head provider-evidence follow-up
 
-- The Finder-cancel implementation is bound to source head `356363035f9ab97874be6f0fddaa369308c8aab7`,
+- The Finder-cancel implementation is bound to source head `df097743eb75b9cc919d631db0ebdeffad8b7995`,
   following macOS walkdir ownership repair at `6c0347ba53185a85a3a14c4819435c98a6fe8271`. Locked Cargo
   metadata, TypeScript compilation, and `git diff --check` pass locally; a full local Cargo build
   remains intentionally deferred while the host is under provider-copy disk pressure.
 - PR #213 is still mergeable but protected and blocked. Its exact-head release, test, security,
   Noema, Strix, and OpenCode checks are queued or in progress; no protected merge or approval
-  bypass is claimed. The prior current-head Devin finding about `latest_api_object_id` was fixed
+  bypass is claimed. The current documentation head is `ef96322baceaa3089193a9549c47c79d94de93a3`.
+  The prior current-head Devin finding about `latest_api_object_id` was fixed
   by filtering `{receipt_id}-*.json` before scanning, with a regression test covering 4,096
   unrelated records; the outdated review thread was replied to and resolved.
 - Provider evidence lookup remains advisory locator recovery only. It does not grant cloud-write or
