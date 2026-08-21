@@ -371,7 +371,7 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   serialization branch.
 - Head `a4de13e65b6711f97a51eb857642da585f1d0b09` leaves the ontology coverage assertion
   rustfmt-clean; no behavior or authority boundary changed.
-- The current source-and-documentation line is `16784a7bbf45f28ef25ea08357cb2fa676eabefc`; the
+- The current source-and-documentation line is `3fc93b1358cdf29ebaa699521aa98850ace7cc76`; the
   implementation head is `df097743eb75b9cc919d631db0ebdeffad8b7995` and the final docs-only
   binding commit records that distinction.
 
@@ -404,7 +404,7 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   `df097743eb75b9cc919d631db0ebdeffad8b7995`.
 - The UI contract now also asserts that the cancellation action is serialized through the Tauri
   command wrapper and remains disabled while a request or health refresh is active; focused API,
-  privacy, admission, TypeScript, and JSON checks passed locally at head `16784a7`.
+  privacy, admission, Goal projection, TypeScript, and JSON checks passed locally at head `3fc93b1`.
 - The Finder `real_datasets` incident remains provider-sync-incomplete. The 7.2 GiB target did not
   change, diagnostic dumps totaling about 1.6 GiB were removed without touching provider state,
   and the local volume recovered to about 1.6 GiB free. The already-running Finder operation must
