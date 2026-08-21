@@ -569,3 +569,7 @@ admission-blocker set. Invalid, unreadable, or changed historical evidence stops
 restart cannot manufacture a longer stall interval. The field is diagnostic only: provider-native
 completion, copy receipts, attestation, and local eviction remain independent fail-closed gates.
 The implementation and regression test are at source head `ad850e9`.
+
+The Naruon readiness allow-list now includes `icloud-file-provider-indexing-pending`, keeping the
+provider-derived blocker set closed under export and rejecting the same blocker on non-iCloud
+envelopes. The binding repair is at source head `6f95ca3`.

@@ -49,6 +49,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Include `icloud-file-provider-indexing-pending` in the Naruon iCloud admission-blocker binding,
+  so a signed non-iCloud envelope cannot smuggle that provider blocker through validation.
+
 - Cover the `sensitive-config` archive-kind wire label in the generated cloud-plan implementation,
   so the macOS/Linux/Windows cloud-plan binaries compile after the sensitive-config safety
   boundary is enabled.
