@@ -537,7 +537,7 @@ provider-global observations, not only in Storybook. It maps a missing/error obs
 `materialization-stalled`, and a quiet observation to `clear`; elapsed time, bounded evidence time,
 and the existing Finder-cancel request remain visible. The card is informational/cancel-only and
 does not grant copy, attestation, or eviction authority. This is implemented by the UX follow-up
-head `97533ad`; `svelte-check`, the CloudArchive contract suite, and the Storybook interaction/a11y
+head `58db694`; `svelte-check`, the CloudArchive contract suite, and the Storybook interaction/a11y
 scenes pass.
 
 ## Amendment: latest runtime evidence surfaced by the UX (2026-08-21 22:22 +0900)
@@ -554,7 +554,7 @@ The running status card now derives both its stall threshold and displayed durat
 provider observation timestamp, matching the detail panel and avoiding wall-clock drift during the
 five-minute blocked-probe backoff. A missing observation remains `checking` or
 `provider-sync-incomplete`; no UI clock can promote a provider to copy, attestation, or eviction
-authority. The latest UX safety follow-up is tracked at DiskSage PR #246 head `97533ad`.
+authority. The latest UX safety follow-up is tracked at DiskSage PR #246 functional head `58db694`.
 
 ## Amendment: legacy panel contrast and probe-action consistency (2026-08-21)
 
