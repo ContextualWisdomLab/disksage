@@ -143,7 +143,8 @@ pub fn plan(home: &Path, now_ms: u64) -> Result<OrphanPlan, String> {
     let canonical_home =
         std::fs::canonicalize(home).map_err(|_| "orphan-home-unavailable".to_string())?;
     let library = canonical_home.join("Library");
-    if !canonical_home.is_dir() || !library.is_dir() || !planner_home_scope_is_safe(&canonical_home) {
+    if !canonical_home.is_dir() || !library.is_dir() || !planner_home_scope_is_safe(&canonical_home)
+    {
         return Err("orphan-home-unsafe".into());
     }
     let watched = [
@@ -305,7 +306,7 @@ pub fn plan_for_roots(
             notices.push("orphan-scan-budget-exhausted".into());
             break;
         }
-        let entries = match std::fs::read_dir(root) {
+        let dir_entries = match std::fs::read_dir(root) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(_) => {
@@ -315,7 +316,7 @@ pub fn plan_for_roots(
             }
         };
         let mut entries = Vec::new();
-        for entry in entries {
+        for entry in dir_entries {
             match entry {
                 Ok(entry) => entries.push(entry),
                 Err(_) => {
