@@ -807,3 +807,16 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   clock origin, with a current-observation fallback only when persistence is unavailable. This
   makes the screenshot's long-running “복사 준비 중” state remain visible as a stall after restart;
   it does not cancel Finder, write provider state, or authorize copy, attestation, or eviction.
+
+## 2026-08-22 06:05 +0900 repeated Finder preparation stall
+
+- A new bounded, read-only observation still found four `fetchContentsForItemWithID` requests with
+  no progress, `pending-indexable-count=31882`, active disk import, unchanged aggregate upload
+  (`5205160706/5465661912`) and download (`10647837/11116116`) counters, and `brctl` flags
+  `needs-sync-up|needs-sync-down`. Finder had remained alive for roughly 18 hours and the data
+  volume had only about 4.9 GiB available.
+- The observation confirms provider-level preparation debt but remains aggregate evidence: it does
+  not identify the seven Finder items in `real_datasets` or prove any cloud copy. DiskSage keeps
+  the runtime Goal `provider-sync-incomplete`, copy/attestation/source eviction fail-closed, and
+  exposes only the explicit bounded Finder-cancel action; no Finder/provider process, CloudDocs
+  database, source, or cloud object was mutated.
