@@ -19,10 +19,9 @@ describe("orphan cleanup safety contract", () => {
     expect(component).toContain("candidate.metadata_fingerprint");
     expect(component).not.toContain("candidate.path");
 
-    // Runtime/shareable evidence must not serialize even a dictionary-recoverable digest of HOME.
-    // The Rust behavior test verifies the serialized payload; this source contract prevents the
-    // execution-only scope binding from accidentally losing its serde boundary.
-    expect(orphan).toContain("#[serde(skip)]\n    root_fingerprint: String");
+    // HOME identity must not exist in either the public TypeScript contract or the Rust wire type.
+    expect(api).not.toContain("root_fingerprint");
+    expect(orphan).not.toContain("root_fingerprint: String");
 
     // A globally incomplete plan is fail-closed in the UI before the backend submission boundary.
     expect(component).toContain("!plan.scan_complete");
