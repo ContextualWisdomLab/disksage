@@ -176,7 +176,13 @@ fn malformed_directory_version_count_and_size_fail_closed_before_lookup() {
     );
 
     let too_many = temp.path().join("too-many.json");
-    let entries: Vec<_> = (0..33).map(|_| serde_json::json!({})).collect();
+    #[cfg(windows)]
+    let count_root = google_root(r"C:\Cloud\Drive".into());
+    #[cfg(not(windows))]
+    let count_root = google_root("/Cloud/Drive".into());
+    let entries: Vec<_> = (0..33)
+        .map(|_| serde_json::to_value(connection(&count_root)).unwrap())
+        .collect();
     write_private(
         &too_many,
         serde_json::to_vec(&serde_json::json!({"version": 1, "connections": entries})).unwrap(),
