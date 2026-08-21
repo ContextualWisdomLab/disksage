@@ -500,6 +500,7 @@
         activity?.no_progress_create_count ?? 0,
         activity?.materialization_failure_count ?? 0,
         activity?.staged_item_missing_count ?? 0,
+        activity?.pending_indexable_count ?? "",
         activity?.active_upload_count ?? 0,
         activity?.active_download_count ?? 0,
         activity?.active_upload_progress_millionths ?? "",
@@ -796,6 +797,7 @@
       "icloud-file-provider-materialization-failed": "File Provider 파일 materialization이 실패함(staged item 없음)",
       "icloud-file-provider-filename-excluded": "iCloud가 파일 이름 때문에 동기화에서 제외한 항목이 있음",
       "icloud-file-provider-root-excluded": "iCloud가 동기화 루트에서 제외한 항목이 있음",
+      "icloud-file-provider-indexing-pending": "iCloud File Provider 메타데이터 색인 대기 항목이 있음",
       "icloud-file-provider-transfer-active": "File Provider 기존 upload/download가 진행 중임",
       "icloud-file-provider-dump-timeout": "File Provider 상태 확인이 시간 초과됨",
       "icloud-file-provider-dump-output-truncated": "File Provider 상태 증거가 잘려 불완전함",
@@ -921,6 +923,7 @@
           {#if icloudHealth.file_provider_activity}
             · File Provider 무진행 fetch {icloudHealth.file_provider_activity.no_progress_fetch_count}개 / create {icloudHealth.file_provider_activity.no_progress_create_count}개 ·
             materialization 실패 {icloudHealth.file_provider_activity.materialization_failure_count}개 / staged item 없음 {icloudHealth.file_provider_activity.staged_item_missing_count}개 ·
+            색인 대기 {icloudHealth.file_provider_activity.pending_indexable_count ?? 0}개 ·
             활성 upload {icloudHealth.file_provider_activity.active_upload_count}개 / download {icloudHealth.file_provider_activity.active_download_count}개
           {/if}
         </span>
@@ -946,6 +949,7 @@
             || icloudHealth.file_provider_activity.no_progress_create_count > 0
             || icloudHealth.file_provider_activity.materialization_failure_count > 0
             || icloudHealth.file_provider_activity.staged_item_missing_count > 0
+            || (icloudHealth.file_provider_activity.pending_indexable_count ?? 0) > 0
             || icloudHealth.file_provider_activity.timed_out
             || icloudHealth.file_provider_activity.active_upload_count > 0
             || icloudHealth.file_provider_activity.active_download_count > 0
@@ -977,6 +981,12 @@
             <p class="warning">
               iCloud에 기존 전송이 진행 중입니다. 기존 upload/download가 끝나고 새 복사 admission이
               clear가 될 때까지 Finder 복사와 원본 정리를 진행하지 않습니다.
+            </p>
+          {/if}
+          {#if (icloudHealth.file_provider_activity?.pending_indexable_count ?? 0) > 0}
+            <p class="warning">
+              iCloud File Provider에 메타데이터 색인 대기 항목이 {icloudHealth.file_provider_activity?.pending_indexable_count}개 있습니다.
+              Finder의 “복사 준비 중” 단계가 이 대기열을 기다릴 수 있으므로, 색인 대기와 기존 전송이 해소되기 전에는 복사를 완료로 간주하지 않습니다.
             </p>
           {/if}
           {#if icloudHealthBlockedSinceMs > 0 && icloudHealth.observed_at_ms - icloudHealthBlockedSinceMs >= PROVIDER_STALL_WARNING_MS}

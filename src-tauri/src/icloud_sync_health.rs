@@ -155,6 +155,9 @@ pub struct IcloudFileProviderActivityEvidence {
     /// Aggregate provider errors where iCloud excludes an item under a sync root.
     #[serde(default)]
     pub sync_excluded_root_count: u64,
+    /// Aggregate File Provider metadata work still waiting to be indexed.
+    #[serde(default)]
+    pub pending_indexable_count: Option<u64>,
     #[serde(default)]
     pub active_upload_count: u64,
     #[serde(default)]
@@ -966,6 +969,12 @@ fn parse_file_provider_activity_output(
                 .contains("excluded from sync under root")
         })
         .count() as u64;
+    let pending_indexable_count = output.lines().find_map(|line| {
+        let marker = line.trim().strip_prefix("+ ").unwrap_or(line.trim());
+        marker
+            .strip_prefix("pending-indexable-count:")
+            .and_then(|value| value.trim().parse::<u64>().ok())
+    });
     let active_upload_count = output
         .lines()
         .filter(|line| line.to_ascii_lowercase().contains("upload progress:"))
@@ -1005,6 +1014,9 @@ fn parse_file_provider_activity_output(
     if sync_excluded_root_count > 0 {
         notices.push("icloud-file-provider-sync-root-excluded-observed".into());
     }
+    if pending_indexable_count.is_some_and(|count| count > 0) {
+        notices.push("icloud-file-provider-indexing-pending".into());
+    }
     if active_upload_count > 0 {
         notices.push("icloud-file-provider-active-upload".into());
     }
@@ -1023,6 +1035,7 @@ fn parse_file_provider_activity_output(
         staged_item_missing_count,
         sync_excluded_filename_count,
         sync_excluded_root_count,
+        pending_indexable_count,
         active_upload_count,
         active_download_count,
         active_upload_progress_millionths,
@@ -1917,6 +1930,9 @@ fn attach_native_status_admission(report: &mut IcloudSyncHealthReport) {
         if activity.sync_excluded_root_count > 0 {
             add_blocker("icloud-file-provider-root-excluded");
         }
+        if activity.pending_indexable_count.is_some_and(|count| count > 0) {
+            add_blocker("icloud-file-provider-indexing-pending");
+        }
         if !no_progress && !materialization_failed {
             if activity.active_upload_count > 0 || activity.active_download_count > 0 {
                 add_blocker("icloud-file-provider-transfer-active");
@@ -2255,6 +2271,22 @@ mod tests {
         assert!(evidence
             .notices
             .contains(&"icloud-file-provider-active-download".to_string()));
+        assert!(validate_file_provider_activity_evidence(&evidence).is_ok());
+    }
+
+    #[test]
+    fn file_provider_parser_records_pending_indexable_count() {
+        let evidence = parse_file_provider_activity_output(
+            "pending-indexable-count: 12474\n",
+            42,
+            true,
+            false,
+            false,
+        );
+        assert_eq!(evidence.pending_indexable_count, Some(12_474));
+        assert!(evidence
+            .notices
+            .contains(&"icloud-file-provider-indexing-pending".to_string()));
         assert!(validate_file_provider_activity_evidence(&evidence).is_ok());
     }
 

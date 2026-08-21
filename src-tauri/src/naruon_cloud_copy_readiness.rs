@@ -333,6 +333,9 @@ fn expected_icloud_admission_blockers(report: &IcloudSyncHealthReport) -> Vec<St
         if activity.sync_excluded_root_count > 0 {
             blockers.push("icloud-file-provider-root-excluded".into());
         }
+        if activity.pending_indexable_count.is_some_and(|count| count > 0) {
+            blockers.push("icloud-file-provider-indexing-pending".into());
+        }
         if !no_progress && !materialization_failed
             && (activity.active_upload_count > 0 || activity.active_download_count > 0)
         {
@@ -1190,6 +1193,9 @@ fn validate_icloud_admission_summary(
         }
         if activity.sync_excluded_root_count > 0 {
             expected.push("icloud-file-provider-root-excluded".to_string());
+        }
+        if activity.pending_indexable_count.is_some_and(|count| count > 0) {
+            expected.push("icloud-file-provider-indexing-pending".to_string());
         }
         if !no_progress && !materialization_failed
             && (activity.active_upload_count > 0 || activity.active_download_count > 0)

@@ -81,6 +81,7 @@ fn active_transfer_health() -> IcloudSyncHealthReport {
             staged_item_missing_count: 0,
             sync_excluded_filename_count: 0,
             sync_excluded_root_count: 0,
+            pending_indexable_count: None,
             active_upload_count: 1,
             active_download_count: 0,
             active_upload_progress_millionths: Some(500_000),

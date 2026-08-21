@@ -663,3 +663,11 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   the existing history, preventing clock regression from deleting fresh proof. The retention
   integration test covers the bounded 128-record history. Local implementation commit `c5aa3a1`
   is not yet published because the repository ruleset currently rejects direct branch updates.
+
+## 2026-08-21 iCloud indexing backlog follow-up
+
+- A repeated read-only iCloud File Provider observation remained unchanged for 21 seconds with
+  `pending-indexable-count=12474`, upload progress `0/5038` at `0.0000`, 18 filename exclusions,
+  and 2 root exclusions. DiskSage now exports the aggregate indexing backlog, blocks new-copy
+  admission with `icloud-file-provider-indexing-pending`, and surfaces the count in the Finder
+  “복사 준비 중” warning. No provider or source mutation was performed.

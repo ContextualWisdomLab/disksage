@@ -31,6 +31,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Show the last read-only iCloud File Provider evidence timestamp beside the
   new-copy admission state, so a stalled `no progress`/`hard expired` queue has
   an actionable retry context without exposing provider paths.
+- Include the redacted iCloud File Provider `pending-indexable-count` in admission evidence and
+  surface `icloud-file-provider-indexing-pending` when Finder remains in “복사 준비 중”.
 - Bind Tauri packaging to a fail-closed cross-manifest release-version verifier so `package.json`, `Cargo.toml`, `tauri.conf.json`, and any `v*` release tag must agree on one valid Semantic Version before a bundle is built.
 - Add retry-safe release concurrency: fresh first attempts may supersede stale runs, while explicit GitHub rerun attempts do not self-cancel inside the same concurrency group.
 - Replace generator-era Cargo package metadata with the DiskSage product description, MIT license expression, canonical source repository URL, and `publish = false` registry-publication boundary; deliberately omit Cargo's deprecated `authors` field, verify publication refusal through Cargo's versioned parsed metadata rather than substring matching, and regression-test commented/out-of-table decoys together with the retained acquisition metadata and doctoring evidence.

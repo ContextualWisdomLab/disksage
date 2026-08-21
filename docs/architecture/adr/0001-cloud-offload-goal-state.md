@@ -539,3 +539,13 @@ when its clock is older than the existing bounded history, so clock regression c
 attestation that was just persisted. Both boundaries remain fail-closed and are covered by focused
 Rust regression tests. The local implementation is `c5aa3a1`; its protected-branch publication is
 still pending the repository ruleset's normal PR workflow.
+
+## Amendment: iCloud indexing backlog is an admission blocker (2026-08-21)
+
+A repeated read-only File Provider observation remained unchanged for 21 seconds: the provider
+reported `pending-indexable-count=12474` and upload progress `0/5038` at `0.0000`, alongside the
+existing 18 filename and 2 root exclusions. DiskSage now retains this aggregate count in the
+path-free activity evidence and adds `icloud-file-provider-indexing-pending` to new-copy blockers;
+the UI includes it in the stable-block fingerprint and warns that Finder may remain in “복사 준비
+중”. No Finder/provider process is killed and no cloud or source mutation is performed. The
+extension remains additive to activity schema v3 and is covered by a parser regression test.
