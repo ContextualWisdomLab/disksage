@@ -170,7 +170,6 @@ jobs:
               if (!retryable || attempt >= 3) throw new Error(`github-api-${response.status}`);
               await pause(attempt * 1_000);
             }
-            throw new Error('github-api-retry-exhausted');
           };
 
           const report = await auditActionsRegistry(fetchJson, repository, expectedMainSha);
