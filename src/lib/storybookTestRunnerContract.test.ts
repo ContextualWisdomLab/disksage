@@ -18,15 +18,17 @@ describe("Storybook test-runner viewport isolation", () => {
     mockedGetStoryContext.mockReset();
   });
 
-  it("restores the desktop viewport after a mobile story", async () => {
+  it("follows Storybook 10 viewport globals and restores desktop after mobile", async () => {
     const setViewportSize = vi.fn();
     const page = { setViewportSize } as never;
 
     mockedGetStoryContext
       .mockResolvedValueOnce({
-        parameters: { viewport: { defaultViewport: "mobile" } },
+        globals: { viewport: { value: "mobile", isRotated: false } },
       } as never)
-      .mockResolvedValueOnce({ parameters: {} } as never);
+      .mockResolvedValueOnce({
+        globals: { viewport: { value: "desktop", isRotated: false } },
+      } as never);
 
     await config.preVisit?.(page, story("mobile"));
     await config.preVisit?.(page, story("desktop"));
