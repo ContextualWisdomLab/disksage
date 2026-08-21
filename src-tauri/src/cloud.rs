@@ -7595,6 +7595,7 @@ mod tests {
             ("x.psd", ArchiveKind::Creative),
             ("x.aup3", ArchiveKind::Creative),
             ("x.crdownload", ArchiveKind::IncompleteDownload),
+            (".env.api", ArchiveKind::SensitiveConfig),
             ("x.zip.part004", ArchiveKind::Archive),
         ] {
             assert_eq!(archive_kind(Path::new(ext)), Some(expected));

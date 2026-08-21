@@ -607,6 +607,22 @@ mod tests {
         }
     }
 
+    #[test]
+    fn ontology_class_covers_every_archive_kind() {
+        for (kind, expected) in [
+            (ArchiveKind::Document, "Document"),
+            (ArchiveKind::Media, "Media"),
+            (ArchiveKind::Archive, "Archive"),
+            (ArchiveKind::Dataset, "Dataset"),
+            (ArchiveKind::Backup, "Backup"),
+            (ArchiveKind::Creative, "Creative"),
+            (ArchiveKind::IncompleteDownload, "IncompleteDownload"),
+            (ArchiveKind::SensitiveConfig, "SensitiveConfig"),
+        ] {
+            assert_eq!(ontology_class(kind), format!("{ONTOLOGY_NAMESPACE}{expected}"));
+        }
+    }
+
     #[cfg(not(coverage))]
     fn produced_receipt() -> CloudCopyReceipt {
         let tmp = tempfile::tempdir().unwrap();
