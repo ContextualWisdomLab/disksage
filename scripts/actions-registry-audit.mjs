@@ -145,7 +145,6 @@ export async function listAllWorkflowRecords(fetchJson, repository) {
   let page = 1;
   let expectedTotal = null;
   while (true) {
-    if (page > MAX_LIST_PAGES) throw new Error('actions-list-page-limit-exceeded');
     const payload = await fetchJson(`/repos/${repository}/actions/workflows?per_page=100&page=${page}`);
     const totalCount = payload?.total_count;
     if (
