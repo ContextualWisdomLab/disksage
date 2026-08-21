@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-22 (Asia/Seoul)
-**Repository heads at snapshot:** PR #213 `2b9833c`, PR #247 `67873b2`, PR #246 `741ab30`,
+**Repository heads at snapshot:** PR #213 `2b9833c`, PR #247 `67873b2`, PR #246 `44756d1`,
 supporting PR #156 `39a08a7`, and PR #192 `30ceea2`; hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
@@ -764,4 +764,12 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   and kills that group before joining output readers on timeout. This closes the shell-descendant
   pipe leak that could starve the independent `ps` probe and report a false active-use timeout.
   The focused Rust test passed 3/3. The same patch is present on stacked PR heads `67873b2` (#247)
-  and `741ab30` (#246); hosted checks are rerunning and protected merge/review is still pending.
+  and `44756d1` (#246); hosted checks are rerunning and protected merge/review is still pending.
+
+## 2026-08-22 indexing backlog stall-clock correction
+
+- A rising `pending_indexable_count` no longer resets the UX stall interval; only a drained backlog
+  or actual upload/download progress does. Unknown backlog values remain non-progress evidence.
+  This keeps the “몇 시간째 준비 중” warning actionable when File Provider keeps adding work.
+  Seven focused Vitest tests pass and `svelte-check` reports 0 errors/0 warnings at source head
+  `44756d1`.

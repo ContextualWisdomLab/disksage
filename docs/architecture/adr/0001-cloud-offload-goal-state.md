@@ -632,3 +632,13 @@ File Provider databases, cloud objects, and user files remain outside the mutati
 focused Rust regression test passed 3/3. A timeout remains incomplete active-use evidence and
 keeps cache cleanup and cloud eviction fail-closed; this process-group cleanup is not a provider
 recovery or copy-cancellation operation.
+
+## Amendment: indexing backlog growth does not reset the stall clock (2026-08-22)
+
+The UX stall clock now treats a smaller pending-indexable count as progress, while an increasing or
+unknown count only refreshes the displayed fingerprint and preserves the existing blocked duration.
+Active upload/download counters and progress markers retain their existing progress semantics. This
+prevents a growing provider queue from postponing the 15-minute Finder-stall guidance indefinitely;
+the clock remains diagnostic/cancel-only and never grants copy, attestation, or eviction authority.
+The implementation at source head `44756d1` is covered by seven focused Vitest cases and a clean
+`svelte-check` run.
