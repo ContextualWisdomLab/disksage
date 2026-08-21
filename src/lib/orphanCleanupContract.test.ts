@@ -19,8 +19,10 @@ describe("orphan cleanup safety contract", () => {
     expect(component).toContain("candidate.metadata_fingerprint");
     expect(component).not.toContain("candidate.path");
 
-    // Public/browser evidence must not expose even a dictionary-recoverable digest of HOME.
-    expect(api).not.toContain("root_fingerprint");
+    // Runtime/shareable evidence must not serialize even a dictionary-recoverable digest of HOME.
+    // The Rust behavior test verifies the serialized payload; this source contract prevents the
+    // execution-only scope binding from accidentally losing its serde boundary.
+    expect(orphan).toContain("#[serde(skip)]\n    root_fingerprint: String");
 
     // A globally incomplete plan is fail-closed in the UI before the backend submission boundary.
     expect(component).toContain("!plan.scan_complete");
@@ -31,9 +33,11 @@ describe("orphan cleanup safety contract", () => {
     // Arbitrary backend/native exception text must not cross the customer-visible boundary.
     expect(component).not.toContain("String(e)");
     expect(orphan).not.toContain("error: Some(error.to_string())");
+    expect(orphan).toContain('error: Some("orphan-trash-operation-failed".into())');
 
     // The real user-home root is a valid planning scope; generic cleanup protection intentionally
     // treats HOME itself as protected and therefore cannot be reused as the planner admission test.
     expect(orphan).not.toContain("crate::safety::is_protected(&canonical_home)");
+    expect(orphan).toContain("planner_home_scope_is_safe");
   });
 });
