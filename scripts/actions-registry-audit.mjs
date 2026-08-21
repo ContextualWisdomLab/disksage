@@ -165,7 +165,9 @@ export async function listAllWorkflowRecords(fetchJson, repository) {
     }
     for (const workflow of payload.workflows) {
       const workflowId = workflow?.id;
-      if (!Number.isSafeInteger(workflowId) || workflowId <= 0) continue;
+      if (!Number.isSafeInteger(workflowId) || workflowId <= 0) {
+        throw new Error('actions-workflow-record-invalid');
+      }
       if (seenWorkflowIds.has(workflowId)) {
         throw new Error('actions-workflow-list-duplicate');
       }
