@@ -97,13 +97,7 @@ fn read_json<T: for<'de> Deserialize<'de>>(
     serde_json::from_str(&body).map_err(|_| "provider-api-response-invalid".into())
 }
 
-fn read_response_body(response: &mut ureq::http::Response<ureq::Body>) -> Result<(), String> {
-    if !(200..300).contains(&response.status().as_u16()) {
-        return Err(format!(
-            "provider-api-http-status:{}",
-            response.status().as_u16()
-        ));
-    }
+fn drain_response_body(response: &mut ureq::http::Response<ureq::Body>) -> Result<(), String> {
     response
         .body_mut()
         .with_config()
@@ -111,6 +105,24 @@ fn read_response_body(response: &mut ureq::http::Response<ureq::Body>) -> Result
         .read_to_vec()
         .map_err(safe_transport_error)
         .map(|_| ())
+}
+
+fn read_response_body(response: &mut ureq::http::Response<ureq::Body>) -> Result<(), String> {
+    if !(200..300).contains(&response.status().as_u16()) {
+        return Err(format!(
+            "provider-api-http-status:{}",
+            response.status().as_u16()
+        ));
+    }
+    drain_response_body(response)
+}
+
+fn validate_upload_progress_status(status: u16) -> Result<(), String> {
+    if status == 202 || status == 308 {
+        Ok(())
+    } else {
+        Err(format!("provider-api-http-status:{status}"))
+    }
 }
 
 fn response_location(response: &ureq::http::Response<ureq::Body>) -> Result<String, String> {
@@ -324,9 +336,7 @@ fn upload_chunks(
                 .filter(|id| !id.trim().is_empty())
                 .ok_or_else(|| "provider-api-upload-object-id-missing".into());
         }
-        if status != 308 && status != 202 {
-            return Err(format!("provider-api-http-status:{status}"));
-        }
+        validate_upload_progress_status(status)?;
         if let Some(range) = response.headers().get("Range").and_then(|v| v.to_str().ok()) {
             let end = range
                 .rsplit_once('-')
@@ -336,7 +346,7 @@ fn upload_chunks(
         } else {
             offset = end.saturating_add(1);
         }
-        read_response_body(&mut response)?;
+        drain_response_body(&mut response)?;
     }
     Err("provider-api-upload-completion-missing".into())
 }
@@ -495,5 +505,15 @@ mod tests {
         read_source_chunk_at(&mut source, 2, &mut buffer).unwrap();
 
         assert_eq!(&buffer, b"2345");
+    }
+
+    #[test]
+    fn resumable_upload_progress_accepts_google_308_and_onedrive_202() {
+        assert!(validate_upload_progress_status(308).is_ok());
+        assert!(validate_upload_progress_status(202).is_ok());
+        assert_eq!(
+            validate_upload_progress_status(307).unwrap_err(),
+            "provider-api-http-status:307"
+        );
     }
 }
