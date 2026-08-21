@@ -179,7 +179,11 @@ fn remove_retained_evidence_file(path: &Path) -> Result<(), String> {
 }
 
 #[cfg(not(coverage))]
-fn prune_receipt_evidence_history(directory: &Path, receipt_id: &str) -> Result<(), String> {
+fn prune_receipt_evidence_history(
+    directory: &Path,
+    receipt_id: &str,
+    protected_record_id: &str,
+) -> Result<(), String> {
     let prefix = format!("{receipt_id}-");
     let mut records = Vec::<(u64, String, PathBuf)>::new();
     for entry in std::fs::read_dir(directory)
@@ -212,7 +216,11 @@ fn prune_receipt_evidence_history(directory: &Path, receipt_id: &str) -> Result<
     }
     records.sort_by(|left, right| (left.0, left.1.as_str()).cmp(&(right.0, right.1.as_str())));
     let prune_count = records.len() - MAX_PROVIDER_EVIDENCE_RECORDS_PER_RECEIPT;
-    for (_, _, path) in records.into_iter().take(prune_count) {
+    for (_, _, path) in records
+        .into_iter()
+        .filter(|(_, record_id, _)| record_id.as_str() != protected_record_id)
+        .take(prune_count)
+    {
         remove_retained_evidence_file(&path)?;
     }
     #[cfg(unix)]
@@ -225,8 +233,9 @@ fn prune_receipt_evidence_history(directory: &Path, receipt_id: &str) -> Result<
 /// Persist the full provider claim before it is used to authorize source eviction.
 ///
 /// The file is create-only, read-only, fsynced, and named by the receipt, observation time, and
-/// integrity digest. Existing evidence is never overwritten. Repeated attestations retain the
-/// newest bounded per-receipt history so background reconciliation cannot grow storage forever.
+/// integrity digest. Existing evidence is never overwritten. Repeated attestations retain a
+/// bounded per-receipt history while preserving the just-written immutable record even if the
+/// local clock moves backwards.
 #[cfg(not(coverage))]
 pub fn write_immutable_sync_evidence(
     directory: &Path,
@@ -279,7 +288,11 @@ pub fn write_immutable_sync_evidence(
         return Err(error);
     }
     drop(file);
-    if let Err(_error) = prune_receipt_evidence_history(directory, &record.evidence.receipt_id) {
+    if let Err(_error) = prune_receipt_evidence_history(
+        directory,
+        &record.evidence.receipt_id,
+        &record.record_id,
+    ) {
         // Retention is maintenance, not part of the attestation's authority. Keep the
         // fsynced record so a transient directory/read/delete failure cannot discard valid proof;
         // the next reconciliation pass can retry bounded pruning.
