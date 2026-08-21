@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-21 (Asia/Seoul)
-**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` source through `4b8c0b2`; this
+**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` source through `22748f8`; this
 baseline records the current loop's runtime and integration evidence.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
@@ -354,3 +354,6 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   `git diff --check`, locked Cargo metadata, and TypeScript `tsc --noEmit` pass locally. The local
   Cargo registry source cache was removed only after confirming no Cargo/rustc process was active;
   hosted Rust, security, and review checks remain the authority for compilation and coverage.
+- Head `22748f8147613013966ddaa80928ae73681c60df` records `sensitive-config-file` in the dynamic
+  Goal's `blocked_source_classes`, keeping the replaceable Goal projection aligned with the Rust
+  planner and ADR rather than relying on a UI-only label.
