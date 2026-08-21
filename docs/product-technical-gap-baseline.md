@@ -653,3 +653,13 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   and retained SQLite `databaseInitError` code 11. The provider is therefore still not quiet or
   complete; DiskSage keeps copy, attestation, and eviction fail-closed. This separates the active
   provider-index backlog from the earlier low-space pressure incident.
+
+## 2026-08-21 bounded-planning and evidence-retention follow-up
+
+- Exact duplicate detection now runs before the candidate presentation limit, so a duplicate pair
+  split by `limit` still marks the visible candidate for human canonical selection and remains in
+  the path-free cluster summary. A focused Rust regression test covers this boundary.
+- Provider evidence retention protects the just-written record when its timestamp is older than
+  the existing history, preventing clock regression from deleting fresh proof. The retention
+  integration test covers the bounded 128-record history. Local implementation commit `c5aa3a1`
+  is not yet published because the repository ruleset currently rejects direct branch updates.

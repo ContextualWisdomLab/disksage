@@ -528,3 +528,14 @@ new-copy admission blocker (`icloud-file-provider-filename-excluded` or
 `icloud-file-provider-root-excluded`) in addition to any transfer or materialization blocker.
 The Finder preparation dialog therefore remains an incomplete provider operation, not a successful
 copy receipt, and copy, attestation, and eviction stay fail-closed until the provider is quiet.
+
+## Amendment: bounded planning and attestation-retention edge cases (2026-08-21)
+
+Exact-content duplicate clusters are now computed before the presentation `limit` is applied. A
+duplicate pair split across that limit therefore still marks the visible member for canonical
+selection and remains represented in the path-free cluster summary; the limit controls presentation,
+not safety evidence. The retention pass also protects the just-written immutable provider record
+when its clock is older than the existing bounded history, so clock regression cannot delete the
+attestation that was just persisted. Both boundaries remain fail-closed and are covered by focused
+Rust regression tests. The local implementation is `c5aa3a1`; its protected-branch publication is
+still pending the repository ruleset's normal PR workflow.
