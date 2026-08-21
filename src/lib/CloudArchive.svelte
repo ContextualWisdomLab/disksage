@@ -921,6 +921,7 @@
           {#if icloudHealth.file_provider_activity}
             · File Provider 무진행 fetch {icloudHealth.file_provider_activity.no_progress_fetch_count}개 / create {icloudHealth.file_provider_activity.no_progress_create_count}개 ·
             materialization 실패 {icloudHealth.file_provider_activity.materialization_failure_count}개 / staged item 없음 {icloudHealth.file_provider_activity.staged_item_missing_count}개 ·
+            sync 제외(파일명) {icloudHealth.file_provider_activity.sync_excluded_filename_count}개 / 루트 {icloudHealth.file_provider_activity.sync_excluded_root_count}개 ·
             활성 upload {icloudHealth.file_provider_activity.active_upload_count}개 / download {icloudHealth.file_provider_activity.active_download_count}개
           {/if}
         </span>
@@ -946,6 +947,8 @@
             || icloudHealth.file_provider_activity.no_progress_create_count > 0
             || icloudHealth.file_provider_activity.materialization_failure_count > 0
             || icloudHealth.file_provider_activity.staged_item_missing_count > 0
+            || icloudHealth.file_provider_activity.sync_excluded_filename_count > 0
+            || icloudHealth.file_provider_activity.sync_excluded_root_count > 0
             || icloudHealth.file_provider_activity.timed_out
             || icloudHealth.file_provider_activity.active_upload_count > 0
             || icloudHealth.file_provider_activity.active_download_count > 0
@@ -965,6 +968,12 @@
             <p class="warning">
               File Provider가 파일 materialization에 실패했거나 staged item을 잃었습니다. 현재 복사는 완료로 간주하지 않으며,
               새 복사·attestation·원본 정리는 상태가 정상화될 때까지 차단합니다.
+            </p>
+          {/if}
+          {#if icloudHealth.file_provider_activity && (icloudHealth.file_provider_activity.sync_excluded_filename_count > 0 || icloudHealth.file_provider_activity.sync_excluded_root_count > 0)}
+            <p class="warning">
+              iCloud가 파일명 또는 동기화 루트 제약으로 항목을 제외했습니다. 이 상태의 Finder 복사는 완료로 간주하지 않으며,
+              제외 항목을 해소하고 새 provider 증거가 clear가 될 때까지 새 복사·attestation·원본 정리를 차단합니다.
             </p>
           {/if}
           {#if icloudHealth.file_provider_activity?.timed_out}
