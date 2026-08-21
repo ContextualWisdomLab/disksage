@@ -638,3 +638,12 @@ provider-stall evidence, not a per-item receipt and not proof that the visible F
 completed. DiskSage performed no Finder cancellation, daemon restart, CloudDocs/provider-database
 write, cloud mutation, materialization, or source mutation. New copy, attestation, and eviction
 therefore remain fail-closed; the existing bounded Finder-cancel action remains operator initiated.
+
+## Amendment: current protected PR inventory is evidence-bound (2026-08-22 04:23 +0900)
+
+The product baseline records the exact protected PR queue at DiskSage head `dac324d` (PR #247).
+That inventory is operational evidence only: each row binds its own head SHA, and a later push
+invalidates predecessor checks and approvals. A clean mergeable flag, bot comment, or queued review
+never authorizes a cloud copy, provider attestation, source eviction, or protected merge. The
+review loop remains exact-head review → repair → checks → qualifying approval → normal protected
+merge; no provider, Finder, cloud, or user-file mutation was performed for this amendment.
