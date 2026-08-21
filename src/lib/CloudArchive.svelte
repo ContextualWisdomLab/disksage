@@ -829,13 +829,25 @@
     hasObservation: boolean,
     blocked: boolean,
     blockedSinceMs: number,
+    observedAtMs: number,
     error = false,
   ): "clear" | "checking" | "provider-sync-incomplete" | "materialization-stalled" {
     if (!hasObservation && !error) return "checking";
     if (!blocked && !error) return "clear";
-    return blockedSinceMs > 0 && Date.now() - blockedSinceMs >= PROVIDER_STALL_WARNING_MS
+    return observedAtMs > 0
+      && blockedSinceMs > 0
+      && observedAtMs - blockedSinceMs >= PROVIDER_STALL_WARNING_MS
       ? "materialization-stalled"
       : "provider-sync-incomplete";
+  }
+
+  function blockedDuration(
+    blockedSinceMs: number,
+    observedAtMs: number,
+  ): string | undefined {
+    return blockedSinceMs > 0 && observedAtMs > 0
+      ? duration(Math.max(0, observedAtMs - blockedSinceMs))
+      : undefined;
   }
 
   function icloudStatusDetails(): string {
@@ -951,11 +963,12 @@
           Boolean(icloudHealth),
           (icloudHealth?.new_copy_admission_blockers.length ?? 0) > 0,
           icloudHealthBlockedSinceMs,
+          icloudHealth?.observed_at_ms ?? 0,
           Boolean(icloudHealthError),
         )}
         details={icloudStatusDetails()}
         observedAt={icloudHealth ? evidenceObservedAt(icloudHealth.observed_at_ms) : undefined}
-        blockedFor={icloudHealthBlockedSinceMs > 0 ? duration(Math.max(0, Date.now() - icloudHealthBlockedSinceMs)) : undefined}
+        blockedFor={blockedDuration(icloudHealthBlockedSinceMs, icloudHealth?.observed_at_ms ?? 0)}
         canCancel={Boolean(icloudHealth?.file_provider_activity && (
           icloudHealth.file_provider_activity.no_progress_fetch_count > 0
           || icloudHealth.file_provider_activity.no_progress_create_count > 0
@@ -1101,10 +1114,11 @@
           true,
           providerGlobalSync.blockers.length > 0,
           providerGlobalSyncBlockedSinceMs,
+          providerGlobalSyncObservedAtMs,
         )}
         details={providerGlobalStatusDetails()}
         observedAt={evidenceObservedAt(providerGlobalSyncObservedAtMs)}
-        blockedFor={providerGlobalSyncBlockedSinceMs > 0 ? duration(Math.max(0, Date.now() - providerGlobalSyncBlockedSinceMs)) : undefined}
+        blockedFor={blockedDuration(providerGlobalSyncBlockedSinceMs, providerGlobalSyncObservedAtMs)}
         canCancel={canCancelFinderCopyForProviderGlobalSync(providerGlobalSync)}
         cancelLabel={cancellingFinderCopy ? "Finder 복사 취소 요청 중…" : "Finder 복사 취소 요청"}
         onCancel={cancelFinderCopy}

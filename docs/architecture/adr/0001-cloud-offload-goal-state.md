@@ -546,3 +546,11 @@ reconciliation backlog, active upload/download markers, one no-progress fetch, a
 exclusions `18/2`. CloudArchive displays these aggregate blockers and the elapsed provider-stall
 state; it does not expose raw provider paths or grant mutation authority. The bounded observation
 completed without provider or source mutation.
+
+## Amendment: provider stall duration uses receipt time (2026-08-21)
+
+The running status card now derives both its stall threshold and displayed duration from the
+provider observation timestamp, matching the detail panel and avoiding wall-clock drift during the
+five-minute blocked-probe backoff. A missing observation remains `checking` or
+`provider-sync-incomplete`; no UI clock can promote a provider to copy, attestation, or eviction
+authority.

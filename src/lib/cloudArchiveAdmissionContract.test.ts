@@ -60,6 +60,9 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("finderCopyCancelStatus = \"Finder 복사 취소 요청을 보냈습니다. 상태를 다시 확인하십시오.\"");
     expect(source).toContain('import ProviderStatusCard from "./ux/ProviderStatusCard.svelte";');
     expect(source).toContain('state={providerStatusState(');
+    expect(source).toContain("observedAtMs: number");
+    expect(source).toContain("blockedDuration(icloudHealthBlockedSinceMs, icloudHealth?.observed_at_ms ?? 0)");
+    expect(source).toContain("blockedDuration(providerGlobalSyncBlockedSinceMs, providerGlobalSyncObservedAtMs)");
     expect(source).toContain('"materialization-stalled"');
     expect(source).toContain('statusId="icloud-provider-status"');
   });
