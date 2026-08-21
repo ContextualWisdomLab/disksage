@@ -350,6 +350,22 @@ before any copy, attestation, or source eviction. This action is implemented at 
 `df097743eb75b9cc919d631db0ebdeffad8b7995`, with a regression test that preserves the newline
 separator between Finder activation and the System Events Escape command.
 
+## Amendment: ontology-bound orphan cache cleanup (2026-08-21)
+
+DiskSage now exposes a bounded macOS orphan planner as an operator action. It compares installed
+application bundle identifiers with directory names under the user's `Library/Caches` and
+`Library/Application Support`, and records only metadata, deterministic fingerprints, and
+path-free ontology relations. It never reads file contents, follows symlinks, or treats an LLM
+label as authority. `Application Support`, incomplete manifests, incomplete installed-app
+inventories, and active-use evidence remain review-only.
+
+Only a fully scanned, unused cache candidate can be selected for the separate `trash-orphan-cache`
+action. The backend re-plans immediately before mutation, requires the exact plan fingerprint and
+approval phrase plus an audit rationale, revalidates candidate metadata, and moves it through the
+existing reversible OS Trash boundary. Cloud providers, File Provider state, source files, and
+Trash contents are never mutated by the planner. A stale plan or missing active-use evidence fails
+closed.
+
 ## Amendment: provider-runtime recovery evidence (2026-08-21)
 
 OneDrive and Google Drive client recovery now requires an explicit runtime observation before

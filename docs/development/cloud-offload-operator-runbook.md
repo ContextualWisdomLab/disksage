@@ -115,6 +115,15 @@ The runtime sequence is:
     `Date` is preferred when the inner scan is complete; a bounded or malformed inner scan creates
     a metadata warning and keeps the candidate blocked.
 
+11. To investigate macOS application residue, use `관계 기반 고아 정리` to create a bounded,
+    metadata-only plan. The plan compares installed bundle IDs with `Library/Caches` and
+    `Library/Application Support`; it exposes no local paths. Treat `Application Support`,
+    incomplete scans, skipped entries, or active-use evidence as review-only. Only candidates
+    explicitly marked `완전 스캔·미사용 캐시` may be selected. The exact approval phrase and a
+    non-empty rationale are required; execution re-plans and moves only unchanged cache candidates
+    to OS Trash. This does not touch cloud providers or empty Trash. If the plan is incomplete,
+    investigate provider/File Provider activity first and rerun after the provider is quiet.
+
 The Goal and ADR files are replaceable projections. Agents or operators must compare them with the
 immutable receipt/evidence record before any mutation. Naruon receives lineage/provider evidence,
 not a second independent deletion authority.

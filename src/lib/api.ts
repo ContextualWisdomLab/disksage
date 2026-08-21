@@ -55,6 +55,72 @@ export interface CleanResult {
   ok: boolean;
   error: string;
 }
+
+export interface OrphanRelationEvidence {
+  subject: string;
+  predicate: string;
+  object: string;
+  source: string;
+}
+export interface OrphanCandidate {
+  candidate_id: string;
+  kind: string;
+  bundle_id: string | null;
+  bytes: number;
+  files: number;
+  skipped: number;
+  scan_complete: boolean;
+  object_id: string;
+  metadata_fingerprint: string;
+  ontology_class: string;
+  confidence: string;
+  active_use_evidence_complete: boolean;
+  active_use: boolean;
+  relations: OrphanRelationEvidence[];
+  review_reasons: string[];
+  auto_trash_eligible: boolean;
+}
+export interface OrphanPlan {
+  schema_kind: "disksage.orphan-plan/v1";
+  schema_version: number;
+  generated_at_ms: number;
+  root_fingerprint: string;
+  plan_fingerprint: string;
+  candidate_count: number;
+  candidate_bytes: number;
+  scan_complete: boolean;
+  candidates: OrphanCandidate[];
+  notices: string[];
+  local_paths_included: false;
+  mutation_performed: false;
+  exact_approval_phrase: string;
+}
+export interface OrphanCleanupRequest {
+  candidate_id: string;
+  metadata_fingerprint: string;
+  bytes: number;
+  files: number;
+  skipped: number;
+  scan_complete: boolean;
+  object_id: string;
+}
+export interface OrphanCleanupItemResult {
+  candidate_id: string;
+  bytes: number;
+  attempted: boolean;
+  moved_to_trash: boolean;
+  error: string | null;
+}
+export interface OrphanCleanupResult {
+  schema_kind: "disksage.orphan-cleanup-result/v1";
+  schema_version: number;
+  plan_fingerprint: string;
+  requested_count: number;
+  moved_count: number;
+  filesystem_mutation_executed: boolean;
+  items: OrphanCleanupItemResult[];
+  notices: string[];
+}
 export interface JournalEntry {
   ts_ms: number;
   op: string;
@@ -86,6 +152,18 @@ export const recentOperations = (limit = 20) =>
   invoke<JournalEntry[]>("recent_operations", { limit });
 export const findDuplicateFiles = (root: string) =>
   invoke<DupeGroup[]>("find_duplicate_files", { root });
+export const planOrphanCleanup = () => invoke<OrphanPlan>("plan_orphan_cleanup");
+export const cleanOrphanCandidates = (
+  planFingerprint: string,
+  requests: OrphanCleanupRequest[],
+  confirmationPhrase: string,
+  rationale: string,
+) => invoke<OrphanCleanupResult>("clean_orphan_candidates", {
+  planFingerprint,
+  requests,
+  confirmationPhrase,
+  rationale,
+});
 
 export interface PodmanReclaimPlan {
   schema_kind: "disksage.podman-reclaim-plan";

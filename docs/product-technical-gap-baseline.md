@@ -541,3 +541,15 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   DiskSage and Clearfolio reusable-workflow callers, keeps the workflow token read-only, and
   updates the contract tests. Checks are still pending; hourly operation is not claimed until a
   normal protected merge and one successful scheduled receipt are observed.
+## 2026-08-21 ontology-bound orphan cleanup follow-up
+
+- The macOS UI now provides `관계 기반 고아 정리`. A bounded Rust planner compares installed
+  application bundle IDs with cache and Application Support directory metadata, emits path-free
+  ontology relations and deterministic fingerprints, and uses active-use evidence before any
+  candidate can be considered. File contents are not opened and symlinks are not followed.
+- Application Support, incomplete inventories/manifests, skipped entries, and active-use or
+  truncated evidence are review-only. Only a complete unused cache may pass the separate exact
+  phrase/rationale approval and re-plan boundary; mutation uses the existing reversible OS Trash
+  journal. The LLM can annotate but cannot authorize cleanup, and no cloud/provider state is
+  changed. `inspect-orphan-lineage` and `trash-orphan-cache` are now explicit dynamic Goal
+  operator actions.
