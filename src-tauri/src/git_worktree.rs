@@ -1090,6 +1090,8 @@ fn list_worktrees(
     Ok(entries)
 }
 
+const GIT_WORKTREE_LIST_TIMEOUT: &str = "git-worktree-list-timeout";
+
 #[cfg(unix)]
 fn open_admin_fallback_file(path: &Path) -> std::io::Result<fs::File> {
     let parent = path
@@ -1348,7 +1350,10 @@ pub fn audit_git_worktrees(
     )?;
     let (raw_worktrees, fallback_issues) = match list_worktrees(&repository_root, options) {
         Ok(raw_worktrees) => (raw_worktrees, Vec::new()),
-        Err(error) if error == "git-worktree-list-timeout" => {
+        // `run_git` appends `-timeout` to the operation reason. Only that typed-by-contract
+        // condition permits the read-only admin fallback; malformed output and spawn failures
+        // remain hard errors.
+        Err(error) if error == GIT_WORKTREE_LIST_TIMEOUT => {
             admin_fallback_worktrees(&common_dir, options)
         }
         Err(error) => return Err(error),
