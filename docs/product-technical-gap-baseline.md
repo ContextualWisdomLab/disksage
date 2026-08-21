@@ -1,13 +1,9 @@
 # DiskSage product and technical gap baseline
 
-**Snapshot:** 2026-08-21 (Asia/Seoul)
-**Repository heads at snapshot:** DiskSage PR #213 remains at protected remote head
-`108bba0e4737b09b1c09f6c3b5a86a43be22223e`; PR #246 functional UX changes are at
-`bda817d9d395ee97bfe6e5ca7bff158d4e28ec10` (later tip commits are documentation-only), with
-required checks queued and no qualifying approval. Provider evidence changes are published as
-follow-up PR #247 at `347f699fa14fcbf7c94a7586b26e2ce00ec28359`; Naruon follow-up PR #1448 is at
-`0b1b1773130acdf472ed168b5d6a26e6ec11e1cb`. This baseline records the current loop's runtime and
-integration evidence.
+**Snapshot:** 2026-08-22 (Asia/Seoul)
+**Repository heads at snapshot:** PR #213 `2b9833c`, PR #247 `67873b2`, PR #246 `741ab30`,
+supporting PR #156 `39a08a7`, and PR #192 `30ceea2`; hosted checks and protected review remain
+authoritative, and no merge is claimed from queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
 
@@ -750,3 +746,22 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - The Naruon readiness verifier's source comment is now valid both as a standalone binary and when
   included by the integration test that locks its `--help`/absolute-path parser boundary. This
   repairs the exact-head Rust test failure without changing readiness, copy, or eviction authority.
+
+## 2026-08-22 current Finder/iCloud stall and exact-head repair evidence
+
+- The user-visible Finder operation still reports `real_datasets` as “복사 준비 중” after hours.
+  A bounded, read-only iCloud File Provider observation at about `02:08 +0900` found an active
+  upload of `4,170,552,115 / 5,462,125,152` bytes (76.35%), 28,694 pending indexable items,
+  `scheduling=running`, active materialization, and sync-exclusion notices for filenames and roots.
+  The dump exceeded its wall-clock bound and was truncated; these are incomplete provider-global
+  markers, not a per-item upload receipt. No retained marker binds an exclusion to `real_datasets`.
+- The data volume measured about 926 GiB total, 873 GiB used, 12 GiB available (99%). Finder,
+  `fileproviderd`, and `bird` remained alive. DiskSage did not kill a process, touch a CloudDocs
+  database, materialize a placeholder, cancel Finder, or mutate a source/cloud object. Its own
+  admission remains `provider-sync-incomplete`; only the existing operator-visible Finder Escape
+  action may request cancellation, followed by a fresh complete and quiet observation.
+- The exact-head fix `a6ec6e2` starts the bounded `lsof` active-use probe in a private process group
+  and kills that group before joining output readers on timeout. This closes the shell-descendant
+  pipe leak that could starve the independent `ps` probe and report a false active-use timeout.
+  The focused Rust test passed 3/3. The same patch is present on stacked PR heads `67873b2` (#247)
+  and `741ab30` (#246); hosted checks are rerunning and protected merge/review is still pending.

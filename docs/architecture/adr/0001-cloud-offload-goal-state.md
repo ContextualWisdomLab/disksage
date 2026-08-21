@@ -621,3 +621,14 @@ download, indexing, or materialization fingerprint starts a new observation inte
 a healthy progressing transfer from being mislabeled as a 15-minute Finder stall merely because the
 backend's blocker-set duration spans the whole sync run. The behavior is diagnostic/cancel-only and
 does not grant copy, attestation, or eviction authority.
+
+## Amendment: bound active-use probes without touching provider state (2026-08-22)
+
+The exact-head macOS fix `a6ec6e2` starts the bounded `lsof` active-use probe in its own Unix
+process group. On timeout, the group is killed before bounded stdout/stderr readers are joined,
+so a shell wrapper or descendant cannot keep a pipe open and starve the independent `ps` probe.
+Only the command group created for the diagnostic is terminated; Finder, `bird`, `fileproviderd`,
+File Provider databases, cloud objects, and user files remain outside the mutation boundary. The
+focused Rust regression test passed 3/3. A timeout remains incomplete active-use evidence and
+keeps cache cleanup and cloud eviction fail-closed; this process-group cleanup is not a provider
+recovery or copy-cancellation operation.
