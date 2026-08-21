@@ -21,8 +21,9 @@ The existing cloud and eviction authority must not be moved into the browser lay
    44px control minimums.
 3. Add `ProviderStatusCard` as a pure state renderer and maintain one Storybook story per clear,
    incomplete, stalled, checking, action, narrow-layout, and feedback edge state.
-4. Run Storybook's accessibility addon in error mode. Interaction stories must prove the cancel
-   callback and the disabled checking state; they do not call providers or mutate user files.
+4. Run Storybook's accessibility addon in error mode against the built static output. The
+   Chromium test runner must prove the cancel callback, disabled checking state, and 375px mobile
+   viewport; stories do not call providers or mutate user files.
 5. Keep Figma optional for this change because no approved Figma file exists. When a visual handoff
    is supplied, record its File ID in a superseding ADR and reconcile tokens before implementation.
 
