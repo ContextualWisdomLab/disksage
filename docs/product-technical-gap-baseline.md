@@ -686,3 +686,10 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   and retained SQLite `databaseInitError` code 11. The provider is therefore still not quiet or
   complete; DiskSage keeps copy, attestation, and eviction fail-closed. This separates the active
   provider-index backlog from the earlier low-space pressure incident.
+
+## 2026-08-21 third-party provider probe backoff
+
+- CloudArchive now retries clear OneDrive/Google Drive observations on the one-minute loop but backs
+  off blocked or failed global-sync probes for five minutes. Explicit Finder-copy cancellation and
+  provider-client recovery force a fresh read; no provider data, cloud object, or source file is
+  mutated by this UI-only scheduling change.

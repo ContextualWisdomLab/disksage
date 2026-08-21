@@ -22,6 +22,7 @@
   // fileproviderctl can spend tens of seconds inside the system provider database while iCloud is
   // already unhealthy. Back off automatic probes so DiskSage does not add another hot reader.
   const ICLOUD_HEALTH_BLOCKED_RETRY_INTERVAL_MS = 5 * 60_000;
+  const PROVIDER_GLOBAL_SYNC_BLOCKED_RETRY_INTERVAL_MS = 5 * 60_000;
   const PROVIDER_STALL_WARNING_MS = 15 * 60_000;
   const PROVIDER_ADMISSION_BLOCKERS = new Set([
     "icloud-new-copy-admission-blocked",
@@ -109,6 +110,7 @@
   let providerGlobalSyncObservedAtMs = $state(0);
   let providerGlobalSyncBlockedSinceMs = $state(0);
   let providerGlobalSyncFingerprint = $state("");
+  let providerGlobalSyncNextCheckAt = 0;
   let checkingProviderGlobalSync = $state(false);
   let recoveringProvider = $state(false);
   let providerRecovery: api.ProviderRecoveryOutput | null = $state(null);
@@ -541,7 +543,7 @@
       await api.cancelFinderCopy();
       finderCopyCancelStatus = "Finder 복사 취소 요청을 보냈습니다. 상태를 다시 확인하십시오.";
       if (isIcloud) await refreshIcloudHealth(true);
-      else await refreshProviderGlobalSync();
+      else await refreshProviderGlobalSync(true);
     } catch (e) {
       const message = boundedCloudArchiveErrorMessage("finder-copy-cancel", e);
       if (isIcloud) icloudHealthError = message;
@@ -551,7 +553,7 @@
     }
   }
 
-  async function refreshProviderGlobalSync() {
+  async function refreshProviderGlobalSync(force = false) {
     const root = selectedRootDetails();
     if (!root || root.provider === "icloud") {
       providerGlobalSync = null;
@@ -559,8 +561,10 @@
       providerGlobalSyncObservedAtMs = 0;
       providerGlobalSyncBlockedSinceMs = 0;
       providerGlobalSyncFingerprint = "";
+      providerGlobalSyncNextCheckAt = 0;
       return;
     }
+    if (checkingProviderGlobalSync || (!force && Date.now() < providerGlobalSyncNextCheckAt)) return;
     checkingProviderGlobalSync = true;
     providerGlobalSyncError = "";
     try {
@@ -583,6 +587,10 @@
       }
       providerGlobalSync = next;
       providerGlobalSyncObservedAtMs = observedAtMs;
+      providerGlobalSyncNextCheckAt = observedAtMs
+        + (next.blockers.length === 0
+          ? RECONCILIATION_INTERVAL_MS
+          : PROVIDER_GLOBAL_SYNC_BLOCKED_RETRY_INTERVAL_MS);
     } catch (e) {
       const observedAtMs = Date.now();
       providerGlobalSync = null;
@@ -592,6 +600,7 @@
         providerGlobalSyncFingerprint = "error";
       }
       providerGlobalSyncObservedAtMs = observedAtMs;
+      providerGlobalSyncNextCheckAt = observedAtMs + PROVIDER_GLOBAL_SYNC_BLOCKED_RETRY_INTERVAL_MS;
     } finally {
       checkingProviderGlobalSync = false;
     }
@@ -605,7 +614,7 @@
     providerGlobalSyncError = "";
     try {
       providerRecovery = await api.recoverCloudProviderClient(root.path);
-      await refreshProviderGlobalSync();
+      await refreshProviderGlobalSync(true);
     } catch (e) {
       providerGlobalSyncError = boundedCloudArchiveErrorMessage("provider-recovery", e);
     } finally {
@@ -619,6 +628,7 @@
     providerGlobalSyncObservedAtMs = 0;
     providerGlobalSyncBlockedSinceMs = 0;
     providerGlobalSyncFingerprint = "";
+    providerGlobalSyncNextCheckAt = 0;
     void refreshIcloudHealth();
     void refreshProviderGlobalSync();
   }

@@ -30,8 +30,12 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("const admissionClear = next.new_copy_admission_state === \"clear\"");
     expect(source).toContain("동일한 iCloud 차단 상태가 15분 이상 지속되었습니다.");
     expect(source).toContain("refreshIcloudHealth(true)");
+    expect(source).toContain("refreshProviderGlobalSync(true)");
     expect(source).toContain("const observedAtMs = Date.now();");
     expect(source).toContain("providerGlobalSyncBlockedSinceMs");
+    expect(source).toContain("PROVIDER_GLOBAL_SYNC_BLOCKED_RETRY_INTERVAL_MS");
+    expect(source).toContain("providerGlobalSyncNextCheckAt");
+    expect(source).toContain("checkingProviderGlobalSync || (!force && Date.now() < providerGlobalSyncNextCheckAt)");
     expect(source).toContain("next.pending_indexable_count !== null && next.pending_indexable_count > 0");
     expect(source).toContain("provider-global-sync-item-not-found");
     expect(source).toContain("동일 차단 지속");
