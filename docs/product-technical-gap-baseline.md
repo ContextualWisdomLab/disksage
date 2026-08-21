@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-21 (Asia/Seoul)
-**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` source through `22748f8`; this
+**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` source through `a15be74`; this
 baseline records the current loop's runtime and integration evidence.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
@@ -357,3 +357,6 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - Head `22748f8147613013966ddaa80928ae73681c60df` records `sensitive-config-file` in the dynamic
   Goal's `blocked_source_classes`, keeping the replaceable Goal projection aligned with the Rust
   planner and ADR rather than relying on a UI-only label.
+- Head `a15be7425aba9e80a48bb7eba8a669bd505a23d7` adds explicit wire-name and Naruon ontology
+  coverage for `sensitive-config`, preventing the new blocked class from becoming an untested
+  serialization branch.
