@@ -1,9 +1,10 @@
 //! Bounded, ontology-backed macOS orphan planning.
 //!
-//! The planner inspects only directory metadata and installed bundle identifiers. Public
-//! evidence is path-free; the absolute path is retained only in the in-process plan so the
-//! explicit Trash operation can revalidate the exact candidate. An advisory model can label a
-//! candidate, but deterministic eligibility and the human approval phrase remain authoritative.
+//! The planner inspects only bounded installed-app metadata plus directory/file metadata for
+//! candidate Library trees. Public evidence is path-free; the absolute path is retained only in
+//! the in-process plan so the explicit Trash operation can revalidate the exact candidate. An
+//! advisory model can label a candidate, but deterministic eligibility and the human approval
+//! phrase remain authoritative.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -58,7 +59,10 @@ pub struct OrphanPlan {
     pub schema_kind: String,
     pub schema_version: u32,
     pub generated_at_ms: u64,
-    pub root_fingerprint: String,
+    /// Execution-only scope binding. A digest of a low-entropy HOME path is still identifying
+    /// metadata and therefore must not cross the IPC/shareable-evidence boundary.
+    #[serde(skip)]
+    root_fingerprint: String,
     pub plan_fingerprint: String,
     pub candidate_count: usize,
     pub candidate_bytes: u64,
@@ -115,6 +119,17 @@ struct Manifest {
 }
 
 #[cfg(target_os = "macos")]
+fn planner_home_scope_is_safe(canonical_home: &Path) -> bool {
+    if canonical_home.parent().is_none() {
+        return false;
+    }
+    let library = canonical_home.join("Library");
+    let cache_root = library.join("Caches");
+    let support_root = library.join("Application Support");
+    !crate::safety::is_protected(&cache_root) && !crate::safety::is_protected(&support_root)
+}
+
+#[cfg(target_os = "macos")]
 /// Build a path-free orphan plan for the current user's Library.
 pub fn plan(home: &Path, now_ms: u64) -> Result<OrphanPlan, String> {
     if !home.is_absolute()
@@ -124,12 +139,17 @@ pub fn plan(home: &Path, now_ms: u64) -> Result<OrphanPlan, String> {
     {
         return Err("orphan-home-path-invalid".into());
     }
-    let canonical_home =
-        std::fs::canonicalize(home).map_err(|_| "orphan-home-unavailable".to_string())?;
-    if !canonical_home.is_dir() || crate::safety::is_protected(&canonical_home) {
+    let supplied_home =
+        std::fs::symlink_metadata(home).map_err(|_| "orphan-home-unavailable".to_string())?;
+    if supplied_home.file_type().is_symlink() || !supplied_home.is_dir() {
         return Err("orphan-home-unsafe".into());
     }
+    let canonical_home =
+        std::fs::canonicalize(home).map_err(|_| "orphan-home-unavailable".to_string())?;
     let library = canonical_home.join("Library");
+    if !canonical_home.is_dir() || !library.is_dir() || !planner_home_scope_is_safe(&canonical_home) {
+        return Err("orphan-home-unsafe".into());
+    }
     let watched = [
         (library.join("Caches"), "cache"),
         (library.join("Application Support"), "application-support"),
@@ -222,12 +242,12 @@ pub fn move_to_trash(
                     error: None,
                 }
             }
-            Err(error) => OrphanCleanupItemResult {
+            Err(_) => OrphanCleanupItemResult {
                 candidate_id: candidate.candidate_id.clone(),
                 bytes: candidate.bytes,
                 attempted: true,
                 moved_to_trash: false,
-                error: Some(error.to_string()),
+                error: Some("orphan-trash-operation-failed".into()),
             },
         };
         items.push(result);
@@ -262,7 +282,7 @@ pub fn plan_for_roots(
     let mut candidates = Vec::new();
     let mut scan_complete = installed_complete;
     let mut notices = vec![
-        "metadata-only: file contents are never read".into(),
+        "metadata-only: Library candidate file contents are never read; installed app Info.plist metadata is bounded".into(),
         "application-support-is-review-only".into(),
         "containers-mobile-documents-mail-preferences-and-keychains-are-excluded".into(),
         "public-evidence-contains-no-local-paths".into(),
@@ -282,7 +302,16 @@ pub fn plan_for_roots(
                 continue;
             }
         };
-        let mut entries = entries.flatten().collect::<Vec<_>>();
+        let mut entries = Vec::new();
+        for entry in entries {
+            match entry {
+                Ok(entry) => entries.push(entry),
+                Err(_) => {
+                    scan_complete = false;
+                    notices.push("orphan-root-entry-read-failed".into());
+                }
+            }
+        }
         entries.sort_by_key(|entry| entry.file_name());
         for entry in entries {
             if std::time::Instant::now() >= deadline || candidates.len() >= MAX_CANDIDATES {
@@ -478,6 +507,7 @@ fn collect_manifest(
     for entry in entries {
         if std::time::Instant::now() >= deadline || manifest.records.len() >= MAX_MANIFEST_RECORDS {
             manifest.complete = false;
+            manifest.skipped = manifest.skipped.saturating_add(1);
             return;
         }
         let path = entry.path();
@@ -661,6 +691,24 @@ fn plan_fingerprint(candidates: &[OrphanCandidate], root_fingerprint: &str) -> S
 mod tests {
     use super::*;
 
+    fn authoritative_plan(candidate: OrphanCandidate) -> OrphanPlan {
+        OrphanPlan {
+            schema_kind: ORPHAN_SCHEMA_KIND.into(),
+            schema_version: ORPHAN_SCHEMA_VERSION,
+            generated_at_ms: 1,
+            root_fingerprint: "a".repeat(64),
+            plan_fingerprint: "b".repeat(64),
+            candidate_count: 1,
+            candidate_bytes: candidate.bytes,
+            scan_complete: true,
+            candidates: vec![candidate],
+            notices: Vec::new(),
+            local_paths_included: false,
+            mutation_performed: false,
+            exact_approval_phrase: "phrase".into(),
+        }
+    }
+
     #[test]
     fn digest_is_domain_separated_and_fixed_width() {
         let digest = digest_values(&["cache", "com.example.old", "manifest"]);
@@ -721,21 +769,7 @@ mod tests {
             auto_trash_eligible: true,
             path: PathBuf::from("/private/nonexistent/disksage-orphan-candidate"),
         };
-        let plan = OrphanPlan {
-            schema_kind: ORPHAN_SCHEMA_KIND.into(),
-            schema_version: ORPHAN_SCHEMA_VERSION,
-            generated_at_ms: 1,
-            root_fingerprint: "a".repeat(64),
-            plan_fingerprint: "b".repeat(64),
-            candidate_count: 1,
-            candidate_bytes: 1,
-            scan_complete: true,
-            candidates: vec![candidate],
-            notices: Vec::new(),
-            local_paths_included: false,
-            mutation_performed: false,
-            exact_approval_phrase: "phrase".into(),
-        };
+        let plan = authoritative_plan(candidate);
         let request = OrphanCleanupRequest {
             candidate_id: "candidate".into(),
             metadata_fingerprint: "metadata".into(),
@@ -758,6 +792,87 @@ mod tests {
         let serialized = serde_json::to_string(&plan.candidates[0]).unwrap();
         assert!(!serialized.contains("/private/nonexistent"));
         assert!(serialized.contains("actual-object"));
+    }
+
+    #[test]
+    fn move_to_trash_redacts_native_failure_detail() {
+        let candidate = OrphanCandidate {
+            candidate_id: "candidate".into(),
+            kind: "cache".into(),
+            bundle_id: Some("com.example.old".into()),
+            bytes: 1,
+            files: 1,
+            skipped: 0,
+            scan_complete: true,
+            object_id: "missing-object".into(),
+            metadata_fingerprint: "metadata".into(),
+            ontology_class: format!("{ONTOLOGY_NAMESPACE}RegenerableCache"),
+            confidence: "high".into(),
+            active_use_evidence_complete: true,
+            active_use: false,
+            relations: Vec::new(),
+            review_reasons: Vec::new(),
+            auto_trash_eligible: true,
+            path: PathBuf::from("/private/nonexistent/disksage-orphan-candidate"),
+        };
+        let plan = authoritative_plan(candidate);
+        let request = OrphanCleanupRequest {
+            candidate_id: "candidate".into(),
+            metadata_fingerprint: "metadata".into(),
+            bytes: 1,
+            files: 1,
+            skipped: 0,
+            scan_complete: true,
+            object_id: "missing-object".into(),
+        };
+        let result = move_to_trash(
+            &plan,
+            &[request],
+            "phrase",
+            "operator review",
+            Path::new("/private/nonexistent/journal"),
+            2,
+        )
+        .unwrap();
+        assert_eq!(result.moved_count, 0);
+        assert_eq!(
+            result.items[0].error.as_deref(),
+            Some("orphan-trash-operation-failed")
+        );
+        let serialized = serde_json::to_string(&result).unwrap();
+        assert!(!serialized.contains("/private/nonexistent"));
+    }
+
+    #[test]
+    fn serialized_plan_does_not_expose_home_fingerprint() {
+        let plan = OrphanPlan {
+            schema_kind: ORPHAN_SCHEMA_KIND.into(),
+            schema_version: ORPHAN_SCHEMA_VERSION,
+            generated_at_ms: 1,
+            root_fingerprint: "home-derived-secret".into(),
+            plan_fingerprint: "b".repeat(64),
+            candidate_count: 0,
+            candidate_bytes: 0,
+            scan_complete: true,
+            candidates: Vec::new(),
+            notices: Vec::new(),
+            local_paths_included: false,
+            mutation_performed: false,
+            exact_approval_phrase: "phrase".into(),
+        };
+        let serialized = serde_json::to_string(&plan).unwrap();
+        assert!(!serialized.contains("root_fingerprint"));
+        assert!(!serialized.contains("home-derived-secret"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn planner_home_scope_allows_user_home_but_blocks_system_roots() {
+        assert!(planner_home_scope_is_safe(Path::new("/Users/example")));
+        assert!(!planner_home_scope_is_safe(Path::new("/")));
+        assert!(!planner_home_scope_is_safe(Path::new("/System")));
+        assert!(!planner_home_scope_is_safe(Path::new("/Library")));
+        assert!(!planner_home_scope_is_safe(Path::new("/Applications")));
     }
 
     #[cfg(target_os = "macos")]
@@ -817,6 +932,9 @@ mod tests {
         .unwrap();
         assert_eq!(plan.generated_at_ms, 42);
         assert!(!plan.local_paths_included);
+        let serialized_plan = serde_json::to_string(&plan).unwrap();
+        assert!(!serialized_plan.contains(&tmp.path().to_string_lossy().to_string()));
+        assert!(!serialized_plan.contains("root_fingerprint"));
         assert!(plan.candidates.iter().all(|candidate| candidate
             .relations
             .iter()
