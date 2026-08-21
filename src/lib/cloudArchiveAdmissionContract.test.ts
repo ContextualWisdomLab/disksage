@@ -51,6 +51,17 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("finderCopyCancelStatus = \"Finder 복사 취소 요청을 보냈습니다. 상태를 다시 확인하십시오.\"");
   });
 
+  it("does not run the heavy iCloud probe for non-iCloud selected roots", () => {
+    const source = readFileSync(resolve(repositoryRoot, "src/lib/CloudArchive.svelte"), "utf8");
+    const refreshStart = source.indexOf("async function refreshIcloudHealth(force = false)");
+    const providerGuard = source.indexOf('if (!root || root.provider !== "icloud")', refreshStart);
+    const probeCall = source.indexOf("const next = await api.inspectIcloudNewCopyAdmission();", refreshStart);
+
+    expect(refreshStart).toBeGreaterThanOrEqual(0);
+    expect(providerGuard).toBeGreaterThan(refreshStart);
+    expect(probeCall).toBeGreaterThan(providerGuard);
+  });
+
   it("defaults provider OAuth consent to read-only until write access is explicitly selected", () => {
     const source = readFileSync(resolve(repositoryRoot, "src/lib/CloudArchive.svelte"), "utf8");
     expect(source).toContain("let oauthWriteAccess = $state(false);");
