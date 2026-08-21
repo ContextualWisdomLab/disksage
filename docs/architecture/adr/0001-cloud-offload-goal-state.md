@@ -495,3 +495,13 @@ A bounded OneDrive observation during the Finder `real_datasets` incident report
 (`serverUnreachable`). Copy admission remains blocked. Starting the client while only 340 MiB was
 available was stopped immediately; no Finder, `bird`, `fileproviderd`, provider object, or source
 file was mutated. A fresh quiet provider observation and safe local headroom remain required.
+
+## Amendment: paired projection readers use the receipt lock (2026-08-21)
+
+ADR and Goal projection writers already serialize the pair under a receipt-scoped interprocess
+lock. Readers now acquire the same lock before reading both files, so reconciliation cannot observe
+the interval between the two atomic replacements and mistake a transient mismatch for current
+state. The lock file is bounded coordination metadata; immutable receipts and provider evidence
+remain authoritative, and no read path grants copy or eviction authority. This is implemented at
+source head `9cf9665a9041b8b00a66b195f1236c8683f8a951` and covered by the existing paired-writer
+and projection-state tests.
