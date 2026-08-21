@@ -65,6 +65,17 @@ test('open PR pagination rejects membership drift across opposite created-order 
   );
 });
 
+test('open PR pagination accepts identical membership returned in opposite created order', async () => {
+  const fetchJson = async (pathname) => pathname.includes('direction=asc')
+    ? [{ number: 1 }, { number: 2 }]
+    : [{ number: 2 }, { number: 1 }];
+
+  assert.deepEqual(
+    await listAllOpenPullRequests(fetchJson, repo),
+    [{ number: 1 }, { number: 2 }],
+  );
+});
+
 test('workflow registry pagination rejects an externally claimed total beyond the read budget', async () => {
   let calls = 0;
   const fullPage = Array.from({ length: 100 }, (_, index) => ({
