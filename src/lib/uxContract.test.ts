@@ -53,8 +53,8 @@ describe("UI/UX design and Storybook contract", () => {
     expect(story).toContain("toBeDisabled");
     expect(config).toContain('test: "error"');
     expect(config).toContain("mobile");
-    expect(config).toContain('defaultViewport: "desktop"');
-    expect(story).toContain('defaultViewport: "mobile"');
+    expect(config).toContain('viewport: { value: "desktop", isRotated: false }');
+    expect(story).toContain('viewport: { value: "mobile", isRotated: false }');
     expect(workflow).toContain("npm run build-storybook");
     expect(workflow).toContain("playwright install --with-deps chromium");
     expect(workflow).toContain("python3 -m http.server 6006 --directory storybook-static");
