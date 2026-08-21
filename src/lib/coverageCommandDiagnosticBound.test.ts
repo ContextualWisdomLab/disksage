@@ -140,6 +140,40 @@ describe('bounded Rust coverage command diagnostic', () => {
     }
   });
 
+  it('preserves Rust test panic context from the middle of an oversized log', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'disksage-coverage-diagnostic-panic-'));
+    try {
+      const rawLog = join(directory, 'raw.log');
+      const boundedLog = join(directory, 'bounded.log');
+      const panicDiagnostic =
+        "thread 'provider_oauth::tests::oauth_connection_document_bounds_and_links_fail_closed' panicked at src-tauri/src/provider_oauth.rs:1401:9:\n" +
+        'assertion `left == right` failed\n' +
+        '  left: "oauth-connection-document-permissions-unsafe"\n' +
+        ' right: "oauth-connection-document-too-large"\n' +
+        'note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n';
+      const prefixNoise = Array.from(
+        { length: 500 },
+        (_, index) => `prefix-noise-${String(index).padStart(4, '0')} ${'x'.repeat(80)}`,
+      ).join('\n');
+      const suffixNoise = Array.from(
+        { length: 500 },
+        (_, index) => `suffix-noise-${String(index).padStart(4, '0')} ${'y'.repeat(80)}`,
+      ).join('\n');
+      writeFileSync(rawLog, `${prefixNoise}\n${panicDiagnostic}${suffixNoise}\n`);
+
+      execFileSync('bash', [diagnosticHelper, rawLog, boundedLog]);
+
+      const diagnostic = readFileSync(boundedLog, 'utf8');
+      expect(diagnostic).toContain("thread 'provider_oauth::tests::oauth_connection_document_bounds_and_links_fail_closed' panicked at");
+      expect(diagnostic).toContain('assertion `left == right` failed');
+      expect(diagnostic).toContain('left: "oauth-connection-document-permissions-unsafe"');
+      expect(diagnostic).toContain('right: "oauth-connection-document-too-large"');
+      expect(Buffer.byteLength(diagnostic)).toBeLessThanOrEqual(32_768);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('wires the exact coverage step through the executable helper', () => {
     expect(workflow).toContain(
       'bash .github/scripts/bound-coverage-command-diagnostic.sh coverage-command.raw.log coverage-command.bounded.log',
