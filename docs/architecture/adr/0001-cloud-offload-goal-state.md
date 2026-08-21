@@ -221,6 +221,15 @@ is incomplete provider-transfer evidence, not a successful copy or a DiskSage pr
 the source remains retained, the Finder cancel control remains the only supported cancellation
 action, and local headroom plus a fresh quiet provider observation remain required before retry.
 
+The latest read-only incident check at `2026-08-21 11:19 +0900` reproduced the same symptom: a
+bounded `fileproviderctl dump` did not complete within 15 seconds and returned only partial output,
+while the system log recorded repeated `no progress` fetch/create requests, materialization
+failures, and file-coordination failures. `bird` and `fileproviderd` were busy during the check.
+This is provider-side transfer/reconciliation stall evidence, not proof that the Finder copy
+completed. DiskSage sent the fixed Escape cancellation request, which exited successfully; Finder
+and provider daemons were left running, and no source, cloud object, or provider database was
+mutated. Admission remains fail-closed until a fresh complete quiet observation is available.
+
 At source head `6b9cd694ac9d34e8abc40de47b2ec1106ec55d90`, historical provider evidence remains
 readable through the compatibility parser, but an evidence record with `sync_complete=true` and
 an explicit `sync_state=unknown` is rejected at the current authorization boundary. It therefore

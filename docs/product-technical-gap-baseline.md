@@ -233,6 +233,18 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   provider-evidence directories; the documentation change was rebased onto it as exact PR #213
   head `3148d71`. This preserves the remote agent's change without force-push and keeps provider
   evidence fail-closed when directory authority drifts.
+
+## 2026-08-21 11:19 +0900 incident follow-up
+
+- A read-only `fileproviderctl dump` probe was bounded at 15 seconds for diagnosis and returned
+  partial output before timing out. The system log independently recorded repeated File Provider
+  `no progress` fetch/create requests, materialization failures, and file-coordination failures;
+  `bird` and `fileproviderd` were active. This explains the Finder `real_datasets` “copy preparing”
+  dialog as a provider stall, not a successful cloud copy.
+- DiskSage issued the fixed Finder Escape cancellation request and received exit status 0. It did
+  not kill Finder, `bird`, `fileproviderd`, or any provider client, and it did not delete or rename
+  user files, provider data, cloud objects, or CloudDocs databases. A new-copy admission, attestation,
+  and source-eviction decision remains blocked until a fresh complete quiet provider observation.
 - Source head `9b1c270` now retains a bounded hourly contextual-orchestrator receipt: only schema,
   exact event SHA, model id, status, response byte count, and response SHA-256 are uploaded for
   seven days; the advisory response body is never persisted. `actionlint` passed, the focused loop
