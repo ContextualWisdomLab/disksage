@@ -1,10 +1,7 @@
 use disksage_lib::duplicate_audit::{
-    exact_duplicate_audit_integrity_valid, summarize_exact_duplicate_audit, DEFAULT_MAX_ENTRIES,
-    DEFAULT_MIN_BYTES, MAX_ENTRIES,
+    collect_exact_duplicate_audit, exact_duplicate_audit_integrity_valid,
+    summarize_exact_duplicate_audit, DEFAULT_MAX_ENTRIES, DEFAULT_MIN_BYTES, MAX_ENTRIES,
 };
-#[cfg(not(coverage))]
-use disksage_lib::duplicate_audit::collect_exact_duplicate_audit;
-#[cfg(not(coverage))]
 use disksage_lib::private_evidence::write_private_json_create_new;
 use std::path::{Component, Path, PathBuf};
 
@@ -114,7 +111,6 @@ fn system_now_ms() -> u64 {
         .unwrap_or_default()
 }
 
-#[cfg(not(coverage))]
 fn run() -> Result<(), String> {
     let raw = std::env::args_os()
         .skip(1)
@@ -157,16 +153,12 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(coverage))]
 fn main() {
     if let Err(error) = run() {
         eprintln!("DiskSage exact duplicate audit: {error}");
         std::process::exit(2);
     }
 }
-
-#[cfg(coverage)]
-fn main() {}
 
 #[cfg(test)]
 mod tests {
