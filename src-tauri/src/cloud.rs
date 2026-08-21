@@ -5033,6 +5033,7 @@ pub fn plan_cloud_archive_from_snapshot(
     let source_root = &snapshot.source_root;
     let now_ms = snapshot.prepared_at_ms;
     let options = snapshot.options;
+    let local_volume = crate::volume_pressure::snapshot_volume(source_root, now_ms).ok();
     let source_scan_blocker = (!snapshot.source_scan_complete)
         .then(|| "source-scan-incomplete".to_string());
     let mut candidates = Vec::new();
@@ -5131,6 +5132,17 @@ pub fn plan_cloud_archive_from_snapshot(
                     )
                 })
                 .or_else(|| provider_destination_path_blocked_reason(cloud_root, &dst))
+                .or_else(|| {
+                    local_volume
+                        .as_ref()
+                        .filter(|volume| {
+                            !crate::volume_pressure::has_copy_headroom(
+                                volume.available_bytes,
+                                file.bytes,
+                            )
+                        })
+                        .map(|_| "local-volume-headroom-insufficient".into())
+                })
         };
         let source_context = relative
             .parent()
@@ -5272,7 +5284,6 @@ pub fn plan_cloud_archive_from_snapshot(
         .filter(|c| c.blocked_reason.is_none())
         .map(|c| c.bytes)
         .sum();
-    let local_volume = crate::volume_pressure::snapshot_volume(source_root, now_ms).ok();
     let mut notices = vec![
         "dry-run-only".into(),
         "cloud-quota-unverified".into(),
@@ -5693,6 +5704,39 @@ mod tests {
                 .map(|snapshot| snapshot.schema_version),
             Some(crate::volume_pressure::LOCAL_VOLUME_SNAPSHOT_SCHEMA_VERSION)
         );
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn low_local_headroom_blocks_plan_before_copy_review() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source_root = tmp.path().join("source");
+        let cloud_root = tmp.path().join("cloud");
+        writable_dir(&source_root);
+        writable_dir(&cloud_root);
+        let report = plan_cloud_archive(
+            &[FileFact {
+                path: source_root.join("large.zip"),
+                bytes: u64::MAX,
+                created_ms: 1,
+                modified_ms: 1,
+                content_metadata: ContentMetadata::default(),
+            }],
+            &source_root,
+            &root(CloudProvider::GoogleDrive, &cloud_root),
+            system_now_ms(),
+            CloudPlanOptions {
+                min_size_bytes: 1,
+                min_age_days: 0,
+                limit: 10,
+            },
+        );
+
+        assert_eq!(
+            report.candidates[0].blocked_reason.as_deref(),
+            Some("local-volume-headroom-insufficient")
+        );
+        assert_eq!(report.potentially_reclaimable_bytes, 0);
     }
 
     #[cfg(not(coverage))]

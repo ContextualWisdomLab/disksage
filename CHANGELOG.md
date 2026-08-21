@@ -47,6 +47,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Keep the local staging-headroom gate on new native copies only; existing-copy adoption now
   remains available on low-disk volumes because it verifies an already-present destination without
   creating local staging data.
+- Surface insufficient local staging headroom as a dry-run candidate blocker before review, so a
+  Finder/provider copy cannot be started when the current source volume cannot hold the candidate
+  plus the staging reserve.
 - Make `disksage-duplicate-audit --help` exit successfully so release staging can
   verify its usage contract without treating a help request as a failed audit.
 - Publish the source-bound SPDX SBOM as a separately named artifact only after

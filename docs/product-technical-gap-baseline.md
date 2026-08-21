@@ -327,6 +327,14 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   `fileproviderd`, OneDrive, or Google Drive process was terminated, and no provider or user data
   was deleted. The incident remains `provider-sync-incomplete`: Finder cancellation, sufficient
   staging headroom, and a fresh quiet provider observation are required before retry.
+- At `2026-08-21 09:14 +0900`, the same 7.2 GiB target was unchanged while APFS availability
+  fell to 194 MiB (99% full). `bird` logged SQLite `No space left on device` failures and the
+  iCloud File Provider returned internal fetch errors; no provider or Finder process was killed.
+  Regenerable old user logs and two identified cache artifacts were removed, recovering about
+  0.8 GiB; the source and provider databases were retained. Cloud planning now exposes
+  `local-volume-headroom-insufficient` before review, while the existing pre-mutation guard and
+  provider-sync blocker remain authoritative; the Finder cancel control is still the only safe
+  way to end the already-running operation.
 - `git diff --check` passes for the current worktree. A repository-wide `cargo fmt --check` still
   reports pre-existing formatting differences across unrelated files, so it is not treated as
   evidence for the new authorization behavior; hosted Rust checks remain authoritative for the

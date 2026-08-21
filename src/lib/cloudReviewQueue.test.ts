@@ -281,6 +281,8 @@ describe("cloud review queue", () => {
       .toBe("생산일을 내장 메타데이터에서 확인하지 못함");
     expect(cloudDecisionReasonLabel("destination-exists"))
       .toBe("같은 목적지 파일이 이미 있음");
+    expect(cloudDecisionReasonLabel("local-volume-headroom-insufficient"))
+      .toBe("복사에 필요한 로컬 여유공간이 부족함");
     expect(cloudDecisionReasonLabel("future-review-reason"))
       .toBe("future-review-reason");
   });
