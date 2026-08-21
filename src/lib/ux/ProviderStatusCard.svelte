@@ -62,6 +62,7 @@
   {/if}
   {#if canCancel}
     <button
+      class="ds-control"
       type="button"
       onclick={onCancel}
       disabled={state === "checking" || !onCancel}
