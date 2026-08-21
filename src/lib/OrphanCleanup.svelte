@@ -147,3 +147,13 @@
     <p class="muted" role="status">{result.moved_count}/{result.requested_count}개를 휴지통으로 이동했습니다. 휴지통을 비우기 전에는 복원할 수 있습니다.</p>
   {/if}
 </section>
+
+<style>
+  section { margin-top: 1.5rem; border-top: 1px solid #ddd; padding-top: 1rem; }
+  .notice { color: #555; font-size: 0.9rem; }
+  .error { color: #b00; }
+  .muted { color: #666; font-size: 0.85rem; }
+  .list { list-style: none; padding: 0; max-height: 30vh; overflow-y: auto; }
+  .list li { display: grid; gap: 0.25rem; padding: 0.25rem 0; }
+  .disabled { color: #aaa; }
+</style>
