@@ -371,6 +371,13 @@ authority. The APA 7 records and original URLs are kept in the Zotero Local API 
   (Eds.). (2024). *Data Catalog Vocabulary (DCAT) - Version 3*. W3C Recommendation.
   https://www.w3.org/TR/vocab-dcat-3/
 
+- Chandramouli, R., & Pinhas, D. (2020). *Security guidelines for storage infrastructure* (NIST
+  SP 800-209). National Institute of Standards and Technology.
+  https://doi.org/10.6028/NIST.SP.800-209
+- Buneman, P., Khanna, S., & Tan, W.-C. (2001). Why and where: A characterization of data
+  provenance. In A. D. Bossi (Ed.), *Database Theory — ICDT 2001* (pp. 316–330). Springer.
+  https://doi.org/10.1007/3-540-44503-X_20
+
 ## Amendment: iCloud File Provider materialization stalls (2026-08-21)
 A bounded, read-only iCloud observation at `2026-08-21 14:32:54 +0900` timed out while retaining
 58 `fetch` and 114 `create` requests marked `no progress`. The contemporaneous system log

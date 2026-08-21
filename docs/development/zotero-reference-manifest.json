@@ -92,5 +92,37 @@
     "issue": "4",
     "pages": "423-446",
     "extra": "APA 7: Alam, M. M., & Wang, W. (2021). A comprehensive survey on the state-of-the-art data provenance approaches for security enforcement. Journal of Computer Security, 29(4), 423–446. https://doi.org/10.3233/JCS-200108"
+  },
+  {
+    "itemType": "report",
+    "title": "Security Guidelines for Storage Infrastructure",
+    "creators": [
+      { "creatorType": "author", "firstName": "Ramaswamy", "lastName": "Chandramouli" },
+      { "creatorType": "author", "firstName": "Doron", "lastName": "Pinhas" }
+    ],
+    "date": "2020-10-26",
+    "institution": "National Institute of Standards and Technology",
+    "reportNumber": "SP 800-209",
+    "DOI": "10.6028/NIST.SP.800-209",
+    "url": "https://csrc.nist.gov/pubs/sp/800/209/final",
+    "extra": "APA 7: Chandramouli, R., & Pinhas, D. (2020). Security guidelines for storage infrastructure (NIST SP 800-209). National Institute of Standards and Technology. https://doi.org/10.6028/NIST.SP.800-209"
+  },
+  {
+    "itemType": "conferencePaper",
+    "title": "Why and Where: A Characterization of Data Provenance",
+    "creators": [
+      { "creatorType": "author", "firstName": "Peter", "lastName": "Buneman" },
+      { "creatorType": "author", "firstName": "Sanjeev", "lastName": "Khanna" },
+      { "creatorType": "author", "firstName": "Wang-Chiew", "lastName": "Tan" }
+    ],
+    "date": "2001",
+    "conferenceName": "8th International Conference on Database Theory (ICDT 2001)",
+    "proceedingsTitle": "Database Theory — ICDT 2001",
+    "publisher": "Springer",
+    "place": "London, UK",
+    "pages": "316-330",
+    "DOI": "10.1007/3-540-44503-X_20",
+    "url": "https://www.research.ed.ac.uk/files/16509989/Why_and_Where_A_Characterization_of_Data_Provenance.pdf",
+    "extra": "APA 7: Buneman, P., Khanna, S., & Tan, W.-C. (2001). Why and where: A characterization of data provenance. In A. D. Bossi (Ed.), Database Theory — ICDT 2001 (pp. 316–330). Springer. https://doi.org/10.1007/3-540-44503-X_20"
   }
 ]

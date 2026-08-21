@@ -62,3 +62,10 @@ https://www.dublincore.org/specifications/dublin-core/dcmi-terms/2020-01-20/
 Alam, M. M., & Wang, W. (2021). A comprehensive survey on the state-of-the-art data provenance
 approaches for security enforcement. *Journal of Computer Security, 29*(4), 423–446.
 https://doi.org/10.3233/JCS-200108
+
+Chandramouli, R., & Pinhas, D. (2020). *Security guidelines for storage infrastructure* (NIST SP
+800-209). National Institute of Standards and Technology. https://doi.org/10.6028/NIST.SP.800-209
+
+Buneman, P., Khanna, S., & Tan, W.-C. (2001). Why and where: A characterization of data
+provenance. In A. D. Bossi (Ed.), *Database Theory — ICDT 2001* (pp. 316–330). Springer.
+https://doi.org/10.1007/3-540-44503-X_20
