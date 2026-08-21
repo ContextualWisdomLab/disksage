@@ -578,6 +578,17 @@ fingerprint clock on repeated polls; a newly supplied persisted timestamp still 
 This preserves the 15-minute stalled-copy warning during a staged rollout of the backend field.
 The compatibility repair is at functional head `bda817d`.
 
+## Amendment: stall counters do not reset the iCloud progress clock (2026-08-22)
+
+The UX now fingerprints only admission blockers and genuine transfer/indexing progress: pending
+indexable count, active upload/download counts, and their progress counters. No-progress counters,
+materialization failures, staged-item misses, and timeout flags remain diagnostic evidence and cannot
+restart the stall interval. A real progress change resets the interval and that reset is retained on
+the following poll; a newly blocked admission still uses the backend timestamp when present. This
+keeps a Finder preparation dialog from hiding behind fluctuating error counters while preserving the
+fail-closed copy, attestation, and eviction boundary. The implementation and regression tests are
+tracked in DiskSage PR #246.
+
 ## Amendment: progress-aware iCloud stall clock (2026-08-21 23:38 +0900)
 
 The UX stall clock now distinguishes an admission-blocker run from transfer progress. After an

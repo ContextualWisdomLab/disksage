@@ -62,6 +62,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   current-observation fallback for older reports; the running card remains diagnostic/cancel-only.
 - Retain the existing iCloud blocker fingerprint clock when older backends omit the persisted
   start-time field, so legacy responses still reach the 15-minute stalled-copy warning.
+- Keep iCloud stall-counter changes (`no progress`, materialization failures, and timeouts) out of
+  the progress fingerprint, so a blocked Finder copy still reaches the 15-minute warning; retain
+  a real transfer/indexing progress reset across subsequent polls.
 
 - Cover the `sensitive-config` archive-kind wire label in the generated cloud-plan implementation,
   so the macOS/Linux/Windows cloud-plan binaries compile after the sensitive-config safety

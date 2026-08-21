@@ -721,3 +721,12 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - `npm run check` passed with 0 errors/0 warnings, Vitest passed 34 files/138 tests, production
   build passed, and Storybook Chromium interaction/a11y passed 5/5. Generated Storybook output was
   removed after validation; no provider or user data was touched.
+
+## 2026-08-22 iCloud stall-counter clock regression
+
+- Current-head review found that the UX combined genuine progress fields with fluctuating
+  no-progress/materialization/timeout counters. A long-lived Finder preparation could therefore
+  reset its 15-minute warning on every diagnostic poll. The fix isolates the progress fingerprint,
+  preserves a real-progress reset on the next poll, and keeps the existing provider timestamp for a
+  newly blocked admission. Four focused clock tests and the CloudArchive contract suite pass locally;
+  PR #246 remains subject to fresh hosted checks and approval.

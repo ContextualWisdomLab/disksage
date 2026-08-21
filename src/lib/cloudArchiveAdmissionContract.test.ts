@@ -15,7 +15,6 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("icloud-item-error-octagon-not-signed-in");
     expect(source).toContain("동기화 진단:");
     expect(source).toContain("iCloud File Provider 증거를 확인하지 못했습니다.");
-    expect(source).toContain("no_progress_create_count");
     expect(source).toContain("pending_indexable_count");
     expect(source).toContain("icloud-file-provider-indexing-pending");
     expect(source).toContain("Finder에 남은 복사 대기는 취소");
@@ -29,13 +28,10 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("icloudHealthNextCheckAt");
     expect(source).toContain("icloudHealthBlockedSinceMs");
     expect(source).toContain("icloudHealthFingerprint");
-    expect(source).toContain("const admissionClear = next.new_copy_admission_state === \"clear\"");
-    expect(source).toContain("} else if (icloudHealthFingerprint !== fingerprint) {");
-    expect(source).toContain("} else if (next.admission_blocked_since_ms != null) {");
-    expect(source).toContain("const admissionFingerprint = [");
-    expect(source).toContain("const previousAdmissionFingerprint = icloudHealth");
-    expect(source).toContain("previousAdmissionFingerprint === admissionFingerprint");
-    expect(source).toContain("? observedAtMs");
+    expect(source).toContain('import { updateIcloudHealthStallClock } from "./icloudHealthStallClock";');
+    expect(source).toContain("const stallClock = updateIcloudHealthStallClock(");
+    expect(source).toContain("icloudHealthBlockedSinceMs = stallClock.blockedSinceMs;");
+    expect(source).toContain("icloudHealthFingerprint = stallClock.fingerprint;");
     expect(source).toContain("동일한 iCloud 차단 상태가 15분 이상 지속되었습니다.");
     expect(source).toContain("refreshIcloudHealth(true)");
     expect(source).toContain("refreshProviderGlobalSync(true)");

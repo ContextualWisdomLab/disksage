@@ -16,6 +16,7 @@
   } from "./cloudReviewQueue";
   import { boundedCloudArchiveErrorMessage } from "./cloudArchiveErrorFeedback";
   import { fmtBytes } from "./fmt";
+  import { updateIcloudHealthStallClock } from "./icloudHealthStallClock";
   import IcloudLocalEviction from "./IcloudLocalEviction.svelte";
   import ProviderStatusCard from "./ux/ProviderStatusCard.svelte";
 
@@ -493,46 +494,19 @@
     try {
       const observedAtMs = Date.now();
       const next = await api.inspectIcloudNewCopyAdmission();
-      const activity = next.file_provider_activity;
-      const admissionFingerprint = [
-        next.new_copy_admission_state,
-        next.new_copy_admission_blockers.join(","),
-      ].join("|");
-      const previousAdmissionFingerprint = icloudHealth
-        ? [
-          icloudHealth.new_copy_admission_state,
-          icloudHealth.new_copy_admission_blockers.join(","),
-        ].join("|")
-        : "";
-      const fingerprint = [
-        admissionFingerprint,
-        activity?.no_progress_fetch_count ?? 0,
-        activity?.no_progress_create_count ?? 0,
-        activity?.materialization_failure_count ?? 0,
-        activity?.staged_item_missing_count ?? 0,
-        activity?.pending_indexable_count ?? "",
-        activity?.active_upload_count ?? 0,
-        activity?.active_download_count ?? 0,
-        activity?.active_upload_progress_millionths ?? "",
-        activity?.active_download_progress_millionths ?? "",
-        activity?.timed_out ?? false,
-      ].join("|");
-      const admissionClear = next.new_copy_admission_state === "clear"
-        && next.new_copy_admission_blockers.length === 0;
-      if (admissionClear) {
-        icloudHealthBlockedSinceMs = 0;
-        icloudHealthFingerprint = "";
-      } else if (icloudHealthFingerprint !== fingerprint) {
-        icloudHealthBlockedSinceMs = previousAdmissionFingerprint === admissionFingerprint
-          ? observedAtMs
-          : next.admission_blocked_since_ms ?? next.observed_at_ms;
-        icloudHealthFingerprint = fingerprint;
-      } else if (next.admission_blocked_since_ms != null) {
-        icloudHealthBlockedSinceMs = next.admission_blocked_since_ms;
-      }
+      const stallClock = updateIcloudHealthStallClock(
+        icloudHealth,
+        { blockedSinceMs: icloudHealthBlockedSinceMs, fingerprint: icloudHealthFingerprint },
+        next,
+        observedAtMs,
+      );
+      icloudHealthBlockedSinceMs = stallClock.blockedSinceMs;
+      icloudHealthFingerprint = stallClock.fingerprint;
       icloudHealth = next;
       icloudHealthNextCheckAt = observedAtMs
-        + (admissionClear ? RECONCILIATION_INTERVAL_MS : ICLOUD_HEALTH_BLOCKED_RETRY_INTERVAL_MS);
+        + (stallClock.fingerprint === ""
+          ? RECONCILIATION_INTERVAL_MS
+          : ICLOUD_HEALTH_BLOCKED_RETRY_INTERVAL_MS);
     } catch (e) {
       icloudHealth = null;
       icloudHealthError = boundedCloudArchiveErrorMessage("icloud-health", e);
