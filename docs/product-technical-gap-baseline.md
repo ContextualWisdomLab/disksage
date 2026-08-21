@@ -1,9 +1,9 @@
 # DiskSage product and technical gap baseline
 
-**Snapshot:** 2026-08-22 (Asia/Seoul)
-**Repository heads at snapshot:** PR #213 `2b9833c`, PR #247 `d82feac`, PR #246 `09a6391`,
-supporting PR #156 `980a67b`, and PR #192 `30ceea2`; hosted checks and protected review remain
-authoritative, and no merge is claimed from queued or stale status.
+**Snapshot:** 2026-08-22 04:23 +0900 (Asia/Seoul)
+**Repository heads at snapshot:** the current exact-head inventory below supersedes earlier
+historical captures; hosted checks and protected review remain authoritative, and no merge is
+claimed from queued, stale, or bot-only status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
 
@@ -14,6 +14,29 @@ authoritative, and no merge is claimed from queued or stale status.
 3. Native File Provider copy is bounded, re-hashed, and source-identity rechecked. Provider-global timeout, quota/auth uncertainty, local headroom shortage, stale worktree metadata, or incomplete metadata fail closed.
 4. Regenerable caches are a separate reclaim domain. They are per-child, identity-bound, active-use checked, journaled, and moved to OS Trash; they are not uploaded as user data.
 5. Deterministic Rust gates own safety. A local model may judge only the fixed maintenance command after dry-run evidence, calibration, and explicit human confirmation. No external LLM or OAuth service is a runtime prerequisite for the standalone product.
+
+## 2026-08-22 04:23 +0900 current protected PR inventory
+
+This is the current review queue captured from GitHub immediately before this snapshot. A commit
+SHA is authoritative only for the PR row where it appears; a later push invalidates predecessor
+checks and approvals.
+
+| PR | Exact head | Draft | Merge state | Review state | Current interpretation |
+| --- | --- | --- | --- | --- | --- |
+| #247 | `5a6b4ed8743be1adf11e4388c4db94829c2f3794` | yes | unstable | none | iCloud pending-indexing follow-up; checks running |
+| #246 | `09a63910c5e4bbb90bb6a7845de89f4dcef5af43` | no | clean | none | Storybook/accessibility contract; approvals still absent |
+| #244 | `6f7c73ccd6af3e177e7c3a643c244e76071c6184` | no | blocked | none | Rust 1.97.1 baseline; required OpenCode review queued |
+| #238 | `d44b23bdf4108bf6b6f6378f7e0ac305187deec6` | no | blocked | changes requested | mail-parser update; predecessor coverage review is stale |
+| #234 | `22bc81585257f409abf9f99a5db81184e84dafe9` | no | blocked | review required | ureq update; protected approval quorum absent |
+| #232 | `99db1d36f722aeb00b280793126064e4951e62be` | no | blocked | changes requested | @types/node update; predecessor decision is not current-head evidence |
+| #230 | `c7e4e623e9b691dcd6a24cad3cc492393cb5d83e` | no | blocked | review required | download-artifact update; protected approval quorum absent |
+| #228 | `1eb947ec9d4e591638230a8cb24af4d5b14ae35b` | yes | clean | none | private-evidence identity hardening; review pending |
+| #213 | `f40bd901bb8206e7051790dcd0e4a129548cda34` | yes | blocked | changes requested | provider sync/goals base; exact-head checks/review still required |
+| #156 | `fe99870baf099e1d7acf74dc197b048a5741e36e` | yes | blocked | review required | exact-head coverage/release contracts; checks running |
+
+No protected merge is inferred from `clean`, green predecessor checks, bot comments, or queued
+reviews. The queue is processed exact-head-first: review, repair, recheck, then normal protected
+merge.
 
 ## Buyer-observable product gaps
 
@@ -33,7 +56,7 @@ authoritative, and no merge is claimed from queued or stale status.
 | P0 | Provider end-to-end receipt is absent for the current iCloud incident. | Global probe can time out and CloudDocs state is intentionally not force-killed or deleted; the native copy boundary now requires an integrity-checked three-stream pre-copy cohort before mutation. | Capture a bounded fresh provider evidence receipt after sync settles; keep transfer/eviction disabled until it is complete. |
 | P0 | Disk pressure telemetry and provider queue evidence must remain comparable across loops without retaining raw provider output. | Cloud plans and explicit iCloud health refreshes persist bounded, path-free `LocalVolumeSnapshot`, `ProviderClientRuntimeSnapshot`, and `IcloudSyncHealthEvidenceSnapshot` records under `volume-pressure-evidence`, `provider-client-runtime-evidence`, and `icloud-sync-health-evidence`; iCloud plans now combine them into a timestamp/fingerprint-bound cohort. | Missing, incomplete, malformed, or more-than-five-minute-skewed cohort observations remain blocked; a fresh exact-head native incident plan is still needed to compare the emitted cohort with the live incident. |
 | P1 | Hourly product-development/review loop is not yet live in this repository environment. | The repository-local `.github/workflows/hourly-product-loop.yml` is intentionally `workflow_dispatch`-only because its direct contextual-orchestrator HTTP call is advisory and not a pinned OpenCode worker. The trusted central [`disksage-hourly-review-repair.yml`](https://github.com/ContextualWisdomLab/.github/blob/main/.github/workflows/disksage-hourly-review-repair.yml) runs at `37 * * * *` and dispatches the pinned scheduler `a3fdaa1aacaba9443a18573f3c309fe1841fc2f0`, which performs the OpenCode OIDC exchange. The local workflow still uploads a seven-day path-free receipt when manually configured; no external endpoint or deployment receipt is available here. | Verify one central scheduler receipt and one local manual advisory receipt; preserve read-only permissions, exact-head binding, and no provider-secret import or mutation. |
-| P1 | Open PR queue prevents a clean protected release line. | PR #213 is exact remote head `108bba0`, `CHANGES_REQUESTED`, with required checks queued; PR #246 is `2298bc6` and blocked; PR #244 is `aed6312` with terminal source checks but queued required OpenCode review. Local provider follow-up `c5edabd` cannot be published because direct branch updates and new refs are rejected by the active PR-only ruleset. | Process one PR at a time: current-head review → fix → required checks → fresh approval → normal protected merge; never bypass or self-approve. |
+| P1 | Open PR queue prevents a clean protected release line. | The current exact-head inventory above still has protected review/quorum gaps; PR #156 and #247 have checks running, while PR #244 has required OpenCode review queued. | Process one PR at a time: current-head review → fix → required checks → fresh approval → normal protected merge; never bypass or self-approve. |
 | P1 | Current UI coverage is contract-heavy rather than runtime E2E for native File Provider states. | The UI now displays `로컬 최신본·업로드 미확인` and maps blockers without backend detail; provider operations are not safely reproducible on this full disk. Rust fixtures now cover `local-current + is_uploaded=false`, provider timeout, timeliness transitions, and receipt/evidence invalidation; native runtime E2E remains unavailable while the provider is unhealthy. | Keep the fixture-backed state machine green and add a bounded native E2E receipt only after a quiet provider observation is authoritative. |
 | P1 | Ontology/catalog integrations are export boundaries, not deployed services. | Naruon/semantic catalog and Zotero local API docs/contracts exist; no Noema/contextual-orchestrator runtime dependency is required. | Keep integrations optional and path-free; add live service tests only when a concrete consumer and secret boundary exist. |
 | P2 | 100% documentation/docstring and edge-case coverage is not yet evidenced. | Existing checks cover core Rust/TS behavior, not a repository-wide percentage claim. | Publish measured coverage per language and close high-risk edge paths before claiming 100%. |
