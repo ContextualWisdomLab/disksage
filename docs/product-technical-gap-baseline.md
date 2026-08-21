@@ -52,6 +52,14 @@ baseline records the current loop's runtime and integration evidence.
 
 ## 2026-08-21 loop evidence
 
+- The exact-head hosted macOS build exposed a compile regression after the sensitive-config safety
+  boundary was added: the generated `disksage-cloud-plan` implementation omitted the new
+  `ArchiveKind::SensitiveConfig` wire label. The source was fixed in the single generated-source
+  owner (`src-tauri/cloud_plan_implementation.rs.inc`) and now has a focused label contract test;
+  local `cargo check --locked --features cloud-cli --bin disksage-cloud-plan` passes. The hosted
+  matrix must be rerun on the resulting head before any protected merge; this correction grants
+  no copy, cloud-write, or eviction authority.
+
 - The implementation head observed before this documentation update was `88001d8`: existing-copy
   adoption no longer requires native-copy staging headroom, so a low-disk user can verify and adopt
   an already-present cloud copy without creating local staging data.

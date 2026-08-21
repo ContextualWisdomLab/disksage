@@ -44,6 +44,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Cover the `sensitive-config` archive-kind wire label in the generated cloud-plan implementation,
+  so the macOS/Linux/Windows cloud-plan binaries compile after the sensitive-config safety
+  boundary is enabled.
 - Keep the local staging-headroom gate on new native copies only; existing-copy adoption now
   remains available on low-disk volumes because it verifies an already-present destination without
   creating local staging data.

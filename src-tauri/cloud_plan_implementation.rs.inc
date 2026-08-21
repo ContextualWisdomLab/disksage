@@ -1762,6 +1762,7 @@ fn archive_kind_label(kind: ArchiveKind) -> &'static str {
         ArchiveKind::Backup => "backup",
         ArchiveKind::Creative => "creative",
         ArchiveKind::IncompleteDownload => "incomplete-download",
+        ArchiveKind::SensitiveConfig => "sensitive-config",
     }
 }
 
@@ -3802,6 +3803,14 @@ mod coverage_tests {
 #[cfg(all(test, not(coverage)))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn archive_kind_label_includes_sensitive_config_wire_name() {
+        assert_eq!(
+            archive_kind_label(ArchiveKind::SensitiveConfig),
+            "sensitive-config"
+        );
+    }
 
     #[test]
     fn parses_defaults_and_explicit_values() {
