@@ -238,6 +238,30 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn symlinked_root_scans_target_but_not_nested_symlinks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        let outside = tmp.path().join("outside");
+        fs::create_dir(&real).unwrap();
+        fs::create_dir(&outside).unwrap();
+        write(&real.join("inside.bin"), 11);
+        write(&outside.join("outside.bin"), 37);
+        std::os::unix::fs::symlink(&outside, real.join("nested-link")).unwrap();
+        let selected = tmp.path().join("selected-root");
+        std::os::unix::fs::symlink(&real, &selected).unwrap();
+
+        let res = scan_dir(&selected, &AtomicBool::new(false), noop);
+
+        assert_eq!(res.root, selected);
+        assert_eq!(res.stats.files, 1);
+        assert_eq!(res.stats.bytes, 11);
+        assert_eq!(res.dir_sizes[&selected], 11);
+        assert_eq!(res.top_files[0].0, selected.join("inside.bin"));
+        assert!(!res.dir_sizes.contains_key(&selected.join("nested-link")));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn non_file_non_dir_entries_are_ignored() {
         // FIFO는 dir도 file도 아니어서 분류 분기의 암묵적 else(집계 없음)를 태운다
         let tmp = tempfile::tempdir().unwrap();
