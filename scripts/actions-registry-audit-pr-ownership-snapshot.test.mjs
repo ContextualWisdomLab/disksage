@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { auditActionsRegistry } from './actions-registry-audit.mjs';
+import {
+  activePullRequestWorkflowPaths,
+  auditActionsRegistry,
+} from './actions-registry-audit.mjs';
 
 const repository = 'ContextualWisdomLab/disksage';
 const mainSha = 'a'.repeat(40);
@@ -53,5 +56,28 @@ test('fails closed when same-head PR workflow ownership changes during the audit
     changedFileReads,
     2,
     'semantic workflow ownership must be re-read even when PR number and head SHA are unchanged',
+  );
+});
+
+test('fails closed when a changed workflow file has an unknown GitHub status', async () => {
+  const pullRequests = [{
+    number: 42,
+    head: { sha: headSha, repo: { full_name: repository } },
+  }];
+
+  await assert.rejects(
+    activePullRequestWorkflowPaths(async (url) => {
+      if (url.includes(`/git/trees/${headSha}`)) {
+        return {
+          truncated: false,
+          tree: [{ type: 'blob', path: workflowPath }],
+        };
+      }
+      if (url.includes('/pulls/42/files')) {
+        return [{ filename: workflowPath, status: 'moved' }];
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }, repository, pullRequests),
+    /open-pr-file-invalid/,
   );
 });
