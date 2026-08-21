@@ -568,7 +568,7 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   attestation, and eviction remain blocked. Local APFS availability recovered to about 8.9 GiB
   during the observation. The fixed Finder Escape action remains the only supported cancellation;
   no daemon, cloud object, or source file was touched.
-- PR #245 current head `55a1c13ffb5cc1381aa1e86e2e6e73e055669c58` adds the ontology-bound orphan cache action and fails closed when
+- The PR #245 implementation snapshot `55a1c13ffb5cc1381aa1e86e2e6e73e055669c58` adds the ontology-bound orphan cache action and fails closed when
   installed-app inventory or metadata manifests are truncated, too deep, or contain directory
   iteration errors. Frontend checks passed locally (31 files, 129 tests); focused Rust orphan tests
   pass (12/12 unit plus 2/2 lsof-warning integration tests, including deep inventory/manifest,
@@ -607,7 +607,7 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 
 ## 2026-08-21 exact-head stacked PR audit
 
-- PR #245 is now rebased onto provider-sync base `cc693e4` at exact head `55a1c13`; its protected
+- PR #245 was rebased onto provider-sync base `cc693e4` at implementation snapshot `55a1c13`; its protected
   Release, Test, security, Noema, Strix, and review checks restarted and remain queued. The PR is
   `REVIEW_REQUIRED`/`BLOCKED`; no force-merge or approval bypass was used.
 - PR #213 remains exact head `cc693e4` with CodeRabbit passing, Devin and required checks pending,
