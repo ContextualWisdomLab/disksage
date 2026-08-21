@@ -58,6 +58,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   changing copy or eviction authority.
 - Preserve the backend-provided iCloud admission-blocker start time across app restarts, with a
   current-observation fallback for older reports; the running card remains diagnostic/cancel-only.
+- Retain the existing iCloud blocker fingerprint clock when older backends omit the persisted
+  start-time field, so legacy responses still reach the 15-minute stalled-copy warning.
 
 - Cover the `sensitive-config` archive-kind wire label in the generated cloud-plan implementation,
   so the macOS/Linux/Windows cloud-plan binaries compile after the sensitive-config safety
