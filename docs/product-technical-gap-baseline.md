@@ -634,7 +634,7 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 
 ## 2026-08-21 exact-head ecosystem audit
 
-- DiskSage PR #246 implementation head is `2c57310b1a138b65bd3b3470f04649847572f8f8`; the
+- DiskSage PR #246 implementation head is `2a4ed3860264f4b4f7ba30655281e6ef93399386`; the
   following documentation-only binding commit does not change the UX implementation, and the PR
   remains stacked on provider
   base `64e58c98a46104148bf599fa7e796da4b576220a`. Its local UI contract and `svelte-check` pass;
