@@ -253,8 +253,20 @@ pub fn list_roots() -> Vec<String> {
     }
     #[cfg(not(windows))]
     {
-        let mut roots = vec!["/".to_string()];
-        roots.extend(std::env::var("HOME").ok());
+        let mut roots = Vec::new();
+        if let Ok(home) = std::env::var("HOME") {
+            let home_path = Path::new(&home);
+            let downloads = home_path.join("Downloads");
+            if downloads.is_dir() {
+                roots.push(downloads.to_string_lossy().into_owned());
+            }
+            if home != "/" {
+                roots.push(home);
+            }
+        }
+        if !roots.iter().any(|root| root == "/") {
+            roots.push("/".to_string());
+        }
         roots
     }
 }
@@ -3395,7 +3407,21 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         #[cfg(windows)]
         assert!(roots.iter().any(|r| r.ends_with(":\\")));
         #[cfg(not(windows))]
-        assert!(roots.contains(&"/".to_string()));
+        {
+            assert!(roots.contains(&"/".to_string()));
+            if let Ok(home) = std::env::var("HOME") {
+                let downloads = Path::new(&home).join("Downloads");
+                if downloads.is_dir() {
+                    let expected = downloads.to_string_lossy().into_owned();
+                    assert_eq!(roots.first(), Some(&expected));
+                }
+                if home != "/" {
+                    let home_index = roots.iter().position(|root| root == &home).unwrap();
+                    let filesystem_index = roots.iter().position(|root| root == "/").unwrap();
+                    assert!(home_index < filesystem_index);
+                }
+            }
+        }
     }
 
     #[test]

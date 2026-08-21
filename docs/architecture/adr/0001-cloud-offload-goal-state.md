@@ -589,6 +589,15 @@ keeps a Finder preparation dialog from hiding behind fluctuating error counters 
 fail-closed copy, attestation, and eviction boundary. The implementation and regression tests are
 tracked in DiskSage PR #246.
 
+## Amendment: safe default scan root avoids provider enumeration (2026-08-22)
+
+On macOS the generic scanner now offers `~/Downloads` first when it exists, then the home directory,
+and the filesystem root last. This preserves explicit access to `/` while preventing a first click on
+“scan” from recursively enumerating iCloud, OneDrive, or Google Drive File Provider trees. Cloud
+provider roots remain discovered separately by the metadata/provider evidence flow; this UI default
+does not grant copy, attestation, eviction, or provider-write authority. The root-order contract is
+covered by the Rust command test and is tracked in DiskSage PR #246.
+
 ## Amendment: progress-aware iCloud stall clock (2026-08-21 23:38 +0900)
 
 The UX stall clock now distinguishes an admission-blocker run from transfer progress. After an

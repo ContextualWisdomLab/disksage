@@ -730,3 +730,11 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   preserves a real-progress reset on the next poll, and keeps the existing provider timestamp for a
   newly blocked admission. Four focused clock tests and the CloudArchive contract suite pass locally;
   PR #246 remains subject to fresh hosted checks and approval.
+
+## 2026-08-22 safe default scan root
+
+- The generic macOS scan previously offered `/` first, allowing an accidental initial scan to
+  enumerate cloud-provider placeholder trees and amplify FileProvider reconciliation. The command
+  now orders an existing `~/Downloads`, then `$HOME`, then `/`; explicit root selection remains
+  available. The focused Rust root-order test passes, and cloud copy/eviction authority remains
+  unchanged.

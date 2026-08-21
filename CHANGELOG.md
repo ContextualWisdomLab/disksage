@@ -65,6 +65,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Keep iCloud stall-counter changes (`no progress`, materialization failures, and timeouts) out of
   the progress fingerprint, so a blocked Finder copy still reaches the 15-minute warning; retain
   a real transfer/indexing progress reset across subsequent polls.
+- Prefer `~/Downloads` and then the home directory over `/` for the initial macOS scan root, so a
+  first scan does not recursively enumerate iCloud/OneDrive File Provider trees by accident.
 
 - Cover the `sensitive-config` archive-kind wire label in the generated cloud-plan implementation,
   so the macOS/Linux/Windows cloud-plan binaries compile after the sensitive-config safety
