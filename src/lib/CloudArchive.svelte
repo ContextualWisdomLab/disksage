@@ -15,6 +15,7 @@
     type CloudReviewQueueSort,
   } from "./cloudReviewQueue";
   import { boundedCloudArchiveErrorMessage } from "./cloudArchiveErrorFeedback";
+  import { icloudBlockedSinceMs as resolveIcloudBlockedSinceMs } from "./cloudArchiveHealthTiming";
   import { fmtBytes } from "./fmt";
   import IcloudLocalEviction from "./IcloudLocalEviction.svelte";
 
@@ -513,7 +514,10 @@
         icloudHealthBlockedSinceMs = 0;
         icloudHealthFingerprint = "";
       } else if (icloudHealthFingerprint !== fingerprint) {
-        icloudHealthBlockedSinceMs = next.admission_blocked_since_ms ?? observedAtMs;
+        icloudHealthBlockedSinceMs = resolveIcloudBlockedSinceMs(
+          next.admission_blocked_since_ms,
+          next.observed_at_ms,
+        );
         icloudHealthFingerprint = fingerprint;
       }
       icloudHealth = next;
