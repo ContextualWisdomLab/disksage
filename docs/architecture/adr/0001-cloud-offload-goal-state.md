@@ -536,5 +536,5 @@ provider-global observations, not only in Storybook. It maps a missing/error obs
 `provider-sync-incomplete`, a repeated blocker lasting at least 15 minutes to
 `materialization-stalled`, and a quiet observation to `clear`; elapsed time, bounded evidence time,
 and the existing Finder-cancel request remain visible. The card is informational/cancel-only and
-does not grant copy, attestation, or eviction authority. This is implemented at UX head
-`9c4d67964d2c3572e4109f624f5a63a6d4fb2d12`; `svelte-check` and the CloudArchive contract suite pass.
+does not grant copy, attestation, or eviction authority. This is implemented by the UX follow-up
+commits `9c4d679` and `52a0c22`; `svelte-check` and the CloudArchive contract suite pass.
