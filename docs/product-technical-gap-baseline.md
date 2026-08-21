@@ -568,7 +568,7 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   attestation, and eviction remain blocked. Local APFS availability recovered to about 8.9 GiB
   during the observation. The fixed Finder Escape action remains the only supported cancellation;
   no daemon, cloud object, or source file was touched.
-- PR #245 current head `d48bd34` adds the ontology-bound orphan cache action and fails closed when
+- PR #245 current head `a184e6e05d346165ee2fa109b7f9f34a602c612d` adds the ontology-bound orphan cache action and fails closed when
   installed-app inventory or metadata manifests are truncated, too deep, or contain directory
   iteration errors. Frontend checks passed locally (31 files, 129 tests); focused Rust orphan tests
   pass (12/12 unit plus 2/2 lsof-warning integration tests, including deep inventory/manifest,
@@ -581,7 +581,7 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   preserves the successful cleanup receipt and clears stale UI selection.
   Hosted full Rust,
   security, and review checks remain authoritative and pending. PR #213's live base head is
-  `6f424af`.
+  `cc693e4`.
 
 ## 2026-08-21 12:35 +0900 repeated provider-stall observation
 
@@ -604,3 +604,11 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - The bounded diagnostic was terminated without touching provider daemons, cloud objects, or source
   files. Subsequent scans must avoid raw cloud-placeholder paths because metadata inspection can
   request File Provider materialization even when the command is read-only.
+
+## 2026-08-21 exact-head stacked PR audit
+
+- PR #245 is now rebased onto provider-sync base `cc693e4` at exact head `a184e6e`; its protected
+  Release, Test, security, Noema, Strix, and review checks restarted and remain queued. The PR is
+  `REVIEW_REQUIRED`/`BLOCKED`; no force-merge or approval bypass was used.
+- PR #213 remains exact head `cc693e4` with CodeRabbit passing, Devin and required checks pending,
+  and a stale `CHANGES_REQUESTED` review decision. No merge or provider mutation is claimed.
