@@ -626,3 +626,15 @@ and surfaces it with the existing fixed Finder-cancel action. The notice contain
 filename, item identifier, or raw provider output. Disk import is provider-progress evidence, not
 a copy receipt; copy, attestation, and source eviction remain fail-closed until a complete quiet
 observation and independent per-item evidence exist.
+
+## Amendment: unchanged iCloud preparation queue after restart (2026-08-22 04:05 +0900)
+
+A subsequent bounded, read-only observation found the same iCloud File Provider aggregate state:
+`pending-indexable-count=31,024`, upload progress `5,202,024,494/5,462,125,152` (95.24%),
+download progress `0/828`, and `disk import: yes`. The native sync summary still reported
+`needs-sync-up`/`needs-sync-down` with the last sync at `2026-08-21 20:20:10.166 +0900`; multiple
+items remained in `pending-scan` for roughly three or more hours. The unchanged counters are
+provider-stall evidence, not a per-item receipt and not proof that the visible Finder operation
+completed. DiskSage performed no Finder cancellation, daemon restart, CloudDocs/provider-database
+write, cloud mutation, materialization, or source mutation. New copy, attestation, and eviction
+therefore remain fail-closed; the existing bounded Finder-cancel action remains operator initiated.

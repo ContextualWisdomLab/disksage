@@ -758,3 +758,17 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   projects it into the new-copy admission blockers and Naruon readiness export, and shows it next
   to the existing fixed Finder-cancel action. Copy, attestation, and source eviction remain
   fail-closed; no provider process, source, CloudDocs database, or cloud object was mutated.
+
+## 2026-08-22 04:05 +0900 unchanged iCloud preparation queue
+
+- A second read-only host observation found the same bounded aggregate values after the earlier
+  disk-import evidence: `pending-indexable-count=31,024`, upload
+  `5,202,024,494/5,462,125,152` (95.24%), download `0/828`, and `disk import: yes`.
+  `brctl` still reported `needs-sync-up`/`needs-sync-down`, with last sync at
+  `2026-08-21 20:20:10.166 +0900`; many `pending-scan` entries were three or more hours old.
+- This strengthens the product diagnosis of a stalled File Provider preparation queue but does
+  not bind the state to a particular Finder item or prove a cloud copy. DiskSage performed no
+  cancellation, daemon restart, provider-database write, materialization, cloud mutation, or
+  source mutation. The runtime Goal remains `provider-sync-incomplete`; copy, attestation, and
+  source eviction remain blocked until a fresh complete quiet observation and independent
+  per-item evidence exist.
