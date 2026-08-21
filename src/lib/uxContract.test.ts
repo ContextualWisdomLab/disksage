@@ -41,6 +41,7 @@ describe("UI/UX design and Storybook contract", () => {
     expect(config).toContain('defaultViewport: "desktop"');
     expect(story).toContain('defaultViewport: "mobile"');
     expect(workflow).toContain("npm run build-storybook");
+    expect(workflow).toContain("playwright install --with-deps chromium");
     expect(workflow).toContain("npm run test-storybook");
   });
 
