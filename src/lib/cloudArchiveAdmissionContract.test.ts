@@ -42,6 +42,10 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("접근 불가·진단만 가능");
     expect(source).toContain("공급자 전역 상태 진단과 고정된 데스크톱 클라이언트 복구만 허용");
     expect(source).toContain("!selectedRootDetails()?.readable");
+    expect(source).toContain("async function cancelFinderCopy()");
+    expect(source).toContain("await api.cancelFinderCopy();");
+    expect(source).toContain("cancellingFinderCopy || checkingIcloudHealth");
+    expect(source).toContain("finderCopyCancelStatus = \"Finder 복사 취소 요청을 보냈습니다. 상태를 다시 확인하십시오.\"");
   });
 
   it("defaults provider OAuth consent to read-only until write access is explicitly selected", () => {
