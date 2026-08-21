@@ -378,17 +378,26 @@ pub fn latest_api_object_id(
     }
     let prefix = format!("{receipt_id}-");
     let mut latest: Option<(u64, String, String)> = None;
-    for entry in std::fs::read_dir(directory).ok()?.take(4_096) {
-        let Ok(entry) = entry else {
-            continue;
-        };
-        let path = entry.path();
+    // Retention bounds valid records per receipt. Filter before reading so unrelated receipts do
+    // not consume a global directory window; scanning the complete prefix also recovers a valid
+    // record if an interrupted retention pass temporarily left extra files behind.
+    for path in std::fs::read_dir(directory)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|value| value.to_str())
+                .is_some_and(|name| {
+                    name.starts_with(&prefix)
+                        && path.extension().and_then(|value| value.to_str()) == Some("json")
+                })
+        })
+    {
         let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
             continue;
         };
-        if !name.starts_with(&prefix) || path.extension().and_then(|value| value.to_str()) != Some("json") {
-            continue;
-        }
+        debug_assert!(name.starts_with(&prefix));
         let Ok(record) = read_immutable_sync_evidence(&path) else {
             continue;
         };
@@ -497,6 +506,24 @@ mod tests {
     #[test]
     fn latest_api_object_id_is_read_from_valid_immutable_evidence() {
         let temp = tempfile::tempdir().unwrap();
+        let (record, _) = write_immutable_sync_evidence(temp.path(), &evidence()).unwrap();
+        assert_eq!(
+            latest_api_object_id(temp.path(), &record.evidence.receipt_id, CloudProvider::Onedrive),
+            Some("remote-id".into())
+        );
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn latest_api_object_id_ignores_unrelated_receipts_before_global_window() {
+        let temp = tempfile::tempdir().unwrap();
+        for index in 0..4_096 {
+            std::fs::write(
+                temp.path().join(format!("{}-{index:020}-unrelated.json", "b".repeat(64))),
+                b"unrelated",
+            )
+            .unwrap();
+        }
         let (record, _) = write_immutable_sync_evidence(temp.path(), &evidence()).unwrap();
         assert_eq!(
             latest_api_object_id(temp.path(), &record.evidence.receipt_id, CloudProvider::Onedrive),
