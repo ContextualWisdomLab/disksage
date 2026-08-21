@@ -429,6 +429,18 @@ catalog exports use DCAT 3 concepts for datasets, distributions, checksums, and 
 standards describe interchange semantics only; they do not grant cloud-write or source-eviction
 authority. The APA 7 records and original URLs are kept in the Zotero Local API manifest.
 
+## Amendment: OneDrive runtime was disconnected during Finder preparation (2026-08-21)
+
+A fresh bounded OneDrive File Provider observation reported `temporarily disconnected` because the
+OneDrive client was not running, active upload/download progress, a SQLite database-init error, and
+root reconciliation entries failing with File Provider `-1004` (`serverUnreachable`). DiskSage keeps
+copy admission blocked and exposes the bounded Finder-cancel and provider-recovery actions; it must
+not treat Finder's “준비 중” window as completion or evict a source. Starting the client while the
+volume had only 340 MiB available was stopped immediately; only the user-space client was closed and
+no Finder, `bird`, `fileproviderd`, provider object, or source file was mutated. The operator must
+restore safe local headroom, explicitly cancel the stale Finder copy if desired, then obtain a fresh
+quiet provider observation before retrying.
+
 - Lebo, T., Sahoo, S., & McGuinness, D. (Eds.). (2013). *PROV-O: The PROV ontology*. W3C
   Recommendation. https://www.w3.org/TR/prov-o/
 - Albertoni, R., Browning, D., Cox, S. J., Gonzalez Beltran, A., Perego, A., & Winstanley, P.
