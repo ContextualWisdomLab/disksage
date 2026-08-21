@@ -123,6 +123,11 @@ test('live registry uses the tested Node runtime and bounded transient GitHub AP
     /for \(let attempt = 1; attempt <= 3; attempt \+= 1\)/,
   );
   assert.match(liveRegistryJob, /attempt >= 3/);
+  assert.doesNotMatch(
+    liveRegistryJob,
+    /github-api-retry-exhausted/,
+    'bounded retry control flow must not retain an unreachable post-loop failure path',
+  );
 });
 
 test('live registry binds executed audit code and protected-main evidence to one immutable SHA', () => {
