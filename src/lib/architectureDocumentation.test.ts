@@ -144,7 +144,7 @@ describe('canonical DiskSage documentation graph', () => {
     expect(incident).toContain('## Distinct remedies and feasibility');
     expect(incident).toContain('## Recovery and closure evidence');
     expect(diligence).toContain('## Buyer evidence matrix');
-    expect(diligence).toContain('protected main');
+    expect(diligence).toContain('Protected `main`');
     expect(diligence).toContain('no evidence');
     expect(licensing).toContain('## Rights evidence model');
     expect(licensing).toContain('SBOM');
