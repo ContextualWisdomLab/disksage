@@ -341,6 +341,9 @@ fn validate_connection_document_parent(parent: &Path, allow_missing: bool) -> Re
                 }
             }
             Err(error) if allow_missing && error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotADirectory => {
+                return Err("oauth-connection-directory-unsafe".into());
+            }
             Err(_) => return Err("oauth-connection-directory-unavailable".into()),
         }
     }
