@@ -366,7 +366,7 @@ existing reversible OS Trash boundary. Cloud providers, File Provider state, sou
 Trash contents are never mutated by the planner. A stale plan or missing active-use evidence fails
 closed.
 
-The current orphan head `3d2406c` also treats an incomplete installed-application inventory or
+The current orphan implementation head `3d2406c` (documented by `c2be303`) also treats an incomplete installed-application inventory or
 metadata manifest as non-authoritative. Directory-iteration errors and recursion-depth limits are
 recorded as incomplete evidence, so an unvisited subtree can never make a cache eligible for
 automatic Trash movement; the focused macOS Rust safety tests cover both bounded scans.
