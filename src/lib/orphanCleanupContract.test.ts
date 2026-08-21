@@ -38,5 +38,10 @@ describe("orphan cleanup safety contract", () => {
     // treats HOME itself as protected and therefore cannot be reused as the planner admission test.
     expect(orphan).not.toContain("crate::safety::is_protected(&canonical_home)");
     expect(orphan).toContain("planner_home_scope_is_safe");
+
+    // Validate the complete submitted batch before the first filesystem mutation. A later stale
+    // request must not turn an early request into an unreported partial mutation.
+    expect(orphan).toContain("validate_cleanup_requests(plan, requests)?");
+    expect(orphan).toContain("for candidate in prepared");
   });
 });
