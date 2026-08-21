@@ -30,7 +30,9 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("icloudHealthBlockedSinceMs");
     expect(source).toContain("icloudHealthFingerprint");
     expect(source).toContain("const admissionClear = next.new_copy_admission_state === \"clear\"");
+    expect(source).toContain("} else if (icloudHealthFingerprint !== fingerprint) {");
     expect(source).toContain("icloudHealthBlockedSinceMs = next.admission_blocked_since_ms ?? next.observed_at_ms;");
+    expect(source).toContain("} else if (next.admission_blocked_since_ms != null) {");
     expect(source).toContain("동일한 iCloud 차단 상태가 15분 이상 지속되었습니다.");
     expect(source).toContain("refreshIcloudHealth(true)");
     expect(source).toContain("refreshProviderGlobalSync(true)");
