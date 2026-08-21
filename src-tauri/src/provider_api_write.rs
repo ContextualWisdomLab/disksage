@@ -8,7 +8,7 @@
 use crate::cloud::CloudProvider;
 use crate::provider_api_client::{onedrive_path_locator, ProviderRemoteLocator};
 use serde::Deserialize;
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 const ONEDRIVE_GRAPH_ROOT: &str = "https://graph.microsoft.com/v1.0/me/drive/root";
@@ -277,6 +277,19 @@ fn google_upload_session(
     response_location(&response)
 }
 
+fn read_source_chunk_at(
+    source: &mut std::fs::File,
+    offset: u64,
+    buffer: &mut [u8],
+) -> Result<(), String> {
+    source
+        .seek(SeekFrom::Start(offset))
+        .map_err(|_| "source-seek-failed-during-provider-upload".to_string())?;
+    source
+        .read_exact(buffer)
+        .map_err(|_| "source-read-failed-during-provider-upload".to_string())
+}
+
 fn upload_chunks(
     agent: &ureq::Agent,
     session_url: &str,
@@ -289,9 +302,7 @@ fn upload_chunks(
     let mut buffer = vec![0_u8; chunk_bytes];
     while offset < bytes {
         let want = (bytes - offset).min(chunk_bytes as u64) as usize;
-        source
-            .read_exact(&mut buffer[..want])
-            .map_err(|_| "source-read-failed-during-provider-upload".to_string())?;
+        read_source_chunk_at(&mut source, offset, &mut buffer[..want])?;
         let end = offset + want as u64 - 1;
         let content_range = format!("bytes {offset}-{end}/{bytes}");
         let mut request = agent
