@@ -1,4 +1,5 @@
 use crate::cloud_local_eviction::observe_path_active_use;
+use crate::bound_read_root::BoundReadRoot;
 use crate::incomplete_download::{
     IncompleteDownloadAuditItem, IncompleteDownloadAuditReport, IncompleteDownloadState,
 };
@@ -313,7 +314,11 @@ fn parse_structural_zip_range(value: &str) -> Option<(u64, u64, usize)> {
     (end > start).then_some((start, end, entries))
 }
 
-fn safe_candidate_path(canonical_root: &Path, relative_path: &str) -> Result<PathBuf, String> {
+fn safe_candidate_path(
+    io_root: &Path,
+    canonical_root: &Path,
+    relative_path: &str,
+) -> Result<PathBuf, String> {
     let relative = Path::new(relative_path);
     if relative.as_os_str().is_empty()
         || relative.is_absolute()
@@ -323,7 +328,7 @@ fn safe_candidate_path(canonical_root: &Path, relative_path: &str) -> Result<Pat
     {
         return Err("recovery-candidate-relative-path-unsafe".into());
     }
-    let mut current = canonical_root.to_path_buf();
+    let mut current = io_root.to_path_buf();
     for component in relative.components() {
         let Component::Normal(value) = component else {
             return Err("recovery-candidate-relative-path-unsafe".into());
@@ -340,7 +345,7 @@ fn safe_candidate_path(canonical_root: &Path, relative_path: &str) -> Result<Pat
     if !canonical.starts_with(canonical_root) {
         return Err("recovery-candidate-outside-root".into());
     }
-    Ok(canonical)
+    Ok(current)
 }
 
 fn content_validation(
@@ -611,6 +616,7 @@ fn skipped_item(
 }
 
 fn validate_item(
+    io_root: &Path,
     canonical_root: &Path,
     item: &IncompleteDownloadAuditItem,
     limits: RecoveryValidationLimits,
@@ -625,7 +631,7 @@ fn validate_item(
     if item.active_use.active {
         return skipped_item(item, RecoveryItemStatus::SkippedActive, "audit-item-active");
     }
-    let path = match safe_candidate_path(canonical_root, &item.relative_path) {
+    let path = match safe_candidate_path(io_root, canonical_root, &item.relative_path) {
         Ok(path) => path,
         Err(reason) => {
             return skipped_item(item, RecoveryItemStatus::SkippedEvidenceIncomplete, &reason)
@@ -930,13 +936,19 @@ pub fn validate_incomplete_download_recovery(
     if !source_root.is_absolute() {
         return Err("recovery-validation-root-must-be-absolute".into());
     }
-    let canonical_root = std::fs::canonicalize(source_root)
+    let supplied_root_metadata = std::fs::symlink_metadata(source_root)
         .map_err(|_| "recovery-validation-root-unavailable".to_string())?;
-    let root_metadata = std::fs::symlink_metadata(&canonical_root)
-        .map_err(|_| "recovery-validation-root-unavailable".to_string())?;
-    if !root_metadata.is_dir() || root_metadata.file_type().is_symlink() {
+    if !supplied_root_metadata.is_dir() || supplied_root_metadata.file_type().is_symlink() {
         return Err("recovery-validation-root-unsafe".into());
     }
+    let root_guard = BoundReadRoot::open(source_root)
+        .ok_or_else(|| "recovery-validation-root-unsafe".to_string())?;
+    let canonical_root = root_guard
+        .canonical_path()
+        .ok_or_else(|| "recovery-validation-root-unsafe".to_string())?;
+    let stable_root = root_guard
+        .stable_path()
+        .ok_or_else(|| "recovery-validation-root-unsafe".to_string())?;
     if audit.source_root != canonical_root.to_string_lossy() {
         return Err("recovery-validation-audit-root-mismatch".into());
     }
@@ -948,7 +960,7 @@ pub fn validate_incomplete_download_recovery(
         .items
         .iter()
         .filter(|item| item.recovery_candidate)
-        .map(|item| validate_item(&canonical_root, item, limits))
+        .map(|item| validate_item(&stable_root, &canonical_root, item, limits))
         .collect::<Vec<_>>();
     items.sort_by(|left, right| left.candidate_fingerprint.cmp(&right.candidate_fingerprint));
     let mut issues = BTreeMap::new();
@@ -993,6 +1005,9 @@ pub fn validate_incomplete_download_recovery(
         total.saturating_add(item.validated_recoverable_bytes)
     });
     let fingerprint = validation_fingerprint(audit, limits, evidence_complete, &issues, &items);
+    if root_guard.canonical_path().as_ref() != Some(&canonical_root) {
+        return Err("recovery-validation-root-unsafe".into());
+    }
     Ok(IncompleteDownloadRecoveryReport {
         schema_version: INCOMPLETE_DOWNLOAD_RECOVERY_VERSION,
         observed_at_ms,

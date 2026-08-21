@@ -11,6 +11,10 @@ use std::fs::{File, Metadata};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
+#[path = "bound_read_root.rs"]
+pub(crate) mod bound_read_root;
+use bound_read_root::BoundReadRoot;
+
 pub const EXACT_DUPLICATE_AUDIT_VERSION: u32 = 1;
 pub const DEFAULT_MAX_ENTRIES: usize = 200_000;
 pub const MAX_ENTRIES: usize = 1_000_000;
@@ -402,7 +406,7 @@ fn unix_identity(metadata: &Metadata) -> (u64, u64) {
 }
 
 fn observe_file(
-    canonical_root: &Path,
+    io_root: &Path,
     path: PathBuf,
     metadata: Metadata,
 ) -> Result<FileObservation, String> {
@@ -410,7 +414,7 @@ fn observe_file(
         return Err("duplicate-audit-file-unsafe".into());
     }
     let relative = path
-        .strip_prefix(canonical_root)
+        .strip_prefix(io_root)
         .map_err(|_| "duplicate-audit-relative-path-failed".to_string())?;
     if !valid_relative_path(relative) {
         return Err("duplicate-audit-relative-path-unsafe".into());
@@ -548,20 +552,26 @@ pub fn collect_exact_duplicate_audit(
     if !(1..=MAX_ENTRIES).contains(&max_entries) {
         return Err("duplicate-audit-max-entries-out-of-range".into());
     }
-    let canonical_root = std::fs::canonicalize(source_root)
+    let supplied_root_metadata = std::fs::symlink_metadata(source_root)
         .map_err(|_| "duplicate-audit-root-unavailable".to_string())?;
-    let root_metadata = std::fs::symlink_metadata(&canonical_root)
-        .map_err(|_| "duplicate-audit-root-unavailable".to_string())?;
-    if !root_metadata.is_dir() || root_metadata.file_type().is_symlink() {
+    if !supplied_root_metadata.is_dir() || supplied_root_metadata.file_type().is_symlink() {
         return Err("duplicate-audit-root-unsafe".into());
     }
+    let root_guard = BoundReadRoot::open(source_root)
+        .ok_or_else(|| "duplicate-audit-root-unsafe".to_string())?;
+    let canonical_root = root_guard
+        .canonical_path()
+        .ok_or_else(|| "duplicate-audit-root-unsafe".to_string())?;
+    let stable_root = root_guard
+        .stable_path()
+        .ok_or_else(|| "duplicate-audit-root-unsafe".to_string())?;
 
     let mut evidence_complete = true;
     let mut entries_seen = 0usize;
     let mut file_count = 0usize;
     let mut issue_counts = BTreeMap::new();
     let mut observations = Vec::new();
-    let mut pending = vec![(canonical_root.clone(), 0usize)];
+    let mut pending = vec![(stable_root.clone(), 0usize)];
     while let Some((directory, depth)) = pending.pop() {
         let entries = match std::fs::read_dir(&directory) {
             Ok(entries) => entries,
@@ -629,7 +639,7 @@ pub fn collect_exact_duplicate_audit(
             if metadata.len() < min_bytes {
                 continue;
             }
-            match observe_file(&canonical_root, path, metadata) {
+            match observe_file(&stable_root, path, metadata) {
                 Ok(observation) => observations.push(observation),
                 Err(reason) => {
                     evidence_complete = false;
@@ -741,6 +751,9 @@ pub fn collect_exact_duplicate_audit(
         *production_time_source_counts
             .entry(member.production_metadata.production_time_source.clone())
             .or_insert(0) += 1;
+    }
+    if root_guard.canonical_path().as_ref() != Some(&canonical_root) {
+        return Err("duplicate-audit-root-unsafe".into());
     }
     let source_root = canonical_root
         .to_str()

@@ -5,6 +5,7 @@
 
 use crate::cloud_local_eviction::observe_path_active_use;
 use crate::content_digest::{ContentDigests, ContentHasher};
+use crate::bound_read_root::BoundReadRoot;
 use crate::incomplete_download::{
     incomplete_download_audit_integrity_valid, IncompleteDownloadAuditItem,
     IncompleteDownloadAuditReport,
@@ -154,7 +155,11 @@ fn source_metadata_matches(metadata: &Metadata, item: &IncompleteDownloadAuditIt
         && system_time_ms(metadata.modified()) == item.filesystem_modified_ms
 }
 
-fn safe_candidate_path(canonical_root: &Path, relative_path: &str) -> Result<PathBuf, String> {
+fn safe_candidate_path(
+    io_root: &Path,
+    canonical_root: &Path,
+    relative_path: &str,
+) -> Result<PathBuf, String> {
     let relative = Path::new(relative_path);
     if relative.as_os_str().is_empty()
         || relative.is_absolute()
@@ -164,7 +169,7 @@ fn safe_candidate_path(canonical_root: &Path, relative_path: &str) -> Result<Pat
     {
         return Err("materialization-source-relative-path-unsafe".into());
     }
-    let mut current = canonical_root.to_path_buf();
+    let mut current = io_root.to_path_buf();
     for component in relative.components() {
         if let Component::Normal(value) = component {
             current.push(value);
@@ -180,7 +185,7 @@ fn safe_candidate_path(canonical_root: &Path, relative_path: &str) -> Result<Pat
     if !canonical.starts_with(canonical_root) {
         return Err("materialization-source-outside-root".into());
     }
-    Ok(canonical)
+    Ok(current)
 }
 
 fn digest_range(path: &Path, start: u64, end: u64) -> Result<ContentDigests, String> {
@@ -370,13 +375,19 @@ pub fn plan_incomplete_download_materialization(
     if !source_root.is_absolute() {
         return Err("materialization-root-must-be-absolute".into());
     }
-    let canonical_root = std::fs::canonicalize(source_root)
+    let supplied_root_metadata = std::fs::symlink_metadata(source_root)
         .map_err(|_| "materialization-root-unavailable".to_string())?;
-    let root_metadata = std::fs::symlink_metadata(&canonical_root)
-        .map_err(|_| "materialization-root-unavailable".to_string())?;
-    if !root_metadata.is_dir() || root_metadata.file_type().is_symlink() {
+    if !supplied_root_metadata.is_dir() || supplied_root_metadata.file_type().is_symlink() {
         return Err("materialization-root-unsafe".into());
     }
+    let root_guard = BoundReadRoot::open(source_root)
+        .ok_or_else(|| "materialization-root-unsafe".to_string())?;
+    let canonical_root = root_guard
+        .canonical_path()
+        .ok_or_else(|| "materialization-root-unsafe".to_string())?;
+    let stable_root = root_guard
+        .stable_path()
+        .ok_or_else(|| "materialization-root-unsafe".to_string())?;
     if audit.source_root != canonical_root.to_string_lossy() {
         return Err("materialization-audit-root-mismatch".into());
     }
@@ -426,7 +437,7 @@ pub fn plan_incomplete_download_materialization(
         {
             return Err("materialization-audit-item-not-idle".into());
         }
-        let path = safe_candidate_path(&canonical_root, &audit_item.relative_path)?;
+        let path = safe_candidate_path(&stable_root, &canonical_root, &audit_item.relative_path)?;
         let before = std::fs::symlink_metadata(&path)
             .map_err(|_| "materialization-source-metadata-failed".to_string())?;
         if !source_metadata_matches(&before, audit_item) {
@@ -539,6 +550,9 @@ pub fn plan_incomplete_download_materialization(
         evidence_complete,
         &units,
     );
+    if root_guard.canonical_path().as_ref() != Some(&canonical_root) {
+        return Err("materialization-root-unsafe".into());
+    }
 
     Ok(IncompleteDownloadMaterializationReport {
         schema_version: INCOMPLETE_DOWNLOAD_MATERIALIZATION_VERSION,
