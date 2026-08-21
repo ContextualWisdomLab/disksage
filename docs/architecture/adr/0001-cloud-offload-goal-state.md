@@ -449,8 +449,9 @@ also recorded extension termination after the stalled requests and materializati
 with staged items missing. These are provider-reconciliation evidence only: they do not prove
 a completed destination copy, cloud durability, remote capacity, or source-eviction authority.
 
-The File Provider activity evidence schema is therefore version 2. DiskSage stores only aggregate
-counts (`materialization_failure_count` and `staged_item_missing_count`) and redacted notices;
+The File Provider activity evidence schema is therefore version 3. DiskSage stores only aggregate
+counts (`materialization_failure_count`, `staged_item_missing_count`, and sync-exclusion counts)
+and redacted notices;
 raw paths, filenames, item identifiers, contents, and provider dumps are not persisted. Either
 materialization failure or staged-item loss adds `icloud-file-provider-materialization-failed`
 to the new-copy admission blockers. Copy, attestation, and local eviction remain fail-closed
