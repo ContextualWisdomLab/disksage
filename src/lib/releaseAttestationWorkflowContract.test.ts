@@ -21,4 +21,15 @@ describe("release attestation workflow contract", () => {
     expect(checkoutIndex).toBeLessThan(downloadIndex);
     expect(attestJob).toContain("expected exactly 18 regular files");
   });
+
+  it("binds Cargo SBOM metadata to the shipped Rust manifest", () => {
+    const workflow = readFileSync(resolve(repositoryRoot, ".github/workflows/release.yml"), "utf8");
+    const attestStart = workflow.indexOf("  attest-release:");
+    const publishStart = workflow.indexOf("  publish-release:");
+    const attestJob = workflow.slice(attestStart, publishStart);
+
+    expect(attestJob).toContain(
+      "cargo metadata --locked --format-version=1 --manifest-path src-tauri/Cargo.toml",
+    );
+  });
 });
