@@ -36,3 +36,33 @@ fn public_plan_fingerprint_does_not_encode_home_scope() {
     assert!(!serialized.contains("root_fingerprint"));
     assert!(!serialized.contains(&home_a.path().to_string_lossy().to_string()));
 }
+
+#[test]
+fn installed_reverse_dns_bundle_id_is_not_limited_to_a_small_prefix_allowlist() {
+    let home = tempfile::tempdir().expect("private home fixture");
+    let applications = home.path().join("Applications");
+    let contents = applications.join("Editor.app/Contents");
+    let caches = home.path().join("Library/Caches/dev.example.editor");
+    std::fs::create_dir_all(&contents).expect("create app bundle");
+    std::fs::create_dir_all(&caches).expect("create matching cache");
+    std::fs::write(
+        contents.join("Info.plist"),
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>dev.example.editor</string></dict></plist>"#,
+    )
+    .expect("write Info.plist");
+
+    let watched = [
+        (home.path().join("Library/Caches"), "cache"),
+        (
+            home.path().join("Library/Application Support"),
+            "application-support",
+        ),
+    ];
+    let plan = plan_for_roots(home.path(), &watched, &[applications], 1)
+        .expect("plan with non-com prefix installed app");
+
+    assert!(plan.scan_complete);
+    assert_eq!(plan.candidate_count, 0);
+}
