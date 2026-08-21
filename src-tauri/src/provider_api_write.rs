@@ -27,6 +27,12 @@ pub struct ProviderApiUploadResult {
     pub locator: ProviderRemoteLocator,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UploadResponseKind {
+    Complete,
+    Progress,
+}
+
 #[derive(Debug, Deserialize)]
 struct UploadedItem {
     id: Option<String>,
@@ -117,11 +123,34 @@ fn read_response_body(response: &mut ureq::http::Response<ureq::Body>) -> Result
     drain_response_body(response)
 }
 
-fn validate_upload_progress_status(status: u16) -> Result<(), String> {
-    if status == 202 || status == 308 {
-        Ok(())
+fn classify_upload_response_status(status: u16) -> Result<UploadResponseKind, String> {
+    match status {
+        200 | 201 => Ok(UploadResponseKind::Complete),
+        202 | 308 => Ok(UploadResponseKind::Progress),
+        _ => Err(format!("provider-api-http-status:{status}")),
+    }
+}
+
+fn next_upload_offset(
+    status: u16,
+    range: Option<&str>,
+    sent_end: u64,
+) -> Result<u64, String> {
+    if let Some(range) = range {
+        let acknowledged_end = range
+            .strip_prefix("bytes=")
+            .and_then(|value| value.rsplit_once('-'))
+            .and_then(|(_, value)| value.parse::<u64>().ok())
+            .filter(|acknowledged_end| *acknowledged_end <= sent_end)
+            .ok_or_else(|| "provider-api-upload-range-invalid".to_string())?;
+        return Ok(acknowledged_end.saturating_add(1));
+    }
+    if status == 308 {
+        // Google Drive specifies that a 308 without Range means the session has committed no bytes.
+        Ok(0)
     } else {
-        Err(format!("provider-api-http-status:{status}"))
+        // OneDrive reports accepted fragments as 202 and may omit the HTTP Range header.
+        Ok(sent_end.saturating_add(1))
     }
 }
 
@@ -329,24 +358,20 @@ fn upload_chunks(
             .send(&buffer[..want])
             .map_err(safe_transport_error)?;
         let status = response.status().as_u16();
-        if (200..300).contains(&status) {
-            let item: UploadedItem = read_json(&mut response)?;
-            return item
-                .id
-                .filter(|id| !id.trim().is_empty())
-                .ok_or_else(|| "provider-api-upload-object-id-missing".into());
+        match classify_upload_response_status(status)? {
+            UploadResponseKind::Complete => {
+                let item: UploadedItem = read_json(&mut response)?;
+                return item
+                    .id
+                    .filter(|id| !id.trim().is_empty())
+                    .ok_or_else(|| "provider-api-upload-object-id-missing".into());
+            }
+            UploadResponseKind::Progress => {
+                let range = response.headers().get("Range").and_then(|value| value.to_str().ok());
+                offset = next_upload_offset(status, range, end)?;
+                drain_response_body(&mut response)?;
+            }
         }
-        validate_upload_progress_status(status)?;
-        if let Some(range) = response.headers().get("Range").and_then(|v| v.to_str().ok()) {
-            let end = range
-                .rsplit_once('-')
-                .and_then(|(_, value)| value.parse::<u64>().ok())
-                .ok_or_else(|| "provider-api-upload-range-invalid".to_string())?;
-            offset = end.saturating_add(1);
-        } else {
-            offset = end.saturating_add(1);
-        }
-        drain_response_body(&mut response)?;
     }
     Err("provider-api-upload-completion-missing".into())
 }
@@ -508,12 +533,44 @@ mod tests {
     }
 
     #[test]
-    fn resumable_upload_progress_accepts_google_308_and_onedrive_202() {
-        assert!(validate_upload_progress_status(308).is_ok());
-        assert!(validate_upload_progress_status(202).is_ok());
+    fn resumable_upload_statuses_distinguish_progress_from_completion() {
         assert_eq!(
-            validate_upload_progress_status(307).unwrap_err(),
+            classify_upload_response_status(200).unwrap(),
+            UploadResponseKind::Complete
+        );
+        assert_eq!(
+            classify_upload_response_status(201).unwrap(),
+            UploadResponseKind::Complete
+        );
+        assert_eq!(
+            classify_upload_response_status(202).unwrap(),
+            UploadResponseKind::Progress
+        );
+        assert_eq!(
+            classify_upload_response_status(308).unwrap(),
+            UploadResponseKind::Progress
+        );
+        assert_eq!(
+            classify_upload_response_status(307).unwrap_err(),
             "provider-api-http-status:307"
+        );
+    }
+
+    #[test]
+    fn google_308_without_range_retries_from_zero_instead_of_skipping_bytes() {
+        assert_eq!(next_upload_offset(308, None, 1023).unwrap(), 0);
+        assert_eq!(
+            next_upload_offset(308, Some("bytes=0-42"), 1023).unwrap(),
+            43
+        );
+        assert_eq!(next_upload_offset(202, None, 1023).unwrap(), 1024);
+        assert_eq!(
+            next_upload_offset(308, Some("bytes=0-2048"), 1023).unwrap_err(),
+            "provider-api-upload-range-invalid"
+        );
+        assert_eq!(
+            next_upload_offset(308, Some("nonsense-42"), 1023).unwrap_err(),
+            "provider-api-upload-range-invalid"
         );
     }
 }
