@@ -653,3 +653,9 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   and retained SQLite `databaseInitError` code 11. The provider is therefore still not quiet or
   complete; DiskSage keeps copy, attestation, and eviction fail-closed. This separates the active
   provider-index backlog from the earlier low-space pressure incident.
+
+## 2026-08-22 readiness verifier integration boundary
+
+- The Naruon readiness verifier's source comment is now valid both as a standalone binary and when
+  included by the integration test that locks its `--help`/absolute-path parser boundary. This
+  repairs the exact-head Rust test failure without changing readiness, copy, or eviction authority.

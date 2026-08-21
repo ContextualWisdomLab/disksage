@@ -44,6 +44,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Keep the shipped Naruon readiness verifier source includable by its integration boundary test;
+  the terminal parser contract now compiles in both the binary and test-module contexts.
+
 - Cover the `sensitive-config` archive-kind wire label in the generated cloud-plan implementation,
   so the macOS/Linux/Windows cloud-plan binaries compile after the sensitive-config safety
   boundary is enabled.
