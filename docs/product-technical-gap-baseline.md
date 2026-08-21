@@ -632,9 +632,31 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - PR #213 remains exact head `cc693e4` with CodeRabbit passing, Devin and required checks pending,
   and a stale `CHANGES_REQUESTED` review decision. No merge or provider mutation is claimed.
 
+## 2026-08-21 exact-head ecosystem audit
+
+- DiskSage PR #246 implementation history remains on `feat/storybook-ux-contracts`; its latest
+  implementation commit is `2a4ed3860264f4b4f7ba30655281e6ef93399386`, followed by documentation
+  bindings and the provider-base synchronization merge. The PR is open and no protected merge is
+  claimed.
+- The UX contract now exposes the fixed Finder Escape action when provider-global evidence reports
+  either local disk exhaustion or a missing provider item, in addition to active transfer and
+  provider-error evidence. This is cancellation guidance only; it grants no copy, attestation, or
+  eviction authority.
+- Naruon PR #1434 remains open at `c05fb102ff2f099e9bb6513dd541ec3d0496c472`; substantive
+  security, frontend, backend, Noema, and CodeQL checks are successful, but coverage evidence is
+  queued and the metadata-only gate is still in progress. Its protected merge state is blocked.
+- semantic-data-portal PR #59 remains open at `65e4fd770c69192daafe51854eb73eb2f06f0bf4` with
+  completed substantive checks successful, but protected review is still required. PR #61 remains
+  open at `0c248d288be4ef9a01cd498b7311157b053a63e1`; its CodeQL failures came from the hosted
+  service response `No server is currently available to service your request`, and the historical
+  run cannot be retried through GitHub's API, so the PR is not represented as green.
+- The user-referenced fast-mlsirm PR #160 is closed without merge (`merged_at=null`). DiskSage has
+  not introduced an unverified LLM-as-a-Judge dependency; its copy and eviction gates remain
+  deterministic and fail closed until a current, reviewed fast-mlsirm integration exists.
+
 ## 2026-08-21 exact-head native staging and OneDrive runtime follow-up
 
-- DiskSage source head `3704dd1` closes the native-copy cleanup race identified in the P0 gap:
+- DiskSage source head `e6c6e34` records the native-copy cleanup race fix identified in the P0 gap:
   macOS now copies into a command-owned `tempfile` directory, verifies bytes and source identity,
   and finalizes with bounded `/bin/mv -n`; timeout/helper failure drops only that owned staging
   directory and cannot remove a provider-owned final destination. Successful copies continue to
@@ -687,7 +709,6 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - The user-referenced fast-mlsirm PR #160 is closed without merge (`merged_at=null`). DiskSage has
   not introduced an unverified LLM-as-a-Judge dependency; its copy and eviction gates remain
   deterministic and fail closed until a current, reviewed fast-mlsirm integration exists.
-
 ## 2026-08-21 third-party provider probe backoff
 
 - CloudArchive now retries clear OneDrive/Google Drive observations on the one-minute loop but backs
