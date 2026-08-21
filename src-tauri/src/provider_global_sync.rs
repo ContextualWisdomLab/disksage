@@ -99,6 +99,17 @@ fn probe_output_is_truncated(bytes_len: usize) -> bool {
     bytes_len as u64 > MAX_DUMP_BYTES
 }
 
+fn contains_bounded_numeric_marker(text: &str, prefix: &str, number: &str) -> bool {
+    text.match_indices(prefix).any(|(index, _)| {
+        let remainder = &text[index + prefix.len()..];
+        remainder.starts_with(number)
+            && remainder
+                .as_bytes()
+                .get(number.len())
+                .map_or(true, |next| !next.is_ascii_digit())
+    })
+}
+
 /// Parse only aggregate queue markers from one provider-filtered File Provider dump.
 pub fn parse_dump(
     provider: CloudProvider,
@@ -159,8 +170,8 @@ pub fn parse_dump(
         has_local_disk_full |= marker_lower.contains("odresult_errno 28")
             || marker_lower.contains("errno 28")
             || marker_lower.contains("enospc")
-            || marker_lower.contains("code=28")
-            || marker_lower.contains("code 28")
+            || contains_bounded_numeric_marker(&marker_lower, "code=", "28")
+            || contains_bounded_numeric_marker(&marker_lower, "code ", "28")
             || marker_lower.contains("osstatus -34")
             || marker_lower.contains("no space left on device")
             || marker_lower.contains("disk full");
