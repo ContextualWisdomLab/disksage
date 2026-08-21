@@ -371,6 +371,11 @@ metadata manifest as non-authoritative. Directory-iteration errors and recursion
 recorded as incomplete evidence, so an unvisited subtree can never make a cache eligible for
 automatic Trash movement; the focused macOS Rust safety tests cover both bounded scans.
 
+The cleanup mutation result is authoritative once the OS Trash operation succeeds. A follow-up
+read-only plan refresh is deliberately separate: if it fails, the UI preserves the successful
+cleanup receipt, clears the stale selection, and asks the operator to re-run the relationship
+inspection instead of reporting a completed mutation as a failed cleanup.
+
 ## Amendment: repeated provider-stall evidence remains blocking (2026-08-21 12:35 +0900)
 
 A fresh bounded read-only Google Drive File Provider dump still reported temporarily disconnected

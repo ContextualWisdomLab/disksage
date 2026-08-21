@@ -568,6 +568,8 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   iteration errors. Frontend checks passed locally (31 files, 127 tests); focused Rust orphan tests
   pass (11/11 unit plus 2/2 privacy-boundary integration tests, including deep inventory/manifest
   rejection and object identity replacement rejection).
+  The post-Trash read-only refresh is now separate from the mutation result, so a refresh failure
+  preserves the successful cleanup receipt and clears stale UI selection.
   Hosted full Rust,
   security, and review checks remain authoritative and pending. PR #213's live base head is
   `6f424af`.
