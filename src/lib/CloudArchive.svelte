@@ -1021,7 +1021,8 @@
           {#if providerGlobalSync.pending_indexable_count !== null}
             · 인덱싱 대기 {providerGlobalSync.pending_indexable_count}개
           {/if}
-          · 마지막 관찰 {evidenceObservedAt(providerGlobalSyncObservedAtMs)} · 1분 후 자동 재확인
+          · 마지막 관찰 {evidenceObservedAt(providerGlobalSyncObservedAtMs)} ·
+          {providerGlobalSync.blockers.length === 0 ? "1분" : "5분"} 후 자동 재확인
           {#if providerGlobalSyncBlockedSinceMs > 0}
             · 동일 차단 지속 {duration(Math.max(0, providerGlobalSyncObservedAtMs - providerGlobalSyncBlockedSinceMs))}
           {/if}
