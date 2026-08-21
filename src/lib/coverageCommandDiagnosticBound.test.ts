@@ -72,6 +72,42 @@ describe('bounded Rust coverage command diagnostic', () => {
     }
   });
 
+  it('prioritizes compiler errors when earlier warnings exhaust the focus budget', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'disksage-coverage-diagnostic-warnings-'));
+    try {
+      const rawLog = join(directory, 'raw.log');
+      const boundedLog = join(directory, 'bounded.log');
+      const compilerDiagnostic =
+        'error[E0425]: cannot find value `missing` in this scope\n --> src-tauri/src/lib.rs:777:9\n';
+      const prefixNoise = Array.from(
+        { length: 180 },
+        (_, index) => `prefix-noise-${String(index).padStart(4, '0')} ${'x'.repeat(80)}`,
+      ).join('\n');
+      const warnings = Array.from(
+        { length: 220 },
+        (_, index) =>
+          `warning: pre-error warning ${String(index).padStart(4, '0')} ${'w'.repeat(70)}\n` +
+          ` --> src-tauri/src/warn${String(index).padStart(4, '0')}.rs:1:1`,
+      ).join('\n');
+      const suffixNoise = Array.from(
+        { length: 500 },
+        (_, index) => `suffix-noise-${String(index).padStart(4, '0')} ${'y'.repeat(80)}`,
+      ).join('\n');
+      writeFileSync(
+        rawLog,
+        `${prefixNoise}\n${warnings}\n${compilerDiagnostic}${suffixNoise}\n`,
+      );
+
+      execFileSync('bash', [diagnosticHelper, rawLog, boundedLog]);
+
+      const diagnostic = readFileSync(boundedLog, 'utf8');
+      expect(diagnostic).toContain(compilerDiagnostic);
+      expect(Buffer.byteLength(diagnostic)).toBeLessThanOrEqual(32_768);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('wires the exact coverage step through the executable helper', () => {
     expect(workflow).toContain(
       'bash .github/scripts/bound-coverage-command-diagnostic.sh coverage-command.raw.log coverage-command.bounded.log',
