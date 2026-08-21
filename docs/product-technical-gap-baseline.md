@@ -443,3 +443,14 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   217 MiB. The Node compile cache, active worktrees, iCloud/File Provider state, OneDrive state,
   Google Drive support data, and all user/provider files remain untouched. APFS availability then
   measured about 2.3 GiB, while the 7.2 GiB Finder materialization remains unsafe to retry.
+
+## 2026-08-21 central hourly-loop RCA
+
+- Central `.github` scheduled DiskSage runs `31960074438` through `31991358711` ended in
+  `startup_failure` before creating a job. The reusable scheduler requests an OIDC exchange, but
+  the DiskSage caller exposed only `contents: read`; GitHub therefore could not start the called
+  job with `id-token: write`.
+- The minimal cross-repository repair is tracked in [`.github#1188`](https://github.com/ContextualWisdomLab/.github/pull/1188)
+  at exact head `7f9f9f0`, with 24 focused contract tests passing locally. The current cadence is
+  not claimed operational until a protected merge and a new scheduled run complete; no provider
+  secret, Copilot token, or repository write permission is added to the caller.

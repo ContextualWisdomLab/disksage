@@ -48,10 +48,12 @@ ended in `startup_failure` before creating a job. The called scheduler requests
 `id-token: write`, while the caller exposed only `contents: read`; the missing
 caller permission prevented the OpenCode OIDC exchange from starting. The
 minimal repair is tracked in
-[`ContextualWisdomLab/.github#1180`](https://github.com/ContextualWisdomLab/.github/pull/1180)
-at head `25efbca56f5749cf99f3a5d532070c1b01c6c79d`. Until that PR is normally
-merged and a scheduled run completes, the hourly cadence is not claimed as
-operational evidence.
+[`ContextualWisdomLab/.github#1188`](https://github.com/ContextualWisdomLab/.github/pull/1188)
+at head `7f9f9f0606ac5c88df3857eb5e5367d5bdbad420`; it applies the same OIDC
+permission fix to DiskSage and its sibling Clearfolio caller and updates the
+contract tests. The earlier DiskSage-only repair remains open as #1180. Until
+one of these fixes is normally merged and a scheduled run completes, the
+hourly cadence is not claimed as operational evidence.
 
 ## Consequences
 
