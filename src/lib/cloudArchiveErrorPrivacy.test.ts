@@ -17,6 +17,7 @@ const operations = [
   "attest",
   "reconcile",
   "icloud-health",
+  "finder-copy-cancel",
   "provider-sync",
   "provider-recovery",
   "evict",

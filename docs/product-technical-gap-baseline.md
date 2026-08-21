@@ -388,11 +388,15 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - Provider evidence lookup remains advisory locator recovery only. It does not grant cloud-write or
   source-eviction authority: remote revalidation, destination binding, content hash, explicit
   provider-sync state, and the existing approval gates still decide authorization.
+- The prior manual Finder workaround is now a product action: a macOS-only, fixed-script
+  `cancel_finder_copy` command sends Escape with a five-second bound and no user-controlled input.
+  The UI exposes it only alongside concrete iCloud File Provider activity evidence; its success
+  does not clear admission and the next bounded provider observation remains authoritative.
 - The Finder `real_datasets` incident remains provider-sync-incomplete. The 7.2 GiB target did not
   change, diagnostic dumps totaling about 1.6 GiB were removed without touching provider state,
   and the local volume recovered to about 1.6 GiB free. The already-running Finder operation must
-  be cancelled from its UI and must not be retried until the local headroom and a fresh quiet
-  File Provider observation satisfy the plan gates.
+  be cancelled through the bounded `cancel_finder_copy` UI action and must not be retried until the
+  local headroom and a fresh quiet File Provider observation satisfy the plan gates.
 
 ## 2026-08-21 immediate disk-pressure follow-up
 

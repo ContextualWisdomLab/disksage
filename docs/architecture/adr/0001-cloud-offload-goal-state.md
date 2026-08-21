@@ -317,6 +317,14 @@ destination binding, local hash, and normal provider-sync gates remain mandatory
 implemented at source head `9222558b4346d1a6be30ef17645f43124e1232e1` with a regression case that
 places 4,096 unrelated records before the target record.
 
+When a bounded iCloud health observation reports a stalled or active File Provider transfer, the UI
+may request Finder cancellation through one fixed macOS AppleScript that activates Finder and sends
+Escape. The command accepts no path, script, or process identifier, uses a five-second timeout, and
+never kills `bird`, `fileproviderd`, a provider client, a cloud object, or a source file. A successful
+request is only an operator-action receipt; a fresh quiet provider observation is still required
+before any copy, attestation, or source eviction. This action is implemented at the follow-up head
+`61d69745184dfc7b8e9e7d3742818c122e622415`.
+
 ## Standards references
 
 The lineage vocabulary is aligned with PROV-O's Entity/Activity/Agent and derivation relations;

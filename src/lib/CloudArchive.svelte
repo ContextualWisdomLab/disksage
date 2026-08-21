@@ -96,6 +96,8 @@
   let checkingProviderGlobalSync = $state(false);
   let recoveringProvider = $state(false);
   let providerRecovery: api.ProviderRecoveryOutput | null = $state(null);
+  let cancellingFinderCopy = $state(false);
+  let finderCopyCancelStatus = $state("");
   let evicting = $state(false);
   let evictionConfirmation = $state("");
   let evictionRationale = $state("");
@@ -500,6 +502,22 @@
     }
   }
 
+  async function cancelFinderCopy() {
+    if (cancellingFinderCopy) return;
+    cancellingFinderCopy = true;
+    finderCopyCancelStatus = "";
+    icloudHealthError = "";
+    try {
+      await api.cancelFinderCopy();
+      finderCopyCancelStatus = "Finder 복사 취소 요청을 보냈습니다. 상태를 다시 확인하십시오.";
+      await refreshIcloudHealth(true);
+    } catch (e) {
+      icloudHealthError = boundedCloudArchiveErrorMessage("finder-copy-cancel", e);
+    } finally {
+      cancellingFinderCopy = false;
+    }
+  }
+
   async function refreshProviderGlobalSync() {
     const root = selectedRootDetails();
     if (!root || root.provider === "icloud") {
@@ -875,6 +893,18 @@
             차단 사유:
             {icloudHealth.new_copy_admission_blockers.map(icloudBlockerLabel).join(", ")}
           </p>
+          {#if icloudHealth.file_provider_activity && (
+            icloudHealth.file_provider_activity.no_progress_fetch_count > 0
+            || icloudHealth.file_provider_activity.no_progress_create_count > 0
+            || icloudHealth.file_provider_activity.timed_out
+            || icloudHealth.file_provider_activity.active_upload_count > 0
+            || icloudHealth.file_provider_activity.active_download_count > 0
+          )}
+            <button onclick={cancelFinderCopy} disabled={cancellingFinderCopy || checkingIcloudHealth}>
+              {cancellingFinderCopy ? "Finder 복사 취소 요청 중…" : "Finder 복사 취소 요청"}
+            </button>
+            {#if finderCopyCancelStatus}<p class="muted">{finderCopyCancelStatus}</p>{/if}
+          {/if}
           {#if icloudHealth.file_provider_activity && (icloudHealth.file_provider_activity.no_progress_fetch_count > 0 || icloudHealth.file_provider_activity.no_progress_create_count > 0)}
             <p class="warning">
               File Provider의 복사 요청이 진행률 없이 만료되었습니다. Finder에 남은 복사 대기는 취소하고,

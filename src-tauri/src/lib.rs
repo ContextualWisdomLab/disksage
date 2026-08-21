@@ -146,6 +146,7 @@ pub fn run() {
             commands::verify_cloud_provider_capacity,
             commands::inspect_cloud_provider_client_runtime,
             commands::recover_cloud_provider_client,
+            provider_recovery::cancel_finder_copy,
             commands::inspect_icloud_new_copy_admission,
             commands::inspect_cloud_provider_global_sync,
             commands::list_cloud_review_decisions,

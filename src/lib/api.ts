@@ -1157,6 +1157,7 @@ export const verifyCloudProviderCapacity = (cloudRoot: string) =>
   invoke<CloudCapacitySnapshot>("verify_cloud_provider_capacity", { cloudRoot });
 export const inspectIcloudNewCopyAdmission = () =>
   invoke<IcloudSyncHealthReport>("inspect_icloud_new_copy_admission");
+export const cancelFinderCopy = () => invoke<void>("cancel_finder_copy");
 export const inspectCloudProviderGlobalSync = (cloudRoot: string) =>
   invoke<ProviderGlobalSyncReport>("inspect_cloud_provider_global_sync", { cloudRoot });
 export interface ProviderRecoveryOutput {

@@ -70,6 +70,7 @@ describe("api wrappers", () => {
       [() => api.listCloudProviderConnections(), "list_cloud_provider_connections"],
       [() => api.verifyCloudProviderCapacity("/cloud"), "verify_cloud_provider_capacity", { cloudRoot: "/cloud" }],
       [() => api.inspectIcloudNewCopyAdmission(), "inspect_icloud_new_copy_admission"],
+      [() => api.cancelFinderCopy(), "cancel_finder_copy"],
       [() => api.inspectCloudProviderGlobalSync("/cloud"), "inspect_cloud_provider_global_sync", { cloudRoot: "/cloud" }],
       [() => api.recoverCloudProviderClient("/cloud"), "recover_cloud_provider_client", { cloudRoot: "/cloud" }],
       [() => api.listCloudReviewDecisions(), "list_cloud_review_decisions"],

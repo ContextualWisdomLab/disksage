@@ -30,6 +30,38 @@ pub fn recovery_supported(provider: CloudProvider) -> bool {
     )
 }
 
+/// Request Finder to cancel its active copy/materialization dialog without touching any provider
+/// daemon, cloud object, or source file. The fixed AppleScript sends only Escape; it accepts no
+/// user-provided script, path, or process identifier.
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn cancel_finder_copy() -> Result<(), String> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        return Err("finder-copy-cancel-platform-unsupported".into());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        const SCRIPT: &str = "tell application \"Finder\" to activate\n\
+tell application \"System Events\" to tell process \"Finder\" to key code 53\n";
+        let ok =
+            run_bounded(Path::new("/usr/bin/osascript"), &["-e", SCRIPT]).map_err(|error| {
+                match error.as_str() {
+                    "provider-recovery-command-spawn-failed" => "finder-copy-cancel-spawn-failed",
+                    "provider-recovery-command-timeout" => "finder-copy-cancel-timeout",
+                    "provider-recovery-command-wait-failed" => "finder-copy-cancel-wait-failed",
+                    _ => "finder-copy-cancel-command-failed",
+                }
+                .to_string()
+            })?;
+        if ok {
+            Ok(())
+        } else {
+            Err("finder-copy-cancel-command-failed".into())
+        }
+    }
+}
+
 #[cfg(not(coverage))]
 use std::path::{Path, PathBuf};
 #[cfg(not(coverage))]
@@ -284,5 +316,14 @@ mod tests {
         .unwrap();
         assert_eq!(json["cloud_write_executed"], false);
         assert_eq!(json["source_eviction_executed"], false);
+    }
+
+    #[cfg(all(not(target_os = "macos"), not(coverage)))]
+    #[test]
+    fn finder_copy_cancel_is_explicitly_unsupported_off_macos() {
+        assert_eq!(
+            cancel_finder_copy().unwrap_err(),
+            "finder-copy-cancel-platform-unsupported"
+        );
     }
 }
