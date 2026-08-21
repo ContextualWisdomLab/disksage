@@ -444,7 +444,7 @@ fn observe_lsof_active_use(path: &Path) -> ActiveUseEvidence {
         .arg(path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
     {
         Ok(child) => child,
@@ -469,7 +469,20 @@ fn observe_lsof_active_use(path: &Path) -> ActiveUseEvidence {
             error: Some("active-use-output-missing".into()),
         };
     };
+    let Some(stderr) = child.stderr.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return ActiveUseEvidence {
+            method: "lsof-fp+ps-command".into(),
+            evidence_complete: false,
+            active: false,
+            observed_pids: Vec::new(),
+            results_truncated: false,
+            error: Some("active-use-error-output-missing".into()),
+        };
+    };
     let reader = drain_bounded(stdout);
+    let error_reader = drain_bounded(stderr);
     let started = Instant::now();
     let status = loop {
         match child.try_wait() {
@@ -489,6 +502,11 @@ fn observe_lsof_active_use(path: &Path) -> ActiveUseEvidence {
         }
     };
     let output = reader.join().ok().and_then(Result::ok).unwrap_or_default();
+    let error_output = error_reader
+        .join()
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_default();
     if status.is_none() {
         return ActiveUseEvidence {
             method: "lsof-fp".into(),
@@ -499,7 +517,18 @@ fn observe_lsof_active_use(path: &Path) -> ActiveUseEvidence {
             error: Some("active-use-check-timeout-or-wait-failed".into()),
         };
     }
-    let results_truncated = output.len() as u64 > MAX_ACTIVE_USE_OUTPUT_BYTES;
+    let results_truncated = output.len() as u64 > MAX_ACTIVE_USE_OUTPUT_BYTES
+        || error_output.len() as u64 > MAX_ACTIVE_USE_OUTPUT_BYTES;
+    if results_truncated {
+        return ActiveUseEvidence {
+            method: "lsof-fp".into(),
+            evidence_complete: false,
+            active: false,
+            observed_pids: Vec::new(),
+            results_truncated: true,
+            error: Some("active-use-output-truncated".into()),
+        };
+    }
     let text = String::from_utf8_lossy(&output);
     let mut pids: Vec<u32> = text
         .lines()
@@ -513,14 +542,14 @@ fn observe_lsof_active_use(path: &Path) -> ActiveUseEvidence {
     }
     let success = status.is_some_and(|value| value.success());
     let no_matches = status.and_then(|value| value.code()) == Some(1) && pids.is_empty();
-    let results_truncated = results_truncated || pid_results_truncated;
-    let evidence_complete = !results_truncated && (success || no_matches);
+    let stderr_nonempty = !error_output.is_empty();
+    let evidence_complete = !stderr_nonempty && (success || no_matches);
     ActiveUseEvidence {
         method: "lsof-fp".into(),
         evidence_complete,
         active: !pids.is_empty(),
         observed_pids: pids,
-        results_truncated,
+        results_truncated: pid_results_truncated,
         error: (!evidence_complete).then(|| "active-use-lsof-status-unexpected".into()),
     }
 }
