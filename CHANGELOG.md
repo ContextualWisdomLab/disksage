@@ -14,6 +14,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Render the provider status card in the running CloudArchive view, including the path-free iCloud
   indexing backlog and a bounded Finder-cancel escape; the card remains informational and cannot
   authorize cloud writes, attestation, or source eviction.
+- Reset the UX stall clock when a blocked iCloud transfer's progress fingerprint changes, while
+  retaining the persisted blocker-set timestamp only for the first observation after restart.
 
 - Persist bounded, path-free local-volume snapshots from cloud plans with create-only files,
   content fingerprints, Unix `0400`/`0700` permissions, and shape-limited retention; surface a

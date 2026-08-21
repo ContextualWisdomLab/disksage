@@ -710,3 +710,14 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   off blocked or failed global-sync probes for five minutes. Explicit Finder-copy cancellation and
   provider-client recovery force a fresh read; no provider data, cloud object, or source file is
   mutated by this UI-only scheduling change.
+
+## 2026-08-21 23:38 +0900 progress-aware Finder-stall clock
+
+- UX exact head now resets the iCloud stall interval when the blocked observation's upload,
+  download, indexing, or materialization fingerprint changes. Only the first observation after an
+  application restart may restore the backend's persisted blocker-set timestamp. This prevents an
+  actively progressing transfer from being mislabeled as a long-lived Finder stall; the cancel-only
+  action and fail-closed copy/attestation/eviction gates are unchanged.
+- `npm run check` passed with 0 errors/0 warnings, Vitest passed 34 files/138 tests, production
+  build passed, and Storybook Chromium interaction/a11y passed 5/5. Generated Storybook output was
+  removed after validation; no provider or user data was touched.

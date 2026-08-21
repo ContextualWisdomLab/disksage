@@ -494,9 +494,18 @@
       const observedAtMs = Date.now();
       const next = await api.inspectIcloudNewCopyAdmission();
       const activity = next.file_provider_activity;
-      const fingerprint = [
+      const admissionFingerprint = [
         next.new_copy_admission_state,
         next.new_copy_admission_blockers.join(","),
+      ].join("|");
+      const previousAdmissionFingerprint = icloudHealth
+        ? [
+          icloudHealth.new_copy_admission_state,
+          icloudHealth.new_copy_admission_blockers.join(","),
+        ].join("|")
+        : "";
+      const fingerprint = [
+        admissionFingerprint,
         activity?.no_progress_fetch_count ?? 0,
         activity?.no_progress_create_count ?? 0,
         activity?.materialization_failure_count ?? 0,
@@ -514,7 +523,9 @@
         icloudHealthBlockedSinceMs = 0;
         icloudHealthFingerprint = "";
       } else if (icloudHealthFingerprint !== fingerprint) {
-        icloudHealthBlockedSinceMs = next.admission_blocked_since_ms ?? next.observed_at_ms;
+        icloudHealthBlockedSinceMs = previousAdmissionFingerprint === admissionFingerprint
+          ? observedAtMs
+          : next.admission_blocked_since_ms ?? next.observed_at_ms;
         icloudHealthFingerprint = fingerprint;
       } else if (next.admission_blocked_since_ms != null) {
         icloudHealthBlockedSinceMs = next.admission_blocked_since_ms;

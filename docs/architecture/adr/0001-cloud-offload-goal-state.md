@@ -577,3 +577,13 @@ Legacy backend responses without `admission_blocked_since_ms` now keep the exist
 fingerprint clock on repeated polls; a newly supplied persisted timestamp still takes precedence.
 This preserves the 15-minute stalled-copy warning during a staged rollout of the backend field.
 The compatibility repair is at functional head `bda817d`.
+
+## Amendment: progress-aware iCloud stall clock (2026-08-21 23:38 +0900)
+
+The UX stall clock now distinguishes an admission-blocker run from transfer progress. After an
+application restart, the first blocked observation may restore the backend's persisted
+`admission_blocked_since_ms`; while the admission blocker set is unchanged, any changed upload,
+download, indexing, or materialization fingerprint starts a new observation interval. This prevents
+a healthy progressing transfer from being mislabeled as a 15-minute Finder stall merely because the
+backend's blocker-set duration spans the whole sync run. The behavior is diagnostic/cancel-only and
+does not grant copy, attestation, or eviction authority.
