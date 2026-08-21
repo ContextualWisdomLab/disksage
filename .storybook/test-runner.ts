@@ -7,7 +7,7 @@ const config: TestRunnerConfig = {
   async preVisit(page, story) {
     const context = await getStoryContext(page, story);
     const viewport =
-      context.parameters?.viewport?.defaultViewport === "mobile"
+      context.globals?.viewport?.value === "mobile"
         ? MOBILE_VIEWPORT
         : DESKTOP_VIEWPORT;
     await page.setViewportSize(viewport);
