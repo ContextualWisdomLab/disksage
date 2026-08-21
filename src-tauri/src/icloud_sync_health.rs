@@ -847,12 +847,15 @@ fn parse_native_status_output(
         .map(|value| {
             let (client, value) = value.split_once(" server:").unwrap_or((value, ""));
             let (server, value) = value.split_once(" sync:").unwrap_or((value, ""));
-            let (sync, value) = value.split_once(" last-sync:").unwrap_or((value, ""));
+            let (sync, last_sync_present) = match value.split_once(" last-sync:") {
+                Some((sync, _)) => (sync, true),
+                None => (value.split_once('}').map_or(value, |(sync, _)| sync), false),
+            };
             (
                 bounded_native_status_token(client),
                 bounded_native_status_token(server),
                 bounded_native_status_token(sync),
-                !value.is_empty() || output.contains(" last-sync:"),
+                last_sync_present,
             )
         })
         .unwrap_or((None, None, None, false));
@@ -1131,6 +1134,8 @@ fn probe_file_provider_activity(observed_at_ms: u64) -> IcloudFileProviderActivi
             Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(25)),
             Ok(None) => {
                 timed_out = true;
+                // fileproviderctl flushes its sync-engine summary during a graceful shutdown;
+                // retain that bounded output before falling back to a process-group kill.
                 unsafe {
                     let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGTERM);
                 }
@@ -1217,6 +1222,8 @@ fn probe_native_status(observed_at_ms: u64) -> IcloudNativeStatusEvidence {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
+    // Keep descendants in a private process group so brctl helpers cannot retain our pipe after
+    // the bounded probe expires.
     unsafe {
         command.pre_exec(|| {
             if libc::setpgid(0, 0) == -1 {
@@ -1290,6 +1297,8 @@ fn probe_native_status(observed_at_ms: u64) -> IcloudNativeStatusEvidence {
         }
         match child.try_wait() {
             Ok(Some(status)) => {
+                // The process can exit while unread bytes remain in the pipe. Drain them before
+                // parsing; otherwise a complete native summary can be mistaken for missing data.
                 let drain_deadline = Instant::now() + Duration::from_secs(1);
                 loop {
                     match stdout.read(&mut buffer) {
@@ -1307,14 +1316,13 @@ fn probe_native_status(observed_at_ms: u64) -> IcloudNativeStatusEvidence {
                             if matches!(
                                 error.kind(),
                                 ErrorKind::WouldBlock | ErrorKind::Interrupted
-                            ) =>
-                        {
-                            if Instant::now() >= drain_deadline {
-                                kill_group();
-                                break;
+                            ) => {
+                                if Instant::now() >= drain_deadline {
+                                    kill_group();
+                                    break;
+                                }
+                                thread::sleep(Duration::from_millis(5));
                             }
-                            thread::sleep(Duration::from_millis(5));
-                        }
                         Err(_) => {
                             read_failed = true;
                             break;
