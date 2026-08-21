@@ -512,3 +512,19 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - DiskSage PR #222 has a current Strix failure from the known `127.0.0.1:48080` Caido startup
   outage. It is an infrastructure failure, not a source finding; the canonical remediation is
   #1153. No Strix failure was reclassified as a source pass, and no check was bypassed.
+
+## 2026-08-21 fresh headless iCloud incident receipt
+
+- The exact-head `disksage-icloud-sync-health` binary completed a bounded, read-only probe at
+  `2026-08-21 17:07:34 +0900`. The report was `schema_version=5`, `evidence_complete=false`,
+  `native_status=null`, and `file_provider_activity.timed_out=true`; it retained 85 no-progress
+  fetch markers and 144 no-progress create markers. No active upload/download progress was
+  reported. New-copy admission remains `blocked` with
+  `icloud-sync-health-evidence-incomplete` and `icloud-file-provider-no-progress`.
+- The provider probe does not authorize cancellation, retry, cloud mutation, or local eviction.
+  The receipt is path-free at the public boundary; the 21.3 GB provider-managed database
+  allocation is retained only as bounded disk-pressure evidence. Finder, `bird`,
+  `fileproviderd`, CloudDocs databases, and user files were not mutated.
+- This receipt is the required fresh exact-head proof for the current materialization incident;
+  the acceptance gap remains open until a later complete, quiet provider observation and a
+  provider-specific per-item attestation are available. The protected merge state is unchanged.

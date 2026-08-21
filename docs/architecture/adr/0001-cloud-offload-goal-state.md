@@ -406,3 +406,14 @@ retried on the next reconciliation pass. macOS native copy uses `/bin/cp -n` and
 destination after a failed copy because a concurrent File Provider object may own that path.
 Native-status early termination requires only the stable client/server/sync fields; optional
 `last-sync` remains parsed evidence but is not a latency gate.
+
+## Amendment: fresh headless materialization-stall receipt (2026-08-21)
+
+At `2026-08-21 17:07:34 +0900`, the exact-head `disksage-icloud-sync-health` binary completed a
+bounded read-only observation with `schema_version=5`, incomplete evidence, no native status,
+and a timed-out File Provider dump. The redacted activity aggregate retained 85 fetch and 144
+create requests marked `no progress`, with no active upload or download progress. New-copy
+admission therefore remains blocked by `icloud-sync-health-evidence-incomplete` and
+`icloud-file-provider-no-progress`; this is provider-reconciliation evidence, not proof of a
+completed copy, remote durability, or eviction authority. The observation records the stale
+Finder copy symptom without killing Finder, `bird`, `fileproviderd`, or touching provider data.
