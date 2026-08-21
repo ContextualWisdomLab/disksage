@@ -113,6 +113,7 @@ const CLOUD_DECISION_REASON_LABELS: Readonly<Record<string, string>> = {
   "organization-cloud-sensitive-context-needs-explicit-tenant-approval": "조직 클라우드에 민감 맥락을 보관할 명시적 확인이 필요함",
   "personal-cloud-sensitive-context-needs-explicit-approval": "개인 클라우드에 민감 맥락을 보관할 명시적 확인이 필요함",
   "production-date-not-from-embedded-metadata": "생산일을 내장 메타데이터에서 확인하지 못함",
+  "provider-sync-incomplete": "공급자 동기화 증거가 불완전하여 기존 목적지를 채택할 수 없음",
   "recording-may-contain-sensitive-speech": "녹음·영상에 민감한 대화가 포함될 수 있음",
   "shared-destination-access-needs-review": "공유 목적지의 접근 범위를 확인해야 함",
   "spreadsheet-content-needs-review": "스프레드시트 내용의 민감성 확인이 필요함",
