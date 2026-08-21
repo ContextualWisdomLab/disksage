@@ -454,3 +454,17 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   at exact head `7f9f9f0`, with 24 focused contract tests passing locally. The current cadence is
   not claimed operational until a protected merge and a new scheduled run complete; no provider
   secret, Copilot token, or repository write permission is added to the caller.
+
+## 2026-08-21 Finder provider-stall follow-up
+
+- A bounded `fileproviderctl dump com.google.drivefs.fpext -l` at 11:41:49 KST returned complete
+  read-only evidence: Google Drive was temporarily disconnected, upload and download progress
+  were active, reconciliation contained 2,000 entries, and the extension reported File Provider
+  `-1004` (server unreachable); the local volume had about 6.9 GiB available. This is the exact
+  evidence behind the user's `real_datasets` Finder copy-preparing dialog, not proof that any
+  user file was lost or deleted.
+- CloudArchive now offers its existing fixed `cancel_finder_copy` action for these third-party
+  provider-global blockers, refreshes the same provider dump afterward, and keeps copy,
+  attestation, and source eviction blocked until a fresh clear observation. No provider daemon,
+  cloud object, or source file is terminated or mutated; focused TypeScript and contract tests
+  pass after the change.

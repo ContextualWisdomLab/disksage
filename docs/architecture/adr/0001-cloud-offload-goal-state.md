@@ -169,6 +169,19 @@ immutable per-item evidence history is bounded to 128 records per receipt. The N
 validator also mirrors the iCloud health contract for active File Provider upload/download
 progress, exporting a blocked envelope instead of failing validation.
 
+### Finder cancellation for third-party provider stalls (2026-08-21)
+
+The bounded third-party File Provider dump remains the source of truth for a stuck Finder copy.
+In the current incident, `fileproviderctl dump com.google.drivefs.fpext -l` returned a complete
+read-only observation with Google Drive temporarily disconnected, active upload and download
+progress, a 2,000-entry reconciliation backlog, and File Provider error `-1004`; the local
+volume had about 6.9 GiB available. These markers produce the existing
+`provider-global-sync-*` blockers. CloudArchive now exposes the same fixed Finder Escape
+cancellation action for those blockers, then refreshes the provider-global observation; it does
+not restart `fileproviderd`/`bird`, write cloud data, or authorize attestation or source eviction.
+The cancellation remains an operator-action receipt only, and a fresh clear observation is still
+required before a retry.
+
 The follow-up read-only observation at `2026-08-21 04:31:47 +0900` retained only aggregate evidence
 from the bounded iCloud dump: 97 `createItemBasedOnTemplate` and 46 `fetchContentsForItemWithID`
 requests reported `no progress`, with no upload/download progress marker in the retained output.

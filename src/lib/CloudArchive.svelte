@@ -28,9 +28,23 @@
     "provider-global-sync-blocked",
     "provider-global-sync-evidence-unavailable",
   ]);
+  const PROVIDER_FINDER_COPY_BLOCKERS = new Set([
+    "provider-global-sync-transfer-active",
+    "provider-global-sync-reconciliation-pending",
+    "provider-global-sync-temporarily-disconnected",
+    "provider-global-sync-server-unreachable",
+    "provider-global-sync-error",
+    "provider-global-sync-probe-timeout",
+  ]);
 
   function hasProviderAdmissionBlocker(notices: readonly string[]): boolean {
     return notices.some((notice) => PROVIDER_ADMISSION_BLOCKERS.has(notice));
+  }
+
+  function canCancelFinderCopyForProviderGlobalSync(
+    sync: api.ProviderGlobalSyncReport | null,
+  ): boolean {
+    return sync?.blockers.some((blocker) => PROVIDER_FINDER_COPY_BLOCKERS.has(blocker)) ?? false;
   }
 
   function hasIncompleteSourceScan(notices: readonly string[]): boolean {
@@ -504,15 +518,21 @@
 
   async function cancelFinderCopy() {
     if (cancellingFinderCopy) return;
+    const provider = selectedRootDetails()?.provider;
+    const isIcloud = provider === "icloud";
     cancellingFinderCopy = true;
     finderCopyCancelStatus = "";
-    icloudHealthError = "";
+    if (isIcloud) icloudHealthError = "";
+    else providerGlobalSyncError = "";
     try {
       await api.cancelFinderCopy();
       finderCopyCancelStatus = "Finder 복사 취소 요청을 보냈습니다. 상태를 다시 확인하십시오.";
-      await refreshIcloudHealth(true);
+      if (isIcloud) await refreshIcloudHealth(true);
+      else await refreshProviderGlobalSync();
     } catch (e) {
-      icloudHealthError = boundedCloudArchiveErrorMessage("finder-copy-cancel", e);
+      const message = boundedCloudArchiveErrorMessage("finder-copy-cancel", e);
+      if (isIcloud) icloudHealthError = message;
+      else providerGlobalSyncError = message;
     } finally {
       cancellingFinderCopy = false;
     }
@@ -986,6 +1006,12 @@
             <button onclick={recoverProviderClient} disabled={recoveringProvider || checkingProviderGlobalSync}>
               {recoveringProvider ? "공급자 앱 재기동 중…" : "공급자 앱 재기동 후 상태 재확인"}
             </button>
+            {#if canCancelFinderCopyForProviderGlobalSync(providerGlobalSync)}
+              <button onclick={cancelFinderCopy} disabled={cancellingFinderCopy || checkingProviderGlobalSync}>
+                {cancellingFinderCopy ? "Finder 복사 취소 요청 중…" : "Finder 복사 취소 요청"}
+              </button>
+              {#if finderCopyCancelStatus}<p class="muted">{finderCopyCancelStatus}</p>{/if}
+            {/if}
           {/if}
         {:else}
           <p class="capacity-ok">공급자 전역 동기화 대기열이 비어 있습니다. 개별 파일은 별도 provider 증거가 필요합니다.</p>

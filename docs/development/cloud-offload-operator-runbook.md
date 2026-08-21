@@ -71,6 +71,10 @@ The runtime sequence is:
    and records whether the process is observed afterward. A missing post-restart observation still
    blocks copying; the action performs no cloud write, attestation, or source eviction. iCloud's
    system-managed `bird` process is intentionally not terminated by DiskSage.
+   When a third-party provider reports active transfer, reconciliation backlog, disconnection, or
+   server/error blockers, the same panel exposes `Finder 복사 취소 요청`; it sends only the fixed
+   bounded Finder Escape action and immediately rechecks the provider-global dump. This is not a
+   provider restart or copy/eviction authority.
    The identical bounded action is available headlessly:
    `cargo run --features cloud-cli --bin disksage-provider-recovery -- --provider google-drive`
    (or `onedrive`). A non-zero result such as `provider-recovery-quit-request-failed` is evidence
