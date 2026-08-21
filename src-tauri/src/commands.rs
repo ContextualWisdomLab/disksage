@@ -30,6 +30,9 @@ use crate::{
 #[path = "home_resolution.rs"]
 mod home_resolution;
 
+#[path = "copy_headroom.rs"]
+mod copy_headroom;
+
 #[derive(Default)]
 pub struct AppState {
     pub result: Arc<Mutex<Option<ScanResult>>>,
@@ -1564,15 +1567,11 @@ fn require_capacity_for_copy(
 
 #[cfg(not(coverage))]
 fn require_local_copy_headroom(candidate: &cloud::CloudCandidate) -> Result<(), String> {
-    let snapshot = crate::volume_pressure::snapshot_volume(
-        Path::new(&candidate.src),
+    copy_headroom::require_destination_copy_headroom(
+        Path::new(&candidate.dst),
+        candidate.bytes,
         cloud::system_now_ms(),
-    )?;
-    if crate::volume_pressure::has_copy_headroom(snapshot.available_bytes, candidate.bytes) {
-        Ok(())
-    } else {
-        Err("local-volume-headroom-insufficient".into())
-    }
+    )
 }
 
 #[cfg(not(coverage))]
@@ -1752,8 +1751,8 @@ fn create_cloud_candidate_receipt(
     )?;
     if !adopt_existing {
         // Native File Provider copies can materialize placeholders and stage more than the source
-        // bytes. Re-check local headroom immediately before any mutation; adoption only verifies
-        // an existing destination and does not create a local staging file.
+        // bytes. Re-check destination/staging headroom immediately before any mutation; adoption
+        // only verifies an existing destination and does not create a local staging file.
         require_local_copy_headroom(candidate)?;
         let runtime = provider_client_runtime::require_provider_client_runtime(
             selected.provider,
