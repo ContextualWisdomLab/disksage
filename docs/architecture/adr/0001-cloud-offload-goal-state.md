@@ -574,6 +574,15 @@ The Naruon readiness allow-list now includes `icloud-file-provider-indexing-pend
 provider-derived blocker set closed under export and rejecting the same blocker on non-iCloud
 envelopes. The binding repair is at source head `6f95ca3`.
 
+## Amendment: exact numeric disk-full markers (2026-08-21)
+
+Provider-global File Provider parsing now applies numeric-boundary matching to `errno 28`,
+`odresult_errno 28`, and `OSStatus -34` in addition to the existing `code=28` forms. Longer
+values such as `errno 280` and `OSStatus -340` remain ordinary provider errors and cannot create
+the actionable local-disk-full blocker. The focused regression covers both exact and extended
+markers; this parser remains diagnostic evidence only and does not grant copy, attestation, or
+eviction authority.
+
 ## Amendment: live Finder preparation stall receipt (2026-08-21 23:30 +0900)
 
 The exact-head headless iCloud health probe completed a bounded read-only observation with complete

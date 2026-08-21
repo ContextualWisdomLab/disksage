@@ -49,6 +49,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Bound numeric File Provider disk-full markers for `errno`, `odresult_errno`, and
+  `OSStatus -34`, so longer codes such as `errno 280` cannot be misclassified as
+  local-disk-full evidence.
+
 - Include `icloud-file-provider-indexing-pending` in the Naruon iCloud admission-blocker binding,
   so a signed non-iCloud envelope cannot smuggle that provider blocker through validation.
 

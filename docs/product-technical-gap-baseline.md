@@ -716,3 +716,10 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   `18/2`. The bounded dump was truncated; DiskSage persisted only path-free aggregate evidence and
   set no-progress, indexing-pending, transfer, and exclusion blockers. `mutation_performed=false`;
   Finder preparation is not a copy receipt.
+
+## 2026-08-21 provider disk-full marker boundary
+
+- Provider-global sync parsing now treats only the exact numeric markers `errno 28`,
+  `odresult_errno 28`, and `OSStatus -34` as local-disk-full evidence; longer values such as
+  `errno 280` are retained as generic provider errors. The focused boundary regression passes,
+  and no provider, source, or cloud state was mutated.
