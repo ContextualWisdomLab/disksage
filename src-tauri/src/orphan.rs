@@ -12,6 +12,12 @@ use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+#[cfg(all(target_os = "macos", not(test)))]
+use std::process::{Command, Stdio};
+#[cfg(target_os = "macos")]
+use std::time::Instant;
+#[cfg(all(target_os = "macos", not(test)))]
+use std::time::Duration;
 
 pub const ORPHAN_SCHEMA_VERSION: u32 = 1;
 const ORPHAN_SCHEMA_KIND: &str = "disksage.orphan-plan/v1";
@@ -22,6 +28,8 @@ const MAX_MANIFEST_RECORDS: usize = 100_000;
 const MAX_BUNDLE_SCAN_DEPTH: usize = 3;
 const MAX_MANIFEST_DEPTH: usize = 64;
 const MAX_BUNDLE_METADATA_BYTES: u64 = 1_048_576;
+#[cfg(all(target_os = "macos", not(test)))]
+const MAX_LAUNCH_SERVICES_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -423,7 +431,92 @@ fn installed_bundle_ids(
     for root in roots {
         complete &= collect_bundle_ids(root, 0, deadline, &mut ids);
     }
+    let (launch_services_ids, launch_services_complete) = launch_services_bundle_ids(deadline);
+    ids.extend(launch_services_ids);
+    complete &= launch_services_complete;
     (ids, complete)
+}
+
+#[cfg(all(target_os = "macos", not(test)))]
+fn launch_services_bundle_ids(deadline: Instant) -> (BTreeSet<String>, bool) {
+    let mut child = match Command::new("/usr/bin/mdfind")
+        .args(["-0", "kMDItemContentType == 'com.apple.application-bundle'"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return (BTreeSet::new(), false),
+    };
+    let Some(stdout) = child.stdout.take() else {
+        return (BTreeSet::new(), false);
+    };
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let read_ok = stdout
+            .take((MAX_LAUNCH_SERVICES_OUTPUT_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)
+            .is_ok();
+        let truncated = !read_ok || bytes.len() > MAX_LAUNCH_SERVICES_OUTPUT_BYTES;
+        (bytes, truncated)
+    });
+    let mut timed_out = false;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Ok(None) => {
+                timed_out = true;
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+        }
+    };
+    let Ok((output, truncated)) = reader.join() else {
+        return (BTreeSet::new(), false);
+    };
+    let Some(status) = status else {
+        return (BTreeSet::new(), false);
+    };
+    if timed_out || truncated || !status.success() {
+        return (BTreeSet::new(), false);
+    }
+    let mut ids = BTreeSet::new();
+    let mut complete = true;
+    for raw_path in output.split(|byte| *byte == 0).filter(|value| !value.is_empty()) {
+        let Ok(path_text) = std::str::from_utf8(raw_path) else {
+            complete = false;
+            continue;
+        };
+        let path = Path::new(path_text);
+        if !path.is_absolute()
+            || path.extension().and_then(|value| value.to_str()) != Some("app")
+        {
+            continue;
+        }
+        if let Some(id) = read_bundle_id(path) {
+            ids.insert(id);
+        } else {
+            complete = false;
+        }
+    }
+    (ids, complete)
+}
+
+#[cfg(all(target_os = "macos", test))]
+fn launch_services_bundle_ids(_deadline: Instant) -> (BTreeSet<String>, bool) {
+    // Unit tests use temporary application roots; querying the host Launch Services database
+    // would make their eligibility depend on unrelated installed applications.
+    (BTreeSet::new(), true)
 }
 
 #[cfg(target_os = "macos")]

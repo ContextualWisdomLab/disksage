@@ -551,8 +551,13 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   truncated evidence are review-only. Only a complete unused cache may pass the separate exact
   phrase/rationale approval and re-plan boundary; mutation uses the existing reversible OS Trash
   journal. The LLM can annotate but cannot authorize cleanup, and no cloud/provider state is
-  changed. `inspect-orphan-lineage` and `trash-orphan-cache` are now explicit dynamic Goal
+  changed. `plan_orphan_cleanup` and `clean_orphan_candidates` are now explicit dynamic Goal
   operator actions.
+- The review hardening now joins bounded Launch Services bundle inventory with the fixed roots;
+  an unavailable, timed-out, truncated, or unreadable inventory is incomplete and keeps every
+  cache candidate review-only. Installed-app traversal shares the five-second plan deadline,
+  Info.plist reads are capped before parsing, directory active-use probes use recursive `lsof +D`,
+  and active-use errors are surfaced as explicit review reasons.
 
 ## 2026-08-21 current-head live provider confirmation
 
