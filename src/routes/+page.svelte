@@ -102,9 +102,9 @@
       {#each roots as r}<option value={r}>{r}</option>{/each}
     </select>
     {#if scanning}
-      <button type="button" onclick={() => api.cancelScan()} aria-label="현재 스캔 취소">취소</button>
+      <button class="ds-control scan-action" type="button" onclick={() => api.cancelScan()} aria-label="현재 스캔 취소">취소</button>
     {:else}
-      <button type="button" onclick={scan} disabled={!selectedRoot}>스캔</button>
+      <button class="ds-control scan-action" type="button" onclick={scan} disabled={!selectedRoot}>스캔</button>
     {/if}
     {#if stats}
       <span class="stats">
