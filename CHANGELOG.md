@@ -56,6 +56,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Keep legacy light-only panels readable with dark-scheme token overrides; disable provider cancel
   actions during in-flight probes and show non-iCloud probe errors in the shared status card without
   changing copy or eviction authority.
+- Preserve the backend-provided iCloud admission-blocker start time across app restarts, with a
+  current-observation fallback for older reports; the running card remains diagnostic/cancel-only.
 
 - Cover the `sensitive-config` archive-kind wire label in the generated cloud-plan implementation,
   so the macOS/Linux/Windows cloud-plan binaries compile after the sensitive-config safety
