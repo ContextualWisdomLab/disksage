@@ -528,3 +528,16 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - This receipt is the required fresh exact-head proof for the current materialization incident;
   the acceptance gap remains open until a later complete, quiet provider observation and a
   provider-specific per-item attestation are available. The protected merge state is unchanged.
+
+## 2026-08-21 central hourly scheduler repair evidence
+
+- The latest central `.github` scheduled run `31991358711` ended in `startup_failure` before a
+  job was created. Its referenced reusable scheduler requests `id-token: write`, while the
+  deployed DiskSage caller exposed only `contents: read`; therefore no OpenCode OIDC exchange or
+  review-repair dispatch occurred. This is an infrastructure/workflow admission failure, not a
+  DiskSage source result.
+- Central `.github` PR #1188 is the current minimal repair at exact head
+  `3ab34b57a7ab04eb14b5fca7994dd047df676748`. It grants only job-scoped `id-token: write` to the
+  DiskSage and Clearfolio reusable-workflow callers, keeps the workflow token read-only, and
+  updates the contract tests. Checks are still pending; hourly operation is not claimed until a
+  normal protected merge and one successful scheduled receipt are observed.

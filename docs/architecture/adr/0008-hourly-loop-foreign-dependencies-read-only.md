@@ -49,7 +49,7 @@ ended in `startup_failure` before creating a job. The called scheduler requests
 caller permission prevented the OpenCode OIDC exchange from starting. The
 minimal repair is tracked in
 [`ContextualWisdomLab/.github#1188`](https://github.com/ContextualWisdomLab/.github/pull/1188)
-at head `7f9f9f0606ac5c88df3857eb5e5367d5bdbad420`; it applies the same OIDC
+at current head `3ab34b57a7ab04eb14b5fca7994dd047df676748`; it applies the same OIDC
 permission fix to DiskSage and its sibling Clearfolio caller and updates the
 contract tests. The earlier DiskSage-only repair remains open as #1180. Until
 one of these fixes is normally merged and a scheduled run completes, the
