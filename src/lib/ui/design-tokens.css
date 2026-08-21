@@ -106,7 +106,7 @@ textarea {
   min-height: var(--ds-control-min-size);
 }
 
-button {
+.ds-control {
   border: 1px solid var(--ds-border);
   border-radius: var(--ds-radius-sm);
   background: var(--ds-surface);
@@ -115,7 +115,7 @@ button {
   padding: var(--ds-control-padding-block) var(--ds-control-padding-inline);
 }
 
-button:hover:not(:disabled) {
+.ds-control:hover:not(:disabled) {
   border-color: var(--ds-action);
 }
 
