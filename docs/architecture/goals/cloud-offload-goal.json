@@ -17,6 +17,9 @@
     "immutable-evidence-record-valid",
     "explicit-eviction-permit"
   ],
+  "blocked_source_classes": [
+    "sensitive-config-file"
+  ],
   "pre_copy_evidence_streams": [
     "volume-pressure-evidence",
     "provider-client-runtime-evidence",

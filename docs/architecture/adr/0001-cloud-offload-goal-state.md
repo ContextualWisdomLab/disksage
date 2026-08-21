@@ -232,7 +232,9 @@ kind. Filename-only markers (`.env`/`.env.*` except examples, credential names, 
 and key/certificate extensions) are collected for visibility without opening their contents, then
 blocked at the shared planner boundary as `sensitive-config-file`. They never enter metadata
 probing, cloud-copy approval, potentially-reclaimable-byte totals, or source eviction. This is a
-name-based safety boundary, not a claim that every secret-bearing file can be recognized.
+name-based safety boundary, not a claim that every secret-bearing file can be recognized. The
+runtime Goal vocabulary records the same blocker under `blocked_source_classes`, so a replaceable
+Goal projection cannot silently omit the protection.
 
 ## Consequences
 
