@@ -106,7 +106,12 @@ test('paginates complete workflow and open-PR collections', async () => {
     return url.endsWith('page=1') ? pulls : [{ number: 101 }];
   }, repo);
   assert.equal(openPulls.length, 101);
-  assert.equal(pullCalls.length, 2);
+  assert.equal(pullCalls.length, 4);
+  assert.deepEqual(
+    pullCalls.map((url) => url.includes('direction=asc') ? 'asc' : 'desc'),
+    ['asc', 'asc', 'desc', 'desc'],
+    'open PR pagination must read the complete membership in both creation orders',
+  );
 });
 
 test('fails closed when workflow registry pagination is shorter than total_count', async () => {
