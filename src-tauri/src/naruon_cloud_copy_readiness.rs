@@ -31,7 +31,7 @@ const RUNTIME_BLOCKERS: [&str; 2] = [
     "provider-client-runtime-not-observed",
     "provider-client-runtime-evidence-unavailable",
 ];
-const ICLOUD_ADMISSION_BLOCKERS: [&str; 21] = [
+const ICLOUD_ADMISSION_BLOCKERS: [&str; 22] = [
     "icloud-sync-health-evidence-incomplete",
     "icloud-upload-queue-nonempty",
     "icloud-upload-in-flight",
@@ -48,6 +48,7 @@ const ICLOUD_ADMISSION_BLOCKERS: [&str; 21] = [
     "icloud-file-provider-filename-excluded",
     "icloud-file-provider-root-excluded",
     "icloud-file-provider-indexing-pending",
+    "icloud-file-provider-disk-import-active",
     "icloud-file-provider-transfer-active",
     "icloud-file-provider-dump-timeout",
     "icloud-file-provider-dump-output-truncated",
@@ -336,6 +337,13 @@ fn expected_icloud_admission_blockers(report: &IcloudSyncHealthReport) -> Vec<St
         }
         if activity.pending_indexable_count.is_some_and(|count| count > 0) {
             blockers.push("icloud-file-provider-indexing-pending".into());
+        }
+        if activity
+            .notices
+            .iter()
+            .any(|notice| notice == "icloud-file-provider-disk-import-active")
+        {
+            blockers.push("icloud-file-provider-disk-import-active".into());
         }
         if !no_progress && !materialization_failed
             && (activity.active_upload_count > 0 || activity.active_download_count > 0)
@@ -1197,6 +1205,13 @@ fn validate_icloud_admission_summary(
         }
         if activity.pending_indexable_count.is_some_and(|count| count > 0) {
             expected.push("icloud-file-provider-indexing-pending".to_string());
+        }
+        if activity
+            .notices
+            .iter()
+            .any(|notice| notice == "icloud-file-provider-disk-import-active")
+        {
+            expected.push("icloud-file-provider-disk-import-active".to_string());
         }
         if !no_progress && !materialization_failed
             && (activity.active_upload_count > 0 || activity.active_download_count > 0)

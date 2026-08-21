@@ -747,3 +747,14 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   pipe leak that could starve the independent `ps` probe and report a false active-use timeout.
   The focused Rust test passed 3/3. The same patch is present on stacked PR heads `a0fa7bc` (#247)
   and `741ab30` (#246); hosted checks are rerunning and protected merge/review is still pending.
+
+## 2026-08-22 File Provider disk-import detection
+
+- A fresh bounded `fileproviderctl` observation showed the iCloud domain with Finder enumerators,
+  `disk import: yes`, active upload progress of `5,202,024,494 / 5,462,125,152` bytes, and
+  `pending-indexable-count=30,960`. These aggregate markers explain why Finder can remain in
+  “복사 준비 중”, but they do not bind the operation to `real_datasets` or prove a per-item cloud
+  copy. DiskSage now records the redacted `icloud-file-provider-disk-import-active` notice,
+  projects it into the new-copy admission blockers and Naruon readiness export, and shows it next
+  to the existing fixed Finder-cancel action. Copy, attestation, and source eviction remain
+  fail-closed; no provider process, source, CloudDocs database, or cloud object was mutated.

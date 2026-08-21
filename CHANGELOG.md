@@ -33,6 +33,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   an actionable retry context without exposing provider paths.
 - Include the redacted iCloud File Provider `pending-indexable-count` in admission evidence and
   surface `icloud-file-provider-indexing-pending` when Finder remains in “복사 준비 중”.
+- Record the redacted File Provider `disk import: yes` marker as
+  `icloud-file-provider-disk-import-active`, show it beside the iCloud admission evidence, and
+  keep Finder copy, attestation, and source cleanup blocked while macOS is importing a provider
+  disk.
 - Persist the earliest retained timestamp for an unchanged iCloud admission-blocker set, so a
   restart cannot reset the stalled-copy duration; this diagnostic never grants copy, attestation,
   or eviction authority.

@@ -53,6 +53,7 @@ pub const ICLOUD_NATIVE_STATUS_SCHEMA_VERSION: u32 = 1;
 pub const ICLOUD_FILE_PROVIDER_ACTIVITY_SCHEMA_VERSION: u32 = 3;
 pub const ICLOUD_SYNC_HEALTH_EVIDENCE_SCHEMA_VERSION: u32 = 1;
 pub const ICLOUD_SYNC_HEALTH_EVIDENCE_DIRECTORY: &str = "icloud-sync-health-evidence";
+const FILE_PROVIDER_DISK_IMPORT_NOTICE: &str = "icloud-file-provider-disk-import-active";
 const MAX_PERSISTED_HEALTH_SNAPSHOTS: usize = 128;
 const MAX_PERSISTED_HEALTH_SNAPSHOT_BYTES: usize = 64 * 1024;
 
@@ -1037,6 +1038,10 @@ fn parse_file_provider_activity_output(
             .strip_prefix("pending-indexable-count:")
             .and_then(|value| value.trim().parse::<u64>().ok())
     });
+    let disk_import_active = output.lines().any(|line| {
+        let marker = line.trim().strip_prefix("+ ").unwrap_or(line.trim());
+        marker.eq_ignore_ascii_case("disk import: yes")
+    });
     let active_upload_count = output
         .lines()
         .filter(|line| line.to_ascii_lowercase().contains("upload progress:"))
@@ -1078,6 +1083,9 @@ fn parse_file_provider_activity_output(
     }
     if pending_indexable_count.is_some_and(|count| count > 0) {
         notices.push("icloud-file-provider-indexing-pending".into());
+    }
+    if disk_import_active {
+        notices.push(FILE_PROVIDER_DISK_IMPORT_NOTICE.into());
     }
     if active_upload_count > 0 {
         notices.push("icloud-file-provider-active-upload".into());
@@ -1996,6 +2004,13 @@ fn attach_native_status_admission(report: &mut IcloudSyncHealthReport) {
         if activity.pending_indexable_count.is_some_and(|count| count > 0) {
             add_blocker("icloud-file-provider-indexing-pending");
         }
+        if activity
+            .notices
+            .iter()
+            .any(|notice| notice == FILE_PROVIDER_DISK_IMPORT_NOTICE)
+        {
+            add_blocker(FILE_PROVIDER_DISK_IMPORT_NOTICE);
+        }
         if !no_progress && !materialization_failed {
             if activity.active_upload_count > 0 || activity.active_download_count > 0 {
                 add_blocker("icloud-file-provider-transfer-active");
@@ -2351,6 +2366,22 @@ mod tests {
             .notices
             .contains(&"icloud-file-provider-indexing-pending".to_string()));
         assert!(validate_file_provider_activity_evidence(&evidence).is_ok());
+    }
+
+    #[test]
+    fn file_provider_parser_records_disk_import_without_paths() {
+        let evidence = parse_file_provider_activity_output(
+            "sync engine state:\n+ disk import: yes\n",
+            42,
+            true,
+            false,
+            false,
+        );
+        assert!(evidence
+            .notices
+            .contains(&"icloud-file-provider-disk-import-active".to_string()));
+        assert!(validate_file_provider_activity_evidence(&evidence).is_ok());
+        assert!(!serde_json::to_string(&evidence).unwrap().contains("sync engine state"));
     }
 
     #[test]

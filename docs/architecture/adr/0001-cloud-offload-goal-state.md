@@ -616,3 +616,13 @@ convert this observation into copy, attestation, or eviction authority. A comple
 and independent per-item provider evidence remain required. This evidence was observed while PR #246
 was at `fc9f4a4c465fc5ef355f7fbf552ff4295cf4f609` and PR #247 at
 `45214018dff43c6ba7c71253bc50e8c0eab0e1bd`; hosted checks remain authoritative.
+
+## Amendment: detect macOS File Provider disk import during Finder preparation (2026-08-22)
+
+A bounded read-only iCloud File Provider dump can report `disk import: yes` while Finder remains
+in “복사 준비 중”. DiskSage now retains only the boolean aggregate as the
+`icloud-file-provider-disk-import-active` notice, derives the same new-copy admission blocker,
+and surfaces it with the existing fixed Finder-cancel action. The notice contains no path,
+filename, item identifier, or raw provider output. Disk import is provider-progress evidence, not
+a copy receipt; copy, attestation, and source eviction remain fail-closed until a complete quiet
+observation and independent per-item evidence exist.

@@ -18,6 +18,8 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("no_progress_create_count");
     expect(source).toContain("pending_indexable_count");
     expect(source).toContain("icloud-file-provider-indexing-pending");
+    expect(source).toContain("icloud-file-provider-disk-import-active");
+    expect(source).toContain("디스크 import");
     expect(source).toContain("Finder에 남은 복사 대기는 취소");
     expect(source).toContain("File Provider 상태 확인이 제한시간을 넘었습니다");
     expect(source).toContain("Lineage 연결관계");
