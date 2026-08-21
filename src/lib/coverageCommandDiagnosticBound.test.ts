@@ -42,6 +42,36 @@ describe('bounded Rust coverage command diagnostic', () => {
     }
   });
 
+  it('preserves compiler diagnostics that fall between long bounded log edges', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'disksage-coverage-diagnostic-middle-'));
+    try {
+      const rawLog = join(directory, 'raw.log');
+      const boundedLog = join(directory, 'bounded.log');
+      const compilerDiagnostic =
+        'error[E0753]: expected outer doc comment\n --> src-tauri/src/bin/example.rs:1:1\n';
+      const prefixNoise = Array.from(
+        { length: 500 },
+        (_, index) => `prefix-noise-${String(index).padStart(4, '0')} ${'x'.repeat(80)}`,
+      ).join('\n');
+      const suffixNoise = Array.from(
+        { length: 500 },
+        (_, index) => `suffix-noise-${String(index).padStart(4, '0')} ${'y'.repeat(80)}`,
+      ).join('\n');
+      writeFileSync(
+        rawLog,
+        `${prefixNoise}\n${compilerDiagnostic}${suffixNoise}\n`,
+      );
+
+      execFileSync('bash', [diagnosticHelper, rawLog, boundedLog]);
+
+      const diagnostic = readFileSync(boundedLog, 'utf8');
+      expect(diagnostic).toContain(compilerDiagnostic);
+      expect(Buffer.byteLength(diagnostic)).toBeLessThanOrEqual(32_768);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('wires the exact coverage step through the executable helper', () => {
     expect(workflow).toContain(
       'bash .github/scripts/bound-coverage-command-diagnostic.sh coverage-command.raw.log coverage-command.bounded.log',
