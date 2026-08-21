@@ -60,7 +60,7 @@ baseline records the current loop's runtime and integration evidence.
   evidence, materialization stall, cancel callback, disabled action, mobile viewport, and reduced
   motion states. The a11y addon is configured to fail a story on detected violations; Storybook is
   development-only and cannot authorize cloud writes or source eviction.
-- Local evidence at this implementation snapshot: `npm test` 32 files/134 tests, `svelte-check`
+- Local evidence at this implementation snapshot: `npm test` 33 files/135 tests, `svelte-check`
   0 errors/0 warnings, `npm run build` passed, `npm run build-storybook` passed, and the
   Storybook test runner passed 4 smoke/interaction stories in Chromium. The production and
   development dependency audit reported 0 vulnerabilities after the uuid override. The Storybook
