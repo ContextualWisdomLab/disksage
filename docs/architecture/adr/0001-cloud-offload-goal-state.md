@@ -538,3 +538,11 @@ provider-global observations, not only in Storybook. It maps a missing/error obs
 and the existing Finder-cancel request remain visible. The card is informational/cancel-only and
 does not grant copy, attestation, or eviction authority. This is implemented by the UX follow-up
 commits `9c4d679` and `52a0c22`; `svelte-check` and the CloudArchive contract suite pass.
+
+## Amendment: latest runtime evidence surfaced by the UX (2026-08-21 22:22 +0900)
+
+The latest bounded iCloud receipt observed pending indexable `13,737`, a `12,449`-entry
+reconciliation backlog, active upload/download markers, one no-progress fetch, and filename/root
+exclusions `18/2`. CloudArchive displays these aggregate blockers and the elapsed provider-stall
+state; it does not expose raw provider paths or grant mutation authority. The bounded observation
+completed without provider or source mutation.
