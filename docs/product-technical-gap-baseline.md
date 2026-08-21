@@ -332,9 +332,10 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   iCloud File Provider returned internal fetch errors; no provider or Finder process was killed.
   Regenerable old user logs and two identified cache artifacts were removed, recovering about
   0.8 GiB; the source and provider databases were retained. Cloud planning now exposes
-  `local-volume-headroom-insufficient` before review, while the existing pre-mutation guard and
-  provider-sync blocker remain authoritative; the Finder cancel control is still the only safe
-  way to end the already-running operation.
+  `local-volume-headroom-insufficient` as a plan notice before review; native-copy controls and
+  the existing pre-mutation/provider-sync blockers remain authoritative, while the non-staging
+  provider-API fallback and existing-copy adoption stay available. The Finder cancel control is
+  still the only safe way to end the already-running operation.
 - `git diff --check` passes for the current worktree. A repository-wide `cargo fmt --check` still
   reports pre-existing formatting differences across unrelated files, so it is not treated as
   evidence for the new authorization behavior; hosted Rust checks remain authoritative for the

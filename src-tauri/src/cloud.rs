@@ -5033,7 +5033,6 @@ pub fn plan_cloud_archive_from_snapshot(
     let source_root = &snapshot.source_root;
     let now_ms = snapshot.prepared_at_ms;
     let options = snapshot.options;
-    let local_volume = crate::volume_pressure::snapshot_volume(source_root, now_ms).ok();
     let source_scan_blocker = (!snapshot.source_scan_complete)
         .then(|| "source-scan-incomplete".to_string());
     let mut candidates = Vec::new();
@@ -5132,17 +5131,6 @@ pub fn plan_cloud_archive_from_snapshot(
                     )
                 })
                 .or_else(|| provider_destination_path_blocked_reason(cloud_root, &dst))
-                .or_else(|| {
-                    local_volume
-                        .as_ref()
-                        .filter(|volume| {
-                            !crate::volume_pressure::has_copy_headroom(
-                                volume.available_bytes,
-                                file.bytes,
-                            )
-                        })
-                        .map(|_| "local-volume-headroom-insufficient".into())
-                })
         };
         let source_context = relative
             .parent()
@@ -5284,6 +5272,7 @@ pub fn plan_cloud_archive_from_snapshot(
         .filter(|c| c.blocked_reason.is_none())
         .map(|c| c.bytes)
         .sum();
+    let local_volume = crate::volume_pressure::snapshot_volume(source_root, now_ms).ok();
     let mut notices = vec![
         "dry-run-only".into(),
         "cloud-quota-unverified".into(),
@@ -5291,6 +5280,13 @@ pub fn plan_cloud_archive_from_snapshot(
         "cloud-sync-unverified".into(),
         "full-transfer-content-hash-pending".into(),
     ];
+    if local_volume.as_ref().is_some_and(|volume| {
+        candidates.iter().any(|candidate| {
+            !crate::volume_pressure::has_copy_headroom(volume.available_bytes, candidate.bytes)
+        })
+    }) {
+        notices.push("local-volume-headroom-insufficient".into());
+    }
     if !snapshot.source_scan_complete {
         notices.push("source-scan-incomplete".into());
         notices.push(format!(
@@ -5732,11 +5728,11 @@ mod tests {
             },
         );
 
-        assert_eq!(
-            report.candidates[0].blocked_reason.as_deref(),
-            Some("local-volume-headroom-insufficient")
-        );
-        assert_eq!(report.potentially_reclaimable_bytes, 0);
+        assert_eq!(report.candidates[0].blocked_reason, None);
+        assert!(report
+            .notices
+            .contains(&"local-volume-headroom-insufficient".to_string()));
+        assert_eq!(report.potentially_reclaimable_bytes, u64::MAX);
     }
 
     #[cfg(not(coverage))]
