@@ -1929,6 +1929,22 @@ mod tests {
         assert!(!staging.exists());
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_move_create_only_preserves_staging_on_destination_race() {
+        let parent = tempfile::tempdir().unwrap();
+        let staging = parent.path().join("staging-payload");
+        let destination = parent.path().join("provider-payload");
+        std::fs::write(&staging, b"staging").unwrap();
+        std::fs::write(&destination, b"provider").unwrap();
+
+        let result = bounded_macos_move_create_only(&staging, &destination, Duration::from_secs(5));
+
+        assert_eq!(result, Err("cloud-copy-finalize-race".into()));
+        assert_eq!(std::fs::read(&staging).unwrap(), b"staging");
+        assert_eq!(std::fs::read(&destination).unwrap(), b"provider");
+    }
+
     fn receipt() -> CloudCopyReceipt {
         let candidate = candidate();
         let approval =
