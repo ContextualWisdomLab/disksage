@@ -6,8 +6,8 @@
 //! object, and keeps that handle alive for the whole audit. Unix callers should traverse through
 //! the descriptor-relative helpers on this guard: they walk components with `openat`/`fstatat` and
 //! enumerate directories with `fdopendir`, so pathname replacement cannot redirect child I/O.
-//! Windows keeps a handle that deliberately excludes delete sharing, which blocks root rename or
-//! deletion while the guard is alive.
+//! Windows keeps no-delete-share handles open for every traversed directory and opens final files
+//! with reparse-point semantics, so descendant replacement cannot redirect an authorized read.
 
 use same_file::Handle;
 use std::path::{Path, PathBuf};
@@ -21,12 +21,17 @@ pub(crate) enum BoundEntryKind {
 }
 
 #[cfg(windows)]
-fn metadata_is_real_directory(metadata: &std::fs::Metadata) -> bool {
+fn metadata_is_reparse_point(metadata: &std::fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(windows)]
+fn metadata_is_real_directory(metadata: &std::fs::Metadata) -> bool {
     metadata.is_dir()
         && !metadata.file_type().is_symlink()
-        && metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
+        && !metadata_is_reparse_point(metadata)
 }
 
 #[cfg(not(windows))]
@@ -146,18 +151,53 @@ fn relative_components(relative: &Path) -> std::io::Result<Vec<std::ffi::CString
 }
 
 #[cfg(windows)]
-fn validate_windows_relative_path(relative: &Path, allow_empty: bool) -> std::io::Result<()> {
+fn windows_relative_components(
+    relative: &Path,
+    allow_empty: bool,
+) -> std::io::Result<Vec<std::ffi::OsString>> {
     use std::path::Component;
 
-    if relative.is_absolute()
-        || (!allow_empty && relative.as_os_str().is_empty())
-        || relative
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_)))
-    {
+    if relative.is_absolute() {
         return Err(invalid_relative_path());
     }
-    Ok(())
+    let components = relative
+        .components()
+        .map(|component| match component {
+            Component::Normal(value) => Ok(value.to_os_string()),
+            _ => Err(invalid_relative_path()),
+        })
+        .collect::<std::io::Result<Vec<_>>>()?;
+    if !allow_empty && components.is_empty() {
+        return Err(invalid_relative_path());
+    }
+    Ok(components)
+}
+
+#[cfg(windows)]
+fn open_windows_directory_chain(
+    root: &Path,
+    components: &[std::ffi::OsString],
+) -> std::io::Result<(PathBuf, Vec<Handle>)> {
+    let mut current_path = root.to_path_buf();
+    let mut held_directories = Vec::with_capacity(components.len());
+    for component in components {
+        current_path.push(component);
+        let handle = open_directory_handle(&current_path).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "bound root descendant directory unavailable",
+            )
+        })?;
+        let metadata = handle.as_file().metadata()?;
+        if !metadata_is_real_directory(&metadata) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "bound root descendant directory is a reparse point or non-directory",
+            ));
+        }
+        held_directories.push(handle);
+    }
+    Ok((current_path, held_directories))
 }
 
 #[cfg(unix)]
@@ -232,8 +272,8 @@ impl Drop for DirectoryStream {
 /// An opened directory identity used as the authority root for read-only traversal.
 ///
 /// The guard never grants mutation authority. Canonical paths are display/lineage evidence only;
-/// security-sensitive Unix child I/O should use [`Self::read_dir_names`], [`Self::entry_kind`],
-/// and [`Self::open_file`] so every component remains relative to the opened root descriptor.
+/// security-sensitive child I/O should use [`Self::read_dir_names`], [`Self::entry_kind`], and
+/// [`Self::open_file`] so every component remains bound beneath the opened root object.
 pub(crate) struct BoundReadRoot {
     handle: Handle,
     display_path: PathBuf,
@@ -247,11 +287,14 @@ impl BoundReadRoot {
         }
 
         let handle = open_directory_handle(path)?;
+        if !metadata_is_real_directory(&handle.as_file().metadata().ok()?) {
+            return None;
+        }
         if !path_is_real_directory(path) {
             return None;
         }
         let current = open_directory_handle(path)?;
-        if handle != current {
+        if !metadata_is_real_directory(&current.as_file().metadata().ok()?) || handle != current {
             return None;
         }
 
@@ -268,10 +311,13 @@ impl BoundReadRoot {
         }
         let canonical = std::fs::canonicalize(&self.display_path).ok()?;
         let current = open_directory_handle(&self.display_path)?;
-        if self.handle != current {
+        if !metadata_is_real_directory(&current.as_file().metadata().ok()?) || self.handle != current {
             return None;
         }
         let canonical_handle = open_directory_handle(&canonical)?;
+        if !metadata_is_real_directory(&canonical_handle.as_file().metadata().ok()?) {
+            return None;
+        }
         (self.handle == canonical_handle).then_some(canonical)
     }
 
@@ -341,11 +387,12 @@ impl BoundReadRoot {
 
         #[cfg(windows)]
         {
-            validate_windows_relative_path(relative, true)?;
+            let components = windows_relative_components(relative, true)?;
             let root = self
                 .stable_path()
                 .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "bound root unavailable"))?;
-            return std::fs::read_dir(root.join(relative))?
+            let (directory, _held_directories) = open_windows_directory_chain(&root, &components)?;
+            return std::fs::read_dir(directory)?
                 .map(|entry| entry.map(|entry| entry.file_name()))
                 .collect();
         }
@@ -395,12 +442,17 @@ impl BoundReadRoot {
 
         #[cfg(windows)]
         {
-            validate_windows_relative_path(relative, true)?;
+            let mut components = windows_relative_components(relative, true)?;
+            if components.is_empty() {
+                return Ok(BoundEntryKind::Directory);
+            }
+            let name = components.pop().expect("non-empty Windows relative components");
             let root = self
                 .stable_path()
                 .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "bound root unavailable"))?;
-            let metadata = std::fs::symlink_metadata(root.join(relative))?;
-            return Ok(if metadata.file_type().is_symlink() {
+            let (parent, _held_directories) = open_windows_directory_chain(&root, &components)?;
+            let metadata = std::fs::symlink_metadata(parent.join(name))?;
+            return Ok(if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) {
                 BoundEntryKind::Symlink
             } else if metadata.is_dir() {
                 BoundEntryKind::Directory
@@ -450,11 +502,34 @@ impl BoundReadRoot {
 
         #[cfg(windows)]
         {
-            validate_windows_relative_path(relative, false)?;
+            use std::os::windows::fs::OpenOptionsExt;
+
+            const FILE_SHARE_READ: u32 = 0x0000_0001;
+            const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+
+            let mut components = windows_relative_components(relative, false)?;
+            let name = components.pop().expect("validated Windows file path has a leaf");
             let root = self
                 .stable_path()
                 .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "bound root unavailable"))?;
-            return std::fs::File::open(root.join(relative));
+            let (parent, _held_directories) = open_windows_directory_chain(&root, &components)?;
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(parent.join(name))?;
+            let metadata = file.metadata()?;
+            if !metadata.is_file()
+                || metadata.file_type().is_symlink()
+                || metadata_is_reparse_point(&metadata)
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "bound root regular-file evidence rejected a reparse point or non-regular entry",
+                ));
+            }
+            return Ok(file);
         }
     }
 
