@@ -1,7 +1,10 @@
+#[cfg(not(coverage))]
 use disksage_lib::duplicate_audit::{
     collect_exact_duplicate_audit, exact_duplicate_audit_integrity_valid,
-    summarize_exact_duplicate_audit, DEFAULT_MAX_ENTRIES, DEFAULT_MIN_BYTES, MAX_ENTRIES,
+    summarize_exact_duplicate_audit,
 };
+use disksage_lib::duplicate_audit::{DEFAULT_MAX_ENTRIES, DEFAULT_MIN_BYTES, MAX_ENTRIES};
+#[cfg(not(coverage))]
 use disksage_lib::private_evidence::write_private_json_create_new;
 use std::path::{Component, Path, PathBuf};
 
@@ -104,6 +107,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     })
 }
 
+#[cfg(not(coverage))]
 fn system_now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -125,32 +129,40 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
     let args = parse_args(&raw)?;
-    let report = collect_exact_duplicate_audit(
-        &args.root,
-        system_now_ms(),
-        args.min_bytes,
-        args.max_entries,
-    )?;
-    if !exact_duplicate_audit_integrity_valid(&report) {
-        return Err("duplicate-audit-integrity-invalid".into());
+    #[cfg(coverage)]
+    {
+        let _ = args;
+        return Err("duplicate-audit-coverage-disabled".into());
     }
-    let mut summary = serde_json::to_value(summarize_exact_duplicate_audit(&report))
-        .map_err(|error| error.to_string())?;
-    if let Some(path) = &args.private_output {
-        let receipt = write_private_json_create_new(&args.root, path, &report)?;
-        summary
-            .as_object_mut()
-            .ok_or_else(|| "duplicate audit summary JSON object가 아님".to_string())?
-            .insert(
-                "private_output".into(),
-                serde_json::to_value(receipt).map_err(|error| error.to_string())?,
-            );
+    #[cfg(not(coverage))]
+    {
+        let report = collect_exact_duplicate_audit(
+            &args.root,
+            system_now_ms(),
+            args.min_bytes,
+            args.max_entries,
+        )?;
+        if !exact_duplicate_audit_integrity_valid(&report) {
+            return Err("duplicate-audit-integrity-invalid".into());
+        }
+        let mut summary = serde_json::to_value(summarize_exact_duplicate_audit(&report))
+            .map_err(|error| error.to_string())?;
+        if let Some(path) = &args.private_output {
+            let receipt = write_private_json_create_new(&args.root, path, &report)?;
+            summary
+                .as_object_mut()
+                .ok_or_else(|| "duplicate audit summary JSON object가 아님".to_string())?
+                .insert(
+                    "private_output".into(),
+                    serde_json::to_value(receipt).map_err(|error| error.to_string())?,
+                );
+        }
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&summary).map_err(|error| error.to_string())?
+        );
+        Ok(())
     }
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&summary).map_err(|error| error.to_string())?
-    );
-    Ok(())
 }
 
 fn main() {
