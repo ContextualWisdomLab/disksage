@@ -59,6 +59,44 @@ test('fails closed when same-head PR workflow ownership changes during the audit
   );
 });
 
+test('shared exact heads reuse one workflow tree while preserving each PR changed-file ownership', async () => {
+  const secondWorkflowPath = '.github/workflows/pr-second.yml';
+  const pullRequests = [
+    {
+      number: 42,
+      head: { sha: headSha, repo: { full_name: repository } },
+    },
+    {
+      number: 43,
+      head: { sha: headSha, repo: { full_name: repository } },
+    },
+  ];
+  let treeReads = 0;
+
+  const paths = await activePullRequestWorkflowPaths(async (url) => {
+    if (url.includes(`/git/trees/${headSha}`)) {
+      treeReads += 1;
+      return {
+        truncated: false,
+        tree: [
+          { type: 'blob', path: workflowPath },
+          { type: 'blob', path: secondWorkflowPath },
+        ],
+      };
+    }
+    if (url.includes('/pulls/42/files')) {
+      return [{ filename: workflowPath, status: 'added' }];
+    }
+    if (url.includes('/pulls/43/files')) {
+      return [{ filename: secondWorkflowPath, status: 'modified' }];
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }, repository, pullRequests);
+
+  assert.equal(treeReads, 1, 'one immutable head tree should be reused across PR identities');
+  assert.deepEqual([...paths].sort(), [secondWorkflowPath, workflowPath].sort());
+});
+
 test('fails closed when a changed workflow file has an unknown GitHub status', async () => {
   const pullRequests = [{
     number: 42,
