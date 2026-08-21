@@ -43,3 +43,14 @@ blocked until an independent cloud receipt exists.
 - Alam, M. M., & Wang, W. (2021). A comprehensive survey on the state-of-the-art data provenance
   approaches for security enforcement. *Journal of Computer Security, 29*(4), 423–446.
   https://doi.org/10.3233/JCS-200108
+
+## Amendment: current Zotero capability and research handoff (2026-08-21)
+
+The live loopback endpoint reports Zotero `9.0.6`, API version 3, and 8,312 items. A valid
+metadata POST and a bounded invalid POST both return `400 Endpoint does not support method`;
+the connector save route is not treated as an alternate write authority. No item, attachment,
+or Zotero database content was changed. The research manifest therefore remains the explicit
+APA 7 handoff until Zotero 10+ local-write authorization is available.
+
+The manifest now includes NIST SP 800-209 for storage security and Buneman, Khanna, and Tan's
+provenance characterization alongside PROV-O, DCAT, DCMI, and the existing provenance survey.
