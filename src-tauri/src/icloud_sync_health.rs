@@ -147,6 +147,12 @@ pub struct IcloudFileProviderActivityEvidence {
     pub materialization_failure_count: u64,
     #[serde(default)]
     pub staged_item_missing_count: u64,
+    /// Aggregate provider errors where iCloud excludes an item because of its filename.
+    #[serde(default)]
+    pub sync_excluded_filename_count: u64,
+    /// Aggregate provider errors where iCloud excludes an item under a sync root.
+    #[serde(default)]
+    pub sync_excluded_root_count: u64,
     #[serde(default)]
     pub active_upload_count: u64,
     #[serde(default)]
@@ -944,6 +950,20 @@ fn parse_file_provider_activity_output(
         .lines()
         .filter(|line| line.to_ascii_lowercase().contains("stageditemmissing"))
         .count() as u64;
+    let sync_excluded_filename_count = output
+        .lines()
+        .filter(|line| {
+            line.to_ascii_lowercase()
+                .contains("excluded from sync due to filename")
+        })
+        .count() as u64;
+    let sync_excluded_root_count = output
+        .lines()
+        .filter(|line| {
+            line.to_ascii_lowercase()
+                .contains("excluded from sync under root")
+        })
+        .count() as u64;
     let active_upload_count = output
         .lines()
         .filter(|line| line.to_ascii_lowercase().contains("upload progress:"))
@@ -977,6 +997,12 @@ fn parse_file_provider_activity_output(
     if staged_item_missing_count > 0 {
         notices.push("icloud-file-provider-staged-item-missing-observed".into());
     }
+    if sync_excluded_filename_count > 0 {
+        notices.push("icloud-file-provider-sync-filename-excluded-observed".into());
+    }
+    if sync_excluded_root_count > 0 {
+        notices.push("icloud-file-provider-sync-root-excluded-observed".into());
+    }
     if active_upload_count > 0 {
         notices.push("icloud-file-provider-active-upload".into());
     }
@@ -993,6 +1019,8 @@ fn parse_file_provider_activity_output(
         no_progress_create_count,
         materialization_failure_count,
         staged_item_missing_count,
+        sync_excluded_filename_count,
+        sync_excluded_root_count,
         active_upload_count,
         active_download_count,
         active_upload_progress_millionths,
@@ -1881,6 +1909,12 @@ fn attach_native_status_admission(report: &mut IcloudSyncHealthReport) {
         if materialization_failed {
             add_blocker("icloud-file-provider-materialization-failed");
         }
+        if activity.sync_excluded_filename_count > 0 {
+            add_blocker("icloud-file-provider-filename-excluded");
+        }
+        if activity.sync_excluded_root_count > 0 {
+            add_blocker("icloud-file-provider-root-excluded");
+        }
         if !no_progress && !materialization_failed {
             if activity.active_upload_count > 0 || activity.active_download_count > 0 {
                 add_blocker("icloud-file-provider-transfer-active");
@@ -2241,6 +2275,29 @@ mod tests {
             .contains(&"icloud-file-provider-staged-item-missing-observed".to_string()));
         assert!(validate_file_provider_activity_evidence(&evidence).is_ok());
         assert!(!serde_json::to_string(&evidence).unwrap().contains("stagedItemMissing"));
+    }
+
+    #[test]
+    fn file_provider_parser_records_sync_exclusions_without_paths() {
+        let evidence = parse_file_provider_activity_output(
+            "error: Excluded From Sync Due To Filename\nerror: Excluded From Sync Under Root\n",
+            42,
+            true,
+            false,
+            false,
+        );
+        assert_eq!(evidence.sync_excluded_filename_count, 1);
+        assert_eq!(evidence.sync_excluded_root_count, 1);
+        assert!(evidence
+            .notices
+            .contains(&"icloud-file-provider-sync-filename-excluded-observed".to_string()));
+        assert!(evidence
+            .notices
+            .contains(&"icloud-file-provider-sync-root-excluded-observed".to_string()));
+        assert!(validate_file_provider_activity_evidence(&evidence).is_ok());
+        assert!(!serde_json::to_string(&evidence)
+            .unwrap()
+            .contains("Excluded From Sync"));
     }
 
     #[test]

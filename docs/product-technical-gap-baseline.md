@@ -512,6 +512,14 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   and a stale `CHANGES_REQUESTED` review decision. The protected merge gate remains unchanged;
   no approval or merge bypass is claimed.
 
+## 2026-08-21 iCloud filename/root exclusion follow-up
+
+- The current bounded iCloud File Provider dump contains active upload/download progress and
+  repeated `Excluded From Sync Due To Filename` / `Excluded From Sync Under Root` errors. DiskSage
+  now retains only aggregate counters and redacted notices, exposes dedicated admission blockers,
+  and keeps the Finder preparation state fail-closed. No filename, provider item ID, provider dump,
+  Finder process, or cloud object is mutated by this observation.
+
 ## 2026-08-21 protected-PR and scheduler audit
 
 - PR #213 follow-up hardening keeps valid provider evidence when bounded retention pruning fails,

@@ -31,7 +31,7 @@ const RUNTIME_BLOCKERS: [&str; 2] = [
     "provider-client-runtime-not-observed",
     "provider-client-runtime-evidence-unavailable",
 ];
-const ICLOUD_ADMISSION_BLOCKERS: [&str; 18] = [
+const ICLOUD_ADMISSION_BLOCKERS: [&str; 20] = [
     "icloud-sync-health-evidence-incomplete",
     "icloud-upload-queue-nonempty",
     "icloud-upload-in-flight",
@@ -45,6 +45,8 @@ const ICLOUD_ADMISSION_BLOCKERS: [&str; 18] = [
     "icloud-native-sync-down-pending",
     "icloud-file-provider-no-progress",
     "icloud-file-provider-materialization-failed",
+    "icloud-file-provider-filename-excluded",
+    "icloud-file-provider-root-excluded",
     "icloud-file-provider-transfer-active",
     "icloud-file-provider-dump-timeout",
     "icloud-file-provider-dump-output-truncated",
@@ -324,6 +326,12 @@ fn expected_icloud_admission_blockers(report: &IcloudSyncHealthReport) -> Vec<St
         }
         if materialization_failed {
             blockers.push("icloud-file-provider-materialization-failed".into());
+        }
+        if activity.sync_excluded_filename_count > 0 {
+            blockers.push("icloud-file-provider-filename-excluded".into());
+        }
+        if activity.sync_excluded_root_count > 0 {
+            blockers.push("icloud-file-provider-root-excluded".into());
         }
         if !no_progress && !materialization_failed
             && (activity.active_upload_count > 0 || activity.active_download_count > 0)
@@ -1176,6 +1184,12 @@ fn validate_icloud_admission_summary(
         }
         if materialization_failed {
             expected.push("icloud-file-provider-materialization-failed".to_string());
+        }
+        if activity.sync_excluded_filename_count > 0 {
+            expected.push("icloud-file-provider-filename-excluded".to_string());
+        }
+        if activity.sync_excluded_root_count > 0 {
+            expected.push("icloud-file-provider-root-excluded".to_string());
         }
         if !no_progress && !materialization_failed
             && (activity.active_upload_count > 0 || activity.active_download_count > 0)

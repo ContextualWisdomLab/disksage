@@ -429,18 +429,6 @@ catalog exports use DCAT 3 concepts for datasets, distributions, checksums, and 
 standards describe interchange semantics only; they do not grant cloud-write or source-eviction
 authority. The APA 7 records and original URLs are kept in the Zotero Local API manifest.
 
-## Amendment: OneDrive runtime was disconnected during Finder preparation (2026-08-21)
-
-A fresh bounded OneDrive File Provider observation reported `temporarily disconnected` because the
-OneDrive client was not running, active upload/download progress, a SQLite database-init error, and
-root reconciliation entries failing with File Provider `-1004` (`serverUnreachable`). DiskSage keeps
-copy admission blocked and exposes the bounded Finder-cancel and provider-recovery actions; it must
-not treat Finder's “준비 중” window as completion or evict a source. Starting the client while the
-volume had only 340 MiB available was stopped immediately; only the user-space client was closed and
-no Finder, `bird`, `fileproviderd`, provider object, or source file was mutated. The operator must
-restore safe local headroom, explicitly cancel the stale Finder copy if desired, then obtain a fresh
-quiet provider observation before retrying.
-
 - Lebo, T., Sahoo, S., & McGuinness, D. (Eds.). (2013). *PROV-O: The PROV ontology*. W3C
   Recommendation. https://www.w3.org/TR/prov-o/
 - Albertoni, R., Browning, D., Cox, S. J., Gonzalez Beltran, A., Perego, A., & Winstanley, P.
@@ -529,11 +517,13 @@ shows that low disk pressure was not the only cause of the Finder stall. DiskSag
 report provider-sync-incomplete and must not attest, evict, or treat the Finder preparation dialog
 as a completed cloud copy until a fresh complete, quiet observation and immutable receipt exist.
 
-## Amendment: back off repeated third-party provider probes (2026-08-21)
+## Amendment: iCloud sync-exclusion evidence for Finder preparation stalls (2026-08-21)
 
-CloudArchive now applies the same bounded retry discipline to OneDrive and Google Drive global
-sync probes: a clear observation may refresh on the normal one-minute loop, while a blocker or
-probe error schedules the next automatic check five minutes later. Explicit Finder-copy
-cancellation and provider-client recovery actions force one fresh observation. This prevents an
-already busy File Provider database from receiving a second hot reader without weakening the
-provider-sync-incomplete, attestation, or eviction gates.
+A fresh bounded iCloud File Provider dump recorded active upload and download progress together
+with repeated `Excluded From Sync Due To Filename` and `Excluded From Sync Under Root` errors.
+These are aggregate, path-free provider evidence: DiskSage records only the two counts and redacted
+notices, never filenames, item identifiers, or raw provider output. Either count adds a dedicated
+new-copy admission blocker (`icloud-file-provider-filename-excluded` or
+`icloud-file-provider-root-excluded`) in addition to any transfer or materialization blocker.
+The Finder preparation dialog therefore remains an incomplete provider operation, not a successful
+copy receipt, and copy, attestation, and eviction stay fail-closed until the provider is quiet.
