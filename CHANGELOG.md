@@ -11,6 +11,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add an accessible, token-driven Svelte shell contract with Storybook scenes for provider-clear,
   incomplete-evidence, materialization-stall, checking, keyboard, responsive, and reduced-motion
   states. Storybook is development-only; Rust receipts and approval gates remain authoritative.
+- Render the provider status card in the running CloudArchive view, including the path-free iCloud
+  indexing backlog and a bounded Finder-cancel escape; the card remains informational and cannot
+  authorize cloud writes, attestation, or source eviction.
 
 - Persist bounded, path-free local-volume snapshots from cloud plans with create-only files,
   content fingerprints, Unix `0400`/`0700` permissions, and shape-limited retention; surface a
@@ -47,6 +50,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Refresh the Tauri CSP standards evidence to the current July 29, 2026 W3C Content Security Policy Level 3 Working Draft and regression-test its exact publication URL so future doctoring cannot silently drift back to an older draft.
 
 ### Fixed
+
+- Use the provider observation timestamp consistently for stall thresholds and durations so the
+  summary card and detailed evidence panel cannot disagree during blocked-probe backoff.
 
 - Cover the `sensitive-config` archive-kind wire label in the generated cloud-plan implementation,
   so the macOS/Linux/Windows cloud-plan binaries compile after the sensitive-config safety
