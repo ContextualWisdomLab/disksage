@@ -29,7 +29,9 @@
   "pre_copy_evidence_max_skew_ms": 300000,
   "runtime_evidence_failure_policy": "fail-closed; unavailable provider-client runtime evidence is not process absence",
   "operator_actions": [
-    "cancel-finder-copy"
+    "cancel-finder-copy",
+    "plan_orphan_cleanup",
+    "clean_orphan_candidates"
   ],
   "lineage_relation_graph": [
     "source",
@@ -41,7 +43,10 @@
     "review-decision",
     "provider-sync-state",
     "provider-evidence",
-    "remote-object"
+    "remote-object",
+    "installed-bundle-inventory",
+    "orphan-candidate",
+    "active-use-evidence"
   ],
   "lineage_relation_identifier_rule": "deterministic-domain-separated-digest; never a raw local or provider path",
   "safety_invariant": "source-retained-until-an-explicit-trash-step"

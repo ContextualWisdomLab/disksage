@@ -5,6 +5,7 @@
   import { confirm } from "@tauri-apps/plugin-dialog";
   import GitWorktreeCleanup from "./GitWorktreeCleanup.svelte";
   import BrewCleanup from "./BrewCleanup.svelte";
+  import OrphanCleanup from "./OrphanCleanup.svelte";
 
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
@@ -328,6 +329,8 @@
     </div>
   {/if}
 </section>
+
+<OrphanCleanup />
 
 <style>
   section { margin-top: 1.5rem; border-top: 1px solid #ddd; padding-top: 1rem; }

@@ -20,6 +20,10 @@ describe("cloud-offload Goal projection contract", () => {
     };
 
     expect(goal.operator_actions).toContain("cancel-finder-copy");
+    expect(goal.operator_actions).toEqual(expect.arrayContaining([
+      "plan_orphan_cleanup",
+      "clean_orphan_candidates",
+    ]));
     expect(goal.runtime_evidence_failure_policy).toContain("fail-closed");
     expect(goal.runtime_evidence_failure_policy).toContain("not process absence");
     expect(goal.pre_copy_evidence_streams).toEqual(expect.arrayContaining([

@@ -23,7 +23,7 @@ use crate::{
     organization_lineage,
     podman_reclaim, provider_api_client, provider_api_write, provider_capacity,
     provider_client_runtime, provider_evidence, provider_global_sync, provider_oauth,
-    provider_recovery, provider_sync, rules,
+    provider_recovery, provider_sync, rules, orphan,
 };
 
 #[cfg(not(coverage))]
@@ -1019,6 +1019,54 @@ pub async fn remove_stale_git_worktrees(
     })
     .await
     .map_err(|_| "git-worktree-removal-task-failed".to_string())?
+}
+
+/// Build a bounded, path-free ontology plan for uninstalled macOS application data.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn plan_orphan_cleanup(app: AppHandle) -> Result<orphan::OrphanPlan, String> {
+    let home = resolve_home(&app)?;
+    tauri::async_runtime::spawn_blocking(move || orphan::plan(&home, now_ms()))
+        .await
+        .map_err(|_| "orphan-plan-task-failed".to_string())?
+}
+
+/// Re-plan immediately before moving only fully scanned, unused cache candidates to OS Trash.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn clean_orphan_candidates(
+    plan_fingerprint: String,
+    requests: Vec<orphan::OrphanCleanupRequest>,
+    confirmation_phrase: String,
+    rationale: String,
+    app: AppHandle,
+) -> Result<orphan::OrphanCleanupResult, String> {
+    if !valid_brew_fingerprint(&plan_fingerprint) {
+        return Err("orphan-plan-fingerprint-invalid".into());
+    }
+    let home = resolve_home(&app)?;
+    let plan = tauri::async_runtime::spawn_blocking({
+        let home = home.clone();
+        move || orphan::plan(&home, now_ms())
+    })
+    .await
+    .map_err(|_| "orphan-clean-plan-task-failed".to_string())??;
+    if plan.plan_fingerprint != plan_fingerprint {
+        return Err("orphan-plan-stale".into());
+    }
+    let journal = journal_file_path(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        orphan::move_to_trash(
+            &plan,
+            &requests,
+            &confirmation_phrase,
+            &rationale,
+            &journal,
+            now_ms(),
+        )
+    })
+    .await
+    .map_err(|_| "orphan-clean-task-failed".to_string())?
 }
 
 #[cfg(not(coverage))]

@@ -90,6 +90,8 @@ pub mod reclaim;
 pub mod semantic_catalog;
 pub mod volume_pressure;
 pub mod zotero_local;
+/// Bounded, path-free ontology planning for uninstalled macOS application data.
+pub mod orphan;
 
 // coverage 빌드에서 제외 — GUI 런타임은 헤드리스 테스트로 실행 불가
 #[cfg(not(coverage))]
@@ -147,6 +149,8 @@ pub fn run() {
             commands::inspect_cloud_provider_client_runtime,
             commands::recover_cloud_provider_client,
             provider_recovery::cancel_finder_copy,
+            commands::plan_orphan_cleanup,
+            commands::clean_orphan_candidates,
             commands::inspect_icloud_new_copy_admission,
             commands::inspect_cloud_provider_global_sync,
             commands::list_cloud_review_decisions,

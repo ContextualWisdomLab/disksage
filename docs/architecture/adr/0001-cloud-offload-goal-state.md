@@ -350,6 +350,68 @@ before any copy, attestation, or source eviction. This action is implemented at 
 `df097743eb75b9cc919d631db0ebdeffad8b7995`, with a regression test that preserves the newline
 separator between Finder activation and the System Events Escape command.
 
+## Amendment: ontology-bound orphan cache cleanup (2026-08-21)
+
+DiskSage now exposes a bounded macOS orphan planner as an operator action. It compares installed
+application bundle identifiers with directory names under the user's `Library/Caches` and
+`Library/Application Support`, and records only metadata, deterministic fingerprints, and
+path-free ontology relations. It never reads file contents, follows symlinks, or treats an LLM
+label as authority. `Application Support`, incomplete manifests, incomplete installed-app
+inventories, and active-use evidence remain review-only.
+
+Only a fully scanned, unused cache candidate can be selected for the separate `trash-orphan-cache`
+action. The backend re-plans immediately before mutation, requires the exact plan fingerprint and
+approval phrase plus an audit rationale, revalidates candidate metadata, and moves it through the
+existing reversible OS Trash boundary. Cloud providers, File Provider state, source files, and
+Trash contents are never mutated by the planner. A stale plan or missing active-use evidence fails
+closed.
+
+The orphan implementation introduced at `3d2406c`, with subsequent provider-sync and cleanup-refresh safety fixes, also treats an incomplete installed-application inventory or
+metadata manifest as non-authoritative. Directory-iteration errors and recursion-depth limits are
+recorded as incomplete evidence, so an unvisited subtree can never make a cache eligible for
+automatic Trash movement; the focused macOS Rust safety tests cover both bounded scans.
+
+The planner's installed-application traversal now combines bounded fixed-root and Launch Services
+(`mdfind`) bundle inventory, shares the five-second plan deadline, caps Info.plist reads before
+parsing, and uses recursive `lsof +D` evidence for directory candidates;
+timeouts, read failures, and active-use errors remain review-only. The replaceable Goal names the
+actual Tauri commands `plan_orphan_cleanup` and `clean_orphan_candidates`, so operator automation
+cannot drift from the registered command boundary.
+
+The Launch Services `mdfind` probe also runs in a private process group; timeout cleanup kills the
+group before the bounded stdout reader is joined, so a descendant cannot hold the planner past its
+deadline.
+
+The active-use probes share the enclosing planner deadline rather than starting an independent
+timeout per candidate. Immediately before a Trash batch, existing candidate directories are
+re-scanned against the reviewed metadata manifest; a changed, incomplete, or unsafe manifest
+fails the whole batch before the first mutation. This remains metadata-only: cache contents are
+never opened and no File Provider placeholder is materialized.
+
+The cleanup mutation result is authoritative once the OS Trash operation succeeds. A follow-up
+read-only plan refresh is deliberately separate: if it fails, the UI preserves the successful
+cleanup receipt, clears the stale selection, and asks the operator to re-run the relationship
+inspection instead of reporting a completed mutation as a failed cleanup.
+
+## Amendment: repeated provider-stall evidence remains blocking (2026-08-21 12:35 +0900)
+
+A fresh bounded read-only Google Drive File Provider dump still reported temporarily disconnected
+domains, File Provider `-1004` server-unreachable errors, simultaneous upload/download progress,
+and reconciliation queues of 14,558, 2,000, 201, and 168 entries. `bird` and `fileproviderd`
+were CPU-active. This repeated observation keeps the provider-global transfer, reconciliation,
+disconnect, and server-error blockers authoritative; a Finder “준비 중” dialog is not copy
+completion. DiskSage must offer only the fixed bounded Finder Escape cancellation and a later fresh
+quiet observation, never a daemon kill, cloud mutation, retry, or source eviction.
+
+## Amendment: iCloud active-transfer observation (2026-08-21 13:38 +0900)
+
+A capped read-only iCloud File Provider dump observed live Finder enumerators, `scheduling state:
+running`, upload progress of 95.24% (118,950,548,354 of 124,897,444,934 bytes), and download
+progress of 2.78% (30,311,669 of 1,091,221,225 bytes). This bounded head is not a quiet provider
+attestation. The observation command was stopped without changing a provider daemon, cloud object,
+or source file; raw cloud-placeholder scans remain prohibited because metadata inspection can
+request materialization.
+
 ## Amendment: provider-runtime recovery evidence (2026-08-21)
 
 OneDrive and Google Drive client recovery now requires an explicit runtime observation before

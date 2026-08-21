@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-21 (Asia/Seoul)
-**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` source through `2144791`; this
+**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` source through `6f424af`; this
 baseline records the current loop's runtime and integration evidence.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
@@ -32,7 +32,7 @@ baseline records the current loop's runtime and integration evidence.
 | P0 | Provider end-to-end receipt is absent for the current iCloud incident. | Global probe can time out and CloudDocs state is intentionally not force-killed or deleted; the native copy boundary now requires an integrity-checked three-stream pre-copy cohort before mutation. | Capture a bounded fresh provider evidence receipt after sync settles; keep transfer/eviction disabled until it is complete. |
 | P0 | Disk pressure telemetry and provider queue evidence must remain comparable across loops without retaining raw provider output. | Cloud plans and explicit iCloud health refreshes persist bounded, path-free `LocalVolumeSnapshot`, `ProviderClientRuntimeSnapshot`, and `IcloudSyncHealthEvidenceSnapshot` records under `volume-pressure-evidence`, `provider-client-runtime-evidence`, and `icloud-sync-health-evidence`; iCloud plans now combine them into a timestamp/fingerprint-bound cohort. | Missing, incomplete, malformed, or more-than-five-minute-skewed cohort observations remain blocked; a fresh exact-head native incident plan is still needed to compare the emitted cohort with the live incident. |
 | P1 | Hourly product-development/review loop is not yet live in this repository environment. | The repository-local `.github/workflows/hourly-product-loop.yml` is intentionally `workflow_dispatch`-only because its direct contextual-orchestrator HTTP call is advisory and not a pinned OpenCode worker. The trusted central [`disksage-hourly-review-repair.yml`](https://github.com/ContextualWisdomLab/.github/blob/main/.github/workflows/disksage-hourly-review-repair.yml) runs at `37 * * * *` and dispatches the pinned scheduler `a3fdaa1aacaba9443a18573f3c309fe1841fc2f0`, which performs the OpenCode OIDC exchange. The local workflow still uploads a seven-day path-free receipt when manually configured; no external endpoint or deployment receipt is available here. | Verify one central scheduler receipt and one local manual advisory receipt; preserve read-only permissions, exact-head binding, and no provider-secret import or mutation. |
-| P1 | Open PR queue prevents a clean protected release line. | At this loop capture PR #213 is exact head `2144791` on `feat/provider-sync-dynamic-goals`; its required checks reset after this head update and the prior review decision remains stale `CHANGES_REQUESTED`, with no unresolved current thread. PR #209 is at `0fc67a4` with hosted checks green and fresh OpenCode review requested; PR #228 is at `1eb947e` with hosted checks green and now ready for review; both remain unmerged pending exact-head approval. | Process one PR at a time: current-head review → fix → required checks → fresh approval → normal protected merge; never bypass or self-approve. |
+| P1 | Open PR queue prevents a clean protected release line. | At this loop capture PR #213 is exact head `6f424af` on `feat/provider-sync-dynamic-goals`; its required checks reset after the provider-dump pipe repair and the prior review decision remains stale `CHANGES_REQUESTED`. The orphan cleanup follow-up is PR #245, initially implemented at `3d2406c` and subsequently extended with provider-sync and cleanup-refresh safety fixes. Both remain protected and unmerged pending exact-head review. | Process one PR at a time: current-head review → fix → required checks → fresh approval → normal protected merge; never bypass or self-approve. |
 | P1 | Current UI coverage is contract-heavy rather than runtime E2E for native File Provider states. | The UI now displays `로컬 최신본·업로드 미확인` and maps blockers without backend detail; provider operations are not safely reproducible on this full disk. Rust fixtures now cover `local-current + is_uploaded=false`, provider timeout, timeliness transitions, and receipt/evidence invalidation; native runtime E2E remains unavailable while the provider is unhealthy. | Keep the fixture-backed state machine green and add a bounded native E2E receipt only after a quiet provider observation is authoritative. |
 | P1 | Ontology/catalog integrations are export boundaries, not deployed services. | Naruon/semantic catalog and Zotero local API docs/contracts exist; no Noema/contextual-orchestrator runtime dependency is required. | Keep integrations optional and path-free; add live service tests only when a concrete consumer and secret boundary exist. |
 | P2 | 100% documentation/docstring and edge-case coverage is not yet evidenced. | Existing checks cover core Rust/TS behavior, not a repository-wide percentage claim. | Publish measured coverage per language and close high-risk edge paths before claiming 100%. |
@@ -541,3 +541,74 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   DiskSage and Clearfolio reusable-workflow callers, keeps the workflow token read-only, and
   updates the contract tests. Checks are still pending; hourly operation is not claimed until a
   normal protected merge and one successful scheduled receipt are observed.
+## 2026-08-21 ontology-bound orphan cleanup follow-up
+
+- The macOS UI now provides `관계 기반 고아 정리`. A bounded Rust planner compares installed
+  application bundle IDs with cache and Application Support directory metadata, emits path-free
+  ontology relations and deterministic fingerprints, and uses active-use evidence before any
+  candidate can be considered. File contents are not opened and symlinks are not followed.
+- Application Support, incomplete inventories/manifests, skipped entries, and active-use or
+  truncated evidence are review-only. Only a complete unused cache may pass the separate exact
+  phrase/rationale approval and re-plan boundary; mutation uses the existing reversible OS Trash
+  journal. The LLM can annotate but cannot authorize cleanup, and no cloud/provider state is
+  changed. `plan_orphan_cleanup` and `clean_orphan_candidates` are now explicit dynamic Goal
+  operator actions.
+- The review hardening now joins bounded Launch Services bundle inventory with the fixed roots;
+  an unavailable, timed-out, truncated, or unreadable inventory is incomplete and keeps every
+  cache candidate review-only. Installed-app traversal shares the five-second plan deadline,
+  Info.plist reads are capped before parsing, directory active-use probes use recursive `lsof +D`,
+  and active-use errors are surfaced as explicit review reasons.
+
+## 2026-08-21 current-head live provider confirmation
+
+- A new bounded read-only Google Drive File Provider dump returned 5,159,669 bytes with the domain
+  temporarily disconnected, active upload/download progress, a 2,000-entry reconciliation queue,
+  and File Provider `-1004` server-unreachable evidence. `bird` remains CPU-active. This confirms
+  that the Finder “준비 중” dialog is provider-stall evidence, not a completed copy; copy,
+  attestation, and eviction remain blocked. Local APFS availability recovered to about 8.9 GiB
+  during the observation. The fixed Finder Escape action remains the only supported cancellation;
+  no daemon, cloud object, or source file was touched.
+- The PR #245 implementation snapshot `55a1c13ffb5cc1381aa1e86e2e6e73e055669c58` adds the ontology-bound orphan cache action and fails closed when
+  installed-app inventory or metadata manifests are truncated, too deep, or contain directory
+  iteration errors. Frontend checks passed locally (31 files, 129 tests); focused Rust orphan tests
+  pass (12/12 unit plus 2/2 lsof-warning integration tests, including deep inventory/manifest,
+  metadata-change, and object identity replacement rejection). Active-use probes share the
+  enclosing five-second plan deadline, and the pre-trash batch revalidates the metadata manifest
+  without reading cache contents or materializing provider placeholders.
+  Launch Services timeout cleanup now terminates the private mdfind process group before joining
+  stdout, preventing descendants from holding the planner past its deadline.
+  The post-Trash read-only refresh is now separate from the mutation result, so a refresh failure
+  preserves the successful cleanup receipt and clears stale UI selection.
+  Hosted full Rust,
+  security, and review checks remain authoritative and pending. PR #213's live base head is
+  `cc693e4`.
+
+## 2026-08-21 12:35 +0900 repeated provider-stall observation
+
+- A fresh bounded `fileproviderctl dump com.google.drivefs.fpext -l` returned about 5.16 MB of
+  read-only evidence. Multiple Google Drive domains remained temporarily disconnected with File
+  Provider `-1004` server-unreachable errors, active upload/download markers, and reconciliation
+  queues of 14,558, 2,000, 201, and 168 entries. `bird` and `fileproviderd` remained CPU-active.
+  The Finder “준비 중” operation therefore remains provider-sync-incomplete; DiskSage must not
+  treat it as a successful copy or authorize eviction. No provider daemon, cloud object, or source
+  file was changed.
+
+## 2026-08-21 13:38 +0900 iCloud active-transfer observation
+
+- A bounded 16 KiB head of a read-only `fileproviderctl dump com.apple.CloudDocs.iCloudDriveFileProvider -l`
+  showed Finder enumerators alive for the iCloud domain, sync scheduling `running`, upload progress
+  at 95.24% (118,950,548,354 / 124,897,444,934 bytes), and download progress at 2.78%
+  (30,311,669 / 1,091,221,225 bytes). `bird` and `fileproviderd` were still running. Because the
+  diagnostic head was intentionally capped, it is active-transfer evidence, not a complete quiet
+  provider attestation; copy, attestation, and eviction remain blocked.
+- The bounded diagnostic was terminated without touching provider daemons, cloud objects, or source
+  files. Subsequent scans must avoid raw cloud-placeholder paths because metadata inspection can
+  request File Provider materialization even when the command is read-only.
+
+## 2026-08-21 exact-head stacked PR audit
+
+- PR #245 was rebased onto provider-sync base `cc693e4` at implementation snapshot `55a1c13`; its protected
+  Release, Test, security, Noema, Strix, and review checks restarted and remain queued. The PR is
+  `REVIEW_REQUIRED`/`BLOCKED`; no force-merge or approval bypass was used.
+- PR #213 remains exact head `cc693e4` with CodeRabbit passing, Devin and required checks pending,
+  and a stale `CHANGES_REQUESTED` review decision. No merge or provider mutation is claimed.
