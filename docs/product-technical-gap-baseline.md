@@ -60,6 +60,10 @@ baseline records the current loop's runtime and integration evidence.
   `cargo test --locked --features cloud-cli --bin disksage-cloud-plan` passes (1 test). The hosted
   matrix must be rerun on the resulting head before any protected merge; this correction grants
   no copy, cloud-write, or eviction authority.
+- The local verification created only regenerable Cargo target artifacts; after all Cargo processes
+  exited, `cargo clean --manifest-path src-tauri/Cargo.toml` removed 3.8 GiB and restored about
+  8.9 GiB APFS availability. No source, Finder, iCloud/File Provider, OneDrive, or Google Drive
+  data was touched.
 
 - The implementation head observed before this documentation update was `88001d8`: existing-copy
   adoption no longer requires native-copy staging headroom, so a low-disk user can verify and adopt
