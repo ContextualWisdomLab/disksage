@@ -674,7 +674,7 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   provider-index backlog from the earlier low-space pressure incident.
 ## 2026-08-21 exact-head ecosystem audit
 
-- DiskSage PR #246 exact implementation head is `9c4d67964d2c3572e4109f624f5a63a6d4fb2d12`; the
+- DiskSage PR #246 exact implementation head is `52a0c22d083de38b35b5e94723044c782c6df114`; the
   branch remains open with `UNSTABLE` checks queued and no qualifying approval. The UX now renders
   `ProviderStatusCard` in the running CloudArchive screen, so a stuck Finder copy is visible as a
   provider-sync-incomplete/materialization-stalled state with elapsed time and a bounded cancel
