@@ -119,7 +119,6 @@ fn handle_traversal_path(_handle: &Handle, display_path: &Path) -> Option<PathBu
     Some(display_path.to_path_buf())
 }
 
-#[cfg(unix)]
 fn invalid_relative_path() -> std::io::Error {
     std::io::Error::new(
         std::io::ErrorKind::InvalidInput,
@@ -144,6 +143,21 @@ fn relative_components(relative: &Path) -> std::io::Result<Vec<std::ffi::CString
             _ => Err(invalid_relative_path()),
         })
         .collect()
+}
+
+#[cfg(windows)]
+fn validate_windows_relative_path(relative: &Path, allow_empty: bool) -> std::io::Result<()> {
+    use std::path::Component;
+
+    if relative.is_absolute()
+        || (!allow_empty && relative.as_os_str().is_empty())
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(invalid_relative_path());
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -327,6 +341,7 @@ impl BoundReadRoot {
 
         #[cfg(windows)]
         {
+            validate_windows_relative_path(relative, true)?;
             let root = self
                 .stable_path()
                 .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "bound root unavailable"))?;
@@ -380,6 +395,7 @@ impl BoundReadRoot {
 
         #[cfg(windows)]
         {
+            validate_windows_relative_path(relative, true)?;
             let root = self
                 .stable_path()
                 .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "bound root unavailable"))?;
@@ -434,6 +450,7 @@ impl BoundReadRoot {
 
         #[cfg(windows)]
         {
+            validate_windows_relative_path(relative, false)?;
             let root = self
                 .stable_path()
                 .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "bound root unavailable"))?;
