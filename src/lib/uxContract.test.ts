@@ -21,8 +21,11 @@ describe("UI/UX design and Storybook contract", () => {
     const page = read("src/routes/+page.svelte");
     const providerStatus = read("src/lib/ux/ProviderStatusCard.svelte");
     const globalButtonRule = tokens.match(/(?:^|\n)button\s*\{([\s\S]*?)\}/m)?.[1] ?? "";
+    const globalControlSizingRule = tokens.match(/button,\s*\nselect,\s*\ninput,\s*\ntextarea\s*\{([\s\S]*?)\}/m)?.[1] ?? "";
 
     expect(globalButtonRule).not.toMatch(/\b(?:border|background|padding)\s*:/);
+    expect(globalControlSizingRule).not.toContain("min-height");
+    expect(tokens).toMatch(/\.ds-control\s*\{[\s\S]*?min-height:\s*var\(--ds-control-min-size\)/);
     expect(tokens).toMatch(/\.ds-control\s*\{[\s\S]*?border:\s*1px solid var\(--ds-border\)/);
     expect(tokens).toMatch(/\.ds-control:hover:not\(:disabled\)/);
     expect(page).toContain('class="ds-control scan-action"');
