@@ -412,4 +412,25 @@ mod tests {
         assert!(!names.contains(&"link.bin".to_string()), "심링크 제외");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn collect_files_accepts_symlinked_root_without_following_nested_symlinks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir(&real).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        write_file(&real, "inside.bin", b"inside");
+        write_file(&outside, "outside.bin", b"outside");
+        std::os::unix::fs::symlink(&outside, real.join("nested-link")).unwrap();
+        let selected = tmp.path().join("selected-root");
+        std::os::unix::fs::symlink(&real, &selected).unwrap();
+
+        let files = collect_files(&selected);
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, selected.join("inside.bin"));
+        assert_eq!(files[0].size, 6);
+    }
+
 }
