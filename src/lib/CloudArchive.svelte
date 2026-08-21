@@ -473,6 +473,15 @@
   }
 
   async function refreshIcloudHealth(force = false) {
+    const root = selectedRootDetails();
+    if (!root || root.provider !== "icloud") {
+      icloudHealth = null;
+      icloudHealthError = "";
+      icloudHealthNextCheckAt = 0;
+      icloudHealthBlockedSinceMs = 0;
+      icloudHealthFingerprint = "";
+      return;
+    }
     if (checkingIcloudHealth || (!force && Date.now() < icloudHealthNextCheckAt)) return;
     checkingIcloudHealth = true;
     icloudHealthError = "";
@@ -608,6 +617,7 @@
     providerGlobalSyncObservedAtMs = 0;
     providerGlobalSyncBlockedSinceMs = 0;
     providerGlobalSyncFingerprint = "";
+    void refreshIcloudHealth();
     void refreshProviderGlobalSync();
   }
 
