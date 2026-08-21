@@ -612,3 +612,21 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   `REVIEW_REQUIRED`/`BLOCKED`; no force-merge or approval bypass was used.
 - PR #213 remains exact head `cc693e4` with CodeRabbit passing, Devin and required checks pending,
   and a stale `CHANGES_REQUESTED` review decision. No merge or provider mutation is claimed.
+
+## 2026-08-21 exact-head native staging and OneDrive runtime follow-up
+
+- DiskSage source head `3704dd1` closes the native-copy cleanup race identified in the P0 gap:
+  macOS now copies into a command-owned `tempfile` directory, verifies bytes and source identity,
+  and finalizes with bounded `/bin/mv -n`; timeout/helper failure drops only that owned staging
+  directory and cannot remove a provider-owned final destination. Successful copies continue to
+  write the immutable receipt. The preview and mutation-boundary 1 GiB reserve gate remains
+  authoritative.
+- The live OneDrive File Provider observation reported `temporarily disconnected`, active
+  upload/download progress, `databaseInitError`, and root reconciliation failures with `-1004`
+  `serverUnreachable`. DiskSage therefore keeps copy, attestation, and eviction blocked. The
+  OneDrive client was stopped after a restart attempt reduced available space to 340 MiB; only
+  regenerable package cache and an unreferenced temporary clone were removed, and no Finder,
+  provider daemon, cloud object, or user file was touched.
+- PR #213 now points to exact head `3704dd1`; hosted checks/review are authoritative and a
+  protected approval is still required. The remaining gap is a fresh complete, quiet provider
+  receipt plus runtime E2E under safe headroom.
