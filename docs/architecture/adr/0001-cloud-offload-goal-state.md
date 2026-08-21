@@ -560,3 +560,12 @@ path-free activity evidence and adds `icloud-file-provider-indexing-pending` to 
 the UI includes it in the stable-block fingerprint and warns that Finder may remain in “복사 준비
 중”. No Finder/provider process is killed and no cloud or source mutation is performed. The
 extension remains additive to activity schema v3 and is covered by a parser regression test.
+
+## Amendment: restart-safe iCloud admission duration (2026-08-21)
+
+Each successful iCloud health inspection now persists a bounded, path-free observation before
+deriving `admission_blocked_since_ms` from the earliest contiguous retained record with the same
+admission-blocker set. Invalid, unreadable, or changed historical evidence stops the walk, so a
+restart cannot manufacture a longer stall interval. The field is diagnostic only: provider-native
+completion, copy receipts, attestation, and local eviction remain independent fail-closed gates.
+The implementation and regression test are at source head `ad850e9`.
