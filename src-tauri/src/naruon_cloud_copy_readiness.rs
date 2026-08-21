@@ -31,7 +31,7 @@ const RUNTIME_BLOCKERS: [&str; 2] = [
     "provider-client-runtime-not-observed",
     "provider-client-runtime-evidence-unavailable",
 ];
-const ICLOUD_ADMISSION_BLOCKERS: [&str; 20] = [
+const ICLOUD_ADMISSION_BLOCKERS: [&str; 21] = [
     "icloud-sync-health-evidence-incomplete",
     "icloud-upload-queue-nonempty",
     "icloud-upload-in-flight",
@@ -47,6 +47,7 @@ const ICLOUD_ADMISSION_BLOCKERS: [&str; 20] = [
     "icloud-file-provider-materialization-failed",
     "icloud-file-provider-filename-excluded",
     "icloud-file-provider-root-excluded",
+    "icloud-file-provider-indexing-pending",
     "icloud-file-provider-transfer-active",
     "icloud-file-provider-dump-timeout",
     "icloud-file-provider-dump-output-truncated",
@@ -1931,7 +1932,7 @@ mod tests {
         let mut forged_icloud_blocker =
             export_naruon_cloud_copy_readiness(&onedrive_report, &runtime, None).unwrap();
         forged_icloud_blocker.candidate_blocker_counts.insert(
-            "icloud-upload-queue-nonempty".into(),
+            "icloud-file-provider-indexing-pending".into(),
             CountBytes {
                 count: forged_icloud_blocker.candidate_count,
                 bytes: forged_icloud_blocker.candidate_bytes,
