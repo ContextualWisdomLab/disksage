@@ -34,12 +34,25 @@ diagnostic_bytes="$(wc -c < "$line_bounded_log" | tr -d ' ')"
 if (( diagnostic_bytes <= max_total_bytes )); then
   cp "$line_bounded_log" "$bounded_log"
 else
-  # Put actionable Rust/Cargo errors ahead of warning noise. Match against an ANSI-free copy
-  # because the Rust toolchain forces colored output in CI, while preserving the original line.
+  # Put actionable Rust/Cargo errors and test panics ahead of warning noise. Match against an
+  # ANSI-free copy because the Rust toolchain forces colored output in CI, while preserving the
+  # original diagnostic lines. A bounded number of lines following a panic header is retained so
+  # assertion values and the source location survive even when the failure sits between log edges.
   LC_ALL=C awk '
     {
       plain = $0
       gsub(/\033\[[0-9;]*m/, "", plain)
+    }
+    plain ~ /^thread .* panicked at / {
+      print
+      panic_context = 6
+      in_error = 0
+      next
+    }
+    panic_context > 0 {
+      print
+      panic_context--
+      next
     }
     plain ~ /^(error(\[[^]]+\])?:|fatal:|Caused by:)/ {
       print
@@ -63,7 +76,7 @@ else
 
   head -c "$edge_bytes" "$line_bounded_log" > "$bounded_log"
   if [[ -s "$error_focus_log" ]]; then
-    printf '\n--- focused compiler errors ---\n' >> "$bounded_log"
+    printf '\n--- focused compiler errors and test panics ---\n' >> "$bounded_log"
     head -c "$error_focus_bytes" "$error_focus_log" >> "$bounded_log"
   fi
   if [[ -s "$other_focus_log" ]]; then
