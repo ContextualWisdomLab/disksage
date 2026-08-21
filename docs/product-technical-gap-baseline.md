@@ -2,10 +2,11 @@
 
 **Snapshot:** 2026-08-21 (Asia/Seoul)
 **Repository heads at snapshot:** DiskSage PR #213 remains at protected remote head
-`108bba0e4737b09b1c09f6c3b5a86a43be22223e`; PR #246 implementation remains at `52a0c22`, with
-latest docs/test binding head `5126c8760ba7f117b8fd3dbc1e077092b881c1d4`.
-The local provider follow-up `a394ba2` is not published because the active PR-only ruleset rejects
-direct branch updates; this baseline records the current loop's runtime and integration evidence.
+`108bba0e4737b09b1c09f6c3b5a86a43be22223e`; PR #246 is at `97533ad6c3f14770ec48091221c2d7a9e562976f`,
+with required checks queued and no qualifying approval. Provider evidence changes are published as
+follow-up PR #247 at `d6aa2ebb1da7117b18d5c96a1c93c3cbc320f355`; Naruon follow-up PR #1448 is at
+`0b1b1773130acdf472ed168b5d6a26e6ec11e1cb`. This baseline records the current loop's runtime and
+integration evidence.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
 
@@ -35,7 +36,7 @@ direct branch updates; this baseline records the current loop's runtime and inte
 | P0 | Provider end-to-end receipt is absent for the current iCloud incident. | Global probe can time out and CloudDocs state is intentionally not force-killed or deleted; the native copy boundary now requires an integrity-checked three-stream pre-copy cohort before mutation. | Capture a bounded fresh provider evidence receipt after sync settles; keep transfer/eviction disabled until it is complete. |
 | P0 | Disk pressure telemetry and provider queue evidence must remain comparable across loops without retaining raw provider output. | Cloud plans and explicit iCloud health refreshes persist bounded, path-free `LocalVolumeSnapshot`, `ProviderClientRuntimeSnapshot`, and `IcloudSyncHealthEvidenceSnapshot` records under `volume-pressure-evidence`, `provider-client-runtime-evidence`, and `icloud-sync-health-evidence`; iCloud plans now combine them into a timestamp/fingerprint-bound cohort. | Missing, incomplete, malformed, or more-than-five-minute-skewed cohort observations remain blocked; a fresh exact-head native incident plan is still needed to compare the emitted cohort with the live incident. |
 | P1 | Hourly product-development/review loop is not yet live in this repository environment. | The repository-local `.github/workflows/hourly-product-loop.yml` is intentionally `workflow_dispatch`-only because its direct contextual-orchestrator HTTP call is advisory and not a pinned OpenCode worker. The trusted central [`disksage-hourly-review-repair.yml`](https://github.com/ContextualWisdomLab/.github/blob/main/.github/workflows/disksage-hourly-review-repair.yml) runs at `37 * * * *` and dispatches the pinned scheduler `a3fdaa1aacaba9443a18573f3c309fe1841fc2f0`, which performs the OpenCode OIDC exchange. The local workflow still uploads a seven-day path-free receipt when manually configured; no external endpoint or deployment receipt is available here. | Verify one central scheduler receipt and one local manual advisory receipt; preserve read-only permissions, exact-head binding, and no provider-secret import or mutation. |
-| P1 | Open PR queue prevents a clean protected release line. | PR #213 is exact remote head `108bba0`, `CHANGES_REQUESTED`, with required checks queued; PR #246 is exact head `278b62b`, `UNSTABLE`, with build jobs in progress/queued and no qualifying approval. Local provider follow-up `a394ba2` cannot be published under the active PR-only ruleset. | Process one PR at a time: current-head review → fix → required checks → fresh approval → normal protected merge; never bypass or self-approve. |
+| P1 | Open PR queue prevents a clean protected release line. | PR #213 is exact remote head `108bba0`, `CHANGES_REQUESTED`, with required checks queued; PR #246 is exact head `97533ad`, `UNSTABLE`, with required checks queued and no qualifying approval; PR #247 is exact head `d6aa2eb` with checks queued. | Process one PR at a time: current-head review → fix → required checks → fresh approval → normal protected merge; never bypass or self-approve. |
 | P1 | Current UI coverage is contract-heavy rather than runtime E2E for native File Provider states. | The UI now displays `로컬 최신본·업로드 미확인` and maps blockers without backend detail; provider operations are not safely reproducible on this full disk. Rust fixtures now cover `local-current + is_uploaded=false`, provider timeout, timeliness transitions, and receipt/evidence invalidation; native runtime E2E remains unavailable while the provider is unhealthy. | Keep the fixture-backed state machine green and add a bounded native E2E receipt only after a quiet provider observation is authoritative. |
 | P1 | Ontology/catalog integrations are export boundaries, not deployed services. | Naruon/semantic catalog and Zotero local API docs/contracts exist; no Noema/contextual-orchestrator runtime dependency is required. | Keep integrations optional and path-free; add live service tests only when a concrete consumer and secret boundary exist. |
 | P2 | 100% documentation/docstring and edge-case coverage is not yet evidenced. | Existing checks cover core Rust/TS behavior, not a repository-wide percentage claim. | Publish measured coverage per language and close high-risk edge paths before claiming 100%. |
@@ -678,8 +679,8 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   provider-index backlog from the earlier low-space pressure incident.
 ## 2026-08-21 exact-head ecosystem audit
 
-- DiskSage PR #246 implementation head remains `52a0c22`; later test/documentation commits keep the
-  branch open with `UNSTABLE` checks in progress/queued and no qualifying approval. The UX now renders
+- DiskSage PR #246 is at `97533ad`; required checks are queued and no qualifying approval exists. The
+  follow-up provider evidence PR #247 is at `d6aa2eb`. The UX now renders
   `ProviderStatusCard` in the running CloudArchive screen, so a stuck Finder copy is visible as a
   provider-sync-incomplete/materialization-stalled state with elapsed time and a bounded cancel
   request. This is cancellation guidance only; it grants no copy, attestation, or eviction authority.
@@ -687,10 +688,11 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   the latest bounded live observation recorded 13,737 pending indexable items, a 12,449-entry
   reconciliation backlog, one no-progress fetch, active transfer markers, and filename/root
   exclusions `18/2`. The displayed action remains read-only/cancel-only.
-- Naruon PR #1443 remains open at `d61d316f67e130f951ef8d769c6d148b9bf7b9d0`; backend, security,
+- Naruon PR #1443 remains open at `d61d316f67e130f951ef8d769c6d148b9bf7b9d0`; follow-up PR #1448
+  is published at `0b1b1773130acdf472ed168b5d6a26e6ec11e1cb`; backend, security,
   frontend, Noema, and CodeQL checks are successful, but coverage is queued and the metadata-only
-  gate is failing. A local multiline-head parser repair exists but cannot be published under the
-  current PR-only ruleset; its protected merge state remains blocked.
+  gate is failing. Both PRs remain blocked by current-head hosted checks/review gates; no bypass or
+  self-approval was used.
 - semantic-data-portal PR #59 remains open at `65e4fd770c69192daafe51854eb73eb2f06f0bf4` with
   completed substantive checks successful, but protected review is still required. PR #61 remains
   open at `0c248d288be4ef9a01cd498b7311157b053a63e1`; its CodeQL failures came from the hosted
