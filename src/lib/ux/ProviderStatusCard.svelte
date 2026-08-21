@@ -10,7 +10,7 @@
     canCancel?: boolean;
     cancelLabel?: string;
     onCancel?: () => void;
-    statusId?: string;
+    statusId: string;
   };
 
   let {
@@ -22,7 +22,7 @@
     canCancel = false,
     cancelLabel = "복사 취소 요청",
     onCancel,
-    statusId = "provider-status",
+    statusId,
   }: Props = $props();
 
   const stateLabel: Record<ProviderStatusState, string> = {

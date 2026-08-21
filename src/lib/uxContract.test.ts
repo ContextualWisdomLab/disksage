@@ -23,6 +23,7 @@ describe("UI/UX design and Storybook contract", () => {
     expect(page).toContain('id="main-content" tabindex="-1"');
     expect(page).toContain('for="scan-root"');
     expect(page).toContain('role="alert"');
+    expect(page).toContain('role="group" aria-label="스캔 제어"');
     expect(page).toContain('aria-live="polite"');
     expect(page).not.toContain("alert(`스캔 시작 실패");
   });
@@ -43,6 +44,7 @@ describe("UI/UX design and Storybook contract", () => {
     expect(workflow).toContain("npm run build-storybook");
     expect(workflow).toContain("playwright install --with-deps chromium");
     expect(workflow).toContain("npm run test-storybook");
+    expect(read(".storybook/test-runner.ts")).toContain("setViewportSize");
   });
 
   it("uses release-consumer terminology rather than a shopping-domain actor", () => {

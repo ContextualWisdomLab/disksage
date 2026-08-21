@@ -96,7 +96,7 @@
 
 <main id="main-content" tabindex="-1">
   <h1>DiskSage</h1>
-  <div class="controls" aria-label="스캔 제어">
+  <div class="controls" role="group" aria-label="스캔 제어">
     <label for="scan-root">스캔 위치</label>
     <select id="scan-root" bind:value={selectedRoot} disabled={scanning || roots.length === 0}>
       {#each roots as r}<option value={r}>{r}</option>{/each}
