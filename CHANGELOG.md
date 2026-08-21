@@ -65,6 +65,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Keep iCloud stall-counter changes (`no progress`, materialization failures, and timeouts) out of
   the progress fingerprint, so a blocked Finder copy still reaches the 15-minute warning; retain
   a real transfer/indexing progress reset across subsequent polls.
+- Do not treat a growing or unknown iCloud pending-indexable backlog as progress; only a drained
+  backlog or actual transfer progress resets the stalled-copy interval.
 - Prefer `~/Downloads` and then the home directory over `/` for the initial macOS scan root, so a
   first scan does not recursively enumerate iCloud/OneDrive File Provider trees by accident.
 - Keep the iCloud status card blocked when the admission state is `blocked` even if a malformed or
