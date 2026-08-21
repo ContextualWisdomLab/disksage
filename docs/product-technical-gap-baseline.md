@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-21 (Asia/Seoul)
-**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` source through `a15be74`; this
+**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` source through `a4de13e`; this
 baseline records the current loop's runtime and integration evidence.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
@@ -360,3 +360,5 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - Head `a15be7425aba9e80a48bb7eba8a669bd505a23d7` adds explicit wire-name and Naruon ontology
   coverage for `sensitive-config`, preventing the new blocked class from becoming an untested
   serialization branch.
+- Head `a4de13e65b6711f97a51eb857642da585f1d0b09` leaves the ontology coverage assertion
+  rustfmt-clean; no behavior or authority boundary changed.
