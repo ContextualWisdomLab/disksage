@@ -687,3 +687,10 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - The user-referenced fast-mlsirm PR #160 is closed without merge (`merged_at=null`). DiskSage has
   not introduced an unverified LLM-as-a-Judge dependency; its copy and eviction gates remain
   deterministic and fail closed until a current, reviewed fast-mlsirm integration exists.
+
+## 2026-08-21 third-party provider probe backoff
+
+- CloudArchive now retries clear OneDrive/Google Drive observations on the one-minute loop but backs
+  off blocked or failed global-sync probes for five minutes. Explicit Finder-copy cancellation and
+  provider-client recovery force a fresh read; no provider data, cloud object, or source file is
+  mutated by this UI-only scheduling change.

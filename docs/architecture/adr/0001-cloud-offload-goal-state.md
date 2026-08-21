@@ -528,3 +528,12 @@ domain was observed through `fileproviderd`/ExtensionKit rather than a quiet pro
 shows that low disk pressure was not the only cause of the Finder stall. DiskSage must continue to
 report provider-sync-incomplete and must not attest, evict, or treat the Finder preparation dialog
 as a completed cloud copy until a fresh complete, quiet observation and immutable receipt exist.
+
+## Amendment: back off repeated third-party provider probes (2026-08-21)
+
+CloudArchive now applies the same bounded retry discipline to OneDrive and Google Drive global
+sync probes: a clear observation may refresh on the normal one-minute loop, while a blocker or
+probe error schedules the next automatic check five minutes later. Explicit Finder-copy
+cancellation and provider-client recovery actions force one fresh observation. This prevents an
+already busy File Provider database from receiving a second hot reader without weakening the
+provider-sync-incomplete, attestation, or eviction gates.
