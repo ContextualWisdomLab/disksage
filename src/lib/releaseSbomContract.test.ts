@@ -32,6 +32,12 @@ describe('release SBOM generator', () => {
         lockfileVersion: 3,
         packages: {
           '': { name: 'disksage', version: '0.1.0' },
+          'node_modules/parent': {
+            version: '2.0.0',
+            dependencies: { example: '^1.0.0' },
+            resolved: 'https://registry.npmjs.org/parent/-/parent-2.0.0.tgz',
+            license: 'MIT',
+          },
           'node_modules/example': {
             version: '1.2.3',
             resolved: 'https://registry.npmjs.org/example/-/example-1.2.3.tgz',
@@ -51,13 +57,25 @@ describe('release SBOM generator', () => {
       const document = JSON.parse(readFileSync(outputPath, 'utf8')) as {
         spdxVersion: string;
         documentNamespace: string;
-        packages: Array<{ name: string }>;
+        packages: Array<{ SPDXID: string; name: string }>;
+        relationships: Array<{
+          spdxElementId: string;
+          relationshipType: string;
+          relatedSpdxElement: string;
+        }>;
       };
       expect(document.spdxVersion).toBe('SPDX-2.3');
       expect(document.documentNamespace).toContain('/sbom/deadbeef');
       expect(document.packages.map((pkg) => pkg.name)).toEqual(
-        expect.arrayContaining(['cargo:disksage', 'npm:example']),
+        expect.arrayContaining(['cargo:disksage', 'npm:parent', 'npm:example']),
       );
+      const parentId = document.packages.find((pkg) => pkg.name === 'npm:parent')?.SPDXID;
+      const exampleId = document.packages.find((pkg) => pkg.name === 'npm:example')?.SPDXID;
+      expect(document.relationships).toContainEqual({
+        spdxElementId: parentId,
+        relationshipType: 'DEPENDS_ON',
+        relatedSpdxElement: exampleId,
+      });
 
       const validated = runGenerator(['--validate', outputPath], root);
       expect(validated.status).toBe(0);
