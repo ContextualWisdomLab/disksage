@@ -794,6 +794,8 @@
       "icloud-native-status-command-timeout": "macOS iCloud 상태 확인이 시간 초과되어 복사를 보류함",
       "icloud-file-provider-no-progress": "File Provider fetch/create 요청이 진행률 없이 정지함",
       "icloud-file-provider-materialization-failed": "File Provider 파일 materialization이 실패함(staged item 없음)",
+      "icloud-file-provider-filename-excluded": "iCloud가 파일 이름 때문에 동기화에서 제외한 항목이 있음",
+      "icloud-file-provider-root-excluded": "iCloud가 동기화 루트에서 제외한 항목이 있음",
       "icloud-file-provider-transfer-active": "File Provider 기존 upload/download가 진행 중임",
       "icloud-file-provider-dump-timeout": "File Provider 상태 확인이 시간 초과됨",
       "icloud-file-provider-dump-output-truncated": "File Provider 상태 증거가 잘려 불완전함",

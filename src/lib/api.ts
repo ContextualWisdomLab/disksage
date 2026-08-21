@@ -843,6 +843,8 @@ export interface IcloudSyncHealthReport {
     no_progress_create_count: number;
     materialization_failure_count: number;
     staged_item_missing_count: number;
+    sync_excluded_filename_count: number;
+    sync_excluded_root_count: number;
     active_upload_count: number;
     active_download_count: number;
     active_upload_progress_millionths?: number | null;

@@ -516,3 +516,14 @@ domain was observed through `fileproviderd`/ExtensionKit rather than a quiet pro
 shows that low disk pressure was not the only cause of the Finder stall. DiskSage must continue to
 report provider-sync-incomplete and must not attest, evict, or treat the Finder preparation dialog
 as a completed cloud copy until a fresh complete, quiet observation and immutable receipt exist.
+
+## Amendment: iCloud sync-exclusion evidence for Finder preparation stalls (2026-08-21)
+
+A fresh bounded iCloud File Provider dump recorded active upload and download progress together
+with repeated `Excluded From Sync Due To Filename` and `Excluded From Sync Under Root` errors.
+These are aggregate, path-free provider evidence: DiskSage records only the two counts and redacted
+notices, never filenames, item identifiers, or raw provider output. Either count adds a dedicated
+new-copy admission blocker (`icloud-file-provider-filename-excluded` or
+`icloud-file-provider-root-excluded`) in addition to any transfer or materialization blocker.
+The Finder preparation dialog therefore remains an incomplete provider operation, not a successful
+copy receipt, and copy, attestation, and eviction stay fail-closed until the provider is quiet.
