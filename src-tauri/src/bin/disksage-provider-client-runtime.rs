@@ -166,8 +166,20 @@ fn run(args: &[String]) -> Result<(), String> {
 }
 
 #[cfg(not(coverage))]
+fn command_args() -> Result<Vec<String>, String> {
+    std::env::args_os()
+        .skip(1)
+        .map(|argument| {
+            argument
+                .into_string()
+                .map_err(|_| "provider-client-runtime-argument-not-utf8".to_string())
+        })
+        .collect()
+}
+
+#[cfg(not(coverage))]
 fn main() {
-    if let Err(error) = run(&std::env::args().skip(1).collect::<Vec<_>>()) {
+    if let Err(error) = command_args().and_then(|args| run(&args)) {
         eprintln!("{error}");
         std::process::exit(2);
     }

@@ -141,6 +141,18 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
 }
 
 #[cfg(not(coverage))]
+fn command_args() -> Result<Vec<String>, String> {
+    std::env::args_os()
+        .skip(1)
+        .map(|argument| {
+            argument
+                .into_string()
+                .map_err(|_| "cloud-local-inventory-argument-not-utf8".to_string())
+        })
+        .collect()
+}
+
+#[cfg(not(coverage))]
 fn home_dir() -> Result<PathBuf, String> {
     std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
@@ -530,7 +542,7 @@ fn run_watchdog(
 
 #[cfg(not(coverage))]
 fn run() -> Result<(), String> {
-    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let raw = command_args()?;
     if matches!(raw.as_slice(), [flag] if flag == "--help" || flag == "-h") {
         println!("{}", usage());
         return Ok(());
