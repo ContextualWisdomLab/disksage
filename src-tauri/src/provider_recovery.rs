@@ -7,6 +7,7 @@ use crate::cloud::CloudProvider;
 use serde::{Deserialize, Serialize};
 
 pub const PROVIDER_RECOVERY_SCHEMA_VERSION: u32 = 1;
+const FINDER_COPY_CANCEL_SCRIPT: &str = "tell application \"Finder\" to activate\ntell application \"System Events\" to tell process \"Finder\" to key code 53\n";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -50,20 +51,19 @@ pub fn cancel_finder_copy() -> Result<(), String> {
     }
     #[cfg(target_os = "macos")]
     {
-        const SCRIPT: &str = "tell application \"Finder\" to activate\
-\
-tell application \"System Events\" to tell process \"Finder\" to key code 53\
-";
-        let ok =
-            run_bounded(Path::new("/usr/bin/osascript"), &["-e", SCRIPT]).map_err(|error| {
-                match error.as_str() {
-                    "provider-recovery-command-spawn-failed" => "finder-copy-cancel-spawn-failed",
-                    "provider-recovery-command-timeout" => "finder-copy-cancel-timeout",
-                    "provider-recovery-command-wait-failed" => "finder-copy-cancel-wait-failed",
-                    _ => "finder-copy-cancel-command-failed",
-                }
-                .to_string()
-            })?;
+        let ok = run_bounded(
+            Path::new("/usr/bin/osascript"),
+            &["-e", FINDER_COPY_CANCEL_SCRIPT],
+        )
+        .map_err(|error| {
+            match error.as_str() {
+                "provider-recovery-command-spawn-failed" => "finder-copy-cancel-spawn-failed",
+                "provider-recovery-command-timeout" => "finder-copy-cancel-timeout",
+                "provider-recovery-command-wait-failed" => "finder-copy-cancel-wait-failed",
+                _ => "finder-copy-cancel-command-failed",
+            }
+            .to_string()
+        })?;
         if ok {
             Ok(())
         } else {
@@ -309,6 +309,17 @@ mod tests {
         assert!(recovery_supported(CloudProvider::Onedrive));
         assert!(recovery_supported(CloudProvider::GoogleDrive));
         assert!(!recovery_supported(CloudProvider::Icloud));
+    }
+
+    #[test]
+    fn finder_copy_cancel_script_keeps_two_statements() {
+        assert_eq!(
+            FINDER_COPY_CANCEL_SCRIPT.lines().collect::<Vec<_>>(),
+            vec![
+                "tell application \"Finder\" to activate",
+                "tell application \"System Events\" to tell process \"Finder\" to key code 53",
+            ]
+        );
     }
 
     #[test]
