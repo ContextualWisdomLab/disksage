@@ -31,7 +31,7 @@ const RUNTIME_BLOCKERS: [&str; 2] = [
     "provider-client-runtime-not-observed",
     "provider-client-runtime-evidence-unavailable",
 ];
-const ICLOUD_ADMISSION_BLOCKERS: [&str; 17] = [
+const ICLOUD_ADMISSION_BLOCKERS: [&str; 18] = [
     "icloud-sync-health-evidence-incomplete",
     "icloud-upload-queue-nonempty",
     "icloud-upload-in-flight",
@@ -44,6 +44,7 @@ const ICLOUD_ADMISSION_BLOCKERS: [&str; 17] = [
     "icloud-native-sync-up-pending",
     "icloud-native-sync-down-pending",
     "icloud-file-provider-no-progress",
+    "icloud-file-provider-materialization-failed",
     "icloud-file-provider-transfer-active",
     "icloud-file-provider-dump-timeout",
     "icloud-file-provider-dump-output-truncated",
