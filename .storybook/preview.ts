@@ -10,12 +10,14 @@ const preview: Preview = {
       expanded: true,
     },
     viewport: {
-      viewports: {
+      options: {
         desktop: { name: "Desktop", styles: { width: "1280px", height: "800px" } },
         mobile: { name: "Mobile", styles: { width: "375px", height: "812px" } },
       },
-      defaultViewport: "desktop",
     },
+  },
+  initialGlobals: {
+    viewport: { value: "desktop", isRotated: false },
   },
   tags: ["autodocs"],
 };
