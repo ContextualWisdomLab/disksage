@@ -17,6 +17,7 @@ const GOOGLE_FILES: &str = "https://www.googleapis.com/drive/v3/files";
 const GOOGLE_UPLOAD_FILES: &str = "https://www.googleapis.com/upload/drive/v3/files";
 const MAX_BEARER_TOKEN_BYTES: usize = 64 * 1024;
 const MAX_RESPONSE_BYTES: u64 = 256 * 1024;
+const MAX_NEXT_EXPECTED_RANGES: usize = 128;
 const GOOGLE_CHUNK_BYTES: usize = 8 * 1024 * 1024;
 const ONEDRIVE_CHUNK_BYTES: usize = 320 * 1024 * 10;
 
@@ -54,6 +55,12 @@ struct GoogleFileEntry {
 struct OneDriveUploadSession {
     #[serde(rename = "uploadUrl")]
     upload_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OneDriveUploadProgress {
+    #[serde(rename = "nextExpectedRanges")]
+    next_expected_ranges: Vec<String>,
 }
 
 fn validate_bearer_token(token: &str) -> Result<(), String> {
@@ -131,11 +138,52 @@ fn classify_upload_response_status(status: u16) -> Result<UploadResponseKind, St
     }
 }
 
-fn next_upload_offset(
-    status: u16,
-    range: Option<&str>,
+fn parse_onedrive_next_expected_offset(body: &str, sent_end: u64) -> Result<u64, String> {
+    let progress: OneDriveUploadProgress =
+        serde_json::from_str(body).map_err(|_| "provider-api-upload-progress-invalid".to_string())?;
+    if progress.next_expected_ranges.is_empty()
+        || progress.next_expected_ranges.len() > MAX_NEXT_EXPECTED_RANGES
+    {
+        return Err("provider-api-upload-next-range-required".into());
+    }
+    let max_next_offset = sent_end.saturating_add(1);
+    progress
+        .next_expected_ranges
+        .iter()
+        .map(|range| {
+            let start = range
+                .split_once('-')
+                .map(|(start, _)| start)
+                .unwrap_or(range.as_str());
+            if start.is_empty() || !start.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err("provider-api-upload-next-range-invalid".to_string());
+            }
+            start
+                .parse::<u64>()
+                .ok()
+                .filter(|offset| *offset <= max_next_offset)
+                .ok_or_else(|| "provider-api-upload-next-range-invalid".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .min()
+        .ok_or_else(|| "provider-api-upload-next-range-required".into())
+}
+
+fn read_onedrive_progress_offset(
+    response: &mut ureq::http::Response<ureq::Body>,
     sent_end: u64,
 ) -> Result<u64, String> {
+    let body = response
+        .body_mut()
+        .with_config()
+        .limit(MAX_RESPONSE_BYTES)
+        .read_to_string()
+        .map_err(safe_transport_error)?;
+    parse_onedrive_next_expected_offset(&body, sent_end)
+}
+
+fn google_next_upload_offset(range: Option<&str>, sent_end: u64) -> Result<u64, String> {
     if let Some(range) = range {
         let acknowledged_end = range
             .strip_prefix("bytes=")
@@ -145,13 +193,8 @@ fn next_upload_offset(
             .ok_or_else(|| "provider-api-upload-range-invalid".to_string())?;
         return Ok(acknowledged_end.saturating_add(1));
     }
-    if status == 308 {
-        // Google Drive specifies that a 308 without Range means the session has committed no bytes.
-        Ok(0)
-    } else {
-        // OneDrive reports accepted fragments as 202 and may omit the HTTP Range header.
-        Ok(sent_end.saturating_add(1))
-    }
+    // Google Drive specifies that a 308 without Range means the session has committed no bytes.
+    Ok(0)
 }
 
 fn response_location(response: &ureq::http::Response<ureq::Body>) -> Result<String, String> {
@@ -366,9 +409,12 @@ fn upload_chunks(
                     .filter(|id| !id.trim().is_empty())
                     .ok_or_else(|| "provider-api-upload-object-id-missing".into());
             }
+            UploadResponseKind::Progress if status == 202 => {
+                offset = read_onedrive_progress_offset(&mut response, end)?;
+            }
             UploadResponseKind::Progress => {
                 let range = response.headers().get("Range").and_then(|value| value.to_str().ok());
-                offset = next_upload_offset(status, range, end)?;
+                offset = google_next_upload_offset(range, end)?;
                 drain_response_body(&mut response)?;
             }
         }
@@ -558,26 +604,67 @@ mod tests {
 
     #[test]
     fn google_308_without_range_retries_from_zero_instead_of_skipping_bytes() {
-        assert_eq!(next_upload_offset(308, None, 1023).unwrap(), 0);
+        assert_eq!(google_next_upload_offset(None, 1023).unwrap(), 0);
         assert_eq!(
-            next_upload_offset(308, Some("bytes=0-42"), 1023).unwrap(),
+            google_next_upload_offset(Some("bytes=0-42"), 1023).unwrap(),
             43
         );
         assert_eq!(
-            next_upload_offset(308, Some("bytes=0-2048"), 1023).unwrap_err(),
+            google_next_upload_offset(Some("bytes=0-2048"), 1023).unwrap_err(),
             "provider-api-upload-range-invalid"
         );
         assert_eq!(
-            next_upload_offset(308, Some("nonsense-42"), 1023).unwrap_err(),
+            google_next_upload_offset(Some("nonsense-42"), 1023).unwrap_err(),
             "provider-api-upload-range-invalid"
         );
     }
 
     #[test]
-    fn onedrive_202_requires_explicit_server_acknowledgement() {
+    fn onedrive_202_uses_server_next_expected_ranges_instead_of_assuming_full_chunk() {
         assert_eq!(
-            next_upload_offset(202, None, 1023).unwrap_err(),
+            parse_onedrive_next_expected_offset(
+                r#"{"nextExpectedRanges":["512-"]}"#,
+                1023,
+            )
+            .unwrap(),
+            512
+        );
+        assert_eq!(
+            parse_onedrive_next_expected_offset(
+                r#"{"nextExpectedRanges":["900-1000","768-"]}"#,
+                1023,
+            )
+            .unwrap(),
+            768
+        );
+    }
+
+    #[test]
+    fn onedrive_202_rejects_missing_malformed_or_forward_skipping_ranges() {
+        assert_eq!(
+            parse_onedrive_next_expected_offset(r#"{"nextExpectedRanges":[]}"#, 1023)
+                .unwrap_err(),
             "provider-api-upload-next-range-required"
+        );
+        assert_eq!(
+            parse_onedrive_next_expected_offset(
+                r#"{"nextExpectedRanges":["not-a-range"]}"#,
+                1023,
+            )
+            .unwrap_err(),
+            "provider-api-upload-next-range-invalid"
+        );
+        assert_eq!(
+            parse_onedrive_next_expected_offset(
+                r#"{"nextExpectedRanges":["2048-"]}"#,
+                1023,
+            )
+            .unwrap_err(),
+            "provider-api-upload-next-range-invalid"
+        );
+        assert_eq!(
+            parse_onedrive_next_expected_offset("{}", 1023).unwrap_err(),
+            "provider-api-upload-progress-invalid"
         );
     }
 }
