@@ -190,7 +190,7 @@ test('audit fails closed when same-repository open-PR workflow ownership moves m
     }
     if (url.includes('/pulls?')) {
       pullReads += 1;
-      return pullReads === 1
+      return pullReads <= 2
         ? []
         : [{ number: 7, head: { sha: newHead, repo: { full_name: repo } } }];
     }
@@ -210,7 +210,7 @@ test('audit fails closed when same-repository open-PR workflow ownership moves m
     auditActionsRegistry(fetchJson, repo, expected),
     /open-pr-snapshot-moved/,
   );
-  assert.equal(pullReads, 2);
+  assert.equal(pullReads, 4);
 });
 
 test('audit fails closed when active PR identity changes at the same head', async () => {
@@ -226,7 +226,7 @@ test('audit fails closed when active PR identity changes at the same head', asyn
     }
     if (url.includes('/pulls?')) {
       pullReads += 1;
-      const number = pullReads === 1 ? 42 : 43;
+      const number = pullReads <= 2 ? 42 : 43;
       return [{ number, head: { sha: sharedHead, repo: { full_name: repo } } }];
     }
     if (url.includes('/pulls/42/files')) {
@@ -248,7 +248,7 @@ test('audit fails closed when active PR identity changes at the same head', asyn
     auditActionsRegistry(fetchJson, repo, expected),
     /open-pr-snapshot-moved/,
   );
-  assert.equal(pullReads, 2);
+  assert.equal(pullReads, 4);
 });
 
 test('audit fails closed when workflow registry identity changes without a count change', async () => {
