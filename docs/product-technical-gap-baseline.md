@@ -492,9 +492,16 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 
 ## 2026-08-21 protected-PR and scheduler audit
 
-- The current DiskSage PR #213 head is `31798a4`, with the iCloud stall implementation and ADR
+- PR #213 follow-up hardening keeps valid provider evidence when bounded retention pruning fails,
+  gives the headless Naruon readiness export the same three-stream iCloud pre-copy cohort as the
+  GUI path, uses non-overwriting `/bin/cp -n` for macOS native copies, and no longer deletes a
+  raced destination after a failed copy. `last-sync` is optional for native-status probe early
+  termination; it remains recorded when present.
+
+- The current DiskSage PR #213 head is `988bd24ecaeeba9bae44b38272edceccd9fbe889`, with the iCloud stall implementation, symlink-root fixes, and ADR
   binding pushed. Its checks are running or queued; the protected merge state remains blocked
-  because the prior `CHANGES_REQUESTED` decision is stale and no fresh approval exists.
+  because the prior `CHANGES_REQUESTED` decision is stale and no fresh approval exists while the
+  current review threads are being addressed.
 - Central `.github` PR #1153 is at `035343c8a68e880a4abf27f7c947bfed9dbaafcf` and carries the
   fail-closed Strix infrastructure-unavailable repair. Central `.github` PR #1188 is at
   `82cd117d279a9b870f185b136984d82bb3ac5236` and carries the reusable-workflow OIDC caller

@@ -908,7 +908,6 @@ fn native_status_summary_complete(output: &[u8]) -> bool {
         line.contains("{client:")
             && line.contains(" server:")
             && line.contains(" sync:")
-            && line.contains(" last-sync:")
     });
     container_count && summary
 }

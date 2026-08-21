@@ -1194,7 +1194,8 @@ fn bounded_macos_mkdir(path: &Path, timeout: Duration) -> Result<(), String> {
 fn bounded_macos_copy(source: &Path, destination: &Path, timeout: Duration) -> Result<(), String> {
     bounded_macos_command(
         Path::new("/bin/cp"),
-        &[source.as_os_str(), destination.as_os_str()],
+        // Never replace a File Provider object that appeared after the read-only preflight.
+        &[OsStr::new("-n"), source.as_os_str(), destination.as_os_str()],
         timeout,
     )
 }
@@ -1312,6 +1313,9 @@ fn copy_and_verify(
         Ok((copied, destination_hashes))
     })();
 
+    // On macOS `/bin/cp -n` cannot report whether a destination won a race with our preflight;
+    // never delete that path on failure because it may belong to the provider or another actor.
+    #[cfg(not(target_os = "macos"))]
     if copy_result.is_err() {
         remove_created_file(destination);
     }

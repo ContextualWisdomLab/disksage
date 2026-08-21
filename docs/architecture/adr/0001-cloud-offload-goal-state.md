@@ -393,3 +393,14 @@ to the new-copy admission blockers. Copy, attestation, and local eviction remain
 until a fresh bounded observation is complete and quiet. This behavior is implemented at source
 head `0ded557893191606ff6f91d4303fb54d5112fe45` and covered by parser, readiness, integration,
 and frontend tests.
+
+## Amendment: headless readiness and copy race hardening (2026-08-21)
+
+The headless `disksage-cloud-plan --export-naruon-copy-readiness` path now constructs the same
+three-stream pre-copy cohort as the GUI path before exporting iCloud readiness. A missing or
+incomplete volume, runtime, or native-health stream remains an explicit blocker. Provider
+attestation retention never removes the newly fsynced record when pruning fails; maintenance is
+retried on the next reconciliation pass. macOS native copy uses `/bin/cp -n` and never removes a
+destination after a failed copy because a concurrent File Provider object may own that path.
+Native-status early termination requires only the stable client/server/sync fields; optional
+`last-sync` remains parsed evidence but is not a latency gate.
