@@ -514,7 +514,7 @@
         icloudHealthBlockedSinceMs = 0;
         icloudHealthFingerprint = "";
       } else {
-        icloudHealthBlockedSinceMs = next.admission_blocked_since_ms ?? observedAtMs;
+        icloudHealthBlockedSinceMs = next.admission_blocked_since_ms ?? next.observed_at_ms;
         icloudHealthFingerprint = fingerprint;
       }
       icloudHealth = next;
