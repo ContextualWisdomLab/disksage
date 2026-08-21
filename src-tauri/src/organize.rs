@@ -335,7 +335,10 @@ dm:Installer a owl:Class ; rdfs:label "설치파일"@ko ; dm:targetFolder "~/Ins
             },
         );
         assert_eq!(probes.get(), MAX_LINEAGE_PROBES);
-        assert_eq!(plans.len(), MAX_LINEAGE_PROBES);
+        assert_eq!(plans.len(), MAX_LINEAGE_PROBES + 1);
+        assert_eq!(plans[MAX_LINEAGE_PROBES].src, format!("/downloads/{}.png", MAX_LINEAGE_PROBES));
+        assert_eq!(plans[MAX_LINEAGE_PROBES].source_size, Some(1));
+        assert!(plans[MAX_LINEAGE_PROBES].lineage.lineage_fingerprint.is_empty());
     }
 
     #[test]
