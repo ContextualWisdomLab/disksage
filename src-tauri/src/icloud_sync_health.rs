@@ -249,6 +249,12 @@ pub struct IcloudSyncHealthReport {
     pub schema_version: u32,
     pub output_mode: String,
     pub observed_at_ms: u64,
+    /// Earliest retained observation in the current admission-blocker run.
+    ///
+    /// This is derived from the bounded local evidence journal after the current observation is
+    /// persisted. It is diagnostic only and never authorizes a copy, attestation, or eviction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission_blocked_since_ms: Option<u64>,
     pub provider: String,
     pub evidence_kind: String,
     pub evidence_complete: bool,
@@ -570,6 +576,62 @@ fn prune_health_evidence(directory: &Path) -> Result<(), String> {
             .map_err(|_| "icloud-sync-health-evidence-retention-failed")?;
     }
     Ok(())
+}
+
+#[cfg(not(coverage))]
+fn admission_blocker_key(blockers: &[String]) -> Vec<String> {
+    let mut key = blockers.to_vec();
+    key.sort_unstable();
+    key.dedup();
+    key
+}
+
+/// Find the earliest retained observation with the same admission blockers.
+///
+/// The journal is bounded and each record is integrity-checked before it can extend the duration.
+/// An invalid or unreadable historical record stops the walk rather than manufacturing a longer
+/// stall interval from incomplete evidence.
+#[cfg(not(coverage))]
+pub fn admission_blocked_since_ms(
+    app_data_dir: &Path,
+    report: &IcloudSyncHealthReport,
+) -> Option<u64> {
+    let current_key = admission_blocker_key(&report.new_copy_admission_blockers);
+    if current_key.is_empty() || report.observed_at_ms == 0 {
+        return None;
+    }
+    let directory = health_evidence_directory(app_data_dir).ok()?;
+    let mut records = std::fs::read_dir(directory)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            is_health_evidence_record_name(&name).then_some((name, entry.path()))
+        })
+        .collect::<Vec<_>>();
+    records.sort_by(|left, right| right.0.cmp(&left.0));
+
+    let mut since = report.observed_at_ms;
+    for (_, path) in records {
+        let encoded = match std::fs::read(path) {
+            Ok(encoded) => encoded,
+            Err(_) => break,
+        };
+        let snapshot = match serde_json::from_slice::<IcloudSyncHealthEvidenceSnapshot>(&encoded) {
+            Ok(snapshot) if validate_icloud_sync_health_evidence_snapshot(&snapshot).is_ok() => {
+                snapshot
+            }
+            _ => break,
+        };
+        if snapshot.observed_at_ms >= report.observed_at_ms {
+            continue;
+        }
+        if admission_blocker_key(&snapshot.new_copy_admission_blockers) != current_key {
+            break;
+        }
+        since = snapshot.observed_at_ms;
+    }
+    Some(since)
 }
 
 fn system_time_ms(time: SystemTime) -> Option<u64> {
@@ -1807,6 +1869,7 @@ fn build_report(
         schema_version: ICLOUD_SYNC_HEALTH_SCHEMA_VERSION,
         output_mode: "icloud-local-sync-health".into(),
         observed_at_ms,
+        admission_blocked_since_ms: None,
         provider: "icloud".into(),
         evidence_kind: "supplementary-local-cloud-docs-private-schema".into(),
         evidence_complete,
@@ -2661,6 +2724,46 @@ mod tests {
         .count();
         assert_eq!(records, MAX_PERSISTED_HEALTH_SNAPSHOTS);
         assert!(!first.exists());
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn admission_blocked_since_uses_only_contiguous_matching_evidence() {
+        let directory = tempfile::tempdir().unwrap();
+        for observed_at_ms in 1..=2 {
+            let report = build_report(
+                observed_at_ms,
+                vec![],
+                parse_queue_rows(queue_output()).unwrap(),
+                false,
+                false,
+            )
+            .unwrap();
+            write_icloud_sync_health_evidence(directory.path(), &report).unwrap();
+        }
+
+        let current = build_report(
+            3,
+            vec![],
+            parse_queue_rows(queue_output()).unwrap(),
+            false,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            admission_blocked_since_ms(directory.path(), &current),
+            Some(1)
+        );
+
+        let mut changed = current.clone();
+        changed.observed_at_ms = 4;
+        changed
+            .new_copy_admission_blockers
+            .push("icloud-upload-out-of-quota".into());
+        assert_eq!(
+            admission_blocked_since_ms(directory.path(), &changed),
+            Some(4)
+        );
     }
 
     #[test]

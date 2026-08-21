@@ -54,6 +54,7 @@ fn active_transfer_health() -> IcloudSyncHealthReport {
         schema_version: ICLOUD_SYNC_HEALTH_SCHEMA_VERSION,
         output_mode: "icloud-local-sync-health".into(),
         observed_at_ms: 30,
+        admission_blocked_since_ms: None,
         provider: "icloud".into(),
         evidence_kind: "supplementary-local-cloud-docs-private-schema".into(),
         evidence_complete: true,
