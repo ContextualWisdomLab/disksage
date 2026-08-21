@@ -666,7 +666,7 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   provider-index backlog from the earlier low-space pressure incident.
 ## 2026-08-21 exact-head ecosystem audit
 
-- DiskSage PR #246 is currently `fcff463cb52a24ab2a91f1d238c192f18b0150f5`, stacked on provider
+- DiskSage PR #246 is currently `800da44d37d14ecb51c7ccf6bac4b008320d865d`, stacked on provider
   base `64e58c98a46104148bf599fa7e796da4b576220a`. Its local UI contract and `svelte-check` pass;
   hosted build jobs are in progress while test and llm-engine jobs are queued. The PR remains
   open and no protected merge is claimed.
