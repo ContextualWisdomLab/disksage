@@ -38,3 +38,56 @@ fn successful_provider_dump_terminates_private_group_before_reader_join() {
         "private process group must be terminated before the stdout reader is joined"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn descendant_inheriting_stdout_keeps_pipe_open_until_private_group_is_terminated() {
+    use std::io::Read;
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    use std::sync::mpsc::{self, RecvTimeoutError};
+    use std::thread;
+    use std::time::Duration;
+
+    let mut command = Command::new("/bin/sh");
+    command
+        .args(["-c", "(sleep 30) & printf 'probe-output\\n'"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
+    let mut child = command.spawn().expect("probe fixture must spawn");
+    let process_group = child.id() as libc::pid_t;
+    let mut stdout = child.stdout.take().expect("probe fixture stdout must be piped");
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = stdout.read_to_end(&mut bytes).map(|_| bytes);
+        let _ = sender.send(result);
+    });
+
+    let status = child.wait().expect("probe fixture leader must be waitable");
+    assert!(status.success(), "probe fixture leader must exit successfully");
+
+    let before_group_kill = receiver.recv_timeout(Duration::from_millis(250));
+    unsafe {
+        let _ = libc::kill(-process_group, libc::SIGKILL);
+    }
+    assert!(
+        matches!(before_group_kill, Err(RecvTimeoutError::Timeout)),
+        "a surviving descendant that inherited stdout must prevent EOF after leader exit"
+    );
+
+    let bytes = receiver
+        .recv_timeout(Duration::from_secs(2))
+        .expect("terminating the private process group must release inherited stdout promptly")
+        .expect("fixture stdout read must succeed");
+    assert_eq!(bytes, b"probe-output\n");
+}
