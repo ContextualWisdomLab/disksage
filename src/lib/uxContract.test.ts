@@ -27,6 +27,7 @@ describe("UI/UX design and Storybook contract", () => {
     expect(tokens).toMatch(/\.ds-control:hover:not\(:disabled\)/);
     expect(page).toContain('class="ds-control scan-action"');
     expect(providerStatus).toContain('class="ds-control"');
+    expect(providerStatus).toContain("h1, h2 { margin: 0; font-size: 1.1rem; }");
   });
 
   it("keeps the shell keyboard and live-feedback boundaries explicit", () => {
