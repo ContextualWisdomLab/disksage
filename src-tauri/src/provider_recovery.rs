@@ -42,8 +42,10 @@ pub fn cancel_finder_copy() -> Result<(), String> {
     }
     #[cfg(target_os = "macos")]
     {
-        const SCRIPT: &str = "tell application \"Finder\" to activate\n\
-tell application \"System Events\" to tell process \"Finder\" to key code 53\n";
+        const SCRIPT: &str = "tell application \"Finder\" to activate\
+\
+tell application \"System Events\" to tell process \"Finder\" to key code 53\
+";
         let ok =
             run_bounded(Path::new("/usr/bin/osascript"), &["-e", SCRIPT]).map_err(|error| {
                 match error.as_str() {
@@ -316,6 +318,28 @@ mod tests {
         .unwrap();
         assert_eq!(json["cloud_write_executed"], false);
         assert_eq!(json["source_eviction_executed"], false);
+    }
+
+    #[cfg(all(not(target_os = "macos"), not(coverage)))]
+    #[test]
+    fn unavailable_runtime_evidence_is_not_process_absence() {
+        assert_eq!(
+            require_runtime_observation(CloudProvider::Onedrive, 0).unwrap_err(),
+            "provider-recovery-runtime-evidence-unavailable"
+        );
+    }
+
+    #[test]
+    fn post_restart_blockers_preserve_unavailable_runtime_evidence() {
+        assert!(post_runtime_blockers(Some(true)).is_empty());
+        assert_eq!(
+            post_runtime_blockers(Some(false)),
+            vec!["provider-client-runtime-not-observed-after-restart"]
+        );
+        assert_eq!(
+            post_runtime_blockers(None),
+            vec!["provider-client-runtime-evidence-unavailable-after-restart"]
+        );
     }
 
     #[cfg(all(not(target_os = "macos"), not(coverage)))]
