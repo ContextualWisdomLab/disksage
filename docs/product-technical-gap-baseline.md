@@ -377,8 +377,7 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 ## 2026-08-21 current-head provider-evidence follow-up
 
 - The Finder-cancel implementation is bound to source head `356363035f9ab97874be6f0fddaa369308c8aab7`,
-  following the
-  macOS walkdir ownership repair at `6c0347ba53185a85a3a14c4819435c98a6fe8271`. Locked Cargo
+  following macOS walkdir ownership repair at `6c0347ba53185a85a3a14c4819435c98a6fe8271`. Locked Cargo
   metadata, TypeScript compilation, and `git diff --check` pass locally; a full local Cargo build
   remains intentionally deferred while the host is under provider-copy disk pressure.
 - PR #213 is still mergeable but protected and blocked. Its exact-head release, test, security,
