@@ -517,3 +517,14 @@ state. The lock file is bounded coordination metadata; immutable receipts and pr
 remain authoritative, and no read path grants copy or eviction authority. This is implemented at
 source head `9cf9665a9041b8b00a66b195f1236c8683f8a951` and covered by the existing paired-writer
 and projection-state tests.
+
+## Amendment: OneDrive reconciliation remains incomplete after headroom recovery (2026-08-21)
+
+A fresh bounded File Provider observation at `2026-08-21 20:07:09 +0900` found 39 GiB of local
+headroom, but the OneDrive personal domain still required indexing with 77,393 pending indexable
+items and 81,524 reconciliation entries. Upload and download progress remained active; the
+provider database history retained SQLite error 11 (`databaseInitError`), and the File Provider
+domain was observed through `fileproviderd`/ExtensionKit rather than a quiet provider state. This
+shows that low disk pressure was not the only cause of the Finder stall. DiskSage must continue to
+report provider-sync-incomplete and must not attest, evict, or treat the Finder preparation dialog
+as a completed cloud copy until a fresh complete, quiet observation and immutable receipt exist.
