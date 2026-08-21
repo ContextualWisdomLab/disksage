@@ -17,6 +17,7 @@ const PLAN_BUDGET_MS: u64 = 5_000;
 const MAX_CANDIDATES: usize = 256;
 const MAX_MANIFEST_RECORDS: usize = 100_000;
 const MAX_BUNDLE_SCAN_DEPTH: usize = 3;
+const MAX_MANIFEST_DEPTH: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -384,7 +385,14 @@ fn collect_bundle_ids(root: &Path, depth: usize, ids: &mut BTreeSet<String>) -> 
         Err(_) => return false,
     };
     let mut complete = true;
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => {
+                complete = false;
+                continue;
+            }
+        };
         let path = entry.path();
         let Ok(file_type) = entry.file_type() else {
             complete = false;
@@ -427,7 +435,7 @@ fn bounded_manifest(root: &Path, deadline: std::time::Instant) -> Manifest {
         complete: true,
         ..Manifest::default()
     };
-    collect_manifest(root, root, deadline, &mut manifest);
+    collect_manifest(root, root, deadline, 0, &mut manifest);
     manifest.records.sort_unstable();
     manifest
 }
@@ -437,13 +445,18 @@ fn collect_manifest(
     root: &Path,
     directory: &Path,
     deadline: std::time::Instant,
+    depth: usize,
     manifest: &mut Manifest,
 ) {
-    if std::time::Instant::now() >= deadline || manifest.records.len() >= MAX_MANIFEST_RECORDS {
+    if depth > MAX_MANIFEST_DEPTH
+        || std::time::Instant::now() >= deadline
+        || manifest.records.len() >= MAX_MANIFEST_RECORDS
+    {
         manifest.complete = false;
+        manifest.skipped = manifest.skipped.saturating_add(1);
         return;
     }
-    let entries = match std::fs::read_dir(directory) {
+    let read_entries = match std::fs::read_dir(directory) {
         Ok(entries) => entries,
         Err(_) => {
             manifest.skipped = manifest.skipped.saturating_add(1);
@@ -451,7 +464,16 @@ fn collect_manifest(
             return;
         }
     };
-    let mut entries = entries.flatten().collect::<Vec<_>>();
+    let mut entries = Vec::new();
+    for entry in read_entries {
+        match entry {
+            Ok(entry) => entries.push(entry),
+            Err(_) => {
+                manifest.skipped = manifest.skipped.saturating_add(1);
+                manifest.complete = false;
+            }
+        }
+    }
     entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
         if std::time::Instant::now() >= deadline || manifest.records.len() >= MAX_MANIFEST_RECORDS {
@@ -479,7 +501,7 @@ fn collect_manifest(
         }
         if file_type.is_dir() {
             manifest.records.push(format!("D:{relative}"));
-            collect_manifest(root, &path, deadline, manifest);
+            collect_manifest(root, &path, deadline, depth.saturating_add(1), manifest);
             continue;
         }
         if !file_type.is_file() {
@@ -749,6 +771,22 @@ mod tests {
         let mut ids = BTreeSet::new();
         assert!(!collect_bundle_ids(tmp.path(), 0, &mut ids));
         assert!(!ids.contains("com.example.installed"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn deep_cache_manifest_is_incomplete() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut manifest = Manifest::default();
+        collect_manifest(
+            tmp.path(),
+            tmp.path(),
+            std::time::Instant::now() + std::time::Duration::from_secs(1),
+            MAX_MANIFEST_DEPTH + 1,
+            &mut manifest,
+        );
+        assert!(!manifest.complete);
+        assert_eq!(manifest.skipped, 1);
     }
 
     #[cfg(target_os = "macos")]
