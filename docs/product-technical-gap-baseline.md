@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-21 (Asia/Seoul)
-**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` source through `a4de13e`; this
+**Repository heads at snapshot:** `feat/provider-sync-dynamic-goals` source through `c731687`; this
 baseline records the current loop's runtime and integration evidence.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
@@ -362,3 +362,5 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   serialization branch.
 - Head `a4de13e65b6711f97a51eb857642da585f1d0b09` leaves the ontology coverage assertion
   rustfmt-clean; no behavior or authority boundary changed.
+- The current source-and-documentation line is `c731687ae08a5278fac396ccc9a5c5ed36b6ce42`; the
+  final docs-only binding commit keeps the snapshot's source-head statement unchanged.
