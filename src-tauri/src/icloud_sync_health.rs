@@ -847,12 +847,15 @@ fn parse_native_status_output(
         .map(|value| {
             let (client, value) = value.split_once(" server:").unwrap_or((value, ""));
             let (server, value) = value.split_once(" sync:").unwrap_or((value, ""));
-            let (sync, value) = value.split_once(" last-sync:").unwrap_or((value, ""));
+            let (sync, last_sync_present) = match value.split_once(" last-sync:") {
+                Some((sync, _)) => (sync, true),
+                None => (value.split_once('}').map_or(value, |(sync, _)| sync), false),
+            };
             (
                 bounded_native_status_token(client),
                 bounded_native_status_token(server),
                 bounded_native_status_token(sync),
-                !value.is_empty() || output.contains(" last-sync:"),
+                last_sync_present,
             )
         })
         .unwrap_or((None, None, None, false));
@@ -2103,6 +2106,24 @@ mod tests {
         assert!(!serde_json::to_string(&evidence)
             .unwrap()
             .contains("requestID"));
+    }
+
+    #[test]
+    fn parses_brctl_summary_when_last_sync_is_absent() {
+        let evidence = parse_native_status_output(
+            "1 containers matching '*'\n\
+             foreground {client:needs-sync server:full-sync sync:needs-sync-up}\n",
+            42,
+            true,
+            false,
+            false,
+        );
+        assert!(evidence.status_observed);
+        assert!(evidence.evidence_complete);
+        assert_eq!(evidence.container_count, Some(1));
+        assert_eq!(evidence.sync_state.as_deref(), Some("needs-sync-up"));
+        assert!(!evidence.last_sync_present);
+        assert!(native_sync_up_pending(&evidence));
     }
 
     #[test]

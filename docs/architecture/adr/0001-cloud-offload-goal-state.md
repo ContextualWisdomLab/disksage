@@ -491,3 +491,19 @@ admission therefore remains blocked by `icloud-sync-health-evidence-incomplete` 
 `icloud-file-provider-no-progress`; this is provider-reconciliation evidence, not proof of a
 completed copy, remote durability, or eviction authority. The observation records the stale
 Finder copy symptom without killing Finder, `bird`, `fileproviderd`, or touching provider data.
+
+## Amendment: child-owned macOS copy staging and OneDrive runtime evidence (2026-08-21)
+
+The native macOS copy boundary now creates a private `tempfile` directory inside the validated
+destination parent, copies into its `payload` with bounded `/bin/cp`, rechecks source identity and
+digests, and finalizes with bounded `/bin/mv -n`. The staging directory is owned by the command and
+is dropped on timeout or helper failure; a provider-owned final destination is never removed by
+failure cleanup. The successful path still writes the immutable copy receipt before any later
+attestation or eviction decision. This hardening is bound to source head `3704dd1`.
+
+A bounded OneDrive observation during the Finder `real_datasets` incident reported
+`temporarily disconnected` (the desktop client was not running), active upload/download markers,
+`databaseInitError`, and root reconciliation failures with File Provider `-1004`
+(`serverUnreachable`). Copy admission remains blocked. Starting the client while only 340 MiB was
+available was stopped immediately; no Finder, `bird`, `fileproviderd`, provider object, or source
+file was mutated. A fresh quiet provider observation and safe local headroom remain required.

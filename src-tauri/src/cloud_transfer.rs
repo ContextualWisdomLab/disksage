@@ -1200,6 +1200,37 @@ fn bounded_macos_copy(source: &Path, destination: &Path, timeout: Duration) -> R
     )
 }
 
+#[cfg(all(not(coverage), target_os = "macos"))]
+fn bounded_macos_move_create_only(
+    source: &Path,
+    destination: &Path,
+    timeout: Duration,
+) -> Result<(), String> {
+    bounded_macos_command(
+        Path::new("/bin/mv"),
+        &[
+            OsStr::new("-n"),
+            source.as_os_str(),
+            destination.as_os_str(),
+        ],
+        timeout,
+    )?;
+    if std::fs::symlink_metadata(source).is_ok() {
+        return Err("cloud-copy-finalize-race".into());
+    }
+    Ok(())
+}
+
+#[cfg(all(not(coverage), target_os = "macos"))]
+fn create_macos_copy_staging(parent: &Path) -> Result<(tempfile::TempDir, PathBuf), String> {
+    let directory = tempfile::Builder::new()
+        .prefix(".disksage-copy-")
+        .tempdir_in(parent)
+        .map_err(|_| "cloud-copy-staging-create-failed".to_string())?;
+    let path = directory.path().join("payload");
+    Ok((directory, path))
+}
+
 #[cfg(not(coverage))]
 fn copy_and_verify(
     candidate: &CloudCandidate,
@@ -1244,22 +1275,43 @@ fn copy_and_verify(
     }
 
     #[cfg(target_os = "macos")]
+    let (_staging_directory, staging) = create_macos_copy_staging(parent)?;
+
+    #[cfg(target_os = "macos")]
     let copy_result = (|| -> Result<(u64, ContentDigests), String> {
-        bounded_macos_copy(source, destination, copy_timeout_for_bytes(candidate.bytes))?;
+        bounded_macos_copy(source, &staging, copy_timeout_for_bytes(candidate.bytes))?;
         let source_hashes = hash_file(source)?;
-        let destination_hashes = hash_file(destination)?;
+        let staging_hashes = hash_file(&staging)?;
         let after = std::fs::symlink_metadata(source).map_err(|error| error.to_string())?;
         let unchanged = after.is_file()
             && !after.file_type().is_symlink()
             && after.len() == before.len()
             && modified_ms(&after)? == before_modified_ms;
-        let destination_len = std::fs::metadata(destination)
-            .map_err(|error| error.to_string())?
-            .len();
-        if !unchanged || destination_len != candidate.bytes || source_hashes != destination_hashes {
+        let staging_metadata =
+            std::fs::symlink_metadata(&staging).map_err(|error| error.to_string())?;
+        let staging_len = staging_metadata.len();
+        if !unchanged
+            || !staging_metadata.is_file()
+            || staging_metadata.file_type().is_symlink()
+            || staging_len != candidate.bytes
+            || source_hashes != staging_hashes
+        {
             return Err("copy-verification-failed".into());
         }
-        Ok((destination_len, destination_hashes))
+        if std::fs::symlink_metadata(destination).is_ok() {
+            return Err("destination-created-during-copy".into());
+        }
+        bounded_macos_move_create_only(
+            &staging,
+            destination,
+            copy_timeout_for_bytes(candidate.bytes),
+        )?;
+        let finalized = std::fs::symlink_metadata(destination)
+            .map_err(|_| "cloud-copy-finalize-failed".to_string())?;
+        if !finalized.is_file() || finalized.file_type().is_symlink() {
+            return Err("cloud-copy-finalize-failed".into());
+        }
+        Ok((staging_len, staging_hashes))
     })();
 
     #[cfg(not(target_os = "macos"))]
@@ -1313,8 +1365,8 @@ fn copy_and_verify(
         Ok((copied, destination_hashes))
     })();
 
-    // On macOS `/bin/cp -n` cannot report whether a destination won a race with our preflight;
-    // never delete that path on failure because it may belong to the provider or another actor.
+    // The TempDir owns the only pathname created for a macOS copy. Its drop cleanup removes a
+    // timed-out/failed payload without ever touching a provider-owned final destination.
     #[cfg(not(target_os = "macos"))]
     if copy_result.is_err() {
         remove_created_file(destination);
@@ -1864,6 +1916,17 @@ mod tests {
             copy_timeout_for_bytes(u64::MAX),
             Duration::from_secs(COPY_TIMEOUT_MAX_SECS)
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_copy_staging_is_owned_and_removed_with_the_temp_directory() {
+        let parent = tempfile::tempdir().unwrap();
+        let (directory, staging) = create_macos_copy_staging(parent.path()).unwrap();
+        assert!(staging.starts_with(directory.path()));
+        std::fs::write(&staging, b"partial").unwrap();
+        drop(directory);
+        assert!(!staging.exists());
     }
 
     fn receipt() -> CloudCopyReceipt {

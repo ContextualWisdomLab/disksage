@@ -634,12 +634,10 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 
 ## 2026-08-21 exact-head ecosystem audit
 
-- DiskSage PR #246 implementation head is `2a4ed3860264f4b4f7ba30655281e6ef93399386`; the
-  following documentation-only binding commit does not change the UX implementation, and the PR
-  remains stacked on provider
-  base `64e58c98a46104148bf599fa7e796da4b576220a`. Its local UI contract and `svelte-check` pass;
-  hosted build jobs are in progress while test and llm-engine jobs are queued. The PR remains
-  open and no protected merge is claimed.
+- DiskSage PR #246 implementation history remains on `feat/storybook-ux-contracts`; its latest
+  implementation commit is `2a4ed3860264f4b4f7ba30655281e6ef93399386`, followed by documentation
+  bindings and the provider-base synchronization merge. The PR is open and no protected merge is
+  claimed.
 - The UX contract now exposes the fixed Finder Escape action when provider-global evidence reports
   either local disk exhaustion or a missing provider item, in addition to active transfer and
   provider-error evidence. This is cancellation guidance only; it grants no copy, attestation, or
@@ -655,3 +653,21 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - The user-referenced fast-mlsirm PR #160 is closed without merge (`merged_at=null`). DiskSage has
   not introduced an unverified LLM-as-a-Judge dependency; its copy and eviction gates remain
   deterministic and fail closed until a current, reviewed fast-mlsirm integration exists.
+
+## 2026-08-21 exact-head native staging and OneDrive runtime follow-up
+
+- DiskSage source head `e6c6e34` records the native-copy cleanup race fix identified in the P0 gap:
+  macOS now copies into a command-owned `tempfile` directory, verifies bytes and source identity,
+  and finalizes with bounded `/bin/mv -n`; timeout/helper failure drops only that owned staging
+  directory and cannot remove a provider-owned final destination. Successful copies continue to
+  write the immutable receipt. The preview and mutation-boundary 1 GiB reserve gate remains
+  authoritative.
+- The live OneDrive File Provider observation reported `temporarily disconnected`, active
+  upload/download progress, `databaseInitError`, and root reconciliation failures with `-1004`
+  `serverUnreachable`. DiskSage therefore keeps copy, attestation, and eviction blocked. The
+  OneDrive client was stopped after a restart attempt reduced available space to 340 MiB; only
+  regenerable package cache and an unreferenced temporary clone were removed, and no Finder,
+  provider daemon, cloud object, or user file was touched.
+- PR #213 now points to exact head `e6c6e34`; hosted checks/review are authoritative and a
+  protected approval is still required. The remaining gap is a fresh complete, quiet provider
+  receipt plus runtime E2E under safe headroom.
