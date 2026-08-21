@@ -59,3 +59,45 @@ fn recurring_attestation_retains_a_bounded_receipt_history() {
         EXPECTED_MAX_RECORDS_PER_RECEIPT as u64 + 2
     );
 }
+
+#[test]
+fn clock_regression_never_prunes_the_record_just_written() {
+    let directory = tempfile::tempdir().expect("temporary evidence directory");
+
+    for confirmed_at_ms in 100..(100 + EXPECTED_MAX_RECORDS_PER_RECEIPT as u64) {
+        write_immutable_sync_evidence(directory.path(), &evidence(confirmed_at_ms))
+            .expect("seed bounded evidence history");
+    }
+
+    let (written_record, written_path) =
+        write_immutable_sync_evidence(directory.path(), &evidence(1))
+            .expect("clock-regressed evidence write");
+
+    assert!(
+        written_path.exists(),
+        "a successful immutable evidence write must not return a path that retention deleted"
+    );
+    let reread = read_immutable_sync_evidence(&written_path)
+        .expect("the just-written evidence must remain readable after retention");
+    assert_eq!(reread.record_id, written_record.record_id);
+    assert_eq!(reread.evidence.confirmed_at_ms, 1);
+
+    let mut retained_times = std::fs::read_dir(directory.path())
+        .expect("read evidence directory")
+        .map(|entry| entry.expect("evidence directory entry").path())
+        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("json"))
+        .map(|path| {
+            read_immutable_sync_evidence(&path)
+                .expect("retained evidence must remain valid")
+                .evidence
+                .confirmed_at_ms
+        })
+        .collect::<Vec<_>>();
+    retained_times.sort_unstable();
+
+    assert_eq!(retained_times.len(), EXPECTED_MAX_RECORDS_PER_RECEIPT);
+    assert_eq!(retained_times[0], 1);
+    assert!(!retained_times.contains(&100));
+    assert!(retained_times.contains(&101));
+    assert!(retained_times.contains(&227));
+}
