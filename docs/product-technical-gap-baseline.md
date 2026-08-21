@@ -568,11 +568,13 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   attestation, and eviction remain blocked. Local APFS availability recovered to about 8.9 GiB
   during the observation. The fixed Finder Escape action remains the only supported cancellation;
   no daemon, cloud object, or source file was touched.
-- PR #245 evidence snapshot head `6ca0017` adds the ontology-bound orphan cache action and fails closed when
+- PR #245 current head `d48bd34` adds the ontology-bound orphan cache action and fails closed when
   installed-app inventory or metadata manifests are truncated, too deep, or contain directory
-  iteration errors. Frontend checks passed locally (31 files, 127 tests); focused Rust orphan tests
-  pass (11/11 unit plus 2/2 privacy-boundary integration tests, including deep inventory/manifest
-  rejection and object identity replacement rejection).
+  iteration errors. Frontend checks passed locally (31 files, 129 tests); focused Rust orphan tests
+  pass (12/12 unit plus 2/2 lsof-warning integration tests, including deep inventory/manifest,
+  metadata-change, and object identity replacement rejection). Active-use probes share the
+  enclosing five-second plan deadline, and the pre-trash batch revalidates the metadata manifest
+  without reading cache contents or materializing provider placeholders.
   The post-Trash read-only refresh is now separate from the mutation result, so a refresh failure
   preserves the successful cleanup receipt and clears stale UI selection.
   Hosted full Rust,

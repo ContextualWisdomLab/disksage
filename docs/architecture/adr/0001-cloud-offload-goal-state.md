@@ -378,6 +378,12 @@ timeouts, read failures, and active-use errors remain review-only. The replaceab
 actual Tauri commands `plan_orphan_cleanup` and `clean_orphan_candidates`, so operator automation
 cannot drift from the registered command boundary.
 
+The active-use probes share the enclosing planner deadline rather than starting an independent
+timeout per candidate. Immediately before a Trash batch, existing candidate directories are
+re-scanned against the reviewed metadata manifest; a changed, incomplete, or unsafe manifest
+fails the whole batch before the first mutation. This remains metadata-only: cache contents are
+never opened and no File Provider placeholder is materialized.
+
 The cleanup mutation result is authoritative once the OS Trash operation succeeds. A follow-up
 read-only plan refresh is deliberately separate: if it fails, the UI preserves the successful
 cleanup receipt, clears the stale selection, and asks the operator to re-run the relationship
