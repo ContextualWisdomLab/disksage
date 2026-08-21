@@ -70,6 +70,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   never open them for metadata probing or include them in cloud-copy or source-eviction authority.
 - Bound one-minute background reconciliation to 128 immutable provider evidence records per
   receipt, and validate active iCloud File Provider transfers as blocked readiness evidence.
+- Scope persisted API object-id recovery by receipt filename prefix before scanning, so unrelated
+  receipts in a shared evidence directory cannot hide a valid Google Drive or OneDrive locator.
 - Hardened iCloud local-copy batch eviction with fresh per-item timestamps, deterministic planner/executor/recorder/clock seams, fail-closed immutable checkpoint handling, bounded manifest admission, symlink-safe control-path validation, and distinct operator diagnostics.
 - Restored the cloud-copy public documentation regression contract after a temporary repair path removed it, so CI continues to fail when the new Rust or TypeScript approval surfaces lose beginner-readable documentation.
 

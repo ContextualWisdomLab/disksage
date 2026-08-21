@@ -306,6 +306,17 @@ Goal projection cannot silently omit the protection.
   `targetFolder`, and the planned `move` action. Naruon stores it encrypted and returns a redacted
   summary; it never receives paths, names, OAuth material, or move/eviction authority.
 
+## Amendment: receipt-scoped API locator recovery (2026-08-21)
+
+The persisted API object identifier is a locator hint, not independent transfer authority. Its
+lookup must filter the immutable evidence directory by the exact receipt-id filename prefix before
+reading records; an unrelated receipt must never consume a global directory scan window. Valid
+records are retained per receipt (currently 128), and the lookup scans the complete matching prefix
+so a temporarily interrupted retention pass cannot hide a valid locator. The remote response,
+destination binding, local hash, and normal provider-sync gates remain mandatory. This amendment is
+implemented at source head `9222558b4346d1a6be30ef17645f43124e1232e1` with a regression case that
+places 4,096 unrelated records before the target record.
+
 ## Standards references
 
 The lineage vocabulary is aligned with PROV-O's Entity/Activity/Agent and derivation relations;

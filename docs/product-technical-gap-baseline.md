@@ -373,3 +373,23 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   rustfmt-clean; no behavior or authority boundary changed.
 - The current source-and-documentation line is `c731687ae08a5278fac396ccc9a5c5ed36b6ce42`; the
   final docs-only binding commit keeps the snapshot's source-head statement unchanged.
+
+## 2026-08-21 current-head provider-evidence follow-up
+
+- The live DiskSage branch is now `9222558b4346d1a6be30ef17645f43124e1232e1`, following the
+  macOS walkdir ownership repair at `6c0347ba53185a85a3a14c4819435c98a6fe8271`. Locked Cargo
+  metadata, TypeScript compilation, and `git diff --check` pass locally; a full local Cargo build
+  remains intentionally deferred while the host is under provider-copy disk pressure.
+- PR #213 is still mergeable but protected and blocked. Its exact-head release, test, security,
+  Noema, Strix, and OpenCode checks are queued or in progress; no protected merge or approval
+  bypass is claimed. The prior current-head Devin finding about `latest_api_object_id` was fixed
+  by filtering `{receipt_id}-*.json` before scanning, with a regression test covering 4,096
+  unrelated records; the outdated review thread was replied to and resolved.
+- Provider evidence lookup remains advisory locator recovery only. It does not grant cloud-write or
+  source-eviction authority: remote revalidation, destination binding, content hash, explicit
+  provider-sync state, and the existing approval gates still decide authorization.
+- The Finder `real_datasets` incident remains provider-sync-incomplete. The 7.2 GiB target did not
+  change, diagnostic dumps totaling about 1.6 GiB were removed without touching provider state,
+  and the local volume recovered to about 1.6 GiB free. The already-running Finder operation must
+  be cancelled from its UI and must not be retried until the local headroom and a fresh quiet
+  File Provider observation satisfy the plan gates.
