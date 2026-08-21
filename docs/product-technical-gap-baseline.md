@@ -664,3 +664,24 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   and retained SQLite `databaseInitError` code 11. The provider is therefore still not quiet or
   complete; DiskSage keeps copy, attestation, and eviction fail-closed. This separates the active
   provider-index backlog from the earlier low-space pressure incident.
+## 2026-08-21 exact-head ecosystem audit
+
+- DiskSage PR #246 is currently `fcff463cb52a24ab2a91f1d238c192f18b0150f5`, stacked on provider
+  base `64e58c98a46104148bf599fa7e796da4b576220a`. Its local UI contract and `svelte-check` pass;
+  hosted build jobs are in progress while test and llm-engine jobs are queued. The PR remains
+  open and no protected merge is claimed.
+- The UX contract now exposes the fixed Finder Escape action when provider-global evidence reports
+  either local disk exhaustion or a missing provider item, in addition to active transfer and
+  provider-error evidence. This is cancellation guidance only; it grants no copy, attestation, or
+  eviction authority.
+- Naruon PR #1434 remains open at `c05fb102ff2f099e9bb6513dd541ec3d0496c472`; substantive
+  security, frontend, backend, Noema, and CodeQL checks are successful, but coverage evidence is
+  queued and the metadata-only gate is still in progress. Its protected merge state is blocked.
+- semantic-data-portal PR #59 remains open at `65e4fd770c69192daafe51854eb73eb2f06f0bf4` with
+  completed substantive checks successful, but protected review is still required. PR #61 remains
+  open at `0c248d288be4ef9a01cd498b7311157b053a63e1`; its CodeQL failures came from the hosted
+  service response `No server is currently available to service your request`, and the historical
+  run cannot be retried through GitHub's API, so the PR is not represented as green.
+- The user-referenced fast-mlsirm PR #160 is closed without merge (`merged_at=null`). DiskSage has
+  not introduced an unverified LLM-as-a-Judge dependency; its copy and eviction gates remain
+  deterministic and fail closed until a current, reviewed fast-mlsirm integration exists.
