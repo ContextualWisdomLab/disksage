@@ -121,17 +121,20 @@ pub fn find_duplicates(files: Vec<FileEntry>, prefix_len: usize) -> Vec<DupeGrou
 /// walkdir로 파일만 수집 — 심링크/reparse는 scanner::keep_entry가 순회에서 제외.
 /// 콤비네이터 형태: 순회/메타데이터 오류는 조용히 건너뜀(수집기는 skipped를 집계하지 않음).
 pub fn collect_files(root: &Path) -> Vec<FileEntry> {
-    walkdir::WalkDir::new(root)
+    let traversal_root = crate::scanner::read_only_traversal_root(root);
+    walkdir::WalkDir::new(&traversal_root)
         .follow_links(false)
         .into_iter()
         .filter_entry(crate::scanner::keep_entry)
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file())
-        .filter_map(|e| e.metadata().ok().map(|md| FileEntry {
-            path: e.path().to_path_buf(),
-            size: md.len(),
-            mtime_ms: mtime_millis(&md),
-        }))
+        .filter_map(|e| {
+            e.metadata().ok().map(|md| FileEntry {
+                path: crate::scanner::logical_scan_path(e.path(), &traversal_root, root),
+                size: md.len(),
+                mtime_ms: mtime_millis(&md),
+            })
+        })
         .collect()
 }
 
