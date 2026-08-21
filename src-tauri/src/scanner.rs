@@ -29,7 +29,7 @@ pub fn scan_dir(
     scan_dir_with_interval(root, cancel, 8192, on_progress)
 }
 
-fn read_only_traversal_root(root: &Path) -> PathBuf {
+pub(crate) fn read_only_traversal_root(root: &Path) -> PathBuf {
     match std::fs::symlink_metadata(root) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf())
@@ -38,7 +38,7 @@ fn read_only_traversal_root(root: &Path) -> PathBuf {
     }
 }
 
-fn logical_scan_path(path: &Path, traversal_root: &Path, requested_root: &Path) -> PathBuf {
+pub(crate) fn logical_scan_path(path: &Path, traversal_root: &Path, requested_root: &Path) -> PathBuf {
     path.strip_prefix(traversal_root)
         .map(|relative| requested_root.join(relative))
         .unwrap_or_else(|_| path.to_path_buf())
