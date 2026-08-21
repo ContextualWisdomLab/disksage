@@ -467,4 +467,25 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   provider-global blockers, refreshes the same provider dump afterward, and keeps copy,
   attestation, and source eviction blocked until a fresh clear observation. No provider daemon,
   cloud object, or source file is terminated or mutated; focused TypeScript and contract tests
-  pass after the change.
+ pass after the change.
+
+## 2026-08-21 iCloud materialization-stall follow-up
+
+- At `2026-08-21 14:32:54 +0900`, the headless DiskSage iCloud probe completed its bounded
+  read-only observation with `timed_out=true`, `no_progress_fetch_count=58`, and
+  `no_progress_create_count=114`. New-copy admission remained blocked by
+  `icloud-file-provider-no-progress`; this is incomplete provider evidence, not a successful
+  copy or eviction receipt.
+- The contemporaneous system log also retained File Provider extension termination after
+  no-progress requests and `materializationFailed`/`stagedItemMissing` materialization errors.
+  DiskSage source head `0ded557893191606ff6f91d4303fb54d5112fe45` now records those aggregate
+  markers as path-free `materialization_failure_count` and `staged_item_missing_count` fields,
+  exposes the fail-closed blocker and UI warning, and never persists raw paths, item IDs, or
+  provider output.
+- Focused Rust parser/readiness tests, the active File Provider integration test, the 29-file
+  frontend suite (123 tests), `svelte-check`, and TypeScript compilation passed locally. The
+  generated Cargo target was then removed, recovering 4.1 GiB; user files, Finder, `bird`,
+  `fileproviderd`, CloudDocs databases, and provider-managed data remained untouched.
+- PR #213 is at this exact head with checks running/queued, no open non-outdated review thread,
+  and a stale `CHANGES_REQUESTED` review decision. The protected merge gate remains unchanged;
+  no approval or merge bypass is claimed.

@@ -370,3 +370,19 @@ authority. The APA 7 records and original URLs are kept in the Zotero Local API 
 - Albertoni, R., Browning, D., Cox, S. J., Gonzalez Beltran, A., Perego, A., & Winstanley, P.
   (Eds.). (2024). *Data Catalog Vocabulary (DCAT) - Version 3*. W3C Recommendation.
   https://www.w3.org/TR/vocab-dcat-3/
+
+## Amendment: iCloud File Provider materialization stalls (2026-08-21)
+A bounded, read-only iCloud observation at `2026-08-21 14:32:54 +0900` timed out while retaining
+58 `fetch` and 114 `create` requests marked `no progress`. The contemporaneous system log
+also recorded extension termination after the stalled requests and materialization failures
+with staged items missing. These are provider-reconciliation evidence only: they do not prove
+a completed destination copy, cloud durability, remote capacity, or source-eviction authority.
+
+The File Provider activity evidence schema is therefore version 2. DiskSage stores only aggregate
+counts (`materialization_failure_count` and `staged_item_missing_count`) and redacted notices;
+raw paths, filenames, item identifiers, contents, and provider dumps are not persisted. Either
+materialization failure or staged-item loss adds `icloud-file-provider-materialization-failed`
+to the new-copy admission blockers. Copy, attestation, and local eviction remain fail-closed
+until a fresh bounded observation is complete and quiet. This behavior is implemented at source
+head `0ded557893191606ff6f91d4303fb54d5112fe45` and covered by parser, readiness, integration,
+and frontend tests.
