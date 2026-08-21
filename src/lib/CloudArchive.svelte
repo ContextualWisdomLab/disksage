@@ -17,6 +17,7 @@
   import { boundedCloudArchiveErrorMessage } from "./cloudArchiveErrorFeedback";
   import { fmtBytes } from "./fmt";
   import IcloudLocalEviction from "./IcloudLocalEviction.svelte";
+  import ProviderStatusCard from "./ux/ProviderStatusCard.svelte";
 
   const RECONCILIATION_INTERVAL_MS = 60_000;
   // fileproviderctl can spend tens of seconds inside the system provider database while iCloud is
@@ -824,6 +825,38 @@
     return labels[blocker] ?? blocker;
   }
 
+  function providerStatusState(
+    hasObservation: boolean,
+    blocked: boolean,
+    blockedSinceMs: number,
+    error = false,
+  ): "clear" | "checking" | "provider-sync-incomplete" | "materialization-stalled" {
+    if (!hasObservation && !error) return "checking";
+    if (!blocked && !error) return "clear";
+    return blockedSinceMs > 0 && Date.now() - blockedSinceMs >= PROVIDER_STALL_WARNING_MS
+      ? "materialization-stalled"
+      : "provider-sync-incomplete";
+  }
+
+  function icloudStatusDetails(): string {
+    if (!icloudHealth) return icloudHealthError || "iCloud File Provider 상태 증거를 확인하는 중입니다.";
+    const activity = icloudHealth.file_provider_activity;
+    const pending = activity?.pending_indexable_count ?? 0;
+    const blockers = icloudHealth.new_copy_admission_blockers.map(icloudBlockerLabel);
+    return blockers.length > 0
+      ? `새 복사 차단: ${blockers.join(", ")} · 색인 대기 ${pending.toLocaleString()}개`
+      : "iCloud 전역 동기화 대기열이 비어 있습니다. 개별 파일 증거를 확인하십시오.";
+  }
+
+  function providerGlobalStatusDetails(): string {
+    if (!providerGlobalSync) return providerGlobalSyncError || "공급자 전역 동기화 상태를 확인하는 중입니다.";
+    const blockers = providerGlobalSync.blockers.map(providerGlobalSyncBlockerLabel);
+    const pending = providerGlobalSync.pending_indexable_count ?? 0;
+    return blockers.length > 0
+      ? `새 복사 차단: ${blockers.join(", ")} · 색인 대기 ${pending.toLocaleString()}개`
+      : "공급자 전역 동기화 대기열이 비어 있습니다. 개별 파일 증거를 확인하십시오.";
+  }
+
   function duration(ms: number): string {
     const totalMinutes = Math.floor(ms / 60_000);
     const hours = Math.floor(totalMinutes / 60);
@@ -911,6 +944,35 @@
       </div>
     {/if}
     {#if reconciliationError}<p class="error" role="alert">{reconciliationError}</p>{/if}
+    {#if selectedRootDetails()?.provider === "icloud"}
+      <ProviderStatusCard
+        provider="iCloud"
+        state={providerStatusState(
+          Boolean(icloudHealth),
+          (icloudHealth?.new_copy_admission_blockers.length ?? 0) > 0,
+          icloudHealthBlockedSinceMs,
+          Boolean(icloudHealthError),
+        )}
+        details={icloudStatusDetails()}
+        observedAt={icloudHealth ? evidenceObservedAt(icloudHealth.observed_at_ms) : undefined}
+        blockedFor={icloudHealthBlockedSinceMs > 0 ? duration(Math.max(0, Date.now() - icloudHealthBlockedSinceMs)) : undefined}
+        canCancel={Boolean(icloudHealth?.file_provider_activity && (
+          icloudHealth.file_provider_activity.no_progress_fetch_count > 0
+          || icloudHealth.file_provider_activity.no_progress_create_count > 0
+          || icloudHealth.file_provider_activity.materialization_failure_count > 0
+          || icloudHealth.file_provider_activity.staged_item_missing_count > 0
+          || icloudHealth.file_provider_activity.sync_excluded_filename_count > 0
+          || icloudHealth.file_provider_activity.sync_excluded_root_count > 0
+          || (icloudHealth.file_provider_activity.pending_indexable_count ?? 0) > 0
+          || icloudHealth.file_provider_activity.timed_out
+          || icloudHealth.file_provider_activity.active_upload_count > 0
+          || icloudHealth.file_provider_activity.active_download_count > 0
+        ))}
+        cancelLabel={cancellingFinderCopy ? "Finder 복사 취소 요청 중…" : "Finder 복사 취소 요청"}
+        onCancel={cancelFinderCopy}
+        statusId="icloud-provider-status"
+      />
+    {/if}
     {#if icloudHealth}
       <div class="receipt-reconciliation" aria-live="polite">
         <strong>iCloud 새 복사 admission</strong>
@@ -1033,6 +1095,21 @@
       </p>
     {/if}
     {#if providerGlobalSync}
+      <ProviderStatusCard
+        provider={providerGlobalSync.provider}
+        state={providerStatusState(
+          true,
+          providerGlobalSync.blockers.length > 0,
+          providerGlobalSyncBlockedSinceMs,
+        )}
+        details={providerGlobalStatusDetails()}
+        observedAt={evidenceObservedAt(providerGlobalSyncObservedAtMs)}
+        blockedFor={providerGlobalSyncBlockedSinceMs > 0 ? duration(Math.max(0, Date.now() - providerGlobalSyncBlockedSinceMs)) : undefined}
+        canCancel={canCancelFinderCopyForProviderGlobalSync(providerGlobalSync)}
+        cancelLabel={cancellingFinderCopy ? "Finder 복사 취소 요청 중…" : "Finder 복사 취소 요청"}
+        onCancel={cancelFinderCopy}
+        statusId="provider-global-sync-status"
+      />
       <div class="receipt-reconciliation" aria-live="polite">
         <strong>{providerGlobalSync.provider} 전역 동기화 admission</strong>
         <span class="context">

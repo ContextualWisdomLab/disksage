@@ -528,3 +528,13 @@ new-copy admission blocker (`icloud-file-provider-filename-excluded` or
 `icloud-file-provider-root-excluded`) in addition to any transfer or materialization blocker.
 The Finder preparation dialog therefore remains an incomplete provider operation, not a successful
 copy receipt, and copy, attestation, and eviction stay fail-closed until the provider is quiet.
+
+## Amendment: running UX exposes provider-stall state (2026-08-21)
+
+The CloudArchive screen now renders the shared `ProviderStatusCard` for iCloud and third-party
+provider-global observations, not only in Storybook. It maps a missing/error observation to
+`provider-sync-incomplete`, a repeated blocker lasting at least 15 minutes to
+`materialization-stalled`, and a quiet observation to `clear`; elapsed time, bounded evidence time,
+and the existing Finder-cancel request remain visible. The card is informational/cancel-only and
+does not grant copy, attestation, or eviction authority. This is implemented at UX head
+`9c4d67964d2c3572e4109f624f5a63a6d4fb2d12`; `svelte-check` and the CloudArchive contract suite pass.

@@ -640,28 +640,6 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - PR #213 remains exact head `cc693e4` with CodeRabbit passing, Devin and required checks pending,
   and a stale `CHANGES_REQUESTED` review decision. No merge or provider mutation is claimed.
 
-## 2026-08-21 exact-head ecosystem audit
-
-- DiskSage PR #246 implementation history remains on `feat/storybook-ux-contracts`; its latest
-  implementation commit is `2a4ed3860264f4b4f7ba30655281e6ef93399386`, followed by documentation
-  bindings and the provider-base synchronization merge. The PR is open and no protected merge is
-  claimed.
-- The UX contract now exposes the fixed Finder Escape action when provider-global evidence reports
-  either local disk exhaustion or a missing provider item, in addition to active transfer and
-  provider-error evidence. This is cancellation guidance only; it grants no copy, attestation, or
-  eviction authority.
-- Naruon PR #1434 remains open at `c05fb102ff2f099e9bb6513dd541ec3d0496c472`; substantive
-  security, frontend, backend, Noema, and CodeQL checks are successful, but coverage evidence is
-  queued and the metadata-only gate is still in progress. Its protected merge state is blocked.
-- semantic-data-portal PR #59 remains open at `65e4fd770c69192daafe51854eb73eb2f06f0bf4` with
-  completed substantive checks successful, but protected review is still required. PR #61 remains
-  open at `0c248d288be4ef9a01cd498b7311157b053a63e1`; its CodeQL failures came from the hosted
-  service response `No server is currently available to service your request`, and the historical
-  run cannot be retried through GitHub's API, so the PR is not represented as green.
-- The user-referenced fast-mlsirm PR #160 is closed without merge (`merged_at=null`). DiskSage has
-  not introduced an unverified LLM-as-a-Judge dependency; its copy and eviction gates remain
-  deterministic and fail closed until a current, reviewed fast-mlsirm integration exists.
-
 ## 2026-08-21 exact-head native staging and OneDrive runtime follow-up
 
 - DiskSage source head `e6c6e34` records the native-copy cleanup race fix identified in the P0 gap:
@@ -696,16 +674,14 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   provider-index backlog from the earlier low-space pressure incident.
 ## 2026-08-21 exact-head ecosystem audit
 
-- DiskSage PR #246 implementation head is `2a4ed3860264f4b4f7ba30655281e6ef93399386`; the
-  following documentation-only binding commit does not change the UX implementation, and the PR
-  remains stacked on provider
-  base `64e58c98a46104148bf599fa7e796da4b576220a`. Its local UI contract and `svelte-check` pass;
-  hosted build jobs are in progress while test and llm-engine jobs are queued. The PR remains
-  open and no protected merge is claimed.
-- The UX contract now exposes the fixed Finder Escape action when provider-global evidence reports
-  either local disk exhaustion or a missing provider item, in addition to active transfer and
-  provider-error evidence. This is cancellation guidance only; it grants no copy, attestation, or
-  eviction authority.
+- DiskSage PR #246 exact implementation head is `9c4d67964d2c3572e4109f624f5a63a6d4fb2d12`; the
+  branch remains open with `UNSTABLE` checks queued and no qualifying approval. The UX now renders
+  `ProviderStatusCard` in the running CloudArchive screen, so a stuck Finder copy is visible as a
+  provider-sync-incomplete/materialization-stalled state with elapsed time and a bounded cancel
+  request. This is cancellation guidance only; it grants no copy, attestation, or eviction authority.
+- The iCloud UX exposes `pending_indexable_count` and labels the corresponding admission blocker;
+  the bounded live observation recorded 12,474 pending indexable items, active transfer markers,
+  and filename/root exclusions. The displayed action remains read-only/cancel-only.
 - Naruon PR #1434 remains open at `c05fb102ff2f099e9bb6513dd541ec3d0496c472`; substantive
   security, frontend, backend, Noema, and CodeQL checks are successful, but coverage evidence is
   queued and the metadata-only gate is still in progress. Its protected merge state is blocked.
