@@ -574,6 +574,13 @@ The Naruon readiness allow-list now includes `icloud-file-provider-indexing-pend
 provider-derived blocker set closed under export and rejecting the same blocker on non-iCloud
 envelopes. The binding repair is at source head `6f95ca3`.
 
+## Amendment: keep the readiness verifier boundary testable (2026-08-22)
+
+The shipped Naruon readiness verifier uses a plain source comment rather than a crate-inner doc
+comment so the same parser can be included by its integration boundary test module. This is a
+compile-boundary repair only; the verifier's path-redacted output and readiness authority do not
+change.
+
 ## Amendment: exact numeric disk-full markers (2026-08-21)
 
 Provider-global File Provider parsing now applies numeric-boundary matching to `errno 28`,

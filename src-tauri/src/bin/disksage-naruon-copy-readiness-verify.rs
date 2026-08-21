@@ -1,4 +1,4 @@
-//! Offline, path-redacted verification of one Naruon cloud-copy readiness envelope.
+// Offline, path-redacted verification of one Naruon cloud-copy readiness envelope.
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};

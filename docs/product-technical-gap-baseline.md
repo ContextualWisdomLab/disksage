@@ -723,3 +723,9 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   `odresult_errno 28`, and `OSStatus -34` as local-disk-full evidence; longer values such as
   `errno 280` are retained as generic provider errors. The focused boundary regression passes,
   and no provider, source, or cloud state was mutated.
+
+## 2026-08-22 readiness verifier integration boundary
+
+- The Naruon readiness verifier's source comment is now valid both as a standalone binary and when
+  included by the integration test that locks its `--help`/absolute-path parser boundary. This
+  repairs the exact-head Rust test failure without changing readiness, copy, or eviction authority.
