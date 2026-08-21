@@ -1242,7 +1242,7 @@ pub fn collect_archive_files_bounded(
             continue;
         };
         files.push(FileFact {
-            path: entry.path(),
+            path: entry.path().to_path_buf(),
             bytes: metadata.len(),
             created_ms: millis(metadata.created()),
             modified_ms: millis(metadata.modified()),

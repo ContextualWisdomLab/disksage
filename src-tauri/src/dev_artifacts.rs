@@ -100,7 +100,7 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
         let entry_path = entry.path();
         let relative = entry_path
             .strip_prefix(root)
-            .unwrap_or(entry_path.as_path())
+            .unwrap_or(entry_path)
             .to_string_lossy()
             .replace('\\', "/");
         let relative = if relative.is_empty() { "." } else { &relative };
@@ -199,7 +199,7 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
         let parent = path.parent().unwrap_or(root);
         let marker_ok = markers.is_empty() || markers.iter().any(|m| parent.join(m).exists());
         if marker_ok {
-            candidates.push(path);
+            candidates.push(path.to_path_buf());
         }
     }
 
