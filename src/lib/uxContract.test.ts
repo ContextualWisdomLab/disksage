@@ -16,6 +16,19 @@ describe("UI/UX design and Storybook contract", () => {
     expect(tokens).toContain("forced-colors: active");
   });
 
+  it("keeps visual control styling opt-in instead of restyling every legacy button", () => {
+    const tokens = read("src/lib/ui/design-tokens.css");
+    const page = read("src/routes/+page.svelte");
+    const providerStatus = read("src/lib/ux/ProviderStatusCard.svelte");
+    const globalButtonRule = tokens.match(/(?:^|\n)button\s*\{([\s\S]*?)\}/m)?.[1] ?? "";
+
+    expect(globalButtonRule).not.toMatch(/\b(?:border|background|padding)\s*:/);
+    expect(tokens).toMatch(/\.ds-control\s*\{[\s\S]*?border:\s*1px solid var\(--ds-border\)/);
+    expect(tokens).toMatch(/\.ds-control:hover:not\(:disabled\)/);
+    expect(page).toContain('class="ds-control scan-action"');
+    expect(providerStatus).toContain('class="ds-control"');
+  });
+
   it("keeps the shell keyboard and live-feedback boundaries explicit", () => {
     const layout = read("src/routes/+layout.svelte");
     const page = read("src/routes/+page.svelte");
