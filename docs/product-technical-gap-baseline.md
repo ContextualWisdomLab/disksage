@@ -671,3 +671,10 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - PR #213 now points to exact head `e6c6e34`; hosted checks/review are authoritative and a
   protected approval is still required. The remaining gap is a fresh complete, quiet provider
   receipt plus runtime E2E under safe headroom.
+
+## 2026-08-21 paired projection read-lock follow-up
+
+- PR #213 source head `9cf9665` now makes `read_projection_state` acquire the same receipt-scoped
+  ADR/Goal pair lock as writers. The projection files remain replaceable and non-authoritative;
+  immutable receipts/evidence still decide copy, attestation, and eviction. The focused cloud ADR
+  suite passes 20/20, including same-timestamp concurrent pair writers and late-state regression.
