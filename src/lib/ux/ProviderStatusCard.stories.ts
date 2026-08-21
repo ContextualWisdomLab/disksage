@@ -30,7 +30,7 @@ export const Clear: Story = {
 };
 
 export const MaterializationStalled: Story = {
-  parameters: { viewport: { defaultViewport: "mobile" } },
+  globals: { viewport: { value: "mobile", isRotated: false } },
   args: {
     statusId: "stalled-provider-status",
     headingLevel: "h1",
