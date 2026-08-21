@@ -18,33 +18,46 @@
   let crumbs: string[] = $state([]);
   let top: api.EntryView[] = $state([]);
   let navSeq = 0;
+  let loadError = $state("");
+  let scanMessage = $state("");
 
   onMount(async () => {
-    roots = await api.listRoots();
-    selectedRoot = roots[0] ?? "";
-    await api.onScanProgress((s) => (stats = s));
-    await api.onScanDone(async (s) => {
-      stats = s;
-      scanning = false;
-      try {
-        crumbs = [selectedRoot];
-        node = await api.getNode(selectedRoot);
-        top = await api.topFiles(200);
-      } catch (e) {
-        console.error("post-scan load failed:", e);
-      }
-    });
+    try {
+      roots = await api.listRoots();
+      selectedRoot = roots[0] ?? "";
+      await api.onScanProgress((s) => (stats = s));
+      await api.onScanDone(async (s) => {
+        stats = s;
+        scanning = false;
+        scanMessage = `스캔 완료: ${s.files.toLocaleString()}개 파일, ${fmtBytes(s.bytes)}`;
+        try {
+          crumbs = [selectedRoot];
+          node = await api.getNode(selectedRoot);
+          top = await api.topFiles(200);
+        } catch (e) {
+          loadError = String(e);
+          scanMessage = "스캔 결과를 화면에 불러오지 못했습니다.";
+        }
+      });
+    } catch (e) {
+      loadError = String(e);
+      scanMessage = "스캔할 수 있는 위치를 불러오지 못했습니다.";
+    }
   });
 
   async function scan() {
+    if (!selectedRoot || scanning) return;
     scanning = true;
     node = null;
     top = [];
+    loadError = "";
+    scanMessage = `${selectedRoot} 스캔을 시작했습니다.`;
     try {
       await api.startScan(selectedRoot);
     } catch (e) {
       scanning = false;
-      alert(`스캔 시작 실패: ${e}`);
+      loadError = `스캔 시작 실패: ${e}`;
+      scanMessage = "스캔을 시작하지 못했습니다.";
     }
   }
 
@@ -73,16 +86,25 @@
   }
 </script>
 
-<main>
+<svelte:head>
+  <title>DiskSage · 로컬 저장공간과 클라우드 증거</title>
+  <meta
+    name="description"
+    content="메타데이터와 공급자 증거를 먼저 확인하고 로컬 저장공간을 안전하게 정리합니다."
+  />
+</svelte:head>
+
+<main id="main-content" tabindex="-1">
   <h1>DiskSage</h1>
-  <div class="controls">
-    <select bind:value={selectedRoot} disabled={scanning}>
+  <div class="controls" aria-label="스캔 제어">
+    <label for="scan-root">스캔 위치</label>
+    <select id="scan-root" bind:value={selectedRoot} disabled={scanning || roots.length === 0}>
       {#each roots as r}<option value={r}>{r}</option>{/each}
     </select>
     {#if scanning}
-      <button onclick={() => api.cancelScan()}>취소</button>
+      <button type="button" onclick={() => api.cancelScan()} aria-label="현재 스캔 취소">취소</button>
     {:else}
-      <button onclick={scan}>스캔</button>
+      <button type="button" onclick={scan} disabled={!selectedRoot}>스캔</button>
     {/if}
     {#if stats}
       <span class="stats">
@@ -91,11 +113,13 @@
       </span>
     {/if}
   </div>
+  {#if loadError}<p class="error" role="alert">{loadError}</p>{/if}
+  <p class="sr-only" role="status" aria-live="polite" aria-atomic="true">{scanMessage}</p>
 
   {#if node}
-    <nav class="crumbs">
+    <nav class="crumbs" aria-label="현재 폴더 경로">
       {#each crumbs as c, i}
-        <button class="crumb" onclick={() => jump(i)}>{c}</button>
+        <button type="button" class="crumb" onclick={() => jump(i)}>{c}</button>
         {#if i < crumbs.length - 1}<span>›</span>{/if}
       {/each}
     </nav>
@@ -104,7 +128,7 @@
       {#each node.entries as e}
         <li>
           {#if e.is_dir}
-            <button class="dir" onclick={() => open(e.path)}>📁 {e.name}</button>
+            <button type="button" class="dir" onclick={() => open(e.path)}>📁 {e.name}</button>
           {:else}
             <span>📄 {e.name}</span>
           {/if}
@@ -130,13 +154,19 @@
 </main>
 
 <style>
-  main { font-family: system-ui, sans-serif; padding: 1rem; }
-  .controls { display: flex; gap: 0.5rem; align-items: center; }
-  .stats { color: #666; font-size: 0.9rem; }
-  .crumbs { margin: 0.75rem 0; display: flex; gap: 0.25rem; flex-wrap: wrap; }
-  .crumb { background: none; border: none; color: #06c; cursor: pointer; padding: 0; }
+  main { max-width: 90rem; margin: 0 auto; padding: var(--ds-space-4); }
+  .controls { display: flex; gap: var(--ds-space-2); align-items: center; flex-wrap: wrap; }
+  .stats { color: var(--ds-text-muted); font-size: 0.9rem; }
+  .error { color: var(--ds-danger-text); background: var(--ds-danger-surface); padding: var(--ds-space-2); border-radius: var(--ds-radius-sm); }
+  .crumbs { margin: var(--ds-space-3) 0; display: flex; gap: var(--ds-space-1); flex-wrap: wrap; align-items: center; }
+  .crumb { background: transparent; border-color: transparent; color: var(--ds-action); cursor: pointer; }
   .entries { list-style: none; padding: 0; max-height: 40vh; overflow-y: auto; }
-  .entries li { display: flex; justify-content: space-between; padding: 2px 0; }
-  .dir { background: none; border: none; cursor: pointer; font: inherit; padding: 0; }
-  .size { color: #666; font-variant-numeric: tabular-nums; }
+  .entries li { display: flex; justify-content: space-between; gap: var(--ds-space-3); padding: var(--ds-space-1) 0; }
+  .dir { background: transparent; border-color: transparent; cursor: pointer; font: inherit; text-align: left; }
+  .size { color: var(--ds-text-muted); font-variant-numeric: tabular-nums; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+  @media (max-width: 40rem) {
+    .controls > * { width: 100%; }
+    .controls button { width: 100%; }
+  }
 </style>
