@@ -948,7 +948,8 @@
         provider="iCloud"
         state={providerStatusState(
           Boolean(icloudHealth),
-          (icloudHealth?.new_copy_admission_blockers.length ?? 0) > 0,
+          icloudHealth?.new_copy_admission_state !== "clear"
+            || (icloudHealth?.new_copy_admission_blockers.length ?? 0) > 0,
           icloudHealthBlockedSinceMs,
           icloudHealth?.observed_at_ms ?? 0,
           Boolean(icloudHealthError),

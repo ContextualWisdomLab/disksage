@@ -67,6 +67,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   a real transfer/indexing progress reset across subsequent polls.
 - Prefer `~/Downloads` and then the home directory over `/` for the initial macOS scan root, so a
   first scan does not recursively enumerate iCloud/OneDrive File Provider trees by accident.
+- Keep the iCloud status card blocked when the admission state is `blocked` even if a malformed or
+  partially populated provider report temporarily has no blocker codes.
 
 - Cover the `sensitive-config` archive-kind wire label in the generated cloud-plan implementation,
   so the macOS/Linux/Windows cloud-plan binaries compile after the sensitive-config safety

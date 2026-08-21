@@ -598,6 +598,13 @@ provider roots remain discovered separately by the metadata/provider evidence fl
 does not grant copy, attestation, eviction, or provider-write authority. The root-order contract is
 covered by the Rust command test and is tracked in DiskSage PR #246.
 
+## Amendment: iCloud admission state remains fail-closed in the status card (2026-08-22)
+
+The iCloud status card treats `new_copy_admission_state != clear` as blocked independently of the
+blocker-code list. The backend currently validates state/code consistency, but the UI remains
+fail-closed if a provider report is partial or malformed. This keeps copy, attestation, and eviction
+guidance conservative and is tracked in DiskSage PR #246.
+
 ## Amendment: progress-aware iCloud stall clock (2026-08-21 23:38 +0900)
 
 The UX stall clock now distinguishes an admission-blocker run from transfer progress. After an

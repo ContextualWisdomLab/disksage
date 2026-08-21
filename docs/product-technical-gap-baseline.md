@@ -738,3 +738,9 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   now orders an existing `~/Downloads`, then `$HOME`, then `/`; explicit root selection remains
   available. The focused Rust root-order test passes, and cloud copy/eviction authority remains
   unchanged.
+
+## 2026-08-22 iCloud admission card fail-closed guard
+
+- The iCloud card now uses the explicit admission state as a blocker signal in addition to blocker
+  codes. This prevents a partial provider report with `blocked` and an empty code list from showing
+  a misleading clear status; copy, attestation, and eviction gates remain unchanged.

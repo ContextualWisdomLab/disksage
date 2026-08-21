@@ -10,6 +10,9 @@ describe("CloudArchive iCloud admission contract", () => {
     const source = readFileSync(resolve(repositoryRoot, "src/lib/CloudArchive.svelte"), "utf8");
     expect(source).toContain("icloudHealth = null;");
     expect(source).toContain("icloudHealth?.new_copy_admission_state !== \"clear\"");
+    expect(source).toContain(
+      'icloudHealth?.new_copy_admission_state !== "clear"\n            || (icloudHealth?.new_copy_admission_blockers.length ?? 0) > 0',
+    );
     expect(source).toContain("managed_database_allocated_bytes");
     expect(source).toContain("시스템 관리 데이터를 삭제하지 않습니다");
     expect(source).toContain("icloud-item-error-octagon-not-signed-in");
