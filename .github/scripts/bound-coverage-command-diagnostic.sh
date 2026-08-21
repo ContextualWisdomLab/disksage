@@ -34,24 +34,32 @@ diagnostic_bytes="$(wc -c < "$line_bounded_log" | tr -d ' ')"
 if (( diagnostic_bytes <= max_total_bytes )); then
   cp "$line_bounded_log" "$bounded_log"
 else
-  # Put actionable Rust/Cargo errors ahead of warning noise. An edge-only or warning-first focus can
-  # otherwise omit the first compiler error when a build emits many warnings before it fails.
+  # Put actionable Rust/Cargo errors ahead of warning noise. Match against an ANSI-free copy
+  # because the Rust toolchain forces colored output in CI, while preserving the original line.
   LC_ALL=C awk '
-    /^(error(\[[^]]+\])?:|fatal:|Caused by:)/ {
+    {
+      plain = $0
+      gsub(/\033\[[0-9;]*m/, "", plain)
+    }
+    plain ~ /^(error(\[[^]]+\])?:|fatal:|Caused by:)/ {
       print
       in_error = 1
       next
     }
-    in_error && /^[[:space:]]*(--> |[0-9]+[[:space:]]*\||\|[[:space:]]|= (note|help):|(note|help):)/ {
+    in_error && plain ~ /^[[:space:]]*(--> |[0-9]+[[:space:]]*\||\|[[:space:]]|= (note|help):|(note|help):)/ {
       print
       next
     }
     { in_error = 0 }
   ' "$line_bounded_log" > "$error_focus_log"
 
-  LC_ALL=C grep -E \
-    '^warning(\[[^]]+\])?:|^[[:space:]]*= (note|help):|^[[:space:]]*(note|help):' \
-    "$line_bounded_log" > "$other_focus_log" || true
+  LC_ALL=C awk '
+    {
+      plain = $0
+      gsub(/\033\[[0-9;]*m/, "", plain)
+    }
+    plain ~ /^warning(\[[^]]+\])?:|^[[:space:]]*= (note|help):|^[[:space:]]*(note|help):/ { print }
+  ' "$line_bounded_log" > "$other_focus_log"
 
   head -c "$edge_bytes" "$line_bounded_log" > "$bounded_log"
   if [[ -s "$error_focus_log" ]]; then
