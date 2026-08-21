@@ -163,11 +163,50 @@ pub fn plan(_home: &Path, _now_ms: u64) -> Result<OrphanPlan, String> {
     Err("orphan-plan-macos-only".into())
 }
 
+fn validate_cleanup_requests<'a>(
+    plan: &'a OrphanPlan,
+    requests: &[OrphanCleanupRequest],
+) -> Result<Vec<&'a OrphanCandidate>, String> {
+    if requests.len() > MAX_CANDIDATES {
+        return Err("orphan-candidate-count-exceeded".into());
+    }
+    let mut seen = BTreeSet::new();
+    let mut prepared = Vec::with_capacity(requests.len());
+    for request in requests {
+        if !seen.insert(request.candidate_id.clone()) {
+            return Err("orphan-candidate-duplicate".into());
+        }
+        let candidate = plan
+            .candidates
+            .iter()
+            .find(|candidate| candidate.candidate_id == request.candidate_id)
+            .ok_or_else(|| "orphan-candidate-not-in-plan".to_string())?;
+        if candidate.metadata_fingerprint != request.metadata_fingerprint
+            || candidate.bytes != request.bytes
+            || candidate.files != request.files
+            || candidate.skipped != request.skipped
+            || candidate.scan_complete != request.scan_complete
+            || candidate.object_id != request.object_id
+            || !candidate.auto_trash_eligible
+            || candidate.kind != "cache"
+            || !candidate.scan_complete
+            || candidate.skipped != 0
+            || candidate.active_use
+            || !candidate.active_use_evidence_complete
+        {
+            return Err("orphan-candidate-safety-gate-blocked".into());
+        }
+        prepared.push(candidate);
+    }
+    Ok(prepared)
+}
+
 /// Move only deterministic, fully scanned cache candidates to the OS Trash.
 ///
 /// The caller must have just rebuilt `plan`; this function still rechecks every request against
 /// that plan and rejects Application Support, broken links, incomplete manifests, duplicate
-/// requests, and any model-only approval.
+/// requests, and any model-only approval. The complete request batch is validated before the first
+/// filesystem mutation so a later stale request cannot create an unreported partial operation.
 pub fn move_to_trash(
     plan: &OrphanPlan,
     requests: &[OrphanCleanupRequest],
@@ -194,33 +233,10 @@ pub fn move_to_trash(
     {
         return Err("orphan-rationale-invalid".into());
     }
-    let mut seen = BTreeSet::new();
-    let mut items = Vec::with_capacity(requests.len());
+    let prepared = validate_cleanup_requests(plan, requests)?;
+    let mut items = Vec::with_capacity(prepared.len());
     let mut moved_count = 0usize;
-    for request in requests {
-        if !seen.insert(request.candidate_id.clone()) {
-            return Err("orphan-candidate-duplicate".into());
-        }
-        let candidate = plan
-            .candidates
-            .iter()
-            .find(|candidate| candidate.candidate_id == request.candidate_id)
-            .ok_or_else(|| "orphan-candidate-not-in-plan".to_string())?;
-        if candidate.metadata_fingerprint != request.metadata_fingerprint
-            || candidate.bytes != request.bytes
-            || candidate.files != request.files
-            || candidate.skipped != request.skipped
-            || candidate.scan_complete != request.scan_complete
-            || candidate.object_id != request.object_id
-            || !candidate.auto_trash_eligible
-            || candidate.kind != "cache"
-            || !candidate.scan_complete
-            || candidate.skipped != 0
-            || candidate.active_use
-            || !candidate.active_use_evidence_complete
-        {
-            return Err("orphan-candidate-safety-gate-blocked".into());
-        }
+    for candidate in prepared {
         let result = match crate::safety::trash_delete_if_identity(
             &candidate.path,
             &candidate.object_id,
@@ -692,6 +708,40 @@ fn plan_fingerprint(candidates: &[OrphanCandidate]) -> String {
 mod tests {
     use super::*;
 
+    fn safe_candidate(candidate_id: &str) -> OrphanCandidate {
+        OrphanCandidate {
+            candidate_id: candidate_id.into(),
+            kind: "cache".into(),
+            bundle_id: Some("com.example.old".into()),
+            bytes: 1,
+            files: 1,
+            skipped: 0,
+            scan_complete: true,
+            object_id: format!("object-{candidate_id}"),
+            metadata_fingerprint: format!("metadata-{candidate_id}"),
+            ontology_class: format!("{ONTOLOGY_NAMESPACE}RegenerableCache"),
+            confidence: "high".into(),
+            active_use_evidence_complete: true,
+            active_use: false,
+            relations: Vec::new(),
+            review_reasons: Vec::new(),
+            auto_trash_eligible: true,
+            path: PathBuf::from(format!("/private/nonexistent/disksage-{candidate_id}")),
+        }
+    }
+
+    fn request_for(candidate: &OrphanCandidate) -> OrphanCleanupRequest {
+        OrphanCleanupRequest {
+            candidate_id: candidate.candidate_id.clone(),
+            metadata_fingerprint: candidate.metadata_fingerprint.clone(),
+            bytes: candidate.bytes,
+            files: candidate.files,
+            skipped: candidate.skipped,
+            scan_complete: candidate.scan_complete,
+            object_id: candidate.object_id.clone(),
+        }
+    }
+
     fn authoritative_plan(candidate: OrphanCandidate) -> OrphanPlan {
         OrphanPlan {
             schema_kind: ORPHAN_SCHEMA_KIND.into(),
@@ -748,30 +798,24 @@ mod tests {
     }
 
     #[test]
+    fn cleanup_batch_is_preflighted_before_mutation() {
+        let candidate = safe_candidate("candidate");
+        let valid = request_for(&candidate);
+        let mut stale = valid.clone();
+        stale.candidate_id = "not-in-plan".into();
+        let plan = authoritative_plan(candidate);
+
+        let error = validate_cleanup_requests(&plan, &[valid, stale]).unwrap_err();
+        assert_eq!(error, "orphan-candidate-not-in-plan");
+    }
+
+    #[test]
     fn move_to_trash_rejects_candidate_identity_mismatch_without_mutation() {
-        let candidate = OrphanCandidate {
-            candidate_id: "candidate".into(),
-            kind: "cache".into(),
-            bundle_id: Some("com.example.old".into()),
-            bytes: 1,
-            files: 1,
-            skipped: 0,
-            scan_complete: true,
-            object_id: "actual-object".into(),
-            metadata_fingerprint: "metadata".into(),
-            ontology_class: format!("{ONTOLOGY_NAMESPACE}RegenerableCache"),
-            confidence: "high".into(),
-            active_use_evidence_complete: true,
-            active_use: false,
-            relations: Vec::new(),
-            review_reasons: Vec::new(),
-            auto_trash_eligible: true,
-            path: PathBuf::from("/private/nonexistent/disksage-orphan-candidate"),
-        };
+        let candidate = safe_candidate("candidate");
         let plan = authoritative_plan(candidate);
         let request = OrphanCleanupRequest {
             candidate_id: "candidate".into(),
-            metadata_fingerprint: "metadata".into(),
+            metadata_fingerprint: "metadata-candidate".into(),
             bytes: 1,
             files: 1,
             skipped: 0,
@@ -790,40 +834,14 @@ mod tests {
         assert_eq!(error, "orphan-candidate-safety-gate-blocked");
         let serialized = serde_json::to_string(&plan.candidates[0]).unwrap();
         assert!(!serialized.contains("/private/nonexistent"));
-        assert!(serialized.contains("actual-object"));
+        assert!(serialized.contains("object-candidate"));
     }
 
     #[test]
     fn move_to_trash_redacts_native_failure_detail() {
-        let candidate = OrphanCandidate {
-            candidate_id: "candidate".into(),
-            kind: "cache".into(),
-            bundle_id: Some("com.example.old".into()),
-            bytes: 1,
-            files: 1,
-            skipped: 0,
-            scan_complete: true,
-            object_id: "missing-object".into(),
-            metadata_fingerprint: "metadata".into(),
-            ontology_class: format!("{ONTOLOGY_NAMESPACE}RegenerableCache"),
-            confidence: "high".into(),
-            active_use_evidence_complete: true,
-            active_use: false,
-            relations: Vec::new(),
-            review_reasons: Vec::new(),
-            auto_trash_eligible: true,
-            path: PathBuf::from("/private/nonexistent/disksage-orphan-candidate"),
-        };
+        let candidate = safe_candidate("candidate");
         let plan = authoritative_plan(candidate);
-        let request = OrphanCleanupRequest {
-            candidate_id: "candidate".into(),
-            metadata_fingerprint: "metadata".into(),
-            bytes: 1,
-            files: 1,
-            skipped: 0,
-            scan_complete: true,
-            object_id: "missing-object".into(),
-        };
+        let request = request_for(&plan.candidates[0]);
         let result = move_to_trash(
             &plan,
             &[request],
