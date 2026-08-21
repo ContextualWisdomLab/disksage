@@ -1131,8 +1131,6 @@ fn probe_file_provider_activity(observed_at_ms: u64) -> IcloudFileProviderActivi
             Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(25)),
             Ok(None) => {
                 timed_out = true;
-                // fileproviderctl flushes its sync-engine summary during a graceful shutdown;
-                // retain that bounded output before falling back to a process-group kill.
                 unsafe {
                     let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGTERM);
                 }
@@ -1219,8 +1217,6 @@ fn probe_native_status(observed_at_ms: u64) -> IcloudNativeStatusEvidence {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    // Keep descendants in a private process group so brctl helpers cannot retain our pipe after
-    // the bounded probe expires.
     unsafe {
         command.pre_exec(|| {
             if libc::setpgid(0, 0) == -1 {
@@ -1294,8 +1290,6 @@ fn probe_native_status(observed_at_ms: u64) -> IcloudNativeStatusEvidence {
         }
         match child.try_wait() {
             Ok(Some(status)) => {
-                // The process can exit while unread bytes remain in the pipe. Drain them before
-                // parsing; otherwise a complete native summary can be mistaken for missing data.
                 let drain_deadline = Instant::now() + Duration::from_secs(1);
                 loop {
                     match stdout.read(&mut buffer) {
@@ -1313,13 +1307,14 @@ fn probe_native_status(observed_at_ms: u64) -> IcloudNativeStatusEvidence {
                             if matches!(
                                 error.kind(),
                                 ErrorKind::WouldBlock | ErrorKind::Interrupted
-                            ) => {
-                                if Instant::now() >= drain_deadline {
-                                    kill_group();
-                                    break;
-                                }
-                                thread::sleep(Duration::from_millis(5));
+                            ) =>
+                        {
+                            if Instant::now() >= drain_deadline {
+                                kill_group();
+                                break;
                             }
+                            thread::sleep(Duration::from_millis(5));
+                        }
                         Err(_) => {
                             read_failed = true;
                             break;
@@ -2103,6 +2098,24 @@ mod tests {
         assert!(!serde_json::to_string(&evidence)
             .unwrap()
             .contains("requestID"));
+    }
+
+    #[test]
+    fn parses_brctl_summary_when_last_sync_is_absent() {
+        let evidence = parse_native_status_output(
+            "1 containers matching '*'\n\
+             foreground {client:needs-sync server:full-sync sync:needs-sync-up}\n",
+            42,
+            true,
+            false,
+            false,
+        );
+        assert!(evidence.status_observed);
+        assert!(evidence.evidence_complete);
+        assert_eq!(evidence.container_count, Some(1));
+        assert_eq!(evidence.sync_state.as_deref(), Some("needs-sync-up"));
+        assert!(!evidence.last_sync_present);
+        assert!(native_sync_up_pending(&evidence));
     }
 
     #[test]
