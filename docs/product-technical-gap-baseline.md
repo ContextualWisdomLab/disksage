@@ -60,7 +60,7 @@ baseline records the current loop's runtime and integration evidence.
   evidence, materialization stall, cancel callback, disabled action, mobile viewport, and reduced
   motion states. The a11y addon is configured to fail a story on detected violations; Storybook is
   development-only and cannot authorize cloud writes or source eviction.
-- Local evidence at this implementation snapshot: `npm test` 33 files/135 tests, `svelte-check`
+- Local evidence at this implementation snapshot: `npm test` 33 files/136 tests, `svelte-check`
   0 errors/0 warnings, `npm run build` passed, `npm run build-storybook` passed, and the
   Storybook test runner passed 4 smoke/interaction stories in Chromium. The production and
   development dependency audit reported 0 vulnerabilities after the uuid override. The Storybook
@@ -666,7 +666,7 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   provider-index backlog from the earlier low-space pressure incident.
 ## 2026-08-21 exact-head ecosystem audit
 
-- DiskSage PR #246 is currently `800da44d37d14ecb51c7ccf6bac4b008320d865d`, stacked on provider
+- DiskSage PR #246 is currently `2a4ed3860264f4b4f7ba30655281e6ef93399386`, stacked on provider
   base `64e58c98a46104148bf599fa7e796da4b576220a`. Its local UI contract and `svelte-check` pass;
   hosted build jobs are in progress while test and llm-engine jobs are queued. The PR remains
   open and no protected merge is claimed.
