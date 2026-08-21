@@ -3,7 +3,9 @@ use disksage_lib::cloud_transfer::{
     ProviderSyncEvidence, ProviderSyncState, RemoteChecksumAlgorithm, RemoteContentProof,
     SyncEvidenceKind,
 };
-use disksage_lib::provider_evidence::{read_immutable_sync_evidence, write_immutable_sync_evidence};
+use disksage_lib::provider_evidence::{
+    read_immutable_sync_evidence, write_immutable_sync_evidence,
+};
 
 const EXPECTED_MAX_RECORDS_PER_RECEIPT: usize = 128;
 
@@ -47,7 +49,9 @@ fn recurring_attestation_retains_a_bounded_receipt_history() {
     records.sort();
 
     assert_eq!(records.len(), EXPECTED_MAX_RECORDS_PER_RECEIPT);
-    assert!(records.iter().all(|path| read_immutable_sync_evidence(path).is_ok()));
+    assert!(records
+        .iter()
+        .all(|path| read_immutable_sync_evidence(path).is_ok()));
 
     let oldest_remaining = read_immutable_sync_evidence(&records[0])
         .expect("oldest retained evidence must remain valid");
@@ -58,4 +62,30 @@ fn recurring_attestation_retains_a_bounded_receipt_history() {
         newest.evidence.confirmed_at_ms,
         EXPECTED_MAX_RECORDS_PER_RECEIPT as u64 + 2
     );
+}
+
+#[test]
+fn newest_write_survives_retention_when_the_clock_regresses() {
+    let directory = tempfile::tempdir().expect("temporary evidence directory");
+
+    for confirmed_at_ms in 1..=(EXPECTED_MAX_RECORDS_PER_RECEIPT as u64) {
+        write_immutable_sync_evidence(directory.path(), &evidence(confirmed_at_ms))
+            .expect("bounded recurring evidence write");
+    }
+    write_immutable_sync_evidence(directory.path(), &evidence(0))
+        .expect("clock-regressed evidence write");
+
+    let timestamps = std::fs::read_dir(directory.path())
+        .expect("read evidence directory")
+        .map(|entry| {
+            read_immutable_sync_evidence(&entry.expect("evidence directory entry").path())
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .expect("retained evidence must remain valid")
+        .into_iter()
+        .map(|record| record.evidence.confirmed_at_ms)
+        .collect::<Vec<_>>();
+    assert_eq!(timestamps.len(), EXPECTED_MAX_RECORDS_PER_RECEIPT);
+    assert!(timestamps.contains(&0));
+    assert!(!timestamps.contains(&1));
 }
