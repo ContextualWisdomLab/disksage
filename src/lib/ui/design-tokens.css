@@ -54,23 +54,7 @@
   --ds-panel-gap: var(--ds-space-4);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --ds-surface: var(--ds-slate-950);
-    --ds-surface-muted: var(--ds-slate-800);
-    --ds-text: var(--ds-slate-100);
-    --ds-text-muted: var(--ds-slate-300);
-    --ds-border: var(--ds-slate-700);
-    --ds-action: #7dd3fc;
-    --ds-action-hover: #bae6fd;
-    --ds-success-surface: #14532d;
-    --ds-success-text: #bbf7d0;
-    --ds-warning-surface: #78350f;
-    --ds-warning-text: #fde68a;
-    --ds-danger-surface: #7f1d1d;
-    --ds-danger-text: #fecaca;
-  }
-}
+/* Dark semantic values remain opt-in until legacy light-only panels are migrated. */
 
 *,
 *::before,

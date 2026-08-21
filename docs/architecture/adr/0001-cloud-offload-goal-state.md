@@ -554,3 +554,11 @@ provider observation timestamp, matching the detail panel and avoiding wall-cloc
 five-minute blocked-probe backoff. A missing observation remains `checking` or
 `provider-sync-incomplete`; no UI clock can promote a provider to copy, attestation, or eviction
 authority.
+
+## Amendment: legacy panel contrast and probe-action consistency (2026-08-21)
+
+Automatic dark-scheme surface inversion remains deferred because pre-existing cleanup and cloud
+panels still use light-only backgrounds; this keeps OS dark mode readable instead of producing
+light text on light panels. The running provider card now keeps its cancel action disabled during an
+in-flight probe and remains visible when a non-iCloud provider probe fails, while retaining the
+same observation-time stall clock and fail-closed mutation boundary.

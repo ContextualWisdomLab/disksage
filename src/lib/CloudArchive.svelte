@@ -514,7 +514,7 @@
         icloudHealthBlockedSinceMs = 0;
         icloudHealthFingerprint = "";
       } else if (icloudHealthFingerprint !== fingerprint) {
-        icloudHealthBlockedSinceMs = observedAtMs;
+        icloudHealthBlockedSinceMs = next.observed_at_ms;
         icloudHealthFingerprint = fingerprint;
       }
       icloudHealth = next;
@@ -981,6 +981,7 @@
           || icloudHealth.file_provider_activity.active_upload_count > 0
           || icloudHealth.file_provider_activity.active_download_count > 0
         ))}
+        cancelDisabled={checkingIcloudHealth}
         cancelLabel={cancellingFinderCopy ? "Finder 복사 취소 요청 중…" : "Finder 복사 취소 요청"}
         onCancel={cancelFinderCopy}
         statusId="icloud-provider-status"
@@ -1107,6 +1108,24 @@
         로컬 여유공간을 확보한 뒤 DiskSage에서 상태를 다시 확인하십시오.
       </p>
     {/if}
+    {#if selectedRootDetails()?.provider !== "icloud" && providerGlobalSyncError && !providerGlobalSync}
+      <ProviderStatusCard
+        provider={selectedRootDetails()?.provider ?? "공급자"}
+        state={providerStatusState(
+          false,
+          true,
+          providerGlobalSyncBlockedSinceMs,
+          providerGlobalSyncObservedAtMs,
+          true,
+        )}
+        details={providerGlobalStatusDetails()}
+        observedAt={providerGlobalSyncObservedAtMs > 0
+          ? evidenceObservedAt(providerGlobalSyncObservedAtMs)
+          : undefined}
+        blockedFor={blockedDuration(providerGlobalSyncBlockedSinceMs, providerGlobalSyncObservedAtMs)}
+        statusId="provider-global-sync-error-status"
+      />
+    {/if}
     {#if providerGlobalSync}
       <ProviderStatusCard
         provider={providerGlobalSync.provider}
@@ -1120,6 +1139,7 @@
         observedAt={evidenceObservedAt(providerGlobalSyncObservedAtMs)}
         blockedFor={blockedDuration(providerGlobalSyncBlockedSinceMs, providerGlobalSyncObservedAtMs)}
         canCancel={canCancelFinderCopyForProviderGlobalSync(providerGlobalSync)}
+        cancelDisabled={checkingProviderGlobalSync}
         cancelLabel={cancellingFinderCopy ? "Finder 복사 취소 요청 중…" : "Finder 복사 취소 요청"}
         onCancel={cancelFinderCopy}
         statusId="provider-global-sync-status"

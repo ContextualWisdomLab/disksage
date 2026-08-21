@@ -69,6 +69,25 @@ export const CheckingWithoutAction: Story = {
   },
 };
 
+export const ProbeInFlight: Story = {
+  args: {
+    statusId: "in-flight-provider-status",
+    headingLevel: "h1",
+    provider: "OneDrive",
+    state: "provider-sync-incomplete",
+    details: "새 관찰을 기다리는 동안 이전 차단 증거를 표시합니다.",
+    canCancel: true,
+    cancelDisabled: true,
+    onCancel: fn(),
+  },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByRole("button", { name: "복사 취소 요청" })).toBeDisabled();
+    await userEvent.click(canvas.getByRole("button", { name: "복사 취소 요청" }));
+    await expect(args.onCancel).not.toHaveBeenCalled();
+  },
+};
+
 export const IncompleteEvidence: Story = {
   args: {
     statusId: "incomplete-provider-status",

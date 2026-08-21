@@ -56,7 +56,8 @@ direct branch updates; this baseline records the current loop's runtime and inte
 ## 2026-08-21 accessible Storybook UX contract
 
 - The Svelte shell now imports a primitive → semantic → component token hierarchy from
-  `src/lib/ui/design-tokens.css`, including dark preference, forced-colors focus, reduced motion,
+  `src/lib/ui/design-tokens.css`, including forced-colors focus and reduced motion,
+  with automatic dark-scheme surface inversion deferred until legacy light-only panels are migrated,
   and 44px controls. The layout adds a skip link and the scan shell adds labelled controls,
   keyboard-safe buttons, live completion feedback, and alert feedback without browser `alert()`.
 - `ProviderStatusCard` and Storybook 10.5 scenes cover clear, checking, incomplete provider

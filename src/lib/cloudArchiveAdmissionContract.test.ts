@@ -30,6 +30,7 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("icloudHealthBlockedSinceMs");
     expect(source).toContain("icloudHealthFingerprint");
     expect(source).toContain("const admissionClear = next.new_copy_admission_state === \"clear\"");
+    expect(source).toContain("icloudHealthBlockedSinceMs = next.observed_at_ms;");
     expect(source).toContain("동일한 iCloud 차단 상태가 15분 이상 지속되었습니다.");
     expect(source).toContain("refreshIcloudHealth(true)");
     expect(source).toContain("refreshProviderGlobalSync(true)");
@@ -65,6 +66,9 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("blockedDuration(providerGlobalSyncBlockedSinceMs, providerGlobalSyncObservedAtMs)");
     expect(source).toContain('"materialization-stalled"');
     expect(source).toContain('statusId="icloud-provider-status"');
+    expect(source).toContain("cancelDisabled={checkingIcloudHealth}");
+    expect(source).toContain('selectedRootDetails()?.provider !== "icloud" && providerGlobalSyncError && !providerGlobalSync');
+    expect(source).toContain("cancelDisabled={checkingProviderGlobalSync}");
   });
 
   it("does not run the heavy iCloud probe for non-iCloud selected roots", () => {

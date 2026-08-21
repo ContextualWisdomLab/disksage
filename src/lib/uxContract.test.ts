@@ -25,7 +25,7 @@ describe("UI/UX design and Storybook contract", () => {
     expect(tokens).toContain("--ds-blue-700");
     expect(tokens).toContain("--ds-text: var(--ds-slate-950)");
     expect(tokens).toContain("--ds-control-min-size: 2.75rem");
-    expect(tokens).toContain("prefers-color-scheme: dark");
+    expect(tokens).toContain("Dark semantic values remain opt-in");
     expect(tokens).toContain("prefers-reduced-motion: reduce");
     expect(tokens).toContain("forced-colors: active");
   });

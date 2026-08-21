@@ -8,6 +8,7 @@
     observedAt?: string;
     blockedFor?: string;
     canCancel?: boolean;
+    cancelDisabled?: boolean;
     cancelLabel?: string;
     onCancel?: () => void;
     statusId: string;
@@ -21,6 +22,7 @@
     observedAt = "",
     blockedFor = "",
     canCancel = false,
+    cancelDisabled = false,
     cancelLabel = "복사 취소 요청",
     onCancel,
     statusId,
@@ -65,8 +67,8 @@
       class="ds-control"
       type="button"
       onclick={onCancel}
-      disabled={state === "checking" || !onCancel}
-      aria-disabled={state === "checking" || !onCancel}
+      disabled={state === "checking" || cancelDisabled || !onCancel}
+      aria-disabled={state === "checking" || cancelDisabled || !onCancel}
     >
       {cancelLabel}
     </button>
