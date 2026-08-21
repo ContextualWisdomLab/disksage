@@ -99,13 +99,6 @@ textarea {
   font: inherit;
 }
 
-button,
-select,
-input,
-textarea {
-  min-height: var(--ds-control-min-size);
-}
-
 .ds-control {
   min-height: var(--ds-control-min-size);
   border: 1px solid var(--ds-border);
