@@ -166,6 +166,23 @@ current loop's runtime and integration evidence.
 
 At each scheduled or operator loop, update this file only with new dated evidence: current head, open-PR/check state, provider receipt state, disk headroom, and the smallest acceptance proof completed. Do not convert an incomplete provider probe, filename date, model answer, or GitHub review comment into a transfer or deletion authority.
 
+## 2026-08-21 23:30 +0900 live iCloud Finder-preparation receipt
+
+- The exact-head `disksage-icloud-sync-health` binary completed a bounded, read-only iCloud
+  observation. The report was `evidence_complete=true`, native status `needs-sync-up` plus
+  `needs-sync-down`, and File Provider activity schema 3 with one no-progress fetch, active
+  upload/download markers at `953100`/`988500` millionths, and `pending_indexable_count=17547`.
+  The upload queue also retained six `blocked_on_sync_up` items; 18 filename exclusions and two
+  root exclusions were observed. New-copy admission is `blocked`; `mutation_performed=false`.
+- `fileproviderctl` also showed active iCloud materialization/fetch jobs and a roughly 14,965-entry
+  reconciliation backlog. This is consistent with the Finder `real_datasets` “복사 준비 중”
+  symptom, but it is not a per-item copy receipt. DiskSage keeps copy, attestation, and source
+  eviction fail-closed until a fresh complete quiet observation and per-item provider evidence
+  exist. No Finder/provider daemon, CloudDocs database, cloud object, or source file was changed.
+- Current exact PR heads are UX #246 `d6d3142ed0a9b61f7401b97f99022fe1a3202a83` and provider
+  #247 `347f699fa14fcbf7c94a7586b26e2ce00ec28359`; their hosted checks remain pending, while
+  local Rust/UX validation is green. The live observation does not authorize a protected merge.
+
 ## 2026-08-21 lineage graph update
 
 - Source head `677042467b3398866757f39b9475bd0b267abc75` now exports path-free ontology relations for

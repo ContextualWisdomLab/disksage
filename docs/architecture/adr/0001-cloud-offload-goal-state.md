@@ -573,3 +573,19 @@ The implementation and regression test are at source head `ad850e9`.
 The Naruon readiness allow-list now includes `icloud-file-provider-indexing-pending`, keeping the
 provider-derived blocker set closed under export and rejecting the same blocker on non-iCloud
 envelopes. The binding repair is at source head `6f95ca3`.
+
+## Amendment: live Finder preparation stall receipt (2026-08-21 23:30 +0900)
+
+The exact-head headless iCloud health probe completed a bounded read-only observation with complete
+evidence. macOS reported `needs-sync-up` and `needs-sync-down`; File Provider reported one
+no-progress fetch, active upload/download progress (`953100`/`988500` millionths), 17,547 pending
+indexable items, 18 filename exclusions, and two root exclusions. The CloudDocs upload queue retained
+six items blocked on sync-up. New-copy admission is therefore `blocked`. These aggregate facts explain
+why Finder can remain at “복사 준비 중”, but they do not identify or attest the seven displayed items.
+
+DiskSage records only bounded, path-free counters and exposes the existing Finder cancellation
+request. It does not kill `fileproviderd`, `bird`, or Finder, modify CloudDocs/provider state, or
+convert this observation into copy, attestation, or eviction authority. A complete quiet observation
+and independent per-item provider evidence remain required. This evidence was observed while PR #246
+was at `d6d3142ed0a9b61f7401b97f99022fe1a3202a83` and PR #247 at
+`347f699fa14fcbf7c94a7586b26e2ce00ec28359`; hosted checks remain authoritative.
