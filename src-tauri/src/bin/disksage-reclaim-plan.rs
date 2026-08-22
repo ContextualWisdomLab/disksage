@@ -180,6 +180,12 @@ mod tests {
     }
 
     #[test]
+    fn option_shape_classification_is_platform_independent() {
+        assert!(native_argument_is_option_like(&OsString::from("--opaque")));
+        assert!(!native_argument_is_option_like(&OsString::from("relative-path")));
+    }
+
+    #[test]
     fn double_dash_preserves_option_like_paths() {
         let parsed = expect_run(
             parse_args([OsString::from("--"), OsString::from("--not-an-option")]).unwrap(),
