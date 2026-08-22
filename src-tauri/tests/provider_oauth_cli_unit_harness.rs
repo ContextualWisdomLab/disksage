@@ -103,6 +103,10 @@ mod provider_oauth_cli {
         let home = fresh_home("parser");
         let absolute_root = home.join("provider-root");
         let absolute_root = absolute_root.to_string_lossy().into_owned();
+        let connections_a = home.join("connections-a.json").to_string_lossy().into_owned();
+        let connections_b = home.join("connections-b.json").to_string_lossy().into_owned();
+        let home_a = home.join("home-a").to_string_lossy().into_owned();
+        let home_b = home.join("home-b").to_string_lossy().into_owned();
         let google_client = "1234567890-abcxyz.apps.googleusercontent.com";
 
         let cases: Vec<(Vec<String>, Option<std::path::PathBuf>, &str)> = vec![
@@ -116,6 +120,31 @@ mod provider_oauth_cli {
                 utf8_args(&["--home"]),
                 Some(home.clone()),
                 "--home requires a value",
+            ),
+            (
+                utf8_args(&["--connections"]),
+                Some(home.clone()),
+                "--connections requires a value",
+            ),
+            (
+                utf8_args(&["--cloud-root"]),
+                Some(home.clone()),
+                "--cloud-root requires a value",
+            ),
+            (
+                utf8_args(&["--client-id"]),
+                Some(home.clone()),
+                "--client-id requires a value",
+            ),
+            (
+                utf8_args(&["--unknown"]),
+                Some(home.clone()),
+                "unknown argument",
+            ),
+            (
+                utf8_args(&["--list"]),
+                None,
+                "home-directory-unavailable",
             ),
             (
                 utf8_args(&["--list", "--home", "relative-home"]),
@@ -133,14 +162,38 @@ mod provider_oauth_cli {
                 "--cloud-root must be absolute",
             ),
             (
+                vec![
+                    "--list".into(),
+                    "--cloud-root".into(),
+                    absolute_root.clone(),
+                ],
+                Some(home.clone()),
+                "--list does not accept root, client, or browser arguments",
+            ),
+            (
+                vec!["--list".into(), "--client-id".into(), google_client.into()],
+                Some(home.clone()),
+                "--list does not accept root, client, or browser arguments",
+            ),
+            (
                 utf8_args(&["--list", "--manual-browser"]),
                 Some(home.clone()),
                 "--list does not accept root, client, or browser arguments",
             ),
             (
+                vec!["--connect".into(), "--client-id".into(), google_client.into()],
+                Some(home.clone()),
+                "--connect requires --cloud-root and --client-id",
+            ),
+            (
                 vec!["--connect".into(), "--cloud-root".into(), absolute_root.clone()],
                 Some(home.clone()),
                 "--connect requires --cloud-root and --client-id",
+            ),
+            (
+                utf8_args(&["--verify-capacity"]),
+                Some(home.clone()),
+                "capacity verification and disconnect require only --cloud-root",
             ),
             (
                 vec![
@@ -154,15 +207,60 @@ mod provider_oauth_cli {
                 "capacity verification and disconnect require only --cloud-root",
             ),
             (
-                utf8_args(&[
-                    "--list",
-                    "--home",
-                    "/tmp/disksage-home-a",
-                    "--home",
-                    "/tmp/disksage-home-b",
-                ]),
+                vec![
+                    "--disconnect".into(),
+                    "--cloud-root".into(),
+                    absolute_root.clone(),
+                    "--manual-browser".into(),
+                ],
+                Some(home.clone()),
+                "capacity verification and disconnect require only --cloud-root",
+            ),
+            (
+                vec![
+                    "--list".into(),
+                    "--home".into(),
+                    home_a,
+                    "--home".into(),
+                    home_b,
+                ],
                 None,
                 "--home may be supplied once",
+            ),
+            (
+                vec![
+                    "--list".into(),
+                    "--connections".into(),
+                    connections_a,
+                    "--connections".into(),
+                    connections_b,
+                ],
+                Some(home.clone()),
+                "--connections may be supplied once",
+            ),
+            (
+                vec![
+                    "--disconnect".into(),
+                    "--cloud-root".into(),
+                    absolute_root.clone(),
+                    "--cloud-root".into(),
+                    absolute_root.clone(),
+                ],
+                Some(home.clone()),
+                "--cloud-root may be supplied once",
+            ),
+            (
+                vec![
+                    "--connect".into(),
+                    "--cloud-root".into(),
+                    absolute_root.clone(),
+                    "--client-id".into(),
+                    google_client.into(),
+                    "--client-id".into(),
+                    google_client.into(),
+                ],
+                Some(home.clone()),
+                "--client-id may be supplied once",
             ),
         ];
 
