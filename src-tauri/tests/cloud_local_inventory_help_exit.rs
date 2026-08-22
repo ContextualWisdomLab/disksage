@@ -116,6 +116,44 @@ fn assert_help_does_not_hide_invalid_argument(binary: &Path) {
     );
 }
 
+fn assert_duplicate_batch_option_is_bounded(binary: &Path, duplicate_args: &[&str]) {
+    let home = tempfile::tempdir().expect("isolated empty home must be created");
+    let output = Command::new(binary)
+        .env("HOME", home.path())
+        .env_remove("USERPROFILE")
+        .arg("--all-roots")
+        .args(duplicate_args)
+        .output()
+        .expect("cloud local-inventory CLI must launch for duplicate-option validation");
+
+    assert!(
+        !output.status.success(),
+        "duplicate option must fail before empty-home discovery can produce a successful batch report: {duplicate_args:?}"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "duplicate-option failure must not emit a successful inventory report"
+    );
+    let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must remain valid UTF-8");
+    assert!(!stderr.is_empty(), "duplicate-option failure must remain visible");
+}
+
+fn assert_duplicate_all_roots_is_bounded(binary: &Path) {
+    let home = tempfile::tempdir().expect("isolated empty home must be created");
+    let output = Command::new(binary)
+        .env("HOME", home.path())
+        .env_remove("USERPROFILE")
+        .args(["--all-roots", "--all-roots"])
+        .output()
+        .expect("cloud local-inventory CLI must launch for duplicate --all-roots validation");
+
+    assert!(
+        !output.status.success(),
+        "duplicate --all-roots must fail rather than silently producing an empty batch report"
+    );
+    assert!(output.stdout.is_empty());
+}
+
 #[cfg(unix)]
 fn assert_non_utf8_argument_is_bounded(binary: &Path) {
     use std::os::unix::ffi::OsStringExt;
@@ -152,6 +190,17 @@ fn cloud_local_inventory_help_is_successful_and_invalid_arguments_are_bounded() 
     assert_help_success(&binary, "-h");
     assert_invalid_argument_is_bounded(&binary);
     assert_help_does_not_hide_invalid_argument(&binary);
+    assert_duplicate_all_roots_is_bounded(&binary);
+    for duplicate_args in [
+        ["--min-allocated-mib", "1", "--min-allocated-mib", "2"],
+        ["--max-entries", "1", "--max-entries", "2"],
+        ["--max-results", "1", "--max-results", "2"],
+        ["--max-depth", "1", "--max-depth", "2"],
+        ["--max-duration-ms", "1", "--max-duration-ms", "2"],
+        ["--max-issues", "1", "--max-issues", "2"],
+    ] {
+        assert_duplicate_batch_option_is_bounded(&binary, &duplicate_args);
+    }
     #[cfg(unix)]
     assert_non_utf8_argument_is_bounded(&binary);
 }
