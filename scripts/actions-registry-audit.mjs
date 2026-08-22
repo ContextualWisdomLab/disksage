@@ -328,8 +328,9 @@ export async function activePullRequestWorkflowPaths(fetchJson, repository, pull
         throw new Error('open-pr-files-duplicate');
       }
       seenChangedFilenames.add(file.filename);
-      if (file.status === 'removed') continue;
       const workflowPath = normalizeWorkflowPath(file.filename);
+      if (!workflowPath) throw new Error('open-pr-file-invalid');
+      if (file.status === 'removed') continue;
       if (
         isRepositoryWorkflowPath(workflowPath) &&
         currentHeadPaths.has(workflowPath)
