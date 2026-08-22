@@ -2,7 +2,8 @@
 //!
 //! Help is a terminal, side-effect-free operator boundary: it must not require HOME,
 //! cloud discovery, provider capacity, private evidence, or execution authority. Host
-//! arguments that cannot be decoded as UTF-8 must fail closed without a Rust panic.
+//! arguments that cannot be decoded as UTF-8 must fail closed without a Rust panic, and
+//! opaque invalid host input must never be reflected into operator diagnostics.
 
 use std::process::Command;
 
@@ -32,6 +33,20 @@ fn assert_terminal_help(binary: &str, expected_usage: &str) {
             "help output should contain the shipped usage contract: {stdout}"
         );
     }
+}
+
+fn assert_opaque_unknown_argument_is_bounded(binary: &str, expected_error: &str) {
+    const OPAQUE: &str = "--opaque-secret-payload";
+    let output = Command::new(binary)
+        .arg(OPAQUE)
+        .output()
+        .expect("the shipped incomplete-download binary should start");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("stderr should remain UTF-8");
+    assert!(stderr.contains(expected_error), "stderr: {stderr}");
+    assert!(!stderr.contains(OPAQUE), "opaque host input leaked: {stderr}");
 }
 
 #[cfg(unix)]
@@ -64,6 +79,22 @@ fn materialize_help_is_terminal_without_home_or_mutation_authority() {
     assert_terminal_help(
         env!("CARGO_BIN_EXE_disksage-incomplete-download-materialize"),
         "usage: disksage-incomplete-download-materialize",
+    );
+}
+
+#[test]
+fn destination_plan_unknown_argument_does_not_reflect_host_payload() {
+    assert_opaque_unknown_argument_is_bounded(
+        env!("CARGO_BIN_EXE_disksage-incomplete-download-destination-plan"),
+        "incomplete-download-destination-plan-unknown-argument",
+    );
+}
+
+#[test]
+fn materialize_unknown_argument_does_not_reflect_host_payload() {
+    assert_opaque_unknown_argument_is_bounded(
+        env!("CARGO_BIN_EXE_disksage-incomplete-download-materialize"),
+        "incomplete-download-materialize-unknown-argument",
     );
 }
 
