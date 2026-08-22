@@ -17,58 +17,93 @@
   let node: api.NodeView | null = $state(null);
   let crumbs: string[] = $state([]);
   let top: api.EntryView[] = $state([]);
+  let operationError = $state("");
   let navSeq = 0;
 
   onMount(async () => {
-    roots = await api.listRoots();
-    selectedRoot = roots[0] ?? "";
-    await api.onScanProgress((s) => (stats = s));
-    await api.onScanDone(async (s) => {
-      stats = s;
-      scanning = false;
-      try {
-        crumbs = [selectedRoot];
-        node = await api.getNode(selectedRoot);
-        top = await api.topFiles(200);
-      } catch (e) {
-        console.error("post-scan load failed:", e);
-      }
-    });
+    try {
+      roots = await api.listRoots();
+      selectedRoot = roots[0] ?? "";
+    } catch {
+      console.error("disk root load failed");
+      operationError = "디스크 루트 목록을 불러오지 못했습니다.";
+    }
+
+    try {
+      await api.onScanProgress((s) => (stats = s));
+      await api.onScanDone(async (s) => {
+        stats = s;
+        scanning = false;
+        operationError = "";
+        const resultSeq = navSeq;
+        const scannedRoot = selectedRoot;
+        try {
+          const [nextNode, nextTop] = await Promise.all([
+            api.getNode(scannedRoot),
+            api.topFiles(200),
+          ]);
+          if (resultSeq !== navSeq) return;
+          crumbs = [scannedRoot];
+          node = nextNode;
+          top = nextTop;
+        } catch {
+          if (resultSeq !== navSeq) return;
+          node = null;
+          top = [];
+          console.error("post-scan result load failed");
+          operationError = "스캔 결과를 불러오지 못했습니다.";
+        }
+      });
+    } catch {
+      console.error("scan event registration failed");
+      operationError = "스캔 이벤트 연결을 준비하지 못했습니다.";
+    }
   });
 
   async function scan() {
+    ++navSeq;
+    operationError = "";
     scanning = true;
     node = null;
     top = [];
     try {
       await api.startScan(selectedRoot);
-    } catch (e) {
+    } catch {
       scanning = false;
-      alert(`스캔 시작 실패: ${e}`);
+      console.error("scan start failed");
+      operationError = "스캔을 시작하지 못했습니다.";
     }
   }
 
   async function open(path: string) {
     const seq = ++navSeq;
+    operationError = "";
     try {
       const n = await api.getNode(path);
       if (seq !== navSeq) return; // 더 새로운 내비게이션이 이미 시작됨
       crumbs = [...crumbs, path];
       node = n;
-    } catch (e) {
-      console.error("getNode failed:", e);
+    } catch {
+      if (seq === navSeq) {
+        console.error("folder navigation failed");
+        operationError = "폴더 내용을 불러오지 못했습니다.";
+      }
     }
   }
 
   async function jump(i: number) {
     const seq = ++navSeq;
+    operationError = "";
     try {
       const n = await api.getNode(crumbs[i]);
       if (seq !== navSeq) return;
       crumbs = crumbs.slice(0, i + 1);
       node = n;
-    } catch (e) {
-      console.error("getNode failed:", e);
+    } catch {
+      if (seq === navSeq) {
+        console.error("folder navigation failed");
+        operationError = "폴더 내용을 불러오지 못했습니다.";
+      }
     }
   }
 </script>
@@ -91,6 +126,10 @@
       </span>
     {/if}
   </div>
+
+  {#if operationError}
+    <p class="error" role="alert">{operationError}</p>
+  {/if}
 
   {#if node}
     <nav class="crumbs">
@@ -133,6 +172,7 @@
   main { font-family: system-ui, sans-serif; padding: 1rem; }
   .controls { display: flex; gap: 0.5rem; align-items: center; }
   .stats { color: #666; font-size: 0.9rem; }
+  .error { margin: 0.75rem 0; font-weight: 600; }
   .crumbs { margin: 0.75rem 0; display: flex; gap: 0.25rem; flex-wrap: wrap; }
   .crumb { background: none; border: none; color: #06c; cursor: pointer; padding: 0; }
   .entries { list-style: none; padding: 0; max-height: 40vh; overflow-y: auto; }
