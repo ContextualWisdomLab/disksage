@@ -19,10 +19,15 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # pinned
+        with:
+          toolchain: 1.97.1
+          components: clippy,rustfmt
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri
+      - name: Report exact Rust toolchain
+        run: rustc --version --verbose
       - name: Rust tests (includes unix symlink test)
         run: cargo test --manifest-path src-tauri/Cargo.toml
       - name: Headless cloud planner tests
@@ -52,9 +57,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake clang libclang-dev libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # pinned
+        with:
+          toolchain: 1.97.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri
+      - name: Report exact Rust toolchain
+        run: rustc --version --verbose
       - name: Build with llm-engine (compiles real llama.cpp CPU + engine.rs FFI)
         run: cargo test --manifest-path src-tauri/Cargo.toml --features llm-engine --lib --no-run

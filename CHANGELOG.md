@@ -8,6 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Raise the DiskSage application MSRV and exact local, CI, and release compiler baseline from Rust 1.88 to 1.97.1; keep the compiler reproducible through the root toolchain manifest, enforced by CI and a repository contract test.
 - Bind Tauri packaging to a fail-closed cross-manifest release-version verifier so `package.json`, `Cargo.toml`, `tauri.conf.json`, and any `v*` release tag must agree on one valid Semantic Version before a bundle is built.
 - Add retry-safe release concurrency: fresh first attempts may supersede stale runs, while explicit GitHub rerun attempts do not self-cancel inside the same concurrency group.
 - Replace generator-era Cargo package metadata with the DiskSage product description, MIT license expression, canonical source repository URL, and `publish = false` registry-publication boundary; deliberately omit Cargo's deprecated `authors` field, verify publication refusal through Cargo's versioned parsed metadata rather than substring matching, and regression-test commented/out-of-table decoys together with the retained acquisition metadata and doctoring evidence.
