@@ -33,30 +33,55 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut repository_root = None;
     let mut expected_candidate_set_fingerprint = None;
     let mut apply = false;
+    let mut apply_seen = false;
     let mut max_entries = DEFAULT_MAX_ENTRIES;
+    let mut max_entries_seen = false;
     let mut output = None;
     let mut index = 0usize;
     while index < args.len() {
         match args[index].as_str() {
             "--repository-root" => {
-                repository_root = Some(PathBuf::from(value(args, &mut index, "--repository-root")?))
+                if repository_root.is_some() {
+                    return Err("--repository-root는 한 번만 지정할 수 있음".into());
+                }
+                repository_root = Some(PathBuf::from(value(args, &mut index, "--repository-root")?));
             }
             "--expected-candidate-set-fingerprint" => {
+                if expected_candidate_set_fingerprint.is_some() {
+                    return Err(
+                        "--expected-candidate-set-fingerprint는 한 번만 지정할 수 있음".into(),
+                    );
+                }
                 expected_candidate_set_fingerprint = Some(value(
                     args,
                     &mut index,
                     "--expected-candidate-set-fingerprint",
-                )?)
+                )?);
             }
-            "--apply" => apply = true,
+            "--apply" => {
+                if apply_seen {
+                    return Err("--apply는 한 번만 지정할 수 있음".into());
+                }
+                apply_seen = true;
+                apply = true;
+            }
             "--max-entries" => {
+                if max_entries_seen {
+                    return Err("--max-entries는 한 번만 지정할 수 있음".into());
+                }
+                max_entries_seen = true;
                 max_entries = value(args, &mut index, "--max-entries")?
                     .parse()
-                    .map_err(|_| "--max-entries는 정수여야 함".to_string())?
+                    .map_err(|_| "--max-entries는 정수여야 함".to_string())?;
             }
-            "--output" => output = Some(PathBuf::from(value(args, &mut index, "--output")?)),
+            "--output" => {
+                if output.is_some() {
+                    return Err("--output은 한 번만 지정할 수 있음".into());
+                }
+                output = Some(PathBuf::from(value(args, &mut index, "--output")?));
+            }
             "--help" | "-h" => return Err(usage().into()),
-            unknown => return Err(format!("알 수 없는 인자: {unknown}")),
+            _ => return Err("알 수 없는 인자".to_string()),
         }
         index += 1;
     }
@@ -126,8 +151,19 @@ fn output_summary(path: &PathBuf, report: &MavenCachePruneReport) -> Result<Stri
     .map_err(|error| error.to_string())
 }
 
+fn command_line_args() -> Result<Vec<String>, String> {
+    std::env::args_os()
+        .skip(1)
+        .map(|value| value.into_string().map_err(|_| "알 수 없는 인자".to_string()))
+        .collect()
+}
+
 fn run() -> Result<(), String> {
-    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let raw = command_line_args()?;
+    if raw.len() == 1 && matches!(raw[0].as_str(), "--help" | "-h") {
+        println!("{}", usage());
+        return Ok(());
+    }
     let args = parse_args(&raw)?;
     let report = prune_maven_repository(
         &args.repository_root,
