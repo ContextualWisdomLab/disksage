@@ -98,3 +98,25 @@ fn unsupported_provider_and_malformed_clients_fail_before_browser_or_network_wor
         );
     }
 }
+
+#[test]
+fn client_id_bounds_fail_before_loopback_or_provider_work() {
+    let oversized = format!("{}{}", "a".repeat(513), ".apps.googleusercontent.com");
+    let invalid_clients = [
+        "".to_string(),
+        format!(" {GOOGLE_CLIENT_ID}"),
+        format!("{GOOGLE_CLIENT_ID} "),
+        oversized,
+        "café.apps.googleusercontent.com".to_string(),
+        "abc\u{0007}xyz.apps.googleusercontent.com".replace("\\u{0007}", "\u{0007}"),
+    ];
+
+    for client_id in invalid_clients {
+        assert_eq!(
+            prepare_authorization(CloudProvider::GoogleDrive, &client_id)
+                .err()
+                .expect("bounded client-ID validation must fail before listener or provider work"),
+            "oauth-client-id-invalid"
+        );
+    }
+}
