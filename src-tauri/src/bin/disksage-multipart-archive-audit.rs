@@ -22,6 +22,7 @@ fn usage() -> String {
 fn parse_args(raw: &[String]) -> Result<Args, String> {
     let mut root = None;
     let mut max_entries = DEFAULT_MAX_ENTRIES;
+    let mut max_entries_seen = false;
     let mut private_output = None;
     let mut index = 0usize;
     while index < raw.len() {
@@ -39,6 +40,10 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 root = Some(PathBuf::from(value(&mut index, "--root")?));
             }
             "--max-entries" => {
+                if max_entries_seen {
+                    return Err("--max-entries는 한 번만 지정할 수 있음".into());
+                }
+                max_entries_seen = true;
                 let parsed = value(&mut index, "--max-entries")?
                     .parse::<usize>()
                     .map_err(|_| "--max-entries는 양의 정수여야 함".to_string())?;
