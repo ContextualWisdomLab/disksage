@@ -1,13 +1,15 @@
 //! Public-boundary coverage for OAuth connection root matching and persisted client-ID admission.
 //!
 //! These regressions cover authority branches not exercised by the broader connection-document
-//! matrix: whitespace-tainted provider credentials propagated through persistence validation and
-//! same-provider roots whose filesystem path no longer matches. They use only private temporary
-//! files and never launch a browser, contact a provider, access the credential store, or mutate a
-//! cloud provider.
+//! matrix: whitespace-tainted provider credentials propagated through persistence validation,
+//! same-provider roots whose filesystem path no longer matches, and bare relative document names
+//! whose authority parent is the current directory. They never launch a browser, contact a
+//! provider, access the credential store, or mutate a cloud provider.
 
 use disksage_lib::cloud::{CloudAccountScope, CloudProvider, CloudRoot};
-use disksage_lib::provider_oauth::{connection_for_root, load_connections, requested_scope, OAuthConnection};
+use disksage_lib::provider_oauth::{
+    connection_for_root, load_connections, requested_scope, OAuthConnection,
+};
 use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization;
 
@@ -107,5 +109,25 @@ fn same_provider_root_lookup_requires_the_persisted_filesystem_path() {
         connection_for_root(std::slice::from_ref(&connection), &moved_root).unwrap_err(),
         "provider-oauth-connection-missing",
         "same-provider identity alone must not authorize a different filesystem root"
+    );
+}
+
+#[test]
+fn missing_bare_document_name_uses_current_directory_authority_without_creation() {
+    let path = std::path::PathBuf::from(format!(
+        ".disksage-oauth-missing-{}.json",
+        std::process::id()
+    ));
+    assert!(
+        !path.exists(),
+        "coverage fixture name must not collide with a repository file"
+    );
+    assert!(
+        load_connections(&path).unwrap().is_empty(),
+        "a missing bare filename must remain a non-authorizing empty document"
+    );
+    assert!(
+        !path.exists(),
+        "read-only connection lookup must not create the missing document"
     );
 }
