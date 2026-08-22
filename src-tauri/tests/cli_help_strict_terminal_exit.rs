@@ -145,6 +145,41 @@ fn assert_duplicate_option_is_bounded(binary: &Path, duplicate_args: &[&str]) {
     );
 }
 
+fn assert_duplicate_options_are_bounded(binary: &Path) {
+    let file_name = binary
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("test binary name must be UTF-8");
+    let cases: Vec<Vec<&str>> = if file_name.starts_with("disksage-reclaim-plan") {
+        vec![
+            vec!["--operation", "trash", "--operation", "delete"],
+            vec!["--pretty", "--pretty"],
+            vec!["--check-active-use", "--check-active-use"],
+        ]
+    } else if file_name.starts_with("disksage-podman-reclaim-plan") {
+        vec![
+            vec!["--machine", "one", "--machine", "two"],
+            vec!["--podman-bin", "podman-one", "--podman-bin", "podman-two"],
+            vec!["--timeout-seconds", "1", "--timeout-seconds", "2"],
+            vec!["--pretty", "--pretty"],
+        ]
+    } else {
+        vec![
+            vec!["--path", ".", "--path", "."],
+            vec!["--baseline", "one.json", "--baseline", "two.json"],
+            vec![
+                "--logical-removed-bytes",
+                "1",
+                "--logical-removed-bytes",
+                "2",
+            ],
+        ]
+    };
+    for case in cases {
+        assert_duplicate_option_is_bounded(binary, &case);
+    }
+}
+
 #[cfg(unix)]
 fn assert_non_utf8_argument_is_bounded(binary: &Path) {
     use std::os::unix::ffi::OsStringExt;
@@ -185,31 +220,8 @@ fn successful_help_is_strictly_terminal_and_invalid_input_stays_bounded() {
         assert_unknown_argument_is_bounded(binary);
         assert_help_does_not_hide_invalid_argument(binary, "--help");
         assert_help_does_not_hide_invalid_argument(binary, "-h");
+        assert_duplicate_options_are_bounded(binary);
         #[cfg(unix)]
         assert_non_utf8_argument_is_bounded(binary);
-    }
-}
-
-#[test]
-fn duplicate_options_fail_before_operational_domain_work() {
-    let (_target_dir, binaries) = build_operational_binaries();
-    for (binary, _) in &binaries {
-        let file_name = binary
-            .file_name()
-            .and_then(|name| name.to_str())
-            .expect("test binary name must be UTF-8");
-        if file_name.starts_with("disksage-reclaim-plan") {
-            assert_duplicate_option_is_bounded(
-                binary,
-                &["--operation", "trash", "--operation", "delete"],
-            );
-        } else if file_name.starts_with("disksage-podman-reclaim-plan") {
-            assert_duplicate_option_is_bounded(
-                binary,
-                &["--timeout-seconds", "1", "--timeout-seconds", "2"],
-            );
-        } else {
-            assert_duplicate_option_is_bounded(binary, &["--path", ".", "--path", "."]);
-        }
     }
 }
