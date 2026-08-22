@@ -1,3 +1,5 @@
+#![cfg(feature = "cloud-cli")]
+
 //! Real-binary parser coverage for bounded incomplete-download operator CLIs.
 //!
 //! Every case fails during argument admission, before HOME lookup, provider discovery,
