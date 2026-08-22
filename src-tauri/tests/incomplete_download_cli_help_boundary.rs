@@ -2,10 +2,13 @@
 //!
 //! Help is a terminal, side-effect-free operator boundary: it must not require HOME,
 //! cloud discovery, provider capacity, private evidence, or execution authority. Host
-//! arguments that cannot be decoded as UTF-8 must fail closed without a Rust panic, and
-//! opaque invalid host input must never be reflected into operator diagnostics.
+//! arguments that cannot be decoded as UTF-8 and opaque invalid host input must fail
+//! closed through the same bounded diagnostic without reflection or a Rust panic.
 
 use std::process::Command;
+
+const DESTINATION_UNKNOWN: &str = "incomplete-download-destination-plan-unknown-argument";
+const MATERIALIZE_UNKNOWN: &str = "incomplete-download-materialize-unknown-argument";
 
 fn assert_terminal_help(binary: &str, expected_usage: &str) {
     for help_flag in ["--help", "-h"] {
@@ -50,7 +53,7 @@ fn assert_opaque_unknown_argument_is_bounded(binary: &str, expected_error: &str)
 }
 
 #[cfg(unix)]
-fn assert_non_utf8_argument_fails_closed(binary: &str) {
+fn assert_non_utf8_argument_fails_closed(binary: &str, expected_error: &str) {
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
 
@@ -62,7 +65,7 @@ fn assert_non_utf8_argument_fails_closed(binary: &str) {
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).expect("stderr should remain UTF-8");
-    assert!(stderr.contains("invalid-argument-encoding"), "stderr: {stderr}");
+    assert!(stderr.contains(expected_error), "stderr: {stderr}");
     assert!(!stderr.contains("panicked"), "stderr: {stderr}");
 }
 
@@ -86,7 +89,7 @@ fn materialize_help_is_terminal_without_home_or_mutation_authority() {
 fn destination_plan_unknown_argument_does_not_reflect_host_payload() {
     assert_opaque_unknown_argument_is_bounded(
         env!("CARGO_BIN_EXE_disksage-incomplete-download-destination-plan"),
-        "incomplete-download-destination-plan-unknown-argument",
+        DESTINATION_UNKNOWN,
     );
 }
 
@@ -94,22 +97,24 @@ fn destination_plan_unknown_argument_does_not_reflect_host_payload() {
 fn materialize_unknown_argument_does_not_reflect_host_payload() {
     assert_opaque_unknown_argument_is_bounded(
         env!("CARGO_BIN_EXE_disksage-incomplete-download-materialize"),
-        "incomplete-download-materialize-unknown-argument",
+        MATERIALIZE_UNKNOWN,
     );
 }
 
 #[cfg(unix)]
 #[test]
 fn destination_plan_rejects_non_utf8_host_arguments_without_panicking() {
-    assert_non_utf8_argument_fails_closed(env!(
-        "CARGO_BIN_EXE_disksage-incomplete-download-destination-plan"
-    ));
+    assert_non_utf8_argument_fails_closed(
+        env!("CARGO_BIN_EXE_disksage-incomplete-download-destination-plan"),
+        DESTINATION_UNKNOWN,
+    );
 }
 
 #[cfg(unix)]
 #[test]
 fn materialize_rejects_non_utf8_host_arguments_without_panicking() {
-    assert_non_utf8_argument_fails_closed(env!(
-        "CARGO_BIN_EXE_disksage-incomplete-download-materialize"
-    ));
+    assert_non_utf8_argument_fails_closed(
+        env!("CARGO_BIN_EXE_disksage-incomplete-download-materialize"),
+        MATERIALIZE_UNKNOWN,
+    );
 }
