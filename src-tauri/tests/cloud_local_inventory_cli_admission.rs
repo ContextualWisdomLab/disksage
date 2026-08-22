@@ -57,7 +57,7 @@ fn assert_rejected(binary: &Path, args: &[&str], expected: &str) {
 }
 
 #[test]
-fn parser_rejects_missing_values_non_numbers_and_duplicate_path_options_before_domain_work() {
+fn parser_rejects_missing_values_non_numbers_and_duplicate_options_before_domain_work() {
     let (_target_dir, binary) = build_feature_gated_binary();
 
     assert_rejected(&binary, &["--max-results"], "--max-results 값이 필요함");
@@ -83,12 +83,37 @@ fn parser_rejects_missing_values_non_numbers_and_duplicate_path_options_before_d
         ],
         "--relative-subpath는 한 번만 지정할 수 있음",
     );
+    assert_rejected(
+        &binary,
+        &["--all-roots", "--all-roots"],
+        "--all-roots는 한 번만 지정할 수 있음",
+    );
+
+    for flag in [
+        "--min-allocated-mib",
+        "--max-entries",
+        "--max-results",
+        "--max-depth",
+        "--max-duration-ms",
+        "--max-issues",
+    ] {
+        assert_rejected(
+            &binary,
+            &["--all-roots", flag, "1", flag, "2"],
+            &format!("{flag}는 한 번만 지정할 수 있음"),
+        );
+    }
 }
 
 #[test]
 fn parser_rejects_conflicting_and_unsafe_root_selection_before_home_or_provider_discovery() {
     let (_target_dir, binary) = build_feature_gated_binary();
 
+    assert_rejected(
+        &binary,
+        &[],
+        "--cloud-root 또는 --all-roots 값이 필요함",
+    );
     assert_rejected(
         &binary,
         &["--cloud-root", "/cloud", "--all-roots"],
@@ -106,6 +131,26 @@ fn parser_rejects_conflicting_and_unsafe_root_selection_before_home_or_provider_
             "/cloud",
             "--relative-subpath",
             "../escape",
+        ],
+        "--relative-subpath는 안전한 상대 경로여야 함",
+    );
+    assert_rejected(
+        &binary,
+        &[
+            "--cloud-root",
+            "/cloud",
+            "--relative-subpath",
+            "/absolute",
+        ],
+        "--relative-subpath는 안전한 상대 경로여야 함",
+    );
+    assert_rejected(
+        &binary,
+        &[
+            "--cloud-root",
+            "/cloud",
+            "--relative-subpath",
+            "",
         ],
         "--relative-subpath는 안전한 상대 경로여야 함",
     );
