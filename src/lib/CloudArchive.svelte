@@ -76,8 +76,8 @@
       connections = await api.listCloudProviderConnections();
       reviewDecisions = await api.listCloudReviewDecisions();
       selectedRoot = roots.find((root) => root.readable)?.path ?? "";
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "클라우드 정보를 불러오지 못했습니다. 공급자 연결과 선택한 클라우드 루트의 접근 권한을 확인한 뒤 다시 열어 보세요.";
     }
   });
 
@@ -111,8 +111,8 @@
         connectionCapacity = planned.capacity.snapshot;
         connectionCapacityRoot = selectedRoot;
       }
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "클라우드 오프로드 후보를 분석하지 못했습니다. 스캔 결과와 선택한 클라우드 루트를 확인한 뒤 다시 분석하세요.";
     } finally {
       busy = false;
     }
@@ -195,8 +195,8 @@
         ...reviewTenantAuthorities,
         [candidate.metadata_fingerprint]: false,
       };
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "클라우드 후보 검토 결정을 저장하지 못했습니다. 사유와 조직 테넌트 권한을 확인한 뒤 다시 저장하세요.";
     } finally {
       reviewingFingerprint = "";
     }
@@ -231,8 +231,8 @@
         Math.max(0, Math.floor(minAgeDays)),
         200,
       );
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "클라우드 후보를 복사하지 못했습니다. 원격 용량과 공급자 연결을 확인한 뒤 새 계획부터 다시 진행하세요.";
     } finally {
       copyingFingerprint = "";
     }
@@ -270,8 +270,8 @@
         Math.max(0, Math.floor(minAgeDays)),
         200,
       );
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "기존 클라우드 복사본을 채택하지 못했습니다. 대상 객체와 승인 문구를 다시 확인한 뒤 새 계획부터 진행하세요.";
     } finally {
       copyingFingerprint = "";
     }
@@ -287,8 +287,8 @@
         copied.receipt.receipt_id,
         copied.receipt.provider === "google-drive" ? objectId.trim() || null : null,
       );
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "클라우드 복사 증거를 검증하지 못했습니다. 공급자에서 복사본을 확인한 뒤 다시 검증하세요.";
     } finally {
       attesting = false;
     }
@@ -318,8 +318,8 @@
       attestation = eviction.attestation;
       evictionConfirmation = "";
       evictionRationale = "";
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "검증된 원본을 휴지통으로 보내지 못했습니다. 원본과 증거 상태를 다시 확인한 뒤 새 검증부터 진행하세요.";
     } finally {
       evicting = false;
     }
@@ -364,8 +364,8 @@
     try {
       connectionCapacity = await api.verifyCloudProviderCapacity(root.path);
       connectionCapacityRoot = root.path;
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "클라우드 원격 용량을 검증하지 못했습니다. 공급자 연결을 확인한 뒤 용량 확인을 다시 실행하세요.";
     } finally {
       checkingCapacity = false;
     }
@@ -385,8 +385,8 @@
       oauthClientId = "";
       connectionCapacity = await api.verifyCloudProviderCapacity(root.path);
       connectionCapacityRoot = root.path;
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "클라우드 공급자 연결을 완료하지 못했습니다. OAuth 클라이언트 ID와 공급자 동의 화면을 확인한 뒤 다시 연결하세요.";
     } finally {
       connecting = false;
     }
@@ -403,8 +403,8 @@
       connections = connections.filter((entry) => entry.connection_id !== connection.connection_id);
       connectionCapacity = null;
       connectionCapacityRoot = "";
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "클라우드 공급자 연결을 해제하지 못했습니다. OS Keychain과 공급자 연결 상태를 확인한 뒤 다시 해제하세요.";
     } finally {
       disconnecting = false;
     }
@@ -557,7 +557,7 @@
   {/if}
 
   {#if !scannedRoot}<p class="muted">먼저 스캔을 완료하세요.</p>{/if}
-  {#if loadError}<p class="error">{loadError}</p>{/if}
+  {#if loadError}<p class="error" role="alert">{loadError}</p>{/if}
 
   {#if report}
     <div class="summary">
