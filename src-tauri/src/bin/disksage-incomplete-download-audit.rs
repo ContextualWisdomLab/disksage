@@ -1,7 +1,10 @@
 use disksage_lib::incomplete_download::{
-    collect_incomplete_download_audit, summarize_incomplete_download_audit, DEFAULT_MAX_ENTRIES,
-    DEFAULT_STALE_AFTER_DAYS, MAX_STALE_AFTER_DAYS,
+    summarize_incomplete_download_audit, DEFAULT_MAX_ENTRIES, DEFAULT_STALE_AFTER_DAYS,
+    MAX_STALE_AFTER_DAYS,
 };
+#[cfg(not(coverage))]
+use disksage_lib::incomplete_download::collect_incomplete_download_audit;
+#[cfg(not(coverage))]
 use disksage_lib::private_evidence::write_private_json_create_new;
 use std::path::{Component, Path, PathBuf};
 

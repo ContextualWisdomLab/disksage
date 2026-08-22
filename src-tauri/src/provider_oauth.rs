@@ -1,8 +1,8 @@
-//! Native OAuth 2.0 authorization for read-only cloud-provider metadata checks.
-//!
-//! DiskSage uses the system browser, PKCE S256, an ephemeral loopback listener, exact provider
-//! hosts, and an OS credential store. Refresh tokens never enter settings or command responses;
-//! access tokens live only long enough to perform one provider metadata request.
+// Native OAuth 2.0 authorization for read-only cloud-provider metadata checks.
+//
+// DiskSage uses the system browser, PKCE S256, an ephemeral loopback listener, exact provider
+// hosts, and an OS credential store. Refresh tokens never enter settings or command responses;
+// access tokens live only long enough to perform one provider metadata request.
 
 use crate::cloud::{cloud_root_path_matches, CloudProvider, CloudRoot};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -45,6 +45,7 @@ const GOOGLE_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_SCOPE: &str = "https://www.googleapis.com/auth/drive.metadata.readonly";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OAuthConnection {
     pub connection_id: String,
     pub provider: CloudProvider,
@@ -56,6 +57,7 @@ pub struct OAuthConnection {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ConnectionDocument {
     version: u32,
     connections: Vec<OAuthConnection>,
@@ -290,6 +292,16 @@ fn validate_connection(connection: &OAuthConnection) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_unique_connection_ids(connections: &[OAuthConnection]) -> Result<(), String> {
+    let mut connection_ids = std::collections::BTreeSet::new();
+    for connection in connections {
+        if !connection_ids.insert(connection.connection_id.as_str()) {
+            return Err("oauth-connection-document-duplicate-id".into());
+        }
+    }
+    Ok(())
+}
+
 fn connection_matches_root(connection: &OAuthConnection, root: &CloudRoot) -> bool {
     validate_connection(connection).is_ok()
         && connection.provider == root.provider
@@ -304,7 +316,42 @@ pub fn connections_path(app_data_dir: &Path) -> PathBuf {
     app_data_dir.join("cloud-oauth-connections.json")
 }
 
+fn connection_document_parent(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+fn validate_connection_document_parent(parent: &Path, allow_missing: bool) -> Result<(), String> {
+    for ancestor in parent
+        .ancestors()
+        .filter(|ancestor| !ancestor.as_os_str().is_empty())
+    {
+        match std::fs::symlink_metadata(ancestor) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err("oauth-connection-directory-unsafe".into());
+            }
+            Ok(metadata) => {
+                #[cfg(unix)]
+                if ancestor == parent {
+                    use std::os::unix::fs::PermissionsExt;
+                    if metadata.permissions().mode() & 0o022 != 0 {
+                        return Err("oauth-connection-directory-writable-by-others".into());
+                    }
+                }
+            }
+            Err(error) if allow_missing && error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotADirectory => {
+                return Err("oauth-connection-directory-unsafe".into());
+            }
+            Err(_) => return Err("oauth-connection-directory-unavailable".into()),
+        }
+    }
+    Ok(())
+}
+
 pub fn load_connections(path: &Path) -> Result<Vec<OAuthConnection>, String> {
+    validate_connection_document_parent(connection_document_parent(path), true)?;
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -312,6 +359,13 @@ pub fn load_connections(path: &Path) -> Result<Vec<OAuthConnection>, String> {
     };
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err("oauth-connection-document-not-regular-file".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err("oauth-connection-document-permissions-unsafe".into());
+        }
     }
     if metadata.len() > MAX_CONNECTION_DOCUMENT_BYTES {
         return Err("oauth-connection-document-too-large".into());
@@ -327,6 +381,7 @@ pub fn load_connections(path: &Path) -> Result<Vec<OAuthConnection>, String> {
     for connection in &document.connections {
         validate_connection(connection)?;
     }
+    validate_unique_connection_ids(&document.connections)?;
     Ok(document.connections)
 }
 
@@ -337,21 +392,25 @@ fn save_connections(path: &Path, connections: &[OAuthConnection]) -> Result<(), 
     for connection in connections {
         validate_connection(connection)?;
     }
-    let parent = path
-        .parent()
-        .ok_or_else(|| "oauth-connection-directory-invalid".to_string())?;
-    std::fs::create_dir_all(parent).map_err(|_| "oauth-connection-directory-unavailable")?;
-    if let Ok(metadata) = std::fs::symlink_metadata(path) {
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err("oauth-connection-document-not-regular-file".into());
-        }
-    }
+    validate_unique_connection_ids(connections)?;
     let document = ConnectionDocument {
         version: CONNECTION_DOCUMENT_VERSION,
         connections: connections.to_vec(),
     };
     let encoded = serde_json::to_vec_pretty(&document)
         .map_err(|_| "oauth-connection-document-encode-failed")?;
+    if encoded.len() as u64 > MAX_CONNECTION_DOCUMENT_BYTES {
+        return Err("oauth-connection-document-too-large".into());
+    }
+    let parent = connection_document_parent(path);
+    validate_connection_document_parent(parent, true)?;
+    std::fs::create_dir_all(parent).map_err(|_| "oauth-connection-directory-unavailable")?;
+    validate_connection_document_parent(parent, false)?;
+    if let Ok(metadata) = std::fs::symlink_metadata(path) {
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err("oauth-connection-document-not-regular-file".into());
+        }
+    }
     let temporary = parent.join(format!(
         ".cloud-oauth-connections.{}.tmp",
         random_urlsafe(12)?
@@ -933,23 +992,45 @@ pub fn refreshed_access_token(
     Ok(grant.access_token)
 }
 
-#[cfg(not(coverage))]
-pub fn disconnect(connection_document_path: &Path, root: &CloudRoot) -> Result<(), String> {
+fn disconnect_with_delete<F>(
+    connection_document_path: &Path,
+    root: &CloudRoot,
+    mut delete_token: F,
+) -> Result<(), String>
+where
+    F: FnMut(&str) -> Result<(), String>,
+{
     let original = load_connections(connection_document_path)?;
     let connection = connection_for_root(&original, root)?;
+    let matching_ids: Vec<_> = original
+        .iter()
+        .filter(|entry| connection_matches_root(entry, root))
+        .map(|entry| entry.connection_id.clone())
+        .collect();
     let updated: Vec<_> = original
         .iter()
-        .filter(|entry| entry.connection_id != connection.connection_id)
+        .filter(|entry| !connection_matches_root(entry, root))
         .cloned()
         .collect();
     save_connections(connection_document_path, &updated)?;
-    if let Err(error) = delete_refresh_token(&connection.connection_id) {
+    if let Err(error) = delete_token(&connection.connection_id) {
         if save_connections(connection_document_path, &original).is_err() {
             return Err("provider-oauth-keyring-delete-and-config-rollback-failed".into());
         }
         return Err(error);
     }
+    for stale_id in matching_ids
+        .iter()
+        .filter(|connection_id| **connection_id != connection.connection_id)
+    {
+        let _ = delete_token(stale_id);
+    }
     Ok(())
+}
+
+#[cfg(not(coverage))]
+pub fn disconnect(connection_document_path: &Path, root: &CloudRoot) -> Result<(), String> {
+    disconnect_with_delete(connection_document_path, root, delete_refresh_token)
 }
 
 #[cfg(test)]
@@ -1184,6 +1265,35 @@ mod tests {
         );
     }
 
+    #[test]
+    fn disconnect_removes_every_canonical_and_legacy_record_for_the_same_root() {
+        let saved_root = unicode_root(CloudProvider::GoogleDrive, true);
+        let requested_root = unicode_root(CloudProvider::GoogleDrive, false);
+        let mut legacy = connection(CloudProvider::GoogleDrive);
+        legacy.cloud_root_id = saved_root.id.clone();
+        legacy.cloud_root_path = saved_root.path.clone();
+        legacy.connection_id = legacy_connection_id(&saved_root);
+        legacy.connected_at_ms = 100;
+        let mut current = legacy.clone();
+        current.connection_id = connection_id(&saved_root);
+        current.connected_at_ms = 200;
+        assert_ne!(legacy.connection_id, current.connection_id);
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("connections.json");
+        save_connections(&path, &[legacy.clone(), current.clone()]).unwrap();
+        let mut deleted = Vec::new();
+
+        disconnect_with_delete(&path, &requested_root, |connection_id| {
+            deleted.push(connection_id.to_string());
+            Ok(())
+        })
+        .unwrap();
+
+        assert!(load_connections(&path).unwrap().is_empty());
+        assert_eq!(deleted, vec![current.connection_id, legacy.connection_id]);
+    }
+
     #[cfg(unix)]
     #[test]
     fn connection_document_rejects_symlinks() {
@@ -1195,6 +1305,64 @@ mod tests {
         symlink(&target, &link).unwrap();
         assert!(load_connections(&link).is_err());
         assert!(save_connections(&link, &[]).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn connection_document_rejects_symlinked_directory_ancestors_for_read_and_write() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let outside = temp.path().join("outside-ancestor");
+        let outside_parent = outside.join("nested");
+        std::fs::create_dir_all(&outside_parent).unwrap();
+        let outside_document = outside_parent.join("connections.json");
+        let original = b"{\"version\":1,\"connections\":[]}";
+        std::fs::write(&outside_document, original).unwrap();
+
+        let alias = temp.path().join("app-data-alias");
+        symlink(&outside, &alias).unwrap();
+        let path = alias.join("nested").join("connections.json");
+
+        assert_eq!(
+            load_connections(&path).unwrap_err(),
+            "oauth-connection-directory-unsafe"
+        );
+        assert_eq!(
+            save_connections(&path, &[]).unwrap_err(),
+            "oauth-connection-directory-unsafe"
+        );
+        assert_eq!(std::fs::read(&outside_document).unwrap(), original);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn connection_document_rejects_shared_writable_parent_for_write() {
+        use std::os::unix::fs::PermissionsExt;
+
+        for writable_bit in [0o020, 0o002] {
+            let temp = tempfile::tempdir().unwrap();
+            let parent = temp.path().join(format!("oauth-write-parent-{writable_bit:o}"));
+            std::fs::create_dir(&parent).unwrap();
+            let path = parent.join("connections.json");
+            let original = b"{\"version\":1,\"connections\":[]}";
+            std::fs::write(&path, original).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            std::fs::set_permissions(
+                &parent,
+                std::fs::Permissions::from_mode(0o700 | writable_bit),
+            )
+            .unwrap();
+
+            let result = save_connections(&path, &[]);
+
+            std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+            assert_eq!(
+                result.unwrap_err(),
+                "oauth-connection-directory-writable-by-others"
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+        }
     }
 
     #[test]

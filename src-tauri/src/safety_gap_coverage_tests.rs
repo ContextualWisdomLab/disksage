@@ -1,0 +1,283 @@
+//! Focused exact-head coverage for safety branches that remain buyer-critical.
+//!
+//! These regressions stay at shipped public boundaries: durable journal appends must not create
+//! phantom blank records, and a symlink into a protected system tree must never become a trash
+//! target merely because the caller supplied a local-looking pathname.
+
+use crate::safety::{
+    filesystem_object_id, journal_append, journal_recent, same_volume, trash_delete,
+    trash_delete_if_identity, JournalEntry, SafetyError,
+};
+
+#[test]
+fn journal_append_to_complete_record_does_not_insert_a_blank_audit_line() {
+    let root = tempfile::tempdir().expect("temporary journal root");
+    let journal = root.path().join("safety-journal.jsonl");
+    let first = JournalEntry {
+        ts_ms: 50_001,
+        op: "move_file".into(),
+        path: "/tmp/first-reviewed-source.bin".into(),
+        bytes: 11,
+        outcome: "pending".into(),
+    };
+    let second = JournalEntry {
+        ts_ms: 50_002,
+        op: "move_file".into(),
+        path: "/tmp/second-reviewed-source.bin".into(),
+        bytes: 22,
+        outcome: "ok".into(),
+    };
+
+    journal_append(&journal, &first).expect("write first complete journal record");
+    journal_append(&journal, &second).expect("append after newline-terminated record");
+
+    let raw = std::fs::read_to_string(&journal).expect("read complete journal");
+    let lines: Vec<_> = raw.lines().collect();
+    assert_eq!(lines.len(), 2, "a complete tail must not gain an empty audit record");
+    assert!(lines.iter().all(|line| !line.is_empty()));
+    let recent = journal_recent(&journal, 10);
+    assert_eq!(recent.len(), 2);
+    assert_eq!(recent[0].ts_ms, second.ts_ms);
+    assert_eq!(recent[1].ts_ms, first.ts_ms);
+}
+
+#[test]
+fn journal_recent_is_bounded_and_ignores_unparseable_records() {
+    let root = tempfile::tempdir().expect("temporary journal root");
+    let missing = root.path().join("missing.jsonl");
+    assert!(journal_recent(&missing, 5).is_empty());
+
+    let journal = root.path().join("mixed-journal.jsonl");
+    let first = serde_json::to_string(&JournalEntry {
+        ts_ms: 51_001,
+        op: "trash_delete".into(),
+        path: "/tmp/first.bin".into(),
+        bytes: 1,
+        outcome: "pending".into(),
+    })
+    .expect("serialize first fixture");
+    let second = serde_json::to_string(&JournalEntry {
+        ts_ms: 51_002,
+        op: "trash_delete".into(),
+        path: "/tmp/second.bin".into(),
+        bytes: 2,
+        outcome: "ok".into(),
+    })
+    .expect("serialize second fixture");
+    std::fs::write(&journal, format!("{first}\nnot-json\n{second}\n"))
+        .expect("write mixed journal fixture");
+
+    let recent = journal_recent(&journal, 1);
+    assert_eq!(recent.len(), 1);
+    assert_eq!(recent[0].ts_ms, 51_002);
+    assert!(journal_recent(&journal, 0).is_empty());
+}
+
+#[test]
+fn safety_error_display_preserves_actionable_operator_context() {
+    let protected = SafetyError::Protected(std::path::PathBuf::from("/system/path")).to_string();
+    let trash = SafetyError::Trash("provider refused mutation".into()).to_string();
+    let journal = SafetyError::Journal("disk full".into()).to_string();
+
+    assert!(protected.contains("/system/path"));
+    assert!(trash.contains("provider refused mutation"));
+    assert!(journal.contains("disk full"));
+}
+
+#[cfg(unix)]
+#[test]
+fn same_volume_uses_existing_source_and_destination_parent() {
+    let root = tempfile::tempdir().expect("temporary volume root");
+    let source = root.path().join("source.bin");
+    let destination = root.path().join("nested-output.bin");
+    std::fs::write(&source, b"source").expect("write source fixture");
+
+    assert!(same_volume(&source, &destination));
+    assert!(!same_volume(&root.path().join("missing-source.bin"), &destination));
+}
+
+#[cfg(unix)]
+#[test]
+fn trash_rejects_local_symlink_that_resolves_into_protected_system_tree() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempfile::tempdir().expect("temporary trash root");
+    let protected_alias = root.path().join("protected-trash-source");
+    let journal = root.path().join("trash-journal.jsonl");
+    symlink("/usr/bin", &protected_alias).expect("create protected-system symlink fixture");
+
+    let error = trash_delete(&protected_alias, 0, &journal, 50_003).unwrap_err();
+
+    assert!(matches!(error, SafetyError::Protected(_)));
+    assert!(
+        std::fs::symlink_metadata(&protected_alias)
+            .expect("caller-owned symlink must remain")
+            .file_type()
+            .is_symlink()
+    );
+    assert!(
+        !journal.exists(),
+        "protected symlink aliases must fail before mutation journaling"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn identity_bound_trash_rejects_protected_symlink_before_identity_or_journal_work() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempfile::tempdir().expect("temporary identity-trash root");
+    let protected_alias = root.path().join("protected-identity-source");
+    let journal = root.path().join("identity-trash-journal.jsonl");
+    symlink("/usr/bin", &protected_alias).expect("create protected-system symlink fixture");
+    let expected_identity = filesystem_object_id(&protected_alias)
+        .expect("caller-supplied symlink has a stable filesystem identity");
+
+    let error = trash_delete_if_identity(
+        &protected_alias,
+        &expected_identity,
+        0,
+        &journal,
+        50_004,
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, SafetyError::Protected(_)));
+    assert!(
+        std::fs::symlink_metadata(&protected_alias)
+            .expect("caller-owned symlink must remain")
+            .file_type()
+            .is_symlink()
+    );
+    assert!(
+        !journal.exists(),
+        "protected identity-bound aliases must fail before identity mutation journaling"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn identity_bound_trash_fails_closed_when_private_staging_namespace_is_exhausted() {
+    let root = tempfile::tempdir().expect("temporary identity-trash root");
+    let reviewed_source = root.path().join("reviewed-source.bin");
+    let journal = root.path().join("identity-trash-journal.jsonl");
+    let payload = b"reviewed-source-must-survive";
+    std::fs::write(&reviewed_source, payload).expect("write reviewed source fixture");
+    let expected_identity = filesystem_object_id(&reviewed_source)
+        .expect("reviewed source has a stable filesystem identity");
+    let now_ms = 50_005;
+    let pid = std::process::id();
+
+    // The production allocator gives up after 32 create-only collisions. Pre-create a deliberately
+    // generous serial window for this unique timestamp so the test remains deterministic even if
+    // earlier identity-trash tests have advanced the process-global staging counter.
+    for serial in 0..512u64 {
+        std::fs::create_dir(root.path().join(format!(
+            ".disksage-trash-{pid}-{now_ms}-{serial}"
+        )))
+        .expect("reserve staging collision fixture");
+    }
+
+    let error = trash_delete_if_identity(
+        &reviewed_source,
+        &expected_identity,
+        payload.len() as u64,
+        &journal,
+        now_ms,
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, SafetyError::Trash(_)));
+    assert_eq!(
+        std::fs::read(&reviewed_source).expect("reviewed source remains readable"),
+        payload
+    );
+    assert!(
+        !journal.exists(),
+        "staging namespace exhaustion must fail before mutation journaling"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn identity_bound_trash_preserves_source_when_staging_parent_is_read_only() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let root = tempfile::tempdir().expect("temporary identity-trash root");
+    let reviewed_source = root.path().join("reviewed-source.bin");
+    let journal = root.path().join("identity-trash-journal.jsonl");
+    let payload = b"reviewed-source-must-survive-read-only-parent";
+    std::fs::write(&reviewed_source, payload).expect("write reviewed source fixture");
+    let expected_identity = filesystem_object_id(&reviewed_source)
+        .expect("reviewed source has a stable filesystem identity");
+    let original_mode = std::fs::metadata(root.path())
+        .expect("read staging parent metadata")
+        .mode();
+
+    std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o500))
+        .expect("make staging parent read-only");
+    let result = trash_delete_if_identity(
+        &reviewed_source,
+        &expected_identity,
+        payload.len() as u64,
+        &journal,
+        50_006,
+    );
+    std::fs::set_permissions(
+        root.path(),
+        std::fs::Permissions::from_mode(original_mode),
+    )
+    .expect("restore staging parent permissions");
+
+    let error = result.expect_err("read-only staging parent must fail closed");
+    assert!(matches!(error, SafetyError::Trash(_)));
+    assert_eq!(
+        std::fs::read(&reviewed_source).expect("reviewed source remains readable"),
+        payload
+    );
+    assert!(
+        !journal.exists(),
+        "staging permission failure must happen before mutation journaling"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn identity_bound_trash_self_descendant_staging_failure_preserves_reviewed_tree() {
+    let root = tempfile::tempdir().expect("temporary identity-trash root");
+    let reviewed_alias = root.path().join(".");
+    let journal = root.path().join("identity-trash-journal.jsonl");
+    let sentinel = root.path().join("sentinel.bin");
+    let payload = b"reviewed-tree-must-survive-self-descendant-staging";
+    std::fs::write(&sentinel, payload).expect("write reviewed tree sentinel");
+    let expected_identity = filesystem_object_id(&reviewed_alias)
+        .expect("reviewed directory alias has a stable filesystem identity");
+    let now_ms = 50_007;
+    let staging_prefix = format!(".disksage-trash-{}-{now_ms}-", std::process::id());
+
+    let error = trash_delete_if_identity(
+        &reviewed_alias,
+        &expected_identity,
+        payload.len() as u64,
+        &journal,
+        now_ms,
+    )
+    .expect_err("a directory cannot be atomically staged inside itself");
+
+    assert!(matches!(error, SafetyError::Trash(_)));
+    assert_eq!(
+        std::fs::read(&sentinel).expect("reviewed tree sentinel remains readable"),
+        payload
+    );
+    let recent = journal_recent(&journal, 10);
+    assert_eq!(recent.len(), 2, "failed staging must retain pending and terminal evidence");
+    assert!(recent[0].outcome.starts_with("error:"));
+    assert_eq!(recent[1].outcome, "pending");
+    assert!(
+        !std::fs::read_dir(root.path())
+            .expect("read reviewed tree after failed staging")
+            .filter_map(Result::ok)
+            .any(|entry| entry.file_name().to_string_lossy().starts_with(&staging_prefix)),
+        "failed self-descendant staging must clean its private directory"
+    );
+}

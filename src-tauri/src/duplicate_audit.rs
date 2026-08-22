@@ -946,6 +946,7 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    #[cfg(not(coverage))]
     #[test]
     fn finds_only_stable_full_content_duplicates_without_authorizing_delete() {
         let root = tempfile::tempdir().unwrap();
@@ -1010,6 +1011,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(coverage))]
     #[test]
     fn entry_limit_fails_completeness_closed() {
         let root = tempfile::tempdir().unwrap();
@@ -1025,7 +1027,7 @@ mod tests {
         assert!(exact_duplicate_audit_integrity_valid(&report));
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, not(coverage)))]
     #[test]
     fn symlinks_are_not_followed_or_hashed() {
         use std::os::unix::fs::symlink;
@@ -1045,6 +1047,7 @@ mod tests {
         assert!(exact_duplicate_audit_integrity_valid(&report));
     }
 
+    #[cfg(not(coverage))]
     #[test]
     fn integrity_rejects_tampered_delete_or_fingerprint_claims() {
         let root = tempfile::tempdir().unwrap();
@@ -1060,6 +1063,7 @@ mod tests {
         assert!(!exact_duplicate_audit_integrity_valid(&tampered));
     }
 
+    #[cfg(not(coverage))]
     #[test]
     fn integrity_rejects_tampered_member_evidence_even_if_parent_hashes_are_recomputed() {
         let root = tempfile::tempdir().unwrap();

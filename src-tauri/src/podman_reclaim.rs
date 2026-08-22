@@ -12,6 +12,8 @@ pub const PODMAN_RECLAIM_SCHEMA_KIND: &str = "disksage.podman-reclaim-plan";
 pub const DEFAULT_PODMAN_MACHINE: &str = "podman-machine-default";
 pub const DEFAULT_PROBE_TIMEOUT: Duration = Duration::from_secs(12);
 const MAX_CAPTURE_BYTES: usize = 1_048_576;
+const EXECUTABLE_BUSY_RETRY_DELAY_MS: u64 = 50;
+const EXECUTABLE_BUSY_MAX_RETRIES: usize = 6;
 const GIB: u64 = 1_073_741_824;
 const CRITICAL_GUEST_AVAILABLE_BYTES: u64 = 2 * GIB;
 const MATERIAL_ALLOCATION_GAP_BYTES: u64 = 512 * 1_048_576;
@@ -458,17 +460,38 @@ fn join_capture(
         .map_err(|error| format!("{label}-{stream}:{error}"))
 }
 
+fn spawn_command_with_busy_retry(
+    executable: &Path,
+    args: &[&str],
+) -> std::io::Result<std::process::Child> {
+    let mut retries = 0usize;
+    loop {
+        match Command::new(executable)
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => return Ok(child),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    && retries < EXECUTABLE_BUSY_MAX_RETRIES =>
+            {
+                retries += 1;
+                thread::sleep(Duration::from_millis(EXECUTABLE_BUSY_RETRY_DELAY_MS));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 fn command_text(
     executable: &Path,
     args: &[&str],
     timeout: Duration,
     label: &str,
 ) -> Result<String, String> {
-    let mut child = Command::new(executable)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+    let mut child = spawn_command_with_busy_retry(executable, args)
         .map_err(|error| format!("{label}-spawn:{error}"))?;
     let stdout = child
         .stdout

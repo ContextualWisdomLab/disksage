@@ -247,7 +247,7 @@ fn main() {
 #[cfg(coverage)]
 fn main() {}
 
-#[cfg(test)]
+#[cfg(all(test, not(coverage)))]
 mod tests {
     use super::*;
 
