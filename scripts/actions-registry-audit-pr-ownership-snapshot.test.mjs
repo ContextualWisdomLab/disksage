@@ -146,3 +146,29 @@ test('fails closed when a changed workflow file status is not a string', async (
     /open-pr-file-invalid/,
   );
 });
+
+test('fails closed when a changed-file filename contains parent traversal', async () => {
+  const pullRequests = [{
+    number: 42,
+    head: { sha: headSha, repo: { full_name: repository } },
+  }];
+
+  await assert.rejects(
+    activePullRequestWorkflowPaths(async (url) => {
+      if (url.includes(`/git/trees/${headSha}`)) {
+        return {
+          truncated: false,
+          tree: [{ type: 'blob', path: workflowPath }],
+        };
+      }
+      if (url.includes('/pulls/42/files')) {
+        return [{
+          filename: '.github/workflows/../workflows/pr-only.yml',
+          status: 'modified',
+        }];
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }, repository, pullRequests),
+    /open-pr-file-invalid/,
+  );
+});
