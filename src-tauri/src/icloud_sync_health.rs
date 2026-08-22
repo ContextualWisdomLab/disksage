@@ -43,8 +43,11 @@ const FILEPROVIDERCTL_PATH: &str = "/usr/bin/fileproviderctl";
 const FILEPROVIDER_DUMP_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(target_os = "macos")]
 // Keep the sync summary and a larger bounded provider-error window together; iCloud places
-// filename/root exclusion diagnostics after the aggregate summary in large dumps.
-const MAX_FILEPROVIDER_DUMP_BYTES: usize = 1024 * 1024;
+// filename/root exclusion diagnostics after the aggregate summary in large dumps. Match the
+// sibling provider_global_sync probe's cap: real fileproviderctl dumps observed in the field
+// run several MiB, and the previous 1 MiB cap routinely truncated before reaching per-item
+// exclusion/materialization markers that follow the aggregate summary.
+const MAX_FILEPROVIDER_DUMP_BYTES: usize = 32 * 1024 * 1024;
 const ITEM_ERROR_AGE_NOTICE_MS: u64 = 86_400_000;
 static SNAPSHOT_NONCE: AtomicU64 = AtomicU64::new(0);
 
