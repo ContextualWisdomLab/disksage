@@ -127,6 +127,29 @@ fn assert_help_does_not_hide_invalid_argument(binary: &Path) {
     );
 }
 
+/// Require a duplicate bounded option to fail before the read-only audit begins.
+fn assert_duplicate_option_is_bounded(binary: &Path, extra_args: &[&str]) {
+    let root = tempfile::tempdir().expect("empty audit root fixture must be created");
+    let output = Command::new(binary)
+        .env_remove("HOME")
+        .arg("--root")
+        .arg(root.path())
+        .args(extra_args)
+        .output()
+        .expect("DiskSage audit CLI must launch for duplicate-option validation");
+
+    assert!(
+        !output.status.success(),
+        "duplicate option must be rejected rather than silently selecting one value: {extra_args:?}"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "duplicate-option failure must not emit a successful audit summary"
+    );
+    let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must remain valid UTF-8");
+    assert!(!stderr.is_empty(), "duplicate-option failure must remain visible");
+}
+
 #[cfg(unix)]
 fn assert_non_utf8_argument_is_bounded(binary: &Path) {
     use std::os::unix::ffi::OsStringExt;
@@ -172,7 +195,13 @@ fn audit_cli_help_is_successful_and_invalid_arguments_are_bounded() {
         assert_help_success(binary, "-h", expected_usage);
         assert_invalid_argument_is_bounded(binary);
         assert_help_does_not_hide_invalid_argument(binary);
+        assert_duplicate_option_is_bounded(binary, &["--max-entries", "1", "--max-entries", "2"]);
         #[cfg(unix)]
         assert_non_utf8_argument_is_bounded(binary);
     }
+
+    assert_duplicate_option_is_bounded(
+        &incomplete_download_audit,
+        &["--stale-after-days", "1", "--stale-after-days", "2"],
+    );
 }
