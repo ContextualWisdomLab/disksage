@@ -96,4 +96,29 @@ describe("Inventory privacy-safe failure feedback", () => {
     expect(loadPrefix).toContain('insightsError = ""');
     expect(source).toContain("generation === loadGeneration");
   });
+
+  it("ignores a stale unknown-bucket summary that resolves after a newer load started", () => {
+    const source = readSource("src/lib/Inventory.svelte");
+    const summarizeStart = source.indexOf("async function summarizeUnknown()");
+    const summarizeCall = source.indexOf(
+      "await api.summarizeUnknownBucket(report?.unknown_samples ?? [])",
+      summarizeStart,
+    );
+    const summarizeBody = source.slice(summarizeStart, source.indexOf("\n  }", summarizeCall));
+
+    expect(summarizeStart).toBeGreaterThanOrEqual(0);
+    expect(summarizeCall).toBeGreaterThan(summarizeStart);
+    // The in-flight summarize call must capture the load generation up front, and every
+    // subsequent state write (success, failure, and the busy/loaded finally block) must be
+    // guarded against a newer load() having started in the meantime.
+    expect(summarizeBody).toContain("const generation = loadGeneration");
+    expect(summarizeBody.match(/generation === loadGeneration/g)?.length).toBeGreaterThanOrEqual(3);
+
+    // A fresh load() must clear a stale summarize's busy flag so a superseded response
+    // cannot leave the "요약 보기" button permanently disabled.
+    const loadStart = source.indexOf("async function load()");
+    const inventoryCall = source.indexOf("report = await api.diskInventory(scannedRoot)", loadStart);
+    const loadPrefix = source.slice(loadStart, inventoryCall);
+    expect(loadPrefix).toContain("summaryBusy = false");
+  });
 });

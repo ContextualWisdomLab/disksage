@@ -60,6 +60,7 @@
     summary = null;
     summaryLoaded = false;
     summaryError = "";
+    summaryBusy = false;
     issues = null;
     coherenceError = "";
     userRulesCount = null;
@@ -117,17 +118,25 @@
   // 미분류 버킷 요약: 스캔된 미분류 파일 경로 샘플(unknown_samples)을 백엔드가 모델로 요약.
   // 샘플이 없거나 모델이 없으면 null(안내 문구로 대체).
   async function summarizeUnknown() {
+    const generation = loadGeneration;
     summaryBusy = true;
     summaryLoaded = false;
     summary = null;
     summaryError = "";
     try {
-      summary = await api.summarizeUnknownBucket(report?.unknown_samples ?? []);
+      const result = await api.summarizeUnknownBucket(report?.unknown_samples ?? []);
+      if (generation === loadGeneration) {
+        summary = result;
+      }
     } catch {
-      summaryError = "미분류 요약에 실패했습니다. 모델 설치 상태를 확인한 뒤 요약을 다시 실행하세요.";
+      if (generation === loadGeneration) {
+        summaryError = "미분류 요약에 실패했습니다. 모델 설치 상태를 확인한 뒤 요약을 다시 실행하세요.";
+      }
     } finally {
-      summaryLoaded = true;
-      summaryBusy = false;
+      if (generation === loadGeneration) {
+        summaryLoaded = true;
+        summaryBusy = false;
+      }
     }
   }
 
