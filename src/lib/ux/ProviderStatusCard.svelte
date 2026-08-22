@@ -62,7 +62,7 @@
       {#if blockedFor}동일 차단 {blockedFor}{/if}
     </p>
   {/if}
-  {#if canCancel}
+  {#if canCancel && state !== "clear"}
     <button
       class="ds-control"
       type="button"
