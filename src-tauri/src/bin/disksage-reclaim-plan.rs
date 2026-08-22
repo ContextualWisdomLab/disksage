@@ -42,14 +42,21 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
     }
 
     let mut operation = PlannedOperation::Trash;
+    let mut operation_seen = false;
     let mut pretty = false;
+    let mut pretty_seen = false;
     let mut check_active_use = false;
+    let mut check_active_use_seen = false;
     let mut paths = Vec::new();
     let mut args = raw_args.into_iter();
 
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--operation") => {
+                if operation_seen {
+                    return Err("--operation may be supplied once".to_string());
+                }
+                operation_seen = true;
                 let value = args
                     .next()
                     .ok_or_else(|| "--operation requires trash or delete".to_string())?;
@@ -58,8 +65,20 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
                 })?;
                 operation = value.parse()?;
             }
-            Some("--pretty") => pretty = true,
-            Some("--check-active-use") => check_active_use = true,
+            Some("--pretty") => {
+                if pretty_seen {
+                    return Err("--pretty may be supplied once".to_string());
+                }
+                pretty_seen = true;
+                pretty = true;
+            }
+            Some("--check-active-use") => {
+                if check_active_use_seen {
+                    return Err("--check-active-use may be supplied once".to_string());
+                }
+                check_active_use_seen = true;
+                check_active_use = true;
+            }
             Some("-h" | "--help") => return Err(format!("help must be used alone\n{USAGE}")),
             Some("--") => {
                 paths.extend(args.map(PathBuf::from));
