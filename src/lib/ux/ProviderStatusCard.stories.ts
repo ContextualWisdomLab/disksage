@@ -26,6 +26,13 @@ export const Clear: Story = {
     state: "clear",
     details: "새 복사는 허용할 수 있지만 개별 파일 attestation은 별도로 필요합니다.",
     observedAt: "2026-08-21 17:30 KST",
+    canCancel: true,
+    onCancel: fn(),
+  },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.queryByRole("button", { name: "복사 취소 요청" })).not.toBeInTheDocument();
+    await expect(args.onCancel).not.toHaveBeenCalled();
   },
 };
 
