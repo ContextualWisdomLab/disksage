@@ -154,6 +154,104 @@ fn assert_duplicate_all_roots_is_bounded(binary: &Path) {
     assert!(output.stdout.is_empty());
 }
 
+fn assert_argument_failure(binary: &Path, args: &[&str], expected: &str) {
+    let home = tempfile::tempdir().expect("isolated empty home must be created");
+    let output = Command::new(binary)
+        .env("HOME", home.path())
+        .env_remove("USERPROFILE")
+        .args(args)
+        .output()
+        .expect("cloud local-inventory CLI must launch for parser admission validation");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "invalid parser input must use the bounded argument-error exit: {args:?}"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "invalid parser input must not emit a successful inventory report: {args:?}"
+    );
+    let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must remain valid UTF-8");
+    assert_eq!(
+        stderr,
+        format!("{expected}\n"),
+        "parser admission diagnostics must stay exact and bounded: {args:?}"
+    );
+}
+
+fn assert_parser_admission_matrix_is_bounded(binary: &Path) {
+    for flag in [
+        "--min-allocated-mib",
+        "--max-entries",
+        "--max-results",
+        "--max-depth",
+        "--max-duration-ms",
+        "--max-issues",
+    ] {
+        assert_argument_failure(binary, &["--all-roots", flag], &format!("{flag} 값이 필요함"));
+        assert_argument_failure(
+            binary,
+            &["--all-roots", flag, "not-a-number"],
+            &format!("{flag}는 정수여야 함"),
+        );
+    }
+
+    assert_argument_failure(
+        binary,
+        &[],
+        "--cloud-root 또는 --all-roots 값이 필요함",
+    );
+    assert_argument_failure(binary, &["--cloud-root"], "--cloud-root 값이 필요함");
+    assert_argument_failure(
+        binary,
+        &["--all-roots", "--relative-subpath"],
+        "--relative-subpath 값이 필요함",
+    );
+
+    #[cfg(windows)]
+    let absolute_root = r"C:\Cloud";
+    #[cfg(not(windows))]
+    let absolute_root = "/Cloud";
+
+    assert_argument_failure(
+        binary,
+        &["--cloud-root", absolute_root, "--all-roots"],
+        "--cloud-root와 --all-roots는 함께 사용할 수 없음",
+    );
+    assert_argument_failure(
+        binary,
+        &["--cloud-root", "relative"],
+        "--cloud-root는 절대 경로여야 함",
+    );
+    for relative in ["", "../escape"] {
+        assert_argument_failure(
+            binary,
+            &["--cloud-root", absolute_root, "--relative-subpath", relative],
+            "--relative-subpath는 안전한 상대 경로여야 함",
+        );
+    }
+    #[cfg(windows)]
+    let absolute_subpath = r"C:\escape";
+    #[cfg(not(windows))]
+    let absolute_subpath = "/escape";
+    assert_argument_failure(
+        binary,
+        &[
+            "--cloud-root",
+            absolute_root,
+            "--relative-subpath",
+            absolute_subpath,
+        ],
+        "--relative-subpath는 안전한 상대 경로여야 함",
+    );
+    assert_argument_failure(
+        binary,
+        &["--all-roots", "--relative-subpath", "Archive"],
+        "--relative-subpath는 --all-roots와 함께 사용할 수 없음",
+    );
+}
+
 #[cfg(unix)]
 fn assert_non_utf8_argument_is_bounded(binary: &Path) {
     use std::os::unix::ffi::OsStringExt;
@@ -201,6 +299,7 @@ fn cloud_local_inventory_help_is_successful_and_invalid_arguments_are_bounded() 
     ] {
         assert_duplicate_batch_option_is_bounded(&binary, &duplicate_args);
     }
+    assert_parser_admission_matrix_is_bounded(&binary);
     #[cfg(unix)]
     assert_non_utf8_argument_is_bounded(&binary);
 }
