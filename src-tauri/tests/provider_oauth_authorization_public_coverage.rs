@@ -108,7 +108,7 @@ fn client_id_bounds_fail_before_loopback_or_provider_work() {
         format!("{GOOGLE_CLIENT_ID} "),
         oversized,
         "café.apps.googleusercontent.com".to_string(),
-        "abc\u{0007}xyz.apps.googleusercontent.com".replace("\\u{0007}", "\u{0007}"),
+        "abc\u{0007}xyz.apps.googleusercontent.com".to_string(),
     ];
 
     for client_id in invalid_clients {
