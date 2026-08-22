@@ -1,25 +1,19 @@
-#[cfg(not(coverage))]
 use disksage_lib::cloud::{discover_cloud_roots_report, CloudProvider, CloudRoot};
-use disksage_lib::incomplete_download::{DEFAULT_MAX_ENTRIES, DEFAULT_STALE_AFTER_DAYS,
-    MAX_STALE_AFTER_DAYS};
-#[cfg(not(coverage))]
-use disksage_lib::incomplete_download::collect_incomplete_download_audit;
-#[cfg(not(coverage))]
+use disksage_lib::incomplete_download::{
+    collect_incomplete_download_audit, DEFAULT_MAX_ENTRIES, DEFAULT_STALE_AFTER_DAYS,
+    MAX_STALE_AFTER_DAYS,
+};
 use disksage_lib::incomplete_download_materialization::plan_incomplete_download_materialization;
-#[cfg(not(coverage))]
 use disksage_lib::incomplete_download_materialization_destination::{
     plan_incomplete_download_destination, summarize_incomplete_download_destination,
 };
-#[cfg(not(coverage))]
 use disksage_lib::incomplete_download_recovery::{
     validate_incomplete_download_recovery, RecoveryValidationLimits,
 };
-#[cfg(not(coverage))]
 use disksage_lib::private_evidence::write_private_json_create_new;
-use disksage_lib::provider_capacity::DEFAULT_CAPACITY_RESERVE_BYTES;
-#[cfg(not(coverage))]
-use disksage_lib::provider_capacity::{collect_icloud_native_capacity, CloudCapacitySnapshot};
-#[cfg(not(coverage))]
+use disksage_lib::provider_capacity::{
+    collect_icloud_native_capacity, CloudCapacitySnapshot, DEFAULT_CAPACITY_RESERVE_BYTES,
+};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
@@ -159,7 +153,9 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 private_output = Some(PathBuf::from(value(&mut index, "--private-output")?));
             }
             "--help" | "-h" => return Err(usage()),
-            flag => return Err(format!("알 수 없는 인자: {flag}")),
+            _unknown => {
+                return Err("incomplete-download-destination-plan-unknown-argument".into())
+            }
         }
         index += 1;
     }
@@ -210,7 +206,6 @@ fn system_now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-#[cfg(not(coverage))]
 fn select_discovered_root(home: &Path, requested: &Path) -> Result<CloudRoot, String> {
     let canonical_requested = std::fs::canonicalize(requested)
         .map_err(|_| "materialization-cloud-root-unavailable".to_string())?;
@@ -229,7 +224,6 @@ fn select_discovered_root(home: &Path, requested: &Path) -> Result<CloudRoot, St
     Ok(matches.remove(0))
 }
 
-#[cfg(not(coverage))]
 fn read_capacity_snapshot(path: &Path) -> Result<CloudCapacitySnapshot, String> {
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|_| "materialization-capacity-snapshot-unavailable".to_string())?;
@@ -263,20 +257,15 @@ fn read_capacity_snapshot(path: &Path) -> Result<CloudCapacitySnapshot, String> 
 }
 
 #[cfg(not(coverage))]
-fn host_args() -> Result<Vec<String>, String> {
-    std::env::args_os()
+fn run() -> Result<(), String> {
+    let raw = std::env::args_os()
         .skip(1)
         .map(|argument| {
             argument
                 .into_string()
-                .map_err(|_| "invalid-argument-encoding".to_string())
+                .map_err(|_| "incomplete-download-destination-plan-invalid-utf8-argument".to_string())
         })
-        .collect()
-}
-
-#[cfg(not(coverage))]
-fn run() -> Result<(), String> {
-    let raw = host_args()?;
+        .collect::<Result<Vec<_>, _>>()?;
     if raw.len() == 1 && matches!(raw[0].as_str(), "--help" | "-h") {
         println!("{}", usage());
         return Ok(());

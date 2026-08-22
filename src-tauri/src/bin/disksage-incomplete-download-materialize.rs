@@ -1,27 +1,20 @@
-#[cfg(not(coverage))]
 use disksage_lib::cloud::{discover_cloud_roots_report, CloudAccountScope, CloudProvider};
-use disksage_lib::incomplete_download::{DEFAULT_MAX_ENTRIES, DEFAULT_STALE_AFTER_DAYS,
-    MAX_STALE_AFTER_DAYS};
-#[cfg(not(coverage))]
-use disksage_lib::incomplete_download::collect_incomplete_download_audit;
-#[cfg(not(coverage))]
+use disksage_lib::incomplete_download::{
+    collect_incomplete_download_audit, DEFAULT_MAX_ENTRIES, DEFAULT_STALE_AFTER_DAYS,
+    MAX_STALE_AFTER_DAYS,
+};
 use disksage_lib::incomplete_download_materialization::plan_incomplete_download_materialization;
-#[cfg(not(coverage))]
 use disksage_lib::incomplete_download_materialization_destination::{
     approve_incomplete_download_destination, IncompleteDownloadDestinationPlan,
 };
-#[cfg(not(coverage))]
 use disksage_lib::incomplete_download_materialization_execution::{
     execute_incomplete_download_materialization,
     summarize_incomplete_download_materialization_receipt,
 };
-#[cfg(not(coverage))]
 use disksage_lib::incomplete_download_recovery::{
     validate_incomplete_download_recovery, RecoveryValidationLimits,
 };
-#[cfg(not(coverage))]
 use disksage_lib::provider_capacity::{collect_icloud_native_capacity, CloudCapacitySnapshot};
-#[cfg(not(coverage))]
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
@@ -169,8 +162,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 }
                 execute = true;
             }
-            "--help" | "-h" => return Err(usage()),
-            flag => return Err(format!("알 수 없는 인자: {flag}")),
+            _unknown => return Err("incomplete-download-materialize-unknown-argument".into()),
         }
         index += 1;
     }
@@ -237,7 +229,6 @@ fn system_now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-#[cfg(not(coverage))]
 fn read_bounded_json<T: serde::de::DeserializeOwned>(
     path: &Path,
     max_bytes: u64,
@@ -264,7 +255,6 @@ fn read_bounded_json<T: serde::de::DeserializeOwned>(
     serde_json::from_slice(&bytes).map_err(|_| format!("{error_prefix}-json-invalid"))
 }
 
-#[cfg(not(coverage))]
 fn read_capacity_snapshot(path: &Path) -> Result<CloudCapacitySnapshot, String> {
     let value: serde_json::Value = read_bounded_json(
         path,
@@ -282,7 +272,6 @@ fn read_capacity_snapshot(path: &Path) -> Result<CloudCapacitySnapshot, String> 
         .map_err(|_| "materialization-execution-capacity-snapshot-json-invalid".into())
 }
 
-#[cfg(not(coverage))]
 fn verify_discovered_cloud_root(
     home: &Path,
     plan: &IncompleteDownloadDestinationPlan,
@@ -307,20 +296,15 @@ fn verify_discovered_cloud_root(
 }
 
 #[cfg(not(coverage))]
-fn host_args() -> Result<Vec<String>, String> {
-    std::env::args_os()
+fn run() -> Result<(), String> {
+    let raw = std::env::args_os()
         .skip(1)
         .map(|argument| {
             argument
                 .into_string()
-                .map_err(|_| "invalid-argument-encoding".to_string())
+                .map_err(|_| "incomplete-download-materialize-unknown-argument".to_string())
         })
-        .collect()
-}
-
-#[cfg(not(coverage))]
-fn run() -> Result<(), String> {
-    let raw = host_args()?;
+        .collect::<Result<Vec<_>, _>>()?;
     if raw.len() == 1 && matches!(raw[0].as_str(), "--help" | "-h") {
         println!("{}", usage());
         return Ok(());
