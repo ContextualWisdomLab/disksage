@@ -248,19 +248,37 @@ fn release_commands_remain_under_the_root_toolchain_override() {
     assert!(!RELEASE_WORKFLOW.contains("working-directory: src-tauri"));
 }
 
-/// Verify Dependabot exposes a bounded, reviewable compiler update policy.
+/// Verify Dependabot's real ecosystems stay reviewable and the schema stays valid.
+///
+/// `rust-toolchain` is not a package-ecosystem value GitHub Dependabot recognizes (its
+/// supported ecosystems are enumerated at
+/// <https://docs.github.com/en/code-security/dependabot/ecosystems-supported-by-dependabot/supported-ecosystems-and-repositories>,
+/// and `rust-toolchain.toml` tracking is not among them). An unrecognized `package-ecosystem`
+/// value fails Dependabot's config schema validation for the *entire file*, silently disabling
+/// the existing `github-actions`, `npm`, and `cargo` update jobs too. This contract guards
+/// against reintroducing that entry and instead verifies the ecosystems Dependabot actually
+/// supports remain configured with a bounded weekly review cadence.
 #[test]
 fn compiler_updates_are_reviewable() {
-    let rust_update = dependabot_entry(DEPENDABOT, "rust-toolchain")
-        .expect("Dependabot must contain a rust-toolchain update entry");
-    assert_eq!(entry_scalar(&rust_update, "directory").as_deref(), Some("/"));
+    assert!(
+        dependabot_entry(DEPENDABOT, "rust-toolchain").is_none(),
+        "rust-toolchain is not a supported Dependabot package-ecosystem; an entry here \
+         invalidates the whole config file and silently disables every other ecosystem's updates"
+    );
+
+    let cargo_update = dependabot_entry(DEPENDABOT, "cargo")
+        .expect("Dependabot must track the src-tauri Cargo manifest, which pulls in rust-toolchain.toml-adjacent crate updates");
+    assert_eq!(entry_scalar(&cargo_update, "directory").as_deref(), Some("/src-tauri"));
     assert_eq!(
-        entry_nested_scalar(&rust_update, "schedule", "interval").as_deref(),
+        entry_nested_scalar(&cargo_update, "schedule", "interval").as_deref(),
         Some("weekly")
     );
+
+    let actions_update = dependabot_entry(DEPENDABOT, "github-actions")
+        .expect("Dependabot must track workflow action pins");
     assert_eq!(
-        entry_scalar(&rust_update, "open-pull-requests-limit").as_deref(),
-        Some("1")
+        entry_nested_scalar(&actions_update, "schedule", "interval").as_deref(),
+        Some("weekly")
     );
 }
 
