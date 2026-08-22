@@ -43,18 +43,47 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut repository_root = None;
     let mut output = None;
     let mut max_entries = defaults.max_entries;
+    let mut max_entries_seen = false;
     let mut max_candidates = defaults.max_candidates;
+    let mut max_candidates_seen = false;
     let mut max_issues = defaults.max_issues;
+    let mut max_issues_seen = false;
     let mut index = 0usize;
     while index < args.len() {
         match args[index].as_str() {
             "--repository-root" => {
-                repository_root = Some(PathBuf::from(value(args, &mut index, "--repository-root")?))
+                if repository_root.is_some() {
+                    return Err("--repository-root는 한 번만 지정할 수 있음".into());
+                }
+                repository_root = Some(PathBuf::from(value(args, &mut index, "--repository-root")?));
             }
-            "--output" => output = Some(PathBuf::from(value(args, &mut index, "--output")?)),
-            "--max-entries" => max_entries = number(args, &mut index, "--max-entries")?,
-            "--max-candidates" => max_candidates = number(args, &mut index, "--max-candidates")?,
-            "--max-issues" => max_issues = number(args, &mut index, "--max-issues")?,
+            "--output" => {
+                if output.is_some() {
+                    return Err("--output은 한 번만 지정할 수 있음".into());
+                }
+                output = Some(PathBuf::from(value(args, &mut index, "--output")?));
+            }
+            "--max-entries" => {
+                if max_entries_seen {
+                    return Err("--max-entries는 한 번만 지정할 수 있음".into());
+                }
+                max_entries_seen = true;
+                max_entries = number(args, &mut index, "--max-entries")?;
+            }
+            "--max-candidates" => {
+                if max_candidates_seen {
+                    return Err("--max-candidates는 한 번만 지정할 수 있음".into());
+                }
+                max_candidates_seen = true;
+                max_candidates = number(args, &mut index, "--max-candidates")?;
+            }
+            "--max-issues" => {
+                if max_issues_seen {
+                    return Err("--max-issues는 한 번만 지정할 수 있음".into());
+                }
+                max_issues_seen = true;
+                max_issues = number(args, &mut index, "--max-issues")?;
+            }
             "--help" | "-h" => return Err(usage().into()),
             _ => return Err("알 수 없는 인자".to_string()),
         }
