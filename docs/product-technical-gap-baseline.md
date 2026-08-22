@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-22 (Asia/Seoul)
-**Repository heads at snapshot:** PR #213 `a6ec6e2`, PR #247 `a0fa7bc`, PR #246 `741ab30`,
+**Repository heads at snapshot:** PR #213 `2b9833c`, PR #247 `67873b2`, PR #246 `44756d1`,
 supporting PR #156 `39a08a7`, and PR #192 `30ceea2`; hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
@@ -15,16 +15,16 @@ authoritative, and no merge is claimed from queued or stale status.
 4. Regenerable caches are a separate reclaim domain. They are per-child, identity-bound, active-use checked, journaled, and moved to OS Trash; they are not uploaded as user data.
 5. Deterministic Rust gates own safety. A local model may judge only the fixed maintenance command after dry-run evidence, calibration, and explicit human confirmation. No external LLM or OAuth service is a runtime prerequisite for the standalone product.
 
-## Buyer-observable product gaps
+## User-observable product gaps
 
 | Priority | Gap / observable symptom | Evidence | Acceptance criterion |
 | --- | --- | --- | --- |
-| P0 | Cloud offload can remain blocked while a provider is syncing or reports `local-current`/`is_uploaded=false`; the user sees no safe reclaim despite free cloud capacity. | Existing provider-global and iCloud native-state gates; `bird`/`fileproviderd` remain active during the current incident, with about 3.8 GiB available at the latest observation. | UI explains the exact blocker, last evidence time, and next bounded retry; a verified provider attestation alone can advance a candidate, never a stale projection. |
-| P0 | A long Finder/provider copy can appear hung and consume the remaining local headroom. | The `real_datasets` Finder copy remained at “준비 중” for hours; the latest bounded iCloud dump retained 125 no-progress fetch/create markers, a 95.24% upload, and a zero-progress 1.06GB download while scheduling was `running`. Bounded `/bin/cp`/`mkdir` and global probes use private process groups and headroom gates. | Preview shows required bytes + staging reserve; timeout cleans only the child-created destination and leaves a durable receipt. |
+| P0 | Cloud offload can remain blocked while a provider is syncing or reports `local-current`/`is_uploaded=false`; the user sees no safe reclaim despite free cloud capacity. | Existing provider-global and iCloud native-state gates; the latest bounded iCloud evidence reported 13,737 pending indexable items, a 12,449-entry reconciliation backlog, active transfer markers, and filename/root exclusions. | UI explains the exact blocker, last evidence time, and next bounded retry; a verified provider attestation alone can advance a candidate, never a stale projection. |
+| P0 | A long Finder/provider copy can appear hung and consume the remaining local headroom. | The `real_datasets` Finder copy remained at “준비 중” for hours; the latest bounded iCloud observation retained `pending-indexable-count=13737`, one no-progress fetch, active upload/download markers, and 18 filename plus 2 root exclusions. | Preview shows required bytes + staging reserve; the running UX shows stable blocker duration and a cancel-only escape; timeout cleans only the child-created destination and leaves a durable receipt. |
 | P1 | Personal desktop-client capacity is not the same as API quota; OAuth is unnecessarily implied for a single-user installation. | ADR-0001 permits copy-only desktop-client mode marked `capacity-unverified`; the cloud connection UI defaults to read-only OAuth consent and requires an explicit write-access opt-in. | Settings clearly distinguish local desktop client, API quota, and organization OAuth; no OAuth prompt is required for the local-only path. |
 | P1 | Users cannot yet see a full lineage graph connecting source, metadata, archive member, provider item, receipt, Goal, and eviction decision. | The candidate UI now exposes a compact source→metadata→archive→provider lineage panel using the stable fingerprint, confidence, and blocker state; provider item/receipt/permit remain explicitly pending until their evidence exists. | Export and UI show stable content IDs, provenance edges, confidence, and blockers without exposing raw private paths. |
 | P1 | “Orphan”/duplicate cleanup is difficult to trust because relationship evidence is not visible before action. | Ontology and duplicate/orphan PRs are open; current default path remains fail-closed. | Every proposed removal has an explainable parent/child/duplicate relation, identity recheck, reversible Trash action, and a no-candidate result when evidence is incomplete. |
-| P2 | Cross-platform behavior and accessibility are not presented as one release contract. | macOS/Linux/Windows release checks exist; several UI accessibility PRs remain open. | Release notes and UI expose platform capability matrix, keyboard/assistive labels, and bounded failure messages for each action. |
+| P2 | Cross-platform behavior and accessibility are not presented as one release contract. | macOS/Linux/Windows release checks exist; the Svelte shell now has a token-driven keyboard/live-feedback contract and Storybook provider-state scenes. | Release notes and UI expose platform capability matrix, keyboard/assistive labels, and bounded failure messages for each action; complete VoiceOver/zoom/native-provider acceptance remains open. |
 
 ## Technical and operational gaps
 
@@ -33,7 +33,7 @@ authoritative, and no merge is claimed from queued or stale status.
 | P0 | Provider end-to-end receipt is absent for the current iCloud incident. | Global probe can time out and CloudDocs state is intentionally not force-killed or deleted; the native copy boundary now requires an integrity-checked three-stream pre-copy cohort before mutation. | Capture a bounded fresh provider evidence receipt after sync settles; keep transfer/eviction disabled until it is complete. |
 | P0 | Disk pressure telemetry and provider queue evidence must remain comparable across loops without retaining raw provider output. | Cloud plans and explicit iCloud health refreshes persist bounded, path-free `LocalVolumeSnapshot`, `ProviderClientRuntimeSnapshot`, and `IcloudSyncHealthEvidenceSnapshot` records under `volume-pressure-evidence`, `provider-client-runtime-evidence`, and `icloud-sync-health-evidence`; iCloud plans now combine them into a timestamp/fingerprint-bound cohort. | Missing, incomplete, malformed, or more-than-five-minute-skewed cohort observations remain blocked; a fresh exact-head native incident plan is still needed to compare the emitted cohort with the live incident. |
 | P1 | Hourly product-development/review loop is not yet live in this repository environment. | The repository-local `.github/workflows/hourly-product-loop.yml` is intentionally `workflow_dispatch`-only because its direct contextual-orchestrator HTTP call is advisory and not a pinned OpenCode worker. The trusted central [`disksage-hourly-review-repair.yml`](https://github.com/ContextualWisdomLab/.github/blob/main/.github/workflows/disksage-hourly-review-repair.yml) runs at `37 * * * *` and dispatches the pinned scheduler `a3fdaa1aacaba9443a18573f3c309fe1841fc2f0`, which performs the OpenCode OIDC exchange. The local workflow still uploads a seven-day path-free receipt when manually configured; no external endpoint or deployment receipt is available here. | Verify one central scheduler receipt and one local manual advisory receipt; preserve read-only permissions, exact-head binding, and no provider-secret import or mutation. |
-| P1 | Open PR queue prevents a clean protected release line. | At this loop capture PR #213 is exact head `6f424af` on `feat/provider-sync-dynamic-goals`; its required checks reset after the provider-dump pipe repair and the prior review decision remains stale `CHANGES_REQUESTED`. The orphan cleanup follow-up is PR #245, initially implemented at `3d2406c` and subsequently extended with provider-sync and cleanup-refresh safety fixes. Both remain protected and unmerged pending exact-head review. | Process one PR at a time: current-head review → fix → required checks → fresh approval → normal protected merge; never bypass or self-approve. |
+| P1 | Open PR queue prevents a clean protected release line. | PR #213 is exact remote head `108bba0`, `CHANGES_REQUESTED`, with required checks queued; PR #246 functional head is `bda817d`, with later documentation-only tip commits, required checks queued, and no qualifying approval; PR #247 is exact head `347f699` with checks queued. | Process one PR at a time: current-head review → fix → required checks → fresh approval → normal protected merge; never bypass or self-approve. |
 | P1 | Current UI coverage is contract-heavy rather than runtime E2E for native File Provider states. | The UI now displays `로컬 최신본·업로드 미확인` and maps blockers without backend detail; provider operations are not safely reproducible on this full disk. Rust fixtures now cover `local-current + is_uploaded=false`, provider timeout, timeliness transitions, and receipt/evidence invalidation; native runtime E2E remains unavailable while the provider is unhealthy. | Keep the fixture-backed state machine green and add a bounded native E2E receipt only after a quiet provider observation is authoritative. |
 | P1 | Ontology/catalog integrations are export boundaries, not deployed services. | Naruon/semantic catalog and Zotero local API docs/contracts exist; no Noema/contextual-orchestrator runtime dependency is required. | Keep integrations optional and path-free; add live service tests only when a concrete consumer and secret boundary exist. |
 | P2 | 100% documentation/docstring and edge-case coverage is not yet evidenced. | Existing checks cover core Rust/TS behavior, not a repository-wide percentage claim. | Publish measured coverage per language and close high-risk edge paths before claiming 100%. |
@@ -50,6 +50,27 @@ authoritative, and no merge is claimed from queued or stale status.
 - ADR-0008 keeps the hourly contextual-orchestrator integration read-only at the foreign-repository and provider-secret boundaries.
 - Dynamic Goal/ADR projections are replaceable views over receipts; they cannot authorize mutation.
 - Rust remains the computation and security boundary. Noema, contextual-orchestrator, semantic-data-portal, pg-erd-cloud, fast-mlsirm, or Gemma are added only when a measured gap requires them and their boundary is documented first.
+
+## 2026-08-21 accessible Storybook UX contract
+
+- The Svelte shell now imports a primitive → semantic → component token hierarchy from
+  `src/lib/ui/design-tokens.css`, including dark-scheme panel overrides, forced-colors focus,
+  and reduced motion,
+  and 44px controls. The layout adds a skip link and the scan shell adds labelled controls,
+  keyboard-safe buttons, live completion feedback, and alert feedback without browser `alert()`.
+- `ProviderStatusCard` and Storybook 10.5 scenes cover clear, checking, incomplete provider
+  evidence, materialization stall, cancel callback, disabled action, mobile viewport, and reduced
+  motion states. The a11y addon is configured to fail a story on detected violations; Storybook is
+  development-only and cannot authorize cloud writes or source eviction.
+- Local evidence at this implementation snapshot: `npm test` 34 files/138 tests, `npm run coverage`
+  100% statements/branches/functions/lines, `svelte-check`
+  0 errors/0 warnings, `npm run build` passed, `npm run build-storybook` passed, and the
+  Storybook test runner passed 5 smoke/interaction stories in Chromium. The production and
+  development dependency audit reported 0 vulnerabilities after the uuid override. The Storybook
+  bundle emits a non-blocking >500 KiB axe chunk advisory; no runtime bundle includes Storybook.
+- Standards adopted for this slice are WCAG 2.2, WAI-ARIA APG, Design Tokens Format Module
+  2025.10, and Storybook accessibility testing. No Figma File ID exists for this change; ADR-0010
+  records that boundary and requires a superseding ADR when a Figma handoff is approved.
 
 ## 2026-08-21 loop evidence
 
@@ -624,7 +645,7 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 
 ## 2026-08-21 exact-head native staging and OneDrive runtime follow-up
 
-- DiskSage source head `3704dd1` closes the native-copy cleanup race identified in the P0 gap:
+- DiskSage source head `e6c6e34` records the native-copy cleanup race fix identified in the P0 gap:
   macOS now copies into a command-owned `tempfile` directory, verifies bytes and source identity,
   and finalizes with bounded `/bin/mv -n`; timeout/helper failure drops only that owned staging
   directory and cannot remove a provider-owned final destination. Successful copies continue to
@@ -654,6 +675,71 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   and retained SQLite `databaseInitError` code 11. The provider is therefore still not quiet or
   complete; DiskSage keeps copy, attestation, and eviction fail-closed. This separates the active
   provider-index backlog from the earlier low-space pressure incident.
+## 2026-08-21 exact-head ecosystem audit
+
+- DiskSage PR #246 functional head is `bda817d`; later tip commits are documentation-only, required
+  checks are queued, and no qualifying approval exists. The
+  follow-up provider evidence PR #247 is at `347f699`. The UX now renders
+  `ProviderStatusCard` in the running CloudArchive screen, so a stuck Finder copy is visible as a
+  provider-sync-incomplete/materialization-stalled state with elapsed time and a bounded cancel
+  request. This is cancellation guidance only; it grants no copy, attestation, or eviction authority.
+- The iCloud UX exposes `pending_indexable_count` and labels the corresponding admission blocker;
+  the latest bounded live observation recorded 13,737 pending indexable items, a 12,449-entry
+  reconciliation backlog, one no-progress fetch, active transfer markers, and filename/root
+  exclusions `18/2`. The displayed action remains read-only/cancel-only.
+- Naruon PR #1443 remains open at `d61d316f67e130f951ef8d769c6d148b9bf7b9d0`; follow-up PR #1448
+  is published at `0b1b1773130acdf472ed168b5d6a26e6ec11e1cb`; backend, security,
+  frontend, Noema, and CodeQL checks are successful, but coverage is queued and the metadata-only
+  gate is failing. Both PRs remain blocked by current-head hosted checks/review gates; no bypass or
+  self-approval was used.
+- semantic-data-portal PR #59 remains open at `65e4fd770c69192daafe51854eb73eb2f06f0bf4` with
+  completed substantive checks successful, but protected review is still required. PR #61 remains
+  open at `0c248d288be4ef9a01cd498b7311157b053a63e1`; its CodeQL failures came from the hosted
+  service response `No server is currently available to service your request`, and the historical
+  run cannot be retried through GitHub's API, so the PR is not represented as green.
+- The user-referenced fast-mlsirm PR #160 is closed without merge (`merged_at=null`). DiskSage has
+  not introduced an unverified LLM-as-a-Judge dependency; its copy and eviction gates remain
+  deterministic and fail closed until a current, reviewed fast-mlsirm integration exists.
+## 2026-08-21 third-party provider probe backoff
+
+- CloudArchive now retries clear OneDrive/Google Drive observations on the one-minute loop but backs
+  off blocked or failed global-sync probes for five minutes. Explicit Finder-copy cancellation and
+  provider-client recovery force a fresh read; no provider data, cloud object, or source file is
+  mutated by this UI-only scheduling change.
+
+## 2026-08-21 23:38 +0900 progress-aware Finder-stall clock
+
+- UX exact head now resets the iCloud stall interval when the blocked observation's upload,
+  download, indexing, or materialization fingerprint changes. Only the first observation after an
+  application restart may restore the backend's persisted blocker-set timestamp. This prevents an
+  actively progressing transfer from being mislabeled as a long-lived Finder stall; the cancel-only
+  action and fail-closed copy/attestation/eviction gates are unchanged.
+- `npm run check` passed with 0 errors/0 warnings, Vitest passed 34 files/138 tests, production
+  build passed, and Storybook Chromium interaction/a11y passed 5/5. Generated Storybook output was
+  removed after validation; no provider or user data was touched.
+
+## 2026-08-22 iCloud stall-counter clock regression
+
+- Current-head review found that the UX combined genuine progress fields with fluctuating
+  no-progress/materialization/timeout counters. A long-lived Finder preparation could therefore
+  reset its 15-minute warning on every diagnostic poll. The fix isolates the progress fingerprint,
+  preserves a real-progress reset on the next poll, and keeps the existing provider timestamp for a
+  newly blocked admission. Four focused clock tests and the CloudArchive contract suite pass locally;
+  PR #246 remains subject to fresh hosted checks and approval.
+
+## 2026-08-22 safe default scan root
+
+- The generic macOS scan previously offered `/` first, allowing an accidental initial scan to
+  enumerate cloud-provider placeholder trees and amplify FileProvider reconciliation. The command
+  now orders an existing `~/Downloads`, then `$HOME`, then `/`; explicit root selection remains
+  available. The focused Rust root-order test passes, and cloud copy/eviction authority remains
+  unchanged.
+
+## 2026-08-22 iCloud admission card fail-closed guard
+
+- The iCloud card now uses the explicit admission state as a blocker signal in addition to blocker
+  codes. This prevents a partial provider report with `blocked` and an empty code list from showing
+  a misleading clear status; copy, attestation, and eviction gates remain unchanged.
 
 ## 2026-08-22 readiness verifier integration boundary
 
@@ -677,5 +763,13 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - The exact-head fix `a6ec6e2` starts the bounded `lsof` active-use probe in a private process group
   and kills that group before joining output readers on timeout. This closes the shell-descendant
   pipe leak that could starve the independent `ps` probe and report a false active-use timeout.
-  The focused Rust test passed 3/3. The same patch is present on stacked PR heads `a0fa7bc` (#247)
-  and `741ab30` (#246); hosted checks are rerunning and protected merge/review is still pending.
+  The focused Rust test passed 3/3. The same patch is present on stacked PR heads `67873b2` (#247)
+  and `44756d1` (#246); hosted checks are rerunning and protected merge/review is still pending.
+
+## 2026-08-22 indexing backlog stall-clock correction
+
+- A rising `pending_indexable_count` no longer resets the UX stall interval; only a drained backlog
+  or actual upload/download progress does. Unknown backlog values remain non-progress evidence.
+  This keeps the “몇 시간째 준비 중” warning actionable when File Provider keeps adding work.
+  Seven focused Vitest tests pass and `svelte-check` reports 0 errors/0 warnings at source head
+  `44756d1`.

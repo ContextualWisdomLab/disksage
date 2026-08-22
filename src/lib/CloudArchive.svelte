@@ -16,7 +16,9 @@
   } from "./cloudReviewQueue";
   import { boundedCloudArchiveErrorMessage } from "./cloudArchiveErrorFeedback";
   import { fmtBytes } from "./fmt";
+  import { updateIcloudHealthStallClock } from "./icloudHealthStallClock";
   import IcloudLocalEviction from "./IcloudLocalEviction.svelte";
+  import ProviderStatusCard from "./ux/ProviderStatusCard.svelte";
 
   const RECONCILIATION_INTERVAL_MS = 60_000;
   // fileproviderctl can spend tens of seconds inside the system provider database while iCloud is
@@ -492,32 +494,19 @@
     try {
       const observedAtMs = Date.now();
       const next = await api.inspectIcloudNewCopyAdmission();
-      const activity = next.file_provider_activity;
-      const fingerprint = [
-        next.new_copy_admission_state,
-        next.new_copy_admission_blockers.join(","),
-        activity?.no_progress_fetch_count ?? 0,
-        activity?.no_progress_create_count ?? 0,
-        activity?.materialization_failure_count ?? 0,
-        activity?.staged_item_missing_count ?? 0,
-        activity?.active_upload_count ?? 0,
-        activity?.active_download_count ?? 0,
-        activity?.active_upload_progress_millionths ?? "",
-        activity?.active_download_progress_millionths ?? "",
-        activity?.timed_out ?? false,
-      ].join("|");
-      const admissionClear = next.new_copy_admission_state === "clear"
-        && next.new_copy_admission_blockers.length === 0;
-      if (admissionClear) {
-        icloudHealthBlockedSinceMs = 0;
-        icloudHealthFingerprint = "";
-      } else if (icloudHealthFingerprint !== fingerprint) {
-        icloudHealthBlockedSinceMs = observedAtMs;
-        icloudHealthFingerprint = fingerprint;
-      }
+      const stallClock = updateIcloudHealthStallClock(
+        icloudHealth,
+        { blockedSinceMs: icloudHealthBlockedSinceMs, fingerprint: icloudHealthFingerprint },
+        next,
+        observedAtMs,
+      );
+      icloudHealthBlockedSinceMs = stallClock.blockedSinceMs;
+      icloudHealthFingerprint = stallClock.fingerprint;
       icloudHealth = next;
       icloudHealthNextCheckAt = observedAtMs
-        + (admissionClear ? RECONCILIATION_INTERVAL_MS : ICLOUD_HEALTH_BLOCKED_RETRY_INTERVAL_MS);
+        + (stallClock.fingerprint === ""
+          ? RECONCILIATION_INTERVAL_MS
+          : ICLOUD_HEALTH_BLOCKED_RETRY_INTERVAL_MS);
     } catch (e) {
       icloudHealth = null;
       icloudHealthError = boundedCloudArchiveErrorMessage("icloud-health", e);
@@ -796,6 +785,7 @@
       "icloud-file-provider-materialization-failed": "File Provider 파일 materialization이 실패함(staged item 없음)",
       "icloud-file-provider-filename-excluded": "iCloud가 파일 이름 때문에 동기화에서 제외한 항목이 있음",
       "icloud-file-provider-root-excluded": "iCloud가 동기화 루트에서 제외한 항목이 있음",
+      "icloud-file-provider-indexing-pending": "iCloud File Provider 메타데이터 색인 대기 항목이 있음",
       "icloud-file-provider-transfer-active": "File Provider 기존 upload/download가 진행 중임",
       "icloud-file-provider-dump-timeout": "File Provider 상태 확인이 시간 초과됨",
       "icloud-file-provider-dump-output-truncated": "File Provider 상태 증거가 잘려 불완전함",
@@ -820,6 +810,53 @@
       "provider-global-sync-probe-timeout": "공급자 동기화 상태 확인이 시간 초과됨",
     };
     return labels[blocker] ?? blocker;
+  }
+
+  function providerStatusState(
+    hasObservation: boolean,
+    blocked: boolean,
+    blockedSinceMs: number,
+    observedAtMs: number,
+    error = false,
+  ): "clear" | "checking" | "provider-sync-incomplete" | "materialization-stalled" {
+    if (!hasObservation && !error) return "checking";
+    if (!blocked && !error) return "clear";
+    // A probe failure never observed real provider evidence, so it must not escalate into
+    // "materialization-stalled" — that label asserts a specific, observed stall condition.
+    if (error) return "provider-sync-incomplete";
+    return observedAtMs > 0
+      && blockedSinceMs > 0
+      && observedAtMs - blockedSinceMs >= PROVIDER_STALL_WARNING_MS
+      ? "materialization-stalled"
+      : "provider-sync-incomplete";
+  }
+
+  function blockedDuration(
+    blockedSinceMs: number,
+    observedAtMs: number,
+  ): string | undefined {
+    return blockedSinceMs > 0 && observedAtMs > 0
+      ? duration(Math.max(0, observedAtMs - blockedSinceMs))
+      : undefined;
+  }
+
+  function icloudStatusDetails(): string {
+    if (!icloudHealth) return icloudHealthError || "iCloud File Provider 상태 증거를 확인하는 중입니다.";
+    const activity = icloudHealth.file_provider_activity;
+    const pending = activity?.pending_indexable_count ?? 0;
+    const blockers = icloudHealth.new_copy_admission_blockers.map(icloudBlockerLabel);
+    return blockers.length > 0
+      ? `새 복사 차단: ${blockers.join(", ")} · 색인 대기 ${pending.toLocaleString()}개`
+      : "iCloud 전역 동기화 대기열이 비어 있습니다. 개별 파일 증거를 확인하십시오.";
+  }
+
+  function providerGlobalStatusDetails(): string {
+    if (!providerGlobalSync) return providerGlobalSyncError || "공급자 전역 동기화 상태를 확인하는 중입니다.";
+    const blockers = providerGlobalSync.blockers.map(providerGlobalSyncBlockerLabel);
+    const pending = providerGlobalSync.pending_indexable_count ?? 0;
+    return blockers.length > 0
+      ? `새 복사 차단: ${blockers.join(", ")} · 색인 대기 ${pending.toLocaleString()}개`
+      : "공급자 전역 동기화 대기열이 비어 있습니다. 개별 파일 증거를 확인하십시오.";
   }
 
   function duration(ms: number): string {
@@ -909,6 +946,38 @@
       </div>
     {/if}
     {#if reconciliationError}<p class="error" role="alert">{reconciliationError}</p>{/if}
+    {#if selectedRootDetails()?.provider === "icloud"}
+      <ProviderStatusCard
+        provider="iCloud"
+        state={providerStatusState(
+          Boolean(icloudHealth),
+          icloudHealth?.new_copy_admission_state !== "clear"
+            || (icloudHealth?.new_copy_admission_blockers.length ?? 0) > 0,
+          icloudHealthBlockedSinceMs,
+          icloudHealth?.observed_at_ms ?? 0,
+          Boolean(icloudHealthError),
+        )}
+        details={icloudStatusDetails()}
+        observedAt={icloudHealth ? evidenceObservedAt(icloudHealth.observed_at_ms) : undefined}
+        blockedFor={blockedDuration(icloudHealthBlockedSinceMs, icloudHealth?.observed_at_ms ?? 0)}
+        canCancel={Boolean(icloudHealth?.file_provider_activity && (
+          icloudHealth.file_provider_activity.no_progress_fetch_count > 0
+          || icloudHealth.file_provider_activity.no_progress_create_count > 0
+          || icloudHealth.file_provider_activity.materialization_failure_count > 0
+          || icloudHealth.file_provider_activity.staged_item_missing_count > 0
+          || icloudHealth.file_provider_activity.sync_excluded_filename_count > 0
+          || icloudHealth.file_provider_activity.sync_excluded_root_count > 0
+          || (icloudHealth.file_provider_activity.pending_indexable_count ?? 0) > 0
+          || icloudHealth.file_provider_activity.timed_out
+          || icloudHealth.file_provider_activity.active_upload_count > 0
+          || icloudHealth.file_provider_activity.active_download_count > 0
+        ))}
+        cancelDisabled={checkingIcloudHealth}
+        cancelLabel={cancellingFinderCopy ? "Finder 복사 취소 요청 중…" : "Finder 복사 취소 요청"}
+        onCancel={cancelFinderCopy}
+        statusId="icloud-provider-status"
+      />
+    {/if}
     {#if icloudHealth}
       <div class="receipt-reconciliation" aria-live="polite">
         <strong>iCloud 새 복사 admission</strong>
@@ -921,6 +990,8 @@
           {#if icloudHealth.file_provider_activity}
             · File Provider 무진행 fetch {icloudHealth.file_provider_activity.no_progress_fetch_count}개 / create {icloudHealth.file_provider_activity.no_progress_create_count}개 ·
             materialization 실패 {icloudHealth.file_provider_activity.materialization_failure_count}개 / staged item 없음 {icloudHealth.file_provider_activity.staged_item_missing_count}개 ·
+            sync 제외(파일명) {icloudHealth.file_provider_activity.sync_excluded_filename_count}개 / 루트 {icloudHealth.file_provider_activity.sync_excluded_root_count}개 ·
+            색인 대기 {icloudHealth.file_provider_activity.pending_indexable_count ?? 0}개 ·
             활성 upload {icloudHealth.file_provider_activity.active_upload_count}개 / download {icloudHealth.file_provider_activity.active_download_count}개
           {/if}
         </span>
@@ -946,6 +1017,9 @@
             || icloudHealth.file_provider_activity.no_progress_create_count > 0
             || icloudHealth.file_provider_activity.materialization_failure_count > 0
             || icloudHealth.file_provider_activity.staged_item_missing_count > 0
+            || icloudHealth.file_provider_activity.sync_excluded_filename_count > 0
+            || icloudHealth.file_provider_activity.sync_excluded_root_count > 0
+            || (icloudHealth.file_provider_activity.pending_indexable_count ?? 0) > 0
             || icloudHealth.file_provider_activity.timed_out
             || icloudHealth.file_provider_activity.active_upload_count > 0
             || icloudHealth.file_provider_activity.active_download_count > 0
@@ -967,6 +1041,12 @@
               새 복사·attestation·원본 정리는 상태가 정상화될 때까지 차단합니다.
             </p>
           {/if}
+          {#if icloudHealth.file_provider_activity && (icloudHealth.file_provider_activity.sync_excluded_filename_count > 0 || icloudHealth.file_provider_activity.sync_excluded_root_count > 0)}
+            <p class="warning">
+              iCloud가 파일명 또는 동기화 루트 제약으로 항목을 제외했습니다. 이 상태의 Finder 복사는 완료로 간주하지 않으며,
+              제외 항목을 해소하고 새 provider 증거가 clear가 될 때까지 새 복사·attestation·원본 정리를 차단합니다.
+            </p>
+          {/if}
           {#if icloudHealth.file_provider_activity?.timed_out}
             <p class="warning">
               File Provider 상태 확인이 제한시간을 넘었습니다. Finder에 남은 복사 대기를 취소하고,
@@ -977,6 +1057,12 @@
             <p class="warning">
               iCloud에 기존 전송이 진행 중입니다. 기존 upload/download가 끝나고 새 복사 admission이
               clear가 될 때까지 Finder 복사와 원본 정리를 진행하지 않습니다.
+            </p>
+          {/if}
+          {#if (icloudHealth.file_provider_activity?.pending_indexable_count ?? 0) > 0}
+            <p class="warning">
+              iCloud File Provider에 메타데이터 색인 대기 항목이 {icloudHealth.file_provider_activity?.pending_indexable_count}개 있습니다.
+              Finder의 “복사 준비 중” 단계가 이 대기열을 기다릴 수 있으므로, 색인 대기와 기존 전송이 해소되기 전에는 복사를 완료로 간주하지 않습니다.
             </p>
           {/if}
           {#if icloudHealthBlockedSinceMs > 0 && icloudHealth.observed_at_ms - icloudHealthBlockedSinceMs >= PROVIDER_STALL_WARNING_MS}
@@ -1013,7 +1099,42 @@
         로컬 여유공간을 확보한 뒤 DiskSage에서 상태를 다시 확인하십시오.
       </p>
     {/if}
+    {#if selectedRootDetails()?.provider !== "icloud" && providerGlobalSyncError && !providerGlobalSync}
+      <ProviderStatusCard
+        provider={selectedRootDetails()?.provider ?? "공급자"}
+        state={providerStatusState(
+          false,
+          true,
+          providerGlobalSyncBlockedSinceMs,
+          providerGlobalSyncObservedAtMs,
+          true,
+        )}
+        details={providerGlobalStatusDetails()}
+        observedAt={providerGlobalSyncObservedAtMs > 0
+          ? evidenceObservedAt(providerGlobalSyncObservedAtMs)
+          : undefined}
+        blockedFor={blockedDuration(providerGlobalSyncBlockedSinceMs, providerGlobalSyncObservedAtMs)}
+        statusId="provider-global-sync-error-status"
+      />
+    {/if}
     {#if providerGlobalSync}
+      <ProviderStatusCard
+        provider={providerGlobalSync.provider}
+        state={providerStatusState(
+          true,
+          providerGlobalSync.blockers.length > 0,
+          providerGlobalSyncBlockedSinceMs,
+          providerGlobalSyncObservedAtMs,
+        )}
+        details={providerGlobalStatusDetails()}
+        observedAt={evidenceObservedAt(providerGlobalSyncObservedAtMs)}
+        blockedFor={blockedDuration(providerGlobalSyncBlockedSinceMs, providerGlobalSyncObservedAtMs)}
+        canCancel={canCancelFinderCopyForProviderGlobalSync(providerGlobalSync)}
+        cancelDisabled={checkingProviderGlobalSync}
+        cancelLabel={cancellingFinderCopy ? "Finder 복사 취소 요청 중…" : "Finder 복사 취소 요청"}
+        onCancel={cancelFinderCopy}
+        statusId="provider-global-sync-status"
+      />
       <div class="receipt-reconciliation" aria-live="polite">
         <strong>{providerGlobalSync.provider} 전역 동기화 admission</strong>
         <span class="context">

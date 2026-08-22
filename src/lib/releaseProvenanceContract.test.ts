@@ -216,7 +216,7 @@ describe('release artifact provenance contract', () => {
     },
   );
 
-  it('keeps buyer verification and authoritative provenance references discoverable', () => {
+  it('keeps operator verification and authoritative provenance references discoverable', () => {
     const doctoring = readRepositoryFile('docs/doctoring/release-artifact-provenance.md');
     const changelog = readRepositoryFile('CHANGELOG.md');
 
@@ -226,6 +226,6 @@ describe('release artifact provenance contract', () => {
     expect(doctoring).toContain('SLSA Provenance v1');
     expect(doctoring).toContain('in-toto Statement v1');
     expect(doctoring).toContain('APA 7th references');
-    expect(changelog).toContain('buyer-verifiable release artifact provenance');
+    expect(changelog).toContain('operator-verifiable release artifact provenance');
   });
 });

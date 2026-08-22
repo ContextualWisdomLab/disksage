@@ -15,6 +15,7 @@ new numbered record rather than rewriting history.
 | [0007](0007-pre-copy-evidence-cohort.md) | Gate iCloud plans on a fresh evidence cohort | Accepted |
 | [0008](0008-hourly-loop-foreign-dependencies-read-only.md) | Keep the hourly loop read-only at foreign dependency boundaries | Accepted |
 | [0009](0009-path-free-lineage-relation-graph.md) | Export a path-free lineage relation graph | Accepted |
+| [0010](0010-accessible-storybook-ux-contracts.md) | Accessible Storybook UX contracts and design tokens | Proposed |
 
 New records must state context, decision, consequences, rejected alternatives, and the evidence or
 standard that led to the decision. A record never grants cloud-write or source-eviction authority;
