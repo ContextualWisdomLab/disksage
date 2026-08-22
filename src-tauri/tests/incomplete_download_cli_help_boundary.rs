@@ -1,9 +1,17 @@
+#![cfg(feature = "cloud-cli")]
 //! Black-box host-argument regressions for incomplete-download operator CLIs.
 //!
 //! Help is a terminal, side-effect-free operator boundary: it must not require HOME,
 //! cloud discovery, provider capacity, private evidence, or execution authority. Host
 //! arguments that cannot be decoded as UTF-8 and opaque invalid host input must fail
 //! closed through bounded diagnostics without reflection or a Rust panic.
+//!
+//! `disksage-incomplete-download-destination-plan` and `disksage-incomplete-download-materialize`
+//! are `required-features = ["cloud-cli"]` binaries, so `env!("CARGO_BIN_EXE_...")` below only
+//! resolves to a binary that actually exists when this feature is enabled. Gate the whole file on
+//! it (matching provider_oauth_cli_process.rs) so the base `cargo test` run — which builds without
+//! `--features cloud-cli` — skips this file instead of failing to spawn a binary that was never
+//! built.
 
 use std::process::Command;
 

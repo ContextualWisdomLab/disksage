@@ -41,6 +41,8 @@ jobs:
         run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-cloud-plan
       - name: Provider OAuth CLI process contract
         run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --test provider_oauth_cli_process
+      - name: Incomplete-download CLI help boundary contract
+        run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --test incomplete_download_cli_help_boundary
       - name: Exact duplicate audit tests
         run: |
           cargo test --manifest-path src-tauri/Cargo.toml --lib --features cloud-cli duplicate_audit
