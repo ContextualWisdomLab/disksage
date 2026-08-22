@@ -99,6 +99,58 @@ fn assert_audit_duplicate_bound_is_rejected(binary: &str) {
     assert!(!stderr.is_empty(), "duplicate-option failure must remain visible");
 }
 
+/// Produce the exact candidate-set fingerprint for an empty repository through the real audit CLI.
+fn empty_repository_fingerprint(audit_binary: &str, repository: &std::path::Path) -> String {
+    let output = Command::new(audit_binary)
+        .env_remove("HOME")
+        .arg("--repository-root")
+        .arg(repository)
+        .output()
+        .expect("DiskSage Maven audit CLI must launch for prune-fixture preparation");
+    assert!(
+        output.status.success(),
+        "empty repository audit must succeed before the prune duplicate-option check: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("audit stdout must remain valid JSON");
+    report["candidate_set_fingerprint"]
+        .as_str()
+        .expect("audit report must contain its candidate-set fingerprint")
+        .to_string()
+}
+
+/// Require duplicate prune options to fail before a fingerprint-valid dry-run can execute.
+fn assert_prune_duplicate_bound_is_rejected(audit_binary: &str, prune_binary: &str) {
+    let repository = tempfile::tempdir().expect("empty Maven repository fixture must be created");
+    let fingerprint = empty_repository_fingerprint(audit_binary, repository.path());
+    let output = Command::new(prune_binary)
+        .env_remove("HOME")
+        .arg("--repository-root")
+        .arg(repository.path())
+        .args([
+            "--expected-candidate-set-fingerprint",
+            fingerprint.as_str(),
+            "--max-entries",
+            "1",
+            "--max-entries",
+            "2",
+        ])
+        .output()
+        .expect("DiskSage Maven prune CLI must launch for duplicate-option validation");
+
+    assert!(
+        !output.status.success(),
+        "duplicate --max-entries must be rejected instead of executing a fingerprint-valid dry-run"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "duplicate-option failure must not emit a successful Maven prune document"
+    );
+    let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must remain valid UTF-8");
+    assert!(!stderr.is_empty(), "duplicate-option failure must remain visible");
+}
+
 #[cfg(unix)]
 fn assert_non_utf8_argument_is_bounded(binary: &str) {
     use std::ffi::OsString;
@@ -145,12 +197,14 @@ fn maven_cache_audit_help_is_successful_and_invalid_arguments_are_bounded() {
 /// Prove the Maven prune command's exact help and bounded invalid-input contract.
 #[test]
 fn maven_cache_prune_help_is_successful_and_invalid_arguments_are_bounded() {
+    let audit_binary = env!("CARGO_BIN_EXE_disksage-maven-cache-audit");
     let binary = env!("CARGO_BIN_EXE_disksage-maven-cache-prune");
     let expected_usage = "usage: disksage-maven-cache-prune --repository-root ABSOLUTE_PATH --expected-candidate-set-fingerprint HEX [--apply] [--max-entries N] [--output NEW_ABSOLUTE_JSON_PATH]";
     assert_help_success(binary, "--help", expected_usage);
     assert_help_success(binary, "-h", expected_usage);
     assert_invalid_argument_is_bounded(binary);
     assert_help_does_not_hide_invalid_argument(binary);
+    assert_prune_duplicate_bound_is_rejected(audit_binary, binary);
     #[cfg(unix)]
     assert_non_utf8_argument_is_bounded(binary);
 }
