@@ -263,8 +263,20 @@ fn read_capacity_snapshot(path: &Path) -> Result<CloudCapacitySnapshot, String> 
 }
 
 #[cfg(not(coverage))]
+fn host_args() -> Result<Vec<String>, String> {
+    std::env::args_os()
+        .skip(1)
+        .map(|argument| {
+            argument
+                .into_string()
+                .map_err(|_| "invalid-argument-encoding".to_string())
+        })
+        .collect()
+}
+
+#[cfg(not(coverage))]
 fn run() -> Result<(), String> {
-    let raw = std::env::args().skip(1).collect::<Vec<_>>();
+    let raw = host_args()?;
     if raw.len() == 1 && matches!(raw[0].as_str(), "--help" | "-h") {
         println!("{}", usage());
         return Ok(());
