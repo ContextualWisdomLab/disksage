@@ -29,17 +29,19 @@ describe('Test workflow coverage evidence contract', () => {
   it('measures Rust branch coverage instead of synthesizing percentages', () => {
     expect(workflow).toContain('tool: cargo-llvm-cov');
     expect(workflow).toContain(
-      'cargo llvm-cov --all-features --manifest-path src-tauri/Cargo.toml --branch --json --output-path coverage.json',
+      'cargo llvm-cov --no-cfg-coverage --no-cfg-coverage-nightly --all-features --manifest-path src-tauri/Cargo.toml --branch --json --output-path coverage.json',
     );
     expect(workflow).not.toContain('--summary-only');
     expect(workflow).toContain('coverage.json');
     expect(workflow).toContain('coverage-evidence.json');
   });
 
-  it('keeps the deterministic coverage cfg boundary enabled', () => {
-    expect(workflow).toContain('cargo llvm-cov --all-features --manifest-path src-tauri/Cargo.toml');
-    expect(workflow).not.toContain('--no-cfg-coverage');
-    expect(workflow).not.toContain('--no-cfg-coverage-nightly');
+  it('keeps coverage instrumentation from changing production cfg semantics', () => {
+    expect(workflow).toContain(
+      'cargo llvm-cov --no-cfg-coverage --no-cfg-coverage-nightly --all-features --manifest-path src-tauri/Cargo.toml',
+    );
+    expect(workflow).toContain('--no-cfg-coverage');
+    expect(workflow).toContain('--no-cfg-coverage-nightly');
   });
 
   it('preserves bounded exact-head metric diagnostics when the 100% gate fails', () => {
