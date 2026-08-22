@@ -114,6 +114,7 @@ textarea {
       "docs/doctoring/release-version-contract.md",
       "docs/doctoring/release-artifact-provenance.md",
       "scripts/ci/release-version.mjs",
+      "src-tauri/src/preferred_scan_roots.rs",
     ];
     for (const file of files) expect(read(file).toLowerCase()).not.toMatch(/\bbuyer\b/);
   });

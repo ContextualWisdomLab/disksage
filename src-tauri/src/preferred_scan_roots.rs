@@ -1,4 +1,4 @@
-//! Buyer-facing initial scan-root ordering for the desktop UX.
+//! Operator-facing initial scan-root ordering for the desktop UX.
 //!
 //! The provider/cloud command owner may evolve independently underneath this stacked UX lane.
 //! Keeping the first-scan preference here prevents a Storybook/UX restack from rewriting provider
