@@ -124,6 +124,27 @@ fn assert_help_does_not_hide_invalid_argument(binary: &Path, help_flag: &str) {
     );
 }
 
+fn assert_duplicate_option_is_bounded(binary: &Path, duplicate_args: &[&str]) {
+    let output = Command::new(binary)
+        .args(duplicate_args)
+        .output()
+        .expect("DiskSage CLI must launch for duplicate-option validation");
+    assert!(
+        !output.status.success(),
+        "duplicate options must remain a non-zero argument failure: {duplicate_args:?}"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "duplicate-option failure must not emit a successful evidence document"
+    );
+    let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must remain valid UTF-8");
+    assert!(!stderr.is_empty(), "duplicate-option failure must remain visible");
+    assert!(
+        !stderr.contains("panicked") && !stderr.contains("thread 'main'"),
+        "duplicate-option input must stay inside the bounded argument-error path"
+    );
+}
+
 #[cfg(unix)]
 fn assert_non_utf8_argument_is_bounded(binary: &Path) {
     use std::os::unix::ffi::OsStringExt;
@@ -166,5 +187,29 @@ fn successful_help_is_strictly_terminal_and_invalid_input_stays_bounded() {
         assert_help_does_not_hide_invalid_argument(binary, "-h");
         #[cfg(unix)]
         assert_non_utf8_argument_is_bounded(binary);
+    }
+}
+
+#[test]
+fn duplicate_options_fail_before_operational_domain_work() {
+    let (_target_dir, binaries) = build_operational_binaries();
+    for (binary, _) in &binaries {
+        let file_name = binary
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("test binary name must be UTF-8");
+        if file_name.starts_with("disksage-reclaim-plan") {
+            assert_duplicate_option_is_bounded(
+                binary,
+                &["--operation", "trash", "--operation", "delete"],
+            );
+        } else if file_name.starts_with("disksage-podman-reclaim-plan") {
+            assert_duplicate_option_is_bounded(
+                binary,
+                &["--timeout-seconds", "1", "--timeout-seconds", "2"],
+            );
+        } else {
+            assert_duplicate_option_is_bounded(binary, &["--path", ".", "--path", "."]);
+        }
     }
 }
