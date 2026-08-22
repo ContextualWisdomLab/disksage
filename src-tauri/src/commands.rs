@@ -1241,7 +1241,7 @@ pub fn inspect_icloud_new_copy_admission(
 ) -> Result<icloud_sync_health::IcloudSyncHealthReport, String> {
     let home = resolve_home(&app)?;
     let mut report = icloud_sync_health::inspect_new_copy_admission(&home, cloud::system_now_ms())?;
-    if !persist_icloud_health_evidence(&app, &report) {
+    if !persist_icloud_health_evidence(&app, &mut report) {
         report
             .notices
             .push("icloud-sync-health-evidence-persistence-failed".into());
@@ -1275,15 +1275,17 @@ struct CloudPlanningOutput {
 #[cfg(not(coverage))]
 fn persist_icloud_health_evidence(
     app: &AppHandle,
-    report: &icloud_sync_health::IcloudSyncHealthReport,
+    report: &mut icloud_sync_health::IcloudSyncHealthReport,
 ) -> bool {
-    app.path()
-        .app_data_dir()
-        .ok()
-        .and_then(|app_data_dir| {
-            icloud_sync_health::write_icloud_sync_health_evidence(&app_data_dir, report).ok()
-        })
-        .is_some()
+    let Some(app_data_dir) = app.path().app_data_dir().ok() else {
+        return false;
+    };
+    if icloud_sync_health::write_icloud_sync_health_evidence(&app_data_dir, report).is_err() {
+        return false;
+    }
+    report.admission_blocked_since_ms =
+        icloud_sync_health::admission_blocked_since_ms(&app_data_dir, report);
+    true
 }
 
 #[cfg(not(coverage))]
@@ -1439,8 +1441,9 @@ fn cloud_plan_for_inputs(
     }
     let (icloud_health, provider_global_sync) = if selected.provider == cloud::CloudProvider::Icloud
     {
-        let health = icloud_sync_health::inspect_new_copy_admission(&home, cloud::system_now_ms()).ok();
-        if let Some(health) = health.as_ref() {
+        let mut health =
+            icloud_sync_health::inspect_new_copy_admission(&home, cloud::system_now_ms()).ok();
+        if let Some(health) = health.as_mut() {
             if !persist_icloud_health_evidence(app, health) {
                 report
                     .notices

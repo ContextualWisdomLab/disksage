@@ -1,9 +1,9 @@
 # DiskSage product and technical gap baseline
 
-**Snapshot:** 2026-08-22 (Asia/Seoul)
-**Repository heads at snapshot:** PR #213 `a6ec6e2`, PR #247 `a0fa7bc`, PR #246 `741ab30`,
-supporting PR #156 `39a08a7`, and PR #192 `30ceea2`; hosted checks and protected review remain
-authoritative, and no merge is claimed from queued or stale status.
+**Snapshot:** 2026-08-22 04:23 +0900 (Asia/Seoul)
+**Repository heads at snapshot:** the current exact-head inventory below supersedes earlier
+historical captures; hosted checks and protected review remain authoritative, and no merge is
+claimed from queued, stale, or bot-only status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
 
@@ -15,12 +15,35 @@ authoritative, and no merge is claimed from queued or stale status.
 4. Regenerable caches are a separate reclaim domain. They are per-child, identity-bound, active-use checked, journaled, and moved to OS Trash; they are not uploaded as user data.
 5. Deterministic Rust gates own safety. A local model may judge only the fixed maintenance command after dry-run evidence, calibration, and explicit human confirmation. No external LLM or OAuth service is a runtime prerequisite for the standalone product.
 
+## 2026-08-22 04:23 +0900 current protected PR inventory
+
+This is the current review queue captured from GitHub immediately before this snapshot. A commit
+SHA is authoritative only for the PR row where it appears; a later push invalidates predecessor
+checks and approvals.
+
+| PR | Exact head | Draft | Merge state | Review state | Current interpretation |
+| --- | --- | --- | --- | --- | --- |
+| #247 | `5a6b4ed8743be1adf11e4388c4db94829c2f3794` | yes | unstable | none | iCloud pending-indexing follow-up; checks running |
+| #246 | `09a63910c5e4bbb90bb6a7845de89f4dcef5af43` | no | clean | none | Storybook/accessibility contract; approvals still absent |
+| #244 | `6f7c73ccd6af3e177e7c3a643c244e76071c6184` | no | blocked | none | Rust 1.97.1 baseline; required OpenCode review queued |
+| #238 | `d44b23bdf4108bf6b6f6378f7e0ac305187deec6` | no | blocked | changes requested | mail-parser update; predecessor coverage review is stale |
+| #234 | `22bc81585257f409abf9f99a5db81184e84dafe9` | no | blocked | review required | ureq update; protected approval quorum absent |
+| #232 | `99db1d36f722aeb00b280793126064e4951e62be` | no | blocked | changes requested | @types/node update; predecessor decision is not current-head evidence |
+| #230 | `c7e4e623e9b691dcd6a24cad3cc492393cb5d83e` | no | blocked | review required | download-artifact update; protected approval quorum absent |
+| #228 | `1eb947ec9d4e591638230a8cb24af4d5b14ae35b` | yes | clean | none | private-evidence identity hardening; review pending |
+| #213 | `f40bd901bb8206e7051790dcd0e4a129548cda34` | yes | blocked | changes requested | provider sync/goals base; exact-head checks/review still required |
+| #156 | `fe99870baf099e1d7acf74dc197b048a5741e36e` | yes | blocked | review required | exact-head coverage/release contracts; checks running |
+
+No protected merge is inferred from `clean`, green predecessor checks, bot comments, or queued
+reviews. The queue is processed exact-head-first: review, repair, recheck, then normal protected
+merge.
+
 ## Buyer-observable product gaps
 
 | Priority | Gap / observable symptom | Evidence | Acceptance criterion |
 | --- | --- | --- | --- |
 | P0 | Cloud offload can remain blocked while a provider is syncing or reports `local-current`/`is_uploaded=false`; the user sees no safe reclaim despite free cloud capacity. | Existing provider-global and iCloud native-state gates; `bird`/`fileproviderd` remain active during the current incident, with about 3.8 GiB available at the latest observation. | UI explains the exact blocker, last evidence time, and next bounded retry; a verified provider attestation alone can advance a candidate, never a stale projection. |
-| P0 | A long Finder/provider copy can appear hung and consume the remaining local headroom. | The `real_datasets` Finder copy remained at “준비 중” for hours; the latest bounded iCloud dump retained 125 no-progress fetch/create markers, a 95.24% upload, and a zero-progress 1.06GB download while scheduling was `running`. Bounded `/bin/cp`/`mkdir` and global probes use private process groups and headroom gates. | Preview shows required bytes + staging reserve; timeout cleans only the child-created destination and leaves a durable receipt. |
+| P0 | A long Finder/provider copy can appear hung and consume the remaining local headroom. | A repeated exact-head iCloud dump remained unchanged for 21 seconds with `pending-indexable-count=12474`, upload `0/5038` at `0.0000`, active upload/download markers, and 18 filename plus 2 root exclusions. | UI reports the indexing backlog and stable blocker duration; Finder copy, attestation, and eviction remain fail-closed until a fresh quiet provider observation. |
 | P1 | Personal desktop-client capacity is not the same as API quota; OAuth is unnecessarily implied for a single-user installation. | ADR-0001 permits copy-only desktop-client mode marked `capacity-unverified`; the cloud connection UI defaults to read-only OAuth consent and requires an explicit write-access opt-in. | Settings clearly distinguish local desktop client, API quota, and organization OAuth; no OAuth prompt is required for the local-only path. |
 | P1 | Users cannot yet see a full lineage graph connecting source, metadata, archive member, provider item, receipt, Goal, and eviction decision. | The candidate UI now exposes a compact source→metadata→archive→provider lineage panel using the stable fingerprint, confidence, and blocker state; provider item/receipt/permit remain explicitly pending until their evidence exists. | Export and UI show stable content IDs, provenance edges, confidence, and blockers without exposing raw private paths. |
 | P1 | “Orphan”/duplicate cleanup is difficult to trust because relationship evidence is not visible before action. | Ontology and duplicate/orphan PRs are open; current default path remains fail-closed. | Every proposed removal has an explainable parent/child/duplicate relation, identity recheck, reversible Trash action, and a no-candidate result when evidence is incomplete. |
@@ -33,7 +56,7 @@ authoritative, and no merge is claimed from queued or stale status.
 | P0 | Provider end-to-end receipt is absent for the current iCloud incident. | Global probe can time out and CloudDocs state is intentionally not force-killed or deleted; the native copy boundary now requires an integrity-checked three-stream pre-copy cohort before mutation. | Capture a bounded fresh provider evidence receipt after sync settles; keep transfer/eviction disabled until it is complete. |
 | P0 | Disk pressure telemetry and provider queue evidence must remain comparable across loops without retaining raw provider output. | Cloud plans and explicit iCloud health refreshes persist bounded, path-free `LocalVolumeSnapshot`, `ProviderClientRuntimeSnapshot`, and `IcloudSyncHealthEvidenceSnapshot` records under `volume-pressure-evidence`, `provider-client-runtime-evidence`, and `icloud-sync-health-evidence`; iCloud plans now combine them into a timestamp/fingerprint-bound cohort. | Missing, incomplete, malformed, or more-than-five-minute-skewed cohort observations remain blocked; a fresh exact-head native incident plan is still needed to compare the emitted cohort with the live incident. |
 | P1 | Hourly product-development/review loop is not yet live in this repository environment. | The repository-local `.github/workflows/hourly-product-loop.yml` is intentionally `workflow_dispatch`-only because its direct contextual-orchestrator HTTP call is advisory and not a pinned OpenCode worker. The trusted central [`disksage-hourly-review-repair.yml`](https://github.com/ContextualWisdomLab/.github/blob/main/.github/workflows/disksage-hourly-review-repair.yml) runs at `37 * * * *` and dispatches the pinned scheduler `a3fdaa1aacaba9443a18573f3c309fe1841fc2f0`, which performs the OpenCode OIDC exchange. The local workflow still uploads a seven-day path-free receipt when manually configured; no external endpoint or deployment receipt is available here. | Verify one central scheduler receipt and one local manual advisory receipt; preserve read-only permissions, exact-head binding, and no provider-secret import or mutation. |
-| P1 | Open PR queue prevents a clean protected release line. | At this loop capture PR #213 is exact head `6f424af` on `feat/provider-sync-dynamic-goals`; its required checks reset after the provider-dump pipe repair and the prior review decision remains stale `CHANGES_REQUESTED`. The orphan cleanup follow-up is PR #245, initially implemented at `3d2406c` and subsequently extended with provider-sync and cleanup-refresh safety fixes. Both remain protected and unmerged pending exact-head review. | Process one PR at a time: current-head review → fix → required checks → fresh approval → normal protected merge; never bypass or self-approve. |
+| P1 | Open PR queue prevents a clean protected release line. | The current exact-head inventory above still has protected review/quorum gaps; PR #156 and #247 have checks running, while PR #244 has required OpenCode review queued. | Process one PR at a time: current-head review → fix → required checks → fresh approval → normal protected merge; never bypass or self-approve. |
 | P1 | Current UI coverage is contract-heavy rather than runtime E2E for native File Provider states. | The UI now displays `로컬 최신본·업로드 미확인` and maps blockers without backend detail; provider operations are not safely reproducible on this full disk. Rust fixtures now cover `local-current + is_uploaded=false`, provider timeout, timeliness transitions, and receipt/evidence invalidation; native runtime E2E remains unavailable while the provider is unhealthy. | Keep the fixture-backed state machine green and add a bounded native E2E receipt only after a quiet provider observation is authoritative. |
 | P1 | Ontology/catalog integrations are export boundaries, not deployed services. | Naruon/semantic catalog and Zotero local API docs/contracts exist; no Noema/contextual-orchestrator runtime dependency is required. | Keep integrations optional and path-free; add live service tests only when a concrete consumer and secret boundary exist. |
 | P2 | 100% documentation/docstring and edge-case coverage is not yet evidenced. | Existing checks cover core Rust/TS behavior, not a repository-wide percentage claim. | Publish measured coverage per language and close high-risk edge paths before claiming 100%. |
@@ -164,6 +187,23 @@ authoritative, and no merge is claimed from queued or stale status.
 ## Loop update rule
 
 At each scheduled or operator loop, update this file only with new dated evidence: current head, open-PR/check state, provider receipt state, disk headroom, and the smallest acceptance proof completed. Do not convert an incomplete provider probe, filename date, model answer, or GitHub review comment into a transfer or deletion authority.
+
+## 2026-08-21 23:30 +0900 live iCloud Finder-preparation receipt
+
+- The exact-head `disksage-icloud-sync-health` binary completed a bounded, read-only iCloud
+  observation. The report was `evidence_complete=true`, native status `needs-sync-up` plus
+  `needs-sync-down`, and File Provider activity schema 3 with one no-progress fetch, active
+  upload/download markers at `953100`/`988500` millionths, and `pending_indexable_count=17547`.
+  The upload queue also retained six `blocked_on_sync_up` items; 18 filename exclusions and two
+  root exclusions were observed. New-copy admission is `blocked`; `mutation_performed=false`.
+- `fileproviderctl` also showed active iCloud materialization/fetch jobs and a roughly 14,965-entry
+  reconciliation backlog. This is consistent with the Finder `real_datasets` “복사 준비 중”
+  symptom, but it is not a per-item copy receipt. DiskSage keeps copy, attestation, and source
+  eviction fail-closed until a fresh complete quiet observation and per-item provider evidence
+  exist. No Finder/provider daemon, CloudDocs database, cloud object, or source file was changed.
+- Current exact PR heads are UX #246 `fc9f4a4c465fc5ef355f7fbf552ff4295cf4f609` and provider
+  #247 `45214018dff43c6ba7c71253bc50e8c0eab0e1bd`; their hosted checks remain pending, while
+  local Rust/UX validation is green. The live observation does not authorize a protected merge.
 
 ## 2026-08-21 lineage graph update
 
@@ -655,6 +695,57 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   complete; DiskSage keeps copy, attestation, and eviction fail-closed. This separates the active
   provider-index backlog from the earlier low-space pressure incident.
 
+## 2026-08-21 bounded-planning and evidence-retention follow-up
+
+- Exact duplicate detection now runs before the candidate presentation limit, so a duplicate pair
+  split by `limit` still marks the visible candidate for human canonical selection and remains in
+  the path-free cluster summary. A focused Rust regression test covers this boundary.
+- Provider evidence retention protects the just-written record when its timestamp is older than
+  the existing history, preventing clock regression from deleting fresh proof. The retention
+  integration test covers the bounded 128-record history. Local implementation commit `c5aa3a1`
+  is not yet published because the repository ruleset currently rejects direct branch updates.
+
+## 2026-08-21 current exact-head iCloud/indexing and PR audit
+
+- Exact-head local commit `c5edabd` adds the path-free iCloud File Provider
+  `pending_indexable_count` field, emits `icloud-file-provider-indexing-pending`, includes it in
+  Naruon readiness and the stable UI blocker fingerprint, and records the change in ADR-0001,
+  this baseline, and `CHANGELOG.md`. The pinned Rust 1.97.1 parser test passed; `npm run check`
+  reported 0 errors/0 warnings and the CloudArchive contract suite passed 3/3.
+- The rebuilt `disksage-icloud-sync-health` observed at `2026-08-21 21:54:33 +0900` returned
+  `schema_version=5`, complete evidence, native `idle`/`has-synced-down`, File Provider activity
+  schema 3 with pending indexable `12474`, active upload/download `1/1`, and filename/root
+  exclusions `18/2`. Admission remains blocked by upload-in-flight, both exclusion blockers,
+  indexing-pending, and transfer-active; `mutation_performed=false`.
+- A normal push of `c5edabd` was rejected by ruleset `GH013` because branch changes must go through
+  a pull request and the central required workflows are unsatisfied. No bypass, force-push, admin
+  merge, or self-approval was used. Remote PR #213 therefore remains at `108bba0`; the local
+  follow-up is explicitly unprotected until a normal PR path becomes available.
+
+## 2026-08-21 iCloud indexing backlog follow-up
+
+- A repeated read-only iCloud File Provider observation remained unchanged for 21 seconds with
+  `pending-indexable-count=12474`, upload progress `0/5038` at `0.0000`, 18 filename exclusions,
+  and 2 root exclusions. DiskSage now exports the aggregate indexing backlog, blocks new-copy
+  admission with `icloud-file-provider-indexing-pending`, and surfaces the count in the Finder
+  “복사 준비 중” warning. No provider or source mutation was performed.
+
+## 2026-08-21 current iCloud indexing and transfer receipt
+
+- A fresh bounded read-only `fileproviderctl` observation completed at `2026-08-21 22:22:53 +0900`.
+  It reported `needs-indexing=no`, pending indexable `13737`, a `12449`-entry reconciliation
+  backlog, active upload/download markers, one no-progress fetch, and filename/root exclusions
+  `18/2`. The bounded dump was truncated; DiskSage persisted only path-free aggregate evidence and
+  set no-progress, indexing-pending, transfer, and exclusion blockers. `mutation_performed=false`;
+  Finder preparation is not a copy receipt.
+
+## 2026-08-21 provider disk-full marker boundary
+
+- Provider-global sync parsing now treats only the exact numeric markers `errno 28`,
+  `odresult_errno 28`, and `OSStatus -34` as local-disk-full evidence; longer values such as
+  `errno 280` are retained as generic provider errors. The focused boundary regression passes,
+  and no provider, source, or cloud state was mutated.
+
 ## 2026-08-22 readiness verifier integration boundary
 
 - The Naruon readiness verifier's source comment is now valid both as a standalone binary and when
@@ -679,3 +770,53 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   pipe leak that could starve the independent `ps` probe and report a false active-use timeout.
   The focused Rust test passed 3/3. The same patch is present on stacked PR heads `a0fa7bc` (#247)
   and `741ab30` (#246); hosted checks are rerunning and protected merge/review is still pending.
+
+## 2026-08-22 File Provider disk-import detection
+
+- A fresh bounded `fileproviderctl` observation showed the iCloud domain with Finder enumerators,
+  `disk import: yes`, active upload progress of `5,202,024,494 / 5,462,125,152` bytes, and
+  `pending-indexable-count=30,960`. These aggregate markers explain why Finder can remain in
+  “복사 준비 중”, but they do not bind the operation to `real_datasets` or prove a per-item cloud
+  copy. DiskSage now records the redacted `icloud-file-provider-disk-import-active` notice,
+  projects it into the new-copy admission blockers and Naruon readiness export, and shows it next
+  to the existing fixed Finder-cancel action. Copy, attestation, and source eviction remain
+  fail-closed; no provider process, source, CloudDocs database, or cloud object was mutated.
+
+## 2026-08-22 04:05 +0900 unchanged iCloud preparation queue
+
+- A second read-only host observation found the same bounded aggregate values after the earlier
+  disk-import evidence: `pending-indexable-count=31,024`, upload
+  `5,202,024,494/5,462,125,152` (95.24%), download `0/828`, and `disk import: yes`.
+  `brctl` still reported `needs-sync-up`/`needs-sync-down`, with last sync at
+  `2026-08-21 20:20:10.166 +0900`; many `pending-scan` entries were three or more hours old.
+- This strengthens the product diagnosis of a stalled File Provider preparation queue but does
+  not bind the state to a particular Finder item or prove a cloud copy. DiskSage performed no
+  cancellation, daemon restart, provider-database write, materialization, cloud mutation, or
+  source mutation. The runtime Goal remains `provider-sync-incomplete`; copy, attestation, and
+  source eviction remain blocked until a fresh complete quiet observation and independent
+  per-item evidence exist.
+
+## 2026-08-22 persisted stall-duration wiring
+
+- The current bounded probe at `2026-08-21 20:21:04 +0000` still reports two no-progress fetches,
+  `pending-indexable-count=31882`, unchanged aggregate upload/download counters, and active disk
+  import. The iCloud health command already derives `admission_blocked_since_ms` from the
+  integrity-checked evidence journal, but the frontend previously ignored that field and restarted
+  its 15-minute clock after a UI/system restart.
+- DiskSage now carries the field through the TypeScript report contract and uses it as the UI stall
+  clock origin, with a current-observation fallback only when persistence is unavailable. This
+  makes the screenshot's long-running “복사 준비 중” state remain visible as a stall after restart;
+  it does not cancel Finder, write provider state, or authorize copy, attestation, or eviction.
+
+## 2026-08-22 06:05 +0900 repeated Finder preparation stall
+
+- A new bounded, read-only observation still found four `fetchContentsForItemWithID` requests with
+  no progress, `pending-indexable-count=31882`, active disk import, unchanged aggregate upload
+  (`5205160706/5465661912`) and download (`10647837/11116116`) counters, and `brctl` flags
+  `needs-sync-up|needs-sync-down`. Finder had remained alive for roughly 18 hours and the data
+  volume had only about 4.9 GiB available.
+- The observation confirms provider-level preparation debt but remains aggregate evidence: it does
+  not identify the seven Finder items in `real_datasets` or prove any cloud copy. DiskSage keeps
+  the runtime Goal `provider-sync-incomplete`, copy/attestation/source eviction fail-closed, and
+  exposes only the explicit bounded Finder-cancel action; no Finder/provider process, CloudDocs
+  database, source, or cloud object was mutated.

@@ -167,14 +167,15 @@ pub fn parse_dump(
         has_item_not_found |= marker_lower.contains("code=-1005")
             || marker_lower.contains("itemnotfound")
             || marker.contains("파일이 존재하지 않습니다");
-        has_local_disk_full |= contains_bounded_numeric_marker(&marker_lower, "odresult_errno ", "28")
-            || contains_bounded_numeric_marker(&marker_lower, "errno ", "28")
-            || marker_lower.contains("enospc")
-            || contains_bounded_numeric_marker(&marker_lower, "code=", "28")
-            || contains_bounded_numeric_marker(&marker_lower, "code ", "28")
-            || contains_bounded_numeric_marker(&marker_lower, "osstatus ", "-34")
-            || marker_lower.contains("no space left on device")
-            || marker_lower.contains("disk full");
+        has_local_disk_full |=
+            contains_bounded_numeric_marker(&marker_lower, "odresult_errno ", "28")
+                || contains_bounded_numeric_marker(&marker_lower, "errno ", "28")
+                || marker_lower.contains("enospc")
+                || contains_bounded_numeric_marker(&marker_lower, "code=", "28")
+                || contains_bounded_numeric_marker(&marker_lower, "code ", "28")
+                || contains_bounded_numeric_marker(&marker_lower, "osstatus -", "34")
+                || marker_lower.contains("no space left on device")
+                || marker_lower.contains("disk full");
         if has_filename_too_long
             || has_temporarily_disconnected
             || has_server_unreachable
