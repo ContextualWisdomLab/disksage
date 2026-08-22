@@ -60,12 +60,38 @@ fn assert_rejected(binary: &Path, args: &[&str], expected: &str) {
 fn parser_rejects_missing_values_non_numbers_and_duplicate_options_before_domain_work() {
     let (_target_dir, binary) = build_feature_gated_binary();
 
-    assert_rejected(&binary, &["--max-results"], "--max-results 값이 필요함");
+    assert_rejected(&binary, &["--cloud-root"], "--cloud-root 값이 필요함");
     assert_rejected(
         &binary,
-        &["--all-roots", "--max-results", "not-a-number"],
-        "--max-results는 정수여야 함",
+        &["--cloud-root", "/cloud", "--relative-subpath"],
+        "--relative-subpath 값이 필요함",
     );
+
+    for flag in [
+        "--min-allocated-mib",
+        "--max-entries",
+        "--max-results",
+        "--max-depth",
+        "--max-duration-ms",
+        "--max-issues",
+    ] {
+        assert_rejected(
+            &binary,
+            &["--all-roots", flag],
+            &format!("{flag} 값이 필요함"),
+        );
+        assert_rejected(
+            &binary,
+            &["--all-roots", flag, "not-a-number"],
+            &format!("{flag}는 정수여야 함"),
+        );
+        assert_rejected(
+            &binary,
+            &["--all-roots", flag, "1", flag, "2"],
+            &format!("{flag}는 한 번만 지정할 수 있음"),
+        );
+    }
+
     assert_rejected(
         &binary,
         &["--cloud-root", "/first", "--cloud-root", "/second"],
@@ -88,21 +114,6 @@ fn parser_rejects_missing_values_non_numbers_and_duplicate_options_before_domain
         &["--all-roots", "--all-roots"],
         "--all-roots는 한 번만 지정할 수 있음",
     );
-
-    for flag in [
-        "--min-allocated-mib",
-        "--max-entries",
-        "--max-results",
-        "--max-depth",
-        "--max-duration-ms",
-        "--max-issues",
-    ] {
-        assert_rejected(
-            &binary,
-            &["--all-roots", flag, "1", flag, "2"],
-            &format!("{flag}는 한 번만 지정할 수 있음"),
-        );
-    }
 }
 
 #[test]
