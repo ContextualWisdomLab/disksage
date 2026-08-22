@@ -32,6 +32,15 @@ enum ParseResult {
     Help,
 }
 
+/// Detect option-shaped native arguments without requiring them to be valid Unicode.
+///
+/// Lossy conversion is used only for the leading `-` classification and is never reflected in a
+/// diagnostic. This keeps invalid-Unicode option tokens fail-closed on Windows as well as Unix,
+/// while non-option native paths remain available to the planner unchanged.
+fn native_argument_is_option_like(argument: &OsString) -> bool {
+    argument.to_string_lossy().starts_with('-')
+}
+
 /// Parses bounded options while preserving non-option values as native operating-system strings.
 fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResult, String> {
     let raw_args: Vec<OsString> = raw_args.into_iter().collect();
@@ -87,17 +96,10 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
             Some(value) if value.starts_with('-') => {
                 return Err(format!("unknown option\n{USAGE}"));
             }
-            None => {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::ffi::OsStrExt;
-
-                    if arg.as_os_str().as_bytes().starts_with(b"-") {
-                        return Err(format!("unknown option\n{USAGE}"));
-                    }
-                }
-                paths.push(PathBuf::from(arg));
+            None if native_argument_is_option_like(&arg) => {
+                return Err(format!("unknown option\n{USAGE}"));
             }
+            None => paths.push(PathBuf::from(arg)),
             Some(_) => paths.push(PathBuf::from(arg)),
         }
     }
