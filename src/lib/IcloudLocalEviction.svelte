@@ -2,6 +2,14 @@
   import { confirm, open } from "@tauri-apps/plugin-dialog";
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
+  import {
+    ICLOUD_EVICTION_EXECUTION_FAILURE,
+    ICLOUD_FILE_SELECTION_FAILURE,
+    ICLOUD_RESULT_RECORD_FAILURE,
+    ICLOUD_STATE_INSPECTION_FAILURE,
+    planBlockerActions,
+    verificationBlockerActions,
+  } from "./icloudLocalEvictionFeedback";
 
   let { cloudRoot }: { cloudRoot: string } = $props();
 
@@ -34,8 +42,8 @@
       if (typeof selected !== "string") return;
       path = selected;
       resetDecision();
-    } catch (e) {
-      error = String(e);
+    } catch {
+      error = ICLOUD_FILE_SELECTION_FAILURE;
     }
   }
 
@@ -46,8 +54,8 @@
     resetDecision();
     try {
       plan = await api.planIcloudLocalCopyEviction(cloudRoot, selectedPath);
-    } catch (e) {
-      error = String(e);
+    } catch {
+      error = ICLOUD_STATE_INSPECTION_FAILURE;
     } finally {
       planning = false;
     }
@@ -82,8 +90,8 @@
       );
       confirmation = "";
       rationale = "";
-    } catch (e) {
-      error = String(e);
+    } catch {
+      error = ICLOUD_EVICTION_EXECUTION_FAILURE;
     } finally {
       executing = false;
     }
@@ -150,18 +158,20 @@
             iCloud 항목 경로와 ubiquitous identity는 유지되었습니다.
           </p>
         {:else}
-          <p class="warning">
-            축출 요청은 성공했지만 로컬 할당 감소 검증은 불완전합니다:
-            {eviction.result.verification_blockers.join(", ")}
-          </p>
+          <div class="warning" role="alert">
+            <p>축출 결과 검증이 불완전합니다. 다음 항목을 확인하세요.</p>
+            <ul>
+              {#each verificationBlockerActions(eviction.result.verification_blockers) as action}
+                <li>{action}</li>
+              {/each}
+            </ul>
+          </div>
         {/if}
         <p class="muted">승인 기록: {eviction.approval_path}</p>
         {#if eviction.result_path}
           <p class="muted">결과 기록: {eviction.result_path}</p>
         {:else}
-          <p class="error" role="alert">
-            축출 결과는 위와 같지만 결과 기록을 저장하지 못했습니다: {eviction.result_record_error}
-          </p>
+          <p class="error" role="alert">{ICLOUD_RESULT_RECORD_FAILURE}</p>
         {/if}
       {:else if plan.eligible_after_human_approval}
         <div class="approval-controls">
@@ -194,7 +204,14 @@
           </button>
         </div>
       {:else}
-        <p class="warning">현재 축출 불가: {plan.blockers.join(", ")}</p>
+        <div class="warning" role="status">
+          <p>현재 로컬 사본을 축출할 수 없습니다. 다음 항목을 확인하세요.</p>
+          <ul>
+            {#each planBlockerActions(plan.blockers) as action}
+              <li>{action}</li>
+            {/each}
+          </ul>
+        </div>
       {/if}
     </div>
   {/if}
@@ -213,6 +230,9 @@
   label { display: grid; gap: 0.2rem; font-size: 0.8rem; color: #555; }
   .muted { color: #777; margin: 0; }
   .warning { color: #8a5700; margin: 0; }
+  .warning > p { margin: 0; }
+  .warning ul { margin: 0.25rem 0 0; padding-left: 1.25rem; }
+  .warning li + li { margin-top: 0.2rem; }
   .safe { color: #276437; margin: 0; }
   .error { color: #b00; margin: 0; }
 </style>
