@@ -76,6 +76,29 @@ fn assert_help_does_not_hide_invalid_argument(binary: &str) {
     );
 }
 
+/// Require duplicate audit options to fail before a repository scan can begin.
+fn assert_audit_duplicate_bound_is_rejected(binary: &str) {
+    let repository = tempfile::tempdir().expect("empty Maven repository fixture must be created");
+    let output = Command::new(binary)
+        .env_remove("HOME")
+        .arg("--repository-root")
+        .arg(repository.path())
+        .args(["--max-entries", "1", "--max-entries", "2"])
+        .output()
+        .expect("DiskSage Maven audit CLI must launch for duplicate-option validation");
+
+    assert!(
+        !output.status.success(),
+        "duplicate --max-entries must be rejected instead of silently using the last value"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "duplicate-option failure must not emit a successful Maven audit document"
+    );
+    let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must remain valid UTF-8");
+    assert!(!stderr.is_empty(), "duplicate-option failure must remain visible");
+}
+
 #[cfg(unix)]
 fn assert_non_utf8_argument_is_bounded(binary: &str) {
     use std::ffi::OsString;
@@ -114,6 +137,7 @@ fn maven_cache_audit_help_is_successful_and_invalid_arguments_are_bounded() {
     assert_help_success(binary, "-h", expected_usage);
     assert_invalid_argument_is_bounded(binary);
     assert_help_does_not_hide_invalid_argument(binary);
+    assert_audit_duplicate_bound_is_rejected(binary);
     #[cfg(unix)]
     assert_non_utf8_argument_is_bounded(binary);
 }
