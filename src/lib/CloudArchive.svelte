@@ -821,6 +821,9 @@
   ): "clear" | "checking" | "provider-sync-incomplete" | "materialization-stalled" {
     if (!hasObservation && !error) return "checking";
     if (!blocked && !error) return "clear";
+    // A probe failure never observed real provider evidence, so it must not escalate into
+    // "materialization-stalled" — that label asserts a specific, observed stall condition.
+    if (error) return "provider-sync-incomplete";
     return observedAtMs > 0
       && blockedSinceMs > 0
       && observedAtMs - blockedSinceMs >= PROVIDER_STALL_WARNING_MS

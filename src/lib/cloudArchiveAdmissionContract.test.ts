@@ -93,4 +93,18 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("bind:checked={oauthWriteAccess}");
     expect(source).toContain("oauthWriteAccess,");
   });
+
+  it("never escalates an unread provider probe failure into a materialization-stall claim", () => {
+    const source = readFileSync(resolve(repositoryRoot, "src/lib/CloudArchive.svelte"), "utf8");
+    const fnStart = source.indexOf("function providerStatusState(");
+    const errorGuard = source.indexOf('if (error) return "provider-sync-incomplete";', fnStart);
+    const stalledBranch = source.indexOf('? "materialization-stalled"', fnStart);
+
+    expect(fnStart).toBeGreaterThanOrEqual(0);
+    // The error short-circuit must come before the time-based branch that can return
+    // "materialization-stalled", so a probe failure (no observed evidence) can never be
+    // reported as a specific, observed stall condition.
+    expect(errorGuard).toBeGreaterThan(fnStart);
+    expect(stalledBranch).toBeGreaterThan(errorGuard);
+  });
 });
