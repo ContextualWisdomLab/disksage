@@ -30,6 +30,9 @@ use crate::{
 #[path = "home_resolution.rs"]
 mod home_resolution;
 
+#[path = "copy_headroom.rs"]
+mod copy_headroom;
+
 #[derive(Default)]
 pub struct AppState {
     pub result: Arc<Mutex<Option<ScanResult>>>,
@@ -253,20 +256,8 @@ pub fn list_roots() -> Vec<String> {
     }
     #[cfg(not(windows))]
     {
-        let mut roots = Vec::new();
-        if let Ok(home) = std::env::var("HOME") {
-            let home_path = Path::new(&home);
-            let downloads = home_path.join("Downloads");
-            if downloads.is_dir() {
-                roots.push(downloads.to_string_lossy().into_owned());
-            }
-            if home != "/" {
-                roots.push(home);
-            }
-        }
-        if !roots.iter().any(|root| root == "/") {
-            roots.push("/".to_string());
-        }
+        let mut roots = vec!["/".to_string()];
+        roots.extend(std::env::var("HOME").ok());
         roots
     }
 }
@@ -1576,15 +1567,11 @@ fn require_capacity_for_copy(
 
 #[cfg(not(coverage))]
 fn require_local_copy_headroom(candidate: &cloud::CloudCandidate) -> Result<(), String> {
-    let snapshot = crate::volume_pressure::snapshot_volume(
-        Path::new(&candidate.src),
+    copy_headroom::require_destination_copy_headroom(
+        Path::new(&candidate.dst),
+        candidate.bytes,
         cloud::system_now_ms(),
-    )?;
-    if crate::volume_pressure::has_copy_headroom(snapshot.available_bytes, candidate.bytes) {
-        Ok(())
-    } else {
-        Err("local-volume-headroom-insufficient".into())
-    }
+    )
 }
 
 #[cfg(not(coverage))]
@@ -1764,8 +1751,8 @@ fn create_cloud_candidate_receipt(
     )?;
     if !adopt_existing {
         // Native File Provider copies can materialize placeholders and stage more than the source
-        // bytes. Re-check local headroom immediately before any mutation; adoption only verifies
-        // an existing destination and does not create a local staging file.
+        // bytes. Re-check destination/staging headroom immediately before any mutation; adoption
+        // only verifies an existing destination and does not create a local staging file.
         require_local_copy_headroom(candidate)?;
         let runtime = provider_client_runtime::require_provider_client_runtime(
             selected.provider,
@@ -3407,21 +3394,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         #[cfg(windows)]
         assert!(roots.iter().any(|r| r.ends_with(":\\")));
         #[cfg(not(windows))]
-        {
-            assert!(roots.contains(&"/".to_string()));
-            if let Ok(home) = std::env::var("HOME") {
-                let downloads = Path::new(&home).join("Downloads");
-                if downloads.is_dir() {
-                    let expected = downloads.to_string_lossy().into_owned();
-                    assert_eq!(roots.first(), Some(&expected));
-                }
-                if home != "/" {
-                    let home_index = roots.iter().position(|root| root == &home).unwrap();
-                    let filesystem_index = roots.iter().position(|root| root == "/").unwrap();
-                    assert!(home_index < filesystem_index);
-                }
-            }
-        }
+        assert!(roots.contains(&"/".to_string()));
     }
 
     #[test]
