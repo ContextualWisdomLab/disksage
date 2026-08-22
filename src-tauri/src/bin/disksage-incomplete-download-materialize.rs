@@ -308,7 +308,12 @@ fn verify_discovered_cloud_root(
 
 #[cfg(not(coverage))]
 fn run() -> Result<(), String> {
-    let args = parse_args(&std::env::args().skip(1).collect::<Vec<_>>())?;
+    let raw = std::env::args().skip(1).collect::<Vec<_>>();
+    if raw.len() == 1 && matches!(raw[0].as_str(), "--help" | "-h") {
+        println!("{}", usage());
+        return Ok(());
+    }
+    let args = parse_args(&raw)?;
     let plan: IncompleteDownloadDestinationPlan = read_bounded_json(
         &args.destination_plan,
         MAX_PRIVATE_PLAN_BYTES,
