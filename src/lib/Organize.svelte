@@ -10,6 +10,7 @@
   let busy = $state(false);
   let loadError = $state("");
   let results: api.CleanResult[] = $state([]);
+  let resultAction: "move" | "undo" | null = $state(null);
   let verdicts: Record<string, api.Verdict> = $state({});
 
   async function loadVerdicts(paths: string[]) {
@@ -25,12 +26,15 @@
     if (!scannedRoot) return;
     busy = true;
     loadError = "";
+    plans = [];
+    verdicts = {};
     results = [];
+    resultAction = null;
     try {
       plans = await api.planOrganize(scannedRoot);
-      loadVerdicts(plans.map((p) => p.src));
-    } catch (e) {
-      loadError = String(e);
+      await loadVerdicts(plans.map((p) => p.src));
+    } catch {
+      loadError = "정리 계획을 만들지 못했습니다. 스캔 대상 폴더의 접근 권한을 확인하고 스캔을 다시 실행한 뒤 미리보기를 다시 만드세요.";
     } finally {
       busy = false;
     }
@@ -55,12 +59,19 @@
     );
     if (!okay) return;
     busy = true;
+    loadError = "";
+    results = [];
+    resultAction = null;
     try {
       const r = await api.executeMoves(plans);
       results = r;
+      resultAction = "move";
       plans = [];
-    } catch (e) {
-      loadError = String(e);
+      verdicts = {};
+    } catch {
+      plans = [];
+      verdicts = {};
+      loadError = "파일 정리를 실행하지 못했습니다. 파일이 열려 있는지와 대상 폴더의 접근 권한을 확인한 뒤 새 미리보기부터 진행하세요.";
     } finally {
       busy = false;
     }
@@ -68,11 +79,15 @@
 
   async function undoMoves() {
     busy = true;
+    loadError = "";
+    results = [];
+    resultAction = null;
     try {
       const r = await api.undoLastMoves();
       results = r;
-    } catch (e) {
-      loadError = String(e);
+      resultAction = "undo";
+    } catch {
+      loadError = "마지막 이동을 되돌리지 못했습니다. 이동한 파일의 현재 위치와 원래 폴더의 접근 권한을 확인한 뒤 다시 되돌리세요.";
     } finally {
       busy = false;
     }
@@ -87,7 +102,7 @@
          미리보기/실행 상태와 무관하게 항상 노출되어야 한다(그렇지 않으면 재-미리보기로 사라짐). -->
     <button class="undo" onclick={undoMoves} disabled={busy}>마지막 이동 되돌리기</button>
   </h2>
-  {#if loadError}<p class="error">{loadError}</p>{/if}
+  {#if loadError}<p class="error" role="alert">{loadError}</p>{/if}
 
   {#if plans.length === 0 && !busy}
     <p class="muted">미리보기를 눌러 정리 계획을 확인하세요.</p>
@@ -121,11 +136,19 @@
   {/if}
 
   {#if results.length > 0}
-    <p>{results.filter((r) => r.ok).length}/{results.length}개 완료 — 위 "되돌리기"로 복원할 수 있습니다.</p>
+    {#if resultAction === "undo"}
+      <p role="status">{results.filter((r) => r.ok).length}/{results.length}개 되돌리기를 완료했습니다. 다시 정리하려면 새 미리보기를 만드세요.</p>
+    {:else}
+      <p role="status">{results.filter((r) => r.ok).length}/{results.length}개 완료. 복원이 필요하면 위 ‘마지막 이동 되돌리기’를 사용하세요.</p>
+    {/if}
     {#if results.some((r) => !r.ok)}
       <ul class="errors">
         {#each results.filter((r) => !r.ok) as r (r.path)}
-          <li title={r.path}>⚠ {r.path} — {r.error}</li>
+          {#if resultAction === "undo"}
+            <li title={r.path}>⚠ {r.path} — 현재 파일 위치와 원래 폴더의 접근 권한을 확인한 뒤 ‘마지막 이동 되돌리기’를 다시 실행하세요.</li>
+          {:else}
+            <li title={r.path}>⚠ {r.path} — 파일이 사용 중인지와 대상 폴더의 접근 권한을 확인한 뒤 새 미리보기부터 진행하세요.</li>
+          {/if}
         {/each}
       </ul>
     {/if}
