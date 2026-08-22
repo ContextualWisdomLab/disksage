@@ -103,7 +103,11 @@ fn assert_unknown_argument_is_bounded(binary: &Path) {
     );
 }
 
-fn assert_help_does_not_hide_invalid_argument(binary: &Path, help_flag: &str) {
+fn assert_help_does_not_hide_invalid_argument(
+    binary: &Path,
+    help_flag: &str,
+    usage_marker: &str,
+) {
     let output = Command::new(binary)
         .args([help_flag, "--opaque-option=not-shown"])
         .output()
@@ -118,6 +122,10 @@ fn assert_help_does_not_hide_invalid_argument(binary: &Path, help_flag: &str) {
     );
     let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must be valid UTF-8");
     assert!(!stderr.is_empty(), "mixed invalid invocation must remain visible");
+    assert!(
+        stderr.contains(usage_marker),
+        "mixed help diagnostics must retain the stable usage synopsis"
+    );
     assert!(
         !stderr.contains("not-shown"),
         "mixed invalid diagnostics must not echo arbitrary argument payloads"
@@ -218,8 +226,8 @@ fn successful_help_is_strictly_terminal_and_invalid_input_stays_bounded() {
         assert_help_success(binary, "--help", usage_marker);
         assert_help_success(binary, "-h", usage_marker);
         assert_unknown_argument_is_bounded(binary);
-        assert_help_does_not_hide_invalid_argument(binary, "--help");
-        assert_help_does_not_hide_invalid_argument(binary, "-h");
+        assert_help_does_not_hide_invalid_argument(binary, "--help", usage_marker);
+        assert_help_does_not_hide_invalid_argument(binary, "-h", usage_marker);
         assert_duplicate_options_are_bounded(binary);
         #[cfg(unix)]
         assert_non_utf8_argument_is_bounded(binary);
