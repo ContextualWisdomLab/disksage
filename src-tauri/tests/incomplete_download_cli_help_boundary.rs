@@ -3,11 +3,13 @@
 //! Help is a terminal, side-effect-free operator boundary: it must not require HOME,
 //! cloud discovery, provider capacity, private evidence, or execution authority. Host
 //! arguments that cannot be decoded as UTF-8 and opaque invalid host input must fail
-//! closed through the same bounded diagnostic without reflection or a Rust panic.
+//! closed through bounded diagnostics without reflection or a Rust panic.
 
 use std::process::Command;
 
 const DESTINATION_UNKNOWN: &str = "incomplete-download-destination-plan-unknown-argument";
+const DESTINATION_INVALID_UTF8: &str =
+    "incomplete-download-destination-plan-invalid-utf8-argument";
 const MATERIALIZE_UNKNOWN: &str = "incomplete-download-materialize-unknown-argument";
 
 fn assert_terminal_help(binary: &str, expected_usage: &str) {
@@ -106,7 +108,7 @@ fn materialize_unknown_argument_does_not_reflect_host_payload() {
 fn destination_plan_rejects_non_utf8_host_arguments_without_panicking() {
     assert_non_utf8_argument_fails_closed(
         env!("CARGO_BIN_EXE_disksage-incomplete-download-destination-plan"),
-        DESTINATION_UNKNOWN,
+        DESTINATION_INVALID_UTF8,
     );
 }
 
