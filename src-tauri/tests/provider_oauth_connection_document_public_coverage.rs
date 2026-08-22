@@ -369,3 +369,55 @@ fn connection_document_symlinked_ancestor_is_rejected_even_when_immediate_parent
         "every existing ancestor in the connection-document authority chain must be non-symlink"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn connection_document_rejects_group_or_other_permissions_before_parsing() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("connections.json");
+    std::fs::write(&path, b"{\"version\":1,\"connections\":[]}").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+
+    assert_eq!(
+        load_connections(&path).unwrap_err(),
+        "oauth-connection-document-permissions-unsafe",
+        "durable OAuth metadata must not be read from a group/other-accessible file"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn connection_document_rejects_group_or_other_writable_authority_parent() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let parent = temp.path().join("shared-app-data");
+    std::fs::create_dir(&parent).unwrap();
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o770)).unwrap();
+    let path = parent.join("connections.json");
+    std::fs::write(&path, b"{\"version\":1,\"connections\":[]}").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    assert_eq!(
+        load_connections(&path).unwrap_err(),
+        "oauth-connection-directory-writable-by-others",
+        "connection metadata authority must fail closed when the immediate parent is shared-writable"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn connection_document_rejects_non_directory_parent_component() {
+    let temp = tempfile::tempdir().unwrap();
+    let parent = temp.path().join("not-a-directory");
+    std::fs::write(&parent, b"not a directory").unwrap();
+    let path = parent.join("connections.json");
+
+    assert_eq!(
+        load_connections(&path).unwrap_err(),
+        "oauth-connection-directory-unsafe",
+        "a regular file in the authority chain must never be treated as a connection-document directory"
+    );
+}
