@@ -165,6 +165,13 @@ fn parser_rejects_conflicting_and_unsafe_root_selection_before_home_or_provider_
         ],
         "--relative-subpath는 안전한 상대 경로여야 함",
     );
+    for relative in [".", "./Archive"] {
+        assert_rejected(
+            &binary,
+            &["--cloud-root", "/cloud", "--relative-subpath", relative],
+            "--relative-subpath는 안전한 상대 경로여야 함",
+        );
+    }
     assert_rejected(
         &binary,
         &["--all-roots", "--relative-subpath", "Archive"],
