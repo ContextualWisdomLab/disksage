@@ -1,7 +1,8 @@
-//! Black-box help-contract regressions for incomplete-download operator CLIs.
+//! Black-box host-argument regressions for incomplete-download operator CLIs.
 //!
 //! Help is a terminal, side-effect-free operator boundary: it must not require HOME,
-//! cloud discovery, provider capacity, private evidence, or execution authority.
+//! cloud discovery, provider capacity, private evidence, or execution authority. Host
+//! arguments that cannot be decoded as UTF-8 must fail closed without a Rust panic.
 
 use std::process::Command;
 
@@ -33,6 +34,23 @@ fn assert_terminal_help(binary: &str, expected_usage: &str) {
     }
 }
 
+#[cfg(unix)]
+fn assert_non_utf8_argument_fails_closed(binary: &str) {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let output = Command::new(binary)
+        .arg(OsString::from_vec(vec![0xff, b'x']))
+        .output()
+        .expect("the shipped incomplete-download binary should start");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("stderr should remain UTF-8");
+    assert!(stderr.contains("invalid-argument-encoding"), "stderr: {stderr}");
+    assert!(!stderr.contains("panicked"), "stderr: {stderr}");
+}
+
 #[test]
 fn destination_plan_help_is_terminal_without_home_or_provider_io() {
     assert_terminal_help(
@@ -47,4 +65,20 @@ fn materialize_help_is_terminal_without_home_or_mutation_authority() {
         env!("CARGO_BIN_EXE_disksage-incomplete-download-materialize"),
         "usage: disksage-incomplete-download-materialize",
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn destination_plan_rejects_non_utf8_host_arguments_without_panicking() {
+    assert_non_utf8_argument_fails_closed(env!(
+        "CARGO_BIN_EXE_disksage-incomplete-download-destination-plan"
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn materialize_rejects_non_utf8_host_arguments_without_panicking() {
+    assert_non_utf8_argument_fails_closed(env!(
+        "CARGO_BIN_EXE_disksage-incomplete-download-materialize"
+    ));
 }
