@@ -87,6 +87,38 @@ fn canonical_record_wins_when_equivalent_legacy_record_is_still_present() {
 }
 
 #[test]
+fn a_single_legacy_record_remains_usable_during_identity_migration() {
+    let (requested, legacy_root) = equivalent_roots();
+    let legacy = connection(&legacy_root, legacy_connection_id(&legacy_root), 100);
+
+    assert_eq!(
+        connection_for_root(std::slice::from_ref(&legacy), &requested).unwrap(),
+        legacy
+    );
+}
+
+#[test]
+fn missing_connection_fails_closed() {
+    let (requested, _) = equivalent_roots();
+
+    assert_eq!(
+        connection_for_root(&[], &requested).unwrap_err(),
+        "provider-oauth-connection-missing"
+    );
+}
+
+#[test]
+fn duplicate_canonical_records_remain_ambiguous_instead_of_gaining_authority() {
+    let (requested, legacy_root) = equivalent_roots();
+    let current = connection(&legacy_root, canonical_connection_id(&legacy_root), 200);
+
+    assert_eq!(
+        connection_for_root(&[current.clone(), current], &requested).unwrap_err(),
+        "provider-oauth-connection-ambiguous"
+    );
+}
+
+#[test]
 fn duplicate_legacy_records_remain_ambiguous_instead_of_gaining_authority() {
     let (requested, legacy_root) = equivalent_roots();
     let legacy = connection(&legacy_root, legacy_connection_id(&legacy_root), 100);
