@@ -69,35 +69,88 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let defaults = CloudLocalInventoryOptions::default();
     let mut cloud_root = None;
     let mut all_roots = false;
+    let mut all_roots_seen = false;
     let mut relative_subpath = None;
     let mut min_allocated_mib = defaults.min_allocated_bytes / (1024 * 1024);
+    let mut min_allocated_mib_seen = false;
     let mut max_entries = defaults.max_entries;
+    let mut max_entries_seen = false;
     let mut max_results = defaults.max_results;
+    let mut max_results_seen = false;
     let mut max_depth = defaults.max_depth;
+    let mut max_depth_seen = false;
     let mut max_duration_ms = defaults.max_duration_ms;
+    let mut max_duration_ms_seen = false;
     let mut max_issues = defaults.max_issues;
+    let mut max_issues_seen = false;
     let mut index = 0usize;
     while index < args.len() {
         match args[index].as_str() {
             "--cloud-root" => {
-                cloud_root = Some(PathBuf::from(value(args, &mut index, "--cloud-root")?))
+                if cloud_root.is_some() {
+                    return Err("--cloud-root는 한 번만 지정할 수 있음".into());
+                }
+                cloud_root = Some(PathBuf::from(value(args, &mut index, "--cloud-root")?));
             }
-            "--all-roots" => all_roots = true,
+            "--all-roots" => {
+                if all_roots_seen {
+                    return Err("--all-roots는 한 번만 지정할 수 있음".into());
+                }
+                all_roots_seen = true;
+                all_roots = true;
+            }
             "--relative-subpath" => {
+                if relative_subpath.is_some() {
+                    return Err("--relative-subpath는 한 번만 지정할 수 있음".into());
+                }
                 relative_subpath = Some(PathBuf::from(value(
                     args,
                     &mut index,
                     "--relative-subpath",
-                )?))
+                )?));
             }
             "--min-allocated-mib" => {
-                min_allocated_mib = number(args, &mut index, "--min-allocated-mib")?
+                if min_allocated_mib_seen {
+                    return Err("--min-allocated-mib는 한 번만 지정할 수 있음".into());
+                }
+                min_allocated_mib_seen = true;
+                min_allocated_mib = number(args, &mut index, "--min-allocated-mib")?;
             }
-            "--max-entries" => max_entries = number(args, &mut index, "--max-entries")?,
-            "--max-results" => max_results = number(args, &mut index, "--max-results")?,
-            "--max-depth" => max_depth = number(args, &mut index, "--max-depth")?,
-            "--max-duration-ms" => max_duration_ms = number(args, &mut index, "--max-duration-ms")?,
-            "--max-issues" => max_issues = number(args, &mut index, "--max-issues")?,
+            "--max-entries" => {
+                if max_entries_seen {
+                    return Err("--max-entries는 한 번만 지정할 수 있음".into());
+                }
+                max_entries_seen = true;
+                max_entries = number(args, &mut index, "--max-entries")?;
+            }
+            "--max-results" => {
+                if max_results_seen {
+                    return Err("--max-results는 한 번만 지정할 수 있음".into());
+                }
+                max_results_seen = true;
+                max_results = number(args, &mut index, "--max-results")?;
+            }
+            "--max-depth" => {
+                if max_depth_seen {
+                    return Err("--max-depth는 한 번만 지정할 수 있음".into());
+                }
+                max_depth_seen = true;
+                max_depth = number(args, &mut index, "--max-depth")?;
+            }
+            "--max-duration-ms" => {
+                if max_duration_ms_seen {
+                    return Err("--max-duration-ms는 한 번만 지정할 수 있음".into());
+                }
+                max_duration_ms_seen = true;
+                max_duration_ms = number(args, &mut index, "--max-duration-ms")?;
+            }
+            "--max-issues" => {
+                if max_issues_seen {
+                    return Err("--max-issues는 한 번만 지정할 수 있음".into());
+                }
+                max_issues_seen = true;
+                max_issues = number(args, &mut index, "--max-issues")?;
+            }
             "--help" | "-h" => return Err(usage().into()),
             _ => return Err("cloud-local-inventory-unknown-argument".into()),
         }
