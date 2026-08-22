@@ -159,10 +159,109 @@ fn read_baseline(path: PathBuf) -> Result<LocalVolumeSnapshot, String> {
 fn now_ms() -> Result<u64, String> {
     let observed_at_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|_| "local-volume-clock-unavailable")?
-        .as_millis();
-    u64::try_from(observed_at_ms)
-        .ok()
-        .filter(|value| *value > 0)
-        .ok_or_else(|| "local-volume-clock-unavailable".into())
+        .map_err(|_| "local-volume-clock-invalid")?
+        .as_millis() as u64;
+    if observed_at_ms == 0 {
+        return Err("local-volume-clock-invalid".into());
+    }
+    Ok(observed_at_ms)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use disksage_lib::volume_pressure::snapshot_volume;
+    use std::fs;
+
+    #[test]
+    fn parser_defaults_to_current_directory() {
+        assert_eq!(
+            parse_args(Vec::<String>::new()).unwrap(),
+            Args {
+                path: PathBuf::from("."),
+                baseline: None,
+                logical_removed_bytes: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parser_accepts_bounded_comparison_arguments() {
+        assert_eq!(
+            parse_args([
+                "--path",
+                "/volume",
+                "--baseline",
+                "/tmp/baseline.json",
+                "--logical-removed-bytes",
+                "123",
+            ])
+            .unwrap(),
+            Args {
+                path: PathBuf::from("/volume"),
+                baseline: Some(PathBuf::from("/tmp/baseline.json")),
+                logical_removed_bytes: Some(123),
+            }
+        );
+    }
+
+    #[test]
+    fn parser_rejects_unknown_duplicate_and_unbound_arguments() {
+        assert_eq!(
+            parse_args(["--unknown"]).unwrap_err(),
+            "local-volume-argument-unknown"
+        );
+        assert_eq!(
+            parse_args(["--path", ".", "--path", "."]).unwrap_err(),
+            "local-volume-path-duplicate"
+        );
+        assert_eq!(
+            parse_args(["--logical-removed-bytes", "1"]).unwrap_err(),
+            "local-volume-logical-removed-requires-baseline"
+        );
+        assert_eq!(
+            parse_args(["--baseline"]).unwrap_err(),
+            "local-volume-baseline-value-missing"
+        );
+    }
+
+    #[test]
+    fn baseline_reader_accepts_only_bounded_valid_snapshot_json() {
+        let temp = tempfile::tempdir().unwrap();
+        let snapshot = snapshot_volume(temp.path(), 1).unwrap();
+        let valid = temp.path().join("valid.json");
+        fs::write(&valid, serde_json::to_vec(&snapshot).unwrap()).unwrap();
+        assert_eq!(read_baseline(valid).unwrap(), snapshot);
+
+        let malformed = temp.path().join("malformed.json");
+        fs::write(&malformed, b"not-json").unwrap();
+        assert_eq!(
+            read_baseline(malformed).unwrap_err(),
+            "local-volume-baseline-json-invalid"
+        );
+
+        let oversized = temp.path().join("oversized.json");
+        fs::write(&oversized, vec![b'x'; MAX_BASELINE_BYTES as usize + 1]).unwrap();
+        assert_eq!(
+            read_baseline(oversized).unwrap_err(),
+            "local-volume-baseline-too-large"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn baseline_reader_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let snapshot = snapshot_volume(temp.path(), 1).unwrap();
+        let valid = temp.path().join("valid.json");
+        let linked = temp.path().join("linked.json");
+        fs::write(&valid, serde_json::to_vec(&snapshot).unwrap()).unwrap();
+        symlink(valid, &linked).unwrap();
+        assert_eq!(
+            read_baseline(linked).unwrap_err(),
+            "local-volume-baseline-not-regular-file"
+        );
+    }
 }
