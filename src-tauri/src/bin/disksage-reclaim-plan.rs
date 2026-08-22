@@ -229,6 +229,29 @@ mod tests {
         assert!(error.starts_with("unknown option"), "{error}");
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn invalid_unicode_option_shaped_argument_is_rejected_on_windows() {
+        use std::os::windows::ffi::OsStringExt;
+
+        let option = OsString::from_wide(&[
+            b'-' as u16,
+            b'-' as u16,
+            b'o' as u16,
+            b'p' as u16,
+            b'a' as u16,
+            b'q' as u16,
+            b'u' as u16,
+            b'e' as u16,
+            0xD800,
+        ]);
+        assert!(option.to_str().is_none(), "fixture must be invalid Unicode");
+        let error = parse_args([option]).unwrap_err();
+
+        assert!(error.starts_with("unknown option"), "{error}");
+        assert!(!error.contains("opaque"), "diagnostic must not reflect payload");
+    }
+
     #[cfg(unix)]
     #[test]
     fn non_utf8_operation_value_is_rejected_without_panicking() {
