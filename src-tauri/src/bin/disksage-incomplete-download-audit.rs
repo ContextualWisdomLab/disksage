@@ -13,6 +13,15 @@ struct Args {
     private_output: Option<PathBuf>,
 }
 
+fn usage() -> String {
+    format!(
+        "usage: disksage-incomplete-download-audit --root ABSOLUTE_PATH \
+         [--max-entries 1..={DEFAULT_MAX_ENTRIES}] \
+         [--stale-after-days 1..={MAX_STALE_AFTER_DAYS}] \
+         [--private-output ABSOLUTE_NEW_FILE.json]"
+    )
+}
+
 fn absolute_without_parent(path: &Path) -> bool {
     path.is_absolute()
         && !path
@@ -23,7 +32,9 @@ fn absolute_without_parent(path: &Path) -> bool {
 fn parse_args(raw: &[String]) -> Result<Args, String> {
     let mut root = None;
     let mut max_entries = DEFAULT_MAX_ENTRIES;
+    let mut max_entries_seen = false;
     let mut stale_after_days = DEFAULT_STALE_AFTER_DAYS;
+    let mut stale_after_days_seen = false;
     let mut private_output = None;
     let mut index = 0usize;
     while index < raw.len() {
@@ -41,6 +52,10 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 root = Some(PathBuf::from(value(&mut index, "--root")?));
             }
             "--max-entries" => {
+                if max_entries_seen {
+                    return Err("--max-entries는 한 번만 지정할 수 있음".into());
+                }
+                max_entries_seen = true;
                 let parsed = value(&mut index, "--max-entries")?
                     .parse::<usize>()
                     .map_err(|_| "--max-entries는 양의 정수여야 함".to_string())?;
@@ -52,6 +67,10 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 max_entries = parsed;
             }
             "--stale-after-days" => {
+                if stale_after_days_seen {
+                    return Err("--stale-after-days는 한 번만 지정할 수 있음".into());
+                }
+                stale_after_days_seen = true;
                 let parsed = value(&mut index, "--stale-after-days")?
                     .parse::<u64>()
                     .map_err(|_| "--stale-after-days는 양의 정수여야 함".to_string())?;
@@ -68,15 +87,8 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 }
                 private_output = Some(PathBuf::from(value(&mut index, "--private-output")?));
             }
-            "--help" | "-h" => {
-                return Err(format!(
-                    "usage: disksage-incomplete-download-audit --root ABSOLUTE_PATH \
-                     [--max-entries 1..={DEFAULT_MAX_ENTRIES}] \
-                     [--stale-after-days 1..={MAX_STALE_AFTER_DAYS}] \
-                     [--private-output ABSOLUTE_NEW_FILE.json]"
-                ));
-            }
-            flag => return Err(format!("알 수 없는 인자: {flag}")),
+            "--help" | "-h" => return Err(usage()),
+            _ => return Err("알 수 없는 인자".to_string()),
         }
         index += 1;
     }
@@ -106,7 +118,19 @@ fn system_now_ms() -> u64 {
 
 #[cfg(not(coverage))]
 fn run() -> Result<(), String> {
-    let args = parse_args(&std::env::args().skip(1).collect::<Vec<_>>())?;
+    let raw = std::env::args_os()
+        .skip(1)
+        .map(|argument| {
+            argument
+                .into_string()
+                .map_err(|_| "알 수 없는 인자".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if raw.len() == 1 && matches!(raw[0].as_str(), "--help" | "-h") {
+        println!("{}", usage());
+        return Ok(());
+    }
+    let args = parse_args(&raw)?;
     let report = collect_incomplete_download_audit(
         &args.root,
         system_now_ms(),
