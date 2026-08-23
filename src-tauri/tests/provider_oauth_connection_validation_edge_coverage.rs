@@ -121,6 +121,39 @@ fn malformed_connection_identity_fields_fail_closed_at_the_public_document_bound
 }
 
 #[test]
+fn malformed_connection_fields_are_rejected_before_identity_lookup() {
+    let temp = tempfile::tempdir().unwrap();
+    let google_root = root(CloudProvider::GoogleDrive);
+    let valid = connection(&google_root);
+
+    let mut whitespace_root_id = valid.clone();
+    whitespace_root_id.cloud_root_id = "   ".into();
+
+    let mut relative_root_path = valid.clone();
+    relative_root_path.cloud_root_path = "relative/cloud/root".into();
+
+    let mut wrong_scope = valid.clone();
+    wrong_scope.scope = "Files.Read".into();
+
+    let mut malformed_client = valid;
+    malformed_client.client_id = "not-a-google-client.apps.googleusercontent.invalid".into();
+
+    for (index, (candidate, expected)) in [
+        (whitespace_root_id, "oauth-connection-invalid"),
+        (relative_root_path, "oauth-connection-invalid"),
+        (wrong_scope, "oauth-connection-invalid"),
+        (malformed_client, "oauth-client-id-provider-format-invalid"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let path = temp.path().join(format!("field-invalid-{index}.json"));
+        write_private(&path, &candidate);
+        assert_eq!(load_connections(&path).unwrap_err(), expected);
+    }
+}
+
+#[test]
 fn unsupported_provider_connection_and_cross_provider_lookup_do_not_authorize() {
     let temp = tempfile::tempdir().unwrap();
     let icloud_root = root(CloudProvider::Icloud);
