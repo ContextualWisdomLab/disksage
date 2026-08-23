@@ -72,6 +72,42 @@ fn valid_publication_is_private_loadable_and_replaceable() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn shared_writable_parent_never_gains_publication_authority() {
+    use std::os::unix::fs::PermissionsExt;
+
+    for writable_bit in [0o020, 0o002] {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join(format!("oauth-write-parent-{writable_bit:o}"));
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::set_permissions(
+            &parent,
+            std::fs::Permissions::from_mode(0o700 | writable_bit),
+        )
+        .unwrap();
+        let path = parent.join("connections.json");
+
+        let result = save_connections(&path, &[connection("account", 1)]);
+
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(
+            result.unwrap_err(),
+            "oauth-connection-directory-writable-by-others",
+            "writable bit {writable_bit:o} must fail before durable OAuth metadata is published"
+        );
+        assert!(
+            !path.exists(),
+            "a rejected authority directory must not receive a connection document"
+        );
+        assert_eq!(
+            std::fs::read_dir(&parent).unwrap().count(),
+            0,
+            "authority rejection must not leave a temporary OAuth document behind"
+        );
+    }
+}
+
 #[test]
 fn invalid_sets_fail_before_first_use_authority_is_created() {
     let temp = tempfile::tempdir().unwrap();
