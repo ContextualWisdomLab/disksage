@@ -26,10 +26,25 @@ describe('Test workflow coverage evidence contract', () => {
     expect(workflow.split(exactHeadCheckout).length - 1).toBe(3);
   });
 
+  it('requires every Rust test and coverage invocation to honor the committed lockfile', () => {
+    const rustExecutionLines = workflow
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(
+        (line) =>
+          line.startsWith('cargo test ') || line.startsWith('cargo llvm-cov '),
+      );
+
+    expect(rustExecutionLines.length).toBeGreaterThan(0);
+    for (const line of rustExecutionLines) {
+      expect(line, `unlocked Rust CI command: ${line}`).toContain('--locked');
+    }
+  });
+
   it('measures Rust branch coverage instead of synthesizing percentages', () => {
     expect(workflow).toContain('tool: cargo-llvm-cov');
     expect(workflow).toContain(
-      'cargo llvm-cov --no-cfg-coverage --no-cfg-coverage-nightly --all-features --manifest-path src-tauri/Cargo.toml --branch --json --output-path coverage.json',
+      'cargo llvm-cov --locked --no-cfg-coverage --no-cfg-coverage-nightly --all-features --manifest-path src-tauri/Cargo.toml --branch --json --output-path coverage.json',
     );
     expect(workflow).not.toContain('--summary-only');
     expect(workflow).toContain('coverage.json');
@@ -38,7 +53,7 @@ describe('Test workflow coverage evidence contract', () => {
 
   it('keeps coverage instrumentation from changing production cfg semantics', () => {
     expect(workflow).toContain(
-      'cargo llvm-cov --no-cfg-coverage --no-cfg-coverage-nightly --all-features --manifest-path src-tauri/Cargo.toml',
+      'cargo llvm-cov --locked --no-cfg-coverage --no-cfg-coverage-nightly --all-features --manifest-path src-tauri/Cargo.toml',
     );
     expect(workflow).toContain('--no-cfg-coverage');
     expect(workflow).toContain('--no-cfg-coverage-nightly');
