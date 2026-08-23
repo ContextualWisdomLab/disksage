@@ -151,3 +151,26 @@ fn percent_encoding_preserves_only_the_rfc3986_unreserved_set() {
         "https://example.invalid/path?a%20b=x%2Fy&z=~"
     );
 }
+
+#[test]
+fn provider_token_endpoints_are_exact_and_icloud_remains_unsupported() {
+    assert_eq!(
+        token_endpoint(CloudProvider::Onedrive).unwrap(),
+        "https://login.microsoftonline.com/common/oauth2/v2.0/token"
+    );
+    assert_eq!(
+        token_endpoint(CloudProvider::GoogleDrive).unwrap(),
+        "https://oauth2.googleapis.com/token"
+    );
+    assert_eq!(
+        token_endpoint(CloudProvider::Icloud).unwrap_err(),
+        "icloud-oauth-not-supported"
+    );
+}
+
+#[test]
+fn empty_connection_document_defaults_to_the_current_version() {
+    let document = ConnectionDocument::default();
+    assert_eq!(document.version, CONNECTION_DOCUMENT_VERSION);
+    assert!(document.connections.is_empty());
+}
