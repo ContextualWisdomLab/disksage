@@ -3,9 +3,9 @@
 //! Real-process coverage for malformed `git worktree list --porcelain -z` evidence.
 //!
 //! Git porcelain is an external authority boundary. These regressions launch the shipped audit CLI
-//! with a deterministic fake `git` executable and prove that a worktree record missing either its
-//! path or HEAD cannot become partial removal evidence. The CLI must fail before filesystem sizing,
-//! active-use inspection, or any mutation-capable follow-up.
+//! with a deterministic fake `git` executable and prove that incomplete, duplicate, malformed, or
+//! undecodable worktree records cannot become partial removal evidence. Rejection happens before
+//! filesystem sizing, active-use inspection, or any mutation-capable follow-up.
 
 use std::env;
 use std::fs;
@@ -65,26 +65,73 @@ fn run(porcelain_command: &str) -> std::process::Output {
         .expect("Git worktree audit binary should start")
 }
 
-#[test]
-fn porcelain_record_without_path_fails_closed() {
-    let output = run(&format!("printf 'HEAD {OID}\\0\\0'"));
-
-    assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty());
+fn assert_failure(porcelain_command: &str, expected_reason: &str) {
+    let output = run(porcelain_command);
+    assert_eq!(output.status.code(), Some(2), "reason: {expected_reason}");
+    assert!(output.stdout.is_empty(), "reason: {expected_reason}");
     assert_eq!(
         String::from_utf8(output.stderr).expect("stderr should remain UTF-8"),
-        "DiskSage Git worktree audit: git-worktree-porcelain-path-missing\n"
+        format!("DiskSage Git worktree audit: {expected_reason}\n")
     );
 }
 
 #[test]
-fn porcelain_record_without_head_fails_closed() {
-    let output = run("printf 'worktree /tmp/disksage-untrusted-worktree\\0\\0'");
+fn incomplete_porcelain_records_fail_closed() {
+    assert_failure(
+        &format!("printf 'HEAD {OID}\\0\\0'"),
+        "git-worktree-porcelain-path-missing",
+    );
+    assert_failure(
+        "printf 'worktree /tmp/disksage-untrusted-worktree\\0\\0'",
+        "git-worktree-porcelain-head-missing",
+    );
+    assert_failure("printf ''", "git-worktree-list-empty");
+}
 
-    assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty());
-    assert_eq!(
-        String::from_utf8(output.stderr).expect("stderr should remain UTF-8"),
-        "DiskSage Git worktree audit: git-worktree-porcelain-head-missing\n"
+#[test]
+fn duplicate_porcelain_identity_fields_fail_closed() {
+    assert_failure(
+        &format!(
+            "printf 'worktree /tmp/one\\0worktree /tmp/two\\0HEAD {OID}\\0\\0'"
+        ),
+        "git-worktree-porcelain-duplicate-path",
+    );
+    assert_failure(
+        &format!(
+            "printf 'worktree /tmp/one\\0HEAD {OID}\\0HEAD {OID}\\0\\0'"
+        ),
+        "git-worktree-porcelain-head-invalid",
+    );
+    assert_failure(
+        &format!(
+            "printf 'worktree /tmp/one\\0HEAD {OID}\\0branch refs/heads/main\\0branch refs/heads/other\\0\\0'"
+        ),
+        "git-worktree-porcelain-branch-invalid",
+    );
+}
+
+#[test]
+fn malformed_or_unknown_porcelain_fields_fail_closed() {
+    assert_failure(
+        "printf 'worktree /tmp/one\\0HEAD not-an-oid\\0\\0'",
+        "git-worktree-porcelain-head-invalid",
+    );
+    assert_failure(
+        &format!(
+            "printf 'worktree /tmp/one\\0HEAD {OID}\\0branch refs/tags/not-a-branch\\0\\0'"
+        ),
+        "git-worktree-porcelain-branch-invalid",
+    );
+    assert_failure(
+        &format!("printf 'worktree /tmp/one\\0HEAD {OID}\\0mystery field\\0\\0'"),
+        "git-worktree-porcelain-field-unknown",
+    );
+}
+
+#[test]
+fn non_utf8_porcelain_is_rejected_before_interpretation() {
+    assert_failure(
+        &format!("printf 'worktree /tmp/one\\0HEAD {OID}\\0'; printf '\\377\\0\\0'"),
+        "git-worktree-porcelain-not-utf8",
     );
 }
