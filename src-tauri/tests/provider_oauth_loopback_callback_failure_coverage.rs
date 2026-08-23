@@ -11,7 +11,7 @@ use disksage_lib::provider_oauth::{
     connections_path, finish_authorization, prepare_authorization,
 };
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{Shutdown, TcpStream};
 use std::time::Duration;
 
 const GOOGLE_CLIENT_ID: &str = "1234567890-abcxyz.apps.googleusercontent.com";
@@ -62,6 +62,29 @@ fn send_raw_rejected_bytes(port: u16, request: &[u8]) -> String {
 
 fn send_raw_rejected_request(port: u16, request: &str) -> String {
     send_raw_rejected_bytes(port, request.as_bytes())
+}
+
+fn send_eof_terminated_rejected_request(port: u16, request_line: &str) -> String {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("loopback listener accepts");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .expect("read timeout configured");
+    stream
+        .write_all(format!("{request_line}\r\n").as_bytes())
+        .expect("partial callback request written");
+    stream.flush().expect("partial callback request flushed");
+    stream
+        .shutdown(Shutdown::Write)
+        .expect("partial callback request write side closes");
+
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .expect("bounded loopback response read");
+    assert!(response.starts_with("HTTP/1.1 400 Bad Request\r\n"));
+    assert!(response.contains("Cache-Control: no-store\r\n"));
+    assert!(response.contains("Content-Security-Policy"));
+    response
 }
 
 fn send_rejected_request(port: u16, request_line: &str) -> String {
@@ -127,6 +150,10 @@ fn rejected_callbacks_fail_closed_before_network_keyring_or_durable_publication(
 
     send_raw_rejected_request(port, &exact_limit_rejected_request(port));
     send_raw_rejected_bytes(port, &invalid_utf8_callback_request(port, &state));
+    send_eof_terminated_rejected_request(
+        port,
+        &format!("GET /?error=access_denied&state={state} HTTP/1.1"),
+    );
     send_rejected_request(port, "GET HTTP/1.1");
     send_rejected_request(
         port,
