@@ -182,6 +182,17 @@ fn parser_rejects_conflicting_and_unsafe_root_selection_before_home_or_provider_
 #[test]
 fn empty_home_and_synthetic_onedrive_return_bounded_read_only_json_evidence() {
     let (_target_dir, binary) = build_feature_gated_binary();
+
+    let invalid_home = Command::new(&binary)
+        .env("HOME", "")
+        .env("USERPROFILE", "")
+        .arg("--all-roots")
+        .output()
+        .expect("cloud local-inventory CLI must launch for empty-home admission");
+    assert_eq!(invalid_home.status.code(), Some(2));
+    assert!(invalid_home.stdout.is_empty());
+    assert_eq!(invalid_home.stderr, b"HOME/USERPROFILE을 찾을 수 없음\n");
+
     let home = tempfile::tempdir().expect("isolated empty home must be created");
     let output = Command::new(&binary)
         .env("HOME", home.path())
