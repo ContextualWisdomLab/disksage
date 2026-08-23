@@ -4,6 +4,10 @@
   "source": "icon-source.svg",
   "source_sha256": "42ba6bb93f6ee9faf4783adc279dee900fd2a33c14a926a7bbb16685c0862419",
   "generator": "scripts/generate-icons.mjs",
+  "generator_runtime": {
+    "node": "20.19.0",
+    "zlib": "1.3.0.1-motley"
+  },
   "png_assets": [
     { "path": "32x32.png", "width": 32, "height": 32, "mode": "RGBA" },
     { "path": "128x128.png", "width": 128, "height": 128, "mode": "RGBA" },
