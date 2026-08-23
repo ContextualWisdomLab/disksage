@@ -17,14 +17,21 @@ fn parse_google(json: &str, refresh_required: bool) -> Result<OAuthGrant, String
     parse_token_document(CloudProvider::GoogleDrive, json, refresh_required)
 }
 
+fn parse_error(result: Result<OAuthGrant, String>) -> String {
+    match result {
+        Ok(_) => panic!("token document unexpectedly gained OAuth grant authority"),
+        Err(error) => error,
+    }
+}
+
 #[test]
 fn malformed_or_rejected_token_documents_fail_closed_before_secret_use() {
     assert_eq!(
-        parse_google("not-json", false).unwrap_err(),
+        parse_error(parse_google("not-json", false)),
         "oauth-token-response-invalid"
     );
     assert_eq!(
-        parse_google(r#"{"error":"invalid_grant"}"#, false).unwrap_err(),
+        parse_error(parse_google(r#"{"error":"invalid_grant"}"#, false)),
         "oauth-token-endpoint-rejected"
     );
 
@@ -34,7 +41,7 @@ fn malformed_or_rejected_token_documents_fail_closed_before_secret_use() {
         r#"{"access_token":"line\nfeed","token_type":"Bearer"}"#,
     ] {
         assert_eq!(
-            parse_google(json, false).unwrap_err(),
+            parse_error(parse_google(json, false)),
             "oauth-access-token-invalid",
             "missing, empty, or control-bearing access tokens must fail closed"
         );
@@ -47,7 +54,7 @@ fn malformed_or_rejected_token_documents_fail_closed_before_secret_use() {
     })
     .to_string();
     assert_eq!(
-        parse_google(&json, false).unwrap_err(),
+        parse_error(parse_google(&json, false)),
         "oauth-access-token-invalid"
     );
 }
@@ -59,7 +66,7 @@ fn bearer_type_expiry_and_resource_scope_are_bounded() {
         r#"{"access_token":"access","token_type":"MAC"}"#,
     ] {
         assert_eq!(
-            parse_google(json, false).unwrap_err(),
+            parse_error(parse_google(json, false)),
             "oauth-token-type-invalid"
         );
     }
@@ -72,7 +79,7 @@ fn bearer_type_expiry_and_resource_scope_are_bounded() {
         })
         .to_string();
         assert_eq!(
-            parse_google(&json, false).unwrap_err(),
+            parse_error(parse_google(&json, false)),
             "oauth-token-expiry-invalid"
         );
     }
@@ -85,11 +92,10 @@ fn bearer_type_expiry_and_resource_scope_are_bounded() {
     assert_eq!(legal_max_expiry.access_token.as_str(), "access");
 
     assert_eq!(
-        parse_google(
+        parse_error(parse_google(
             r#"{"access_token":"access","token_type":"Bearer","scope":"https://www.googleapis.com/auth/drive.file"}"#,
             false,
-        )
-        .unwrap_err(),
+        )),
         "oauth-required-scope-missing"
     );
 
@@ -111,11 +117,10 @@ fn bearer_type_expiry_and_resource_scope_are_bounded() {
 #[test]
 fn refresh_token_requirement_and_value_bounds_fail_closed() {
     assert_eq!(
-        parse_google(
+        parse_error(parse_google(
             r#"{"access_token":"access","token_type":"Bearer"}"#,
             true,
-        )
-        .unwrap_err(),
+        )),
         "oauth-refresh-token-missing"
     );
 
@@ -127,7 +132,7 @@ fn refresh_token_requirement_and_value_bounds_fail_closed() {
         })
         .to_string();
         assert_eq!(
-            parse_google(&json, true).unwrap_err(),
+            parse_error(parse_google(&json, true)),
             "oauth-refresh-token-invalid"
         );
     }
@@ -140,7 +145,7 @@ fn refresh_token_requirement_and_value_bounds_fail_closed() {
     })
     .to_string();
     assert_eq!(
-        parse_google(&json, true).unwrap_err(),
+        parse_error(parse_google(&json, true)),
         "oauth-refresh-token-invalid"
     );
 
