@@ -349,8 +349,50 @@ function encodePng(width, height, rgba) {
   ]);
 }
 
-/** Assemble a Windows ICO whose image entries are PNG payloads in the required order. */
-function encodeIco(pngBySize, sizes, bitDepth) {
+/** Encode one 32-bit Windows icon DIB with bottom-up BGRA pixels and a DWORD-aligned AND mask. */
+function encodeIconDib(size, rgba, bitDepth) {
+  if (bitDepth !== 32) throw new Error(`unsupported ICO bit depth: ${bitDepth}`);
+  if (rgba.length !== size * size * 4) throw new Error(`invalid ${size}px RGBA raster for ICO`);
+
+  const pixelBytes = size * size * 4;
+  const maskRowBytes = Math.ceil(size / 32) * 4;
+  const maskBytes = maskRowBytes * size;
+  const header = Buffer.alloc(40);
+  header.writeUInt32LE(40, 0);
+  header.writeInt32LE(size, 4);
+  header.writeInt32LE(size * 2, 8);
+  header.writeUInt16LE(1, 12);
+  header.writeUInt16LE(bitDepth, 14);
+  header.writeUInt32LE(0, 16);
+  header.writeUInt32LE(pixelBytes + maskBytes, 20);
+
+  const pixels = Buffer.allocUnsafe(pixelBytes);
+  const mask = Buffer.alloc(maskBytes);
+  for (let dibY = 0; dibY < size; dibY += 1) {
+    const sourceY = size - 1 - dibY;
+    for (let x = 0; x < size; x += 1) {
+      const sourceOffset = (sourceY * size + x) * 4;
+      const destinationOffset = (dibY * size + x) * 4;
+      const red = rgba[sourceOffset];
+      const green = rgba[sourceOffset + 1];
+      const blue = rgba[sourceOffset + 2];
+      const alpha = rgba[sourceOffset + 3];
+      pixels[destinationOffset] = blue;
+      pixels[destinationOffset + 1] = green;
+      pixels[destinationOffset + 2] = red;
+      pixels[destinationOffset + 3] = alpha;
+      if (alpha === 0) {
+        const maskOffset = dibY * maskRowBytes + Math.floor(x / 8);
+        mask[maskOffset] |= 1 << (7 - (x % 8));
+      }
+    }
+  }
+
+  return Buffer.concat([header, pixels, mask]);
+}
+
+/** Assemble a Windows ICO using DIB for legacy-sized layers and PNG for the 256px layer. */
+function encodeIco(rgbaBySize, pngBySize, sizes, bitDepth) {
   const header = Buffer.alloc(6 + sizes.length * 16);
   header.writeUInt16LE(0, 0);
   header.writeUInt16LE(1, 2);
@@ -360,7 +402,9 @@ function encodeIco(pngBySize, sizes, bitDepth) {
   const payloads = [];
   sizes.forEach((size, index) => {
     const png = pngBySize.get(size);
-    if (!png) throw new Error(`missing ${size}px PNG for ICO`);
+    const rgba = rgbaBySize.get(size);
+    if (!png || !rgba) throw new Error(`missing ${size}px raster for ICO`);
+    const payload = size === 256 ? png : encodeIconDib(size, rgba, bitDepth);
     const entryOffset = 6 + index * 16;
     header[entryOffset] = size === 256 ? 0 : size;
     header[entryOffset + 1] = size === 256 ? 0 : size;
@@ -368,10 +412,10 @@ function encodeIco(pngBySize, sizes, bitDepth) {
     header[entryOffset + 3] = 0;
     header.writeUInt16LE(1, entryOffset + 4);
     header.writeUInt16LE(bitDepth, entryOffset + 6);
-    header.writeUInt32LE(png.length, entryOffset + 8);
+    header.writeUInt32LE(payload.length, entryOffset + 8);
     header.writeUInt32LE(payloadOffset, entryOffset + 12);
-    payloadOffset += png.length;
-    payloads.push(png);
+    payloadOffset += payload.length;
+    payloads.push(payload);
   });
 
   return Buffer.concat([header, ...payloads]);
@@ -413,10 +457,12 @@ export function generateIconSet({ sourcePath, contractPath, outputDirectory }) {
     ...contract.ico.sizes,
     ...contract.icns.chunks.map(({ size }) => size),
   ]);
+  const rgbaBySize = new Map();
   const pngBySize = new Map();
 
   for (const size of [...requiredSizes].sort((left, right) => left - right)) {
     const rgba = renderIcon(size, master, sourceDefinition);
+    rgbaBySize.set(size, rgba);
     pngBySize.set(size, encodePng(size, size, rgba));
   }
 
@@ -431,7 +477,7 @@ export function generateIconSet({ sourcePath, contractPath, outputDirectory }) {
     assets.push({ ...asset, sha256: sha256(png) });
   }
 
-  const ico = encodeIco(pngBySize, contract.ico.sizes, contract.ico.bit_depth);
+  const ico = encodeIco(rgbaBySize, pngBySize, contract.ico.sizes, contract.ico.bit_depth);
   writeFileSync(resolve(outputDirectory, contract.ico.path), ico);
   assets.push({ path: contract.ico.path, sha256: sha256(ico), bytes: ico.length });
 
