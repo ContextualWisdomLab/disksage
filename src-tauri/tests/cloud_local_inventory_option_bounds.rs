@@ -67,6 +67,11 @@ fn invalid_inventory_limits_fail_before_empty_home_discovery_can_return_success(
     let (_target_dir, binary) = build_feature_gated_binary();
 
     for (flag, value, expected) in [
+        (
+            "--min-allocated-mib",
+            "17592186044416",
+            "cloud-local-inventory-min-allocated-mib-invalid",
+        ),
         ("--max-entries", "0", "cloud-local-inventory-max-entries-invalid"),
         (
             "--max-entries",
@@ -110,6 +115,8 @@ fn exact_inventory_limit_ceilings_remain_admitted() {
         .env("USERPROFILE", home.path())
         .args([
             "--all-roots",
+            "--min-allocated-mib",
+            "17592186044415",
             "--max-entries",
             "1000000",
             "--max-results",
