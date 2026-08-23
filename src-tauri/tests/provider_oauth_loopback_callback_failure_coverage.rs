@@ -15,6 +15,7 @@ use std::net::TcpStream;
 use std::time::Duration;
 
 const GOOGLE_CLIENT_ID: &str = "1234567890-abcxyz.apps.googleusercontent.com";
+const CALLBACK_REQUEST_LIMIT_BYTES: usize = 16 * 1024;
 
 fn query_value<'a>(url: &'a str, key: &str) -> &'a str {
     let query = url
@@ -39,16 +40,14 @@ fn google_loopback_port(url: &str) -> u16 {
         .expect("loopback port is numeric")
 }
 
-fn send_rejected_request(port: u16, request_line: &str) -> String {
+fn send_raw_rejected_request(port: u16, request: &str) -> String {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("loopback listener accepts");
     stream
         .set_read_timeout(Some(Duration::from_secs(3)))
         .expect("read timeout configured");
-    write!(
-        stream,
-        "{request_line}\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
-    )
-    .expect("callback request written");
+    stream
+        .write_all(request.as_bytes())
+        .expect("callback request written");
     stream.flush().expect("callback request flushed");
 
     let mut response = String::new();
@@ -59,6 +58,26 @@ fn send_rejected_request(port: u16, request_line: &str) -> String {
     assert!(response.contains("Cache-Control: no-store\r\n"));
     assert!(response.contains("Content-Security-Policy"));
     response
+}
+
+fn send_rejected_request(port: u16, request_line: &str) -> String {
+    let request = format!(
+        "{request_line}\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    send_raw_rejected_request(port, &request)
+}
+
+fn exact_limit_rejected_request(port: u16) -> String {
+    let prefix = "GET /?padding=";
+    let suffix = format!(
+        " HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    let padding_bytes = CALLBACK_REQUEST_LIMIT_BYTES
+        .checked_sub(prefix.len() + suffix.len())
+        .expect("callback limit exceeds fixed request framing");
+    let request = format!("{prefix}{}{suffix}", "a".repeat(padding_bytes));
+    assert_eq!(request.len(), CALLBACK_REQUEST_LIMIT_BYTES);
+    request
 }
 
 #[test]
@@ -90,8 +109,7 @@ fn rejected_callbacks_fail_closed_before_network_keyring_or_durable_publication(
         finish_authorization(pending, &root, &connection_path, 123)
     });
 
-    let oversized_target = format!("GET /?padding={} HTTP/1.1", "a".repeat(17 * 1024));
-    send_rejected_request(port, &oversized_target);
+    send_raw_rejected_request(port, &exact_limit_rejected_request(port));
     send_rejected_request(
         port,
         &format!("POST /?code=ignored&state={state} HTTP/1.1"),
