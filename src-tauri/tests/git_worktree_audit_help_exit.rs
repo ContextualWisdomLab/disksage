@@ -196,6 +196,29 @@ fn unknown_and_missing_arguments_are_exact_bounded_failures() {
 }
 
 #[test]
+fn unsafe_paths_and_missing_reference_authority_fail_before_domain_work() {
+    assert_exact_failure(
+        &["--repository-root", "relative/repository", "--reference-ref", OID],
+        "--repository-root는 절대 경로여야 함",
+    );
+    assert_exact_failure(
+        &[
+            "--repository-root",
+            "/definitely/not/a/real/repository",
+            "--reference-ref",
+            OID,
+            "--private-output",
+            "relative/report.json",
+        ],
+        "--private-output은 절대 경로여야 함",
+    );
+    assert_exact_failure(
+        &["--repository-root", "/definitely/not/a/real/repository"],
+        "--reference-ref 값이 하나 이상 필요함",
+    );
+}
+
+#[test]
 fn duplicate_singleton_options_fail_before_git_or_filesystem_work() {
     let cases: &[&[&str]] = &[
         &[
