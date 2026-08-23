@@ -244,10 +244,14 @@ fn command_args() -> Result<Vec<String>, String> {
 
 #[cfg(not(coverage))]
 fn home_dir() -> Result<PathBuf, String> {
-    std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map(PathBuf::from)
-        .map_err(|_| "HOME/USERPROFILE을 찾을 수 없음".into())
+    for key in ["HOME", "USERPROFILE"] {
+        if let Some(value) = std::env::var_os(key) {
+            if !value.is_empty() {
+                return Ok(PathBuf::from(value));
+            }
+        }
+    }
+    Err("HOME/USERPROFILE을 찾을 수 없음".into())
 }
 
 #[cfg(not(coverage))]
