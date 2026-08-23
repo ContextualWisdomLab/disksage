@@ -333,9 +333,12 @@ fn validate_connection_document_parent(parent: &Path, allow_missing: bool) -> Re
             }
             Ok(metadata) => {
                 #[cfg(unix)]
-                if ancestor == parent {
+                {
                     use std::os::unix::fs::PermissionsExt;
-                    if metadata.permissions().mode() & 0o022 != 0 {
+                    let mode = metadata.permissions().mode();
+                    let shared_writable = mode & 0o022 != 0;
+                    let sticky = mode & 0o1000 != 0;
+                    if shared_writable && (ancestor == parent || !sticky) {
                         return Err("oauth-connection-directory-writable-by-others".into());
                     }
                 }
