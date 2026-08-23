@@ -1,13 +1,11 @@
 //! Read-only Git worktree safety audit with a path-redacted public summary.
 
 use std::ffi::OsString;
-use std::fs::OpenOptions;
-use std::io::Write;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use disksage_lib::git_worktree::{audit_git_worktrees, public_summary, GitWorktreeAuditOptions};
-use sha2::{Digest, Sha256};
+use disksage_lib::private_evidence::{write_private_json_create_new, PrivateEvidenceReceipt};
 
 const MAX_REFERENCE_BYTES: usize = 1_024;
 
@@ -173,35 +171,39 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn private_output_unix_mode() -> Result<&'static str, String> {
-    #[cfg(unix)]
-    {
-        Ok("0600")
-    }
-    #[cfg(not(unix))]
-    {
-        Err("git-worktree-private-output-secure-mode-unsupported".into())
+fn map_private_output_error(error: String) -> String {
+    match error.as_str() {
+        "private-evidence-secure-mode-unsupported" => {
+            "git-worktree-private-output-secure-mode-unsupported".into()
+        }
+        "private-evidence-parent-writable-by-others" => {
+            "git-worktree-private-output-parent-writable-by-others".into()
+        }
+        "private-evidence-inside-source-root" => {
+            "git-worktree-private-output-inside-repository".into()
+        }
+        "private-evidence-create-failed" => "git-worktree-private-output-create-failed".into(),
+        "private-evidence-write-failed"
+        | "private-evidence-parent-sync-failed"
+        | "private-evidence-mode-invalid" => "git-worktree-private-output-write-failed".into(),
+        "private-evidence-parent-missing"
+        | "private-evidence-parent-unavailable"
+        | "private-evidence-parent-unsafe"
+        | "private-evidence-source-root-unavailable"
+        | "private-evidence-name-invalid" => "git-worktree-private-output-parent-unsafe".into(),
+        "private-evidence-json-invalid" | "private-evidence-too-large" => {
+            "git-worktree-private-output-invalid".into()
+        }
+        _ => "git-worktree-private-output-failed".into(),
     }
 }
 
-fn write_new_private_json(path: &PathBuf, encoded: &[u8]) -> Result<(), String> {
-    private_output_unix_mode()?;
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut output = options
-        .open(path)
-        .map_err(|_| "git-worktree-private-output-create-failed".to_string())?;
-    output
-        .write_all(encoded)
-        .map_err(|_| "git-worktree-private-output-write-failed".to_string())?;
-    output
-        .sync_all()
-        .map_err(|_| "git-worktree-private-output-sync-failed".to_string())
+fn write_private_report(
+    source_root: &PathBuf,
+    path: &PathBuf,
+    report: &impl serde::Serialize,
+) -> Result<PrivateEvidenceReceipt, String> {
+    write_private_json_create_new(source_root, path, report).map_err(map_private_output_error)
 }
 
 fn run_with_args(args: Args, observed_at_ms: u64) -> Result<serde_json::Value, String> {
@@ -214,26 +216,20 @@ fn run_with_args(args: Args, observed_at_ms: u64) -> Result<serde_json::Value, S
     let mut summary =
         serde_json::to_value(public_summary(&report)).map_err(|error| error.to_string())?;
     if let Some(private_output) = &args.private_output {
-        let unix_mode = private_output_unix_mode()?;
-        let encoded = serde_json::to_vec_pretty(&report).map_err(|error| error.to_string())?;
-        write_new_private_json(private_output, &encoded)?;
-        let sha256: String = Sha256::digest(&encoded)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
+        let receipt = write_private_report(&args.repository_root, private_output, &report)?;
         summary
             .as_object_mut()
             .ok_or_else(|| "git-worktree-public-summary-not-object".to_string())?
             .insert(
                 "private_report".into(),
                 serde_json::json!({
-                    "written": true,
-                    "bytes": encoded.len(),
-                    "sha256": sha256,
-                    "unix_mode": unix_mode,
-                    "create_new": true,
-                    "contains_sensitive_local_paths_and_branches": true,
-                    "is_approval": false,
+                    "written": receipt.written,
+                    "bytes": receipt.bytes,
+                    "sha256": receipt.sha256,
+                    "unix_mode": receipt.unix_mode,
+                    "create_new": receipt.create_new,
+                    "contains_sensitive_local_paths_and_branches": receipt.contains_sensitive_local_paths,
+                    "is_approval": receipt.is_approval,
                 }),
             );
     }
@@ -407,36 +403,45 @@ mod tests {
     }
 
     #[test]
-    fn private_output_support_matches_secure_mode_contract() {
-        #[cfg(unix)]
-        assert_eq!(private_output_unix_mode().unwrap(), "0600");
-        #[cfg(not(unix))]
+    fn private_output_error_mapping_remains_cli_bounded() {
         assert_eq!(
-            private_output_unix_mode().unwrap_err(),
+            map_private_output_error("private-evidence-secure-mode-unsupported".into()),
             "git-worktree-private-output-secure-mode-unsupported"
+        );
+        assert_eq!(
+            map_private_output_error("private-evidence-parent-writable-by-others".into()),
+            "git-worktree-private-output-parent-writable-by-others"
+        );
+        assert_eq!(
+            map_private_output_error("private-evidence-inside-source-root".into()),
+            "git-worktree-private-output-inside-repository"
+        );
+        assert_eq!(
+            map_private_output_error("private-evidence-create-failed".into()),
+            "git-worktree-private-output-create-failed"
         );
     }
 
+    #[cfg(unix)]
     #[test]
-    fn private_output_is_create_new_and_not_overwritten() {
-        #[cfg(unix)]
-        {
-            let temp = tempfile::tempdir().unwrap();
-            let output = temp.path().join("audit.json");
-            write_new_private_json(&output, b"{\"first\":true}").unwrap();
-            assert_eq!(std::fs::read(&output).unwrap(), b"{\"first\":true}");
-            assert!(write_new_private_json(&output, b"{\"second\":true}").is_err());
-            assert_eq!(std::fs::read(&output).unwrap(), b"{\"first\":true}");
-        }
-        #[cfg(not(unix))]
-        {
-            let temp = tempfile::tempdir().unwrap();
-            let output = temp.path().join("audit.json");
-            assert_eq!(
-                write_new_private_json(&output, b"{\"private\":true}").unwrap_err(),
-                "git-worktree-private-output-secure-mode-unsupported"
-            );
-            assert!(!output.exists());
-        }
+    fn private_output_reuses_repository_private_evidence_boundary() {
+        let source = tempfile::tempdir().unwrap();
+        let private = tempfile::tempdir().unwrap();
+        let output = private.path().join("audit.json");
+        let receipt = write_private_report(
+            &source.path().to_path_buf(),
+            &output,
+            &serde_json::json!({"private": true}),
+        )
+        .unwrap();
+        assert!(receipt.written);
+        assert_eq!(receipt.unix_mode, "0600");
+        assert!(receipt.contains_sensitive_local_paths);
+        assert!(write_private_report(
+            &source.path().to_path_buf(),
+            &output,
+            &serde_json::json!({"private": false}),
+        )
+        .is_err());
     }
 }
