@@ -3,42 +3,27 @@
 #[cfg(target_os = "macos")]
 embed_plist::embed_info_plist!("../../disksage-cloud-plan.Info.plist");
 
-#[cfg(not(coverage))]
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
-#[cfg(not(coverage))]
 use std::path::{Path, PathBuf};
-#[cfg(not(coverage))]
 use std::process::{Command, Stdio};
-#[cfg(not(coverage))]
 use std::sync::{Arc, Mutex};
-#[cfg(not(coverage))]
 use std::time::{Duration, Instant};
 
-#[cfg(not(coverage))]
 use disksage_lib::cloud::{self, CloudRoot};
-#[cfg(not(coverage))]
 use disksage_lib::cloud_local_inventory::{
     hard_timeout_inventory, hard_timeout_inventory_from_checkpoint,
     inventory_cloud_local_allocations_with_checkpoints, CloudLocalAllocationInventory,
     CloudLocalInventoryOptions,
 };
 
-#[cfg(not(coverage))]
 const WORKER_REPORT_GRACE_MS: u64 = 2_000;
-#[cfg(not(coverage))]
 const MAX_MIN_ALLOCATED_MIB: u64 = u64::MAX / (1024 * 1024);
-#[cfg(not(coverage))]
 const MAX_ENTRY_LIMIT: u64 = 1_000_000;
-#[cfg(not(coverage))]
 const MAX_RESULT_LIMIT: usize = 10_000;
-#[cfg(not(coverage))]
 const MAX_DEPTH_LIMIT: usize = 64;
-#[cfg(not(coverage))]
 const MAX_DURATION_LIMIT_MS: u64 = 300_000;
-#[cfg(not(coverage))]
 const MAX_ISSUE_LIMIT: usize = 1_000;
 
-#[cfg(not(coverage))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Args {
     cloud_root: Option<PathBuf>,
@@ -52,12 +37,10 @@ struct Args {
     max_issues: usize,
 }
 
-#[cfg(not(coverage))]
 fn usage() -> &'static str {
     "usage: disksage-cloud-local-inventory (--cloud-root ABSOLUTE_PATH [--relative-subpath SAFE_RELATIVE_PATH] | --all-roots) [--min-allocated-mib N] [--max-entries N] [--max-results N] [--max-depth N] [--max-duration-ms N] [--max-issues N]"
 }
 
-#[cfg(not(coverage))]
 fn value(args: &[String], index: &mut usize, flag: &str) -> Result<String, String> {
     *index += 1;
     args.get(*index)
@@ -65,7 +48,6 @@ fn value(args: &[String], index: &mut usize, flag: &str) -> Result<String, Strin
         .ok_or_else(|| format!("{flag} 값이 필요함"))
 }
 
-#[cfg(not(coverage))]
 fn number<T: std::str::FromStr>(
     args: &[String],
     index: &mut usize,
@@ -76,7 +58,6 @@ fn number<T: std::str::FromStr>(
         .map_err(|_| format!("{flag}는 정수여야 함"))
 }
 
-#[cfg(not(coverage))]
 fn validate_option_bounds(args: &Args) -> Result<(), String> {
     if args.min_allocated_mib > MAX_MIN_ALLOCATED_MIB {
         return Err("cloud-local-inventory-min-allocated-mib-invalid".into());
@@ -99,7 +80,6 @@ fn validate_option_bounds(args: &Args) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(coverage))]
 fn parse_args(args: &[String]) -> Result<Args, String> {
     let defaults = CloudLocalInventoryOptions::default();
     let mut cloud_root = None;
@@ -230,7 +210,6 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     Ok(parsed)
 }
 
-#[cfg(not(coverage))]
 fn command_args() -> Result<Vec<String>, String> {
     std::env::args_os()
         .skip(1)
@@ -242,7 +221,6 @@ fn command_args() -> Result<Vec<String>, String> {
         .collect()
 }
 
-#[cfg(not(coverage))]
 fn home_dir() -> Result<PathBuf, String> {
     for key in ["HOME", "USERPROFILE"] {
         if let Some(value) = std::env::var_os(key) {
@@ -254,7 +232,6 @@ fn home_dir() -> Result<PathBuf, String> {
     Err("HOME/USERPROFILE을 찾을 수 없음".into())
 }
 
-#[cfg(not(coverage))]
 fn select_root<'a>(roots: &'a [CloudRoot], requested: &Path) -> Result<&'a CloudRoot, String> {
     let matches: Vec<_> = roots
         .iter()
@@ -267,7 +244,6 @@ fn select_root<'a>(roots: &'a [CloudRoot], requested: &Path) -> Result<&'a Cloud
     }
 }
 
-#[cfg(not(coverage))]
 fn scan_root(discovered: &CloudRoot, relative_subpath: Option<&Path>) -> Result<CloudRoot, String> {
     let Some(relative) = relative_subpath else {
         return Ok(discovered.clone());
@@ -291,7 +267,6 @@ fn scan_root(discovered: &CloudRoot, relative_subpath: Option<&Path>) -> Result<
     Ok(selected)
 }
 
-#[cfg(not(coverage))]
 fn inventory_options(args: &Args) -> CloudLocalInventoryOptions {
     CloudLocalInventoryOptions {
         min_allocated_bytes: args.min_allocated_mib * (1024 * 1024),
@@ -303,7 +278,6 @@ fn inventory_options(args: &Args) -> CloudLocalInventoryOptions {
     }
 }
 
-#[cfg(not(coverage))]
 fn print_report(report: &CloudLocalAllocationInventory) -> Result<(), String> {
     println!(
         "{}",
@@ -312,7 +286,6 @@ fn print_report(report: &CloudLocalAllocationInventory) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(coverage))]
 #[derive(Debug, serde::Serialize)]
 struct CloudLocalInventoryBatchFailure {
     cloud_root_id: String,
@@ -322,7 +295,6 @@ struct CloudLocalInventoryBatchFailure {
     reason: String,
 }
 
-#[cfg(not(coverage))]
 #[derive(Debug, serde::Serialize)]
 struct CloudLocalInventoryBatchReport {
     version: u32,
@@ -339,7 +311,6 @@ struct CloudLocalInventoryBatchReport {
     notices: Vec<String>,
 }
 
-#[cfg(not(coverage))]
 fn print_batch_report(report: &CloudLocalInventoryBatchReport) -> Result<(), String> {
     println!(
         "{}",
@@ -348,7 +319,6 @@ fn print_batch_report(report: &CloudLocalInventoryBatchReport) -> Result<(), Str
     Ok(())
 }
 
-#[cfg(not(coverage))]
 fn single_root_invocation(args: &Args, root: &CloudRoot) -> (Vec<String>, Args) {
     let raw = vec![
         "--cloud-root".into(),
@@ -382,7 +352,6 @@ fn single_root_invocation(args: &Args, root: &CloudRoot) -> (Vec<String>, Args) 
     )
 }
 
-#[cfg(not(coverage))]
 fn inventory_all_roots(
     discovery: cloud::CloudRootDiscoveryReport,
     args: &Args,
@@ -412,7 +381,6 @@ fn inventory_all_roots(
     )
 }
 
-#[cfg(not(coverage))]
 fn finish_batch_report(
     observed_at_ms: u64,
     discovered_roots: usize,
@@ -461,7 +429,6 @@ fn finish_batch_report(
     }
 }
 
-#[cfg(not(coverage))]
 #[derive(Debug, serde::Serialize)]
 #[serde(tag = "kind", content = "report", rename_all = "kebab-case")]
 enum WorkerMessageRef<'a> {
@@ -469,7 +436,6 @@ enum WorkerMessageRef<'a> {
     Complete(&'a CloudLocalAllocationInventory),
 }
 
-#[cfg(not(coverage))]
 #[derive(Debug, serde::Deserialize)]
 #[serde(tag = "kind", content = "report", rename_all = "kebab-case")]
 enum WorkerMessage {
@@ -477,7 +443,6 @@ enum WorkerMessage {
     Complete(CloudLocalAllocationInventory),
 }
 
-#[cfg(not(coverage))]
 fn write_worker_message(
     writer: &mut impl Write,
     message: &WorkerMessageRef<'_>,
@@ -491,7 +456,6 @@ fn write_worker_message(
         .map_err(|_| "inventory-worker-output-failed".to_string())
 }
 
-#[cfg(not(coverage))]
 fn run_worker(root: &CloudRoot, args: &Args) -> Result<(), String> {
     let stdout = std::io::stdout();
     let mut writer = BufWriter::new(stdout.lock());
@@ -504,7 +468,6 @@ fn run_worker(root: &CloudRoot, args: &Args) -> Result<(), String> {
     write_worker_message(&mut writer, &WorkerMessageRef::Complete(&report))
 }
 
-#[cfg(not(coverage))]
 fn drain_pipe<R: Read + Send + 'static>(
     mut pipe: R,
 ) -> std::thread::JoinHandle<Result<String, String>> {
@@ -516,14 +479,12 @@ fn drain_pipe<R: Read + Send + 'static>(
     })
 }
 
-#[cfg(not(coverage))]
 fn join_pipe(reader: std::thread::JoinHandle<Result<String, String>>) -> Result<String, String> {
     reader
         .join()
         .map_err(|_| "inventory-worker-output-thread-failed".to_string())?
 }
 
-#[cfg(not(coverage))]
 fn drain_worker_stdout<R: Read + Send + 'static>(
     reader: R,
     latest_checkpoint: Arc<Mutex<Option<CloudLocalAllocationInventory>>>,
@@ -548,7 +509,6 @@ fn drain_worker_stdout<R: Read + Send + 'static>(
     })
 }
 
-#[cfg(not(coverage))]
 fn join_worker_stdout(
     reader: std::thread::JoinHandle<Result<CloudLocalAllocationInventory, String>>,
 ) -> Result<CloudLocalAllocationInventory, String> {
@@ -557,12 +517,10 @@ fn join_worker_stdout(
         .map_err(|_| "inventory-worker-output-thread-failed".to_string())?
 }
 
-#[cfg(not(coverage))]
 fn watchdog_deadline_ms(max_duration_ms: u64) -> u64 {
     max_duration_ms.saturating_add(WORKER_REPORT_GRACE_MS)
 }
 
-#[cfg(not(coverage))]
 fn run_watchdog(
     raw: &[String],
     root: &CloudRoot,
@@ -634,7 +592,6 @@ fn run_watchdog(
     }
 }
 
-#[cfg(not(coverage))]
 fn run() -> Result<(), String> {
     let raw = command_args()?;
     if matches!(raw.as_slice(), [flag] if flag == "--help" || flag == "-h") {
@@ -661,16 +618,12 @@ fn run() -> Result<(), String> {
     print_report(&run_watchdog(&raw, &root, &args)?)
 }
 
-#[cfg(not(coverage))]
 fn main() {
     if let Err(error) = run() {
         eprintln!("{error}");
         std::process::exit(2);
     }
 }
-
-#[cfg(coverage)]
-fn main() {}
 
 #[cfg(test)]
 mod tests {
