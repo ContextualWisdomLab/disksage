@@ -247,11 +247,21 @@ fn empty_home_and_synthetic_onedrive_return_bounded_read_only_json_evidence() {
         serde_json::from_slice(&single.stdout).expect("single-root output must be valid JSON");
     assert_eq!(single_report["version"], 2);
     assert_eq!(single_report["provider"], "onedrive");
-    assert_eq!(single_report["cloud_root"], onedrive.to_string_lossy().as_ref());
-    assert_eq!(single_report["candidate_count"].as_u64().unwrap_or(0), 0);
+    assert_eq!(single_report["account_scope"], "unknown");
+    assert_eq!(
+        single_report["cloud_root_id"],
+        onedrive.to_string_lossy().as_ref()
+    );
+    assert_eq!(
+        single_report["cloud_root"],
+        onedrive.to_string_lossy().as_ref()
+    );
     assert_eq!(single_report["allocated_candidate_bytes"], 0);
     assert_eq!(single_report["evidence_complete"], true);
+    assert_eq!(single_report["issues_truncated"], false);
+    assert_eq!(single_report["results_truncated"], false);
     assert_eq!(single_report["candidates"].as_array().map(Vec::len), Some(0));
+    assert_eq!(single_report["stop_reasons"].as_array().map(Vec::len), Some(0));
     let single_notices = single_report["notices"]
         .as_array()
         .expect("single-root notices must be an array");
