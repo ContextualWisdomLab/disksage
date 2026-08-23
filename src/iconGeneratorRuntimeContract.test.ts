@@ -20,9 +20,10 @@ const EXPECTED_RUNTIME = {
   node_major: 20,
   zlib: "1.3.0.1-motley",
 };
+const EXPECTED_NODE_VERSION = "20.19.0";
 
 describe("deterministic icon generator runtime", () => {
-  it("pins the compressor ABI while Test and Release stay on Node 20", () => {
+  it("pins Test and Release to the audited Node runtime and compressor ABI", () => {
     const contract = JSON.parse(readFileSync(contractPath, "utf8")) as {
       generator_runtime?: { node_major?: number; zlib?: string };
     };
@@ -33,8 +34,9 @@ describe("deterministic icon generator runtime", () => {
     );
 
     expect(contract.generator_runtime).toEqual(EXPECTED_RUNTIME);
-    expect(testWorkflow).toContain("node-version: 20.19.0");
-    expect(releaseWorkflow).toContain("node-version: 20");
+    expect(testWorkflow).toContain(`node-version: ${EXPECTED_NODE_VERSION}`);
+    expect(releaseWorkflow).toContain(`node-version: ${EXPECTED_NODE_VERSION}`);
+    expect(releaseWorkflow).not.toMatch(/node-version:\s*20\s*(?:#.*)?$/m);
   });
 
   it("fails closed before creating output when the runtime contract does not match", () => {
