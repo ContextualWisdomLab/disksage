@@ -96,6 +96,15 @@ fn rejected_callbacks_fail_closed_before_network_keyring_or_durable_publication(
     );
     send_rejected_request(
         port,
+        &format!("GET /wrong?code=ignored&state={state} HTTP/1.1"),
+    );
+    send_rejected_request(port, &format!("GET /?state={state} HTTP/1.1"));
+    send_rejected_request(
+        port,
+        &format!("GET /?code=one&code=two&state={state} HTTP/1.1"),
+    );
+    send_rejected_request(
+        port,
         &format!("GET /?code=%GG&state={state} HTTP/1.1"),
     );
     send_rejected_request(port, "GET /?code=ignored&state=wrong HTTP/1.1");
