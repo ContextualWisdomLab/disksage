@@ -90,6 +90,8 @@ fn rejected_callbacks_fail_closed_before_network_keyring_or_durable_publication(
         finish_authorization(pending, &root, &connection_path, 123)
     });
 
+    let oversized_target = format!("GET /?padding={} HTTP/1.1", "a".repeat(17 * 1024));
+    send_rejected_request(port, &oversized_target);
     send_rejected_request(
         port,
         &format!("POST /?code=ignored&state={state} HTTP/1.1"),
