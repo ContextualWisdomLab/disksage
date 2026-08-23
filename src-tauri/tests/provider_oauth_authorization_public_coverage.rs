@@ -6,7 +6,7 @@
 //! persist connection metadata.
 
 use disksage_lib::cloud::CloudProvider;
-use disksage_lib::provider_oauth::prepare_authorization;
+use disksage_lib::provider_oauth::{prepare_authorization, requested_scope, validate_client_id};
 
 const MICROSOFT_CLIENT_ID: &str = "12345678-1234-4abc-8def-1234567890ab";
 const GOOGLE_CLIENT_ID: &str = "1234567890-abcxyz.apps.googleusercontent.com";
@@ -119,4 +119,68 @@ fn client_id_bounds_fail_before_loopback_or_provider_work() {
             "oauth-client-id-invalid"
         );
     }
+}
+
+#[test]
+fn provider_client_id_shape_matrix_exercises_public_admission_without_side_effects() {
+    assert_eq!(
+        validate_client_id(CloudProvider::Onedrive, MICROSOFT_CLIENT_ID),
+        Ok(())
+    );
+    assert_eq!(
+        validate_client_id(
+            CloudProvider::Onedrive,
+            "ABCDEF12-ABCD-4ABC-8DEF-ABCDEF123456",
+        ),
+        Ok(())
+    );
+    for invalid in [
+        "1234567-1234-4abc-8def-1234567890ab",
+        "12345678-123-4abc-8def-1234567890ab",
+        "12345678-1234-4ab-8def-1234567890ab",
+        "12345678-1234-4abc-8de-1234567890ab",
+        "12345678-1234-4abc-8def-1234567890a",
+        "12345678-1234-4abg-8def-1234567890ab",
+        "12345678-1234-4abc-8def-1234567890ab-extra",
+    ] {
+        assert_eq!(
+            validate_client_id(CloudProvider::Onedrive, invalid),
+            Err("oauth-client-id-provider-format-invalid".to_string()),
+            "malformed Microsoft native client ID {invalid:?} must fail closed",
+        );
+    }
+
+    assert_eq!(
+        validate_client_id(CloudProvider::GoogleDrive, GOOGLE_CLIENT_ID),
+        Ok(())
+    );
+    for invalid in [
+        ".apps.googleusercontent.com",
+        "abc_xyz.apps.googleusercontent.com",
+        "abc/xyz.apps.googleusercontent.com",
+        "abcxyz.googleusercontent.com",
+    ] {
+        assert_eq!(
+            validate_client_id(CloudProvider::GoogleDrive, invalid),
+            Err("oauth-client-id-provider-format-invalid".to_string()),
+            "malformed Google installed-app client ID {invalid:?} must fail closed",
+        );
+    }
+
+    assert_eq!(
+        validate_client_id(CloudProvider::Icloud, MICROSOFT_CLIENT_ID),
+        Err("icloud-oauth-not-supported".to_string())
+    );
+    assert_eq!(
+        requested_scope(CloudProvider::Onedrive),
+        Ok("Files.Read offline_access")
+    );
+    assert_eq!(
+        requested_scope(CloudProvider::GoogleDrive),
+        Ok("https://www.googleapis.com/auth/drive.metadata.readonly")
+    );
+    assert_eq!(
+        requested_scope(CloudProvider::Icloud),
+        Err("icloud-oauth-not-supported".to_string())
+    );
 }
