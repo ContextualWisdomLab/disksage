@@ -158,7 +158,19 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+fn private_output_unix_mode() -> Result<&'static str, String> {
+    #[cfg(unix)]
+    {
+        Ok("0600")
+    }
+    #[cfg(not(unix))]
+    {
+        Err("git-worktree-private-output-secure-mode-unsupported".into())
+    }
+}
+
 fn write_new_private_json(path: &PathBuf, encoded: &[u8]) -> Result<(), String> {
+    private_output_unix_mode()?;
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -187,6 +199,7 @@ fn run_with_args(args: Args, observed_at_ms: u64) -> Result<serde_json::Value, S
     let mut summary =
         serde_json::to_value(public_summary(&report)).map_err(|error| error.to_string())?;
     if let Some(private_output) = &args.private_output {
+        let unix_mode = private_output_unix_mode()?;
         let encoded = serde_json::to_vec_pretty(&report).map_err(|error| error.to_string())?;
         write_new_private_json(private_output, &encoded)?;
         let sha256: String = Sha256::digest(&encoded)
@@ -202,7 +215,7 @@ fn run_with_args(args: Args, observed_at_ms: u64) -> Result<serde_json::Value, S
                     "written": true,
                     "bytes": encoded.len(),
                     "sha256": sha256,
-                    "unix_mode": "0600",
+                    "unix_mode": unix_mode,
                     "create_new": true,
                     "contains_sensitive_local_paths_and_branches": true,
                     "is_approval": false,
@@ -361,12 +374,36 @@ mod tests {
     }
 
     #[test]
+    fn private_output_support_matches_secure_mode_contract() {
+        #[cfg(unix)]
+        assert_eq!(private_output_unix_mode().unwrap(), "0600");
+        #[cfg(not(unix))]
+        assert_eq!(
+            private_output_unix_mode().unwrap_err(),
+            "git-worktree-private-output-secure-mode-unsupported"
+        );
+    }
+
+    #[test]
     fn private_output_is_create_new_and_not_overwritten() {
-        let temp = tempfile::tempdir().unwrap();
-        let output = temp.path().join("audit.json");
-        write_new_private_json(&output, b"{\"first\":true}").unwrap();
-        assert_eq!(std::fs::read(&output).unwrap(), b"{\"first\":true}");
-        assert!(write_new_private_json(&output, b"{\"second\":true}").is_err());
-        assert_eq!(std::fs::read(&output).unwrap(), b"{\"first\":true}");
+        #[cfg(unix)]
+        {
+            let temp = tempfile::tempdir().unwrap();
+            let output = temp.path().join("audit.json");
+            write_new_private_json(&output, b"{\"first\":true}").unwrap();
+            assert_eq!(std::fs::read(&output).unwrap(), b"{\"first\":true}");
+            assert!(write_new_private_json(&output, b"{\"second\":true}").is_err());
+            assert_eq!(std::fs::read(&output).unwrap(), b"{\"first\":true}");
+        }
+        #[cfg(not(unix))]
+        {
+            let temp = tempfile::tempdir().unwrap();
+            let output = temp.path().join("audit.json");
+            assert_eq!(
+                write_new_private_json(&output, b"{\"private\":true}").unwrap_err(),
+                "git-worktree-private-output-secure-mode-unsupported"
+            );
+            assert!(!output.exists());
+        }
     }
 }
