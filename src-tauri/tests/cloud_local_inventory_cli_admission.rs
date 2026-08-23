@@ -1,9 +1,9 @@
 //! Black-box admission regressions for the shipped cloud local-inventory CLI.
 //!
 //! The rejection cases terminate during argument parsing, before home discovery, provider
-//! discovery, filesystem traversal, watchdog work, or JSON report production. The empty-home
-//! batch case additionally exercises the shipped read-only success path and its bounded JSON
-//! evidence without requiring a real provider account.
+//! discovery, filesystem traversal, watchdog work, or JSON report production. The success cases
+//! additionally exercise the shipped read-only batch and single-root runtime paths without
+//! requiring a real provider account.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -180,7 +180,7 @@ fn parser_rejects_conflicting_and_unsafe_root_selection_before_home_or_provider_
 }
 
 #[test]
-fn empty_home_all_roots_returns_bounded_read_only_json_evidence() {
+fn empty_home_and_synthetic_onedrive_return_bounded_read_only_json_evidence() {
     let (_target_dir, binary) = build_feature_gated_binary();
     let home = tempfile::tempdir().expect("isolated empty home must be created");
     let output = Command::new(&binary)
@@ -214,6 +214,58 @@ fn empty_home_all_roots_returns_bounded_read_only_json_evidence() {
         assert!(
             notices.iter().any(|notice| notice.as_str() == Some(expected)),
             "missing notice {expected}: {notices:?}"
+        );
+    }
+
+    let onedrive = home.path().join("OneDrive");
+    std::fs::create_dir(&onedrive).expect("synthetic OneDrive root must be created");
+    let single = Command::new(&binary)
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .arg("--cloud-root")
+        .arg(&onedrive)
+        .args([
+            "--min-allocated-mib",
+            "0",
+            "--max-entries",
+            "16",
+            "--max-results",
+            "16",
+            "--max-depth",
+            "2",
+            "--max-duration-ms",
+            "2000",
+            "--max-issues",
+            "16",
+        ])
+        .output()
+        .expect("cloud local-inventory CLI must launch for synthetic OneDrive inventory");
+
+    assert!(single.status.success(), "stderr: {}", String::from_utf8_lossy(&single.stderr));
+    assert!(single.stderr.is_empty());
+    let single_report: serde_json::Value =
+        serde_json::from_slice(&single.stdout).expect("single-root output must be valid JSON");
+    assert_eq!(single_report["version"], 2);
+    assert_eq!(single_report["provider"], "onedrive");
+    assert_eq!(single_report["cloud_root"], onedrive.to_string_lossy().as_ref());
+    assert_eq!(single_report["candidate_count"].as_u64().unwrap_or(0), 0);
+    assert_eq!(single_report["allocated_candidate_bytes"], 0);
+    assert_eq!(single_report["evidence_complete"], true);
+    assert_eq!(single_report["candidates"].as_array().map(Vec::len), Some(0));
+    let single_notices = single_report["notices"]
+        .as_array()
+        .expect("single-root notices must be an array");
+    for expected in [
+        "metadata-only-content-not-opened",
+        "embedded-production-metadata-not-inspected",
+        "provider-sync-not-attested",
+        "inventory-does-not-authorize-eviction",
+    ] {
+        assert!(
+            single_notices
+                .iter()
+                .any(|notice| notice.as_str() == Some(expected)),
+            "missing notice {expected}: {single_notices:?}"
         );
     }
 }
