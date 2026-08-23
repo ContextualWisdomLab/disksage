@@ -191,7 +191,10 @@ fn empty_home_and_synthetic_onedrive_return_bounded_read_only_json_evidence() {
         .expect("cloud local-inventory CLI must launch for empty-home admission");
     assert_eq!(invalid_home.status.code(), Some(2));
     assert!(invalid_home.stdout.is_empty());
-    assert_eq!(invalid_home.stderr, b"HOME/USERPROFILE을 찾을 수 없음\n");
+    assert_eq!(
+        invalid_home.stderr,
+        "HOME/USERPROFILE을 찾을 수 없음\n".as_bytes()
+    );
 
     let home = tempfile::tempdir().expect("isolated empty home must be created");
     let output = Command::new(&binary)
