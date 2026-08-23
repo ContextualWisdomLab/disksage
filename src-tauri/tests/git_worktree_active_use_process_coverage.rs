@@ -1,9 +1,9 @@
 //! Real-process coverage for the Git worktree active-use safety boundary.
 //!
 //! A linked worktree that would otherwise be a removal candidate must be preserved while an
-//! independent process has its current working directory inside that worktree. This regression
-//! uses the shipped audit boundary, real Git worktrees, and the host `lsof` process probe; it never
-//! removes the audited worktree or mutates user repositories.
+//! independent process has its current working directory inside that worktree. These regressions
+//! use the shipped audit boundary, real Git worktrees, and the host `lsof` process probe; they never
+//! remove the audited worktree or mutate user repositories.
 
 #![cfg(unix)]
 
@@ -50,7 +50,43 @@ fn initialized_repository() -> tempfile::TempDir {
     repository
 }
 
+fn detached_ancestor_worktree(repository: &Path, name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let ancestor = git(repository, &["rev-parse", "HEAD"]);
+    std::fs::write(repository.join("tracked.txt"), b"second\n")
+        .expect("advance retained fixture");
+    git(repository, &["add", "tracked.txt"]);
+    git(repository, &["commit", "-m", "second"]);
+
+    let linked_parent = tempfile::tempdir().expect("linked worktree parent");
+    let linked_path = linked_parent.path().join(name);
+    let linked_path_text = linked_path.to_string_lossy().into_owned();
+    git(
+        repository,
+        &["worktree", "add", "--detach", &linked_path_text, &ancestor],
+    );
+    (linked_parent, linked_path)
+}
+
 struct ChildGuard(Child);
+
+impl ChildGuard {
+    fn sleeping_in(cwd: &Path) -> Self {
+        Self(
+            Command::new("sleep")
+                .arg("30")
+                .current_dir(cwd)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("active-use fixture process must start"),
+        )
+    }
+
+    fn id(&self) -> u32 {
+        self.0.id()
+    }
+}
 
 impl Drop for ChildGuard {
     fn drop(&mut self) {
@@ -62,32 +98,11 @@ impl Drop for ChildGuard {
 #[test]
 fn otherwise_removable_worktree_is_preserved_while_real_process_uses_it() {
     let repository = initialized_repository();
-    let ancestor = git(repository.path(), &["rev-parse", "HEAD"]);
-
-    std::fs::write(repository.path().join("tracked.txt"), b"second\n")
-        .expect("advance retained fixture");
-    git(repository.path(), &["add", "tracked.txt"]);
-    git(repository.path(), &["commit", "-m", "second"]);
-
-    let linked_parent = tempfile::tempdir().expect("linked worktree parent");
-    let linked_path = linked_parent.path().join("active-worktree");
+    let (_linked_parent, linked_path) =
+        detached_ancestor_worktree(repository.path(), "active-worktree");
     let linked_path_text = linked_path.to_string_lossy().into_owned();
-    git(
-        repository.path(),
-        &["worktree", "add", "--detach", &linked_path_text, &ancestor],
-    );
-
-    let mut child = ChildGuard(
-        Command::new("sleep")
-            .arg("30")
-            .current_dir(&linked_path)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("active-use fixture process must start"),
-    );
-    let active_pid = child.0.id();
+    let child = ChildGuard::sleeping_in(&linked_path);
+    let active_pid = child.id();
 
     let report = audit_git_worktrees(
         repository.path(),
@@ -119,7 +134,50 @@ fn otherwise_removable_worktree_is_preserved_while_real_process_uses_it() {
     assert_eq!(linked.disposition, GitWorktreeDisposition::Preserve);
     assert_eq!(report.removal_candidate_count, 0);
     assert!(!report.filesystem_mutation_executed);
+}
 
-    child.0.kill().expect("stop active-use fixture process");
-    child.0.wait().expect("reap active-use fixture process");
+#[test]
+fn active_process_evidence_truncation_never_grants_removal_authority() {
+    let repository = initialized_repository();
+    let (_linked_parent, linked_path) =
+        detached_ancestor_worktree(repository.path(), "busy-worktree");
+    let linked_path_text = linked_path.to_string_lossy().into_owned();
+    let first = ChildGuard::sleeping_in(&linked_path);
+    let second = ChildGuard::sleeping_in(&linked_path);
+    let active_pids = [first.id(), second.id()];
+    let options = GitWorktreeAuditOptions {
+        max_active_pids: 1,
+        ..GitWorktreeAuditOptions::default()
+    };
+
+    let report = audit_git_worktrees(
+        repository.path(),
+        &["refs/heads/main".into()],
+        options,
+        9_002,
+    )
+    .expect("audit must remain fail-closed when active-use evidence is truncated");
+
+    let linked = report
+        .entries
+        .iter()
+        .find(|entry| entry.path == linked_path_text)
+        .expect("linked worktree must be audited");
+
+    assert!(linked.active_use.assessed);
+    assert!(!linked.active_use.evidence_complete);
+    assert!(linked.active_use.active);
+    assert_eq!(linked.active_use.observed_pids.len(), 1);
+    assert!(active_pids.contains(&linked.active_use.observed_pids[0]));
+    assert!(linked.active_use.results_truncated);
+    assert_eq!(linked.active_use.error.as_deref(), Some("active-use-pid-limit"));
+    assert!(linked
+        .blockers
+        .iter()
+        .any(|blocker| blocker == "active-use-evidence-incomplete"));
+    assert_eq!(linked.disposition, GitWorktreeDisposition::EvidenceGap);
+    assert_eq!(report.removal_candidate_count, 0);
+    assert_eq!(report.evidence_gap_count, 1);
+    assert!(!report.evidence_complete);
+    assert!(!report.filesystem_mutation_executed);
 }
