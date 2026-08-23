@@ -1,9 +1,9 @@
 //! Black-box admission regressions for the shipped cloud local-inventory CLI.
 //!
-//! These cases terminate during argument parsing, before home discovery, provider discovery,
-//! filesystem traversal, watchdog work, or JSON report production. They complement the dedicated
-//! help/non-UTF-8 process contract by exercising the remaining bounded parser failure modes on the
-//! real feature-gated executable.
+//! The rejection cases terminate during argument parsing, before home discovery, provider
+//! discovery, filesystem traversal, watchdog work, or JSON report production. The empty-home
+//! batch case additionally exercises the shipped read-only success path and its bounded JSON
+//! evidence without requiring a real provider account.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -177,4 +177,43 @@ fn parser_rejects_conflicting_and_unsafe_root_selection_before_home_or_provider_
         &["--all-roots", "--relative-subpath", "Archive"],
         "--relative-subpath는 --all-roots와 함께 사용할 수 없음",
     );
+}
+
+#[test]
+fn empty_home_all_roots_returns_bounded_read_only_json_evidence() {
+    let (_target_dir, binary) = build_feature_gated_binary();
+    let home = tempfile::tempdir().expect("isolated empty home must be created");
+    let output = Command::new(&binary)
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .arg("--all-roots")
+        .output()
+        .expect("cloud local-inventory CLI must launch for empty-home batch inventory");
+
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(output.stderr.is_empty());
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("success output must be valid JSON");
+    assert_eq!(report["version"], 1);
+    assert_eq!(report["discovered_roots"], 0);
+    assert_eq!(report["reported_roots"], 0);
+    assert_eq!(report["failed_roots"], 0);
+    assert_eq!(report["candidate_count"], 0);
+    assert_eq!(report["allocated_candidate_bytes"], 0);
+    assert_eq!(report["evidence_complete"], false);
+    assert_eq!(report["reports"].as_array().map(Vec::len), Some(0));
+    assert_eq!(report["failures"].as_array().map(Vec::len), Some(0));
+    let notices = report["notices"]
+        .as_array()
+        .expect("batch report notices must be an array");
+    for expected in [
+        "metadata-only-content-not-opened",
+        "batch-inventory-does-not-authorize-eviction",
+        "no-cloud-roots-discovered",
+    ] {
+        assert!(
+            notices.iter().any(|notice| notice.as_str() == Some(expected)),
+            "missing notice {expected}: {notices:?}"
+        );
+    }
 }
