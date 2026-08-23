@@ -62,15 +62,15 @@ fn duplicate_audit_feature_batch_builds_only_the_intended_library_and_cli_target
 
     assert!(
         duplicate_block.contains(
-            "cargo test --manifest-path src-tauri/Cargo.toml --lib --features cloud-cli duplicate_audit"
+            "cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --features cloud-cli duplicate_audit"
         ),
-        "the cloud-cli duplicate-audit library proof must use --lib so Cargo does not relink every integration-test target"
+        "the cloud-cli duplicate-audit library proof must stay lockfile-bound and use --lib so Cargo does not relink every integration-test target"
     );
     assert!(
         duplicate_block.contains(
-            "cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-duplicate-audit"
+            "cargo test --locked --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-duplicate-audit"
         ),
-        "the dedicated duplicate-audit CLI proof must remain explicit"
+        "the dedicated duplicate-audit CLI proof must remain explicit and lockfile-bound"
     );
 }
 
@@ -88,14 +88,14 @@ fn archive_feature_batch_builds_only_the_intended_library_and_cli_targets() {
 
     assert!(
         archive_block.contains(
-            "cargo test --manifest-path src-tauri/Cargo.toml --lib --features archive-cli archive_git_tree"
+            "cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --features archive-cli archive_git_tree"
         ),
-        "the archive-cli library proof must use --lib so Cargo does not relink every integration-test target"
+        "the archive-cli library proof must stay lockfile-bound and use --lib so Cargo does not relink every integration-test target"
     );
     assert!(
         archive_block.contains(
-            "cargo test --manifest-path src-tauri/Cargo.toml --features archive-cli --bin disksage-archive-tree"
+            "cargo test --locked --manifest-path src-tauri/Cargo.toml --features archive-cli --bin disksage-archive-tree"
         ),
-        "the dedicated archive-tree CLI proof must remain explicit"
+        "the dedicated archive-tree CLI proof must remain explicit and lockfile-bound"
     );
 }
