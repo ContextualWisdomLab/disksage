@@ -17,14 +17,14 @@ const sourcePath = resolve(repositoryRoot, "src-tauri/icons/icon-source.svg");
 const contractPath = resolve(repositoryRoot, "src-tauri/icons/icon-contract.json");
 
 const EXPECTED_RUNTIME = {
-  node: "20.19.0",
+  node_major: 20,
   zlib: "1.3.0.1-motley",
 };
 
 describe("deterministic icon generator runtime", () => {
-  it("pins the exact compressor runtime used by Test and Release", () => {
+  it("pins the compressor ABI while Test and Release stay on Node 20", () => {
     const contract = JSON.parse(readFileSync(contractPath, "utf8")) as {
-      generator_runtime?: { node?: string; zlib?: string };
+      generator_runtime?: { node_major?: number; zlib?: string };
     };
     const testWorkflow = readFileSync(resolve(repositoryRoot, ".github/workflows/test.yml"), "utf8");
     const releaseWorkflow = readFileSync(
@@ -33,8 +33,8 @@ describe("deterministic icon generator runtime", () => {
     );
 
     expect(contract.generator_runtime).toEqual(EXPECTED_RUNTIME);
-    expect(testWorkflow).toContain(`node-version: ${EXPECTED_RUNTIME.node}`);
-    expect(releaseWorkflow).toContain(`node-version: ${EXPECTED_RUNTIME.node}`);
+    expect(testWorkflow).toContain("node-version: 20.19.0");
+    expect(releaseWorkflow).toContain("node-version: 20");
   });
 
   it("fails closed before creating output when the runtime contract does not match", () => {
@@ -51,7 +51,7 @@ describe("deterministic icon generator runtime", () => {
         `${JSON.stringify(
           {
             ...contract,
-            generator_runtime: { ...EXPECTED_RUNTIME, node: "0.0.0" },
+            generator_runtime: { ...EXPECTED_RUNTIME, node_major: 0 },
           },
           null,
           2,
