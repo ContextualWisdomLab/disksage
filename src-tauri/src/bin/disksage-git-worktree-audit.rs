@@ -1,5 +1,6 @@
 //! Read-only Git worktree safety audit with a path-redacted public summary.
 
+use std::ffi::OsString;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
@@ -16,44 +17,72 @@ struct Args {
     options: GitWorktreeAuditOptions,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ParseOutcome {
+    Run(Args),
+    Help,
+}
+
 fn usage() -> &'static str {
     "usage: disksage-git-worktree-audit --repository-root ABSOLUTE_PATH --reference-ref REF [--reference-ref REF ...] [--private-output NEW_ABSOLUTE_JSON_PATH] [--command-timeout-ms N] [--size-scan-timeout-ms N] [--max-worktrees N] [--max-entries-per-worktree N] [--max-active-pids N]"
 }
 
-fn value(args: &[String], index: &mut usize, flag: &str) -> Result<String, String> {
+fn value(args: &[OsString], index: &mut usize, flag: &str) -> Result<OsString, String> {
     *index += 1;
     args.get(*index)
         .cloned()
         .ok_or_else(|| format!("{flag} 값이 필요함"))
 }
 
+fn utf8_value(args: &[OsString], index: &mut usize, flag: &str) -> Result<String, String> {
+    value(args, index, flag)?
+        .into_string()
+        .map_err(|_| "invalid-argument-encoding".to_string())
+}
+
 fn parse_number<T: std::str::FromStr>(
-    args: &[String],
+    args: &[OsString],
     index: &mut usize,
     flag: &str,
 ) -> Result<T, String> {
-    value(args, index, flag)?
+    utf8_value(args, index, flag)?
         .parse()
         .map_err(|_| format!("{flag}는 올바른 정수여야 함"))
 }
 
-fn parse_args(args: &[String]) -> Result<Args, String> {
+fn parse_args(args: &[OsString]) -> Result<ParseOutcome, String> {
+    if args.len() == 1 && matches!(args[0].to_str(), Some("--help" | "-h")) {
+        return Ok(ParseOutcome::Help);
+    }
+
     let mut repository_root = None;
     let mut retention_references = Vec::new();
     let mut private_output = None;
     let mut options = GitWorktreeAuditOptions::default();
     let mut index = 0usize;
     while index < args.len() {
-        match args[index].as_str() {
+        let flag = args[index]
+            .to_str()
+            .ok_or_else(|| "invalid-argument-encoding".to_string())?;
+        match flag {
             "--repository-root" => {
-                repository_root =
-                    Some(PathBuf::from(value(args, &mut index, "--repository-root")?));
+                repository_root = Some(PathBuf::from(value(
+                    args,
+                    &mut index,
+                    "--repository-root",
+                )?));
             }
-            "--reference-ref" => {
-                retention_references.push(value(args, &mut index, "--reference-ref")?)
-            }
+            "--reference-ref" => retention_references.push(utf8_value(
+                args,
+                &mut index,
+                "--reference-ref",
+            )?),
             "--private-output" => {
-                private_output = Some(PathBuf::from(value(args, &mut index, "--private-output")?));
+                private_output = Some(PathBuf::from(value(
+                    args,
+                    &mut index,
+                    "--private-output",
+                )?));
             }
             "--command-timeout-ms" => {
                 options.command_timeout_ms =
@@ -73,8 +102,8 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             "--max-active-pids" => {
                 options.max_active_pids = parse_number(args, &mut index, "--max-active-pids")?;
             }
-            "--help" | "-h" => return Err(usage().into()),
-            unknown => return Err(format!("알 수 없는 인자: {unknown}")),
+            "--help" | "-h" => return Err("help-cannot-be-combined-with-runtime-input".into()),
+            _ => return Err("unknown-argument".into()),
         }
         index += 1;
     }
@@ -92,12 +121,12 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     if retention_references.is_empty() {
         return Err("--reference-ref 값이 하나 이상 필요함".into());
     }
-    Ok(Args {
+    Ok(ParseOutcome::Run(Args {
         repository_root,
         retention_references,
         private_output,
         options,
-    })
+    }))
 }
 
 fn now_ms() -> u64 {
@@ -163,8 +192,15 @@ fn run_with_args(args: Args, observed_at_ms: u64) -> Result<serde_json::Value, S
 }
 
 fn run() -> Result<(), String> {
-    let raw: Vec<String> = std::env::args().skip(1).collect();
-    let output = run_with_args(parse_args(&raw)?, now_ms())?;
+    let raw: Vec<OsString> = std::env::args_os().skip(1).collect();
+    let args = match parse_args(&raw)? {
+        ParseOutcome::Help => {
+            println!("{}", usage());
+            return Ok(());
+        }
+        ParseOutcome::Run(args) => args,
+    };
+    let output = run_with_args(args, now_ms())?;
     println!(
         "{}",
         serde_json::to_string_pretty(&output).map_err(|error| error.to_string())?
@@ -183,71 +219,118 @@ fn main() {
 mod tests {
     use super::*;
 
+    fn run_args(values: &[&str]) -> Args {
+        let raw: Vec<OsString> = values.iter().map(OsString::from).collect();
+        match parse_args(&raw).unwrap() {
+            ParseOutcome::Run(args) => args,
+            ParseOutcome::Help => panic!("runtime arguments must not parse as help"),
+        }
+    }
+
     #[test]
     fn parser_requires_absolute_root_and_reference_and_defaults_read_only() {
-        let args = parse_args(&[
-            "--repository-root".into(),
-            "/tmp/repository".into(),
-            "--reference-ref".into(),
-            "origin/develop".into(),
-        ])
-        .unwrap();
+        let args = run_args(&[
+            "--repository-root",
+            "/tmp/repository",
+            "--reference-ref",
+            "origin/develop",
+        ]);
         assert_eq!(args.retention_references, vec!["origin/develop"]);
         assert_eq!(args.options, GitWorktreeAuditOptions::default());
         assert!(args.private_output.is_none());
 
         assert!(parse_args(&[]).is_err());
-        assert!(parse_args(&[
-            "--repository-root".into(),
-            "relative".into(),
-            "--reference-ref".into(),
-            "develop".into(),
-            "--reference-ref".into(),
-            "a".repeat(40),
-        ])
-        .is_err());
-        assert!(parse_args(&[
-            "--repository-root".into(),
-            "/tmp/repository".into(),
-            "--reference-ref".into(),
-            "develop".into(),
-            "--reference-ref".into(),
-            "a".repeat(40),
-            "--private-output".into(),
-            "relative.json".into(),
-        ])
-        .is_err());
+        let relative: Vec<OsString> = [
+            "--repository-root",
+            "relative",
+            "--reference-ref",
+            "develop",
+            "--reference-ref",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+        assert!(parse_args(&relative).is_err());
+        let relative_output: Vec<OsString> = [
+            "--repository-root",
+            "/tmp/repository",
+            "--reference-ref",
+            "develop",
+            "--reference-ref",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--private-output",
+            "relative.json",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+        assert!(parse_args(&relative_output).is_err());
     }
 
     #[test]
     fn parser_accepts_all_bounded_audit_options() {
-        let args = parse_args(&[
-            "--repository-root".into(),
-            "/tmp/repository".into(),
-            "--reference-ref".into(),
-            "develop".into(),
-            "--reference-ref".into(),
-            "a".repeat(40),
-            "--private-output".into(),
-            "/tmp/private.json".into(),
-            "--command-timeout-ms".into(),
-            "2000".into(),
-            "--size-scan-timeout-ms".into(),
-            "3000".into(),
-            "--max-worktrees".into(),
-            "10".into(),
-            "--max-entries-per-worktree".into(),
-            "1000".into(),
-            "--max-active-pids".into(),
-            "8".into(),
-        ])
-        .unwrap();
+        let args = run_args(&[
+            "--repository-root",
+            "/tmp/repository",
+            "--reference-ref",
+            "develop",
+            "--reference-ref",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--private-output",
+            "/tmp/private.json",
+            "--command-timeout-ms",
+            "2000",
+            "--size-scan-timeout-ms",
+            "3000",
+            "--max-worktrees",
+            "10",
+            "--max-entries-per-worktree",
+            "1000",
+            "--max-active-pids",
+            "8",
+        ]);
         assert_eq!(args.options.command_timeout_ms, 2000);
         assert_eq!(args.options.size_scan_timeout_ms, 3000);
         assert_eq!(args.options.max_worktrees, 10);
         assert_eq!(args.options.max_entries_per_worktree, 1000);
         assert_eq!(args.options.max_active_pids, 8);
         assert_eq!(args.retention_references.len(), 2);
+    }
+
+    #[test]
+    fn parser_separates_terminal_help_from_invalid_mixed_help() {
+        for flag in ["--help", "-h"] {
+            let raw = vec![OsString::from(flag)];
+            assert_eq!(parse_args(&raw).unwrap(), ParseOutcome::Help);
+        }
+        let mixed = vec![
+            OsString::from("--help"),
+            OsString::from("--repository-root"),
+            OsString::from("/tmp/repository"),
+        ];
+        assert_eq!(
+            parse_args(&mixed).unwrap_err(),
+            "help-cannot-be-combined-with-runtime-input"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parser_preserves_native_repository_paths_without_utf8_conversion() {
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+        let native_path = OsString::from_vec(vec![b'/', b't', b'm', b'p', b'/', b'r', 0xff]);
+        let raw = vec![
+            OsString::from("--repository-root"),
+            native_path.clone(),
+            OsString::from("--reference-ref"),
+            OsString::from("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        ];
+        let ParseOutcome::Run(args) = parse_args(&raw).unwrap() else {
+            panic!("native path invocation must parse as a runtime request")
+        };
+        assert_eq!(args.repository_root.as_os_str().as_bytes(), native_path.as_bytes());
     }
 
     #[test]
