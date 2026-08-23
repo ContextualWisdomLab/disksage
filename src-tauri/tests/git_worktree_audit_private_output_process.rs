@@ -151,3 +151,38 @@ fn private_report_is_owner_only_create_once_and_publicly_committed_by_digest() {
         "create-once publication must never replace the first private report"
     );
 }
+
+#[test]
+fn private_report_rejects_shared_writable_or_repository_owned_parent() {
+    let (temp, repository) = initialized_repository();
+
+    let shared_parent = temp.path().join("shared-private-parent");
+    fs::create_dir(&shared_parent).expect("shared parent should be created");
+    fs::set_permissions(&shared_parent, fs::Permissions::from_mode(0o770))
+        .expect("shared parent mode should be configured");
+    let shared_output = shared_parent.join("private-report.json");
+    let shared = run_private_output(&repository, &shared_output);
+    assert_eq!(shared.status.code(), Some(2));
+    assert!(shared.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8(shared.stderr).expect("failure stderr should remain UTF-8"),
+        "DiskSage Git worktree audit: git-worktree-private-output-parent-writable-by-others\n"
+    );
+    assert!(
+        !shared_output.exists(),
+        "a shared-writable parent must never receive private evidence"
+    );
+
+    let inside_repository = repository.join("private-report.json");
+    let inside = run_private_output(&repository, &inside_repository);
+    assert_eq!(inside.status.code(), Some(2));
+    assert!(inside.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8(inside.stderr).expect("failure stderr should remain UTF-8"),
+        "DiskSage Git worktree audit: git-worktree-private-output-inside-repository\n"
+    );
+    assert!(
+        !inside_repository.exists(),
+        "private evidence must stay outside the audited repository"
+    );
+}
