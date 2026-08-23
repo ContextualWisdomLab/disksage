@@ -26,6 +26,8 @@ use disksage_lib::cloud_local_inventory::{
 #[cfg(not(coverage))]
 const WORKER_REPORT_GRACE_MS: u64 = 2_000;
 #[cfg(not(coverage))]
+const MAX_MIN_ALLOCATED_MIB: u64 = u64::MAX / (1024 * 1024);
+#[cfg(not(coverage))]
 const MAX_ENTRY_LIMIT: u64 = 1_000_000;
 #[cfg(not(coverage))]
 const MAX_RESULT_LIMIT: usize = 10_000;
@@ -76,6 +78,9 @@ fn number<T: std::str::FromStr>(
 
 #[cfg(not(coverage))]
 fn validate_option_bounds(args: &Args) -> Result<(), String> {
+    if args.min_allocated_mib > MAX_MIN_ALLOCATED_MIB {
+        return Err("cloud-local-inventory-min-allocated-mib-invalid".into());
+    }
     if args.max_entries == 0 || args.max_entries > MAX_ENTRY_LIMIT {
         return Err("cloud-local-inventory-max-entries-invalid".into());
     }
@@ -285,7 +290,7 @@ fn scan_root(discovered: &CloudRoot, relative_subpath: Option<&Path>) -> Result<
 #[cfg(not(coverage))]
 fn inventory_options(args: &Args) -> CloudLocalInventoryOptions {
     CloudLocalInventoryOptions {
-        min_allocated_bytes: args.min_allocated_mib.saturating_mul(1024 * 1024),
+        min_allocated_bytes: args.min_allocated_mib * (1024 * 1024),
         max_entries: args.max_entries,
         max_results: args.max_results,
         max_depth: args.max_depth,
