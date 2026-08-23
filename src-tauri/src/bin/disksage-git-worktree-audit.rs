@@ -50,6 +50,13 @@ fn parse_number<T: std::str::FromStr>(
         .map_err(|_| format!("{flag}는 올바른 정수여야 함"))
 }
 
+fn mark_singleton(seen: &mut bool) -> Result<(), String> {
+    if std::mem::replace(seen, true) {
+        return Err("duplicate-option".into());
+    }
+    Ok(())
+}
+
 fn parse_args(args: &[OsString]) -> Result<ParseOutcome, String> {
     if args.len() == 1 && matches!(args[0].to_str(), Some("--help") | Some("-h")) {
         return Ok(ParseOutcome::Help);
@@ -59,6 +66,13 @@ fn parse_args(args: &[OsString]) -> Result<ParseOutcome, String> {
     let mut retention_references = Vec::new();
     let mut private_output = None;
     let mut options = GitWorktreeAuditOptions::default();
+    let mut seen_repository_root = false;
+    let mut seen_private_output = false;
+    let mut seen_command_timeout = false;
+    let mut seen_size_scan_timeout = false;
+    let mut seen_max_worktrees = false;
+    let mut seen_max_entries = false;
+    let mut seen_max_active_pids = false;
     let mut index = 0usize;
     while index < args.len() {
         let flag = args[index]
@@ -66,6 +80,7 @@ fn parse_args(args: &[OsString]) -> Result<ParseOutcome, String> {
             .ok_or_else(|| "invalid-argument-encoding".to_string())?;
         match flag {
             "--repository-root" => {
+                mark_singleton(&mut seen_repository_root)?;
                 repository_root = Some(PathBuf::from(value(
                     args,
                     &mut index,
@@ -78,6 +93,7 @@ fn parse_args(args: &[OsString]) -> Result<ParseOutcome, String> {
                 "--reference-ref",
             )?),
             "--private-output" => {
+                mark_singleton(&mut seen_private_output)?;
                 private_output = Some(PathBuf::from(value(
                     args,
                     &mut index,
@@ -85,21 +101,26 @@ fn parse_args(args: &[OsString]) -> Result<ParseOutcome, String> {
                 )?));
             }
             "--command-timeout-ms" => {
+                mark_singleton(&mut seen_command_timeout)?;
                 options.command_timeout_ms =
                     parse_number(args, &mut index, "--command-timeout-ms")?;
             }
             "--size-scan-timeout-ms" => {
+                mark_singleton(&mut seen_size_scan_timeout)?;
                 options.size_scan_timeout_ms =
                     parse_number(args, &mut index, "--size-scan-timeout-ms")?;
             }
             "--max-worktrees" => {
+                mark_singleton(&mut seen_max_worktrees)?;
                 options.max_worktrees = parse_number(args, &mut index, "--max-worktrees")?;
             }
             "--max-entries-per-worktree" => {
+                mark_singleton(&mut seen_max_entries)?;
                 options.max_entries_per_worktree =
                     parse_number(args, &mut index, "--max-entries-per-worktree")?;
             }
             "--max-active-pids" => {
+                mark_singleton(&mut seen_max_active_pids)?;
                 options.max_active_pids = parse_number(args, &mut index, "--max-active-pids")?;
             }
             "--help" | "-h" => return Err("help-cannot-be-combined-with-runtime-input".into()),
