@@ -21,9 +21,10 @@ function sha256(bytes) {
 /** Fail closed if the compressor runtime differs from the audited generation contract. */
 function validateGeneratorRuntime(contract) {
   const expected = contract.generator_runtime;
+  const nodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "", 10);
   if (
     !expected
-    || expected.node !== process.versions.node
+    || expected.node_major !== nodeMajor
     || expected.zlib !== process.versions.zlib
   ) {
     throw new Error("icon-generator-runtime-mismatch");
