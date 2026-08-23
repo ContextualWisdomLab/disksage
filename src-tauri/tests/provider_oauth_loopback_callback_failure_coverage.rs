@@ -40,13 +40,13 @@ fn google_loopback_port(url: &str) -> u16 {
         .expect("loopback port is numeric")
 }
 
-fn send_raw_rejected_request(port: u16, request: &str) -> String {
+fn send_raw_rejected_bytes(port: u16, request: &[u8]) -> String {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("loopback listener accepts");
     stream
         .set_read_timeout(Some(Duration::from_secs(3)))
         .expect("read timeout configured");
     stream
-        .write_all(request.as_bytes())
+        .write_all(request)
         .expect("callback request written");
     stream.flush().expect("callback request flushed");
 
@@ -58,6 +58,10 @@ fn send_raw_rejected_request(port: u16, request: &str) -> String {
     assert!(response.contains("Cache-Control: no-store\r\n"));
     assert!(response.contains("Content-Security-Policy"));
     response
+}
+
+fn send_raw_rejected_request(port: u16, request: &str) -> String {
+    send_raw_rejected_bytes(port, request.as_bytes())
 }
 
 fn send_rejected_request(port: u16, request_line: &str) -> String {
@@ -77,6 +81,18 @@ fn exact_limit_rejected_request(port: u16) -> String {
         .expect("callback limit exceeds fixed request framing");
     let request = format!("{prefix}{}{suffix}", "a".repeat(padding_bytes));
     assert_eq!(request.len(), CALLBACK_REQUEST_LIMIT_BYTES);
+    request
+}
+
+fn invalid_utf8_callback_request(port: u16, state: &str) -> Vec<u8> {
+    let mut request = b"GET /?code=".to_vec();
+    request.push(0xff);
+    request.extend_from_slice(
+        format!(
+            "&state={state} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+        )
+        .as_bytes(),
+    );
     request
 }
 
@@ -110,6 +126,12 @@ fn rejected_callbacks_fail_closed_before_network_keyring_or_durable_publication(
     });
 
     send_raw_rejected_request(port, &exact_limit_rejected_request(port));
+    send_raw_rejected_bytes(port, &invalid_utf8_callback_request(port, &state));
+    send_rejected_request(port, "GET HTTP/1.1");
+    send_rejected_request(
+        port,
+        &format!("GET /?code=ignored&state={state} HTTP/1.1 EXTRA"),
+    );
     send_rejected_request(
         port,
         &format!("POST /?code=ignored&state={state} HTTP/1.1"),
@@ -122,6 +144,16 @@ fn rejected_callbacks_fail_closed_before_network_keyring_or_durable_publication(
     send_rejected_request(
         port,
         &format!("GET /?code=one&code=two&state={state} HTTP/1.1"),
+    );
+    send_rejected_request(
+        port,
+        &format!("GET /?code=one&state={state}&state={state} HTTP/1.1"),
+    );
+    send_rejected_request(port, "GET /?error=access_denied HTTP/1.1");
+    send_rejected_request(port, &format!("GET /?code=&state={state} HTTP/1.1"));
+    send_rejected_request(
+        port,
+        &format!("GET /?code=%00&state={state} HTTP/1.1"),
     );
     send_rejected_request(
         port,
