@@ -1,5 +1,6 @@
 //! Path-free audit of local cloud-provider client runtime prerequisites.
 
+use std::ffi::OsString;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -38,15 +39,19 @@ fn usage() -> &'static str {
     "usage: disksage-provider-client-runtime [--output ABSOLUTE_NEW_FILE.json]"
 }
 
-fn parse_args(args: &[String]) -> Result<Args, String> {
+fn parse_args(args: &[OsString]) -> Result<Args, String> {
     let mut output = None;
     let mut index = 0usize;
     while index < args.len() {
-        match args[index].as_str() {
+        let flag = args[index]
+            .to_str()
+            .ok_or_else(|| "provider-client-runtime-argument-not-utf8".to_string())?;
+        match flag {
             "--output" => {
                 index += 1;
                 let value = args
                     .get(index)
+                    .cloned()
                     .ok_or_else(|| "--output requires an absolute new file".to_string())?;
                 let path = PathBuf::from(value);
                 if !path.is_absolute() {
@@ -132,8 +137,8 @@ fn write_create_new(path: &Path, encoded: &[u8]) -> Result<(), String> {
         .map_err(|_| "provider-client-runtime-output-write-failed".to_string())
 }
 
-fn run(args: &[String]) -> Result<(), String> {
-    if matches!(args, [flag] if flag == "--help" || flag == "-h") {
+fn run(args: &[OsString]) -> Result<(), String> {
+    if matches!(args, [flag] if matches!(flag.to_str(), Some("--help") | Some("-h"))) {
         println!("{}", usage());
         return Ok(());
     }
@@ -153,19 +158,12 @@ fn run(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn command_args() -> Result<Vec<String>, String> {
-    std::env::args_os()
-        .skip(1)
-        .map(|argument| {
-            argument
-                .into_string()
-                .map_err(|_| "provider-client-runtime-argument-not-utf8".to_string())
-        })
-        .collect()
+fn command_args() -> Vec<OsString> {
+    std::env::args_os().skip(1).collect()
 }
 
 fn main() {
-    if let Err(error) = command_args().and_then(|args| run(&args)) {
+    if let Err(error) = run(&command_args()) {
         eprintln!("{error}");
         std::process::exit(2);
     }
