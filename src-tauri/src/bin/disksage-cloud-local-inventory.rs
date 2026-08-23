@@ -25,6 +25,16 @@ use disksage_lib::cloud_local_inventory::{
 
 #[cfg(not(coverage))]
 const WORKER_REPORT_GRACE_MS: u64 = 2_000;
+#[cfg(not(coverage))]
+const MAX_ENTRY_LIMIT: u64 = 1_000_000;
+#[cfg(not(coverage))]
+const MAX_RESULT_LIMIT: usize = 10_000;
+#[cfg(not(coverage))]
+const MAX_DEPTH_LIMIT: usize = 64;
+#[cfg(not(coverage))]
+const MAX_DURATION_LIMIT_MS: u64 = 300_000;
+#[cfg(not(coverage))]
+const MAX_ISSUE_LIMIT: usize = 1_000;
 
 #[cfg(not(coverage))]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +72,26 @@ fn number<T: std::str::FromStr>(
     value(args, index, flag)?
         .parse()
         .map_err(|_| format!("{flag}는 정수여야 함"))
+}
+
+#[cfg(not(coverage))]
+fn validate_option_bounds(args: &Args) -> Result<(), String> {
+    if args.max_entries == 0 || args.max_entries > MAX_ENTRY_LIMIT {
+        return Err("cloud-local-inventory-max-entries-invalid".into());
+    }
+    if args.max_results == 0 || args.max_results > MAX_RESULT_LIMIT {
+        return Err("cloud-local-inventory-max-results-invalid".into());
+    }
+    if args.max_depth > MAX_DEPTH_LIMIT {
+        return Err("cloud-local-inventory-max-depth-invalid".into());
+    }
+    if args.max_duration_ms == 0 || args.max_duration_ms > MAX_DURATION_LIMIT_MS {
+        return Err("cloud-local-inventory-max-duration-invalid".into());
+    }
+    if args.max_issues == 0 || args.max_issues > MAX_ISSUE_LIMIT {
+        return Err("cloud-local-inventory-max-issues-invalid".into());
+    }
+    Ok(())
 }
 
 #[cfg(not(coverage))]
@@ -180,7 +210,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     if all_roots && relative_subpath.is_some() {
         return Err("--relative-subpath는 --all-roots와 함께 사용할 수 없음".into());
     }
-    Ok(Args {
+    let parsed = Args {
         cloud_root,
         all_roots,
         relative_subpath,
@@ -190,7 +220,9 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         max_depth,
         max_duration_ms,
         max_issues,
-    })
+    };
+    validate_option_bounds(&parsed)?;
+    Ok(parsed)
 }
 
 #[cfg(not(coverage))]
