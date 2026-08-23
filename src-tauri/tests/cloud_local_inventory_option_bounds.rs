@@ -100,3 +100,39 @@ fn invalid_inventory_limits_fail_before_empty_home_discovery_can_return_success(
         assert_out_of_range(&binary, flag, value, expected);
     }
 }
+
+#[test]
+fn exact_inventory_limit_ceilings_remain_admitted() {
+    let (_target_dir, binary) = build_feature_gated_binary();
+    let home = tempfile::tempdir().expect("isolated empty home must be created");
+    let output = Command::new(binary)
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .args([
+            "--all-roots",
+            "--max-entries",
+            "1000000",
+            "--max-results",
+            "10000",
+            "--max-depth",
+            "64",
+            "--max-duration-ms",
+            "300000",
+            "--max-issues",
+            "1000",
+        ])
+        .output()
+        .expect("cloud local-inventory CLI must launch at exact supported ceilings");
+
+    assert!(
+        output.status.success(),
+        "exact supported ceilings must remain valid: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("valid ceiling invocation emits JSON");
+    assert_eq!(report["version"], 1);
+    assert_eq!(report["discovered_roots"], 0);
+    assert_eq!(report["reported_roots"], 0);
+}
