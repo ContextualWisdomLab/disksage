@@ -14,6 +14,20 @@ fn command() -> Command {
     Command::new(env!("CARGO_BIN_EXE_disksage-git-worktree-audit"))
 }
 
+fn assert_exact_failure(arguments: &[&str], expected: &str) {
+    let output = command()
+        .args(arguments)
+        .output()
+        .expect("Git worktree audit binary should start");
+    assert_eq!(output.status.code(), Some(2), "arguments: {arguments:?}");
+    assert!(output.stdout.is_empty(), "arguments: {arguments:?}");
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("stderr should remain UTF-8"),
+        format!("DiskSage Git worktree audit: {expected}\n"),
+        "arguments: {arguments:?}"
+    );
+}
+
 #[test]
 fn sole_help_flags_are_terminal_success_without_domain_environment() {
     for flag in ["--help", "-h"] {
@@ -48,9 +62,44 @@ fn help_mixed_with_runtime_input_stays_a_bounded_failure() {
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).expect("stderr should remain UTF-8");
-    assert!(!stderr.is_empty());
+    assert_eq!(
+        stderr,
+        "DiskSage Git worktree audit: help-cannot-be-combined-with-runtime-input\n"
+    );
     assert!(!stderr.contains(sensitive_path));
     assert!(!stderr.contains("panicked") && !stderr.contains("thread 'main'"));
+}
+
+#[test]
+fn unknown_and_missing_arguments_are_exact_bounded_failures() {
+    assert_exact_failure(&["--opaque-option=customer-secret"], "unknown-argument");
+    assert_exact_failure(&["--repository-root"], "--repository-root 값이 필요함");
+    assert_exact_failure(
+        &["--repository-root", "/repository", "--reference-ref"],
+        "--reference-ref 값이 필요함",
+    );
+    assert_exact_failure(
+        &[
+            "--repository-root",
+            "/repository",
+            "--reference-ref",
+            OID,
+            "--private-output",
+        ],
+        "--private-output 값이 필요함",
+    );
+    for flag in [
+        "--command-timeout-ms",
+        "--size-scan-timeout-ms",
+        "--max-worktrees",
+        "--max-entries-per-worktree",
+        "--max-active-pids",
+    ] {
+        assert_exact_failure(
+            &["--repository-root", "/repository", "--reference-ref", OID, flag],
+            &format!("{flag} 값이 필요함"),
+        );
+    }
 }
 
 #[test]
@@ -127,17 +176,7 @@ fn duplicate_singleton_options_fail_before_git_or_filesystem_work() {
     ];
 
     for arguments in cases {
-        let output = command()
-            .args(*arguments)
-            .output()
-            .expect("Git worktree audit binary should start");
-        assert_eq!(output.status.code(), Some(2), "arguments: {arguments:?}");
-        assert!(output.stdout.is_empty(), "arguments: {arguments:?}");
-        assert_eq!(
-            String::from_utf8(output.stderr).expect("stderr should remain UTF-8"),
-            "DiskSage Git worktree audit: duplicate-option\n",
-            "arguments: {arguments:?}"
-        );
+        assert_exact_failure(arguments, "duplicate-option");
     }
 }
 
