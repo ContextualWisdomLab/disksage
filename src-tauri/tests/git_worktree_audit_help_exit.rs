@@ -1,0 +1,73 @@
+#![cfg(feature = "cloud-cli")]
+
+//! Black-box process contract for the shipped Git-worktree audit CLI.
+//!
+//! Help is a terminal discovery action: it must succeed without repository, HOME, Git, or
+//! filesystem-domain work. Invalid and malformed host input remains a bounded non-zero failure.
+
+use std::process::Command;
+
+const EXPECTED_USAGE: &str = "usage: disksage-git-worktree-audit --repository-root ABSOLUTE_PATH --reference-ref REF [--reference-ref REF ...] [--private-output NEW_ABSOLUTE_JSON_PATH] [--command-timeout-ms N] [--size-scan-timeout-ms N] [--max-worktrees N] [--max-entries-per-worktree N] [--max-active-pids N]";
+
+fn command() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_disksage-git-worktree-audit"))
+}
+
+#[test]
+fn sole_help_flags_are_terminal_success_without_domain_environment() {
+    for flag in ["--help", "-h"] {
+        let output = command()
+            .env_remove("HOME")
+            .env_remove("USERPROFILE")
+            .env_remove("APPDATA")
+            .env_remove("XDG_DATA_HOME")
+            .env("PATH", "")
+            .arg(flag)
+            .output()
+            .expect("Git worktree audit binary should start");
+
+        assert_eq!(output.status.code(), Some(0), "help flag: {flag}");
+        assert_eq!(
+            String::from_utf8(output.stdout).expect("help stdout should remain UTF-8"),
+            format!("{EXPECTED_USAGE}\n"),
+            "help flag: {flag}"
+        );
+        assert!(output.stderr.is_empty(), "help flag: {flag}");
+    }
+}
+
+#[test]
+fn help_mixed_with_runtime_input_stays_a_bounded_failure() {
+    let sensitive_path = "/private/customer/repository";
+    let output = command()
+        .args(["--help", "--repository-root", sensitive_path])
+        .output()
+        .expect("Git worktree audit binary should start");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("stderr should remain UTF-8");
+    assert!(!stderr.is_empty());
+    assert!(!stderr.contains(sensitive_path));
+    assert!(!stderr.contains("panicked") && !stderr.contains("thread 'main'"));
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_option_shaped_input_is_bounded_and_non_reflective() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let opaque = OsString::from_vec(vec![b'-', b'-', b'o', b'p', b'a', b'q', b'u', b'e', 0xff]);
+    let output = command()
+        .arg(opaque)
+        .output()
+        .expect("Git worktree audit binary should start");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("stderr should remain UTF-8"),
+        "DiskSage Git worktree audit: invalid-argument-encoding\n"
+    );
+}
