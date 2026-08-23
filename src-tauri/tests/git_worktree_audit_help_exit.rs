@@ -273,6 +273,36 @@ fn duplicate_singleton_options_fail_before_git_or_filesystem_work() {
     }
 }
 
+#[test]
+fn out_of_range_limits_fail_before_git_or_filesystem_work() {
+    let cases = [
+        ("--command-timeout-ms", "0", "git-worktree-command-timeout-out-of-bounds"),
+        ("--command-timeout-ms", "300001", "git-worktree-command-timeout-out-of-bounds"),
+        ("--size-scan-timeout-ms", "0", "git-worktree-size-timeout-out-of-bounds"),
+        ("--size-scan-timeout-ms", "600001", "git-worktree-size-timeout-out-of-bounds"),
+        ("--max-worktrees", "0", "git-worktree-count-limit-out-of-bounds"),
+        ("--max-worktrees", "10001", "git-worktree-count-limit-out-of-bounds"),
+        ("--max-entries-per-worktree", "0", "git-worktree-entry-limit-out-of-bounds"),
+        ("--max-entries-per-worktree", "20000001", "git-worktree-entry-limit-out-of-bounds"),
+        ("--max-active-pids", "0", "git-worktree-active-pid-limit-out-of-bounds"),
+        ("--max-active-pids", "4097", "git-worktree-active-pid-limit-out-of-bounds"),
+    ];
+
+    for (flag, value, expected) in cases {
+        assert_exact_failure(
+            &[
+                "--repository-root",
+                "/definitely/not/a/real/repository",
+                "--reference-ref",
+                OID,
+                flag,
+                value,
+            ],
+            expected,
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn non_utf8_option_shaped_input_is_bounded_and_non_reflective() {
