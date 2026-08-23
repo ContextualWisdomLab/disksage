@@ -17,6 +17,16 @@ fn git(cwd: &Path, args: &[&str]) {
     assert!(status.success(), "git {args:?} failed");
 }
 
+fn git_stdout(cwd: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .current_dir(cwd)
+        .args(args)
+        .output()
+        .expect("git must be available in the test environment");
+    assert!(output.status.success(), "git {args:?} failed");
+    String::from_utf8(output.stdout).expect("git test output must be UTF-8")
+}
+
 fn initialized_repository() -> tempfile::TempDir {
     let temp = tempfile::tempdir().unwrap();
     git(temp.path(), &["init", "-q"]);
@@ -69,7 +79,7 @@ fn malformed_reference_values_fail_closed_before_git_resolution() {
     }
 
     assert_eq!(
-        git(root.path(), &["worktree", "list", "--porcelain"])
+        git_stdout(root.path(), &["worktree", "list", "--porcelain"])
             .lines()
             .filter(|line| line.starts_with("worktree "))
             .count(),
