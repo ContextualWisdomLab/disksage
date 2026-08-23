@@ -5,6 +5,8 @@
 //! Help is a terminal discovery action: it must succeed without repository, HOME, Git, or
 //! filesystem-domain work. Invalid and malformed host input remains a bounded non-zero failure.
 
+use std::fs;
+use std::path::Path;
 use std::process::Command;
 
 const EXPECTED_USAGE: &str = "usage: disksage-git-worktree-audit --repository-root ABSOLUTE_PATH --reference-ref REF [--reference-ref REF ...] [--private-output NEW_ABSOLUTE_JSON_PATH] [--command-timeout-ms N] [--size-scan-timeout-ms N] [--max-worktrees N] [--max-entries-per-worktree N] [--max-active-pids N]";
@@ -25,6 +27,19 @@ fn assert_exact_failure(arguments: &[&str], expected: &str) {
         String::from_utf8(output.stderr).expect("stderr should remain UTF-8"),
         format!("DiskSage Git worktree audit: {expected}\n"),
         "arguments: {arguments:?}"
+    );
+}
+
+fn git(repository: &Path, arguments: &[&str]) {
+    let output = Command::new("git")
+        .current_dir(repository)
+        .args(arguments)
+        .output()
+        .expect("Git should be available to the worktree process contract");
+    assert!(
+        output.status.success(),
+        "git {arguments:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 
@@ -68,6 +83,43 @@ fn help_mixed_with_runtime_input_stays_a_bounded_failure() {
     );
     assert!(!stderr.contains(sensitive_path));
     assert!(!stderr.contains("panicked") && !stderr.contains("thread 'main'"));
+}
+
+#[test]
+fn primary_worktree_audit_keeps_machine_json_path_redacted_and_read_only() {
+    let temp = tempfile::tempdir().expect("temporary directory should be created");
+    let repository = temp.path().join("private-customer-repository");
+    fs::create_dir(&repository).expect("repository directory should be created");
+    git(&repository, &["init", "-q"]);
+    git(&repository, &["config", "user.email", "coverage@example.invalid"]);
+    git(&repository, &["config", "user.name", "DiskSage Test"]);
+    fs::write(repository.join("tracked.txt"), b"tracked\n").expect("tracked fixture should be written");
+    git(&repository, &["add", "tracked.txt"]);
+    git(&repository, &["commit", "-q", "-m", "fixture"]);
+
+    let output = command()
+        .arg("--repository-root")
+        .arg(&repository)
+        .args(["--reference-ref", "HEAD"])
+        .output()
+        .expect("Git worktree audit binary should start");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    let stdout = String::from_utf8(output.stdout).expect("audit stdout should remain UTF-8 JSON");
+    let report: serde_json::Value = serde_json::from_str(&stdout).expect("audit stdout should be JSON");
+    assert_eq!(report["schema_kind"], "disksage.git-worktree-audit");
+    assert_eq!(report["version"], 2);
+    assert_eq!(report["worktree_count"], 1);
+    assert_eq!(report["removal_candidate_count"], 0);
+    assert_eq!(report["preserved_count"], 1);
+    assert_eq!(report["filesystem_mutation_executed"], false);
+    assert_eq!(report["local_paths_redacted"], true);
+    assert_eq!(report["branch_names_redacted"], true);
+    assert!(
+        !stdout.contains(&repository.to_string_lossy().to_string()),
+        "public machine JSON must not expose the selected repository path"
+    );
 }
 
 #[test]
