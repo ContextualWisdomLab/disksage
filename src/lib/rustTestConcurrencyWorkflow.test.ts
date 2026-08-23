@@ -39,7 +39,7 @@ describe('native Rust test concurrency contract', () => {
       'HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}',
     );
     expect(workflow).toContain(
-      'cargo llvm-cov --no-cfg-coverage --no-cfg-coverage-nightly --all-features --manifest-path src-tauri/Cargo.toml --branch --json --output-path coverage.json',
+      'cargo llvm-cov --locked --no-cfg-coverage --no-cfg-coverage-nightly --all-features --manifest-path src-tauri/Cargo.toml --branch --json --output-path coverage.json',
     );
     expect(workflow).toContain('value.percent !== 100');
   });
