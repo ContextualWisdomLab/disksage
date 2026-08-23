@@ -1,26 +1,19 @@
 //! Path-free audit of local cloud-provider client runtime prerequisites.
 
-#[cfg(not(coverage))]
 use std::fs::OpenOptions;
-#[cfg(not(coverage))]
 use std::io::Write;
-#[cfg(not(coverage))]
 use std::path::{Path, PathBuf};
 
-#[cfg(not(coverage))]
 use disksage_lib::cloud::{self, CloudProvider};
-#[cfg(not(coverage))]
 use disksage_lib::provider_client_runtime::{
     self, ProviderClientRuntimeSnapshot, ProviderClientRuntimeState,
 };
 
-#[cfg(not(coverage))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Args {
     output: Option<PathBuf>,
 }
 
-#[cfg(not(coverage))]
 #[derive(Debug, serde::Serialize)]
 struct ProviderClientRuntimeAudit {
     schema_version: u32,
@@ -41,12 +34,10 @@ struct ProviderClientRuntimeAudit {
     notices: Vec<&'static str>,
 }
 
-#[cfg(not(coverage))]
 fn usage() -> &'static str {
     "usage: disksage-provider-client-runtime [--output ABSOLUTE_NEW_FILE.json]"
 }
 
-#[cfg(not(coverage))]
 fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut output = None;
     let mut index = 0usize;
@@ -73,7 +64,6 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     Ok(Args { output })
 }
 
-#[cfg(not(coverage))]
 fn audit(generated_at_ms: u64) -> ProviderClientRuntimeAudit {
     let snapshots = [
         CloudProvider::Icloud,
@@ -120,7 +110,6 @@ fn audit(generated_at_ms: u64) -> ProviderClientRuntimeAudit {
     }
 }
 
-#[cfg(not(coverage))]
 fn write_create_new(path: &Path, encoded: &[u8]) -> Result<(), String> {
     #[cfg(unix)]
     let mut file = {
@@ -143,7 +132,6 @@ fn write_create_new(path: &Path, encoded: &[u8]) -> Result<(), String> {
         .map_err(|_| "provider-client-runtime-output-write-failed".to_string())
 }
 
-#[cfg(not(coverage))]
 fn run(args: &[String]) -> Result<(), String> {
     if matches!(args, [flag] if flag == "--help" || flag == "-h") {
         println!("{}", usage());
@@ -165,7 +153,6 @@ fn run(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(coverage))]
 fn command_args() -> Result<Vec<String>, String> {
     std::env::args_os()
         .skip(1)
@@ -177,16 +164,12 @@ fn command_args() -> Result<Vec<String>, String> {
         .collect()
 }
 
-#[cfg(not(coverage))]
 fn main() {
     if let Err(error) = command_args().and_then(|args| run(&args)) {
         eprintln!("{error}");
         std::process::exit(2);
     }
 }
-
-#[cfg(coverage)]
-fn main() {}
 
 #[cfg(test)]
 mod tests {
