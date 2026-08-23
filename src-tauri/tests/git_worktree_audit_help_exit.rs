@@ -1,19 +1,60 @@
-#![cfg(feature = "cloud-cli")]
-
 //! Black-box process contract for the shipped Git-worktree audit CLI.
 //!
 //! Help is a terminal discovery action: it must succeed without repository, HOME, Git, or
 //! filesystem-domain work. Invalid and malformed host input remains a bounded non-zero failure.
+//!
+//! The binary itself requires the `cloud-cli` feature. This integration test deliberately remains
+//! part of the default native test suite and builds the feature-gated shipped binary in an isolated
+//! target directory so a green default `cargo test` cannot silently skip the process contract.
 
+use std::ffi::OsString;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 
 const EXPECTED_USAGE: &str = "usage: disksage-git-worktree-audit --repository-root ABSOLUTE_PATH --reference-ref REF [--reference-ref REF ...] [--private-output NEW_ABSOLUTE_JSON_PATH] [--command-timeout-ms N] [--size-scan-timeout-ms N] [--max-worktrees N] [--max-entries-per-worktree N] [--max-active-pids N]";
 const OID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
+fn binary_path() -> &'static Path {
+    static BINARY_PATH: OnceLock<PathBuf> = OnceLock::new();
+    BINARY_PATH
+        .get_or_init(|| {
+            let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            let target_dir = std::env::temp_dir().join(format!(
+                "disksage-git-worktree-audit-contract-{}",
+                std::process::id()
+            ));
+            let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+            let output = Command::new(cargo)
+                .current_dir(&manifest_dir)
+                .args([
+                    "build",
+                    "--locked",
+                    "--features",
+                    "cloud-cli",
+                    "--bin",
+                    "disksage-git-worktree-audit",
+                    "--target-dir",
+                ])
+                .arg(&target_dir)
+                .output()
+                .expect("Cargo should start for the shipped Git worktree audit binary");
+            assert!(
+                output.status.success(),
+                "feature-gated Git worktree audit binary build failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            target_dir.join("debug").join(format!(
+                "disksage-git-worktree-audit{}",
+                std::env::consts::EXE_SUFFIX
+            ))
+        })
+        .as_path()
+}
+
 fn command() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_disksage-git-worktree-audit"))
+    Command::new(binary_path())
 }
 
 fn assert_exact_failure(arguments: &[&str], expected: &str) {
@@ -235,7 +276,6 @@ fn duplicate_singleton_options_fail_before_git_or_filesystem_work() {
 #[cfg(unix)]
 #[test]
 fn non_utf8_option_shaped_input_is_bounded_and_non_reflective() {
-    use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
 
     let opaque = OsString::from_vec(vec![b'-', b'-', b'o', b'p', b'a', b'q', b'u', b'e', 0xff]);
