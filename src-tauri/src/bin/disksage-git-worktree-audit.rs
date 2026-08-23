@@ -51,7 +51,7 @@ fn parse_number<T: std::str::FromStr>(
 }
 
 fn parse_args(args: &[OsString]) -> Result<ParseOutcome, String> {
-    if args.len() == 1 && matches!(args[0].to_str(), Some("--help" | "-h")) {
+    if args.len() == 1 && matches!(args[0].to_str(), Some("--help") | Some("-h")) {
         return Ok(ParseOutcome::Help);
     }
 
@@ -220,7 +220,10 @@ mod tests {
     use super::*;
 
     fn run_args(values: &[&str]) -> Args {
-        let raw: Vec<OsString> = values.iter().map(OsString::from).collect();
+        let raw: Vec<OsString> = values
+            .iter()
+            .map(|value| OsString::from(*value))
+            .collect();
         match parse_args(&raw).unwrap() {
             ParseOutcome::Run(args) => args,
             ParseOutcome::Help => panic!("runtime arguments must not parse as help"),
@@ -330,7 +333,10 @@ mod tests {
         let ParseOutcome::Run(args) = parse_args(&raw).unwrap() else {
             panic!("native path invocation must parse as a runtime request")
         };
-        assert_eq!(args.repository_root.as_os_str().as_bytes(), native_path.as_bytes());
+        assert_eq!(
+            args.repository_root.as_os_str().as_bytes(),
+            native_path.as_os_str().as_bytes()
+        );
     }
 
     #[test]
