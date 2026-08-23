@@ -18,6 +18,18 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+/** Fail closed if the compressor runtime differs from the audited generation contract. */
+function validateGeneratorRuntime(contract) {
+  const expected = contract.generator_runtime;
+  if (
+    !expected
+    || expected.node !== process.versions.node
+    || expected.zlib !== process.versions.zlib
+  ) {
+    throw new Error("icon-generator-runtime-mismatch");
+  }
+}
+
 /** Parse one element's double-quoted SVG attributes into a plain object. */
 function parseAttributes(fragment) {
   const attributes = {};
@@ -444,6 +456,7 @@ export function generateIconSet({ sourcePath, contractPath, outputDirectory }) {
   const source = readFileSync(sourcePath);
   const sourceDigest = sha256(source);
   const contract = JSON.parse(readFileSync(contractPath, "utf8"));
+  validateGeneratorRuntime(contract);
   if (contract.source_sha256 !== sourceDigest) {
     throw new Error(
       `icon source digest ${sourceDigest} does not match contract ${contract.source_sha256}`,
@@ -491,6 +504,10 @@ export function generateIconSet({ sourcePath, contractPath, outputDirectory }) {
     source: contract.source,
     source_sha256: sourceDigest,
     generator: contract.generator,
+    generator_runtime: {
+      node: process.versions.node,
+      zlib: process.versions.zlib,
+    },
     assets,
   };
   writeFileSync(
