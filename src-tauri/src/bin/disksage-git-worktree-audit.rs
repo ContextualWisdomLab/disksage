@@ -9,6 +9,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use disksage_lib::git_worktree::{audit_git_worktrees, public_summary, GitWorktreeAuditOptions};
 use sha2::{Digest, Sha256};
 
+const MAX_REFERENCE_BYTES: usize = 1_024;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Args {
     repository_root: PathBuf,
@@ -57,6 +59,19 @@ fn mark_singleton(seen: &mut bool) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_reference(reference: &str) -> Result<(), String> {
+    if reference.is_empty()
+        || reference.len() > MAX_REFERENCE_BYTES
+        || reference.starts_with('-')
+        || reference
+            .chars()
+            .any(|character| character.is_control() || character == '\0')
+    {
+        return Err("git-worktree-reference-invalid".into());
+    }
+    Ok(())
+}
+
 fn parse_args(args: &[OsString]) -> Result<ParseOutcome, String> {
     if args.len() == 1 && matches!(args[0].to_str(), Some("--help") | Some("-h")) {
         return Ok(ParseOutcome::Help);
@@ -87,11 +102,11 @@ fn parse_args(args: &[OsString]) -> Result<ParseOutcome, String> {
                     "--repository-root",
                 )?));
             }
-            "--reference-ref" => retention_references.push(utf8_value(
-                args,
-                &mut index,
-                "--reference-ref",
-            )?),
+            "--reference-ref" => {
+                let reference = utf8_value(args, &mut index, "--reference-ref")?;
+                validate_reference(&reference)?;
+                retention_references.push(reference);
+            }
             "--private-output" => {
                 mark_singleton(&mut seen_private_output)?;
                 private_output = Some(PathBuf::from(value(
@@ -371,6 +386,24 @@ mod tests {
             args.repository_root.as_os_str().as_bytes(),
             native_path.as_os_str().as_bytes()
         );
+    }
+
+    #[test]
+    fn reference_admission_matches_the_library_contract_before_domain_work() {
+        assert!(validate_reference("HEAD").is_ok());
+        assert!(validate_reference("a/b").is_ok());
+        assert!(validate_reference(&"a".repeat(MAX_REFERENCE_BYTES)).is_ok());
+        for invalid in [
+            String::new(),
+            "-dangerous-option".into(),
+            "control\nreference".into(),
+            "a".repeat(MAX_REFERENCE_BYTES + 1),
+        ] {
+            assert_eq!(
+                validate_reference(&invalid).unwrap_err(),
+                "git-worktree-reference-invalid"
+            );
+        }
     }
 
     #[test]
