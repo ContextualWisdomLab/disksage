@@ -84,6 +84,19 @@ fn git(repository: &Path, arguments: &[&str]) {
     );
 }
 
+fn initialized_repository() -> (tempfile::TempDir, PathBuf) {
+    let temp = tempfile::tempdir().expect("temporary directory should be created");
+    let repository = temp.path().join("private-customer-repository");
+    fs::create_dir(&repository).expect("repository directory should be created");
+    git(&repository, &["init", "-q"]);
+    git(&repository, &["config", "user.email", "coverage@example.invalid"]);
+    git(&repository, &["config", "user.name", "DiskSage Test"]);
+    fs::write(repository.join("tracked.txt"), b"tracked\n").expect("tracked fixture should be written");
+    git(&repository, &["add", "tracked.txt"]);
+    git(&repository, &["commit", "-q", "-m", "fixture"]);
+    (temp, repository)
+}
+
 #[test]
 fn sole_help_flags_are_terminal_success_without_domain_environment() {
     for flag in ["--help", "-h"] {
@@ -128,15 +141,7 @@ fn help_mixed_with_runtime_input_stays_a_bounded_failure() {
 
 #[test]
 fn primary_worktree_audit_keeps_machine_json_path_redacted_and_read_only() {
-    let temp = tempfile::tempdir().expect("temporary directory should be created");
-    let repository = temp.path().join("private-customer-repository");
-    fs::create_dir(&repository).expect("repository directory should be created");
-    git(&repository, &["init", "-q"]);
-    git(&repository, &["config", "user.email", "coverage@example.invalid"]);
-    git(&repository, &["config", "user.name", "DiskSage Test"]);
-    fs::write(repository.join("tracked.txt"), b"tracked\n").expect("tracked fixture should be written");
-    git(&repository, &["add", "tracked.txt"]);
-    git(&repository, &["commit", "-q", "-m", "fixture"]);
+    let (_temp, repository) = initialized_repository();
 
     let output = command()
         .arg("--repository-root")
@@ -161,6 +166,29 @@ fn primary_worktree_audit_keeps_machine_json_path_redacted_and_read_only() {
         !stdout.contains(&repository.to_string_lossy().to_string()),
         "public machine JSON must not expose the selected repository path"
     );
+}
+
+#[cfg(not(unix))]
+#[test]
+fn private_output_fails_closed_when_secure_unix_mode_is_unavailable() {
+    let (temp, repository) = initialized_repository();
+    let private_output = temp.path().join("private-report.json");
+
+    let output = command()
+        .arg("--repository-root")
+        .arg(&repository)
+        .args(["--reference-ref", "HEAD", "--private-output"])
+        .arg(&private_output)
+        .output()
+        .expect("Git worktree audit binary should start");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("stderr should remain UTF-8"),
+        "DiskSage Git worktree audit: git-worktree-private-output-secure-mode-unsupported\n"
+    );
+    assert!(!private_output.exists());
 }
 
 #[test]
