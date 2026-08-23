@@ -224,7 +224,7 @@ fn assert_parser_admission_matrix_is_bounded(binary: &Path) {
         &["--cloud-root", "relative"],
         "--cloud-root는 절대 경로여야 함",
     );
-    for relative in ["", "../escape"] {
+    for relative in ["", "../escape", ".", "./Archive"] {
         assert_argument_failure(
             binary,
             &["--cloud-root", absolute_root, "--relative-subpath", relative],
