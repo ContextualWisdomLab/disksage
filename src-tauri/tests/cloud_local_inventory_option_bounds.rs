@@ -2,6 +2,8 @@
 //!
 //! Invalid resource bounds must fail before home/provider discovery. In particular, an empty
 //! home must never turn an invalid `--all-roots` invocation into a successful empty JSON report.
+//! The exact maximum MiB value is also exercised through a real synthetic provider root so the
+//! accepted value must survive the MiB-to-byte conversion used by production inventory.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -107,9 +109,11 @@ fn invalid_inventory_limits_fail_before_empty_home_discovery_can_return_success(
 }
 
 #[test]
-fn exact_inventory_limit_ceilings_remain_admitted() {
+fn exact_inventory_limit_ceilings_remain_admitted_through_real_provider_inventory() {
     let (_target_dir, binary) = build_feature_gated_binary();
-    let home = tempfile::tempdir().expect("isolated empty home must be created");
+    let home = tempfile::tempdir().expect("isolated synthetic provider home must be created");
+    std::fs::create_dir(home.path().join("OneDrive"))
+        .expect("synthetic OneDrive root must be created");
     let output = Command::new(binary)
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
@@ -133,13 +137,15 @@ fn exact_inventory_limit_ceilings_remain_admitted() {
 
     assert!(
         output.status.success(),
-        "exact supported ceilings must remain valid: {}",
+        "exact supported ceilings must remain valid through a real worker inventory: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(output.stderr.is_empty());
     let report: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("valid ceiling invocation emits JSON");
     assert_eq!(report["version"], 1);
-    assert_eq!(report["discovered_roots"], 0);
-    assert_eq!(report["reported_roots"], 0);
+    assert_eq!(report["discovered_roots"], 1);
+    assert_eq!(report["reported_roots"], 1);
+    assert_eq!(report["failed_roots"], 0);
+    assert_eq!(report["evidence_complete"], true);
 }
