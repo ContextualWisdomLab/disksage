@@ -8,6 +8,7 @@
 use std::process::Command;
 
 const EXPECTED_USAGE: &str = "usage: disksage-git-worktree-audit --repository-root ABSOLUTE_PATH --reference-ref REF [--reference-ref REF ...] [--private-output NEW_ABSOLUTE_JSON_PATH] [--command-timeout-ms N] [--size-scan-timeout-ms N] [--max-worktrees N] [--max-entries-per-worktree N] [--max-active-pids N]";
+const OID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 fn command() -> Command {
     Command::new(env!("CARGO_BIN_EXE_disksage-git-worktree-audit"))
@@ -50,6 +51,94 @@ fn help_mixed_with_runtime_input_stays_a_bounded_failure() {
     assert!(!stderr.is_empty());
     assert!(!stderr.contains(sensitive_path));
     assert!(!stderr.contains("panicked") && !stderr.contains("thread 'main'"));
+}
+
+#[test]
+fn duplicate_singleton_options_fail_before_git_or_filesystem_work() {
+    let cases: &[&[&str]] = &[
+        &[
+            "--repository-root",
+            "/first/repository",
+            "--repository-root",
+            "/second/repository",
+            "--reference-ref",
+            OID,
+        ],
+        &[
+            "--repository-root",
+            "/repository",
+            "--reference-ref",
+            OID,
+            "--private-output",
+            "/first.json",
+            "--private-output",
+            "/second.json",
+        ],
+        &[
+            "--repository-root",
+            "/repository",
+            "--reference-ref",
+            OID,
+            "--command-timeout-ms",
+            "10",
+            "--command-timeout-ms",
+            "20",
+        ],
+        &[
+            "--repository-root",
+            "/repository",
+            "--reference-ref",
+            OID,
+            "--size-scan-timeout-ms",
+            "10",
+            "--size-scan-timeout-ms",
+            "20",
+        ],
+        &[
+            "--repository-root",
+            "/repository",
+            "--reference-ref",
+            OID,
+            "--max-worktrees",
+            "10",
+            "--max-worktrees",
+            "20",
+        ],
+        &[
+            "--repository-root",
+            "/repository",
+            "--reference-ref",
+            OID,
+            "--max-entries-per-worktree",
+            "10",
+            "--max-entries-per-worktree",
+            "20",
+        ],
+        &[
+            "--repository-root",
+            "/repository",
+            "--reference-ref",
+            OID,
+            "--max-active-pids",
+            "1",
+            "--max-active-pids",
+            "2",
+        ],
+    ];
+
+    for arguments in cases {
+        let output = command()
+            .args(*arguments)
+            .output()
+            .expect("Git worktree audit binary should start");
+        assert_eq!(output.status.code(), Some(2), "arguments: {arguments:?}");
+        assert!(output.stdout.is_empty(), "arguments: {arguments:?}");
+        assert_eq!(
+            String::from_utf8(output.stderr).expect("stderr should remain UTF-8"),
+            "DiskSage Git worktree audit: duplicate-option\n",
+            "arguments: {arguments:?}"
+        );
+    }
 }
 
 #[cfg(unix)]
