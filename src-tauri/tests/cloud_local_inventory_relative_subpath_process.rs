@@ -1,8 +1,9 @@
 //! Black-box runtime coverage for cloud-local-inventory relative-subpath selection.
 //!
 //! These tests launch the shipped feature-gated CLI against an isolated synthetic OneDrive root.
-//! A real descendant directory must remain a read-only inventory scope, while a symlink descendant
-//! must fail closed before traversal can escape the selected provider root.
+//! A real descendant directory must remain a read-only inventory scope, while unavailable,
+//! non-directory, or symlink descendants must fail closed before traversal can escape or invent
+//! the selected provider-root scope.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -94,6 +95,47 @@ fn real_descendant_directory_is_inventory_scope_without_provider_mutation() {
     assert_eq!(report["results_truncated"], false);
     assert_eq!(report["issues_truncated"], false);
     assert_eq!(report["candidates"].as_array().map(Vec::len), Some(0));
+}
+
+#[test]
+fn unavailable_or_regular_file_descendant_fails_closed_before_inventory() {
+    let (_target_dir, binary) = build_feature_gated_binary();
+    let home = tempfile::tempdir().expect("isolated synthetic provider home must be created");
+    let onedrive = home.path().join("OneDrive");
+    std::fs::create_dir(&onedrive).expect("synthetic OneDrive root must be created");
+
+    let unavailable = Command::new(&binary)
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .args(bounded_inventory_args(&onedrive, "Missing"))
+        .output()
+        .expect("cloud local-inventory CLI must launch for unavailable descendant rejection");
+    assert_eq!(unavailable.status.code(), Some(2));
+    assert!(unavailable.stdout.is_empty());
+    assert_eq!(
+        unavailable.stderr,
+        b"cloud-local-inventory-subpath-unavailable\n"
+    );
+
+    let marker = onedrive.join("Archive");
+    std::fs::write(&marker, b"must-remain-a-file\n")
+        .expect("regular-file descendant fixture must be written");
+    let regular_file = Command::new(&binary)
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .args(bounded_inventory_args(&onedrive, "Archive"))
+        .output()
+        .expect("cloud local-inventory CLI must launch for regular-file descendant rejection");
+    assert_eq!(regular_file.status.code(), Some(2));
+    assert!(regular_file.stdout.is_empty());
+    assert_eq!(
+        regular_file.stderr,
+        b"cloud-local-inventory-subpath-not-real-directory\n"
+    );
+    assert_eq!(
+        std::fs::read(&marker).expect("regular-file descendant must remain unchanged"),
+        b"must-remain-a-file\n"
+    );
 }
 
 #[cfg(unix)]
