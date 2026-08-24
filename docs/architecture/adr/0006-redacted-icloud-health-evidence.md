@@ -215,6 +215,14 @@ media candidate remains eligible while the unsafe document candidate remains dia
 partial. The focused suite passed 11/11 on Rust 1.97.1. No provider, Finder, source, or cloud
 mutation rule changed.
 
+## Decision maintenance — 2026-08-24 17:59
+
+The Finder-copy cancellation control now tells the operator why macOS Accessibility/System Events
+permission is required to send the fixed Escape request, and explicitly states that a denied request
+does not mutate files or cloud data. The focused UI contract/privacy tests passed 6/6 and
+`npm run check` reported zero diagnostics. This is explanatory UX only; provider admission,
+attestation, and eviction remain fail-closed.
+
 ## Operational evidence update — 2026-08-24 16:21
 
 The latest bounded read-only receipt still reports `evidence_complete=true` and

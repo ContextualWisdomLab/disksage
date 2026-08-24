@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
-**Snapshot:** 2026-08-24 17:52 +0900 (Asia/Seoul)
-**Repository heads at snapshot:** the dated inventory and 17:52 correction below supersede earlier
+**Snapshot:** 2026-08-24 17:59 +0900 (Asia/Seoul)
+**Repository heads at snapshot:** the dated inventory and 17:59 correction below supersede earlier
 historical captures; hosted checks and protected review remain authoritative, and no merge is
 claimed from queued, stale, or bot-only status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
@@ -15,7 +15,7 @@ claimed from queued, stale, or bot-only status.
 4. Regenerable caches are a separate reclaim domain. They are per-child, identity-bound, active-use checked, journaled, and moved to OS Trash; they are not uploaded as user data.
 5. Deterministic Rust gates own safety. A local model may judge only the fixed maintenance command after dry-run evidence, calibration, and explicit human confirmation. No external LLM or OAuth service is a runtime prerequisite for the standalone product.
 
-## 2026-08-24 17:52 +0900 current protected PR inventory
+## 2026-08-24 17:59 +0900 current protected PR inventory
 
 This is the current review queue captured from GitHub immediately before this snapshot. A commit
 SHA is authoritative only for the PR row where it appears; a later push invalidates predecessor
@@ -24,7 +24,7 @@ checks and approvals.
 | PR | Exact head | Draft | Merge state | Review state | Current interpretation |
 | --- | --- | --- | --- | --- | --- |
 | #249 | `dc9ccf2a215061fba5bea2a23e8df3e84a0cd072` | yes | blocked | review required | Git worktree audit help; process tests use Cargo's shipped binary without nested temp builds |
-| #247 | `d5ffedb0872d07d933f7e0b95e42681c8e1c1174` | yes | blocked | review required | iCloud provider indexing plus live Finder/provider stall evidence; upgrade-compatible stall journal and dated headroom-fixture repair |
+| #247 | `7b45ada3be4762724fd2c964b0dafe7f62dbeacb` | yes | blocked | review required | iCloud provider indexing plus live Finder/provider stall evidence; dated headroom-fixture repair and explicit Finder Accessibility permission guidance |
 | #246 | `1972614ee5488cca34deeb3bd999d369c61b3de1` | no | blocked | review required | Storybook/accessibility contract; iCloud stall clock test slice is 7/7 |
 | #244 | `13caeb04333e50e57c8a51a11b64aeb131c080b2` | no | blocked | review required | Rust 1.97.1 compiler baseline |
 | #227 | `5ad11975ad1229e700dc042fdfd0482f21a2f45c` | no | blocked | review required | symlink-root audit hardening |
