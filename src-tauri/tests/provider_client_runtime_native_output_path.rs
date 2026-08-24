@@ -86,3 +86,44 @@ fn non_utf8_absolute_output_path_remains_a_valid_native_destination() {
         "public evidence must not reflect the native output filename"
     );
 }
+
+#[test]
+fn shared_writable_output_parent_never_gains_audit_publication_authority() {
+    use std::os::unix::fs::PermissionsExt;
+
+    for mode in [0o720, 0o702] {
+        let directory = tempfile::tempdir().expect("authority fixture root must be created");
+        let parent = directory.path().join(format!("shared-{mode:o}"));
+        std::fs::create_dir(&parent).expect("shared-writable parent fixture must be created");
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(mode))
+            .expect("shared-writable parent mode must be set");
+        let output_path = parent.join("provider-runtime.json");
+
+        let output = Command::new(binary_path())
+            .env_remove("HOME")
+            .arg("--output")
+            .arg(&output_path)
+            .output()
+            .expect("provider client-runtime CLI must launch for authority rejection");
+
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700))
+            .expect("fixture permissions must be restored for cleanup");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "group/other-writable output parents must fail closed"
+        );
+        assert!(
+            output.stdout.is_empty(),
+            "rejected publication authority must not emit a success report"
+        );
+        assert_eq!(
+            String::from_utf8(output.stderr).expect("diagnostic must remain UTF-8"),
+            "provider-client-runtime-output-parent-writable-by-others\n"
+        );
+        assert!(
+            !output_path.exists(),
+            "rejected authority must not receive even a partial audit artifact"
+        );
+    }
+}
