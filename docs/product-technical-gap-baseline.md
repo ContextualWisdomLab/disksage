@@ -1222,3 +1222,10 @@ checks are not reused:
 
 - DiskSage #205 (Intel Homebrew executable admission) is ready at `5c86668a6e503a174ff0b07151f67226b39547ff`; its hosted Test/Release/build checks are green but the stacked base and protected approvals remain.
 - DiskSage #206 (content-bound Homebrew execution) is ready at `2e7b845b7610a871ec5981d964bcab5cb99df41d`; GitHub reports clean and hosted Test/Release/build checks are green. No approval bypass or merge was performed.
+
+## 2026-08-24 16:15 +0900 customer-facing UI queue status
+
+- DiskSage #203 (assistive table labels) is ready at `9d573f04145eb4168098623042484fdf73c2ab74`;
+  #202 (bounded scan/navigation failure feedback) is ready at
+  `1d005586b270ca1fcad445970cf44bf5e7268425`. Both have no unresolved review threads; protected
+  checks and approvals remain the merge gates.
