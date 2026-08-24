@@ -1268,3 +1268,10 @@ checks are not reused:
 - The metadata-failure diagnostic remains a bounded generic fallback by design; it does not expose
   paths or weaken the fail-closed private-report contract. Current hosted checks and protected
   approvals remain required.
+
+## 2026-08-24 16:50 +0900 exact-head queue refresh
+
+- #203 is ready at `5f0bd51` with the current TopFiles accessibility contract; #244 is ready at
+  `13caeb0`; and #249 is ready at `db95c54` after the test-artifact cleanup. Their review threads
+  are resolved where applicable, but current hosted checks and the protected independent-approval
+  quorum remain merge gates. No merge or approval bypass was performed.

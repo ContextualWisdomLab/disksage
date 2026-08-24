@@ -234,3 +234,10 @@ The exact-head loop also repaired #249's process-test storage gap at head `db95c
 feature-gated Git-worktree CLI integration tests now reuse deterministic private target directories
 and remove stale output before each nested build, preventing process-id-named target accumulation.
 This test-only cleanup does not alter provider, source, Finder, or cloud mutation boundaries.
+
+## Decision maintenance — 2026-08-24 16:50
+
+The current-head review queue was refreshed after the accessibility and compiler-baseline PRs were
+marked ready: #203 is at `5f0bd51`, #244 at `13caeb0`, and #249 at `db95c54`. All remain blocked by
+live hosted gates and protected approvals; none of these states changes the provider evidence
+decision or authorizes source/cloud mutation.
