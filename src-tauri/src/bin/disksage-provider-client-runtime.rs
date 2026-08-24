@@ -56,9 +56,9 @@ fn validate_output_parent(path: &Path) -> Result<(), String> {
             .ancestors()
             .filter(|ancestor| !ancestor.as_os_str().is_empty())
         {
-            let metadata = std::fs::metadata(ancestor)
+            let metadata = std::fs::symlink_metadata(ancestor)
                 .map_err(|_| "provider-client-runtime-output-parent-unavailable".to_string())?;
-            if !metadata.is_dir() {
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
                 return Err("provider-client-runtime-output-parent-unsafe".into());
             }
             let mode = metadata.permissions().mode();
