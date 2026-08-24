@@ -1111,3 +1111,14 @@ checks are not reused:
   (Rust 1.97.1 baseline) are draft/open; #189 remains `8809e6c`, and #212 remains `779afa4`.
   Central `.github` #1263 remains `7011fee` with changes requested. Protected merge is not inferred
   from draft status, queued checks, or historical approvals.
+
+## 2026-08-24 14:47 +0900 exact-head regression repair
+
+- A local exact-head run initially exposed `source-snapshot-stale` in #247's destination-headroom
+  test because its fixture used sentinel timestamps (`created_ms=1`, `modified_ms=1`) for a file
+  that the public planner revalidates. The test—not the destination-authority implementation—was
+  stale. Head `e9a3fd8` now binds the fixture bytes/mtime to the materialized source and uses the
+  observed clock.
+- Pinned Rust 1.97.1 execution now passes both runtime regressions: destination ancestor headroom
+  authority and folded mail-header planning (2 passed). This preserves the real source freshness
+  gate while testing the intended symlinked-staging safety behavior.
