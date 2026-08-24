@@ -8,38 +8,46 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 
-fn build_feature_gated_binary() -> (tempfile::TempDir, PathBuf) {
-    let target_dir = tempfile::tempdir().expect("isolated Cargo target directory must be created");
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
-    let status = Command::new(cargo)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .args([
-            "build",
-            "--locked",
-            "--features",
-            "cloud-cli",
-            "--bin",
-            "disksage-cloud-local-inventory",
-            "--target-dir",
-        ])
-        .arg(target_dir.path())
-        .status()
-        .expect("cloud local-inventory CLI must be buildable for relative-subpath tests");
-    assert!(status.success(), "feature-gated CLI build must succeed");
+fn binary_path() -> &'static Path {
+    static BINARY_PATH: OnceLock<PathBuf> = OnceLock::new();
+    BINARY_PATH
+        .get_or_init(|| {
+            let target_dir = std::env::temp_dir().join(format!(
+                "disksage-cloud-local-inventory-relative-subpath-{}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&target_dir)
+                .expect("isolated Cargo target directory must be created");
+            let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+            let status = Command::new(cargo)
+                .current_dir(env!("CARGO_MANIFEST_DIR"))
+                .args([
+                    "build",
+                    "--locked",
+                    "--features",
+                    "cloud-cli",
+                    "--bin",
+                    "disksage-cloud-local-inventory",
+                    "--target-dir",
+                ])
+                .arg(&target_dir)
+                .status()
+                .expect("cloud local-inventory CLI must be buildable for relative-subpath tests");
+            assert!(status.success(), "feature-gated CLI build must succeed");
 
-    let binary = target_dir
-        .path()
-        .join("debug")
-        .join(format!(
-            "disksage-cloud-local-inventory{}",
-            std::env::consts::EXE_SUFFIX
-        ));
-    assert!(binary.is_file(), "feature-gated CLI binary must exist");
-    (target_dir, binary)
+            let binary = target_dir.join("debug").join(format!(
+                "disksage-cloud-local-inventory{}",
+                std::env::consts::EXE_SUFFIX
+            ));
+            assert!(binary.is_file(), "feature-gated CLI binary must exist");
+            binary
+        })
+        .as_path()
 }
 
-fn bounded_inventory_args<'a>(cloud_root: &'a Path, relative: &'a str) -> Vec<OsString> {
+fn bounded_inventory_args(cloud_root: &Path, relative: &str) -> Vec<OsString> {
     vec![
         OsString::from("--cloud-root"),
         cloud_root.as_os_str().to_os_string(),
@@ -62,13 +70,13 @@ fn bounded_inventory_args<'a>(cloud_root: &'a Path, relative: &'a str) -> Vec<Os
 
 #[test]
 fn real_descendant_directory_is_inventory_scope_without_provider_mutation() {
-    let (_target_dir, binary) = build_feature_gated_binary();
+    let binary = binary_path();
     let home = tempfile::tempdir().expect("isolated synthetic provider home must be created");
     let onedrive = home.path().join("OneDrive");
     let archive = onedrive.join("Archive");
     std::fs::create_dir_all(&archive).expect("synthetic OneDrive descendant must be created");
 
-    let output = Command::new(&binary)
+    let output = Command::new(binary)
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
         .args(bounded_inventory_args(&onedrive, "Archive"))
@@ -99,12 +107,12 @@ fn real_descendant_directory_is_inventory_scope_without_provider_mutation() {
 
 #[test]
 fn unavailable_or_regular_file_descendant_fails_closed_before_inventory() {
-    let (_target_dir, binary) = build_feature_gated_binary();
+    let binary = binary_path();
     let home = tempfile::tempdir().expect("isolated synthetic provider home must be created");
     let onedrive = home.path().join("OneDrive");
     std::fs::create_dir(&onedrive).expect("synthetic OneDrive root must be created");
 
-    let unavailable = Command::new(&binary)
+    let unavailable = Command::new(binary)
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
         .args(bounded_inventory_args(&onedrive, "Missing"))
@@ -120,7 +128,7 @@ fn unavailable_or_regular_file_descendant_fails_closed_before_inventory() {
     let marker = onedrive.join("Archive");
     std::fs::write(&marker, b"must-remain-a-file\n")
         .expect("regular-file descendant fixture must be written");
-    let regular_file = Command::new(&binary)
+    let regular_file = Command::new(binary)
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
         .args(bounded_inventory_args(&onedrive, "Archive"))
@@ -143,7 +151,7 @@ fn unavailable_or_regular_file_descendant_fails_closed_before_inventory() {
 fn symlink_descendant_fails_closed_before_inventory_escape() {
     use std::os::unix::fs::symlink;
 
-    let (_target_dir, binary) = build_feature_gated_binary();
+    let binary = binary_path();
     let home = tempfile::tempdir().expect("isolated synthetic provider home must be created");
     let onedrive = home.path().join("OneDrive");
     let outside = tempfile::tempdir().expect("outside fixture must be created");
@@ -153,7 +161,7 @@ fn symlink_descendant_fails_closed_before_inventory_escape() {
     symlink(outside.path(), onedrive.join("Archive"))
         .expect("symlink descendant fixture must be created");
 
-    let output = Command::new(&binary)
+    let output = Command::new(binary)
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
         .args(bounded_inventory_args(&onedrive, "Archive"))
