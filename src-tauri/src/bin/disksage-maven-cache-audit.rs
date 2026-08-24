@@ -1,5 +1,6 @@
 //! Read-only Maven local-repository provenance audit. This command never removes artifacts.
 
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{fs::OpenOptions, io::Write};
@@ -21,24 +22,30 @@ fn usage() -> &'static str {
     "usage: disksage-maven-cache-audit --repository-root ABSOLUTE_PATH [--output NEW_ABSOLUTE_JSON_PATH] [--max-entries N] [--max-candidates N] [--max-issues N]"
 }
 
-fn value(args: &[String], index: &mut usize, flag: &str) -> Result<String, String> {
+fn native_value(args: &[OsString], index: &mut usize, flag: &str) -> Result<OsString, String> {
     *index += 1;
     args.get(*index)
         .cloned()
         .ok_or_else(|| format!("{flag} 값이 필요함"))
 }
 
+fn text_value(args: &[OsString], index: &mut usize, flag: &str) -> Result<String, String> {
+    native_value(args, index, flag)?
+        .into_string()
+        .map_err(|_| "알 수 없는 인자".to_string())
+}
+
 fn number<T: std::str::FromStr>(
-    args: &[String],
+    args: &[OsString],
     index: &mut usize,
     flag: &str,
 ) -> Result<T, String> {
-    value(args, index, flag)?
+    text_value(args, index, flag)?
         .parse()
         .map_err(|_| format!("{flag}는 정수여야 함"))
 }
 
-fn parse_args(args: &[String]) -> Result<Args, String> {
+fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
     let defaults = MavenCacheAuditOptions::default();
     let mut repository_root = None;
     let mut output = None;
@@ -50,42 +57,46 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut max_issues_seen = false;
     let mut index = 0usize;
     while index < args.len() {
-        match args[index].as_str() {
-            "--repository-root" => {
+        match args[index].to_str() {
+            Some("--repository-root") => {
                 if repository_root.is_some() {
                     return Err("--repository-root는 한 번만 지정할 수 있음".into());
                 }
-                repository_root = Some(PathBuf::from(value(args, &mut index, "--repository-root")?));
+                repository_root = Some(PathBuf::from(native_value(
+                    args,
+                    &mut index,
+                    "--repository-root",
+                )?));
             }
-            "--output" => {
+            Some("--output") => {
                 if output.is_some() {
                     return Err("--output은 한 번만 지정할 수 있음".into());
                 }
-                output = Some(PathBuf::from(value(args, &mut index, "--output")?));
+                output = Some(PathBuf::from(native_value(args, &mut index, "--output")?));
             }
-            "--max-entries" => {
+            Some("--max-entries") => {
                 if max_entries_seen {
                     return Err("--max-entries는 한 번만 지정할 수 있음".into());
                 }
                 max_entries_seen = true;
                 max_entries = number(args, &mut index, "--max-entries")?;
             }
-            "--max-candidates" => {
+            Some("--max-candidates") => {
                 if max_candidates_seen {
                     return Err("--max-candidates는 한 번만 지정할 수 있음".into());
                 }
                 max_candidates_seen = true;
                 max_candidates = number(args, &mut index, "--max-candidates")?;
             }
-            "--max-issues" => {
+            Some("--max-issues") => {
                 if max_issues_seen {
                     return Err("--max-issues는 한 번만 지정할 수 있음".into());
                 }
                 max_issues_seen = true;
                 max_issues = number(args, &mut index, "--max-issues")?;
             }
-            "--help" | "-h" => return Err(usage().into()),
-            _ => return Err("알 수 없는 인자".to_string()),
+            Some("--help" | "-h") => return Err(usage().into()),
+            Some(_) | None => return Err("알 수 없는 인자".to_string()),
         }
         index += 1;
     }
@@ -107,6 +118,12 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         max_candidates,
         max_issues,
     })
+}
+
+#[cfg(test)]
+fn parse_args(args: &[String]) -> Result<Args, String> {
+    let native = args.iter().map(OsString::from).collect::<Vec<_>>();
+    parse_args_os(&native)
 }
 
 fn now_ms() -> u64 {
@@ -162,20 +179,13 @@ fn output_summary(path: &PathBuf, report: &MavenCacheAuditReport) -> Result<Stri
     .map_err(|error| error.to_string())
 }
 
-fn command_line_args() -> Result<Vec<String>, String> {
-    std::env::args_os()
-        .skip(1)
-        .map(|value| value.into_string().map_err(|_| "알 수 없는 인자".to_string()))
-        .collect()
-}
-
 fn run() -> Result<(), String> {
-    let raw = command_line_args()?;
-    if raw.len() == 1 && matches!(raw[0].as_str(), "--help" | "-h") {
+    let raw = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if raw.len() == 1 && matches!(raw[0].to_str(), Some("--help" | "-h")) {
         println!("{}", usage());
         return Ok(());
     }
-    let args = parse_args(&raw)?;
+    let args = parse_args_os(&raw)?;
     let report = report(&args)?;
     let encoded = serde_json::to_vec_pretty(&report).map_err(|error| error.to_string())?;
     if let Some(output) = &args.output {
