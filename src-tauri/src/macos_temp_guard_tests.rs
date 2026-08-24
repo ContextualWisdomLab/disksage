@@ -5,6 +5,7 @@
 
 #![cfg(target_os = "macos")]
 
+use crate::rules::{cache_candidates, BaseDirs};
 use crate::safety::is_protected;
 use std::path::{Path, PathBuf};
 
@@ -44,4 +45,27 @@ fn rejects_a_canonicalized_symlink_to_a_protected_target() {
     let canonical_target = std::fs::canonicalize(&link).expect("canonicalize the protected target");
     assert_eq!(canonical_target, Path::new("/System"));
     assert!(is_protected(&canonical_target));
+}
+
+#[test]
+fn cache_totals_exclude_disksage_trash_staging() {
+    let fixture = tempfile::tempdir().expect("create cache accounting fixture");
+    let cache_root = fixture.path().join("cache");
+    let staging = cache_root.join(".disksage-trash-fixture");
+    std::fs::create_dir_all(&staging).expect("create staging fixture");
+    std::fs::write(cache_root.join("live.bin"), b"live").expect("write live cache fixture");
+    std::fs::write(staging.join("staged.bin"), vec![0_u8; 100])
+        .expect("write staged cache fixture");
+
+    let bases = BaseDirs {
+        temp: cache_root,
+        local_data: fixture.path().join("local"),
+        home: fixture.path().join("home"),
+    };
+    let candidate = cache_candidates(&bases)
+        .into_iter()
+        .find(|candidate| candidate.id == "os-temp")
+        .expect("OS temp candidate must be catalogued");
+
+    assert_eq!(candidate.bytes, 4);
 }

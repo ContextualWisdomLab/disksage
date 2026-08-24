@@ -103,14 +103,17 @@ const CLOUD_DECISION_REASON_LABELS: Readonly<Record<string, string>> = {
   "exact-duplicate-content-needs-canonical-selection": "내용이 같은 파일 중 대표본을 선택해야 함",
   "exact-duplicate-content-probe-incomplete": "정확 중복 검사가 완전하지 않음",
   "filename-contains-geolocation": "파일명에 위치정보로 보이는 값이 있음",
+  "local-volume-headroom-insufficient": "복사에 필요한 로컬 여유공간이 부족함",
   "filename-context-may-be-confidential": "파일명 맥락에 기밀정보 가능성이 있음",
   "incomplete-download": "다운로드가 완료되지 않은 파일임",
+  "icloud-native-sync-up-pending": "iCloud 네이티브 상태가 업로드 대기 중이라 새 복사를 보류함",
   "multipart-archive-atomic-copy-required": "분할 압축 전체를 함께 처리해야 함",
   "multipart-archive-member": "분할 압축의 일부 파일임",
   "opaque-container-content-uninspected": "컨테이너 내부 내용을 확인하지 못함",
   "organization-cloud-sensitive-context-needs-explicit-tenant-approval": "조직 클라우드에 민감 맥락을 보관할 명시적 확인이 필요함",
   "personal-cloud-sensitive-context-needs-explicit-approval": "개인 클라우드에 민감 맥락을 보관할 명시적 확인이 필요함",
   "production-date-not-from-embedded-metadata": "생산일을 내장 메타데이터에서 확인하지 못함",
+  "provider-sync-incomplete": "공급자 동기화 증거가 불완전하여 기존 목적지를 채택할 수 없음",
   "recording-may-contain-sensitive-speech": "녹음·영상에 민감한 대화가 포함될 수 있음",
   "shared-destination-access-needs-review": "공유 목적지의 접근 범위를 확인해야 함",
   "spreadsheet-content-needs-review": "스프레드시트 내용의 민감성 확인이 필요함",
@@ -119,6 +122,8 @@ const CLOUD_DECISION_REASON_LABELS: Readonly<Record<string, string>> = {
   "spreadsheet-schema-profile-missing": "스프레드시트 스키마 정보를 확인하지 못함",
   "spreadsheet-sensitive-column-name-detected": "민감정보로 보이는 스프레드시트 열 이름이 있음",
   "structured-data-may-contain-personal-data": "구조화 데이터에 개인정보가 포함될 수 있음",
+  "sensitive-config-file": "자격 증명·비밀 설정 파일은 자동 복사·삭제할 수 없음",
+  "system-managed-photos-library-data": "Photos 라이브러리 내부 데이터는 패키지 전체 처리 없이 이동할 수 없음",
 };
 
 export function cloudDecisionReasonLabel(reason: string): string {
