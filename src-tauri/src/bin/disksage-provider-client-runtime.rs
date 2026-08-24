@@ -39,6 +39,26 @@ fn usage() -> &'static str {
     "usage: disksage-provider-client-runtime [--output ABSOLUTE_NEW_FILE.json]"
 }
 
+fn validate_output_parent(path: &Path) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| "provider-client-runtime-output-parent-missing".to_string())?;
+    let metadata = std::fs::symlink_metadata(parent)
+        .map_err(|_| "provider-client-runtime-output-parent-unavailable".to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("provider-client-runtime-output-parent-unsafe".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o022 != 0 {
+            return Err("provider-client-runtime-output-parent-writable-by-others".into());
+        }
+    }
+    Ok(())
+}
+
 fn parse_args(args: &[OsString]) -> Result<Args, String> {
     let mut output = None;
     let mut index = 0usize;
@@ -57,6 +77,7 @@ fn parse_args(args: &[OsString]) -> Result<Args, String> {
                 if !path.is_absolute() {
                     return Err("--output must be absolute".into());
                 }
+                validate_output_parent(&path)?;
                 if output.replace(path).is_some() {
                     return Err("--output may be supplied once".into());
                 }
