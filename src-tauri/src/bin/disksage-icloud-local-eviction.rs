@@ -55,25 +55,53 @@ fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
     while index < args.len() {
         match args[index].to_str() {
             Some("--cloud-root") => {
-                cloud_root = Some(PathBuf::from(native_value(args, &mut index, "--cloud-root")?))
+                if cloud_root.is_some() {
+                    return Err("--cloud-root는 한 번만 지정할 수 있음".into());
+                }
+                cloud_root = Some(PathBuf::from(native_value(args, &mut index, "--cloud-root")?));
             }
-            Some("--path") => path = Some(PathBuf::from(native_value(args, &mut index, "--path")?)),
-            Some("--execute") => execute = true,
+            Some("--path") => {
+                if path.is_some() {
+                    return Err("--path는 한 번만 지정할 수 있음".into());
+                }
+                path = Some(PathBuf::from(native_value(args, &mut index, "--path")?));
+            }
+            Some("--execute") => {
+                if execute {
+                    return Err("--execute는 한 번만 지정할 수 있음".into());
+                }
+                execute = true;
+            }
             Some("--approved-plan-fingerprint") => {
+                if approved_plan_fingerprint.is_some() {
+                    return Err("--approved-plan-fingerprint는 한 번만 지정할 수 있음".into());
+                }
                 approved_plan_fingerprint =
                     Some(text_value(args, &mut index, "--approved-plan-fingerprint")?)
             }
             Some("--confirm-plan-fingerprint") => {
+                if confirm_plan_fingerprint.is_some() {
+                    return Err("--confirm-plan-fingerprint는 한 번만 지정할 수 있음".into());
+                }
                 confirm_plan_fingerprint =
                     Some(text_value(args, &mut index, "--confirm-plan-fingerprint")?)
             }
             Some("--approved-by") => {
+                if approved_by.is_some() {
+                    return Err("--approved-by는 한 번만 지정할 수 있음".into());
+                }
                 approved_by = Some(text_value(args, &mut index, "--approved-by")?)
             }
             Some("--rationale") => {
+                if rationale.is_some() {
+                    return Err("--rationale은 한 번만 지정할 수 있음".into());
+                }
                 rationale = Some(text_value(args, &mut index, "--rationale")?)
             }
             Some("--record-dir") => {
+                if record_dir.is_some() {
+                    return Err("--record-dir는 한 번만 지정할 수 있음".into());
+                }
                 record_dir = Some(PathBuf::from(native_value(args, &mut index, "--record-dir")?))
             }
             Some("--help" | "-h") => return Err(usage().into()),
