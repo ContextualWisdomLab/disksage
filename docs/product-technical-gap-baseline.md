@@ -1208,3 +1208,12 @@ checks are not reused:
   while standalone help remains environment-independent; the targeted cloud-cli test passed 2/2.
 - The provider OAuth environment contract remains intentionally in the default test matrix, and
   its informational review thread was resolved without adding cloud credentials or side effects.
+
+## 2026-08-24 16:14 +0900 worktree-audit queue status
+
+- DiskSage #249 is now ready for review at `44390608d30417477f6a66601b18a53ca87b0a9c`; its
+  non-Strix checks passed in the last exact-head run, while Strix remains an external provider
+  availability failure requiring a fresh authoritative run.
+- The PR is not merge-ready until that provider gate, current coverage, and protected review quorum
+  are satisfied. No worktree, source, provider, or cloud mutation was performed by this status
+  update.
