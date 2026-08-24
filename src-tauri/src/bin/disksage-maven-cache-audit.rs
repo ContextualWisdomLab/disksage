@@ -11,6 +11,8 @@ use disksage_lib::private_evidence::{
     write_private_json_create_new, PrivateEvidenceReceipt,
 };
 
+const MAX_MAVEN_CACHE_ENTRIES: u64 = 2_000_000;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Args {
     repository_root: PathBuf,
@@ -110,8 +112,10 @@ fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
     if output.as_ref().is_some_and(|path| !path.is_absolute()) {
         return Err("--output은 절대 경로여야 함".into());
     }
-    if max_entries == 0 {
-        return Err("--max-entries는 1 이상이어야 함".into());
+    if !(1..=MAX_MAVEN_CACHE_ENTRIES).contains(&max_entries) {
+        return Err(format!(
+            "--max-entries는 1..={MAX_MAVEN_CACHE_ENTRIES} 범위여야 함"
+        ));
     }
     Ok(Args {
         repository_root,
