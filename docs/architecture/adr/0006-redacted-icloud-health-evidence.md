@@ -206,6 +206,15 @@ The aggregate queue continues to grow, but the receipt still does not identify t
 items or attest a remote write. `provider_sync_attested=false`, `local_eviction_authorized=false`,
 and `mutation_performed=false` remain invariant.
 
+## Decision maintenance — 2026-08-24 17:49
+
+The exact-head PR #247 integration run exposed and repaired a test-fixture defect in the mixed
+destination-headroom regression. The unsafe symlink is now placed at the actual dated destination
+ancestor derived by the same Rust production-date decomposition used by the planner; the verified
+media candidate remains eligible while the unsafe document candidate remains diagnostically
+partial. The focused suite passed 11/11 on Rust 1.97.1. No provider, Finder, source, or cloud
+mutation rule changed.
+
 ## Operational evidence update — 2026-08-24 16:21
 
 The latest bounded read-only receipt still reports `evidence_complete=true` and
