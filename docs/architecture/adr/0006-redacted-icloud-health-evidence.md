@@ -284,3 +284,11 @@ the focused slices passed 8/8, 2/2, and 1/1, with no new `disksage-git-worktree-
 targets created. This removes a local test-side source of disk pressure without changing the
 provider, Finder, source, or cloud mutation boundaries. The PR is draft, blocked, review-required,
 with hosted checks pending and no unresolved review threads.
+
+## Decision maintenance — 2026-08-24 17:38
+
+At exact head `b8a17eb`, retained iCloud health snapshots now accept the exact pre-
+`pending_indexable_count` fingerprint encoding when that optional field is absent. New snapshots
+still use the current fingerprint, and the 29-test iCloud health slice passed on Rust 1.97.1. This
+preserves the restart-safe stall clock across upgrades without weakening evidence integrity or
+changing the fail-closed provider/Finder/source/cloud mutation boundary.
