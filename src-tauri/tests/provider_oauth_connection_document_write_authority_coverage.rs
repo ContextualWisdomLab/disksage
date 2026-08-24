@@ -151,3 +151,38 @@ fn an_existing_non_regular_destination_never_gains_publication_authority() {
     );
     assert!(path.is_dir(), "rejected destination must remain untouched");
 }
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_destination_never_gains_publication_authority_or_mutates_its_target() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let target = temp.path().join("external-sensitive.json");
+    let original = b"external-sensitive-bytes";
+    std::fs::write(&target, original).unwrap();
+    let path = temp.path().join("connections.json");
+    symlink(&target, &path).unwrap();
+
+    assert_eq!(
+        save_connections(&path, &[connection("account", 1)]).unwrap_err(),
+        "oauth-connection-document-not-regular-file"
+    );
+    assert!(
+        std::fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "rejected OAuth destination must remain a symlink rather than being replaced"
+    );
+    assert_eq!(
+        std::fs::read(&target).unwrap(),
+        original,
+        "a rejected symlink destination must not mutate its target"
+    );
+    assert_eq!(
+        std::fs::read_dir(temp.path()).unwrap().count(),
+        2,
+        "symlink rejection must not leave a temporary OAuth document behind"
+    );
+}
