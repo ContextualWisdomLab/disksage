@@ -1305,6 +1305,9 @@ checks are not reused:
   copy/attestation, and local-eviction gates remain fail-closed. The root volume currently has
   about 36 GiB available, so the live blocker is provider reconciliation/error backlog rather
   than a full root volume.
+- At 17:02, the read-only process inventory showed Finder (PID 1422), `fileproviderd` (1450), and
+  `bird` (1462) all started at 10:43:49, about 6h18m earlier. This confirms a long-lived provider
+  session, not that DiskSage owns or has locked the Finder operation.
 - Exact-head review evidence remains current: #249 is now `6b95c59` after centralizing the CLI's
   reference validation in the library; #246 is `1972614`; #227 is `5ad1197`. Hosted checks and
   protected independent approvals remain the only merge gates.

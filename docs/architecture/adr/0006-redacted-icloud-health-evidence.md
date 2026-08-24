@@ -272,3 +272,6 @@ items or attest a cloud write, so the evidence remains diagnostic only:
 DiskSage must continue to expose only the explicit bounded Finder-cancel action and must not
 restart provider processes or mutate Finder, source, or cloud state automatically. The root volume
 had about 36 GiB available at the same observation, so disk-full is not the current root cause.
+At 17:02, a read-only process inventory showed Finder (PID 1422), `fileproviderd` (1450), and
+`bird` (1462) all started at 10:43:49, about 6h18m earlier. This confirms a long-lived provider
+session but does not establish DiskSage ownership or a Finder lock.
