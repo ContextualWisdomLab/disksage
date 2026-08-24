@@ -170,3 +170,44 @@ fn shared_writable_output_ancestor_never_gains_directory_replacement_authority()
         "rejected ancestor authority must not receive an audit artifact"
     );
 }
+
+#[test]
+fn symlink_output_ancestor_never_gains_publication_authority() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempfile::tempdir().expect("authority fixture root must be created");
+    let real_ancestor = directory.path().join("real-ancestor");
+    let real_parent = real_ancestor.join("private-parent");
+    std::fs::create_dir(&real_ancestor).expect("real ancestor must be created");
+    std::fs::create_dir(&real_parent).expect("real parent must be created");
+    let symlink_ancestor = directory.path().join("redirected-ancestor");
+    symlink(&real_ancestor, &symlink_ancestor).expect("ancestor symlink fixture must be created");
+    let output_path = symlink_ancestor
+        .join("private-parent")
+        .join("provider-runtime.json");
+
+    let output = Command::new(binary_path())
+        .env_remove("HOME")
+        .arg("--output")
+        .arg(&output_path)
+        .output()
+        .expect("provider client-runtime CLI must launch for symlink-ancestor rejection");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a symlink in the output authority chain must fail closed"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "rejected symlink authority must not emit a success report"
+    );
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("diagnostic must remain UTF-8"),
+        "provider-client-runtime-output-parent-unsafe\n"
+    );
+    assert!(
+        !real_parent.join("provider-runtime.json").exists(),
+        "a rejected symlink ancestor must not redirect audit publication"
+    );
+}
