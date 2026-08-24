@@ -2,6 +2,7 @@ use disksage_lib::cloud::{
     plan_cloud_archive, CloudAccountScope, CloudPlanOptions, CloudProvider, CloudRoot, ContentMetadata,
     FileFact, system_now_ms,
 };
+use disksage_lib::cloud_plan_view::normalize_native_copy_headroom_notices;
 
 #[cfg(unix)]
 #[test]
@@ -53,7 +54,7 @@ fn cloud_plan_preview_uses_destination_ancestor_authority_at_runtime() {
         access_issue: None,
     };
 
-    let report = plan_cloud_archive(
+    let mut report = plan_cloud_archive(
         &[file],
         &source_root,
         &root,
@@ -64,6 +65,7 @@ fn cloud_plan_preview_uses_destination_ancestor_authority_at_runtime() {
             limit: 10,
         },
     );
+    normalize_native_copy_headroom_notices(&mut report);
 
     assert_eq!(report.candidates.len(), 1);
     assert_eq!(report.candidates[0].blocked_reason, None);
@@ -130,7 +132,7 @@ fn one_unverified_candidate_does_not_blanket_block_candidates_with_verified_head
         readable: true,
         access_issue: None,
     };
-    let report = plan_cloud_archive(
+    let mut report = plan_cloud_archive(
         &facts,
         &source_root,
         &root,
@@ -141,6 +143,7 @@ fn one_unverified_candidate_does_not_blanket_block_candidates_with_verified_head
             limit: 10,
         },
     );
+    normalize_native_copy_headroom_notices(&mut report);
 
     assert_eq!(report.candidates.len(), 2);
     assert!(report.candidates.iter().all(|candidate| candidate.blocked_reason.is_none()));
