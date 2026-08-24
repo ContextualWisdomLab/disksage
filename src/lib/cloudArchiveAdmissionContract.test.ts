@@ -18,6 +18,8 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("iCloud File Provider 증거를 확인하지 못했습니다.");
     expect(source).toContain("no_progress_create_count");
     expect(source).toContain("pending_indexable_count");
+    expect(source).toContain("pending_scan_count");
+    expect(source).toContain("icloud-native-status-pending-scan");
     expect(source).toContain("icloud-file-provider-indexing-pending");
     expect(source).toContain("icloud-file-provider-disk-import-active");
     expect(source).toContain("디스크 import");

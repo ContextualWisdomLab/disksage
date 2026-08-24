@@ -837,6 +837,12 @@ export interface IcloudSyncHealthReport {
     out_of_quota_count: number;
     item_error_count: number;
   };
+  native_status?: {
+    status_observed: boolean;
+    evidence_complete: boolean;
+    pending_scan_count?: number;
+    notices: string[];
+  } | null;
   file_provider_activity?: {
     command_succeeded: boolean;
     timed_out: boolean;

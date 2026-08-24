@@ -320,3 +320,11 @@ available (926 GiB total, 12 GiB used), so this is not a full-root condition, bu
 lower than the earlier 36 GiB observation. The Finder copy remains diagnostic-only: no item-level
 remote write is identified, and `provider_sync_attested=false`, `local_eviction_authorized=false`,
 and `mutation_performed=false` remain invariant.
+
+## Operational evidence update — 2026-08-24 21:00
+
+The native status contract now retains only a bounded `pending_scan_count` derived from
+`brctl status` apply markers and exposes the stable blocker
+`icloud-native-status-pending-scan`. It never persists the marker's path or item identifier. The
+same blocker is validated in Naruon readiness and displayed beside the Finder cancellation
+guidance; it does not authorize cancellation, cloud writes, attestation, or source eviction.

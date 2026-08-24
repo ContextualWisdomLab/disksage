@@ -135,6 +135,9 @@ pub struct IcloudNativeStatusEvidence {
     pub server_state: Option<String>,
     pub sync_state: Option<String>,
     pub last_sync_present: bool,
+    /// Number of bounded `brctl status` apply entries waiting on a provider scan.
+    #[serde(default)]
+    pub pending_scan_count: u64,
     pub notices: Vec<String>,
 }
 
@@ -246,6 +249,10 @@ pub fn native_sync_down_pending(evidence: &IcloudNativeStatusEvidence) -> bool {
             .sync_state
             .as_deref()
             .is_some_and(|state| state.split('|').any(|value| value == "needs-sync-down"))
+}
+
+pub fn native_pending_scan(evidence: &IcloudNativeStatusEvidence) -> bool {
+    evidence.status_observed && evidence.pending_scan_count > 0
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -973,6 +980,13 @@ fn parse_native_status_output(
             )
         })
         .unwrap_or((None, None, None, false));
+    let pending_scan_count = output
+        .lines()
+        .filter(|line| {
+            let marker = line.trim();
+            marker.contains("apply{[") && marker.contains("pending-scan")
+        })
+        .count() as u64;
     let status_observed = client_state.is_some() || server_state.is_some() || sync_state.is_some();
     let evidence_complete = container_count.is_some()
         && client_state.is_some()
@@ -996,6 +1010,9 @@ fn parse_native_status_output(
     if status_observed && !evidence_complete {
         notices.push("icloud-native-status-summary-incomplete".into());
     }
+    if pending_scan_count > 0 {
+        notices.push("icloud-native-status-pending-scan".into());
+    }
     IcloudNativeStatusEvidence {
         schema_version: ICLOUD_NATIVE_STATUS_SCHEMA_VERSION,
         observed_at_ms,
@@ -1009,6 +1026,7 @@ fn parse_native_status_output(
         server_state,
         sync_state,
         last_sync_present,
+        pending_scan_count,
         notices,
     }
 }
@@ -1443,6 +1461,12 @@ fn probe_native_status(observed_at_ms: u64) -> IcloudNativeStatusEvidence {
         }
         if native_status_summary_complete(&output) {
             bounded_after_summary = true;
+        }
+        if bounded_after_summary
+            && output
+                .windows("pending-scan".len())
+                .any(|window| window == b"pending-scan")
+        {
             kill_group();
             let _ = child.kill();
             let _ = child.wait();
@@ -2012,6 +2036,21 @@ fn attach_native_status_admission(report: &mut IcloudSyncHealthReport) {
             .blockers
             .insert(0, "icloud-native-sync-down-pending".into());
     }
+    if report.native_status.as_ref().is_some_and(native_pending_scan)
+        && !report
+            .new_copy_admission_blockers
+            .iter()
+            .any(|blocker| blocker == "icloud-native-status-pending-scan")
+    {
+        report.sync_backlog_present = true;
+        report
+            .new_copy_admission_blockers
+            .push("icloud-native-status-pending-scan".into());
+        report.new_copy_admission_state = "blocked".into();
+        report
+            .blockers
+            .insert(0, "icloud-native-status-pending-scan".into());
+    }
     if let Some(activity) = report.file_provider_activity.as_ref() {
         let no_progress = activity.no_progress_fetch_count > 0
             || activity.no_progress_create_count > 0;
@@ -2252,7 +2291,8 @@ mod tests {
     fn parses_bounded_brctl_summary_without_retaining_paths_or_item_ids() {
         let evidence = parse_native_status_output(
             "1 containers matching '*'\n\
-             c{1}m.a{3}e.C{7}s[1] foreground {client:needs-sync server:full-sync|fetched-recents|ever-full-sync sync:needs-sync-up|in-sync-up|has-synced-down|0x100 last-sync:2026-08-14 01:57:54 +0000 requestID:7}\n",
+             c{1}m.a{3}e.C{7}s[1] foreground {client:needs-sync server:full-sync|fetched-recents|ever-full-sync sync:needs-sync-up|in-sync-up|has-synced-down|0x100 last-sync:2026-08-14 01:57:54 +0000 requestID:7}\n\
+             > apply{[ pending-scan attempts:9 last:22.0m ago next:ready cleanup:37.98m ]}\n",
             42,
             false,
             true,
@@ -2271,6 +2311,11 @@ mod tests {
             Some("needs-sync-up|in-sync-up|has-synced-down|0x100")
         );
         assert!(evidence.last_sync_present);
+        assert_eq!(evidence.pending_scan_count, 1);
+        assert!(native_pending_scan(&evidence));
+        assert!(evidence
+            .notices
+            .contains(&"icloud-native-status-pending-scan".into()));
         assert!(evidence.timed_out);
         assert!(evidence.output_truncated);
         assert!(!serde_json::to_string(&evidence)
@@ -2311,7 +2356,7 @@ mod tests {
     }
 
     #[test]
-    fn stops_native_probe_after_summary_before_detail_stream() {
+    fn recognizes_native_summary_before_bounded_detail_stream() {
         let summary = b"1 containers matching '*'\\nforeground {client:needs-sync server:full-sync sync:needs-sync-up last-sync:now}\\n";
         assert!(native_status_summary_complete(summary));
         assert!(!native_status_summary_complete(b"1 containers matching '*'\\n"));
@@ -2579,6 +2624,31 @@ mod tests {
         assert_eq!(
             require_new_copy_admission(&report).unwrap_err(),
             "icloud-native-status-evidence-incomplete,icloud-native-status-command-timeout"
+        );
+    }
+
+    #[test]
+    fn native_pending_scan_blocks_new_copy_admission() {
+        let mut report =
+            build_report(1, vec![], IcloudUploadQueueSummary::default(), true, true).unwrap();
+        report.native_status = Some(parse_native_status_output(
+            "1 containers matching '*'\n\
+             foreground {client:needs-sync server:full-sync sync:needs-sync-down last-sync:now}\n\
+             > apply{[ pending-scan attempts:9 last:22.0m ago next:ready cleanup:37.98m ]}\n",
+            1,
+            true,
+            false,
+            false,
+        ));
+        attach_native_status_admission(&mut report);
+
+        assert_eq!(report.new_copy_admission_state, "blocked");
+        assert!(report
+            .new_copy_admission_blockers
+            .contains(&"icloud-native-status-pending-scan".into()));
+        assert_eq!(
+            require_new_copy_admission(&report).unwrap_err(),
+            "icloud-native-sync-down-pending,icloud-native-status-pending-scan"
         );
     }
 

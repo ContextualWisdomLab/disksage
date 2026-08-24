@@ -845,3 +845,12 @@ The replaceable Goal contract now names `provider-sync-incomplete` as an explici
 `destination-headroom-bound` as a completion gate. These terms keep the Finder/File Provider
 diagnosis and candidate-scoped local staging evidence visible to projections instead of collapsing
 both into a generic pending state.
+
+## Amendment: classify native iCloud pending scans (2026-08-24 21:00 +0900)
+
+The bounded `brctl status` parser now counts path-free `apply{[ pending-scan ... ]}` entries as
+`pending_scan_count` and emits `icloud-native-status-pending-scan`. This is an aggregate native
+provider observation, not a per-item cloud receipt: a Finder “복사 준비 중” dialog remains
+unverified, `provider-sync-incomplete`, and blocked for copy, attestation, cloud write, and source
+eviction until the scan backlog is gone and item-level provider evidence is present. The Naruon
+readiness export and CloudArchive UI carry the same blocker and show the bounded next action.

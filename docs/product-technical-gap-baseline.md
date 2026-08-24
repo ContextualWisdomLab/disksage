@@ -1412,3 +1412,13 @@ checks are not reused:
 - The replaceable Goal now explicitly carries `provider-sync-incomplete` and
   `destination-headroom-bound`, so the persistent iCloud blocker and per-candidate staging gate
   survive projection/restart without being reduced to an ambiguous pending label.
+
+## 2026-08-24 21:00 +0900 native iCloud pending-scan detection
+
+- The live `brctl status` evidence contains repeated `apply{[ pending-scan ... ]}` entries, but the
+  prior native-status schema did not expose that count to the admission report. DiskSage now
+  records the bounded, path-free `pending_scan_count`, emits
+  `icloud-native-status-pending-scan`, propagates it through Naruon readiness, and shows it in the
+  CloudArchive UI. This keeps the Finder `real_datasets` “복사 준비 중” state explicitly blocked
+  without treating the screenshot as an upload receipt; no Finder, provider, source, or cloud
+  mutation is performed.
