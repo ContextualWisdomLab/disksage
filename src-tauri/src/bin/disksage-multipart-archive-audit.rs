@@ -95,7 +95,6 @@ fn system_now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-#[cfg(not(coverage))]
 fn run() -> Result<(), String> {
     let raw = std::env::args_os()
         .skip(1)
@@ -130,16 +129,12 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(coverage))]
 fn main() {
     if let Err(error) = run() {
         eprintln!("DiskSage multipart archive audit: {error}");
         std::process::exit(2);
     }
 }
-
-#[cfg(coverage)]
-fn main() {}
 
 #[cfg(test)]
 mod tests {
