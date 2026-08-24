@@ -80,8 +80,11 @@ fn parse_args_os(raw: &[OsString]) -> Result<Args, String> {
     let mut cloud_root = None;
     let mut destination_subdirectory = None;
     let mut max_entries = DEFAULT_MAX_ENTRIES;
+    let mut max_entries_seen = false;
     let mut stale_after_days = DEFAULT_STALE_AFTER_DAYS;
+    let mut stale_after_days_seen = false;
     let mut reserve_mib = DEFAULT_CAPACITY_RESERVE_BYTES / (1024 * 1024);
+    let mut reserve_mib_seen = false;
     let mut live_icloud_capacity = false;
     let mut capacity_snapshot = None;
     let mut private_output = None;
@@ -111,6 +114,10 @@ fn parse_args_os(raw: &[OsString]) -> Result<Args, String> {
                 )?));
             }
             Some("--max-entries") => {
+                if max_entries_seen {
+                    return Err("--max-entries는 한 번만 지정할 수 있음".into());
+                }
+                max_entries_seen = true;
                 let parsed = text_value(raw, &mut index, "--max-entries")?
                     .parse::<usize>()
                     .map_err(|_| "--max-entries는 양의 정수여야 함".to_string())?;
@@ -122,6 +129,10 @@ fn parse_args_os(raw: &[OsString]) -> Result<Args, String> {
                 max_entries = parsed;
             }
             Some("--stale-after-days") => {
+                if stale_after_days_seen {
+                    return Err("--stale-after-days는 한 번만 지정할 수 있음".into());
+                }
+                stale_after_days_seen = true;
                 let parsed = text_value(raw, &mut index, "--stale-after-days")?
                     .parse::<u64>()
                     .map_err(|_| "--stale-after-days는 양의 정수여야 함".to_string())?;
@@ -133,6 +144,10 @@ fn parse_args_os(raw: &[OsString]) -> Result<Args, String> {
                 stale_after_days = parsed;
             }
             Some("--capacity-reserve-mib") => {
+                if reserve_mib_seen {
+                    return Err("--capacity-reserve-mib는 한 번만 지정할 수 있음".into());
+                }
+                reserve_mib_seen = true;
                 let parsed = text_value(raw, &mut index, "--capacity-reserve-mib")?
                     .parse::<u64>()
                     .map_err(|_| "--capacity-reserve-mib는 정수여야 함".to_string())?;
