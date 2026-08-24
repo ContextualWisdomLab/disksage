@@ -1,6 +1,6 @@
 use disksage_lib::cloud::{
     plan_cloud_archive, CloudAccountScope, CloudPlanOptions, CloudProvider, CloudRoot, ContentMetadata,
-    FileFact,
+    FileFact, system_now_ms,
 };
 
 #[cfg(unix)]
@@ -18,6 +18,14 @@ fn cloud_plan_preview_uses_destination_ancestor_authority_at_runtime() {
 
     let source_file = source_root.join("report.pdf");
     std::fs::write(&source_file, b"report").unwrap();
+    let source_metadata = std::fs::metadata(&source_file).unwrap();
+    let modified_ms = source_metadata
+        .modified()
+        .unwrap()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let observed_at_ms = system_now_ms();
 
     // The final candidate itself does not exist, so ordinary destination-exists checks do not
     // block it. The nearest existing staging ancestor is nevertheless a symlink and must not
@@ -30,9 +38,9 @@ fn cloud_plan_preview_uses_destination_ancestor_authority_at_runtime() {
 
     let file = FileFact {
         path: source_file,
-        bytes: 6,
-        created_ms: 1,
-        modified_ms: 1,
+        bytes: source_metadata.len(),
+        created_ms: observed_at_ms,
+        modified_ms,
         content_metadata: ContentMetadata::default(),
     };
     let root = CloudRoot {
@@ -49,7 +57,7 @@ fn cloud_plan_preview_uses_destination_ancestor_authority_at_runtime() {
         &[file],
         &source_root,
         &root,
-        86_400_001,
+        observed_at_ms,
         CloudPlanOptions {
             min_size_bytes: 1,
             min_age_days: 0,
