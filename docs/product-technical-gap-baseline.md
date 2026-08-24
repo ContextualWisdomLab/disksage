@@ -1145,6 +1145,18 @@ checks are not reused:
   `provider-sync-incomplete`, copy/attestation/source eviction fail-closed, and performed no
   Finder, provider, source, or cloud mutation.
 
+## 2026-08-24 15:46 +0900 iCloud indexing backlog continues to rise
+
+- A fresh bounded read-only probe reported `evidence_complete=true` and
+  `new_copy_admission_state=blocked`: 343 uploads remain blocked on sync-up, one upload remains
+  active at 95.24%, and one download remains active. File Provider pending indexable items reached
+  130,571, with disk import/transfer activity and the 28 filename/2 root exclusions still present;
+  native status remains `client_state=needs-sync` with sync-up pending.
+- This is aggregate provider reconciliation evidence that explains the Finder “preparing to copy”
+  symptom but does not identify the seven items or prove remote upload. DiskSage keeps
+  `provider-sync-incomplete`, copy/attestation/source eviction fail-closed, and performs no
+  Finder, provider, source, or cloud mutation.
+
 ## 2026-08-24 15:42 +0900 Strix provider evidence separated from source readiness
 
 - The exact-head central `.github` PR #1263 Strix artifact (`32693700056`) recorded NVIDIA NIM

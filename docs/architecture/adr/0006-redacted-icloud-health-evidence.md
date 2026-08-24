@@ -173,3 +173,16 @@ status continued to report `client_state=needs-sync` with `needs-sync-up|in-sync
 This increasing aggregate queue is stronger provider-stall evidence but still cannot identify the
 seven Finder items or prove a cloud write. The observation remains read-only and keeps
 `provider_sync_attested=false`, `local_eviction_authorized=false`, and `mutation_performed=false`.
+
+## Operational evidence update — 2026-08-24 15:46
+
+The latest bounded read-only receipt still reported `evidence_complete=true` and
+`new_copy_admission_state=blocked`. The sync-up backlog remained 343 items and the active upload
+remained at 95.24%; one active download remained. File Provider pending indexable items increased
+again to 130,571, while disk import, transfer activity, and the 28 filename/2 root exclusions
+remained present. Native status continued to report `client_state=needs-sync` with sync-up pending.
+
+The growing aggregate backlog is consistent with the Finder “preparing to copy” stall, but it does
+not identify the seven Finder items or attest a cloud write. DiskSage therefore continues to keep
+`provider_sync_attested=false`, `local_eviction_authorized=false`, and `mutation_performed=false`;
+the probe performed no Finder, provider, source, or cloud mutation.
