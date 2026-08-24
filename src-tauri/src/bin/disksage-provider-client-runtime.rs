@@ -52,8 +52,21 @@ fn validate_output_parent(path: &Path) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if metadata.permissions().mode() & 0o022 != 0 {
-            return Err("provider-client-runtime-output-parent-writable-by-others".into());
+        for ancestor in parent
+            .ancestors()
+            .filter(|ancestor| !ancestor.as_os_str().is_empty())
+        {
+            let metadata = std::fs::metadata(ancestor)
+                .map_err(|_| "provider-client-runtime-output-parent-unavailable".to_string())?;
+            if !metadata.is_dir() {
+                return Err("provider-client-runtime-output-parent-unsafe".into());
+            }
+            let mode = metadata.permissions().mode();
+            let shared_writable = mode & 0o022 != 0;
+            let sticky = mode & 0o1000 != 0;
+            if shared_writable && (ancestor == parent || !sticky) {
+                return Err("provider-client-runtime-output-parent-writable-by-others".into());
+            }
         }
     }
     Ok(())
