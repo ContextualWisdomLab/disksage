@@ -256,7 +256,7 @@ fn hash_optional_string(hasher: &mut blake3::Hasher, value: Option<&str>) {
             hasher.update(value.as_bytes());
             hasher.update(&[0]);
         }
-    };
+    }
 }
 
 fn plan_fingerprint(
@@ -326,6 +326,13 @@ fn build_plan(
     }
     if !state.is_ubiquitous {
         push_unique(&mut blockers, "icloud-item-not-ubiquitous");
+    }
+    if state.observation_method == IcloudStateObservationMethod::FoundationUbiquitousResourceValues
+    {
+        push_unique(
+            &mut blockers,
+            "icloud-file-provider-native-status-unavailable",
+        );
     }
     if !state.is_uploaded {
         push_unique(&mut blockers, "icloud-upload-not-confirmed");
@@ -425,14 +432,50 @@ fn drain_bounded<R: Read + Send + 'static>(
 }
 
 #[cfg(all(unix, not(coverage)))]
-fn observe_lsof_active_use(path: &Path) -> ActiveUseEvidence {
-    let mut child = match Command::new("lsof")
-        .arg("-F")
-        .arg("p")
+fn lsof_stderr_is_benign(stderr: &[u8], target: &Path) -> bool {
+    let Ok(text) = std::str::from_utf8(stderr) else {
+        return false;
+    };
+    let target = target.to_string_lossy();
+    let mut warning_seen = false;
+    text.lines().all(|line| {
+        let line = line.trim();
+        if line.is_empty() {
+            return true;
+        }
+        if line.starts_with("lsof: WARNING:") {
+            warning_seen = true;
+            return !line.contains(target.as_ref());
+        }
+        warning_seen && line == "Output information may be incomplete."
+    })
+}
+
+#[cfg(all(unix, not(coverage)))]
+fn observe_lsof_active_use(path: &Path, deadline: Instant) -> ActiveUseEvidence {
+    let mut command = Command::new("lsof");
+    command.arg("-F").arg("p");
+    if path.is_dir() {
+        // `lsof PATH` only proves the directory itself is referenced. Recursive +D is required
+        // for a cache directory whose open files live below the directory entry.
+        command.arg("+D");
+    }
+    // A bounded lsof probe may be a shell wrapper in tests or on user systems. Kill its process
+    // group on timeout so descendants cannot keep the stdout pipe alive and starve the ps probe.
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = match command
         .arg(path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
     {
         Ok(child) => child,
@@ -457,18 +500,32 @@ fn observe_lsof_active_use(path: &Path) -> ActiveUseEvidence {
             error: Some("active-use-output-missing".into()),
         };
     };
+    let Some(stderr) = child.stderr.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return ActiveUseEvidence {
+            method: "lsof-fp+ps-command".into(),
+            evidence_complete: false,
+            active: false,
+            observed_pids: Vec::new(),
+            results_truncated: false,
+            error: Some("active-use-error-output-missing".into()),
+        };
+    };
     let reader = drain_bounded(stdout);
-    let started = Instant::now();
+    let error_reader = drain_bounded(stderr);
+    let child_pid = child.id();
+    let kill_group = || unsafe {
+        let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
+    };
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break Some(status),
-            Ok(None)
-                if u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
-                    < ACTIVE_USE_TIMEOUT_MS =>
-            {
+            Ok(None) if Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(25));
             }
             Ok(None) => {
+                kill_group();
                 let _ = child.kill();
                 let _ = child.wait();
                 break None;
@@ -477,6 +534,11 @@ fn observe_lsof_active_use(path: &Path) -> ActiveUseEvidence {
         }
     };
     let output = reader.join().ok().and_then(Result::ok).unwrap_or_default();
+    let error_output = error_reader
+        .join()
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_default();
     if status.is_none() {
         return ActiveUseEvidence {
             method: "lsof-fp".into(),
@@ -487,7 +549,18 @@ fn observe_lsof_active_use(path: &Path) -> ActiveUseEvidence {
             error: Some("active-use-check-timeout-or-wait-failed".into()),
         };
     }
-    let results_truncated = output.len() as u64 > MAX_ACTIVE_USE_OUTPUT_BYTES;
+    let results_truncated = output.len() as u64 > MAX_ACTIVE_USE_OUTPUT_BYTES
+        || error_output.len() as u64 > MAX_ACTIVE_USE_OUTPUT_BYTES;
+    if results_truncated {
+        return ActiveUseEvidence {
+            method: "lsof-fp".into(),
+            evidence_complete: false,
+            active: false,
+            observed_pids: Vec::new(),
+            results_truncated: true,
+            error: Some("active-use-output-truncated".into()),
+        };
+    }
     let text = String::from_utf8_lossy(&output);
     let mut pids: Vec<u32> = text
         .lines()
@@ -501,14 +574,14 @@ fn observe_lsof_active_use(path: &Path) -> ActiveUseEvidence {
     }
     let success = status.is_some_and(|value| value.success());
     let no_matches = status.and_then(|value| value.code()) == Some(1) && pids.is_empty();
-    let results_truncated = results_truncated || pid_results_truncated;
-    let evidence_complete = !results_truncated && (success || no_matches);
+    let stderr_benign = lsof_stderr_is_benign(&error_output, path);
+    let evidence_complete = stderr_benign && (success || no_matches);
     ActiveUseEvidence {
         method: "lsof-fp".into(),
         evidence_complete,
         active: !pids.is_empty(),
         observed_pids: pids,
-        results_truncated,
+        results_truncated: pid_results_truncated,
         error: (!evidence_complete).then(|| "active-use-lsof-status-unexpected".into()),
     }
 }
@@ -592,7 +665,7 @@ fn parse_process_command_references(output: &[u8], path: &Path, own_pid: u32) ->
 }
 
 #[cfg(all(unix, not(coverage)))]
-fn observe_process_command_use(path: &Path) -> ActiveUseEvidence {
+fn observe_process_command_use(path: &Path, deadline: Instant) -> ActiveUseEvidence {
     let mut child = match Command::new("ps")
         .args(["-axo", "pid=,ppid=,command="])
         .stdin(Stdio::null())
@@ -623,14 +696,10 @@ fn observe_process_command_use(path: &Path) -> ActiveUseEvidence {
         };
     };
     let reader = drain_bounded(stdout);
-    let started = Instant::now();
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break Some(status),
-            Ok(None)
-                if u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
-                    < ACTIVE_USE_TIMEOUT_MS =>
-            {
+            Ok(None) if Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(25));
             }
             Ok(None) => {
@@ -661,9 +730,21 @@ fn observe_process_command_use(path: &Path) -> ActiveUseEvidence {
 }
 
 #[cfg(all(unix, not(coverage)))]
-fn observe_active_use(path: &Path) -> ActiveUseEvidence {
-    let lsof = observe_lsof_active_use(path);
-    let process_commands = observe_process_command_use(path);
+fn observe_active_use_until(path: &Path, deadline: Instant) -> ActiveUseEvidence {
+    let started = Instant::now();
+    let remaining = deadline.saturating_duration_since(started);
+    let per_probe_budget = std::cmp::min(
+        remaining / 2,
+        Duration::from_millis(ACTIVE_USE_TIMEOUT_MS),
+    );
+    // Reserve an independent bounded slice for each source. A recursive `lsof +D` may consume its
+    // entire allocation; it must not starve the process-command probe and hide an active PID.
+    let lsof = observe_lsof_active_use(path, started + per_probe_budget);
+    let ps_started = Instant::now();
+    let process_commands = observe_process_command_use(
+        path,
+        std::cmp::min(deadline, ps_started + per_probe_budget),
+    );
     let mut pids = lsof.observed_pids;
     pids.extend(process_commands.observed_pids);
     pids.sort_unstable();
@@ -691,7 +772,7 @@ fn observe_active_use(path: &Path) -> ActiveUseEvidence {
 }
 
 #[cfg(any(not(unix), coverage))]
-fn observe_active_use(_path: &Path) -> ActiveUseEvidence {
+fn observe_active_use_until(_path: &Path, _deadline: Instant) -> ActiveUseEvidence {
     ActiveUseEvidence {
         method: "unsupported".into(),
         evidence_complete: false,
@@ -706,7 +787,17 @@ fn observe_active_use(_path: &Path) -> ActiveUseEvidence {
 /// bytes may be released. Unsupported or incomplete platforms remain explicit and fail closed at
 /// the caller.
 pub fn observe_path_active_use(path: &Path) -> ActiveUseEvidence {
-    observe_active_use(path)
+    observe_active_use_until(
+        path,
+        Instant::now() + Duration::from_millis(
+            ACTIVE_USE_TIMEOUT_MS.saturating_mul(2),
+        ),
+    )
+}
+
+/// Observe open handles without allowing the probe to outlive an enclosing plan deadline.
+pub fn observe_path_active_use_until(path: &Path, deadline: Instant) -> ActiveUseEvidence {
+    observe_active_use_until(path, deadline)
 }
 
 #[cfg(all(target_os = "macos", not(coverage)))]
@@ -853,7 +944,10 @@ fn observe_icloud_state(path: &Path, observed_bytes: u64) -> Result<IcloudLocalS
 fn file_provider_command_allows_foundation_fallback(error: &str) -> bool {
     matches!(
         error,
-        "file-provider-status-command-unavailable" | "file-provider-status-command-failed"
+        "file-provider-status-command-unavailable"
+            | "file-provider-status-command-failed"
+            | "file-provider-status-field-missing:hasUnresolvedConflicts"
+            | "file-provider-status-field-missing:itemIdentifier"
     )
 }
 
@@ -871,7 +965,7 @@ pub fn plan_icloud_local_eviction(
 ) -> Result<IcloudLocalEvictionPlan, String> {
     let file = observe_local_file(root, path)?;
     let state = observe_icloud_state(path, file.logical_bytes)?;
-    let active_use = observe_active_use(path);
+    let active_use = observe_path_active_use(path);
     Ok(build_plan(
         root,
         path,
@@ -1266,7 +1360,7 @@ mod tests {
 
     fn state() -> IcloudLocalState {
         IcloudLocalState {
-            observation_method: IcloudStateObservationMethod::FoundationUbiquitousResourceValues,
+            observation_method: IcloudStateObservationMethod::FileProviderCtlEvaluate,
             is_ubiquitous: true,
             is_uploaded: true,
             is_uploading: false,
@@ -1274,11 +1368,11 @@ mod tests {
             downloading_status_current: true,
             has_unresolved_conflicts: false,
             is_excluded_from_sync: false,
-            is_sync_paused: None,
-            is_trashed: None,
-            allows_eviction: None,
-            provider_reported_bytes: None,
-            item_identifier_fingerprint: None,
+            is_sync_paused: Some(false),
+            is_trashed: Some(false),
+            allows_eviction: Some(true),
+            provider_reported_bytes: Some(100),
+            item_identifier_fingerprint: Some("a".repeat(64)),
         }
     }
 
@@ -1287,6 +1381,8 @@ mod tests {
         for error in [
             "file-provider-status-command-unavailable",
             "file-provider-status-command-failed",
+            "file-provider-status-field-missing:hasUnresolvedConflicts",
+            "file-provider-status-field-missing:itemIdentifier",
         ] {
             assert!(file_provider_command_allows_foundation_fallback(error));
         }
@@ -1299,6 +1395,30 @@ mod tests {
         ] {
             assert!(!file_provider_command_allows_foundation_fallback(error));
         }
+    }
+
+    #[test]
+    fn foundation_observation_never_authorizes_local_eviction() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut state = state();
+        state.observation_method = IcloudStateObservationMethod::FoundationUbiquitousResourceValues;
+        state.is_sync_paused = None;
+        state.is_trashed = None;
+        state.allows_eviction = None;
+        state.provider_reported_bytes = None;
+        state.item_identifier_fingerprint = None;
+        let plan = build_plan(
+            &root(temp.path()),
+            &temp.path().join("file.bin"),
+            file(),
+            state,
+            idle(),
+            20,
+        );
+        assert!(!plan.eligible_after_human_approval);
+        assert!(plan
+            .blockers
+            .contains(&"icloud-file-provider-native-status-unavailable".into()));
     }
 
     fn file_provider_state() -> IcloudLocalState {
@@ -1482,6 +1602,21 @@ mod tests {
         assert!(plan
             .blockers
             .contains(&"active-use-evidence-incomplete".into()));
+    }
+
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
+    fn lsof_unrelated_warnings_are_benign_but_target_warnings_block() {
+        let target = Path::new("/Users/test/Library/Caches/example");
+        assert!(lsof_stderr_is_benign(
+            b"lsof: WARNING: can't stat() /Volumes/Other\n",
+            target,
+        ));
+        assert!(!lsof_stderr_is_benign(
+            b"lsof: WARNING: can't stat() /Users/test/Library/Caches/example/nested\n",
+            target,
+        ));
+        assert!(!lsof_stderr_is_benign(b"lsof: error: permission denied\n", target));
     }
 
     #[cfg(all(unix, not(coverage)))]
