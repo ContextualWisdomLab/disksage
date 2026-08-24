@@ -71,7 +71,8 @@ mod tests {
     }
     fn meta() -> FileMeta {
         FileMeta { path: "/downloads/old_report.pdf".into(), name: "old_report.pdf".into(),
-                   size: 2_400_000, mtime_days: 420, parent: "downloads".into() }
+                   size: 2_400_000, mtime_days: 420, parent: "downloads".into(),
+                   production_time_ms: None, production_time_source: None, production_time_confidence: None }
     }
 
     #[test]
