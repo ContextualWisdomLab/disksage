@@ -77,63 +77,6 @@
     }[pressure];
   }
 
-  const RECONCILIATION_INTERVAL_MS = 60_000;
-  // fileproviderctl can spend tens of seconds inside the system provider database while iCloud is
-  // already unhealthy. Back off automatic probes so DiskSage does not add another hot reader.
-  const ICLOUD_HEALTH_BLOCKED_RETRY_INTERVAL_MS = 5 * 60_000;
-  const PROVIDER_GLOBAL_SYNC_BLOCKED_RETRY_INTERVAL_MS = 5 * 60_000;
-  const PROVIDER_STALL_WARNING_MS = 15 * 60_000;
-  const PROVIDER_ADMISSION_BLOCKERS = new Set([
-    "icloud-new-copy-admission-blocked",
-    "provider-global-sync-blocked",
-    "provider-global-sync-evidence-unavailable",
-  ]);
-  const PROVIDER_FINDER_COPY_BLOCKERS = new Set([
-    "provider-global-sync-transfer-active",
-    "provider-global-sync-reconciliation-pending",
-    "provider-global-sync-temporarily-disconnected",
-    "provider-global-sync-server-unreachable",
-    "provider-global-sync-local-disk-full",
-    "provider-global-sync-item-not-found",
-    "provider-global-sync-error",
-    "provider-global-sync-probe-timeout",
-  ]);
-
-  function hasProviderAdmissionBlocker(notices: readonly string[]): boolean {
-    return notices.some((notice) => PROVIDER_ADMISSION_BLOCKERS.has(notice));
-  }
-
-  function canCancelFinderCopyForProviderGlobalSync(
-    sync: api.ProviderGlobalSyncReport | null,
-  ): boolean {
-    return sync?.blockers.some((blocker) => PROVIDER_FINDER_COPY_BLOCKERS.has(blocker)) ?? false;
-  }
-
-  function hasIncompleteSourceScan(notices: readonly string[]): boolean {
-    return notices.includes("source-scan-incomplete");
-  }
-
-  function hasLocalEvidencePersistenceFailure(notices: readonly string[]): boolean {
-    return notices.includes("local-volume-evidence-persistence-failed");
-  }
-
-  function hasRuntimeEvidencePersistenceFailure(notices: readonly string[]): boolean {
-    return notices.includes("provider-client-runtime-evidence-persistence-failed");
-  }
-
-  function hasIcloudHealthEvidencePersistenceFailure(notices: readonly string[]): boolean {
-    return notices.includes("icloud-sync-health-evidence-persistence-failed");
-  }
-
-  function localPressureLabel(pressure: api.LocalVolumePressure): string {
-    return {
-      normal: "정상",
-      elevated: "상승",
-      high: "높음",
-      critical: "위험",
-    }[pressure];
-  }
-
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
   let roots: api.CloudRoot[] = $state([]);
@@ -1156,7 +1099,6 @@
         로컬 여유공간을 확보한 뒤 DiskSage에서 상태를 다시 확인하십시오.
       </p>
     {/if}
-    {#if providerGlobalSync}
     {#if selectedRootDetails()?.provider !== "icloud" && providerGlobalSyncError && !providerGlobalSync}
       <ProviderStatusCard
         provider={selectedRootDetails()?.provider ?? "공급자"}
