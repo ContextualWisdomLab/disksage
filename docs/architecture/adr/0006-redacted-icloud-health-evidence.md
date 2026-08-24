@@ -115,3 +115,18 @@ attestation. The decision therefore remains unchanged: DiskSage reports the reco
 backlog, offers only the explicit bounded Finder-cancel action, and keeps copy, attestation, and
 source eviction fail-closed. No provider process, CloudDocs database, source, or cloud object was
 mutated.
+
+## Operational evidence update — 2026-08-24 14:11
+
+The exact-head `disksage-icloud-sync-health` binary completed another read-only CloudDocs/WAL
+snapshot with `evidence_complete=true` and `new_copy_admission_state=blocked`. Aggregate upload
+backlog remained 343 items blocked on sync-up and one active upload remained at 95.24%; File
+Provider pending indexable items increased from 74,946 to 103,013 while one download and the
+disk-import/transfer notices remained active. The `real_datasets` target still had 14 entries,
+512 bytes, and mtime `2026-08-20 03:28:07 +0900`, with about 94 GiB available on `/`.
+
+The observation remains supplementary global provider evidence. It does not identify a Finder item
+or attest a cloud write, so `provider_sync_attested=false`, `local_eviction_authorized=false`, and
+`mutation_performed=false` remain required. DiskSage continues to expose only the explicit bounded
+Finder-cancel action and never restarts provider processes or mutates provider, source, or cloud
+state from this evidence.

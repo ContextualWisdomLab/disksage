@@ -1026,3 +1026,17 @@ independent approvals, last-push approval, resolved threads, and normal merge/sq
   a DiskSage lock. The UI keeps the explicit bounded Finder-cancel action as the only operator
   mutation, while new copy, attestation, and source eviction remain fail-closed. No Finder/provider
   process, CloudDocs database, source file, or cloud object was changed.
+
+## 2026-08-24 14:11 +0900 live iCloud probe confirms worsening backlog
+
+- The exact-head `disksage-icloud-sync-health` binary completed another read-only CloudDocs/WAL
+  snapshot with `evidence_complete=true`, `new_copy_admission_state=blocked`,
+  `provider_sync_attested=false`, `local_eviction_authorized=false`, and
+  `mutation_performed=false`.
+- The aggregate provider state still has 343 uploads blocked on sync-up and one active upload at
+  95.24%; File Provider pending indexable items increased from 74,946 to 103,013, with one active
+  download and disk-import/transfer activity still present. This is provider reconciliation
+  evidence, not proof that any Finder item reached the cloud.
+- The target remained 14 entries, 512 bytes, and mtime `2026-08-20 03:28:07 +0900`; `/` retained
+  about 94 GiB available. DiskSage therefore continues to block new copy, attestation, and source
+  eviction. The only available operator mutation remains the explicit Finder-cancel action.
