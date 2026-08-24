@@ -52,7 +52,8 @@ fn cargo_publish_policy(manifest_path: &Path) -> Option<Vec<String>> {
         .find(|package| {
             package["manifest_path"]
                 .as_str()
-                .map(PathBuf::from)
+                .map(Path::new)
+                .and_then(|path| fs::canonicalize(path).ok())
                 .is_some_and(|path| path == canonical_manifest)
         })
         .expect("cargo metadata must contain the package for the requested manifest");
@@ -147,4 +148,17 @@ note = "publish = false"
         None,
         "commented or unrelated publish text must remain unrestricted in Cargo metadata and therefore fail the DiskSage guard"
     );
+}
+
+#[test]
+fn tauri_bin_directory_contains_only_rust_sources() {
+    let bin_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/bin");
+    for entry in fs::read_dir(&bin_dir).expect("Tauri bin directory must be readable") {
+        let path = entry.expect("Tauri bin directory entries must be readable").path();
+        assert!(
+            path.is_file() && path.extension().is_some_and(|extension| extension == "rs"),
+            "Tauri scans every src/bin entry as a binary; keep non-Rust source fragments outside it: {}",
+            path.display()
+        );
+    }
 }
