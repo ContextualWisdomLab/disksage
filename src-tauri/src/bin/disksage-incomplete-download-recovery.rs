@@ -7,6 +7,7 @@ use disksage_lib::incomplete_download_recovery::{
     RecoveryValidationLimits,
 };
 use disksage_lib::private_evidence::write_private_json_create_new;
+use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,28 +34,38 @@ fn usage() -> String {
     )
 }
 
-fn parse_args(raw: &[String]) -> Result<Args, String> {
+fn next_value(raw: &[OsString], index: &mut usize, flag: &str) -> Result<OsString, String> {
+    *index += 1;
+    raw.get(*index)
+        .cloned()
+        .ok_or_else(|| format!("{flag} 값이 필요함"))
+}
+
+fn next_text_value(raw: &[OsString], index: &mut usize, flag: &str) -> Result<String, String> {
+    next_value(raw, index, flag)?
+        .into_string()
+        .map_err(|_| format!("{flag} 값은 UTF-8 텍스트여야 함"))
+}
+
+fn parse_args(raw: &[OsString]) -> Result<Args, String> {
     let mut root = None;
     let mut max_entries = DEFAULT_MAX_ENTRIES;
     let mut stale_after_days = DEFAULT_STALE_AFTER_DAYS;
     let mut private_output = None;
     let mut index = 0usize;
     while index < raw.len() {
-        let value = |index: &mut usize, flag: &str| -> Result<String, String> {
-            *index += 1;
-            raw.get(*index)
-                .cloned()
-                .ok_or_else(|| format!("{flag} 값이 필요함"))
-        };
-        match raw[index].as_str() {
+        let option = raw[index]
+            .to_str()
+            .ok_or_else(|| "incomplete-download-recovery-unknown-argument".to_string())?;
+        match option {
             "--root" => {
                 if root.is_some() {
                     return Err("--root는 한 번만 지정할 수 있음".into());
                 }
-                root = Some(PathBuf::from(value(&mut index, "--root")?));
+                root = Some(PathBuf::from(next_value(raw, &mut index, "--root")?));
             }
             "--max-entries" => {
-                let parsed = value(&mut index, "--max-entries")?
+                let parsed = next_text_value(raw, &mut index, "--max-entries")?
                     .parse::<usize>()
                     .map_err(|_| "--max-entries는 양의 정수여야 함".to_string())?;
                 if parsed == 0 || parsed > DEFAULT_MAX_ENTRIES {
@@ -65,7 +76,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 max_entries = parsed;
             }
             "--stale-after-days" => {
-                let parsed = value(&mut index, "--stale-after-days")?
+                let parsed = next_text_value(raw, &mut index, "--stale-after-days")?
                     .parse::<u64>()
                     .map_err(|_| "--stale-after-days는 양의 정수여야 함".to_string())?;
                 if !(1..=MAX_STALE_AFTER_DAYS).contains(&parsed) {
@@ -79,7 +90,11 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 if private_output.is_some() {
                     return Err("--private-output은 한 번만 지정할 수 있음".into());
                 }
-                private_output = Some(PathBuf::from(value(&mut index, "--private-output")?));
+                private_output = Some(PathBuf::from(next_value(
+                    raw,
+                    &mut index,
+                    "--private-output",
+                )?));
             }
             _unknown => return Err("incomplete-download-recovery-unknown-argument".into()),
         }
@@ -109,17 +124,14 @@ fn system_now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-#[cfg(not(coverage))]
 fn run() -> Result<(), String> {
-    let raw = std::env::args_os()
-        .skip(1)
-        .map(|argument| {
-            argument
-                .into_string()
-                .map_err(|_| "incomplete-download-recovery-unknown-argument".to_string())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    if raw.len() == 1 && matches!(raw[0].as_str(), "--help" | "-h") {
+    let raw = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if raw.len() == 1
+        && matches!(
+            raw.first().map(OsString::as_os_str),
+            Some(argument) if argument == OsStr::new("--help") || argument == OsStr::new("-h")
+        )
+    {
         println!("{}", usage());
         return Ok(());
     }
@@ -155,16 +167,12 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(coverage))]
 fn main() {
     if let Err(error) = run() {
         eprintln!("DiskSage incomplete download recovery validation: {error}");
         std::process::exit(2);
     }
 }
-
-#[cfg(coverage)]
-fn main() {}
 
 #[cfg(test)]
 mod tests {
