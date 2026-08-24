@@ -1285,3 +1285,9 @@ checks are not reused:
 - The growing queue is consistent with Finder’s multi-hour “preparing to copy” state, but still
   does not prove DiskSage holds a Finder lock or identify the seven items. No provider, source,
   Finder, or cloud mutation was performed, and local eviction remains fail-closed.
+
+## 2026-08-24 16:55 +0900 concurrent test-target repair
+
+- #249 advanced to exact head `aa5c37d`; its shared test helper now uses process-scoped Cargo target
+  directories and prunes stale outputs without deleting another active run. The affected targets
+  compile under pinned Rust 1.97.1, and the current hosted checks have restarted for this head.

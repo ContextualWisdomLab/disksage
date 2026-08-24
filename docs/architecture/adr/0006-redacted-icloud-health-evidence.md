@@ -250,3 +250,9 @@ active download, native `client_state=needs-sync`, and sync-up pending remain un
 File Provider indexable items increased to 135,334. The receipt remains aggregate provider evidence
 only; `provider_sync_attested=false`, `local_eviction_authorized=false`, and
 `mutation_performed=false` remain invariant.
+
+## Decision maintenance — 2026-08-24 16:55
+
+The current #249 exact head is `aa5c37d`. Its test-only target helper now keeps concurrent
+process-scoped build directories while pruning dead-process or aged stale output; this preserves
+the disk-reclamation goal without changing any provider, Finder, source, or cloud mutation rule.
