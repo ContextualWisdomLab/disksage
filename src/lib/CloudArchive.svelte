@@ -971,7 +971,7 @@
             활성 upload {icloudHealth.file_provider_activity.active_upload_count}개 / download {icloudHealth.file_provider_activity.active_download_count}개
           {/if}
           {#if icloudHealth.native_status}
-            · native pending-scan {icloudHealth.native_status.pending_scan_count ?? 0}개
+            · native pending-scan 관찰 {icloudHealth.native_status.pending_scan_count ?? 0}개(경계 내)
           {/if}
         </span>
         <p class="muted">마지막 증거 확인: {evidenceObservedAt(icloudHealth.observed_at_ms)}</p>
@@ -1018,7 +1018,7 @@
           {/if}
           {#if (icloudHealth.native_status?.pending_scan_count ?? 0) > 0}
             <p class="warning">
-              macOS iCloud native 상태에 pending-scan {icloudHealth.native_status?.pending_scan_count}개가 남아 있습니다.
+              macOS iCloud native 상태에서 pending-scan 항목이 관찰되었습니다(경계 내 {icloudHealth.native_status?.pending_scan_count}개).
               Finder의 “복사 준비 중”은 완료 영수증이 아니므로 scan 대기가 해소될 때까지 새 복사·attestation·원본 정리를 진행하지 않습니다.
             </p>
           {/if}
