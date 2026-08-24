@@ -1,9 +1,10 @@
 #![allow(dead_code, unused_imports)]
 
-//! A disconnect must not report success when a legacy credential delete fails after the primary
-//! credential has already been removed. The durable connection document is the retry handle for
-//! finishing cleanup, so the real transactional helper must restore it on any matching-token
-//! deletion failure rather than silently leaving an unreachable stale refresh token behind.
+//! A disconnect must not destroy the canonical refresh token before every stale matching
+//! credential has been removed. The durable connection document can be restored after a delete
+//! failure, but a successfully deleted canonical credential cannot be recreated from that file.
+//! Delete stale legacy credentials first so a stale-delete failure leaves the canonical retry
+//! credential intact and the restored document remains an honest recovery handle.
 
 include!("../src/provider_oauth.rs");
 
@@ -49,7 +50,7 @@ fn google_connection(
 }
 
 #[test]
-fn stale_credential_delete_failure_restores_connection_document_for_retry() {
+fn stale_credential_delete_failure_preserves_canonical_retry_credential() {
     let temp = tempfile::tempdir().unwrap();
     let document = temp.path().join("connections.json");
     let saved_root = unicode_google_root(true);
@@ -73,7 +74,11 @@ fn stale_credential_delete_failure_restores_connection_document_for_retry() {
     .unwrap_err();
 
     assert_eq!(error, "provider-oauth-keyring-delete-failed");
-    assert_eq!(deleted, vec![current.connection_id, legacy.connection_id]);
+    assert_eq!(
+        deleted,
+        vec![legacy.connection_id],
+        "stale matching credentials must be removed before the canonical credential so a stale-delete failure cannot destroy the only usable retry credential"
+    );
     assert_eq!(
         load_connections(&document).unwrap(),
         original,
