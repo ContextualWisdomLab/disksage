@@ -1235,3 +1235,15 @@ checks are not reused:
 - DiskSage #189 is ready at exact head `66d7aa767d416048a752c5c550e8d64e03213e0e`; the local
   frontend regression slice passed 7/7 (`fmt` and `verdictBadge`), while coverage-source-tree and
   protected approvals remain pending.
+
+## 2026-08-24 16:21 +0900 iCloud Finder copy remains provider-blocked
+
+- The bounded read-only health receipt still reports `evidence_complete=true` and
+  `new_copy_admission_state=blocked`: 343 uploads remain blocked on sync-up, one upload remains
+  active at 95.24%, and one download remains active. File Provider pending indexable items reached
+  132,783; disk-import/transfer activity and the 28 filename/2 root exclusions remain, and native
+  status remains `client_state=needs-sync` with sync-up pending.
+- This explains a multi-hour Finder “preparing to copy” symptom as provider-global reconciliation
+  pressure, but does not prove that DiskSage itself holds a Finder lock, identify the seven items,
+  or prove a cloud write. The product keeps `provider-sync-incomplete`, copy/attestation/source
+  eviction fail-closed and performs no Finder, provider, source, or cloud mutation.
