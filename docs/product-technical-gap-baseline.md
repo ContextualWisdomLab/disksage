@@ -1343,3 +1343,15 @@ checks are not reused:
   reconciliation/indexing pressure; it is not proof that DiskSage owns a Finder lock, nor proof
   that the cloud write completed. Per-item copy, attestation, and local eviction remain
   fail-closed; no Finder, provider, source, or cloud mutation occurred.
+
+## 2026-08-24 19:10 +0900 exact-head iCloud health receipt
+
+- The exact-head `disksage-icloud-sync-health` probe completed read-only with
+  `evidence_complete=true`, `new_copy_admission_state=blocked`, and
+  `pending_indexable_count=151283`; one upload is active at 95.24% and one download is active.
+  The report retains `provider_sync_attested=false`, `local_eviction_authorized=false`, and
+  `mutation_performed=false`.
+- The blockers include native sync-up pending, 343 uploads blocked on sync-up, File Provider
+  indexing/disk-import/transfer activity, and filename/root exclusions. This is still aggregate
+  provider evidence rather than a per-item receipt for the seven Finder entries; no cloud write or
+  source eviction is authorized.

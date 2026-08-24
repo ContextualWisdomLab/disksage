@@ -776,3 +776,13 @@ the screenshot's seven-item copy size and destination receipt remain unknown. Th
 provider reconciliation evidence only: `provider-sync-incomplete`, copy/attestation, cloud-write,
 and source-eviction authority remain fail-closed, and no Finder, provider, source, or cloud
 mutation was performed.
+
+## Amendment: exact-head health receipt keeps new copy admission blocked (2026-08-24 19:10 +0900)
+
+The exact-head `disksage-icloud-sync-health` probe completed as a read-only report with
+`evidence_complete=true`, `new_copy_admission_state=blocked`, and
+`pending_indexable_count=151283`; one upload is active at 95.24% and one download is active.
+The report records 343 uploads blocked on sync-up and retains
+`provider_sync_attested=false`, `local_eviction_authorized=false`, and `mutation_performed=false`.
+The aggregate receipt cannot attest the seven Finder items or a remote cloud write, so copy,
+cloud-write, and source-eviction authority remain fail-closed.
