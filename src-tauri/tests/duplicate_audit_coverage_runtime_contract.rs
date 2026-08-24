@@ -1,3 +1,5 @@
+#![cfg(feature = "cloud-cli")]
+
 //! Black-box regression for the shipped duplicate-audit runtime plus its coverage entrypoint.
 //!
 //! Repository-wide coverage is intentionally collected without defining `cfg(coverage)` because
