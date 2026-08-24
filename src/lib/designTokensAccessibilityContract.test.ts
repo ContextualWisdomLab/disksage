@@ -4,9 +4,12 @@ import { describe, expect, it } from "vitest";
 const css = readFileSync(new URL("./ui/design-tokens.css", import.meta.url), "utf8");
 
 function tokenHex(name: string): string {
-  const match = css.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})\\s*;`));
+  const declaration = css
+    .split(/\r?\n/)
+    .find((line) => line.trimStart().startsWith(`--${name}:`));
+  const match = declaration?.match(/#[0-9a-fA-F]{6}/);
   if (!match) throw new Error(`missing color token: ${name}`);
-  return match[1];
+  return match[0];
 }
 
 function channelLuminance(channel: number): number {
