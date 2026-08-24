@@ -140,6 +140,24 @@ fn invalid_sets_fail_before_first_use_authority_is_created() {
 }
 
 #[test]
+fn oversized_serialized_document_fails_before_first_use_authority_is_created() {
+    let temp = tempfile::tempdir().unwrap();
+    let parent = temp.path().join("oversized-first-use");
+    let path = parent.join("connections.json");
+    let oversized_identity = "a".repeat(MAX_CONNECTION_DOCUMENT_BYTES as usize);
+    let oversized = connection(&oversized_identity, 1);
+
+    assert_eq!(
+        save_connections(&path, &[oversized]).unwrap_err(),
+        "oauth-connection-document-too-large"
+    );
+    assert!(
+        !parent.exists(),
+        "an oversized durable document must fail before first-use authority is created"
+    );
+}
+
+#[test]
 fn an_existing_non_regular_destination_never_gains_publication_authority() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("connections.json");
