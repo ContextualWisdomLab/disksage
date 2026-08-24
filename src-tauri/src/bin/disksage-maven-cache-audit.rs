@@ -3,10 +3,12 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::{fs::OpenOptions, io::Write};
 
 use disksage_lib::maven_cache::{
     audit_maven_repository, MavenCacheAuditOptions, MavenCacheAuditReport,
+};
+use disksage_lib::private_evidence::{
+    write_private_json_create_new, PrivateEvidenceReceipt,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,27 +148,13 @@ fn report(args: &Args) -> Result<MavenCacheAuditReport, String> {
     )
 }
 
-fn write_new_private_json(path: &PathBuf, encoded: &[u8]) -> Result<(), String> {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(path)
-        .map_err(|_| "maven-cache-audit-output-create-failed".to_string())?;
-    file.write_all(encoded)
-        .map_err(|_| "maven-cache-audit-output-write-failed".to_string())?;
-    file.sync_all()
-        .map_err(|_| "maven-cache-audit-output-sync-failed".to_string())
-}
-
-fn output_summary(path: &PathBuf, report: &MavenCacheAuditReport) -> Result<String, String> {
+fn output_summary(
+    receipt: &PrivateEvidenceReceipt,
+    report: &MavenCacheAuditReport,
+) -> Result<String, String> {
     serde_json::to_string(&serde_json::json!({
         "schema_kind": report.schema_kind,
-        "output": path.to_string_lossy(),
+        "private_output": receipt,
         "candidate_set_fingerprint": report.candidate_set_fingerprint,
         "remote_recoverable_directories": report.remote_recoverable_directories,
         "remote_recoverable_bytes": report.remote_recoverable_bytes,
@@ -187,11 +175,11 @@ fn run() -> Result<(), String> {
     }
     let args = parse_args_os(&raw)?;
     let report = report(&args)?;
-    let encoded = serde_json::to_vec_pretty(&report).map_err(|error| error.to_string())?;
     if let Some(output) = &args.output {
-        write_new_private_json(output, &encoded)?;
-        println!("{}", output_summary(output, &report)?);
+        let receipt = write_private_json_create_new(&args.repository_root, output, &report)?;
+        println!("{}", output_summary(&receipt, &report)?);
     } else {
+        let encoded = serde_json::to_vec_pretty(&report).map_err(|error| error.to_string())?;
         println!("{}", String::from_utf8_lossy(&encoded));
     }
     Ok(())
@@ -250,37 +238,28 @@ mod tests {
     }
 
     #[test]
-    fn private_output_is_create_new_and_not_overwritten() {
-        let tmp = tempfile::tempdir().unwrap();
-        let output = tmp.path().join("audit.json");
-
-        write_new_private_json(&output, b"{\"first\":true}").unwrap();
-        assert_eq!(std::fs::read(&output).unwrap(), b"{\"first\":true}");
-        assert!(write_new_private_json(&output, b"{\"second\":true}").is_err());
-        assert_eq!(std::fs::read(&output).unwrap(), b"{\"first\":true}");
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                std::fs::metadata(&output).unwrap().permissions().mode() & 0o777,
-                0o600
-            );
-        }
-    }
-
-    #[test]
-    fn output_summary_escapes_unusual_path_characters_as_valid_json() {
+    fn output_summary_exposes_only_private_evidence_commitment() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("repository");
         std::fs::create_dir(&root).unwrap();
         let report = audit_maven_repository(&root, MavenCacheAuditOptions::default(), 123).unwrap();
-        let output = PathBuf::from("/tmp/audit-\"quoted\"\nline.json");
+        let receipt = PrivateEvidenceReceipt {
+            written: true,
+            sha256: "a".repeat(64),
+            bytes: 123,
+            unix_mode: "0600".into(),
+            create_new: true,
+            contains_sensitive_local_paths: true,
+            is_approval: false,
+        };
 
-        let encoded = output_summary(&output, &report).unwrap();
+        let encoded = output_summary(&receipt, &report).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&encoded).unwrap();
 
-        assert_eq!(parsed["output"], output.to_string_lossy().as_ref());
+        assert_eq!(parsed["private_output"]["written"], true);
+        assert_eq!(parsed["private_output"]["sha256"], "a".repeat(64));
+        assert_eq!(parsed["private_output"]["unix_mode"], "0600");
+        assert!(parsed.get("output").is_none());
         assert_eq!(parsed["provider_write_executed"], false);
     }
 }
