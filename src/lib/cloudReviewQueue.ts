@@ -104,6 +104,7 @@ const CLOUD_DECISION_REASON_LABELS: Readonly<Record<string, string>> = {
   "exact-duplicate-content-probe-incomplete": "정확 중복 검사가 완전하지 않음",
   "filename-contains-geolocation": "파일명에 위치정보로 보이는 값이 있음",
   "local-volume-headroom-insufficient": "복사에 필요한 로컬 여유공간이 부족함",
+  "local-volume-headroom-unverified": "복사 대상 볼륨의 여유공간을 확인하지 못함",
   "filename-context-may-be-confidential": "파일명 맥락에 기밀정보 가능성이 있음",
   "incomplete-download": "다운로드가 완료되지 않은 파일임",
   "icloud-native-sync-up-pending": "iCloud 네이티브 상태가 업로드 대기 중이라 새 복사를 보류함",
