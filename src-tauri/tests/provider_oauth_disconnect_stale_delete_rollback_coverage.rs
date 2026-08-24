@@ -11,8 +11,6 @@ mod cloud {
     pub use disksage_lib::cloud::*;
 }
 
-use unicode_normalization::UnicodeNormalization;
-
 fn unicode_google_root(decomposed: bool) -> CloudRoot {
     #[cfg(windows)]
     let composed = r"C:\Cloud\내 드라이브";
@@ -34,7 +32,11 @@ fn unicode_google_root(decomposed: bool) -> CloudRoot {
     }
 }
 
-fn google_connection(root: &CloudRoot, connection_id: String, connected_at_ms: u64) -> OAuthConnection {
+fn google_connection(
+    root: &CloudRoot,
+    connection_id: String,
+    connected_at_ms: u64,
+) -> OAuthConnection {
     OAuthConnection {
         connection_id,
         provider: root.provider,
