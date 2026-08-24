@@ -1366,3 +1366,13 @@ checks are not reused:
 - The audit remains read-only, path-redacted, create-once for private evidence, and grants no
   worktree-removal authority. The new exact head has no failed checks yet; hosted checks and
   protected approvals remain authoritative. No user, Finder, provider, or cloud data was changed.
+
+## 2026-08-24 19:38 +0900 post-recovery iCloud recheck
+
+- A fresh read-only `/usr/bin/brctl status` still reports `client:needs-sync` and
+  `needs-sync-up|in-sync-down|prefer-sync-down|oob-sync-ack`; native last-sync remains
+  `2026-08-21 20:20:10.166`.
+- Finder, `fileproviderd`, and `bird` are present with no DiskSage process; `/` has about 12 GiB
+  available. This remains aggregate provider reconciliation evidence for the Finder
+  `real_datasets` preparation stall, not proof of a DiskSage lock or a completed cloud write.
+  Copy admission, attestation, and source eviction remain fail-closed; no mutation was performed.

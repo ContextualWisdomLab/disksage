@@ -795,3 +795,14 @@ unit tests without duplicating the validation contract. Pinned Rust 1.97.1 proof
 tests and 10/10 black-box Git-worktree tests. The audit remains read-only and path-redacted; no
 worktree removal, Finder/provider operation, cloud write, or source eviction is authorized by this
 repair.
+
+## Amendment: recheck the Finder preparation blocker after scheduler recovery (2026-08-24 19:38 +0900)
+
+A fresh read-only `/usr/bin/brctl status` still reports the iCloud client as `needs-sync` with
+`needs-sync-up|in-sync-down|prefer-sync-down|oob-sync-ack`; the last native sync remains
+`2026-08-21 20:20:10.166`. Finder, `fileproviderd`, and `bird` are running, while no DiskSage
+process is present. The root volume has about 12 GiB available. This is provider-global
+reconciliation evidence consistent with the multi-hour Finder `real_datasets` preparation stall,
+not a per-item receipt and not proof of a DiskSage lock or cloud write. The existing
+`provider-sync-incomplete` admission, copy/attestation, and source-eviction gates therefore stay
+fail-closed; no Finder, provider, source, or cloud mutation was performed.
