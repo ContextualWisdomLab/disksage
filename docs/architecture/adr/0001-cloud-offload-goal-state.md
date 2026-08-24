@@ -821,3 +821,12 @@ only; it performs no provider, source, cloud, ADR, or Goal mutation.
 When a provider attestation contains a remote object proof, the graph adds a path-free
 `provider-item` node and binds it to the provider and receipt. Without that proof the provider
 item remains explicitly absent rather than inferred from a local File Provider path.
+
+## Amendment: preserve the live Finder preparation diagnosis (2026-08-24 20:00 +0900)
+
+The latest read-only `/usr/bin/brctl status` still reports iCloud `client:needs-sync` with
+`needs-sync-up|needs-sync-down|in-sync-down|prefer-sync-down|oob-sync-ack`; the native last-sync
+timestamp remains `2026-08-21 20:20:10.166`. Finder, `fileproviderd`, and `bird` are running, but
+no DiskSage process is present. The persistent `pending-scan` queue and missing per-item receipt
+keep the Finder `real_datasets` preparation operation at `provider-sync-incomplete`; no
+provider, source, cloud, or Finder mutation was performed.

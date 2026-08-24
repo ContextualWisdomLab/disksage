@@ -1391,3 +1391,12 @@ checks are not reused:
 - When remote content proof exists, the graph additionally binds a path-free provider-item node to
   the provider and receipt; without it, no provider item is inferred from a local File Provider
   path.
+
+## 2026-08-24 20:00 +0900 live Finder preparation diagnosis
+
+- The latest read-only `brctl status` still reports iCloud `client:needs-sync` with
+  `needs-sync-up|needs-sync-down|in-sync-down|prefer-sync-down|oob-sync-ack`; native last-sync
+  remains `2026-08-21 20:20:10.166`. Finder, `fileproviderd`, and `bird` are running, while no
+  DiskSage process is present. The persistent `pending-scan` queue and absent per-item receipt
+  keep the seven-item `real_datasets` operation at `provider-sync-incomplete`; no mutation was
+  performed.
