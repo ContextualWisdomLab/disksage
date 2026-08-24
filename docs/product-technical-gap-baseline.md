@@ -1040,3 +1040,23 @@ independent approvals, last-push approval, resolved threads, and normal merge/sq
 - The target remained 14 entries, 512 bytes, and mtime `2026-08-20 03:28:07 +0900`; `/` retained
   about 94 GiB available. DiskSage therefore continues to block new copy, attestation, and source
   eviction. The only available operator mutation remains the explicit Finder-cancel action.
+
+## 2026-08-24 14:27 +0900 exact-head PR audit
+
+The following live heads were re-queried before this documentation update; predecessor reviews and
+checks are not reused:
+
+- DiskSage #189 is open/non-draft at `288904ff8b81d769847869f7b434065d7613b1d7` after absorbing
+  current `main`; required checks are queued/in progress, with no unresolved review threads.
+- DiskSage #212 is open/non-draft at `779afa48cc8bc534a6e5cc910714324d85f7358b`; its OAuth help
+  contract and dead-entrypoint fixes are pushed, required checks are queued/in progress, and all
+  current review threads are resolved.
+- DiskSage #238 is merged at `d44b23bdf4108bf6b6f6378f7e0ac305187deec6`; it is no longer an open
+  merge candidate.
+- DiskSage #247 is draft/open at `c9ac3b2041cc6736fb60fde773c3c6fbd21fcdc2`; the latest iCloud
+  evidence/ADR update is pushed, required checks are queued, and no review thread is unresolved.
+- DiskSage #249 remains draft/open at `44390608d30417477f6a66601b18a53ca87b0a9c`; its previous
+  Strix failure remains a provider-gate issue and is not treated as a product merge approval.
+- Central `.github` #1263 is open/non-draft at `14cd0e8438b6d670a0f036d1e47f35bd4c3f97a7`; the
+  cross-repository documentation reference is qualified, but protected checks/reviews are pending.
+  No merge is inferred from queued checks or bot comments.
