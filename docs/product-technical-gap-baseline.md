@@ -1408,3 +1408,7 @@ checks are not reused:
   filesystem probe. The UI retains the aggregate-notice fallback for older reports, so one large
   file no longer disables smaller candidates that independently fit. Rust library tests passed
   741/741 (one live-provider test ignored) and the frontend passed 138/138 with 100% V8 coverage.
+
+- The replaceable Goal now explicitly carries `provider-sync-incomplete` and
+  `destination-headroom-bound`, so the persistent iCloud blocker and per-candidate staging gate
+  survive projection/restart without being reduced to an ambiguous pending label.

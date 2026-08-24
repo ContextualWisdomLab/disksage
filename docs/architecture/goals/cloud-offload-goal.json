@@ -6,12 +6,14 @@
   "states": [
     "copy-verified",
     "pending-provider-sync",
+    "provider-sync-incomplete",
     "provider-sync-confirmed",
     "eviction-ready",
     "source-evicted"
   ],
   "completion_gates": [
     "metadata-and-lineage-bound",
+    "destination-headroom-bound",
     "copy-content-verified",
     "provider-sync-state-complete",
     "immutable-evidence-record-valid",

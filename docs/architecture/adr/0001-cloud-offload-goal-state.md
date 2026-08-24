@@ -840,3 +840,8 @@ notice remains for operator visibility. The UI preserves fail-closed behavior fo
 that have only the aggregate notice. This prevents one oversized archive from disabling every
 otherwise admissible copy and does not grant copy, cloud-write, attestation, or source-eviction
 authority.
+
+The replaceable Goal contract now names `provider-sync-incomplete` as an explicit runtime state and
+`destination-headroom-bound` as a completion gate. These terms keep the Finder/File Provider
+diagnosis and candidate-scoped local staging evidence visible to projections instead of collapsing
+both into a generic pending state.
