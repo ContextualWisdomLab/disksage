@@ -180,6 +180,38 @@ fn assert_non_utf8_argument_is_bounded(binary: &Path) {
     );
 }
 
+#[cfg(unix)]
+fn assert_native_non_utf8_root_reaches_audit(binary: &Path) {
+    use std::os::unix::ffi::OsStringExt;
+
+    let parent = tempfile::tempdir().expect("native-path parent fixture must be created");
+    let root = parent
+        .path()
+        .join(OsString::from_vec(vec![b'a', b'u', b'd', b'i', b't', b'-', 0xff]));
+    std::fs::create_dir(&root).expect("native non-UTF-8 audit root must be created");
+
+    let output = Command::new(binary)
+        .env_remove("HOME")
+        .arg("--root")
+        .arg(&root)
+        .output()
+        .expect("DiskSage audit CLI must launch for native-path admission");
+
+    assert!(
+        output.status.success(),
+        "valid native filesystem roots must reach the read-only audit boundary; status={:?}, stderr={:?}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "successful native-path audit must not emit argument diagnostics"
+    );
+    let summary: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("successful native-path audit must emit machine-readable JSON");
+    assert!(summary.is_object(), "audit success output must remain a JSON object");
+}
+
 #[test]
 fn audit_coverage_contract_keeps_shipped_entrypoints_real() {
     for (name, source) in [
@@ -223,7 +255,10 @@ fn audit_cli_help_is_successful_and_invalid_arguments_are_bounded() {
         assert_help_does_not_hide_invalid_argument(binary);
         assert_duplicate_option_is_bounded(binary, &["--max-entries", "1", "--max-entries", "2"]);
         #[cfg(unix)]
-        assert_non_utf8_argument_is_bounded(binary);
+        {
+            assert_non_utf8_argument_is_bounded(binary);
+            assert_native_non_utf8_root_reaches_audit(binary);
+        }
     }
 
     assert_duplicate_option_is_bounded(
