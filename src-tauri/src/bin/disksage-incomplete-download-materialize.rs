@@ -87,7 +87,9 @@ fn parse_args(raw: &[OsString]) -> Result<Args, String> {
     let mut approved_by = None;
     let mut rationale = None;
     let mut max_entries = DEFAULT_MAX_ENTRIES;
+    let mut max_entries_seen = false;
     let mut stale_after_days = DEFAULT_STALE_AFTER_DAYS;
+    let mut stale_after_days_seen = false;
     let mut live_icloud_capacity = false;
     let mut capacity_snapshot = None;
     let mut execute = false;
@@ -150,6 +152,10 @@ fn parse_args(raw: &[OsString]) -> Result<Args, String> {
                 rationale = Some(next_text_value(raw, &mut index, "--rationale")?);
             }
             "--max-entries" => {
+                if max_entries_seen {
+                    return Err("--max-entries는 한 번만 지정할 수 있음".into());
+                }
+                max_entries_seen = true;
                 let parsed = next_text_value(raw, &mut index, "--max-entries")?
                     .parse::<usize>()
                     .map_err(|_| "--max-entries는 양의 정수여야 함".to_string())?;
@@ -161,6 +167,10 @@ fn parse_args(raw: &[OsString]) -> Result<Args, String> {
                 max_entries = parsed;
             }
             "--stale-after-days" => {
+                if stale_after_days_seen {
+                    return Err("--stale-after-days는 한 번만 지정할 수 있음".into());
+                }
+                stale_after_days_seen = true;
                 let parsed = next_text_value(raw, &mut index, "--stale-after-days")?
                     .parse::<u64>()
                     .map_err(|_| "--stale-after-days는 양의 정수여야 함".to_string())?;
