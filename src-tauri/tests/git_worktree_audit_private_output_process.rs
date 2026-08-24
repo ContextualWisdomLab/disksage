@@ -14,17 +14,16 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
+#[path = "git_worktree_audit_test_support.rs"]
+mod test_support;
+
 fn binary_path() -> &'static Path {
     static BINARY_PATH: OnceLock<PathBuf> = OnceLock::new();
     BINARY_PATH
         .get_or_init(|| {
             let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
             let target_dir =
-                std::env::temp_dir().join("disksage-git-worktree-private-output-contract");
-            if target_dir.exists() {
-                fs::remove_dir_all(&target_dir)
-                    .expect("stale Cargo target directory should be removed");
-            }
+                test_support::new_target_dir("disksage-git-worktree-private-output-contract-");
             let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
             let output = Command::new(cargo)
                 .current_dir(&manifest_dir)

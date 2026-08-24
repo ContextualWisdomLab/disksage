@@ -13,6 +13,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
+#[path = "git_worktree_audit_test_support.rs"]
+mod test_support;
+
 const EXPECTED_USAGE: &str = "usage: disksage-git-worktree-audit --repository-root ABSOLUTE_PATH --reference-ref REF [--reference-ref REF ...] [--private-output NEW_ABSOLUTE_JSON_PATH] [--command-timeout-ms N] [--size-scan-timeout-ms N] [--max-worktrees N] [--max-entries-per-worktree N] [--max-active-pids N]";
 const OID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -21,12 +24,7 @@ fn binary_path() -> &'static Path {
     BINARY_PATH
         .get_or_init(|| {
             let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-            let target_dir =
-                std::env::temp_dir().join("disksage-git-worktree-audit-contract");
-            if target_dir.exists() {
-                fs::remove_dir_all(&target_dir)
-                    .expect("stale Cargo target directory should be removed");
-            }
+            let target_dir = test_support::new_target_dir("disksage-git-worktree-audit-contract-");
             let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
             let output = Command::new(cargo)
                 .current_dir(&manifest_dir)
