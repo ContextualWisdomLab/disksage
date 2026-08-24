@@ -830,3 +830,13 @@ timestamp remains `2026-08-21 20:20:10.166`. Finder, `fileproviderd`, and `bird`
 no DiskSage process is present. The persistent `pending-scan` queue and missing per-item receipt
 keep the Finder `real_datasets` preparation operation at `provider-sync-incomplete`; no
 provider, source, cloud, or Finder mutation was performed.
+
+## Amendment: keep native copy headroom candidate-scoped (2026-08-24 20:18 +0900)
+
+Destination-volume headroom is now evaluated per candidate during the Rust plan stage. A file that
+does not fit (or whose destination probe is unavailable) receives its own
+`blocked_reason`, while smaller candidates whose probe passes remain eligible; the aggregate plan
+notice remains for operator visibility. The UI preserves fail-closed behavior for legacy reports
+that have only the aggregate notice. This prevents one oversized archive from disabling every
+otherwise admissible copy and does not grant copy, cloud-write, attestation, or source-eviction
+authority.

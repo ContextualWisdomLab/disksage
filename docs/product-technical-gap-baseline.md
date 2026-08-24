@@ -1400,3 +1400,11 @@ checks are not reused:
   DiskSage process is present. The persistent `pending-scan` queue and absent per-item receipt
   keep the seven-item `real_datasets` operation at `provider-sync-incomplete`; no mutation was
   performed.
+
+## 2026-08-24 20:18 +0900 candidate-scoped local headroom
+
+- The native-copy plan now records `local-volume-headroom-insufficient` or
+  `local-volume-headroom-unverified` on the individual candidate that failed its destination
+  filesystem probe. The UI retains the aggregate-notice fallback for older reports, so one large
+  file no longer disables smaller candidates that independently fit. Rust library tests passed
+  741/741 (one live-provider test ignored) and the frontend passed 138/138 with 100% V8 coverage.

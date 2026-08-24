@@ -79,6 +79,8 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("권한이 없으면 요청만 실패하며 파일·클라우드 데이터는 변경되지 않습니다");
     expect(source).toContain("local-volume-headroom-insufficient");
     expect(source).toContain("local-volume-headroom-unverified");
+    expect(source).toContain("const candidateBlocked = candidate.blocked_reason");
+    expect(source).toContain("const hasPerCandidateEvidence = report?.candidates.some");
     expect(source).toContain("!nativeCopyHeadroomBlocked(candidate)");
     expect(source).not.toContain("api.localCopyHasHeadroom(report?.local_volume, candidate.bytes)");
   });

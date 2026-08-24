@@ -241,9 +241,19 @@
       && approvalPhrase !== null;
   }
 
-  function nativeCopyHeadroomBlocked(_candidate: api.CloudCandidate): boolean {
-    return report?.notices.includes("local-volume-headroom-insufficient") === true
-      || report?.notices.includes("local-volume-headroom-unverified") === true;
+  function nativeCopyHeadroomBlocked(candidate: api.CloudCandidate): boolean {
+    const candidateBlocked = candidate.blocked_reason === "local-volume-headroom-insufficient"
+      || candidate.blocked_reason === "local-volume-headroom-unverified";
+    if (candidateBlocked) return true;
+    // Older reports carried only a plan-wide notice. Keep those fail-closed while allowing
+    // current reports to admit candidates whose own destination probe passed.
+    const hasPerCandidateEvidence = report?.candidates.some((item) =>
+      item.blocked_reason === "local-volume-headroom-insufficient"
+      || item.blocked_reason === "local-volume-headroom-unverified"
+    ) === true;
+    return !hasPerCandidateEvidence
+      && (report?.notices.includes("local-volume-headroom-insufficient") === true
+        || report?.notices.includes("local-volume-headroom-unverified") === true);
   }
 
   function providerApiWriteConnected(): boolean {

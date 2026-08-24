@@ -5269,12 +5269,6 @@ pub fn plan_cloud_archive_from_snapshot(
         candidates.truncate(options.limit);
         ExactDuplicateSummary::default()
     };
-    let candidate_bytes = candidates.iter().map(|c| c.bytes).sum();
-    let potentially_reclaimable_bytes = candidates
-        .iter()
-        .filter(|c| c.blocked_reason.is_none())
-        .map(|c| c.bytes)
-        .sum();
     let local_volume = crate::volume_pressure::snapshot_volume(source_root, now_ms).ok();
     let mut notices = vec![
         "dry-run-only".into(),
@@ -5286,7 +5280,7 @@ pub fn plan_cloud_archive_from_snapshot(
     let mut destination_headroom_insufficient = false;
     let mut destination_headroom_unverified = false;
     for candidate in candidates
-        .iter()
+        .iter_mut()
         .filter(|candidate| candidate.blocked_reason.is_none())
     {
         match crate::copy_headroom::require_destination_copy_headroom(
@@ -5296,9 +5290,11 @@ pub fn plan_cloud_archive_from_snapshot(
         ) {
             Ok(()) => {}
             Err(reason) if reason == "local-volume-headroom-insufficient" => {
+                candidate.blocked_reason = Some(reason);
                 destination_headroom_insufficient = true;
             }
-            Err(_) => {
+            Err(reason) => {
+                candidate.blocked_reason = Some(reason);
                 destination_headroom_unverified = true;
             }
         }
@@ -5309,6 +5305,12 @@ pub fn plan_cloud_archive_from_snapshot(
     if destination_headroom_unverified {
         notices.push("local-volume-headroom-unverified".into());
     }
+    let candidate_bytes = candidates.iter().map(|c| c.bytes).sum();
+    let potentially_reclaimable_bytes = candidates
+        .iter()
+        .filter(|c| c.blocked_reason.is_none())
+        .map(|c| c.bytes)
+        .sum();
     if !snapshot.source_scan_complete {
         notices.push("source-scan-incomplete".into());
         notices.push(format!(
@@ -5750,11 +5752,70 @@ mod tests {
             },
         );
 
-        assert_eq!(report.candidates[0].blocked_reason, None);
+        assert_eq!(
+            report.candidates[0].blocked_reason.as_deref(),
+            Some("local-volume-headroom-insufficient")
+        );
         assert!(report
             .notices
             .contains(&"local-volume-headroom-insufficient".to_string()));
-        assert_eq!(report.potentially_reclaimable_bytes, u64::MAX);
+        assert_eq!(report.potentially_reclaimable_bytes, 0);
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn destination_headroom_blocks_only_the_candidate_that_does_not_fit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source_root = tmp.path().join("source");
+        let cloud_root = tmp.path().join("cloud");
+        writable_dir(&source_root);
+        writable_dir(&cloud_root);
+        let report = plan_cloud_archive(
+            &[
+                FileFact {
+                    path: source_root.join("large.zip"),
+                    bytes: u64::MAX / 2,
+                    created_ms: 1,
+                    modified_ms: 1,
+                    content_metadata: ContentMetadata::default(),
+                },
+                FileFact {
+                    path: source_root.join("small.zip"),
+                    bytes: 1,
+                    created_ms: 1,
+                    modified_ms: 1,
+                    content_metadata: ContentMetadata::default(),
+                },
+            ],
+            &source_root,
+            &root(CloudProvider::GoogleDrive, &cloud_root),
+            system_now_ms(),
+            CloudPlanOptions {
+                min_size_bytes: 1,
+                min_age_days: 0,
+                limit: 10,
+            },
+        );
+
+        let large = report
+            .candidates
+            .iter()
+            .find(|candidate| candidate.src.ends_with("large.zip"))
+            .unwrap();
+        let small = report
+            .candidates
+            .iter()
+            .find(|candidate| candidate.src.ends_with("small.zip"))
+            .unwrap();
+        assert_eq!(
+            large.blocked_reason.as_deref(),
+            Some("local-volume-headroom-insufficient")
+        );
+        assert_ne!(
+            small.blocked_reason.as_deref(),
+            Some("local-volume-headroom-insufficient")
+        );
+        assert_eq!(report.potentially_reclaimable_bytes, small.bytes);
     }
 
     #[cfg(not(coverage))]
