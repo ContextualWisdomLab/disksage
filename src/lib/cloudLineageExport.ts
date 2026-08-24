@@ -6,7 +6,7 @@ import type {
 
 export interface CloudLineageExportNode {
   id: string;
-  kind: "source" | "metadata" | "archive" | "provider" | "receipt" | "goal" | "eviction";
+  kind: "source" | "metadata" | "archive" | "provider" | "provider-item" | "receipt" | "goal" | "eviction";
   status: string;
 }
 
@@ -31,6 +31,9 @@ export interface CloudLineageExport {
   ];
   provider: CloudCopyOutput["receipt"]["provider"];
   provider_sync_state: CloudAttestationOutput["evidence"]["sync_state"];
+  remote_object_id: string | null;
+  remote_revision: string | null;
+  remote_location_bound: boolean | null;
   blockers: string[];
   local_paths_included: false;
   nodes: CloudLineageExportNode[];
@@ -63,6 +66,9 @@ export function buildCloudLineageExport(
   const provider = nodeId("provider", copied.receipt.provider);
   const receipt = nodeId("receipt", copied.receipt.receipt_id);
   const goal = nodeId("goal", copied.receipt.receipt_id);
+  const remoteObject = attestation?.evidence.remote_content?.object_id
+    ? nodeId("provider-item", attestation.evidence.remote_content.object_id)
+    : null;
   const evictionNode = eviction ? nodeId("eviction", eviction.approval.approval_id) : null;
   const syncState = attestation?.evidence.sync_state ?? "unknown";
   const blockers = [...(attestation?.blockers ?? [])].sort();
@@ -75,6 +81,9 @@ export function buildCloudLineageExport(
     { id: receipt, kind: "receipt", status: copied.receipt.copy_verified ? "verified" : "blocked" },
     { id: goal, kind: "goal", status: copied.goal_status ?? "unknown" },
   ];
+  if (remoteObject) {
+    nodes.splice(4, 0, { id: remoteObject, kind: "provider-item", status: "identified" });
+  }
   if (eviction) {
     nodes.push({
       id: nodeId("eviction", eviction.approval.approval_id),
@@ -93,6 +102,10 @@ export function buildCloudLineageExport(
   if (attestation) {
     edges.push({ subject: receipt, predicate: "attested-by", object: provider });
   }
+  if (remoteObject) {
+    edges.push({ subject: provider, predicate: "has-provider-item", object: remoteObject });
+    edges.push({ subject: receipt, predicate: "matches-provider-item", object: remoteObject });
+  }
   if (evictionNode) {
     edges.push({ subject: goal, predicate: "authorizes", object: evictionNode });
   }
@@ -107,6 +120,9 @@ export function buildCloudLineageExport(
     metadata_precedence: metadataPrecedence,
     provider: copied.receipt.provider,
     provider_sync_state: syncState,
+    remote_object_id: attestation?.evidence.remote_content?.object_id ?? null,
+    remote_revision: attestation?.evidence.remote_content?.revision ?? null,
+    remote_location_bound: attestation?.evidence.remote_content?.location_bound ?? null,
     blockers,
     local_paths_included: false,
     nodes,

@@ -1387,3 +1387,7 @@ checks are not reused:
   fingerprint fail closed. Frontend `npm run check`, all 137 frontend tests, and 100% V8
   statements/branches/functions/lines pass; the export itself is read-only and does not change
   provider, source, cloud, ADR, or Goal state.
+
+- When remote content proof exists, the graph additionally binds a path-free provider-item node to
+  the provider and receipt; without it, no provider item is inferred from a local File Provider
+  path.

@@ -817,3 +817,7 @@ setting `local_paths_included=false`. It never fabricates a provider item, attes
 completion, or eviction relation: legacy receipts without lineage are not exportable, and an
 eviction edge appears only after the real eviction output exists. This is an export/view action
 only; it performs no provider, source, cloud, ADR, or Goal mutation.
+
+When a provider attestation contains a remote object proof, the graph adds a path-free
+`provider-item` node and binds it to the provider and receipt. Without that proof the provider
+item remains explicitly absent rather than inferred from a local File Provider path.
