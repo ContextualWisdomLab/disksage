@@ -272,7 +272,10 @@ fn compiler_updates_are_reviewable() {
 
     let cargo_update = dependabot_entry(DEPENDABOT, "cargo")
         .expect("Dependabot must track the src-tauri Cargo manifest, which pulls in rust-toolchain.toml-adjacent crate updates");
-    assert_eq!(entry_scalar(&cargo_update, "directory").as_deref(), Some("/src-tauri"));
+    assert_eq!(
+        entry_scalar(&cargo_update, "directory").as_deref(),
+        Some("/src-tauri")
+    );
     assert_eq!(
         entry_nested_scalar(&cargo_update, "schedule", "interval").as_deref(),
         Some("weekly")
@@ -354,5 +357,8 @@ updates:
 "#;
     let nested_entry = dependabot_entry(nested_dependabot_decoy, "rust-toolchain").unwrap();
     assert_eq!(entry_scalar(&nested_entry, "directory"), None);
-    assert_eq!(entry_nested_scalar(&nested_entry, "schedule", "interval"), None);
+    assert_eq!(
+        entry_nested_scalar(&nested_entry, "schedule", "interval"),
+        None
+    );
 }
