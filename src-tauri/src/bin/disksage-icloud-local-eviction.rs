@@ -4,18 +4,14 @@
 //! fingerprint, an attributed human approval, a second matching confirmation, and a local immutable
 //! record directory.
 
-#[cfg(not(coverage))]
 use disksage_lib::cloud::{self, CloudRoot};
-#[cfg(not(coverage))]
 use disksage_lib::cloud_local_eviction::{
     approve_icloud_local_eviction, execute_icloud_local_eviction, plan_icloud_local_eviction,
     write_immutable_record, IcloudLocalEvictionApproval, IcloudLocalEvictionPlan,
     IcloudLocalEvictionResult,
 };
-#[cfg(not(coverage))]
 use std::path::{Path, PathBuf};
 
-#[cfg(not(coverage))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Args {
     cloud_root: PathBuf,
@@ -28,12 +24,10 @@ struct Args {
     record_dir: Option<PathBuf>,
 }
 
-#[cfg(not(coverage))]
 fn usage() -> &'static str {
     "usage: disksage-icloud-local-eviction --cloud-root ABSOLUTE_PATH --path ABSOLUTE_FILE [--execute --approved-plan-fingerprint HEX64 --confirm-plan-fingerprint HEX64 --approved-by human:IDENTITY --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]"
 }
 
-#[cfg(not(coverage))]
 fn value(args: &[String], index: &mut usize, flag: &str) -> Result<String, String> {
     *index += 1;
     args.get(*index)
@@ -41,7 +35,6 @@ fn value(args: &[String], index: &mut usize, flag: &str) -> Result<String, Strin
         .ok_or_else(|| format!("{flag} 값이 필요함"))
 }
 
-#[cfg(not(coverage))]
 fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut cloud_root = None;
     let mut path = None;
@@ -113,7 +106,6 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     })
 }
 
-#[cfg(not(coverage))]
 fn home_dir() -> Result<PathBuf, String> {
     std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
@@ -121,7 +113,6 @@ fn home_dir() -> Result<PathBuf, String> {
         .map_err(|_| "HOME/USERPROFILE을 찾을 수 없음".into())
 }
 
-#[cfg(not(coverage))]
 fn select_root<'a>(roots: &'a [CloudRoot], requested: &Path) -> Result<&'a CloudRoot, String> {
     let matches: Vec<_> = roots
         .iter()
@@ -134,7 +125,6 @@ fn select_root<'a>(roots: &'a [CloudRoot], requested: &Path) -> Result<&'a Cloud
     }
 }
 
-#[cfg(not(coverage))]
 #[derive(Debug, serde::Serialize)]
 struct PlanOutput {
     action: &'static str,
@@ -142,7 +132,6 @@ struct PlanOutput {
     plan: IcloudLocalEvictionPlan,
 }
 
-#[cfg(not(coverage))]
 #[derive(Debug, serde::Serialize)]
 struct ExecuteOutput {
     action: &'static str,
@@ -154,7 +143,6 @@ struct ExecuteOutput {
     result_record: String,
 }
 
-#[cfg(not(coverage))]
 fn print_json<T: serde::Serialize>(value: &T) -> Result<(), String> {
     println!(
         "{}",
@@ -163,7 +151,6 @@ fn print_json<T: serde::Serialize>(value: &T) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(coverage))]
 fn run() -> Result<(), String> {
     let raw = std::env::args_os()
         .skip(1)
@@ -247,16 +234,12 @@ fn run() -> Result<(), String> {
     })
 }
 
-#[cfg(not(coverage))]
 fn main() {
     if let Err(error) = run() {
         eprintln!("{error}");
         std::process::exit(2);
     }
 }
-
-#[cfg(coverage)]
-fn main() {}
 
 #[cfg(test)]
 mod tests {
