@@ -1,12 +1,17 @@
-//! Coverage instrumentation must preserve shipped runtime behavior for eviction/destination CLIs.
+//! Shipped-runtime and coverage-entrypoint contract for eviction/destination CLIs.
 //!
-//! These binaries are part of owned production coverage. Building with `--cfg coverage` must not
-//! replace their real parser/runtime with an empty entry point, otherwise exact coverage can look
-//! better while never measuring the shipped help and argument boundary.
+//! Repository-wide coverage is intentionally collected without defining `cfg(coverage)` because
+//! that synthetic cfg historically changed production semantics. This regression therefore builds
+//! the real feature-gated binaries in their production configuration, executes terminal help, and
+//! separately prevents either entrypoint from regaining a coverage-only no-op replacement.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+const LOCAL_EVICTION_SOURCE: &str = include_str!("../src/bin/disksage-icloud-local-eviction.rs");
+const DESTINATION_PLAN_SOURCE: &str =
+    include_str!("../src/bin/disksage-incomplete-download-destination-plan.rs");
 
 const BINARIES: [(&str, &str); 2] = [
     (
@@ -19,12 +24,12 @@ const BINARIES: [(&str, &str); 2] = [
     ),
 ];
 
-fn build_coverage_binary(binary: &str, target_dir: &Path) -> PathBuf {
+fn build_shipped_binary(binary: &str, target_dir: &Path) -> PathBuf {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
     let build = Command::new(cargo)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .args([
-            "rustc",
+            "build",
             "--locked",
             "--features",
             "cloud-cli",
@@ -33,12 +38,11 @@ fn build_coverage_binary(binary: &str, target_dir: &Path) -> PathBuf {
             "--target-dir",
         ])
         .arg(target_dir)
-        .args(["--", "--cfg", "coverage"])
         .output()
-        .expect("Cargo should start for the coverage-instrumented operational CLI");
+        .expect("Cargo should start for the shipped operational CLI");
     assert!(
         build.status.success(),
-        "coverage-instrumented {binary} build failed: {}",
+        "shipped {binary} build failed: {}",
         String::from_utf8_lossy(&build.stderr)
     );
     target_dir
@@ -47,11 +51,31 @@ fn build_coverage_binary(binary: &str, target_dir: &Path) -> PathBuf {
 }
 
 #[test]
-fn coverage_instrumentation_preserves_terminal_help_runtime() {
-    let target = tempfile::tempdir().expect("isolated coverage target must be created");
+fn eviction_coverage_contract_keeps_shipped_entrypoints_real() {
+    for (name, source) in [
+        ("disksage-icloud-local-eviction", LOCAL_EVICTION_SOURCE),
+        (
+            "disksage-incomplete-download-destination-plan",
+            DESTINATION_PLAN_SOURCE,
+        ),
+    ] {
+        assert!(
+            !source.contains("#[cfg(coverage)]\nfn main()"),
+            "coverage must never replace the shipped {name} entrypoint with a synthetic main"
+        );
+        assert!(
+            !source.contains("#[cfg(not(coverage))]\nfn main()"),
+            "the shipped {name} entrypoint must remain present under instrumentation"
+        );
+    }
+}
+
+#[test]
+fn shipped_eviction_clis_preserve_terminal_help_runtime() {
+    let target = tempfile::tempdir().expect("isolated build target must be created");
 
     for (binary, expected_usage) in BINARIES {
-        let executable = build_coverage_binary(binary, target.path());
+        let executable = build_shipped_binary(binary, target.path());
         let output = Command::new(&executable)
             .env_remove("HOME")
             .env_remove("USERPROFILE")
@@ -59,22 +83,22 @@ fn coverage_instrumentation_preserves_terminal_help_runtime() {
             .env_remove("XDG_DATA_HOME")
             .arg("--help")
             .output()
-            .expect("coverage-instrumented operational CLI must launch");
+            .expect("shipped operational CLI must launch");
 
         assert_eq!(
             output.status.code(),
             Some(0),
-            "coverage instrumentation must preserve successful help for {binary}: {}",
+            "shipped help must remain successful for {binary}: {}",
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(
             output.stderr.is_empty(),
-            "coverage-instrumented successful help must keep stderr empty for {binary}"
+            "successful shipped help must keep stderr empty for {binary}"
         );
         assert_eq!(
             String::from_utf8(output.stdout).expect("help output must stay valid UTF-8"),
             format!("{expected_usage}\n"),
-            "coverage instrumentation must execute the shipped help runtime for {binary}"
+            "the shipped help runtime must remain exact for {binary}"
         );
     }
 }
