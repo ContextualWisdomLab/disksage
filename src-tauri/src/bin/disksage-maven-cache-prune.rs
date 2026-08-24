@@ -105,8 +105,10 @@ fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
     }
     let expected_candidate_set_fingerprint = expected_candidate_set_fingerprint
         .ok_or_else(|| "--expected-candidate-set-fingerprint 값이 필요함".to_string())?;
-    if max_entries == 0 {
-        return Err("--max-entries는 1 이상이어야 함".into());
+    if !(1..=DEFAULT_MAX_ENTRIES).contains(&max_entries) {
+        return Err(format!(
+            "--max-entries는 1..={DEFAULT_MAX_ENTRIES} 범위여야 함"
+        ));
     }
     if output.as_ref().is_some_and(|path| !path.is_absolute()) {
         return Err("--output은 절대 경로여야 함".into());
