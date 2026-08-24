@@ -328,7 +328,7 @@ fn validate_options(options: GitWorktreeAuditOptions) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_reference(reference: &str) -> Result<(), String> {
+pub fn validate_reference(reference: &str) -> Result<(), String> {
     if reference.is_empty()
         || reference.len() > MAX_REFERENCE_BYTES
         || reference.starts_with('-')

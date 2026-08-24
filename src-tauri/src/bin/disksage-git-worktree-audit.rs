@@ -4,10 +4,10 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use disksage_lib::git_worktree::{audit_git_worktrees, public_summary, GitWorktreeAuditOptions};
+use disksage_lib::git_worktree::{
+    audit_git_worktrees, public_summary, validate_reference, GitWorktreeAuditOptions,
+};
 use disksage_lib::private_evidence::{write_private_json_create_new, PrivateEvidenceReceipt};
-
-const MAX_REFERENCE_BYTES: usize = 1_024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Args {
@@ -53,19 +53,6 @@ fn parse_number<T: std::str::FromStr>(
 fn mark_singleton(seen: &mut bool) -> Result<(), String> {
     if std::mem::replace(seen, true) {
         return Err("duplicate-option".into());
-    }
-    Ok(())
-}
-
-fn validate_reference(reference: &str) -> Result<(), String> {
-    if reference.is_empty()
-        || reference.len() > MAX_REFERENCE_BYTES
-        || reference.starts_with('-')
-        || reference
-            .chars()
-            .any(|character| character.is_control() || character == '\0')
-    {
-        return Err("git-worktree-reference-invalid".into());
     }
     Ok(())
 }
