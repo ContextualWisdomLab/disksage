@@ -19,10 +19,12 @@ fn binary_path() -> &'static Path {
     BINARY_PATH
         .get_or_init(|| {
             let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-            let target_dir = std::env::temp_dir().join(format!(
-                "disksage-git-worktree-private-output-contract-{}",
-                std::process::id()
-            ));
+            let target_dir =
+                std::env::temp_dir().join("disksage-git-worktree-private-output-contract");
+            if target_dir.exists() {
+                fs::remove_dir_all(&target_dir)
+                    .expect("stale Cargo target directory should be removed");
+            }
             let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
             let output = Command::new(cargo)
                 .current_dir(&manifest_dir)
