@@ -227,3 +227,10 @@ the iCloud fail-closed decision: #246 restored the coverage dead-code allowance 
 `node_navigation` (head `1972614`), and #227 renamed the bound audit parameter to `stable_root`
 (head `5ad1197`) while retaining the intentionally nested private module contract. Both focused
 Rust test slices passed locally; hosted checks and protected approvals remain authoritative gates.
+
+## Decision maintenance — 2026-08-24 16:47
+
+The exact-head loop also repaired #249's process-test storage gap at head `db95c54`: the three
+feature-gated Git-worktree CLI integration tests now reuse deterministic private target directories
+and remove stale output before each nested build, preventing process-id-named target accumulation.
+This test-only cleanup does not alter provider, source, Finder, or cloud mutation boundaries.

@@ -1258,3 +1258,13 @@ checks are not reused:
   the intentional `duplicate_audit::bound_read_root` module contract was documented. The pinned
   Rust 1.97.1 duplicate-audit slice passed 10/10 and both current informational threads are
   resolved. Hosted checks and protected approvals still gate merge.
+
+## 2026-08-24 16:47 +0900 Git-worktree test artifact cleanup
+
+- DiskSage #249 advanced to exact head `db95c54` and is ready for review. Its three feature-gated
+  CLI integration tests now reuse deterministic private Cargo target directories and remove stale
+  output before nested builds, closing the repeated-test disk accumulation gap. The affected test
+  targets compile under pinned Rust 1.97.1; the help process slice passed 8/8 before this cleanup.
+- The metadata-failure diagnostic remains a bounded generic fallback by design; it does not expose
+  paths or weaken the fail-closed private-report contract. Current hosted checks and protected
+  approvals remain required.
