@@ -546,3 +546,11 @@ File Provider databases, cloud objects, and user files remain outside the mutati
 focused Rust regression test passed 3/3. A timeout remains incomplete active-use evidence and
 keeps cache cleanup and cloud eviction fail-closed; this process-group cleanup is not a provider
 recovery or copy-cancellation operation.
+
+## Amendment: share the Git reference admission bound with its CLI tests (2026-08-24)
+
+PR #249 exact head `d454eff3` now exports the library-owned `MAX_REFERENCE_BYTES` contract and
+imports it only for the CLI's unit tests. This repairs the hosted all-features compile failure
+(`E0425`) without duplicating a security boundary in the binary. Pinned Rust 1.97.1 local proofs
+passed 7/7 CLI unit tests and 10/10 Git-worktree black-box tests; the audit remains read-only and
+path-redacted, and this change grants no worktree removal authority.
