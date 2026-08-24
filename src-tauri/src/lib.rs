@@ -7,8 +7,8 @@ mod dupes;
 #[cfg_attr(coverage, allow(dead_code))]
 mod commands;
 #[cfg_attr(coverage, allow(dead_code))]
-#[cfg_attr(coverage, allow(dead_code))]
 mod preferred_scan_roots;
+#[cfg_attr(coverage, allow(dead_code))]
 mod node_navigation;
 #[cfg_attr(coverage, allow(dead_code))]
 pub mod cache_cleanup;
