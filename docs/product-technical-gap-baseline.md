@@ -1229,3 +1229,9 @@ checks are not reused:
   #202 (bounded scan/navigation failure feedback) is ready at
   `1d005586b270ca1fcad445970cf44bf5e7268425`. Both have no unresolved review threads; protected
   checks and approvals remain the merge gates.
+
+## 2026-08-24 16:18 +0900 Homebrew status UI verification
+
+- DiskSage #189 is ready at exact head `66d7aa767d416048a752c5c550e8d64e03213e0e`; the local
+  frontend regression slice passed 7/7 (`fmt` and `verdictBadge`), while coverage-source-tree and
+  protected approvals remain pending.
