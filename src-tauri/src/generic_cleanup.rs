@@ -20,8 +20,9 @@ fn clean_paths_inner(paths: &[String]) -> Vec<CleanResult> {
 ///
 /// The Rust function name is intentionally distinct from the legacy command wrapper. Tauri 2.11+
 /// maps this handler back to the stable external `clean_paths` IPC name without generating the
-/// duplicate command macro symbol that the former same-named Rust function produced.
-#[cfg(not(coverage))]
+/// duplicate command macro symbol that the former same-named Rust function produced. The handler
+/// remains compiled in coverage builds so instrumentation measures the same fail-closed command
+/// surface that ships to customers.
 #[tauri::command(rename = "clean_paths")]
 pub fn fail_closed_clean_paths(paths: Vec<String>) -> Result<Vec<CleanResult>, String> {
     Ok(clean_paths_inner(&paths))
@@ -45,6 +46,16 @@ mod tests {
         assert_eq!(results[1].path, "second");
         assert!(!results[1].ok);
         assert_eq!(results[1].error, IDENTITY_BOUND_RECYCLE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn public_handler_returns_the_same_fail_closed_results() {
+        let results = fail_closed_clean_paths(vec!["customer-file".to_string()]).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].path, "customer-file");
+        assert!(!results[0].ok);
+        assert_eq!(results[0].error, IDENTITY_BOUND_RECYCLE_UNAVAILABLE);
     }
 
     #[test]
