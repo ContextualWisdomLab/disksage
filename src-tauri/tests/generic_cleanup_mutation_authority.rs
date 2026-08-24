@@ -31,6 +31,12 @@ fn generic_cleanup_route_must_fail_closed_before_path_consuming_recycle() {
         cleanup.contains("pub fn fail_closed_clean_paths("),
         "the fail-closed Rust handler name must remain distinct from the legacy command macro"
     );
+    assert!(
+        !cleanup.contains(
+            "#[cfg(not(coverage))]\n#[tauri::command(rename = \"clean_paths\")]"
+        ),
+        "coverage builds must retain the shipped fail-closed clean_paths handler instead of compiling a different command surface"
+    );
 }
 
 #[test]
