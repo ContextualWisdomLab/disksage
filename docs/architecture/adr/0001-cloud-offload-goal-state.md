@@ -740,3 +740,18 @@ provider-API uploads remain a separate path. The source-volume snapshot remains 
 Pinned Rust tests, the destination-headroom contract, the full frontend suite (134 tests),
 `svelte-check`, and frontend coverage all pass; mutation, attestation, and eviction authority are
 unchanged and still fail closed.
+
+## Amendment: reconcile cwd-relative organize targets with current main (2026-08-24 18:28 +0900)
+
+PR #225 exact head `ea6f82d914e4660319600acb614fccb4a701aec1` now contains the current `main`
+lineage-aware organization contract and the original fail-closed target fix. `resolve_target_folder`
+expands only an exact `~` or leading `~/` against an absolute home path; process-cwd-relative,
+named-user tilde, parent/root traversal, and relative-home targets are rejected. Organization plans
+retain embedded-metadata-first production evidence (filename tokens such as `2026-04-28`/`251210`
+remain secondary), source size/mtime, and a lineage fingerprint; source drift is rechecked before
+execution.
+
+The exact-head local proof is 21 `organize::tests`, one Windows home-resolution contract test,
+`actionlint`, and `git diff --check`. Hosted checks were restarted for this head and remain
+authoritative; the draft PR has no qualifying approval. This amendment changes no Finder/provider,
+cloud, source-file, or eviction state.
