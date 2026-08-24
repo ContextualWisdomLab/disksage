@@ -1,8 +1,8 @@
-//! Headless OAuth lifecycle for OneDrive and Google Drive evidence and explicit API uploads.
-//!
-//! Refresh tokens remain in the operating-system credential store. This command emits only
-//! non-secret connection descriptors and provider capacity evidence; this command itself never
-//! performs a cloud file write or source eviction.
+// Headless OAuth lifecycle for OneDrive and Google Drive evidence and explicit API uploads.
+//
+// Refresh tokens remain in the operating-system credential store. This command emits only
+// non-secret connection descriptors and provider capacity evidence; this command itself never
+// performs a cloud file write or source eviction.
 
 #[cfg(not(coverage))]
 use std::path::{Path, PathBuf};
@@ -387,52 +387,6 @@ fn execute(args: Args) -> Result<Output, String> {
         }
     }
 }
-
-#[cfg(not(coverage))]
-fn command_line_args() -> Result<Vec<String>, String> {
-    std::env::args_os()
-        .skip(1)
-        .map(|argument| {
-            argument
-                .into_string()
-                .map_err(|_| "provider-oauth-invalid-utf8-argument".to_string())
-        })
-        .collect()
-}
-
-#[cfg(not(coverage))]
-fn run() -> Result<(), String> {
-    let args = command_line_args()?;
-    if matches!(args.as_slice(), [flag] if flag == "--help" || flag == "-h") {
-        println!("{}", usage());
-        return Ok(());
-    }
-
-    let parsed = parse_args(&args, std::env::var_os("HOME").map(PathBuf::from))?;
-    let output = execute(parsed)?;
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&output)
-            .map_err(|_| "provider-oauth-output-serialization-failed".to_string())?
-    );
-    Ok(())
-}
-
-#[cfg(not(coverage))]
-fn main() {
-    if let Err(error) = run() {
-        let exit_code = if error == "provider-oauth-invalid-utf8-argument" {
-            2
-        } else {
-            1
-        };
-        eprintln!("{error}");
-        std::process::exit(exit_code);
-    }
-}
-
-#[cfg(coverage)]
-fn main() {}
 
 #[cfg(all(test, not(coverage)))]
 mod tests {

@@ -100,7 +100,7 @@ fn icloud_sync_health_help_is_successful_without_environment_dependency() {
 #[test]
 fn provider_oauth_help_is_successful_without_environment_dependency() {
     let binary = env!("CARGO_BIN_EXE_disksage-provider-oauth");
-    let expected_usage = "usage: disksage-provider-oauth [--home ABSOLUTE_PATH] [--connections ABSOLUTE_PATH] (--list | --connect --cloud-root ABSOLUTE_PATH --client-id ID [--manual-browser] | --verify-capacity --cloud-root ABSOLUTE_PATH | --disconnect --cloud-root ABSOLUTE_PATH)";
+    let expected_usage = "usage: disksage-provider-oauth [--home ABSOLUTE_PATH] [--connections ABSOLUTE_PATH] (--list | --connect --cloud-root ABSOLUTE_PATH --client-id ID [--manual-browser] [--write-access] | --verify-capacity --cloud-root ABSOLUTE_PATH | --disconnect --cloud-root ABSOLUTE_PATH)";
     assert_help_success(binary, "--help", expected_usage);
     assert_help_success(binary, "-h", expected_usage);
     assert_invalid_argument_is_bounded(binary, &["--opaque-option=not-shown"]);
