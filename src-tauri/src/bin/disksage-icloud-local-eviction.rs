@@ -10,6 +10,7 @@ use disksage_lib::cloud_local_eviction::{
     write_immutable_record, IcloudLocalEvictionApproval, IcloudLocalEvictionPlan,
     IcloudLocalEvictionResult,
 };
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,14 +29,20 @@ fn usage() -> &'static str {
     "usage: disksage-icloud-local-eviction --cloud-root ABSOLUTE_PATH --path ABSOLUTE_FILE [--execute --approved-plan-fingerprint HEX64 --confirm-plan-fingerprint HEX64 --approved-by human:IDENTITY --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]"
 }
 
-fn value(args: &[String], index: &mut usize, flag: &str) -> Result<String, String> {
+fn native_value(args: &[OsString], index: &mut usize, flag: &str) -> Result<OsString, String> {
     *index += 1;
     args.get(*index)
         .cloned()
         .ok_or_else(|| format!("{flag} 값이 필요함"))
 }
 
-fn parse_args(args: &[String]) -> Result<Args, String> {
+fn text_value(args: &[OsString], index: &mut usize, flag: &str) -> Result<String, String> {
+    native_value(args, index, flag)?
+        .into_string()
+        .map_err(|_| "icloud-local-eviction-invalid-utf8-argument".to_string())
+}
+
+fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
     let mut cloud_root = None;
     let mut path = None;
     let mut execute = false;
@@ -46,27 +53,32 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut record_dir = None;
     let mut index = 0usize;
     while index < args.len() {
-        match args[index].as_str() {
-            "--cloud-root" => {
-                cloud_root = Some(PathBuf::from(value(args, &mut index, "--cloud-root")?))
+        match args[index].to_str() {
+            Some("--cloud-root") => {
+                cloud_root = Some(PathBuf::from(native_value(args, &mut index, "--cloud-root")?))
             }
-            "--path" => path = Some(PathBuf::from(value(args, &mut index, "--path")?)),
-            "--execute" => execute = true,
-            "--approved-plan-fingerprint" => {
+            Some("--path") => path = Some(PathBuf::from(native_value(args, &mut index, "--path")?)),
+            Some("--execute") => execute = true,
+            Some("--approved-plan-fingerprint") => {
                 approved_plan_fingerprint =
-                    Some(value(args, &mut index, "--approved-plan-fingerprint")?)
+                    Some(text_value(args, &mut index, "--approved-plan-fingerprint")?)
             }
-            "--confirm-plan-fingerprint" => {
+            Some("--confirm-plan-fingerprint") => {
                 confirm_plan_fingerprint =
-                    Some(value(args, &mut index, "--confirm-plan-fingerprint")?)
+                    Some(text_value(args, &mut index, "--confirm-plan-fingerprint")?)
             }
-            "--approved-by" => approved_by = Some(value(args, &mut index, "--approved-by")?),
-            "--rationale" => rationale = Some(value(args, &mut index, "--rationale")?),
-            "--record-dir" => {
-                record_dir = Some(PathBuf::from(value(args, &mut index, "--record-dir")?))
+            Some("--approved-by") => {
+                approved_by = Some(text_value(args, &mut index, "--approved-by")?)
             }
-            "--help" | "-h" => return Err(usage().into()),
-            _unknown => return Err("icloud-local-eviction-unknown-argument".into()),
+            Some("--rationale") => {
+                rationale = Some(text_value(args, &mut index, "--rationale")?)
+            }
+            Some("--record-dir") => {
+                record_dir = Some(PathBuf::from(native_value(args, &mut index, "--record-dir")?))
+            }
+            Some("--help" | "-h") => return Err(usage().into()),
+            Some(_) => return Err("icloud-local-eviction-unknown-argument".into()),
+            None => return Err("icloud-local-eviction-invalid-utf8-argument".into()),
         }
         index += 1;
     }
@@ -104,6 +116,12 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         rationale,
         record_dir,
     })
+}
+
+#[cfg(test)]
+fn parse_args(args: &[String]) -> Result<Args, String> {
+    let native = args.iter().map(OsString::from).collect::<Vec<_>>();
+    parse_args_os(&native)
 }
 
 fn home_dir() -> Result<PathBuf, String> {
@@ -152,19 +170,12 @@ fn print_json<T: serde::Serialize>(value: &T) -> Result<(), String> {
 }
 
 fn run() -> Result<(), String> {
-    let raw = std::env::args_os()
-        .skip(1)
-        .map(|argument| {
-            argument
-                .into_string()
-                .map_err(|_| "icloud-local-eviction-invalid-utf8-argument".to_string())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    if raw.len() == 1 && matches!(raw[0].as_str(), "--help" | "-h") {
+    let raw = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if raw.len() == 1 && matches!(raw[0].to_str(), Some("--help" | "-h")) {
         println!("{}", usage());
         return Ok(());
     }
-    let args = parse_args(&raw)?;
+    let args = parse_args_os(&raw)?;
     let roots = cloud::discover_cloud_roots(&home_dir()?);
     let root = select_root(&roots, &args.cloud_root)?.clone();
     let now_ms = cloud::system_now_ms();
