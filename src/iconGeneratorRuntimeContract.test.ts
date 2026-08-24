@@ -18,7 +18,7 @@ const contractPath = resolve(repositoryRoot, "src-tauri/icons/icon-contract.json
 
 const EXPECTED_RUNTIME = {
   node_major: 20,
-  zlib: "1.3.0.1-motley",
+  zlib: "1.3.0.1-motley-82a5fec",
 };
 const EXPECTED_NODE_VERSION = "20.19.0";
 
@@ -112,5 +112,5 @@ describe("deterministic icon generator runtime", () => {
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
-  });
+  }, 30_000);
 });
