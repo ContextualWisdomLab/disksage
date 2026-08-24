@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
-**Snapshot:** 2026-08-24 13:58 +0900 (Asia/Seoul)
-**Repository heads at snapshot:** the dated inventory and 13:58 correction below supersede earlier
+**Snapshot:** 2026-08-24 17:05 +0900 (Asia/Seoul)
+**Repository heads at snapshot:** the dated inventory and 17:05 correction below supersede earlier
 historical captures; hosted checks and protected review remain authoritative, and no merge is
 claimed from queued, stale, or bot-only status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
@@ -15,7 +15,7 @@ claimed from queued, stale, or bot-only status.
 4. Regenerable caches are a separate reclaim domain. They are per-child, identity-bound, active-use checked, journaled, and moved to OS Trash; they are not uploaded as user data.
 5. Deterministic Rust gates own safety. A local model may judge only the fixed maintenance command after dry-run evidence, calibration, and explicit human confirmation. No external LLM or OAuth service is a runtime prerequisite for the standalone product.
 
-## 2026-08-22 04:23 +0900 current protected PR inventory
+## 2026-08-24 17:05 +0900 current protected PR inventory
 
 This is the current review queue captured from GitHub immediately before this snapshot. A commit
 SHA is authoritative only for the PR row where it appears; a later push invalidates predecessor
@@ -23,21 +23,21 @@ checks and approvals.
 
 | PR | Exact head | Draft | Merge state | Review state | Current interpretation |
 | --- | --- | --- | --- | --- | --- |
-| #249 | `44390608d30417477f6a66601b18a53ca87b0a9c` | yes | blocked | review required | Git worktree audit help; Strix provider-prefix failure is tracked against central `.github` PR #1263 |
-| #247 | `7c690c09a8409f5aafdc880d188fcc2939c14ce3` | no | dirty | review required | destination-staging headroom binding and provider-scoped stall-history repair; hosted checks/review rerunning |
-| #246 | `476678c150ded97b400d62566292adfff56a84c2` | no | clean | none | Storybook/accessibility contract; approvals still absent |
-| #244 | `b9941295ac354bb63cf911a064a1f4df1f8eb60b` | yes | blocked | review required | Rust 1.97.1 baseline; protected approval quorum absent |
-| #238 | `d44b23bdf4108bf6b6f6378f7e0ac305187deec6` | no | blocked | review required | mail-parser update; all current checks are green but protected approvals are absent |
-| #234 | `22bc81585257f409abf9f99a5db81184e84dafe9` | yes | blocked | review required | ureq update; protected approval quorum absent |
-| #232 | `99db1d36f722aeb00b280793126064e4951e62be` | no | blocked | review required | @types/node update; protected approval quorum absent |
-| #230 | `c7e4e623e9b691dcd6a24cad3cc492393cb5d83e` | yes | blocked | review required | download-artifact update; protected approval quorum absent |
-| #228 | `1eb947ec9d4e591638230a8cb24af4d5b14ae35b` | yes | clean | none | private-evidence identity hardening; review pending |
-| #189 | `1ada64a334fc27a022d42c897fabe32ccc25ae7e` | no | blocked | review required | stacked Homebrew/iCloud safety UI repair; hosted checks are rerunning |
-| #156 | `c6dc8a6635639329c9bb02d9e32d6548abeaa427` | yes | unknown | review required | exact-head coverage/release contracts; coverage measured below 100% |
+| #249 | `6b95c590b19fe2ecd2104b77d3f87c30a6eedff1` | no | blocked | review required | Git worktree audit help; reference validation is now shared with the library |
+| #247 | `8d6de50bd6f1d343df745fe435f87824c1d952f6` | no | blocked | review required | pending iCloud provider indexing plus live Finder/provider stall evidence |
+| #246 | `1972614ee5488cca34deeb3bd999d369c61b3de1` | no | blocked | review required | Storybook/accessibility contract; iCloud stall clock test slice is 7/7 |
+| #244 | `13caeb04333e50e57c8a51a11b64aeb131c080b2` | no | blocked | review required | Rust 1.97.1 compiler baseline |
+| #227 | `5ad11975ad1229e700dc042fdfd0482f21a2f45c` | no | blocked | review required | symlink-root audit hardening |
+| #212 | `75d728e403cf0b30511e149a7e650731f6472733` | no | blocked | review required | cloud operational CLI help |
+| #206 | `2e7b845b7610a871ec5981d964bcab5cb99df41d` | no | clean | none | content-bound Homebrew execution; no qualifying approval |
+| #205 | `5c86668a6e503a174ff0b07151f67226b39547ff` | no | clean | none | Intel Homebrew target support; no qualifying approval |
+| #203 | `5f0bd51be4b2faca8a30aadc661bf651a619c549` | no | blocked | review required | TopFiles accessibility contract |
+| #202 | `ec2db50307d0d6bccd2546a820c7a6822f054df5` | no | blocked | review required | bounded scan/navigation failure feedback |
+| #189 | `66d7aa767d416048a752c5c550e8d64e03213e0e` | no | blocked | review required | Homebrew cleanup status UI |
 
-No protected merge is inferred from `clean`, green predecessor checks, bot comments, or queued
-reviews. The queue is processed exact-head-first: review, repair, recheck, then normal protected
-merge.
+Additional draft dependency/security PRs remain open and are not merge candidates. No protected
+merge is inferred from `clean`, green predecessor checks, bot comments, or queued reviews. The queue
+is processed exact-head-first: review, repair, recheck, then normal protected merge.
 
 ## Buyer-observable product gaps
 
