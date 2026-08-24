@@ -25,6 +25,10 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("File Provider 상태 확인이 제한시간을 넘었습니다");
     expect(source).toContain("Lineage 연결관계");
     expect(source).toContain("검증 복사 영수증 → provider attestation → Goal/ADR");
+    expect(source).toContain('from "./cloudLineageExport"');
+    expect(source).toContain("downloadLineageExport()");
+    expect(source).toContain("path-free lineage JSON 내보내기");
+    expect(source).toContain("원본·목적지 경로 없이 stable content ID");
     expect(source).toContain("candidate.metadata_fingerprint");
     expect(source).toContain("마지막 증거 확인:");
     expect(source).toContain("evidenceObservedAt(icloudHealth.observed_at_ms)");
