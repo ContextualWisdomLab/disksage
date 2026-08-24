@@ -1331,3 +1331,15 @@ checks are not reused:
 - Exact-head review evidence remains current: #249 is now `6b95c59` after centralizing the CLI's
   reference validation in the library; #246 is `1972614`; #227 is `5ad1197`. Hosted checks and
   protected independent approvals remain the only merge gates.
+
+## 2026-08-24 19:04 +0900 live iCloud queue still explains the copy-preparation stall
+
+- A fresh read-only `/usr/bin/brctl status` still reports the iCloud client as `needs-sync` with
+  `needs-sync-up|in-sync-down|prefer-sync-down|oob-sync-ack`. The bounded dump contains 1,740
+  `pending-scan` entries and 343 `pending-sync-up` entries; the queue remains provider-global and
+  does not identify the seven Finder items.
+- The host has about 12 GiB available on `/`, and the read-only process inventory contains Finder,
+  `fileproviderd`, and `bird` but no DiskSage process. This is consistent with provider
+  reconciliation/indexing pressure; it is not proof that DiskSage owns a Finder lock, nor proof
+  that the cloud write completed. Per-item copy, attestation, and local eviction remain
+  fail-closed; no Finder, provider, source, or cloud mutation occurred.
