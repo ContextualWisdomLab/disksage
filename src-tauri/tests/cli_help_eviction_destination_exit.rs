@@ -171,6 +171,57 @@ fn assert_non_utf8_argument_is_bounded(binary: &Path, expected_diagnostic: &str)
     );
 }
 
+#[cfg(unix)]
+fn assert_native_path_values_are_not_forced_through_utf8(binaries: &[PathBuf]) {
+    use std::os::unix::ffi::OsStringExt;
+
+    let parent = tempfile::tempdir().expect("native path parent must be created");
+    let mut name = b"native-cloud-root-".to_vec();
+    name.push(0xff);
+    let native_path = parent.path().join(OsString::from_vec(name));
+    let manifest = parent.path().join("manifest.json");
+    let capacity = parent.path().join("capacity.json");
+
+    let local = command(&binaries[0])
+        .arg("--cloud-root")
+        .arg(&native_path)
+        .arg("--path")
+        .arg(&native_path)
+        .output()
+        .expect("local-eviction CLI must launch with native path values");
+    let local_stderr = String::from_utf8(local.stderr).expect("diagnostic must remain UTF-8");
+    assert_eq!(local.status.code(), Some(2));
+    assert!(local_stderr.contains("HOME/USERPROFILE을 찾을 수 없음"));
+    assert!(!local_stderr.contains("invalid-utf8-argument"));
+
+    let destination = command(&binaries[1])
+        .arg("--source-root")
+        .arg(&native_path)
+        .arg("--cloud-root")
+        .arg(&native_path)
+        .args(["--destination-subdirectory", "Recovered", "--capacity-snapshot"])
+        .arg(&capacity)
+        .output()
+        .expect("destination-plan CLI must launch with native path values");
+    let destination_stderr =
+        String::from_utf8(destination.stderr).expect("diagnostic must remain UTF-8");
+    assert_eq!(destination.status.code(), Some(2));
+    assert!(destination_stderr.contains("home-directory-unavailable"));
+    assert!(!destination_stderr.contains("invalid-utf8-argument"));
+
+    let batch = command(&binaries[2])
+        .arg("--cloud-root")
+        .arg(&native_path)
+        .arg("--manifest")
+        .arg(&manifest)
+        .output()
+        .expect("batch-eviction CLI must launch with native path values");
+    let batch_stderr = String::from_utf8(batch.stderr).expect("diagnostic must remain UTF-8");
+    assert_eq!(batch.status.code(), Some(2));
+    assert!(batch_stderr.contains("HOME을 확인할 수 없음"));
+    assert!(!batch_stderr.contains("invalid-utf8-argument"));
+}
+
 #[test]
 fn eviction_and_destination_help_are_successful_and_invalid_arguments_are_bounded() {
     let (_target_dir, binaries) = build_feature_gated_binaries();
@@ -184,4 +235,6 @@ fn eviction_and_destination_help_are_successful_and_invalid_arguments_are_bounde
         #[cfg(unix)]
         assert_non_utf8_argument_is_bounded(binary, expected_invalid_utf8);
     }
+    #[cfg(unix)]
+    assert_native_path_values_are_not_forced_through_utf8(&binaries);
 }
