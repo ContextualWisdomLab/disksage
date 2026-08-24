@@ -241,3 +241,12 @@ The current-head review queue was refreshed after the accessibility and compiler
 marked ready: #203 is at `5f0bd51`, #244 at `13caeb0`, and #249 at `db95c54`. All remain blocked by
 live hosted gates and protected approvals; none of these states changes the provider evidence
 decision or authorizes source/cloud mutation.
+
+## Operational evidence update — 2026-08-24 16:50
+
+The latest bounded read-only receipt still reports `evidence_complete=true` and
+`new_copy_admission_state=blocked`. The 343-item sync-up backlog, one active upload at 95.24%, one
+active download, native `client_state=needs-sync`, and sync-up pending remain unchanged. Pending
+File Provider indexable items increased to 135,334. The receipt remains aggregate provider evidence
+only; `provider_sync_attested=false`, `local_eviction_authorized=false`, and
+`mutation_performed=false` remain invariant.

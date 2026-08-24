@@ -1275,3 +1275,13 @@ checks are not reused:
   `13caeb0`; and #249 is ready at `db95c54` after the test-artifact cleanup. Their review threads
   are resolved where applicable, but current hosted checks and the protected independent-approval
   quorum remain merge gates. No merge or approval bypass was performed.
+
+## 2026-08-24 16:50 +0900 iCloud backlog remains the active customer blocker
+
+- The bounded probe now reports File Provider pending indexable items at 135,334, up from 132,783
+  at 16:21; 343 uploads remain blocked on sync-up, one upload remains active at 95.24%, and one
+  download remains active. Native status remains `client_state=needs-sync` with sync-up pending and
+  `new_copy_admission_state=blocked`.
+- The growing queue is consistent with Finder’s multi-hour “preparing to copy” state, but still
+  does not prove DiskSage holds a Finder lock or identify the seven items. No provider, source,
+  Finder, or cloud mutation was performed, and local eviction remains fail-closed.
