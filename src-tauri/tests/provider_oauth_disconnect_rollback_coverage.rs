@@ -64,3 +64,33 @@ fn credential_delete_failure_restores_the_original_connection_document() {
         "failed credential deletion must roll the durable connection document back to its original state"
     );
 }
+
+#[test]
+fn successful_credential_delete_commits_an_empty_durable_connection_document() {
+    let temp = tempfile::tempdir().unwrap();
+    let document = temp.path().join("connections.json");
+    let root = google_root();
+    let original = connection(&root);
+    save_connections(&document, std::slice::from_ref(&original)).unwrap();
+
+    let mut deleted = Vec::new();
+    disconnect_with_delete(&document, &root, |connection_id| {
+        deleted.push(connection_id.to_string());
+        Ok(())
+    })
+    .unwrap();
+
+    assert_eq!(
+        deleted,
+        vec![original.connection_id],
+        "a successful disconnect deletes exactly the credential bound to the selected canonical connection"
+    );
+    assert!(
+        document.is_file(),
+        "disconnect keeps a valid durable versioned document rather than deleting the evidence path"
+    );
+    assert!(
+        load_connections(&document).unwrap().is_empty(),
+        "successful credential deletion must commit the matching connection removal"
+    );
+}
