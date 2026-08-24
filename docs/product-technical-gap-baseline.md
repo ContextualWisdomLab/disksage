@@ -1122,3 +1122,13 @@ checks are not reused:
 - Pinned Rust 1.97.1 execution now passes both runtime regressions: destination ancestor headroom
   authority and folded mail-header planning (2 passed). This preserves the real source freshness
   gate while testing the intended symlinked-staging safety behavior.
+
+## 2026-08-24 14:55 +0900 live iCloud recheck
+
+- The bounded `disksage-icloud-sync-health` probe completed with `evidence_complete=true` and
+  `new_copy_admission_state=blocked`: 343 uploads remain blocked on sync-up, one upload is active
+  at 95.24%, one download is active, and File Provider pending indexable items reached 121,859.
+- The root volume has 66 GiB available; `real_datasets` still has 14 entries and 512 bytes with
+  its 2026-08-20 mtime, and the bounded `lsof` sample has no handle on that directory. This
+  confirms provider reconciliation/indexing stall evidence rather than disk exhaustion or a
+  Finder copy receipt. Copy, per-item attestation, and source eviction remain fail-closed.

@@ -146,3 +146,18 @@ reconciliation/indexing evidence, not disk exhaustion or per-item cloud-write pr
 is unchanged: keep `provider_sync_attested=false`, `local_eviction_authorized=false`, and
 `mutation_performed=false`; expose only the explicit bounded Finder-cancel action and never
 restart providers or mutate provider, source, or cloud state from this aggregate receipt.
+
+## Operational evidence update — 2026-08-24 14:55
+
+The next bounded read-only CloudDocs/WAL snapshot completed with
+`evidence_complete=true` and `new_copy_admission_state=blocked`. The upload queue still contained
+343 items blocked on sync-up; one active upload remained at 95.24% and one active download was
+present. File Provider pending indexable items increased to 121,859, with the same disk-import,
+transfer, filename-exclusion, and root-exclusion notices. Native status continued to report
+`client_state=needs-sync` and sync-up/down pending.
+
+The root volume still had 66 GiB available, the 14-entry `real_datasets` directory remained 512
+bytes with its 2026-08-20 mtime, and the bounded `lsof` sample found no handle on that directory.
+This is a worsening provider reconciliation/indexing backlog, not local disk exhaustion or
+per-item cloud-write proof. The existing decision therefore remains fail-closed:
+`provider_sync_attested=false`, `local_eviction_authorized=false`, and `mutation_performed=false`.
