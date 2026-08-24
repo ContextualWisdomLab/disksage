@@ -1355,3 +1355,14 @@ checks are not reused:
   indexing/disk-import/transfer activity, and filename/root exclusions. This is still aggregate
   provider evidence rather than a per-item receipt for the seven Finder entries; no cloud write or
   source eviction is authorized.
+
+## 2026-08-24 19:28 +0900 exact-head Git worktree audit repair
+
+- DiskSage #249 advanced to exact head `c8ca669262f913de5719ebda377132f1135c06c8`. The hosted
+  all-features compile failure was traced to CLI tests referencing the library's private
+  `MAX_REFERENCE_BYTES` bound; the bound is now exported once by the library and imported only by
+  the CLI test module. Pinned Rust 1.97.1 local proofs passed 7/7 CLI tests and 10/10 black-box
+  Git-worktree tests.
+- The audit remains read-only, path-redacted, create-once for private evidence, and grants no
+  worktree-removal authority. The new exact head has no failed checks yet; hosted checks and
+  protected approvals remain authoritative. No user, Finder, provider, or cloud data was changed.

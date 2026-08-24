@@ -786,3 +786,12 @@ The report records 343 uploads blocked on sync-up and retains
 `provider_sync_attested=false`, `local_eviction_authorized=false`, and `mutation_performed=false`.
 The aggregate receipt cannot attest the seven Finder items or a remote cloud write, so copy,
 cloud-write, and source-eviction authority remain fail-closed.
+
+## Amendment: record the exact-head Git worktree audit compile repair (2026-08-24 19:28 +0900)
+
+DiskSage #249 exact head `c8ca669262f913de5719ebda377132f1135c06c8` repairs the hosted
+all-features `E0425` by making the library-owned `MAX_REFERENCE_BYTES` bound available to its CLI
+unit tests without duplicating the validation contract. Pinned Rust 1.97.1 proofs passed 7/7 CLI
+tests and 10/10 black-box Git-worktree tests. The audit remains read-only and path-redacted; no
+worktree removal, Finder/provider operation, cloud write, or source eviction is authorized by this
+repair.
