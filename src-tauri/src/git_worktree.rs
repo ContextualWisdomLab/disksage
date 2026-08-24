@@ -25,6 +25,7 @@ use std::time::{Duration, Instant};
 
 pub const GIT_WORKTREE_AUDIT_SCHEMA_KIND: &str = "disksage.git-worktree-audit/v2";
 const MAX_COMMAND_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
+/// Maximum UTF-8 byte length accepted for a Git reference at the audit boundary.
 pub const MAX_REFERENCE_BYTES: usize = 1_024;
 const MAX_REACHABLE_COMMITS: usize = 100_000;
 const GIT_WORKTREE_REMOVAL_VERSION: u32 = 1;
