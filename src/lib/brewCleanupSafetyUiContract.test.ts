@@ -36,7 +36,7 @@ describe("Homebrew cleanup safety UX", () => {
   it("distinguishes executed and non-executed result states", () => {
     const source = readSource("src/lib/BrewCleanup.svelte");
     const start = source.indexOf("{#if execution}");
-    const end = source.indexOf("{/if}", start);
+    const end = source.indexOf("\n      {/if}\n    </div>", start);
     const executionResult = source.slice(start, end);
 
     expect(start).toBeGreaterThanOrEqual(0);
