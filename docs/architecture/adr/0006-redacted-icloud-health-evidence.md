@@ -256,3 +256,19 @@ only; `provider_sync_attested=false`, `local_eviction_authorized=false`, and
 The current #249 exact head is `aa5c37d`. Its test-only target helper now keeps concurrent
 process-scoped build directories while pruning dead-process or aged stale output; this preserves
 the disk-reclamation goal without changing any provider, Finder, source, or cloud mutation rule.
+
+## Operational evidence update — 2026-08-24 17:00
+
+A fresh read-only `/usr/bin/brctl status` completed at 17:00. The iCloud container reports
+`client:needs-sync` and `sync:needs-sync-up|in-sync-down|prefer-sync-down|oob-sync-ack`; the
+bounded summary contains 1,740 `pending-scan` entries, 343 `pending-sync-up` entries, 1,807
+scheduled sync-up markers, and 5 upload errors. Several queued uploads have not run for roughly
+60–66 hours, including `CKErrorDomain:4` “Saving asset failed” records.
+
+This is provider-global reconciliation/error evidence consistent with the Finder
+`real_datasets` “복사 준비 중” dialog persisting for hours. It does not identify the seven Finder
+items or attest a cloud write, so the evidence remains diagnostic only:
+`provider_sync_attested=false`, `local_eviction_authorized=false`, and `mutation_performed=false`.
+DiskSage must continue to expose only the explicit bounded Finder-cancel action and must not
+restart provider processes or mutate Finder, source, or cloud state automatically. The root volume
+had about 36 GiB available at the same observation, so disk-full is not the current root cause.

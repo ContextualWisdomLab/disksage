@@ -1291,3 +1291,20 @@ checks are not reused:
 - #249 advanced to exact head `aa5c37d`; its shared test helper now uses process-scoped Cargo target
   directories and prunes stale outputs without deleting another active run. The affected targets
   compile under pinned Rust 1.97.1, and the current hosted checks have restarted for this head.
+
+## 2026-08-24 17:00 +0900 live brctl confirmation of the Finder stall
+
+- A fresh read-only `/usr/bin/brctl status` completed at 17:00. The iCloud container still reports
+  `client:needs-sync` and `sync:needs-sync-up|in-sync-down|prefer-sync-down|oob-sync-ack`; the
+  dump contains 1,740 `pending-scan` entries, 343 `pending-sync-up` entries, 1,807 scheduled
+  sync-up markers, and 5 upload errors. Individual queued uploads last ran roughly 60–66 hours
+  ago, including `CKErrorDomain:4` / “Saving asset failed” records.
+- This is stronger provider-global evidence for the screenshot's multi-hour `real_datasets`
+  “복사 준비 중” state, but it still cannot identify the seven Finder items or prove a cloud
+  write. DiskSage performed no Finder/provider/source/cloud mutation; `provider-sync-incomplete`,
+  copy/attestation, and local-eviction gates remain fail-closed. The root volume currently has
+  about 36 GiB available, so the live blocker is provider reconciliation/error backlog rather
+  than a full root volume.
+- Exact-head review evidence remains current: #249 is now `6b95c59` after centralizing the CLI's
+  reference validation in the library; #246 is `1972614`; #227 is `5ad1197`. Hosted checks and
+  protected independent approvals remain the only merge gates.
