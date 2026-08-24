@@ -130,3 +130,19 @@ or attest a cloud write, so `provider_sync_attested=false`, `local_eviction_auth
 `mutation_performed=false` remain required. DiskSage continues to expose only the explicit bounded
 Finder-cancel action and never restarts provider processes or mutates provider, source, or cloud
 state from this evidence.
+
+## Operational evidence update — 2026-08-24 14:31
+
+A fresh read-only health receipt observed `evidence_complete=true` and
+`new_copy_admission_state=blocked`. Aggregate upload state remained 343 items blocked on sync-up
+with one active upload at 95.24%; one active download and File Provider indexing, disk-import, and
+transfer activity remained, while pending indexable items increased to 110,652. Native status
+continued to report `client_state=needs-sync` with sync-up/down pending, and filename/root
+exclusions were still present.
+
+The root volume had about 83 GiB available and a bounded `lsof` sample found no handle on the
+`real_datasets` target while Finder remained at “preparing to copy”. This is provider
+reconciliation/indexing evidence, not disk exhaustion or per-item cloud-write proof. The decision
+is unchanged: keep `provider_sync_attested=false`, `local_eviction_authorized=false`, and
+`mutation_performed=false`; expose only the explicit bounded Finder-cancel action and never
+restart providers or mutate provider, source, or cloud state from this aggregate receipt.

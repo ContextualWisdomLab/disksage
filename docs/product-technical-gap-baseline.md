@@ -1060,3 +1060,18 @@ checks are not reused:
 - Central `.github` #1263 is open/non-draft at `14cd0e8438b6d670a0f036d1e47f35bd4c3f97a7`; the
   cross-repository documentation reference is qualified, but protected checks/reviews are pending.
   No merge is inferred from queued checks or bot comments.
+
+## 2026-08-24 14:31 +0900 live iCloud probe confirms copy-preparation stall
+
+- A fresh exact-head `disksage-icloud-sync-health` read-only probe again reported
+  `evidence_complete=true`, `new_copy_admission_state=blocked`, `provider_sync_attested=false`,
+  `local_eviction_authorized=false`, and `mutation_performed=false`.
+- The aggregate state remained 343 uploads blocked on sync-up with one active upload at 95.24%,
+  one active download, and File Provider pending indexable items increased to 110,652. Native
+  status still reported `client_state=needs-sync` with sync-up/down pending; filename/root
+  exclusions and disk-import/transfer activity remained present.
+- The root volume had about 83 GiB available (13% used), and a bounded `lsof` sample found no
+  handle on `real_datasets`. The Finder “preparing to copy” dialog is therefore a provider
+  reconciliation/indexing stall, not local disk exhaustion or evidence of a completed cloud
+  copy. DiskSage keeps copy, attestation, and source eviction fail-closed; only the explicit
+  bounded Finder-cancel action is available to the operator.
