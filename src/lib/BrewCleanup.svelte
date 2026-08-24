@@ -26,7 +26,7 @@
     try {
       judgment = await api.judgeBrewCleanup();
     } catch (e) {
-      error = String(e);
+      error = "Homebrew 정리 계획을 만들지 못했습니다.";
     } finally {
       planning = false;
     }
@@ -82,7 +82,7 @@
         rationale.trim(),
       );
     } catch (e) {
-      error = String(e);
+      error = "Homebrew 정리를 실행하지 못했습니다.";
     } finally {
       judgment = null;
       confirmationPhrase = "";
@@ -156,7 +156,7 @@
         {#if execution.record_path}
           <p class="muted">감사 기록: {execution.record_path}</p>
         {:else}
-          <p class="error" role="alert">명령 결과는 반환됐지만 감사 기록을 저장하지 못했습니다: {execution.record_error}</p>
+          <p class="error" role="alert">명령 결과는 반환됐지만 감사 기록을 저장하지 못했습니다.</p>
         {/if}
       {/if}
     </div>
