@@ -228,6 +228,7 @@ mod tests {
         std::fs::write(selected.join("marker.txt"), b"original").unwrap();
 
         let guard = BoundReadRoot::open(&selected).expect("selected directory must bind");
+        #[cfg(target_os = "linux")]
         let stable = guard.stable_path().expect("stable namespace must be available");
         assert!(guard.canonical_path().is_some());
 
