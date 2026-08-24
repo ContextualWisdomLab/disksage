@@ -1029,7 +1029,12 @@ where
         .iter()
         .filter(|connection_id| **connection_id != connection.connection_id)
     {
-        let _ = delete_token(stale_id);
+        if let Err(error) = delete_token(stale_id) {
+            if save_connections(connection_document_path, &original).is_err() {
+                return Err("provider-oauth-keyring-delete-and-config-rollback-failed".into());
+            }
+            return Err(error);
+        }
     }
     Ok(())
 }
