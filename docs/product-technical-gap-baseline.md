@@ -1180,3 +1180,12 @@ checks are not reused:
   accessibility/Storybook checks were locally verified, while its hosted Strix result remains an
   external provider gate that must be freshly revalidated. #244 remains open/non-draft with its
   pinned Rust baseline checks queued. No merge is inferred from readiness or queued checks.
+
+## 2026-08-24 16:03 +0900 iCloud health recheck
+
+- The bounded probe remains fail-closed: `evidence_complete=true`, `new_copy_admission_state=blocked`,
+  343 sync-up items blocked, one upload at 95.24%, one download active, and native
+  `client_state=needs-sync`/`needs-sync-up`.
+- File Provider pending indexable items reached 131,214; disk import, transfer activity, and the
+  28 filename/2 root exclusions remain. This is aggregate reconciliation evidence, not proof that
+  the seven Finder items were uploaded. No provider, Finder, source, or cloud mutation occurred.

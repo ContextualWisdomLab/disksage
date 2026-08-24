@@ -193,3 +193,15 @@ The latest product review queue keeps the same safety decision: #247 is ready fo
 `59057c08eb5017ac57b640419a0c7e4779f443d7`, but queued checks and protected approvals are not yet
 complete. The health evidence remains diagnostic only; no readiness, review, or queue state can
 promote aggregate iCloud evidence into per-item upload attestation or local-eviction authority.
+
+## Operational evidence update — 2026-08-24 16:03
+
+The next bounded read-only receipt still reports `evidence_complete=true` and
+`new_copy_admission_state=blocked`. The sync-up backlog remains 343 items; one upload remains at
+95.24% and one download remains active. Pending File Provider indexable items reached 131,214,
+with disk import, transfer activity, and the 28 filename/2 root exclusions still present. Native
+status remains `client_state=needs-sync` with `needs-sync-up`.
+
+The aggregate queue continues to grow, but the receipt still does not identify the seven Finder
+items or attest a remote write. `provider_sync_attested=false`, `local_eviction_authorized=false`,
+and `mutation_performed=false` remain invariant.
