@@ -8,6 +8,7 @@ const MULTIPART_AUDIT_SOURCE: &str =
     include_str!("../src/bin/disksage-multipart-archive-audit.rs");
 const INCOMPLETE_AUDIT_SOURCE: &str =
     include_str!("../src/bin/disksage-incomplete-download-audit.rs");
+const UNKNOWN_ARGUMENT: &str = "알 수 없는 인자";
 
 /// Build both feature-gated audit binaries in an isolated Cargo target directory.
 fn build_feature_gated_audit_binaries() -> (tempfile::TempDir, PathBuf, PathBuf) {
@@ -92,23 +93,23 @@ fn assert_invalid_argument_is_bounded(binary: &Path) {
         .output()
         .expect("DiskSage audit CLI must launch for invalid argument validation");
 
-    assert!(
-        !output.status.success(),
-        "an unknown argument must remain a non-zero failure"
-    );
+    assert_eq!(output.status.code(), Some(2));
     assert!(
         output.stdout.is_empty(),
         "invalid invocation must not emit successful output on stdout"
     );
     let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must be valid UTF-8");
-    assert!(!stderr.is_empty(), "invalid invocation must remain visible");
+    assert!(
+        stderr.contains(UNKNOWN_ARGUMENT),
+        "unknown input must use the stable bounded argument diagnostic"
+    );
     assert!(
         !stderr.contains("not-shown"),
         "invalid diagnostics must not echo arbitrary argument payloads"
     );
 }
 
-/// Require a mixed help and invalid request to remain a bounded failure.
+/// Require a mixed help and invalid request to remain an argument failure, not failed help.
 fn assert_help_does_not_hide_invalid_argument(binary: &Path) {
     let output = Command::new(binary)
         .env_remove("HOME")
@@ -116,16 +117,20 @@ fn assert_help_does_not_hide_invalid_argument(binary: &Path) {
         .output()
         .expect("DiskSage audit CLI must launch for mixed help validation");
 
-    assert!(
-        !output.status.success(),
-        "help must not turn an otherwise invalid invocation into success"
-    );
+    assert_eq!(output.status.code(), Some(2));
     assert!(
         output.stdout.is_empty(),
         "mixed invalid invocation must not emit successful help on stdout"
     );
     let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must be valid UTF-8");
-    assert!(!stderr.is_empty(), "mixed invalid invocation must remain visible");
+    assert!(
+        stderr.contains(UNKNOWN_ARGUMENT),
+        "help is terminal only when sole; mixed input must remain the stable argument failure"
+    );
+    assert!(
+        !stderr.contains("usage:"),
+        "mixed invalid input must not project successful-help content through stderr"
+    );
     assert!(
         !stderr.contains("not-shown"),
         "mixed invalid diagnostics must not echo arbitrary argument payloads"
@@ -173,7 +178,7 @@ fn assert_non_utf8_argument_is_bounded(binary: &Path) {
     );
     assert!(output.stdout.is_empty(), "invalid non-UTF-8 input must not emit successful output");
     let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must remain valid UTF-8");
-    assert!(!stderr.is_empty(), "invalid non-UTF-8 input must remain visible");
+    assert!(stderr.contains(UNKNOWN_ARGUMENT));
     assert!(
         !stderr.contains("panicked") && !stderr.contains("thread 'main'"),
         "invalid host arguments must not escape through a Rust panic"
