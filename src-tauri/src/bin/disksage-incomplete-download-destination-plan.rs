@@ -256,7 +256,6 @@ fn read_capacity_snapshot(path: &Path) -> Result<CloudCapacitySnapshot, String> 
         .map_err(|_| "materialization-capacity-snapshot-json-invalid".into())
 }
 
-#[cfg(not(coverage))]
 fn run() -> Result<(), String> {
     let raw = std::env::args_os()
         .skip(1)
@@ -336,16 +335,12 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(coverage))]
 fn main() {
     if let Err(error) = run() {
         eprintln!("DiskSage incomplete download destination plan: {error}");
         std::process::exit(2);
     }
 }
-
-#[cfg(coverage)]
-fn main() {}
 
 #[cfg(test)]
 mod tests {
