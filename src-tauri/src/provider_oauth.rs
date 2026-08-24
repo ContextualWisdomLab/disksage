@@ -1,8 +1,8 @@
-//! Native OAuth 2.0 authorization for read-only cloud-provider metadata checks.
+//! Native OAuth 2.0 authorization for cloud-provider metadata checks and explicit file uploads.
 //!
 //! DiskSage uses the system browser, PKCE S256, an ephemeral loopback listener, exact provider
 //! hosts, and an OS credential store. Refresh tokens never enter settings or command responses;
-//! access tokens live only long enough to perform one provider metadata request.
+//! access tokens live only long enough to perform one bounded provider operation.
 
 use crate::cloud::{cloud_root_path_matches, CloudProvider, CloudRoot};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -37,12 +37,14 @@ const ONEDRIVE_AUTH_ENDPOINT: &str =
     "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
 #[cfg(not(coverage))]
 const ONEDRIVE_TOKEN_ENDPOINT: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
-const ONEDRIVE_SCOPE: &str = "Files.Read offline_access";
+const ONEDRIVE_READ_SCOPE: &str = "Files.Read offline_access";
+const ONEDRIVE_WRITE_SCOPE: &str = "Files.ReadWrite offline_access";
 
 const GOOGLE_AUTH_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 #[cfg(not(coverage))]
 const GOOGLE_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
-const GOOGLE_SCOPE: &str = "https://www.googleapis.com/auth/drive.metadata.readonly";
+const GOOGLE_READ_SCOPE: &str = "https://www.googleapis.com/auth/drive.metadata.readonly";
+const GOOGLE_WRITE_SCOPE: &str = "https://www.googleapis.com/auth/drive";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OAuthConnection {
@@ -72,10 +74,28 @@ impl Default for ConnectionDocument {
 
 pub fn requested_scope(provider: CloudProvider) -> Result<&'static str, String> {
     match provider {
-        CloudProvider::Onedrive => Ok(ONEDRIVE_SCOPE),
-        CloudProvider::GoogleDrive => Ok(GOOGLE_SCOPE),
+        CloudProvider::Onedrive => Ok(ONEDRIVE_READ_SCOPE),
+        CloudProvider::GoogleDrive => Ok(GOOGLE_READ_SCOPE),
         CloudProvider::Icloud => Err("icloud-oauth-not-supported".into()),
     }
+}
+
+pub fn requested_write_scope(provider: CloudProvider) -> Result<&'static str, String> {
+    match provider {
+        CloudProvider::Onedrive => Ok(ONEDRIVE_WRITE_SCOPE),
+        CloudProvider::GoogleDrive => Ok(GOOGLE_WRITE_SCOPE),
+        CloudProvider::Icloud => Err("icloud-oauth-not-supported".into()),
+    }
+}
+
+fn scope_is_valid(provider: CloudProvider, scope: &str) -> Result<bool, String> {
+    Ok(scope == requested_scope(provider)? || scope == requested_write_scope(provider)?)
+}
+
+pub fn scope_allows_write(connection: &OAuthConnection) -> bool {
+    requested_write_scope(connection.provider)
+        .map(|scope| connection.scope == scope)
+        .unwrap_or(false)
 }
 
 fn authorization_endpoint(provider: CloudProvider) -> Result<&'static str, String> {
@@ -183,6 +203,7 @@ fn generate_pkce() -> Result<PkceMaterial, String> {
 fn build_authorization_url(
     provider: CloudProvider,
     client_id: &str,
+    scope: &str,
     redirect_uri: &str,
     challenge: &str,
     state: &str,
@@ -205,8 +226,10 @@ fn build_authorization_url(
     if challenge.len() != 43 || state.len() != 43 {
         return Err("oauth-pkce-material-invalid".into());
     }
+    if scope.is_empty() || scope.bytes().any(|byte| byte.is_ascii_control()) {
+        return Err("oauth-scope-invalid".into());
+    }
     let endpoint = authorization_endpoint(provider)?;
-    let scope = requested_scope(provider)?;
     let mut params = vec![
         ("client_id", client_id),
         ("redirect_uri", redirect_uri),
@@ -268,7 +291,7 @@ fn validate_connection(connection: &OAuthConnection) -> Result<(), String> {
         || connection.cloud_root_id.trim().is_empty()
         || connection.cloud_root_path.trim().is_empty()
         || !Path::new(&connection.cloud_root_path).is_absolute()
-        || connection.scope != requested_scope(connection.provider)?
+        || !scope_is_valid(connection.provider, &connection.scope)?
     {
         return Err("oauth-connection-invalid".into());
     }
@@ -413,6 +436,7 @@ pub fn connection_for_root(
 pub struct PendingOAuth {
     provider: CloudProvider,
     client_id: String,
+    scope: String,
     redirect_uri: String,
     state: String,
     verifier: Zeroizing<String>,
@@ -431,6 +455,15 @@ impl PendingOAuth {
 pub fn prepare_authorization(
     provider: CloudProvider,
     client_id: &str,
+) -> Result<PendingOAuth, String> {
+    prepare_authorization_with_write_access(provider, client_id, false)
+}
+
+#[cfg(not(coverage))]
+pub fn prepare_authorization_with_write_access(
+    provider: CloudProvider,
+    client_id: &str,
+    write_access: bool,
 ) -> Result<PendingOAuth, String> {
     validate_client_id(provider, client_id)?;
     let listener = TcpListener::bind(("127.0.0.1", 0))
@@ -458,9 +491,15 @@ pub fn prepare_authorization(
         }
     }
     let pkce = generate_pkce()?;
+    let scope = if write_access {
+        requested_write_scope(provider)?
+    } else {
+        requested_scope(provider)?
+    };
     let authorization_url = build_authorization_url(
         provider,
         client_id,
+        scope,
         &redirect_uri,
         &pkce.challenge,
         &pkce.state,
@@ -468,6 +507,7 @@ pub fn prepare_authorization(
     Ok(PendingOAuth {
         provider,
         client_id: client_id.to_owned(),
+        scope: scope.to_owned(),
         redirect_uri,
         state: pkce.state,
         verifier: pkce.verifier,
@@ -694,7 +734,8 @@ fn validate_token_value(value: &str) -> bool {
 }
 
 fn parse_token_document(
-    provider: CloudProvider,
+    _provider: CloudProvider,
+    required_scope: &str,
     json: &str,
     refresh_required: bool,
 ) -> Result<OAuthGrant, String> {
@@ -721,7 +762,7 @@ fn parse_token_document(
         return Err("oauth-token-expiry-invalid".into());
     }
     if let Some(scope) = &document.scope {
-        let required_resource_scope = requested_scope(provider)?
+        let required_resource_scope = required_scope
             .split_whitespace()
             .next()
             .expect("provider scope is non-empty");
@@ -773,6 +814,7 @@ fn safe_oauth_transport_error(error: ureq::Error) -> String {
 #[cfg(not(coverage))]
 fn read_token_response(
     provider: CloudProvider,
+    required_scope: &str,
     response: ureq::http::Response<ureq::Body>,
     refresh_required: bool,
 ) -> Result<OAuthGrant, String> {
@@ -789,7 +831,7 @@ fn read_token_response(
             .read_to_string()
             .map_err(safe_oauth_transport_error)?,
     );
-    parse_token_document(provider, body.as_str(), refresh_required)
+    parse_token_document(provider, required_scope, body.as_str(), refresh_required)
 }
 
 #[cfg(not(coverage))]
@@ -803,7 +845,7 @@ fn exchange_authorization_code(pending: &PendingOAuth, code: &str) -> Result<OAu
             ("code", code),
             ("redirect_uri", pending.redirect_uri.as_str()),
             ("code_verifier", pending.verifier.as_str()),
-            ("scope", requested_scope(pending.provider)?),
+            ("scope", pending.scope.as_str()),
         ]),
         CloudProvider::GoogleDrive => agent.post(endpoint).send_form([
             ("client_id", pending.client_id.as_str()),
@@ -815,7 +857,7 @@ fn exchange_authorization_code(pending: &PendingOAuth, code: &str) -> Result<OAu
         CloudProvider::Icloud => return Err("icloud-oauth-not-supported".into()),
     }
     .map_err(safe_oauth_transport_error)?;
-    read_token_response(pending.provider, response, true)
+    read_token_response(pending.provider, &pending.scope, response, true)
 }
 
 #[cfg(not(coverage))]
@@ -837,7 +879,7 @@ fn refresh_grant(connection: &OAuthConnection, refresh_token: &str) -> Result<OA
         CloudProvider::Icloud => return Err("icloud-oauth-not-supported".into()),
     }
     .map_err(safe_oauth_transport_error)?;
-    read_token_response(connection.provider, response, false)
+    read_token_response(connection.provider, &connection.scope, response, false)
 }
 
 #[cfg(not(coverage))]
@@ -894,7 +936,7 @@ pub fn finish_authorization(
         cloud_root_id: root.id.clone(),
         cloud_root_path: root.path.clone(),
         client_id: pending.client_id.clone(),
-        scope: requested_scope(root.provider)?.into(),
+        scope: pending.scope.clone(),
         connected_at_ms,
     };
     validate_connection(&connection)?;
@@ -1039,6 +1081,7 @@ mod tests {
         let microsoft = build_authorization_url(
             CloudProvider::Onedrive,
             MICROSOFT_CLIENT_ID,
+            ONEDRIVE_READ_SCOPE,
             "http://localhost:49152",
             &challenge,
             &state,
@@ -1052,6 +1095,7 @@ mod tests {
         let google = build_authorization_url(
             CloudProvider::GoogleDrive,
             GOOGLE_CLIENT_ID,
+            GOOGLE_READ_SCOPE,
             "http://127.0.0.1:49153",
             &challenge,
             &state,
@@ -1065,6 +1109,7 @@ mod tests {
         assert!(build_authorization_url(
             CloudProvider::Onedrive,
             MICROSOFT_CLIENT_ID,
+            ONEDRIVE_READ_SCOPE,
             "https://attacker.invalid/callback",
             &challenge,
             &state,
@@ -1073,11 +1118,44 @@ mod tests {
         assert!(build_authorization_url(
             CloudProvider::GoogleDrive,
             GOOGLE_CLIENT_ID,
+            GOOGLE_READ_SCOPE,
             "http://localhost:49153",
             &challenge,
             &state,
         )
         .is_err());
+    }
+
+    #[test]
+    fn write_scopes_are_explicit_and_distinct_from_metadata_scopes() {
+        assert_eq!(
+            requested_write_scope(CloudProvider::Onedrive).unwrap(),
+            "Files.ReadWrite offline_access"
+        );
+        assert_eq!(
+            requested_write_scope(CloudProvider::GoogleDrive).unwrap(),
+            "https://www.googleapis.com/auth/drive"
+        );
+        assert_ne!(
+            requested_scope(CloudProvider::Onedrive).unwrap(),
+            requested_write_scope(CloudProvider::Onedrive).unwrap()
+        );
+        assert_ne!(
+            requested_scope(CloudProvider::GoogleDrive).unwrap(),
+            requested_write_scope(CloudProvider::GoogleDrive).unwrap()
+        );
+        let mut connection = OAuthConnection {
+            connection_id: "connection:test".into(),
+            provider: CloudProvider::GoogleDrive,
+            cloud_root_id: "google-drive:test".into(),
+            cloud_root_path: "/cloud".into(),
+            client_id: GOOGLE_CLIENT_ID.into(),
+            scope: GOOGLE_WRITE_SCOPE.into(),
+            connected_at_ms: 1,
+        };
+        assert!(scope_allows_write(&connection));
+        connection.scope = GOOGLE_READ_SCOPE.into();
+        assert!(!scope_allows_write(&connection));
     }
 
     #[test]
@@ -1215,6 +1293,7 @@ mod tests {
     fn token_documents_require_bearer_resource_scope_and_refresh_on_consent() {
         let microsoft = parse_token_document(
             CloudProvider::Onedrive,
+            ONEDRIVE_READ_SCOPE,
             r#"{"access_token":"access","refresh_token":"refresh","token_type":"Bearer","expires_in":3599,"scope":"Files.Read offline_access"}"#,
             true,
         )
@@ -1224,6 +1303,7 @@ mod tests {
 
         let google = parse_token_document(
             CloudProvider::GoogleDrive,
+            GOOGLE_READ_SCOPE,
             r#"{"access_token":"access","token_type":"bearer","expires_in":3600,"scope":"https://www.googleapis.com/auth/drive.metadata.readonly"}"#,
             false,
         )
@@ -1236,7 +1316,7 @@ mod tests {
             r#"{"error":"invalid_grant"}"#,
             r#"{"access_token":"access","token_type":"Bearer","expires_in":0}"#,
         ] {
-            assert!(parse_token_document(CloudProvider::GoogleDrive, invalid, true).is_err());
+            assert!(parse_token_document(CloudProvider::GoogleDrive, GOOGLE_READ_SCOPE, invalid, true).is_err());
         }
     }
 }
