@@ -4,6 +4,8 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(test)]
+use disksage_lib::git_worktree::MAX_REFERENCE_BYTES;
 use disksage_lib::git_worktree::{
     audit_git_worktrees, public_summary, validate_reference, GitWorktreeAuditOptions,
 };
