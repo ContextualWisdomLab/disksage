@@ -16,7 +16,7 @@ a provider, attests synchronization, or authorizes local source eviction.
 
 ## Contract
 
-`disksage.naruon.cloud-copy-readiness` version 5 contains:
+`disksage.naruon.cloud-copy-readiness` version 7 contains:
 
 - provider and destination account scope;
 - the DiskSage decision-batch fingerprint;
@@ -29,7 +29,11 @@ a provider, attests synchronization, or authorizes local source eviction.
 - the complete path-free provider-client runtime snapshot;
 - the complete provider-authoritative capacity assessment;
 - for iCloud, waiting and active upload queue counts/bytes plus the remaining
-  admission blocker inputs.
+  admission blocker inputs and a bounded native `brctl status` summary
+  (`needs-sync-up` and `needs-sync-down` are blockers, even when the private queue is quiet).
+- for iCloud, the path-free, integrity-checked three-stream pre-copy evidence cohort and an
+  explicit `pre_copy_evidence_met` binding; a missing, incomplete, stale, or tampered cohort
+  blocks readiness even when the provider queue is quiet.
 - for OneDrive and Google Drive, bounded provider-wide File Provider transfer
   and indexing state, without retaining provider paths or filenames.
 
@@ -53,9 +57,10 @@ DiskSage starts with the existing per-candidate transfer blockers. It then adds:
    satisfied;
 2. the capacity blocker obtained by reassessing that candidate against the
    exported authoritative snapshot and reserve;
-3. for iCloud, every current queue blocker, or
+3. for iCloud, every current queue/native-status blocker, or
    `icloud-new-copy-admission-evidence-unavailable` when the immutable local
-   probe cannot be obtained.
+   probe cannot be obtained, plus `pre-copy-evidence-cohort-unavailable` when
+   the three-stream freshness/integrity cohort is missing or incomplete.
 4. for OneDrive and Google Drive, every provider-global-sync blocker, or
    `provider-global-sync-evidence-unavailable` when the bounded dump cannot be
    obtained.
@@ -74,7 +79,7 @@ cross-runtime Unicode normalization ambiguity.
 
 The known Rust test vector for the fixed OneDrive fixture is:
 
-`9746455ea407b33b50daa408076223892894dfe0a105cc0a53d9af9b95bcae11`
+`958f7a8e2e595f119bfd38f0ee231436217e3cb97c4d2745fdcfb5e29b5a299c`
 
 Naruon must reconstruct the same canonical form and digest. It must also
 recompute all semantic invariants; accepting a newly signed contradiction is
@@ -103,9 +108,9 @@ cloud account.
 
 OneDrive and Google Drive capacity remains unavailable without an existing
 DiskSage read-only OAuth connection descriptor and credential. iCloud uses
-Apple's bounded native quota client and the separate immutable CloudDocs
-queue probe. Unavailable evidence is retained as a blocker rather than guessed
-from local APFS free space.
+Apple's bounded native quota client, immutable CloudDocs queue snapshot, and a
+bounded read-only `brctl status` summary; timeout or missing native output is
+retained as evidence-incomplete rather than guessed from local APFS free space.
 
 ## Integration boundary
 

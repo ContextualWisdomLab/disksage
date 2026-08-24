@@ -472,6 +472,8 @@ mod tests {
             candidates,
             exact_duplicates: ExactDuplicateSummary::default(),
             capacity: None,
+            local_volume: None,
+            pre_copy_evidence: None,
             notices: vec!["dry-run-only".into()],
         }
     }
