@@ -243,4 +243,29 @@ mod tests {
         assert!(write_create_new(&path, b"changed").is_err());
         assert_eq!(std::fs::read(path).unwrap(), b"{}");
     }
+
+    #[test]
+    #[cfg(unix)]
+    fn output_parent_authority_is_rechecked_at_publication_time() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let parent = directory.path().join("audit-parent");
+        std::fs::create_dir(&parent).unwrap();
+        let path = parent.join("audit.json");
+        validate_output_parent(&path).unwrap();
+
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o720)).unwrap();
+        let result = write_create_new(&path, b"{}");
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert_eq!(
+            result.unwrap_err(),
+            "provider-client-runtime-output-parent-writable-by-others"
+        );
+        assert!(
+            !path.exists(),
+            "authority drift after argument admission must not receive an audit artifact"
+        );
+    }
 }
