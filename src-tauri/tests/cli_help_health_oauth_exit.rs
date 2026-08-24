@@ -29,7 +29,9 @@ fn assert_help_success(binary: &str, flag: &str, expected_usage: &str) {
 
 fn assert_invalid_argument_is_bounded(binary: &str, arguments: &[&str]) {
     let output = Command::new(binary)
-        .env_remove("HOME")
+        // Keep HOME available so mixed help+invalid invocations exercise argument validation,
+        // rather than the unrelated environment-authority failure path.
+        .env("HOME", "/private/tmp/disksage-cli-test-home")
         .args(arguments)
         .output()
         .expect("DiskSage operational CLI must launch for invalid argument validation");
