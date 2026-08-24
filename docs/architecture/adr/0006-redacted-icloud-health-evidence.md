@@ -186,3 +186,10 @@ The growing aggregate backlog is consistent with the Finder “preparing to copy
 not identify the seven Finder items or attest a cloud write. DiskSage therefore continues to keep
 `provider_sync_attested=false`, `local_eviction_authorized=false`, and `mutation_performed=false`;
 the probe performed no Finder, provider, source, or cloud mutation.
+
+## Decision maintenance — 2026-08-24 16:03
+
+The latest product review queue keeps the same safety decision: #247 is ready for review at
+`59057c08eb5017ac57b640419a0c7e4779f443d7`, but queued checks and protected approvals are not yet
+complete. The health evidence remains diagnostic only; no readiness, review, or queue state can
+promote aggregate iCloud evidence into per-item upload attestation or local-eviction authority.

@@ -1167,3 +1167,16 @@ checks are not reused:
   a cloud/data mutation. The central repair remains subject to a fresh authoritative same-head
   Strix run and protected approvals; DiskSage's local iCloud admission and eviction gates are
   unaffected and remain fail-closed.
+
+## 2026-08-24 16:03 +0900 exact-head review queue refresh
+
+- DiskSage #227 is ready for review at `fd841e9e6b76dc2d47d62d2fddabe53eecf544b2`; its current
+  review threads are resolved, macOS bound-root passed, and the remaining hosted checks plus the
+  two independent protected approvals are still required.
+- DiskSage #247 is ready for review at `59057c08eb5017ac57b640419a0c7e4779f443d7`; the iCloud
+  indexing evidence and customer-facing admission messages are in the exact ancestry. Checks are
+  queued and no protected approval is present.
+- DiskSage #246 is ready for review at `308be49b56d1c38fbe9a5c00ab46ac2b3e51df73`; frontend
+  accessibility/Storybook checks were locally verified, while its hosted Strix result remains an
+  external provider gate that must be freshly revalidated. #244 remains open/non-draft with its
+  pinned Rust baseline checks queued. No merge is inferred from readiness or queued checks.
