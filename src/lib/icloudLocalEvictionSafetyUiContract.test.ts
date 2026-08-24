@@ -23,9 +23,21 @@ describe("iCloud local eviction safety UI", () => {
   it("keeps customer next actions bounded for each native-state failure path", () => {
     const source = readSource();
 
-    expect(source).toContain("iCloud 파일 선택을 완료하지 못했습니다. 다시 시도하십시오.");
-    expect(source).toContain("iCloud 로컬 사본 상태를 확인하지 못했습니다. 다시 시도하십시오.");
-    expect(source).toContain("iCloud 로컬 사본을 회수하지 못했습니다. 상태를 다시 확인하십시오.");
+    expect(source).toContain("파일 선택 창을 열지 못했습니다.");
+    expect(source).toContain("iCloud 로컬 사본 상태를 확인하지 못했습니다.");
+    expect(source).toContain("iCloud 로컬 사본 축출을 실행하지 못했습니다.");
     expect(source).toContain("function blockerSummary");
+  });
+
+  it("retains provider-aware progress and deduplicated blocker feedback", () => {
+    const source = readSource();
+
+    expect(source).toContain("function uploadLabel");
+    expect(source).toContain("업로드 중");
+    expect(source).toContain("function syncLabel");
+    expect(source).toContain("공급자 상태");
+    expect(source).toContain("new Set(blockers.map(blockerLabel))");
+    expect(source).toContain("blockerSummary(plan.blockers)");
+    expect(source).not.toContain("plan.blockers.join(\", \")");
   });
 });
