@@ -15,6 +15,7 @@ use disksage_lib::incomplete_download_recovery::{
     validate_incomplete_download_recovery, RecoveryValidationLimits,
 };
 use disksage_lib::provider_capacity::{collect_icloud_native_capacity, CloudCapacitySnapshot};
+use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
@@ -65,7 +66,20 @@ fn usage() -> String {
     )
 }
 
-fn parse_args(raw: &[String]) -> Result<Args, String> {
+fn next_value(raw: &[OsString], index: &mut usize, flag: &str) -> Result<OsString, String> {
+    *index += 1;
+    raw.get(*index)
+        .cloned()
+        .ok_or_else(|| format!("{flag} 값이 필요함"))
+}
+
+fn next_text_value(raw: &[OsString], index: &mut usize, flag: &str) -> Result<String, String> {
+    next_value(raw, index, flag)?
+        .into_string()
+        .map_err(|_| format!("{flag} 값은 UTF-8 텍스트여야 함"))
+}
+
+fn parse_args(raw: &[OsString]) -> Result<Args, String> {
     let mut source_root = None;
     let mut destination_plan = None;
     let mut confirmed_plan_fingerprint = None;
@@ -79,51 +93,64 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     let mut execute = false;
     let mut index = 0usize;
     while index < raw.len() {
-        let value = |index: &mut usize, flag: &str| -> Result<String, String> {
-            *index += 1;
-            raw.get(*index)
-                .cloned()
-                .ok_or_else(|| format!("{flag} 값이 필요함"))
-        };
-        match raw[index].as_str() {
+        let option = raw[index]
+            .to_str()
+            .ok_or_else(|| "incomplete-download-materialize-unknown-argument".to_string())?;
+        match option {
             "--source-root" => {
                 if source_root.is_some() {
                     return Err("--source-root는 한 번만 지정할 수 있음".into());
                 }
-                source_root = Some(PathBuf::from(value(&mut index, "--source-root")?));
+                source_root = Some(PathBuf::from(next_value(
+                    raw,
+                    &mut index,
+                    "--source-root",
+                )?));
             }
             "--destination-plan" => {
                 if destination_plan.is_some() {
                     return Err("--destination-plan은 한 번만 지정할 수 있음".into());
                 }
-                destination_plan = Some(PathBuf::from(value(&mut index, "--destination-plan")?));
+                destination_plan = Some(PathBuf::from(next_value(
+                    raw,
+                    &mut index,
+                    "--destination-plan",
+                )?));
             }
             "--confirm-plan-fingerprint" => {
                 if confirmed_plan_fingerprint.is_some() {
                     return Err("--confirm-plan-fingerprint는 한 번만 지정할 수 있음".into());
                 }
-                confirmed_plan_fingerprint = Some(value(&mut index, "--confirm-plan-fingerprint")?);
+                confirmed_plan_fingerprint = Some(next_text_value(
+                    raw,
+                    &mut index,
+                    "--confirm-plan-fingerprint",
+                )?);
             }
             "--receipt-dir" => {
                 if receipt_dir.is_some() {
                     return Err("--receipt-dir은 한 번만 지정할 수 있음".into());
                 }
-                receipt_dir = Some(PathBuf::from(value(&mut index, "--receipt-dir")?));
+                receipt_dir = Some(PathBuf::from(next_value(
+                    raw,
+                    &mut index,
+                    "--receipt-dir",
+                )?));
             }
             "--approved-by" => {
                 if approved_by.is_some() {
                     return Err("--approved-by는 한 번만 지정할 수 있음".into());
                 }
-                approved_by = Some(value(&mut index, "--approved-by")?);
+                approved_by = Some(next_text_value(raw, &mut index, "--approved-by")?);
             }
             "--rationale" => {
                 if rationale.is_some() {
                     return Err("--rationale은 한 번만 지정할 수 있음".into());
                 }
-                rationale = Some(value(&mut index, "--rationale")?);
+                rationale = Some(next_text_value(raw, &mut index, "--rationale")?);
             }
             "--max-entries" => {
-                let parsed = value(&mut index, "--max-entries")?
+                let parsed = next_text_value(raw, &mut index, "--max-entries")?
                     .parse::<usize>()
                     .map_err(|_| "--max-entries는 양의 정수여야 함".to_string())?;
                 if parsed == 0 || parsed > DEFAULT_MAX_ENTRIES {
@@ -134,7 +161,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 max_entries = parsed;
             }
             "--stale-after-days" => {
-                let parsed = value(&mut index, "--stale-after-days")?
+                let parsed = next_text_value(raw, &mut index, "--stale-after-days")?
                     .parse::<u64>()
                     .map_err(|_| "--stale-after-days는 양의 정수여야 함".to_string())?;
                 if !(1..=MAX_STALE_AFTER_DAYS).contains(&parsed) {
@@ -154,7 +181,11 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 if capacity_snapshot.is_some() {
                     return Err("--capacity-snapshot은 한 번만 지정할 수 있음".into());
                 }
-                capacity_snapshot = Some(PathBuf::from(value(&mut index, "--capacity-snapshot")?));
+                capacity_snapshot = Some(PathBuf::from(next_value(
+                    raw,
+                    &mut index,
+                    "--capacity-snapshot",
+                )?));
             }
             "--execute" => {
                 if execute {
@@ -295,17 +326,14 @@ fn verify_discovered_cloud_root(
     Ok(())
 }
 
-#[cfg(not(coverage))]
 fn run() -> Result<(), String> {
-    let raw = std::env::args_os()
-        .skip(1)
-        .map(|argument| {
-            argument
-                .into_string()
-                .map_err(|_| "incomplete-download-materialize-unknown-argument".to_string())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    if raw.len() == 1 && matches!(raw[0].as_str(), "--help" | "-h") {
+    let raw = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if raw.len() == 1
+        && matches!(
+            raw.first().map(OsString::as_os_str),
+            Some(argument) if argument == OsStr::new("--help") || argument == OsStr::new("-h")
+        )
+    {
         println!("{}", usage());
         return Ok(());
     }
@@ -324,17 +352,16 @@ fn run() -> Result<(), String> {
     verify_discovered_cloud_root(&home, &plan)?;
 
     let capacity_observed_at_ms = system_now_ms();
-    let capacity =
-        if args.live_icloud_capacity {
-            if plan.provider != CloudProvider::Icloud {
-                return Err("live-icloud-capacity-requires-icloud-plan".into());
-            }
-            collect_icloud_native_capacity(capacity_observed_at_ms)?
-        } else {
-            read_capacity_snapshot(args.capacity_snapshot.as_deref().ok_or_else(|| {
-                "materialization-execution-capacity-snapshot-missing".to_string()
-            })?)?
-        };
+    let capacity = if args.live_icloud_capacity {
+        if plan.provider != CloudProvider::Icloud {
+            return Err("live-icloud-capacity-requires-icloud-plan".into());
+        }
+        collect_icloud_native_capacity(capacity_observed_at_ms)?
+    } else {
+        read_capacity_snapshot(args.capacity_snapshot.as_deref().ok_or_else(|| {
+            "materialization-execution-capacity-snapshot-missing".to_string()
+        })?)?
+    };
 
     let audit = collect_incomplete_download_audit(
         &args.source_root,
@@ -381,7 +408,6 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(coverage))]
 fn main() {
     if let Err(error) = run() {
         eprintln!("DiskSage incomplete download materialization execution: {error}");
@@ -389,21 +415,18 @@ fn main() {
     }
 }
 
-#[cfg(coverage)]
-fn main() {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn required() -> Vec<String> {
+    fn required() -> Vec<OsString> {
         vec![
             "--source-root".into(),
             "/source".into(),
             "--destination-plan".into(),
             "/private/plan.json".into(),
             "--confirm-plan-fingerprint".into(),
-            "a".repeat(64),
+            "a".repeat(64).into(),
             "--receipt-dir".into(),
             "/private/receipts".into(),
             "--approved-by".into(),
@@ -427,7 +450,7 @@ mod tests {
     #[test]
     fn rejects_missing_execute_bad_attribution_and_ambiguous_capacity() {
         let mut missing_execute = required();
-        missing_execute.retain(|value| value != "--execute");
+        missing_execute.retain(|value| value != OsStr::new("--execute"));
         missing_execute.push("--live-icloud-capacity".into());
         assert!(parse_args(&missing_execute).is_err());
 
@@ -442,7 +465,7 @@ mod tests {
         let mut bad_attribution = required();
         let position = bad_attribution
             .iter()
-            .position(|value| value == "human:test")
+            .position(|value| value == OsStr::new("human:test"))
             .unwrap();
         bad_attribution[position] = "agent:test".into();
         bad_attribution.push("--live-icloud-capacity".into());
