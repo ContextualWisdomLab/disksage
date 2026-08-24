@@ -8,6 +8,12 @@ pub struct BaseDirs {
     pub home: PathBuf,
 }
 
+fn absolute_env_path(name: &str) -> Option<PathBuf> {
+    std::env::var_os(name)
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+}
+
 impl BaseDirs {
     pub fn from_env() -> Option<BaseDirs> {
         let home = std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).ok()?;
@@ -19,7 +25,7 @@ impl BaseDirs {
         #[cfg(windows)]
         let local_data = std::env::var("LOCALAPPDATA").map(PathBuf::from).ok()?;
         #[cfg(not(windows))]
-        let local_data = home.join(".cache");
+        let local_data = absolute_env_path("XDG_CACHE_HOME").unwrap_or_else(|| home.join(".cache"));
         Some(BaseDirs { temp, local_data, home })
     }
 }
@@ -31,6 +37,22 @@ pub struct CacheCandidate {
     pub path: String,
     pub bytes: u64,
     pub exists: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CacheTarget {
+    pub path: String,
+    pub bytes: u64,
+    pub modified_ms: u64,
+    pub object_id: String,
+}
+
+const MAX_CACHE_TARGETS: usize = 4_096;
+
+fn is_disksage_trash_staging(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with(".disksage-trash-"))
 }
 
 /// 정적 캐시 카탈로그 (스펙 §4 rules). 항목 = (id, 라벨, 베이스 기준 상대경로).
@@ -59,7 +81,65 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
         ("pip-cache", "pip 캐시", pip),
         ("cargo-registry-cache", "cargo 레지스트리 캐시",
             bases.home.join(".cargo").join("registry").join("cache")),
+        ("cargo-registry-source", "cargo 레지스트리 소스 캐시",
+            bases.home.join(".cargo").join("registry").join("src")),
     ];
+
+    #[cfg(target_os = "macos")]
+    let uv = absolute_env_path("UV_CACHE_DIR").unwrap_or_else(|| bases.local_data.join("uv"));
+    #[cfg(target_os = "macos")]
+    let huggingface = absolute_env_path("HF_HUB_CACHE")
+        .or_else(|| absolute_env_path("HF_HOME").map(|path| path.join("hub")))
+        .unwrap_or_else(|| bases.local_data.join("huggingface"));
+    #[cfg(target_os = "macos")]
+    entries.extend([
+        ("uv-cache", "uv 캐시", uv),
+        ("huggingface-cache", "Hugging Face 캐시", huggingface),
+        ("codex-runtimes-cache", "Codex 런타임 캐시", bases.local_data.join("codex-runtimes")),
+        ("gradle-cache", "Gradle 캐시", bases.home.join(".gradle").join("caches")),
+        ("macos-app-support-cache", "macOS 응용 프로그램 업데이트 캐시",
+            bases.home.join("Library").join("Application Support").join("Caches")),
+        (
+            "pnpm-cache",
+            "pnpm 캐시",
+            bases.home.join("Library").join("Caches").join("pnpm"),
+        ),
+        (
+            "node-cache",
+            "Node.js 캐시",
+            bases.local_data.join("node"),
+        ),
+        (
+            "torch-cache",
+            "PyTorch 캐시",
+            bases.local_data.join("torch"),
+        ),
+        (
+            "prisma-cache",
+            "Prisma 캐시",
+            bases.local_data.join("prisma"),
+        ),
+        (
+            "gh-cache",
+            "GitHub CLI 캐시",
+            bases.local_data.join("gh"),
+        ),
+        (
+            "adobe-cache",
+            "Adobe 캐시",
+            bases.home.join("Library").join("Caches").join("Adobe"),
+        ),
+        (
+            "edge-cache",
+            "Microsoft Edge 캐시",
+            bases.home.join("Library").join("Caches").join("Microsoft Edge"),
+        ),
+        (
+            "trivy-cache",
+            "Trivy 취약점 스캔 캐시",
+            bases.home.join("Library").join("Caches").join("trivy"),
+        ),
+    ]);
 
     // Windows 진단 캐시 — 조용히 수십 GB로 자라는 것들. RDP 자동 추적(RdClientAutoTrace)의 .etl 로그가
     // 대표적: 원격 접속 세션마다 쌓여 재발하므로, os-temp에 묻어두지 않고 명명 항목으로 노출해
@@ -209,12 +289,24 @@ impl CatalogRoot {
     }
 
     fn directory_size(&self) -> u64 {
+        #[cfg(target_os = "macos")]
+        {
+            return self.directory_size_from_handle();
+        }
+
+        #[cfg(not(target_os = "macos"))]
         let Some(stable) = self.stable_path() else { return 0 };
+        #[cfg(not(target_os = "macos"))]
         let Ok(entries) = std::fs::read_dir(stable) else { return 0 };
+        #[cfg(not(target_os = "macos"))]
         let mut bytes = 0u64;
 
+        #[cfg(not(target_os = "macos"))]
         for entry in entries.filter_map(Result::ok) {
             let path = entry.path();
+            if is_disksage_trash_staging(&path) {
+                continue;
+            }
             let Ok(metadata) = std::fs::symlink_metadata(&path) else { continue };
             if metadata.file_type().is_symlink() {
                 continue;
@@ -237,17 +329,29 @@ impl CatalogRoot {
             }
         }
 
+        #[cfg(not(target_os = "macos"))]
         bytes
     }
 
     fn child_paths(&self) -> Vec<PathBuf> {
+        #[cfg(target_os = "macos")]
+        {
+            return self.child_paths_from_handle();
+        }
+
+        #[cfg(not(target_os = "macos"))]
         let Some(stable) = self.stable_path() else { return Vec::new() };
+        #[cfg(not(target_os = "macos"))]
         let Ok(entries) = std::fs::read_dir(stable) else { return Vec::new() };
 
+        #[cfg(not(target_os = "macos"))]
         entries
             .filter_map(Result::ok)
             .filter_map(|entry| {
                 let stable_child = entry.path();
+                if is_disksage_trash_staging(&stable_child) {
+                    return None;
+                }
                 let metadata = std::fs::symlink_metadata(&stable_child).ok()?;
                 if metadata.file_type().is_symlink() {
                     return None;
@@ -262,6 +366,106 @@ impl CatalogRoot {
                 }
                 Some(self.display_path.join(entry.file_name()))
             })
+            .collect()
+    }
+
+    #[cfg(target_os = "macos")]
+    fn directory_entries(&self) -> Option<Vec<std::ffi::OsString>> {
+        use std::ffi::CStr;
+        use std::os::fd::IntoRawFd;
+        use std::os::unix::ffi::OsStringExt;
+
+        let fd = self.handle.as_file().try_clone().ok()?.into_raw_fd();
+        if unsafe { libc::lseek(fd, 0, libc::SEEK_SET) } < 0 {
+            unsafe { libc::close(fd) };
+            return None;
+        }
+        let directory = unsafe { libc::fdopendir(fd) };
+        if directory.is_null() {
+            unsafe { libc::close(fd) };
+            return None;
+        }
+
+        let mut names = Vec::new();
+        loop {
+            let entry = unsafe { libc::readdir(directory) };
+            if entry.is_null() {
+                break;
+            }
+            let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
+            if name != b"." && name != b".." {
+                names.push(std::ffi::OsString::from_vec(name.to_vec()));
+            }
+        }
+        unsafe { libc::closedir(directory) };
+        Some(names)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn open_child(&self, entry_name: &std::ffi::OsStr) -> Option<(CatalogRoot, std::fs::Metadata)> {
+        use std::ffi::CString;
+        use std::os::fd::{AsRawFd, FromRawFd};
+        use std::os::unix::ffi::OsStrExt;
+
+        let name = CString::new(entry_name.as_bytes()).ok()?;
+        let fd = unsafe {
+            libc::openat(
+                self.handle.as_file().as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
+            )
+        };
+        if fd < 0 {
+            return None;
+        }
+
+        let file = unsafe { std::fs::File::from_raw_fd(fd) };
+        let metadata = file.metadata().ok()?;
+        if metadata.file_type().is_symlink() {
+            return None;
+        }
+        let handle = Handle::from_file(file).ok()?;
+        let mut display_path = self.display_path.clone();
+        display_path.push(entry_name);
+        Some((
+            CatalogRoot {
+                handle,
+                display_path,
+            },
+            metadata,
+        ))
+    }
+
+    #[cfg(target_os = "macos")]
+    fn directory_size_from_handle(&self) -> u64 {
+        let Some(names) = self.directory_entries() else {
+            return 0;
+        };
+        names
+            .into_iter()
+            .filter(|name| !is_disksage_trash_staging(&self.display_path.join(name)))
+            .filter_map(|name| {
+                let (child, metadata) = self.open_child(&name)?;
+                if metadata.is_file() {
+                    Some(metadata.len())
+                } else if metadata.is_dir() {
+                    Some(child.directory_size())
+                } else {
+                    None
+                }
+            })
+            .fold(0u64, u64::saturating_add)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn child_paths_from_handle(&self) -> Vec<PathBuf> {
+        let Some(names) = self.directory_entries() else {
+            return Vec::new();
+        };
+        names
+            .into_iter()
+            .filter(|name| !is_disksage_trash_staging(&self.display_path.join(name)))
+            .filter_map(|name| self.open_child(&name).map(|(child, _)| child.display_path))
             .collect()
     }
 }
@@ -295,6 +499,50 @@ pub fn clean_targets(dir: &Path) -> Vec<PathBuf> {
     CatalogRoot::open(dir)
         .map(|root| root.child_paths())
         .unwrap_or_default()
+}
+
+fn modified_ms(metadata: &std::fs::Metadata) -> u64 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+        .and_then(|value| u64::try_from(value.as_millis()).ok())
+        .unwrap_or(0)
+}
+
+/// Return the exact direct children that a cache cleanup approval may move to Trash.
+/// The object identity, size, and modification timestamp bind the later mutation to this snapshot.
+pub fn cache_targets(dir: &Path) -> Result<Vec<CacheTarget>, String> {
+    let root = CatalogRoot::open(dir).ok_or("cache-root-not-current-or-safe")?;
+    let paths = root.child_paths();
+    if paths.len() > MAX_CACHE_TARGETS {
+        return Err("cache-target-limit-exceeded".into());
+    }
+    let mut targets = Vec::with_capacity(paths.len());
+    for path in paths {
+        let metadata = std::fs::symlink_metadata(&path)
+            .map_err(|_| "cache-target-metadata-unavailable".to_string())?;
+        if metadata.file_type().is_symlink() || !(metadata.is_file() || metadata.is_dir()) {
+            continue;
+        }
+        let bytes = if metadata.is_dir() {
+            CatalogRoot::open(&path)
+                .ok_or_else(|| "cache-target-directory-unavailable".to_string())?
+                .directory_size()
+        } else {
+            metadata.len()
+        };
+        let object_id = crate::safety::filesystem_object_id(&path)
+            .map_err(|_| "cache-target-identity-unavailable".to_string())?;
+        targets.push(CacheTarget {
+            path: path.to_string_lossy().into_owned(),
+            bytes,
+            modified_ms: modified_ms(&metadata),
+            object_id,
+        });
+    }
+    targets.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(targets)
 }
 
 #[cfg(test)]
@@ -335,6 +583,8 @@ mod tests {
         let temp_c = cands.iter().find(|c| c.id == "os-temp").unwrap();
         assert!(!temp_c.exists);
         assert_eq!(temp_c.bytes, 0);
+        let cargo_source = cands.iter().find(|c| c.id == "cargo-registry-source").unwrap();
+        assert!(cargo_source.path.ends_with(".cargo/registry/src"));
         // 카탈로그에 최소 4개 규칙
         assert!(cands.len() >= 4);
     }
@@ -352,6 +602,48 @@ mod tests {
         let rdp = cands.iter().find(|c| c.id == "rdp-autotrace").unwrap();
         assert!(rdp.path.contains("RdClientAutoTrace"));
         assert!(cands.len() >= 7);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn catalog_includes_macos_app_support_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bases = fake_bases(tmp.path());
+        let cands = cache_candidates(&bases);
+        let candidate = cands
+            .iter()
+            .find(|candidate| candidate.id == "macos-app-support-cache")
+            .expect("macOS application-support cache must be catalogued");
+        assert!(candidate.path.ends_with("Library/Application Support/Caches"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn catalog_includes_observed_regenerable_macos_caches() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bases = fake_bases(tmp.path());
+        let candidates = cache_candidates(&bases);
+        for (id, suffix) in [
+            ("pnpm-cache", "Library/Caches/pnpm"),
+            ("node-cache", "local/node"),
+            ("torch-cache", "local/torch"),
+            ("prisma-cache", "local/prisma"),
+            ("gh-cache", "local/gh"),
+            ("adobe-cache", "Library/Caches/Adobe"),
+            ("edge-cache", "Library/Caches/Microsoft Edge"),
+            ("trivy-cache", "Library/Caches/trivy"),
+        ] {
+            let candidate = candidates
+                .iter()
+                .find(|candidate| candidate.id == id)
+                .unwrap_or_else(|| panic!("{id} cache must be catalogued"));
+            assert!(candidate.path.ends_with(suffix), "{id}");
+        }
+        let uv = candidates
+            .iter()
+            .find(|candidate| candidate.id == "uv-cache")
+            .expect("uv cache must be catalogued");
+        assert!(uv.path.ends_with("local/uv"));
     }
 
     #[test]
@@ -376,6 +668,43 @@ mod tests {
             .collect();
         names.sort();
         assert_eq!(names, vec!["a", "b.bin"]);
+    }
+
+    #[test]
+    fn cache_targets_bind_identity_size_and_mtime() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir(tmp.path().join("nested")).unwrap();
+        fs::write(tmp.path().join("nested").join("deep.bin"), b"deep").unwrap();
+        fs::write(tmp.path().join("blob.bin"), b"blob").unwrap();
+
+        let targets = cache_targets(tmp.path()).unwrap();
+        assert_eq!(targets.len(), 2);
+        assert!(targets.iter().all(|target| !target.object_id.is_empty()));
+        assert!(targets.iter().all(|target| target.modified_ms > 0));
+        assert_eq!(
+            targets
+                .iter()
+                .find(|target| target.path.ends_with("nested"))
+                .unwrap()
+                .bytes,
+            4
+        );
+    }
+
+    #[test]
+    fn cache_targets_ignore_disksage_trash_staging() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("keep.bin"), b"keep").unwrap();
+        fs::create_dir(tmp.path().join(".disksage-trash-fixture")).unwrap();
+        fs::write(
+            tmp.path().join(".disksage-trash-fixture").join("staged.bin"),
+            b"staged",
+        )
+        .unwrap();
+
+        let targets = cache_targets(tmp.path()).unwrap();
+        assert_eq!(targets.len(), 1);
+        assert!(targets[0].path.ends_with("keep.bin"));
     }
 
     #[test]
