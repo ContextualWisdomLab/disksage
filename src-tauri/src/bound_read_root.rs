@@ -235,8 +235,44 @@ mod tests {
         std::fs::create_dir(&selected).unwrap();
         std::fs::write(selected.join("marker.txt"), b"replacement").unwrap();
 
-        assert_eq!(std::fs::read(stable.join("marker.txt")).unwrap(), b"original");
-        assert!(guard.canonical_path().is_none());
+        // Linux keeps traversing through the live descriptor, so the already-captured
+        // stable namespace must continue to resolve to the originally opened directory
+        // object and still observe the original file bytes.
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            std::fs::read(stable.join("marker.txt")).unwrap(),
+            b"original"
+        );
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            // macOS resolves the opened descriptor with F_GETPATH, which follows a
+            // rename: the stable namespace must therefore keep naming the SAME bound
+            // object (now at its renamed location) instead of silently resolving into
+            // the replacement directory that reused the caller pathname. Windows
+            // blocks the rename entirely and has its own guard test.
+            let followed = guard
+                .stable_path()
+                .expect("stable namespace must stay identity-bound across rename");
+            assert_ne!(
+                std::path::Path::new(&followed),
+                root.path().join("selected"),
+                "stable namespace must not resolve into the pathname that was replaced"
+            );
+            assert_eq!(
+                std::fs::read(followed.join("marker.txt")).unwrap(),
+                b"original",
+                "the object observed through the stable namespace must remain the bound one"
+            );
+        }
+
+        // Every platform must fail closed once the caller pathname no longer names the
+        // bound directory identity: the replacement directory at the old name must never
+        // be mistaken for the bound evidence root.
+        assert!(
+            guard.canonical_path().is_none(),
+            "caller pathname replacement must fail closed even when a new directory occupies it"
+        );
     }
 
     #[cfg(windows)]
