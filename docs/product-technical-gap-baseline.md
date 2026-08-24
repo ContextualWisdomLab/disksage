@@ -1189,3 +1189,14 @@ checks are not reused:
 - File Provider pending indexable items reached 131,214; disk import, transfer activity, and the
   28 filename/2 root exclusions remain. This is aggregate reconciliation evidence, not proof that
   the seven Finder items were uploaded. No provider, Finder, source, or cloud mutation occurred.
+
+## 2026-08-24 16:08 +0900 review metadata and exact-head repair
+
+- DiskSage #244 keeps exact head `13caeb04333e50e57c8a51a11b64aeb131c080b2` with all review threads
+  resolved. Its PR description now matches the supported Dependabot configuration and records the
+  local pinned Rust documentation-test evidence without claiming a full hosted pass; checks and
+  protected approvals remain pending.
+- DiskSage #227 advanced to `bf62ea0d74f077add672d0a193de154bde910b97` with a platform-specific
+  test-warning cleanup; its prior bound-root test passed 4/4 locally and hosted checks restarted.
+- DiskSage #247 remains ready for review at `1535320c2b8b288376d9dcd35485a2af58374873`; its latest
+  iCloud evidence is exact-head and all copy/attestation/eviction mutations remain disabled.
