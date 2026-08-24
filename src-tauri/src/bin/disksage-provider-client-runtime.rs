@@ -211,14 +211,24 @@ mod tests {
     #[test]
     fn output_argument_must_be_absolute_and_unique() {
         assert!(parse_args(&[]).unwrap().output.is_none());
-        assert!(parse_args(&["--output".into(), "relative.json".into()]).is_err());
-        assert!(parse_args(&[
-            "--output".into(),
-            "/tmp/one.json".into(),
-            "--output".into(),
-            "/tmp/two.json".into(),
-        ])
-        .is_err());
+        assert_eq!(
+            parse_args(&["--output".into(), "relative.json".into()]).unwrap_err(),
+            "--output must be absolute"
+        );
+
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("one.json").into_os_string();
+        let second = directory.path().join("two.json").into_os_string();
+        assert_eq!(
+            parse_args(&[
+                "--output".into(),
+                first,
+                "--output".into(),
+                second,
+            ])
+            .unwrap_err(),
+            "--output may be supplied once"
+        );
     }
 
     #[test]
