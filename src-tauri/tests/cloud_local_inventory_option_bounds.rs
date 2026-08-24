@@ -8,35 +8,43 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 
-fn build_feature_gated_binary() -> (tempfile::TempDir, PathBuf) {
-    let target_dir = tempfile::tempdir().expect("isolated Cargo target directory must be created");
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
-    let status = Command::new(cargo)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .args([
-            "build",
-            "--locked",
-            "--features",
-            "cloud-cli",
-            "--bin",
-            "disksage-cloud-local-inventory",
-            "--target-dir",
-        ])
-        .arg(target_dir.path())
-        .status()
-        .expect("cloud local-inventory CLI must be buildable for range-admission tests");
-    assert!(status.success(), "feature-gated CLI build must succeed");
+fn binary_path() -> &'static Path {
+    static BINARY_PATH: OnceLock<PathBuf> = OnceLock::new();
+    BINARY_PATH
+        .get_or_init(|| {
+            let target_dir = std::env::temp_dir().join(format!(
+                "disksage-cloud-local-inventory-option-bounds-{}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&target_dir)
+                .expect("isolated Cargo target directory must be created");
+            let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+            let status = Command::new(cargo)
+                .current_dir(env!("CARGO_MANIFEST_DIR"))
+                .args([
+                    "build",
+                    "--locked",
+                    "--features",
+                    "cloud-cli",
+                    "--bin",
+                    "disksage-cloud-local-inventory",
+                    "--target-dir",
+                ])
+                .arg(&target_dir)
+                .status()
+                .expect("cloud local-inventory CLI must be buildable for range-admission tests");
+            assert!(status.success(), "feature-gated CLI build must succeed");
 
-    let binary = target_dir
-        .path()
-        .join("debug")
-        .join(format!(
-            "disksage-cloud-local-inventory{}",
-            std::env::consts::EXE_SUFFIX
-        ));
-    assert!(binary.is_file(), "feature-gated CLI binary must exist");
-    (target_dir, binary)
+            let binary = target_dir.join("debug").join(format!(
+                "disksage-cloud-local-inventory{}",
+                std::env::consts::EXE_SUFFIX
+            ));
+            assert!(binary.is_file(), "feature-gated CLI binary must exist");
+            binary
+        })
+        .as_path()
 }
 
 fn assert_out_of_range(binary: &Path, flag: &str, value: &str, expected: &str) {
@@ -66,7 +74,7 @@ fn assert_out_of_range(binary: &Path, flag: &str, value: &str, expected: &str) {
 
 #[test]
 fn invalid_inventory_limits_fail_before_empty_home_discovery_can_return_success() {
-    let (_target_dir, binary) = build_feature_gated_binary();
+    let binary = binary_path();
 
     for (flag, value, expected) in [
         (
@@ -104,13 +112,13 @@ fn invalid_inventory_limits_fail_before_empty_home_discovery_can_return_success(
             "cloud-local-inventory-max-issues-invalid",
         ),
     ] {
-        assert_out_of_range(&binary, flag, value, expected);
+        assert_out_of_range(binary, flag, value, expected);
     }
 }
 
 #[test]
 fn exact_inventory_limit_ceilings_remain_admitted_through_real_provider_inventory() {
-    let (_target_dir, binary) = build_feature_gated_binary();
+    let binary = binary_path();
     let home = tempfile::tempdir().expect("isolated synthetic provider home must be created");
     std::fs::create_dir(home.path().join("OneDrive"))
         .expect("synthetic OneDrive root must be created");
