@@ -6,6 +6,10 @@ compile_error!("DiskSage supports only Windows, Linux, and macOS targets.");
 mod dupes;
 #[cfg_attr(coverage, allow(dead_code))]
 mod commands;
+#[cfg(test)]
+mod commands_public_tests;
+#[cfg(test)]
+mod commands_env_coverage_tests;
 #[cfg_attr(coverage, allow(dead_code))]
 mod cache_cleanup;
 #[cfg_attr(coverage, allow(dead_code))]
@@ -16,6 +20,14 @@ mod userrules;
 mod settings;
 #[cfg_attr(coverage, allow(dead_code))]
 mod safety;
+#[cfg(test)]
+mod safety_public_tests;
+#[cfg(test)]
+mod safety_edge_coverage_tests;
+#[cfg(test)]
+mod safety_gap_coverage_tests;
+#[cfg(test)]
+mod safety_symlink_guard_coverage_tests;
 #[cfg(all(test, target_os = "macos"))]
 mod macos_temp_guard_tests;
 #[cfg_attr(coverage, allow(dead_code))]
@@ -38,6 +50,13 @@ mod reasoning;
 mod dataset_metadata;
 #[cfg_attr(coverage, allow(dead_code))]
 mod brew_cleanup;
+#[cfg(test)]
+mod brew_cleanup_public_coverage_tests;
+/// Privacy-safe dataset schema and quality evidence returned by the bounded profiler.
+pub use dataset_metadata::{DatasetColumnProfile, DatasetProfile};
+/// Profile a supported local dataset without returning sampled cell values.
+#[cfg(not(coverage))]
+pub use dataset_metadata::profile_dataset;
 pub mod archive_git_tree;
 #[cfg_attr(coverage, allow(dead_code))]
 pub mod cloud;
@@ -52,11 +71,15 @@ pub mod cloud_review;
 pub mod cloud_transfer;
 pub mod content_digest;
 pub mod duplicate_audit;
+#[cfg(all(test, not(coverage)))]
+mod duplicate_audit_integrity_coverage_tests;
 pub mod icloud_sync_health;
 pub mod incomplete_download;
 pub mod incomplete_download_materialization;
 pub mod incomplete_download_materialization_destination;
 pub mod incomplete_download_materialization_execution;
+#[cfg(test)]
+mod incomplete_download_execution_integrity_coverage_tests;
 pub mod incomplete_download_recovery;
 pub mod git_worktree;
 pub mod maven_cache;

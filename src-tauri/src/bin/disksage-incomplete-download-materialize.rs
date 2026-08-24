@@ -162,8 +162,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 }
                 execute = true;
             }
-            "--help" | "-h" => return Err(usage()),
-            flag => return Err(format!("알 수 없는 인자: {flag}")),
+            _unknown => return Err("incomplete-download-materialize-unknown-argument".into()),
         }
         index += 1;
     }
@@ -298,7 +297,19 @@ fn verify_discovered_cloud_root(
 
 #[cfg(not(coverage))]
 fn run() -> Result<(), String> {
-    let args = parse_args(&std::env::args().skip(1).collect::<Vec<_>>())?;
+    let raw = std::env::args_os()
+        .skip(1)
+        .map(|argument| {
+            argument
+                .into_string()
+                .map_err(|_| "incomplete-download-materialize-unknown-argument".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if raw.len() == 1 && matches!(raw[0].as_str(), "--help" | "-h") {
+        println!("{}", usage());
+        return Ok(());
+    }
+    let args = parse_args(&raw)?;
     let plan: IncompleteDownloadDestinationPlan = read_bounded_json(
         &args.destination_plan,
         MAX_PRIVATE_PLAN_BYTES,

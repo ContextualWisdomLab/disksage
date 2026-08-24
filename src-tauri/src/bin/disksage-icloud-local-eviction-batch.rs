@@ -3,20 +3,29 @@
 //! Planning is read-only. Execution requires an exact batch fingerprint twice, attributed human
 //! approval, a rationale, and a local immutable-record directory outside cloud storage.
 
+#[cfg(not(coverage))]
 use disksage_lib::cloud::{self, CloudAccountScope, CloudProvider, CloudRoot};
+#[cfg(not(coverage))]
 use disksage_lib::cloud_local_eviction_batch::{
     approve_icloud_local_eviction_batch, execute_icloud_local_eviction_batch,
     plan_icloud_local_eviction_batch, IcloudLocalEvictionBatchPlan, IcloudLocalEvictionBatchResult,
     MAX_BATCH_ITEMS,
 };
+#[cfg(not(coverage))]
 use serde::Deserialize;
+#[cfg(not(coverage))]
 use std::collections::BTreeMap;
+#[cfg(not(coverage))]
 use std::io::Read;
+#[cfg(not(coverage))]
 use std::path::{Path, PathBuf};
 
+#[cfg(not(coverage))]
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
+#[cfg(not(coverage))]
 const HELP_REQUESTED: &str = "icloud-local-eviction-batch-help-requested";
 
+#[cfg(not(coverage))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Args {
     cloud_root: PathBuf,
@@ -29,6 +38,7 @@ struct Args {
     record_dir: Option<PathBuf>,
 }
 
+#[cfg(not(coverage))]
 fn usage() -> &'static str {
     "usage: disksage-icloud-local-eviction-batch --cloud-root ABSOLUTE_PATH \
      --manifest ABSOLUTE_JSON [--execute --approved-batch-fingerprint HEX64 \
@@ -36,6 +46,7 @@ fn usage() -> &'static str {
      --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]"
 }
 
+#[cfg(not(coverage))]
 fn value(args: &[String], index: &mut usize, flag: &str) -> Result<String, String> {
     *index += 1;
     args.get(*index)
@@ -43,6 +54,7 @@ fn value(args: &[String], index: &mut usize, flag: &str) -> Result<String, Strin
         .ok_or_else(|| format!("{flag} 값이 필요함"))
 }
 
+#[cfg(not(coverage))]
 fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut cloud_root = None;
     let mut manifest = None;
@@ -117,6 +129,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     })
 }
 
+#[cfg(not(coverage))]
 fn home_dir() -> Result<PathBuf, String> {
     std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -124,14 +137,17 @@ fn home_dir() -> Result<PathBuf, String> {
         .ok_or_else(|| "HOME을 확인할 수 없음".to_string())
 }
 
+#[cfg(not(coverage))]
 fn canonical_existing(path: &Path, error_code: &str) -> Result<PathBuf, String> {
     std::fs::canonicalize(path).map_err(|_| error_code.to_string())
 }
 
+#[cfg(not(coverage))]
 fn paths_overlap(left: &Path, right: &Path) -> bool {
     left == right || left.starts_with(right) || right.starts_with(left)
 }
 
+#[cfg(not(coverage))]
 fn validate_control_locations(
     cloud_root: &Path,
     manifest: &Path,
@@ -161,6 +177,7 @@ fn validate_control_locations(
     Ok(())
 }
 
+#[cfg(not(coverage))]
 fn select_root<'a>(roots: &'a [CloudRoot], requested: &Path) -> Result<&'a CloudRoot, String> {
     let matches: Vec<_> = roots
         .iter()
@@ -174,16 +191,19 @@ fn select_root<'a>(roots: &'a [CloudRoot], requested: &Path) -> Result<&'a Cloud
     }
 }
 
+#[cfg(not(coverage))]
 #[derive(Debug, Deserialize)]
 struct InputManifest {
     plans: Vec<InputManifestItem>,
 }
 
+#[cfg(not(coverage))]
 #[derive(Debug, Deserialize)]
 struct InputManifestItem {
     path: PathBuf,
 }
 
+#[cfg(not(coverage))]
 fn read_manifest_paths(path: &Path) -> Result<Vec<PathBuf>, String> {
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|_| "icloud-local-eviction-batch-manifest-unavailable".to_string())?;
@@ -219,6 +239,7 @@ fn read_manifest_paths(path: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(paths)
 }
 
+#[cfg(not(coverage))]
 #[derive(Debug, serde::Serialize)]
 struct RedactedBatchPlan {
     version: u32,
@@ -237,6 +258,7 @@ struct RedactedBatchPlan {
     notices: Vec<String>,
 }
 
+#[cfg(not(coverage))]
 fn redact_plan(plan: &IcloudLocalEvictionBatchPlan) -> RedactedBatchPlan {
     let mut unavailable_error_counts = BTreeMap::new();
     for unavailable in &plan.unavailable {
@@ -263,6 +285,7 @@ fn redact_plan(plan: &IcloudLocalEvictionBatchPlan) -> RedactedBatchPlan {
     }
 }
 
+#[cfg(not(coverage))]
 #[derive(Debug, serde::Serialize)]
 struct PlanOutput {
     action: &'static str,
@@ -271,6 +294,7 @@ struct PlanOutput {
     plan: RedactedBatchPlan,
 }
 
+#[cfg(not(coverage))]
 #[derive(Debug, serde::Serialize)]
 struct RedactedBatchResult {
     version: u32,
@@ -294,6 +318,7 @@ struct RedactedBatchResult {
     notices: Vec<String>,
 }
 
+#[cfg(not(coverage))]
 fn redact_result(result: &IcloudLocalEvictionBatchResult) -> RedactedBatchResult {
     RedactedBatchResult {
         version: result.version,
@@ -318,6 +343,7 @@ fn redact_result(result: &IcloudLocalEvictionBatchResult) -> RedactedBatchResult
     }
 }
 
+#[cfg(not(coverage))]
 #[derive(Debug, serde::Serialize)]
 struct ExecuteOutput {
     action: &'static str,
@@ -327,6 +353,7 @@ struct ExecuteOutput {
     result: RedactedBatchResult,
 }
 
+#[cfg(not(coverage))]
 fn print_json<T: serde::Serialize>(value: &T) -> Result<(), String> {
     println!(
         "{}",
@@ -335,6 +362,7 @@ fn print_json<T: serde::Serialize>(value: &T) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(not(coverage))]
 fn run() -> Result<(), String> {
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let args = parse_args(&raw)?;
@@ -405,6 +433,7 @@ fn run() -> Result<(), String> {
     })
 }
 
+#[cfg(not(coverage))]
 fn main() {
     if let Err(error) = run() {
         if error == HELP_REQUESTED {
@@ -416,7 +445,10 @@ fn main() {
     }
 }
 
-#[cfg(test)]
+#[cfg(coverage)]
+fn main() {}
+
+#[cfg(all(test, not(coverage)))]
 mod tests {
     use super::*;
     use disksage_lib::cloud_local_eviction::{

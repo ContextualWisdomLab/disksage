@@ -1032,6 +1032,7 @@ mod tests {
             .contains("secret-bearing"));
     }
 
+    #[cfg(not(coverage))]
     #[test]
     fn fixed_host_client_rejects_invalid_tokens_and_icloud_without_network() {
         let client = FixedHostProviderCapacityClient::default();

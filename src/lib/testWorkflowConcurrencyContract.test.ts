@@ -1,0 +1,44 @@
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from 'vitest';
+
+const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+
+function readTestWorkflow(): string {
+  return readFileSync(resolve(repositoryRoot, '.github/workflows/test.yml'), 'utf8').replace(
+    /\r\n?/g,
+    '\n',
+  );
+}
+
+describe('Test workflow supersession', () => {
+  it('cancels obsolete first-attempt work for one ref without making reruns self-cancel', () => {
+    const workflow = readTestWorkflow();
+    const concurrencyStart = workflow.indexOf('concurrency:');
+    const permissionsStart = workflow.indexOf('permissions:');
+
+    expect(concurrencyStart).toBeGreaterThanOrEqual(0);
+    expect(permissionsStart).toBeGreaterThan(concurrencyStart);
+
+    const concurrencyBlock = workflow.slice(concurrencyStart, permissionsStart);
+    expect(concurrencyBlock).toContain(
+      'group: test-${{ github.workflow }}-${{ github.ref }}',
+    );
+    expect(concurrencyBlock).toContain(
+      'cancel-in-progress: ${{ github.run_attempt == 1 }}',
+    );
+    expect(concurrencyBlock).not.toContain('github.sha');
+    expect(concurrencyBlock).not.toContain('pull_request.head.sha');
+  });
+
+  it('bounds every Test job so a stuck dependency or native build cannot occupy a runner indefinitely', () => {
+    const workflow = readTestWorkflow();
+
+    for (const jobName of ['test', 'coverage-evidence', 'llm-engine-build']) {
+      expect(workflow).toMatch(
+        new RegExp(`\\n  ${jobName}:\\n    runs-on: ubuntu-latest\\n    timeout-minutes: 60\\n`),
+      );
+    }
+  });
+});
