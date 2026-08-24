@@ -46,6 +46,7 @@ fn duplicate_audit_publishes_to_non_utf8_private_output_without_path_leakage() {
     assert_eq!(summary["private_output"]["unix_mode"], "0600");
     assert_eq!(summary["private_output"]["contains_sensitive_local_paths"], true);
     assert_eq!(summary["private_output"]["is_approval"], false);
+    assert!(summary["private_output"].get("path").is_none());
 
     assert!(private_output.is_file());
     assert_eq!(
@@ -63,12 +64,24 @@ fn duplicate_audit_publishes_to_non_utf8_private_output_without_path_leakage() {
             .any(|window| window == filename_bytes),
         "public evidence must not reflect the native private-output filename"
     );
+    let source_bytes = source.path().as_os_str().as_bytes();
+    assert!(
+        !output
+            .stdout
+            .windows(source_bytes.len())
+            .any(|window| window == source_bytes),
+        "public evidence must not reflect the audited source path"
+    );
 
     let private_bytes = std::fs::read(&private_output).expect("private evidence must be readable");
     let private_json: serde_json::Value =
         serde_json::from_slice(&private_bytes).expect("private evidence must be valid JSON");
     assert_eq!(private_json["schema_version"], 1);
-    assert_eq!(private_json["source_root"], serde_json::Value::Null);
+    assert_eq!(
+        private_json["source_root"].as_str(),
+        source.path().to_str(),
+        "the exact source path belongs only in the private report"
+    );
 
     assert_eq!(private_output.file_name().unwrap().as_bytes(), filename_bytes);
 }
