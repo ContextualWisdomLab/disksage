@@ -144,7 +144,7 @@
       {/if}
 
       {#if execution}
-        <p class:success={execution.status_code === 0} class:error={execution.status_code !== 0}>
+        <p class:success={execution.executed && execution.status_code === 0} class:error={execution.executed && execution.status_code !== 0}>
           {execution.executed
             ? execution.status_code === 0
               ? `실행 성공 (종료 코드 ${execution.status_code})`
