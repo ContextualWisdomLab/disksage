@@ -15,6 +15,8 @@ const MAX_CAPTURE_BYTES: usize = 1_048_576;
 const GIB: u64 = 1_073_741_824;
 const CRITICAL_GUEST_AVAILABLE_BYTES: u64 = 2 * GIB;
 const MATERIAL_ALLOCATION_GAP_BYTES: u64 = 512 * 1_048_576;
+const PODMAN_PRUNE_SCHEMA_VERSION: u32 = 1;
+const PODMAN_PRUNE_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PodmanMachineEvidence {
@@ -123,8 +125,28 @@ pub struct PodmanReclaimPlan {
     pub store: Option<PodmanStoreEvidence>,
     pub system_df: Option<PodmanSystemDfEvidence>,
     pub unused_images: Option<PodmanUnusedImageEvidence>,
+    /// Present only when the fresh evidence contains dangling (untagged, unreferenced) images.
+    pub dangling_prune_approval_phrase: Option<String>,
     pub assessment: PodmanReclaimAssessment,
     pub issues: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PodmanDanglingImagePruneExecution {
+    pub schema_version: u32,
+    pub candidate_set_sha256: String,
+    pub command: Vec<String>,
+    pub status_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+    pub output_truncated: bool,
+    pub executed: bool,
+    pub executed_at_ms: u64,
+    pub before_available_bytes: Option<u64>,
+    pub after_available_bytes: Option<u64>,
+    /// Only a positive before/after available-space delta is reported; it is still attribution-weak.
+    pub observed_available_gain_bytes: Option<u64>,
+    pub rationale: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -177,10 +199,25 @@ struct PodmanImageRecord {
     id: String,
     #[serde(rename = "RepoTags")]
     repo_tags: Option<Vec<String>>,
+    #[serde(rename = "RepoDigests")]
+    repo_digests: Option<Vec<String>>,
+    #[serde(rename = "Names")]
+    names: Option<Vec<String>>,
     #[serde(rename = "Containers")]
     containers: u64,
     #[serde(rename = "Size")]
     size_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UnusedImageCandidate {
+    id: String,
+    tags: Vec<String>,
+    size_bytes: u64,
+}
+
+fn prune_approval_phrase(candidate_set_sha256: &str) -> String {
+    format!("DiskSage Podman dangling image prune 승인 {candidate_set_sha256}")
 }
 
 fn valid_machine_name(value: &str) -> bool {
@@ -334,7 +371,9 @@ fn lower_hex(bytes: &[u8]) -> String {
     encoded
 }
 
-fn parse_podman_images(output: &str) -> Result<PodmanUnusedImageEvidence, String> {
+fn parse_unused_image_candidates(
+    output: &str,
+) -> Result<(u64, u64, Vec<UnusedImageCandidate>), String> {
     let records: Vec<PodmanImageRecord> = serde_json::from_str(output)
         .map_err(|error| format!("invalid-podman-images-json:{error}"))?;
     let total_records =
@@ -351,6 +390,8 @@ fn parse_podman_images(output: &str) -> Result<PodmanUnusedImageEvidence, String
             return Err("podman-images-invalid-id".to_string());
         }
         let mut tags = record.repo_tags.take().unwrap_or_default();
+        tags.extend(record.repo_digests.take().unwrap_or_default());
+        tags.extend(record.names.take().unwrap_or_default());
         tags.sort();
         tags.dedup();
         if record.containers > 0 {
@@ -358,34 +399,46 @@ fn parse_podman_images(output: &str) -> Result<PodmanUnusedImageEvidence, String
                 .checked_add(1)
                 .ok_or_else(|| "podman-images-count-overflow".to_string())?;
         } else {
-            candidates.push((record.id, tags, record.size_bytes));
+            candidates.push(UnusedImageCandidate {
+                id: record.id,
+                tags,
+                size_bytes: record.size_bytes,
+            });
         }
     }
-    candidates.sort_by(|left, right| left.0.cmp(&right.0));
-    if candidates.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+    candidates.sort_by(|left, right| left.id.cmp(&right.id));
+    if candidates.windows(2).any(|pair| pair[0].id == pair[1].id) {
         return Err("podman-images-duplicate-id".to_string());
     }
+    Ok((total_records, referenced_records, candidates))
+}
+
+fn summarize_unused_image_candidates(
+    total_records: u64,
+    referenced_records: u64,
+    candidates: &[UnusedImageCandidate],
+) -> Result<PodmanUnusedImageEvidence, String> {
     let unused_records =
         u64::try_from(candidates.len()).map_err(|_| "podman-images-count-overflow".to_string())?;
     let unused_untagged_records = u64::try_from(
         candidates
             .iter()
-            .filter(|(_, tags, _)| tags.is_empty())
+            .filter(|candidate| candidate.tags.is_empty())
             .count(),
     )
     .map_err(|_| "podman-images-count-overflow".to_string())?;
-    let candidate_record_size_sum = candidates.iter().try_fold(0u64, |total, (_, _, size)| {
+    let candidate_record_size_sum = candidates.iter().try_fold(0u64, |total, candidate| {
         total
-            .checked_add(*size)
+            .checked_add(candidate.size_bytes)
             .ok_or_else(|| "podman-images-size-overflow".to_string())
     })?;
     let mut hasher = Sha256::new();
     hasher.update(b"disksage.podman-unused-images.v1");
-    for (id, tags, size_bytes) in &candidates {
-        hash_frame(&mut hasher, id.as_bytes());
-        hash_frame(&mut hasher, &size_bytes.to_be_bytes());
-        hash_frame(&mut hasher, &(tags.len() as u64).to_be_bytes());
-        for tag in tags {
+    for candidate in candidates {
+        hash_frame(&mut hasher, candidate.id.as_bytes());
+        hash_frame(&mut hasher, &candidate.size_bytes.to_be_bytes());
+        hash_frame(&mut hasher, &(candidate.tags.len() as u64).to_be_bytes());
+        for tag in &candidate.tags {
             hash_frame(&mut hasher, tag.as_bytes());
         }
     }
@@ -398,6 +451,11 @@ fn parse_podman_images(output: &str) -> Result<PodmanUnusedImageEvidence, String
         candidate_record_size_sum,
         candidate_set_sha256: lower_hex(&hasher.finalize()),
     })
+}
+
+fn parse_podman_images(output: &str) -> Result<PodmanUnusedImageEvidence, String> {
+    let (total_records, referenced_records, candidates) = parse_unused_image_candidates(output)?;
+    summarize_unused_image_candidates(total_records, referenced_records, &candidates)
 }
 
 fn raw_image_evidence(path: &Path) -> Result<RawImageEvidence, String> {
@@ -458,12 +516,20 @@ fn join_capture(
         .map_err(|error| format!("{label}-{stream}:{error}"))
 }
 
-fn command_text(
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CommandCapture {
+    status_code: i32,
+    stdout: String,
+    stderr: String,
+    output_truncated: bool,
+}
+
+fn command_capture(
     executable: &Path,
     args: &[&str],
     timeout: Duration,
     label: &str,
-) -> Result<String, String> {
+) -> Result<CommandCapture, String> {
     let mut child = Command::new(executable)
         .args(args)
         .stdout(Stdio::piped())
@@ -508,11 +574,26 @@ fn command_text(
     if stdout_truncated || stderr_truncated {
         return Err(format!("{label}-output-too-large"));
     }
-    if !status.success() {
-        let detail = bounded_detail(&String::from_utf8_lossy(&stderr));
+    Ok(CommandCapture {
+        status_code: status.code().unwrap_or(-1),
+        stdout: String::from_utf8(stdout).map_err(|_| format!("{label}-stdout-not-utf8"))?,
+        stderr: String::from_utf8(stderr).map_err(|_| format!("{label}-stderr-not-utf8"))?,
+        output_truncated: false,
+    })
+}
+
+fn command_text(
+    executable: &Path,
+    args: &[&str],
+    timeout: Duration,
+    label: &str,
+) -> Result<String, String> {
+    let output = command_capture(executable, args, timeout, label)?;
+    if output.status_code != 0 {
+        let detail = bounded_detail(&output.stderr);
         return Err(format!("{label}-failed:{detail}"));
     }
-    String::from_utf8(stdout).map_err(|_| format!("{label}-stdout-not-utf8"))
+    Ok(output.stdout)
 }
 
 fn assess(
@@ -638,6 +719,112 @@ fn assess(
         reason_codes,
         recommended_actions,
     }
+}
+
+/// Remove only freshly observed, untagged images with zero container references.
+/// Never prunes volumes, tagged images, containers, or the Podman machine itself.
+pub fn prune_dangling_images(
+    podman_bin: &Path,
+    requested_machine: &str,
+    confirmation_phrase: &str,
+    rationale: &str,
+    executed_at_ms: u64,
+) -> Result<PodmanDanglingImagePruneExecution, String> {
+    if executed_at_ms == 0 {
+        return Err("podman-prune-time-invalid".into());
+    }
+    if rationale.trim().is_empty()
+        || rationale != rationale.trim()
+        || rationale.chars().count() > 1_000
+        || rationale.chars().any(char::is_control)
+    {
+        return Err("podman-prune-rationale-invalid".into());
+    }
+    if !valid_machine_name(requested_machine) {
+        return Err("unsafe-requested-machine-name".into());
+    }
+    let inspect = command_text(
+        podman_bin,
+        &["machine", "inspect", requested_machine],
+        PODMAN_PRUNE_TIMEOUT,
+        "podman-prune-machine-inspect",
+    )
+    .and_then(|output| parse_machine_inspect(&output))?;
+    if inspect.name != requested_machine || !inspect.state.eq_ignore_ascii_case("running") {
+        return Err("podman-prune-machine-not-running".into());
+    }
+    let images_output = command_text(
+        podman_bin,
+        &[
+            "--connection",
+            requested_machine,
+            "images",
+            "--all",
+            "--format",
+            "json",
+        ],
+        PODMAN_PRUNE_TIMEOUT,
+        "podman-prune-images",
+    )?;
+    let (total_records, referenced_records, candidates) =
+        parse_unused_image_candidates(&images_output)?;
+    let evidence =
+        summarize_unused_image_candidates(total_records, referenced_records, &candidates)?;
+    let expected_phrase =
+        if evidence.unused_untagged_records > 0 && evidence.unused_tagged_records == 0 {
+            prune_approval_phrase(&evidence.candidate_set_sha256)
+        } else {
+            return Err("podman-prune-tagged-or-empty-candidate-set".into());
+        };
+    if confirmation_phrase != expected_phrase {
+        return Err("podman-prune-confirmation-mismatch".into());
+    }
+
+    let before_available_bytes = std::env::current_dir()
+        .ok()
+        .and_then(|path| crate::volume_pressure::snapshot_volume(&path, executed_at_ms).ok())
+        .map(|snapshot| snapshot.available_bytes);
+    let output = command_capture(
+        podman_bin,
+        &["--connection", requested_machine, "image", "prune", "--force"],
+        PODMAN_PRUNE_TIMEOUT,
+        "podman-prune-dangling-images",
+    )?;
+    let after_observed_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(executed_at_ms);
+    let after_available_bytes = std::env::current_dir()
+        .ok()
+        .and_then(|path| {
+            crate::volume_pressure::snapshot_volume(&path, after_observed_at_ms).ok()
+        })
+        .map(|snapshot| snapshot.available_bytes);
+    let observed_available_gain_bytes = before_available_bytes.zip(after_available_bytes).and_then(
+        |(before, after)| after.checked_sub(before),
+    );
+    Ok(PodmanDanglingImagePruneExecution {
+        schema_version: PODMAN_PRUNE_SCHEMA_VERSION,
+        candidate_set_sha256: evidence.candidate_set_sha256,
+        command: vec![
+            "podman".into(),
+            "--connection".into(),
+            requested_machine.into(),
+            "image".into(),
+            "prune".into(),
+            "--force".into(),
+        ],
+        status_code: output.status_code,
+        stdout: output.stdout,
+        stderr: output.stderr,
+        output_truncated: output.output_truncated,
+        executed: output.status_code == 0,
+        executed_at_ms,
+        before_available_bytes,
+        after_available_bytes,
+        observed_available_gain_bytes,
+        rationale: rationale.to_string(),
+    })
 }
 
 pub fn probe_podman_reclaim(
@@ -780,6 +967,10 @@ pub fn probe_podman_reclaim(
         unused_images.as_ref(),
         &issues,
     );
+    let dangling_prune_approval_phrase = unused_images.as_ref().and_then(|evidence| {
+        (evidence.unused_untagged_records > 0 && evidence.unused_tagged_records == 0)
+            .then(|| prune_approval_phrase(&evidence.candidate_set_sha256))
+    });
     PodmanReclaimPlan {
         schema_kind: PODMAN_RECLAIM_SCHEMA_KIND,
         schema_version: 3,
@@ -798,6 +989,7 @@ pub fn probe_podman_reclaim(
         store,
         system_df,
         unused_images,
+        dangling_prune_approval_phrase,
         assessment,
         issues,
     }
@@ -952,6 +1144,33 @@ mod tests {
     }
 
     #[test]
+    fn dangling_prune_phrase_is_only_offered_for_untagged_candidates() {
+        let (_, _, candidates) = parse_unused_image_candidates(IMAGES).unwrap();
+        let evidence = summarize_unused_image_candidates(3, 1, &candidates).unwrap();
+        assert_eq!(evidence.unused_untagged_records, 2);
+        assert_eq!(evidence.unused_tagged_records, 0);
+        assert_eq!(
+            prune_approval_phrase(&evidence.candidate_set_sha256),
+            format!(
+                "DiskSage Podman dangling image prune 승인 {}",
+                evidence.candidate_set_sha256
+            )
+        );
+        let tagged = r#"[{"Id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","RepoTags":["localhost/keep:latest"],"Containers":0,"Size":200}]"#;
+        let (_, _, tagged_candidates) = parse_unused_image_candidates(tagged).unwrap();
+        let tagged_evidence =
+            summarize_unused_image_candidates(1, 0, &tagged_candidates).unwrap();
+        assert_eq!(tagged_evidence.unused_untagged_records, 0);
+        assert_eq!(tagged_evidence.unused_tagged_records, 1);
+        let digest_only = r#"[{"Id":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","RepoTags":null,"RepoDigests":["docker.io/library/python@sha256:abc"],"Names":["docker.io/library/python@sha256:abc"],"Containers":0,"Size":200}]"#;
+        let (_, _, digest_candidates) = parse_unused_image_candidates(digest_only).unwrap();
+        let digest_evidence =
+            summarize_unused_image_candidates(1, 0, &digest_candidates).unwrap();
+        assert_eq!(digest_evidence.unused_untagged_records, 0);
+        assert_eq!(digest_evidence.unused_tagged_records, 1);
+    }
+
+    #[test]
     fn serialized_contract_keeps_reclaim_unknown_and_action_codes_stable() {
         let plan = PodmanReclaimPlan {
             schema_kind: PODMAN_RECLAIM_SCHEMA_KIND,
@@ -965,6 +1184,7 @@ mod tests {
             store: None,
             system_df: None,
             unused_images: None,
+            dangling_prune_approval_phrase: None,
             assessment: PodmanReclaimAssessment {
                 physically_reclaimable_bytes: None,
                 podman_reported_reclaimable_bytes: None,

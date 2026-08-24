@@ -20,6 +20,9 @@ src-tauri/icons/icon-manifest.json
 
 .superpowers/
 
+# CodeGraph's local SQLite index is regenerated per checkout and is not release source.
+.codegraph/
+
 # Claude Code session-local state
 .claude/scheduled_tasks.lock
 .claude/*.lock
