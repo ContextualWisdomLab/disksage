@@ -219,3 +219,11 @@ copy”, but it neither identifies the seven items nor proves that DiskSage is h
 or that a cloud write completed. `provider_sync_attested=false`, `local_eviction_authorized=false`,
 and `mutation_performed=false` remain required; no Finder, provider, source, or cloud mutation was
 performed.
+
+## Decision maintenance — 2026-08-24 16:32
+
+The exact-head review loop repaired two independent safety/documentation findings without changing
+the iCloud fail-closed decision: #246 restored the coverage dead-code allowance to
+`node_navigation` (head `1972614`), and #227 renamed the bound audit parameter to `stable_root`
+(head `5ad1197`) while retaining the intentionally nested private module contract. Both focused
+Rust test slices passed locally; hosted checks and protected approvals remain authoritative gates.

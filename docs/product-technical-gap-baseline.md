@@ -1247,3 +1247,14 @@ checks are not reused:
   pressure, but does not prove that DiskSage itself holds a Finder lock, identify the seven items,
   or prove a cloud write. The product keeps `provider-sync-incomplete`, copy/attestation/source
   eviction fail-closed and performs no Finder, provider, source, or cloud mutation.
+
+## 2026-08-24 16:32 +0900 exact-head review repairs
+
+- DiskSage #246 advanced to `1972614`; its coverage configuration now keeps the
+  `node_navigation` dead-code allowance without duplicating the attribute on
+  `preferred_scan_roots`. The pinned Rust 1.97.1 navigation slice passed 6/6 and the Devin thread
+  is resolved.
+- DiskSage #227 advanced to `5ad1197`; the bound-root audit parameter now says `stable_root`, and
+  the intentional `duplicate_audit::bound_read_root` module contract was documented. The pinned
+  Rust 1.97.1 duplicate-audit slice passed 10/10 and both current informational threads are
+  resolved. Hosted checks and protected approvals still gate merge.
