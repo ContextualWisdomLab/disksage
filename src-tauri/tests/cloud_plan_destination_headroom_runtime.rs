@@ -83,3 +83,90 @@ fn cloud_plan_preview_uses_destination_ancestor_authority_at_runtime() {
         "dry-run planning must not materialize the redirected destination",
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn one_unverified_candidate_does_not_blanket_block_candidates_with_verified_headroom() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = tempfile::tempdir().unwrap();
+    let source_root = fixture.path().join("source");
+    let cloud_root = fixture.path().join("cloud");
+    let archive_root = cloud_root.join("DiskSage Archive");
+    let redirected_documents = fixture.path().join("redirected-documents");
+    std::fs::create_dir(&source_root).unwrap();
+    std::fs::create_dir(&cloud_root).unwrap();
+    std::fs::create_dir(&archive_root).unwrap();
+    std::fs::create_dir(&redirected_documents).unwrap();
+    symlink(&redirected_documents, archive_root.join("documents")).unwrap();
+
+    let observed_at_ms = system_now_ms();
+    let mut facts = Vec::new();
+    for (name, bytes) in [("report.pdf", b"report".as_slice()), ("clip.mp4", b"clip".as_slice())] {
+        let path = source_root.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        let metadata = std::fs::metadata(&path).unwrap();
+        let modified_ms = metadata
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        facts.push(FileFact {
+            path,
+            bytes: metadata.len(),
+            created_ms: observed_at_ms,
+            modified_ms,
+            content_metadata: ContentMetadata::default(),
+        });
+    }
+
+    let root = CloudRoot {
+        id: "google-drive:test".into(),
+        provider: CloudProvider::GoogleDrive,
+        account_scope: CloudAccountScope::Personal,
+        label: "Google Drive".into(),
+        path: cloud_root.to_string_lossy().into_owned(),
+        readable: true,
+        access_issue: None,
+    };
+    let report = plan_cloud_archive(
+        &facts,
+        &source_root,
+        &root,
+        observed_at_ms,
+        CloudPlanOptions {
+            min_size_bytes: 1,
+            min_age_days: 0,
+            limit: 10,
+        },
+    );
+
+    assert_eq!(report.candidates.len(), 2);
+    assert!(report.candidates.iter().all(|candidate| candidate.blocked_reason.is_none()));
+    assert!(
+        report
+            .notices
+            .iter()
+            .any(|notice| notice == "local-volume-headroom-partial"),
+        "mixed per-candidate headroom results need a non-blocking plan diagnostic",
+    );
+    assert!(
+        !report
+            .notices
+            .iter()
+            .any(|notice| notice == "local-volume-headroom-unverified"),
+        "one unsafe destination ancestor must not disable candidates whose own staging headroom is verified",
+    );
+    assert!(
+        !report
+            .notices
+            .iter()
+            .any(|notice| notice == "local-volume-headroom-insufficient"),
+        "plan-wide native-copy blockers are reserved for plans where no candidate has verified headroom",
+    );
+    assert!(
+        !redirected_documents.join("report.pdf").exists(),
+        "dry-run planning must not materialize the redirected candidate",
+    );
+}
