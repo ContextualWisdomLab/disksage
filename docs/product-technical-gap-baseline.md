@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
-**Snapshot:** 2026-08-24 17:59 +0900 (Asia/Seoul)
-**Repository heads at snapshot:** the dated inventory and 17:59 correction below supersede earlier
+**Snapshot:** 2026-08-24 18:08 +0900 (Asia/Seoul)
+**Repository heads at snapshot:** the dated inventory and 18:08 correction below supersede earlier
 historical captures; hosted checks and protected review remain authoritative, and no merge is
 claimed from queued, stale, or bot-only status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
@@ -15,7 +15,7 @@ claimed from queued, stale, or bot-only status.
 4. Regenerable caches are a separate reclaim domain. They are per-child, identity-bound, active-use checked, journaled, and moved to OS Trash; they are not uploaded as user data.
 5. Deterministic Rust gates own safety. A local model may judge only the fixed maintenance command after dry-run evidence, calibration, and explicit human confirmation. No external LLM or OAuth service is a runtime prerequisite for the standalone product.
 
-## 2026-08-24 17:59 +0900 current protected PR inventory
+## 2026-08-24 18:08 +0900 current protected PR inventory
 
 This is the current review queue captured from GitHub immediately before this snapshot. A commit
 SHA is authoritative only for the PR row where it appears; a later push invalidates predecessor
@@ -27,6 +27,7 @@ checks and approvals.
 | #247 | `7b45ada3be4762724fd2c964b0dafe7f62dbeacb` | yes | blocked | review required | iCloud provider indexing plus live Finder/provider stall evidence; dated headroom-fixture repair and explicit Finder Accessibility permission guidance |
 | #246 | `1972614ee5488cca34deeb3bd999d369c61b3de1` | no | blocked | review required | Storybook/accessibility contract; iCloud stall clock test slice is 7/7 |
 | #244 | `13caeb04333e50e57c8a51a11b64aeb131c080b2` | no | blocked | review required | Rust 1.97.1 compiler baseline |
+| #204 | `e62342c3daa45584f7d16b461e6be527a466bfd8` | yes | blocked | review required | DiskSage shell/icon identity; Node 20.19.0 and zlib ABI pinned after hosted runtime mismatch |
 | #227 | `5ad11975ad1229e700dc042fdfd0482f21a2f45c` | no | blocked | review required | symlink-root audit hardening |
 | #212 | `75d728e403cf0b30511e149a7e650731f6472733` | no | blocked | review required | cloud operational CLI help |
 | #206 | `2e7b845b7610a871ec5981d964bcab5cb99df41d` | no | clean | none | content-bound Homebrew execution; no qualifying approval |
