@@ -4,6 +4,11 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+const MULTIPART_AUDIT_SOURCE: &str =
+    include_str!("../src/bin/disksage-multipart-archive-audit.rs");
+const INCOMPLETE_AUDIT_SOURCE: &str =
+    include_str!("../src/bin/disksage-incomplete-download-audit.rs");
+
 /// Build both feature-gated audit binaries in an isolated Cargo target directory.
 fn build_feature_gated_audit_binaries() -> (tempfile::TempDir, PathBuf, PathBuf) {
     let target_dir = tempfile::tempdir().expect("isolated Cargo target directory must be created");
@@ -173,6 +178,27 @@ fn assert_non_utf8_argument_is_bounded(binary: &Path) {
         !stderr.contains("panicked") && !stderr.contains("thread 'main'"),
         "invalid host arguments must not escape through a Rust panic"
     );
+}
+
+#[test]
+fn audit_coverage_contract_keeps_shipped_entrypoints_real() {
+    for (name, source) in [
+        ("disksage-multipart-archive-audit", MULTIPART_AUDIT_SOURCE),
+        ("disksage-incomplete-download-audit", INCOMPLETE_AUDIT_SOURCE),
+    ] {
+        assert!(
+            !source.contains("#[cfg(coverage)]\nfn main()"),
+            "coverage must never replace the shipped {name} entrypoint with a synthetic main"
+        );
+        assert!(
+            !source.contains("#[cfg(not(coverage))]\nfn main()"),
+            "the shipped {name} entrypoint must remain present under instrumentation"
+        );
+        assert!(
+            !source.contains("#[cfg(not(coverage))]\nfn run()"),
+            "the shipped {name} runtime must remain present under instrumentation"
+        );
+    }
 }
 
 /// Prove exact help output and bounded invalid-input behavior for both audit CLIs.
