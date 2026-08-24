@@ -21,6 +21,7 @@
   } from "./cloudArchiveHealthTiming";
   import { fmtBytes } from "./fmt";
   import IcloudLocalEviction from "./IcloudLocalEviction.svelte";
+  import { buildCloudLineageExport } from "./cloudLineageExport";
 
   const RECONCILIATION_INTERVAL_MS = 60_000;
   // fileproviderctl can spend tens of seconds inside the system provider database while iCloud is
@@ -467,6 +468,19 @@
     } finally {
       attesting = false;
     }
+  }
+
+  function downloadLineageExport() {
+    if (!copied) return;
+    const graph = buildCloudLineageExport(copied, attestation, eviction);
+    if (!graph) return;
+    const blob = new Blob([JSON.stringify(graph, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `disksage-lineage-${graph.content_id.slice(0, 12)}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
   }
 
   async function reconcileCloudReceipts() {
@@ -1312,6 +1326,12 @@
         <div class="context">영수증 {copied.receipt.receipt_id} · {fmtBytes(copied.receipt.bytes)}</div>
         <div class="path">{copied.receipt.destination}</div>
         <p class="muted">Goal: {copied.goal_state} · 상태: {copied.goal_status ?? "미확인"} · 동적 ADR: {copied.adr_path ?? "실패"} · 동적 Goal: {copied.goal_path ?? "실패"}</p>
+        {#if buildCloudLineageExport(copied, attestation, eviction)}
+          <button class="secondary" onclick={downloadLineageExport}>
+            path-free lineage JSON 내보내기
+          </button>
+          <p class="muted">원본·목적지 경로 없이 stable content ID, metadata provenance, provider sync, Goal, eviction 관계와 차단 사유만 내보냅니다.</p>
+        {/if}
         {#each copied.projection_warnings as warning}
           <p class="warning">동적 ADR/Goal 투영 경고: {warning}</p>
         {/each}

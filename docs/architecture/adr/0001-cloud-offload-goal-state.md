@@ -806,3 +806,14 @@ reconciliation evidence consistent with the multi-hour Finder `real_datasets` pr
 not a per-item receipt and not proof of a DiskSage lock or cloud write. The existing
 `provider-sync-incomplete` admission, copy/attestation, and source-eviction gates therefore stay
 fail-closed; no Finder, provider, source, or cloud mutation was performed.
+
+## Amendment: expose a path-free lineage graph for catalog handoff (2026-08-24 19:52 +0900)
+
+The CloudArchive receipt view now offers a JSON export only when a verified receipt contains the
+modern lineage fingerprint. The export is a bounded client-side graph with stable content,
+metadata, archive, provider, receipt, Goal, and optional eviction node identifiers; it carries
+production-time source/confidence, provider sync state, and sorted blockers, while explicitly
+setting `local_paths_included=false`. It never fabricates a provider item, attestation, Goal
+completion, or eviction relation: legacy receipts without lineage are not exportable, and an
+eviction edge appears only after the real eviction output exists. This is an export/view action
+only; it performs no provider, source, cloud, ADR, or Goal mutation.

@@ -1376,3 +1376,14 @@ checks are not reused:
   available. This remains aggregate provider reconciliation evidence for the Finder
   `real_datasets` preparation stall, not proof of a DiskSage lock or a completed cloud write.
   Copy admission, attestation, and source eviction remain fail-closed; no mutation was performed.
+
+## 2026-08-24 19:52 +0900 path-free lineage handoff proof
+
+- The buyer-visible P1 lineage gap now has a minimal export path: CloudArchive can download a
+  `disksage.cloud-lineage` JSON graph from a verified modern receipt, connecting source,
+  metadata, archive, provider, receipt, Goal, and (only after actual eviction) eviction nodes.
+- The export includes stable content IDs, production metadata source/confidence, provider sync
+  state, and blockers, but no raw local or destination paths. Legacy receipts without a lineage
+  fingerprint fail closed. Frontend `npm run check`, all 137 frontend tests, and 100% V8
+  statements/branches/functions/lines pass; the export itself is read-only and does not change
+  provider, source, cloud, ADR, or Goal state.
