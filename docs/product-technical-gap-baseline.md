@@ -1088,3 +1088,14 @@ checks are not reused:
   provider-gated Strix result is not merge evidence. Central `.github` #1263 has advanced to
   `7011fee275eaa257ce491efb4812dd3e98ed649e` and remains blocked with changes requested.
   No merge is inferred from queued checks or bot comments.
+
+## 2026-08-24 14:40 +0900 exact-head queue refresh
+
+- DiskSage #247 advanced to `618acff21b78ba93a40a7c0d48b99961ba79f4dc` with an additional public
+  plan regression for folded mail headers; the preceding destination-headroom test and iCloud
+  evidence remain in the exact ancestry. Checks are re-running and the draft remains blocked.
+- The other live references are unchanged: #189 `8809e6cdc8da14915a9e0219481f75a1faebfdb9`,
+  #212 `779afa48cc8bc534a6e5cc910714324d85f7358b`, #249
+  `44390608d30417477f6a66601b18a53ca87b0a9c`, and central `.github` #1263
+  `7011fee275eaa257ce491efb4812dd3e98ed649e`. No protected merge is inferred from pending
+  checks, historical reviews, or bot comments.
