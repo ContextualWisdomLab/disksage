@@ -61,6 +61,31 @@ function extractWorkflowRunScript(job: string, stepName: string): string {
 function createCompleteReleaseFixture(): string {
   const fixtureRoot = mkdtempSync(join(tmpdir(), 'disksage-release-allowlist-'));
   const artifactRoot = join(fixtureRoot, 'release-artifacts');
+  mkdirSync(join(artifactRoot, 'sbom'), { recursive: true });
+  writeFileSync(
+    join(artifactRoot, 'sbom', 'disksage.spdx.json'),
+    JSON.stringify({
+      spdxVersion: 'SPDX-2.3',
+      dataLicense: 'CC0-1.0',
+      SPDXID: 'SPDXRef-DOCUMENT',
+      name: 'disksage-deadbeef',
+      documentNamespace: 'https://github.com/ContextualWisdomLab/disksage/sbom/deadbeef',
+      creationInfo: { created: '2000-01-01T00:00:00.000Z', creators: ['Tool: disksage-release-sbom'] },
+      documentDescribes: ['SPDXRef-Cargo-root'],
+      packages: [{
+        SPDXID: 'SPDXRef-Cargo-root',
+        name: 'cargo:disksage',
+        versionInfo: '0.1.0',
+        downloadLocation: 'NOASSERTION',
+        filesAnalyzed: false,
+        licenseConcluded: 'NOASSERTION',
+        licenseDeclared: 'NOASSERTION',
+        supplier: 'NOASSERTION',
+      }],
+      relationships: [],
+      documentComment: 'Dependency inventory bound to source revision deadbeef.',
+    }),
+  );
   const bundlePaths = [
     'ubuntu/bundle/deb/disksage.deb',
     'ubuntu/bundle/appimage/disksage.AppImage',
@@ -102,6 +127,7 @@ function runReleaseArtifactVerifier(fixtureRoot: string) {
   return spawnSync('bash', ['-c', verifier], {
     cwd: fixtureRoot,
     encoding: 'utf8',
+    env: { ...process.env, GITHUB_WORKSPACE: repositoryRoot },
   });
 }
 
