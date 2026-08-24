@@ -8,6 +8,7 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
 describe("CloudArchive iCloud admission contract", () => {
   it("clears stale health evidence when refresh fails", () => {
     const source = readFileSync(resolve(repositoryRoot, "src/lib/CloudArchive.svelte"), "utf8");
+    const apiSource = readFileSync(resolve(repositoryRoot, "src/lib/api.ts"), "utf8");
     expect(source).toContain("icloudHealth = null;");
     expect(source).toContain("icloudHealth?.new_copy_admission_state !== \"clear\"");
     expect(source).toContain("managed_database_allocated_bytes");
@@ -16,6 +17,10 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("동기화 진단:");
     expect(source).toContain("iCloud File Provider 증거를 확인하지 못했습니다.");
     expect(source).toContain("no_progress_create_count");
+    expect(source).toContain("pending_indexable_count");
+    expect(source).toContain("icloud-file-provider-indexing-pending");
+    expect(source).toContain("icloud-file-provider-disk-import-active");
+    expect(source).toContain("디스크 import");
     expect(source).toContain("Finder에 남은 복사 대기는 취소");
     expect(source).toContain("File Provider 상태 확인이 제한시간을 넘었습니다");
     expect(source).toContain("Lineage 연결관계");
@@ -28,11 +33,21 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("icloudHealthBlockedSinceMs");
     expect(source).toContain("icloudHealthFingerprint");
     expect(source).toContain("const admissionClear = next.new_copy_admission_state === \"clear\"");
+    expect(source).toContain('from "./cloudArchiveHealthTiming"');
+    expect(source).toContain("resolveIcloudBlockedSinceMs(");
+    expect(source).toContain("next.admission_blocked_since_ms,");
+    expect(source).toContain("next.observed_at_ms,");
+    expect(source).not.toContain("next.admission_blocked_since_ms ?? observedAtMs");
+    expect(apiSource).toContain("admission_blocked_since_ms?: number | null;");
     expect(source).toContain("동일한 iCloud 차단 상태가 15분 이상 지속되었습니다.");
     expect(source).toContain("refreshIcloudHealth(true)");
     expect(source).toContain("refreshProviderGlobalSync(true)");
     expect(source).toContain("const observedAtMs = Date.now();");
     expect(source).toContain("providerGlobalSyncBlockedSinceMs");
+    expect(source).toContain("const backendObservedAtMs = Number.isInteger(next.observed_at_ms)");
+    expect(source).toContain("const backendBlockedSinceMs = resolveBlockedSinceMs(");
+    expect(source).toContain("providerGlobalSyncObservedAtMs = backendObservedAtMs;");
+    expect(source).toContain("providerGlobalSyncBlockedSinceMs = backendBlockedSinceMs;");
     expect(source).toContain("PROVIDER_GLOBAL_SYNC_BLOCKED_RETRY_INTERVAL_MS");
     expect(source).toContain("providerGlobalSyncNextCheckAt");
     expect(source).toContain("checkingProviderGlobalSync || (!force && Date.now() < providerGlobalSyncNextCheckAt)");
@@ -56,6 +71,10 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("provider-global-sync-item-not-found");
     expect(source).toContain("cancellingFinderCopy || checkingProviderGlobalSync");
     expect(source).toContain("finderCopyCancelStatus = \"Finder 복사 취소 요청을 보냈습니다. 상태를 다시 확인하십시오.\"");
+    expect(source).toContain("local-volume-headroom-insufficient");
+    expect(source).toContain("local-volume-headroom-unverified");
+    expect(source).toContain("!nativeCopyHeadroomBlocked(candidate)");
+    expect(source).not.toContain("api.localCopyHasHeadroom(report?.local_volume, candidate.bytes)");
   });
 
   it("does not run the heavy iCloud probe for non-iCloud selected roots", () => {

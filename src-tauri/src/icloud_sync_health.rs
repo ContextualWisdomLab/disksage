@@ -43,8 +43,11 @@ const FILEPROVIDERCTL_PATH: &str = "/usr/bin/fileproviderctl";
 const FILEPROVIDER_DUMP_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(target_os = "macos")]
 // Keep the sync summary and a larger bounded provider-error window together; iCloud places
-// filename/root exclusion diagnostics after the aggregate summary in large dumps.
-const MAX_FILEPROVIDER_DUMP_BYTES: usize = 1024 * 1024;
+// filename/root exclusion diagnostics after the aggregate summary in large dumps. Match the
+// sibling provider_global_sync probe's cap: real fileproviderctl dumps observed in the field
+// run several MiB, and the previous 1 MiB cap routinely truncated before reaching per-item
+// exclusion/materialization markers that follow the aggregate summary.
+const MAX_FILEPROVIDER_DUMP_BYTES: usize = 32 * 1024 * 1024;
 const ITEM_ERROR_AGE_NOTICE_MS: u64 = 86_400_000;
 static SNAPSHOT_NONCE: AtomicU64 = AtomicU64::new(0);
 
@@ -53,6 +56,7 @@ pub const ICLOUD_NATIVE_STATUS_SCHEMA_VERSION: u32 = 1;
 pub const ICLOUD_FILE_PROVIDER_ACTIVITY_SCHEMA_VERSION: u32 = 3;
 pub const ICLOUD_SYNC_HEALTH_EVIDENCE_SCHEMA_VERSION: u32 = 1;
 pub const ICLOUD_SYNC_HEALTH_EVIDENCE_DIRECTORY: &str = "icloud-sync-health-evidence";
+const FILE_PROVIDER_DISK_IMPORT_NOTICE: &str = "icloud-file-provider-disk-import-active";
 const MAX_PERSISTED_HEALTH_SNAPSHOTS: usize = 128;
 const MAX_PERSISTED_HEALTH_SNAPSHOT_BYTES: usize = 64 * 1024;
 
@@ -155,6 +159,9 @@ pub struct IcloudFileProviderActivityEvidence {
     /// Aggregate provider errors where iCloud excludes an item under a sync root.
     #[serde(default)]
     pub sync_excluded_root_count: u64,
+    /// Aggregate File Provider metadata work still waiting to be indexed.
+    #[serde(default)]
+    pub pending_indexable_count: Option<u64>,
     #[serde(default)]
     pub active_upload_count: u64,
     #[serde(default)]
@@ -246,6 +253,12 @@ pub struct IcloudSyncHealthReport {
     pub schema_version: u32,
     pub output_mode: String,
     pub observed_at_ms: u64,
+    /// Earliest retained observation in the current admission-blocker run.
+    ///
+    /// This is derived from the bounded local evidence journal after the current observation is
+    /// persisted. It is diagnostic only and never authorizes a copy, attestation, or eviction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission_blocked_since_ms: Option<u64>,
     pub provider: String,
     pub evidence_kind: String,
     pub evidence_complete: bool,
@@ -567,6 +580,62 @@ fn prune_health_evidence(directory: &Path) -> Result<(), String> {
             .map_err(|_| "icloud-sync-health-evidence-retention-failed")?;
     }
     Ok(())
+}
+
+#[cfg(not(coverage))]
+fn admission_blocker_key(blockers: &[String]) -> Vec<String> {
+    let mut key = blockers.to_vec();
+    key.sort_unstable();
+    key.dedup();
+    key
+}
+
+/// Find the earliest retained observation with the same admission blockers.
+///
+/// The journal is bounded and each record is integrity-checked before it can extend the duration.
+/// An invalid or unreadable historical record stops the walk rather than manufacturing a longer
+/// stall interval from incomplete evidence.
+#[cfg(not(coverage))]
+pub fn admission_blocked_since_ms(
+    app_data_dir: &Path,
+    report: &IcloudSyncHealthReport,
+) -> Option<u64> {
+    let current_key = admission_blocker_key(&report.new_copy_admission_blockers);
+    if current_key.is_empty() || report.observed_at_ms == 0 {
+        return None;
+    }
+    let directory = health_evidence_directory(app_data_dir).ok()?;
+    let mut records = std::fs::read_dir(directory)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            is_health_evidence_record_name(&name).then_some((name, entry.path()))
+        })
+        .collect::<Vec<_>>();
+    records.sort_by(|left, right| right.0.cmp(&left.0));
+
+    let mut since = report.observed_at_ms;
+    for (_, path) in records {
+        let encoded = match std::fs::read(path) {
+            Ok(encoded) => encoded,
+            Err(_) => break,
+        };
+        let snapshot = match serde_json::from_slice::<IcloudSyncHealthEvidenceSnapshot>(&encoded) {
+            Ok(snapshot) if validate_icloud_sync_health_evidence_snapshot(&snapshot).is_ok() => {
+                snapshot
+            }
+            _ => break,
+        };
+        if snapshot.observed_at_ms >= report.observed_at_ms {
+            continue;
+        }
+        if admission_blocker_key(&snapshot.new_copy_admission_blockers) != current_key {
+            break;
+        }
+        since = snapshot.observed_at_ms;
+    }
+    Some(since)
 }
 
 fn system_time_ms(time: SystemTime) -> Option<u64> {
@@ -966,6 +1035,16 @@ fn parse_file_provider_activity_output(
                 .contains("excluded from sync under root")
         })
         .count() as u64;
+    let pending_indexable_count = output.lines().find_map(|line| {
+        let marker = line.trim().strip_prefix("+ ").unwrap_or(line.trim());
+        marker
+            .strip_prefix("pending-indexable-count:")
+            .and_then(|value| value.trim().parse::<u64>().ok())
+    });
+    let disk_import_active = output.lines().any(|line| {
+        let marker = line.trim().strip_prefix("+ ").unwrap_or(line.trim());
+        marker.eq_ignore_ascii_case("disk import: yes")
+    });
     let active_upload_count = output
         .lines()
         .filter(|line| line.to_ascii_lowercase().contains("upload progress:"))
@@ -1005,6 +1084,12 @@ fn parse_file_provider_activity_output(
     if sync_excluded_root_count > 0 {
         notices.push("icloud-file-provider-sync-root-excluded-observed".into());
     }
+    if pending_indexable_count.is_some_and(|count| count > 0) {
+        notices.push("icloud-file-provider-indexing-pending".into());
+    }
+    if disk_import_active {
+        notices.push(FILE_PROVIDER_DISK_IMPORT_NOTICE.into());
+    }
     if active_upload_count > 0 {
         notices.push("icloud-file-provider-active-upload".into());
     }
@@ -1023,6 +1108,7 @@ fn parse_file_provider_activity_output(
         staged_item_missing_count,
         sync_excluded_filename_count,
         sync_excluded_root_count,
+        pending_indexable_count,
         active_upload_count,
         active_download_count,
         active_upload_progress_millionths,
@@ -1794,6 +1880,7 @@ fn build_report(
         schema_version: ICLOUD_SYNC_HEALTH_SCHEMA_VERSION,
         output_mode: "icloud-local-sync-health".into(),
         observed_at_ms,
+        admission_blocked_since_ms: None,
         provider: "icloud".into(),
         evidence_kind: "supplementary-local-cloud-docs-private-schema".into(),
         evidence_complete,
@@ -1916,6 +2003,16 @@ fn attach_native_status_admission(report: &mut IcloudSyncHealthReport) {
         }
         if activity.sync_excluded_root_count > 0 {
             add_blocker("icloud-file-provider-root-excluded");
+        }
+        if activity.pending_indexable_count.is_some_and(|count| count > 0) {
+            add_blocker("icloud-file-provider-indexing-pending");
+        }
+        if activity
+            .notices
+            .iter()
+            .any(|notice| notice == FILE_PROVIDER_DISK_IMPORT_NOTICE)
+        {
+            add_blocker(FILE_PROVIDER_DISK_IMPORT_NOTICE);
         }
         if !no_progress && !materialization_failed {
             if activity.active_upload_count > 0 || activity.active_download_count > 0 {
@@ -2256,6 +2353,38 @@ mod tests {
             .notices
             .contains(&"icloud-file-provider-active-download".to_string()));
         assert!(validate_file_provider_activity_evidence(&evidence).is_ok());
+    }
+
+    #[test]
+    fn file_provider_parser_records_pending_indexable_count() {
+        let evidence = parse_file_provider_activity_output(
+            "pending-indexable-count: 12474\n",
+            42,
+            true,
+            false,
+            false,
+        );
+        assert_eq!(evidence.pending_indexable_count, Some(12_474));
+        assert!(evidence
+            .notices
+            .contains(&"icloud-file-provider-indexing-pending".to_string()));
+        assert!(validate_file_provider_activity_evidence(&evidence).is_ok());
+    }
+
+    #[test]
+    fn file_provider_parser_records_disk_import_without_paths() {
+        let evidence = parse_file_provider_activity_output(
+            "sync engine state:\n+ disk import: yes\n",
+            42,
+            true,
+            false,
+            false,
+        );
+        assert!(evidence
+            .notices
+            .contains(&"icloud-file-provider-disk-import-active".to_string()));
+        assert!(validate_file_provider_activity_evidence(&evidence).is_ok());
+        assert!(!serde_json::to_string(&evidence).unwrap().contains("sync engine state"));
     }
 
     #[test]
@@ -2629,6 +2758,46 @@ mod tests {
         .count();
         assert_eq!(records, MAX_PERSISTED_HEALTH_SNAPSHOTS);
         assert!(!first.exists());
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn admission_blocked_since_uses_only_contiguous_matching_evidence() {
+        let directory = tempfile::tempdir().unwrap();
+        for observed_at_ms in 1..=2 {
+            let report = build_report(
+                observed_at_ms,
+                vec![],
+                parse_queue_rows(queue_output()).unwrap(),
+                false,
+                false,
+            )
+            .unwrap();
+            write_icloud_sync_health_evidence(directory.path(), &report).unwrap();
+        }
+
+        let current = build_report(
+            3,
+            vec![],
+            parse_queue_rows(queue_output()).unwrap(),
+            false,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            admission_blocked_since_ms(directory.path(), &current),
+            Some(1)
+        );
+
+        let mut changed = current.clone();
+        changed.observed_at_ms = 4;
+        changed
+            .new_copy_admission_blockers
+            .push("icloud-upload-out-of-quota".into());
+        assert_eq!(
+            admission_blocked_since_ms(directory.path(), &changed),
+            Some(4)
+        );
     }
 
     #[test]

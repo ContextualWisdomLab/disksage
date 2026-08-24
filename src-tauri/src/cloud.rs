@@ -5256,9 +5256,12 @@ pub fn plan_cloud_archive_from_snapshot(
     }
     #[cfg(not(coverage))]
     let exact_duplicates = {
+        // Detect clusters before applying the presentation limit so a duplicate pair split across
+        // the boundary still blocks automatic handling of the visible member.
+        let exact_duplicates = mark_exact_duplicate_candidates(&mut candidates, None);
         candidates.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.src.cmp(&b.src)));
         candidates.truncate(options.limit);
-        mark_exact_duplicate_candidates(&mut candidates, None)
+        exact_duplicates
     };
     #[cfg(coverage)]
     let exact_duplicates = {
@@ -5280,12 +5283,31 @@ pub fn plan_cloud_archive_from_snapshot(
         "cloud-sync-unverified".into(),
         "full-transfer-content-hash-pending".into(),
     ];
-    if local_volume.as_ref().is_some_and(|volume| {
-        candidates.iter().any(|candidate| {
-            !crate::volume_pressure::has_copy_headroom(volume.available_bytes, candidate.bytes)
-        })
-    }) {
+    let mut destination_headroom_insufficient = false;
+    let mut destination_headroom_unverified = false;
+    for candidate in candidates
+        .iter()
+        .filter(|candidate| candidate.blocked_reason.is_none())
+    {
+        match crate::copy_headroom::require_destination_copy_headroom(
+            Path::new(&candidate.dst),
+            candidate.bytes,
+            now_ms,
+        ) {
+            Ok(()) => {}
+            Err(reason) if reason == "local-volume-headroom-insufficient" => {
+                destination_headroom_insufficient = true;
+            }
+            Err(_) => {
+                destination_headroom_unverified = true;
+            }
+        }
+    }
+    if destination_headroom_insufficient {
         notices.push("local-volume-headroom-insufficient".into());
+    }
+    if destination_headroom_unverified {
+        notices.push("local-volume-headroom-unverified".into());
     }
     if !snapshot.source_scan_complete {
         notices.push("source-scan-incomplete".into());
@@ -7067,6 +7089,65 @@ mod tests {
             .find(|candidate| candidate.relative_path == "c.pdf")
             .unwrap();
         assert!(!unique
+            .review_reasons
+            .contains(&"exact-duplicate-content-needs-canonical-selection".to_string()));
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn planner_detects_duplicate_pairs_split_by_candidate_limit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let cloud = tmp.path().join("cloud");
+        writable_dir(&source);
+        writable_dir(&cloud);
+        std::fs::write(source.join("large.pdf"), b"larger-than-duplicates").unwrap();
+        for name in ["a-duplicate.pdf", "z-duplicate.pdf"] {
+            std::fs::write(source.join(name), b"same-content").unwrap();
+        }
+        let production_time_ms = date_epoch_ms(2026, 1, 2).unwrap();
+        let metadata = ContentMetadata {
+            production_time_ms: Some(production_time_ms),
+            production_time_source: Some("embedded:test:creation-date".into()),
+            production_time_confidence: Some("high".into()),
+            ..ContentMetadata::default()
+        };
+        let files = ["large.pdf", "a-duplicate.pdf", "z-duplicate.pdf"]
+            .into_iter()
+            .map(|name| {
+                let path = source.join(name);
+                let file_metadata = std::fs::metadata(&path).unwrap();
+                FileFact {
+                    path,
+                    bytes: file_metadata.len(),
+                    created_ms: millis(file_metadata.created()),
+                    modified_ms: millis(file_metadata.modified()),
+                    content_metadata: metadata.clone(),
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let report = plan_cloud_archive(
+            &files,
+            &source,
+            &root(CloudProvider::GoogleDrive, &cloud),
+            system_now_ms() + DAY_MS,
+            CloudPlanOptions {
+                min_size_bytes: 0,
+                min_age_days: 0,
+                limit: 2,
+            },
+        );
+
+        assert_eq!(report.candidates.len(), 2);
+        assert_eq!(report.exact_duplicates.cluster_count, 1);
+        assert_eq!(report.exact_duplicates.candidate_count, 2);
+        let visible_duplicate = report
+            .candidates
+            .iter()
+            .find(|candidate| candidate.relative_path == "a-duplicate.pdf")
+            .unwrap();
+        assert!(visible_duplicate
             .review_reasons
             .contains(&"exact-duplicate-content-needs-canonical-selection".to_string()));
     }

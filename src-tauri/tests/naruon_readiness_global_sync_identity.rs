@@ -56,6 +56,8 @@ fn canonical_clear_report() -> ProviderGlobalSyncReport {
         schema_version: PROVIDER_GLOBAL_SYNC_SCHEMA_VERSION,
         provider: CloudProvider::Onedrive,
         evidence_kind: "fileproviderctl-global-dump".into(),
+        observed_at_ms: 1,
+        admission_blocked_since_ms: None,
         evidence_complete: true,
         state: ProviderGlobalSyncState::Clear,
         upload_progress_present: false,

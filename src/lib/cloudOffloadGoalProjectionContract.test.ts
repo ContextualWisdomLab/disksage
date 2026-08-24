@@ -29,6 +29,7 @@ describe("cloud-offload Goal projection contract", () => {
     expect(goal.pre_copy_evidence_streams).toEqual(expect.arrayContaining([
       "provider-client-runtime-evidence",
       "icloud-sync-health-evidence",
+      "provider-global-sync-evidence",
     ]));
     expect(goal.lineage_relation_identifier_rule).toContain("never a raw local or provider path");
   });

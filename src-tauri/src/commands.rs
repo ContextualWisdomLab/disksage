@@ -30,9 +30,6 @@ use crate::{
 #[path = "home_resolution.rs"]
 mod home_resolution;
 
-#[path = "copy_headroom.rs"]
-mod copy_headroom;
-
 #[derive(Default)]
 pub struct AppState {
     pub result: Arc<Mutex<Option<ScanResult>>>,
@@ -1241,7 +1238,7 @@ pub fn inspect_icloud_new_copy_admission(
 ) -> Result<icloud_sync_health::IcloudSyncHealthReport, String> {
     let home = resolve_home(&app)?;
     let mut report = icloud_sync_health::inspect_new_copy_admission(&home, cloud::system_now_ms())?;
-    if !persist_icloud_health_evidence(&app, &report) {
+    if !persist_icloud_health_evidence(&app, &mut report) {
         report
             .notices
             .push("icloud-sync-health-evidence-persistence-failed".into());
@@ -1261,7 +1258,13 @@ pub fn inspect_cloud_provider_global_sync(
     if selected.provider == cloud::CloudProvider::Icloud {
         return Err("provider-global-sync-icloud-specialized".into());
     }
-    provider_global_sync::inspect_new_copy_admission(selected.provider)
+    let mut report = provider_global_sync::inspect_new_copy_admission(selected.provider)?;
+    if !persist_provider_global_sync_evidence(&app, &mut report) {
+        report
+            .notices
+            .push("provider-global-sync-evidence-persistence-failed".into());
+    }
+    Ok(report)
 }
 
 #[cfg(not(coverage))]
@@ -1275,15 +1278,33 @@ struct CloudPlanningOutput {
 #[cfg(not(coverage))]
 fn persist_icloud_health_evidence(
     app: &AppHandle,
-    report: &icloud_sync_health::IcloudSyncHealthReport,
+    report: &mut icloud_sync_health::IcloudSyncHealthReport,
 ) -> bool {
-    app.path()
-        .app_data_dir()
-        .ok()
-        .and_then(|app_data_dir| {
-            icloud_sync_health::write_icloud_sync_health_evidence(&app_data_dir, report).ok()
-        })
-        .is_some()
+    let Some(app_data_dir) = app.path().app_data_dir().ok() else {
+        return false;
+    };
+    if icloud_sync_health::write_icloud_sync_health_evidence(&app_data_dir, report).is_err() {
+        return false;
+    }
+    report.admission_blocked_since_ms =
+        icloud_sync_health::admission_blocked_since_ms(&app_data_dir, report);
+    true
+}
+
+#[cfg(not(coverage))]
+fn persist_provider_global_sync_evidence(
+    app: &AppHandle,
+    report: &mut provider_global_sync::ProviderGlobalSyncReport,
+) -> bool {
+    let Some(app_data_dir) = app.path().app_data_dir().ok() else {
+        return false;
+    };
+    if provider_global_sync::write_provider_global_sync_evidence(&app_data_dir, report).is_err() {
+        return false;
+    }
+    report.admission_blocked_since_ms =
+        provider_global_sync::provider_global_sync_blocked_since_ms(&app_data_dir, report);
+    true
 }
 
 #[cfg(not(coverage))]
@@ -1439,8 +1460,9 @@ fn cloud_plan_for_inputs(
     }
     let (icloud_health, provider_global_sync) = if selected.provider == cloud::CloudProvider::Icloud
     {
-        let health = icloud_sync_health::inspect_new_copy_admission(&home, cloud::system_now_ms()).ok();
-        if let Some(health) = health.as_ref() {
+        let mut health =
+            icloud_sync_health::inspect_new_copy_admission(&home, cloud::system_now_ms()).ok();
+        if let Some(health) = health.as_mut() {
             if !persist_icloud_health_evidence(app, health) {
                 report
                     .notices
@@ -1450,7 +1472,14 @@ fn cloud_plan_for_inputs(
         icloud_sync_health::attach_new_copy_admission_notice(&mut report.notices, health.as_ref());
         (health, None)
     } else {
-        let global_sync = provider_global_sync::inspect_new_copy_admission(selected.provider).ok();
+        let mut global_sync = provider_global_sync::inspect_new_copy_admission(selected.provider).ok();
+        if let Some(global_sync) = global_sync.as_mut() {
+            if !persist_provider_global_sync_evidence(app, global_sync) {
+                report
+                    .notices
+                    .push("provider-global-sync-evidence-persistence-failed".into());
+            }
+        }
         provider_global_sync::attach_new_copy_admission_notice(
             &mut report.notices,
             global_sync.as_ref(),
@@ -1567,7 +1596,7 @@ fn require_capacity_for_copy(
 
 #[cfg(not(coverage))]
 fn require_local_copy_headroom(candidate: &cloud::CloudCandidate) -> Result<(), String> {
-    copy_headroom::require_destination_copy_headroom(
+    crate::copy_headroom::require_destination_copy_headroom(
         Path::new(&candidate.dst),
         candidate.bytes,
         cloud::system_now_ms(),

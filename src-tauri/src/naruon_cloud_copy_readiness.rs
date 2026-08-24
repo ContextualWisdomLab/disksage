@@ -31,7 +31,7 @@ const RUNTIME_BLOCKERS: [&str; 2] = [
     "provider-client-runtime-not-observed",
     "provider-client-runtime-evidence-unavailable",
 ];
-const ICLOUD_ADMISSION_BLOCKERS: [&str; 20] = [
+const ICLOUD_ADMISSION_BLOCKERS: [&str; 22] = [
     "icloud-sync-health-evidence-incomplete",
     "icloud-upload-queue-nonempty",
     "icloud-upload-in-flight",
@@ -47,6 +47,8 @@ const ICLOUD_ADMISSION_BLOCKERS: [&str; 20] = [
     "icloud-file-provider-materialization-failed",
     "icloud-file-provider-filename-excluded",
     "icloud-file-provider-root-excluded",
+    "icloud-file-provider-indexing-pending",
+    "icloud-file-provider-disk-import-active",
     "icloud-file-provider-transfer-active",
     "icloud-file-provider-dump-timeout",
     "icloud-file-provider-dump-output-truncated",
@@ -332,6 +334,16 @@ fn expected_icloud_admission_blockers(report: &IcloudSyncHealthReport) -> Vec<St
         }
         if activity.sync_excluded_root_count > 0 {
             blockers.push("icloud-file-provider-root-excluded".into());
+        }
+        if activity.pending_indexable_count.is_some_and(|count| count > 0) {
+            blockers.push("icloud-file-provider-indexing-pending".into());
+        }
+        if activity
+            .notices
+            .iter()
+            .any(|notice| notice == "icloud-file-provider-disk-import-active")
+        {
+            blockers.push("icloud-file-provider-disk-import-active".into());
         }
         if !no_progress && !materialization_failed
             && (activity.active_upload_count > 0 || activity.active_download_count > 0)
@@ -1191,6 +1203,16 @@ fn validate_icloud_admission_summary(
         if activity.sync_excluded_root_count > 0 {
             expected.push("icloud-file-provider-root-excluded".to_string());
         }
+        if activity.pending_indexable_count.is_some_and(|count| count > 0) {
+            expected.push("icloud-file-provider-indexing-pending".to_string());
+        }
+        if activity
+            .notices
+            .iter()
+            .any(|notice| notice == "icloud-file-provider-disk-import-active")
+        {
+            expected.push("icloud-file-provider-disk-import-active".to_string());
+        }
         if !no_progress && !materialization_failed
             && (activity.active_upload_count > 0 || activity.active_download_count > 0)
         {
@@ -1408,6 +1430,7 @@ mod tests {
             schema_version: ICLOUD_SYNC_HEALTH_SCHEMA_VERSION,
             output_mode: "icloud-local-sync-health".into(),
             observed_at_ms: 30,
+            admission_blocked_since_ms: None,
             provider: "icloud".into(),
             evidence_kind: "supplementary-local-cloud-docs-private-schema".into(),
             evidence_complete: true,
@@ -1559,6 +1582,8 @@ mod tests {
             schema_version: provider_global_sync::PROVIDER_GLOBAL_SYNC_SCHEMA_VERSION,
             provider: CloudProvider::Onedrive,
             evidence_kind: "fileproviderctl-global-dump".into(),
+            observed_at_ms: 1,
+            admission_blocked_since_ms: None,
             evidence_complete: true,
             state: ProviderGlobalSyncState::Pending,
             upload_progress_present: true,
@@ -1924,7 +1949,7 @@ mod tests {
         let mut forged_icloud_blocker =
             export_naruon_cloud_copy_readiness(&onedrive_report, &runtime, None).unwrap();
         forged_icloud_blocker.candidate_blocker_counts.insert(
-            "icloud-upload-queue-nonempty".into(),
+            "icloud-file-provider-indexing-pending".into(),
             CountBytes {
                 count: forged_icloud_blocker.candidate_count,
                 bytes: forged_icloud_blocker.candidate_bytes,

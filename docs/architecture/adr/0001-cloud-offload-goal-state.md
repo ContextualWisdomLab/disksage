@@ -529,12 +529,50 @@ new-copy admission blocker (`icloud-file-provider-filename-excluded` or
 The Finder preparation dialog therefore remains an incomplete provider operation, not a successful
 copy receipt, and copy, attestation, and eviction stay fail-closed until the provider is quiet.
 
-## Amendment: keep the readiness verifier boundary testable (2026-08-22)
+## Amendment: current iCloud indexing and transfer receipt (2026-08-21 22:22 +0900)
 
-The shipped Naruon readiness verifier uses a plain source comment rather than a crate-inner doc
-comment so the same parser can be included by its integration boundary test module. This is a
-compile-boundary repair only; the verifier's path-redacted output and readiness authority do not
-change.
+A fresh bounded read-only `fileproviderctl` observation completed at `2026-08-21 22:22:53 +0900`.
+The path-free aggregate reported `needs-indexing=no`, `pending-indexable-count=13,737`, a
+12,449-entry reconciliation backlog, one active upload marker, one active download marker with
+99.16% observed progress, one no-progress fetch, and 18 filename plus 2 root sync exclusions.
+The parser retained `icloud-file-provider-indexing-pending`, transfer, no-progress, and exclusion
+admission blockers; the bounded dump was truncated and no mutation was performed. This is still
+provider-sync-incomplete evidence: the Finder preparation dialog is not a completed copy receipt,
+and native copy, attestation, and eviction remain blocked.
+
+## Amendment: bounded planning and attestation-retention edge cases (2026-08-21)
+
+Exact-content duplicate clusters are now computed before the presentation `limit` is applied. A
+duplicate pair split across that limit therefore still marks the visible member for canonical
+selection and remains represented in the path-free cluster summary; the limit controls presentation,
+not safety evidence. The retention pass also protects the just-written immutable provider record
+when its clock is older than the existing bounded history, so clock regression cannot delete the
+attestation that was just persisted. Both boundaries remain fail-closed and are covered by focused
+Rust regression tests. The local implementation is `c5aa3a1`; its protected-branch publication is
+still pending the repository ruleset's normal PR workflow.
+
+## Amendment: iCloud indexing backlog is an admission blocker (2026-08-21)
+
+A repeated read-only File Provider observation remained unchanged for 21 seconds: the provider
+reported `pending-indexable-count=12474` and upload progress `0/5038` at `0.0000`, alongside the
+existing 18 filename and 2 root exclusions. DiskSage now retains this aggregate count in the
+path-free activity evidence and adds `icloud-file-provider-indexing-pending` to new-copy blockers;
+the UI includes it in the stable-block fingerprint and warns that Finder may remain in “복사 준비
+중”. No Finder/provider process is killed and no cloud or source mutation is performed. The
+extension remains additive to activity schema v3 and is covered by a parser regression test.
+
+## Amendment: restart-safe iCloud admission duration (2026-08-21)
+
+Each successful iCloud health inspection now persists a bounded, path-free observation before
+deriving `admission_blocked_since_ms` from the earliest contiguous retained record with the same
+admission-blocker set. Invalid, unreadable, or changed historical evidence stops the walk, so a
+restart cannot manufacture a longer stall interval. The field is diagnostic only: provider-native
+completion, copy receipts, attestation, and local eviction remain independent fail-closed gates.
+The implementation and regression test are at source head `ad850e9`.
+
+The Naruon readiness allow-list now includes `icloud-file-provider-indexing-pending`, keeping the
+provider-derived blocker set closed under export and rejecting the same blocker on non-iCloud
+envelopes. The binding repair is at source head `6f95ca3`.
 
 ## Amendment: bound active-use probes without touching provider state (2026-08-22)
 
@@ -546,3 +584,159 @@ File Provider databases, cloud objects, and user files remain outside the mutati
 focused Rust regression test passed 3/3. A timeout remains incomplete active-use evidence and
 keeps cache cleanup and cloud eviction fail-closed; this process-group cleanup is not a provider
 recovery or copy-cancellation operation.
+
+## Amendment: keep the readiness verifier boundary testable (2026-08-22)
+
+The shipped Naruon readiness verifier uses a plain source comment rather than a crate-inner doc
+comment so the same parser can be included by its integration boundary test module. This is a
+compile-boundary repair only; the verifier's path-redacted output and readiness authority do not
+change.
+
+## Amendment: exact numeric disk-full markers (2026-08-21)
+
+Provider-global File Provider parsing now applies numeric-boundary matching to `errno 28`,
+`odresult_errno 28`, and `OSStatus -34` in addition to the existing `code=28` forms. Longer
+values such as `errno 280` and `OSStatus -340` remain ordinary provider errors and cannot create
+the actionable local-disk-full blocker. The focused regression covers both exact and extended
+markers; this parser remains diagnostic evidence only and does not grant copy, attestation, or
+eviction authority.
+
+## Amendment: live Finder preparation stall receipt (2026-08-21 23:30 +0900)
+
+The exact-head headless iCloud health probe completed a bounded read-only observation with complete
+evidence. macOS reported `needs-sync-up` and `needs-sync-down`; File Provider reported one
+no-progress fetch, active upload/download progress (`953100`/`988500` millionths), 17,547 pending
+indexable items, 18 filename exclusions, and two root exclusions. The CloudDocs upload queue retained
+six items blocked on sync-up. New-copy admission is therefore `blocked`. These aggregate facts explain
+why Finder can remain at “복사 준비 중”, but they do not identify or attest the seven displayed items.
+
+DiskSage records only bounded, path-free counters and exposes the existing Finder cancellation
+request. It does not kill `fileproviderd`, `bird`, or Finder, modify CloudDocs/provider state, or
+convert this observation into copy, attestation, or eviction authority. A complete quiet observation
+and independent per-item provider evidence remain required. This evidence was observed while PR #246
+was at `fc9f4a4c465fc5ef355f7fbf552ff4295cf4f609` and PR #247 at
+`45214018dff43c6ba7c71253bc50e8c0eab0e1bd`; hosted checks remain authoritative.
+
+## Amendment: detect macOS File Provider disk import during Finder preparation (2026-08-22)
+
+A bounded read-only iCloud File Provider dump can report `disk import: yes` while Finder remains
+in “복사 준비 중”. DiskSage now retains only the boolean aggregate as the
+`icloud-file-provider-disk-import-active` notice, derives the same new-copy admission blocker,
+and surfaces it with the existing fixed Finder-cancel action. The notice contains no path,
+filename, item identifier, or raw provider output. Disk import is provider-progress evidence, not
+a copy receipt; copy, attestation, and source eviction remain fail-closed until a complete quiet
+observation and independent per-item evidence exist.
+
+## Amendment: isolate third-party stall clocks and preserve prior onset on journal faults (2026-08-24)
+
+One shared path-free `provider-global-sync-evidence` journal can contain interleaved OneDrive and
+Google Drive observations. The restart-safe onset walk therefore ignores valid records belonging to
+another provider instead of treating them as a blocker transition. Read, parse, integrity, or
+incomplete-record failures stop the walk while retaining the onset already accumulated from newer
+valid records; they can never manufacture a longer duration. Rust regressions cover both an
+interleaved provider record and a malformed older record. This is diagnostic continuity only: it
+does not grant copy, attestation, cloud mutation, or source eviction authority.
+
+## Amendment: unchanged iCloud preparation queue after restart (2026-08-22 04:05 +0900)
+
+A subsequent bounded, read-only observation found the same iCloud File Provider aggregate state:
+`pending-indexable-count=31,024`, upload progress `5,202,024,494/5,462,125,152` (95.24%),
+download progress `0/828`, and `disk import: yes`. The native sync summary still reported
+`needs-sync-up`/`needs-sync-down` with the last sync at `2026-08-21 20:20:10.166 +0900`; multiple
+items remained in `pending-scan` for roughly three or more hours. The unchanged counters are
+provider-stall evidence, not a per-item receipt and not proof that the visible Finder operation
+completed. DiskSage performed no Finder cancellation, daemon restart, CloudDocs/provider-database
+write, cloud mutation, materialization, or source mutation. New copy, attestation, and eviction
+therefore remain fail-closed; the existing bounded Finder-cancel action remains operator initiated.
+
+## Amendment: current protected PR inventory is evidence-bound (2026-08-22 04:23 +0900)
+
+The product baseline records the exact protected PR queue at DiskSage head `dac324d` (PR #247).
+That inventory is operational evidence only: each row binds its own head SHA, and a later push
+invalidates predecessor checks and approvals. A clean mergeable flag, bot comment, or queued review
+never authorizes a cloud copy, provider attestation, source eviction, or protected merge. The
+review loop remains exact-head review → repair → checks → qualifying approval → normal protected
+merge; no provider, Finder, cloud, or user-file mutation was performed for this amendment.
+
+## Amendment: preserve third-party Finder-stall duration across restart (2026-08-24)
+
+The screenshot-level symptom “복사 준비 중” can outlive both Finder and DiskSage. The existing
+third-party provider-global probe now stamps each bounded OneDrive/Google Drive observation and
+persists a path-free `ProviderGlobalSyncEvidenceSnapshot` under
+`provider-global-sync-evidence`. Create-only, SHA-256-fingerprinted records are capped at 64 KiB,
+stored as `0400` files in a `0700` directory, and retained at most 128 records. Invalid, tampered,
+incomplete, or unsafe records cannot extend a blocker interval.
+
+When the same provider, state, aggregate transfer/indexing flags, and stable blocker set are seen
+again, the command returns `admission_blocked_since_ms`; CloudArchive uses it as the third-party
+stall-clock origin after an application or system restart. The persisted clock is diagnostic only:
+it does not cancel Finder, restart a provider, write cloud data, attest an item, or authorize source
+eviction. A provider-global `-1004`/disconnect, active transfer, reconciliation backlog, or local
+disk-full marker therefore remains a visible fail-closed blocker until a fresh complete quiet
+observation and independent per-item evidence exist.
+
+## Amendment: executed iCloud admission evidence for the current Finder stall (2026-08-24 12:39 +0900)
+
+The exact-head `disksage-icloud-sync-health` binary completed a read-only CloudDocs/WAL snapshot
+with complete evidence. It observed `needs-sync-up|needs-sync-down`, 343 uploads blocked on
+sync-up, one active upload at 95.24%, one active download, and 58,183 pending indexable items.
+New-copy admission is `blocked` for transfer activity, disk import, indexing backlog, root and
+filename exclusions, and native sync-up/down state. The report explicitly retains
+`provider_sync_attested=false`, `local_eviction_authorized=false`, and `mutation_performed=false`.
+
+This is global provider evidence explaining Finder's “복사 준비 중” state, not a per-item cloud
+receipt. The probe reads a copy-on-write snapshot including WAL files, redacts paths, and never
+writes CloudDocs/provider state. Copy, attestation, and source eviction remain fail-closed until
+quiet provider evidence and independent per-item receipts exist.
+
+## Amendment: reject impossible persisted stall-onset values (2026-08-24 12:51 +0900)
+
+CloudArchive treats the persisted blocker onset as diagnostic input, not trusted authority. It now
+accepts that value only when it is a safe, non-negative integer no later than the backend observation;
+negative, future, non-finite, and unsafe-integer values fall back to the current observation. This
+prevents malformed history from suppressing a prolonged Finder “복사 준비 중” warning while keeping
+copy, attestation, cloud-write, and source-eviction authority fail-closed.
+
+## Amendment: latest iCloud preparation queue remains blocked (2026-08-24 12:58 +0900)
+
+The latest exact-head read-only probe still reports `new_copy_admission_state=blocked` and
+`mutation_performed=false`. Native iCloud remains `needs-sync-up|needs-sync-down`; 343 uploads are
+blocked on sync-up, one upload and one download are active, and pending indexable items increased
+to 64,969 from 58,183 at 12:39. Disk import, transfer activity, and the filename/root exclusions
+remain present. This aggregate provider evidence explains the Finder preparation stall but is not a
+per-item receipt, so copy, attestation, cloud-write, and source-eviction authority remain
+fail-closed; DiskSage performs no Finder, provider, source, or cloud mutation.
+
+## Amendment: iCloud indexing backlog increased during the Finder stall (2026-08-24 13:04 +0900)
+
+A subsequent exact-head read-only probe observed the same `needs-sync-up|needs-sync-down` native
+state, 343 uploads blocked on sync-up, one active upload at 95.24%, one active download, and
+`new_copy_admission_state=blocked`. FileProvider pending indexable items increased from 64,969 to
+67,017 while disk import, transfer activity, and the filename/root exclusions remained present.
+The evidence is aggregate and `provider_sync_attested=false`, `local_eviction_authorized=false`,
+and `mutation_performed=false`; therefore it cannot attest the seven Finder items or authorize any
+copy, cloud write, or source eviction.
+
+## Amendment: iCloud backlog continues to grow without a DiskSage database handle (2026-08-24 13:12 +0900)
+
+The next exact-head read-only probe observed `pending_indexable_count=74,946` (up from 67,017),
+the same native `needs-sync-up|needs-sync-down` state, 343 uploads blocked on sync-up, one active
+upload at 95.24%, one active download, and `new_copy_admission_state=blocked`. Finder's
+`real_datasets` destination remained 512 bytes with the same 2026-08-20 03:28:07 mtime and the
+root had about 99 GiB available. Bounded process inspection found `fileproviderd` using 72–129% CPU,
+but no DiskSage process, CloudDocs database, or source path was open in that process. This supports
+a provider-side reconciliation/indexing backlog, not a proven DiskSage database lock. The probe
+still reports `provider_sync_attested=false`, `local_eviction_authorized=false`, and
+`mutation_performed=false`; no Finder, provider, source, or cloud mutation is authorized.
+
+## Amendment: preview headroom follows the destination staging filesystem (2026-08-24 13:22 +0900)
+
+The planner previously exposed source-volume pressure while the native mutation gate correctly
+probed the destination staging ancestor. That could make a cross-volume preview disagree with the
+actual copy boundary. The planner now performs the same bounded destination probe for each visible,
+otherwise-unblocked candidate and emits `local-volume-headroom-insufficient` or
+`local-volume-headroom-unverified`; the native UI gate follows those notices, while explicit
+provider-API uploads remain a separate path. The source-volume snapshot remains diagnostic only.
+Pinned Rust tests, the destination-headroom contract, the full frontend suite (134 tests),
+`svelte-check`, and frontend coverage all pass; mutation, attestation, and eviction authority are
+unchanged and still fail closed.

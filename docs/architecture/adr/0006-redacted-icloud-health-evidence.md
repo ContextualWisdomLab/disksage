@@ -38,12 +38,19 @@ The timestamped records are the third evidence stream alongside `volume-pressure
 `provider-client-runtime-evidence`. iCloud plans combine the three records with the bounded
 freshness comparator in [ADR-0007](0007-pre-copy-evidence-cohort.md); a missing, incomplete,
 malformed, or skewed stream remains blocked without reconstructing a provider dump.
+After the current observation is written, the command returns the earliest retained timestamp for
+the same admission-blocker set as `admission_blocked_since_ms`. The UI uses that diagnostic value
+when starting its stall clock, falling back to the current observation only when durable evidence
+is unavailable. This preserves a visible stall duration across an application or system restart;
+it never changes copy, attestation, or eviction authority.
 
 ## Consequences
 
 ### Positive
 
 - The current iCloud incident remains comparable after a restart or UI refresh.
+- A restarted UI retains the provider stall duration when the bounded evidence journal is readable,
+  instead of presenting a long-running Finder preparation as a newly observed block.
 - Provider evidence is durable without copying private provider databases or raw output.
 - Bounded create-only records preserve provenance and fail closed on malformed claims.
 - The UI can tell the operator when current evidence was observed and when durable comparison failed.
@@ -69,3 +76,42 @@ malformed, or skewed stream remains blocked without reconstructing a provider du
 - [ADR-0001](0001-cloud-offload-goal-state.md) — provider evidence and fail-closed eviction gates.
 - [ADR-0005](0005-hourly-agent-loop-is-advisory.md) — scheduled loops remain advisory and cannot
   authorize mutation.
+
+## Operational evidence update — 2026-08-24
+
+The post-restart bounded observation recorded `pending-indexable-count=32377`, a `28123`-entry
+reconciliation queue, upload progress `6229217391/6540678102`, `scheduling state: running`,
+`disk import: yes`, and `stream reset: yes`; `brctl` still reported `needs-sync-up|needs-sync-down`.
+These aggregate values are incident evidence only. They do not identify a `real_datasets` item or
+prove a cloud write, so the existing decision continues to require per-item provider evidence and
+keeps copy, attestation, and source eviction fail-closed.
+
+The same bounded observation also captured File Provider activity while the Finder dialog remained
+at “preparing to copy” for hours: iCloud continued redacted item ingestion, while a separate
+Google Drive File Provider request returned `NSFileProviderErrorDomain -1004` (device cannot
+connect to the server) during root materialization. The provider name is therefore part of the
+diagnosis; a Finder progress window alone cannot tell which provider is stalled. DiskSage records
+this as provider-specific runtime evidence, exposes the existing explicit Finder-cancel action,
+and never infers copy completion or grants eviction authority from the dialog.
+
+## Operational evidence update — 2026-08-24 11:34
+
+A later bounded read-only observation increased the aggregate iCloud queue to
+`pending-indexable-count=39404` and `reconciliation=35150` while the same upload counter remained
+at `6229217391/6540678102` (95.24%), with `scheduling state: running`, `disk import: yes`, and
+`stream reset: yes`. `brctl` still reported `needs-sync-up|needs-sync-down` and pending scans were
+about 55 hours old. This worsening aggregate state reinforces the existing fail-closed decision;
+it still does not bind the Finder `real_datasets` dialog to an item-level cloud write.
+
+## Operational evidence update — 2026-08-24 13:53
+
+A bounded local recheck at `13:48:21 +0900` found about 96 GiB free on the root volume while Finder,
+`fileproviderd`, and `bird` had remained alive for roughly three hours. The visible `real_datasets`
+target remained 512 bytes with mtime `2026-08-20 03:28:07 +0900`; no target handle appeared in the
+bounded process-handle sample. The latest complete iCloud health receipt available for this loop
+reported 343 uploads blocked on sync-up, one active upload at 95.24%, one active download, and
+74,946 pending indexable items. These facts are aggregate provider evidence, not per-item cloud
+attestation. The decision therefore remains unchanged: DiskSage reports the reconciliation/indexing
+backlog, offers only the explicit bounded Finder-cancel action, and keeps copy, attestation, and
+source eviction fail-closed. No provider process, CloudDocs database, source, or cloud object was
+mutated.
