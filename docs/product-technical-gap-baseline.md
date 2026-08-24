@@ -1099,3 +1099,15 @@ checks are not reused:
   `44390608d30417477f6a66601b18a53ca87b0a9c`, and central `.github` #1263
   `7011fee275eaa257ce491efb4812dd3e98ed649e`. No protected merge is inferred from pending
   checks, historical reviews, or bot comments.
+
+## 2026-08-24 14:45 +0900 exact-head product queue refresh
+
+- DiskSage #247 is now exact head `f23539684651e9280962271759841f9d0fdd377a`, a draft/open
+  provider-indexing follow-up that also contains the folded-header and destination-headroom
+  regressions plus the standards-safe UI label convergence. Local frontend checks passed on this
+  tree; hosted checks are pending and no review thread is unresolved.
+- The next product gaps are visible in the live queue: #246 `9cf11c0194aece52a2769b9d10b8f20b7d2658e5`
+  (accessible Storybook UX contracts) and #244 `b9941295ac354bb63cf911a064a1f4df1f8eb60b`
+  (Rust 1.97.1 baseline) are draft/open; #189 remains `8809e6c`, and #212 remains `779afa4`.
+  Central `.github` #1263 remains `7011fee` with changes requested. Protected merge is not inferred
+  from draft status, queued checks, or historical approvals.
