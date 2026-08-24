@@ -1,6 +1,6 @@
 # DiskSage product and technical gap baseline
 
-**Snapshot:** 2026-08-24 18:30 +0900 (Asia/Seoul)
+**Snapshot:** 2026-08-24 18:51 +0900 (Asia/Seoul)
 **Repository heads at snapshot:** the dated inventory and 18:30 correction below supersede earlier
 historical captures; hosted checks and protected review remain authoritative, and no merge is
 claimed from queued, stale, or bot-only status.
@@ -28,8 +28,8 @@ checks and approvals.
 | #246 | `1972614ee5488cca34deeb3bd999d369c61b3de1` | no | blocked | review required | Storybook/accessibility contract; iCloud stall clock test slice is 7/7 |
 | #244 | `13caeb04333e50e57c8a51a11b64aeb131c080b2` | no | blocked | review required | Rust 1.97.1 compiler baseline |
 | #204 | `5bf86a9c593888fe5f08bff9f8dea74e5f1299ae` | yes | blocked | review required | DiskSage shell/icon identity; every Test/Release Node bootstrap and zlib ABI pinned after hosted runtime mismatch |
-| #227 | `5ad11975ad1229e700dc042fdfd0482f21a2f45c` | no | blocked | review required | symlink-root audit hardening |
-| #225 | `ea6f82d914e4660319600acb614fccb4a701aec1` | yes | blocked | review required | cwd-relative organize targets fail closed while lineage metadata and Windows home-resolution contracts remain intact |
+| #227 | `753352a1d0cd7e297bb656d5edf9339235a628a3` | yes | blocked | review required | symlink-root audit hardening; Ubuntu active-use tests now install `lsof` |
+| #225 | `3715a5ada760072d3675026fe7f264b4ee47964f` | yes | blocked | review required | cwd-relative organize targets fail closed; Windows regressions use platform-absolute homes |
 | #212 | `75d728e403cf0b30511e149a7e650731f6472733` | no | blocked | review required | cloud operational CLI help |
 | #206 | `2e7b845b7610a871ec5981d964bcab5cb99df41d` | no | clean | none | content-bound Homebrew execution; no qualifying approval |
 | #205 | `5c86668a6e503a174ff0b07151f67226b39547ff` | no | clean | none | Intel Homebrew target support; no qualifying approval |
@@ -191,6 +191,24 @@ is processed exact-head-first: review, repair, recheck, then normal protected me
 ## Loop update rule
 
 At each scheduled or operator loop, update this file only with new dated evidence: current head, open-PR/check state, provider receipt state, disk headroom, and the smallest acceptance proof completed. Do not convert an incomplete provider probe, filename date, model answer, or GitHub review comment into a transfer or deletion authority.
+
+## 2026-08-24 18:51 +0900 exact-head and host delta
+
+- PR #225 is at `3715a5ada760072d3675026fe7f264b4ee47964f`; its Windows failure was reproduced from
+  the hosted log: two tests supplied POSIX `/home/u`, which the fail-closed Windows resolver correctly
+  rejects. The existing `platform_home()` fixture now supplies a Windows absolute path; pinned Rust
+  organize tests pass 21/21, with `rustfmt --check` and `git diff --check` passing.
+- PR #227 is at `753352a1d0cd7e297bb656d5edf9339235a628a3`; its Ubuntu failure was caused by the
+  runner missing `lsof`, which the fail-closed active-use probe requires. The existing system-dependency
+  step now installs `lsof`; the local full Rust suite passes 735/735 with one ignored live-provider test.
+- A fresh read-only host observation measured 16 GiB available on `/` (926 GiB total, 43% used), while
+  `brctl status` still reports iCloud `needs-sync` and repeated `pending-scan` entries roughly 1.37 hours
+  old. Finder, `fileproviderd`, and `bird` are running; no DiskSage process was present. This supports a
+  provider reconciliation/indexing stall, not local disk exhaustion or a proven DiskSage lock.
+- The Finder `real_datasets` copy remains unmaterialized in the bounded provider evidence. No Finder
+  cancellation, provider restart, CloudDocs write, cloud mutation, source mutation, attestation, or
+  eviction was performed; `provider_sync_attested=false`, `local_eviction_authorized=false`, and
+  `mutation_performed=false` remain the only safe state until fresh per-item evidence exists.
 
 ## 2026-08-21 23:30 +0900 live iCloud Finder-preparation receipt
 

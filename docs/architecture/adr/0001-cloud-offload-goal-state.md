@@ -755,3 +755,13 @@ The exact-head local proof is 21 `organize::tests`, one Windows home-resolution 
 `actionlint`, and `git diff --check`. Hosted checks were restarted for this head and remain
 authoritative; the draft PR has no qualifying approval. This amendment changes no Finder/provider,
 cloud, source-file, or eviction state.
+
+## Amendment: make platform fixtures and active-use CI evidence explicit (2026-08-24 18:51 +0900)
+
+PR #225 exact head `3715a5ada760072d3675026fe7f264b4ee47964f` keeps the resolver fail-closed on
+Windows by changing only the regression fixtures from POSIX `/home/u` to the existing platform
+absolute-home helper. PR #227 exact head `753352a1d0cd7e297bb656d5edf9339235a628a3` installs `lsof`
+in the Ubuntu test image so active-use evidence remains complete in CI; production behavior still
+fails closed when the probe is unavailable. Local proofs are 21/21 organize tests and 735/735 Rust
+tests with one ignored live-provider test. These CI/fixture repairs grant no copy, cloud-write,
+attestation, source-eviction, Finder-cancel, or provider-restart authority.
