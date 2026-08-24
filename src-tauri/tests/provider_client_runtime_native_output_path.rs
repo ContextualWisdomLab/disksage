@@ -127,3 +127,46 @@ fn shared_writable_output_parent_never_gains_audit_publication_authority() {
         );
     }
 }
+
+#[test]
+fn shared_writable_output_ancestor_never_gains_directory_replacement_authority() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().expect("authority fixture root must be created");
+    let shared_ancestor = directory.path().join("shared-ancestor");
+    let private_parent = shared_ancestor.join("private-parent");
+    std::fs::create_dir(&shared_ancestor).expect("shared ancestor must be created");
+    std::fs::create_dir(&private_parent).expect("private output parent must be created");
+    std::fs::set_permissions(&shared_ancestor, std::fs::Permissions::from_mode(0o770))
+        .expect("shared ancestor mode must be set");
+    std::fs::set_permissions(&private_parent, std::fs::Permissions::from_mode(0o700))
+        .expect("private parent mode must be set");
+    let output_path = private_parent.join("provider-runtime.json");
+
+    let output = Command::new(binary_path())
+        .env_remove("HOME")
+        .arg("--output")
+        .arg(&output_path)
+        .output()
+        .expect("provider client-runtime CLI must launch for ancestor authority rejection");
+
+    std::fs::set_permissions(&shared_ancestor, std::fs::Permissions::from_mode(0o700))
+        .expect("fixture permissions must be restored for cleanup");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a non-sticky shared-writable ancestor can replace the private parent and must fail closed"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "rejected ancestor authority must not emit a success report"
+    );
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("diagnostic must remain UTF-8"),
+        "provider-client-runtime-output-parent-writable-by-others\n"
+    );
+    assert!(
+        !output_path.exists(),
+        "rejected ancestor authority must not receive an audit artifact"
+    );
+}
