@@ -71,6 +71,8 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("provider-global-sync-item-not-found");
     expect(source).toContain("cancellingFinderCopy || checkingProviderGlobalSync");
     expect(source).toContain("finderCopyCancelStatus = \"Finder 복사 취소 요청을 보냈습니다. 상태를 다시 확인하십시오.\"");
+    expect(source).toContain("macOS 손쉬운 사용 설정에서 DiskSage의 System Events 제어 권한이 필요합니다");
+    expect(source).toContain("권한이 없으면 요청만 실패하며 파일·클라우드 데이터는 변경되지 않습니다");
     expect(source).toContain("local-volume-headroom-insufficient");
     expect(source).toContain("local-volume-headroom-unverified");
     expect(source).toContain("!nativeCopyHeadroomBlocked(candidate)");

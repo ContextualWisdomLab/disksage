@@ -974,6 +974,9 @@
             || icloudHealth.file_provider_activity.active_upload_count > 0
             || icloudHealth.file_provider_activity.active_download_count > 0
           )}
+            <p class="muted">
+              이 작업은 Finder에 Escape 키를 보내므로 macOS 손쉬운 사용 설정에서 DiskSage의 System Events 제어 권한이 필요합니다. 권한이 없으면 요청만 실패하며 파일·클라우드 데이터는 변경되지 않습니다.
+            </p>
             <button onclick={cancelFinderCopy} disabled={cancellingFinderCopy || checkingIcloudHealth}>
               {cancellingFinderCopy ? "Finder 복사 취소 요청 중…" : "Finder 복사 취소 요청"}
             </button>
@@ -1080,6 +1083,9 @@
               {recoveringProvider ? "공급자 앱 재기동 중…" : "공급자 앱 재기동 후 상태 재확인"}
             </button>
             {#if canCancelFinderCopyForProviderGlobalSync(providerGlobalSync)}
+              <p class="muted">
+                이 작업은 Finder에 Escape 키를 보내므로 macOS 손쉬운 사용 설정에서 DiskSage의 System Events 제어 권한이 필요합니다. 권한이 없으면 요청만 실패하며 파일·클라우드 데이터는 변경되지 않습니다.
+              </p>
               <button onclick={cancelFinderCopy} disabled={cancellingFinderCopy || checkingProviderGlobalSync}>
                 {cancellingFinderCopy ? "Finder 복사 취소 요청 중…" : "Finder 복사 취소 요청"}
               </button>
