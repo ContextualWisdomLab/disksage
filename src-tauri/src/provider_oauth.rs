@@ -1019,12 +1019,6 @@ where
         .cloned()
         .collect();
     save_connections(connection_document_path, &updated)?;
-    if let Err(error) = delete_token(&connection.connection_id) {
-        if save_connections(connection_document_path, &original).is_err() {
-            return Err("provider-oauth-keyring-delete-and-config-rollback-failed".into());
-        }
-        return Err(error);
-    }
     for stale_id in matching_ids
         .iter()
         .filter(|connection_id| **connection_id != connection.connection_id)
@@ -1035,6 +1029,12 @@ where
             }
             return Err(error);
         }
+    }
+    if let Err(error) = delete_token(&connection.connection_id) {
+        if save_connections(connection_document_path, &original).is_err() {
+            return Err("provider-oauth-keyring-delete-and-config-rollback-failed".into());
+        }
+        return Err(error);
     }
     Ok(())
 }
@@ -1302,7 +1302,7 @@ mod tests {
         .unwrap();
 
         assert!(load_connections(&path).unwrap().is_empty());
-        assert_eq!(deleted, vec![current.connection_id, legacy.connection_id]);
+        assert_eq!(deleted, vec![legacy.connection_id, current.connection_id]);
     }
 
     #[cfg(unix)]
@@ -1353,7 +1353,9 @@ mod tests {
 
         for writable_bit in [0o020, 0o002] {
             let temp = tempfile::tempdir().unwrap();
-            let parent = temp.path().join(format!("oauth-write-parent-{writable_bit:o}"));
+            let parent = temp
+                .path()
+                .join(format!("oauth-write-parent-{writable_bit:o}"));
             std::fs::create_dir(&parent).unwrap();
             let path = parent.join("connections.json");
             let original = b"{\"version\":1,\"connections\":[]}";
