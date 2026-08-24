@@ -1132,3 +1132,15 @@ checks are not reused:
   its 2026-08-20 mtime, and the bounded `lsof` sample has no handle on that directory. This
   confirms provider reconciliation/indexing stall evidence rather than disk exhaustion or a
   Finder copy receipt. Copy, per-item attestation, and source eviction remain fail-closed.
+
+## 2026-08-24 15:34 +0900 iCloud queue continues to grow
+
+- The next bounded read-only receipt still reported `evidence_complete=true` and
+  `new_copy_admission_state=blocked`: 343 uploads remained blocked on sync-up, one upload stayed
+  active at 95.24%, and one download stayed active. File Provider pending indexable items grew
+  from 121,859 to 128,917; disk import, transfer activity, and the 28 filename/2 root exclusions
+  remained present. Native status remained `client_state=needs-sync` with sync-up pending.
+- This is provider-global reconciliation evidence, not a per-item receipt for the seven
+  `real_datasets` entries and not proof of a cloud write. DiskSage keeps Goal
+  `provider-sync-incomplete`, copy/attestation/source eviction fail-closed, and performed no
+  Finder, provider, source, or cloud mutation.

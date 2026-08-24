@@ -161,3 +161,15 @@ bytes with its 2026-08-20 mtime, and the bounded `lsof` sample found no handle o
 This is a worsening provider reconciliation/indexing backlog, not local disk exhaustion or
 per-item cloud-write proof. The existing decision therefore remains fail-closed:
 `provider_sync_attested=false`, `local_eviction_authorized=false`, and `mutation_performed=false`.
+
+## Operational evidence update — 2026-08-24 15:34
+
+The next bounded read-only receipt still reported `evidence_complete=true` and
+`new_copy_admission_state=blocked`. The 343-item sync-up backlog and one active upload at 95.24%
+were unchanged, while File Provider pending indexable items increased to 128,917; one download,
+disk import, transfer activity, and the 28 filename/2 root exclusions remained present. Native
+status continued to report `client_state=needs-sync` with `needs-sync-up|in-sync-down|prefer-sync-down|oob-sync-ack`.
+
+This increasing aggregate queue is stronger provider-stall evidence but still cannot identify the
+seven Finder items or prove a cloud write. The observation remains read-only and keeps
+`provider_sync_attested=false`, `local_eviction_authorized=false`, and `mutation_performed=false`.
