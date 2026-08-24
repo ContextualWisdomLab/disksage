@@ -10,12 +10,16 @@ describe("CloudArchive iCloud admission contract", () => {
     const source = readFileSync(resolve(repositoryRoot, "src/lib/CloudArchive.svelte"), "utf8");
     expect(source).toContain("icloudHealth = null;");
     expect(source).toContain("icloudHealth?.new_copy_admission_state !== \"clear\"");
+    expect(source).toContain(
+      'icloudHealth?.new_copy_admission_state !== "clear"\n            || (icloudHealth?.new_copy_admission_blockers.length ?? 0) > 0',
+    );
     expect(source).toContain("managed_database_allocated_bytes");
     expect(source).toContain("시스템 관리 데이터를 삭제하지 않습니다");
     expect(source).toContain("icloud-item-error-octagon-not-signed-in");
     expect(source).toContain("동기화 진단:");
     expect(source).toContain("iCloud File Provider 증거를 확인하지 못했습니다.");
-    expect(source).toContain("no_progress_create_count");
+    expect(source).toContain("pending_indexable_count");
+    expect(source).toContain("icloud-file-provider-indexing-pending");
     expect(source).toContain("Finder에 남은 복사 대기는 취소");
     expect(source).toContain("File Provider 상태 확인이 제한시간을 넘었습니다");
     expect(source).toContain("Lineage 연결관계");
@@ -27,7 +31,10 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("icloudHealthNextCheckAt");
     expect(source).toContain("icloudHealthBlockedSinceMs");
     expect(source).toContain("icloudHealthFingerprint");
-    expect(source).toContain("const admissionClear = next.new_copy_admission_state === \"clear\"");
+    expect(source).toContain('import { updateIcloudHealthStallClock } from "./icloudHealthStallClock";');
+    expect(source).toContain("const stallClock = updateIcloudHealthStallClock(");
+    expect(source).toContain("icloudHealthBlockedSinceMs = stallClock.blockedSinceMs;");
+    expect(source).toContain("icloudHealthFingerprint = stallClock.fingerprint;");
     expect(source).toContain("동일한 iCloud 차단 상태가 15분 이상 지속되었습니다.");
     expect(source).toContain("refreshIcloudHealth(true)");
     expect(source).toContain("refreshProviderGlobalSync(true)");
@@ -56,6 +63,16 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("provider-global-sync-item-not-found");
     expect(source).toContain("cancellingFinderCopy || checkingProviderGlobalSync");
     expect(source).toContain("finderCopyCancelStatus = \"Finder 복사 취소 요청을 보냈습니다. 상태를 다시 확인하십시오.\"");
+    expect(source).toContain('import ProviderStatusCard from "./ux/ProviderStatusCard.svelte";');
+    expect(source).toContain('state={providerStatusState(');
+    expect(source).toContain("observedAtMs: number");
+    expect(source).toContain("blockedDuration(icloudHealthBlockedSinceMs, icloudHealth?.observed_at_ms ?? 0)");
+    expect(source).toContain("blockedDuration(providerGlobalSyncBlockedSinceMs, providerGlobalSyncObservedAtMs)");
+    expect(source).toContain('"materialization-stalled"');
+    expect(source).toContain('statusId="icloud-provider-status"');
+    expect(source).toContain("cancelDisabled={checkingIcloudHealth}");
+    expect(source).toContain('selectedRootDetails()?.provider !== "icloud" && providerGlobalSyncError && !providerGlobalSync');
+    expect(source).toContain("cancelDisabled={checkingProviderGlobalSync}");
   });
 
   it("does not run the heavy iCloud probe for non-iCloud selected roots", () => {
@@ -75,5 +92,19 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).not.toContain("let oauthWriteAccess = $state(true);");
     expect(source).toContain("bind:checked={oauthWriteAccess}");
     expect(source).toContain("oauthWriteAccess,");
+  });
+
+  it("never escalates an unread provider probe failure into a materialization-stall claim", () => {
+    const source = readFileSync(resolve(repositoryRoot, "src/lib/CloudArchive.svelte"), "utf8");
+    const fnStart = source.indexOf("function providerStatusState(");
+    const errorGuard = source.indexOf('if (error) return "provider-sync-incomplete";', fnStart);
+    const stalledBranch = source.indexOf('? "materialization-stalled"', fnStart);
+
+    expect(fnStart).toBeGreaterThanOrEqual(0);
+    // The error short-circuit must come before the time-based branch that can return
+    // "materialization-stalled", so a probe failure (no observed evidence) can never be
+    // reported as a specific, observed stall condition.
+    expect(errorGuard).toBeGreaterThan(fnStart);
+    expect(stalledBranch).toBeGreaterThan(errorGuard);
   });
 });

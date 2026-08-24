@@ -1,4 +1,4 @@
-//! Regression contract for buyer-visible Rust package metadata.
+//! Regression contract for release-visible Rust package metadata.
 //!
 //! DiskSage is distributed as a desktop product rather than a crates.io library. The Cargo
 //! manifest still forms part of acquisition, SBOM, provenance, and support evidence, so it must

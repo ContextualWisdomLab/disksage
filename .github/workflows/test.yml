@@ -41,8 +41,45 @@ jobs:
         with:
           node-version: 20.19.0
       - run: npm ci
+      - run: npx playwright install --with-deps chromium
       - run: npm test
       - run: npm run build
+      - run: npm run build-storybook
+      - name: Run Storybook interaction and accessibility tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m http.server 6006 --directory storybook-static > /tmp/disksage-storybook.log 2>&1 &
+          server_pid=$!
+          cleanup() { kill "$server_pid" 2>/dev/null || true; }
+          trap cleanup EXIT
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:6006/iframe.html >/dev/null; then
+              break
+            fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              cat /tmp/disksage-storybook.log
+              exit 1
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:6006/iframe.html >/dev/null
+          npm run test-storybook -- --ci --url http://127.0.0.1:6006 --browsers chromium --testTimeout 30000
+
+  windows-home-resolution:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - name: Windows absolute-home regression
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force target | Out-Null
+          rustc --edition=2021 --test src-tauri/tests/home_resolution_contract.rs -o target/home-resolution-contract.exe
+          & .\target\home-resolution-contract.exe
 
   windows-home-resolution:
     runs-on: windows-latest
