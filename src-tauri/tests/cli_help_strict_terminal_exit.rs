@@ -188,6 +188,36 @@ fn assert_duplicate_options_are_bounded(binary: &Path) {
     }
 }
 
+fn assert_volume_value_options_do_not_consume_flags(binary: &Path) {
+    for (args, expected_error) in [
+        (
+            ["--path", "--baseline"].as_slice(),
+            "local-volume-path-value-missing",
+        ),
+        (
+            ["--baseline", "--path"].as_slice(),
+            "local-volume-baseline-value-missing",
+        ),
+        (
+            ["--logical-removed-bytes", "--path"].as_slice(),
+            "local-volume-logical-removed-value-missing",
+        ),
+    ] {
+        let output = Command::new(binary)
+            .args(args)
+            .output()
+            .expect("volume snapshot CLI must launch for missing-value validation");
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr)
+            .expect("volume snapshot diagnostics must remain valid UTF-8");
+        assert!(
+            stderr.contains(expected_error),
+            "option-shaped tokens must not be consumed as values: args={args:?}, stderr={stderr:?}"
+        );
+    }
+}
+
 #[cfg(unix)]
 fn assert_non_utf8_argument_is_bounded(binary: &Path) {
     use std::os::unix::ffi::OsStringExt;
@@ -232,4 +262,5 @@ fn successful_help_is_strictly_terminal_and_invalid_input_stays_bounded() {
         #[cfg(unix)]
         assert_non_utf8_argument_is_bounded(binary);
     }
+    assert_volume_value_options_do_not_consume_flags(&binaries[2].0);
 }
