@@ -67,6 +67,23 @@ where
     Ok(())
 }
 
+/// Detect option-shaped native arguments without requiring them to be valid Unicode.
+fn native_argument_is_option_like(argument: &OsString) -> bool {
+    argument.to_string_lossy().starts_with('-')
+}
+
+/// Consume one option value without allowing another option token to become that value.
+fn next_option_value(
+    values: &mut std::vec::IntoIter<OsString>,
+    missing_error: &'static str,
+) -> Result<OsString, String> {
+    let value = values.next().ok_or(missing_error)?;
+    if native_argument_is_option_like(&value) {
+        return Err(missing_error.into());
+    }
+    Ok(value)
+}
+
 /// Parses bounded native arguments without reflecting unknown or malformed values.
 fn parse_args<I, S>(args: I) -> Result<Args, String>
 where
@@ -91,25 +108,28 @@ where
                 if path.is_some() {
                     return Err("local-volume-path-duplicate".into());
                 }
-                path = Some(PathBuf::from(
-                    values.next().ok_or("local-volume-path-value-missing")?,
-                ));
+                path = Some(PathBuf::from(next_option_value(
+                    &mut values,
+                    "local-volume-path-value-missing",
+                )?));
             }
             Some("--baseline") => {
                 if baseline.is_some() {
                     return Err("local-volume-baseline-duplicate".into());
                 }
-                baseline = Some(PathBuf::from(
-                    values.next().ok_or("local-volume-baseline-value-missing")?,
-                ));
+                baseline = Some(PathBuf::from(next_option_value(
+                    &mut values,
+                    "local-volume-baseline-value-missing",
+                )?));
             }
             Some("--logical-removed-bytes") => {
                 if logical_removed_bytes.is_some() {
                     return Err("local-volume-logical-removed-duplicate".into());
                 }
-                let raw_bytes = values
-                    .next()
-                    .ok_or("local-volume-logical-removed-value-missing")?;
+                let raw_bytes = next_option_value(
+                    &mut values,
+                    "local-volume-logical-removed-value-missing",
+                )?;
                 logical_removed_bytes = Some(
                     raw_bytes
                         .to_str()
@@ -222,6 +242,22 @@ mod tests {
         assert_eq!(
             parse_args(["--baseline"]).unwrap_err(),
             "local-volume-baseline-value-missing"
+        );
+    }
+
+    #[test]
+    fn parser_does_not_consume_option_tokens_as_values() {
+        assert_eq!(
+            parse_args(["--path", "--baseline"]).unwrap_err(),
+            "local-volume-path-value-missing"
+        );
+        assert_eq!(
+            parse_args(["--baseline", "--path"]).unwrap_err(),
+            "local-volume-baseline-value-missing"
+        );
+        assert_eq!(
+            parse_args(["--logical-removed-bytes", "--path"]).unwrap_err(),
+            "local-volume-logical-removed-value-missing"
         );
     }
 
