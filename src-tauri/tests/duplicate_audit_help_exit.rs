@@ -65,7 +65,7 @@ fn duplicate_audit_unknown_and_mixed_arguments_are_bounded() {
     }
 }
 
-/// Prove hostile non-UTF-8 arguments fail through the stable diagnostic on Unix.
+/// Prove hostile non-UTF-8 option-shaped arguments fail through the stable diagnostic on Unix.
 #[cfg(unix)]
 #[test]
 fn duplicate_audit_non_utf8_argument_fails_without_panic() {
@@ -84,5 +84,46 @@ fn duplicate_audit_non_utf8_argument_fails_without_panic() {
     assert_eq!(
         stderr.trim_end(),
         "DiskSage exact duplicate audit: duplicate-audit-argument-invalid"
+    );
+}
+
+/// Native filesystem roots are OS paths, not UTF-8 protocol fields.
+#[cfg(unix)]
+#[test]
+fn duplicate_audit_accepts_a_non_utf8_absolute_root_without_reflecting_it() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let parent = tempfile::tempdir().expect("native root parent must be created");
+    let mut name = b"duplicate-audit-root-".to_vec();
+    name.push(0xff);
+    let root = parent.path().join(OsString::from_vec(name.clone()));
+    std::fs::create_dir(&root).expect("native non-UTF-8 audit root must be created");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_disksage-duplicate-audit"))
+        .arg("--root")
+        .arg(&root)
+        .args(["--min-bytes", "1", "--max-entries", "10"])
+        .output()
+        .expect("duplicate-audit CLI must launch with a native root path");
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "valid native filesystem paths must not be rejected as UTF-8 protocol input: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    let summary: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("successful native-root audit must remain machine-readable JSON");
+    assert_eq!(summary["schema_version"], 1);
+    assert_eq!(summary["file_count"], 0);
+    assert_eq!(summary["cluster_count"], 0);
+    assert_eq!(summary["automatic_delete_allowed"], false);
+    assert_eq!(summary["mutation_performed"], false);
+    assert_eq!(summary["local_paths_included"], false);
+    assert!(
+        !output.stdout.windows(name.len()).any(|window| window == name),
+        "public evidence must not reflect the native root filename"
     );
 }
