@@ -197,7 +197,10 @@ fn assert_native_non_utf8_paths_reach_domain_boundaries(binaries: &[PathBuf]) {
             output.status.code(),
             String::from_utf8_lossy(&output.stderr)
         );
-        assert!(output.stderr.is_empty(), "successful native-path planning must not emit argument diagnostics");
+        assert!(
+            output.stderr.is_empty(),
+            "successful native-path planning must not emit argument diagnostics"
+        );
         let summary: serde_json::Value = serde_json::from_slice(&output.stdout)
             .expect("successful native-path planning must emit machine-readable JSON");
         assert!(summary.is_object(), "planning output must remain a JSON object");
@@ -237,6 +240,60 @@ fn assert_native_non_utf8_paths_reach_domain_boundaries(binaries: &[PathBuf]) {
     assert!(!stderr.contains("incomplete-download-materialize-unknown-argument"));
 }
 
+fn assert_read_only_duplicate_limit_is_bounded(binary: &Path, flag: &str) {
+    let root = tempfile::tempdir().expect("duplicate-limit root fixture must be created");
+    let output = command(binary)
+        .arg("--root")
+        .arg(root.path())
+        .arg(flag)
+        .arg("1")
+        .arg(flag)
+        .arg("2")
+        .output()
+        .expect("read-only incomplete-download CLI must launch for duplicate-limit validation");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("duplicate-limit diagnostic must be UTF-8");
+    assert!(
+        stderr.contains(&format!("{flag}는 한 번만 지정할 수 있음")),
+        "duplicate bounded limit must fail before domain work: {stderr}"
+    );
+}
+
+fn assert_materialize_duplicate_limit_is_bounded(binary: &Path, flag: &str) {
+    let source_root = tempfile::tempdir().expect("duplicate-limit source fixture must be created");
+    let private = tempfile::tempdir().expect("duplicate-limit private fixture must be created");
+    let output = command(binary)
+        .arg("--source-root")
+        .arg(source_root.path())
+        .arg("--destination-plan")
+        .arg(private.path().join("missing-plan.json"))
+        .arg("--confirm-plan-fingerprint")
+        .arg("a".repeat(64))
+        .arg("--receipt-dir")
+        .arg(private.path().join("receipts"))
+        .arg("--approved-by")
+        .arg("human:test")
+        .arg("--rationale")
+        .arg("duplicate limit admission")
+        .arg(flag)
+        .arg("1")
+        .arg(flag)
+        .arg("2")
+        .arg("--execute")
+        .arg("--capacity-snapshot")
+        .arg(private.path().join("capacity.json"))
+        .output()
+        .expect("materialize CLI must launch for duplicate-limit validation");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("duplicate-limit diagnostic must be UTF-8");
+    assert!(
+        stderr.contains(&format!("{flag}는 한 번만 지정할 수 있음")),
+        "duplicate bounded limit must fail before plan or filesystem admission: {stderr}"
+    );
+}
+
 #[test]
 fn incomplete_download_coverage_contract_keeps_shipped_entrypoints_real() {
     for (name, source) in [
@@ -270,6 +327,12 @@ fn incomplete_download_help_is_successful_and_invalid_arguments_are_bounded() {
         #[cfg(unix)]
         assert_non_utf8_argument_is_bounded(binary, error_token);
     }
+    for binary in &binaries[..2] {
+        assert_read_only_duplicate_limit_is_bounded(binary, "--max-entries");
+        assert_read_only_duplicate_limit_is_bounded(binary, "--stale-after-days");
+    }
+    assert_materialize_duplicate_limit_is_bounded(&binaries[2], "--max-entries");
+    assert_materialize_duplicate_limit_is_bounded(&binaries[2], "--stale-after-days");
     #[cfg(unix)]
     assert_native_non_utf8_paths_reach_domain_boundaries(&binaries);
 }
