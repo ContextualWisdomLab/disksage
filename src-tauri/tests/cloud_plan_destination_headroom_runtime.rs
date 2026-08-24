@@ -1,6 +1,6 @@
 use disksage_lib::cloud::{
     plan_cloud_archive, CloudAccountScope, CloudPlanOptions, CloudProvider, CloudRoot, ContentMetadata,
-    FileFact, system_now_ms,
+    FileFact, production_year_month, system_now_ms,
 };
 use disksage_lib::cloud_plan_view::normalize_native_copy_headroom_notices;
 
@@ -100,9 +100,14 @@ fn one_unverified_candidate_does_not_blanket_block_candidates_with_verified_head
     std::fs::create_dir(&cloud_root).unwrap();
     std::fs::create_dir(&archive_root).unwrap();
     std::fs::create_dir(&redirected_documents).unwrap();
-    symlink(&redirected_documents, archive_root.join("documents")).unwrap();
 
     let observed_at_ms = system_now_ms();
+    let (year, month) = production_year_month(observed_at_ms);
+    let archive_month = archive_root
+        .join(format!("{year:04}"))
+        .join(format!("{month:02}"));
+    std::fs::create_dir_all(&archive_month).unwrap();
+    symlink(&redirected_documents, archive_month.join("documents")).unwrap();
     let mut facts = Vec::new();
     for (name, bytes) in [("report.pdf", b"report".as_slice()), ("clip.mp4", b"clip".as_slice())] {
         let path = source_root.join(name);
