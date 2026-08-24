@@ -137,6 +137,7 @@ fn audit(generated_at_ms: u64) -> ProviderClientRuntimeAudit {
 }
 
 fn write_create_new(path: &Path, encoded: &[u8]) -> Result<(), String> {
+    validate_output_parent(path)?;
     #[cfg(unix)]
     let mut file = {
         use std::os::unix::fs::OpenOptionsExt;
