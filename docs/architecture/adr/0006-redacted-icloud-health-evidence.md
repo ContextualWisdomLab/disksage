@@ -292,3 +292,14 @@ At exact head `b8a17eb`, retained iCloud health snapshots now accept the exact p
 still use the current fingerprint, and the 29-test iCloud health slice passed on Rust 1.97.1. This
 preserves the restart-safe stall clock across upgrades without weakening evidence integrity or
 changing the fail-closed provider/Finder/source/cloud mutation boundary.
+
+## Operational evidence update — 2026-08-24 17:40
+
+A fresh bounded read-only `/usr/bin/brctl status` still reports `client:needs-sync` with
+`pending-scan=1,740`, `pending-sync-up=343`, and `sync-up-scheduled=2,150`; 20 lines matched the
+bounded upload-error/“Saving asset failed” markers. Finder, `fileproviderd`, and `bird` remain the
+same long-lived provider session started at 10:43:49. The root volume currently has about 21 GiB
+available (926 GiB total, 12 GiB used), so this is not a full-root condition, but headroom is
+lower than the earlier 36 GiB observation. The Finder copy remains diagnostic-only: no item-level
+remote write is identified, and `provider_sync_attested=false`, `local_eviction_authorized=false`,
+and `mutation_performed=false` remain invariant.
