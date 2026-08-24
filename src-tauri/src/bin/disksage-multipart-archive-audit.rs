@@ -75,7 +75,6 @@ fn parse_args(raw: &[OsString]) -> Result<Args, String> {
                     "--private-output",
                 )?));
             }
-            "--help" | "-h" => return Err(usage()),
             _ => return Err("알 수 없는 인자".to_string()),
         }
         index += 1;
