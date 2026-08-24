@@ -59,7 +59,11 @@ pub fn lineage_metadata_for_path(path: &Path) -> Option<LineageMetadata> {
                 content.production_time_confidence,
             )
         } else if let Some(value) = crate::cloud::filename_date_ms(path) {
-            (Some(value), Some("filename:path-token".into()), Some("low".into()))
+            (
+                Some(value),
+                Some("filename:path-token".into()),
+                Some("low".into()),
+            )
         } else if filesystem_created_ms > 0 {
             (
                 Some(filesystem_created_ms),
@@ -89,7 +93,12 @@ pub fn lineage_metadata_for_path(path: &Path) -> Option<LineageMetadata> {
         hasher.update(&[0]);
     }
     for evidence in content.evidence {
-        for value in [evidence.field, evidence.value, evidence.source, evidence.confidence] {
+        for value in [
+            evidence.field,
+            evidence.value,
+            evidence.source,
+            evidence.confidence,
+        ] {
             hasher.update(value.as_bytes());
             hasher.update(&[0]);
         }
@@ -116,21 +125,30 @@ fn plan_moves_impl(
     let mut plans = Vec::new();
     let mut lineage_probe_count = 0;
     for f in files {
-        let Some(name) = f.path.file_name() else { continue };
-        let age_days = now_ms.saturating_sub(f.mtime_ms) / 86_400_000;
-        let local: String = match crate::userrules::classify_by_rules(rules, &f.path, f.size, age_days) {
-            Some(c) => c,
-            None => match pick(&f.path, &candidates) {
-                Some(picked) => picked,
-                None => match classify(&f.path) {
-                    Some(c) => c.to_string(),
-                    None => continue,
-                },
-            },
+        let Some(name) = f.path.file_name() else {
+            continue;
         };
-        let Some(class) = onto.classes.iter().find(|c| local_name(&c.id) == local) else { continue };
-        let Some(template) = onto.resolve_target_with(&reasoner, &class.id) else { continue };
-        let Some(folder_path) = resolve_target_folder(&template, home, &local) else { continue };
+        let age_days = now_ms.saturating_sub(f.mtime_ms) / 86_400_000;
+        let local: String =
+            match crate::userrules::classify_by_rules(rules, &f.path, f.size, age_days) {
+                Some(c) => c,
+                None => match pick(&f.path, &candidates) {
+                    Some(picked) => picked,
+                    None => match classify(&f.path) {
+                        Some(c) => c.to_string(),
+                        None => continue,
+                    },
+                },
+            };
+        let Some(class) = onto.classes.iter().find(|c| local_name(&c.id) == local) else {
+            continue;
+        };
+        let Some(template) = onto.resolve_target_with(&reasoner, &class.id) else {
+            continue;
+        };
+        let Some(folder_path) = resolve_target_folder(&template, home, &local) else {
+            continue;
+        };
         let dst = folder_path.join(name);
         if f.path.parent() == Some(folder_path.as_path()) {
             continue;
@@ -218,21 +236,13 @@ pub fn plan_moves_with_metadata(
     pick: &dyn Fn(&Path, &[&str]) -> Option<String>,
     lineage_probe: &dyn Fn(&Path) -> Option<LineageMetadata>,
 ) -> Vec<MovePlan> {
-    plan_moves_impl(
-        files,
-        onto,
-        home,
-        now_ms,
-        rules,
-        pick,
-        Some(lineage_probe),
-    )
+    plan_moves_impl(files, onto, home, now_ms, rules, pick, Some(lineage_probe))
 }
 
 pub fn validate_move_source(plan: &MovePlan) -> Result<(), String> {
     let path = Path::new(&plan.src);
-    let metadata = std::fs::symlink_metadata(path)
-        .map_err(|_| "organize-source-unavailable".to_string())?;
+    let metadata =
+        std::fs::symlink_metadata(path).map_err(|_| "organize-source-unavailable".to_string())?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err("organize-source-not-regular-file".into());
     }
@@ -284,11 +294,19 @@ dm:Installer a owl:Class ; rdfs:label "설치파일"@ko ; dm:targetFolder "~/Ins
 "#;
 
     fn fe(p: &str, size: u64) -> FileEntry {
-        FileEntry { path: PathBuf::from(p), size, mtime_ms: 0 }
+        FileEntry {
+            path: PathBuf::from(p),
+            size,
+            mtime_ms: 0,
+        }
     }
 
     fn fe_at(p: &str, size: u64, mtime_ms: u64) -> FileEntry {
-        FileEntry { path: PathBuf::from(p), size, mtime_ms }
+        FileEntry {
+            path: PathBuf::from(p),
+            size,
+            mtime_ms,
+        }
     }
 
     fn platform_home() -> PathBuf {
@@ -354,10 +372,16 @@ dm:Installer a owl:Class ; rdfs:label "설치파일"@ko ; dm:targetFolder "~/Ins
             &|_| Some(lineage.clone()),
         );
         assert_eq!(plans.len(), 1);
-        assert_eq!(plans[0].lineage.production_time_source.as_deref(), Some("embedded:exiftool:CreateDate"));
+        assert_eq!(
+            plans[0].lineage.production_time_source.as_deref(),
+            Some("embedded:exiftool:CreateDate")
+        );
         assert!(validate_move_source(&plans[0]).is_ok());
         std::fs::write(&source, b"changed").unwrap();
-        assert_eq!(validate_move_source(&plans[0]), Err("organize-source-size-changed".into()));
+        assert_eq!(
+            validate_move_source(&plans[0]),
+            Err("organize-source-size-changed".into())
+        );
     }
 
     #[test]
@@ -381,19 +405,22 @@ dm:Installer a owl:Class ; rdfs:label "설치파일"@ko ; dm:targetFolder "~/Ins
         );
         assert_eq!(probes.get(), MAX_LINEAGE_PROBES);
         assert_eq!(plans.len(), MAX_LINEAGE_PROBES + 1);
-        assert_eq!(plans[MAX_LINEAGE_PROBES].src, format!("/downloads/{}.png", MAX_LINEAGE_PROBES));
+        assert_eq!(
+            plans[MAX_LINEAGE_PROBES].src,
+            format!("/downloads/{}.png", MAX_LINEAGE_PROBES)
+        );
         assert_eq!(plans[MAX_LINEAGE_PROBES].source_size, Some(1));
-        assert!(plans[MAX_LINEAGE_PROBES].lineage.lineage_fingerprint.is_empty());
+        assert!(plans[MAX_LINEAGE_PROBES]
+            .lineage
+            .lineage_fingerprint
+            .is_empty());
     }
 
     #[test]
     fn skips_unclassified_and_targetless() {
         let onto = parse_ttl(ONTO).unwrap();
         let home = platform_home();
-        let files = vec![
-            fe("/x/unknown.xyz", 10),
-            fe("/x/main.rs", 20),
-        ];
+        let files = vec![fe("/x/unknown.xyz", 10), fe("/x/main.rs", 20)];
         assert!(plan_moves(&files, &onto, &home).is_empty());
     }
 
@@ -402,7 +429,11 @@ dm:Installer a owl:Class ; rdfs:label "설치파일"@ko ; dm:targetFolder "~/Ins
         let onto = parse_ttl(ONTO).unwrap();
         let home = platform_home();
         let existing = home.join("Media").join("Image").join("pic.png");
-        let files = vec![FileEntry { path: existing, size: 100, mtime_ms: 0 }];
+        let files = vec![FileEntry {
+            path: existing,
+            size: 100,
+            mtime_ms: 0,
+        }];
         assert!(plan_moves(&files, &onto, &home).is_empty());
     }
 
@@ -434,7 +465,8 @@ dm:Installer a owl:Class ; rdfs:label "설치파일"@ko ; dm:targetFolder "~/Ins
 
     #[test]
     fn target_folder_without_tilde_is_absolute() {
-        let target_template = platform_absolute_template("/opt/media/{class}", "C:/opt/media/{class}");
+        let target_template =
+            platform_absolute_template("/opt/media/{class}", "C:/opt/media/{class}");
         let ttl = format!(
             r#"
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
@@ -464,7 +496,10 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "relative/{cl
         let onto = parse_ttl(ttl).unwrap();
         let home = platform_home();
         let plans = plan_moves(&[fe("/downloads/pic.png", 100)], &onto, &home);
-        assert!(plans.is_empty(), "relative ontology targets must fail closed");
+        assert!(
+            plans.is_empty(),
+            "relative ontology targets must fail closed"
+        );
     }
 
     #[test]
@@ -478,7 +513,10 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "~/Media/../e
         let onto = parse_ttl(ttl).unwrap();
         let home = platform_home();
         let plans = plan_moves(&[fe("/downloads/pic.png", 100)], &onto, &home);
-        assert!(plans.is_empty(), "home-relative ontology targets must not traverse above their rooted suffix");
+        assert!(
+            plans.is_empty(),
+            "home-relative ontology targets must not traverse above their rooted suffix"
+        );
     }
 
     #[test]
@@ -492,7 +530,10 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "~other/{clas
         let onto = parse_ttl(ttl).unwrap();
         let home = platform_home();
         let plans = plan_moves(&[fe("/downloads/pic.png", 100)], &onto, &home);
-        assert!(plans.is_empty(), "only an exact leading ~/ token may expand to home");
+        assert!(
+            plans.is_empty(),
+            "only an exact leading ~/ token may expand to home"
+        );
     }
 
     #[test]
@@ -523,7 +564,10 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "{}" .
     fn rejects_home_relative_target_when_home_is_relative() {
         let onto = parse_ttl(ONTO).unwrap();
         let plans = plan_moves(&[fe("/downloads/pic.png", 100)], &onto, Path::new("."));
-        assert!(plans.is_empty(), "home-relative targets require an absolute home path");
+        assert!(
+            plans.is_empty(),
+            "home-relative targets require an absolute home path"
+        );
     }
 
     #[test]
@@ -569,7 +613,15 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "{}" .
         let onto = parse_ttl(ONTO).unwrap();
         let home = platform_home();
         let rules = vec![crate::userrules::Rule {
-            r#match: crate::userrules::RuleMatch { ext: Some("png".into()), name_contains: None, path_contains: None, min_size: None, max_size: None, min_age_days: None, max_age_days: None },
+            r#match: crate::userrules::RuleMatch {
+                ext: Some("png".into()),
+                name_contains: None,
+                path_contains: None,
+                min_size: None,
+                max_size: None,
+                min_age_days: None,
+                max_age_days: None,
+            },
             class: "Installer".into(),
         }];
         let pick = |_p: &Path, _c: &[&str]| Some("Image".to_string());
@@ -584,7 +636,15 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "{}" .
         let onto = parse_ttl(ONTO).unwrap();
         let home = platform_home();
         let rules = vec![crate::userrules::Rule {
-            r#match: crate::userrules::RuleMatch { ext: Some("iso".into()), name_contains: None, path_contains: None, min_size: None, max_size: None, min_age_days: None, max_age_days: None },
+            r#match: crate::userrules::RuleMatch {
+                ext: Some("iso".into()),
+                name_contains: None,
+                path_contains: None,
+                min_size: None,
+                max_size: None,
+                min_age_days: None,
+                max_age_days: None,
+            },
             class: "Installer".into(),
         }];
         let pick = |_p: &Path, _c: &[&str]| None;
@@ -599,14 +659,36 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "{}" .
         let home = platform_home();
         let now = 100 * 86_400_000u64;
         let rules = vec![crate::userrules::Rule {
-            r#match: crate::userrules::RuleMatch { ext: None, name_contains: None, path_contains: None, min_size: None, max_size: None, min_age_days: Some(30), max_age_days: None },
+            r#match: crate::userrules::RuleMatch {
+                ext: None,
+                name_contains: None,
+                path_contains: None,
+                min_size: None,
+                max_size: None,
+                min_age_days: Some(30),
+                max_age_days: None,
+            },
             class: "Installer".into(),
         }];
         let pick = |_p: &Path, _c: &[&str]| None;
-        let old = plan_moves_with(&[fe_at("/d/pic.png", 10, 0)], &onto, &home, now, &rules, &pick);
+        let old = plan_moves_with(
+            &[fe_at("/d/pic.png", 10, 0)],
+            &onto,
+            &home,
+            now,
+            &rules,
+            &pick,
+        );
         assert_eq!(old.len(), 1);
         assert!(old[0].class_id.ends_with("Installer"));
-        let fresh = plan_moves_with(&[fe_at("/d/pic.png", 10, now)], &onto, &home, now, &rules, &pick);
+        let fresh = plan_moves_with(
+            &[fe_at("/d/pic.png", 10, now)],
+            &onto,
+            &home,
+            now,
+            &rules,
+            &pick,
+        );
         assert_eq!(fresh.len(), 1);
         assert!(fresh[0].class_id.ends_with("Image"));
     }
@@ -618,11 +700,26 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "{}" .
         let now = 100 * 86_400_000u64;
         let future = 200 * 86_400_000u64;
         let rules = vec![crate::userrules::Rule {
-            r#match: crate::userrules::RuleMatch { ext: None, name_contains: None, path_contains: None, min_size: None, max_size: None, min_age_days: Some(1), max_age_days: None },
+            r#match: crate::userrules::RuleMatch {
+                ext: None,
+                name_contains: None,
+                path_contains: None,
+                min_size: None,
+                max_size: None,
+                min_age_days: Some(1),
+                max_age_days: None,
+            },
             class: "Installer".into(),
         }];
         let pick = |_p: &Path, _c: &[&str]| None;
-        let plans = plan_moves_with(&[fe_at("/d/pic.png", 10, future)], &onto, &home, now, &rules, &pick);
+        let plans = plan_moves_with(
+            &[fe_at("/d/pic.png", 10, future)],
+            &onto,
+            &home,
+            now,
+            &rules,
+            &pick,
+        );
         assert_eq!(plans.len(), 1);
         assert!(plans[0].class_id.ends_with("Image"));
     }
