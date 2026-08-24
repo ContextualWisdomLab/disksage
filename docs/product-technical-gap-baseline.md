@@ -1144,3 +1144,14 @@ checks are not reused:
   `real_datasets` entries and not proof of a cloud write. DiskSage keeps Goal
   `provider-sync-incomplete`, copy/attestation/source eviction fail-closed, and performed no
   Finder, provider, source, or cloud mutation.
+
+## 2026-08-24 15:42 +0900 Strix provider evidence separated from source readiness
+
+- The exact-head central `.github` PR #1263 Strix artifact (`32693700056`) recorded NVIDIA NIM
+  HTTP 429 rate limiting on the primary and retries, followed by a direct OpenAI fallback HTTP
+  404 for `openai-direct/gpt-5.6-luna`. The gate correctly retained the provider-failure signal
+  and did not promote the fallback's zero-finding report to a successful security result.
+- This is external model-provider availability evidence, not proof of a DiskSage source defect or
+  a cloud/data mutation. The central repair remains subject to a fresh authoritative same-head
+  Strix run and protected approvals; DiskSage's local iCloud admission and eviction gates are
+  unaffected and remain fail-closed.
