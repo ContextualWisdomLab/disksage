@@ -219,7 +219,11 @@ fn local_package_and_ci_use_the_same_exact_compiler() {
     );
 
     let ci_toolchains = action_toolchains(TEST_WORKFLOW);
-    assert_eq!(ci_toolchains.len(), 2, "both Rust CI jobs must install a reviewed toolchain");
+    assert_eq!(
+        ci_toolchains.len(),
+        3,
+        "all Rust CI jobs must install the reviewed toolchain"
+    );
     assert!(
         ci_toolchains
             .iter()
@@ -234,8 +238,8 @@ fn release_commands_remain_under_the_root_toolchain_override() {
     let release_toolchains = action_toolchains(RELEASE_WORKFLOW);
     assert_eq!(
         release_toolchains.len(),
-        2,
-        "release and GPU release jobs must retain their Rust bootstrap action"
+        3,
+        "release, attestation, and GPU release jobs must retain their Rust bootstrap action"
     );
     assert!(
         release_toolchains.iter().all(Option::is_none),
