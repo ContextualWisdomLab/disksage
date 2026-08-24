@@ -14,6 +14,7 @@ use disksage_lib::private_evidence::write_private_json_create_new;
 use disksage_lib::provider_capacity::{
     collect_icloud_native_capacity, CloudCapacitySnapshot, DEFAULT_CAPACITY_RESERVE_BYTES,
 };
+use std::ffi::OsString;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
@@ -61,7 +62,20 @@ fn usage() -> String {
     )
 }
 
-fn parse_args(raw: &[String]) -> Result<Args, String> {
+fn native_value(raw: &[OsString], index: &mut usize, flag: &str) -> Result<OsString, String> {
+    *index += 1;
+    raw.get(*index)
+        .cloned()
+        .ok_or_else(|| format!("{flag} 값이 필요함"))
+}
+
+fn text_value(raw: &[OsString], index: &mut usize, flag: &str) -> Result<String, String> {
+    native_value(raw, index, flag)?
+        .into_string()
+        .map_err(|_| "incomplete-download-destination-plan-invalid-utf8-argument".to_string())
+}
+
+fn parse_args_os(raw: &[OsString]) -> Result<Args, String> {
     let mut source_root = None;
     let mut cloud_root = None;
     let mut destination_subdirectory = None;
@@ -73,36 +87,31 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     let mut private_output = None;
     let mut index = 0usize;
     while index < raw.len() {
-        let value = |index: &mut usize, flag: &str| -> Result<String, String> {
-            *index += 1;
-            raw.get(*index)
-                .cloned()
-                .ok_or_else(|| format!("{flag} 값이 필요함"))
-        };
-        match raw[index].as_str() {
-            "--source-root" => {
+        match raw[index].to_str() {
+            Some("--source-root") => {
                 if source_root.is_some() {
                     return Err("--source-root는 한 번만 지정할 수 있음".into());
                 }
-                source_root = Some(PathBuf::from(value(&mut index, "--source-root")?));
+                source_root = Some(PathBuf::from(native_value(raw, &mut index, "--source-root")?));
             }
-            "--cloud-root" => {
+            Some("--cloud-root") => {
                 if cloud_root.is_some() {
                     return Err("--cloud-root는 한 번만 지정할 수 있음".into());
                 }
-                cloud_root = Some(PathBuf::from(value(&mut index, "--cloud-root")?));
+                cloud_root = Some(PathBuf::from(native_value(raw, &mut index, "--cloud-root")?));
             }
-            "--destination-subdirectory" => {
+            Some("--destination-subdirectory") => {
                 if destination_subdirectory.is_some() {
                     return Err("--destination-subdirectory는 한 번만 지정할 수 있음".into());
                 }
-                destination_subdirectory = Some(PathBuf::from(value(
+                destination_subdirectory = Some(PathBuf::from(text_value(
+                    raw,
                     &mut index,
                     "--destination-subdirectory",
                 )?));
             }
-            "--max-entries" => {
-                let parsed = value(&mut index, "--max-entries")?
+            Some("--max-entries") => {
+                let parsed = text_value(raw, &mut index, "--max-entries")?
                     .parse::<usize>()
                     .map_err(|_| "--max-entries는 양의 정수여야 함".to_string())?;
                 if parsed == 0 || parsed > DEFAULT_MAX_ENTRIES {
@@ -112,8 +121,8 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 }
                 max_entries = parsed;
             }
-            "--stale-after-days" => {
-                let parsed = value(&mut index, "--stale-after-days")?
+            Some("--stale-after-days") => {
+                let parsed = text_value(raw, &mut index, "--stale-after-days")?
                     .parse::<u64>()
                     .map_err(|_| "--stale-after-days는 양의 정수여야 함".to_string())?;
                 if !(1..=MAX_STALE_AFTER_DAYS).contains(&parsed) {
@@ -123,8 +132,8 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 }
                 stale_after_days = parsed;
             }
-            "--capacity-reserve-mib" => {
-                let parsed = value(&mut index, "--capacity-reserve-mib")?
+            Some("--capacity-reserve-mib") => {
+                let parsed = text_value(raw, &mut index, "--capacity-reserve-mib")?
                     .parse::<u64>()
                     .map_err(|_| "--capacity-reserve-mib는 정수여야 함".to_string())?;
                 if parsed > MAX_CAPACITY_RESERVE_MIB {
@@ -134,27 +143,34 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 }
                 reserve_mib = parsed;
             }
-            "--live-icloud-capacity" => {
+            Some("--live-icloud-capacity") => {
                 if live_icloud_capacity {
                     return Err("--live-icloud-capacity는 한 번만 지정할 수 있음".into());
                 }
                 live_icloud_capacity = true;
             }
-            "--capacity-snapshot" => {
+            Some("--capacity-snapshot") => {
                 if capacity_snapshot.is_some() {
                     return Err("--capacity-snapshot은 한 번만 지정할 수 있음".into());
                 }
-                capacity_snapshot = Some(PathBuf::from(value(&mut index, "--capacity-snapshot")?));
+                capacity_snapshot = Some(PathBuf::from(native_value(
+                    raw,
+                    &mut index,
+                    "--capacity-snapshot",
+                )?));
             }
-            "--private-output" => {
+            Some("--private-output") => {
                 if private_output.is_some() {
                     return Err("--private-output은 한 번만 지정할 수 있음".into());
                 }
-                private_output = Some(PathBuf::from(value(&mut index, "--private-output")?));
+                private_output = Some(PathBuf::from(native_value(raw, &mut index, "--private-output")?));
             }
-            "--help" | "-h" => return Err(usage()),
-            _unknown => {
+            Some("--help" | "-h") => return Err(usage()),
+            Some(_) => {
                 return Err("incomplete-download-destination-plan-unknown-argument".into())
+            }
+            None => {
+                return Err("incomplete-download-destination-plan-invalid-utf8-argument".into())
             }
         }
         index += 1;
@@ -197,6 +213,12 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
         capacity_snapshot,
         private_output,
     })
+}
+
+#[cfg(test)]
+fn parse_args(raw: &[String]) -> Result<Args, String> {
+    let native = raw.iter().map(OsString::from).collect::<Vec<_>>();
+    parse_args_os(&native)
 }
 
 fn system_now_ms() -> u64 {
@@ -257,19 +279,12 @@ fn read_capacity_snapshot(path: &Path) -> Result<CloudCapacitySnapshot, String> 
 }
 
 fn run() -> Result<(), String> {
-    let raw = std::env::args_os()
-        .skip(1)
-        .map(|argument| {
-            argument
-                .into_string()
-                .map_err(|_| "incomplete-download-destination-plan-invalid-utf8-argument".to_string())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    if raw.len() == 1 && matches!(raw[0].as_str(), "--help" | "-h") {
+    let raw = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if raw.len() == 1 && matches!(raw[0].to_str(), Some("--help" | "-h")) {
         println!("{}", usage());
         return Ok(());
     }
-    let args = parse_args(&raw)?;
+    let args = parse_args_os(&raw)?;
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or_else(|| "home-directory-unavailable".to_string())?;
