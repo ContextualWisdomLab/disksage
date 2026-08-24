@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
-**Snapshot:** 2026-08-24 18:11 +0900 (Asia/Seoul)
-**Repository heads at snapshot:** the dated inventory and 18:11 correction below supersede earlier
+**Snapshot:** 2026-08-24 18:28 +0900 (Asia/Seoul)
+**Repository heads at snapshot:** the dated inventory and 18:28 correction below supersede earlier
 historical captures; hosted checks and protected review remain authoritative, and no merge is
 claimed from queued, stale, or bot-only status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
@@ -24,11 +24,12 @@ checks and approvals.
 | PR | Exact head | Draft | Merge state | Review state | Current interpretation |
 | --- | --- | --- | --- | --- | --- |
 | #249 | `dc9ccf2a215061fba5bea2a23e8df3e84a0cd072` | yes | blocked | review required | Git worktree audit help; process tests use Cargo's shipped binary without nested temp builds |
-| #247 | `7b45ada3be4762724fd2c964b0dafe7f62dbeacb` | yes | blocked | review required | iCloud provider indexing plus live Finder/provider stall evidence; dated headroom-fixture repair and explicit Finder Accessibility permission guidance |
+| #247 | `776a87d7fbe11668ba3b85ea2bf57ade35334a2c` | yes | blocked | review required | iCloud provider indexing plus live Finder/provider stall evidence; dated headroom-fixture repair and explicit Finder Accessibility permission guidance |
 | #246 | `1972614ee5488cca34deeb3bd999d369c61b3de1` | no | blocked | review required | Storybook/accessibility contract; iCloud stall clock test slice is 7/7 |
 | #244 | `13caeb04333e50e57c8a51a11b64aeb131c080b2` | no | blocked | review required | Rust 1.97.1 compiler baseline |
 | #204 | `5bf86a9c593888fe5f08bff9f8dea74e5f1299ae` | yes | blocked | review required | DiskSage shell/icon identity; every Test/Release Node bootstrap and zlib ABI pinned after hosted runtime mismatch |
 | #227 | `5ad11975ad1229e700dc042fdfd0482f21a2f45c` | no | blocked | review required | symlink-root audit hardening |
+| #225 | `ea6f82d914e4660319600acb614fccb4a701aec1` | yes | blocked | review required | cwd-relative organize targets fail closed while lineage metadata and Windows home-resolution contracts remain intact |
 | #212 | `75d728e403cf0b30511e149a7e650731f6472733` | no | blocked | review required | cloud operational CLI help |
 | #206 | `2e7b845b7610a871ec5981d964bcab5cb99df41d` | no | clean | none | content-bound Homebrew execution; no qualifying approval |
 | #205 | `5c86668a6e503a174ff0b07151f67226b39547ff` | no | clean | none | Intel Homebrew target support; no qualifying approval |
