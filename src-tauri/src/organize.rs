@@ -341,7 +341,7 @@ dm:Installer a owl:Class ; rdfs:label "설치파일"@ko ; dm:targetFolder "~/Ins
     #[test]
     fn metadata_aware_plan_binds_lineage_and_rejects_source_drift() {
         let onto = parse_ttl(ONTO).unwrap();
-        let home = Path::new("/home/u");
+        let home = platform_home();
         let tmp = tempfile::tempdir().unwrap();
         let source = tmp.path().join("pic.png");
         std::fs::write(&source, b"image").unwrap();
@@ -365,7 +365,7 @@ dm:Installer a owl:Class ; rdfs:label "설치파일"@ko ; dm:targetFolder "~/Ins
         let plans = plan_moves_with_metadata(
             &files,
             &onto,
-            home,
+            &home,
             1_800_000_000_000,
             &[],
             &|_, _| None,
@@ -394,7 +394,7 @@ dm:Installer a owl:Class ; rdfs:label "설치파일"@ko ; dm:targetFolder "~/Ins
         let plans = plan_moves_with_metadata(
             &files,
             &onto,
-            Path::new("/home/u"),
+            &platform_home(),
             1_800_000_000_000,
             &[],
             &|_, _| None,
