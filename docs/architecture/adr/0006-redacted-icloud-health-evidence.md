@@ -275,3 +275,12 @@ had about 36 GiB available at the same observation, so disk-full is not the curr
 At 17:02, a read-only process inventory showed Finder (PID 1422), `fileproviderd` (1450), and
 `bird` (1462) all started at 10:43:49, about 6h18m earlier. This confirms a long-lived provider
 session but does not establish DiskSage ownership or a Finder lock.
+
+## Decision maintenance — 2026-08-24 17:33
+
+The exact-head PR #249 test repair is now `dc9ccf2`. Its three process-contract tests use Cargo's
+`CARGO_BIN_EXE_disksage-git-worktree-audit` instead of launching nested feature-gated builds;
+the focused slices passed 8/8, 2/2, and 1/1, with no new `disksage-git-worktree-*` temporary
+targets created. This removes a local test-side source of disk pressure without changing the
+provider, Finder, source, or cloud mutation boundaries. The PR is draft, blocked, review-required,
+with hosted checks pending and no unresolved review threads.
