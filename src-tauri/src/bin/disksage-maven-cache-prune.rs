@@ -1,12 +1,13 @@
 //! Fingerprint-bound Maven cache pruning. Dry-run is the default.
 
 use std::ffi::OsString;
-use std::fs::OpenOptions;
-use std::io::Write;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use disksage_lib::maven_cache::{prune_maven_repository, MavenCachePruneReport};
+use disksage_lib::private_evidence::{
+    write_private_json_create_new, PrivateEvidenceReceipt,
+};
 
 const DEFAULT_MAX_ENTRIES: u64 = 2_000_000;
 
@@ -134,27 +135,13 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn write_new_private_json(path: &PathBuf, encoded: &[u8]) -> Result<(), String> {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(path)
-        .map_err(|_| "maven-cache-prune-output-create-failed".to_string())?;
-    file.write_all(encoded)
-        .map_err(|_| "maven-cache-prune-output-write-failed".to_string())?;
-    file.sync_all()
-        .map_err(|_| "maven-cache-prune-output-sync-failed".to_string())
-}
-
-fn output_summary(path: &PathBuf, report: &MavenCachePruneReport) -> Result<String, String> {
+fn output_summary(
+    receipt: &PrivateEvidenceReceipt,
+    report: &MavenCachePruneReport,
+) -> Result<String, String> {
     serde_json::to_string(&serde_json::json!({
         "schema_kind": report.schema_kind,
-        "output": path.to_string_lossy(),
+        "private_output": receipt,
         "observed_candidate_set_fingerprint": report.observed_candidate_set_fingerprint,
         "candidate_directories": report.candidate_directories,
         "candidate_bytes": report.candidate_bytes,
@@ -182,11 +169,11 @@ fn run() -> Result<(), String> {
         args.max_entries,
         now_ms(),
     )?;
-    let encoded = serde_json::to_vec_pretty(&report).map_err(|error| error.to_string())?;
     if let Some(output) = &args.output {
-        write_new_private_json(output, &encoded)?;
-        println!("{}", output_summary(output, &report)?);
+        let receipt = write_private_json_create_new(&args.repository_root, output, &report)?;
+        println!("{}", output_summary(&receipt, &report)?);
     } else {
+        let encoded = serde_json::to_vec_pretty(&report).map_err(|error| error.to_string())?;
         println!("{}", String::from_utf8_lossy(&encoded));
     }
     Ok(())
@@ -251,13 +238,38 @@ mod tests {
     }
 
     #[test]
-    fn private_output_is_create_new_and_not_overwritten() {
-        let tmp = tempfile::tempdir().unwrap();
-        let output = tmp.path().join("prune.json");
+    fn output_summary_exposes_only_private_evidence_commitment() {
+        let receipt = PrivateEvidenceReceipt {
+            written: true,
+            sha256: "b".repeat(64),
+            bytes: 321,
+            unix_mode: "0600".into(),
+            create_new: true,
+            contains_sensitive_local_paths: true,
+            is_approval: false,
+        };
+        let report = MavenCachePruneReport {
+            schema_kind: "disksage.maven-cache-prune/v1".into(),
+            repository_root: "/private/repository".into(),
+            generated_at_ms: 1,
+            expected_candidate_set_fingerprint: "a".repeat(64),
+            observed_candidate_set_fingerprint: "a".repeat(64),
+            candidate_directories: 0,
+            candidate_bytes: 0,
+            removed_directories: 0,
+            removed_bytes: 0,
+            skipped_directories: 0,
+            skip_reason_counts: Default::default(),
+            apply_requested: false,
+            filesystem_mutation_executed: false,
+            complete: true,
+        };
 
-        write_new_private_json(&output, b"{\"first\":true}").unwrap();
-        assert_eq!(std::fs::read(&output).unwrap(), b"{\"first\":true}");
-        assert!(write_new_private_json(&output, b"{\"second\":true}").is_err());
-        assert_eq!(std::fs::read(&output).unwrap(), b"{\"first\":true}");
+        let encoded = output_summary(&receipt, &report).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(parsed["private_output"]["written"], true);
+        assert_eq!(parsed["private_output"]["sha256"], "b".repeat(64));
+        assert!(parsed.get("output").is_none());
+        assert_eq!(parsed["filesystem_mutation_executed"], false);
     }
 }
