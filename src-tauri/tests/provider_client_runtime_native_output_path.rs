@@ -211,3 +211,48 @@ fn symlink_output_ancestor_never_gains_publication_authority() {
         "a rejected symlink ancestor must not redirect audit publication"
     );
 }
+
+#[test]
+fn symlink_output_leaf_never_overwrites_or_mutates_its_target() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempfile::tempdir().expect("leaf identity fixture root must be created");
+    let target = directory.path().join("external-sensitive.json");
+    let original = b"outside-evidence-must-remain-byte-identical";
+    std::fs::write(&target, original).expect("external target fixture must be created");
+    let output_path = directory.path().join("provider-runtime.json");
+    symlink(&target, &output_path).expect("output leaf symlink fixture must be created");
+
+    let output = Command::new(binary_path())
+        .env_remove("HOME")
+        .arg("--output")
+        .arg(&output_path)
+        .output()
+        .expect("provider client-runtime CLI must launch for symlink-leaf rejection");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "create-new publication must never follow or replace an existing symlink leaf"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "rejected leaf identity must not emit a success report"
+    );
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("diagnostic must remain UTF-8"),
+        "provider-client-runtime-output-create-failed\n"
+    );
+    assert_eq!(
+        std::fs::read(&target).expect("external target must remain readable"),
+        original,
+        "a rejected output symlink must leave the external target byte-identical"
+    );
+    assert!(
+        std::fs::symlink_metadata(&output_path)
+            .expect("output symlink must remain present")
+            .file_type()
+            .is_symlink(),
+        "rejected publication must not replace the symlink leaf"
+    );
+}
