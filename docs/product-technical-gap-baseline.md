@@ -15,7 +15,7 @@ authoritative, and no merge is claimed from queued or stale status.
 4. Regenerable caches are a separate reclaim domain. They are per-child, identity-bound, active-use checked, journaled, and moved to OS Trash; they are not uploaded as user data.
 5. Deterministic Rust gates own safety. A local model may judge only the fixed maintenance command after dry-run evidence, calibration, and explicit human confirmation. No external LLM or OAuth service is a runtime prerequisite for the standalone product.
 
-## Buyer-observable product gaps
+## Customer-observable product gaps
 
 | Priority | Gap / observable symptom | Evidence | Acceptance criterion |
 | --- | --- | --- | --- |
