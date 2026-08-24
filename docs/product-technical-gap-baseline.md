@@ -1200,3 +1200,11 @@ checks are not reused:
   test-warning cleanup; its prior bound-root test passed 4/4 locally and hosted checks restarted.
 - DiskSage #247 remains ready for review at `1535320c2b8b288376d9dcd35485a2af58374873`; its latest
   iCloud evidence is exact-head and all copy/attestation/eviction mutations remain disabled.
+
+## 2026-08-24 16:12 +0900 CLI review repair
+
+- DiskSage #212 advanced to exact head `81c44e43205f21276c39f055f1878805f36e1072` and is ready for
+  review. Its mixed help-plus-invalid CLI test now preserves HOME so it exercises argument parsing,
+  while standalone help remains environment-independent; the targeted cloud-cli test passed 2/2.
+- The provider OAuth environment contract remains intentionally in the default test matrix, and
+  its informational review thread was resolved without adding cloud credentials or side effects.
