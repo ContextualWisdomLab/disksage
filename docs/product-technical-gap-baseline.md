@@ -1075,3 +1075,16 @@ checks are not reused:
   reconciliation/indexing stall, not local disk exhaustion or evidence of a completed cloud
   copy. DiskSage keeps copy, attestation, and source eviction fail-closed; only the explicit
   bounded Finder-cancel action is available to the operator.
+
+## 2026-08-24 14:38 +0900 exact-head queue refresh
+
+- DiskSage #189 advanced to `8809e6cdc8da14915a9e0219481f75a1faebfdb9` after absorbing current
+  `main`; it is open/non-draft with required checks pending and no unresolved review threads.
+- DiskSage #212 remains open/non-draft at `779afa48cc8bc534a6e5cc910714324d85f7358b`; checks are
+  pending and no qualifying approval is present.
+- DiskSage #247 is draft/open at `16f511f8af8320ccd885c06c1de60ad00dfbbf12`; the current iCloud
+  evidence update is pushed, checks are re-running, and no review thread is unresolved.
+- DiskSage #249 remains draft/open at `44390608d30417477f6a66601b18a53ca87b0a9c`; its prior
+  provider-gated Strix result is not merge evidence. Central `.github` #1263 has advanced to
+  `7011fee275eaa257ce491efb4812dd3e98ed649e` and remains blocked with changes requested.
+  No merge is inferred from queued checks or bot comments.
