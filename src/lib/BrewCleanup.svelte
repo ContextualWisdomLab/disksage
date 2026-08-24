@@ -34,10 +34,10 @@
 
   function approvalGuidance(): string {
     if (!judgment || judgment.verdict !== "safe") return "";
-    if (!judgment.calibration || judgment.calibration.judgment_id !== judgment.judgment_id) {
+    if (!calibrationMatchesJudgment(judgment)) {
       return "이 정확한 LLM 판정에 연결된 fast-mlsirm calibration이 필요합니다.";
     }
-    if (!judgment.calibration.passed) {
+    if (!calibrationPassed(judgment)) {
       return "fast-mlsirm Judge calibration이 통과하지 않아 실행할 수 없습니다.";
     }
     if (confirmationPhrase.trim() !== judgment.exact_approval_phrase) {
@@ -52,13 +52,19 @@
   function executionReady(): boolean {
     return judgment !== null
       && judgment.verdict === "safe"
-      && judgment.calibration !== undefined
-      && judgment.calibration.judgment_id === judgment.judgment_id
-      && judgment.calibration.passed
+      && calibrationPassed(judgment)
       && confirmationPhrase.trim() === judgment.exact_approval_phrase
       && rationale.trim().length > 0
       && !executing
       && execution === null;
+  }
+
+  function calibrationMatchesJudgment(value: api.BrewCleanupJudgment): boolean {
+    return value.calibration?.judgment_id === value.judgment_id;
+  }
+
+  function calibrationPassed(value: api.BrewCleanupJudgment): boolean {
+    return calibrationMatchesJudgment(value) && value.calibration?.passed === true;
   }
 
   async function executeCleanup() {
@@ -111,8 +117,11 @@
       <p class="fingerprint">계획 지문: {report.plan_fingerprint}</p>
       <p class="fingerprint">실행 예정: brew cleanup --prune-prefix</p>
       {#if report.calibration}
-        <p class:success={report.calibration.passed} class:warning={!report.calibration.passed}>
-          Judge calibration ({report.calibration.engine}): {report.calibration.passed ? "통과" : "실패"}
+        <p class:success={calibrationPassed(report)} class:warning={!calibrationPassed(report)}>
+          Judge calibration ({report.calibration.engine}):
+          {!calibrationMatchesJudgment(report)
+            ? "현재 판정과 불일치"
+            : report.calibration.passed ? "통과" : "실패"}
           · 표본 {report.calibration.sample_count}개 · 일치율 {Math.round(report.calibration.exact_agreement * 100)}%
         </p>
       {:else}

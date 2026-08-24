@@ -15,6 +15,10 @@ describe("BrewCleanup execution status contract", () => {
     expect(source).toContain(
       "class:error={execution.executed && execution.status_code !== 0}",
     );
+    expect(source).toContain("실행 성공");
+    expect(source).toContain("실행 실패");
+    expect(source).toContain("실행되지 않음");
+    expect(source).toContain("execution.executed");
     expect(source).not.toContain("class:success={execution.status_code === 0}");
   });
 });
