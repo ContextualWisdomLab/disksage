@@ -81,7 +81,6 @@ required-features = ["cloud-cli"]
 [[bin]]
 name = "disksage-git-worktree-audit"
 path = "src/bin/disksage-git-worktree-audit.rs"
-required-features = ["cloud-cli"]
 
 [[bin]]
 name = "disksage-git-worktree-remove"

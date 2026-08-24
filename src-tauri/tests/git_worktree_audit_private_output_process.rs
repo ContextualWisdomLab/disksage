@@ -7,48 +7,16 @@
 //! without replacing the first report.
 
 use sha2::{Digest, Sha256};
-use std::ffi::OsString;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-#[path = "git_worktree_audit_test_support.rs"]
-mod test_support;
-
 fn binary_path() -> &'static Path {
     static BINARY_PATH: OnceLock<PathBuf> = OnceLock::new();
     BINARY_PATH
-        .get_or_init(|| {
-            let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-            let target_dir =
-                test_support::new_target_dir("disksage-git-worktree-private-output-contract-");
-            let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
-            let output = Command::new(cargo)
-                .current_dir(&manifest_dir)
-                .args([
-                    "build",
-                    "--locked",
-                    "--features",
-                    "cloud-cli",
-                    "--bin",
-                    "disksage-git-worktree-audit",
-                    "--target-dir",
-                ])
-                .arg(&target_dir)
-                .output()
-                .expect("Cargo should start for the shipped Git worktree audit binary");
-            assert!(
-                output.status.success(),
-                "feature-gated Git worktree audit binary build failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            target_dir.join("debug").join(format!(
-                "disksage-git-worktree-audit{}",
-                std::env::consts::EXE_SUFFIX
-            ))
-        })
+        .get_or_init(|| PathBuf::from(env!("CARGO_BIN_EXE_disksage-git-worktree-audit")))
         .as_path()
 }
 
