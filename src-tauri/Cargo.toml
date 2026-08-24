@@ -138,6 +138,11 @@ name = "disksage-naruon-copy-readiness-verify"
 path = "src/bin/disksage-naruon-copy-readiness-verify.rs"
 required-features = ["cloud-cli"]
 
+[[test]]
+name = "archive_tree_help_exit"
+path = "tests/archive_tree_help_exit.rs"
+required-features = ["archive-cli"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
