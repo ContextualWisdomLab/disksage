@@ -573,3 +573,11 @@ headroom gate also remains active for any candidate whose size plus the staging 
 that budget. This progress does not clear the no-progress or reconciliation blockers: DiskSage
 continues to admit no new copy, attestation, or source eviction until a fresh complete and quiet
 observation plus an independent per-item receipt exists.
+
+The bounded follow-up at `2026-08-25 13:04:12 +0900` timed out after 20 seconds while retaining
+two no-progress fetch requests, upload fraction `0.9999`, download fraction `0.4862`, and a
+`526,878`-entry reconciliation backlog with scheduling still `running`. The data volume had
+recovered to about 50 GiB available after removing only this session's generated Rust build
+artifacts; headroom is therefore no longer the immediate blocker, but the provider timeout and
+backlog still keep copy, attestation, and eviction fail-closed. The timeout itself is incomplete
+evidence and cannot be treated as a clear or per-item receipt.
