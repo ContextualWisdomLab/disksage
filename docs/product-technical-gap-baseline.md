@@ -200,9 +200,12 @@ suite passes 35 tests; hosted Strix and metadata-only gates remain authoritative
   `fecceba0c2be660665253cc39c8bebde2b3f3259`; it is now shipped hourly caller evidence. Earlier
   #1334 and #1333 scheduler/retry PRs are also closed and are not treated as live PR evidence.
 - Central `ContextualWisdomLab/.github` PR #1343 (semantic-data-portal hourly review-repair caller)
-  points to exact head `ca949939f35e72c28626f118b2bee367d4c818b2` but is currently `behind` protected
-  `main` with auto-merge disabled. It has no unresolved current review thread and no terminal check
-  failure observed at capture; rebase and fresh hosted checks are required before any merge claim.
+  was normally rebased onto the current protected base `fecceba0c2be660665253cc39c8bebde2b3f3259`
+  and now points to exact head `4189e6a8edeb8f55715d4dbf5732afe7f1a305a1`. Its doctoring retrieval
+  dates are historical, its permission contract compares complete maps, and its cron test reads the
+  actual caller files; the focused pytest suite passes 4/4 with no unresolved current thread. Protected
+  auto-merge is enabled; hosted checks and independent approval remain authoritative, so no merge is
+  claimed.
 - DiskSage PR #198 advanced to exact head `a727b3eb082c5049f9c9350677abaad23c18222a` and is now
   ready with protected auto-merge enabled. Its iCloud local-eviction UI contract now consumes the
   shared bounded feedback constants (11 focused tests pass); hosted Checks and independent approval
