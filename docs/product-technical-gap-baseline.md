@@ -48,8 +48,8 @@ surfacing cleanup status, applying the Compose hardening contract, and escaping 
 variable interpolation for the atomic WAL archive command; targeted backend/shell/
 Podman drill evidence passed locally, while hosted checks and a fresh qualifying approval remain
 authoritative. PR #1454 is
-`686887e8762ddc90d32fc81e9773946351113936`, with the deleted URL/loopback tests and doctoring
-document restored after a fourth optimizer regression and explicit zero ports rejected in both
+`3426c21c06ce55e70c3c162559279921bba6b651`, with the deleted URL/loopback tests and doctoring
+document restored after a fifth optimizer regression and explicit zero ports rejected in both
 validators; targeted backend (45) tests passed on this exact head, while hosted checks and fresh
 approval remain pending. PR #1462 is
 `8aa604b62ade3067d8b11000f6e96d0ad28c0680`, with Strix governance re-triggering restored, the
