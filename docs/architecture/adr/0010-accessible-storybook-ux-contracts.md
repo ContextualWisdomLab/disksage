@@ -60,3 +60,10 @@ https://www.w3.org/community/reports/design-tokens/CG-FINAL-format-20251028/
 
 Storybook. (n.d.). *Accessibility tests*. Retrieved August 21, 2026, from
 https://storybook.js.org/docs/writing-tests/accessibility-testing
+
+## Amendment: provider-indexing cancellation event (2026-08-25 11:31 +0900)
+
+The provider status contract includes `provider-global-sync-indexing-pending` in the existing
+bounded Finder-cancel event path. This keeps the Storybook event model aligned with the runtime
+provider-global blocker set without granting the browser cloud-write or source-eviction authority.
+The exact-head contract and Svelte checks pass at `b67ea3be`.

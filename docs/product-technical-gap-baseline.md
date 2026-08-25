@@ -679,3 +679,10 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   pipe leak that could starve the independent `ps` probe and report a false active-use timeout.
   The focused Rust test passed 3/3. The same patch is present on stacked PR heads `a0fa7bc` (#247)
   and `741ab30` (#246); hosted checks are rerunning and protected merge/review is still pending.
+
+## 2026-08-25 11:31 +0900 provider-indexing cancellation event alignment
+
+- The Storybook/runtime provider status contract now exposes the bounded Finder-cancel event when
+  a third-party provider reports indexing-only backlog (`provider-global-sync-indexing-pending`).
+- Exact head #246 is `b67ea3be`; local Svelte and focused UX/provider contract tests pass. Hosted
+  checks restarted, and no Finder/provider/source/cloud mutation was performed.
