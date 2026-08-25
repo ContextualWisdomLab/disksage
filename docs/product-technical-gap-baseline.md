@@ -1,8 +1,8 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-25 (Asia/Seoul)
-**Repository heads at snapshot:** PR #259 `86dd521`, PR #258 `5ff508c`, PR #227 `98fa709`, PR #249 `2f1d585`,
-PR #247 `0de3f6a`, PR #246 `cbb9dc0`, PR #204 `750213d`, draft PR #198 `cf763cd`, and replacement central `.github` PRs #1330 `f8a7210`, #1331 `26f96e2`, and #1332 `e6e5f85`;
+**Repository heads at snapshot:** PR #259 `86dd521`, PR #258 `84c3f9d`, PR #227 `98fa709`, PR #249 `2f1d585`,
+PR #247 `0de3f6a`, PR #246 `cbb9dc0`, PR #204 `750213d`, draft PR #198 `cf763cd`, and replacement central `.github` PRs #1330 `f8a7210`, #1331 `3c7f430`, and #1332 `e6e5f85`;
 hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
@@ -26,7 +26,7 @@ rebased and reverified.
 | #204 | `750213dff16482544af3c0a9543f6c638924e5e6` | `17d4e203` | yes | blocked | none | Strix failure; base is stale |
 | #206 | `2e7b845b7610a871ec5981d964bcab5cb99df41d` | `5c86668a` | yes | clean | changes requested | 0 non-success terminal, 2 pending; stacked draft |
 | #198 | `cf763cdf1b3f483efaf483f6c95196a89e005951` | `7eb131c4` | yes | blocked | required | iCloud eviction privacy feedback hardening; focused UI checks pass, hosted checks pending |
-| ContextualWisdomLab/.github #1331 | `26f96e2c6649ad95b57b6fb985c54ae03fcfb69c` | `d2c554db` | no | blocked | required | replacement for closed #1324; direct-OpenAI fallback now uses a paired runner-scoped API base and key, including GitHub Models primary mode; hosted checks and independent approval remain authoritative |
+| ContextualWisdomLab/.github #1331 | `3c7f430f59df0eec2b6d70c8272c60b906d071dd` | `d2c554db` | no | blocked | required | replacement for closed #1324; direct-OpenAI fallback uses a paired runner-scoped API base/key, while standalone custom `LLM_API_BASE_FILE` remains honored; hosted checks and independent approval remain authoritative |
 | ContextualWisdomLab/.github #1330 | `f8a72106b887230ec12a95ff68947a0e00837b58` | `d2c554db` | no | blocked | required | replacement for closed #1328; conflict-mode protected security-contract guard runs after edits and before staging; hosted checks and independent approval remain authoritative |
 | ContextualWisdomLab/.github #1332 | `e6e5f85eefacba0c498de2d1a90dc225684a2120` | `d2c554db` | no | blocked | required | replacement for closed #1322; typed provider/model outages retry at most three times with bounded linear backoff and a 6000-second deadline; findings/configuration failures never retry |
 
@@ -36,7 +36,8 @@ autofix security guard plus the canonical `gpt-5.4` Strix/OpenCode contract. Its
 now runs after OpenCode edits and before staging; local targeted contract tests, Ruff, shell syntax,
 trusted Strix smoke, and diff checks pass. Replacement PR #1331 is based on the same protected head
 and routes direct-OpenAI fallback requests through a paired explicit API-base/key boundary; its 46
-focused tests and trusted Strix smoke pass. Hosted Checks and independent approval remain authoritative
+focused tests and trusted Strix smoke pass. A follow-up preserves an explicitly supplied standalone
+custom OpenAI-compatible base without weakening the workflow override. Hosted Checks and independent approval remain authoritative
 before either protected merge. Replacement PR #1332 carries the bounded provider-outage retry loop;
 its focused Strix contract suite passes 46 tests, plus Ruff, shell syntax, trusted smoke, and diff checks.
 The retry remains fail-closed and does not convert provider-unavailable evidence into a passing security result.
