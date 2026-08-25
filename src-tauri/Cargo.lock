@@ -1004,7 +1004,7 @@ dependencies = [
  "oxrdf",
  "oxttl",
  "plist",
- "png 0.17.16",
+ "png 0.18.1",
  "same-file",
  "serde",
  "serde_json",
