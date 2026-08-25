@@ -30,4 +30,8 @@ fn windows_junction_child_never_gains_directory_traversal_authority() {
         BoundEntryKind::Symlink,
         "a directory reparse point must never be admitted as a traversable directory"
     );
+    assert!(
+        guard.read_dir_names(Path::new("junction")).is_err(),
+        "the traversal primitive itself must reject a directory junction instead of following it outside the bound root"
+    );
 }
