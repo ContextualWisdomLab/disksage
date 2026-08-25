@@ -289,18 +289,6 @@ fn detect_content_type_from_bytes(bytes: &[u8]) -> (Option<String>, Option<Strin
 }
 
 #[cfg(not(coverage))]
-fn detect_content_type(path: &Path) -> Result<(Option<String>, Option<String>), String> {
-    let mut file =
-        std::fs::File::open(path).map_err(|_| "magic-type-probe-open-failed".to_string())?;
-    let mut bytes = vec![0u8; TYPE_PROBE_BYTES];
-    let read = file
-        .read(&mut bytes)
-        .map_err(|_| "magic-type-probe-read-failed".to_string())?;
-    bytes.truncate(read);
-    Ok(detect_content_type_from_bytes(&bytes))
-}
-
-#[cfg(not(coverage))]
 fn detect_content_type_bound(
     root_guard: &BoundReadRoot,
     relative: &Path,

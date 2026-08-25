@@ -492,17 +492,6 @@ pub fn collect_multipart_archive_audit(
             ) {
                 continue;
             }
-            let metadata = match root_guard
-                .open_file(&relative)
-                .and_then(|file| file.metadata())
-            {
-                Ok(metadata) => metadata,
-                Err(_) => {
-                    evidence_complete = false;
-                    increment_issue(&mut issue_counts, "entry-stat-failed");
-                    continue;
-                }
-            };
             if matches!(
                 entry_kind,
                 crate::duplicate_audit::bound_read_root::BoundEntryKind::Directory
@@ -521,6 +510,17 @@ pub fn collect_multipart_archive_audit(
             ) {
                 continue;
             }
+            let metadata = match root_guard
+                .open_file(&relative)
+                .and_then(|file| file.metadata())
+            {
+                Ok(metadata) => metadata,
+                Err(_) => {
+                    evidence_complete = false;
+                    increment_issue(&mut issue_counts, "entry-stat-failed");
+                    continue;
+                }
+            };
             let Some(name) = entry.to_str() else {
                 evidence_complete = false;
                 increment_issue(&mut issue_counts, "multipart-name-not-unicode");

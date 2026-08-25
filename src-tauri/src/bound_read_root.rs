@@ -266,14 +266,21 @@ impl BoundReadRoot {
         #[cfg(unix)]
         {
             use std::ffi::{CStr, OsString};
-            use std::os::fd::{AsRawFd, FromRawFd};
+            use std::os::fd::AsRawFd;
             use std::os::unix::ffi::OsStringExt;
 
             let components = relative_components(relative)?;
             let directory = open_directory_components(self.handle.as_file(), &components)?;
+            let current_directory = std::ffi::CString::new(".").expect("literal has no NUL");
             let stream_fd = unsafe {
-                // SAFETY: the directory descriptor remains live during duplication.
-                libc::fcntl(directory.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0)
+                // SAFETY: `directory` is a live directory descriptor and the literal component
+                // cannot escape it. Opening `.` creates a fresh open-file description, so each
+                // enumeration starts at offset zero instead of sharing a prior readdir offset.
+                libc::openat(
+                    directory.as_raw_fd(),
+                    current_directory.as_ptr(),
+                    libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+                )
             };
             if stream_fd < 0 {
                 return Err(std::io::Error::last_os_error());
@@ -425,10 +432,22 @@ impl BoundReadRoot {
 
         #[cfg(windows)]
         {
+            use std::os::windows::fs::OpenOptionsExt;
+
+            const FILE_SHARE_READ: u32 = 0x0000_0001;
+            const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+            const FILE_SHARE_DELETE: u32 = 0x0000_0004;
+            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+
             let root = self.stable_path().ok_or_else(|| {
                 std::io::Error::new(std::io::ErrorKind::NotFound, "bound root unavailable")
             })?;
-            return std::fs::File::open(root.join(relative));
+            return std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                // Do not follow a leaf reparse point if it is swapped after entry_kind.
+                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(root.join(relative));
         }
     }
 
@@ -516,6 +535,7 @@ mod tests {
 
         let root_names = guard.read_dir_names(Path::new("")).unwrap();
         assert_eq!(root_names, vec![std::ffi::OsString::from("nested")]);
+        assert_eq!(guard.read_dir_names(Path::new("")).unwrap(), root_names);
         assert_eq!(
             guard.entry_kind(Path::new("nested")).unwrap(),
             BoundEntryKind::Directory
