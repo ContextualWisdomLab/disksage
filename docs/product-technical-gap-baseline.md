@@ -21,7 +21,7 @@ rebased and reverified.
 | #249 | `2f1d585398b85f3f1adb3783520ad70e7b4a9c3f` | `7eb131c4` | yes | blocked | none | Strix failure; external gate evidence unavailable |
 | #247 | `58e1dc52a93cd959daaea549a7f362eddc1601f5` | `7eb131c4` | yes | blocked | none | Strix failure; external gate evidence unavailable |
 | #246 | `2037c91b8d64df3a9f06a91ed7ad7ea637d8a7fd` | `17d4e203` | yes | blocked | none | Strix failure; base is stale |
-| #227 | `98fa709afa489e05c91a947d1e8cbf499e2cc6b6` | `7eb131c4` | yes | blocked | required | hosted checks pending after remote head update |
+| #227 | `98fa709afa489e05c91a947d1e8cbf499e2cc6b6` | `7eb131c4` | no | blocked | required | ready-for-review; hosted checks pending after remote head update |
 | #204 | `750213dff16482544af3c0a9543f6c638924e5e6` | `17d4e203` | yes | blocked | none | Strix failure; base is stale |
 | #206 | `2e7b845b7610a871ec5981d964bcab5cb99df41d` | `5c86668a` | yes | clean | changes requested | 0 non-success terminal, 2 pending; stacked draft |
 
