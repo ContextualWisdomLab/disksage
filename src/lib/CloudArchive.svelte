@@ -1149,12 +1149,7 @@
             <button onclick={recoverProviderClient} disabled={recoveringProvider || checkingProviderGlobalSync}>
               {recoveringProvider ? "공급자 앱 재기동 중…" : "공급자 앱 재기동 후 상태 재확인"}
             </button>
-            {#if canCancelFinderCopyForProviderGlobalSync(providerGlobalSync)}
-              <button onclick={cancelFinderCopy} disabled={cancellingFinderCopy || checkingProviderGlobalSync}>
-                {cancellingFinderCopy ? "Finder 복사 취소 요청 중…" : "Finder 복사 취소 요청"}
-              </button>
-              {#if finderCopyCancelStatus}<p class="muted">{finderCopyCancelStatus}</p>{/if}
-            {/if}
+            {#if finderCopyCancelStatus}<p class="muted">{finderCopyCancelStatus}</p>{/if}
           {/if}
         {:else}
           <p class="capacity-ok">공급자 전역 동기화 대기열이 비어 있습니다. 개별 파일은 별도 provider 증거가 필요합니다.</p>
