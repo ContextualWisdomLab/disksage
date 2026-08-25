@@ -556,7 +556,7 @@ alive, but no DiskSage, ZIP, or `real_datasets` process was running; local headr
 These markers classify the user-visible “복사 준비 중” dialog as provider preflight/backlog evidence,
 not a completed copy or a local ZIP stall.
 
-PR #259 (`ced0770086481dfc65d2de5d6d7e0e0139c30480`) exposes the aggregate no-progress label,
+PR #259 (`8dc9a279c55981de867941db7bfe35f5ed24e5b4`) exposes the aggregate no-progress label,
 bounded transfer percentages, and same-blocker duration. This is diagnostic/operator guidance only:
 the UI may request Finder Escape cancellation, but DiskSage does not cancel automatically, kill
 `bird`/`fileproviderd`, touch CloudDocs databases, or grant copy, attestation, or eviction authority.
