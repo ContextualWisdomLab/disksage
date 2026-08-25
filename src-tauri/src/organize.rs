@@ -188,7 +188,11 @@ fn resolve_target_folder(template: &str, home: &Path, local: &str) -> Option<Pat
     }
 
     let folder_path = PathBuf::from(resolved_template);
-    folder_path.is_absolute().then_some(folder_path)
+    (folder_path.is_absolute()
+        && !folder_path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir)))
+    .then_some(folder_path)
 }
 
 /// 파일 → (picker 또는 확장자 classify) 로컬 클래스 → targetFolder → 목적지.
@@ -456,6 +460,13 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
     #[test]
     fn rejects_parent_traversal_in_home_relative_target_folder() {
         let onto = onto_with_target("~/Media/../escape/{class}");
+        let plans = plan_moves(&[fe("/downloads/pic.png", 100)], &onto, Path::new("/home/u"));
+        assert!(plans.is_empty());
+    }
+
+    #[test]
+    fn rejects_parent_traversal_in_absolute_target_folder() {
+        let onto = onto_with_target("/opt/media/../escape/{class}");
         let plans = plan_moves(&[fe("/downloads/pic.png", 100)], &onto, Path::new("/home/u"));
         assert!(plans.is_empty());
     }
