@@ -1133,6 +1133,38 @@ fn remove_created_file(path: &Path) {
     let _ = std::fs::remove_file(path);
 }
 
+#[cfg(all(not(coverage), not(target_os = "macos"), any(unix, windows)))]
+fn file_identity(metadata: &std::fs::Metadata) -> Option<(u64, u64)> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some((metadata.dev(), metadata.ino()))
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        Some((
+            metadata.volume_serial_number()? as u64,
+            metadata.file_index()?,
+        ))
+    }
+}
+
+#[cfg(all(not(coverage), not(target_os = "macos"), any(unix, windows)))]
+fn remove_created_file_if_identity_matches(path: &Path, expected: Option<(u64, u64)>) {
+    let can_remove = expected.is_some_and(|identity| {
+        let Ok(metadata) = std::fs::symlink_metadata(path) else {
+            return false;
+        };
+        !metadata.file_type().is_symlink()
+            && metadata.is_file()
+            && file_identity(&metadata) == Some(identity)
+    });
+    if can_remove {
+        remove_created_file(path);
+    }
+}
+
 #[cfg(not(coverage))]
 fn failure_id_for(record: &CloudCopyFailureRecord) -> String {
     let mut hasher = blake3::Hasher::new();
@@ -1476,7 +1508,7 @@ fn copy_and_verify(
         Ok((staging_len, staging_hashes))
     })();
 
-    #[cfg(all(not(target_os = "macos"), unix))]
+    #[cfg(all(not(target_os = "macos"), any(unix, windows)))]
     let mut destination_identity: Option<(u64, u64)> = None;
 
     #[cfg(not(target_os = "macos"))]
@@ -1487,15 +1519,14 @@ fn copy_and_verify(
             .create_new(true)
             .open(destination)
             .map_err(|error| error.to_string())?;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
-            use std::os::unix::fs::MetadataExt;
             let metadata = std::fs::symlink_metadata(destination)
                 .map_err(|_| "destination-state-unavailable".to_string())?;
             if metadata.file_type().is_symlink() || !metadata.is_file() {
                 return Err("destination-state-unavailable".into());
             }
-            destination_identity = Some((metadata.dev(), metadata.ino()));
+            destination_identity = file_identity(&metadata);
         }
         let mut source_hasher = ContentHasher::default();
         let mut copied = 0_u64;
@@ -1547,19 +1578,11 @@ fn copy_and_verify(
     // cleanup is identity-bound so a concurrent replacement cannot be deleted accidentally.
     #[cfg(all(not(target_os = "macos"), unix))]
     if copy_result.is_err() {
-        use std::os::unix::fs::MetadataExt;
-        let can_remove = destination_identity.is_some_and(|(device, inode)| {
-            let Ok(metadata) = std::fs::symlink_metadata(destination) else {
-                return false;
-            };
-            !metadata.file_type().is_symlink()
-                && metadata.is_file()
-                && metadata.dev() == device
-                && metadata.ino() == inode
-        });
-        if can_remove {
-            remove_created_file(destination);
-        }
+        remove_created_file_if_identity_matches(destination, destination_identity);
+    }
+    #[cfg(windows)]
+    if copy_result.is_err() {
+        remove_created_file_if_identity_matches(destination, destination_identity);
     }
     copy_result
 }
