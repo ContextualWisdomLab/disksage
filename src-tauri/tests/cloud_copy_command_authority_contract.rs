@@ -78,10 +78,19 @@ fn native_copy_cancel_reset_happens_after_serialization_lock() {
 }
 
 #[test]
-fn adoption_cancel_reset_happens_after_serialization_lock() {
-    assert_cancel_reset_is_serialized(
+fn adoption_is_not_registered_as_a_cancellable_native_copy() {
+    let body = function_body(
         "pub async fn adopt_existing_cloud_candidate(",
         "pub struct CloudAttestationOutput",
+    );
+
+    assert!(
+        !body.contains("cloud_copy_operation"),
+        "adoption does not poll the native-copy cancel token and must not be advertised as an active cancellable copy"
+    );
+    assert!(
+        !body.contains("cloud_copy_cancel.store(false, Ordering::SeqCst)"),
+        "non-cancellable adoption must not reset or own the native-copy cancellation lifecycle"
     );
 }
 
