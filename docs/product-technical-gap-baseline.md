@@ -329,10 +329,11 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   not a DiskSage transfer completion. The source is retained; only the Finder progress cancel
   control is an operator action, and new copy, attestation, and eviction remain blocked until a
   fresh complete quiet-provider observation.
-- Naruon PR #1434 is now at exact head `84d61196` and accepts legacy DiskSage readiness envelopes
+- Naruon PR #1434 is now at exact head `e688a2f0` and accepts legacy DiskSage readiness envelopes
   for schemas 3-6 while requiring the four native/pre-copy summary fields for schemas 7-8; its
   focused handoff suite passed 48/48, including rejection of native fields on legacy schema 6.
-  Stacked Naruon PR #1471 (`6f434d4`) merged the schema-8
+  The governance gate now treats explicit CodeRabbit rate-limit warnings as waiting evidence
+  rather than a source failure; its shell regression suite passed. Stacked Naruon PR #1471 (`6f434d4`) merged the schema-8
   acceptance into the protected branch. The path-free protocol grants no cloud-write or
   source-eviction authority; hosted Naruon security, review, and build checks remain authoritative
   before #1434 can merge.
