@@ -2,7 +2,7 @@
 
 **Snapshot:** 2026-08-25 (Asia/Seoul)
 **Repository heads at snapshot:** PR #259 `a019dda`, PR #258 `54ab508`, PR #227 `98fa709`, PR #249 `2f1d585`,
-PR #247 `b3e00c6`, PR #246 `3936cd9`, and PR #204 `750213d`; hosted checks and protected review remain
+PR #247 `56dcb19`, PR #246 `3936cd9`, and PR #204 `750213d`; hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
@@ -19,7 +19,7 @@ rebased and reverified.
 | #259 | `a019ddaba4aa5cad1e0bef02121f20d514d9580c` | `7eb131c4` | no | blocked | required | stale File Provider error-state + `last`/`expired` parser; checks remain authoritative |
 | #258 | `ad8792fb7b91cf2fef425b2d14425ddab8bd9d7f` | `7eb131c4` | no | blocked | required | preceding baseline/docs head; checks remain authoritative |
 | #249 | `2f1d585398b85f3f1adb3783520ad70e7b4a9c3f` | `7eb131c4` | no | blocked | required | source/build/security/coverage pass; Strix external provider failure |
-| #247 | `b3e00c6a9bf13152562ccc50f2ed742b03f0bffa` | `7eb131c4` | no | blocked | required | destination-headroom preview now retains unverified candidate blockers; post-push checks pending |
+| #247 | `56dcb1986e65deba735c8bdf5f517ad5374ac239` | `7eb131c4` | no | blocked | required | ADR records destination blocker proof gate; post-push checks pending |
 | #246 | `3936cd9fd422f04c8dc08c552d4b0f53c2e3a0ac` | `7eb131c4` | no | blocked | required | ADR records single provider card control and non-Windows scan-root wording; checks pending |
 | #227 | `98fa709afa489e05c91a947d1e8cbf499e2cc6b6` | `7eb131c4` | no | blocked | required | Strix annotation `STRIX_PROVIDER_UNAVAILABLE`; source checks otherwise passed |
 | #204 | `750213dff16482544af3c0a9543f6c638924e5e6` | `17d4e203` | yes | blocked | none | Strix failure; base is stale |
@@ -27,7 +27,7 @@ rebased and reverified.
 
 PR #246 exact-head `3936cd9fd422f04c8dc08c552d4b0f53c2e3a0ac` now preserves the backend persisted
 iCloud stall start across restart/probe errors and leaves one Finder-cancel control in the status card.
-PR #247 exact-head `b3e00c6a9bf13152562ccc50f2ed742b03f0bffa` now verifies a candidate before
+PR #247 exact-head `56dcb1986e65deba735c8bdf5f517ad5374ac239` now verifies a candidate before
 clearing destination-headroom blockers; its unit and runtime regressions pass locally. The current
 exact-head source fixes on #247, #246, and #204 have local focused evidence, but no
 protected merge is claimed until their post-push checks and qualifying independent approval are
