@@ -2,7 +2,7 @@
 
 **Snapshot:** 2026-08-25 (Asia/Seoul)
 **Repository heads at snapshot:** PR #259 `86dd521`, PR #258 `84c3f9d`, PR #227 `98fa709`, PR #249 `2f1d585`,
-PR #247 `0de3f6a`, PR #246 `cbb9dc0`, PR #204 `750213d`, draft PR #198 `cf763cd`, and replacement central `.github` PRs #1330 `f8a7210`, #1331 `0547c6b`, and #1332 `495c02d` (with superseded #1321 closed);
+PR #247 `0de3f6a`, PR #246 `cbb9dc0`, PR #204 `750213d`, draft PR #198 `cf763cd`, and replacement central `.github` PRs #1330 `f8a7210`, #1331 `0547c6b`, and #1333 `402f64a` (with superseded #1321/#1332 closed);
 hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
@@ -28,9 +28,9 @@ rebased and reverified.
 | #198 | `cf763cdf1b3f483efaf483f6c95196a89e005951` | `7eb131c4` | yes | blocked | required | iCloud eviction privacy feedback hardening; focused UI checks pass, hosted checks pending |
 | ContextualWisdomLab/.github #1331 | `0547c6b7d0bf0319098f96ce3bc16ab16bcf9933` | `d2c554db` | no | blocked | required | replacement for closed #1324; direct-OpenAI fallback uses a paired runner-scoped API base/key, preserves standalone custom `LLM_API_BASE_FILE`, and rejects foreign GitHub Models bases; hosted checks and independent approval remain authoritative |
 | ContextualWisdomLab/.github #1330 | `f8a72106b887230ec12a95ff68947a0e00837b58` | `d2c554db` | no | blocked | required | replacement for closed #1328; conflict-mode protected security-contract guard runs after edits and before staging; hosted checks and independent approval remain authoritative |
-| ContextualWisdomLab/.github #1332 | `495c02d8a56c648570b3a82d311ac7e9c2727dc5` | `d2c554db` | no | blocked | required | replacement for closed #1322; typed provider/model outages retry at most three times with bounded linear backoff and a 6000-second deadline; findings/configuration failures never retry; inert test helper branch removed on current head |
+| ContextualWisdomLab/.github #1333 | `402f64a08ca5b51a51b5ee93863adcddbe92a33d` | `d2c554db` | no | blocked | required | replacement for closed #1332/#1322; typed provider/model outages retry only when the full gate budget plus backoff fits before the step deadline; per-attempt logs are retained and terminal classification stays fail-closed; hosted checks and independent approval remain authoritative |
 
-Central `.github` PRs #1328, #1329, #1324, #1323, #1322, and #1321 were closed and superseded on request.
+Central `.github` PRs #1328, #1329, #1324, #1323, #1322, #1321, and #1332 were closed and superseded on request.
 Replacement PR #1330 is based on the current protected `main` head and carries the exact-head
 autofix security guard plus the canonical `gpt-5.4` Strix/OpenCode contract. Its conflict-mode guard
 now runs after OpenCode edits and before staging; local targeted contract tests, Ruff, shell syntax,
@@ -39,9 +39,10 @@ and routes direct-OpenAI fallback requests through a paired explicit API-base/ke
 tests and trusted Strix smoke pass. Follow-up review now rejects foreign GitHub Models inheritance
 when the OpenAI fallback key is absent while preserving explicitly supplied standalone custom bases.
 Hosted Checks and independent approval remain authoritative
-before either protected merge. Replacement PR #1332 carries the bounded provider-outage retry loop;
-its focused Strix contract suite passes 46 tests, plus Ruff, shell syntax, trusted smoke, and diff checks.
-The retry remains fail-closed and does not convert provider-unavailable evidence into a passing security result.
+before either protected merge. Replacement PR #1333 carries the bounded provider-outage retry loop;
+its focused contract suite passes 8 tests, plus Ruff, shell syntax, trusted smoke, and diff checks.
+It reserves the full per-attempt budget and retains all attempt logs, while remaining fail-closed and
+never converting provider-unavailable evidence into a passing security result.
 
 PR #246 exact-head `cbb9dc0f5b1eba52e76f23f673381a3ebcdc132f` now preserves the backend persisted
 iCloud stall start across restart/probe errors, adopts a timestamp supplied after the first poll,
