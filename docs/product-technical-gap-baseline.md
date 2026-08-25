@@ -2,7 +2,7 @@
 
 **Snapshot:** 2026-08-25 (Asia/Seoul)
 **Repository heads at snapshot:** PR #259 `86dd521`, PR #258 `84c3f9d`, PR #227 `98fa709`, PR #249 `2f1d585`,
-PR #247 `0de3f6a`, PR #246 `cbb9dc0`, PR #204 `750213d`, draft PR #198 `cf763cd`, and replacement central `.github` PRs #1330 `f8a7210`, #1331 `0547c6b`, and #1333 `402f64a` (with superseded #1321/#1332 closed);
+PR #247 `0de3f6a`, PR #246 `cbb9dc0`, PR #204 `750213d`, draft PR #198 `cf763cd`, and replacement central `.github` PRs #1330 `f8a7210`, #1331 `4fc261f`, and #1333 `402f64a` (with superseded #1321/#1332 closed);
 hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
@@ -28,7 +28,7 @@ an older main remains non-integrated until it is deliberately rebased and reveri
 | #204 | `750213dff16482544af3c0a9543f6c638924e5e6` | `17d4e203` | yes | blocked | none | Strix failure; base is stale |
 | #206 | `2e7b845b7610a871ec5981d964bcab5cb99df41d` | `5c86668a` | yes | clean | changes requested | 0 non-success terminal, 2 pending; stacked draft |
 | #198 | `cf763cdf1b3f483efaf483f6c95196a89e005951` | `7eb131c4` | yes | blocked | required | iCloud eviction privacy feedback hardening; focused UI checks pass, hosted checks pending |
-| ContextualWisdomLab/.github #1331 | `0547c6b7d0bf0319098f96ce3bc16ab16bcf9933` | `d2c554db` | no | blocked | required | replacement for closed #1324; direct-OpenAI fallback uses a paired runner-scoped API base/key, preserves standalone custom `LLM_API_BASE_FILE`, and rejects foreign GitHub Models bases; hosted checks and independent approval remain authoritative |
+| ContextualWisdomLab/.github #1331 | `4fc261ff03f28b4ab8b44ef6d9f14cdb138eb3ef` | `d2c554db` | no | blocked | required | replacement for closed #1324; direct-OpenAI fallback uses a paired runner-scoped API base/key, preserves standalone custom `LLM_API_BASE_FILE`, and rejects known foreign provider bases; hosted checks and independent approval remain authoritative |
 | ContextualWisdomLab/.github #1330 | `f8a72106b887230ec12a95ff68947a0e00837b58` | `d2c554db` | no | blocked | required | replacement for closed #1328; conflict-mode protected security-contract guard runs after edits and before staging; hosted checks and independent approval remain authoritative |
 | ContextualWisdomLab/.github #1333 | `402f64adf3a377326505f5d48098666d8d8f92d5` | `d2c554db` | no | blocked | required | replacement for closed #1332/#1322; typed provider/model outages retry only when the full gate budget plus backoff fits before the step deadline; per-attempt logs are retained and terminal classification stays fail-closed; hosted checks and independent approval remain authoritative |
 
