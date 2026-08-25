@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-25 (Asia/Seoul)
-**Repository heads at snapshot:** PR #259 `a019dda`, PR #258 `54ab508`, PR #227 `98fa709`, PR #249 `2f1d585`,
+**Repository heads at snapshot:** PR #259 `a019dda`, PR #258 `2f74479`, PR #227 `98fa709`, PR #249 `2f1d585`,
 PR #247 `56dcb19`, PR #246 `3936cd9`, and PR #204 `750213d`; hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
@@ -17,7 +17,7 @@ rebased and reverified.
 | PR | Exact head | Base | Draft | Merge state | Review state | Check evidence at capture |
 | --- | --- | --- | --- | --- | --- | --- |
 | #259 | `a019ddaba4aa5cad1e0bef02121f20d514d9580c` | `7eb131c4` | no | blocked | required | stale File Provider error-state + `last`/`expired` parser; checks remain authoritative |
-| #258 | `ad8792fb7b91cf2fef425b2d14425ddab8bd9d7f` | `7eb131c4` | no | blocked | required | preceding baseline/docs head; checks remain authoritative |
+| #258 | `2f74479313ba831eb0855b3af574df4e26e8447b` | `7eb131c4` | no | blocked | required | current baseline/docs head; checks remain authoritative |
 | #249 | `2f1d585398b85f3f1adb3783520ad70e7b4a9c3f` | `7eb131c4` | no | blocked | required | source/build/security/coverage pass; Strix external provider failure |
 | #247 | `56dcb1986e65deba735c8bdf5f517ad5374ac239` | `7eb131c4` | no | blocked | required | ADR records destination blocker proof gate; post-push checks pending |
 | #246 | `3936cd9fd422f04c8dc08c552d4b0f53c2e3a0ac` | `7eb131c4` | no | blocked | required | ADR records single provider card control and non-Windows scan-root wording; checks pending |
@@ -39,6 +39,13 @@ annotation still recorded;
 PR #1443 is `55a84f904f11203f49c356d95d7d88ba9f903030`, the direct gate repair, with source/security
 checks passing, coverage/metadata still pending, and `STRIX_PROVIDER_UNAVAILABLE` recorded. Neither PR is claimed merge-ready
 without a fresh qualifying review and exact-head protected checks.
+PR #1464 is `176378f541bf26d2cabb4d3e131c221df703036e`, with current review threads resolved after
+pinning PITR timestamps to an explicit `+00` offset, surfacing cleanup status, and applying the
+Compose hardening contract; targeted backend/shell/Podman drill evidence passed locally, while hosted
+checks and a fresh qualifying approval remain authoritative. PR #1454 is
+`3a38057f5d9c0dac4af3a4f808452249ad992ed5`, with the deleted URL/loopback tests and doctoring
+document restored and explicit zero ports rejected in both validators; targeted backend (45) and
+NetworkGraph (14) tests passed, but hosted checks and fresh approval remain pending.
 
 ## Current product contract
 
