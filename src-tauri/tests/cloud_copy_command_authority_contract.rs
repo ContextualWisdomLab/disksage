@@ -50,6 +50,26 @@ fn failed_copy_evidence_never_shares_success_receipt_authority() {
     );
 }
 
+#[test]
+fn native_copy_cancellation_is_checked_during_preflight() {
+    let body = function_body(
+        "fn create_cloud_candidate_receipt(",
+        "pub async fn copy_cloud_candidate(",
+    );
+    let checks = body.matches("require_native_copy_not_cancelled(cancel)?").count();
+    assert!(checks >= 5, "native copy preflight must honor cancellation at each bounded gate");
+    assert!(
+        body.find("require_native_copy_not_cancelled(cancel)?")
+            < body.find("require_local_copy_headroom(candidate)?"),
+        "queued cancellation must be checked before headroom/provider preflight"
+    );
+    assert!(
+        body.rfind("require_native_copy_not_cancelled(cancel)?")
+            < body.find("prepare_cloud_copy_with_approval_cancelable("),
+        "native copy must re-check cancellation immediately before mutation"
+    );
+}
+
 fn assert_cancel_registration_precedes_serialization_lock(command_start: &str, command_end: &str) {
     let body = function_body(command_start, command_end);
     let blocking = body

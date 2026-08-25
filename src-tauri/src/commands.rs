@@ -1706,6 +1706,14 @@ pub struct CloudCopyOutput {
 }
 
 #[cfg(not(coverage))]
+fn require_native_copy_not_cancelled(cancel: Option<&AtomicBool>) -> Result<(), String> {
+    if cancel.is_some_and(|token| token.load(Ordering::SeqCst)) {
+        return Err("cloud-copy-cancelled".into());
+    }
+    Ok(())
+}
+
+#[cfg(not(coverage))]
 fn create_cloud_candidate_receipt(
     root: &str,
     cloud_root: &str,
@@ -1727,6 +1735,9 @@ fn create_cloud_candidate_receipt(
     {
         return Err("metadata-fingerprint-invalid".into());
     }
+    if !adopt_existing {
+        require_native_copy_not_cancelled(cancel)?;
+    }
     let planning =
         cloud_plan_for_inputs(root, cloud_root, min_size_mib, min_age_days, limit, app)?;
     let CloudPlanningOutput {
@@ -1745,6 +1756,9 @@ fn create_cloud_candidate_receipt(
         [] => return Err("fresh-plan-candidate-not-found".into()),
         _ => return Err("fresh-plan-candidate-ambiguous".into()),
     };
+    if !adopt_existing {
+        require_native_copy_not_cancelled(cancel)?;
+    }
     let app_data_dir = app
         .path()
         .app_data_dir()
@@ -1778,10 +1792,12 @@ fn create_cloud_candidate_receipt(
         // bytes. Re-check destination/staging headroom immediately before any mutation; adoption
         // only verifies an existing destination and does not create a local staging file.
         require_local_copy_headroom(candidate)?;
+        require_native_copy_not_cancelled(cancel)?;
         let runtime = provider_client_runtime::require_provider_client_runtime(
             selected.provider,
             cloud::system_now_ms(),
         )?;
+        require_native_copy_not_cancelled(cancel)?;
         if selected.provider == cloud::CloudProvider::Icloud {
             cloud::require_pre_copy_evidence_cohort(report.pre_copy_evidence.as_ref())?;
             let health = icloud_health
@@ -1794,6 +1810,7 @@ fn create_cloud_candidate_receipt(
                 .ok_or_else(|| "provider-global-sync-evidence-unavailable".to_string())?;
             provider_global_sync::require_new_copy_admission(global_sync)?;
         }
+        require_native_copy_not_cancelled(cancel)?;
         let snapshot = report
             .capacity
             .as_ref()
@@ -1806,6 +1823,7 @@ fn create_cloud_candidate_receipt(
                 &snapshot.snapshot,
             );
         require_capacity_for_copy(candidate, &snapshot.snapshot, native_client_mode)?;
+        require_native_copy_not_cancelled(cancel)?;
     }
     let copy_result = if adopt_existing {
         cloud_transfer::adopt_existing_cloud_copy_with_approval(
