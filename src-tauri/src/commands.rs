@@ -1717,7 +1717,7 @@ fn create_cloud_candidate_receipt(
     approval_rationale: &str,
     app: &AppHandle,
     adopt_existing: bool,
-    cancel: &AtomicBool,
+    cancel: Option<&AtomicBool>,
 ) -> Result<CloudCopyOutput, String> {
     use tauri::Manager;
     if metadata_fingerprint.len() != 64
@@ -1816,6 +1816,7 @@ fn create_cloud_candidate_receipt(
             &copy_approval,
         )
     } else {
+        let cancel = cancel.ok_or_else(|| "native-copy-cancellation-unavailable".to_string())?;
         cloud_transfer::prepare_cloud_copy_with_approval_cancelable(
             candidate,
             &selected,
@@ -2133,7 +2134,7 @@ pub async fn copy_cloud_candidate(
             &approval_rationale,
             &app,
             false,
-            &cloud_copy_cancel,
+            Some(&cloud_copy_cancel),
         );
         if let Ok(mut active) = cloud_copy_operation.lock() {
             cloud_copy_cancel.store(false, Ordering::SeqCst);
@@ -2199,20 +2200,11 @@ pub async fn adopt_existing_cloud_candidate(
     state: State<'_, AppState>,
 ) -> Result<CloudCopyOutput, String> {
     let cloud_review = Arc::clone(&state.cloud_review);
-    let cloud_copy_cancel = Arc::clone(&state.cloud_copy_cancel);
-    let cloud_copy_operation = Arc::clone(&state.cloud_copy_operation);
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = cloud_review
             .lock()
             .map_err(|_| "cloud-review-lock-poisoned".to_string())?;
-        {
-            let mut active = cloud_copy_operation
-                .lock()
-                .map_err(|_| "cloud-copy-operation-lock-poisoned".to_string())?;
-            cloud_copy_cancel.store(false, Ordering::SeqCst);
-            *active = Some(metadata_fingerprint.clone());
-        }
-        let result = create_cloud_candidate_receipt(
+        create_cloud_candidate_receipt(
             &root,
             &cloud_root,
             &metadata_fingerprint,
@@ -2223,17 +2215,8 @@ pub async fn adopt_existing_cloud_candidate(
             &approval_rationale,
             &app,
             true,
-            &cloud_copy_cancel,
-        );
-        if let Ok(mut active) = cloud_copy_operation.lock() {
-            cloud_copy_cancel.store(false, Ordering::SeqCst);
-            if active.as_deref() == Some(metadata_fingerprint.as_str()) {
-                *active = None;
-            }
-        } else {
-            cloud_copy_cancel.store(false, Ordering::SeqCst);
-        }
-        result
+            None,
+        )
     })
     .await
     .map_err(|_| "cloud-adopt-existing-task-failed".to_string())?

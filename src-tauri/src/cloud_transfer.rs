@@ -1224,53 +1224,72 @@ fn write_copy_failure_record(
     if existing_records >= MAX_CLOUD_COPY_FAILURE_RECORDS {
         return Err("failure-record-retention-limit".into());
     }
-    let encoded = serde_json::to_vec_pretty(record)
-        .map_err(|_| "failure-record-json-invalid".to_string())?;
-    if encoded.len() as u64 > MAX_RECEIPT_BYTES {
-        return Err("failure-record-too-large".into());
-    }
-    let path = receipt_dir.join(format!("{}-failure.json", record.failure_id));
-    #[cfg(unix)]
-    let file_result = {
-        use std::os::unix::fs::OpenOptionsExt;
-        std::fs::OpenOptions::new()
+    // A repeated failure in the same millisecond has the same content-derived base id. Retry with
+    // a bounded suffix so diagnostic evidence is append-only instead of silently dropped by
+    // `create_new`.
+    for suffix in 0..=MAX_CLOUD_COPY_FAILURE_RECORDS {
+        let mut candidate = record.clone();
+        if suffix > 0 {
+            candidate.failure_id = format!("{}-{suffix}", record.failure_id);
+        }
+        let encoded = serde_json::to_vec_pretty(&candidate)
+            .map_err(|_| "failure-record-json-invalid".to_string())?;
+        if encoded.len() as u64 > MAX_RECEIPT_BYTES {
+            return Err("failure-record-too-large".into());
+        }
+        let path = receipt_dir.join(format!("{}-failure.json", candidate.failure_id));
+        #[cfg(unix)]
+        let file_result = {
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o400)
+                .open(&path)
+        };
+        #[cfg(not(unix))]
+        let file_result = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .mode(0o400)
-            .open(&path)
-    };
-    #[cfg(not(unix))]
-    let file_result = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path);
-    let mut file = file_result.map_err(|_| "failure-record-create-failed".to_string())?;
-    let result = (|| -> Result<(), String> {
-        file.write_all(&encoded)
-            .and_then(|_| file.sync_all())
-            .map_err(|_| "failure-record-write-failed".to_string())?;
-        #[cfg(not(unix))]
-        {
-            let mut permissions = file
-                .metadata()
-                .map_err(|_| "failure-record-permissions-failed".to_string())?
-                .permissions();
-            permissions.set_readonly(true);
-            std::fs::set_permissions(&path, permissions)
-                .map_err(|_| "failure-record-permissions-failed".to_string())?;
+            .open(&path);
+        let mut file = match file_result {
+            Ok(file) => file,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::AlreadyExists
+                    && suffix < MAX_CLOUD_COPY_FAILURE_RECORDS =>
+            {
+                continue;
+            }
+            Err(_) => return Err("failure-record-create-failed".into()),
+        };
+        let result = (|| -> Result<(), String> {
+            file.write_all(&encoded)
+                .and_then(|_| file.sync_all())
+                .map_err(|_| "failure-record-write-failed".to_string())?;
+            #[cfg(not(unix))]
+            {
+                let mut permissions = file
+                    .metadata()
+                    .map_err(|_| "failure-record-permissions-failed".to_string())?
+                    .permissions();
+                permissions.set_readonly(true);
+                std::fs::set_permissions(&path, permissions)
+                    .map_err(|_| "failure-record-permissions-failed".to_string())?;
+            }
+            #[cfg(unix)]
+            std::fs::File::open(receipt_dir)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|_| "failure-record-directory-sync-failed".to_string())?;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            drop(file);
+            remove_created_file(&path);
+            return Err(error);
         }
-        #[cfg(unix)]
-        std::fs::File::open(receipt_dir)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|_| "failure-record-directory-sync-failed".to_string())?;
-        Ok(())
-    })();
-    if let Err(error) = result {
-        drop(file);
-        remove_created_file(&path);
-        return Err(error);
+        return Ok(path);
     }
-    Ok(path)
+    Err("failure-record-create-failed".into())
 }
 
 #[cfg(not(coverage))]
@@ -2236,6 +2255,36 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(std::fs::metadata(path).unwrap().permissions().mode() & 0o777, 0o400);
         }
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn same_millisecond_copy_failures_get_distinct_records() {
+        let temporary = tempfile::tempdir().unwrap();
+        let receipt_dir = temporary.path().join("receipts");
+        for _ in 0..2 {
+            record_copy_failure(
+                &candidate(),
+                CloudCopyApprovalAction::CopyOnly,
+                "cloud-copy-timeout",
+                123,
+                &receipt_dir,
+            );
+        }
+        let mut entries: Vec<_> = std::fs::read_dir(&receipt_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        entries.sort();
+        assert_eq!(entries.len(), 2);
+        let records: Vec<CloudCopyFailureRecord> = entries
+            .iter()
+            .map(|path| serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap())
+            .collect();
+        assert_ne!(records[0].failure_id, records[1].failure_id);
+        assert!(records
+            .iter()
+            .all(|record| record.occurred_at_ms == 123));
     }
 
     fn refresh_review_fingerprint(candidate: &mut CloudCandidate) {
