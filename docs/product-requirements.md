@@ -29,9 +29,12 @@ from one another.
    regenerable cache through a dry run, Trash move, journal, and rollback path.
    The narrow ADR-0002 incident policy may execute its reviewed, identity-bound
    cache roots without a second prompt; it is not a general path-based delete.
-5. **Audit a decision.** As a user or operator, I can export path-free lineage
-   from source metadata through provider evidence, receipt, Goal projection, and
-   eviction decision.
+5. **Audit a decision.** As a user or operator, I can export a path-free
+   lineage projection from source metadata through provider evidence, receipt,
+   Goal projection, and eviction decision. The local compatibility envelope
+   `NaruonFileLineageEnvelope` may retain source and destination paths for
+   recovery; it is not a shareable export and callers must use the redacted
+   projection before sending data outside the local trust boundary.
 
 ## Functional requirements
 
@@ -50,13 +53,19 @@ from one another.
 
 ### FR-2: Provider state machine
 
-Every cloud candidate follows this monotonic state machine:
+After a copy has been verified, the successful post-copy Goal projection follows
+this monotonic state machine:
 
 `copy-verified → pending-provider-sync → provider-sync-confirmed → eviction-ready → source-evicted`
 
 `local-current` with `is_uploaded=false` is `pending-upload`; it cannot issue an
 eviction permit. Provider timeout, quota/auth uncertainty, stale evidence,
 insufficient headroom, or an incomplete receipt fail closed.
+
+The Goal state machine is intentionally success-only and begins at
+`copy-verified`. Pre-copy, failed, cancelled, and provider-sync observations are
+separate candidate/provider evidence states; they are never coerced into a Goal
+state or treated as eviction authority.
 
 ### FR-3: Safe copy and eviction
 
@@ -107,8 +116,10 @@ standalone transfer or deletion.
 - **Performance:** bounded child processes and asynchronous UI refreshes must
   keep the desktop responsive; every long operation has a visible timeout and
   cancellation path.
-- **Privacy:** shareable logs, receipts, and exports are path-free by default;
-  provider raw output is never persisted. OAuth refresh tokens, when explicitly
+- **Privacy:** shareable projections, logs, receipts, and exports are path-free
+  by default; the local `NaruonFileLineageEnvelope` is a protected,
+  path-bearing compatibility envelope and must not be used as a shareable
+  export. Provider raw output is never persisted. OAuth refresh tokens, when explicitly
   enabled, are stored only in the operating-system credential store and never
   in application logs, receipts, or exports.
 - **Portability:** macOS, Linux, and Windows capability differences are explicit
