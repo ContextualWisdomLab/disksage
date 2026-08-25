@@ -1,4 +1,5 @@
 const COMMANDS: &str = include_str!("../src/commands.rs");
+const CLOUD_TRANSFER: &str = include_str!("../src/cloud_transfer.rs");
 
 fn function_body(start: &str, end: &str) -> &'static str {
     let start_index = COMMANDS
@@ -8,6 +9,17 @@ fn function_body(start: &str, end: &str) -> &'static str {
     let end_index = tail
         .find(end)
         .unwrap_or_else(|| panic!("missing command boundary: {end}"));
+    &tail[..end_index]
+}
+
+fn cloud_transfer_function_body(start: &str, end: &str) -> &'static str {
+    let start_index = CLOUD_TRANSFER
+        .find(start)
+        .unwrap_or_else(|| panic!("missing cloud-transfer boundary: {start}"));
+    let tail = &CLOUD_TRANSFER[start_index..];
+    let end_index = tail
+        .find(end)
+        .unwrap_or_else(|| panic!("missing cloud-transfer boundary: {end}"));
     &tail[..end_index]
 }
 
@@ -70,5 +82,22 @@ fn adoption_cancel_reset_happens_after_serialization_lock() {
     assert_cancel_reset_is_serialized(
         "pub async fn adopt_existing_cloud_candidate(",
         "pub struct CloudAttestationOutput",
+    );
+}
+
+#[test]
+fn failed_native_copy_cleanup_is_not_compiled_out_on_windows() {
+    let body = cloud_transfer_function_body("fn copy_and_verify(", "fn verify_existing_destination(");
+
+    let has_windows_cleanup = body.contains("#[cfg(windows)]")
+        || body.contains("#[cfg(all(not(target_os = \"macos\"), not(unix)))]");
+    assert!(
+        has_windows_cleanup,
+        "a failed create_new copy must retain a Windows cleanup path instead of leaving a partial destination that blocks retries"
+    );
+
+    assert!(
+        body.contains("if copy_result.is_err()"),
+        "failed native copies must keep an explicit cleanup boundary"
     );
 }
