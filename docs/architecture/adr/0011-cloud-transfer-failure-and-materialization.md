@@ -13,10 +13,12 @@ leak them.
 
 ## Decision
 
-DiskSage writes an append-once, mode-restricted private failure record for every bounded native
-copy error or cancellation. The record binds the candidate fingerprint, provider, exact local
-paths, action, bounded error code, timestamp, and stable failure ID. It is diagnostic only: it
-cannot satisfy provider synchronization, approval, or source-eviction gates.
+DiskSage writes an append-once, mode-restricted private failure record under a dedicated
+`cloud-copy-failures` directory for every bounded native copy error or cancellation. The record
+binds the candidate fingerprint, provider, exact local paths, action, bounded error code,
+timestamp, and stable failure ID. It is diagnostic only: it cannot satisfy provider
+synchronization, approval, or source-eviction gates, and it is excluded from success-receipt
+reconciliation by directory separation.
 
 The adoption path first asks the provider adapter to prove that the destination is already
 materialized and local-current. Dataless, downloading, stale, unsupported, or changed status
@@ -25,6 +27,13 @@ fails closed before any hash read. A later success receipt still rechecks identi
 Private local receipts and UI retain identity-critical paths for recovery and exact revalidation.
 Shareable/public logs and Naruon/semantic-data-portal exports use stable fingerprints and relation
 IDs only; they are path-free by contract.
+
+## Rejected alternatives
+
+- Storing `*-failure.json` beside success receipts was rejected because the reconciliation reader
+  would treat diagnostic failures as receipt candidates and inflate error/incomplete counts.
+- Hydrating a placeholder to decide adoption was rejected because the read itself can consume
+  local disk and change the provider state being evaluated.
 
 ## Consequences
 

@@ -1181,20 +1181,30 @@ fn write_copy_failure_record(
         .create_new(true)
         .open(&path);
     let mut file = file_result.map_err(|_| "failure-record-create-failed".to_string())?;
-    if file.write_all(&encoded).and_then(|_| file.sync_all()).is_err() {
+    let result = (|| -> Result<(), String> {
+        file.write_all(&encoded)
+            .and_then(|_| file.sync_all())
+            .map_err(|_| "failure-record-write-failed".to_string())?;
+        #[cfg(not(unix))]
+        {
+            let mut permissions = file
+                .metadata()
+                .map_err(|_| "failure-record-permissions-failed".to_string())?
+                .permissions();
+            permissions.set_readonly(true);
+            std::fs::set_permissions(&path, permissions)
+                .map_err(|_| "failure-record-permissions-failed".to_string())?;
+        }
+        #[cfg(unix)]
+        std::fs::File::open(receipt_dir)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|_| "failure-record-directory-sync-failed".to_string())?;
+        Ok(())
+    })();
+    if let Err(error) = result {
         drop(file);
         remove_created_file(&path);
-        return Err("failure-record-write-failed".into());
-    }
-    #[cfg(not(unix))]
-    {
-        let mut permissions = file
-            .metadata()
-            .map_err(|_| "failure-record-permissions-failed".to_string())?
-            .permissions();
-        permissions.set_readonly(true);
-        std::fs::set_permissions(&path, permissions)
-            .map_err(|_| "failure-record-permissions-failed".to_string())?;
+        return Err(error);
     }
     Ok(path)
 }

@@ -1736,6 +1736,7 @@ fn create_cloud_candidate_receipt(
         .app_data_dir()
         .map_err(|_| "app-data-directory-unavailable".to_string())?;
     let receipt_dir = app_data_dir.join("cloud-receipts");
+    let failure_dir = app_data_dir.join("cloud-copy-failures");
     let review_decision = if candidate.requires_review {
         cloud_review::load_latest_decisions(&cloud_review_directory(&app)?)?
             .into_iter()
@@ -1818,7 +1819,7 @@ fn create_cloud_candidate_receipt(
                 action,
                 &error,
                 cloud::system_now_ms(),
-                &receipt_dir,
+                &failure_dir,
             );
             return Err(error);
         }
