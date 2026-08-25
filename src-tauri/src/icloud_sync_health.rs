@@ -1062,9 +1062,14 @@ fn parse_file_provider_activity_output(
 }
 
 fn relative_age_ms(line: &str) -> Option<u64> {
-    let start = line.rfind("(-")?.saturating_add(2);
-    let end = start.checked_add(line[start..].find(')')?)?;
-    let age = &line[start..end];
+    let age = ["last:'", "expired:'"].iter().find_map(|marker| {
+        let value_start = line.rfind(marker)?.saturating_add(marker.len());
+        let value_end = value_start.checked_add(line[value_start..].find('\'')?)?;
+        let value = &line[value_start..value_end];
+        let age_start = value.rfind("(-")?.saturating_add(2);
+        let age_end = age_start.checked_add(value[age_start..].find(')')?)?;
+        Some(&value[age_start..age_end])
+    })?;
     let bytes = age.as_bytes();
     let mut index = 0;
     let mut total = 0_u64;
@@ -2411,6 +2416,20 @@ mod tests {
             false,
         );
         assert!(evidence
+            .notices
+            .contains(&"icloud-file-provider-stale-error-observed".to_string()));
+    }
+
+    #[test]
+    fn file_provider_parser_ignores_unrelated_negative_duration() {
+        let evidence = parse_file_provider_activity_output(
+            "doc fetch-content: retry budget (-4h9min)\n",
+            42,
+            true,
+            false,
+            false,
+        );
+        assert!(!evidence
             .notices
             .contains(&"icloud-file-provider-stale-error-observed".to_string()));
     }
