@@ -18,7 +18,7 @@ rebased and reverified.
 | --- | --- | --- | --- | --- | --- | --- |
 | #259 | `a019ddaba4aa5cad1e0bef02121f20d514d9580c` | `7eb131c4` | no | blocked | required | stale File Provider error-state + `last`/`expired` parser; checks remain authoritative |
 | #258 | `54ab508ee95174639add57053f5f2de2cfd945a8` | `7eb131c4` | no | blocked | required | current baseline/docs head; checks remain authoritative |
-| #249 | `2f1d585398b85f3f1adb3783520ad70e7b4a9c3f` | `7eb131c4` | yes | blocked | none | Strix failure; external gate evidence unavailable |
+| #249 | `2f1d585398b85f3f1adb3783520ad70e7b4a9c3f` | `7eb131c4` | no | blocked | required | source/build/security/coverage pass; Strix external provider failure |
 | #247 | `b3e00c6a9bf13152562ccc50f2ed742b03f0bffa` | `7eb131c4` | no | blocked | required | destination-headroom preview now retains unverified candidate blockers; post-push checks pending |
 | #246 | `74f9f3ff73ac18c9e61f6cf1f63b3fcb8237e76e` | `7eb131c4` | no | blocked | required | persisted iCloud stall age and duplicate cancel control fixed; post-push checks pending |
 | #227 | `98fa709afa489e05c91a947d1e8cbf499e2cc6b6` | `7eb131c4` | no | blocked | required | Strix annotation `STRIX_PROVIDER_UNAVAILABLE`; source checks otherwise passed |
