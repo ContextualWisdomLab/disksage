@@ -149,8 +149,9 @@ suite passes 35 tests; hosted Strix and metadata-only gates remain authoritative
   ready-for-review with protected auto-merge enabled. It remains blocked on required hosted checks and
   qualifying independent approval; no merge is claimed. The current head includes the accessor-safe
   cloud-error classification and prototype-trap regression fixes, with zero unresolved review threads.
-- DiskSage PR #260 is exact head `9cebf0bf0382d3cdc50a030f388729acf46fba58` and remains a draft with
-  coverage/Strix checks active; no source change is inferred from pending status.
+- DiskSage PR #260 is exact head `9cebf0bf0382d3cdc50a030f388729acf46fba58` and is now ready for
+  review with protected auto-merge enabled. Its coverage/Strix checks remain active without a current
+  failure; independent approval and the exact-head protected gate remain authoritative.
 - The documentation PR #258 advanced to `4d28ea386f35bf17e0e0b7ad1f5a47422bc90286` after the last
   baseline capture; this section is the current reconciliation for the next exact-head update.
 - DiskSage PR #246 advanced to exact head `1ae5a3517f80aeda79c3e77fe540ccb2ce1f4ccb` with a
