@@ -61,8 +61,8 @@ and fresh approval remain pending. PR #1462 is
 backend tool tests plus the optional-parameter frontend regression and earlier governance suite
 passed, but hosted checks and fresh approval remain pending. PR #1463 is `92270f2ecd721d8533bcb01aef954cd3868b209f`, with the
 Strix completion trigger restored after a current-head governance regression; its informational
-shared-spinner review and restored URL-boundary threads remain resolved, while hosted Strix and
-metadata-only gates remain authoritative.
+shared-spinner review and restored URL-boundary threads remain resolved, and its focused governance
+suite passes 35 tests; hosted Strix and metadata-only gates remain authoritative.
 
 ## Current product contract
 
