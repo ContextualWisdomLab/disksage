@@ -546,3 +546,19 @@ File Provider databases, cloud objects, and user files remain outside the mutati
 focused Rust regression test passed 3/3. A timeout remains incomplete active-use evidence and
 keeps cache cleanup and cloud eviction fail-closed; this process-group cleanup is not a provider
 recovery or copy-cancellation operation.
+
+## Amendment: current iCloud Finder preparation evidence (2026-08-25)
+
+The current bounded read-only observation retained three `fetchContentsForItemWithID` requests
+with no progress, roughly 525,000 pending indexable entries, upload progress at zero, download
+progress at about 21.45%, and an active reconciliation state. Finder and the provider daemons were
+alive, but no DiskSage, ZIP, or `real_datasets` process was running; local headroom was about 12 GiB.
+These markers classify the user-visible “복사 준비 중” dialog as provider preflight/backlog evidence,
+not a completed copy or a local ZIP stall.
+
+PR #259 (`8d87a2ba81af3e1c289bcc5219423c7efa5f4236`) exposes the aggregate no-progress label,
+bounded transfer percentages, and same-blocker duration. This is diagnostic/operator guidance only:
+the UI may request Finder Escape cancellation, but DiskSage does not cancel automatically, kill
+`bird`/`fileproviderd`, touch CloudDocs databases, or grant copy, attestation, or eviction authority.
+New work remains fail-closed until a fresh complete and quiet provider observation plus independent
+per-item receipt evidence exists.
