@@ -20,7 +20,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   fingerprints and a five-minute observation-skew ceiling; incomplete, malformed, or stale
   observations remain blocked and never become cloud-write or eviction authority.
 - Carry the integrity-checked iCloud pre-copy cohort and `pre_copy_evidence_met` through the
-  Naruon cloud-copy readiness envelope (schema version 7), so aggregate consumers also fail closed
+  Naruon cloud-copy readiness envelope (schema version 8), so aggregate consumers also fail closed
   when the provider queue is quiet but pre-copy evidence is absent.
 - Keep the hourly contextual-orchestrator loop on its published read-only API, bind context to
   the exact event commit, and remove foreign-repository checkout, KV mutation, and provider-secret

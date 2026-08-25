@@ -23,7 +23,9 @@ use crate::provider_capacity::{self, CapacityEvidenceKind, CloudCapacityAssessme
 use crate::provider_client_runtime::{self, ProviderClientRuntimeSnapshot};
 use crate::provider_global_sync::{self, ProviderGlobalSyncReport, ProviderGlobalSyncState};
 
-pub const NARUON_CLOUD_COPY_READINESS_SCHEMA_VERSION: u32 = 7;
+/// Schema 8 adds explicit iCloud File Provider lock/stall blockers while preserving the
+/// path-free handoff shape; Naruon accepts it alongside schemas 3–7.
+pub const NARUON_CLOUD_COPY_READINESS_SCHEMA_VERSION: u32 = 8;
 pub const NARUON_CLOUD_COPY_READINESS_MAX_INPUT_BYTES: u64 = 1024 * 1024;
 const NARUON_CLOUD_COPY_READINESS_SCHEMA_KIND: &str = "disksage.naruon.cloud-copy-readiness";
 const FINGERPRINT_CANONICALIZATION: &str = "lexicographic-json-object-keys-utf8-no-whitespace";
@@ -2086,7 +2088,7 @@ mod tests {
         assert_eq!(envelope.readiness_fingerprint_sha256, expected);
         assert_eq!(
             envelope.readiness_fingerprint_sha256,
-            "958f7a8e2e595f119bfd38f0ee231436217e3cb97c4d2745fdcfb5e29b5a299c"
+            "6a69022601c4fc41c9e42360618e7e31728d8b9cf7757f15791832974f8e67bd"
         );
     }
 }
