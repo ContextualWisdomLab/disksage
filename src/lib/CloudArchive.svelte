@@ -92,6 +92,7 @@
   let loadError = $state("");
   let report: api.CloudPlanReport | null = $state(null);
   let copyingFingerprint = $state("");
+  let cancellingCopy = $state(false);
   let reviewingFingerprint = $state("");
   let copied: api.CloudCopyOutput | null = $state(null);
   let attesting = $state(false);
@@ -368,6 +369,19 @@
       loadError = boundedCloudArchiveErrorMessage("copy", e);
     } finally {
       copyingFingerprint = "";
+    }
+  }
+
+  async function cancelCopy() {
+    if (!copyingFingerprint || cancellingCopy) return;
+    cancellingCopy = true;
+    loadError = "";
+    try {
+      await api.cancelCloudCopy();
+    } catch (e) {
+      loadError = String(e);
+    } finally {
+      cancellingCopy = false;
     }
   }
 
@@ -1617,9 +1631,19 @@
                       || copyApprovalPhrase === null
                       || (copyConfirmations[candidate.metadata_fingerprint] ?? "").trim()
                         !== copyApprovalPhrase}
+                >
+                  {copyingFingerprint === candidate.metadata_fingerprint ? "복사·해시 검증 중…" : "원본을 유지하고 클라우드에 복사"}
+                </button>
+                {#if copyingFingerprint === candidate.metadata_fingerprint}
+                  <button
+                    type="button"
+                    onclick={cancelCopy}
+                    disabled={cancellingCopy}
+                    aria-label="진행 중인 DiskSage 클라우드 복사 취소"
                   >
-                    {copyingFingerprint === candidate.metadata_fingerprint ? "복사·해시 검증 중…" : "원본을 유지하고 클라우드에 복사"}
+                    {cancellingCopy ? "복사 취소 요청 중…" : "진행 중인 복사 취소"}
                   </button>
+                {/if}
                 {/if}
                 {#if providerApiCopyEligible(candidate)}
                   <p class="warning">File Provider 전역 동기화가 막혀 있어, 명시적 OAuth 쓰기 연결로 공급자 API에 직접 업로드합니다. 원본은 유지되고 이후 API attestation이 필요합니다.</p>

@@ -105,6 +105,7 @@ pub fn run() {
             commands::list_roots,
             commands::start_scan,
             commands::cancel_scan,
+            commands::cancel_cloud_copy,
             node_navigation::get_node_secure,
             commands::top_files,
             commands::list_cache_candidates,

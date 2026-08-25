@@ -1333,6 +1333,8 @@ export const copyCloudCandidateViaProviderApi = (
   minAgeDays,
   limit,
 });
+/** Request cancellation of the single in-flight native copy operation. */
+export const cancelCloudCopy = () => invoke<void>("cancel_cloud_copy");
 export const adoptExistingCloudCandidate = (
   root: string,
   cloudRoot: string,

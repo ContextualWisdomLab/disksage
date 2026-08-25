@@ -817,6 +817,94 @@ pub fn existing_destination_sync_blocker(
     }
 }
 
+/// Prove that an existing File Provider destination is already materialized before any hash read.
+/// This gate is separate from sync attestation so adoption cannot hydrate a dataless placeholder.
+#[cfg(all(target_os = "macos", not(coverage)))]
+pub fn require_existing_destination_local_current(
+    provider: CloudProvider,
+    destination: &std::path::Path,
+    expected_bytes: u64,
+) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = std::fs::symlink_metadata(destination)
+        .map_err(|_| "existing-destination-status-unavailable".to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("existing-destination-must-be-regular-file".into());
+    }
+    if metadata.len() != expected_bytes || crate::cloud::metadata_is_dataless(&metadata) {
+        return Err("existing-destination-not-materialized".into());
+    }
+    let path = destination
+        .to_str()
+        .ok_or_else(|| "existing-destination-not-unicode".to_string())?;
+    // A unit-test/local filesystem destination is not a File Provider object. Only paths inside
+    // the platform-managed provider trees require a native status probe; arbitrary user-selected
+    // local roots still receive the regular-file/size/identity checks below.
+    let managed_provider_path = destination.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::Normal(name)
+                if matches!(
+                    name.to_str(),
+                    Some("CloudStorage")
+                        | Some("Mobile Documents")
+                        | Some("File Provider Storage")
+                        | Some("FileProvider")
+                )
+        )
+    });
+    if managed_provider_path {
+        match provider {
+            CloudProvider::Icloud => {
+                let (ubiquitous, _, uploading, current) = foundation_icloud_status(path)?;
+                if !ubiquitous || !current || uploading {
+                    return Err("existing-destination-not-local-current".into());
+                }
+            }
+            CloudProvider::Onedrive | CloudProvider::GoogleDrive => {
+                let snapshot = parse_file_providerctl_snapshot(
+                    &file_providerctl_status(path)?,
+                    metadata.len(),
+                    "hash-pending",
+                )?;
+                if !snapshot.is_local_current() {
+                    return Err("existing-destination-not-local-current".into());
+                }
+            }
+        }
+    }
+    let after = std::fs::symlink_metadata(destination)
+        .map_err(|_| "existing-destination-status-unavailable".to_string())?;
+    if after.file_type().is_symlink()
+        || !after.is_file()
+        || after.len() != metadata.len()
+        || after.dev() != metadata.dev()
+        || after.ino() != metadata.ino()
+        || after.modified().ok() != metadata.modified().ok()
+    {
+        return Err("existing-destination-status-changed".into());
+    }
+    Ok(())
+}
+
+#[cfg(any(not(target_os = "macos"), coverage))]
+pub fn require_existing_destination_local_current(
+    _provider: CloudProvider,
+    destination: &std::path::Path,
+    expected_bytes: u64,
+) -> Result<(), String> {
+    let metadata = std::fs::symlink_metadata(destination)
+        .map_err(|_| "existing-destination-status-unavailable".to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("existing-destination-must-be-regular-file".into());
+    }
+    if metadata.len() != expected_bytes || crate::cloud::metadata_is_dataless(&metadata) {
+        return Err("existing-destination-not-materialized".into());
+    }
+    Ok(())
+}
+
 #[cfg(any(not(target_os = "macos"), coverage))]
 pub fn existing_destination_sync_blocker(
     _provider: CloudProvider,
@@ -1331,6 +1419,22 @@ mod tests {
             assert!(!snapshot.is_sync_complete(), "{field}");
         }
         assert!(parse_file_providerctl_snapshot("isUploaded = maybe;", 42, "hash").is_err());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn existing_destination_gate_rejects_missing_or_wrong_size_without_reading_bytes() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("existing.bin");
+        std::fs::write(&path, b"bytes").unwrap();
+        assert_eq!(
+            require_existing_destination_local_current(CloudProvider::Onedrive, &path, 99)
+                .unwrap_err(),
+            "existing-destination-not-materialized"
+        );
+        assert!(
+            require_existing_destination_local_current(CloudProvider::Onedrive, &path, 5).is_ok()
+        );
     }
 
     fn api_snapshot(provider: CloudProvider, checksum: &str) -> ProviderApiSnapshot {

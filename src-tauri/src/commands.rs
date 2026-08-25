@@ -40,6 +40,8 @@ pub struct AppState {
     pub scanning: Arc<AtomicBool>,
     /// Serialize review writes with review-gated copies so a later hold cannot race a copy.
     pub cloud_review: Arc<Mutex<()>>,
+    /// One serialized native copy cancellation token. It is reset at each command boundary.
+    pub cloud_copy_cancel: Arc<AtomicBool>,
     /// The latest model judgment is process-local and consumed by one execution attempt.
     pub brew_cleanup_judgment: Arc<Mutex<Option<crate::brew_cleanup::BrewCleanupJudgment>>>,
     /// Latest binary/polytomous judge calibration. It is process-local and never grants authority
@@ -386,6 +388,12 @@ pub fn start_scan(root: String, app: AppHandle, state: State<AppState>) -> Resul
 #[tauri::command]
 pub fn cancel_scan(state: State<AppState>) {
     state.cancel.store(true, Ordering::SeqCst);
+}
+
+#[cfg(not(coverage))]
+#[tauri::command]
+pub fn cancel_cloud_copy(state: State<AppState>) {
+    state.cloud_copy_cancel.store(true, Ordering::SeqCst);
 }
 
 #[cfg(not(coverage))]
@@ -1695,6 +1703,7 @@ fn create_cloud_candidate_receipt(
     approval_rationale: &str,
     app: &AppHandle,
     adopt_existing: bool,
+    cancel: &AtomicBool,
 ) -> Result<CloudCopyOutput, String> {
     use tauri::Manager;
     if metadata_fingerprint.len() != 64
@@ -1783,22 +1792,36 @@ fn create_cloud_candidate_receipt(
             );
         require_capacity_for_copy(candidate, &snapshot.snapshot, native_client_mode)?;
     }
-    let (receipt, receipt_path) = if adopt_existing {
+    let copy_result = if adopt_existing {
         cloud_transfer::adopt_existing_cloud_copy_with_approval(
             candidate,
             &selected,
             &receipt_dir,
             review_decision.as_ref(),
             &copy_approval,
-        )?
+        )
     } else {
-        cloud_transfer::prepare_cloud_copy_with_approval(
+        cloud_transfer::prepare_cloud_copy_with_approval_cancelable(
             candidate,
             &selected,
             &receipt_dir,
             review_decision.as_ref(),
             &copy_approval,
-        )?
+            cancel,
+        )
+    };
+    let (receipt, receipt_path) = match copy_result {
+        Ok(result) => result,
+        Err(error) => {
+            cloud_transfer::record_copy_failure(
+                candidate,
+                action,
+                &error,
+                cloud::system_now_ms(),
+                &receipt_dir,
+            );
+            return Err(error);
+        }
     };
     let mut projection_warnings = Vec::new();
     let (adr_path, goal_path) = match app.path().app_data_dir() {
@@ -2071,11 +2094,13 @@ pub async fn copy_cloud_candidate(
     state: State<'_, AppState>,
 ) -> Result<CloudCopyOutput, String> {
     let cloud_review = Arc::clone(&state.cloud_review);
+    let cloud_copy_cancel = Arc::clone(&state.cloud_copy_cancel);
     tauri::async_runtime::spawn_blocking(move || {
+        cloud_copy_cancel.store(false, Ordering::SeqCst);
         let _guard = cloud_review
             .lock()
             .map_err(|_| "cloud-review-lock-poisoned".to_string())?;
-        create_cloud_candidate_receipt(
+        let result = create_cloud_candidate_receipt(
             &root,
             &cloud_root,
             &metadata_fingerprint,
@@ -2086,7 +2111,10 @@ pub async fn copy_cloud_candidate(
             &approval_rationale,
             &app,
             false,
-        )
+            &cloud_copy_cancel,
+        );
+        cloud_copy_cancel.store(false, Ordering::SeqCst);
+        result
     })
     .await
     .map_err(|_| "cloud-copy-task-failed".to_string())?
@@ -2142,11 +2170,13 @@ pub async fn adopt_existing_cloud_candidate(
     state: State<'_, AppState>,
 ) -> Result<CloudCopyOutput, String> {
     let cloud_review = Arc::clone(&state.cloud_review);
+    let cloud_copy_cancel = Arc::clone(&state.cloud_copy_cancel);
     tauri::async_runtime::spawn_blocking(move || {
+        cloud_copy_cancel.store(false, Ordering::SeqCst);
         let _guard = cloud_review
             .lock()
             .map_err(|_| "cloud-review-lock-poisoned".to_string())?;
-        create_cloud_candidate_receipt(
+        let result = create_cloud_candidate_receipt(
             &root,
             &cloud_root,
             &metadata_fingerprint,
@@ -2157,7 +2187,10 @@ pub async fn adopt_existing_cloud_candidate(
             &approval_rationale,
             &app,
             true,
-        )
+            &cloud_copy_cancel,
+        );
+        cloud_copy_cancel.store(false, Ordering::SeqCst);
+        result
     })
     .await
     .map_err(|_| "cloud-adopt-existing-task-failed".to_string())?
