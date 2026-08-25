@@ -568,6 +568,8 @@ The follow-up bounded observation at `2026-08-25 12:49:51 +0900` still retained 
 `523,158` entries. Transfer state had advanced to upload fraction `0.9999` (11,812,609 of
 11,813,276 bytes) and download fraction `0.4273` (254,713,831 of 596,099,680 bytes), so the
 Finder dialog remains a provider preflight/reconciliation wait rather than evidence of a local
-ZIP worker. This progress does not clear the no-progress or reconciliation blockers: DiskSage
+ZIP worker. The data volume was still at 99% capacity with about 9 GiB available, so the local
+headroom gate also remains active for any candidate whose size plus the staging reserve exceeds
+that budget. This progress does not clear the no-progress or reconciliation blockers: DiskSage
 continues to admit no new copy, attestation, or source eviction until a fresh complete and quiet
 observation plus an independent per-item receipt exists.
