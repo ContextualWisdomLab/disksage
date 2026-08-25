@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-25 (Asia/Seoul)
-**Repository heads at snapshot:** PR #259 `86dd521`, PR #258 `99d6726`, PR #227 `98fa709`, PR #249 `2f1d585`,
+**Repository heads at snapshot:** PR #259 `86dd521`, PR #258 `a1fb27b`, PR #227 `98fa709`, PR #249 `2f1d585`,
 PR #247 `0de3f6a`, PR #246 `cbb9dc0`, PR #204 `750213d`, draft PR #198 `cf763cd`, and central `.github` PR #1328 `923feea`;
 hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
@@ -18,7 +18,7 @@ rebased and reverified.
 | PR | Exact head | Base | Draft | Merge state | Review state | Check evidence at capture |
 | --- | --- | --- | --- | --- | --- | --- |
 | #259 | `86dd521227661e6d50d7f95e70cfc7f3e3929665` | `7eb131c4` | no | blocked | required | stale File Provider error-state + `last`/`expired` parser; helper docstrings added; checks remain authoritative |
-| #258 | `99d672639f3e86f5419f1484bf49b5da14fa77fe` | `7eb131c4` | no | blocked | required | current baseline/docs head; checks remain authoritative |
+| #258 | `a1fb27be96fc4667b3806fdc582cc6fa9b4ca50c` | `7eb131c4` | no | blocked | required | current baseline/docs head; checks remain authoritative |
 | #249 | `2f1d585398b85f3f1adb3783520ad70e7b4a9c3f` | `7eb131c4` | no | blocked | required | source/build/security/coverage pass; Strix external provider failure |
 | #247 | `0de3f6a3672c6ff0f39726b7a4ddaeba757154b6` | `7eb131c4` | no | blocked | required | runtime receipt projection and shared iCloud notice contracts; post-push checks pending |
 | #246 | `cbb9dc0f5b1eba52e76f23f673381a3ebcdc132f` | `7eb131c4` | no | blocked | required | late persisted iCloud blocker timestamp adoption and border regression repair; focused UI checks pass, hosted checks pending |
@@ -26,7 +26,12 @@ rebased and reverified.
 | #204 | `750213dff16482544af3c0a9543f6c638924e5e6` | `17d4e203` | yes | blocked | none | Strix failure; base is stale |
 | #206 | `2e7b845b7610a871ec5981d964bcab5cb99df41d` | `5c86668a` | yes | clean | changes requested | 0 non-success terminal, 2 pending; stacked draft |
 | #198 | `cf763cdf1b3f483efaf483f6c95196a89e005951` | `7eb131c4` | yes | blocked | required | iCloud eviction privacy feedback hardening; focused UI checks pass, hosted checks pending |
-| ContextualWisdomLab/.github #1328 | `923feea378c99da36d0ed63cb9786b7be542d9b2` | `8fd471a3` | no | blocked | required | central autofix protects both normal/conflict deletion paths; required smoke and all stale Strix/OpenCode gpt-5.4 assertions match the gpt-5.6-luna fallback; staged/unstaged guard and YAML indentation are fixed; exact-head path policy passed again, other protected checks pending |
+| ContextualWisdomLab/.github #1328 | `923feea378c99da36d0ed63cb9786b7be542d9b2` | `8fd471a3` | no | blocked | required | central autofix protects both normal/conflict deletion paths; exact-head path policy passed, but trusted Strix smoke failed before scanning because default-branch smoke still expected gpt-5.4; prerequisite #1329 updates that trusted contract; other protected checks pending |
+
+Central `.github` PR #1329 is the narrow prerequisite at exact head `7e80b0aa4884257aabf0078afd124b57d06cab23`.
+It removes the dead assertion helper and makes the trusted Strix fallback matcher accept both the existing
+`gpt-5.4` and the current `gpt-5.6-luna` spellings. Its local shell syntax and smoke checks pass; protected
+Checks and an independent approval remain authoritative before it can unblock #1328.
 
 PR #246 exact-head `cbb9dc0f5b1eba52e76f23f673381a3ebcdc132f` now preserves the backend persisted
 iCloud stall start across restart/probe errors, adopts a timestamp supplied after the first poll,
