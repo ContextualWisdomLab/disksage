@@ -72,7 +72,9 @@ function uniqueActions(
   const actions: string[] = [];
 
   for (const code of codes) {
-    const action = knownActions[code] ?? unknownAction;
+    const action = Object.prototype.hasOwnProperty.call(knownActions, code)
+      ? knownActions[code]
+      : unknownAction;
     if (!seen.has(action)) {
       seen.add(action);
       actions.push(action);

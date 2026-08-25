@@ -110,6 +110,15 @@ describe("iCloud local eviction next-action feedback", () => {
     ]);
     expect(planBlockerActions([injected]).join(" ")).not.toContain(injected);
     expect(verificationBlockerActions([injected]).join(" ")).not.toContain(injected);
+
+    for (const prototypeKey of ["constructor", "toString", "__proto__"]) {
+      expect(planBlockerActions([prototypeKey])).toEqual([
+        "파일의 iCloud 상태를 다시 확인한 뒤 새 판정을 시작하세요.",
+      ]);
+      expect(verificationBlockerActions([prototypeKey])).toEqual([
+        "Finder와 iCloud.com에서 파일 상태를 확인하고, 확인 전에는 작업을 반복하지 마세요.",
+      ]);
+    }
   });
 
   it("never leaves an ineligible or unverified state without a next action", () => {
