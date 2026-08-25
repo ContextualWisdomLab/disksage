@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getSettings, setSettings } from "./api";
+  import { persistOnlineToggle } from "./settingsPersistenceFlow";
 
   let online = $state(false);
   let busy = $state(true);
@@ -23,15 +24,11 @@
   async function toggle(event: Event) {
     const checkbox = event.currentTarget as HTMLInputElement;
     const persistedOnline = online;
-    checkbox.checked = persistedOnline;
     busy = true;
     error = "";
     try {
-      const settings = await setSettings(!persistedOnline);
-      online = settings.online_mode;
-      checkbox.checked = online;
+      online = await persistOnlineToggle(persistedOnline, checkbox, setSettings);
     } catch {
-      checkbox.checked = persistedOnline;
       error = "설정을 저장하지 못했습니다. 이전 온라인 모드 설정을 유지합니다. DiskSage 데이터 폴더의 권한과 여유 공간을 확인한 뒤 다시 시도하세요.";
     } finally {
       busy = false;
