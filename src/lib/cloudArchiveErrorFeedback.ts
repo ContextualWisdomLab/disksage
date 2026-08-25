@@ -42,12 +42,11 @@ const CLOUD_ARCHIVE_ERROR_MESSAGES: Record<CloudArchiveErrorOperation, string> =
 
 function caughtErrorMessage(caughtError: unknown): string | null {
   if (typeof caughtError === "string") return caughtError;
-  if (caughtError instanceof Error) return caughtError.message;
   if (typeof caughtError !== "object" || caughtError === null) return null;
 
-  // Treat caught values as untrusted. Reading `caughtError.message` directly can invoke an
-  // attacker-controlled accessor (or Proxy trap) from a thrown value and make the bounded error
-  // path throw again. Accept only an own data-property string; all accessors/proxies fail closed.
+  // Treat caught values as untrusted. `instanceof` and direct property access can both execute
+  // Proxy/accessor code from a thrown value. Accept only an own data-property string; accessor and
+  // Proxy traps fail closed without escaping this bounded UI error boundary.
   try {
     const descriptor = Object.getOwnPropertyDescriptor(caughtError, "message");
     return descriptor && "value" in descriptor && typeof descriptor.value === "string"
