@@ -13,6 +13,8 @@ use std::process::Command;
 fn duplicate_audit_publishes_to_non_utf8_private_output_without_path_leakage() {
     let source = tempfile::tempdir().expect("audit source must be created");
     let private_parent = tempfile::tempdir().expect("private evidence parent must be created");
+    let canonical_source =
+        std::fs::canonicalize(source.path()).expect("audit source must remain canonicalizable");
 
     let mut filename_bytes = b"duplicate-audit-private-".to_vec();
     filename_bytes.push(0xff);
@@ -70,7 +72,15 @@ fn duplicate_audit_publishes_to_non_utf8_private_output_without_path_leakage() {
             .stdout
             .windows(source_bytes.len())
             .any(|window| window == source_bytes),
-        "public evidence must not reflect the audited source path"
+        "public evidence must not reflect the caller-visible audited source path"
+    );
+    let canonical_source_bytes = canonical_source.as_os_str().as_bytes();
+    assert!(
+        !output
+            .stdout
+            .windows(canonical_source_bytes.len())
+            .any(|window| window == canonical_source_bytes),
+        "public evidence must not reflect the canonical audited source path"
     );
 
     let private_bytes = std::fs::read(&private_output).expect("private evidence must be readable");
@@ -79,8 +89,8 @@ fn duplicate_audit_publishes_to_non_utf8_private_output_without_path_leakage() {
     assert_eq!(private_json["schema_version"], 1);
     assert_eq!(
         private_json["source_root"].as_str(),
-        source.path().to_str(),
-        "the exact source path belongs only in the private report"
+        canonical_source.to_str(),
+        "the private report must bind the canonical audited source path"
     );
 
     assert_eq!(private_output.file_name().unwrap().as_bytes(), filename_bytes);
