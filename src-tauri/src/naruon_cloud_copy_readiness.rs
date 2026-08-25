@@ -18,6 +18,7 @@ use crate::icloud_sync_health::{
     validate_native_status_evidence,
     validate_file_provider_activity_evidence, IcloudFileProviderActivityEvidence,
     IcloudNativeStatusEvidence, IcloudSyncHealthReport, ICLOUD_SYNC_HEALTH_SCHEMA_VERSION,
+    FILE_PROVIDER_DISK_IMPORT_NOTICE,
 };
 use crate::naruon_capacity;
 use crate::provider_capacity::{self, CapacityEvidenceKind, CloudCapacityAssessment};
@@ -1217,9 +1218,9 @@ fn validate_icloud_admission_summary(
         if activity
             .notices
             .iter()
-            .any(|notice| notice == "icloud-file-provider-disk-import-active")
+            .any(|notice| notice == FILE_PROVIDER_DISK_IMPORT_NOTICE)
         {
-            expected.push("icloud-file-provider-disk-import-active".to_string());
+            expected.push(FILE_PROVIDER_DISK_IMPORT_NOTICE.to_string());
         }
         if !no_progress && !materialization_failed
             && (activity.active_upload_count > 0 || activity.active_download_count > 0)

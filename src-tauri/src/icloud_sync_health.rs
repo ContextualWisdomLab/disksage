@@ -56,7 +56,7 @@ pub const ICLOUD_NATIVE_STATUS_SCHEMA_VERSION: u32 = 1;
 pub const ICLOUD_FILE_PROVIDER_ACTIVITY_SCHEMA_VERSION: u32 = 3;
 pub const ICLOUD_SYNC_HEALTH_EVIDENCE_SCHEMA_VERSION: u32 = 1;
 pub const ICLOUD_SYNC_HEALTH_EVIDENCE_DIRECTORY: &str = "icloud-sync-health-evidence";
-const FILE_PROVIDER_DISK_IMPORT_NOTICE: &str = "icloud-file-provider-disk-import-active";
+pub(crate) const FILE_PROVIDER_DISK_IMPORT_NOTICE: &str = "icloud-file-provider-disk-import-active";
 const MAX_PERSISTED_HEALTH_SNAPSHOTS: usize = 128;
 const MAX_PERSISTED_HEALTH_SNAPSHOT_BYTES: usize = 64 * 1024;
 

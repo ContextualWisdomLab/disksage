@@ -234,7 +234,8 @@ fn prune_receipt_evidence_history(
 ///
 /// The file is create-only, read-only, fsynced, and named by the receipt, observation time, and
 /// integrity digest. Existing evidence is never overwritten. Repeated attestations retain the
-/// newest bounded per-receipt history so background reconciliation cannot grow storage forever.
+/// newest bounded per-receipt history so background reconciliation cannot grow storage forever;
+/// the just-written protected record is retained even if the system clock regresses.
 #[cfg(not(coverage))]
 pub fn write_immutable_sync_evidence(
     directory: &Path,

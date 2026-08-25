@@ -3427,6 +3427,68 @@ mod tests {
 
     #[cfg(not(coverage))]
     #[test]
+    fn provider_goal_projection_scans_the_runtime_receipt_directory() {
+        let temporary = tempfile::tempdir().unwrap();
+        let receipt_dir = temporary.path().join("cloud-receipts");
+        let adr_dir = temporary.path().join("cloud-adr");
+        let goal_dir = temporary.path().join("cloud-goals");
+        let mut receipt = cloud_transfer::CloudCopyReceipt {
+            version: cloud_transfer::LEGACY_RECEIPT_VERSION,
+            receipt_id: String::new(),
+            candidate_fingerprint: "h".repeat(64),
+            provider: cloud::CloudProvider::GoogleDrive,
+            source: "/source/file.zip".into(),
+            destination: "/google-drive/file.zip".into(),
+            bytes: 1,
+            blake3: "i".repeat(64),
+            sha256: "j".repeat(64),
+            quick_xor_base64: String::new(),
+            source_modified_ms: 1,
+            copied_at_ms: 2,
+            copy_verified: true,
+            provider_sync_confirmed: false,
+            lineage_fingerprint: None,
+            lineage: None,
+        };
+        let mut receipt_id = blake3::Hasher::new();
+        receipt_id.update(&receipt.version.to_le_bytes());
+        receipt_id.update(receipt.candidate_fingerprint.as_bytes());
+        receipt_id.update(&[0]);
+        receipt_id.update(receipt.provider.as_str().as_bytes());
+        receipt_id.update(&[0]);
+        receipt_id.update(receipt.source.as_bytes());
+        receipt_id.update(&[0]);
+        receipt_id.update(receipt.destination.as_bytes());
+        receipt_id.update(&[0]);
+        receipt_id.update(&receipt.bytes.to_le_bytes());
+        receipt_id.update(receipt.blake3.as_bytes());
+        receipt_id.update(receipt.sha256.as_bytes());
+        receipt_id.update(receipt.quick_xor_base64.as_bytes());
+        receipt_id.update(&receipt.source_modified_ms.to_le_bytes());
+        receipt_id.update(&receipt.copied_at_ms.to_le_bytes());
+        receipt_id.update(&[receipt.copy_verified as u8, receipt.provider_sync_confirmed as u8]);
+        receipt.receipt_id = receipt_id.finalize().to_hex().to_string();
+
+        cloud_transfer::write_provider_api_receipt(&receipt, &receipt_dir).unwrap();
+        let notices = update_provider_goal_projections(
+            &receipt_dir,
+            &adr_dir,
+            &goal_dir,
+            3,
+            cloud::CloudProvider::GoogleDrive,
+            "provider-global-sync-temporarily-disconnected",
+        );
+        assert!(notices.iter().any(|notice| notice == "dynamic-goal-projection-updated"));
+
+        let goal: cloud_adr::CloudOffloadGoalSnapshot = serde_json::from_slice(
+            &std::fs::read(goal_dir.join(format!("{}-latest.json", receipt.receipt_id))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(goal.status, "blocked");
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
     fn reconciliation_without_receipts_is_read_only() {
         let temporary = tempfile::tempdir().unwrap();
         let output = reconcile_cloud_receipts_inner(
