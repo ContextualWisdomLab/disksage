@@ -81,8 +81,12 @@ fn open_directory_handle(path: &Path) -> Option<Handle> {
 #[cfg(target_os = "linux")]
 fn handle_traversal_path(handle: &Handle, _display_path: &Path) -> Option<PathBuf> {
     use std::os::fd::AsRawFd;
+    // `/proc/self` is process-relative: an external evidence probe launched by DiskSage would
+    // otherwise resolve its own descriptor table instead of the descriptor held by this process.
+    // Pin the namespace to DiskSage's PID so read-only child probes can resolve the same bound root.
     Some(PathBuf::from(format!(
-        "/proc/self/fd/{}",
+        "/proc/{}/fd/{}",
+        std::process::id(),
         handle.as_file().as_raw_fd()
     )))
 }
