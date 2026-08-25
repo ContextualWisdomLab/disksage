@@ -46,15 +46,16 @@ PITR timestamps to an explicit `+00` offset, making WAL archival idempotent on r
 surfacing cleanup status, and applying the Compose hardening contract; targeted backend/shell/
 Podman drill evidence passed locally, while hosted checks and a fresh qualifying approval remain
 authoritative. PR #1454 is
-`d97f569e745a8c0afcc48fc5850f04529c806c37`, with the deleted URL/loopback tests and doctoring
-document restored and explicit zero ports rejected in both validators; targeted backend (45) and
-NetworkGraph tests passed on this exact head; hosted checks and fresh approval remain pending. PR #1462 is
+`799844985545b1af161c6597fe46453ca95f57fa`, with the deleted URL/loopback tests and doctoring
+document restored after a second optimizer regression and explicit zero ports rejected in both
+validators; targeted backend (45) and NetworkGraph tests passed on this exact head; hosted checks
+and fresh approval remain pending. PR #1462 is
 `3aa398dc9f6e3a20548d08e7af9a3140fe8bf704`, with Strix governance re-triggering restored, the
 `pytest-cov` dependency closure pinned and hash-locked, and utility input limits enforced; 75
 backend tool tests plus the earlier governance suite passed, but hosted checks and fresh approval
-remain pending. PR #1463 is `8e32e0d2757a59ffd2134110421ae130e466609b`, with its informational
-shared-spinner review resolved; its Strix and metadata-only failures are provider/gate evidence,
-not source-fix claims.
+remain pending. PR #1463 is `3a0b680b01fa077d88da4cdb173996c53fba05e1`, with its informational
+shared-spinner review and restored URL-boundary threads resolved; its Strix and metadata-only
+failures are provider/gate evidence, not source-fix claims.
 
 ## Current product contract
 
