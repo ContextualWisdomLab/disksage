@@ -40,19 +40,6 @@ pub fn normalize_native_copy_headroom_notices(report: &mut CloudPlanReport) {
         return;
     }
 
-    // An unsafe destination ancestor is a preview diagnostic, not a copy denial. The mutation
-    // boundary re-probes the exact staging path immediately before staging; keep the candidate
-    // selectable so the UI can surface that authoritative check instead of hiding it here.
-    for candidate in &mut report.candidates {
-        if candidate
-            .blocked_reason
-            .as_deref()
-            .is_some_and(|reason| reason.starts_with("local-volume-headroom-destination-"))
-        {
-            candidate.blocked_reason = None;
-        }
-    }
-
     let has_verified_candidate = report
         .candidates
         .iter()
@@ -67,6 +54,21 @@ pub fn normalize_native_copy_headroom_notices(report: &mut CloudPlanReport) {
         });
     if !has_verified_candidate {
         return;
+    }
+
+    // An unsafe destination ancestor is a preview diagnostic, not a copy denial, but only when
+    // another candidate has established destination headroom. Without that proof, retain the
+    // candidate blocker so the serialized action cannot advertise an approval phrase for an
+    // unverified staging path. The mutation boundary still re-probes the exact path immediately
+    // before staging.
+    for candidate in &mut report.candidates {
+        if candidate
+            .blocked_reason
+            .as_deref()
+            .is_some_and(|reason| reason.starts_with("local-volume-headroom-destination-"))
+        {
+            candidate.blocked_reason = None;
+        }
     }
 
     report
@@ -264,7 +266,7 @@ mod tests {
     }
 
     #[test]
-    fn normalization_releases_unverified_destination_headroom_preview_block() {
+    fn normalization_keeps_unverified_destination_headroom_preview_block() {
         let mut report = CloudPlanReport {
             cloud_root: CloudRoot {
                 id: "google-drive-personal".into(),
@@ -293,7 +295,10 @@ mod tests {
 
         normalize_native_copy_headroom_notices(&mut report);
 
-        assert_eq!(report.candidates[0].blocked_reason, None);
+        assert_eq!(
+            report.candidates[0].blocked_reason.as_deref(),
+            Some("local-volume-headroom-destination-parent-unsafe")
+        );
         assert!(report
             .notices
             .contains(&"local-volume-headroom-unverified".to_string()));

@@ -68,7 +68,10 @@ fn cloud_plan_preview_uses_destination_ancestor_authority_at_runtime() {
     normalize_native_copy_headroom_notices(&mut report);
 
     assert_eq!(report.candidates.len(), 1);
-    assert_eq!(report.candidates[0].blocked_reason, None);
+    assert_eq!(
+        report.candidates[0].blocked_reason.as_deref(),
+        Some("local-volume-headroom-destination-parent-unsafe")
+    );
     assert!(
         report
             .notices
