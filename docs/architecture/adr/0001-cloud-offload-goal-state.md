@@ -933,3 +933,12 @@ visible preparation window is therefore attributed to Finder/File Provider coord
 DiskSage copy worker. This is a repeated provider-stall receipt: Goal remains
 `provider-sync-incomplete`, and copy, attestation, cloud-write, and source-eviction gates remain
 closed. No cancellation or provider/source/cloud mutation was performed.
+
+## Amendment: deterministic preview-headroom regression fixture (2026-08-25 11:00 +0900)
+
+The candidate-scoped preview normalization behavior is unchanged. Its regression fixture now uses
+an intentionally unfit candidate size so the test cannot inherit the host runner's root-volume
+capacity when the synthetic destination has no existing ancestor. Pinned Rust 1.97.1 verification
+passed all 745 library tests plus one ignored live-provider test at PR #247 exact head
+`dc57a1539b82514f4ceb17ec0fca42ed23ae7988`; no cloud, provider, Finder, source, or eviction
+mutation was performed.

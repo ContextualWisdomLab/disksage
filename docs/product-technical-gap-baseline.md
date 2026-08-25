@@ -1487,3 +1487,13 @@ auxiliary production-time evidence; embedded metadata and context retain precede
   completed cloud write. Goal remains `provider-sync-incomplete`; copy, attestation, cloud-write,
   and source-eviction gates stay closed. No cancellation or provider/source/cloud mutation was
   performed.
+
+## 2026-08-25 11:00 +0900 deterministic headroom regression proof
+
+- The preview adapter's candidate-scoped behavior is unchanged. Its regression fixture now uses an
+  intentionally unfit candidate size, preventing the test from accidentally treating the host
+  runner's root filesystem as verified capacity when the synthetic destination has no existing
+  ancestor.
+- Pinned Rust 1.97.1 ran 745 library tests with one live-provider test ignored; the exact head is
+  `dc57a1539b82514f4ceb17ec0fca42ed23ae7988`. This is test evidence only and grants no cloud-write,
+  attestation, source-eviction, Finder-cancel, or provider-restart authority.
