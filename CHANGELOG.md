@@ -28,7 +28,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   fingerprints and a five-minute observation-skew ceiling; incomplete, malformed, or stale
   observations remain blocked and never become cloud-write or eviction authority.
 - Carry the integrity-checked iCloud pre-copy cohort and `pre_copy_evidence_met` through the
-  Naruon cloud-copy readiness envelope (schema version 7), so aggregate consumers also fail closed
+  Naruon cloud-copy readiness envelope (schema version 8), so aggregate consumers also fail closed
   when the provider queue is quiet but pre-copy evidence is absent.
 - Keep the hourly contextual-orchestrator loop on its published read-only API, bind context to
   the exact event commit, and remove foreign-repository checkout, KV mutation, and provider-secret
@@ -51,6 +51,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Refresh the Tauri CSP standards evidence to the current July 29, 2026 W3C Content Security Policy Level 3 Working Draft and regression-test its exact publication URL so future doctoring cannot silently drift back to an older draft.
 
 ### Fixed
+
+- Surface the bounded iCloud File Provider upload/download fractions and label repeated
+  `no progress` observations as a Finder “copy preparing” stall, so the operator can cancel the
+  pending Finder request before retrying; this remains diagnostic and never grants copy or eviction
+  authority.
 
 - Keep the shipped Naruon readiness verifier source includable by its integration boundary test;
   the terminal parser contract now compiles in both the binary and test-module contexts.
