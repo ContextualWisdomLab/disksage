@@ -596,3 +596,11 @@ The provider parser also records the redacted `itemIsFlockedCanNotPropagate` con
 `icloud-file-provider-item-locked` admission blocker. The provider-internal token, item identifier,
 and path are never retained. This makes a Finder “copy preparation” wait explainable without
 mistaking a lock/materialization failure for a completed copy.
+
+The bounded read-only probe at `2026-08-25 14:08:26 +0900` retained three no-progress fetch
+requests, a `541,234`-entry reconciliation backlog, upload fraction `0.9999`, and download
+fraction `0.5864`. It also retained provider error count `22`, including the already-classified
+`itemIsFlockedCanNotPropagate` condition observed about three hours earlier and repeated
+`noContentToFetch` failures. The Data volume had about `42 GiB` available. These are aggregate,
+path-free observations: provider activity is not a per-item receipt, the flock/error markers keep
+copy and eviction fail-closed, and no provider database or daemon mutation is authorized.
