@@ -10,10 +10,12 @@ authoritative, and no merge is claimed from queued or stale status.
 
 ## 2026-08-25 exact-head reconciliation
 
-The protected `main` head is `d2c554dbbc04854db6215970fabb70cef1ceb690`. The following live PR
-inventory supersedes the older dated table for these rows; a pending check is not a merge or
-approval signal, and a PR based on an older main remains non-integrated until it is deliberately
-rebased and reverified.
+The DiskSage protected `main` head for the rows below is
+`7eb131c4b4ac628226b262d6406a663fc7dc632f`. The central
+`ContextualWisdomLab/.github` protected `main` head used by the replacement automation PRs is
+`d2c554dbbc04854db6215970fabb70cef1ceb690`. The following live PR inventory supersedes the older
+dated table for these rows; a pending check is not a merge or approval signal, and a PR based on
+an older main remains non-integrated until it is deliberately rebased and reverified.
 
 | PR | Exact head | Base | Draft | Merge state | Review state | Check evidence at capture |
 | --- | --- | --- | --- | --- | --- | --- |
