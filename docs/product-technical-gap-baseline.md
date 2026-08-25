@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-25 (Asia/Seoul)
-**Repository heads at snapshot:** PR #259 `cb9c45c`, PR #258 `926c0ae`, PR #227 `98fa709`, PR #249 `2f1d585`,
+**Repository heads at snapshot:** PR #259 `08189c2`, PR #258 `9cce9a5`, PR #227 `98fa709`, PR #249 `2f1d585`,
 PR #247 `58e1dc5`, PR #246 `2037c91`, and PR #204 `750213d`; hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
@@ -16,7 +16,7 @@ rebased and reverified.
 
 | PR | Exact head | Base | Draft | Merge state | Review state | Check evidence at capture |
 | --- | --- | --- | --- | --- | --- | --- |
-| #259 | `cb9c45ce848687b7a9ac487745b9bbc4754f7529` | `7eb131c4` | no | blocked | required | stale File Provider + cross-record guarded parser; checks remain authoritative |
+| #259 | `08189c207aa4eefc531b404cf816e6165167efc1` | `7eb131c4` | no | blocked | required | stale File Provider error-state + cross-record guarded parser; checks remain authoritative |
 | #258 | `926c0ae32ffc1bc6a49ffbff8e5f09dcf3bbfe78` | `7eb131c4` | no | blocked | required | current baseline/docs head; checks remain authoritative |
 | #249 | `2f1d585398b85f3f1adb3783520ad70e7b4a9c3f` | `7eb131c4` | yes | blocked | none | Strix failure; external gate evidence unavailable |
 | #247 | `58e1dc52a93cd959daaea549a7f362eddc1601f5` | `7eb131c4` | yes | blocked | none | Strix failure; external gate evidence unavailable |
@@ -750,10 +750,10 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   The same blocker is now included in both Naruon readiness expected-blocker projections and the
   summary validator, with a round-trip regression fixture, so the new observation cannot be lost
   at the cross-repository consumer boundary.
-- PR #259 exact head `cb9c45ce848687b7a9ac487745b9bbc4754f7529` also pairs a provider operation marker
+- PR #259 exact head `08189c207aa4eefc531b404cf816e6165167efc1` also pairs a provider operation marker
   with a redacted age token on an adjacent dump row, covering wrapped File Provider diagnostics;
-  the focused Rust parser suite passed 10/10, including rejection of unrelated parenthesized durations
-  and cross-record adjacent age pairing.
+  the focused Rust parser suite passed 11/11, including rejection of unrelated parenthesized durations,
+  cross-record adjacent age pairing, and old healthy operation timestamps without an error marker.
   A bounded read-only probe at `2026-08-25 15:26 +0900`
   timed out after 30 seconds while the preceding bounded output still showed `fetch-content` errors
   aged about six hours. The timeout is incomplete evidence and leaves copy, attestation, and
