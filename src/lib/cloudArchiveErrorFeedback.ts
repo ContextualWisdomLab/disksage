@@ -74,5 +74,9 @@ export function boundedCloudArchiveErrorMessage(
 
 /** Return true only for the backend's deliberate user-cancellation outcome. */
 export function isCloudCopyCancelled(caughtError: unknown): boolean {
-  return caughtErrorMessage(caughtError) === CLOUD_COPY_CANCELLED;
+  const message = caughtErrorMessage(caughtError);
+  return (
+    message === CLOUD_COPY_CANCELLED
+    || message?.startsWith(`${CLOUD_COPY_CANCELLED};`) === true
+  );
 }

@@ -2117,29 +2117,36 @@ pub async fn copy_cloud_candidate(
     let cloud_copy_cancel = Arc::clone(&state.cloud_copy_cancel);
     let cloud_copy_operation = Arc::clone(&state.cloud_copy_operation);
     tauri::async_runtime::spawn_blocking(move || {
-        let _guard = cloud_review
-            .lock()
-            .map_err(|_| "cloud-review-lock-poisoned".to_string())?;
         {
             let mut active = cloud_copy_operation
                 .lock()
                 .map_err(|_| "cloud-copy-operation-lock-poisoned".to_string())?;
+            if active.is_some() {
+                return Err("cloud-copy-already-active".to_string());
+            }
             cloud_copy_cancel.store(false, Ordering::SeqCst);
             *active = Some(metadata_fingerprint.clone());
         }
-        let result = create_cloud_candidate_receipt(
-            &root,
-            &cloud_root,
-            &metadata_fingerprint,
-            min_size_mib,
-            min_age_days,
-            limit,
-            &exact_confirmation_phrase,
-            &approval_rationale,
-            &app,
-            false,
-            Some(&cloud_copy_cancel),
-        );
+        // Register before taking the shared review lock so a queued copy can be cancelled.
+        // The token remains set if cancellation races with lock acquisition.
+        let result = (|| {
+            let _guard = cloud_review
+                .lock()
+                .map_err(|_| "cloud-review-lock-poisoned".to_string())?;
+            create_cloud_candidate_receipt(
+                &root,
+                &cloud_root,
+                &metadata_fingerprint,
+                min_size_mib,
+                min_age_days,
+                limit,
+                &exact_confirmation_phrase,
+                &approval_rationale,
+                &app,
+                false,
+                Some(&cloud_copy_cancel),
+            )
+        })();
         if let Ok(mut active) = cloud_copy_operation.lock() {
             cloud_copy_cancel.store(false, Ordering::SeqCst);
             if active.as_deref() == Some(metadata_fingerprint.as_str()) {

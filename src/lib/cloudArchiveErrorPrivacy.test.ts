@@ -33,6 +33,7 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
 describe("CloudArchive bounded error feedback", () => {
   it("recognizes only the deliberate cloud-copy cancellation outcome", () => {
     expect(isCloudCopyCancelled("cloud-copy-cancelled")).toBe(true);
+    expect(isCloudCopyCancelled("cloud-copy-cancelled;failure-record-write-failed")).toBe(true);
     expect(isCloudCopyCancelled(new Error("cloud-copy-cancelled"))).toBe(true);
     expect(isCloudCopyCancelled({ message: "cloud-copy-cancelled" })).toBe(true);
     expect(isCloudCopyCancelled("failure-record-write-failed")).toBe(false);

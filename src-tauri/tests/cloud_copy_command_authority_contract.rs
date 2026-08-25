@@ -50,28 +50,35 @@ fn failed_copy_evidence_never_shares_success_receipt_authority() {
     );
 }
 
-fn assert_cancel_reset_is_serialized(command_start: &str, command_end: &str) {
+fn assert_cancel_registration_precedes_serialization_lock(command_start: &str, command_end: &str) {
     let body = function_body(command_start, command_end);
     let blocking = body
         .find("spawn_blocking(move ||")
         .map(|index| &body[index..])
         .expect("spawn_blocking command body");
+    let operation_lock = blocking
+        .find("cloud_copy_operation\n                .lock()")
+        .expect("copy operation registration lock");
     let lock_index = blocking
-        .find("cloud_review\n            .lock()")
+        .find("cloud_review\n                .lock()")
         .expect("cloud review serialization lock");
     let reset_index = blocking
         .find("cloud_copy_cancel.store(false, Ordering::SeqCst)")
         .expect("cancel-token reset");
 
     assert!(
-        lock_index < reset_index,
-        "queued commands must not clear an in-flight copy cancellation before acquiring the serialization lock"
+        operation_lock < reset_index && reset_index < lock_index,
+        "queued commands must register and reset cancellation before waiting for the serialization lock"
+    );
+    assert!(
+        blocking.contains("if active.is_some()") && blocking.contains("cloud-copy-already-active"),
+        "a second native copy must not overwrite the queued operation's cancellation token"
     );
 }
 
 #[test]
-fn native_copy_cancel_reset_happens_after_serialization_lock() {
-    assert_cancel_reset_is_serialized(
+fn native_copy_cancel_registration_happens_before_serialization_lock() {
+    assert_cancel_registration_precedes_serialization_lock(
         "pub async fn copy_cloud_candidate(",
         "pub async fn copy_cloud_candidate_via_provider_api(",
     );
