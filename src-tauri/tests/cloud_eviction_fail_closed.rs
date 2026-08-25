@@ -113,6 +113,7 @@ fn valid_receipt(
         kind: SyncEvidenceKind::ProviderNativeStatus,
         evidence_id: "native-test-evidence".into(),
         sync_complete: true,
+        sync_state: disksage_lib::cloud_transfer::ProviderSyncState::Complete,
         remote_content: None,
     };
     let evidence_record = create_sync_evidence_record(&evidence).unwrap();
