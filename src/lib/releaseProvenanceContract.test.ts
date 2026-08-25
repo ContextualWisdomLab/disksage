@@ -117,7 +117,7 @@ describe('release artifact provenance contract', () => {
     expect(attestJob).toContain('contents: read');
     expect(attestJob).toContain('id-token: write');
     expect(attestJob).toContain('attestations: write');
-    expect(attestJob).toContain('artifact-metadata: write');
+    expect(attestJob).not.toContain('artifact-metadata: write');
     expect(attestJob).toContain('pattern: release-disksage-*');
     expect(attestJob).toContain('merge-multiple: false');
     expect(attestJob).toContain(
