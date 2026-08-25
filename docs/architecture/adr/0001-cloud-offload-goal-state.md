@@ -581,3 +581,12 @@ recovered to about 50 GiB available after removing only this session's generated
 artifacts; headroom is therefore no longer the immediate blocker, but the provider timeout and
 backlog still keep copy, attestation, and eviction fail-closed. The timeout itself is incomplete
 evidence and cannot be treated as a clear or per-item receipt.
+
+The operator's current Finder dialog still shows “real_datasets” copy preparation after several
+hours. A fresh bounded probe at `2026-08-25` found no Archive Utility, `ditto`, or `zip` worker and
+the Finder process was idle, while `cloudd` remained busy. `fileproviderctl dump` timed out with
+three no-progress fetch requests and `531,061` reconciliation entries. DiskSage therefore classifies
+the dialog as an iCloud File Provider materialization/reconciliation wait. The operator-visible
+Finder cancel control remains the only recovery action exposed here; it cancels the UI operation
+without deleting sources, mutating provider state, or granting copy, attestation, or eviction
+authority.
