@@ -145,6 +145,10 @@ suite passes 35 tests; hosted Strix and metadata-only gates remain authoritative
 
 ## 2026-08-26 latest head refresh
 
+- DiskSage PR #250 (mail-parser dependency update) is exact head
+  `d68b8abbf65ab8e1073ab2db4309a12e119de474`; current terminal Checks show no failure and no
+  unresolved current review thread. It was marked ready with protected auto-merge enabled; the
+  protected review/check gate remains authoritative and no merge is claimed.
 - DiskSage PR #218 advanced to exact head `8593746f59269346b4dd8c2def7976116e488528` after
   repairing the native-path integration fixture: an empty source can intentionally return the
   bounded `materialization-unit-set-empty-or-duplicate` domain error without being treated as an
