@@ -865,3 +865,25 @@ is a projection update only: immutable receipts remain authoritative, and no pro
 source, cloud, attestation, or eviction mutation is performed. A missing, malformed, oversized,
 or incomplete receipt set emits a stable projection warning instead of claiming that all Goals were
 updated.
+
+## Amendment: current Google Drive preparation diagnosis (2026-08-25 09:23 +0900)
+
+A fresh bounded read-only `fileproviderctl dump com.google.drivefs.fpext -l` identified the provider
+shown behind the `real_datasets` Finder dialog as temporarily disconnected. The dump reported File
+Provider `-1004` server-unreachable failures for the root metadata fetch, active upload and download
+progress markers, a 2,000-entry reconciliation section, and a provider error generation above zero.
+The local Google Drive mount exposed no materialized `real_datasets` destination at observation time;
+the 7.2 GiB source remained local and unchanged. The root volume had about 2.1 GiB available, so a
+retry that might stage the source locally is unsafe even though this particular dump did not emit an
+explicit disk-full marker.
+
+System Events did not enumerate an active Finder copy-progress window during the later read-only
+check. That absence is not evidence of a completed copy: no destination receipt or remote content
+proof exists. The default route through `utun4` is recorded as network context only, not as a proven
+root cause. DiskSage therefore keeps `provider-global-sync-temporarily-disconnected`,
+`provider-global-sync-server-unreachable`, `provider-global-sync-transfer-active`, and
+`provider-global-sync-reconciliation-pending` fail-closed for copy, attestation, and source
+eviction. No Finder cancellation, provider restart, cloud write, source mutation, or eviction was
+performed. The observation was made against DiskSage PR #247 exact head
+`9fdf2922da2939d96d3c2393539f2b2d42009929`; the PR remains draft, review-required, and blocked while
+hosted checks are pending.

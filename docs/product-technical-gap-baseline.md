@@ -1430,3 +1430,20 @@ mutation is performed.
   blocker to bounded valid iCloud receipt projections: Goal becomes `blocked` and revokes provider
   completion and eviction gates; the paired ADR records the provider-state blocker. Projection
   failures remain explicit and path-free, and no provider/Finder/source/cloud mutation occurs.
+
+## 2026-08-25 09:23 +0900 current Google Drive Finder-preparation diagnosis
+
+- The screenshot's destination is Google Drive, not iCloud. A bounded read-only
+  `fileproviderctl dump com.google.drivefs.fpext -l` reported `temporarily disconnected`, File
+  Provider `-1004` server-unreachable root metadata failures, active upload and download progress,
+  and a 2,000-entry reconciliation backlog. This is the provider-global explanation for Finder
+  remaining at “복사 준비 중”; it is not a per-item cloud receipt or proof of a completed copy.
+- The 7.2 GiB `real_datasets` source remained local and unchanged, no destination folder or receipt
+  was observed, and the root volume had about 2.1 GiB free. DiskSage retains the existing stable
+  provider-global blockers and refuses copy, attestation, and source eviction until a fresh quiet
+  provider observation. No Finder, provider, source, or cloud mutation was performed.
+- The exact DiskSage PR #247 head is
+  `9fdf2922da2939d96d3c2393539f2b2d42009929`; its hosted checks are still pending and the protected
+  PR remains draft/blocked/review-required. The host's `utun4` default route is recorded only as
+  context, not as a proven root cause. The filename dates `2026-04-28` and `251210` remain
+  auxiliary production-time evidence; embedded metadata and context retain precedence.
