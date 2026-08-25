@@ -79,10 +79,12 @@ PR #1443 is `2bc9e2cb6b9680da173643c9eeab9fbcf4b872c3`, the direct gate repair, 
 approval-notice fail-closed coverage, exact `headCommitId` matching, current-head blocking-fixture execution, and matching empty-check fixtures; hosted coverage/metadata and independent review remain pending.
 Neither PR is claimed merge-ready
 without a fresh qualifying review and exact-head protected checks.
-PR #1469 is `575b0c24fd9cb98106989eb101de74c5ce383db3`; its 64 MiB deferred attachment retention now
+PR #1469 is `09c6ac23582d53cbe2f6599f5fe9e26d8930d39a`; its 64 MiB deferred attachment retention now
 fails closed before NewsDOM network I/O when the sidecar's 20 MiB `/parse` contract would be exceeded,
-using one shared boundary and a visible `provider_payload_size_exceeded` worker outcome. Hosted checks and
-fresh review remain authoritative.
+using one shared boundary and a visible `provider_payload_size_exceeded` worker outcome. The Korean
+CHANGELOG now explicitly limits the accepted range to >20 MiB and ≤64 MiB and preserves the >64 MiB
+fail-closed behavior; focused attachment-parser tests pass 18/18, while hosted checks and fresh review
+remain authoritative.
 PR #1464 is `5af23f188d764128636e1f308842bbd9f3329ca7`, with review threads resolved after pinning
 PITR timestamps to an explicit `+00` offset, making WAL archival idempotent on reused volumes,
 surfacing cleanup status, applying the Compose hardening contract, and escaping Compose's shell
