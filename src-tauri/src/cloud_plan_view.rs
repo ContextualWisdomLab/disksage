@@ -288,6 +288,8 @@ mod tests {
             pre_copy_evidence: None,
             notices: vec!["local-volume-headroom-unverified".into()],
         };
+        report.candidates[0].bytes = u64::MAX;
+        report.candidate_bytes = u64::MAX;
 
         normalize_native_copy_headroom_notices(&mut report);
 
