@@ -124,10 +124,11 @@ suite passes 35 tests; hosted Strix and metadata-only gates remain authoritative
   `345af62b983e9de67200684da10ab24d16d945cc`; Ubuntu has succeeded and Windows/macOS are still running,
   with no failed step observed. The PR is now ready-for-review with protected auto-merge enabled;
   `REVIEW_REQUIRED`/`BLOCKED` remains authoritative and no merge is claimed.
-- DiskSage PR #246 is now exact head `9ef6d21068c9a3b03c0044567ac258a49309c2f5`: both provider-cancel
+- DiskSage PR #246 is now exact head `64a255bc2afa95f7cdbdde7eb1803978a1c93792`: both provider-cancel
   buttons disable while `cancellingFinderCopy` is true, the focused contract suite passed 5/5, and
-  `npm run check` passed with 0 errors and 0 warnings. Its current review thread is resolved; hosted
-  checks and protected approval remain authoritative, so no merge is claimed.
+  `npm run check` passed with 0 errors and 0 warnings. The latest dark-mode review finding is resolved;
+  all legacy muted/path/fingerprint text now uses semantic tokens. Protected auto-merge is enabled, but
+  hosted checks and qualifying approval remain authoritative and the PR is still blocked.
 - DiskSage PR #227 is now exact head `0f7a990c2ab5ad41cb67278fea192b28830cf869`: duplicate, multipart,
   incomplete-download, recovery, and materialization reads use descriptor-relative `BoundReadRoot`
   traversal; canonical paths are display/lineage evidence or external active-use probe inputs only.
