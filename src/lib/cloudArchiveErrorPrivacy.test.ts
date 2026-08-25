@@ -12,6 +12,7 @@ const operations = [
   "preview",
   "review",
   "copy",
+  "cancel",
   "provider-api-copy",
   "adopt",
   "attest",
