@@ -10,12 +10,12 @@ function readSource(path: string): string {
 }
 
 describe("cache cleanup fail-closed UX", () => {
-  it("does not offer a destructive cache action while atomic trash is unavailable", () => {
+  it("offers only the identity-bound cache action", () => {
     const cleanup = readSource("src/lib/Cleanup.svelte");
 
-    expect(cleanup).not.toContain("cleanCacheContents");
+    expect(cleanup).toContain("cleanCacheContents");
     expect(cleanup).not.toContain("selectedRules");
     expect(cleanup).toContain('role="status"');
-    expect(cleanup).toContain("캐시 항목은 현재 읽기 전용입니다");
+    expect(cleanup).toContain("객체 지문·크기·수정시각");
   });
 });

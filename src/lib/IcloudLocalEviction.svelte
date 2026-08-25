@@ -102,6 +102,39 @@
       ? "macOS File Provider"
       : "Foundation ubiquitous item";
   }
+
+  function uploadLabel(state: api.IcloudLocalState): string {
+    if (state.is_uploaded && !state.is_uploading) return "완료";
+    if (state.is_uploading) return "업로드 중";
+    return "미완료";
+  }
+
+  function syncLabel(state: api.IcloudLocalState): string {
+    if (state.downloading_status_current && !state.is_uploaded && !state.is_uploading) {
+      return "로컬 최신본·업로드 미확인";
+    }
+    if (state.is_uploaded && !state.is_uploading) return "공급자 동기화 완료";
+    if (state.is_uploading) return "공급자 업로드 중";
+    return "공급자 동기화 미완료";
+  }
+
+  function blockerLabel(blocker: string): string {
+    const labels: Record<string, string> = {
+      "icloud-upload-not-confirmed": "로컬 최신본이지만 공급자 업로드가 아직 확인되지 않았습니다. 업로드 완료 후 다시 확인하십시오.",
+      "icloud-upload-still-running": "공급자 업로드가 진행 중입니다. 완료 후 다시 확인하십시오.",
+      "icloud-current-version-unconfirmed": "로컬 최신본 여부를 확인하지 못했습니다. File Provider 상태가 안정된 후 다시 확인하십시오.",
+      "icloud-file-provider-native-status-unavailable": "File Provider 상태 증거가 완전하지 않습니다. 잠시 후 다시 확인하십시오.",
+      "icloud-file-provider-sync-paused-or-unconfirmed": "File Provider 동기화가 일시중지됐거나 상태가 미확인입니다. 동기화를 재개한 후 다시 확인하십시오.",
+      "icloud-unresolved-conflict": "동기화 충돌이 해결되지 않았습니다. 충돌을 해결한 후 다시 확인하십시오.",
+      "active-file-use-detected": "현재 사용 중인 파일이라 회수할 수 없습니다. 파일을 닫은 후 다시 확인하십시오.",
+      "active-use-evidence-incomplete": "파일 사용 상태를 완전히 확인하지 못했습니다. 잠시 후 다시 확인하십시오.",
+    };
+    return labels[blocker] ?? "필수 iCloud 상태 증거가 완전하지 않아 회수할 수 없습니다. 상태를 다시 확인하십시오.";
+  }
+
+  function blockerSummary(blockers: string[]): string {
+    return [...new Set(blockers.map(blockerLabel))].join(" ");
+  }
 </script>
 
 <div class="local-eviction-panel">
@@ -138,8 +171,9 @@
         · {observationLabel(plan.icloud_state.observation_method)}
       </div>
       <div class="status-grid">
-        <span>업로드 {plan.icloud_state.is_uploaded && !plan.icloud_state.is_uploading ? "완료" : "미완료"}</span>
-        <span>최신 버전 {plan.icloud_state.downloading_status_current ? "확인" : "미확인"}</span>
+        <span>업로드 {uploadLabel(plan.icloud_state)}</span>
+        <span>공급자 상태 {syncLabel(plan.icloud_state)}</span>
+        <span>로컬 current {plan.icloud_state.downloading_status_current ? "예" : "아니오"}</span>
         <span>충돌 {plan.icloud_state.has_unresolved_conflicts ? "있음" : "없음"}</span>
         <span>활성 사용 {plan.active_use.active ? "감지" : "없음"}</span>
         <span>동기화 일시정지 {plan.icloud_state.is_sync_paused === false ? "아님" : "미확인/해당"}</span>
