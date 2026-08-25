@@ -905,3 +905,21 @@ transfer markers, and a 2,000-entry reconciliation section. The persisted diagno
 not reduced to local disk pressure. The implementation was verified at PR #247 exact head
 `87c9089bcd4af49f8f8751c54ebcc45b519d1f0c`; the draft PR remains review-required and blocked while
 hosted checks are pending.
+
+## Amendment: bind headroom evidence to the actual data volume (2026-08-25 10:14 +0900)
+
+The live host recheck distinguished the system volume from the `/Users` data volume used by the
+source and File Provider staging. `/Users` had about 594 MiB available before disposable build
+artifacts were cleaned, while `real_datasets` was about 7.2 GiB; after cleanup the same data volume
+had about 2.7 GiB available. The iCloud dump simultaneously reported `pending-indexable-count:
+490195`, upload/download progress entries stuck at `0.0000`, and a 482,470-entry reconciliation
+section. DiskSage
+therefore treats destination-volume headroom and provider-global state as independent blockers:
+`local-volume-headroom-insufficient` remains candidate-specific, while provider indexing/transfer
+blockers remain global. A system-root `df` result cannot authorize a copy staged on `/Users`.
+
+The preview adapter releases only unverified destination-ancestor diagnostics so a later mutation
+probe remains authoritative; insufficient headroom stays blocked. This preserves the existing
+legacy aggregate fallback and gives the UI candidate-scoped evidence without granting cloud-write,
+attestation, or source-eviction authority. Observation is read-only; no Finder, provider, source,
+or cloud mutation was performed. Exact implementation head: `5c3b87359103b82df3efb4099668b1b17f532259`.

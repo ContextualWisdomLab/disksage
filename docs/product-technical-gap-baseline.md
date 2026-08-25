@@ -1462,3 +1462,17 @@ auxiliary production-time evidence; embedded metadata and context retain precede
 - The exact DiskSage PR #247 head is `87c9089bcd4af49f8f8751c54ebcc45b519d1f0c`; hosted checks are
   pending and the protected PR remains draft/blocked/review-required. Filename dates
   `2026-04-28` and `251210` remain auxiliary production-time evidence only.
+
+## 2026-08-25 10:14 +0900 data-volume headroom and iCloud backlog recheck
+
+- `/Users` is the source/File Provider staging volume; it had about 594 MiB available before
+  disposable build-artifact cleanup and about 2.7 GiB after cleanup, while `real_datasets` is about
+  7.2 GiB. The system-root `df` value is not a valid staging-volume authority.
+- iCloud File Provider reported `pending-indexable-count: 490195`, upload/download progress entries
+  stuck at `0.0000`, and a 482,470-entry reconciliation section. The Finder preparation operation therefore remains
+  `provider-sync-incomplete`; it is not treated as a cloud receipt or completed upload.
+- The Rust preview adapter now keeps unverified destination-ancestor results as diagnostics while
+  retaining candidate-specific insufficient-headroom blockers. Mutation-time destination probing
+  remains authoritative. Exact PR #247 head: `5c3b87359103b82df3efb4099668b1b17f532259`; hosted
+  checks are queued and the protected PR remains draft/blocked/review-required. No Finder,
+  provider, source, cloud, or eviction mutation was performed.
