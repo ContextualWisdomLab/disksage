@@ -604,3 +604,10 @@ fraction `0.5864`. It also retained provider error count `22`, including the alr
 `noContentToFetch` failures. The Data volume had about `42 GiB` available. These are aggregate,
 path-free observations: provider activity is not a per-item receipt, the flock/error markers keep
 copy and eviction fail-closed, and no provider database or daemon mutation is authorized.
+
+The subsequent read-only probe at `2026-08-25 14:45:47 +0900` still retained one
+`fetchContentsForItemWithID` request, one `itemIsFlockedCanNotPropagate` marker, `22`
+`noContentToFetch` failures, and a maximum observed reconciliation backlog of `544,098` entries.
+The corresponding process snapshot showed `fileproviderd` at `52.5%` CPU, `bird` at `27.6%`, and
+the user `cloudd` at `6.1%`. This is current provider-pressure evidence, not proof of per-item
+completion or causal ownership by DiskSage; the copy and eviction gates therefore remain closed.
