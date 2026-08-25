@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-25 (Asia/Seoul)
-**Repository heads at snapshot:** PR #259 `a019dda`, PR #258 `6147c7b`, PR #227 `98fa709`, PR #249 `2f1d585`,
+**Repository heads at snapshot:** PR #259 `a019dda`, PR #258 `79d283b`, PR #227 `98fa709`, PR #249 `2f1d585`,
 PR #247 `0de3f6a`, PR #246 `d38ed05`, and PR #204 `750213d`; hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
@@ -17,7 +17,7 @@ rebased and reverified.
 | PR | Exact head | Base | Draft | Merge state | Review state | Check evidence at capture |
 | --- | --- | --- | --- | --- | --- | --- |
 | #259 | `a019ddaba4aa5cad1e0bef02121f20d514d9580c` | `7eb131c4` | no | blocked | required | stale File Provider error-state + `last`/`expired` parser; checks remain authoritative |
-| #258 | `6147c7b68997911aa0697ee0f530ec6b328d033e` | `7eb131c4` | no | blocked | required | current baseline/docs head; checks remain authoritative |
+| #258 | `79d283b461c27a248a7d9f0c83dfa9fe55a16ced` | `7eb131c4` | no | blocked | required | current baseline/docs head; checks remain authoritative |
 | #249 | `2f1d585398b85f3f1adb3783520ad70e7b4a9c3f` | `7eb131c4` | no | blocked | required | source/build/security/coverage pass; Strix external provider failure |
 | #247 | `0de3f6a3672c6ff0f39726b7a4ddaeba757154b6` | `7eb131c4` | no | blocked | required | runtime receipt projection and shared iCloud notice contracts; post-push checks pending |
 | #246 | `d38ed05d2b640402a3bf39c49aa2b26331af5cf4` | `7eb131c4` | no | blocked | required | iCloud stall clock and Finder-cancel confirmation contracts; checks pending |
@@ -41,19 +41,20 @@ annotation still recorded;
 PR #1443 is `55a84f904f11203f49c356d95d7d88ba9f903030`, the direct gate repair, with source/security
 checks passing, coverage/metadata still pending, and `STRIX_PROVIDER_UNAVAILABLE` recorded. Neither PR is claimed merge-ready
 without a fresh qualifying review and exact-head protected checks.
-PR #1464 is `76796f7d4724f47e8b00381e1be8d93cee43fc66`, with review threads resolved after pinning
+PR #1464 is `5af23f188d764128636e1f308842bbd9f3329ca7`, with review threads resolved after pinning
 PITR timestamps to an explicit `+00` offset, making WAL archival idempotent on reused volumes,
-surfacing cleanup status, and applying the Compose hardening contract; targeted backend/shell/
+surfacing cleanup status, applying the Compose hardening contract, and escaping Compose's shell
+variable interpolation for the atomic WAL archive command; targeted backend/shell/
 Podman drill evidence passed locally, while hosted checks and a fresh qualifying approval remain
 authoritative. PR #1454 is
-`799844985545b1af161c6597fe46453ca95f57fa`, with the deleted URL/loopback tests and doctoring
-document restored after a second optimizer regression and explicit zero ports rejected in both
-validators; targeted backend (45) and NetworkGraph tests passed on this exact head; hosted checks
-and fresh approval remain pending. PR #1462 is
-`3aa398dc9f6e3a20548d08e7af9a3140fe8bf704`, with Strix governance re-triggering restored, the
+`e87541b6b52c6c792d89ae95dcdb167b0f55bcbd`, with the deleted URL/loopback tests and doctoring
+document restored after a third optimizer regression and explicit zero ports rejected in both
+validators; targeted backend (45) tests passed on this exact head, while hosted checks and fresh
+approval remain pending. PR #1462 is
+`8aa604b62ade3067d8b11000f6e96d0ad28c0680`, with Strix governance re-triggering restored, the
 `pytest-cov` dependency closure pinned and hash-locked, and utility input limits enforced; 75
-backend tool tests plus the earlier governance suite passed, but hosted checks and fresh approval
-remain pending. PR #1463 is `3a0b680b01fa077d88da4cdb173996c53fba05e1`, with its informational
+backend tool tests plus the optional-parameter frontend regression and earlier governance suite
+passed, but hosted checks and fresh approval remain pending. PR #1463 is `3a0b680b01fa077d88da4cdb173996c53fba05e1`, with its informational
 shared-spinner review and restored URL-boundary threads resolved; its Strix and metadata-only
 failures are provider/gate evidence, not source-fix claims.
 
