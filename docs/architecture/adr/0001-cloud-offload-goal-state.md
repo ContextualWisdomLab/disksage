@@ -959,3 +959,14 @@ window is not a cloud-write receipt, and copy, attestation, source eviction, pro
 Finder cancellation remain fail-closed. No Finder, provider, source, cloud, or eviction mutation
 was performed. The evidence is read-only and path-free; filename dates remain secondary to embedded
 metadata and context.
+
+## Amendment: persistent provider stall recheck (2026-08-25 11:09 +0900)
+
+The next bounded read-only recheck still reports the same two provider blockers. Google Drive is
+temporarily disconnected with File Provider `-1004`, a 2,000-entry reconciliation cap, and active
+upload/download markers. iCloud has grown to `pending-indexable-count: 506044` and 498,320
+reconciliation entries while upload/download remain at `0.0000`; disk import and stream reset are
+still active. The data volume remains at approximately 20 GiB free. This confirms persistence of
+the provider coordination stall rather than a transient Finder rendering issue. The runtime Goal
+remains `provider-sync-incomplete`; no copy, attestation, eviction, Finder cancellation, provider
+restart, or cloud/source mutation was performed.

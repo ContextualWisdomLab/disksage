@@ -1524,3 +1524,19 @@ auxiliary production-time evidence; embedded metadata and context retain precede
   eviction, provider restart, and Finder cancellation blocked. The screenshot is not a cloud receipt;
   no Finder, provider, source, cloud, or eviction mutation was performed. Filename dates remain
   auxiliary evidence only; embedded metadata and context retain precedence.
+
+## 2026-08-25 11:09 +0900 persistent provider stall recheck
+
+- The next bounded read-only probe still finds Google Drive temporarily disconnected with File
+  Provider `-1004`, a 2,000-entry reconciliation cap, and active upload/download markers. iCloud
+  grew to `pending-indexable-count` 506,044 and 498,320 reconciliation entries while both transfer
+  fractions remain `0.0000`; disk import and stream reset remain active.
+- The data volume remains approximately 20 GiB free. This is persistent provider coordination,
+  not evidence that the Finder dialog completed or that the local volume is full. DiskSage keeps
+  `provider-sync-incomplete`, cloud write, attestation, source eviction, provider restart, and
+  Finder cancellation blocked.
+- Current exact-head queue evidence: PR #247 `8e98b74e` (draft/blocked/review-required; hosted
+  checks pending), PR #246 `1972614e` (draft/blocked/review-required; prior Strix HTTP 429/404
+  infrastructure failure rerun requested), PR #249 `2f1d585` (draft/blocked/review-required;
+  Strix rerun pending), and central `.github#1316` `e4f9865a` (blocked with no qualifying approval;
+  required checks pending). No merge is inferred.
