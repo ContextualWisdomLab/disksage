@@ -1,8 +1,8 @@
 # DiskSage product and technical gap baseline
 
-**Snapshot:** 2026-08-22 (Asia/Seoul)
-**Repository heads at snapshot:** PR #213 `a6ec6e2`, PR #247 `a0fa7bc`, PR #246 `741ab30`,
-supporting PR #156 `39a08a7`, and PR #192 `30ceea2`; hosted checks and protected review remain
+**Snapshot:** 2026-08-25 (Asia/Seoul)
+**Repository heads at snapshot:** PR #259 `8d87a2b`, PR #258 `f731f01`, PR #247 `58e1dc5`,
+PR #246 `2037c91`, supporting PR #156 `39a08a7`, and PR #192 `30ceea2`; hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
@@ -16,6 +16,8 @@ rebased and reverified.
 
 | PR | Exact head | Base | Draft | Merge state | Review state | Check evidence at capture |
 | --- | --- | --- | --- | --- | --- | --- |
+| #259 | `8d87a2ba81af3e1c289bcc5219423c7efa5f4236` | `7eb131c4` | no | blocked | none | release matrix in progress; remaining checks queued |
+| #258 | `f731f013d4e430f9ed7b42666edac36b1a48d730` | `7eb131c4` | no | blocked | review required | test/LLM checks in progress; security and Strix successful |
 | #249 | `2f1d585398b85f3f1adb3783520ad70e7b4a9c3f` | `7eb131c4` | no | blocked | none | 1 non-success terminal, 2 pending |
 | #247 | `58e1dc52a93cd959daaea549a7f362eddc1601f5` | `7eb131c4` | no | blocked | none | 0 non-success terminal, 18 pending |
 | #246 | `2037c91b8d64df3a9f06a91ed7ad7ea637d8a7fd` | `17d4e203` | no | blocked | none | 0 non-success terminal, 18 pending; base is stale |
@@ -699,3 +701,18 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   pipe leak that could starve the independent `ps` probe and report a false active-use timeout.
   The focused Rust test passed 3/3. The same patch is present on stacked PR heads `a0fa7bc` (#247)
   and `741ab30` (#246); hosted checks are rerunning and protected merge/review is still pending.
+
+## 2026-08-25 current Finder/iCloud copy-preparation incident
+
+- A fresh bounded read-only File Provider observation retained three `fetchContentsForItemWithID`
+  requests with no progress, an indexable backlog of roughly 525,000 entries, upload progress at
+  zero, and download progress at about 21.45%; reconciliation remained active. Finder and the
+  provider daemons were alive, but no DiskSage, ZIP, or `real_datasets` process was running. The
+  local volume had about 12 GiB available, so this is provider preflight/backlog evidence rather
+  than proof of a local ZIP CPU stall or completed copy.
+- DiskSage keeps new copy, provider attestation, and source eviction fail-closed. It does not kill
+  `bird`, `fileproviderd`, touch CloudDocs databases, or cancel Finder automatically; the existing
+  operator-only Escape/cancel action is the reversible next step. The exact-head UI patch in PR
+  #259 (`8d87a2ba81af3e1c289bcc5219423c7efa5f4236`) exposes no-progress labels, bounded upload/
+  download percentages, the same-blocker duration, and the next safe action. Hosted checks remain
+  in progress/queued and protected review is still authoritative.
