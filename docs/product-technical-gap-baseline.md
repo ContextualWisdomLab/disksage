@@ -43,9 +43,13 @@ PR #1464 is `176378f541bf26d2cabb4d3e131c221df703036e`, with current review thre
 pinning PITR timestamps to an explicit `+00` offset, surfacing cleanup status, and applying the
 Compose hardening contract; targeted backend/shell/Podman drill evidence passed locally, while hosted
 checks and a fresh qualifying approval remain authoritative. PR #1454 is
-`3a38057f5d9c0dac4af3a4f808452249ad992ed5`, with the deleted URL/loopback tests and doctoring
+`3a4aa69fee9adef12b9c7dcd60de1c39b6553f09`, with the deleted URL/loopback tests and doctoring
 document restored and explicit zero ports rejected in both validators; targeted backend (45) and
-NetworkGraph (14) tests passed, but hosted checks and fresh approval remain pending.
+NetworkGraph (14) tests passed before the concurrent optimization follow-up and the same checks
+passed again on this latest head; hosted checks and fresh approval remain pending. PR #1462 is
+`212a645d07980232e06b5906e7efaf6f9727269c`, with Strix governance re-triggering restored and the
+new `pytest-cov` dependency pinned and hash-locked; 107 backend governance/tool tests passed, but
+the branch is behind `develop` and hosted checks remain pending. PR #1463 is `8e32e0d2757a59ffd2134110421ae130e466609b`, with its informational shared-spinner review resolved; its Strix and metadata-only failures are provider/gate evidence, not source-fix claims.
 
 ## Current product contract
 
