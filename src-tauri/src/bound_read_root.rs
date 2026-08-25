@@ -6,8 +6,8 @@
 //! object, and keeps that handle alive for the whole audit. Unix callers should traverse through
 //! the descriptor-relative helpers on this guard: they walk components with `openat`/`fstatat` and
 //! enumerate directories with `fdopendir`, so pathname replacement cannot redirect child I/O.
-//! Windows keeps a handle that deliberately excludes delete sharing, which blocks root rename or
-//! deletion while the guard is alive.
+//! Windows keeps no-delete-share handles for every traversed directory component so a path segment
+//! cannot be replaced with a reparse point between admission and the read-only operation.
 
 use same_file::Handle;
 use std::path::{Path, PathBuf};
@@ -58,6 +58,46 @@ fn open_directory_handle(path: &Path) -> Option<Handle> {
         .open(path)
         .ok()?;
     Handle::from_file(file).ok()
+}
+
+#[cfg(windows)]
+fn invalid_windows_relative_path() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        "bound root traversal requires normal relative path components",
+    )
+}
+
+#[cfg(windows)]
+fn open_windows_directory_chain(root: &Path, relative: &Path) -> std::io::Result<Vec<Handle>> {
+    use std::path::Component;
+
+    if relative.is_absolute() {
+        return Err(invalid_windows_relative_path());
+    }
+    let mut current = root.to_path_buf();
+    let mut handles = Vec::new();
+    for component in relative.components() {
+        let Component::Normal(value) = component else {
+            return Err(invalid_windows_relative_path());
+        };
+        current.push(value);
+        let handle = open_directory_handle(&current).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "bound child directory unavailable",
+            )
+        })?;
+        let metadata = handle.as_file().metadata()?;
+        if !metadata_is_real_directory(&metadata) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "bound child directory is a reparse point or non-directory",
+            ));
+        }
+        handles.push(handle);
+    }
+    Ok(handles)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -337,6 +377,10 @@ impl BoundReadRoot {
             let root = self.stable_path().ok_or_else(|| {
                 std::io::Error::new(std::io::ErrorKind::NotFound, "bound root unavailable")
             })?;
+            // Keep a no-delete-share, OPEN_REPARSE_POINT handle for every directory component
+            // alive through enumeration. This both rejects junctions/mount points and prevents an
+            // admitted component from being replaced before `read_dir` opens the final path.
+            let _component_handles = open_windows_directory_chain(&root, relative)?;
             return std::fs::read_dir(root.join(relative))?
                 .map(|entry| entry.map(|entry| entry.file_name()))
                 .collect();
@@ -393,6 +437,8 @@ impl BoundReadRoot {
             let root = self.stable_path().ok_or_else(|| {
                 std::io::Error::new(std::io::ErrorKind::NotFound, "bound root unavailable")
             })?;
+            let parent = relative.parent().unwrap_or_else(|| Path::new(""));
+            let _parent_handles = open_windows_directory_chain(&root, parent)?;
             let metadata = std::fs::symlink_metadata(root.join(relative))?;
             return Ok(if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
                 BoundEntryKind::Symlink
@@ -435,22 +481,32 @@ impl BoundReadRoot {
 
         #[cfg(windows)]
         {
-            use std::os::windows::fs::OpenOptionsExt;
+            use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 
             const FILE_SHARE_READ: u32 = 0x0000_0001;
             const FILE_SHARE_WRITE: u32 = 0x0000_0002;
             const FILE_SHARE_DELETE: u32 = 0x0000_0004;
+            const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
             const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
 
             let root = self.stable_path().ok_or_else(|| {
                 std::io::Error::new(std::io::ErrorKind::NotFound, "bound root unavailable")
             })?;
-            return std::fs::OpenOptions::new()
+            let parent = relative.parent().unwrap_or_else(|| Path::new(""));
+            let _parent_handles = open_windows_directory_chain(&root, parent)?;
+            let file = std::fs::OpenOptions::new()
                 .read(true)
                 .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-                // Do not follow a leaf reparse point if it is swapped after entry_kind.
+                // Open the leaf reparse point itself rather than following it.
                 .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-                .open(root.join(relative));
+                .open(root.join(relative))?;
+            if file.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "bound child file is a reparse point",
+                ));
+            }
+            return Ok(file);
         }
     }
 
