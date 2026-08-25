@@ -854,3 +854,14 @@ provider observation, not a per-item cloud receipt: a Finder “복사 준비 �
 unverified, `provider-sync-incomplete`, and blocked for copy, attestation, cloud write, and source
 eviction until the scan backlog is gone and item-level provider evidence is present. The Naruon
 readiness export and CloudArchive UI carry the same blocker and show the bounded next action.
+
+## Amendment: persist native health blockers in runtime projections (2026-08-25 00:00 +0900)
+
+When an iCloud admission probe is persisted, DiskSage now selects the native pending-scan blocker
+when present and applies it to every bounded, valid iCloud receipt projection. The replaceable Goal
+is written as `blocked` with `provider-sync-state-complete=false` and
+`explicit-eviction-permit=false`; the paired ADR records `provider-state-blocked:<blocker>`. This
+is a projection update only: immutable receipts remain authoritative, and no provider, Finder,
+source, cloud, attestation, or eviction mutation is performed. A missing, malformed, oversized,
+or incomplete receipt set emits a stable projection warning instead of claiming that all Goals were
+updated.

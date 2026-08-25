@@ -1288,7 +1288,115 @@ fn persist_icloud_health_evidence(
     }
     report.admission_blocked_since_ms =
         icloud_sync_health::admission_blocked_since_ms(&app_data_dir, report);
+    let provider_blocker = report
+        .new_copy_admission_blockers
+        .iter()
+        .find(|blocker| blocker.as_str() == "icloud-native-status-pending-scan")
+        .or_else(|| report.new_copy_admission_blockers.first());
+    if let Some(provider_blocker) = provider_blocker {
+        report.notices.extend(update_icloud_goal_projections(
+            &app_data_dir.join("cloud-receipts"),
+            &app_data_dir.join("cloud-adr"),
+            &app_data_dir.join("cloud-goals"),
+            cloud::system_now_ms(),
+            provider_blocker,
+        ));
+    }
     true
+}
+
+#[cfg(not(coverage))]
+fn apply_icloud_health_blocker_to_projection(
+    receipt: &cloud_transfer::CloudCopyReceipt,
+    adr_dir: &Path,
+    goal_dir: &Path,
+    observed_at_ms: u64,
+    provider_blocker: &str,
+) -> cloud_adr::ProjectionWriteOutcome {
+    cloud_adr::ensure_initial_projection_pair_with_provider_state_outcome(
+        receipt,
+        adr_dir,
+        goal_dir,
+        observed_at_ms,
+        provider_blocker,
+    )
+}
+
+#[cfg(not(coverage))]
+fn update_icloud_goal_projections(
+    receipt_dir: &Path,
+    adr_dir: &Path,
+    goal_dir: &Path,
+    observed_at_ms: u64,
+    provider_blocker: &str,
+) -> Vec<String> {
+    match std::fs::symlink_metadata(receipt_dir) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+        Ok(_) => return vec!["dynamic-goal-projection-update-incomplete".into()],
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(_) => return vec!["dynamic-goal-projection-update-incomplete".into()],
+    }
+    let mut paths = match std::fs::read_dir(receipt_dir) {
+        Ok(entries) => entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>(),
+        Err(_) => return vec!["dynamic-goal-projection-update-incomplete".into()],
+    };
+    paths.sort();
+    if paths.len() > MAX_CLOUD_RECEIPT_RECONCILIATION_ENTRIES {
+        return vec!["dynamic-goal-projection-update-incomplete".into()];
+    }
+    let started = Instant::now();
+    let mut updated = 0usize;
+    let mut incomplete = false;
+    for (index, path) in paths.iter().enumerate() {
+        if index >= MAX_CLOUD_RECEIPTS_PER_RECONCILIATION
+            || started.elapsed() >= CLOUD_RECONCILIATION_MAX_DURATION
+        {
+            incomplete = true;
+            break;
+        }
+        let Ok(file_metadata) = std::fs::symlink_metadata(path) else {
+            incomplete = true;
+            continue;
+        };
+        if file_metadata.file_type().is_symlink()
+            || !file_metadata.is_file()
+            || path.extension().and_then(|value| value.to_str()) != Some("json")
+        {
+            continue;
+        }
+        let receipt = match cloud_transfer::read_immutable_receipt(path) {
+            Ok(receipt) => receipt,
+            Err(_) => {
+                incomplete = true;
+                continue;
+            }
+        };
+        if receipt.provider != cloud::CloudProvider::Icloud {
+            continue;
+        }
+        let outcome = apply_icloud_health_blocker_to_projection(
+            &receipt,
+            adr_dir,
+            goal_dir,
+            observed_at_ms,
+            provider_blocker,
+        );
+        if outcome.wrote {
+            updated = updated.saturating_add(1);
+        }
+        incomplete |= !outcome.warnings.is_empty();
+    }
+    let mut notices = Vec::new();
+    if updated > 0 {
+        notices.push("dynamic-goal-projection-updated".into());
+    }
+    if incomplete {
+        notices.push("dynamic-goal-projection-update-incomplete".into());
+    }
+    notices
 }
 
 #[cfg(not(coverage))]
@@ -3182,6 +3290,65 @@ mod tests {
             stable_reconciliation_error("No such file or directory (os error 2)"),
             "provider-attestation-failed"
         );
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn icloud_health_blocker_updates_dynamic_goal_and_adr_projections() {
+        let temporary = tempfile::tempdir().unwrap();
+        let receipt = cloud_transfer::CloudCopyReceipt {
+            version: cloud_transfer::RECEIPT_VERSION,
+            receipt_id: "a".repeat(64),
+            candidate_fingerprint: "b".repeat(64),
+            provider: cloud::CloudProvider::Icloud,
+            source: "/source/file.bin".into(),
+            destination: "/cloud/file.bin".into(),
+            bytes: 1,
+            blake3: "c".repeat(64),
+            sha256: "d".repeat(64),
+            quick_xor_base64: String::new(),
+            source_modified_ms: 1,
+            copied_at_ms: 2,
+            copy_verified: true,
+            provider_sync_confirmed: false,
+            lineage_fingerprint: None,
+            lineage: None,
+        };
+        let adr_dir = temporary.path().join("adr");
+        let goal_dir = temporary.path().join("goals");
+        let initial = cloud_adr::write_projection_pair(
+            &adr_dir,
+            &cloud_adr::initial_adr_snapshot(&receipt, 2),
+            &goal_dir,
+            &cloud_adr::initial_goal_snapshot(&receipt, 2),
+        );
+        assert!(initial.0.is_some() && initial.1.is_some());
+
+        let outcome = apply_icloud_health_blocker_to_projection(
+            &receipt,
+            &adr_dir,
+            &goal_dir,
+            3,
+            "icloud-native-status-pending-scan",
+        );
+        assert!(outcome.wrote);
+        assert!(outcome.warnings.is_empty());
+
+        let goal: cloud_adr::CloudOffloadGoalSnapshot = serde_json::from_slice(
+            &std::fs::read(goal_dir.join(format!("{}-latest.json", receipt.receipt_id))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(goal.status, "blocked");
+        assert!(!goal.completion_gates["provider-sync-state-complete"]);
+        assert!(!goal.completion_gates["explicit-eviction-permit"]);
+        let adr: cloud_adr::CloudOffloadAdrSnapshot = serde_json::from_slice(
+            &std::fs::read(adr_dir.join(format!("{}-latest.json", receipt.receipt_id))).unwrap(),
+        )
+        .unwrap();
+        assert!(adr
+            .consequences
+            .iter()
+            .any(|value| value == "provider-state-blocked:icloud-native-status-pending-scan"));
     }
 
     #[cfg(not(coverage))]

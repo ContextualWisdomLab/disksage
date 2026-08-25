@@ -1421,4 +1421,12 @@ checks are not reused:
   `icloud-native-status-pending-scan`, propagates it through Naruon readiness, and shows it in the
   CloudArchive UI. This keeps the Finder `real_datasets` “복사 준비 중” state explicitly blocked
   without treating the screenshot as an upload receipt; no Finder, provider, source, or cloud
-  mutation is performed.
+mutation is performed.
+
+## 2026-08-25 00:00 +0900 dynamic Goal/ADR propagation
+
+- The previous native pending-scan implementation stopped at health/readiness/UI and did not update
+  receipt-linked runtime projections. The iCloud health persistence path now applies the selected
+  blocker to bounded valid iCloud receipt projections: Goal becomes `blocked` and revokes provider
+  completion and eviction gates; the paired ADR records the provider-state blocker. Projection
+  failures remain explicit and path-free, and no provider/Finder/source/cloud mutation occurs.

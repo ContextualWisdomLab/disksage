@@ -328,3 +328,11 @@ The native status contract now retains only a bounded `pending_scan_count` deriv
 `icloud-native-status-pending-scan`. It never persists the marker's path or item identifier. The
 same blocker is validated in Naruon readiness and displayed beside the Finder cancellation
 guidance; it does not authorize cancellation, cloud writes, attestation, or source eviction.
+
+## Runtime projection update — 2026-08-25 00:00
+
+The iCloud health persistence path now propagates the selected bounded blocker to existing iCloud
+receipt-linked Goal/ADR projections. Goal status and completion gates therefore reflect the current
+provider-sync hold after restart or a manual health inspection, while receipt/evidence authority is
+unchanged. Projection directory, receipt contents, and provider identifiers are not included in
+the emitted notices.
