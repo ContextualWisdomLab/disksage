@@ -41,16 +41,20 @@ annotation still recorded;
 PR #1443 is `55a84f904f11203f49c356d95d7d88ba9f903030`, the direct gate repair, with source/security
 checks passing, coverage/metadata still pending, and `STRIX_PROVIDER_UNAVAILABLE` recorded. Neither PR is claimed merge-ready
 without a fresh qualifying review and exact-head protected checks.
-PR #1464 is `176378f541bf26d2cabb4d3e131c221df703036e`, with current review threads resolved after
-pinning PITR timestamps to an explicit `+00` offset, surfacing cleanup status, and applying the
-Compose hardening contract; targeted backend/shell/Podman drill evidence passed locally, while hosted
- checks and a fresh qualifying approval remain authoritative. PR #1454 is
+PR #1464 is `76796f7d4724f47e8b00381e1be8d93cee43fc66`, with review threads resolved after pinning
+PITR timestamps to an explicit `+00` offset, making WAL archival idempotent on reused volumes,
+surfacing cleanup status, and applying the Compose hardening contract; targeted backend/shell/
+Podman drill evidence passed locally, while hosted checks and a fresh qualifying approval remain
+authoritative. PR #1454 is
 `d97f569e745a8c0afcc48fc5850f04529c806c37`, with the deleted URL/loopback tests and doctoring
 document restored and explicit zero ports rejected in both validators; targeted backend (45) and
 NetworkGraph tests passed on this exact head; hosted checks and fresh approval remain pending. PR #1462 is
-`212a645d07980232e06b5906e7efaf6f9727269c`, with Strix governance re-triggering restored and the
-new `pytest-cov` dependency pinned and hash-locked; 107 backend governance/tool tests passed, but
-the branch is behind `develop` and hosted checks remain pending. PR #1463 is `8e32e0d2757a59ffd2134110421ae130e466609b`, with its informational shared-spinner review resolved; its Strix and metadata-only failures are provider/gate evidence, not source-fix claims.
+`3aa398dc9f6e3a20548d08e7af9a3140fe8bf704`, with Strix governance re-triggering restored, the
+`pytest-cov` dependency closure pinned and hash-locked, and utility input limits enforced; 75
+backend tool tests plus the earlier governance suite passed, but hosted checks and fresh approval
+remain pending. PR #1463 is `8e32e0d2757a59ffd2134110421ae130e466609b`, with its informational
+shared-spinner review resolved; its Strix and metadata-only failures are provider/gate evidence,
+not source-fix claims.
 
 ## Current product contract
 
