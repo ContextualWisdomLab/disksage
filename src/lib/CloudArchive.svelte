@@ -852,7 +852,7 @@
   }
 
   function providerGlobalStatusDetails(): string {
-    if (!providerGlobalSync) return providerGlobalSyncError || "공급자 전역 동기화 상태를 확인하는 중입니다.";
+    if (!providerGlobalSync) return "공급자 전역 동기화 상태 확인에 실패했습니다. 아래 오류를 확인하십시오.";
     const blockers = providerGlobalSync.blockers.map(providerGlobalSyncBlockerLabel);
     const pending = providerGlobalSync.pending_indexable_count ?? 0;
     return blockers.length > 0

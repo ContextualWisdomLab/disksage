@@ -23,14 +23,12 @@ function progressFingerprint(report: IcloudSyncHealthReport): string {
   ].join("|");
 }
 
-function activeTransferFingerprint(report: IcloudSyncHealthReport): string {
+function transferProgressFingerprint(report: IcloudSyncHealthReport): readonly [number | null, number | null] {
   const activity = report.file_provider_activity;
   return [
-    activity?.active_upload_count ?? 0,
-    activity?.active_download_count ?? 0,
-    activity?.active_upload_progress_millionths ?? "",
-    activity?.active_download_progress_millionths ?? "",
-  ].join("|");
+    activity?.active_upload_progress_millionths ?? null,
+    activity?.active_download_progress_millionths ?? null,
+  ];
 }
 
 function indexingBacklogDrained(
@@ -46,7 +44,12 @@ function hasRealProgress(
   previousReport: IcloudSyncHealthReport,
   next: IcloudSyncHealthReport,
 ): boolean {
-  return activeTransferFingerprint(previousReport) !== activeTransferFingerprint(next)
+  const [previousUpload, previousDownload] = transferProgressFingerprint(previousReport);
+  const [nextUpload, nextDownload] = transferProgressFingerprint(next);
+  const transferProgressed = (previous: number | null, current: number | null): boolean =>
+    previous != null && current != null && current > previous;
+  return transferProgressed(previousUpload, nextUpload)
+    || transferProgressed(previousDownload, nextDownload)
     || indexingBacklogDrained(previousReport, next);
 }
 

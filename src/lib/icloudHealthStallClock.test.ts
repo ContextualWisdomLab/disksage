@@ -106,6 +106,19 @@ describe("iCloud health stall clock", () => {
     expect(clock.fingerprint).toBe(icloudHealthStallClockFingerprint(next));
   });
 
+  it("does not treat a transfer count dropping to zero as progress", () => {
+    const previous = report(activity({ active_upload_count: 1 }));
+    const previousFingerprint = icloudHealthStallClockFingerprint(previous);
+    const next = report(activity({ active_upload_count: 0 }), { observed_at_ms: 2_000 });
+
+    expect(updateIcloudHealthStallClock(
+      previous,
+      { blockedSinceMs: 1_200, fingerprint: previousFingerprint },
+      next,
+      2_000,
+    ).blockedSinceMs).toBe(1_200);
+  });
+
   it("resets when the indexing backlog drains", () => {
     const previous = report(activity({ pending_indexable_count: 20 }));
     const previousFingerprint = icloudHealthStallClockFingerprint(previous);
