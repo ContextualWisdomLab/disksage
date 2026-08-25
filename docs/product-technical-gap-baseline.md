@@ -122,6 +122,8 @@ suite passes 35 tests; hosted Strix and metadata-only gates remain authoritative
 
 ## Architecture and decision linkage
 
+- `docs/product-requirements.md` is the current PRD and is derived only from
+  the safety contracts and exact-head evidence listed below.
 - ADR-0001 defines provider evidence, metadata precedence, native copy, headroom, and eviction gates.
 - ADR-0002 defines per-item cache cleanup and the narrow no-second-approval incident policy.
 - ADR-0003 defines the local Zotero metadata handoff and keeps cloud receipts independent.

@@ -1,0 +1,128 @@
+# DiskSage Product Requirements Document
+
+**Status:** Baseline for implementation and release review  
+**Snapshot:** 2026-08-25 (Asia/Seoul)  
+**Product:** DiskSage by ContextualWisdomLab
+
+## Product outcome
+
+DiskSage helps a single desktop user reclaim local disk space without making an
+unverifiable deletion or cloud-eviction decision. It scans locally, explains
+which evidence is missing, copies only through a bounded provider boundary, and
+evicts a source only after an independently verifiable provider receipt.
+
+The standalone desktop product must work without OAuth, an external LLM, or a
+network service. Cloud desktop clients (iCloud, OneDrive, and Google Drive) are
+optional destinations; their capacity, sync state, and receipts are distinct
+from one another.
+
+## Users and primary stories
+
+1. **Relieve disk pressure safely.** As a desktop user, I can scan a volume and
+   see which files, caches, and provider states consume space before any action.
+2. **Understand a blocked transfer.** As a user, I can see the exact provider
+   blocker, evidence timestamp, required bytes, and next bounded retry.
+3. **Offload a verified candidate.** As a user, I can copy a candidate to a
+   chosen cloud desktop client, verify identity and content, and receive a
+   durable receipt before eviction becomes possible.
+4. **Clean reversible local state.** As a user, I can reclaim an identity-bound,
+   regenerable cache through a dry run, Trash move, journal, and rollback path.
+5. **Audit a decision.** As a user or operator, I can export path-free lineage
+   from source metadata through provider evidence, receipt, Goal projection, and
+   eviction decision.
+
+## Functional requirements
+
+### FR-1: Metadata-first inventory
+
+- Read-only scans identify stable content and filesystem metadata.
+- Embedded metadata takes precedence over an unambiguous filename token; a
+  filename token such as `2026-04-28` or `251210` is secondary evidence only.
+- Missing, malformed, or conflicting metadata is visible and never silently
+  upgraded to ownership or eviction authority.
+
+### FR-2: Provider state machine
+
+Every cloud candidate follows this monotonic state machine:
+
+`copy-verified → pending-provider-sync → provider-sync-confirmed → eviction-ready → source-evicted`
+
+`local-current` with `is_uploaded=false` is `pending-upload`; it cannot issue an
+eviction permit. Provider timeout, quota/auth uncertainty, stale evidence,
+insufficient headroom, or an incomplete receipt fail closed.
+
+### FR-3: Safe copy and eviction
+
+- Native File Provider operations are bounded, re-hashed, and source-identity
+  rechecked.
+- A timeout cleans only destination artifacts created by the current child
+  process and leaves a durable receipt.
+- No provider placeholder or unmaterialized file is mutated.
+- Eviction is disabled until the receipt, identity, and provider attestation
+  are current and complete.
+
+### FR-4: Reclaimable caches
+
+Regenerable caches are a separate reclaim domain. Each proposal is identity
+bound, active-use checked, journaled, reversible through OS Trash, and excluded
+from user-data upload.
+
+### FR-5: Explanations and lineage
+
+The UI and export show stable content identifiers, provenance edges, confidence,
+blockers, evidence timestamps, and the next user action without exposing raw
+private paths. Dynamic Goal and ADR projections are views over receipts and never
+authorize mutation.
+
+### FR-6: Optional intelligence boundary
+
+The deterministic Rust gate owns safety and arithmetic. A local model may rank
+or explain a fixed maintenance command after dry-run evidence and explicit
+confirmation. Noema, contextual-orchestrator, semantic-data-portal, or an
+external LLM is optional integration code, never a runtime prerequisite for
+standalone transfer or deletion.
+
+## Non-functional requirements
+
+- **Safety:** fail closed on missing, stale, contradictory, or provider-global
+  evidence; no heuristic or arbitrary deletion weight.
+- **Performance:** bounded child processes and asynchronous UI refreshes must
+  keep the desktop responsive; every long operation has a visible timeout and
+  cancellation path.
+- **Privacy:** logs, receipts, and exports are path-free by default; secrets and
+  provider raw output are never persisted.
+- **Portability:** macOS, Linux, and Windows capability differences are explicit
+  in release evidence; native File Provider behavior is never assumed on other
+  platforms.
+- **Auditability:** Rust safety decisions are deterministic, testable, and
+  connected to ADR-0001/0002/0006/0007 and the exact-head baseline.
+
+## Acceptance evidence
+
+| Requirement | Required proof |
+| --- | --- |
+| FR-1 | Metadata precedence tests and a path-free inventory receipt |
+| FR-2 | State-machine fixtures for `local-current + is_uploaded=false`, provider timeout, and sync completion |
+| FR-3 | Bounded copy, hash/identity recheck, timeout cleanup, and eviction-permit tests |
+| FR-4 | Dry-run, identity, active-use, Trash, journal, and rollback tests |
+| FR-5 | UI contract and export tests proving blocker/timestamp/next-action wording |
+| FR-6 | No external-service startup test and optional integration boundary tests |
+
+## Explicit non-goals
+
+- Automatic deletion based only on filename date, size, age, or an LLM score.
+- Treating desktop-client free space as provider API quota.
+- Force-killing `bird`, `fileproviderd`, Finder, or cloud clients.
+- OAuth as a prerequisite for a single-user local-only installation.
+- Uploading caches or mutating cloud placeholders.
+
+## Traceability
+
+- ADR-0001: provider evidence, metadata precedence, native copy, headroom, and
+  eviction gates.
+- ADR-0002: per-item cache cleanup and the narrow approval boundary.
+- ADR-0003: local Zotero metadata handoff independent of cloud receipts.
+- ADR-0006: bounded iCloud health evidence and timestamp comparison.
+- ADR-0007: integrity-checked three-stream native-copy cohort.
+- `docs/product-technical-gap-baseline.md`: exact-head product/technical gaps
+  and live PR evidence.
