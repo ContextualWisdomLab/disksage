@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-26 (Asia/Seoul)
-**Repository heads at snapshot:** PR #262 `5e27e4f`, PR #260 `9cebf0b`, PR #259 `ae5e158`, PR #258 `4d28ea3`, PR #257 `d09808f`, PR #253 `7db00e2`, PR #251 `7b8caa3`, PR #227 `0f7a990`, PR #249 `7c93e17`,
+**Repository heads at snapshot:** PR #262 `5e27e4f`, PR #260 `9cebf0b`, PR #259 `ae5e158`, PR #258 `12ce5c6`, PR #257 `d09808f`, PR #253 `7db00e2`, PR #251 `7b8caa3`, PR #227 `90cd444`, PR #249 `7c93e17`,
 PR #247 `0de3f6a`, PR #246 `9124e01`, PR #204 `750213d`, draft PR #198 `cf763cd`, and replacement central `.github` PRs #1330 `f8a7210`, #1331 `4fc261f`, #1333 `058e603`, #1334 `133a1fb`, and #1335 `6fd4d22` (with superseded #1295/#1299/#1300/#1301/#1321/#1332 closed);
 hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
@@ -153,6 +153,13 @@ suite passes 35 tests; hosted Strix and metadata-only gates remain authoritative
   coverage/Strix checks active; no source change is inferred from pending status.
 - The documentation PR #258 advanced to `4d28ea386f35bf17e0e0b7ad1f5a47422bc90286` after the last
   baseline capture; this section is the current reconciliation for the next exact-head update.
+- DiskSage PR #246 advanced to exact head `1ae5a3517f80aeda79c3e77fe540ccb2ce1f4ccb` with a
+  non-iCloud provider checking-state card; focused UI tests and svelte-check pass, while hosted checks
+  and qualifying approval remain authoritative.
+- DiskSage PR #227 advanced to exact head `90cd444c7f17c5284452d9eeecb006de23218162` with fresh
+  descriptor enumeration, Windows leaf reparse protection, dead path-probe removal, and file-only
+  multipart metadata opens; serial Rust library tests pass 736/736 and the root-identity contract
+  passes 7/7.
 
 ## Current product contract
 
