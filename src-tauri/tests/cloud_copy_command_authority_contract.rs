@@ -120,7 +120,7 @@ fn windows_cleanup_uses_stable_handle_identity() {
         "Windows cleanup must use the stable handle-based identity helper"
     );
     assert!(
-        !body.contains("use std::os::windows::fs::MetadataExt"),
-        "unstable Windows metadata identity accessors must not reach release builds"
+        !CLOUD_TRANSFER.contains("use std::os::windows::fs::MetadataExt"),
+        "unstable Windows metadata identity accessors must not be reintroduced at module or function scope"
     );
 }
