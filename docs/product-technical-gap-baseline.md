@@ -145,10 +145,13 @@ suite passes 35 tests; hosted Strix and metadata-only gates remain authoritative
 
 ## 2026-08-26 latest head refresh
 
-- DiskSage PR #218 advanced to exact head `6a4b1867deecf9affaa39245be66a4fb2e4f508b`; its
-  current test/check inventory has no terminal failures and no unresolved current review threads.
-  It is now ready with protected auto-merge enabled. The earlier failed test run is stale evidence;
-  current-head checks and independent approval remain authoritative, so no merge is claimed.
+- DiskSage PR #218 advanced to exact head `8593746f59269346b4dd8c2def7976116e488528` after
+  repairing the native-path integration fixture: an empty source can intentionally return the
+  bounded `materialization-unit-set-empty-or-duplicate` domain error without being treated as an
+  argument-decoding failure, and macOS explicitly skips the APFS `EILSEQ` unsupported path case.
+  The focused feature-gated suite passes 2/2 locally, the informational Devin thread is resolved,
+  and no current terminal check failure is observed. Protected auto-merge is enabled; hosted
+  checks and independent approval remain authoritative, so no merge is claimed.
 - DiskSage PR #246 advanced to exact head `57eb6c134a3a29fe231d973c35df762edd9fa34d` after a
   current skip-link contrast regression test. The Storybook edge remains ready with protected
   auto-merge enabled, no current terminal check failure observed, and protected review still
