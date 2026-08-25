@@ -13,7 +13,7 @@ mod windows_tests {
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix dm: <https://disksage.app/ontology#> .
-dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "{target}/{{class}}" .
+dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "{target}" .
 "#
         );
         parse_ttl(&ttl).expect("Windows ontology fixture must parse")
