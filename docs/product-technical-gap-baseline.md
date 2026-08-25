@@ -1497,3 +1497,15 @@ auxiliary production-time evidence; embedded metadata and context retain precede
 - Pinned Rust 1.97.1 ran 745 library tests with one live-provider test ignored; the exact head is
   `dc57a1539b82514f4ceb17ec0fca42ed23ae7988`. This is test evidence only and grants no cloud-write,
   attestation, source-eviction, Finder-cancel, or provider-restart authority.
+
+## 2026-08-25 11:20 +0900 exact-head queue handoff
+
+- DiskSage PR #247 is now `8ad12e1e5b57944960b5389e4d2067f3fcd0e924`; its new hosted test, Strix,
+  Noema, and queue checks are pending. It remains draft, blocked, and review-required; the local
+  Rust proof above is not a substitute for hosted exact-head evidence or protected approval.
+- DiskSage PR #249 remains at `2f1d585398b85f3f1adb3783520ad70e7b4a9c3f`; the stale Strix failure was
+  explicitly rerun against the same head after central `.github#1318` moved the smoke contract to
+  main. Other substantive checks are green, but the rerun and protected reviews are pending.
+- Central `.github#1318` merged as `8fd471a31399a914d9cb22a840f4a4c68e010ea6`; `.github#1316` is
+  based on that head at `e4f9865a1b06978324f006ee3861b84953877d8b` and carries the remaining direct
+  OpenCode model-pool alignment. No merge or approval is inferred from queued checks or bot reviews.
