@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-25 (Asia/Seoul)
-**Repository heads at snapshot:** PR #259 `e902b88`, PR #258 `0beaaa0`, PR #247 `58e1dc5`,
+**Repository heads at snapshot:** PR #259 `0bfd796`, PR #258 `285766b`, PR #247 `58e1dc5`,
 PR #246 `2037c91`, supporting PR #156 `39a08a7`, and PR #192 `30ceea2`; hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
@@ -16,8 +16,8 @@ rebased and reverified.
 
 | PR | Exact head | Base | Draft | Merge state | Review state | Check evidence at capture |
 | --- | --- | --- | --- | --- | --- | --- |
-| #259 | `e902b880d83a4ebb11bacbe985c228e835817872` | `7eb131c4` | no | blocked | none | checks restarted after bounded provider-timeout evidence |
-| #258 | `0beaaa02829cdf0d788fbc37b6e82b3c38690e56` | `7eb131c4` | no | blocked | review required | checks restarted after exact-head documentation update |
+| #259 | `0bfd796e494b128c7a34b019a280bdbd7dfecf99` | `7eb131c4` | no | blocked | review required | checks restarted after provider-lock detection and UI explanation |
+| #258 | `285766b4c60ba64bf0af862b7beac3619c713daf` | `7eb131c4` | yes | blocked | review required | one transient Rust concurrency failure rerun; remaining checks authoritative |
 | #249 | `2f1d585398b85f3f1adb3783520ad70e7b4a9c3f` | `7eb131c4` | no | blocked | none | 1 non-success terminal, 2 pending |
 | #247 | `58e1dc52a93cd959daaea549a7f362eddc1601f5` | `7eb131c4` | no | blocked | none | 0 non-success terminal, 18 pending |
 | #246 | `2037c91b8d64df3a9f06a91ed7ad7ea637d8a7fd` | `17d4e203` | no | blocked | none | 0 non-success terminal, 18 pending; base is stale |
@@ -730,3 +730,8 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   deleting only this session's generated Rust build artifacts; the remaining blocker is provider
   timeout/backlog, not local headroom. The timeout remains incomplete evidence and cannot authorize
   copy, attestation, or source eviction.
+- The current #259 implementation additionally classifies the redacted File Provider condition
+  `itemIsFlockedCanNotPropagate` as `icloud-file-provider-item-locked-observed` and maps it to the
+  `icloud-file-provider-item-locked` admission blocker. The provider token, item identifier, and
+  path are not retained. The UI presents a customer action—cancel Finder's waiting operation and
+  retry only after a fresh clear observation—rather than treating the lock as a completed copy.
