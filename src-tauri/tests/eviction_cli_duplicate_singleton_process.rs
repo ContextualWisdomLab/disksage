@@ -147,7 +147,7 @@ fn destination_plan_rejects_duplicate_resource_limits() {
     assert_rejected(
         &binaries[1],
         &max_entries,
-        "--max-entries는 한 번만 지정할 수 있음",
+        "DiskSage incomplete download destination plan: --max-entries는 한 번만 지정할 수 있음",
     );
 
     let mut stale = prefix.to_vec();
@@ -160,7 +160,7 @@ fn destination_plan_rejects_duplicate_resource_limits() {
     assert_rejected(
         &binaries[1],
         &stale,
-        "--stale-after-days는 한 번만 지정할 수 있음",
+        "DiskSage incomplete download destination plan: --stale-after-days는 한 번만 지정할 수 있음",
     );
 
     let mut reserve = prefix.to_vec();
@@ -173,6 +173,6 @@ fn destination_plan_rejects_duplicate_resource_limits() {
     assert_rejected(
         &binaries[1],
         &reserve,
-        "--capacity-reserve-mib는 한 번만 지정할 수 있음",
+        "DiskSage incomplete download destination plan: --capacity-reserve-mib는 한 번만 지정할 수 있음",
     );
 }
