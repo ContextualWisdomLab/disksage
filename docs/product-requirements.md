@@ -27,6 +27,8 @@ from one another.
    durable receipt before eviction becomes possible.
 4. **Clean reversible local state.** As a user, I can reclaim an identity-bound,
    regenerable cache through a dry run, Trash move, journal, and rollback path.
+   The narrow ADR-0002 incident policy may execute its reviewed, identity-bound
+   cache roots without a second prompt; it is not a general path-based delete.
 5. **Audit a decision.** As a user or operator, I can export path-free lineage
    from source metadata through provider evidence, receipt, Goal projection, and
    eviction decision.
@@ -40,6 +42,9 @@ from one another.
   filename token such as `2026-04-28` or `251210` is secondary evidence only.
 - Missing, malformed, or conflicting metadata is visible and never silently
   upgraded to ownership or eviction authority.
+- Scans exclude provider-managed trees or use a provider-native metadata
+  capability that proves a placeholder will not be materialized; unsupported or
+  ambiguous provider state is surfaced as a blocker.
 
 ### FR-2: Provider state machine
 
@@ -89,8 +94,10 @@ standalone transfer or deletion.
 - **Performance:** bounded child processes and asynchronous UI refreshes must
   keep the desktop responsive; every long operation has a visible timeout and
   cancellation path.
-- **Privacy:** logs, receipts, and exports are path-free by default; secrets and
-  provider raw output are never persisted.
+- **Privacy:** shareable logs, receipts, and exports are path-free by default;
+  provider raw output is never persisted. OAuth refresh tokens, when explicitly
+  enabled, are stored only in the operating-system credential store and never
+  in application logs, receipts, or exports.
 - **Portability:** macOS, Linux, and Windows capability differences are explicit
   in release evidence; native File Provider behavior is never assumed on other
   platforms.
