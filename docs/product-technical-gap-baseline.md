@@ -17,7 +17,7 @@ rebased and reverified.
 | PR | Exact head | Base | Draft | Merge state | Review state | Check evidence at capture |
 | --- | --- | --- | --- | --- | --- | --- |
 | #259 | `a019ddaba4aa5cad1e0bef02121f20d514d9580c` | `7eb131c4` | no | blocked | required | stale File Provider error-state + `last`/`expired` parser; checks remain authoritative |
-| #258 | `54ab508ee95174639add57053f5f2de2cfd945a8` | `7eb131c4` | no | blocked | required | current baseline/docs head; checks remain authoritative |
+| #258 | `ad8792fb7b91cf2fef425b2d14425ddab8bd9d7f` | `7eb131c4` | no | blocked | required | preceding baseline/docs head; checks remain authoritative |
 | #249 | `2f1d585398b85f3f1adb3783520ad70e7b4a9c3f` | `7eb131c4` | no | blocked | required | source/build/security/coverage pass; Strix external provider failure |
 | #247 | `b3e00c6a9bf13152562ccc50f2ed742b03f0bffa` | `7eb131c4` | no | blocked | required | destination-headroom preview now retains unverified candidate blockers; post-push checks pending |
 | #246 | `cf005f18c237fc60c611f95b30f42d5a5307d0cf` | `7eb131c4` | no | blocked | required | ADR records persisted iCloud stall age and single cancel control; post-push checks pending |
