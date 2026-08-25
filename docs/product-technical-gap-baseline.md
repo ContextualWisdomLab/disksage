@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-25 (Asia/Seoul)
-**Repository heads at snapshot:** PR #259 `0bfd796`, PR #258 `285766b`, PR #247 `58e1dc5`,
+**Repository heads at snapshot:** PR #259 `0bfd796`, PR #258 `c7ca2a4`, PR #247 `58e1dc5`,
 PR #246 `2037c91`, supporting PR #156 `39a08a7`, and PR #192 `30ceea2`; hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
@@ -17,7 +17,7 @@ rebased and reverified.
 | PR | Exact head | Base | Draft | Merge state | Review state | Check evidence at capture |
 | --- | --- | --- | --- | --- | --- | --- |
 | #259 | `0bfd796e494b128c7a34b019a280bdbd7dfecf99` | `7eb131c4` | no | blocked | review required | checks restarted after provider-lock detection and UI explanation |
-| #258 | `285766b4c60ba64bf0af862b7beac3619c713daf` | `7eb131c4` | yes | blocked | review required | one transient Rust concurrency failure rerun; remaining checks authoritative |
+| #258 | `c7ca2a4e34ba3a51bad7c787435c610f3abceb53` | `7eb131c4` | no | blocked | review required | exact-head provider-lock reconciliation; checks remain authoritative |
 | #249 | `2f1d585398b85f3f1adb3783520ad70e7b4a9c3f` | `7eb131c4` | no | blocked | none | 1 non-success terminal, 2 pending |
 | #247 | `58e1dc52a93cd959daaea549a7f362eddc1601f5` | `7eb131c4` | no | blocked | none | 0 non-success terminal, 18 pending |
 | #246 | `2037c91b8d64df3a9f06a91ed7ad7ea637d8a7fd` | `17d4e203` | no | blocked | none | 0 non-success terminal, 18 pending; base is stale |
@@ -713,7 +713,7 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - DiskSage keeps new copy, provider attestation, and source eviction fail-closed. It does not kill
   `bird`, `fileproviderd`, touch CloudDocs databases, or cancel Finder automatically; the existing
   operator-only Escape/cancel action is the reversible next step. The exact-head UI patch in PR
-  #259 (`e902b880d83a4ebb11bacbe985c228e835817872`) exposes no-progress labels, bounded upload/
+  #259 (`0bfd796e494b128c7a34b019a280bdbd7dfecf99`) exposes no-progress labels, bounded upload/
   download percentages, the same-blocker duration, and the next safe action. Hosted checks remain
   in progress/queued and protected review is still authoritative.
 - A follow-up bounded observation at `2026-08-25 12:49:51 +0900` still retained seven
