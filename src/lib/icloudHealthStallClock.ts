@@ -69,7 +69,9 @@ export function updateIcloudHealthStallClock(
     || admissionFingerprint(previousReport) !== admissionFingerprint(next);
   if (admissionChanged) {
     return {
-      blockedSinceMs: next.admission_blocked_since_ms ?? next.observed_at_ms,
+      blockedSinceMs: previousReport
+        ? next.admission_blocked_since_ms ?? next.observed_at_ms
+        : observedAtMs,
       fingerprint,
     };
   }
