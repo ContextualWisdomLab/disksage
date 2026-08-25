@@ -649,6 +649,7 @@ The implementation at source head `44756d1` is covered by seven focused Vitest c
 The UX stall clock now restores `admission_blocked_since_ms` when the first blocked report arrives
 after restart or a failed probe, then falls back to the backend observation timestamp and finally
 the local observation time. This keeps an ongoing Finder stall's 15-minute diagnostic warning from
-resetting to zero without granting copy, attestation, or eviction authority. The iCloud status card
-is the single Finder-cancel control; the duplicate detail-panel button was removed. Exact functional
-head `74f9f3ff73ac18c9e61f6cf1f63b3fcb8237e76e` carries the regression test.
+resetting to zero without granting copy, attestation, or eviction authority. `ProviderStatusCard`
+is the single Finder-cancel control for both iCloud and non-iCloud provider paths; duplicate
+detail-panel buttons were removed. Exact functional head `976d9300b438e9d010f8e030a4ffd09aa1c96632`
+carries the regression tests.
