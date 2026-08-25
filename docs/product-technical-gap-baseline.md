@@ -1509,3 +1509,18 @@ auxiliary production-time evidence; embedded metadata and context retain precede
 - Central `.github#1318` merged as `8fd471a31399a914d9cb22a840f4a4c68e010ea6`; `.github#1316` is
   based on that head at `e4f9865a1b06978324f006ee3861b84953877d8b` and carries the remaining direct
   OpenCode model-pool alignment. No merge or approval is inferred from queued checks or bot reviews.
+
+## 2026-08-25 11:06 +0900 current Finder “복사 준비 중” receipt
+
+- A fresh bounded read-only File Provider dump reports Google Drive as `temporarily disconnected`;
+  the root metadata request returns File Provider `-1004` (server unreachable), the reconciliation
+  queue is capped at 2,000 entries, and the latest user-initiated root retry is approximately
+  57 minutes old. Upload/download markers are present, but there is no per-item destination receipt.
+- iCloud is also backlogged: `pending-indexable-count` is 505,103, upload/download progress is
+  `0.0000`, `disk import` is active, and reconciliation contains 497,379 entries. The data volume
+  has approximately 20 GiB free at this observation, so the Finder wait is provider coordination,
+  not proof that the local volume is full.
+- DiskSage must display this as `provider-sync-incomplete` and keep cloud write, attestation, source
+  eviction, provider restart, and Finder cancellation blocked. The screenshot is not a cloud receipt;
+  no Finder, provider, source, cloud, or eviction mutation was performed. Filename dates remain
+  auxiliary evidence only; embedded metadata and context retain precedence.

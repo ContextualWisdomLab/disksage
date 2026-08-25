@@ -942,3 +942,20 @@ capacity when the synthetic destination has no existing ancestor. Pinned Rust 1.
 passed all 745 library tests plus one ignored live-provider test at PR #247 exact head
 `dc57a1539b82514f4ceb17ec0fca42ed23ae7988`; no cloud, provider, Finder, source, or eviction
 mutation was performed.
+
+## Amendment: current Finder copy-preparation provider receipt (2026-08-25 11:06 +0900)
+
+A fresh read-only File Provider dump identifies the visible Finder preparation as a provider
+coordination stall, not a DiskSage copy worker. The Google Drive domain is `temporarily
+disconnected`; its root metadata fetch reports File Provider `-1004` (server unreachable), the
+reconciliation queue is capped at 2,000 entries, and the latest user-initiated root retry is about
+57 minutes old. Upload/download progress markers exist without a completed item receipt. The
+iCloud domain independently reports `pending-indexable-count: 505103`, upload/download progress
+at `0.0000`, `disk import: yes`, and 497,379 reconciliation entries. The data volume currently has
+about 20 GiB free, so the observed Finder wait is not itself proof of local disk exhaustion.
+
+DiskSage therefore keeps the operation at `provider-sync-incomplete`: the Finder “복사 준비 중”
+window is not a cloud-write receipt, and copy, attestation, source eviction, provider restart, and
+Finder cancellation remain fail-closed. No Finder, provider, source, cloud, or eviction mutation
+was performed. The evidence is read-only and path-free; filename dates remain secondary to embedded
+metadata and context.
