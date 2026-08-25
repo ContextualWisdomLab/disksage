@@ -122,7 +122,8 @@ suite passes 35 tests; hosted Strix and metadata-only gates remain authoritative
   no merge is claimed until the current-head checks and independent approval are present.
 - DiskSage PR #262 release run `32879846812` is still **IN_PROGRESS** for exact head
   `345af62b983e9de67200684da10ab24d16d945cc`; Ubuntu has succeeded and Windows/macOS are still running,
-  with no failed step observed. This is not treated as a blocker or a merge signal.
+  with no failed step observed. The PR is now ready-for-review with protected auto-merge enabled;
+  `REVIEW_REQUIRED`/`BLOCKED` remains authoritative and no merge is claimed.
 - Central `ContextualWisdomLab/.github` PR #1331 is `a1408f520cc38bab3207675b0033a48d3d12240c` and
   #1333 is `5454a19618b27f4d7f34dd2a7a5e47eb5bc42fc1`; both remain protected, open, and auto-merge
   enabled but blocked. These exact heads supersede the older abbreviated table entries above.
