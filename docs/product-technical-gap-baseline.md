@@ -5,6 +5,9 @@
 PR #247 `0de3f6a`, PR #246 `cbb9dc0`, PR #204 `750213d`, draft PR #198 `cf763cd`, and replacement central `.github` PRs #1330 `f8a7210`, #1331 `4fc261f`, #1333 `058e603`, #1334 `133a1fb`, and #1335 `6fd4d22` (with superseded #1295/#1299/#1300/#1301/#1321/#1332 closed);
 hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
+Because this file is itself carried by PR #258, its row records the last
+captured predecessor; the live PR head from GitHub is authoritative for the
+current snapshot and merge decision.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
 
