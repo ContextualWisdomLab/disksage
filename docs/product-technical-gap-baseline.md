@@ -124,6 +124,16 @@ suite passes 35 tests; hosted Strix and metadata-only gates remain authoritative
   `345af62b983e9de67200684da10ab24d16d945cc`; Ubuntu has succeeded and Windows/macOS are still running,
   with no failed step observed. The PR is now ready-for-review with protected auto-merge enabled;
   `REVIEW_REQUIRED`/`BLOCKED` remains authoritative and no merge is claimed.
+- DiskSage PR #246 is now exact head `9ef6d21068c9a3b03c0044567ac258a49309c2f5`: both provider-cancel
+  buttons disable while `cancellingFinderCopy` is true, the focused contract suite passed 5/5, and
+  `npm run check` passed with 0 errors and 0 warnings. Its current review thread is resolved; hosted
+  checks and protected approval remain authoritative, so no merge is claimed.
+- DiskSage PR #227 is now exact head `0f7a990c2ab5ad41cb67278fea192b28830cf869`: duplicate, multipart,
+  incomplete-download, recovery, and materialization reads use descriptor-relative `BoundReadRoot`
+  traversal; canonical paths are display/lineage evidence or external active-use probe inputs only.
+  The Rust library suite passed 736/736 and the root-identity contract passed 7/7; prior Devin threads
+  are resolved. Current CodeQL, OpenCode/Noema, Strix, SAST, security, macOS, and release checks are
+  still queued/in progress, and the PR remains protected with `REVIEW_REQUIRED`/`BLOCKED`.
 - Central `ContextualWisdomLab/.github` PR #1331 is `a1408f520cc38bab3207675b0033a48d3d12240c` and
   #1333 is `5454a19618b27f4d7f34dd2a7a5e47eb5bc42fc1`; both remain protected, open, and auto-merge
   enabled but blocked. These exact heads supersede the older abbreviated table entries above.
