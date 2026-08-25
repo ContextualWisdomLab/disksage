@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-25 (Asia/Seoul)
-**Repository heads at snapshot:** PR #260 `041cce6`, PR #259 `86dd521`, PR #258 `ffc9dd0`, PR #257 `d09808f`, PR #227 `98fa709`, PR #249 `1a3abf8`,
+**Repository heads at snapshot:** PR #260 `041cce6`, PR #259 `86dd521`, PR #258 `f681188`, PR #257 `d09808f`, PR #253 `7db00e2`, PR #251 `7b8caa3`, PR #227 `98fa709`, PR #249 `1a3abf8`,
 PR #247 `0de3f6a`, PR #246 `cbb9dc0`, PR #204 `750213d`, draft PR #198 `cf763cd`, and replacement central `.github` PRs #1330 `f8a7210`, #1331 `4fc261f`, #1333 `058e603`, #1334 `133a1fb`, and #1335 `6fd4d22` (with superseded #1295/#1299/#1300/#1301/#1321/#1332 closed);
 hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
@@ -21,8 +21,14 @@ an older main remains non-integrated until it is deliberately rebased and reveri
 | --- | --- | --- | --- | --- | --- | --- |
 | #259 | `86dd521227661e6d50d7f95e70cfc7f3e3929665` | `7eb131c4` | no | blocked | required | stale File Provider error-state + `last`/`expired` parser; helper docstrings added; exact-head hosted Strix rerun now succeeds (job `97785262805`); independent approval remains required |
 | #260 | `041cce66fc6eb737ced0bf2c31aca29004f5a970` | `7eb131c4` | no | blocked | required | current-main successor for closed draft #225; Rust planner rejects cwd-dependent, named-tilde, and parent-traversal ontology targets, preserves literal absolute tildes, keeps Windows contract tests inside the crate, accepts native `~\\` home tokens, and scopes the Windows job to `organize::tests::windows_`; local organize suite is 22 passed and hosted `windows-home-resolution` is SUCCESS (job `97834797298`), with remaining checks/approval authoritative |
-| #258 | `b003f9c3d6c4fe13a8d92627ef20ab3e437a6663` | `7eb131c4` | no | blocked | required | current baseline/docs head immediately before this exact-head reconciliation; records PR #260 Windows test-filter remediation and keeps hosted checks and qualifying approval authoritative |
+| #258 | `f681188ea503fd4405a9373656e7168def504fa7` | `7eb131c4` | no | blocked | required | current baseline/docs head immediately before this exact-head reconciliation; records PR #251/#253 dependency review evidence and keeps hosted checks and qualifying approval authoritative |
 | #257 | `d09808feb873b5196f5805beaad70d683b772313` | `7eb131c4` | no | blocked | required | dependency update with all source/release/coverage/security checks passing; hosted Strix is the only failure and its job log classifies provider/backend unavailability without a structured vulnerability finding; no unresolved review thread, independent approval remains required |
+| #256 | `0b76d3cb03943ba683568d8f9ec96c63e0604aa0` | `7eb131c4` | yes | blocked | required | Vite dependency update; Strix job `97392415909` failed closed on provider/backend unavailability, with no structured vulnerability finding |
+| #255 | `70064170e647c9d4f9792b39d822bf0ac3d517c7` | `7eb131c4` | yes | blocked | required | SvelteKit dependency update; Strix job `97392378050` failed closed after NVIDIA NIM rate-limit retries, with no structured vulnerability finding |
+| #254 | `51aa0f99dfd4eb3ca5964e45d04e1ddb7b9db89e` | `7eb131c4` | yes | blocked | required | Vitest dependency update; Strix job `97392325746` failed closed after NVIDIA NIM rate-limit retries, with no structured vulnerability finding |
+| #253 | `7db00e2ea1bf6efb225b94dac1067faed404a548` | `7eb131c4` | no | blocked | required | getrandom dependency update; all terminal Checks pass, Rust MSRV 1.88 exceeds getrandom 0.4 MSRV 1.85, no unresolved review thread; ready with protected auto-merge |
+| #252 | `58fc22bf40958b5b0691eb688e2a408d041b141b` | `7eb131c4` | yes | blocked | required | coverage-v8 dependency update; Strix job `97392294276` failed closed on provider/backend unavailability, with no structured vulnerability finding |
+| #251 | `7b8caa3c23dcf23ee1a8645ca1c524b185936aa2` | `7eb131c4` | no | blocked | required | blake3 dependency update; all terminal Checks pass and no unresolved review thread; ready with protected auto-merge |
 | #249 | `1a3abf8a19756a7e252efd4a08b61a91246e7294` | `7eb131c4` | no | blocked | required | Git worktree audit help-terminal contract; no current failed check or unresolved review thread at capture, while hosted checks and independent approval remain authoritative |
 | #247 | `0de3f6a3672c6ff0f39726b7a4ddaeba757154b6` | `7eb131c4` | no | blocked | required | runtime receipt projection and shared iCloud notice contracts; source checks pass, while hosted Strix failed closed on NVIDIA NIM 429/provider-unavailable evidence |
 | #246 | `cbb9dc0f5b1eba52e76f23f673381a3ebcdc132f` | `7eb131c4` | no | blocked | required | late persisted iCloud blocker timestamp adoption and border regression repair; focused UI checks pass, hosted checks pending |
