@@ -2,7 +2,7 @@
 
 **Snapshot:** 2026-08-25 (Asia/Seoul)
 **Repository heads at snapshot:** PR #259 `86dd521`, PR #258 `84c3f9d`, PR #227 `98fa709`, PR #249 `2f1d585`,
-PR #247 `0de3f6a`, PR #246 `cbb9dc0`, PR #204 `750213d`, draft PR #198 `cf763cd`, and replacement central `.github` PRs #1330 `f8a7210`, #1331 `4fc261f`, and #1333 `058e603` (with superseded #1321/#1332 closed);
+PR #247 `0de3f6a`, PR #246 `cbb9dc0`, PR #204 `750213d`, draft PR #198 `cf763cd`, and replacement central `.github` PRs #1330 `f8a7210`, #1331 `4fc261f`, and #1333 `058e603` (with superseded #1295/#1299/#1321/#1332 closed);
 hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
@@ -32,7 +32,7 @@ an older main remains non-integrated until it is deliberately rebased and reveri
 | ContextualWisdomLab/.github #1330 | `f8a72106b887230ec12a95ff68947a0e00837b58` | `d2c554db` | no | blocked | required | replacement for closed #1328; conflict-mode protected security-contract guard runs after edits and before staging; hosted checks and independent approval remain authoritative |
 | ContextualWisdomLab/.github #1333 | `058e603365fd8219635fa96c6470de775e64d551` | `d2c554db` | no | blocked | required | replacement for closed #1332/#1322; typed provider/model outages retry only when the full gate budget plus backoff fits before the step deadline; per-attempt logs are retained; indirect timeout-budget naming is hidden from workflow output; retry test fixture binds the suffix explicitly; terminal classification stays fail-closed |
 
-Central `.github` PRs #1328, #1329, #1324, #1323, #1322, #1321, and #1332 were closed and superseded on request.
+Central `.github` PRs #1299, #1295, #1328, #1329, #1324, #1323, #1322, #1321, and #1332 were closed and superseded on request.
 Replacement PR #1330 is based on the current protected `main` head and carries the exact-head
 autofix security guard plus the canonical `gpt-5.4` Strix/OpenCode contract. Its conflict-mode guard
 now runs after OpenCode edits and before staging; local targeted contract tests, Ruff, shell syntax,
