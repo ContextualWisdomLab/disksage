@@ -40,6 +40,19 @@ pub fn normalize_native_copy_headroom_notices(report: &mut CloudPlanReport) {
         return;
     }
 
+    // An unsafe destination ancestor is a preview diagnostic, not a copy denial. The mutation
+    // boundary re-probes the exact staging path immediately before staging; keep the candidate
+    // selectable so the UI can surface that authoritative check instead of hiding it here.
+    for candidate in &mut report.candidates {
+        if candidate
+            .blocked_reason
+            .as_deref()
+            .is_some_and(|reason| reason.starts_with("local-volume-headroom-destination-"))
+        {
+            candidate.blocked_reason = None;
+        }
+    }
+
     let has_verified_candidate = report
         .candidates
         .iter()
@@ -248,6 +261,40 @@ mod tests {
         let serialized = serde_json::to_value(&view).unwrap();
         assert!(serialized["copy_approval_action"].is_null());
         assert!(serialized["exact_copy_approval_phrase"].is_null());
+    }
+
+    #[test]
+    fn normalization_releases_unverified_destination_headroom_preview_block() {
+        let mut report = CloudPlanReport {
+            cloud_root: CloudRoot {
+                id: "google-drive-personal".into(),
+                provider: CloudProvider::GoogleDrive,
+                account_scope: CloudAccountScope::Personal,
+                label: "Google Drive".into(),
+                path: "/cloud".into(),
+                readable: true,
+                access_issue: None,
+            },
+            generated_at_ms: 42,
+            source_selection_policy: Some(CloudPlanOptions::default()),
+            candidates: vec![candidate(Some(
+                "local-volume-headroom-destination-parent-unsafe",
+            ))],
+            candidate_bytes: 4096,
+            potentially_reclaimable_bytes: 0,
+            exact_duplicates: ExactDuplicateSummary::default(),
+            capacity: None,
+            local_volume: None,
+            pre_copy_evidence: None,
+            notices: vec!["local-volume-headroom-unverified".into()],
+        };
+
+        normalize_native_copy_headroom_notices(&mut report);
+
+        assert_eq!(report.candidates[0].blocked_reason, None);
+        assert!(report
+            .notices
+            .contains(&"local-volume-headroom-unverified".to_string()));
     }
 
     #[test]
