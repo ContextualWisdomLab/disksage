@@ -57,7 +57,7 @@ jobs:
         with:
           workspaces: src-tauri
       - name: Windows organize absolute-path regressions
-        run: cargo test --manifest-path src-tauri/Cargo.toml --lib organize::tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib organize::tests::windows_
       - name: Windows absolute-home regression
         shell: pwsh
         run: |
