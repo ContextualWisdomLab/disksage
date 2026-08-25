@@ -46,6 +46,34 @@ describe("CloudArchive bounded error feedback", () => {
     expect(boundedCloudArchiveErrorMessage("cancel", "cloud-copy-operation-mismatch")).not.toBe("");
   });
 
+  it("does not invoke untrusted message accessors while classifying caught values", () => {
+    let accessorInvoked = false;
+    const accessorError = Object.defineProperty({}, "message", {
+      configurable: true,
+      get() {
+        accessorInvoked = true;
+        throw new Error("secret getter detail");
+      },
+    });
+
+    expect(boundedCloudArchiveErrorMessage("cancel", accessorError)).not.toBe("");
+    expect(isCloudCopyCancelled(accessorError)).toBe(false);
+    expect(accessorInvoked).toBe(false);
+
+    const hostileProxy = new Proxy(
+      {},
+      {
+        getOwnPropertyDescriptor() {
+          throw new Error("secret proxy detail");
+        },
+      },
+    );
+    expect(boundedCloudArchiveErrorMessage("copy", hostileProxy)).toBe(
+      "클라우드 복사를 실행하지 못했습니다.",
+    );
+    expect(isCloudCopyCancelled(hostileProxy)).toBe(false);
+  });
+
   it("drops arbitrary backend details for every user-visible failure phase", () => {
     const sensitiveDetail =
       "OAuth refresh failed for /Users/alice/private/report.pdf token=sk-sensitive";
