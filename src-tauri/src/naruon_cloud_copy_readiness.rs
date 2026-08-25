@@ -31,7 +31,7 @@ const RUNTIME_BLOCKERS: [&str; 2] = [
     "provider-client-runtime-not-observed",
     "provider-client-runtime-evidence-unavailable",
 ];
-const ICLOUD_ADMISSION_BLOCKERS: [&str; 20] = [
+const ICLOUD_ADMISSION_BLOCKERS: [&str; 21] = [
     "icloud-sync-health-evidence-incomplete",
     "icloud-upload-queue-nonempty",
     "icloud-upload-in-flight",
@@ -45,6 +45,7 @@ const ICLOUD_ADMISSION_BLOCKERS: [&str; 20] = [
     "icloud-native-sync-down-pending",
     "icloud-file-provider-no-progress",
     "icloud-file-provider-materialization-failed",
+    "icloud-file-provider-item-locked",
     "icloud-file-provider-filename-excluded",
     "icloud-file-provider-root-excluded",
     "icloud-file-provider-transfer-active",
@@ -326,6 +327,13 @@ fn expected_icloud_admission_blockers(report: &IcloudSyncHealthReport) -> Vec<St
         }
         if materialization_failed {
             blockers.push("icloud-file-provider-materialization-failed".into());
+        }
+        if activity
+            .notices
+            .iter()
+            .any(|notice| notice == "icloud-file-provider-item-locked-observed")
+        {
+            blockers.push("icloud-file-provider-item-locked".into());
         }
         if activity.sync_excluded_filename_count > 0 {
             blockers.push("icloud-file-provider-filename-excluded".into());

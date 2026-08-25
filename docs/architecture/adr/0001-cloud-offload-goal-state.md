@@ -590,3 +590,9 @@ the dialog as an iCloud File Provider materialization/reconciliation wait. The o
 Finder cancel control remains the only recovery action exposed here; it cancels the UI operation
 without deleting sources, mutating provider state, or granting copy, attestation, or eviction
 authority.
+
+The provider parser also records the redacted `itemIsFlockedCanNotPropagate` condition as
+`icloud-file-provider-item-locked-observed` and adds the corresponding
+`icloud-file-provider-item-locked` admission blocker. The provider-internal token, item identifier,
+and path are never retained. This makes a Finder “copy preparation” wait explainable without
+mistaking a lock/materialization failure for a completed copy.

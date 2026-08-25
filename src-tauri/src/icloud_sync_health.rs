@@ -952,6 +952,10 @@ fn parse_file_provider_activity_output(
         .lines()
         .filter(|line| line.to_ascii_lowercase().contains("stageditemmissing"))
         .count() as u64;
+    let item_locked = output.lines().any(|line| {
+        line.to_ascii_lowercase()
+            .contains("itemisflockedcannotpropagate")
+    });
     let sync_excluded_filename_count = output
         .lines()
         .filter(|line| {
@@ -998,6 +1002,9 @@ fn parse_file_provider_activity_output(
     }
     if staged_item_missing_count > 0 {
         notices.push("icloud-file-provider-staged-item-missing-observed".into());
+    }
+    if item_locked {
+        notices.push("icloud-file-provider-item-locked-observed".into());
     }
     if sync_excluded_filename_count > 0 {
         notices.push("icloud-file-provider-sync-filename-excluded-observed".into());
@@ -1911,6 +1918,13 @@ fn attach_native_status_admission(report: &mut IcloudSyncHealthReport) {
         if materialization_failed {
             add_blocker("icloud-file-provider-materialization-failed");
         }
+        if activity
+            .notices
+            .iter()
+            .any(|notice| notice == "icloud-file-provider-item-locked-observed")
+        {
+            add_blocker("icloud-file-provider-item-locked");
+        }
         if activity.sync_excluded_filename_count > 0 {
             add_blocker("icloud-file-provider-filename-excluded");
         }
@@ -2277,6 +2291,43 @@ mod tests {
             .contains(&"icloud-file-provider-staged-item-missing-observed".to_string()));
         assert!(validate_file_provider_activity_evidence(&evidence).is_ok());
         assert!(!serde_json::to_string(&evidence).unwrap().contains("stagedItemMissing"));
+    }
+
+    #[test]
+    fn file_provider_parser_records_locked_item_without_provider_identifiers() {
+        let evidence = parse_file_provider_activity_output(
+            "fetch-content: itemIsFlockedCanNotPropagate\n",
+            42,
+            true,
+            false,
+            false,
+        );
+        assert!(evidence
+            .notices
+            .contains(&"icloud-file-provider-item-locked-observed".to_string()));
+        assert!(validate_file_provider_activity_evidence(&evidence).is_ok());
+        assert!(!serde_json::to_string(&evidence)
+            .unwrap()
+            .contains("itemIsFlockedCanNotPropagate"));
+    }
+
+    #[test]
+    fn locked_file_provider_item_blocks_new_copy_admission() {
+        let mut report = build_report(1, vec![], IcloudUploadQueueSummary::default(), true, true)
+            .unwrap();
+        report.file_provider_activity = Some(parse_file_provider_activity_output(
+            "fetch-content: itemIsFlockedCanNotPropagate\n",
+            1,
+            true,
+            false,
+            false,
+        ));
+        attach_native_status_admission(&mut report);
+        assert!(report
+            .new_copy_admission_blockers
+            .contains(&"icloud-file-provider-item-locked".to_string()));
+        assert!(report.sync_backlog_present);
+        assert_eq!(report.new_copy_admission_state, "blocked");
     }
 
     #[test]
