@@ -611,3 +611,8 @@ The subsequent read-only probe at `2026-08-25 14:45:47 +0900` still retained one
 The corresponding process snapshot showed `fileproviderd` at `52.5%` CPU, `bird` at `27.6%`, and
 the user `cloudd` at `6.1%`. This is current provider-pressure evidence, not proof of per-item
 completion or causal ownership by DiskSage; the copy and eviction gates therefore remain closed.
+
+The provider parser now also treats a redacted fetch/create operation age of at least 15 minutes
+as `icloud-file-provider-stalled`. This captures a multi-hour Finder “preparing” wait even after
+DiskSage restarts; it remains an observational blocker, not evidence of causal ownership by
+DiskSage or permission to mutate Finder, provider state, or source data.

@@ -46,6 +46,7 @@ const FILEPROVIDER_DUMP_TIMEOUT: Duration = Duration::from_secs(30);
 // filename/root exclusion diagnostics after the aggregate summary in large dumps.
 const MAX_FILEPROVIDER_DUMP_BYTES: usize = 1024 * 1024;
 const ITEM_ERROR_AGE_NOTICE_MS: u64 = 86_400_000;
+const FILE_PROVIDER_STALE_ERROR_AGE_MS: u64 = 15 * 60 * 1_000;
 static SNAPSHOT_NONCE: AtomicU64 = AtomicU64::new(0);
 
 pub const ICLOUD_SYNC_HEALTH_SCHEMA_VERSION: u32 = 5;
@@ -956,6 +957,17 @@ fn parse_file_provider_activity_output(
         line.to_ascii_lowercase()
             .contains("itemisflockedcannotpropagate")
     });
+    // fileproviderctl includes a relative age on queued operation errors. Treat an old fetch/create
+    // error as a stalled provider signal even when the current sample has no explicit "no progress"
+    // marker; this survives app restarts and matches the user-visible Finder "preparing" stall.
+    let stale_error_observed = output.lines().any(|line| {
+        let lower = line.to_ascii_lowercase();
+        (lower.contains("fetch-content")
+            || lower.contains("fetchcontentsforitemwithid")
+            || lower.contains("create-item")
+            || lower.contains("createitembasedontemplate"))
+            && relative_age_ms(line).is_some_and(|age| age >= FILE_PROVIDER_STALE_ERROR_AGE_MS)
+    });
     let sync_excluded_filename_count = output
         .lines()
         .filter(|line| {
@@ -1006,6 +1018,9 @@ fn parse_file_provider_activity_output(
     if item_locked {
         notices.push("icloud-file-provider-item-locked-observed".into());
     }
+    if stale_error_observed {
+        notices.push("icloud-file-provider-stale-error-observed".into());
+    }
     if sync_excluded_filename_count > 0 {
         notices.push("icloud-file-provider-sync-filename-excluded-observed".into());
     }
@@ -1036,6 +1051,43 @@ fn parse_file_provider_activity_output(
         active_download_progress_millionths,
         notices,
     }
+}
+
+fn relative_age_ms(line: &str) -> Option<u64> {
+    let start = line.rfind("(-")?.saturating_add(2);
+    let end = start.checked_add(line[start..].find(')')?)?;
+    let age = &line[start..end];
+    let bytes = age.as_bytes();
+    let mut index = 0;
+    let mut total = 0_u64;
+    let mut saw_component = false;
+    while index < bytes.len() {
+        let number_start = index;
+        while index < bytes.len() && bytes[index].is_ascii_digit() {
+            index += 1;
+        }
+        if number_start == index {
+            return None;
+        }
+        let value = age[number_start..index].parse::<u64>().ok()?;
+        let (unit_ms, width) = if bytes[index..].starts_with(b"min") {
+            (60_000, 3)
+        } else if bytes[index..].starts_with(b"ms") {
+            (1, 2)
+        } else if bytes[index..].starts_with(b"d") {
+            (86_400_000, 1)
+        } else if bytes[index..].starts_with(b"h") {
+            (3_600_000, 1)
+        } else if bytes[index..].starts_with(b"s") {
+            (1_000, 1)
+        } else {
+            return None;
+        };
+        total = total.checked_add(value.checked_mul(unit_ms)?)?;
+        index += width;
+        saw_component = true;
+    }
+    saw_component.then_some(total)
 }
 
 fn progress_millionths(output: &str, operation: &str) -> Option<u32> {
@@ -1925,6 +1977,13 @@ fn attach_native_status_admission(report: &mut IcloudSyncHealthReport) {
         {
             add_blocker("icloud-file-provider-item-locked");
         }
+        if activity
+            .notices
+            .iter()
+            .any(|notice| notice == "icloud-file-provider-stale-error-observed")
+        {
+            add_blocker("icloud-file-provider-stalled");
+        }
         if activity.sync_excluded_filename_count > 0 {
             add_blocker("icloud-file-provider-filename-excluded");
         }
@@ -2309,6 +2368,28 @@ mod tests {
         assert!(!serde_json::to_string(&evidence)
             .unwrap()
             .contains("itemIsFlockedCanNotPropagate"));
+    }
+
+    #[test]
+    fn file_provider_parser_detects_old_fetch_create_errors_as_stalled() {
+        let evidence = parse_file_provider_activity_output(
+            "doc fetch-content: last:'1787622820 (-4h9min)' error:'noContentToFetch'\n\
+             doc create-item: last:'1787635515 (-37min30s)' error:'itemNotFound'\n",
+            42,
+            true,
+            false,
+            false,
+        );
+        assert!(evidence
+            .notices
+            .contains(&"icloud-file-provider-stale-error-observed".to_string()));
+        let mut report = build_report(1, vec![], IcloudUploadQueueSummary::default(), true, true)
+            .unwrap();
+        report.file_provider_activity = Some(evidence);
+        attach_native_status_admission(&mut report);
+        assert!(report
+            .new_copy_admission_blockers
+            .contains(&"icloud-file-provider-stalled".to_string()));
     }
 
     #[test]

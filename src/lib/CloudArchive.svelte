@@ -799,6 +799,7 @@
       "icloud-file-provider-no-progress": "File Provider fetch/create 요청이 진행률 없이 정지함",
       "icloud-file-provider-materialization-failed": "File Provider 파일 materialization이 실패함(staged item 없음)",
       "icloud-file-provider-item-locked": "File Provider 항목이 전파 잠금 상태임",
+      "icloud-file-provider-stalled": "File Provider 오래된 오류로 전송이 정지된 상태임",
       "icloud-file-provider-filename-excluded": "iCloud가 파일 이름 때문에 동기화에서 제외한 항목이 있음",
       "icloud-file-provider-root-excluded": "iCloud가 동기화 루트에서 제외한 항목이 있음",
       "icloud-file-provider-transfer-active": "File Provider 기존 upload/download가 진행 중임",
@@ -961,6 +962,7 @@
             || icloudHealth.file_provider_activity.active_upload_count > 0
             || icloudHealth.file_provider_activity.active_download_count > 0
             || icloudHealth.new_copy_admission_blockers.includes("icloud-file-provider-item-locked")
+            || icloudHealth.new_copy_admission_blockers.includes("icloud-file-provider-stalled")
           )}
             <button onclick={cancelFinderCopy} disabled={cancellingFinderCopy || checkingIcloudHealth}>
               {cancellingFinderCopy ? "Finder 복사 취소 요청 중…" : "Finder 복사 취소 요청"}
@@ -982,6 +984,12 @@
           {#if icloudHealth.new_copy_admission_blockers.includes("icloud-file-provider-item-locked")}
             <p class="warning">
               File Provider 항목의 전파 잠금 상태가 Finder 복사 준비 지연과 함께 관찰되었습니다. Finder의 대기 작업을 취소하고,
+              상태가 정상화된 뒤 DiskSage에서 새 복사를 다시 시작하십시오.
+            </p>
+          {/if}
+          {#if icloudHealth.new_copy_admission_blockers.includes("icloud-file-provider-stalled")}
+            <p class="warning">
+              File Provider 큐에서 15분 이상 묵은 fetch/create 오류가 관찰되었습니다. Finder의 “복사 준비 중” 작업을 취소하고,
               상태가 정상화된 뒤 DiskSage에서 새 복사를 다시 시작하십시오.
             </p>
           {/if}

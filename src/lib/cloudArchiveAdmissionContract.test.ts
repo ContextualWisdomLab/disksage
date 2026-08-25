@@ -45,6 +45,8 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("icloud-file-provider-item-locked");
     expect(source).toContain("File Provider 항목이 전파 잠금 상태임");
     expect(source).toContain("File Provider 항목의 전파 잠금 상태가 Finder 복사 준비 지연과 함께 관찰되었습니다.");
+    expect(source).toContain("File Provider 큐에서 15분 이상 묵은 fetch/create 오류가 관찰되었습니다.");
+    expect(source).toContain("icloud-file-provider-stalled");
     expect(source).not.toContain("Finder의 복사 준비가 진행되지 않습니다.");
     expect(source).toContain("동일 차단 지속");
     expect(source).toContain("동일한 공급자 차단 상태가 15분 이상 지속되었습니다.");
