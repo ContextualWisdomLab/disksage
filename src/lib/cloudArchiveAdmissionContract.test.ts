@@ -73,6 +73,7 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("cancellingFinderCopy || checkingIcloudHealth");
     expect(source).toContain("canCancelFinderCopyForProviderGlobalSync");
     expect(source).toContain("provider-global-sync-reconciliation-pending");
+    expect(source).toContain("provider-global-sync-indexing-pending");
     expect(source).toContain("provider-global-sync-local-disk-full");
     expect(source).toContain("provider-global-sync-item-not-found");
     expect(source).toContain("cancellingFinderCopy || checkingProviderGlobalSync");

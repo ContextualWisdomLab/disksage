@@ -36,6 +36,7 @@
   ]);
   const PROVIDER_FINDER_COPY_BLOCKERS = new Set([
     "provider-global-sync-transfer-active",
+    "provider-global-sync-indexing-pending",
     "provider-global-sync-reconciliation-pending",
     "provider-global-sync-temporarily-disconnected",
     "provider-global-sync-server-unreachable",
