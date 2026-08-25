@@ -2,7 +2,7 @@
 
 **Snapshot:** 2026-08-25 (Asia/Seoul)
 **Repository heads at snapshot:** PR #259 `a019dda`, PR #258 `c27b1a5`, PR #227 `98fa709`, PR #249 `2f1d585`,
-PR #247 `0de3f6a`, PR #246 `cbb9dc0`, PR #204 `750213d`, draft PR #198 `cf763cd`, and central `.github` PR #1328 `1c0ae26`;
+PR #247 `0de3f6a`, PR #246 `cbb9dc0`, PR #204 `750213d`, draft PR #198 `cf763cd`, and central `.github` PR #1328 `b2ecfc1`;
 hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
@@ -26,7 +26,7 @@ rebased and reverified.
 | #204 | `750213dff16482544af3c0a9543f6c638924e5e6` | `17d4e203` | yes | blocked | none | Strix failure; base is stale |
 | #206 | `2e7b845b7610a871ec5981d964bcab5cb99df41d` | `5c86668a` | yes | clean | changes requested | 0 non-success terminal, 2 pending; stacked draft |
 | #198 | `cf763cdf1b3f483efaf483f6c95196a89e005951` | `7eb131c4` | yes | blocked | required | iCloud eviction privacy feedback hardening; focused UI checks pass, hosted checks pending |
-| ContextualWisdomLab/.github #1328 | `1c0ae265e086ddf57aec6e973acc486426bddc4f` | `8fd471a3` | no | blocked | required | central autofix protects both normal/conflict deletion paths and restores the gpt-5.6-luna Strix fallback contract; focused tests pass, hosted checks queued |
+| ContextualWisdomLab/.github #1328 | `b2ecfc1270055a0d8f23e0f4e7baa2b6ee37ec0a` | `8fd471a3` | no | blocked | required | central autofix protects both normal/conflict deletion paths; Strix/OpenCode model-contract assertions now match the gpt-5.6-luna fallback contract; 17 focused Python tests pass, hosted checks re-queued |
 
 PR #246 exact-head `cbb9dc0f5b1eba52e76f23f673381a3ebcdc132f` now preserves the backend persisted
 iCloud stall start across restart/probe errors, adopts a timestamp supplied after the first poll,
