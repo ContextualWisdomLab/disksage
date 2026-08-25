@@ -22,6 +22,11 @@ pass 54/54; hosted checks and fresh review remain required). Central
 normal conflict merge with protected checks pending. The live self-PR #258
 head is `6cd3383425c0965c0e0c1bac106f8113de523a75`; its table row intentionally
 records the immediately preceding committed snapshot.
+DiskSage PR #198 is now
+`b993f997d388ccebdb2773a3d817831ec2ab0465`; the unused UI blocker helpers are
+removed, native-status-unavailable has bounded customer guidance, focused UI
+contract tests pass 8/8, review threads are resolved, and hosted checks plus
+protected approval remain authoritative.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
 
@@ -53,7 +58,7 @@ an older main remains non-integrated until it is deliberately rebased and reveri
 | #227 | `0f7a990c2ab5ad41cb67278fea192b28830cf869` | `7eb131c4` | no | blocked | required | duplicate, multipart, incomplete-download, recovery, and materialization reads use descriptor-relative `BoundReadRoot` traversal; Rust library 736/736 and root-identity contract 7/7 pass; hosted checks and approval remain authoritative |
 | #204 | `750213dff16482544af3c0a9543f6c638924e5e6` | `17d4e203` | yes | blocked | none | Strix failure; base is stale |
 | #206 | `2e7b845b7610a871ec5981d964bcab5cb99df41d` | `5c86668a` | yes | clean | changes requested | 0 non-success terminal, 2 pending; stacked draft |
-| #198 | `a727b3eb082c5049f9c9350677abaad23c18222a` | `7eb131c4` | no | blocked | required | iCloud eviction privacy feedback hardening; focused UI checks pass, hosted checks and qualifying approval remain authoritative |
+| #198 | `b993f997d388ccebdb2773a3d817831ec2ab0465` | `7eb131c4` | no | blocked | required | iCloud eviction privacy feedback hardening; unused blocker helpers removed, native-status-unavailable guidance is explicit, focused UI checks pass 8/8, review threads are resolved, hosted checks and qualifying approval remain authoritative |
 | ContextualWisdomLab/.github #1331 | `40955bab7663c86bf642995b417cb9c560cb0778` | `fecceba0` | no | blocked | required | replacement for closed #1324; direct-OpenAI fallback uses a paired runner-scoped API base/key, preserves standalone custom `LLM_API_BASE_FILE`, and rejects known foreign provider bases; main was merged normally to clear conflicts, and hosted checks plus independent approval remain authoritative |
 | ContextualWisdomLab/.github #1330 | `f8a72106b887230ec12a95ff68947a0e00837b58` | `d2c554db` | no | blocked | required | replacement for closed #1328; conflict-mode protected security-contract guard runs after edits and before staging; hosted checks and independent approval remain authoritative |
 | ContextualWisdomLab/.github #1333 | `5454a19618b27f4d7f34dd2a7a5e47eb5bc42fc1` | `564058ce` | no | merged | — | bounded provider-outage retry loop; merged 2026-08-25; retained here as shipped dependency evidence |
