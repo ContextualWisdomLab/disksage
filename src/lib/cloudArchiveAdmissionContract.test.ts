@@ -88,6 +88,21 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(cancelBody).toContain("await api.cancelCloudCopy(copyingFingerprint);");
   });
 
+  it("keeps native-copy cancellation reachable while copy eligibility or preview state changes", () => {
+    const source = readFileSync(resolve(repositoryRoot, "src/lib/CloudArchive.svelte"), "utf8");
+    const markupStart = source.indexOf("</script>");
+    const reportStart = source.indexOf("{#if report}", markupStart);
+    const cancelControl = source.indexOf('aria-label="진행 중인 DiskSage 클라우드 복사 취소"', markupStart);
+
+    expect(markupStart).toBeGreaterThanOrEqual(0);
+    expect(reportStart).toBeGreaterThan(markupStart);
+    expect(cancelControl).toBeGreaterThan(markupStart);
+    expect(cancelControl).toBeLessThan(reportStart);
+    expect(source).toContain("if (!scannedRoot || !selectedRoot || nativeCopyActive) return;");
+    expect(source).toContain("disabled={busy || nativeCopyActive}");
+    expect(source).toContain("disabled={busy || nativeCopyActive || !scannedRoot || !selectedRoot || !selectedRootDetails()?.readable}");
+  });
+
   it("does not run the heavy iCloud probe for non-iCloud selected roots", () => {
     const source = readFileSync(resolve(repositoryRoot, "src/lib/CloudArchive.svelte"), "utf8");
     const refreshStart = source.indexOf("async function refreshIcloudHealth(force = false)");
