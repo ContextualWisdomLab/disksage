@@ -616,3 +616,11 @@ The provider parser now also treats a redacted fetch/create operation age of at 
 as `icloud-file-provider-stalled`. This captures a multi-hour Finder “preparing” wait even after
 DiskSage restarts; it remains an observational blocker, not evidence of causal ownership by
 DiskSage or permission to mutate Finder, provider state, or source data.
+
+The exact-head follow-up `677dc29b` also accepts a provider operation marker and its redacted age
+token on adjacent dump rows, because File Provider diagnostics may wrap one operation across lines.
+The focused Rust parser suite passed 8/8. A bounded read-only probe at `2026-08-25 15:26 +0900`
+timed out after 30 seconds while the earlier bounded output still showed `fetch-content` errors
+aged about six hours; that timeout is incomplete provider evidence and keeps copy, attestation,
+and eviction fail-closed. No Finder, provider daemon, CloudDocs database, source, or cloud object
+was mutated.
