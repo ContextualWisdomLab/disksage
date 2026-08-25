@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-25 (Asia/Seoul)
-**Repository heads at snapshot:** PR #259 `86dd521`, PR #258 `1642c08`, PR #227 `98fa709`, PR #249 `2f1d585`,
+**Repository heads at snapshot:** PR #259 `86dd521`, PR #258 `8961b6c`, PR #227 `98fa709`, PR #249 `2f1d585`,
 PR #247 `0de3f6a`, PR #246 `cbb9dc0`, PR #204 `750213d`, draft PR #198 `cf763cd`, and replacement central `.github` PRs #1330 `f8a7210`, #1331 `4fc261f`, #1333 `058e603`, #1334 `133a1fb`, and #1335 `742d399` (with superseded #1295/#1299/#1300/#1301/#1321/#1332 closed);
 hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
@@ -20,9 +20,9 @@ an older main remains non-integrated until it is deliberately rebased and reveri
 | PR | Exact head | Base | Draft | Merge state | Review state | Check evidence at capture |
 | --- | --- | --- | --- | --- | --- | --- |
 | #259 | `86dd521227661e6d50d7f95e70cfc7f3e3929665` | `7eb131c4` | no | blocked | required | stale File Provider error-state + `last`/`expired` parser; helper docstrings added; exact-head hosted Strix rerun now succeeds (job `97785262805`); independent approval remains required |
-| #258 | `1642c0889cd21ad1568b111e7c18d2e52cc182dd` | `7eb131c4` | no | blocked | required | current baseline/docs head immediately before the PRD refresh; hosted checks and qualifying approval remain authoritative |
+| #258 | `8961b6cfd553388519b36c1ad0a56bdc3bef1b6b` | `7eb131c4` | no | blocked | required | current baseline/docs head immediately before this exact-head reconciliation; hosted checks and qualifying approval remain authoritative |
 | #249 | `2f1d585398b85f3f1adb3783520ad70e7b4a9c3f` | `7eb131c4` | no | blocked | required | source/build/security/coverage pass; Strix external provider failure |
-| #247 | `0de3f6a3672c6ff0f39726b7a4ddaeba757154b6` | `7eb131c4` | no | blocked | required | runtime receipt projection and shared iCloud notice contracts; post-push checks pending |
+| #247 | `0de3f6a3672c6ff0f39726b7a4ddaeba757154b6` | `7eb131c4` | no | blocked | required | runtime receipt projection and shared iCloud notice contracts; source checks pass, while hosted Strix failed closed on NVIDIA NIM 429/provider-unavailable evidence |
 | #246 | `cbb9dc0f5b1eba52e76f23f673381a3ebcdc132f` | `7eb131c4` | no | blocked | required | late persisted iCloud blocker timestamp adoption and border regression repair; focused UI checks pass, hosted checks pending |
 | #227 | `98fa709afa489e05c91a947d1e8cbf499e2cc6b6` | `7eb131c4` | no | blocked | required | Strix annotation `STRIX_PROVIDER_UNAVAILABLE`; source checks otherwise passed |
 | #204 | `750213dff16482544af3c0a9543f6c638924e5e6` | `17d4e203` | yes | blocked | none | Strix failure; base is stale |
@@ -32,7 +32,7 @@ an older main remains non-integrated until it is deliberately rebased and reveri
 | ContextualWisdomLab/.github #1330 | `f8a72106b887230ec12a95ff68947a0e00837b58` | `d2c554db` | no | blocked | required | replacement for closed #1328; conflict-mode protected security-contract guard runs after edits and before staging; hosted checks and independent approval remain authoritative |
 | ContextualWisdomLab/.github #1333 | `058e603365fd8219635fa96c6470de775e64d551` | `d2c554db` | no | blocked | required | replacement for closed #1332/#1322; typed provider/model outages retry only when the full gate budget plus backoff fits before the step deadline; per-attempt logs are retained; indirect timeout-budget naming is hidden from workflow output; retry test fixture binds the suffix explicitly; terminal classification stays fail-closed |
 | ContextualWisdomLab/.github #1334 | `133a1fba1461461929cb53f29f12312bb8e9c5a3` | `d2c554db` | no | blocked | required | replacement for closed #1300; DiskSage hourly caller grants only `contents: read` plus `id-token: write` to the reusable OpenCode scheduler; focused permission/runtime tests pass; hosted checks and independent approval remain authoritative |
-| ContextualWisdomLab/.github #1335 | `742d3994e868776f67372368d20ffcbd5af26408` | `d2c554db` | no | blocked | required | replacement for closed #1301; contextual-orchestrator gets a thin minute-31, non-cancelling hourly caller with one dispatch/two-hour same-head floor, explicit credentials, doctoring, and five contract tests; hosted checks and independent approval remain authoritative |
+| ContextualWisdomLab/.github #1335 | `6fd4d22fd014b59370e8593a6cd8dbb970fd7676` | `d2c554db` | no | blocked | required | replacement for closed #1301; contextual-orchestrator gets a thin minute-34, non-cancelling hourly caller with one dispatch/two-hour same-head floor, explicit credentials, job-scoped OIDC, shared roster updates, doctoring, and five contract tests; hosted checks and independent approval remain authoritative |
 | ContextualWisdomLab/.github #1326 | `19f323ddb9e48b7d30f49605f084d6628aeca999` | `d2c554db` | no | blocked | required | appguardrail and macOS utility-pack hourly callers plus path roster/Strix contract updates; checks are queued and only informational roster/path review notes remain unresolved |
 
 Central `.github` PRs #1299, #1295, #1300, #1301, #1328, #1329, #1324, #1323, #1322, #1321, and #1332 were closed and superseded on request.
