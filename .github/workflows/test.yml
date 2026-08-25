@@ -29,10 +29,16 @@ jobs:
         run: cargo test --manifest-path src-tauri/Cargo.toml
       - name: Headless cloud planner tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-cloud-plan
-      - name: Exact duplicate audit tests
-        run: |
-          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli duplicate_audit
-          cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-duplicate-audit
+      - name: Exact duplicate audit library tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --lib duplicate_audit
+      - name: Exact duplicate audit help process tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --test duplicate_audit_help_exit
+      - name: Exact duplicate audit coverage-runtime process tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --test duplicate_audit_coverage_runtime_contract
+      - name: Exact duplicate audit native private-output tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --test duplicate_audit_native_private_output
+      - name: Exact duplicate audit binary parser tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-duplicate-audit
       - name: Extraction-free archive tree proof tests
         run: |
           cargo test --manifest-path src-tauri/Cargo.toml --features archive-cli archive_git_tree
