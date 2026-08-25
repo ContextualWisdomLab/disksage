@@ -978,3 +978,12 @@ alongside active transfer and reconciliation blockers. This closes the case wher
 Drive reports only an indexing backlog: the user can request the existing bounded Finder Escape
 action, while cloud/provider/source mutation remains unchanged. The contract test and Svelte type
 check pass at exact head `dda0f1d5`; no automatic cancellation was performed.
+
+## Amendment: retain unverified destination blockers until proof exists (2026-08-25)
+
+Cloud-plan presentation now checks for at least one previously unblocked candidate with verified
+destination/staging headroom before clearing any `local-volume-headroom-destination-*` diagnostic.
+When no candidate proves the staging filesystem, the candidate blocker and plan-wide fail-closed
+notice remain, so the serialized backend view cannot advertise a copy-only approval phrase for an
+unverified destination. The focused unit and runtime regressions pass at exact head
+`b3e00c6a9bf13152562ccc50f2ed742b03f0bffa`; mutation-time re-probing remains authoritative.
