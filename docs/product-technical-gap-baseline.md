@@ -145,6 +145,14 @@ suite passes 35 tests; hosted Strix and metadata-only gates remain authoritative
 
 ## 2026-08-26 latest head refresh
 
+- DiskSage PR #218 advanced to exact head `6a4b1867deecf9affaa39245be66a4fb2e4f508b`; its
+  current test/check inventory has no terminal failures and no unresolved current review threads.
+  It is now ready with protected auto-merge enabled. The earlier failed test run is stale evidence;
+  current-head checks and independent approval remain authoritative, so no merge is claimed.
+- DiskSage PR #246 advanced to exact head `57eb6c134a3a29fe231d973c35df762edd9fa34d` after a
+  current skip-link contrast regression test. The Storybook edge remains ready with protected
+  auto-merge enabled, no current terminal check failure observed, and protected review still
+  required; predecessor validation is not carried forward.
 - DiskSage PR #208 advanced to exact head `0ac66a2c0e7daa1fa77bdcd6c2abdb98b6da4e3e` after fixing
   the duplicate-audit test's moved `stderr` value. The assertion now checks the decoded bounded
   diagnostic without reusing moved bytes; macOS explicitly skips the unsupported APFS
