@@ -1,8 +1,8 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-25 (Asia/Seoul)
-**Repository heads at snapshot:** PR #259 `a019dda`, PR #258 `2f74479`, PR #227 `98fa709`, PR #249 `2f1d585`,
-PR #247 `56dcb19`, PR #246 `3936cd9`, and PR #204 `750213d`; hosted checks and protected review remain
+**Repository heads at snapshot:** PR #259 `a019dda`, PR #258 `6147c7b`, PR #227 `98fa709`, PR #249 `2f1d585`,
+PR #247 `0de3f6a`, PR #246 `d38ed05`, and PR #204 `750213d`; hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
@@ -17,18 +17,20 @@ rebased and reverified.
 | PR | Exact head | Base | Draft | Merge state | Review state | Check evidence at capture |
 | --- | --- | --- | --- | --- | --- | --- |
 | #259 | `a019ddaba4aa5cad1e0bef02121f20d514d9580c` | `7eb131c4` | no | blocked | required | stale File Provider error-state + `last`/`expired` parser; checks remain authoritative |
-| #258 | `2f74479313ba831eb0855b3af574df4e26e8447b` | `7eb131c4` | no | blocked | required | current baseline/docs head; checks remain authoritative |
+| #258 | `6147c7b68997911aa0697ee0f530ec6b328d033e` | `7eb131c4` | no | blocked | required | current baseline/docs head; checks remain authoritative |
 | #249 | `2f1d585398b85f3f1adb3783520ad70e7b4a9c3f` | `7eb131c4` | no | blocked | required | source/build/security/coverage pass; Strix external provider failure |
-| #247 | `56dcb1986e65deba735c8bdf5f517ad5374ac239` | `7eb131c4` | no | blocked | required | ADR records destination blocker proof gate; post-push checks pending |
-| #246 | `3936cd9fd422f04c8dc08c552d4b0f53c2e3a0ac` | `7eb131c4` | no | blocked | required | ADR records single provider card control and non-Windows scan-root wording; checks pending |
+| #247 | `0de3f6a3672c6ff0f39726b7a4ddaeba757154b6` | `7eb131c4` | no | blocked | required | runtime receipt projection and shared iCloud notice contracts; post-push checks pending |
+| #246 | `d38ed05d2b640402a3bf39c49aa2b26331af5cf4` | `7eb131c4` | no | blocked | required | iCloud stall clock and Finder-cancel confirmation contracts; checks pending |
 | #227 | `98fa709afa489e05c91a947d1e8cbf499e2cc6b6` | `7eb131c4` | no | blocked | required | Strix annotation `STRIX_PROVIDER_UNAVAILABLE`; source checks otherwise passed |
 | #204 | `750213dff16482544af3c0a9543f6c638924e5e6` | `17d4e203` | yes | blocked | none | Strix failure; base is stale |
 | #206 | `2e7b845b7610a871ec5981d964bcab5cb99df41d` | `5c86668a` | yes | clean | changes requested | 0 non-success terminal, 2 pending; stacked draft |
 
-PR #246 exact-head `3936cd9fd422f04c8dc08c552d4b0f53c2e3a0ac` now preserves the backend persisted
-iCloud stall start across restart/probe errors and leaves one Finder-cancel control in the status card.
-PR #247 exact-head `56dcb1986e65deba735c8bdf5f517ad5374ac239` now verifies a candidate before
-clearing destination-headroom blockers; its unit and runtime regressions pass locally. The current
+PR #246 exact-head `d38ed05d2b640402a3bf39c49aa2b26331af5cf4` now preserves the backend persisted
+iCloud stall start across restart/probe errors and keeps Finder-cancel confirmation visible after
+refresh clears a blocker. Its focused clock and UI contract tests pass locally.
+PR #247 exact-head `0de3f6a3672c6ff0f39726b7a4ddaeba757154b6` now verifies a candidate before
+clearing destination-headroom blockers, projects a valid runtime receipt into the dynamic Goal,
+and shares the File Provider disk-import notice constant; its focused Rust regressions pass locally. The current
 exact-head source fixes on #247, #246, and #204 have local focused evidence, but no
 protected merge is claimed until their post-push checks and qualifying independent approval are
 fresh on the listed heads. The filename-date rule and provider fail-closed rules remain unchanged.
@@ -42,11 +44,10 @@ without a fresh qualifying review and exact-head protected checks.
 PR #1464 is `176378f541bf26d2cabb4d3e131c221df703036e`, with current review threads resolved after
 pinning PITR timestamps to an explicit `+00` offset, surfacing cleanup status, and applying the
 Compose hardening contract; targeted backend/shell/Podman drill evidence passed locally, while hosted
-checks and a fresh qualifying approval remain authoritative. PR #1454 is
-`3a4aa69fee9adef12b9c7dcd60de1c39b6553f09`, with the deleted URL/loopback tests and doctoring
+ checks and a fresh qualifying approval remain authoritative. PR #1454 is
+`d97f569e745a8c0afcc48fc5850f04529c806c37`, with the deleted URL/loopback tests and doctoring
 document restored and explicit zero ports rejected in both validators; targeted backend (45) and
-NetworkGraph (14) tests passed before the concurrent optimization follow-up and the same checks
-passed again on this latest head; hosted checks and fresh approval remain pending. PR #1462 is
+NetworkGraph tests passed on this exact head; hosted checks and fresh approval remain pending. PR #1462 is
 `212a645d07980232e06b5906e7efaf6f9727269c`, with Strix governance re-triggering restored and the
 new `pytest-cov` dependency pinned and hash-locked; 107 backend governance/tool tests passed, but
 the branch is behind `develop` and hosted checks remain pending. PR #1463 is `8e32e0d2757a59ffd2134110421ae130e466609b`, with its informational shared-spinner review resolved; its Strix and metadata-only failures are provider/gate evidence, not source-fix claims.
