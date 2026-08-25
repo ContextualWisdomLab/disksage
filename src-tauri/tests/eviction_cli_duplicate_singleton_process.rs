@@ -6,41 +6,57 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 
 const BINARIES: [&str; 2] = [
     "disksage-icloud-local-eviction-batch",
     "disksage-incomplete-download-destination-plan",
 ];
 
-fn build_binaries() -> (tempfile::TempDir, Vec<PathBuf>) {
-    let target_dir = tempfile::tempdir().expect("isolated Cargo target directory must be created");
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
-    let mut command = Command::new(cargo);
-    command
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .args(["build", "--locked", "--features", "cloud-cli"]);
-    for binary in BINARIES {
-        command.args(["--bin", binary]);
-    }
-    let status = command
-        .arg("--target-dir")
-        .arg(target_dir.path())
-        .status()
-        .expect("eviction-family CLIs must be buildable for process contracts");
-    assert!(status.success(), "eviction-family CLI build must succeed");
-    let paths = BINARIES
-        .iter()
-        .map(|binary| {
-            target_dir
-                .path()
-                .join("debug")
-                .join(format!("{binary}{}", std::env::consts::EXE_SUFFIX))
+/// Build the two shipped feature-gated CLIs once for this integration-test process.
+///
+/// The test harness may execute the two parser regressions concurrently. Building the full Tauri
+/// `cloud-cli` graph independently in each test creates avoidable CPU/disk contention and made the
+/// otherwise deterministic process contract fail under hosted CI. `OnceLock` preserves the real
+/// shipped-binary boundary while making the expensive prerequisite single-writer within the test.
+fn binaries() -> &'static [PathBuf] {
+    static BINARY_PATHS: OnceLock<Vec<PathBuf>> = OnceLock::new();
+    BINARY_PATHS
+        .get_or_init(|| {
+            let target_dir = std::env::temp_dir().join(format!(
+                "disksage-eviction-cli-duplicate-singletons-{}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&target_dir)
+                .expect("isolated Cargo target directory must be created");
+            let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+            let mut command = Command::new(cargo);
+            command
+                .current_dir(env!("CARGO_MANIFEST_DIR"))
+                .args(["build", "--locked", "--features", "cloud-cli"]);
+            for binary in BINARIES {
+                command.args(["--bin", binary]);
+            }
+            let status = command
+                .arg("--target-dir")
+                .arg(&target_dir)
+                .status()
+                .expect("eviction-family CLIs must be buildable for process contracts");
+            assert!(status.success(), "eviction-family CLI build must succeed");
+            let paths = BINARIES
+                .iter()
+                .map(|binary| {
+                    target_dir
+                        .join("debug")
+                        .join(format!("{binary}{}", std::env::consts::EXE_SUFFIX))
+                })
+                .collect::<Vec<_>>();
+            for path in &paths {
+                assert!(path.is_file(), "expected CLI binary must exist after build");
+            }
+            paths
         })
-        .collect::<Vec<_>>();
-    for path in &paths {
-        assert!(path.is_file(), "expected CLI binary must exist after build");
-    }
-    (target_dir, paths)
+        .as_slice()
 }
 
 fn assert_rejected(binary: &Path, args: &[&OsStr], expected: &str) {
@@ -58,7 +74,7 @@ fn assert_rejected(binary: &Path, args: &[&OsStr], expected: &str) {
 
 #[test]
 fn batch_eviction_rejects_duplicate_authority_options() {
-    let (_target_dir, binaries) = build_binaries();
+    let binaries = binaries();
     let fixture = tempfile::tempdir().expect("fixture directory must be created");
     let root = fixture.path().join("Cloud");
     let other_root = fixture.path().join("OtherCloud");
@@ -105,7 +121,7 @@ fn batch_eviction_rejects_duplicate_authority_options() {
 
 #[test]
 fn destination_plan_rejects_duplicate_resource_limits() {
-    let (_target_dir, binaries) = build_binaries();
+    let binaries = binaries();
     let fixture = tempfile::tempdir().expect("fixture directory must be created");
     let source = fixture.path().join("source");
     let cloud = fixture.path().join("cloud");
