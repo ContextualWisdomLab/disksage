@@ -41,6 +41,9 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("checkingProviderGlobalSync || (!force && Date.now() < providerGlobalSyncNextCheckAt)");
     expect(source).toContain("next.pending_indexable_count !== null && next.pending_indexable_count > 0");
     expect(source).toContain("provider-global-sync-item-not-found");
+    expect(source).toContain("icloud-file-provider-item-locked");
+    expect(source).toContain("File Provider 항목이 전파 잠금 상태임");
+    expect(source).toContain("File Provider 항목이 전파 잠금 상태라 Finder의 복사 준비가 진행되지 않습니다.");
     expect(source).toContain("동일 차단 지속");
     expect(source).toContain("동일한 공급자 차단 상태가 15분 이상 지속되었습니다.");
     expect(source).toContain("공급자 전역 증거를 확인하지 못했습니다.");
