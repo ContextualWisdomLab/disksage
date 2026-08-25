@@ -75,8 +75,8 @@ fresh on the listed heads. The filename-date rule and provider fail-closed rules
 Naruon exact-head reconciliation is also part of this baseline: PR #1333 is `dd947ed050652264c4b74d4e59ee081895d96a0a`
 with no unresolved review threads; the exact-head Strix rerun now succeeds, while the metadata-only
 gate remains in progress after its cancelled review-trigger run was requested again;
-PR #1443 is `b24a12831511d9e6e4bdcef0042f7585be1aa9af`, the direct gate repair, with malformed
-approval-notice fail-closed coverage, exact `headCommitId` matching, and matching empty-check fixtures; hosted coverage/metadata and independent review remain pending.
+PR #1443 is `2bc9e2cb6b9680da173643c9eeab9fbcf4b872c3`, the direct gate repair, with malformed
+approval-notice fail-closed coverage, exact `headCommitId` matching, current-head blocking-fixture execution, and matching empty-check fixtures; hosted coverage/metadata and independent review remain pending.
 Neither PR is claimed merge-ready
 without a fresh qualifying review and exact-head protected checks.
 PR #1469 is `575b0c24fd9cb98106989eb101de74c5ce383db3`; its 64 MiB deferred attachment retention now
