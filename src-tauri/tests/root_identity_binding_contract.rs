@@ -46,11 +46,16 @@ fn public_read_only_roots_bind_traversal_to_open_directory_identity() {
             "{name} must bind the caller root with a no-follow directory handle"
         );
         assert!(
-            compact_source.contains("root_guard.stable_path()"),
+            compact_source.contains("root_guard.read_dir_names")
+                || compact_source.contains("root_guard.entry_kind")
+                || compact_source.contains("root_guard.open_file"),
             "{name} must perform filesystem I/O through the handle-bound root namespace"
         );
         assert!(
-            compact_source.matches("root_guard.canonical_path()").count() >= 2,
+            compact_source
+                .matches("root_guard.canonical_path()")
+                .count()
+                >= 2,
             "{name} must revalidate the caller pathname before publishing evidence"
         );
         assert!(

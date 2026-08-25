@@ -60,11 +60,8 @@ fn open_directory_handle(path: &Path) -> Option<Handle> {
     Handle::from_file(file).ok()
 }
 
-#[cfg(target_os = "linux")]
-const NOFOLLOW_DIRECTORY_FLAGS: i32 = 0o600000; // O_DIRECTORY | O_NOFOLLOW
-
-#[cfg(target_os = "macos")]
-const NOFOLLOW_DIRECTORY_FLAGS: i32 = 0x0010_0100; // O_DIRECTORY | O_NOFOLLOW
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const NOFOLLOW_DIRECTORY_FLAGS: i32 = libc::O_DIRECTORY | libc::O_NOFOLLOW;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn open_directory_handle(path: &Path) -> Option<Handle> {
@@ -232,10 +229,6 @@ pub(crate) struct BoundReadRoot {
 impl BoundReadRoot {
     /// Atomically bind a real, non-symlink/reparse directory and reject path replacement races.
     pub(crate) fn open(path: &Path) -> Option<Self> {
-        if !path_is_real_directory(path) {
-            return None;
-        }
-
         let handle = open_directory_handle(path)?;
         if !path_is_real_directory(path) {
             return None;
@@ -266,7 +259,10 @@ impl BoundReadRoot {
     }
 
     /// Return directory entry names beneath `relative` without resolving the caller root again.
-    pub(crate) fn read_dir_names(&self, relative: &Path) -> std::io::Result<Vec<std::ffi::OsString>> {
+    pub(crate) fn read_dir_names(
+        &self,
+        relative: &Path,
+    ) -> std::io::Result<Vec<std::ffi::OsString>> {
         #[cfg(unix)]
         {
             use std::ffi::{CStr, OsString};
@@ -331,9 +327,9 @@ impl BoundReadRoot {
 
         #[cfg(windows)]
         {
-            let root = self
-                .stable_path()
-                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "bound root unavailable"))?;
+            let root = self.stable_path().ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotFound, "bound root unavailable")
+            })?;
             return std::fs::read_dir(root.join(relative))?
                 .map(|entry| entry.map(|entry| entry.file_name()))
                 .collect();
@@ -384,9 +380,9 @@ impl BoundReadRoot {
 
         #[cfg(windows)]
         {
-            let root = self
-                .stable_path()
-                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "bound root unavailable"))?;
+            let root = self.stable_path().ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotFound, "bound root unavailable")
+            })?;
             let metadata = std::fs::symlink_metadata(root.join(relative))?;
             return Ok(if metadata.file_type().is_symlink() {
                 BoundEntryKind::Symlink
@@ -429,9 +425,9 @@ impl BoundReadRoot {
 
         #[cfg(windows)]
         {
-            let root = self
-                .stable_path()
-                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "bound root unavailable"))?;
+            let root = self.stable_path().ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotFound, "bound root unavailable")
+            })?;
             return std::fs::File::open(root.join(relative));
         }
     }
@@ -460,7 +456,10 @@ mod tests {
     fn binds_real_directory_and_preserves_canonical_identity() {
         let root = tempfile::tempdir().unwrap();
         let guard = BoundReadRoot::open(root.path()).expect("real directory must bind");
-        assert_eq!(guard.canonical_path(), std::fs::canonicalize(root.path()).ok());
+        assert_eq!(
+            guard.canonical_path(),
+            std::fs::canonicalize(root.path()).ok()
+        );
         assert!(guard.read_dir_names(Path::new("")).unwrap().is_empty());
     }
 
@@ -561,6 +560,9 @@ mod tests {
         let guard = BoundReadRoot::open(&selected).expect("selected directory must bind");
 
         assert!(std::fs::rename(&selected, &moved).is_err());
-        assert_eq!(guard.canonical_path(), std::fs::canonicalize(&selected).ok());
+        assert_eq!(
+            guard.canonical_path(),
+            std::fs::canonicalize(&selected).ok()
+        );
     }
 }

@@ -300,6 +300,22 @@ fn detect_content_type(path: &Path) -> Result<(Option<String>, Option<String>), 
     Ok(detect_content_type_from_bytes(&bytes))
 }
 
+#[cfg(not(coverage))]
+fn detect_content_type_bound(
+    root_guard: &BoundReadRoot,
+    relative: &Path,
+) -> Result<(Option<String>, Option<String>), String> {
+    let mut file = root_guard
+        .open_file(relative)
+        .map_err(|_| "magic-type-probe-open-failed".to_string())?;
+    let mut bytes = vec![0u8; TYPE_PROBE_BYTES];
+    let read = file
+        .read(&mut bytes)
+        .map_err(|_| "magic-type-probe-read-failed".to_string())?;
+    bytes.truncate(read);
+    Ok(detect_content_type_from_bytes(&bytes))
+}
+
 #[cfg(unix)]
 fn allocated_bytes(metadata: &std::fs::Metadata) -> u64 {
     use std::os::unix::fs::MetadataExt;
@@ -523,18 +539,18 @@ fn build_item(
 #[cfg(not(coverage))]
 fn observe_item(
     display_root: &Path,
-    io_root: &Path,
-    path: &Path,
+    root_guard: &BoundReadRoot,
+    relative: &Path,
     observed_at_ms: u64,
     stale_after_days: u64,
 ) -> Result<IncompleteDownloadAuditItem, String> {
-    let relative = path
-        .strip_prefix(io_root)
-        .map_err(|_| "incomplete-download-relative-path-failed".to_string())?;
     if !valid_relative_path(relative) {
         return Err("incomplete-download-relative-path-unsafe".into());
     }
-    let before = std::fs::symlink_metadata(path)
+    let path = display_root.join(relative);
+    let before = root_guard
+        .open_file(relative)
+        .and_then(|file| file.metadata())
         .map_err(|_| "incomplete-download-metadata-failed".to_string())?;
     if !before.is_file() || before.file_type().is_symlink() {
         return Err("incomplete-download-file-unsafe".into());
@@ -546,28 +562,48 @@ fn observe_item(
         return Err("incomplete-download-modified-time-unavailable".into());
     }
 
-    let content_metadata = probe_content_metadata_for_audit(path);
+    let content_metadata = probe_content_metadata_for_audit(&path);
     let mut evidence_issues = metadata_probe_issues(&content_metadata);
-    let (detected_mime_type, detected_extension) = match detect_content_type(path) {
-        Ok(result) => result,
-        Err(error) => {
-            evidence_issues.push(error);
-            (None, None)
-        }
-    };
-    let active_use = observe_path_active_use(path);
-    let sibling = final_sibling_path(path);
-    let (final_sibling_relative_path, final_sibling_bytes) = match sibling {
-        Some(sibling) => match std::fs::symlink_metadata(&sibling) {
-            Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
-                let relative = sibling
-                    .strip_prefix(io_root)
-                    .ok()
-                    .filter(|relative| valid_relative_path(relative))
-                    .map(|relative| normalized(&relative.to_string_lossy()));
-                (relative, Some(metadata.len()))
+    let (detected_mime_type, detected_extension) =
+        match detect_content_type_bound(root_guard, relative) {
+            Ok(result) => result,
+            Err(error) => {
+                evidence_issues.push(error);
+                (None, None)
             }
-            Ok(_) => {
+        };
+    let active_use = observe_path_active_use(&path);
+    let sibling_relative = final_sibling_path(&path).and_then(|sibling| {
+        sibling
+            .strip_prefix(display_root)
+            .ok()
+            .filter(|relative| valid_relative_path(relative))
+            .map(Path::to_path_buf)
+    });
+    let (final_sibling_relative_path, final_sibling_bytes) = match sibling_relative {
+        Some(sibling_relative) => match root_guard.entry_kind(&sibling_relative) {
+            Ok(crate::duplicate_audit::bound_read_root::BoundEntryKind::File) => {
+                let bytes = root_guard
+                    .open_file(&sibling_relative)
+                    .and_then(|file| file.metadata())
+                    .map(|metadata| metadata.len());
+                match bytes {
+                    Ok(bytes) => (
+                        Some(normalized(&sibling_relative.to_string_lossy())),
+                        Some(bytes),
+                    ),
+                    Err(_) => {
+                        evidence_issues.push("final-sibling-metadata-failed".into());
+                        (None, None)
+                    }
+                }
+            }
+            Ok(crate::duplicate_audit::bound_read_root::BoundEntryKind::Symlink)
+            | Ok(crate::duplicate_audit::bound_read_root::BoundEntryKind::Other) => {
+                evidence_issues.push("final-sibling-unsafe".into());
+                (None, None)
+            }
+            Ok(crate::duplicate_audit::bound_read_root::BoundEntryKind::Directory) => {
                 evidence_issues.push("final-sibling-unsafe".into());
                 (None, None)
             }
@@ -582,7 +618,9 @@ fn observe_item(
             (None, None)
         }
     };
-    let after = std::fs::symlink_metadata(path)
+    let after = root_guard
+        .open_file(relative)
+        .and_then(|file| file.metadata())
         .map_err(|_| "incomplete-download-post-metadata-failed".to_string())?;
     let after_modified_ms = system_time_ms(after.modified());
     if after.len() != logical_bytes || after_modified_ms != filesystem_modified_ms {
@@ -845,28 +883,20 @@ pub fn collect_incomplete_download_audit(
     if !(1..=MAX_STALE_AFTER_DAYS).contains(&stale_after_days) {
         return Err("incomplete-download-stale-days-out-of-range".into());
     }
-    let supplied_root_metadata = std::fs::symlink_metadata(source_root)
-        .map_err(|_| "incomplete-download-audit-root-unavailable".to_string())?;
-    if !supplied_root_metadata.is_dir() || supplied_root_metadata.file_type().is_symlink() {
-        return Err("incomplete-download-audit-root-unsafe".into());
-    }
     let root_guard = BoundReadRoot::open(source_root)
         .ok_or_else(|| "incomplete-download-audit-root-unsafe".to_string())?;
     let canonical_root = root_guard
         .canonical_path()
-        .ok_or_else(|| "incomplete-download-audit-root-unsafe".to_string())?;
-    let stable_root = root_guard
-        .stable_path()
         .ok_or_else(|| "incomplete-download-audit-root-unsafe".to_string())?;
     let max_entries = max_entries.clamp(1, DEFAULT_MAX_ENTRIES);
     let mut evidence_complete = true;
     let mut issue_counts = BTreeMap::new();
     let mut entries_seen = 0usize;
     let mut items = Vec::new();
-    let mut pending = vec![(stable_root.clone(), 0usize)];
+    let mut pending = vec![(PathBuf::new(), 0usize)];
 
     while let Some((directory, depth)) = pending.pop() {
-        let entries = match std::fs::read_dir(&directory) {
+        let entries = match root_guard.read_dir_names(&directory) {
             Ok(entries) => entries,
             Err(_) => {
                 evidence_complete = false;
@@ -874,12 +904,8 @@ pub fn collect_incomplete_download_audit(
                 continue;
             }
         };
-        let mut entries = entries.collect::<Vec<_>>();
-        entries.sort_by(|left, right| {
-            let left = left.as_ref().ok().map(|entry| entry.file_name());
-            let right = right.as_ref().ok().map(|entry| entry.file_name());
-            left.cmp(&right)
-        });
+        let mut entries = entries;
+        entries.sort();
         for entry in entries {
             if entries_seen >= max_entries {
                 evidence_complete = false;
@@ -888,42 +914,44 @@ pub fn collect_incomplete_download_audit(
                 break;
             }
             entries_seen += 1;
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(_) => {
-                    evidence_complete = false;
-                    increment_issue(&mut issue_counts, "directory-entry-read-failed");
-                    continue;
-                }
-            };
-            let file_type = match entry.file_type() {
-                Ok(file_type) => file_type,
+            let relative = directory.join(&entry);
+            let entry_kind = match root_guard.entry_kind(&relative) {
+                Ok(kind) => kind,
                 Err(_) => {
                     evidence_complete = false;
                     increment_issue(&mut issue_counts, "file-type-read-failed");
                     continue;
                 }
             };
-            if file_type.is_symlink() {
+            if matches!(
+                entry_kind,
+                crate::duplicate_audit::bound_read_root::BoundEntryKind::Symlink
+            ) {
                 continue;
             }
-            let path = entry.path();
-            if file_type.is_dir() {
+            if matches!(
+                entry_kind,
+                crate::duplicate_audit::bound_read_root::BoundEntryKind::Directory
+            ) {
                 if depth >= MAX_DEPTH {
                     evidence_complete = false;
                     increment_issue(&mut issue_counts, "depth-limit-reached");
                 } else {
-                    pending.push((path, depth + 1));
+                    pending.push((relative, depth + 1));
                 }
                 continue;
             }
-            if !file_type.is_file() || !incomplete_download_name(&path) {
+            if !matches!(
+                entry_kind,
+                crate::duplicate_audit::bound_read_root::BoundEntryKind::File
+            ) || !incomplete_download_name(&relative)
+            {
                 continue;
             }
             match observe_item(
                 &canonical_root,
-                &stable_root,
-                &path,
+                &root_guard,
+                &relative,
                 observed_at_ms,
                 stale_after_days,
             ) {

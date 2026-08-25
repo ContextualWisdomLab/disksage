@@ -156,7 +156,7 @@ fn source_metadata_matches(metadata: &Metadata, item: &IncompleteDownloadAuditIt
 }
 
 fn safe_candidate_path(
-    io_root: &Path,
+    root_guard: &BoundReadRoot,
     canonical_root: &Path,
     relative_path: &str,
 ) -> Result<PathBuf, String> {
@@ -169,32 +169,42 @@ fn safe_candidate_path(
     {
         return Err("materialization-source-relative-path-unsafe".into());
     }
-    let mut current = io_root.to_path_buf();
+    let mut current = PathBuf::new();
     for component in relative.components() {
         if let Component::Normal(value) = component {
             current.push(value);
-            let metadata = std::fs::symlink_metadata(&current)
+            let kind = root_guard
+                .entry_kind(&current)
                 .map_err(|_| "materialization-source-component-unavailable".to_string())?;
-            if metadata.file_type().is_symlink() {
+            if matches!(
+                kind,
+                crate::duplicate_audit::bound_read_root::BoundEntryKind::Symlink
+            ) {
                 return Err("materialization-source-symlink-component".into());
             }
         }
     }
-    let canonical = std::fs::canonicalize(&current)
-        .map_err(|_| "materialization-source-unavailable".to_string())?;
-    if !canonical.starts_with(canonical_root) {
-        return Err("materialization-source-outside-root".into());
+    if !matches!(
+        root_guard
+            .entry_kind(&current)
+            .map_err(|_| "materialization-source-unavailable".to_string())?,
+        crate::duplicate_audit::bound_read_root::BoundEntryKind::File
+    ) {
+        return Err("materialization-source-unavailable".into());
     }
-    Ok(current)
+    Ok(canonical_root.join(current))
 }
 
-fn digest_range(path: &Path, start: u64, end: u64) -> Result<ContentDigests, String> {
+fn digest_range(
+    file: std::io::Result<File>,
+    start: u64,
+    end: u64,
+) -> Result<ContentDigests, String> {
     let span = end
         .checked_sub(start)
         .filter(|span| *span > 0)
         .ok_or_else(|| "materialization-range-invalid".to_string())?;
-    let mut file =
-        File::open(path).map_err(|_| "materialization-source-open-failed".to_string())?;
+    let mut file = file.map_err(|_| "materialization-source-open-failed".to_string())?;
     let file_len = file
         .metadata()
         .map_err(|_| "materialization-source-metadata-failed".to_string())?
@@ -261,7 +271,7 @@ fn unit_fingerprint(
 }
 
 fn build_unit(
-    path: &Path,
+    root_guard: &BoundReadRoot,
     audit_item: &IncompleteDownloadAuditItem,
     validation_kind: RecoveryValidationKind,
     range_start: u64,
@@ -289,7 +299,11 @@ fn build_unit(
         .checked_sub(range_start)
         .filter(|span| *span > 0)
         .ok_or_else(|| "materialization-range-invalid".to_string())?;
-    let content_digests = digest_range(path, range_start, range_end)?;
+    let content_digests = digest_range(
+        root_guard.open_file(Path::new(&audit_item.relative_path)),
+        range_start,
+        range_end,
+    )?;
     if !valid_hex64(&content_digests.blake3) || !valid_hex64(&content_digests.sha256) {
         return Err("materialization-content-digest-invalid".into());
     }
@@ -375,18 +389,10 @@ pub fn plan_incomplete_download_materialization(
     if !source_root.is_absolute() {
         return Err("materialization-root-must-be-absolute".into());
     }
-    let supplied_root_metadata = std::fs::symlink_metadata(source_root)
-        .map_err(|_| "materialization-root-unavailable".to_string())?;
-    if !supplied_root_metadata.is_dir() || supplied_root_metadata.file_type().is_symlink() {
-        return Err("materialization-root-unsafe".into());
-    }
     let root_guard = BoundReadRoot::open(source_root)
         .ok_or_else(|| "materialization-root-unsafe".to_string())?;
     let canonical_root = root_guard
         .canonical_path()
-        .ok_or_else(|| "materialization-root-unsafe".to_string())?;
-    let stable_root = root_guard
-        .stable_path()
         .ok_or_else(|| "materialization-root-unsafe".to_string())?;
     if audit.source_root != canonical_root.to_string_lossy() {
         return Err("materialization-audit-root-mismatch".into());
@@ -437,12 +443,15 @@ pub fn plan_incomplete_download_materialization(
         {
             return Err("materialization-audit-item-not-idle".into());
         }
-        let path = safe_candidate_path(&stable_root, &canonical_root, &audit_item.relative_path)?;
+        let relative = Path::new(&audit_item.relative_path);
+        let path = safe_candidate_path(&root_guard, &canonical_root, &audit_item.relative_path)?;
         // Keep reads on the identity-bound namespace path, but give external
         // lsof/ps probes a canonical path they can inspect without /proc/fd noise.
         let active_use_path = std::fs::canonicalize(&path)
             .map_err(|_| "materialization-active-use-probe-path-unavailable".to_string())?;
-        let before = std::fs::symlink_metadata(&path)
+        let before = root_guard
+            .open_file(relative)
+            .and_then(|file| file.metadata())
             .map_err(|_| "materialization-source-metadata-failed".to_string())?;
         if !source_metadata_matches(&before, audit_item) {
             return Err("materialization-source-changed-since-audit".into());
@@ -481,7 +490,7 @@ pub fn plan_incomplete_download_materialization(
         }
         for validation in validations {
             units.push(build_unit(
-                &path,
+                &root_guard,
                 audit_item,
                 validation.kind,
                 validation.range_start,
@@ -496,7 +505,9 @@ pub fn plan_incomplete_download_materialization(
         if active_after.active {
             return Err("materialization-source-active-after-hash".into());
         }
-        let after = std::fs::symlink_metadata(&path)
+        let after = root_guard
+            .open_file(relative)
+            .and_then(|file| file.metadata())
             .map_err(|_| "materialization-post-hash-metadata-failed".to_string())?;
         if !source_metadata_matches(&after, audit_item)
             || after.modified().ok() != before.modified().ok()

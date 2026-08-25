@@ -7,7 +7,7 @@
 use crate::cloud::{self, MetadataEvidence};
 use crate::content_digest::{ContentDigests, ContentHasher};
 use std::collections::BTreeMap;
-use std::fs::{File, Metadata};
+use std::fs::Metadata;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
@@ -139,6 +139,7 @@ pub struct ExactDuplicateAuditSummary {
 #[derive(Debug, Clone)]
 struct FileObservation {
     path: PathBuf,
+    relative_fs_path: PathBuf,
     relative_path: String,
     logical_bytes: u64,
     filesystem_created_ms: u64,
@@ -406,16 +407,13 @@ fn unix_identity(metadata: &Metadata) -> (u64, u64) {
 }
 
 fn observe_file(
-    stable_root: &Path,
-    path: PathBuf,
+    canonical_root: &Path,
+    relative: &Path,
     metadata: Metadata,
 ) -> Result<FileObservation, String> {
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err("duplicate-audit-file-unsafe".into());
     }
-    let relative = path
-        .strip_prefix(stable_root)
-        .map_err(|_| "duplicate-audit-relative-path-failed".to_string())?;
     if !valid_relative_path(relative) {
         return Err("duplicate-audit-relative-path-unsafe".into());
     }
@@ -430,7 +428,8 @@ fn observe_file(
     #[cfg(unix)]
     let (device, inode) = unix_identity(&metadata);
     Ok(FileObservation {
-        path,
+        path: canonical_root.join(relative),
+        relative_fs_path: relative.to_path_buf(),
         relative_path,
         logical_bytes: metadata.len(),
         filesystem_created_ms: system_time_ms(metadata.created()),
@@ -461,13 +460,19 @@ fn metadata_matches(metadata: &Metadata, observation: &FileObservation) -> bool 
     true
 }
 
-fn hash_stable_file(observation: &FileObservation) -> Result<ContentDigests, String> {
-    let before = std::fs::symlink_metadata(&observation.path)
+fn hash_stable_file(
+    root_guard: &BoundReadRoot,
+    observation: &FileObservation,
+) -> Result<ContentDigests, String> {
+    let before = root_guard
+        .open_file(&observation.relative_fs_path)
+        .and_then(|file| file.metadata())
         .map_err(|_| "duplicate-audit-pre-hash-metadata-failed".to_string())?;
     if !metadata_matches(&before, observation) {
         return Err("duplicate-audit-source-changed-before-hash".into());
     }
-    let mut file = File::open(&observation.path)
+    let mut file = root_guard
+        .open_file(&observation.relative_fs_path)
         .map_err(|_| "duplicate-audit-content-open-failed".to_string())?;
     let opened = file
         .metadata()
@@ -491,7 +496,9 @@ fn hash_stable_file(observation: &FileObservation) -> Result<ContentDigests, Str
     if bytes_read != observation.logical_bytes {
         return Err("duplicate-audit-content-length-mismatch".into());
     }
-    let after = std::fs::symlink_metadata(&observation.path)
+    let after = root_guard
+        .open_file(&observation.relative_fs_path)
+        .and_then(|file| file.metadata())
         .map_err(|_| "duplicate-audit-post-hash-metadata-failed".to_string())?;
     if !metadata_matches(&after, observation) {
         return Err("duplicate-audit-source-changed-during-hash".into());
@@ -501,11 +508,14 @@ fn hash_stable_file(observation: &FileObservation) -> Result<ContentDigests, Str
 
 #[cfg(not(coverage))]
 fn member(
+    root_guard: &BoundReadRoot,
     observation: &FileObservation,
     digests: &ContentDigests,
 ) -> Result<ExactDuplicateAuditMember, String> {
     let production_metadata = production_metadata(observation);
-    let after = std::fs::symlink_metadata(&observation.path)
+    let after = root_guard
+        .open_file(&observation.relative_fs_path)
+        .and_then(|file| file.metadata())
         .map_err(|_| "duplicate-audit-post-metadata-probe-stat-failed".to_string())?;
     if !metadata_matches(&after, observation) {
         return Err("duplicate-audit-source-changed-during-metadata-probe".into());
@@ -552,28 +562,19 @@ pub fn collect_exact_duplicate_audit(
     if !(1..=MAX_ENTRIES).contains(&max_entries) {
         return Err("duplicate-audit-max-entries-out-of-range".into());
     }
-    let supplied_root_metadata = std::fs::symlink_metadata(source_root)
-        .map_err(|_| "duplicate-audit-root-unavailable".to_string())?;
-    if !supplied_root_metadata.is_dir() || supplied_root_metadata.file_type().is_symlink() {
-        return Err("duplicate-audit-root-unsafe".into());
-    }
     let root_guard = BoundReadRoot::open(source_root)
         .ok_or_else(|| "duplicate-audit-root-unsafe".to_string())?;
     let canonical_root = root_guard
         .canonical_path()
         .ok_or_else(|| "duplicate-audit-root-unsafe".to_string())?;
-    let stable_root = root_guard
-        .stable_path()
-        .ok_or_else(|| "duplicate-audit-root-unsafe".to_string())?;
-
     let mut evidence_complete = true;
     let mut entries_seen = 0usize;
     let mut file_count = 0usize;
     let mut issue_counts = BTreeMap::new();
     let mut observations = Vec::new();
-    let mut pending = vec![(stable_root.clone(), 0usize)];
+    let mut pending = vec![(PathBuf::new(), 0usize)];
     while let Some((directory, depth)) = pending.pop() {
-        let entries = match std::fs::read_dir(&directory) {
+        let entries = match root_guard.read_dir_names(&directory) {
             Ok(entries) => entries,
             Err(_) => {
                 evidence_complete = false;
@@ -581,12 +582,8 @@ pub fn collect_exact_duplicate_audit(
                 continue;
             }
         };
-        let mut entries = entries.collect::<Vec<_>>();
-        entries.sort_by(|left, right| {
-            let left = left.as_ref().ok().map(|entry| entry.file_name());
-            let right = right.as_ref().ok().map(|entry| entry.file_name());
-            left.cmp(&right)
-        });
+        let mut entries = entries;
+        entries.sort();
         for entry in entries {
             if entries_seen >= max_entries {
                 evidence_complete = false;
@@ -595,40 +592,35 @@ pub fn collect_exact_duplicate_audit(
                 break;
             }
             entries_seen += 1;
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(_) => {
-                    evidence_complete = false;
-                    increment_issue(&mut issue_counts, "duplicate-audit-directory-entry-failed");
-                    continue;
-                }
-            };
-            let file_type = match entry.file_type() {
-                Ok(file_type) => file_type,
+            let relative = directory.join(&entry);
+            let entry_kind = match root_guard.entry_kind(&relative) {
+                Ok(kind) => kind,
                 Err(_) => {
                     evidence_complete = false;
                     increment_issue(&mut issue_counts, "duplicate-audit-file-type-failed");
                     continue;
                 }
             };
-            if file_type.is_symlink() {
+            if matches!(entry_kind, bound_read_root::BoundEntryKind::Symlink) {
                 continue;
             }
-            let path = entry.path();
-            if file_type.is_dir() {
+            if matches!(entry_kind, bound_read_root::BoundEntryKind::Directory) {
                 if depth >= MAX_DEPTH {
                     evidence_complete = false;
                     increment_issue(&mut issue_counts, "duplicate-audit-depth-limit-reached");
                 } else {
-                    pending.push((path, depth + 1));
+                    pending.push((relative, depth + 1));
                 }
                 continue;
             }
-            if !file_type.is_file() {
+            if !matches!(entry_kind, bound_read_root::BoundEntryKind::File) {
                 continue;
             }
             file_count += 1;
-            let metadata = match std::fs::symlink_metadata(&path) {
+            let metadata = match root_guard
+                .open_file(&relative)
+                .and_then(|file| file.metadata())
+            {
                 Ok(metadata) => metadata,
                 Err(_) => {
                     evidence_complete = false;
@@ -639,7 +631,7 @@ pub fn collect_exact_duplicate_audit(
             if metadata.len() < min_bytes {
                 continue;
             }
-            match observe_file(&stable_root, path, metadata) {
+            match observe_file(&canonical_root, &relative, metadata) {
                 Ok(observation) => observations.push(observation),
                 Err(reason) => {
                     evidence_complete = false;
@@ -670,7 +662,7 @@ pub fn collect_exact_duplicate_audit(
         let mut by_digest =
             BTreeMap::<(String, String, String), Vec<ExactDuplicateAuditMember>>::new();
         for observation in size_group {
-            match hash_stable_file(&observation) {
+            match hash_stable_file(&root_guard, &observation) {
                 Ok(digests) => {
                     content_hashed_file_count += 1;
                     let key = (
@@ -678,7 +670,7 @@ pub fn collect_exact_duplicate_audit(
                         digests.sha256.clone(),
                         digests.quick_xor_base64.clone(),
                     );
-                    match member(&observation, &digests) {
+                    match member(&root_guard, &observation, &digests) {
                         Ok(member) => by_digest.entry(key).or_default().push(member),
                         Err(reason) => {
                             evidence_complete = false;
