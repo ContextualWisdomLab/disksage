@@ -1540,3 +1540,12 @@ auxiliary production-time evidence; embedded metadata and context retain precede
   infrastructure failure rerun requested), PR #249 `2f1d585` (draft/blocked/review-required;
   Strix rerun pending), and central `.github#1316` `e4f9865a` (blocked with no qualifying approval;
   required checks pending). No merge is inferred.
+
+## 2026-08-25 11:24 +0900 provider-indexing Finder action gap closed
+
+- Provider-global indexing-only stalls now expose the same bounded Finder-cancel action as transfer
+  and reconciliation stalls. This covers OneDrive/Google Drive reports of
+  `provider-global-sync-indexing-pending` without treating the provider dump as a copy receipt.
+- Svelte type-check and the focused CloudArchive admission/timing tests passed. The exact PR #247
+  head is `dda0f1d5`; its hosted checks restart on the documentation head. No automatic Finder
+  cancellation, provider restart, cloud write, source mutation, or eviction was performed.

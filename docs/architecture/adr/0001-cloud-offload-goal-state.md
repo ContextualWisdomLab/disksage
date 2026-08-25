@@ -970,3 +970,11 @@ still active. The data volume remains at approximately 20 GiB free. This confirm
 the provider coordination stall rather than a transient Finder rendering issue. The runtime Goal
 remains `provider-sync-incomplete`; no copy, attestation, eviction, Finder cancellation, provider
 restart, or cloud/source mutation was performed.
+
+## Amendment: third-party provider indexing can expose bounded Finder cancellation (2026-08-25 11:24 +0900)
+
+The provider-global UI now treats `provider-global-sync-indexing-pending` as a Finder-copy blocker,
+alongside active transfer and reconciliation blockers. This closes the case where OneDrive or Google
+Drive reports only an indexing backlog: the user can request the existing bounded Finder Escape
+action, while cloud/provider/source mutation remains unchanged. The contract test and Svelte type
+check pass at exact head `dda0f1d5`; no automatic cancellation was performed.
