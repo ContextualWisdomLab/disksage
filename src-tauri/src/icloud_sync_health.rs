@@ -1078,14 +1078,18 @@ fn parse_file_provider_activity_output(
 }
 
 fn relative_age_ms(line: &str) -> Option<u64> {
-    let age = ["last:'", "expired:'"].iter().find_map(|marker| {
+    ["last:'", "expired:'"].iter().filter_map(|marker| {
         let value_start = line.rfind(marker)?.saturating_add(marker.len());
         let value_end = value_start.checked_add(line[value_start..].find('\'')?)?;
         let value = &line[value_start..value_end];
         let age_start = value.rfind("(-")?.saturating_add(2);
         let age_end = age_start.checked_add(value[age_start..].find(')')?)?;
-        Some(&value[age_start..age_end])
-    })?;
+        parse_age_components(&value[age_start..age_end])
+    })
+    .max()
+}
+
+fn parse_age_components(age: &str) -> Option<u64> {
     let bytes = age.as_bytes();
     let mut index = 0;
     let mut total = 0_u64;
@@ -2475,6 +2479,20 @@ mod tests {
             false,
         );
         assert!(!evidence
+            .notices
+            .contains(&"icloud-file-provider-stale-error-observed".to_string()));
+    }
+
+    #[test]
+    fn file_provider_parser_uses_expired_age_when_last_is_fresh() {
+        let evidence = parse_file_provider_activity_output(
+            "doc fetch-content: last:'1787622820 (-1min)' expired:'1787622820 (-16min)' error:'noContentToFetch'\n",
+            42,
+            true,
+            false,
+            false,
+        );
+        assert!(evidence
             .notices
             .contains(&"icloud-file-provider-stale-error-observed".to_string()));
     }
