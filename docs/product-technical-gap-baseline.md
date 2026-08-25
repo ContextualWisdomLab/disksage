@@ -98,6 +98,10 @@ without a fresh qualifying review and exact-head protected checks.
   exited, `cargo clean --manifest-path src-tauri/Cargo.toml` removed 3.8 GiB and restored about
   8.9 GiB APFS availability. No source, Finder, iCloud/File Provider, OneDrive, or Google Drive
   data was touched.
+- The exact-head review regression run created only regenerable Cargo artifacts; after the tests
+  completed, `cargo clean --manifest-path src-tauri/Cargo.toml` removed 4.6 GiB and the local
+  filesystem reported 48 GiB available. No source, Finder, iCloud/File Provider, OneDrive, or
+  Google Drive data was touched.
 
 - The implementation head observed before this documentation update was `88001d8`: existing-copy
   adoption no longer requires native-copy staging headroom, so a low-disk user can verify and adopt
