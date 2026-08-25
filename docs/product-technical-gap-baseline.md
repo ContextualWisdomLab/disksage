@@ -135,6 +135,9 @@ suite passes 35 tests; hosted Strix and metadata-only gates remain authoritative
   The Rust library suite passed 736/736 and the root-identity contract passed 7/7; prior Devin threads
   are resolved. Current CodeQL, OpenCode/Noema, Strix, SAST, security, macOS, and release checks are
   still queued/in progress, and the PR remains protected with `REVIEW_REQUIRED`/`BLOCKED`.
+- DiskSage docs PR #258 is exact head `e0f56f1fd91e66a1b76b7b2ecb7e6d3a01d536aa`; protected auto-merge
+  is enabled, while current documentation, Windows-home, security, and review checks are queued or
+  running. It remains `BLOCKED` pending normal hosted gates and approval.
 - Central `ContextualWisdomLab/.github` PR #1331 is `a1408f520cc38bab3207675b0033a48d3d12240c` and
   #1333 is `5454a19618b27f4d7f34dd2a7a5e47eb5bc42fc1`; both remain protected, open, and auto-merge
   enabled but blocked. These exact heads supersede the older abbreviated table entries above.
