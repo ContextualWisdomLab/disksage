@@ -71,7 +71,7 @@ export function updateIcloudHealthStallClock(
     return {
       blockedSinceMs: previousReport
         ? next.admission_blocked_since_ms ?? next.observed_at_ms
-        : observedAtMs,
+        : next.admission_blocked_since_ms ?? next.observed_at_ms ?? observedAtMs,
       fingerprint,
     };
   }

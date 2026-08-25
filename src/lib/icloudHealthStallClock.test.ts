@@ -132,7 +132,7 @@ describe("iCloud health stall clock", () => {
     ).blockedSinceMs).toBe(1_200);
   });
 
-  it("starts a fresh clock after a restart instead of showing stale blocker age", () => {
+  it("restores the persisted blocker age after a restart", () => {
     const next = report(activity(), { admission_blocked_since_ms: 700 });
 
     expect(updateIcloudHealthStallClock(
@@ -140,7 +140,7 @@ describe("iCloud health stall clock", () => {
       { blockedSinceMs: 0, fingerprint: "" },
       next,
       2_000,
-    ).blockedSinceMs).toBe(2_000);
+    ).blockedSinceMs).toBe(700);
   });
 
   it("clears the clock when admission becomes clear", () => {
