@@ -162,13 +162,13 @@
 <style>
   .brew-panel { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #b7c6d8; display: grid; gap: 0.55rem; }
   .report { display: grid; gap: 0.55rem; padding: 0.75rem; border: 1px solid #72889c; border-radius: 4px; background: #f7fafc; }
-  .fingerprint { margin: 0; overflow-wrap: anywhere; font: 0.75rem ui-monospace, monospace; color: #59636e; }
+  .fingerprint { margin: 0; overflow-wrap: anywhere; font: 0.75rem ui-monospace, monospace; color: var(--ds-text-muted); }
   .approval { display: grid; gap: 0.55rem; justify-items: start; padding: 0.7rem; border: 1px solid #b78335; border-radius: 4px; background: #fffaf1; }
   .approval code { max-width: min(60rem, 90vw); overflow-wrap: anywhere; user-select: all; }
   label { display: grid; gap: 0.2rem; font-size: 0.82rem; color: #4d5660; }
   textarea { width: min(60rem, 90vw); min-height: 3.5rem; resize: vertical; }
   pre { max-height: 16rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 0.5rem; background: #eef2f5; font-size: 0.78rem; }
-  .muted { color: #727b84; margin: 0; }
+  .muted { color: var(--ds-text-muted); margin: 0; }
   .warning { color: #8a5700; margin: 0; }
   .success { color: #276437; margin: 0; }
   .error { color: #b00; margin: 0; }

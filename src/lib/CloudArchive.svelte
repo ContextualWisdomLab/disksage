@@ -1841,13 +1841,13 @@
   .candidates li.adoptable { border-color: #6b8e72; background: #f5fbf6; }
   .line { display: flex; flex-wrap: wrap; gap: 0.6rem; font-size: 0.8rem; }
   .line em { color: #9a5b00; }
-  .path, .arrow { overflow-wrap: anywhere; font-size: 0.85rem; }
-  .arrow { color: #555; margin-top: 0.2rem; }
-  .metadata { color: #3f5368; font-size: 0.78rem; margin-top: 0.2rem; }
+  .path, .arrow { overflow-wrap: anywhere; font-size: 0.85rem; color: var(--ds-text-muted); }
+  .arrow { margin-top: 0.2rem; }
+  .metadata { color: var(--ds-text-muted); font-size: 0.78rem; margin-top: 0.2rem; }
   .dataset-profile { margin-top: 0.4rem; padding: 0.45rem; border: 1px solid #c8d4df; border-radius: 4px; background: #f8fafc; font-size: 0.78rem; }
   .schema-columns { margin: 0.25rem 0; padding-left: 1.2rem; max-height: 10rem; overflow-y: auto; }
   .schema-columns em { margin-left: 0.4rem; color: #9a5b00; }
-  .context { color: #777; font-size: 0.75rem; margin-top: 0.2rem; }
+  .context { color: var(--ds-text-muted); font-size: 0.75rem; margin-top: 0.2rem; }
   .copy-approval { margin-top: 0.55rem; padding: 0.55rem; border: 1px solid #c8d4df; border-radius: 4px; background: #f8fafc; display: grid; gap: 0.45rem; }
   .copy-approval code { overflow-wrap: anywhere; font-size: 0.72rem; }
   .copy-approval label { display: grid; gap: 0.2rem; font-size: 0.78rem; }
@@ -1855,7 +1855,7 @@
   .copy { margin-top: 0.4rem; }
   details { margin-top: 0.3rem; color: #59636e; font-size: 0.75rem; }
   .evidence { margin: 0.25rem 0 0; padding-left: 1.2rem; }
-  .muted { color: #777; }
+  .muted { color: var(--ds-text-muted); }
   .warning { color: #8a5700; }
   .safe { color: #276437; }
   .error { color: #b00; }

@@ -338,7 +338,7 @@
   .list { list-style: none; padding: 0; max-height: 30vh; overflow-y: auto; }
   .list li { display: flex; justify-content: space-between; gap: 1rem; padding: 2px 0; }
   .size { color: #666; font-variant-numeric: tabular-nums; margin-left: 0.5rem; }
-  .path { color: #999; font-size: 0.8rem; overflow-wrap: anywhere; text-align: right; }
+  .path { color: var(--ds-text-muted); font-size: 0.8rem; overflow-wrap: anywhere; text-align: right; }
   .disabled { color: #aaa; }
   .notice { color: #555; font-size: 0.9rem; }
   .error, .errors { color: #b00; }

@@ -152,7 +152,7 @@
   section { margin-top: 1.5rem; border-top: 1px solid #ddd; padding-top: 1rem; }
   .notice { color: #555; font-size: 0.9rem; }
   .error { color: #b00; }
-  .muted { color: #666; font-size: 0.85rem; }
+  .muted { color: var(--ds-text-muted); font-size: 0.85rem; }
   .list { list-style: none; padding: 0; max-height: 30vh; overflow-y: auto; }
   .list li { display: grid; gap: 0.25rem; padding: 0.25rem 0; }
   .disabled { color: #aaa; }

@@ -166,9 +166,9 @@
   .group ul { list-style: none; padding: 0; margin: 0; }
   .group li { padding: 1px 0; display: flex; gap: 0.5rem; align-items: center; }
   .path { overflow-wrap: anywhere; flex: 1; }
-  .arrow { color: #999; flex-shrink: 0; }
+  .arrow { color: var(--ds-text-muted); flex-shrink: 0; }
   .lineage { color: #666; font-size: 0.75rem; flex-shrink: 0; }
-  .muted { color: #999; }
+  .muted { color: var(--ds-text-muted); }
   .error { color: #b00; }
   .errors { color: #b00; font-size: 0.85rem; list-style: none; padding: 0; }
   .actions { margin-top: 0.5rem; display: flex; gap: 0.5rem; }

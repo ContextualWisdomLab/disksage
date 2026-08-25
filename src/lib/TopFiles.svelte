@@ -26,5 +26,5 @@
   th { text-align: left; position: sticky; top: 0; background: #fff; }
   td { padding: 2px 8px 2px 0; }
   .size { white-space: nowrap; font-variant-numeric: tabular-nums; }
-  .path { overflow-wrap: anywhere; color: #444; }
+  .path { overflow-wrap: anywhere; color: var(--ds-text-muted); }
 </style>

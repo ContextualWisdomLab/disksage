@@ -241,11 +241,11 @@
   .local-path, .fingerprint-input { width: min(56rem, 88vw); font-family: ui-monospace, monospace; }
   .plan { padding: 0.7rem; border: 1px solid #6b8e72; border-radius: 4px; background: #f5fbf6; display: grid; gap: 0.5rem; }
   .status-grid { display: flex; flex-wrap: wrap; gap: 0.65rem; font-size: 0.78rem; color: #3f5368; }
-  .fingerprint { overflow-wrap: anywhere; font: 0.75rem ui-monospace, monospace; color: #59636e; }
+  .fingerprint { overflow-wrap: anywhere; font: 0.75rem ui-monospace, monospace; color: var(--ds-text-muted); }
   .approval-controls { padding: 0.7rem; border: 1px solid #b78335; border-radius: 4px; background: #fffaf1; display: grid; gap: 0.55rem; justify-items: start; }
   .approval-controls textarea { width: min(56rem, 88vw); min-height: 3.5rem; resize: vertical; }
   label { display: grid; gap: 0.2rem; font-size: 0.8rem; color: #555; }
-  .muted { color: #777; margin: 0; }
+  .muted { color: var(--ds-text-muted); margin: 0; }
   .warning { color: #8a5700; margin: 0; }
   .safe { color: #276437; margin: 0; }
   .error { color: #b00; margin: 0; }

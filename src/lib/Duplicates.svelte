@@ -153,7 +153,7 @@
   .group li { padding: 1px 0; }
   .path { overflow-wrap: anywhere; }
   .keep { color: #080; margin-left: 0.5rem; font-size: 0.8rem; }
-  .muted { color: #999; }
+  .muted { color: var(--ds-text-muted); }
   .error { color: #b00; }
   .errors { color: #b00; font-size: 0.85rem; list-style: none; padding: 0; }
   .badge-safe, .badge-caution, .badge-keep, .badge-unrated {
