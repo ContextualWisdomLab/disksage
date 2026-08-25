@@ -8,6 +8,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
+  identity cleanup and dependent eviction helpers; the focused authority contract remains green.
 - Add durable private failure records in a separate journal directory and a receipt-bound
   cancellation command for bounded native cloud copies; bind cancellation to the active candidate,
   require provider-native local-current materialization evidence before existing-copy adoption can
