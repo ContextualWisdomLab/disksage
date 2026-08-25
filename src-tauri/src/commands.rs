@@ -2097,10 +2097,10 @@ pub async fn copy_cloud_candidate(
     let cloud_review = Arc::clone(&state.cloud_review);
     let cloud_copy_cancel = Arc::clone(&state.cloud_copy_cancel);
     tauri::async_runtime::spawn_blocking(move || {
-        cloud_copy_cancel.store(false, Ordering::SeqCst);
         let _guard = cloud_review
             .lock()
             .map_err(|_| "cloud-review-lock-poisoned".to_string())?;
+        cloud_copy_cancel.store(false, Ordering::SeqCst);
         let result = create_cloud_candidate_receipt(
             &root,
             &cloud_root,
@@ -2173,10 +2173,10 @@ pub async fn adopt_existing_cloud_candidate(
     let cloud_review = Arc::clone(&state.cloud_review);
     let cloud_copy_cancel = Arc::clone(&state.cloud_copy_cancel);
     tauri::async_runtime::spawn_blocking(move || {
-        cloud_copy_cancel.store(false, Ordering::SeqCst);
         let _guard = cloud_review
             .lock()
             .map_err(|_| "cloud-review-lock-poisoned".to_string())?;
+        cloud_copy_cancel.store(false, Ordering::SeqCst);
         let result = create_cloud_candidate_receipt(
             &root,
             &cloud_root,

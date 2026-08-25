@@ -69,6 +69,6 @@ fn native_copy_cancel_reset_happens_after_serialization_lock() {
 fn adoption_cancel_reset_happens_after_serialization_lock() {
     assert_cancel_reset_is_serialized(
         "pub async fn adopt_existing_cloud_candidate(",
-        "pub async fn cancel_cloud_copy(",
+        "pub struct CloudAttestationOutput",
     );
 }
