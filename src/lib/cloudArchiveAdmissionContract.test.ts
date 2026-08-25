@@ -56,7 +56,7 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("!selectedRootDetails()?.readable");
     expect(source).toContain("async function cancelFinderCopy()");
     expect(source).toContain("await api.cancelFinderCopy();");
-    expect(source).toContain("cancelDisabled={checkingIcloudHealth}");
+    expect(source).toContain("cancelDisabled={checkingIcloudHealth || cancellingFinderCopy}");
     expect(source).toContain("cancelLabel={cancellingFinderCopy ?");
     expect(source).toContain("canCancelFinderCopyForProviderGlobalSync");
     expect(source).toContain("provider-global-sync-reconciliation-pending");
@@ -73,9 +73,9 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("blockedDuration(providerGlobalSyncBlockedSinceMs, providerGlobalSyncObservedAtMs)");
     expect(source).toContain('"materialization-stalled"');
     expect(source).toContain('statusId="icloud-provider-status"');
-    expect(source).toContain("cancelDisabled={checkingIcloudHealth}");
+    expect(source).toContain("cancelDisabled={checkingIcloudHealth || cancellingFinderCopy}");
     expect(source).toContain('selectedRootDetails()?.provider !== "icloud" && providerGlobalSyncError && !providerGlobalSync');
-    expect(source).toContain("cancelDisabled={checkingProviderGlobalSync}");
+    expect(source).toContain("cancelDisabled={checkingProviderGlobalSync || cancellingFinderCopy}");
   });
 
   it("does not run the heavy iCloud probe for non-iCloud selected roots", () => {

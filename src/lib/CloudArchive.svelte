@@ -973,7 +973,7 @@
           || icloudHealth.file_provider_activity.active_upload_count > 0
           || icloudHealth.file_provider_activity.active_download_count > 0
         ))}
-        cancelDisabled={checkingIcloudHealth}
+        cancelDisabled={checkingIcloudHealth || cancellingFinderCopy}
         cancelLabel={cancellingFinderCopy ? "Finder 복사 취소 요청 중…" : "Finder 복사 취소 요청"}
         onCancel={cancelFinderCopy}
         statusId="icloud-provider-status"
@@ -1115,7 +1115,7 @@
         observedAt={evidenceObservedAt(providerGlobalSyncObservedAtMs)}
         blockedFor={blockedDuration(providerGlobalSyncBlockedSinceMs, providerGlobalSyncObservedAtMs)}
         canCancel={canCancelFinderCopyForProviderGlobalSync(providerGlobalSync)}
-        cancelDisabled={checkingProviderGlobalSync}
+        cancelDisabled={checkingProviderGlobalSync || cancellingFinderCopy}
         cancelLabel={cancellingFinderCopy ? "Finder 복사 취소 요청 중…" : "Finder 복사 취소 요청"}
         onCancel={cancelFinderCopy}
         statusId="provider-global-sync-status"
