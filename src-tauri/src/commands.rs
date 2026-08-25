@@ -1829,14 +1829,18 @@ fn create_cloud_candidate_receipt(
     let (receipt, receipt_path) = match copy_result {
         Ok(result) => result,
         Err(error) => {
-            cloud_transfer::record_copy_failure(
+            let journal_error = cloud_transfer::record_copy_failure(
                 candidate,
                 action,
                 &error,
                 cloud::system_now_ms(),
                 &failure_dir,
-            );
-            return Err(error);
+            )
+            .err();
+            return Err(match journal_error {
+                Some(journal_error) => format!("{error};{journal_error}"),
+                None => error,
+            });
         }
     };
     let mut projection_warnings = Vec::new();

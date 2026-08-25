@@ -892,6 +892,14 @@ pub fn require_existing_destination_local_current(
     destination: &std::path::Path,
     expected_bytes: u64,
 ) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        // Windows Files On-Demand placeholders can report the logical file length while their
+        // bytes are not local. No provider-native local-current adapter exists on this target;
+        // reject adoption rather than letting metadata-only checks hydrate a placeholder.
+        let _ = (destination, expected_bytes);
+        return Err("existing-destination-provider-status-unavailable".into());
+    }
     let metadata = std::fs::symlink_metadata(destination)
         .map_err(|_| "existing-destination-status-unavailable".to_string())?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {

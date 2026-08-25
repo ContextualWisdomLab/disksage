@@ -18,6 +18,8 @@ use std::path::Path;
 
 #[cfg(not(coverage))]
 use crate::content_digest::{ContentDigests, ContentHasher};
+#[cfg(all(not(coverage), not(target_os = "macos")))]
+use same_file::Handle;
 #[cfg(all(not(coverage), target_os = "macos"))]
 use std::ffi::OsStr;
 #[cfg(not(coverage))]
@@ -1133,44 +1135,15 @@ fn remove_created_file(path: &Path) {
     let _ = std::fs::remove_file(path);
 }
 
-#[cfg(all(not(coverage), not(target_os = "macos"), unix))]
-fn file_identity(metadata: &std::fs::Metadata) -> Option<(u64, u64)> {
-    use std::os::unix::fs::MetadataExt;
-    Some((metadata.dev(), metadata.ino()))
-}
-
-#[cfg(all(not(coverage), not(target_os = "macos"), windows))]
-fn file_identity(path: &Path) -> Option<String> {
-    // std::os::windows::fs::MetadataExt exposes the needed identity methods only through the
-    // unstable `windows_by_handle` feature. Reuse the stable handle-based implementation shared
-    // by the safety module instead of weakening cleanup to a path-only check.
-    crate::safety::filesystem_object_id(path).ok()
-}
-
-#[cfg(all(not(coverage), not(target_os = "macos"), unix))]
-fn remove_created_file_if_identity_matches(path: &Path, expected: Option<(u64, u64)>) {
+#[cfg(all(not(coverage), not(target_os = "macos")))]
+fn remove_created_file_if_identity_matches(path: &Path, expected: Option<&Handle>) {
     let can_remove = expected.is_some_and(|identity| {
         let Ok(metadata) = std::fs::symlink_metadata(path) else {
             return false;
         };
         !metadata.file_type().is_symlink()
             && metadata.is_file()
-            && file_identity(&metadata) == Some(identity)
-    });
-    if can_remove {
-        remove_created_file(path);
-    }
-}
-
-#[cfg(all(not(coverage), not(target_os = "macos"), windows))]
-fn remove_created_file_if_identity_matches(path: &Path, expected: Option<String>) {
-    let can_remove = expected.is_some_and(|identity| {
-        let Ok(metadata) = std::fs::symlink_metadata(path) else {
-            return false;
-        };
-        !metadata.file_type().is_symlink()
-            && metadata.is_file()
-            && file_identity(path).as_deref() == Some(identity.as_str())
+            && Handle::from_path(path).is_ok_and(|current| current.eq(identity))
     });
     if can_remove {
         remove_created_file(path);
@@ -1299,7 +1272,7 @@ pub(crate) fn record_copy_failure(
     error_code: &str,
     occurred_at_ms: u64,
     receipt_dir: &Path,
-) {
+) -> Result<(), String> {
     let mut record = CloudCopyFailureRecord {
         version: CLOUD_COPY_FAILURE_VERSION,
         failure_id: String::new(),
@@ -1312,7 +1285,7 @@ pub(crate) fn record_copy_failure(
         occurred_at_ms,
     };
     record.failure_id = failure_id_for(&record);
-    let _ = write_copy_failure_record(&record, receipt_dir);
+    write_copy_failure_record(&record, receipt_dir).map(|_| ())
 }
 
 #[cfg(all(not(coverage), target_os = "macos"))]
@@ -1539,10 +1512,8 @@ fn copy_and_verify(
         Ok((staging_len, staging_hashes))
     })();
 
-    #[cfg(all(not(coverage), not(target_os = "macos"), unix))]
-    let mut destination_identity: Option<(u64, u64)> = None;
-    #[cfg(all(not(coverage), not(target_os = "macos"), windows))]
-    let mut destination_identity: Option<String> = None;
+    #[cfg(all(not(coverage), not(target_os = "macos")))]
+    let mut destination_identity: Option<Handle> = None;
 
     #[cfg(not(target_os = "macos"))]
     let copy_result = (|| -> Result<(u64, ContentDigests), String> {
@@ -1552,23 +1523,18 @@ fn copy_and_verify(
             .create_new(true)
             .open(destination)
             .map_err(|error| error.to_string())?;
-        #[cfg(all(not(coverage), unix))]
+        #[cfg(all(not(coverage), not(target_os = "macos")))]
         {
-            let metadata = std::fs::symlink_metadata(destination)
-                .map_err(|_| "destination-state-unavailable".to_string())?;
-            if metadata.file_type().is_symlink() || !metadata.is_file() {
-                return Err("destination-state-unavailable".into());
-            }
-            destination_identity = file_identity(&metadata);
-        }
-        #[cfg(all(not(coverage), windows))]
-        {
-            let metadata = std::fs::symlink_metadata(destination)
-                .map_err(|_| "destination-state-unavailable".to_string())?;
-            if metadata.file_type().is_symlink() || !metadata.is_file() {
-                return Err("destination-state-unavailable".into());
-            }
-            destination_identity = file_identity(destination);
+            // Capture ownership from the create-new handle itself. A path lookup here could
+            // observe a provider/foreign replacement between creation and cleanup.
+            destination_identity = Some(
+                Handle::from_file(
+                    destination_file
+                        .try_clone()
+                        .map_err(|_| "destination-identity-unavailable".to_string())?,
+                )
+                .map_err(|_| "destination-identity-unavailable".to_string())?,
+            );
         }
         let mut source_hasher = ContentHasher::default();
         let mut copied = 0_u64;
@@ -1589,14 +1555,24 @@ fn copy_and_verify(
             source_hasher.update(&buffer[..read]);
             copied = copied.saturating_add(read as u64);
         }
+        if cancel.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+            return Err("cloud-copy-cancelled".into());
+        }
         destination_file
             .sync_all()
             .map_err(|error| error.to_string())?;
         drop(destination_file);
 
+        if cancel.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+            return Err("cloud-copy-cancelled".into());
+        }
+
         let streamed_hashes = source_hasher.finalize();
         let source_hashes = hash_file(source)?;
         let destination_hashes = hash_file(destination)?;
+        if cancel.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+            return Err("cloud-copy-cancelled".into());
+        }
         let after = std::fs::symlink_metadata(source).map_err(|error| error.to_string())?;
         let unchanged = after.is_file()
             && !after.file_type().is_symlink()
@@ -1618,13 +1594,9 @@ fn copy_and_verify(
 
     // The TempDir owns the only pathname created for a macOS copy. On Unix, a native copy's
     // cleanup is identity-bound so a concurrent replacement cannot be deleted accidentally.
-    #[cfg(all(not(coverage), not(target_os = "macos"), unix))]
+    #[cfg(all(not(coverage), not(target_os = "macos")))]
     if copy_result.is_err() {
-        remove_created_file_if_identity_matches(destination, destination_identity);
-    }
-    #[cfg(all(not(coverage), windows))]
-    if copy_result.is_err() {
-        remove_created_file_if_identity_matches(destination, destination_identity);
+        remove_created_file_if_identity_matches(destination, destination_identity.as_ref());
     }
     copy_result
 }
@@ -2241,7 +2213,8 @@ mod tests {
             "cloud-copy-timeout",
             123,
             &receipt_dir,
-        );
+        )
+        .unwrap();
         let entries: Vec<_> = std::fs::read_dir(&receipt_dir).unwrap().collect();
         assert_eq!(entries.len(), 1);
         let path = entries[0].as_ref().unwrap().path();
@@ -2259,6 +2232,24 @@ mod tests {
 
     #[cfg(not(coverage))]
     #[test]
+    fn copy_failure_record_surfaces_unwritable_journal() {
+        let temporary = tempfile::tempdir().unwrap();
+        let receipt_path = temporary.path().join("not-a-directory");
+        std::fs::write(&receipt_path, b"occupied").unwrap();
+
+        let error = record_copy_failure(
+            &candidate(),
+            CloudCopyApprovalAction::CopyOnly,
+            "cloud-copy-timeout",
+            123,
+            &receipt_path,
+        )
+        .unwrap_err();
+        assert!(!error.is_empty());
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
     fn same_millisecond_copy_failures_get_distinct_records() {
         let temporary = tempfile::tempdir().unwrap();
         let receipt_dir = temporary.path().join("receipts");
@@ -2269,7 +2260,8 @@ mod tests {
                 "cloud-copy-timeout",
                 123,
                 &receipt_dir,
-            );
+            )
+            .unwrap();
         }
         let mut entries: Vec<_> = std::fs::read_dir(&receipt_dir)
             .unwrap()

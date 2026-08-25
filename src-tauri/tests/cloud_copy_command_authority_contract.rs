@@ -100,7 +100,7 @@ fn failed_native_copy_cleanup_is_not_compiled_out_on_windows() {
 
     let has_windows_cleanup = body.contains("#[cfg(windows)]")
         || body.contains("#[cfg(all(not(coverage), windows))]")
-        || body.contains("#[cfg(all(not(target_os = \"macos\"), not(unix)))]");
+        || body.contains("#[cfg(all(not(coverage), not(target_os = \"macos\")))]");
     assert!(
         has_windows_cleanup,
         "a failed create_new copy must retain a Windows cleanup path instead of leaving a partial destination that blocks retries"
@@ -114,10 +114,10 @@ fn failed_native_copy_cleanup_is_not_compiled_out_on_windows() {
 
 #[test]
 fn windows_cleanup_uses_stable_handle_identity() {
-    let body = cloud_transfer_function_body("fn file_identity(", "fn failure_id_for(");
     assert!(
-        body.contains("crate::safety::filesystem_object_id(path).ok()"),
-        "Windows cleanup must use the stable handle-based identity helper"
+        CLOUD_TRANSFER.contains("Handle::from_path(path)")
+            && CLOUD_TRANSFER.contains("Handle::from_file"),
+        "Windows cleanup must capture and compare stable same-file handles"
     );
     assert!(
         !CLOUD_TRANSFER.contains("use std::os::windows::fs::MetadataExt"),
