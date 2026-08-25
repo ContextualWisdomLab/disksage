@@ -179,7 +179,7 @@
   });
 
   async function preview() {
-    if (!scannedRoot || !selectedRoot) return;
+    if (!scannedRoot || !selectedRoot || nativeCopyActive) return;
     busy = true;
     loadError = "";
     report = null;
@@ -879,7 +879,7 @@
     <div class="controls">
       <label>
         대상
-        <select bind:value={selectedRoot} onchange={providerSelectionChanged} disabled={busy}>
+        <select bind:value={selectedRoot} onchange={providerSelectionChanged} disabled={busy || nativeCopyActive}>
           {#each roots as root (root.id)}
             <option value={root.path}>
               {root.label} · {accountScopeLabel(root.account_scope)}{root.readable ? "" : " · 접근 불가·진단만 가능"}
@@ -895,7 +895,7 @@
         마지막 수정 후 최소 일수
         <input type="number" min="0" step="1" bind:value={minAgeDays} disabled={busy} />
       </label>
-      <button onclick={preview} disabled={busy || !scannedRoot || !selectedRoot || !selectedRootDetails()?.readable}>
+      <button onclick={preview} disabled={busy || nativeCopyActive || !scannedRoot || !selectedRoot || !selectedRootDetails()?.readable}>
         {busy ? "계획 중…" : "오프로드 후보 미리보기"}
       </button>
       <button onclick={reconcileCloudReceipts} disabled={reconciling || busy}>
@@ -1197,6 +1197,20 @@
 
   {#if !scannedRoot}<p class="muted">먼저 스캔을 완료하세요.</p>{/if}
   {#if loadError}<p class="error">{loadError}</p>{/if}
+
+  {#if nativeCopyActive && copyingFingerprint}
+    <div class="copy-progress" aria-live="polite">
+      <span>진행 중인 클라우드 복사는 후보 상태가 바뀌어도 취소할 수 있습니다.</span>
+      <button
+        type="button"
+        onclick={cancelCopy}
+        disabled={cancellingCopy}
+        aria-label="진행 중인 DiskSage 클라우드 복사 취소"
+      >
+        {cancellingCopy ? "복사 취소 요청 중…" : "진행 중인 복사 취소"}
+      </button>
+    </div>
+  {/if}
 
   {#if report}
     <div class="summary">
@@ -1648,16 +1662,6 @@
                 >
                   {copyingFingerprint === candidate.metadata_fingerprint ? "복사·해시 검증 중…" : "원본을 유지하고 클라우드에 복사"}
                 </button>
-                {#if nativeCopyActive && copyingFingerprint === candidate.metadata_fingerprint}
-                  <button
-                    type="button"
-                    onclick={cancelCopy}
-                    disabled={cancellingCopy}
-                    aria-label="진행 중인 DiskSage 클라우드 복사 취소"
-                  >
-                    {cancellingCopy ? "복사 취소 요청 중…" : "진행 중인 복사 취소"}
-                  </button>
-                {/if}
                 {/if}
                 {#if providerApiCopyEligible(candidate)}
                   <p class="warning">File Provider 전역 동기화가 막혀 있어, 명시적 OAuth 쓰기 연결로 공급자 API에 직접 업로드합니다. 원본은 유지되고 이후 API attestation이 필요합니다.</p>
