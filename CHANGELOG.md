@@ -67,8 +67,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   a real transfer/indexing progress reset across subsequent polls.
 - Do not treat a growing or unknown iCloud pending-indexable backlog as progress; only a drained
   backlog or actual transfer progress resets the stalled-copy interval.
-- Prefer `~/Downloads` and then the home directory over `/` for the initial macOS scan root, so a
-  first scan does not recursively enumerate iCloud/OneDrive File Provider trees by accident.
+- Prefer `~/Downloads` and then the home directory over `/` for the initial non-Windows desktop
+  scan root, so a first scan does not recursively enumerate iCloud/OneDrive File Provider trees by
+  accident.
 - Keep the iCloud status card blocked when the admission state is `blocked` even if a malformed or
   partially populated provider report temporarily has no blocker codes.
 - Keep the shipped Naruon readiness verifier source includable by its integration boundary test;
