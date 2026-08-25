@@ -7,6 +7,26 @@ authoritative, and no merge is claimed from queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
 
+## 2026-08-25 exact-head reconciliation
+
+The protected `main` head is `7eb131c4b4ac628226b262d6406a663fc7dc632f`. The following live PR
+inventory supersedes the older dated table for these rows; a pending check is not a merge or
+approval signal, and a PR based on an older main remains non-integrated until it is deliberately
+rebased and reverified.
+
+| PR | Exact head | Base | Draft | Merge state | Review state | Check evidence at capture |
+| --- | --- | --- | --- | --- | --- | --- |
+| #249 | `2f1d585398b85f3f1adb3783520ad70e7b4a9c3f` | `7eb131c4` | no | blocked | none | 1 non-success terminal, 2 pending |
+| #247 | `58e1dc52a93cd959daaea549a7f362eddc1601f5` | `7eb131c4` | no | blocked | none | 0 non-success terminal, 18 pending |
+| #246 | `2037c91b8d64df3a9f06a91ed7ad7ea637d8a7fd` | `17d4e203` | no | blocked | none | 0 non-success terminal, 18 pending; base is stale |
+| #227 | `457c9ebb2a69a6b234ef9ce8d882fcc3355892ec` | `7eb131c4` | no | blocked | none | 0 non-success terminal, 15 pending |
+| #204 | `750213dff16482544af3c0a9543f6c638924e5e6` | `17d4e203` | no | blocked | none | 0 non-success terminal, 18 pending; base is stale |
+| #206 | `2e7b845b7610a871ec5981d964bcab5cb99df41d` | `5c86668a` | yes | clean | changes requested | 0 non-success terminal, 2 pending; stacked draft |
+
+The current exact-head source fixes on #247, #246, and #204 have local focused evidence, but no
+protected merge is claimed until their post-push checks and qualifying independent approval are
+fresh on the listed heads. The filename-date rule and provider fail-closed rules remain unchanged.
+
 ## Current product contract
 
 1. Scan and metadata profiling are read-only and metadata-first: embedded metadata precedes an unambiguous filename token, then filesystem creation/modification time. A filename token such as `2026-04-28` or `251210` is secondary evidence and never proves ownership, upload, or eviction authority.
