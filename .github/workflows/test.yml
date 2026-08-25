@@ -59,6 +59,8 @@ jobs:
           New-Item -ItemType Directory -Force target | Out-Null
           rustc --edition=2021 --test src-tauri/tests/home_resolution_contract.rs -o target/home-resolution-contract.exe
           & .\target\home-resolution-contract.exe
+      - name: Windows junction no-follow regression
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test windows_junction_no_follow --locked
 
   macos-bound-root:
     runs-on: macos-latest
