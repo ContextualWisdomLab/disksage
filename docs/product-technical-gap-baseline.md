@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-25 (Asia/Seoul)
-**Repository heads at snapshot:** PR #259 `86dd521`, PR #258 `1511c51`, PR #227 `98fa709`, PR #249 `2f1d585`,
+**Repository heads at snapshot:** PR #259 `86dd521`, PR #258 `39d2188`, PR #227 `98fa709`, PR #249 `2f1d585`,
 PR #247 `0de3f6a`, PR #246 `cbb9dc0`, PR #204 `750213d`, draft PR #198 `cf763cd`, and replacement central `.github` PR #1330 `a27b6ed`;
 hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
@@ -17,8 +17,8 @@ rebased and reverified.
 
 | PR | Exact head | Base | Draft | Merge state | Review state | Check evidence at capture |
 | --- | --- | --- | --- | --- | --- | --- |
-| #259 | `86dd521227661e6d50d7f95e70cfc7f3e3929665` | `7eb131c4` | no | blocked | required | stale File Provider error-state + `last`/`expired` parser; helper docstrings added; checks remain authoritative |
-| #258 | `1511c51f82943ffb35667e117b4082d65e42302b` | `7eb131c4` | no | blocked | required | current baseline/docs head; checks remain authoritative |
+| #259 | `86dd521227661e6d50d7f95e70cfc7f3e3929665` | `7eb131c4` | no | blocked | required | stale File Provider error-state + `last`/`expired` parser; helper docstrings added; hosted Strix is annotated `STRIX_PROVIDER_UNAVAILABLE`, exact-head rerun requested |
+| #258 | `39d2188a5f82e9eb92ad6c87911031b219f01ba4` | `7eb131c4` | no | blocked | required | current baseline/docs head; checks remain authoritative |
 | #249 | `2f1d585398b85f3f1adb3783520ad70e7b4a9c3f` | `7eb131c4` | no | blocked | required | source/build/security/coverage pass; Strix external provider failure |
 | #247 | `0de3f6a3672c6ff0f39726b7a4ddaeba757154b6` | `7eb131c4` | no | blocked | required | runtime receipt projection and shared iCloud notice contracts; post-push checks pending |
 | #246 | `cbb9dc0f5b1eba52e76f23f673381a3ebcdc132f` | `7eb131c4` | no | blocked | required | late persisted iCloud blocker timestamp adoption and border regression repair; focused UI checks pass, hosted checks pending |
@@ -62,7 +62,9 @@ head `a3e6762f01666f5b4e9d202932012de23b942c59` (base `develop`), preserving the
 tests and doctoring document, explicit zero and out-of-range port rejection in both validators, and the
 single `.jules/bolt.md` scope guard that prevents future graph optimizers from touching the security
 contract. The focused backend suite is 46 tests on the verified tree; the sole current Devin informational
-thread is resolved, while hosted checks and a fresh qualifying approval remain pending. PR #1462 is
+thread is resolved. The current Strix run is annotated `STRIX_PROVIDER_UNAVAILABLE`, so the metadata-only
+gate is downstream of provider unavailability; an exact-head rerun was requested and hosted checks plus a
+fresh qualifying approval remain pending. PR #1462 is
 `8aa604b62ade3067d8b11000f6e96d0ad28c0680`, with Strix governance re-triggering restored, the
 `pytest-cov` dependency closure pinned and hash-locked, and utility input limits enforced; 75
 backend tool tests plus the optional-parameter frontend regression and earlier governance suite
