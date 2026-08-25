@@ -924,6 +924,10 @@ fn native_status_summary_complete(output: &[u8]) -> bool {
     container_count && summary
 }
 
+/// Converts bounded `fileproviderctl` text into path-free activity evidence and notices.
+///
+/// Relative operation ages are considered stalled only when paired with a provider operation and
+/// an error marker, so unrelated diagnostic durations cannot block a copy by themselves.
 fn parse_file_provider_activity_output(
     output: &str,
     observed_at_ms: u64,
@@ -1077,6 +1081,7 @@ fn parse_file_provider_activity_output(
     }
 }
 
+/// Extracts the oldest bounded relative age from a provider `last:` or `expired:` field.
 fn relative_age_ms(line: &str) -> Option<u64> {
     ["last:'", "expired:'"].iter().filter_map(|marker| {
         let value_start = line.rfind(marker)?.saturating_add(marker.len());
@@ -1089,6 +1094,7 @@ fn relative_age_ms(line: &str) -> Option<u64> {
     .max()
 }
 
+/// Parses compact provider age components such as `4h9min` without floating-point rounding.
 fn parse_age_components(age: &str) -> Option<u64> {
     let bytes = age.as_bytes();
     let mut index = 0;
@@ -1123,6 +1129,7 @@ fn parse_age_components(age: &str) -> Option<u64> {
     saw_component.then_some(total)
 }
 
+/// Parses one provider progress fraction into millionths while rejecting malformed values.
 fn progress_millionths(output: &str, operation: &str) -> Option<u32> {
     output.lines().find_map(|line| {
         if !line.to_ascii_lowercase().contains(operation) {
@@ -1911,6 +1918,7 @@ fn build_report(
     })
 }
 
+/// Projects native iCloud observations into fail-closed copy-admission blockers.
 fn attach_native_status_admission(report: &mut IcloudSyncHealthReport) {
     if report
         .native_status
