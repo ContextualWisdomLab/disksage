@@ -2,7 +2,7 @@
 
 **Snapshot:** 2026-08-25 (Asia/Seoul)
 **Repository heads at snapshot:** PR #259 `a019dda`, PR #258 `f9785e1`, PR #227 `98fa709`, PR #249 `2f1d585`,
-PR #247 `0de3f6a`, PR #246 `d38ed05`, PR #204 `750213d`, draft PR #198 `cf763cd`, and central `.github` PR #1328 `7c50c44`;
+PR #247 `0de3f6a`, PR #246 `d38ed05`, PR #204 `750213d`, draft PR #198 `cf763cd`, and central `.github` PR #1328 `7fb95ac`;
 hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
@@ -26,7 +26,7 @@ rebased and reverified.
 | #204 | `750213dff16482544af3c0a9543f6c638924e5e6` | `17d4e203` | yes | blocked | none | Strix failure; base is stale |
 | #206 | `2e7b845b7610a871ec5981d964bcab5cb99df41d` | `5c86668a` | yes | clean | changes requested | 0 non-success terminal, 2 pending; stacked draft |
 | #198 | `cf763cdf1b3f483efaf483f6c95196a89e005951` | `7eb131c4` | yes | blocked | required | iCloud eviction privacy feedback hardening; focused UI checks pass, hosted checks pending |
-| ContextualWisdomLab/.github #1328 | `7c50c44df917192b1c9fcb9b7c87b62003dfe127` | `8fd471a3` | no | blocked | required | central autofix now rejects deletion/rename of protected origin-validation security paths; focused contract test passes, hosted checks queued |
+| ContextualWisdomLab/.github #1328 | `7fb95ac249d4adaf3fe96f0432d2d9e978fdaeef` | `8fd471a3` | no | blocked | required | central autofix rejects deletion/rename of protected origin-validation paths in both normal and conflict-resolution modes; focused contract test passes, hosted checks queued |
 
 PR #246 exact-head `d38ed05d2b640402a3bf39c49aa2b26331af5cf4` now preserves the backend persisted
 iCloud stall start across restart/probe errors and keeps Finder-cancel confirmation visible after
