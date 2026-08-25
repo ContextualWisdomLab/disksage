@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-25 (Asia/Seoul)
-**Repository heads at snapshot:** PR #259 `a019dda`, PR #258 `79d283b`, PR #227 `98fa709`, PR #249 `2f1d585`,
+**Repository heads at snapshot:** PR #259 `a019dda`, PR #258 `a3dc8c5`, PR #227 `98fa709`, PR #249 `2f1d585`,
 PR #247 `0de3f6a`, PR #246 `d38ed05`, PR #204 `750213d`, and draft PR #198 `cf763cd`; hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
@@ -17,7 +17,7 @@ rebased and reverified.
 | PR | Exact head | Base | Draft | Merge state | Review state | Check evidence at capture |
 | --- | --- | --- | --- | --- | --- | --- |
 | #259 | `a019ddaba4aa5cad1e0bef02121f20d514d9580c` | `7eb131c4` | no | blocked | required | stale File Provider error-state + `last`/`expired` parser; checks remain authoritative |
-| #258 | `79d283b461c27a248a7d9f0c83dfa9fe55a16ced` | `7eb131c4` | no | blocked | required | current baseline/docs head; checks remain authoritative |
+| #258 | `a3dc8c582d66e33859c1af74e78668650cb70837` | `7eb131c4` | no | blocked | required | current baseline/docs head; checks remain authoritative |
 | #249 | `2f1d585398b85f3f1adb3783520ad70e7b4a9c3f` | `7eb131c4` | no | blocked | required | source/build/security/coverage pass; Strix external provider failure |
 | #247 | `0de3f6a3672c6ff0f39726b7a4ddaeba757154b6` | `7eb131c4` | no | blocked | required | runtime receipt projection and shared iCloud notice contracts; post-push checks pending |
 | #246 | `d38ed05d2b640402a3bf39c49aa2b26331af5cf4` | `7eb131c4` | no | blocked | required | iCloud stall clock and Finder-cancel confirmation contracts; checks pending |
@@ -48,8 +48,8 @@ surfacing cleanup status, applying the Compose hardening contract, and escaping 
 variable interpolation for the atomic WAL archive command; targeted backend/shell/
 Podman drill evidence passed locally, while hosted checks and a fresh qualifying approval remain
 authoritative. PR #1454 is
-`3426c21c06ce55e70c3c162559279921bba6b651`, with the deleted URL/loopback tests and doctoring
-document restored after a fifth optimizer regression and explicit zero ports rejected in both
+`089e70c33663e23cc0a0705a7e520535d5c61fd9`, with the deleted URL/loopback tests and doctoring
+document restored after a sixth optimizer regression and explicit zero ports rejected in both
 validators; targeted backend (45) tests passed on this exact head, while hosted checks and fresh
 approval remain pending. PR #1462 is
 `8aa604b62ade3067d8b11000f6e96d0ad28c0680`, with Strix governance re-triggering restored, the
