@@ -14,7 +14,10 @@
     type CloudReviewQueueFilter,
     type CloudReviewQueueSort,
   } from "./cloudReviewQueue";
-  import { boundedCloudArchiveErrorMessage } from "./cloudArchiveErrorFeedback";
+  import {
+    boundedCloudArchiveErrorMessage,
+    isCloudCopyCancelled,
+  } from "./cloudArchiveErrorFeedback";
   import { fmtBytes } from "./fmt";
   import IcloudLocalEviction from "./IcloudLocalEviction.svelte";
 
@@ -369,7 +372,9 @@
       );
       objectId = copied.provider_object_id ?? "";
     } catch (e) {
-      loadError = boundedCloudArchiveErrorMessage("copy", e);
+      loadError = isCloudCopyCancelled(e)
+        ? "클라우드 복사를 취소했습니다. 원본은 유지됩니다."
+        : boundedCloudArchiveErrorMessage("copy", e);
     } finally {
       copyingFingerprint = "";
       nativeCopyActive = false;

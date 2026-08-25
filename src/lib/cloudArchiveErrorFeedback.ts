@@ -17,6 +17,8 @@ export type CloudArchiveErrorOperation =
   | "connect"
   | "disconnect";
 
+const CLOUD_COPY_CANCELLED = "cloud-copy-cancelled";
+
 const CLOUD_ARCHIVE_ERROR_MESSAGES: Record<CloudArchiveErrorOperation, string> = {
   initialize: "클라우드 상태를 불러오지 못했습니다.",
   preview: "클라우드 오프로드 계획을 만들지 못했습니다.",
@@ -47,4 +49,12 @@ export function boundedCloudArchiveErrorMessage(
   _caughtError: unknown,
 ): string {
   return CLOUD_ARCHIVE_ERROR_MESSAGES[operation];
+}
+
+/** Return true only for the backend's deliberate user-cancellation outcome. */
+export function isCloudCopyCancelled(caughtError: unknown): boolean {
+  if (caughtError === CLOUD_COPY_CANCELLED) return true;
+  if (caughtError instanceof Error) return caughtError.message === CLOUD_COPY_CANCELLED;
+  if (typeof caughtError !== "object" || caughtError === null) return false;
+  return "message" in caughtError && caughtError.message === CLOUD_COPY_CANCELLED;
 }

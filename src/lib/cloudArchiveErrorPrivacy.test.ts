@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   boundedCloudArchiveErrorMessage,
+  isCloudCopyCancelled,
   type CloudArchiveErrorOperation,
 } from "./cloudArchiveErrorFeedback";
 
@@ -30,6 +31,14 @@ const operations = [
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
 describe("CloudArchive bounded error feedback", () => {
+  it("recognizes only the deliberate cloud-copy cancellation outcome", () => {
+    expect(isCloudCopyCancelled("cloud-copy-cancelled")).toBe(true);
+    expect(isCloudCopyCancelled(new Error("cloud-copy-cancelled"))).toBe(true);
+    expect(isCloudCopyCancelled({ message: "cloud-copy-cancelled" })).toBe(true);
+    expect(isCloudCopyCancelled("failure-record-write-failed")).toBe(false);
+    expect(isCloudCopyCancelled(new Error("cloud-copy-failed"))).toBe(false);
+  });
+
   it("drops arbitrary backend details for every user-visible failure phase", () => {
     const sensitiveDetail =
       "OAuth refresh failed for /Users/alice/private/report.pdf token=sk-sensitive";
