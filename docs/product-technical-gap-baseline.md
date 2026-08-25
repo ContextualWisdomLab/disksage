@@ -33,6 +33,12 @@ exact-head source fixes on #247, #246, and #204 have local focused evidence, but
 protected merge is claimed until their post-push checks and qualifying independent approval are
 fresh on the listed heads. The filename-date rule and provider fail-closed rules remain unchanged.
 
+Naruon exact-head reconciliation is also part of this baseline: PR #1333 is `dd947ed050652264c4b74d4e59ee081895d96a0a`
+with no unresolved review threads but an older metadata-only CodeRabbit gate failure still recorded;
+PR #1443 is `55a84f904f11203f49c356d95d7d88ba9f903030`, the direct gate repair, with source/security
+checks passing and coverage/Strix/metadata checks still running. Neither PR is claimed merge-ready
+without a fresh qualifying review and exact-head protected checks.
+
 ## Current product contract
 
 1. Scan and metadata profiling are read-only and metadata-first: embedded metadata precedes an unambiguous filename token, then filesystem creation/modification time. A filename token such as `2026-04-28` or `251210` is secondary evidence and never proves ownership, upload, or eviction authority.
