@@ -347,7 +347,8 @@
       || exactConfirmationPhrase !== expectedApprovalPhrase
       || !approvalRationale) return;
     copyingFingerprint = candidate.metadata_fingerprint;
-    nativeCopyActive = true;
+    // Adoption verifies an existing file without a cancellable native copy helper.
+    nativeCopyActive = false;
     loadError = "";
     copied = null;
     attestation = null;
