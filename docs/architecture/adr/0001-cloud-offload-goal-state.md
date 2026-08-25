@@ -642,3 +642,12 @@ prevents a growing provider queue from postponing the 15-minute Finder-stall gui
 the clock remains diagnostic/cancel-only and never grants copy, attestation, or eviction authority.
 The implementation at source head `44756d1` is covered by seven focused Vitest cases and a clean
 `svelte-check` run.
+
+## Amendment: restore persisted stall age after probe errors (2026-08-25)
+
+The UX stall clock now restores `admission_blocked_since_ms` when the first blocked report arrives
+after restart or a failed probe, then falls back to the backend observation timestamp and finally
+the local observation time. This keeps an ongoing Finder stall's 15-minute diagnostic warning from
+resetting to zero without granting copy, attestation, or eviction authority. The iCloud status card
+is the single Finder-cancel control; the duplicate detail-panel button was removed. Exact functional
+head `74f9f3ff73ac18c9e61f6cf1f63b3fcb8237e76e` carries the regression test.
