@@ -39,6 +39,13 @@ describe("CloudArchive bounded error feedback", () => {
     expect(isCloudCopyCancelled(new Error("cloud-copy-failed"))).toBe(false);
   });
 
+  it("treats a late cancel after the native operation finished as a benign no-op", () => {
+    expect(boundedCloudArchiveErrorMessage("cancel", "cloud-copy-not-active")).toBe("");
+    expect(boundedCloudArchiveErrorMessage("cancel", new Error("cloud-copy-not-active"))).toBe("");
+    expect(boundedCloudArchiveErrorMessage("cancel", { message: "cloud-copy-not-active" })).toBe("");
+    expect(boundedCloudArchiveErrorMessage("cancel", "cloud-copy-operation-mismatch")).not.toBe("");
+  });
+
   it("drops arbitrary backend details for every user-visible failure phase", () => {
     const sensitiveDetail =
       "OAuth refresh failed for /Users/alice/private/report.pdf token=sk-sensitive";
