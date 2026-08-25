@@ -232,6 +232,28 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_output_is_rejected_before_second_parent_probe() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("one.json").into_os_string();
+        let second = directory
+            .path()
+            .join("missing-parent")
+            .join("two.json")
+            .into_os_string();
+
+        assert_eq!(
+            parse_args(&[
+                "--output".into(),
+                first,
+                "--output".into(),
+                second,
+            ])
+            .unwrap_err(),
+            "--output may be supplied once"
+        );
+    }
+
+    #[test]
     fn audit_is_path_free_and_does_not_claim_remote_state() {
         let report = audit(42);
         let encoded = serde_json::to_string(&report).unwrap();
