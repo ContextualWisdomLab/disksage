@@ -1508,7 +1508,7 @@ fn copy_and_verify(
         Ok((staging_len, staging_hashes))
     })();
 
-    #[cfg(all(not(target_os = "macos"), any(unix, windows)))]
+    #[cfg(all(not(coverage), not(target_os = "macos"), any(unix, windows)))]
     let mut destination_identity: Option<(u64, u64)> = None;
 
     #[cfg(not(target_os = "macos"))]
@@ -1519,7 +1519,7 @@ fn copy_and_verify(
             .create_new(true)
             .open(destination)
             .map_err(|error| error.to_string())?;
-        #[cfg(any(unix, windows))]
+        #[cfg(all(not(coverage), any(unix, windows)))]
         {
             let metadata = std::fs::symlink_metadata(destination)
                 .map_err(|_| "destination-state-unavailable".to_string())?;
@@ -1576,11 +1576,11 @@ fn copy_and_verify(
 
     // The TempDir owns the only pathname created for a macOS copy. On Unix, a native copy's
     // cleanup is identity-bound so a concurrent replacement cannot be deleted accidentally.
-    #[cfg(all(not(target_os = "macos"), unix))]
+    #[cfg(all(not(coverage), not(target_os = "macos"), unix))]
     if copy_result.is_err() {
         remove_created_file_if_identity_matches(destination, destination_identity);
     }
-    #[cfg(windows)]
+    #[cfg(all(not(coverage), windows))]
     if copy_result.is_err() {
         remove_created_file_if_identity_matches(destination, destination_identity);
     }

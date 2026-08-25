@@ -50,6 +50,7 @@ pub mod cloud_adr;
 pub mod cloud_plan_view;
 pub mod cloud_local_inventory;
 pub mod cloud_local_eviction;
+#[cfg(not(coverage))]
 pub mod cloud_local_eviction_batch;
 #[cfg(not(coverage))]
 pub mod cloud_eviction;

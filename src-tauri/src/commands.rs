@@ -16,10 +16,11 @@ use crate::scanner::ScanResult;
 // clean_paths_inner/execute_moves_inner/undo_last_moves_inner(순수 함수)가 쓰는 것은 무조건 import; 래퍼 전용은 cfg(not(coverage))
 use crate::organize;
 use crate::safety;
+use crate::dev_artifacts;
 #[cfg(not(coverage))]
 use crate::{
     brew_cleanup, cloud, cloud_adr, cloud_eviction, cloud_local_eviction, cloud_plan_view,
-    cloud_review, cloud_transfer, dev_artifacts, dupes, git_worktree, icloud_sync_health,
+    cloud_review, cloud_transfer, dupes, git_worktree, icloud_sync_health,
     organization_lineage,
     podman_reclaim, provider_api_client, provider_api_write, provider_capacity,
     provider_client_runtime, provider_evidence, provider_global_sync, provider_oauth,

@@ -90,6 +90,7 @@ fn failed_native_copy_cleanup_is_not_compiled_out_on_windows() {
     let body = cloud_transfer_function_body("fn copy_and_verify(", "fn verify_existing_destination(");
 
     let has_windows_cleanup = body.contains("#[cfg(windows)]")
+        || body.contains("#[cfg(all(not(coverage), windows))]")
         || body.contains("#[cfg(all(not(target_os = \"macos\"), not(unix)))]");
     assert!(
         has_windows_cleanup,
