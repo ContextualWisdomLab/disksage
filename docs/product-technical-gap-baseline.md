@@ -79,6 +79,10 @@ PR #1443 is `51115c0fb5950cb96f28ca399dc5480572c49df0`, the direct gate repair, 
 approval-notice self-test fixed and source/security checks restarting; coverage/metadata and independent review remain pending.
 Neither PR is claimed merge-ready
 without a fresh qualifying review and exact-head protected checks.
+PR #1469 is `99315f30d18468bcb2e0c27d215b8fee8a181d22`; its 64 MiB deferred attachment retention now
+fails closed before NewsDOM network I/O when the sidecar's 20 MiB `/parse` contract would be exceeded,
+using one shared boundary and a visible `provider_payload_size_exceeded` worker outcome. Hosted checks and
+fresh review remain authoritative.
 PR #1464 is `5af23f188d764128636e1f308842bbd9f3329ca7`, with review threads resolved after pinning
 PITR timestamps to an explicit `+00` offset, making WAL archival idempotent on reused volumes,
 surfacing cleanup status, applying the Compose hardening contract, and escaping Compose's shell
