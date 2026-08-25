@@ -75,11 +75,11 @@ fresh on the listed heads. The filename-date rule and provider fail-closed rules
 Naruon exact-head reconciliation is also part of this baseline: PR #1333 is `dd947ed050652264c4b74d4e59ee081895d96a0a`
 with no unresolved review threads; the exact-head Strix rerun now succeeds, while the metadata-only
 gate remains in progress after its cancelled review-trigger run was requested again;
-PR #1443 is `51115c0fb5950cb96f28ca399dc5480572c49df0`, the direct gate repair, with the malformed
-approval-notice self-test fixed and source/security checks restarting; coverage/metadata and independent review remain pending.
+PR #1443 is `be923e49f6c249bcb5f0edd2637b33794ee07b1b`, the direct gate repair, with malformed
+approval-notice fail-closed coverage and matching empty-check fixtures; hosted coverage/metadata and independent review remain pending.
 Neither PR is claimed merge-ready
 without a fresh qualifying review and exact-head protected checks.
-PR #1469 is `99315f30d18468bcb2e0c27d215b8fee8a181d22`; its 64 MiB deferred attachment retention now
+PR #1469 is `575b0c24fd9cb98106989eb101de74c5ce383db3`; its 64 MiB deferred attachment retention now
 fails closed before NewsDOM network I/O when the sidecar's 20 MiB `/parse` contract would be exceeded,
 using one shared boundary and a visible `provider_payload_size_exceeded` worker outcome. Hosted checks and
 fresh review remain authoritative.
