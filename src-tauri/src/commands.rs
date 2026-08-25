@@ -2063,6 +2063,14 @@ fn create_cloud_candidate_provider_api_receipt(
     } else {
         None
     };
+    let blockers = cloud_transfer::provider_api_candidate_blockers_with_review(
+        candidate,
+        &selected,
+        review_decision.as_ref(),
+    );
+    if !blockers.is_empty() {
+        return Err(format!("provider-api-candidate-blocked:{}", blockers.join(",")));
+    }
     let copy_approval = cloud_transfer::create_cloud_copy_approval(
         candidate,
         &selected,

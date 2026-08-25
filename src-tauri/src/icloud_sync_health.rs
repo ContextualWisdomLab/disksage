@@ -344,12 +344,12 @@ fn health_evidence_fingerprint(
     Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
-/// Recompute the pre-`pending_indexable_count` fingerprint without changing field order.
+/// Recompute the fingerprint used before the added aggregate provider counters existed.
 ///
 /// Retained snapshots are immutable evidence. Accepting this one historical encoding keeps an
 /// upgrade from silently shortening the durable stall clock while still requiring the exact old
 /// digest; newly written snapshots continue to use `health_evidence_fingerprint`.
-fn health_evidence_fingerprint_without_pending_indexable(
+fn health_evidence_fingerprint_without_added_counters(
     snapshot: &IcloudSyncHealthEvidenceSnapshot,
 ) -> Result<String, String> {
     let mut unsigned = snapshot.clone();
@@ -362,6 +362,18 @@ fn health_evidence_fingerprint_without_pending_indexable(
         .is_some_and(|activity| activity.pending_indexable_count.is_none())
     {
         let field = b"\"pending_indexable_count\":null,";
+        let index = encoded
+            .windows(field.len())
+            .position(|window| window == field)
+            .ok_or_else(|| "icloud-sync-health-evidence-legacy-field-missing".to_string())?;
+        encoded.drain(index..index + field.len());
+    }
+    if unsigned
+        .native_status
+        .as_ref()
+        .is_some_and(|status| status.pending_scan_count == 0)
+    {
+        let field = b"\"pending_scan_count\":0,";
         let index = encoded
             .windows(field.len())
             .position(|window| window == field)
@@ -496,8 +508,12 @@ pub fn validate_icloud_sync_health_evidence_snapshot(
     let legacy_expected = (snapshot
         .file_provider_activity
         .as_ref()
-        .is_some_and(|activity| activity.pending_indexable_count.is_none()))
-    .then(|| health_evidence_fingerprint_without_pending_indexable(snapshot));
+        .is_some_and(|activity| activity.pending_indexable_count.is_none())
+        || snapshot
+            .native_status
+            .as_ref()
+            .is_some_and(|status| status.pending_scan_count == 0))
+    .then(|| health_evidence_fingerprint_without_added_counters(snapshot));
     let fingerprint_matches = snapshot.evidence_fingerprint_sha256 == expected
         || legacy_expected
             .and_then(Result::ok)
@@ -2835,7 +2851,7 @@ mod tests {
     }
 
     #[test]
-    fn health_evidence_accepts_pre_pending_indexable_fingerprint() {
+    fn health_evidence_accepts_pre_added_counter_fingerprint() {
         let mut report = build_report(
             1,
             vec![],
@@ -2863,9 +2879,25 @@ mod tests {
             active_download_progress_millionths: None,
             notices: vec!["test-notice".into()],
         });
+        report.native_status = Some(IcloudNativeStatusEvidence {
+            schema_version: ICLOUD_NATIVE_STATUS_SCHEMA_VERSION,
+            observed_at_ms: 1,
+            command_succeeded: true,
+            timed_out: false,
+            output_truncated: false,
+            status_observed: true,
+            evidence_complete: true,
+            container_count: Some(1),
+            client_state: Some("ready".into()),
+            server_state: Some("ready".into()),
+            sync_state: Some("ready".into()),
+            last_sync_present: false,
+            pending_scan_count: 0,
+            notices: vec!["test-notice".into()],
+        });
         let mut snapshot = health_evidence_snapshot_from_report(&report).unwrap();
         snapshot.evidence_fingerprint_sha256 =
-            health_evidence_fingerprint_without_pending_indexable(&snapshot).unwrap();
+            health_evidence_fingerprint_without_added_counters(&snapshot).unwrap();
         validate_icloud_sync_health_evidence_snapshot(&snapshot).unwrap();
 
         snapshot
@@ -2873,6 +2905,17 @@ mod tests {
             .as_mut()
             .unwrap()
             .pending_indexable_count = Some(1);
+        assert_eq!(
+            validate_icloud_sync_health_evidence_snapshot(&snapshot).unwrap_err(),
+            "icloud-sync-health-evidence-fingerprint-invalid"
+        );
+
+        snapshot
+            .file_provider_activity
+            .as_mut()
+            .unwrap()
+            .pending_indexable_count = None;
+        snapshot.native_status.as_mut().unwrap().pending_scan_count = 1;
         assert_eq!(
             validate_icloud_sync_health_evidence_snapshot(&snapshot).unwrap_err(),
             "icloud-sync-health-evidence-fingerprint-invalid"

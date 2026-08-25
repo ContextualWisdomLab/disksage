@@ -271,10 +271,12 @@
     const embeddedHighConfidence = candidate.production_time_confidence === "high"
       && candidate.production_time_source.startsWith("embedded:");
     const approvalPhrase = api.cloudCopyApprovalPhrase(candidate, "copy-only");
+    const onlyNativeStagingBlocker = candidate.blocked_reason === null
+      || candidate.blocked_reason.startsWith("local-volume-headroom-");
     return selectedRootDetails()?.provider !== "icloud"
       && hasProviderAdmissionBlocker(report?.notices ?? [])
       && providerApiWriteConnected()
-      && candidate.blocked_reason === null
+      && onlyNativeStagingBlocker
       && (!candidate.requires_review || exactApproval)
       && (embeddedHighConfidence || exactApproval)
       && api.cloudCapacityAllowsCopy(report?.capacity)
