@@ -1427,7 +1427,7 @@ mod tests {
         assert!(parse_file_providerctl_snapshot("isUploaded = maybe;", 42, "hash").is_err());
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(all(not(target_os = "macos"), not(windows)))]
     #[test]
     fn existing_destination_gate_rejects_missing_or_wrong_size_without_reading_bytes() {
         let temporary = tempfile::tempdir().unwrap();
@@ -1440,6 +1440,19 @@ mod tests {
         );
         assert!(
             require_existing_destination_local_current(CloudProvider::Onedrive, &path, 5).is_ok()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn existing_destination_gate_fails_closed_without_provider_status_on_windows() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("existing.bin");
+        std::fs::write(&path, b"bytes").unwrap();
+        assert_eq!(
+            require_existing_destination_local_current(CloudProvider::Onedrive, &path, 5)
+                .unwrap_err(),
+            "existing-destination-provider-status-unavailable"
         );
     }
 

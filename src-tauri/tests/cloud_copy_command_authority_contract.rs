@@ -56,15 +56,20 @@ fn native_copy_cancellation_is_checked_during_preflight() {
         "fn create_cloud_candidate_receipt(",
         "pub async fn copy_cloud_candidate(",
     );
-    let checks = body.matches("require_native_copy_not_cancelled(cancel)?").count();
-    assert!(checks >= 5, "native copy preflight must honor cancellation at each bounded gate");
+    let checks = body
+        .matches("require_native_copy_not_cancelled_with_failure(")
+        .count();
     assert!(
-        body.find("require_native_copy_not_cancelled(cancel)?")
+        checks >= 5,
+        "native copy preflight must honor cancellation at each bounded gate"
+    );
+    assert!(
+        body.find("require_native_copy_not_cancelled_with_failure(")
             < body.find("require_local_copy_headroom(candidate)?"),
         "queued cancellation must be checked before headroom/provider preflight"
     );
     assert!(
-        body.rfind("require_native_copy_not_cancelled(cancel)?")
+        body.rfind("require_native_copy_not_cancelled_with_failure(")
             < body.find("prepare_cloud_copy_with_approval_cancelable("),
         "native copy must re-check cancellation immediately before mutation"
     );
@@ -101,6 +106,22 @@ fn native_copy_cancel_registration_happens_before_serialization_lock() {
     assert_cancel_registration_precedes_serialization_lock(
         "pub async fn copy_cloud_candidate(",
         "pub async fn copy_cloud_candidate_via_provider_api(",
+    );
+}
+
+#[test]
+fn native_copy_cleanup_is_panic_safe() {
+    let body = function_body(
+        "pub async fn copy_cloud_candidate(",
+        "pub async fn copy_cloud_candidate_via_provider_api(",
+    );
+    assert!(
+        body.contains("struct NativeCopyReset") && body.contains("impl Drop for NativeCopyReset"),
+        "native copy state must be released by an RAII guard when the blocking task panics"
+    );
+    assert!(
+        body.contains("if active.as_deref() == Some(self.fingerprint.as_str())"),
+        "panic-safe cleanup must not clear a newer operation"
     );
 }
 

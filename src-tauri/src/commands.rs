@@ -1714,6 +1714,31 @@ fn require_native_copy_not_cancelled(cancel: Option<&AtomicBool>) -> Result<(), 
 }
 
 #[cfg(not(coverage))]
+fn require_native_copy_not_cancelled_with_failure(
+    cancel: Option<&AtomicBool>,
+    candidate: &cloud::CloudCandidate,
+    action: cloud_transfer::CloudCopyApprovalAction,
+    failure_dir: &Path,
+) -> Result<(), String> {
+    let error = match require_native_copy_not_cancelled(cancel) {
+        Ok(()) => return Ok(()),
+        Err(error) => error,
+    };
+    let journal_error = cloud_transfer::record_copy_failure(
+        candidate,
+        action,
+        &error,
+        cloud::system_now_ms(),
+        failure_dir,
+    )
+    .err();
+    Err(match journal_error {
+        Some(journal_error) => format!("{error};{journal_error}"),
+        None => error,
+    })
+}
+
+#[cfg(not(coverage))]
 fn create_cloud_candidate_receipt(
     root: &str,
     cloud_root: &str,
@@ -1756,26 +1781,26 @@ fn create_cloud_candidate_receipt(
         [] => return Err("fresh-plan-candidate-not-found".into()),
         _ => return Err("fresh-plan-candidate-ambiguous".into()),
     };
-    if !adopt_existing {
-        require_native_copy_not_cancelled(cancel)?;
-    }
     let app_data_dir = app
         .path()
         .app_data_dir()
         .map_err(|_| "app-data-directory-unavailable".to_string())?;
     let receipt_dir = app_data_dir.join("cloud-receipts");
     let failure_dir = app_data_dir.join("cloud-copy-failures");
+    let action = if adopt_existing {
+        cloud_transfer::CloudCopyApprovalAction::AdoptExistingCopy
+    } else {
+        cloud_transfer::CloudCopyApprovalAction::CopyOnly
+    };
+    if !adopt_existing {
+        require_native_copy_not_cancelled_with_failure(cancel, candidate, action, &failure_dir)?;
+    }
     let review_decision = if candidate.requires_review {
         cloud_review::load_latest_decisions(&cloud_review_directory(&app)?)?
             .into_iter()
             .find(|decision| decision.candidate_fingerprint == candidate.metadata_fingerprint)
     } else {
         None
-    };
-    let action = if adopt_existing {
-        cloud_transfer::CloudCopyApprovalAction::AdoptExistingCopy
-    } else {
-        cloud_transfer::CloudCopyApprovalAction::CopyOnly
     };
     let action_at_ms = cloud::system_now_ms();
     let copy_approval = cloud_transfer::create_cloud_copy_approval(
@@ -1792,12 +1817,12 @@ fn create_cloud_candidate_receipt(
         // bytes. Re-check destination/staging headroom immediately before any mutation; adoption
         // only verifies an existing destination and does not create a local staging file.
         require_local_copy_headroom(candidate)?;
-        require_native_copy_not_cancelled(cancel)?;
+        require_native_copy_not_cancelled_with_failure(cancel, candidate, action, &failure_dir)?;
         let runtime = provider_client_runtime::require_provider_client_runtime(
             selected.provider,
             cloud::system_now_ms(),
         )?;
-        require_native_copy_not_cancelled(cancel)?;
+        require_native_copy_not_cancelled_with_failure(cancel, candidate, action, &failure_dir)?;
         if selected.provider == cloud::CloudProvider::Icloud {
             cloud::require_pre_copy_evidence_cohort(report.pre_copy_evidence.as_ref())?;
             let health = icloud_health
@@ -1810,7 +1835,7 @@ fn create_cloud_candidate_receipt(
                 .ok_or_else(|| "provider-global-sync-evidence-unavailable".to_string())?;
             provider_global_sync::require_new_copy_admission(global_sync)?;
         }
-        require_native_copy_not_cancelled(cancel)?;
+        require_native_copy_not_cancelled_with_failure(cancel, candidate, action, &failure_dir)?;
         let snapshot = report
             .capacity
             .as_ref()
@@ -1823,7 +1848,7 @@ fn create_cloud_candidate_receipt(
                 &snapshot.snapshot,
             );
         require_capacity_for_copy(candidate, &snapshot.snapshot, native_client_mode)?;
-        require_native_copy_not_cancelled(cancel)?;
+        require_native_copy_not_cancelled_with_failure(cancel, candidate, action, &failure_dir)?;
     }
     let copy_result = if adopt_existing {
         cloud_transfer::adopt_existing_cloud_copy_with_approval(
@@ -2135,6 +2160,23 @@ pub async fn copy_cloud_candidate(
     let cloud_copy_cancel = Arc::clone(&state.cloud_copy_cancel);
     let cloud_copy_operation = Arc::clone(&state.cloud_copy_operation);
     tauri::async_runtime::spawn_blocking(move || {
+        struct NativeCopyReset {
+            cancel: Arc<AtomicBool>,
+            operation: Arc<Mutex<Option<String>>>,
+            fingerprint: String,
+        }
+
+        impl Drop for NativeCopyReset {
+            fn drop(&mut self) {
+                self.cancel.store(false, Ordering::SeqCst);
+                if let Ok(mut active) = self.operation.lock() {
+                    if active.as_deref() == Some(self.fingerprint.as_str()) {
+                        *active = None;
+                    }
+                }
+            }
+        }
+
         {
             let mut active = cloud_copy_operation
                 .lock()
@@ -2145,6 +2187,11 @@ pub async fn copy_cloud_candidate(
             cloud_copy_cancel.store(false, Ordering::SeqCst);
             *active = Some(metadata_fingerprint.clone());
         }
+        let _reset = NativeCopyReset {
+            cancel: Arc::clone(&cloud_copy_cancel),
+            operation: Arc::clone(&cloud_copy_operation),
+            fingerprint: metadata_fingerprint.clone(),
+        };
         // Register before taking the shared review lock so a queued copy can be cancelled.
         // The token remains set if cancellation races with lock acquisition.
         let result = (|| {
@@ -2165,14 +2212,6 @@ pub async fn copy_cloud_candidate(
                 Some(&cloud_copy_cancel),
             )
         })();
-        if let Ok(mut active) = cloud_copy_operation.lock() {
-            cloud_copy_cancel.store(false, Ordering::SeqCst);
-            if active.as_deref() == Some(metadata_fingerprint.as_str()) {
-                *active = None;
-            }
-        } else {
-            cloud_copy_cancel.store(false, Ordering::SeqCst);
-        }
         result
     })
     .await
