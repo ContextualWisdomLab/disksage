@@ -56,7 +56,8 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("!selectedRootDetails()?.readable");
     expect(source).toContain("async function cancelFinderCopy()");
     expect(source).toContain("await api.cancelFinderCopy();");
-    expect(source).toContain("cancellingFinderCopy || checkingIcloudHealth");
+    expect(source).toContain("cancelDisabled={checkingIcloudHealth}");
+    expect(source).toContain("cancelLabel={cancellingFinderCopy ?");
     expect(source).toContain("canCancelFinderCopyForProviderGlobalSync");
     expect(source).toContain("provider-global-sync-reconciliation-pending");
     expect(source).toContain("provider-global-sync-indexing-pending");
@@ -86,6 +87,23 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(refreshStart).toBeGreaterThanOrEqual(0);
     expect(providerGuard).toBeGreaterThan(refreshStart);
     expect(probeCall).toBeGreaterThan(providerGuard);
+  });
+
+  it("keeps cancel confirmation visible after a refresh clears admission", () => {
+    const source = readFileSync(resolve(repositoryRoot, "src/lib/CloudArchive.svelte"), "utf8");
+    const icloudStart = source.indexOf("<strong>iCloud 새 복사 admission</strong>");
+    const icloudEnd = source.indexOf("<strong>{providerGlobalSync.provider} 전역 동기화 admission</strong>");
+    const icloudReceipt = source.slice(icloudStart, icloudEnd);
+    const providerStart = icloudEnd;
+    const providerReceipt = source.slice(providerStart);
+
+    expect(icloudReceipt.indexOf("finderCopyCancelStatus")).toBeGreaterThanOrEqual(0);
+    expect(icloudReceipt.indexOf("finderCopyCancelStatus")).toBeLessThan(
+      icloudReceipt.indexOf("icloudHealth.new_copy_admission_blockers.length > 0"),
+    );
+    expect(providerReceipt.indexOf("finderCopyCancelStatus")).toBeLessThan(
+      providerReceipt.indexOf("providerGlobalSync.blockers.length > 0"),
+    );
   });
 
   it("defaults provider OAuth consent to read-only until write access is explicitly selected", () => {

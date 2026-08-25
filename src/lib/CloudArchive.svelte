@@ -1008,12 +1008,12 @@
             복사·원본 정리 판정은 현재 증거가 다시 저장될 때까지 보수적으로 유지합니다.
           </p>
         {/if}
+        {#if finderCopyCancelStatus}<p class="muted">{finderCopyCancelStatus}</p>{/if}
         {#if icloudHealth.new_copy_admission_blockers.length > 0}
           <p class="warning">
             차단 사유:
             {icloudHealth.new_copy_admission_blockers.map(icloudBlockerLabel).join(", ")}
           </p>
-          {#if finderCopyCancelStatus}<p class="muted">{finderCopyCancelStatus}</p>{/if}
           {#if icloudHealth.file_provider_activity && (icloudHealth.file_provider_activity.no_progress_fetch_count > 0 || icloudHealth.file_provider_activity.no_progress_create_count > 0)}
             <p class="warning">
               File Provider의 복사 요청이 진행률 없이 만료되었습니다. Finder에 남은 복사 대기는 취소하고,
@@ -1135,6 +1135,7 @@
             · 동일 차단 지속 {duration(Math.max(0, providerGlobalSyncObservedAtMs - providerGlobalSyncBlockedSinceMs))}
           {/if}
         </span>
+        {#if finderCopyCancelStatus}<p class="muted">{finderCopyCancelStatus}</p>{/if}
         {#if providerGlobalSync.blockers.length > 0}
           <p class="warning">
             차단 사유: {providerGlobalSync.blockers.map(providerGlobalSyncBlockerLabel).join(", ")}
@@ -1149,7 +1150,6 @@
             <button onclick={recoverProviderClient} disabled={recoveringProvider || checkingProviderGlobalSync}>
               {recoveringProvider ? "공급자 앱 재기동 중…" : "공급자 앱 재기동 후 상태 재확인"}
             </button>
-            {#if finderCopyCancelStatus}<p class="muted">{finderCopyCancelStatus}</p>{/if}
           {/if}
         {:else}
           <p class="capacity-ok">공급자 전역 동기화 대기열이 비어 있습니다. 개별 파일은 별도 provider 증거가 필요합니다.</p>
