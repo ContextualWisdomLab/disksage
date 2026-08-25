@@ -224,7 +224,7 @@
         <div class="warning" role="status">
           <p>현재 로컬 사본을 축출할 수 없습니다. 다음 항목을 확인하세요.</p>
           <ul>
-            {#each planBlockerActions(plan.blockers) as action}
+            {#each planBlockerActions(plan.blockers.filter((blocker) => blocker !== "human-local-eviction-approval-required")) as action}
               <li>{action}</li>
             {/each}
           </ul>

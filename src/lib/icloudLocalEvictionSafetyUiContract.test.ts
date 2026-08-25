@@ -37,7 +37,10 @@ describe("iCloud local eviction safety UI", () => {
     expect(ICLOUD_FILE_SELECTION_FAILURE).toContain("iCloud 파일");
     expect(ICLOUD_STATE_INSPECTION_FAILURE).toContain("iCloud 상태");
     expect(ICLOUD_EVICTION_EXECUTION_FAILURE).toContain("로컬 사본");
-    expect(source).toContain("planBlockerActions(plan.blockers)");
+    expect(source).toContain("planBlockerActions(plan.blockers.filter");
+    expect(source).toContain(
+      'blocker !== "human-local-eviction-approval-required"',
+    );
     expect(planBlockerActions(["icloud-file-provider-native-status-unavailable"])).toEqual([
       "File Provider 상태 증거가 완전하지 않습니다. 잠시 후 다시 판정하세요.",
     ]);

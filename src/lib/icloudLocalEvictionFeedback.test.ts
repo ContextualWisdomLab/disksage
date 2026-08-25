@@ -152,7 +152,7 @@ describe("iCloud local eviction next-action feedback", () => {
     expect(source).toContain("ICLOUD_STATE_INSPECTION_FAILURE");
     expect(source).toContain("ICLOUD_EVICTION_EXECUTION_FAILURE");
     expect(source).toContain("ICLOUD_RESULT_RECORD_FAILURE");
-    expect(source).toContain("planBlockerActions(plan.blockers)");
+    expect(source).toContain("planBlockerActions(plan.blockers.filter");
     expect(source).toContain(
       "verificationBlockerActions(eviction.result.verification_blockers)",
     );
