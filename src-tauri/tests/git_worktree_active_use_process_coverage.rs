@@ -32,6 +32,13 @@ fn git(cwd: &Path, args: &[&str]) -> String {
         .to_string()
 }
 
+fn lsof_probe_available() -> bool {
+    Command::new("lsof")
+        .arg("-v")
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
 fn initialized_repository() -> tempfile::TempDir {
     let repository = tempfile::tempdir().expect("repository tempdir");
     git(repository.path(), &["init", "-b", "main"]);
@@ -97,10 +104,16 @@ impl Drop for ChildGuard {
 
 #[test]
 fn otherwise_removable_worktree_is_preserved_while_real_process_uses_it() {
+    if !lsof_probe_available() {
+        return;
+    }
     let repository = initialized_repository();
     let (_linked_parent, linked_path) =
         detached_ancestor_worktree(repository.path(), "active-worktree");
-    let linked_path_text = linked_path.to_string_lossy().into_owned();
+    let linked_path_text = std::fs::canonicalize(&linked_path)
+        .expect("linked worktree path must canonicalize")
+        .to_string_lossy()
+        .into_owned();
     let child = ChildGuard::sleeping_in(&linked_path);
     let active_pid = child.id();
 
@@ -138,10 +151,16 @@ fn otherwise_removable_worktree_is_preserved_while_real_process_uses_it() {
 
 #[test]
 fn active_process_evidence_truncation_never_grants_removal_authority() {
+    if !lsof_probe_available() {
+        return;
+    }
     let repository = initialized_repository();
     let (_linked_parent, linked_path) =
         detached_ancestor_worktree(repository.path(), "busy-worktree");
-    let linked_path_text = linked_path.to_string_lossy().into_owned();
+    let linked_path_text = std::fs::canonicalize(&linked_path)
+        .expect("linked worktree path must canonicalize")
+        .to_string_lossy()
+        .into_owned();
     let first = ChildGuard::sleeping_in(&linked_path);
     let second = ChildGuard::sleeping_in(&linked_path);
     let active_pids = [first.id(), second.id()];
