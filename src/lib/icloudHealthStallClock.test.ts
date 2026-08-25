@@ -143,6 +143,25 @@ describe("iCloud health stall clock", () => {
     ).blockedSinceMs).toBe(700);
   });
 
+  it("adopts a persisted blocker age supplied after the first poll", () => {
+    const previous = report(activity(), { admission_blocked_since_ms: null });
+    const fingerprint = icloudHealthStallClockFingerprint(previous);
+    const next = report(activity(), {
+      observed_at_ms: 2_000,
+      admission_blocked_since_ms: 700,
+    });
+
+    expect(updateIcloudHealthStallClock(
+      previous,
+      { blockedSinceMs: 1_200, fingerprint },
+      next,
+      2_000,
+    )).toEqual({
+      blockedSinceMs: 700,
+      fingerprint: icloudHealthStallClockFingerprint(next),
+    });
+  });
+
   it("clears the clock when admission becomes clear", () => {
     const blocked = report(activity());
     const fingerprint = icloudHealthStallClockFingerprint(blocked);

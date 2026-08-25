@@ -159,10 +159,10 @@
   .stats { color: var(--ds-text-muted); font-size: 0.9rem; }
   .error { color: var(--ds-danger-text); background: var(--ds-danger-surface); padding: var(--ds-space-2); border-radius: var(--ds-radius-sm); }
   .crumbs { margin: var(--ds-space-3) 0; display: flex; gap: var(--ds-space-1); flex-wrap: wrap; align-items: center; }
-  .crumb { background: transparent; border-color: transparent; color: var(--ds-action); cursor: pointer; }
+  .crumb { background: transparent; border: none; color: var(--ds-action); cursor: pointer; }
   .entries { list-style: none; padding: 0; max-height: 40vh; overflow-y: auto; }
   .entries li { display: flex; justify-content: space-between; gap: var(--ds-space-3); padding: var(--ds-space-1) 0; }
-  .dir { background: transparent; border-color: transparent; cursor: pointer; font: inherit; text-align: left; }
+  .dir { background: transparent; border: none; cursor: pointer; font: inherit; text-align: left; }
   .size { color: var(--ds-text-muted); font-variant-numeric: tabular-nums; }
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   @media (max-width: 40rem) {

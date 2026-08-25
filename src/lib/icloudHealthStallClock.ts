@@ -76,6 +76,15 @@ export function updateIcloudHealthStallClock(
     };
   }
 
+  const newlySuppliedBlockedSinceMs = next.admission_blocked_since_ms;
+  if (
+    newlySuppliedBlockedSinceMs != null
+    && newlySuppliedBlockedSinceMs > 0
+    && newlySuppliedBlockedSinceMs !== previousReport.admission_blocked_since_ms
+  ) {
+    return { blockedSinceMs: newlySuppliedBlockedSinceMs, fingerprint };
+  }
+
   if (previousClock.fingerprint !== fingerprint && hasRealProgress(previousReport, next)) {
     return { blockedSinceMs: observedAtMs, fingerprint };
   }
