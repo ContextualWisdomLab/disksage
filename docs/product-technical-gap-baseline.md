@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-25 (Asia/Seoul)
-**Repository heads at snapshot:** PR #259 `a019dda`, PR #258 `5ecce3a`, PR #227 `98fa709`, PR #249 `2f1d585`,
+**Repository heads at snapshot:** PR #259 `a019dda`, PR #258 `fd49200`, PR #227 `98fa709`, PR #249 `2f1d585`,
 PR #247 `0de3f6a`, PR #246 `cbb9dc0`, PR #204 `750213d`, draft PR #198 `cf763cd`, and central `.github` PR #1328 `936b93b`;
 hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
@@ -18,7 +18,7 @@ rebased and reverified.
 | PR | Exact head | Base | Draft | Merge state | Review state | Check evidence at capture |
 | --- | --- | --- | --- | --- | --- | --- |
 | #259 | `a019ddaba4aa5cad1e0bef02121f20d514d9580c` | `7eb131c4` | no | blocked | required | stale File Provider error-state + `last`/`expired` parser; checks remain authoritative |
-| #258 | `5ecce3ac41d48a58f3a0aca981d94c4977aa12cb` | `7eb131c4` | no | blocked | required | current baseline/docs head; checks remain authoritative |
+| #258 | `fd492005bdf9af6e9e55586894c448574524e7e9` | `7eb131c4` | no | blocked | required | current baseline/docs head; checks remain authoritative |
 | #249 | `2f1d585398b85f3f1adb3783520ad70e7b4a9c3f` | `7eb131c4` | no | blocked | required | source/build/security/coverage pass; Strix external provider failure |
 | #247 | `0de3f6a3672c6ff0f39726b7a4ddaeba757154b6` | `7eb131c4` | no | blocked | required | runtime receipt projection and shared iCloud notice contracts; post-push checks pending |
 | #246 | `cbb9dc0f5b1eba52e76f23f673381a3ebcdc132f` | `7eb131c4` | no | blocked | required | late persisted iCloud blocker timestamp adoption and border regression repair; focused UI checks pass, hosted checks pending |
@@ -51,8 +51,8 @@ surfacing cleanup status, applying the Compose hardening contract, and escaping 
 variable interpolation for the atomic WAL archive command; targeted backend/shell/
 Podman drill evidence passed locally, while hosted checks and a fresh qualifying approval remain
 authoritative. PR #1454 is
-`3e892bd1c0b96803d50e99dba3af828ff4b02149`, with the deleted URL/loopback tests and doctoring
-document restored after a nineteenth optimizer regression, explicit zero and out-of-range ports
+`31518cd26c23f341d69f543fefe83e395db70b99`, with the deleted URL/loopback tests and doctoring
+document restored after a twentieth optimizer regression, explicit zero and out-of-range ports
 rejected in both validators, and a single `.jules/bolt.md` scope guard that prevents future graph
 optimizers from touching the security contract; targeted backend (46) tests passed on this exact head, while hosted checks
 and fresh approval remain pending. PR #1462 is
