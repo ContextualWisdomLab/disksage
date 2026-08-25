@@ -1295,6 +1295,9 @@ fn bounded_macos_command(
             Ok(())
         });
     }
+    if cancel.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+        return Err("cloud-copy-cancelled".into());
+    }
     let mut child = command
         .spawn()
         .map_err(|_| "cloud-copy-helper-failed".to_string())?;
