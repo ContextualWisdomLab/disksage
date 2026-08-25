@@ -105,6 +105,28 @@ Strix completion trigger restored after a current-head governance regression; it
 shared-spinner review and restored URL-boundary threads remain resolved, and its focused governance
 suite passes 35 tests; hosted Strix and metadata-only gates remain authoritative.
 
+## 2026-08-26 live PR/check reconciliation
+
+- Naruon PR #1468 is currently `1da167de26b442be6961622f15bb36ae9374e6c4`. All observed required
+  checks other than Strix are successful; the current required `strix` job is **IN_PROGRESS** in run
+  `32848625767`. Its earlier metadata-only failure stated that Strix was failed on an older observation;
+  the active rerun is the authoritative result, so the earlier failure is not reclassified as a source
+  finding and the PR remains protected and unmerged.
+- Naruon PR #1469 is currently `575b0c24fd9cb98106989eb101de74c5ce383db3`. Required Strix and image
+  validation jobs are **IN_PROGRESS**, `coverage-source-tree` is **QUEUED**, and unresolved current review
+  threads are zero. The aggregate `CHANGES_REQUESTED` state comes from the older CodeRabbit review at
+  `dd1fb33c6ca9fba7d94eed2a13eb3933c60149d3`; the latest CodeRabbit notice says the review limit was
+  reached, so no dismissal or approval bypass is valid. A fresh exact-head review remains required.
+- Naruon PR #1443 is currently `2bc9e2cb6b9680da173643c9eeab9fbcf4b872c3`; its current required checks
+  are queued and unresolved review threads are zero. The PR is still blocked with the prior review state;
+  no merge is claimed until the current-head checks and independent approval are present.
+- DiskSage PR #262 release run `32879846812` is still **IN_PROGRESS** for exact head
+  `345af62b983e9de67200684da10ab24d16d945cc`; Ubuntu has succeeded and Windows/macOS are still running,
+  with no failed step observed. This is not treated as a blocker or a merge signal.
+- Central `ContextualWisdomLab/.github` PR #1331 is `a1408f520cc38bab3207675b0033a48d3d12240c` and
+  #1333 is `5454a19618b27f4d7f34dd2a7a5e47eb5bc42fc1`; both remain protected, open, and auto-merge
+  enabled but blocked. These exact heads supersede the older abbreviated table entries above.
+
 ## Current product contract
 
 1. Scan and metadata profiling are read-only and metadata-first: embedded metadata precedes an unambiguous filename token, then filesystem creation/modification time. A filename token such as `2026-04-28` or `251210` is secondary evidence and never proves ownership, upload, or eviction authority.
