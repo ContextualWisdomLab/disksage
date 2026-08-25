@@ -960,13 +960,21 @@ fn parse_file_provider_activity_output(
     // fileproviderctl includes a relative age on queued operation errors. Treat an old fetch/create
     // error as a stalled provider signal even when the current sample has no explicit "no progress"
     // marker; this survives app restarts and matches the user-visible Finder "preparing" stall.
-    let stale_error_observed = output.lines().any(|line| {
+    let provider_lines = output.lines().collect::<Vec<_>>();
+    let is_provider_operation = |line: &&str| {
         let lower = line.to_ascii_lowercase();
-        (lower.contains("fetch-content")
+        lower.contains("fetch-content")
             || lower.contains("fetchcontentsforitemwithid")
             || lower.contains("create-item")
-            || lower.contains("createitembasedontemplate"))
-            && relative_age_ms(line).is_some_and(|age| age >= FILE_PROVIDER_STALE_ERROR_AGE_MS)
+            || lower.contains("createitembasedontemplate")
+    };
+    let is_stale_age = |line: &&str| {
+        relative_age_ms(line).is_some_and(|age| age >= FILE_PROVIDER_STALE_ERROR_AGE_MS)
+    };
+    let stale_error_observed = provider_lines.iter().any(|line| {
+        is_provider_operation(line) && is_stale_age(line)
+    }) || provider_lines.windows(2).any(|record| {
+        record.iter().any(is_provider_operation) && record.iter().any(is_stale_age)
     });
     let sync_excluded_filename_count = output
         .lines()
@@ -2390,6 +2398,21 @@ mod tests {
         assert!(report
             .new_copy_admission_blockers
             .contains(&"icloud-file-provider-stalled".to_string()));
+    }
+
+    #[test]
+    fn file_provider_parser_detects_stale_error_age_on_adjacent_dump_row() {
+        let evidence = parse_file_provider_activity_output(
+            "doc fetch-content: error:'noContentToFetch'\n\
+             last:'1787622820 (-4h9min)' expired:'1787622820 (-4h9min)'\n",
+            42,
+            true,
+            false,
+            false,
+        );
+        assert!(evidence
+            .notices
+            .contains(&"icloud-file-provider-stale-error-observed".to_string()));
     }
 
     #[test]
