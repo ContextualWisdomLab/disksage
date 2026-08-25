@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-25 (Asia/Seoul)
-**Repository heads at snapshot:** PR #259 `93d07d3`, PR #258 `e26f347`, PR #227 `98fa709`, PR #249 `2f1d585`,
+**Repository heads at snapshot:** PR #259 `677dc29`, PR #258 `4368d2b`, PR #227 `98fa709`, PR #249 `2f1d585`,
 PR #247 `58e1dc5`, PR #246 `2037c91`, and PR #204 `750213d`; hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
@@ -16,8 +16,8 @@ rebased and reverified.
 
 | PR | Exact head | Base | Draft | Merge state | Review state | Check evidence at capture |
 | --- | --- | --- | --- | --- | --- | --- |
-| #259 | `93d07d321c238982145d960c59757ed8b9394b5d` | `7eb131c4` | no | blocked | required | stale File Provider + readiness contract; checks remain authoritative |
-| #258 | `e26f347a2bbeef44224400b17cb23ec72a2bfb5f` | `7eb131c4` | no | blocked | required | current baseline/docs head; checks remain authoritative |
+| #259 | `677dc29b0983a3ca4ced2aa6a2a910a4061d993e` | `7eb131c4` | no | blocked | required | stale File Provider + split-row parser contract; checks remain authoritative |
+| #258 | `4368d2b69e272f11ea1e89be323599b1abff690b` | `7eb131c4` | no | blocked | required | current baseline/docs head; checks remain authoritative |
 | #249 | `2f1d585398b85f3f1adb3783520ad70e7b4a9c3f` | `7eb131c4` | yes | blocked | none | Strix failure; external gate evidence unavailable |
 | #247 | `58e1dc52a93cd959daaea549a7f362eddc1601f5` | `7eb131c4` | yes | blocked | none | Strix failure; external gate evidence unavailable |
 | #246 | `2037c91b8d64df3a9f06a91ed7ad7ea637d8a7fd` | `17d4e203` | yes | blocked | none | Strix failure; base is stale |
