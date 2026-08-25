@@ -49,7 +49,10 @@ fn icloud_report() -> CloudPlanReport {
 }
 
 fn locked_item_health() -> IcloudSyncHealthReport {
-    let blocker = "icloud-file-provider-item-locked".to_string();
+    let blockers = vec![
+        "icloud-file-provider-item-locked".to_string(),
+        "icloud-file-provider-stalled".to_string(),
+    ];
     IcloudSyncHealthReport {
         schema_version: ICLOUD_SYNC_HEALTH_SCHEMA_VERSION,
         output_mode: "icloud-local-sync-health".into(),
@@ -88,12 +91,13 @@ fn locked_item_health() -> IcloudSyncHealthReport {
             notices: vec![
                 "icloud-file-provider-dump-read-only".into(),
                 "icloud-file-provider-item-locked-observed".into(),
+                "icloud-file-provider-stale-error-observed".into(),
             ],
         }),
         sync_backlog_present: true,
         new_copy_admission_state: "blocked".into(),
-        new_copy_admission_blockers: vec![blocker.clone()],
-        blockers: vec![blocker],
+        new_copy_admission_blockers: blockers.clone(),
+        blockers,
         notices: Vec::new(),
         paths_redacted: true,
         user_filenames_read: false,
@@ -122,7 +126,10 @@ fn locked_fileprovider_item_round_trips_through_readiness_validation() {
     assert_eq!(admission.state, "blocked");
     assert_eq!(
         admission.blockers,
-        vec!["icloud-file-provider-item-locked".to_string()]
+        vec![
+            "icloud-file-provider-item-locked".to_string(),
+            "icloud-file-provider-stalled".to_string(),
+        ]
     );
     assert!(validate_naruon_cloud_copy_readiness(&envelope).is_ok());
 }
