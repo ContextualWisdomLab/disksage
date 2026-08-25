@@ -493,6 +493,24 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
         assert!(plans.is_empty());
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_home_relative_target_uses_native_absolute_path() {
+        let home = PathBuf::from(r"C:\Users\u");
+        let files = [fe(r"C:\downloads\pic.png", 100)];
+        let plans = plan_moves(&files, &onto_with_target("~/Media/{class}"), &home);
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].dst, r"C:\Users\u\Media\Image\pic.png");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_relative_target_fails_closed() {
+        let home = PathBuf::from(r"C:\Users\u");
+        let files = [fe(r"C:\downloads\pic.png", 100)];
+        assert!(plan_moves(&files, &onto_with_target("relative/{class}"), &home).is_empty());
+    }
+
     #[test]
     fn picker_choice_overrides_extension_classify() {
         // main.rs는 확장자로 "Code"(targetFolder 없음 → 평소 제외)로 분류되지만,
