@@ -34,7 +34,8 @@ protected merge is claimed until their post-push checks and qualifying independe
 fresh on the listed heads. The filename-date rule and provider fail-closed rules remain unchanged.
 
 Naruon exact-head reconciliation is also part of this baseline: PR #1333 is `dd947ed050652264c4b74d4e59ee081895d96a0a`
-with no unresolved review threads but an older metadata-only CodeRabbit gate failure still recorded;
+with no unresolved review threads but the metadata-only gate failure and `STRIX_PROVIDER_UNAVAILABLE`
+annotation still recorded;
 PR #1443 is `55a84f904f11203f49c356d95d7d88ba9f903030`, the direct gate repair, with source/security
 checks passing and coverage/Strix/metadata checks still running. Neither PR is claimed merge-ready
 without a fresh qualifying review and exact-head protected checks.
