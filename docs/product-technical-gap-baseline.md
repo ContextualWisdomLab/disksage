@@ -166,6 +166,10 @@ suite passes 35 tests; hosted Strix and metadata-only gates remain authoritative
   with auto-merge enabled, its current Checks are queued/in progress without failure, and the normal
   independent approval gate remains authoritative. Earlier #1334 and #1333 scheduler/retry PRs are
   closed and are not treated as live scheduler evidence.
+- DiskSage PR #198 advanced to exact head `a727b3eb082c5049f9c9350677abaad23c18222a` and is now
+  ready with protected auto-merge enabled. Its iCloud local-eviction UI contract now consumes the
+  shared bounded feedback constants (11 focused tests pass); hosted Checks and independent approval
+  remain authoritative, and no Strix provider-unavailability result is treated as a source finding.
 
 ## Current product contract
 
