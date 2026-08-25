@@ -3,6 +3,7 @@ export type CloudArchiveErrorOperation =
   | "preview"
   | "review"
   | "copy"
+  | "cancel"
   | "provider-api-copy"
   | "adopt"
   | "attest"
@@ -21,6 +22,7 @@ const CLOUD_ARCHIVE_ERROR_MESSAGES: Record<CloudArchiveErrorOperation, string> =
   preview: "클라우드 오프로드 계획을 만들지 못했습니다.",
   review: "클라우드 후보 검토 결정을 저장하지 못했습니다.",
   copy: "클라우드 복사를 실행하지 못했습니다.",
+  cancel: "진행 중인 클라우드 복사를 취소하지 못했습니다.",
   "provider-api-copy": "공급자 API 업로드를 실행하지 못했습니다.",
   adopt: "기존 클라우드 복사본을 검증·채택하지 못했습니다.",
   attest: "클라우드 복사본의 공급자 증거를 확인하지 못했습니다.",

@@ -383,7 +383,7 @@
     try {
       await api.cancelCloudCopy(copyingFingerprint);
     } catch (e) {
-      loadError = String(e);
+      loadError = boundedCloudArchiveErrorMessage("cancel", e);
     } finally {
       cancellingCopy = false;
     }
