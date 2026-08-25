@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-25 (Asia/Seoul)
-**Repository heads at snapshot:** PR #259 `a019dda`, PR #258 `f9785e1`, PR #227 `98fa709`, PR #249 `2f1d585`,
+**Repository heads at snapshot:** PR #259 `a019dda`, PR #258 `1e4ca55`, PR #227 `98fa709`, PR #249 `2f1d585`,
 PR #247 `0de3f6a`, PR #246 `d38ed05`, PR #204 `750213d`, draft PR #198 `cf763cd`, and central `.github` PR #1328 `7fb95ac`;
 hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
@@ -21,16 +21,17 @@ rebased and reverified.
 | #258 | `f9785e1b9fe22fe80243f93972cc07379f1b5cd9` | `7eb131c4` | no | blocked | required | current baseline/docs head; checks remain authoritative |
 | #249 | `2f1d585398b85f3f1adb3783520ad70e7b4a9c3f` | `7eb131c4` | no | blocked | required | source/build/security/coverage pass; Strix external provider failure |
 | #247 | `0de3f6a3672c6ff0f39726b7a4ddaeba757154b6` | `7eb131c4` | no | blocked | required | runtime receipt projection and shared iCloud notice contracts; post-push checks pending |
-| #246 | `d38ed05d2b640402a3bf39c49aa2b26331af5cf4` | `7eb131c4` | no | blocked | required | iCloud stall clock and Finder-cancel confirmation contracts; checks pending |
+| #246 | `cbb9dc0f5b1eba52e76f23f673381a3ebcdc132f` | `7eb131c4` | no | blocked | required | late persisted iCloud blocker timestamp adoption and border regression repair; focused UI checks pass, hosted checks pending |
 | #227 | `98fa709afa489e05c91a947d1e8cbf499e2cc6b6` | `7eb131c4` | no | blocked | required | Strix annotation `STRIX_PROVIDER_UNAVAILABLE`; source checks otherwise passed |
 | #204 | `750213dff16482544af3c0a9543f6c638924e5e6` | `17d4e203` | yes | blocked | none | Strix failure; base is stale |
 | #206 | `2e7b845b7610a871ec5981d964bcab5cb99df41d` | `5c86668a` | yes | clean | changes requested | 0 non-success terminal, 2 pending; stacked draft |
 | #198 | `cf763cdf1b3f483efaf483f6c95196a89e005951` | `7eb131c4` | yes | blocked | required | iCloud eviction privacy feedback hardening; focused UI checks pass, hosted checks pending |
 | ContextualWisdomLab/.github #1328 | `7fb95ac249d4adaf3fe96f0432d2d9e978fdaeef` | `8fd471a3` | no | blocked | required | central autofix rejects deletion/rename of protected origin-validation paths in both normal and conflict-resolution modes; focused contract test passes, hosted checks queued |
 
-PR #246 exact-head `d38ed05d2b640402a3bf39c49aa2b26331af5cf4` now preserves the backend persisted
-iCloud stall start across restart/probe errors and keeps Finder-cancel confirmation visible after
-refresh clears a blocker. Its focused clock and UI contract tests pass locally.
+PR #246 exact-head `cbb9dc0f5b1eba52e76f23f673381a3ebcdc132f` now preserves the backend persisted
+iCloud stall start across restart/probe errors, adopts a timestamp supplied after the first poll,
+keeps Finder-cancel confirmation visible after refresh clears a blocker, and restores borderless
+breadcrumb/directory controls. Its focused clock suite (8) and svelte-check pass locally.
 PR #247 exact-head `0de3f6a3672c6ff0f39726b7a4ddaeba757154b6` now verifies a candidate before
 clearing destination-headroom blockers, projects a valid runtime receipt into the dynamic Goal,
 and shares the File Provider disk-import notice constant; its focused Rust regressions pass locally. The current
