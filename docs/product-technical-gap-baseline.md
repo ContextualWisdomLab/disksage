@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-26 (Asia/Seoul)
-**Repository heads at snapshot:** PR #262 `5e27e4f`, PR #260 `9cebf0b`, PR #259 `ae5e158`, PR #258 `b19b392`, PR #257 `d09808f`, PR #253 `7db00e2`, PR #251 `7b8caa3`, PR #227 `90cd444`, PR #249 `7c93e17`,
+**Repository heads at snapshot:** PR #262 `0869a7d`, PR #260 `9cebf0b`, PR #259 `ae5e158`, PR #258 `e4c0060`, PR #257 `d09808f`, PR #253 `7db00e2`, PR #251 `7b8caa3`, PR #227 `90cd444`, PR #249 `7c93e17`,
 PR #247 `0de3f6a`, PR #246 `57eb6c1`, PR #204 `750213d`, PR #198 `a727b3e`, replacement central `.github` PRs #1330 `f8a7210` and #1331 `a1408f5`, and merged #1335 `fe5c213` (central #1333 and #1334 are also merged; superseded #1295/#1299/#1300/#1301/#1321/#1332 closed);
 hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
