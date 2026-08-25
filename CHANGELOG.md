@@ -8,6 +8,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
+  identity cleanup and dependent eviction helpers; the focused authority contract remains green.
+- Add durable private failure records in a separate journal directory and a receipt-bound
+  cancellation command for bounded native cloud copies; bind cancellation to the active candidate,
+  require provider-native local-current materialization evidence before existing-copy adoption can
+  hash a destination, cap the private failure journal at 10,000 records, and bind failed-copy
+  cleanup to Unix/Windows file identity while keeping shareable lineage exports path-free. Existing
+  copy adoption remains explicitly non-cancellable because it performs verification only.
 - Persist bounded, path-free local-volume snapshots from cloud plans with create-only files,
   content fingerprints, Unix `0400`/`0700` permissions, and shape-limited retention; surface a
   warning when incident-comparison evidence cannot be written without changing copy authority.

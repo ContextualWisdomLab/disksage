@@ -58,6 +58,51 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("finderCopyCancelStatus = \"Finder 복사 취소 요청을 보냈습니다. 상태를 다시 확인하십시오.\"");
   });
 
+  it("exposes cancellation only for the cancellable native copy path", () => {
+    const source = readFileSync(resolve(repositoryRoot, "src/lib/CloudArchive.svelte"), "utf8");
+    const copyStart = source.indexOf("async function copyCandidate(candidate: api.CloudCandidate)");
+    const cancelStart = source.indexOf("async function cancelCopy()", copyStart);
+    const providerApiStart = source.indexOf("async function copyCandidateViaProviderApi", cancelStart);
+    const adoptStart = source.indexOf("async function adoptExistingCandidate", providerApiStart);
+
+    expect(copyStart).toBeGreaterThanOrEqual(0);
+    expect(cancelStart).toBeGreaterThan(copyStart);
+    expect(providerApiStart).toBeGreaterThan(cancelStart);
+    expect(adoptStart).toBeGreaterThan(providerApiStart);
+
+    const copyBody = source.slice(copyStart, cancelStart);
+    const providerApiBody = source.slice(providerApiStart, adoptStart);
+    const adoptBody = source.slice(adoptStart, source.indexOf("async function", adoptStart + 1));
+    const cancelBody = source.slice(cancelStart, providerApiStart);
+
+    expect(copyBody).toMatch(
+      /copyingFingerprint = candidate\.metadata_fingerprint;\s*(?:\/\/[^\n]*\n\s*)?nativeCopyActive = true;/,
+    );
+    expect(providerApiBody).toMatch(
+      /copyingFingerprint = candidate\.metadata_fingerprint;\s*(?:\/\/[^\n]*\n\s*)?nativeCopyActive = false;/,
+    );
+    expect(adoptBody).toMatch(
+      /copyingFingerprint = candidate\.metadata_fingerprint;\s*(?:\/\/[^\n]*\n\s*)?nativeCopyActive = false;/,
+    );
+    expect(cancelBody).toContain("if (!nativeCopyActive || !copyingFingerprint || cancellingCopy) return;");
+    expect(cancelBody).toContain("await api.cancelCloudCopy(copyingFingerprint);");
+  });
+
+  it("keeps native-copy cancellation reachable while copy eligibility or preview state changes", () => {
+    const source = readFileSync(resolve(repositoryRoot, "src/lib/CloudArchive.svelte"), "utf8");
+    const markupStart = source.indexOf("</script>");
+    const reportStart = source.indexOf("{#if report}", markupStart);
+    const cancelControl = source.indexOf('aria-label="진행 중인 DiskSage 클라우드 복사 취소"', markupStart);
+
+    expect(markupStart).toBeGreaterThanOrEqual(0);
+    expect(reportStart).toBeGreaterThan(markupStart);
+    expect(cancelControl).toBeGreaterThan(markupStart);
+    expect(cancelControl).toBeLessThan(reportStart);
+    expect(source).toContain("if (!scannedRoot || !selectedRoot || nativeCopyActive) return;");
+    expect(source).toContain("disabled={busy || nativeCopyActive}");
+    expect(source).toContain("disabled={busy || nativeCopyActive || !scannedRoot || !selectedRoot || !selectedRootDetails()?.readable}");
+  });
+
   it("does not run the heavy iCloud probe for non-iCloud selected roots", () => {
     const source = readFileSync(resolve(repositoryRoot, "src/lib/CloudArchive.svelte"), "utf8");
     const refreshStart = source.indexOf("async function refreshIcloudHealth(force = false)");
