@@ -145,6 +145,13 @@ suite passes 35 tests; hosted Strix and metadata-only gates remain authoritative
 
 ## 2026-08-26 latest head refresh
 
+- DiskSage PR #208 advanced to exact head `0ac66a2c0e7daa1fa77bdcd6c2abdb98b6da4e3e` after fixing
+  the duplicate-audit test's moved `stderr` value. The assertion now checks the decoded bounded
+  diagnostic without reusing moved bytes; macOS explicitly skips the unsupported APFS
+  non-UTF-8-directory case (`EILSEQ`) while Linux continues to exercise the native-path rejection.
+  The feature-gated focused suite passes 4/4 locally, with no unresolved current review threads;
+  hosted Checks are queued/in progress and protected review remains authoritative. The PR is now
+  ready with protected auto-merge enabled, but no merge is claimed.
 - DiskSage PR #262 is now exact head `5e27e4f16768f613de38e7940893b5fa2dff1e01` and was marked
   ready-for-review with protected auto-merge enabled. It remains blocked on required hosted checks and
   qualifying independent approval; no merge is claimed. The current head includes the accessor-safe
