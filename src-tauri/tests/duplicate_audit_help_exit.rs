@@ -99,7 +99,15 @@ fn duplicate_audit_non_utf8_absolute_root_reaches_bounded_evidence_rejection() {
     let mut name = b"duplicate-audit-root-".to_vec();
     name.push(0xff);
     let root = parent.path().join(OsString::from_vec(name.clone()));
-    std::fs::create_dir(&root).expect("native non-UTF-8 audit root must be created");
+    if let Err(error) = std::fs::create_dir(&root) {
+        #[cfg(target_os = "macos")]
+        if error.raw_os_error() == Some(libc::EILSEQ) {
+            // APFS rejects this byte under the active locale; Linux CI exercises the
+            // lossless native-path branch, while macOS keeps the unsupported case explicit.
+            return;
+        }
+        panic!("native non-UTF-8 audit root must be created: {error}");
+    }
 
     let output = Command::new(env!("CARGO_BIN_EXE_disksage-duplicate-audit"))
         .arg("--root")
@@ -120,7 +128,10 @@ fn duplicate_audit_non_utf8_absolute_root_reaches_bounded_evidence_rejection() {
         "DiskSage exact duplicate audit: duplicate-audit-root-non-unicode"
     );
     assert!(
-        !output.stderr.windows(name.len()).any(|window| window == name),
+        !stderr
+            .as_bytes()
+            .windows(name.len())
+            .any(|window| window == name),
         "bounded evidence rejection must not reflect the native root filename"
     );
 }
