@@ -18,7 +18,8 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("no_progress_create_count");
     expect(source).toContain("providerProgressPercent");
     expect(source).toContain("active_upload_progress_millionths");
-    expect(source).toContain("Finder가 “복사 준비 중”에서 멈춘 원인");
+    expect(source).toContain("Finder가 “복사 준비 중”에서 멈춘 동안 File Provider의 no-progress 요청이 함께 관찰되었습니다.");
+    expect(source).not.toContain("Finder가 “복사 준비 중”에서 멈춘 원인은");
     expect(source).toContain("Finder에 남은 복사 대기는 취소");
     expect(source).toContain("File Provider 상태 확인이 제한시간을 넘었습니다");
     expect(source).toContain("Lineage 연결관계");
@@ -43,7 +44,8 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("provider-global-sync-item-not-found");
     expect(source).toContain("icloud-file-provider-item-locked");
     expect(source).toContain("File Provider 항목이 전파 잠금 상태임");
-    expect(source).toContain("File Provider 항목이 전파 잠금 상태라 Finder의 복사 준비가 진행되지 않습니다.");
+    expect(source).toContain("File Provider 항목의 전파 잠금 상태가 Finder 복사 준비 지연과 함께 관찰되었습니다.");
+    expect(source).not.toContain("Finder의 복사 준비가 진행되지 않습니다.");
     expect(source).toContain("동일 차단 지속");
     expect(source).toContain("동일한 공급자 차단 상태가 15분 이상 지속되었습니다.");
     expect(source).toContain("공급자 전역 증거를 확인하지 못했습니다.");
