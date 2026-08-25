@@ -44,6 +44,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Surface the bounded iCloud File Provider upload/download fractions and label repeated
+  `no progress` observations as a Finder “copy preparing” stall, so the operator can cancel the
+  pending Finder request before retrying; this remains diagnostic and never grants copy or eviction
+  authority.
+
 - Keep the shipped Naruon readiness verifier source includable by its integration boundary test;
   the terminal parser contract now compiles in both the binary and test-module contexts.
 
