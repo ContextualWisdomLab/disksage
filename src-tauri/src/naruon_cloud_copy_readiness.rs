@@ -1193,6 +1193,13 @@ fn validate_icloud_admission_summary(
         if materialization_failed {
             expected.push("icloud-file-provider-materialization-failed".to_string());
         }
+        if activity
+            .notices
+            .iter()
+            .any(|notice| notice == "icloud-file-provider-item-locked-observed")
+        {
+            expected.push("icloud-file-provider-item-locked".to_string());
+        }
         if activity.sync_excluded_filename_count > 0 {
             expected.push("icloud-file-provider-filename-excluded".to_string());
         }
