@@ -1,8 +1,8 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-26 (Asia/Seoul)
-**Repository heads at snapshot:** PR #262 `0869a7d`, PR #260 `9cebf0b`, PR #259 `ae5e158`, PR #258 `e4c0060`, PR #257 `d09808f`, PR #253 `7db00e2`, PR #251 `7b8caa3`, PR #227 `90cd444`, PR #249 `7c93e17`,
-PR #247 `0de3f6a`, PR #246 `57eb6c1`, PR #204 `750213d`, PR #198 `a727b3e`, replacement central `.github` PRs #1330 `f8a7210` and #1331 `a1408f5`, and merged #1335 `fe5c213` (central #1333 and #1334 are also merged; superseded #1295/#1299/#1300/#1301/#1321/#1332 closed);
+**Repository heads at snapshot:** PR #262 `0869a7d`, PR #260 `9cebf0b`, PR #259 `ae5e158`, PR #258 `1331bae`, PR #257 `d09808f`, PR #253 `7db00e2`, PR #251 `7b8caa3`, PR #227 `90cd444`, PR #249 `7c93e17`,
+PR #247 `0de3f6a`, PR #246 `57eb6c1`, PR #204 `750213d`, PR #198 `a727b3e`, replacement central `.github` PRs #1330 `f8a7210` and #1331 `40955ba`, and merged #1335 `fe5c213` (central #1333 and #1334 are also merged; superseded #1295/#1299/#1300/#1301/#1321/#1332 closed);
 hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
 Because this file is itself carried by PR #258, its row records the last
@@ -25,7 +25,7 @@ an older main remains non-integrated until it is deliberately rebased and reveri
 | #259 | `ae5e158968d6a777f1aac22e9637fa2464844606` | `7eb131c4` | no | blocked | required | stale File Provider error-state + `last`/`expired` parser; schema 8 now carries the new lock/stall blocker semantics; stacked Naruon #1471 accepts schema 8; hosted checks and independent approval remain authoritative |
 | #262 | `0869a7d4b4722b868a18f1ff9c67e2633e356f50` | `7eb131c4` | no | blocked | required | private failure records are isolated from success receipts and capped at 10,000 entries; same-millisecond duplicate failures now receive bounded suffix IDs instead of being dropped; native cancellation is bound to the active candidate and no longer appears for provider-API uploads; adoption is not registered as a cancellable native copy; the UI exposes cancellation only for the cancellable native path, keeps its cancel control mounted outside eligibility-changing candidate blocks, and prevents replanning during native copy; it distinguishes deliberate `cloud-copy-cancelled` outcomes from failed copies while treating a race-time `cloud-copy-not-active` cancel as a benign no-op; module-level Windows metadata imports are guarded by the full-source contract; coverage cfgs now compile successfully under `RUSTFLAGS=--cfg coverage`; production adoption always probes provider-native local-current status before and after final identity checks; failed native-copy cleanup now binds Unix and Windows to the opened create-new handle; late cancellation is checked after sync and final hashes; failure-journal write errors are surfaced with the transfer error; Windows existing-copy adoption fails closed without provider-native local-current evidence; focused Rust cloud-transfer tests pass 25/25, provider-sync tests pass 21/21 (1 ignored), authority contract tests pass 5/5, unresolved review threads are zero, no current terminal Check failure is observed, and fresh hosted checks and independent approval remain authoritative |
 | #260 | `9cebf0bf0382d3cdc50a030f388729acf46fba58` | `7eb131c4` | no | blocked | required | current-main successor for closed draft #225; Rust planner rejects cwd-dependent, named-tilde, and parent-traversal ontology targets, preserves literal absolute tildes, keeps Windows contract tests inside the crate, accepts native `~\\` home tokens, and scopes the Windows job to `organize::tests::windows_`; local organize suite is 22 passed and hosted `windows-home-resolution` is SUCCESS (job `97834797298`), with remaining checks/approval authoritative |
-| #258 | `b19b39284f36450e05ae375ab0309f1f5cd0829d` | `7eb131c4` | no | blocked | required | current baseline/docs head; records PR #251/#253 dependency evidence plus metadata precedence, private failure journal, provider-native materialization gate, cancellation, provider-managed traversal, placeholder-adoption gaps, and the path-bearing local Naruon compatibility-envelope exception; hosted checks and qualifying approval remain authoritative |
+| #258 | `1331bae19d49043f27d6ea4113eb5f04df0a67d4` | `7eb131c4` | no | blocked | required | current baseline/docs head; records PR #251/#253 dependency evidence plus metadata precedence, private failure journal, provider-native materialization gate, cancellation, provider-managed traversal, placeholder-adoption gaps, and the path-bearing local Naruon compatibility-envelope exception; hosted checks and qualifying approval remain authoritative |
 | #257 | `d09808feb873b5196f5805beaad70d683b772313` | `7eb131c4` | no | blocked | required | dependency update with all source/release/coverage/security checks passing; hosted Strix is the only failure and its job log classifies provider/backend unavailability without a structured vulnerability finding; no unresolved review thread, independent approval remains required |
 | #256 | `0b76d3cb03943ba683568d8f9ec96c63e0604aa0` | `7eb131c4` | yes | blocked | required | Vite dependency update; Strix job `97392415909` failed closed on provider/backend unavailability, with no structured vulnerability finding |
 | #255 | `70064170e647c9d4f9792b39d822bf0ac3d517c7` | `7eb131c4` | yes | blocked | required | SvelteKit dependency update; Strix job `97392378050` failed closed after NVIDIA NIM rate-limit retries, with no structured vulnerability finding |
@@ -40,7 +40,7 @@ an older main remains non-integrated until it is deliberately rebased and reveri
 | #204 | `750213dff16482544af3c0a9543f6c638924e5e6` | `17d4e203` | yes | blocked | none | Strix failure; base is stale |
 | #206 | `2e7b845b7610a871ec5981d964bcab5cb99df41d` | `5c86668a` | yes | clean | changes requested | 0 non-success terminal, 2 pending; stacked draft |
 | #198 | `a727b3eb082c5049f9c9350677abaad23c18222a` | `7eb131c4` | no | blocked | required | iCloud eviction privacy feedback hardening; focused UI checks pass, hosted checks and qualifying approval remain authoritative |
-| ContextualWisdomLab/.github #1331 | `a1408f520cc38bab3207675b0033a48d3d12240c` | `d2c554db` | no | dirty | required | replacement for closed #1324; direct-OpenAI fallback uses a paired runner-scoped API base/key, preserves standalone custom `LLM_API_BASE_FILE`, and rejects known foreign provider bases; current merge state is dirty and requires normal conflict repair before hosted checks and independent approval |
+| ContextualWisdomLab/.github #1331 | `40955bab7663c86bf642995b417cb9c560cb0778` | `fecceba0` | no | blocked | required | replacement for closed #1324; direct-OpenAI fallback uses a paired runner-scoped API base/key, preserves standalone custom `LLM_API_BASE_FILE`, and rejects known foreign provider bases; main was merged normally to clear conflicts, and hosted checks plus independent approval remain authoritative |
 | ContextualWisdomLab/.github #1330 | `f8a72106b887230ec12a95ff68947a0e00837b58` | `d2c554db` | no | blocked | required | replacement for closed #1328; conflict-mode protected security-contract guard runs after edits and before staging; hosted checks and independent approval remain authoritative |
 | ContextualWisdomLab/.github #1333 | `5454a19618b27f4d7f34dd2a7a5e47eb5bc42fc1` | `564058ce` | no | merged | — | bounded provider-outage retry loop; merged 2026-08-25; retained here as shipped dependency evidence |
 | ContextualWisdomLab/.github #1334 | `78845131e079721ce2d73063bb5c954f55c01894` | `95b05b39` | no | merged | — | DiskSage hourly caller permission boundary; merged 2026-08-25; retained here as shipped dependency evidence |
@@ -141,8 +141,8 @@ suite passes 35 tests; hosted Strix and metadata-only gates remain authoritative
   this update records the latest #246/#227 reconciliation. Protected auto-merge is enabled, while
   current documentation, Windows-home, security, and review checks are queued or running. It remains
   `BLOCKED` pending normal hosted gates and approval.
-- Central `ContextualWisdomLab/.github` PR #1331 is `a1408f520cc38bab3207675b0033a48d3d12240c` and
-  remains open with a dirty merge state; #1333 is `5454a19618b27f4d7f34dd2a7a5e47eb5bc42fc1` and
+- Central `ContextualWisdomLab/.github` PR #1331 is `40955bab7663c86bf642995b417cb9c560cb0778` and
+  remains open with a blocked protected state while fresh checks run; #1333 is `5454a19618b27f4d7f34dd2a7a5e47eb5bc42fc1` and
   merged on 2026-08-25. These exact heads supersede the older abbreviated table entries above.
 
 ## 2026-08-26 latest head refresh
@@ -189,7 +189,7 @@ suite passes 35 tests; hosted Strix and metadata-only gates remain authoritative
 - DiskSage PR #260 is exact head `9cebf0bf0382d3cdc50a030f388729acf46fba58` and is now ready for
   review with protected auto-merge enabled. Its coverage/Strix checks remain active without a current
   failure; independent approval and the exact-head protected gate remain authoritative.
-- The documentation PR #258 is now exact head `b19b39284f36450e05ae375ab0309f1f5cd0829d`; this
+- The documentation PR #258 is now exact head `1331bae19d49043f27d6ea4113eb5f04df0a67d4`; this
   section is the current reconciliation for the protected review/check gate.
 - DiskSage PR #246's predecessor `1ae5a3517f80aeda79c3e77fe540ccb2ce1f4ccb` carried the
   non-iCloud provider checking-state card; the current exact head is `57eb6c134a3a29fe231d973c35df762edd9fa34d`.
