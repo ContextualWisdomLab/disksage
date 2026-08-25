@@ -145,6 +145,15 @@ suite passes 35 tests; hosted Strix and metadata-only gates remain authoritative
 
 ## 2026-08-26 latest head refresh
 
+- DiskSage PRs #236 (`88c5e75473c19d9c9198302d9ae749c5651362e9`), #234
+  (`22bc81585257f409abf9f99a5db81184e84dafe9`), #231
+  (`a781884f656f77d290946a913acc9169aaff0786`), and #230
+  (`c7e4e623e9b691dcd6a24cad3cc492393cb5d83e`) were advanced from draft to ready with protected
+  auto-merge. Their current checks have no terminal failure observed. PRs #217
+  (`687c0148e608fcf6ffe4bc0e13a2f9c2d88ffbde`) and #214
+  (`ce88169954e478b6335cfd7971db819cb828edb1`) were likewise made ready with auto-merge, but
+  their Strix failures remain classified as provider/backend evidence rather than source findings;
+  they remain blocked until the external gate and independent review are fresh.
 - DiskSage PR #250 (mail-parser dependency update) is exact head
   `d68b8abbf65ab8e1073ab2db4309a12e119de474`; current terminal Checks show no failure and no
   unresolved current review thread. It was marked ready with protected auto-merge enabled; the
