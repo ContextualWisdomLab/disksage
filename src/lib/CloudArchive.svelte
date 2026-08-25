@@ -1084,6 +1084,14 @@
         로컬 여유공간을 확보한 뒤 DiskSage에서 상태를 다시 확인하십시오.
       </p>
     {/if}
+    {#if selectedRootDetails()?.provider !== "icloud" && checkingProviderGlobalSync && !providerGlobalSync && !providerGlobalSyncError}
+      <ProviderStatusCard
+        provider={selectedRootDetails()?.provider ?? "공급자"}
+        state={providerStatusState(false, false, 0, 0)}
+        details="공급자 전역 동기화 상태를 확인하는 중입니다. 확인이 끝날 때까지 새 복사와 원본 정리를 시작하지 마십시오."
+        statusId="provider-global-sync-checking-status"
+      />
+    {/if}
     {#if selectedRootDetails()?.provider !== "icloud" && providerGlobalSyncError && !providerGlobalSync}
       <ProviderStatusCard
         provider={selectedRootDetails()?.provider ?? "공급자"}
