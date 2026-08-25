@@ -1294,11 +1294,12 @@ fn persist_icloud_health_evidence(
         .find(|blocker| blocker.as_str() == "icloud-native-status-pending-scan")
         .or_else(|| report.new_copy_admission_blockers.first());
     if let Some(provider_blocker) = provider_blocker {
-        report.notices.extend(update_icloud_goal_projections(
+        report.notices.extend(update_provider_goal_projections(
             &app_data_dir.join("cloud-receipts"),
             &app_data_dir.join("cloud-adr"),
             &app_data_dir.join("cloud-goals"),
             cloud::system_now_ms(),
+            cloud::CloudProvider::Icloud,
             provider_blocker,
         ));
     }
@@ -1306,7 +1307,7 @@ fn persist_icloud_health_evidence(
 }
 
 #[cfg(not(coverage))]
-fn apply_icloud_health_blocker_to_projection(
+fn apply_provider_blocker_to_projection(
     receipt: &cloud_transfer::CloudCopyReceipt,
     adr_dir: &Path,
     goal_dir: &Path,
@@ -1323,11 +1324,12 @@ fn apply_icloud_health_blocker_to_projection(
 }
 
 #[cfg(not(coverage))]
-fn update_icloud_goal_projections(
+fn update_provider_goal_projections(
     receipt_dir: &Path,
     adr_dir: &Path,
     goal_dir: &Path,
     observed_at_ms: u64,
+    provider: cloud::CloudProvider,
     provider_blocker: &str,
 ) -> Vec<String> {
     match std::fs::symlink_metadata(receipt_dir) {
@@ -1374,10 +1376,10 @@ fn update_icloud_goal_projections(
                 continue;
             }
         };
-        if receipt.provider != cloud::CloudProvider::Icloud {
+        if receipt.provider != provider {
             continue;
         }
-        let outcome = apply_icloud_health_blocker_to_projection(
+        let outcome = apply_provider_blocker_to_projection(
             &receipt,
             adr_dir,
             goal_dir,
@@ -1412,6 +1414,20 @@ fn persist_provider_global_sync_evidence(
     }
     report.admission_blocked_since_ms =
         provider_global_sync::provider_global_sync_blocked_since_ms(&app_data_dir, report);
+    let provider_blocker = report.blockers.first().cloned().or_else(|| {
+        (report.state != provider_global_sync::ProviderGlobalSyncState::Clear)
+            .then(|| format!("provider-global-sync-{}", report.state.as_str()))
+    });
+    if let Some(provider_blocker) = provider_blocker.as_deref() {
+        report.notices.extend(update_provider_goal_projections(
+            &app_data_dir.join("cloud-receipts"),
+            &app_data_dir.join("cloud-adr"),
+            &app_data_dir.join("cloud-goals"),
+            report.observed_at_ms,
+            report.provider,
+            provider_blocker,
+        ));
+    }
     true
 }
 
@@ -3324,7 +3340,7 @@ mod tests {
         );
         assert!(initial.0.is_some() && initial.1.is_some());
 
-        let outcome = apply_icloud_health_blocker_to_projection(
+        let outcome = apply_provider_blocker_to_projection(
             &receipt,
             &adr_dir,
             &goal_dir,
@@ -3349,6 +3365,56 @@ mod tests {
             .consequences
             .iter()
             .any(|value| value == "provider-state-blocked:icloud-native-status-pending-scan"));
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn provider_global_sync_blocker_updates_google_drive_goal_and_adr_projections() {
+        let temporary = tempfile::tempdir().unwrap();
+        let receipt = cloud_transfer::CloudCopyReceipt {
+            version: cloud_transfer::RECEIPT_VERSION,
+            receipt_id: "e".repeat(64),
+            candidate_fingerprint: "f".repeat(64),
+            provider: cloud::CloudProvider::GoogleDrive,
+            source: "/source/file.zip".into(),
+            destination: "/google-drive/file.zip".into(),
+            bytes: 1,
+            blake3: "a".repeat(64),
+            sha256: "b".repeat(64),
+            quick_xor_base64: String::new(),
+            source_modified_ms: 1,
+            copied_at_ms: 2,
+            copy_verified: true,
+            provider_sync_confirmed: false,
+            lineage_fingerprint: None,
+            lineage: None,
+        };
+        let adr_dir = temporary.path().join("adr");
+        let goal_dir = temporary.path().join("goals");
+        let outcome = apply_provider_blocker_to_projection(
+            &receipt,
+            &adr_dir,
+            &goal_dir,
+            3,
+            "provider-global-sync-temporarily-disconnected",
+        );
+        assert!(outcome.wrote);
+        assert!(outcome.warnings.is_empty());
+
+        let goal: cloud_adr::CloudOffloadGoalSnapshot = serde_json::from_slice(
+            &std::fs::read(goal_dir.join(format!("{}-latest.json", receipt.receipt_id))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(goal.status, "blocked");
+        assert!(!goal.completion_gates["provider-sync-state-complete"]);
+        assert!(!goal.completion_gates["explicit-eviction-permit"]);
+        let adr: cloud_adr::CloudOffloadAdrSnapshot = serde_json::from_slice(
+            &std::fs::read(adr_dir.join(format!("{}-latest.json", receipt.receipt_id))).unwrap(),
+        )
+        .unwrap();
+        assert!(adr.consequences.iter().any(|value| {
+            value == "provider-state-blocked:provider-global-sync-temporarily-disconnected"
+        }));
     }
 
     #[cfg(not(coverage))]
