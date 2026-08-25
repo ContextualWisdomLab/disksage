@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-25 (Asia/Seoul)
-**Repository heads at snapshot:** PR #259 `8dc9a27`, PR #258 `0beaaa0`, PR #247 `58e1dc5`,
+**Repository heads at snapshot:** PR #259 `33067ee`, PR #258 `0beaaa0`, PR #247 `58e1dc5`,
 PR #246 `2037c91`, supporting PR #156 `39a08a7`, and PR #192 `30ceea2`; hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
@@ -16,7 +16,7 @@ rebased and reverified.
 
 | PR | Exact head | Base | Draft | Merge state | Review state | Check evidence at capture |
 | --- | --- | --- | --- | --- | --- | --- |
-| #259 | `8dc9a279c55981de867941db7bfe35f5ed24e5b4` | `7eb131c4` | no | blocked | none | checks restarted after ADR evidence update |
+| #259 | `33067eeabcb6a86d90bfb3bef881e03c4552249d` | `7eb131c4` | no | blocked | none | checks restarted after ADR evidence update |
 | #258 | `0beaaa02829cdf0d788fbc37b6e82b3c38690e56` | `7eb131c4` | no | blocked | review required | checks restarted after exact-head documentation update |
 | #249 | `2f1d585398b85f3f1adb3783520ad70e7b4a9c3f` | `7eb131c4` | no | blocked | none | 1 non-success terminal, 2 pending |
 | #247 | `58e1dc52a93cd959daaea549a7f362eddc1601f5` | `7eb131c4` | no | blocked | none | 0 non-success terminal, 18 pending |
@@ -713,7 +713,7 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - DiskSage keeps new copy, provider attestation, and source eviction fail-closed. It does not kill
   `bird`, `fileproviderd`, touch CloudDocs databases, or cancel Finder automatically; the existing
   operator-only Escape/cancel action is the reversible next step. The exact-head UI patch in PR
-  #259 (`8dc9a279c55981de867941db7bfe35f5ed24e5b4`) exposes no-progress labels, bounded upload/
+  #259 (`33067eeabcb6a86d90bfb3bef881e03c4552249d`) exposes no-progress labels, bounded upload/
   download percentages, the same-blocker duration, and the next safe action. Hosted checks remain
   in progress/queued and protected review is still authoritative.
 - A follow-up bounded observation at `2026-08-25 12:49:51 +0900` still retained seven
