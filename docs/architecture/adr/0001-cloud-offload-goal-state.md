@@ -617,9 +617,10 @@ as `icloud-file-provider-stalled`. This captures a multi-hour Finder “preparin
 DiskSage restarts; it remains an observational blocker, not evidence of causal ownership by
 DiskSage or permission to mutate Finder, provider state, or source data.
 
-The exact-head follow-up `c2d56fd2` also accepts a provider operation marker and its redacted age
+The exact-head follow-up `590c9df8` also accepts a provider operation marker and its redacted age
 token on adjacent dump rows, because File Provider diagnostics may wrap one operation across lines.
-The focused Rust parser suite passed 9/9, including rejection of unrelated parenthesized durations.
+The focused Rust parser suite passed 10/10, including rejection of unrelated parenthesized durations
+and cross-record adjacent age pairing.
 A bounded read-only probe at `2026-08-25 15:26 +0900`
 timed out after 30 seconds while the earlier bounded output still showed `fetch-content` errors
 aged about six hours; that timeout is incomplete provider evidence and keeps copy, attestation,
