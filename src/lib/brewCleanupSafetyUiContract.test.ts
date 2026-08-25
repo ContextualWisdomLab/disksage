@@ -33,6 +33,21 @@ describe("Homebrew cleanup safety UX", () => {
     expect(executeCleanup).toContain("judgment = null;");
   });
 
+  it("distinguishes executed and non-executed result states", () => {
+    const source = readSource("src/lib/BrewCleanup.svelte");
+    const start = source.indexOf("{#if execution}");
+    const end = source.indexOf("\n      {/if}\n    </div>", start);
+    const executionResult = source.slice(start, end);
+
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    expect(executionResult).toContain("execution.executed");
+    expect(executionResult).toContain("실행 성공 (종료 코드");
+    expect(executionResult).toContain("실행 실패 (종료 코드");
+    expect(executionResult).toContain("실행되지 않음");
+    expect(executionResult).not.toContain("실행 완료</p>");
+  });
+
   it("normalizes the approval phrase and explains why execution is unavailable", () => {
     const source = readSource("src/lib/BrewCleanup.svelte");
 
@@ -40,5 +55,16 @@ describe("Homebrew cleanup safety UX", () => {
     expect(source).toContain("confirmationPhrase.trim(),");
     expect(source).toContain("승인 문구가 일치하지 않습니다.");
     expect(source).toContain("실행 사유를 입력하십시오.");
+  });
+
+  it("distinguishes a failed subprocess from a successful execution", () => {
+    const source = readSource("src/lib/BrewCleanup.svelte");
+
+    expect(source).toContain("execution.status_code === 0");
+    expect(source).toContain("실행 성공 (종료 코드");
+    expect(source).toContain("실행 실패 (종료 코드");
+    expect(source).not.toContain(
+      "execution.executed ? `실행 완료 (종료 코드 ${execution.status_code})`",
+    );
   });
 });

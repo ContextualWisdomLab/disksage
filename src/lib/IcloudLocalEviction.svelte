@@ -35,7 +35,7 @@
       path = selected;
       resetDecision();
     } catch {
-      error = "iCloud 파일 선택을 완료하지 못했습니다. 다시 시도하십시오.";
+      error = "파일 선택 창을 열지 못했습니다.";
     }
   }
 
@@ -47,7 +47,7 @@
     try {
       plan = await api.planIcloudLocalCopyEviction(cloudRoot, selectedPath);
     } catch {
-      error = "iCloud 로컬 사본 상태를 확인하지 못했습니다. 다시 시도하십시오.";
+      error = "iCloud 로컬 사본 상태를 확인하지 못했습니다.";
     } finally {
       planning = false;
     }
@@ -83,7 +83,7 @@
       confirmation = "";
       rationale = "";
     } catch {
-      error = "iCloud 로컬 사본을 회수하지 못했습니다. 상태를 다시 확인하십시오.";
+      error = "iCloud 로컬 사본 축출을 실행하지 못했습니다.";
     } finally {
       executing = false;
     }
