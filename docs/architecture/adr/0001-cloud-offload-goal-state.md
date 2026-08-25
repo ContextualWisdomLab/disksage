@@ -556,9 +556,18 @@ alive, but no DiskSage, ZIP, or `real_datasets` process was running; local headr
 These markers classify the user-visible “복사 준비 중” dialog as provider preflight/backlog evidence,
 not a completed copy or a local ZIP stall.
 
-PR #259 (`8d87a2ba81af3e1c289bcc5219423c7efa5f4236`) exposes the aggregate no-progress label,
+PR #259 (`ced0770086481dfc65d2de5d6d7e0e0139c30480`) exposes the aggregate no-progress label,
 bounded transfer percentages, and same-blocker duration. This is diagnostic/operator guidance only:
 the UI may request Finder Escape cancellation, but DiskSage does not cancel automatically, kill
 `bird`/`fileproviderd`, touch CloudDocs databases, or grant copy, attestation, or eviction authority.
 New work remains fail-closed until a fresh complete and quiet provider observation plus independent
 per-item receipt evidence exists.
+
+The follow-up bounded observation at `2026-08-25 12:49:51 +0900` still retained seven
+`fetchContentsForItemWithID` requests with no progress and an active reconciliation backlog of
+`523,158` entries. Transfer state had advanced to upload fraction `0.9999` (11,812,609 of
+11,813,276 bytes) and download fraction `0.4273` (254,713,831 of 596,099,680 bytes), so the
+Finder dialog remains a provider preflight/reconciliation wait rather than evidence of a local
+ZIP worker. This progress does not clear the no-progress or reconciliation blockers: DiskSage
+continues to admit no new copy, attestation, or source eviction until a fresh complete and quiet
+observation plus an independent per-item receipt exists.
