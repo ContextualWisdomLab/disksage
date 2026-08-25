@@ -46,7 +46,7 @@ describe("CloudArchive bounded error feedback", () => {
     expect(boundedCloudArchiveErrorMessage("cancel", "cloud-copy-operation-mismatch")).not.toBe("");
   });
 
-  it("does not invoke untrusted message accessors while classifying caught values", () => {
+  it("does not invoke untrusted object traps while classifying caught values", () => {
     let accessorInvoked = false;
     const accessorError = Object.defineProperty({}, "message", {
       configurable: true,
@@ -60,18 +60,31 @@ describe("CloudArchive bounded error feedback", () => {
     expect(isCloudCopyCancelled(accessorError)).toBe(false);
     expect(accessorInvoked).toBe(false);
 
-    const hostileProxy = new Proxy(
+    const descriptorProxy = new Proxy(
       {},
       {
         getOwnPropertyDescriptor() {
-          throw new Error("secret proxy detail");
+          throw new Error("secret descriptor detail");
         },
       },
     );
-    expect(boundedCloudArchiveErrorMessage("copy", hostileProxy)).toBe(
+    expect(boundedCloudArchiveErrorMessage("copy", descriptorProxy)).toBe(
       "클라우드 복사를 실행하지 못했습니다.",
     );
-    expect(isCloudCopyCancelled(hostileProxy)).toBe(false);
+    expect(isCloudCopyCancelled(descriptorProxy)).toBe(false);
+
+    const prototypeProxy = new Proxy(
+      {},
+      {
+        getPrototypeOf() {
+          throw new Error("secret prototype detail");
+        },
+      },
+    );
+    expect(boundedCloudArchiveErrorMessage("copy", prototypeProxy)).toBe(
+      "클라우드 복사를 실행하지 못했습니다.",
+    );
+    expect(isCloudCopyCancelled(prototypeProxy)).toBe(false);
   });
 
   it("drops arbitrary backend details for every user-visible failure phase", () => {
