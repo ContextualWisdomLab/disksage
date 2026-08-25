@@ -173,7 +173,13 @@ fn resolve_target_folder(template: &str, home: &Path, local: &str) -> Option<Pat
     if resolved_template == "~" {
         return home.is_absolute().then(|| home.to_path_buf());
     }
-    if let Some(relative) = resolved_template.strip_prefix("~/") {
+    #[cfg(windows)]
+    let home_relative = resolved_template
+        .strip_prefix("~/")
+        .or_else(|| resolved_template.strip_prefix("~\\"));
+    #[cfg(not(windows))]
+    let home_relative = resolved_template.strip_prefix("~/");
+    if let Some(relative) = home_relative {
         if !home.is_absolute() {
             return None;
         }
@@ -509,6 +515,16 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
         let home = PathBuf::from(r"C:\Users\u");
         let files = [fe(r"C:\downloads\pic.png", 100)];
         assert!(plan_moves(&files, &onto_with_target("relative/{class}"), &home).is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_backslash_home_token_expands_against_home() {
+        let home = PathBuf::from(r"C:\Users\u");
+        assert_eq!(
+            resolve_target_folder(r"~\Media\{class}", &home, "Image"),
+            Some(PathBuf::from(r"C:\Users\u\Media\Image"))
+        );
     }
 
     #[test]
