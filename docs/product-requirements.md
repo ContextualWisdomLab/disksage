@@ -38,8 +38,10 @@ from one another.
 ### FR-1: Metadata-first inventory
 
 - Read-only scans identify stable content and filesystem metadata.
-- Embedded metadata takes precedence over an unambiguous filename token; a
-  filename token such as `2026-04-28` or `251210` is secondary evidence only.
+- Metadata precedence is fixed and testable: embedded production metadata first,
+  then an unambiguous filename token, then filesystem creation time, with
+  filesystem modification time only as the final fallback. A filename token
+  such as `2026-04-28` or `251210` is secondary evidence only.
 - Missing, malformed, or conflicting metadata is visible and never silently
   upgraded to ownership or eviction authority.
 - Scans exclude provider-managed trees or use a provider-native metadata
@@ -60,9 +62,20 @@ insufficient headroom, or an incomplete receipt fail closed.
 
 - Native File Provider operations are bounded, re-hashed, and source-identity
   rechecked.
-- A timeout cleans only destination artifacts created by the current child
-  process and leaves a durable receipt.
-- No provider placeholder or unmaterialized file is mutated.
+- A timeout or cancellation cleans only destination artifacts created by the
+  current child process and writes a separate private failure journal containing
+  candidate, source, destination, operation, bounded error code, and timestamp.
+  `cloud-copy-cancelled` and every failed result are never successful receipts
+  and can never authorize eviction; restart/readback must preserve that
+  distinction.
+- No provider placeholder or unmaterialized file is mutated. Existing-copy
+  adoption must obtain provider-native `local-current`/`isDownloaded` evidence
+  before any read or hash, and the status plus post-hash identity must be bound
+  to the adoption receipt.
+- Native and provider-API copy paths both require operation state, deadline, and
+  cancellation checks before start, between chunks, and immediately after a
+  successful write; cleanup/retention and source/eviction invariants are tested
+  for timeout and cancellation.
 - Eviction is disabled until the receipt, identity, and provider attestation
   are current and complete.
 
@@ -108,9 +121,9 @@ standalone transfer or deletion.
 
 | Requirement | Required proof |
 | --- | --- |
-| FR-1 | Metadata precedence tests and a path-free inventory receipt |
+| FR-1 | Metadata precedence fixtures prove embedded → filename token → filesystem creation → modification fallback, plus a path-free inventory receipt |
 | FR-2 | State-machine fixtures for `local-current + is_uploaded=false`, provider timeout, and sync completion |
-| FR-3 | Bounded copy, hash/identity recheck, timeout cleanup, and eviction-permit tests |
+| FR-3 | Native and provider-API bounded copy tests cover pre-start, between-chunk, post-success cancellation, timeout cleanup/retention, private failure-journal restart/readback, materialization-before-hash gating, hash/identity recheck, and eviction-permit denial |
 | FR-4 | Dry-run, identity, active-use, Trash, journal, and rollback tests |
 | FR-5 | UI contract and export tests proving blocker/timestamp/next-action wording |
 | FR-6 | No external-service startup test and optional integration boundary tests |
