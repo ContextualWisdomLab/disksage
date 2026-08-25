@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-25 (Asia/Seoul)
-**Repository heads at snapshot:** PR #259 `a019dda`, PR #258 `0a1f365`, PR #227 `98fa709`, PR #249 `2f1d585`,
+**Repository heads at snapshot:** PR #259 `a019dda`, PR #258 `9576171`, PR #227 `98fa709`, PR #249 `2f1d585`,
 PR #247 `0de3f6a`, PR #246 `cbb9dc0`, PR #204 `750213d`, draft PR #198 `cf763cd`, and central `.github` PR #1328 `1c0ae26`;
 hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
@@ -18,7 +18,7 @@ rebased and reverified.
 | PR | Exact head | Base | Draft | Merge state | Review state | Check evidence at capture |
 | --- | --- | --- | --- | --- | --- | --- |
 | #259 | `a019ddaba4aa5cad1e0bef02121f20d514d9580c` | `7eb131c4` | no | blocked | required | stale File Provider error-state + `last`/`expired` parser; checks remain authoritative |
-| #258 | `0a1f3658646548c8ad5e10e34debcf486046258a` | `7eb131c4` | no | blocked | required | current baseline/docs head; checks remain authoritative |
+| #258 | `95761716ee5826cc1be82f0f17a7e7eb2f2863ed` | `7eb131c4` | no | blocked | required | current baseline/docs head; checks remain authoritative |
 | #249 | `2f1d585398b85f3f1adb3783520ad70e7b4a9c3f` | `7eb131c4` | no | blocked | required | source/build/security/coverage pass; Strix external provider failure |
 | #247 | `0de3f6a3672c6ff0f39726b7a4ddaeba757154b6` | `7eb131c4` | no | blocked | required | runtime receipt projection and shared iCloud notice contracts; post-push checks pending |
 | #246 | `cbb9dc0f5b1eba52e76f23f673381a3ebcdc132f` | `7eb131c4` | no | blocked | required | late persisted iCloud blocker timestamp adoption and border regression repair; focused UI checks pass, hosted checks pending |
@@ -59,7 +59,7 @@ and fresh approval remain pending. PR #1462 is
 `8aa604b62ade3067d8b11000f6e96d0ad28c0680`, with Strix governance re-triggering restored, the
 `pytest-cov` dependency closure pinned and hash-locked, and utility input limits enforced; 75
 backend tool tests plus the optional-parameter frontend regression and earlier governance suite
-passed, but hosted checks and fresh approval remain pending. PR #1463 is `3f733ec08393704aca9b373c9daf495dd4b56127`, with the
+passed, but hosted checks and fresh approval remain pending. PR #1463 is `92270f2ecd721d8533bcb01aef954cd3868b209f`, with the
 Strix completion trigger restored after a current-head governance regression; its informational
 shared-spinner review and restored URL-boundary threads remain resolved, while hosted Strix and
 metadata-only gates remain authoritative.
