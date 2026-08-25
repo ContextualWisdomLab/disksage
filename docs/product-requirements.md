@@ -63,9 +63,10 @@ eviction permit. Provider timeout, quota/auth uncertainty, stale evidence,
 insufficient headroom, or an incomplete receipt fail closed.
 
 The Goal state machine is intentionally success-only and begins at
-`copy-verified`. Pre-copy, failed, cancelled, and provider-sync observations are
-separate candidate/provider evidence states; they are never coerced into a Goal
-state or treated as eviction authority.
+`copy-verified`. Pre-copy, failed, and cancelled observations are separate
+candidate/provider evidence states. Provider-sync evidence drives the listed
+Goal transitions, but it does not grant eviction authority until the current
+receipt, identity, provider attestation, and every eviction gate are complete.
 
 ### FR-3: Safe copy and eviction
 
@@ -132,11 +133,11 @@ standalone transfer or deletion.
 
 | Requirement | Required proof |
 | --- | --- |
-| FR-1 | Metadata precedence fixtures prove embedded → filename token → filesystem creation → modification fallback, plus a path-free inventory receipt |
-| FR-2 | State-machine fixtures for `local-current + is_uploaded=false`, provider timeout, and sync completion |
+| FR-1 | Metadata precedence fixtures prove embedded → filename token → filesystem creation → modification fallback; missing, malformed, conflicting, provider-managed, and ambiguous states retain blockers and no eviction permit; the inventory receipt remains path-free |
+| FR-2 | State-machine fixtures for `local-current + is_uploaded=false`, provider timeout, quota/auth uncertainty, stale or incomplete evidence, insufficient headroom, failed/pre-copy/cancelled observations, and sync completion prove the correct Goal transition while retaining blockers and no eviction permit until every gate is complete |
 | FR-3 | Native and provider-API bounded copy tests cover pre-start, between-chunk, post-success cancellation, timeout cleanup/retention, private failure-journal restart/readback, materialization-before-hash gating, hash/identity recheck, and eviction-permit denial |
 | FR-4 | Dry-run, identity, active-use, Trash, journal, and rollback tests |
-| FR-5 | UI contract and export tests proving blocker/timestamp/next-action wording |
+| FR-5 | UI/export fixtures prove stable identifiers, provenance, confidence, timestamps, blockers, and next-action wording; paths are redacted in shareable projections and Goal/ADR projections cannot authorize mutation |
 | FR-6 | No external-service startup test and optional integration boundary tests |
 
 ## Explicit non-goals
