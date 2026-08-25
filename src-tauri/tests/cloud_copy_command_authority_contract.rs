@@ -102,3 +102,16 @@ fn failed_native_copy_cleanup_is_not_compiled_out_on_windows() {
         "failed native copies must keep an explicit cleanup boundary"
     );
 }
+
+#[test]
+fn windows_cleanup_uses_stable_handle_identity() {
+    let body = cloud_transfer_function_body("fn file_identity(", "fn failure_id_for(");
+    assert!(
+        body.contains("crate::safety::filesystem_object_id(path).ok()"),
+        "Windows cleanup must use the stable handle-based identity helper"
+    );
+    assert!(
+        !body.contains("use std::os::windows::fs::MetadataExt"),
+        "unstable Windows metadata identity accessors must not reach release builds"
+    );
+}

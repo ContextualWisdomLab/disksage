@@ -1133,24 +1133,21 @@ fn remove_created_file(path: &Path) {
     let _ = std::fs::remove_file(path);
 }
 
-#[cfg(all(not(coverage), not(target_os = "macos"), any(unix, windows)))]
+#[cfg(all(not(coverage), not(target_os = "macos"), unix))]
 fn file_identity(metadata: &std::fs::Metadata) -> Option<(u64, u64)> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        Some((metadata.dev(), metadata.ino()))
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        Some((
-            metadata.volume_serial_number()? as u64,
-            metadata.file_index()?,
-        ))
-    }
+    use std::os::unix::fs::MetadataExt;
+    Some((metadata.dev(), metadata.ino()))
 }
 
-#[cfg(all(not(coverage), not(target_os = "macos"), any(unix, windows)))]
+#[cfg(all(not(coverage), not(target_os = "macos"), windows))]
+fn file_identity(path: &Path) -> Option<String> {
+    // std::os::windows::fs::MetadataExt exposes the needed identity methods only through the
+    // unstable `windows_by_handle` feature. Reuse the stable handle-based implementation shared
+    // by the safety module instead of weakening cleanup to a path-only check.
+    crate::safety::filesystem_object_id(path).ok()
+}
+
+#[cfg(all(not(coverage), not(target_os = "macos"), unix))]
 fn remove_created_file_if_identity_matches(path: &Path, expected: Option<(u64, u64)>) {
     let can_remove = expected.is_some_and(|identity| {
         let Ok(metadata) = std::fs::symlink_metadata(path) else {
@@ -1159,6 +1156,21 @@ fn remove_created_file_if_identity_matches(path: &Path, expected: Option<(u64, u
         !metadata.file_type().is_symlink()
             && metadata.is_file()
             && file_identity(&metadata) == Some(identity)
+    });
+    if can_remove {
+        remove_created_file(path);
+    }
+}
+
+#[cfg(all(not(coverage), not(target_os = "macos"), windows))]
+fn remove_created_file_if_identity_matches(path: &Path, expected: Option<String>) {
+    let can_remove = expected.is_some_and(|identity| {
+        let Ok(metadata) = std::fs::symlink_metadata(path) else {
+            return false;
+        };
+        !metadata.file_type().is_symlink()
+            && metadata.is_file()
+            && file_identity(path).as_deref() == Some(identity.as_str())
     });
     if can_remove {
         remove_created_file(path);
@@ -1508,8 +1520,10 @@ fn copy_and_verify(
         Ok((staging_len, staging_hashes))
     })();
 
-    #[cfg(all(not(coverage), not(target_os = "macos"), any(unix, windows)))]
+    #[cfg(all(not(coverage), not(target_os = "macos"), unix))]
     let mut destination_identity: Option<(u64, u64)> = None;
+    #[cfg(all(not(coverage), not(target_os = "macos"), windows))]
+    let mut destination_identity: Option<String> = None;
 
     #[cfg(not(target_os = "macos"))]
     let copy_result = (|| -> Result<(u64, ContentDigests), String> {
@@ -1519,7 +1533,7 @@ fn copy_and_verify(
             .create_new(true)
             .open(destination)
             .map_err(|error| error.to_string())?;
-        #[cfg(all(not(coverage), any(unix, windows)))]
+        #[cfg(all(not(coverage), unix))]
         {
             let metadata = std::fs::symlink_metadata(destination)
                 .map_err(|_| "destination-state-unavailable".to_string())?;
@@ -1527,6 +1541,15 @@ fn copy_and_verify(
                 return Err("destination-state-unavailable".into());
             }
             destination_identity = file_identity(&metadata);
+        }
+        #[cfg(all(not(coverage), windows))]
+        {
+            let metadata = std::fs::symlink_metadata(destination)
+                .map_err(|_| "destination-state-unavailable".to_string())?;
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err("destination-state-unavailable".into());
+            }
+            destination_identity = file_identity(destination);
         }
         let mut source_hasher = ContentHasher::default();
         let mut copied = 0_u64;
