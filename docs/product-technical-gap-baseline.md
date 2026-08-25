@@ -2,7 +2,7 @@
 
 **Snapshot:** 2026-08-25 (Asia/Seoul)
 **Repository heads at snapshot:** PR #259 `86dd521`, PR #258 `84c3f9d`, PR #227 `98fa709`, PR #249 `2f1d585`,
-PR #247 `0de3f6a`, PR #246 `cbb9dc0`, PR #204 `750213d`, draft PR #198 `cf763cd`, and replacement central `.github` PRs #1330 `f8a7210`, #1331 `3c7f430`, and #1332 `495c02d`;
+PR #247 `0de3f6a`, PR #246 `cbb9dc0`, PR #204 `750213d`, draft PR #198 `cf763cd`, and replacement central `.github` PRs #1330 `f8a7210`, #1331 `3c7f430`, and #1332 `495c02d` (with superseded #1321 closed);
 hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
@@ -30,7 +30,7 @@ rebased and reverified.
 | ContextualWisdomLab/.github #1330 | `f8a72106b887230ec12a95ff68947a0e00837b58` | `d2c554db` | no | blocked | required | replacement for closed #1328; conflict-mode protected security-contract guard runs after edits and before staging; hosted checks and independent approval remain authoritative |
 | ContextualWisdomLab/.github #1332 | `495c02d8a56c648570b3a82d311ac7e9c2727dc5` | `d2c554db` | no | blocked | required | replacement for closed #1322; typed provider/model outages retry at most three times with bounded linear backoff and a 6000-second deadline; findings/configuration failures never retry; inert test helper branch removed on current head |
 
-Central `.github` PRs #1328, #1329, #1324, #1323, and #1322 were closed and superseded on request.
+Central `.github` PRs #1328, #1329, #1324, #1323, #1322, and #1321 were closed and superseded on request.
 Replacement PR #1330 is based on the current protected `main` head and carries the exact-head
 autofix security guard plus the canonical `gpt-5.4` Strix/OpenCode contract. Its conflict-mode guard
 now runs after OpenCode edits and before staging; local targeted contract tests, Ruff, shell syntax,
