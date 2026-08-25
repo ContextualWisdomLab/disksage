@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-25 (Asia/Seoul)
-**Repository heads at snapshot:** PR #260 `041cce6`, PR #259 `86dd521`, PR #258 `32e06a1`, PR #257 `d09808f`, PR #253 `7db00e2`, PR #251 `7b8caa3`, PR #227 `98fa709`, PR #249 `1a3abf8`,
+**Repository heads at snapshot:** PR #262 `853771e6`, PR #260 `041cce6`, PR #259 `86dd521`, PR #258 `32e06a1`, PR #257 `d09808f`, PR #253 `7db00e2`, PR #251 `7b8caa3`, PR #227 `98fa709`, PR #249 `1a3abf8`,
 PR #247 `0de3f6a`, PR #246 `cbb9dc0`, PR #204 `750213d`, draft PR #198 `cf763cd`, and replacement central `.github` PRs #1330 `f8a7210`, #1331 `4fc261f`, #1333 `058e603`, #1334 `133a1fb`, and #1335 `6fd4d22` (with superseded #1295/#1299/#1300/#1301/#1321/#1332 closed);
 hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
@@ -20,6 +20,7 @@ an older main remains non-integrated until it is deliberately rebased and reveri
 | PR | Exact head | Base | Draft | Merge state | Review state | Check evidence at capture |
 | --- | --- | --- | --- | --- | --- | --- |
 | #259 | `86dd521227661e6d50d7f95e70cfc7f3e3929665` | `7eb131c4` | no | blocked | required | stale File Provider error-state + `last`/`expired` parser; helper docstrings added; exact-head hosted Strix rerun now succeeds (job `97785262805`); independent approval remains required |
+| #262 | `853771e6a0e3f1fec6fc49e2d12fbfa11ac55c18` | `7eb131c4` | no | blocked | required | private durable native-copy failure records, receipt-bound cancellation, and provider-native local-current materialization gate before existing-copy hashing; Rust checks passed locally; hosted checks and independent approval remain authoritative |
 | #260 | `041cce66fc6eb737ced0bf2c31aca29004f5a970` | `7eb131c4` | no | blocked | required | current-main successor for closed draft #225; Rust planner rejects cwd-dependent, named-tilde, and parent-traversal ontology targets, preserves literal absolute tildes, keeps Windows contract tests inside the crate, accepts native `~\\` home tokens, and scopes the Windows job to `organize::tests::windows_`; local organize suite is 22 passed and hosted `windows-home-resolution` is SUCCESS (job `97834797298`), with remaining checks/approval authoritative |
 | #258 | `32e06a1763a56d2a4c6660f6c3fa22e0da623493` | `7eb131c4` | no | blocked | required | current baseline/docs head immediately before this follow-up; records PR #251/#253 dependency evidence and the current timeout, privacy-scope, cancellation, and placeholder-adoption gaps; hosted checks and qualifying approval remain authoritative |
 | #257 | `d09808feb873b5196f5805beaad70d683b772313` | `7eb131c4` | no | blocked | required | dependency update with all source/release/coverage/security checks passing; hosted Strix is the only failure and its job log classifies provider/backend unavailability without a structured vulnerability finding; no unresolved review thread, independent approval remains required |
