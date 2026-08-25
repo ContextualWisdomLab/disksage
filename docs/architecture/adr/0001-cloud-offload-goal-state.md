@@ -923,3 +923,13 @@ probe remains authoritative; insufficient headroom stays blocked. This preserves
 legacy aggregate fallback and gives the UI candidate-scoped evidence without granting cloud-write,
 attestation, or source-eviction authority. Observation is read-only; no Finder, provider, source,
 or cloud mutation was performed. Exact implementation head: `5c3b87359103b82df3efb4099668b1b17f532259`.
+
+## Amendment: repeated zero-progress iCloud receipt (2026-08-25 10:18 +0900)
+
+Two read-only probes 19 seconds apart observed `pending-indexable-count` rising from `492224` to
+`492507` and reconciliation from `484500` to `484783`; both retained upload and download markers
+at `Fraction completed: 0.0000`. No standalone `cp`, `ditto`, or `rsync` process was present; the
+visible preparation window is therefore attributed to Finder/File Provider coordination, not a
+DiskSage copy worker. This is a repeated provider-stall receipt: Goal remains
+`provider-sync-incomplete`, and copy, attestation, cloud-write, and source-eviction gates remain
+closed. No cancellation or provider/source/cloud mutation was performed.

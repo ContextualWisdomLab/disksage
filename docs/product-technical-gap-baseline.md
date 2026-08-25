@@ -1476,3 +1476,14 @@ auxiliary production-time evidence; embedded metadata and context retain precede
   remains authoritative. Exact PR #247 head: `5c3b87359103b82df3efb4099668b1b17f532259`; hosted
   checks are queued and the protected PR remains draft/blocked/review-required. No Finder,
   provider, source, cloud, or eviction mutation was performed.
+
+## 2026-08-25 10:18 +0900 repeated zero-progress iCloud receipt
+
+- Two read-only iCloud probes 19 seconds apart increased `pending-indexable-count` from `492224` to
+  `492507` and reconciliation from `484500` to `484783`, while upload/download markers remained at
+  `Fraction completed: 0.0000`.
+- No standalone `cp`, `ditto`, or `rsync` process was present. The visible Finder preparation
+  window is therefore provider coordination evidence, not proof of a DiskSage copy worker or a
+  completed cloud write. Goal remains `provider-sync-incomplete`; copy, attestation, cloud-write,
+  and source-eviction gates stay closed. No cancellation or provider/source/cloud mutation was
+  performed.
