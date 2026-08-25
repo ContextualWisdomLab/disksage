@@ -41,7 +41,10 @@ IDs only; they are path-free by contract.
 
 - A failed or cancelled transfer is restart-auditable without implying a successful copy.
 - Failure evidence has a documented 10,000-record storage ceiling and fails closed at the ceiling.
-- Cancellation is explicit in the UI and stops at a safe helper/chunk boundary.
+- Native-copy cancellation is candidate-bound in the UI and stops at a safe helper/chunk boundary;
+  existing-copy adoption is a non-cancellable verification path.
+- Failed native-copy cleanup is identity-bound on Unix (device/inode) and Windows (volume serial/file
+  index); if the platform cannot provide an identity proof, DiskSage preserves the destination.
 - Placeholder adoption cannot silently hydrate data merely to test equality.
 - The implementation is local-first and does not add OAuth, Noema, or an external LLM dependency.
 
