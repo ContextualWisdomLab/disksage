@@ -26,7 +26,7 @@ jobs:
           workspaces: src-tauri
           cache-targets: false
       - name: Rust tests (includes unix symlink test)
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
       - name: Headless cloud planner tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-cloud-plan
       - name: Exact duplicate audit tests
@@ -69,9 +69,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       - name: macOS bound-root traversal regressions
-        run: |
-          cargo test --manifest-path src-tauri/Cargo.toml --test bound_read_root_macos_traversal
-          cargo test --manifest-path src-tauri/Cargo.toml rules::tests::catalog_reports_sizes_and_existence
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test bound_read_root_macos_traversal
 
   llm-engine-build:
     runs-on: ubuntu-latest
