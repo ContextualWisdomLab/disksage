@@ -18,6 +18,7 @@ export type CloudArchiveErrorOperation =
   | "disconnect";
 
 const CLOUD_COPY_CANCELLED = "cloud-copy-cancelled";
+const CLOUD_COPY_NOT_ACTIVE = "cloud-copy-not-active";
 
 const CLOUD_ARCHIVE_ERROR_MESSAGES: Record<CloudArchiveErrorOperation, string> = {
   initialize: "클라우드 상태를 불러오지 못했습니다.",
@@ -39,22 +40,31 @@ const CLOUD_ARCHIVE_ERROR_MESSAGES: Record<CloudArchiveErrorOperation, string> =
   disconnect: "클라우드 공급자 연결을 해제하지 못했습니다.",
 };
 
+function caughtErrorMessage(caughtError: unknown): string | null {
+  if (typeof caughtError === "string") return caughtError;
+  if (caughtError instanceof Error) return caughtError.message;
+  if (typeof caughtError !== "object" || caughtError === null || !("message" in caughtError)) {
+    return null;
+  }
+  return typeof caughtError.message === "string" ? caughtError.message : null;
+}
+
 /**
  * Return a stable user-facing failure message without projecting arbitrary backend details.
- * The caught value is accepted only so callers cannot accidentally stringify it while handling
- * an operation-specific failure; diagnostics remain on trusted backend/audit surfaces.
+ * A late cancel can race with successful completion; once the backend reports no active native
+ * operation, the cancellation request is an idempotent no-op and must not surface as a failure.
  */
 export function boundedCloudArchiveErrorMessage(
   operation: CloudArchiveErrorOperation,
-  _caughtError: unknown,
+  caughtError: unknown,
 ): string {
+  if (operation === "cancel" && caughtErrorMessage(caughtError) === CLOUD_COPY_NOT_ACTIVE) {
+    return "";
+  }
   return CLOUD_ARCHIVE_ERROR_MESSAGES[operation];
 }
 
 /** Return true only for the backend's deliberate user-cancellation outcome. */
 export function isCloudCopyCancelled(caughtError: unknown): boolean {
-  if (caughtError === CLOUD_COPY_CANCELLED) return true;
-  if (caughtError instanceof Error) return caughtError.message === CLOUD_COPY_CANCELLED;
-  if (typeof caughtError !== "object" || caughtError === null) return false;
-  return "message" in caughtError && caughtError.message === CLOUD_COPY_CANCELLED;
+  return caughtErrorMessage(caughtError) === CLOUD_COPY_CANCELLED;
 }
