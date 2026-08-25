@@ -1,8 +1,8 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-25 (Asia/Seoul)
-**Repository heads at snapshot:** PR #259 `86dd521`, PR #258 `38c027f`, PR #227 `98fa709`, PR #249 `2f1d585`,
-PR #247 `0de3f6a`, PR #246 `cbb9dc0`, PR #204 `750213d`, draft PR #198 `cf763cd`, and replacement central `.github` PR #1330 `f8a7210`;
+**Repository heads at snapshot:** PR #259 `86dd521`, PR #258 `f5fedaa`, PR #227 `98fa709`, PR #249 `2f1d585`,
+PR #247 `0de3f6a`, PR #246 `cbb9dc0`, PR #204 `750213d`, draft PR #198 `cf763cd`, and replacement central `.github` PR #1331 `26f96e2`;
 hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
@@ -26,14 +26,16 @@ rebased and reverified.
 | #204 | `750213dff16482544af3c0a9543f6c638924e5e6` | `17d4e203` | yes | blocked | none | Strix failure; base is stale |
 | #206 | `2e7b845b7610a871ec5981d964bcab5cb99df41d` | `5c86668a` | yes | clean | changes requested | 0 non-success terminal, 2 pending; stacked draft |
 | #198 | `cf763cdf1b3f483efaf483f6c95196a89e005951` | `7eb131c4` | yes | blocked | required | iCloud eviction privacy feedback hardening; focused UI checks pass, hosted checks pending |
-| ContextualWisdomLab/.github #1330 | `f8a72106b887230ec12a95ff68947a0e00837b58` | `d2c554db` | no | blocked | required | replacement for closed #1328; protected-path deletion/rename guards now run in both ordinary and conflict modes, Strix/OpenCode assertions are aligned with the current gpt-5.4 contract; hosted checks and independent approval remain authoritative |
+| ContextualWisdomLab/.github #1331 | `26f96e2c6649ad95b57b6fb985c54ae03fcfb69c` | `d2c554db` | no | blocked | required | replacement for closed #1324; direct-OpenAI fallback now uses a paired runner-scoped API base and key, including GitHub Models primary mode; hosted checks and independent approval remain authoritative |
 
-Central `.github` PR #1328 and its narrow prerequisite #1329 were closed and superseded on request.
+Central `.github` PRs #1328, #1329, and #1324 were closed and superseded on request.
 Replacement PR #1330 is based on the current protected `main` head and carries the exact-head
 autofix security guard plus the canonical `gpt-5.4` Strix/OpenCode contract. Its conflict-mode guard
 now runs after OpenCode edits and before staging; local targeted contract tests, Ruff, shell syntax,
-trusted Strix smoke, and diff checks pass. Hosted Checks and an independent approval remain authoritative
-before protected merge.
+trusted Strix smoke, and diff checks pass. Replacement PR #1331 is based on the same protected head
+and routes direct-OpenAI fallback requests through a paired explicit API-base/key boundary; its 46
+focused tests and trusted Strix smoke pass. Hosted Checks and independent approval remain authoritative
+before either protected merge.
 
 PR #246 exact-head `cbb9dc0f5b1eba52e76f23f673381a3ebcdc132f` now preserves the backend persisted
 iCloud stall start across restart/probe errors, adopts a timestamp supplied after the first poll,
