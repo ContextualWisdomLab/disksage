@@ -160,6 +160,11 @@ suite passes 35 tests; hosted Strix and metadata-only gates remain authoritative
   descriptor enumeration, Windows leaf reparse protection, dead path-probe removal, and file-only
   multipart metadata opens; serial Rust library tests pass 736/736 and the root-identity contract
   passes 7/7.
+- Central `ContextualWisdomLab/.github` PR #1335 advanced after a normal rebase to exact head
+  `fe5c213ddf832e510f4532ef5475410d9aba0037`; the contextual-orchestrator hourly caller is protected
+  with auto-merge enabled, its current Checks are queued/in progress without failure, and the normal
+  independent approval gate remains authoritative. Earlier #1334 and #1333 scheduler/retry PRs are
+  closed and are not treated as live scheduler evidence.
 
 ## Current product contract
 
