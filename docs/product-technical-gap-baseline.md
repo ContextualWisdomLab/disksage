@@ -156,13 +156,14 @@ suite passes 35 tests; hosted Strix and metadata-only gates remain authoritative
   current skip-link contrast regression test. The Storybook edge remains ready with protected
   auto-merge enabled, no current terminal check failure observed, and protected review still
   required; predecessor validation is not carried forward.
-- DiskSage PR #208 advanced to exact head `0ac66a2c0e7daa1fa77bdcd6c2abdb98b6da4e3e` after fixing
-  the duplicate-audit test's moved `stderr` value. The assertion now checks the decoded bounded
-  diagnostic without reusing moved bytes; macOS explicitly skips the unsupported APFS
-  non-UTF-8-directory case (`EILSEQ`) while Linux continues to exercise the native-path rejection.
-  The feature-gated focused suite passes 4/4 locally, with no unresolved current review threads;
-  hosted Checks are queued/in progress and protected review remains authoritative. The PR is now
-  ready with protected auto-merge enabled, but no merge is claimed.
+- DiskSage PR #208 advanced to exact head `e5fcc1653a667b0291851568ab038493828e73b6` after
+  addressing current review findings. The duplicate-audit test now handles the macOS APFS
+  `EILSEQ` private-output limitation explicitly, and the production audit rejects a non-Unicode
+  canonical root immediately after canonicalization, before directory enumeration or hashing.
+  The focused feature-gated suites pass 4/4 plus the native private-output test 1/1 locally; all
+  current review threads are resolved, current terminal checks show no failure, and protected
+  auto-merge is enabled. Hosted checks and independent approval remain authoritative, so no merge
+  is claimed.
 - DiskSage PR #262 is now exact head `5e27e4f16768f613de38e7940893b5fa2dff1e01` and was marked
   ready-for-review with protected auto-merge enabled. It remains blocked on required hosted checks and
   qualifying independent approval; no merge is claimed. The current head includes the accessor-safe
