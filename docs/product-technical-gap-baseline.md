@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-26 (Asia/Seoul)
-**Repository heads at snapshot:** PR #262 `345af62`, PR #260 `041cce6`, PR #259 `ae5e158`, PR #258 `5b58c1c`, PR #257 `d09808f`, PR #253 `7db00e2`, PR #251 `7b8caa3`, PR #227 `0f7a990`, PR #249 `7c93e17`,
+**Repository heads at snapshot:** PR #262 `5e27e4f`, PR #260 `9cebf0b`, PR #259 `ae5e158`, PR #258 `4d28ea3`, PR #257 `d09808f`, PR #253 `7db00e2`, PR #251 `7b8caa3`, PR #227 `0f7a990`, PR #249 `7c93e17`,
 PR #247 `0de3f6a`, PR #246 `9124e01`, PR #204 `750213d`, draft PR #198 `cf763cd`, and replacement central `.github` PRs #1330 `f8a7210`, #1331 `4fc261f`, #1333 `058e603`, #1334 `133a1fb`, and #1335 `6fd4d22` (with superseded #1295/#1299/#1300/#1301/#1321/#1332 closed);
 hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
@@ -142,6 +142,17 @@ suite passes 35 tests; hosted Strix and metadata-only gates remain authoritative
 - Central `ContextualWisdomLab/.github` PR #1331 is `a1408f520cc38bab3207675b0033a48d3d12240c` and
   #1333 is `5454a19618b27f4d7f34dd2a7a5e47eb5bc42fc1`; both remain protected, open, and auto-merge
   enabled but blocked. These exact heads supersede the older abbreviated table entries above.
+
+## 2026-08-26 latest head refresh
+
+- DiskSage PR #262 is now exact head `5e27e4f16768f613de38e7940893b5fa2dff1e01` and was marked
+  ready-for-review with protected auto-merge enabled. It remains blocked on required hosted checks and
+  qualifying independent approval; no merge is claimed. The current head includes the accessor-safe
+  cloud-error classification and prototype-trap regression fixes, with zero unresolved review threads.
+- DiskSage PR #260 is exact head `9cebf0bf0382d3cdc50a030f388729acf46fba58` and remains a draft with
+  coverage/Strix checks active; no source change is inferred from pending status.
+- The documentation PR #258 advanced to `4d28ea386f35bf17e0e0b7ad1f5a47422bc90286` after the last
+  baseline capture; this section is the current reconciliation for the next exact-head update.
 
 ## Current product contract
 
