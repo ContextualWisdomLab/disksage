@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-26 (Asia/Seoul)
-**Repository heads at snapshot:** PR #262 `c9e7ebd`, PR #260 `9cebf0b`, PR #259 `ae5e158`, PR #258 `a50b02b`, PR #257 `d09808f`, PR #253 `7db00e2`, PR #251 `7b8caa3`, PR #227 `4a41bb8`, PR #249 `7c93e17`,
+**Repository heads at snapshot:** PR #262 `c9e7ebd`, PR #260 `9cebf0b`, PR #259 `ae5e158`, PR #258 `179d1176`, PR #257 `d09808f`, PR #253 `7db00e2`, PR #251 `7b8caa3`, PR #227 `1f86c22`, PR #249 `7c93e17`,
 PR #247 `0de3f6a`, PR #246 `57eb6c1`, PR #204 `750213d`, PR #198 `c1281fb`, replacement central `.github` PRs #1330 `f8a7210` and #1331 `40955ba`, and merged #1335 `fe5c213` (central #1333 and #1334 are also merged; superseded #1295/#1299/#1300/#1301/#1321/#1332 closed);
 hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
@@ -28,6 +28,16 @@ removed, native-status-unavailable has bounded customer guidance, ineligible
 plans no longer show approval guidance, focused UI contract tests pass 8/8,
 review threads are resolved, and hosted checks plus protected approval remain
 authoritative.
+DiskSage PR #227 is now
+`1f86c22ea9bb05435dcd25c71affa23b954a3aab` after a normal protected-branch
+update. Its current review threads are all resolved; descriptor-relative root
+admission, macOS display-path compatibility, Windows leaf reparse protection,
+and file-only multipart metadata opens remain in the tree. Hosted checks and
+qualifying independent approval are still required. Central `.github` PR #1336
+is now `c694825c9e413cade756d0a21577d894ac6d9930`; its materializer escapes
+pull-request-controlled paths and git diagnostics before GitHub Actions logs,
+with a newline/command-injection regression test. Its current Strix and
+protected checks are pending, so no merge is claimed.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
 
