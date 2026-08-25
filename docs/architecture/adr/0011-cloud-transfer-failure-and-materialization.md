@@ -18,7 +18,9 @@ DiskSage writes an append-once, mode-restricted private failure record under a d
 binds the candidate fingerprint, provider, exact local paths, action, bounded error code,
 timestamp, and stable failure ID. It is diagnostic only: it cannot satisfy provider
 synchronization, approval, or source-eviction gates, and it is excluded from success-receipt
-reconciliation by directory separation.
+reconciliation by directory separation. The directory accepts at most 10,000 failure records;
+when the cap is reached DiskSage refuses another journal write rather than silently deleting
+evidence or allowing diagnostics to consume unbounded disk space.
 
 The adoption path first asks the provider adapter to prove that the destination is already
 materialized and local-current. Dataless, downloading, stale, unsupported, or changed status
@@ -38,6 +40,7 @@ IDs only; they are path-free by contract.
 ## Consequences
 
 - A failed or cancelled transfer is restart-auditable without implying a successful copy.
+- Failure evidence has a documented 10,000-record storage ceiling and fails closed at the ceiling.
 - Cancellation is explicit in the UI and stops at a safe helper/chunk boundary.
 - Placeholder adoption cannot silently hydrate data merely to test equality.
 - The implementation is local-first and does not add OAuth, Noema, or an external LLM dependency.

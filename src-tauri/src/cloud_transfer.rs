@@ -64,6 +64,9 @@ pub fn source_eviction_blocker(source: &Path) -> Option<&'static str> {
 }
 #[cfg(not(coverage))]
 const MAX_RECEIPT_BYTES: u64 = 64 * 1024;
+/// Keep the private diagnostic journal bounded without deleting evidence implicitly.
+#[cfg(not(coverage))]
+const MAX_CLOUD_COPY_FAILURE_RECORDS: usize = 10_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -1160,6 +1163,23 @@ fn write_copy_failure_record(
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return Err("failure-record-directory-unsafe".into());
     }
+    let mut existing_records = 0_usize;
+    for entry in std::fs::read_dir(receipt_dir)
+        .map_err(|_| "failure-record-directory-unavailable".to_string())?
+    {
+        let entry = entry.map_err(|_| "failure-record-directory-unavailable".to_string())?;
+        let entry_metadata = std::fs::symlink_metadata(entry.path())
+            .map_err(|_| "failure-record-directory-unavailable".to_string())?;
+        if entry_metadata.is_file()
+            && !entry_metadata.file_type().is_symlink()
+            && entry.file_name().to_string_lossy().ends_with("-failure.json")
+        {
+            existing_records = existing_records.saturating_add(1);
+        }
+    }
+    if existing_records >= MAX_CLOUD_COPY_FAILURE_RECORDS {
+        return Err("failure-record-retention-limit".into());
+    }
     let encoded = serde_json::to_vec_pretty(record)
         .map_err(|_| "failure-record-json-invalid".to_string())?;
     if encoded.len() as u64 > MAX_RECEIPT_BYTES {
@@ -1284,23 +1304,24 @@ fn bounded_macos_command(
     };
     let deadline = Instant::now() + timeout;
     loop {
-        if cancel.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
-            kill_group();
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err("cloud-copy-cancelled".into());
-        }
         match child.try_wait() {
             Ok(Some(status)) if status.success() => return Ok(()),
             Ok(Some(_)) => return Err("cloud-copy-helper-failed".into()),
-            Ok(None) if Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(50));
-            }
             Ok(None) => {
-                kill_group();
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("cloud-copy-timeout".into());
+                if cancel.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+                    kill_group();
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err("cloud-copy-cancelled".into());
+                }
+                if Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(50));
+                } else {
+                    kill_group();
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err("cloud-copy-timeout".into());
+                }
             }
             Err(_) => {
                 kill_group();
@@ -1452,6 +1473,9 @@ fn copy_and_verify(
         Ok((staging_len, staging_hashes))
     })();
 
+    #[cfg(all(not(target_os = "macos"), unix))]
+    let mut destination_identity: Option<(u64, u64)> = None;
+
     #[cfg(not(target_os = "macos"))]
     let copy_result = (|| -> Result<(u64, ContentDigests), String> {
         let mut source_file = std::fs::File::open(source).map_err(|error| error.to_string())?;
@@ -1460,6 +1484,16 @@ fn copy_and_verify(
             .create_new(true)
             .open(destination)
             .map_err(|error| error.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let metadata = std::fs::symlink_metadata(destination)
+                .map_err(|_| "destination-state-unavailable".to_string())?;
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err("destination-state-unavailable".into());
+            }
+            destination_identity = Some((metadata.dev(), metadata.ino()));
+        }
         let mut source_hasher = ContentHasher::default();
         let mut copied = 0_u64;
         let mut buffer = vec![0_u8; 1024 * 1024];
@@ -1506,11 +1540,23 @@ fn copy_and_verify(
         Ok((copied, destination_hashes))
     })();
 
-    // The TempDir owns the only pathname created for a macOS copy. Its drop cleanup removes a
-    // timed-out/failed payload without ever touching a provider-owned final destination.
-    #[cfg(not(target_os = "macos"))]
+    // The TempDir owns the only pathname created for a macOS copy. On Unix, a native copy's
+    // cleanup is identity-bound so a concurrent replacement cannot be deleted accidentally.
+    #[cfg(all(not(target_os = "macos"), unix))]
     if copy_result.is_err() {
-        remove_created_file(destination);
+        use std::os::unix::fs::MetadataExt;
+        let can_remove = destination_identity.is_some_and(|(device, inode)| {
+            let Ok(metadata) = std::fs::symlink_metadata(destination) else {
+                return false;
+            };
+            !metadata.file_type().is_symlink()
+                && metadata.is_file()
+                && metadata.dev() == device
+                && metadata.ino() == inode
+        });
+        if can_remove {
+            remove_created_file(destination);
+        }
     }
     copy_result
 }

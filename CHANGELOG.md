@@ -9,9 +9,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Changed
 
 - Add durable private failure records in a separate journal directory and a receipt-bound
-  cancellation command for bounded native cloud copies; require provider-native local-current
-  materialization evidence before existing-copy adoption can hash a destination, while keeping
-  shareable lineage exports path-free.
+  cancellation command for bounded native cloud copies; bind cancellation to the active candidate,
+  require provider-native local-current materialization evidence before existing-copy adoption can
+  hash a destination, and cap the private failure journal at 10,000 records while keeping shareable
+  lineage exports path-free.
 - Persist bounded, path-free local-volume snapshots from cloud plans with create-only files,
   content fingerprints, Unix `0400`/`0700` permissions, and shape-limited retention; surface a
   warning when incident-comparison evidence cannot be written without changing copy authority.

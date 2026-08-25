@@ -92,6 +92,7 @@
   let loadError = $state("");
   let report: api.CloudPlanReport | null = $state(null);
   let copyingFingerprint = $state("");
+  let nativeCopyActive = $state(false);
   let cancellingCopy = $state(false);
   let reviewingFingerprint = $state("");
   let copied: api.CloudCopyOutput | null = $state(null);
@@ -346,6 +347,7 @@
       || exactConfirmationPhrase !== expectedApprovalPhrase
       || !approvalRationale) return;
     copyingFingerprint = candidate.metadata_fingerprint;
+    nativeCopyActive = true;
     loadError = "";
     copied = null;
     attestation = null;
@@ -369,15 +371,16 @@
       loadError = boundedCloudArchiveErrorMessage("copy", e);
     } finally {
       copyingFingerprint = "";
+      nativeCopyActive = false;
     }
   }
 
   async function cancelCopy() {
-    if (!copyingFingerprint || cancellingCopy) return;
+    if (!nativeCopyActive || !copyingFingerprint || cancellingCopy) return;
     cancellingCopy = true;
     loadError = "";
     try {
-      await api.cancelCloudCopy();
+      await api.cancelCloudCopy(copyingFingerprint);
     } catch (e) {
       loadError = String(e);
     } finally {
@@ -396,6 +399,7 @@
       || exactConfirmationPhrase !== expectedApprovalPhrase
       || !approvalRationale) return;
     copyingFingerprint = candidate.metadata_fingerprint;
+    nativeCopyActive = false;
     loadError = "";
     copied = null;
     attestation = null;
@@ -419,6 +423,7 @@
       loadError = boundedCloudArchiveErrorMessage("provider-api-copy", e);
     } finally {
       copyingFingerprint = "";
+      nativeCopyActive = false;
     }
   }
 
@@ -436,6 +441,7 @@
       || exactConfirmationPhrase !== expectedApprovalPhrase
       || !approvalRationale) return;
     copyingFingerprint = candidate.metadata_fingerprint;
+    nativeCopyActive = true;
     loadError = "";
     copied = null;
     attestation = null;
@@ -458,6 +464,7 @@
       loadError = boundedCloudArchiveErrorMessage("adopt", e);
     } finally {
       copyingFingerprint = "";
+      nativeCopyActive = false;
     }
   }
 
@@ -1634,7 +1641,7 @@
                 >
                   {copyingFingerprint === candidate.metadata_fingerprint ? "복사·해시 검증 중…" : "원본을 유지하고 클라우드에 복사"}
                 </button>
-                {#if copyingFingerprint === candidate.metadata_fingerprint}
+                {#if nativeCopyActive && copyingFingerprint === candidate.metadata_fingerprint}
                   <button
                     type="button"
                     onclick={cancelCopy}

@@ -827,6 +827,9 @@ pub fn require_existing_destination_local_current(
 ) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
 
+    #[cfg(test)]
+    let _ = provider;
+
     let metadata = std::fs::symlink_metadata(destination)
         .map_err(|_| "existing-destination-status-unavailable".to_string())?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -835,26 +838,12 @@ pub fn require_existing_destination_local_current(
     if metadata.len() != expected_bytes || crate::cloud::metadata_is_dataless(&metadata) {
         return Err("existing-destination-not-materialized".into());
     }
+    #[cfg(not(test))]
     let path = destination
         .to_str()
         .ok_or_else(|| "existing-destination-not-unicode".to_string())?;
-    // A unit-test/local filesystem destination is not a File Provider object. Only paths inside
-    // the platform-managed provider trees require a native status probe; arbitrary user-selected
-    // local roots still receive the regular-file/size/identity checks below.
-    let managed_provider_path = destination.components().any(|component| {
-        matches!(
-            component,
-            std::path::Component::Normal(name)
-                if matches!(
-                    name.to_str(),
-                    Some("CloudStorage")
-                        | Some("Mobile Documents")
-                        | Some("File Provider Storage")
-                        | Some("FileProvider")
-                )
-        )
-    });
-    if managed_provider_path {
+    #[cfg(not(test))]
+    let check_provider_status = |expected_size: u64| -> Result<(), String> {
         match provider {
             CloudProvider::Icloud => {
                 let (ubiquitous, _, uploading, current) = foundation_icloud_status(path)?;
@@ -865,7 +854,7 @@ pub fn require_existing_destination_local_current(
             CloudProvider::Onedrive | CloudProvider::GoogleDrive => {
                 let snapshot = parse_file_providerctl_snapshot(
                     &file_providerctl_status(path)?,
-                    metadata.len(),
+                    expected_size,
                     "hash-pending",
                 )?;
                 if !snapshot.is_local_current() {
@@ -873,11 +862,18 @@ pub fn require_existing_destination_local_current(
                 }
             }
         }
-    }
+        Ok(())
+    };
+    // Production adoption always requires the provider-native status adapter. Unit tests use
+    // ordinary temporary files, so they retain deterministic metadata/identity coverage without
+    // invoking unavailable Foundation or File Provider CLIs.
+    #[cfg(not(test))]
+    check_provider_status(metadata.len())?;
     let after = std::fs::symlink_metadata(destination)
         .map_err(|_| "existing-destination-status-unavailable".to_string())?;
     if after.file_type().is_symlink()
         || !after.is_file()
+        || crate::cloud::metadata_is_dataless(&after)
         || after.len() != metadata.len()
         || after.dev() != metadata.dev()
         || after.ino() != metadata.ino()
@@ -885,6 +881,8 @@ pub fn require_existing_destination_local_current(
     {
         return Err("existing-destination-status-changed".into());
     }
+    #[cfg(not(test))]
+    check_provider_status(after.len())?;
     Ok(())
 }
 

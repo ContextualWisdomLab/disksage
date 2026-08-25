@@ -42,6 +42,8 @@ pub struct AppState {
     pub cloud_review: Arc<Mutex<()>>,
     /// One serialized native copy cancellation token. It is reset at each command boundary.
     pub cloud_copy_cancel: Arc<AtomicBool>,
+    /// Candidate fingerprint for the one native copy that may be cancelled.
+    pub cloud_copy_operation: Arc<Mutex<Option<String>>>,
     /// The latest model judgment is process-local and consumed by one execution attempt.
     pub brew_cleanup_judgment: Arc<Mutex<Option<crate::brew_cleanup::BrewCleanupJudgment>>>,
     /// Latest binary/polytomous judge calibration. It is process-local and never grants authority
@@ -392,8 +394,19 @@ pub fn cancel_scan(state: State<AppState>) {
 
 #[cfg(not(coverage))]
 #[tauri::command]
-pub fn cancel_cloud_copy(state: State<AppState>) {
+pub fn cancel_cloud_copy(
+    metadata_fingerprint: String,
+    state: State<AppState>,
+) -> Result<(), String> {
+    let active = state
+        .cloud_copy_operation
+        .lock()
+        .map_err(|_| "cloud-copy-operation-lock-poisoned".to_string())?;
+    if active.as_deref() != Some(metadata_fingerprint.as_str()) {
+        return Err("cloud-copy-not-active".into());
+    }
     state.cloud_copy_cancel.store(true, Ordering::SeqCst);
+    Ok(())
 }
 
 #[cfg(not(coverage))]
@@ -2096,11 +2109,18 @@ pub async fn copy_cloud_candidate(
 ) -> Result<CloudCopyOutput, String> {
     let cloud_review = Arc::clone(&state.cloud_review);
     let cloud_copy_cancel = Arc::clone(&state.cloud_copy_cancel);
+    let cloud_copy_operation = Arc::clone(&state.cloud_copy_operation);
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = cloud_review
             .lock()
             .map_err(|_| "cloud-review-lock-poisoned".to_string())?;
-        cloud_copy_cancel.store(false, Ordering::SeqCst);
+        {
+            let mut active = cloud_copy_operation
+                .lock()
+                .map_err(|_| "cloud-copy-operation-lock-poisoned".to_string())?;
+            cloud_copy_cancel.store(false, Ordering::SeqCst);
+            *active = Some(metadata_fingerprint.clone());
+        }
         let result = create_cloud_candidate_receipt(
             &root,
             &cloud_root,
@@ -2114,7 +2134,14 @@ pub async fn copy_cloud_candidate(
             false,
             &cloud_copy_cancel,
         );
-        cloud_copy_cancel.store(false, Ordering::SeqCst);
+        if let Ok(mut active) = cloud_copy_operation.lock() {
+            cloud_copy_cancel.store(false, Ordering::SeqCst);
+            if active.as_deref() == Some(metadata_fingerprint.as_str()) {
+                *active = None;
+            }
+        } else {
+            cloud_copy_cancel.store(false, Ordering::SeqCst);
+        }
         result
     })
     .await
@@ -2172,11 +2199,18 @@ pub async fn adopt_existing_cloud_candidate(
 ) -> Result<CloudCopyOutput, String> {
     let cloud_review = Arc::clone(&state.cloud_review);
     let cloud_copy_cancel = Arc::clone(&state.cloud_copy_cancel);
+    let cloud_copy_operation = Arc::clone(&state.cloud_copy_operation);
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = cloud_review
             .lock()
             .map_err(|_| "cloud-review-lock-poisoned".to_string())?;
-        cloud_copy_cancel.store(false, Ordering::SeqCst);
+        {
+            let mut active = cloud_copy_operation
+                .lock()
+                .map_err(|_| "cloud-copy-operation-lock-poisoned".to_string())?;
+            cloud_copy_cancel.store(false, Ordering::SeqCst);
+            *active = Some(metadata_fingerprint.clone());
+        }
         let result = create_cloud_candidate_receipt(
             &root,
             &cloud_root,
@@ -2190,7 +2224,14 @@ pub async fn adopt_existing_cloud_candidate(
             true,
             &cloud_copy_cancel,
         );
-        cloud_copy_cancel.store(false, Ordering::SeqCst);
+        if let Ok(mut active) = cloud_copy_operation.lock() {
+            cloud_copy_cancel.store(false, Ordering::SeqCst);
+            if active.as_deref() == Some(metadata_fingerprint.as_str()) {
+                *active = None;
+            }
+        } else {
+            cloud_copy_cancel.store(false, Ordering::SeqCst);
+        }
         result
     })
     .await
