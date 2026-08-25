@@ -78,6 +78,10 @@
     }[pressure];
   }
 
+  function providerProgressPercent(value: number | null | undefined): string | null {
+    return value == null ? null : `${(value / 10_000).toFixed(2)}%`;
+  }
+
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
   let roots: api.CloudRoot[] = $state([]);
@@ -822,6 +826,8 @@
       "icloud-native-status-command-timeout": "macOS iCloud 상태 확인이 시간 초과되어 복사를 보류함",
       "icloud-file-provider-no-progress": "File Provider fetch/create 요청이 진행률 없이 정지함",
       "icloud-file-provider-materialization-failed": "File Provider 파일 materialization이 실패함(staged item 없음)",
+      "icloud-file-provider-item-locked": "File Provider 항목이 전파 잠금 상태임",
+      "icloud-file-provider-stalled": "File Provider 오래된 오류로 전송이 정지된 상태임",
       "icloud-file-provider-filename-excluded": "iCloud가 파일 이름 때문에 동기화에서 제외한 항목이 있음",
       "icloud-file-provider-root-excluded": "iCloud가 동기화 루트에서 제외한 항목이 있음",
       "icloud-file-provider-transfer-active": "File Provider 기존 upload/download가 진행 중임",
@@ -950,6 +956,12 @@
             · File Provider 무진행 fetch {icloudHealth.file_provider_activity.no_progress_fetch_count}개 / create {icloudHealth.file_provider_activity.no_progress_create_count}개 ·
             materialization 실패 {icloudHealth.file_provider_activity.materialization_failure_count}개 / staged item 없음 {icloudHealth.file_provider_activity.staged_item_missing_count}개 ·
             활성 upload {icloudHealth.file_provider_activity.active_upload_count}개 / download {icloudHealth.file_provider_activity.active_download_count}개
+            {#if providerProgressPercent(icloudHealth.file_provider_activity.active_upload_progress_millionths)}
+              · upload 진행률 {providerProgressPercent(icloudHealth.file_provider_activity.active_upload_progress_millionths)}
+            {/if}
+            {#if providerProgressPercent(icloudHealth.file_provider_activity.active_download_progress_millionths)}
+              · download 진행률 {providerProgressPercent(icloudHealth.file_provider_activity.active_download_progress_millionths)}
+            {/if}
           {/if}
         </span>
         <p class="muted">마지막 증거 확인: {evidenceObservedAt(icloudHealth.observed_at_ms)}</p>
@@ -977,6 +989,8 @@
             || icloudHealth.file_provider_activity.timed_out
             || icloudHealth.file_provider_activity.active_upload_count > 0
             || icloudHealth.file_provider_activity.active_download_count > 0
+            || icloudHealth.new_copy_admission_blockers.includes("icloud-file-provider-item-locked")
+            || icloudHealth.new_copy_admission_blockers.includes("icloud-file-provider-stalled")
           )}
             <button onclick={cancelFinderCopy} disabled={cancellingFinderCopy || checkingIcloudHealth}>
               {cancellingFinderCopy ? "Finder 복사 취소 요청 중…" : "Finder 복사 취소 요청"}
@@ -985,7 +999,7 @@
           {/if}
           {#if icloudHealth.file_provider_activity && (icloudHealth.file_provider_activity.no_progress_fetch_count > 0 || icloudHealth.file_provider_activity.no_progress_create_count > 0)}
             <p class="warning">
-              File Provider의 복사 요청이 진행률 없이 만료되었습니다. Finder에 남은 복사 대기는 취소하고,
+              Finder가 “복사 준비 중”에서 멈춘 동안 File Provider의 no-progress 요청이 함께 관찰되었습니다. Finder에 남은 복사 대기는 취소하고,
               File Provider 상태가 정상으로 관찰된 뒤 DiskSage에서 새 계획을 다시 실행해야 합니다.
             </p>
           {/if}
@@ -993,6 +1007,18 @@
             <p class="warning">
               File Provider가 파일 materialization에 실패했거나 staged item을 잃었습니다. 현재 복사는 완료로 간주하지 않으며,
               새 복사·attestation·원본 정리는 상태가 정상화될 때까지 차단합니다.
+            </p>
+          {/if}
+          {#if icloudHealth.new_copy_admission_blockers.includes("icloud-file-provider-item-locked")}
+            <p class="warning">
+              File Provider 항목의 전파 잠금 상태가 Finder 복사 준비 지연과 함께 관찰되었습니다. Finder의 대기 작업을 취소하고,
+              상태가 정상화된 뒤 DiskSage에서 새 복사를 다시 시작하십시오.
+            </p>
+          {/if}
+          {#if icloudHealth.new_copy_admission_blockers.includes("icloud-file-provider-stalled")}
+            <p class="warning">
+              File Provider 큐에서 15분 이상 묵은 fetch/create 오류가 관찰되었습니다. Finder의 “복사 준비 중” 작업을 취소하고,
+              상태가 정상화된 뒤 DiskSage에서 새 복사를 다시 시작하십시오.
             </p>
           {/if}
           {#if icloudHealth.file_provider_activity?.timed_out}
