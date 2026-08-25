@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-25 (Asia/Seoul)
-**Repository heads at snapshot:** PR #259 `0554671`, PR #258 `e26f347`, PR #227 `98fa709`, PR #249 `2f1d585`,
+**Repository heads at snapshot:** PR #259 `8b30da6`, PR #258 `e26f347`, PR #227 `98fa709`, PR #249 `2f1d585`,
 PR #247 `58e1dc5`, PR #246 `2037c91`, and PR #204 `750213d`; hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
@@ -16,7 +16,7 @@ rebased and reverified.
 
 | PR | Exact head | Base | Draft | Merge state | Review state | Check evidence at capture |
 | --- | --- | --- | --- | --- | --- | --- |
-| #259 | `0554671ad0f42a29f0fd66e21f93d6d2f5b780e7` | `7eb131c4` | no | blocked | required | current lock/readiness/ADR head; checks remain authoritative |
+| #259 | `8b30da68e0e86dde37b2048de7da1a7615ab3ff7` | `7eb131c4` | no | blocked | required | stale File Provider error-age detection; checks remain authoritative |
 | #258 | `e26f347a2bbeef44224400b17cb23ec72a2bfb5f` | `7eb131c4` | no | blocked | required | current baseline/docs head; checks remain authoritative |
 | #249 | `2f1d585398b85f3f1adb3783520ad70e7b4a9c3f` | `7eb131c4` | yes | blocked | none | Strix failure; external gate evidence unavailable |
 | #247 | `58e1dc52a93cd959daaea549a7f362eddc1601f5` | `7eb131c4` | yes | blocked | none | Strix failure; external gate evidence unavailable |
@@ -742,3 +742,8 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   6.1%; the Data volume had about 53 GiB available after generated-cache cleanup. These are
   provider-pressure observations, not per-item receipts or causal proof against DiskSage, so
   copy admission, attestation, and eviction remain fail-closed.
+- PR #259 now detects a path-free `icloud-file-provider-stalled` blocker when a redacted
+  fetch/create operation age is at least 15 minutes. This closes the restart gap where a
+  multi-hour Finder “복사 준비 중” wait previously appeared only as a current error count. It
+  remains observation-only: Finder cancellation is explicit, and provider databases, daemons,
+  cloud objects, source files, attestation, and eviction are not mutated by this detection.
