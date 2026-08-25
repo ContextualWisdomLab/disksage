@@ -762,6 +762,10 @@ pub(crate) fn active_use_evidence(
     }
     let mut pids = BTreeSet::new();
     for field in result.stdout.split(|byte| *byte == 0) {
+        // `lsof -F0` terminates each field with NUL and each process/file set with NL. Therefore
+        // every PID field after the first may begin with that set-separator newline. Strip exactly
+        // the protocol separator before interpreting the field; do not trim arbitrary bytes.
+        let field = field.strip_prefix(b"\n").unwrap_or(field);
         let Some(raw_pid) = field.strip_prefix(b"p") else {
             continue;
         };
