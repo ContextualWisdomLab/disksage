@@ -325,11 +325,12 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   not a DiskSage transfer completion. The source is retained; only the Finder progress cancel
   control is an operator action, and new copy, attestation, and eviction remain blocked until a
   fresh complete quiet-provider observation.
-- Naruon PR #1434 at exact head `c084801` accepts DiskSage readiness schema versions 6 and 7;
-  stacked PR #1471 at exact head `6f434d4` adds schema 8 acceptance and its focused handoff
-  contract passed 49/49. The change keeps the path-free protocol and grants no
-  cloud-write or source-eviction authority. Hosted Naruon security, review, and build checks remain
-  authoritative before merge.
+- Naruon PR #1434 is now at exact head `373e1a51` and accepts legacy DiskSage readiness envelopes
+  for schemas 3-6 while requiring the four native/pre-copy summary fields for schemas 7-8; its
+  focused handoff suite passed 47/47. Stacked Naruon PR #1471 (`6f434d4`) merged the schema-8
+  acceptance into the protected branch. The path-free protocol grants no cloud-write or
+  source-eviction authority; hosted Naruon security, review, and build checks remain authoritative
+  before #1434 can merge.
 - The remote implementation branch advanced concurrently to exact head `a8e0283`, adding a
   regression test that rejects shared-writable provider-evidence lookup authority; it was
   fast-forwarded locally without force-push or conflict resolution. PR #213's Ubuntu/macOS/Windows
