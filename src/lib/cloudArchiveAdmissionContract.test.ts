@@ -76,13 +76,13 @@ describe("CloudArchive iCloud admission contract", () => {
     const cancelBody = source.slice(cancelStart, providerApiStart);
 
     expect(copyBody).toMatch(
-      /copyingFingerprint = candidate\.metadata_fingerprint;\s*nativeCopyActive = true;/,
+      /copyingFingerprint = candidate\.metadata_fingerprint;\s*(?:\/\/[^\n]*\n\s*)?nativeCopyActive = true;/,
     );
     expect(providerApiBody).toMatch(
-      /copyingFingerprint = candidate\.metadata_fingerprint;\s*nativeCopyActive = false;/,
+      /copyingFingerprint = candidate\.metadata_fingerprint;\s*(?:\/\/[^\n]*\n\s*)?nativeCopyActive = false;/,
     );
     expect(adoptBody).toMatch(
-      /copyingFingerprint = candidate\.metadata_fingerprint;\s*nativeCopyActive = false;/,
+      /copyingFingerprint = candidate\.metadata_fingerprint;\s*(?:\/\/[^\n]*\n\s*)?nativeCopyActive = false;/,
     );
     expect(cancelBody).toContain("if (!nativeCopyActive || !copyingFingerprint || cancellingCopy) return;");
     expect(cancelBody).toContain("await api.cancelCloudCopy(copyingFingerprint);");
