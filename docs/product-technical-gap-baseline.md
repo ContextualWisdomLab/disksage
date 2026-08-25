@@ -1,8 +1,8 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-25 (Asia/Seoul)
-**Repository heads at snapshot:** PR #259 `a019dda`, PR #258 `5b6bde5`, PR #227 `98fa709`, PR #249 `2f1d585`,
-PR #247 `0de3f6a`, PR #246 `d38ed05`, PR #204 `750213d`, draft PR #198 `cf763cd`, and central `.github` PR #1328 `7fb95ac`;
+**Repository heads at snapshot:** PR #259 `a019dda`, PR #258 `73c8e98`, PR #227 `98fa709`, PR #249 `2f1d585`,
+PR #247 `0de3f6a`, PR #246 `cbb9dc0`, PR #204 `750213d`, draft PR #198 `cf763cd`, and central `.github` PR #1328 `1c0ae26`;
 hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
@@ -18,7 +18,7 @@ rebased and reverified.
 | PR | Exact head | Base | Draft | Merge state | Review state | Check evidence at capture |
 | --- | --- | --- | --- | --- | --- | --- |
 | #259 | `a019ddaba4aa5cad1e0bef02121f20d514d9580c` | `7eb131c4` | no | blocked | required | stale File Provider error-state + `last`/`expired` parser; checks remain authoritative |
-| #258 | `5b6bde5c31e5a16e14cae621993fd13bf6454b28` | `7eb131c4` | no | blocked | required | current baseline/docs head; checks remain authoritative |
+| #258 | `73c8e9869f8c0f1e2391b81867e5aed6e35247cf` | `7eb131c4` | no | blocked | required | current baseline/docs head; checks remain authoritative |
 | #249 | `2f1d585398b85f3f1adb3783520ad70e7b4a9c3f` | `7eb131c4` | no | blocked | required | source/build/security/coverage pass; Strix external provider failure |
 | #247 | `0de3f6a3672c6ff0f39726b7a4ddaeba757154b6` | `7eb131c4` | no | blocked | required | runtime receipt projection and shared iCloud notice contracts; post-push checks pending |
 | #246 | `cbb9dc0f5b1eba52e76f23f673381a3ebcdc132f` | `7eb131c4` | no | blocked | required | late persisted iCloud blocker timestamp adoption and border regression repair; focused UI checks pass, hosted checks pending |
@@ -26,7 +26,7 @@ rebased and reverified.
 | #204 | `750213dff16482544af3c0a9543f6c638924e5e6` | `17d4e203` | yes | blocked | none | Strix failure; base is stale |
 | #206 | `2e7b845b7610a871ec5981d964bcab5cb99df41d` | `5c86668a` | yes | clean | changes requested | 0 non-success terminal, 2 pending; stacked draft |
 | #198 | `cf763cdf1b3f483efaf483f6c95196a89e005951` | `7eb131c4` | yes | blocked | required | iCloud eviction privacy feedback hardening; focused UI checks pass, hosted checks pending |
-| ContextualWisdomLab/.github #1328 | `7fb95ac249d4adaf3fe96f0432d2d9e978fdaeef` | `8fd471a3` | no | blocked | required | central autofix rejects deletion/rename of protected origin-validation paths in both normal and conflict-resolution modes; focused contract test passes, hosted checks queued |
+| ContextualWisdomLab/.github #1328 | `1c0ae265e086ddf57aec6e973acc486426bddc4f` | `8fd471a3` | no | blocked | required | central autofix protects both normal/conflict deletion paths and restores the gpt-5.6-luna Strix fallback contract; focused tests pass, hosted checks queued |
 
 PR #246 exact-head `cbb9dc0f5b1eba52e76f23f673381a3ebcdc132f` now preserves the backend persisted
 iCloud stall start across restart/probe errors, adopts a timestamp supplied after the first poll,
