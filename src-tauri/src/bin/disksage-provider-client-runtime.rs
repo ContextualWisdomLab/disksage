@@ -81,6 +81,9 @@ fn parse_args(args: &[OsString]) -> Result<Args, String> {
             .ok_or_else(|| "provider-client-runtime-argument-not-utf8".to_string())?;
         match flag {
             "--output" => {
+                if output.is_some() {
+                    return Err("--output may be supplied once".into());
+                }
                 index += 1;
                 let value = args
                     .get(index)
@@ -91,9 +94,7 @@ fn parse_args(args: &[OsString]) -> Result<Args, String> {
                     return Err("--output must be absolute".into());
                 }
                 validate_output_parent(&path)?;
-                if output.replace(path).is_some() {
-                    return Err("--output may be supplied once".into());
-                }
+                output = Some(path);
             }
             "--help" | "-h" => return Err(usage().into()),
             _ => return Err("provider-client-runtime-unknown-argument".into()),
