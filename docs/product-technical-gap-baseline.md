@@ -17,7 +17,7 @@ rebased and reverified.
 
 | PR | Exact head | Base | Draft | Merge state | Review state | Check evidence at capture |
 | --- | --- | --- | --- | --- | --- | --- |
-| #259 | `86dd521227661e6d50d7f95e70cfc7f3e3929665` | `7eb131c4` | no | blocked | required | stale File Provider error-state + `last`/`expired` parser; helper docstrings added; hosted Strix is annotated `STRIX_PROVIDER_UNAVAILABLE`, exact-head rerun requested |
+| #259 | `86dd521227661e6d50d7f95e70cfc7f3e3929665` | `7eb131c4` | no | blocked | required | stale File Provider error-state + `last`/`expired` parser; helper docstrings added; exact-head hosted Strix rerun now succeeds (job `97785262805`); independent approval remains required |
 | #258 | `5ff508c8b6dc8ca8faea6aa658524306131d9f59` | `7eb131c4` | no | blocked | required | current baseline/docs head; checks remain authoritative |
 | #249 | `2f1d585398b85f3f1adb3783520ad70e7b4a9c3f` | `7eb131c4` | no | blocked | required | source/build/security/coverage pass; Strix external provider failure |
 | #247 | `0de3f6a3672c6ff0f39726b7a4ddaeba757154b6` | `7eb131c4` | no | blocked | required | runtime receipt projection and shared iCloud notice contracts; post-push checks pending |
