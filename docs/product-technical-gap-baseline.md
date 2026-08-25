@@ -9,16 +9,18 @@ Because this file is itself carried by PR #258, its row records the last
 captured predecessor; the live PR head from GitHub is authoritative for the
 current snapshot and merge decision.
 **Latest exact-head refresh (2026-08-26):** DiskSage PR #262 is now
-`829f3eec27080221a5117f609bbec9204fae0a3d` (queued-copy cancellation is
-checked throughout native preflight; focused authority/cancellation contract
-tests pass; review threads are resolved; hosted checks and approval remain
+`c9e7ebd8fb403d7420c073c762e4203ba7397ca6` (queued-copy cancellation is
+checked throughout native preflight, cancellation is journaled, and the
+operation reset is panic-safe; focused authority/cancellation contract tests
+pass; review threads are resolved; hosted checks and approval remain
 required). Naruon PR #1469 is now
-`2cd3aa4ce70e04464c6fe028ec8cc229b81c946d` (expected payload-size rejection is
-INFO telemetry, ADR-0005 is restored and indexed, focused worker/client/parser
-tests pass 54/54; hosted checks and fresh review remain required). Central
+`258ac418e77afef7d725705294cb8a0a537db6b2` (expected payload-size rejection is
+INFO telemetry, ADR-0005 now distinguishes the current 20MiB direct DOM
+contract from the proposed 64MiB alignment, focused worker/client/parser tests
+pass 54/54; hosted checks and fresh review remain required). Central
 `.github` PR #1331 remains `40955bab7663c86bf642995b417cb9c560cb0778` after a
 normal conflict merge with protected checks pending. The live self-PR #258
-head is `a9a9c6ebb0b813c4175b7076e6a17b88d5d08112`; its table row intentionally
+head is `6cd3383425c0965c0e0c1bac106f8113de523a75`; its table row intentionally
 records the immediately preceding committed snapshot.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
@@ -91,7 +93,7 @@ PR #1443 is `2bc9e2cb6b9680da173643c9eeab9fbcf4b872c3`, the direct gate repair, 
 approval-notice fail-closed coverage, exact `headCommitId` matching, current-head blocking-fixture execution, and matching empty-check fixtures; hosted coverage/metadata and independent review remain pending.
 Neither PR is claimed merge-ready
 without a fresh qualifying review and exact-head protected checks.
-PR #1469 is `2cd3aa4ce70e04464c6fe028ec8cc229b81c946d`; its 64 MiB deferred attachment retention now
+PR #1469 is `258ac418e77afef7d725705294cb8a0a537db6b2`; its 64 MiB deferred attachment retention now
 fails closed before NewsDOM network I/O when the sidecar's 20 MiB `/parse` contract would be exceeded,
 using one shared boundary and a visible `provider_payload_size_exceeded` worker outcome; expected
 size rejection is logged at INFO rather than WARNING, and the restored ADR-0005 closes the ADR-index
@@ -128,7 +130,7 @@ suite passes 35 tests; hosted Strix and metadata-only gates remain authoritative
   `32848625767`. Its earlier metadata-only failure stated that Strix was failed on an older observation;
   the active rerun is the authoritative result, so the earlier failure is not reclassified as a source
   finding and the PR remains protected and unmerged.
-- Naruon PR #1469 is currently `2cd3aa4ce70e04464c6fe028ec8cc229b81c946d`. Required Strix and image
+- Naruon PR #1469 is currently `258ac418e77afef7d725705294cb8a0a537db6b2`. Required Strix and image
   validation jobs are **IN_PROGRESS**, `coverage-source-tree` is **QUEUED**, and unresolved current review
   threads are zero. The aggregate `CHANGES_REQUESTED` state comes from the older CodeRabbit review at
   `dd1fb33c6ca9fba7d94eed2a13eb3933c60149d3`; the latest CodeRabbit notice says the review limit was
@@ -136,10 +138,10 @@ suite passes 35 tests; hosted Strix and metadata-only gates remain authoritative
 - Naruon PR #1443 is currently `2bc9e2cb6b9680da173643c9eeab9fbcf4b872c3`; its current required checks
   are queued and unresolved review threads are zero. The PR is still blocked with the prior review state;
   no merge is claimed until the current-head checks and independent approval are present.
-- DiskSage PR #262 release run `32879846812` is still **IN_PROGRESS** for exact head
-  `345af62b983e9de67200684da10ab24d16d945cc`; Ubuntu has succeeded and Windows/macOS are still running,
-  with no failed step observed. The PR is now ready-for-review with protected auto-merge enabled;
-  `REVIEW_REQUIRED`/`BLOCKED` remains authoritative and no merge is claimed.
+- DiskSage PR #262 is currently exact head `c9e7ebd8fb403d7420c073c762e4203ba7397ca6`. The
+  cancellation/journal/RAII fix is pushed, current review threads are zero, and protected auto-merge
+  is enabled. Hosted checks are still running; `REVIEW_REQUIRED`/`BLOCKED` remains authoritative and
+  no merge is claimed.
 - DiskSage PR #246 is now exact head `9124e01e82474e2c579be102c77694838215acb5`: both provider-cancel
   buttons disable while `cancellingFinderCopy` is true, transfer-count completion no longer resets the
   iCloud stall clock, failed non-iCloud probe details are not duplicated, the focused UI suite passed
@@ -193,13 +195,14 @@ suite passes 35 tests; hosted Strix and metadata-only gates remain authoritative
   current review threads are resolved, current terminal checks show no failure, and protected
   auto-merge is enabled. Hosted checks and independent approval remain authoritative, so no merge
   is claimed.
-- DiskSage PR #262 is now exact head `829f3eec27080221a5117f609bbec9204fae0a3d` and remains
+- DiskSage PR #262 is now exact head `c9e7ebd8fb403d7420c073c762e4203ba7397ca6` and remains
   ready-for-review with protected auto-merge enabled. It remains blocked on required hosted checks and
   qualifying independent approval; no merge is claimed. The current head includes accessor-safe
   cloud-error classification and prototype-trap fixes plus opened-handle cleanup identity, late
-  cancellation checks, surfaced failure-journal errors, queued-copy cancellation registration, and
+  cancellation checks, surfaced failure-journal errors, queued-copy cancellation registration,
+  preflight cancellation journaling, and panic-safe operation cleanup, and
   Windows placeholder fail-closed adoption; focused cloud-transfer 25/25, provider-sync 21/21
-  (1 ignored), and authority/cancellation contract 5/5 suites pass,
+  (1 ignored), and authority/cancellation contract 7/7 suites pass,
   with zero unresolved review threads and no current terminal Check failure observed.
 - DiskSage PR #260 is exact head `9cebf0bf0382d3cdc50a030f388729acf46fba58` and is now ready for
   review with protected auto-merge enabled. Its coverage/Strix checks remain active without a current
