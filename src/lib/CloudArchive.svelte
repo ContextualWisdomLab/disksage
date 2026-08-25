@@ -969,7 +969,7 @@
           {/if}
           {#if icloudHealth.file_provider_activity && (icloudHealth.file_provider_activity.no_progress_fetch_count > 0 || icloudHealth.file_provider_activity.no_progress_create_count > 0)}
             <p class="warning">
-              Finder가 “복사 준비 중”에서 멈춘 원인은 File Provider의 no-progress 요청으로 관찰되었습니다. Finder에 남은 복사 대기는 취소하고,
+              Finder가 “복사 준비 중”에서 멈춘 동안 File Provider의 no-progress 요청이 함께 관찰되었습니다. Finder에 남은 복사 대기는 취소하고,
               File Provider 상태가 정상으로 관찰된 뒤 DiskSage에서 새 계획을 다시 실행해야 합니다.
             </p>
           {/if}
@@ -981,7 +981,7 @@
           {/if}
           {#if icloudHealth.new_copy_admission_blockers.includes("icloud-file-provider-item-locked")}
             <p class="warning">
-              File Provider 항목이 전파 잠금 상태라 Finder의 복사 준비가 진행되지 않습니다. Finder의 대기 작업을 취소하고,
+              File Provider 항목의 전파 잠금 상태가 Finder 복사 준비 지연과 함께 관찰되었습니다. Finder의 대기 작업을 취소하고,
               상태가 정상화된 뒤 DiskSage에서 새 복사를 다시 시작하십시오.
             </p>
           {/if}
