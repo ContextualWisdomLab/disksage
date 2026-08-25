@@ -387,11 +387,14 @@ impl BoundReadRoot {
 
         #[cfg(windows)]
         {
+            use std::os::windows::fs::MetadataExt;
+            const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+
             let root = self.stable_path().ok_or_else(|| {
                 std::io::Error::new(std::io::ErrorKind::NotFound, "bound root unavailable")
             })?;
             let metadata = std::fs::symlink_metadata(root.join(relative))?;
-            return Ok(if metadata.file_type().is_symlink() {
+            return Ok(if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
                 BoundEntryKind::Symlink
             } else if metadata.is_dir() {
                 BoundEntryKind::Directory
