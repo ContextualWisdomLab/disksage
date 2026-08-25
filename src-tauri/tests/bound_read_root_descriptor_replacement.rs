@@ -44,3 +44,26 @@ fn descriptor_relative_reads_stay_on_original_root_after_path_replacement() {
         "the replaced caller pathname must never regain publication authority"
     );
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn stable_namespace_is_resolvable_by_child_process_for_external_evidence_probes() {
+    let sandbox = tempfile::tempdir().unwrap();
+    let selected = sandbox.path().join("selected");
+    std::fs::create_dir(&selected).unwrap();
+    std::fs::write(selected.join("marker.txt"), b"external-probe").unwrap();
+
+    let guard = BoundReadRoot::open(&selected).expect("real directory must bind");
+    let stable = guard.stable_path().expect("bound root must expose a stable namespace");
+
+    let status = std::process::Command::new("test")
+        .arg("-f")
+        .arg(stable.join("marker.txt"))
+        .status()
+        .expect("external test process must start");
+
+    assert!(
+        status.success(),
+        "the stable namespace must remain resolvable when an external evidence probe runs in a child process"
+    );
+}
