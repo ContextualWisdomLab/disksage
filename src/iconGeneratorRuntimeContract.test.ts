@@ -15,6 +15,7 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const generatorPath = resolve(repositoryRoot, "scripts/generate-icons.mjs");
 const sourcePath = resolve(repositoryRoot, "src-tauri/icons/icon-source.svg");
 const contractPath = resolve(repositoryRoot, "src-tauri/icons/icon-contract.json");
+const packagePath = resolve(repositoryRoot, "package.json");
 
 const EXPECTED_RUNTIME = {
   node_major: 20,
@@ -27,6 +28,9 @@ describe("deterministic icon generator runtime", () => {
     const contract = JSON.parse(readFileSync(contractPath, "utf8")) as {
       generator_runtime?: { node_major?: number; zlib?: string };
     };
+    const packageMetadata = JSON.parse(readFileSync(packagePath, "utf8")) as {
+      engines?: { node?: string };
+    };
     const testWorkflow = readFileSync(resolve(repositoryRoot, ".github/workflows/test.yml"), "utf8");
     const releaseWorkflow = readFileSync(
       resolve(repositoryRoot, ".github/workflows/release.yml"),
@@ -34,6 +38,7 @@ describe("deterministic icon generator runtime", () => {
     );
 
     expect(contract.generator_runtime).toEqual(EXPECTED_RUNTIME);
+    expect(packageMetadata.engines?.node).toBe(EXPECTED_NODE_VERSION);
     expect(testWorkflow).toContain(`node-version: ${EXPECTED_NODE_VERSION}`);
     expect(releaseWorkflow).toContain(`node-version: ${EXPECTED_NODE_VERSION}`);
     expect(releaseWorkflow).not.toMatch(/node-version:\s*20\s*(?:#.*)?$/m);
