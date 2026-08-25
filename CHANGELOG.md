@@ -45,8 +45,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Fixed
 
 - Reject ontology organize destinations that are relative to the process working directory,
-  named-user tilde paths, or parent-traversal paths; only an absolute destination or an exact
-  `~`/`~/` home token can produce a move plan, and literal tildes in absolute paths are preserved.
+  named-user tilde paths, or parent-traversal paths; only an absolute destination or a home token
+  (`~`/`~/`, plus native Windows `~\`) can produce a move plan, and literal tildes in absolute
+  paths are preserved.
 
 - Keep the shipped Naruon readiness verifier source includable by its integration boundary test;
   the terminal parser contract now compiles in both the binary and test-module contexts.

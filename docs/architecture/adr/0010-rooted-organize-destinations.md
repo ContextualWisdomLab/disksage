@@ -13,11 +13,12 @@ non-reproducible across desktop launchers.
 
 ## Decision
 
-The planner accepts only an absolute target or an exact `~`/leading `~/` token expanded against
-the supplied absolute home. It rejects relative targets, named-user tildes, non-normal path
-components, and parent traversal. Literal tildes inside absolute targets remain literal. The
-decision is enforced before a `MovePlan` is emitted and is covered by Rust tests on the real
-planner path, including the Windows-focused workflow contract.
+The planner accepts only an absolute target or an exact home token expanded against the supplied
+absolute home: `~` and leading `~/` on every platform, plus native leading `~\` on Windows. It
+rejects relative targets, named-user tildes, non-normal path components, and parent traversal.
+Literal tildes inside absolute targets remain literal. The decision is enforced before a
+`MovePlan` is emitted and is covered by Rust tests on the real planner path, including the
+Windows-focused workflow contract.
 
 ## Consequences
 
