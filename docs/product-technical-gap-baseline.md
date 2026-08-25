@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-25 (Asia/Seoul)
-**Repository heads at snapshot:** PR #262 `853771e6`, PR #260 `041cce6`, PR #259 `86dd521`, PR #258 `32e06a1`, PR #257 `d09808f`, PR #253 `7db00e2`, PR #251 `7b8caa3`, PR #227 `98fa709`, PR #249 `1a3abf8`,
+**Repository heads at snapshot:** PR #262 `853771e6`, PR #260 `041cce6`, PR #259 `ae5e158`, PR #258 `32e06a1`, PR #257 `d09808f`, PR #253 `7db00e2`, PR #251 `7b8caa3`, PR #227 `98fa709`, PR #249 `1a3abf8`,
 PR #247 `0de3f6a`, PR #246 `cbb9dc0`, PR #204 `750213d`, draft PR #198 `cf763cd`, and replacement central `.github` PRs #1330 `f8a7210`, #1331 `4fc261f`, #1333 `058e603`, #1334 `133a1fb`, and #1335 `6fd4d22` (with superseded #1295/#1299/#1300/#1301/#1321/#1332 closed);
 hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
@@ -19,7 +19,7 @@ an older main remains non-integrated until it is deliberately rebased and reveri
 
 | PR | Exact head | Base | Draft | Merge state | Review state | Check evidence at capture |
 | --- | --- | --- | --- | --- | --- | --- |
-| #259 | `86dd521227661e6d50d7f95e70cfc7f3e3929665` | `7eb131c4` | no | blocked | required | stale File Provider error-state + `last`/`expired` parser; helper docstrings added; exact-head hosted Strix rerun now succeeds (job `97785262805`); independent approval remains required |
+| #259 | `ae5e158968d6a777f1aac22e9637fa2464844606` | `7eb131c4` | no | blocked | required | stale File Provider error-state + `last`/`expired` parser; schema 8 now carries the new lock/stall blocker semantics; stacked Naruon #1471 accepts schema 8; hosted checks and independent approval remain authoritative |
 | #262 | `853771e6a0e3f1fec6fc49e2d12fbfa11ac55c18` | `7eb131c4` | no | blocked | required | private durable native-copy failure records, receipt-bound cancellation, and provider-native local-current materialization gate before existing-copy hashing; Rust checks passed locally; hosted checks and independent approval remain authoritative |
 | #260 | `041cce66fc6eb737ced0bf2c31aca29004f5a970` | `7eb131c4` | no | blocked | required | current-main successor for closed draft #225; Rust planner rejects cwd-dependent, named-tilde, and parent-traversal ontology targets, preserves literal absolute tildes, keeps Windows contract tests inside the crate, accepts native `~\\` home tokens, and scopes the Windows job to `organize::tests::windows_`; local organize suite is 22 passed and hosted `windows-home-resolution` is SUCCESS (job `97834797298`), with remaining checks/approval authoritative |
 | #258 | `32e06a1763a56d2a4c6660f6c3fa22e0da623493` | `7eb131c4` | no | blocked | required | current baseline/docs head immediately before this follow-up; records PR #251/#253 dependency evidence and the current timeout, privacy-scope, cancellation, and placeholder-adoption gaps; hosted checks and qualifying approval remain authoritative |
@@ -172,7 +172,7 @@ suite passes 35 tests; hosted Strix and metadata-only gates remain authoritative
 - The implementation head observed before this documentation update was `88001d8`: existing-copy
   adoption no longer requires native-copy staging headroom, so a low-disk user can verify and adopt
   an already-present cloud copy without creating local staging data.
-- Naruon cloud-copy readiness is now schema version 7 and carries the path-free pre-copy evidence
+- Naruon cloud-copy readiness is now schema version 8 and carries the path-free pre-copy evidence
   cohort plus `pre_copy_evidence_met`; missing or incomplete iCloud evidence remains a blocker in
   the exported contract. Focused Rust readiness tests passed: 14 passed, 0 failed.
 - Only stale generated CodeGraph databases were removed from unrelated temporary worktrees during
@@ -325,9 +325,9 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   not a DiskSage transfer completion. The source is retained; only the Finder progress cancel
   control is an operator action, and new copy, attestation, and eviction remain blocked until a
   fresh complete quiet-provider observation.
-- Naruon PR #1434 at exact head `c084801` now accepts DiskSage readiness schema versions 6 and 7
-  and validates the current pre-copy/iCloud-native fields in its redacted verifier summary; the
-  focused handoff contract passed 48/48. The change keeps the path-free protocol and grants no
+- Naruon PR #1434 at exact head `c084801` accepts DiskSage readiness schema versions 6 and 7;
+  stacked PR #1471 at exact head `6f434d4` adds schema 8 acceptance and its focused handoff
+  contract passed 49/49. The change keeps the path-free protocol and grants no
   cloud-write or source-eviction authority. Hosted Naruon security, review, and build checks remain
   authoritative before merge.
 - The remote implementation branch advanced concurrently to exact head `a8e0283`, adding a
@@ -831,7 +831,7 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   The same blocker is now included in both Naruon readiness expected-blocker projections and the
   summary validator, with a round-trip regression fixture, so the new observation cannot be lost
   at the cross-repository consumer boundary.
-- PR #259 exact head `86dd521227661e6d50d7f95e70cfc7f3e3929665` also pairs a provider operation marker
+- PR #259 exact head `ae5e158968d6a777f1aac22e9637fa2464844606` also pairs a provider operation marker
   with a redacted age token on an adjacent dump row, covering wrapped File Provider diagnostics;
   the focused Rust parser suite passed 12/12, including rejection of unrelated parenthesized durations,
   cross-record adjacent age pairing, old healthy operation timestamps without an error marker, and a
