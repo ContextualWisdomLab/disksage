@@ -34,4 +34,12 @@ fn windows_junction_child_never_gains_directory_traversal_authority() {
         guard.read_dir_names(Path::new("junction")).is_err(),
         "the traversal primitive itself must reject a directory junction instead of following it outside the bound root"
     );
+    assert!(
+        guard.entry_kind(Path::new("junction/outside.txt")).is_err(),
+        "entry inspection must reject a junction in an intermediate component"
+    );
+    assert!(
+        guard.open_file(Path::new("junction/outside.txt")).is_err(),
+        "file reads must reject a junction in an intermediate component rather than opening the external target"
+    );
 }
