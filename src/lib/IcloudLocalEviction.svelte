@@ -118,23 +118,6 @@
     return "공급자 동기화 미완료";
   }
 
-  function blockerLabel(blocker: string): string {
-    const labels: Record<string, string> = {
-      "icloud-upload-not-confirmed": "로컬 최신본이지만 공급자 업로드가 아직 확인되지 않았습니다. 업로드 완료 후 다시 확인하십시오.",
-      "icloud-upload-still-running": "공급자 업로드가 진행 중입니다. 완료 후 다시 확인하십시오.",
-      "icloud-current-version-unconfirmed": "로컬 최신본 여부를 확인하지 못했습니다. File Provider 상태가 안정된 후 다시 확인하십시오.",
-      "icloud-file-provider-native-status-unavailable": "File Provider 상태 증거가 완전하지 않습니다. 잠시 후 다시 확인하십시오.",
-      "icloud-file-provider-sync-paused-or-unconfirmed": "File Provider 동기화가 일시중지됐거나 상태가 미확인입니다. 동기화를 재개한 후 다시 확인하십시오.",
-      "icloud-unresolved-conflict": "동기화 충돌이 해결되지 않았습니다. 충돌을 해결한 후 다시 확인하십시오.",
-      "active-file-use-detected": "현재 사용 중인 파일이라 회수할 수 없습니다. 파일을 닫은 후 다시 확인하십시오.",
-      "active-use-evidence-incomplete": "파일 사용 상태를 완전히 확인하지 못했습니다. 잠시 후 다시 확인하십시오.",
-    };
-    return labels[blocker] ?? "필수 iCloud 상태 증거가 완전하지 않아 회수할 수 없습니다. 상태를 다시 확인하십시오.";
-  }
-
-  function blockerSummary(blockers: string[]): string {
-    return [...new Set(blockers.map(blockerLabel))].join(" ");
-  }
 </script>
 
 <div class="local-eviction-panel">
