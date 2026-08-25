@@ -1,7 +1,7 @@
 # DiskSage product and technical gap baseline
 
 **Snapshot:** 2026-08-25 (Asia/Seoul)
-**Repository heads at snapshot:** PR #259 `a019dda`, PR #258 `99d6726`, PR #227 `98fa709`, PR #249 `2f1d585`,
+**Repository heads at snapshot:** PR #259 `86dd521`, PR #258 `99d6726`, PR #227 `98fa709`, PR #249 `2f1d585`,
 PR #247 `0de3f6a`, PR #246 `cbb9dc0`, PR #204 `750213d`, draft PR #198 `cf763cd`, and central `.github` PR #1328 `923feea`;
 hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
@@ -17,7 +17,7 @@ rebased and reverified.
 
 | PR | Exact head | Base | Draft | Merge state | Review state | Check evidence at capture |
 | --- | --- | --- | --- | --- | --- | --- |
-| #259 | `a019ddaba4aa5cad1e0bef02121f20d514d9580c` | `7eb131c4` | no | blocked | required | stale File Provider error-state + `last`/`expired` parser; checks remain authoritative |
+| #259 | `86dd521227661e6d50d7f95e70cfc7f3e3929665` | `7eb131c4` | no | blocked | required | stale File Provider error-state + `last`/`expired` parser; helper docstrings added; checks remain authoritative |
 | #258 | `99d672639f3e86f5419f1484bf49b5da14fa77fe` | `7eb131c4` | no | blocked | required | current baseline/docs head; checks remain authoritative |
 | #249 | `2f1d585398b85f3f1adb3783520ad70e7b4a9c3f` | `7eb131c4` | no | blocked | required | source/build/security/coverage pass; Strix external provider failure |
 | #247 | `0de3f6a3672c6ff0f39726b7a4ddaeba757154b6` | `7eb131c4` | no | blocked | required | runtime receipt projection and shared iCloud notice contracts; post-push checks pending |
@@ -790,11 +790,13 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   The same blocker is now included in both Naruon readiness expected-blocker projections and the
   summary validator, with a round-trip regression fixture, so the new observation cannot be lost
   at the cross-repository consumer boundary.
-- PR #259 exact head `a019ddaba4aa5cad1e0bef02121f20d514d9580c` also pairs a provider operation marker
+- PR #259 exact head `86dd521227661e6d50d7f95e70cfc7f3e3929665` also pairs a provider operation marker
   with a redacted age token on an adjacent dump row, covering wrapped File Provider diagnostics;
   the focused Rust parser suite passed 12/12, including rejection of unrelated parenthesized durations,
   cross-record adjacent age pairing, old healthy operation timestamps without an error marker, and a
-  fresh `last:` value paired with an older `expired:` value.
+  fresh `last:` value paired with an older `expired:` value. The parser and admission helpers now carry
+  operator-facing Rust documentation to close the review's docstring-coverage gap without changing
+  the fail-closed behavior.
   A bounded read-only probe at `2026-08-25 15:26 +0900`
   timed out after 30 seconds while the preceding bounded output still showed `fetch-content` errors
   aged about six hours. The timeout is incomplete evidence and leaves copy, attestation, and
