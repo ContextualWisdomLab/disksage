@@ -58,4 +58,21 @@ fn public_read_only_roots_bind_traversal_to_open_directory_identity() {
             "{name} must not re-resolve the caller root outside the bound-root guard"
         );
     }
+
+    assert!(
+        RECOVERY.contains("let active_use_path = match std::fs::canonicalize(&path)"),
+        "recovery must canonicalize the bound child only for external active-use probes"
+    );
+    assert!(
+        RECOVERY.contains("observe_path_active_use(&active_use_path)"),
+        "recovery active-use probes must not receive the Linux proc namespace path"
+    );
+    assert!(
+        MATERIALIZATION.contains("let active_use_path = std::fs::canonicalize(&path)"),
+        "materialization must canonicalize the bound child only for external active-use probes"
+    );
+    assert!(
+        MATERIALIZATION.contains("observe_path_active_use(&active_use_path)"),
+        "materialization active-use probes must not receive the Linux proc namespace path"
+    );
 }

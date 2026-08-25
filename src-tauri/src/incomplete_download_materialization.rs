@@ -438,12 +438,16 @@ pub fn plan_incomplete_download_materialization(
             return Err("materialization-audit-item-not-idle".into());
         }
         let path = safe_candidate_path(&stable_root, &canonical_root, &audit_item.relative_path)?;
+        // Keep reads on the identity-bound namespace path, but give external
+        // lsof/ps probes a canonical path they can inspect without /proc/fd noise.
+        let active_use_path = std::fs::canonicalize(&path)
+            .map_err(|_| "materialization-active-use-probe-path-unavailable".to_string())?;
         let before = std::fs::symlink_metadata(&path)
             .map_err(|_| "materialization-source-metadata-failed".to_string())?;
         if !source_metadata_matches(&before, audit_item) {
             return Err("materialization-source-changed-since-audit".into());
         }
-        let active_before = observe_path_active_use(&path);
+        let active_before = observe_path_active_use(&active_use_path);
         if !active_before.evidence_complete {
             return Err("materialization-pre-hash-active-use-evidence-incomplete".into());
         }
@@ -485,7 +489,7 @@ pub fn plan_incomplete_download_materialization(
             )?);
         }
 
-        let active_after = observe_path_active_use(&path);
+        let active_after = observe_path_active_use(&active_use_path);
         if !active_after.evidence_complete {
             return Err("materialization-post-hash-active-use-evidence-incomplete".into());
         }

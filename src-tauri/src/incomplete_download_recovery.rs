@@ -637,6 +637,18 @@ fn validate_item(
             return skipped_item(item, RecoveryItemStatus::SkippedEvidenceIncomplete, &reason)
         }
     };
+    // Keep reads on the identity-bound namespace path, but give external
+    // lsof/ps probes a canonical path they can inspect without /proc/fd noise.
+    let active_use_path = match std::fs::canonicalize(&path) {
+        Ok(path) => path,
+        Err(_) => {
+            return skipped_item(
+                item,
+                RecoveryItemStatus::SkippedEvidenceIncomplete,
+                "active-use-probe-path-unavailable",
+            )
+        }
+    };
     let before = match std::fs::symlink_metadata(&path) {
         Ok(metadata)
             if metadata.is_file()
@@ -655,7 +667,7 @@ fn validate_item(
             )
         }
     };
-    let active_before = observe_path_active_use(&path);
+    let active_before = observe_path_active_use(&active_use_path);
     if !active_before.evidence_complete {
         return skipped_item(
             item,
@@ -698,7 +710,7 @@ fn validate_item(
         ));
     }
 
-    let active_after = observe_path_active_use(&path);
+    let active_after = observe_path_active_use(&active_use_path);
     let after = std::fs::symlink_metadata(&path).ok();
     let stable = active_after.evidence_complete
         && !active_after.active
