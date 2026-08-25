@@ -1446,4 +1446,19 @@ mutation is performed.
   `9fdf2922da2939d96d3c2393539f2b2d42009929`; its hosted checks are still pending and the protected
   PR remains draft/blocked/review-required. The host's `utun4` default route is recorded only as
   context, not as a proven root cause. The filename dates `2026-04-28` and `251210` remain
-  auxiliary production-time evidence; embedded metadata and context retain precedence.
+auxiliary production-time evidence; embedded metadata and context retain precedence.
+
+## 2026-08-25 09:30 +0900 third-party provider blocker projection
+
+- Provider-global sync persistence now applies the existing monotonic ADR/Goal projection contract
+  to OneDrive and Google Drive. A blocked provider observation sets the linked Goal to `blocked`,
+  revokes provider-sync and eviction gates, and records the stable blocker in the paired ADR;
+  clear observations do not rewrite state.
+- Reclaiming only disposable DiskSage Rust build artifacts increased root free space to about 3.5
+  GiB, but the same Google Drive dump still reported `temporarily disconnected`, File Provider
+  `-1004`, active transfer markers, and 2,000 reconciliation entries. This confirms the current
+  stall remains provider-global rather than proven local fullness. No Finder/provider/source/cloud
+  mutation was performed.
+- The exact DiskSage PR #247 head is `87c9089bcd4af49f8f8751c54ebcc45b519d1f0c`; hosted checks are
+  pending and the protected PR remains draft/blocked/review-required. Filename dates
+  `2026-04-28` and `251210` remain auxiliary production-time evidence only.

@@ -887,3 +887,21 @@ eviction. No Finder cancellation, provider restart, cloud write, source mutation
 performed. The observation was made against DiskSage PR #247 exact head
 `9fdf2922da2939d96d3c2393539f2b2d42009929`; the PR remains draft, review-required, and blocked while
 hosted checks are pending.
+
+## Amendment: project third-party provider blockers into runtime Goal/ADR (2026-08-25 09:30 +0900)
+
+The provider-global sync persistence path now reuses the monotonic projection helper for OneDrive
+and Google Drive as well as iCloud. A fresh `temporarily disconnected`, server-unreachable,
+transfer-active, or reconciliation-pending observation therefore writes the matching receipt-linked
+Goal as `blocked`, closes `provider-sync-state-complete` and `explicit-eviction-permit`, and records
+`provider-state-blocked:<blocker>` in its paired ADR. A clear report never rewrites projections, and
+missing or malformed receipts remain an explicit bounded warning. This is local evidence/projection
+state only; no Finder cancellation, provider restart, cloud write, source mutation, attestation, or
+eviction was executed.
+
+After reclaiming only DiskSage's disposable Rust build artifacts, the root volume had about 3.5 GiB
+free, while the same Google Drive dump still reported `temporarily disconnected`, `-1004`, active
+transfer markers, and a 2,000-entry reconciliation section. The persisted diagnosis is therefore
+not reduced to local disk pressure. The implementation was verified at PR #247 exact head
+`87c9089bcd4af49f8f8751c54ebcc45b519d1f0c`; the draft PR remains review-required and blocked while
+hosted checks are pending.
