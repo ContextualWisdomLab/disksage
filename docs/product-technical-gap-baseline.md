@@ -2,7 +2,7 @@
 
 **Snapshot:** 2026-08-26 (Asia/Seoul)
 **Repository heads at snapshot:** PR #262 `5e27e4f`, PR #260 `9cebf0b`, PR #259 `ae5e158`, PR #258 `b19b392`, PR #257 `d09808f`, PR #253 `7db00e2`, PR #251 `7b8caa3`, PR #227 `90cd444`, PR #249 `7c93e17`,
-PR #247 `0de3f6a`, PR #246 `57eb6c1`, PR #204 `750213d`, PR #198 `a727b3e`, and replacement central `.github` PRs #1330 `f8a7210`, #1331 `a1408f5`, and #1335 `fe5c213` (central #1333 and #1334 are merged; superseded #1295/#1299/#1300/#1301/#1321/#1332 closed);
+PR #247 `0de3f6a`, PR #246 `57eb6c1`, PR #204 `750213d`, PR #198 `a727b3e`, replacement central `.github` PRs #1330 `f8a7210` and #1331 `a1408f5`, and merged #1335 `fe5c213` (central #1333 and #1334 are also merged; superseded #1295/#1299/#1300/#1301/#1321/#1332 closed);
 hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
 Because this file is itself carried by PR #258, its row records the last
@@ -44,7 +44,7 @@ an older main remains non-integrated until it is deliberately rebased and reveri
 | ContextualWisdomLab/.github #1330 | `f8a72106b887230ec12a95ff68947a0e00837b58` | `d2c554db` | no | blocked | required | replacement for closed #1328; conflict-mode protected security-contract guard runs after edits and before staging; hosted checks and independent approval remain authoritative |
 | ContextualWisdomLab/.github #1333 | `5454a19618b27f4d7f34dd2a7a5e47eb5bc42fc1` | `564058ce` | no | merged | — | bounded provider-outage retry loop; merged 2026-08-25; retained here as shipped dependency evidence |
 | ContextualWisdomLab/.github #1334 | `78845131e079721ce2d73063bb5c954f55c01894` | `95b05b39` | no | merged | — | DiskSage hourly caller permission boundary; merged 2026-08-25; retained here as shipped dependency evidence |
-| ContextualWisdomLab/.github #1335 | `fe5c213ddf832e510f4532ef5475410d9aba0037` | `d2c554db` | no | blocked | required | replacement for closed #1301; contextual-orchestrator gets a thin minute-34, non-cancelling hourly caller with one dispatch/two-hour same-head floor, explicit credentials, job-scoped OIDC, shared roster updates, doctoring, and five contract tests; hosted checks and independent approval remain authoritative |
+| ContextualWisdomLab/.github #1335 | `fe5c213ddf832e510f4532ef5475410d9aba0037` | `e3b7ece4` | no | merged | — | replacement for closed #1301; contextual-orchestrator gets a thin minute-34, non-cancelling hourly caller with one dispatch/two-hour same-head floor, explicit credentials, job-scoped OIDC, shared roster updates, doctoring, and five contract tests; merged 2026-08-25 as commit `fecceba0c2be660665253cc39c8bebde2b3f3259` |
 | ContextualWisdomLab/.github #1326 | `19f323ddb9e48b7d30f49605f084d6628aeca999` | `d2c554db` | no | blocked | required | appguardrail and macOS utility-pack hourly callers plus path roster/Strix contract updates; checks are queued and only informational roster/path review notes remain unresolved |
 
 Central `.github` PRs #1299, #1295, #1300, #1301, #1328, #1329, #1324, #1323, #1322, #1321, and #1332 were closed and superseded on request.
@@ -196,15 +196,13 @@ suite passes 35 tests; hosted Strix and metadata-only gates remain authoritative
   multipart metadata opens; serial Rust library tests pass 736/736 and the root-identity contract
   passes 7/7.
 - Central `ContextualWisdomLab/.github` PR #1335 advanced after a normal rebase to exact head
-  `fe5c213ddf832e510f4532ef5475410d9aba0037`; the contextual-orchestrator hourly caller is protected
-  with auto-merge enabled, its current Checks are queued/in progress without failure, and the normal
-  independent approval gate remains authoritative. Earlier #1334 and #1333 scheduler/retry PRs are
-  closed and are not treated as live scheduler evidence.
+  `fe5c213ddf832e510f4532ef5475410d9aba0037` and merged on 2026-08-25 as
+  `fecceba0c2be660665253cc39c8bebde2b3f3259`; it is now shipped hourly caller evidence. Earlier
+  #1334 and #1333 scheduler/retry PRs are also closed and are not treated as live PR evidence.
 - Central `ContextualWisdomLab/.github` PR #1343 (semantic-data-portal hourly review-repair caller)
-  was normally rebased onto protected `main` and now points to exact head
-  `ca949939f35e72c28626f118b2bee367d4c818b2`. It has no unresolved current review thread, no
-  terminal check failure observed at capture, and protected auto-merge is enabled; queued checks
-  and independent approval remain authoritative, so no merge is claimed.
+  points to exact head `ca949939f35e72c28626f118b2bee367d4c818b2` but is currently `behind` protected
+  `main` with auto-merge disabled. It has no unresolved current review thread and no terminal check
+  failure observed at capture; rebase and fresh hosted checks are required before any merge claim.
 - DiskSage PR #198 advanced to exact head `a727b3eb082c5049f9c9350677abaad23c18222a` and is now
   ready with protected auto-merge enabled. Its iCloud local-eviction UI contract now consumes the
   shared bounded feedback constants (11 focused tests pass); hosted Checks and independent approval
