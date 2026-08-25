@@ -971,10 +971,16 @@ fn parse_file_provider_activity_output(
     let is_stale_age = |line: &&str| {
         relative_age_ms(line).is_some_and(|age| age >= FILE_PROVIDER_STALE_ERROR_AGE_MS)
     };
+    let is_provider_record_start = |line: &&str| {
+        let lower = line.to_ascii_lowercase();
+        lower.contains("docid(") || is_provider_operation(line)
+    };
     let stale_error_observed = provider_lines.iter().any(|line| {
         is_provider_operation(line) && is_stale_age(line)
     }) || provider_lines.windows(2).any(|record| {
-        record.iter().any(is_provider_operation) && record.iter().any(is_stale_age)
+        is_provider_operation(&record[0])
+            && !is_provider_record_start(&record[1])
+            && is_stale_age(&record[1])
     });
     let sync_excluded_filename_count = output
         .lines()
@@ -2424,6 +2430,21 @@ mod tests {
     fn file_provider_parser_ignores_unrelated_negative_duration() {
         let evidence = parse_file_provider_activity_output(
             "doc fetch-content: retry budget (-4h9min)\n",
+            42,
+            true,
+            false,
+            false,
+        );
+        assert!(!evidence
+            .notices
+            .contains(&"icloud-file-provider-stale-error-observed".to_string()));
+    }
+
+    #[test]
+    fn file_provider_parser_ignores_adjacent_operation_age_from_another_record() {
+        let evidence = parse_file_provider_activity_output(
+            "i:docID(1) fetch-content: request\n\
+             i:docID(2) last:'1787622820 (-4h9min)'\n",
             42,
             true,
             false,
