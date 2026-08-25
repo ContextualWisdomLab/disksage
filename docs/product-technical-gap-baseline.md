@@ -37,7 +37,7 @@ Naruon exact-head reconciliation is also part of this baseline: PR #1333 is `dd9
 with no unresolved review threads but the metadata-only gate failure and `STRIX_PROVIDER_UNAVAILABLE`
 annotation still recorded;
 PR #1443 is `55a84f904f11203f49c356d95d7d88ba9f903030`, the direct gate repair, with source/security
-checks passing and coverage/Strix/metadata checks still running. Neither PR is claimed merge-ready
+checks passing, coverage/metadata still pending, and `STRIX_PROVIDER_UNAVAILABLE` recorded. Neither PR is claimed merge-ready
 without a fresh qualifying review and exact-head protected checks.
 
 ## Current product contract
