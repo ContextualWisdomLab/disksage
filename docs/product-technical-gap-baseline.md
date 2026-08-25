@@ -750,3 +750,10 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   The same blocker is now included in both Naruon readiness expected-blocker projections and the
   summary validator, with a round-trip regression fixture, so the new observation cannot be lost
   at the cross-repository consumer boundary.
+- PR #259 exact head `677dc29b0983a3ca4ced2aa6a2a910a4061d993e` also pairs a provider operation marker
+  with a redacted age token on an adjacent dump row, covering wrapped File Provider diagnostics;
+  the focused Rust parser suite passed 8/8. A bounded read-only probe at `2026-08-25 15:26 +0900`
+  timed out after 30 seconds while the preceding bounded output still showed `fetch-content` errors
+  aged about six hours. The timeout is incomplete evidence and leaves copy, attestation, and
+  eviction fail-closed; no Finder, provider daemon, CloudDocs database, source, or cloud object was
+  mutated.
