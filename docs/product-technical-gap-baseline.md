@@ -1008,3 +1008,25 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   provider/backend conditions, not a repository vulnerability finding. The PR remains blocked and
   is not merge-authorized until the external check is rerun successfully or the organization gate
   records an authoritative equivalent.
+
+## 2026-08-26 current customer-copy and protected-queue reconciliation
+
+The following exact-head inventory is the current evidence for the customer-copy contract and the
+protected merge queue. A queued, failed-provider, or pending review result is not treated as a merge
+or deletion authority; each head must be re-read after every push.
+
+| PR | Exact head | Current state | Customer-visible/product scope | Gate evidence |
+| --- | --- | --- | --- | --- |
+| #150 | `f961ca3ec538baa4c430dbc4048df360f11e9bd5` | blocked, review required, auto-merge enabled | Podman reclaim evidence uses bounded next-action guidance; ready for review after resolving informational threads | Focused UI tests 17/17 and Svelte check 0/0 were previously recorded; hosted checks are current authority |
+| #246 | `384f6f16ca9224852e68eb7661346ff83097a47b` | blocked, review required, auto-merge enabled | Every Svelte screen is covered by `cleanupCustomerCopyContract.test.ts`, which rejects implementation-boundary vocabulary and requires action guidance for static warnings/errors | Local UI suite 172/172, Svelte check 0 errors/0 warnings, and diff check pass; hosted checks and independent approval remain required |
+| #247 | `b9ad2bd846868dbf542e434c85dbd225255fa61b` | blocked, review required, auto-merge enabled | `local-current` plus `is_uploaded=false` remains a visible sync blocker with a customer retry action; provider observations are retained without exposing implementation terms | Focused provider admission tests and Rust readiness checks pass; hosted checks and independent approval remain required |
+| #263 | `ab648af154ae92f7c47a517f5a3e8c3bd74f8116` | blocked, review required, auto-merge enabled | Cache-Trash permanent deletion remains fail-closed; only proven candidates can be previewed and no irreversible action is authorized by a stale path | Focused coverage-runtime and cache-cleanup CLI contracts pass; release-verifier ownership is excluded from this PR |
+| #264 | `5e7b33de8df7f7ce0c011837c2a9139ae7a16a75` | blocked, review required, auto-merge enabled | Release artifact verification is scoped to platform namespaces | All observed release/test/security checks pass except Strix; the failing artifact records an upstream GPT-5.4 chat-completions function-tool incompatibility, not a source vulnerability |
+| `.github #1352` | `41a772978d8d7b475565bcc71c99afceb3d7b23f` | blocked, checks queued, auto-merge enabled | Central Strix runner selects reasoning effort per child model so direct OpenAI fallbacks receive the provider-compatible neutral value | Targeted contract suite 51/51 and shell syntax/diff checks pass; hosted checks and independent approval remain required |
+
+The customer-copy contract is an executable guard, not a documentation promise: it scans all
+`src/lib` and `src/routes` Svelte markup, rejects internal implementation vocabulary (for example
+ontology, lineage, OAuth, File Provider, attestation, and eviction-permit terms), and requires a
+bounded next action for static warning/error/notice paragraphs. Dynamic service errors are mapped to
+the same action-oriented copy before rendering. This preserves the implementation boundary while
+leaving the customer with a concrete next step.
