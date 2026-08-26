@@ -171,7 +171,11 @@ pub fn scan_dir_with_interval(
         }
         // dir도 file도 아닌 항목(FIFO/소켓 등)은 집계 없이 무시됨 (심링크/reparse는 keep_entry가 순회에서 제외)
         if seen % progress_every == 0 {
-            on_progress(&stats);
+            let mut progress = stats.clone();
+            progress.skipped = progress
+                .skipped
+                .saturating_add(provider_roots_skipped.get());
+            on_progress(&progress);
         }
     }
     stats.skipped = stats.skipped.saturating_add(provider_roots_skipped.get());
@@ -381,6 +385,30 @@ mod tests {
         assert_eq!(result.stats.files, 1);
         assert_eq!(result.stats.bytes, 7);
         assert_eq!(result.stats.skipped, 1);
+    }
+
+    #[test]
+    fn progress_includes_pruned_provider_roots() {
+        let tmp = tempfile::tempdir().unwrap();
+        let provider_root = if cfg!(target_os = "macos") {
+            tmp.path().join("Library").join("CloudStorage")
+        } else {
+            tmp.path().join("OneDrive")
+        };
+        fs::create_dir_all(&provider_root).unwrap();
+        write(&provider_root.join("placeholder.bin"), 4096);
+        write(&tmp.path().join("local.bin"), 7);
+        let observed_skipped = Cell::new(0_u64);
+
+        let result = scan_dir_with_interval(
+            tmp.path(),
+            &AtomicBool::new(false),
+            1,
+            |progress| observed_skipped.set(progress.skipped),
+        );
+
+        assert_eq!(result.stats.skipped, 1);
+        assert_eq!(observed_skipped.get(), 1);
     }
 
     #[cfg(unix)]
