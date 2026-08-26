@@ -84,6 +84,18 @@ fn run() -> Result<(), String> {
         }
     }
     let runtime = runtime.ok_or_else(|| format!("--runtime is required\n{USAGE}"))?;
+    match runtime {
+        ContainerRuntimeKind::DockerNative if scope.is_some() => {
+            return Err(format!("--scope is not valid for docker-native\n{USAGE}"));
+        }
+        ContainerRuntimeKind::DockerColimaContext if scope.is_none() => {
+            return Err(format!("--scope is required for docker-colima-context\n{USAGE}"));
+        }
+        ContainerRuntimeKind::PodmanMachine if scope.is_none() => {
+            return Err(format!("--scope is required for podman-machine\n{USAGE}"));
+        }
+        _ => {}
+    }
     let binary_path = binary_path.unwrap_or_else(|| {
         PathBuf::from(match runtime {
             ContainerRuntimeKind::PodmanMachine => "podman",
