@@ -3,6 +3,7 @@ import type { CacheTrashReview } from "./cacheTrashReviewApi";
 export const CACHE_TRASH_OBJECT_BOUND_DELETE_UNAVAILABLE =
   "cache-trash-identity-bound-permanent-delete-unavailable";
 export const CACHE_TRASH_NATIVE_ROOT_UNSAFE = "cache-trash-native-root-unsafe";
+export const CACHE_TRASH_NATIVE_REVIEW_MACOS_ONLY = "cache-trash-native-review-macos-only";
 
 export interface CacheTrashPurgeAvailability {
   canPurge: boolean;
@@ -29,6 +30,14 @@ export function cacheTrashPurgeAvailability(
       canPurge: false,
       instruction:
         "휴지통의 재생성 캐시는 확인했지만 DiskSage에서 안전하게 영구 삭제할 수 없습니다. 저장 공간을 회수하려면 macOS 휴지통에서 항목을 직접 검토한 뒤 비우세요.",
+    };
+  }
+
+  if (review.notice === CACHE_TRASH_NATIVE_REVIEW_MACOS_ONLY) {
+    return {
+      canPurge: false,
+      instruction:
+        "휴지통 속 재생성 캐시 검토는 현재 macOS 기본 휴지통에서만 지원합니다. 앱 내 영구 삭제는 안전한 객체 결합 삭제를 제공할 때까지 모든 플랫폼에서 비활성화되어 있습니다.",
     };
   }
 

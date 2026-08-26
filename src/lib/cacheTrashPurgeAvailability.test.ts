@@ -24,6 +24,20 @@ describe("cacheTrashPurgeAvailability", () => {
     });
   });
 
+  it("describes non-macOS support as review-only scope without implying macOS has in-app permanent deletion", () => {
+    expect(
+      cacheTrashPurgeAvailability({
+        candidates: [],
+        approval_phrase: null,
+        notice: "cache-trash-native-review-macos-only",
+      }),
+    ).toEqual({
+      canPurge: false,
+      instruction:
+        "휴지통 속 재생성 캐시 검토는 현재 macOS 기본 휴지통에서만 지원합니다. 앱 내 영구 삭제는 안전한 객체 결합 삭제를 제공할 때까지 모든 플랫폼에서 비활성화되어 있습니다.",
+    });
+  });
+
   it("enables the action only when the backend minted approval for a non-empty reviewed snapshot", () => {
     expect(
       cacheTrashPurgeAvailability({
