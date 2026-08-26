@@ -9,4 +9,8 @@ describe("productionTimeConfidenceLabel", () => {
     expect(productionTimeConfidenceLabel("low")).toBe("생산일 추정·낮은 확신");
     expect(productionTimeConfidenceLabel("unknown")).toBe("생산일 미확인");
   });
+
+  it("fails closed for an unrecognized backend value", () => {
+    expect(productionTimeConfidenceLabel("filename:path-token")).toBe("생산일 미확인");
+  });
 });

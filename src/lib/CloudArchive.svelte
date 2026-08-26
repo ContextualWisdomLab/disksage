@@ -19,6 +19,7 @@
     isCloudCopyCancelled,
   } from "./cloudArchiveErrorFeedback";
   import { fmtBytes } from "./fmt";
+  import { productionTimeConfidenceLabel } from "./productionTimeConfidenceLabel";
   import IcloudLocalEviction from "./IcloudLocalEviction.svelte";
 
   const RECONCILIATION_INTERVAL_MS = 60_000;
@@ -1492,7 +1493,7 @@
               <strong>{fmtBytes(candidate.bytes)}</strong>
               <span>{candidate.kind}</span>
               <span>생산 {productionDate(candidate.production_time_ms)}</span>
-              <span>생산일 확인됨</span>
+              <span>{productionTimeConfidenceLabel(candidate.production_time_confidence)}</span>
               <span>수정 후 {candidate.age_days.toLocaleString()}일</span>
               {#if candidate.requires_review}<em>맥락/민감정보 검토 필요</em>{/if}
               {#if candidate.blocked_reason}<em>{customerDecisionReasonLabel(candidate.blocked_reason)}</em>{/if}
