@@ -617,11 +617,13 @@ change.
 
 The UX stall clock now distinguishes an admission-blocker run from transfer progress. After an
 application restart, the first blocked observation may restore the backend's persisted
-`admission_blocked_since_ms`; while the admission blocker set is unchanged, any changed upload,
-download, indexing, or materialization fingerprint starts a new observation interval. This prevents
-a healthy progressing transfer from being mislabeled as a 15-minute Finder stall merely because the
-backend's blocker-set duration spans the whole sync run. The behavior is diagnostic/cancel-only and
-does not grant copy, attestation, or eviction authority.
+`admission_blocked_since_ms`; while the admission blocker set is unchanged, only an increase in
+actual upload/download progress or a decrease in the pending-indexable backlog starts a new
+observation interval. Fingerprint changes caused by backlog growth, unknown backlog, counters, or
+materialization diagnostics do not reset the interval. This prevents a healthy progressing transfer
+from being mislabeled as a 15-minute Finder stall merely because the backend's blocker-set duration
+spans the whole sync run. The behavior is diagnostic/cancel-only and does not grant copy,
+attestation, or eviction authority.
 
 ## Amendment: bound active-use probes without touching provider state (2026-08-22)
 

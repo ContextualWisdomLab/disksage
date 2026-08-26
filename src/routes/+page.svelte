@@ -21,28 +21,49 @@
   let loadError = $state("");
   let scanMessage = $state("");
 
-  onMount(async () => {
-    try {
-      roots = await api.listRoots();
-      selectedRoot = roots[0] ?? "";
-      await api.onScanProgress((s) => (stats = s));
-      await api.onScanDone(async (s) => {
-        stats = s;
-        scanning = false;
-        scanMessage = `스캔 완료: ${s.files.toLocaleString()}개 파일, ${fmtBytes(s.bytes)}`;
-        try {
-          crumbs = [selectedRoot];
-          node = await api.getNode(selectedRoot);
-          top = await api.topFiles(200);
-        } catch (e) {
-          loadError = String(e);
-          scanMessage = "스캔 결과를 화면에 불러오지 못했습니다.";
+  onMount(() => {
+    let disposed = false;
+    let unlistenProgress: (() => void) | undefined;
+    let unlistenDone: (() => void) | undefined;
+
+    const initialize = async () => {
+      try {
+        const [progressCleanup, doneCleanup] = await Promise.all([
+          api.onScanProgress((s) => (stats = s)),
+          api.onScanDone(async (s) => {
+            stats = s;
+            scanning = false;
+            scanMessage = `스캔 완료: ${s.files.toLocaleString()}개 파일, ${fmtBytes(s.bytes)}`;
+            try {
+              crumbs = [selectedRoot];
+              node = await api.getNode(selectedRoot);
+              top = await api.topFiles(200);
+            } catch {
+              loadError = "스캔 결과를 화면에 불러오지 못했습니다.";
+              scanMessage = "스캔 결과를 화면에 불러오지 못했습니다.";
+            }
+          }),
+        ]);
+        if (disposed) {
+          progressCleanup();
+          doneCleanup();
+          return;
         }
-      });
-    } catch (e) {
-      loadError = String(e);
-      scanMessage = "스캔할 수 있는 위치를 불러오지 못했습니다.";
-    }
+        unlistenProgress = progressCleanup;
+        unlistenDone = doneCleanup;
+        roots = await api.listRoots();
+        selectedRoot = roots[0] ?? "";
+      } catch {
+        loadError = "스캔할 수 있는 위치를 불러오지 못했습니다.";
+      }
+    };
+
+    void initialize();
+    return () => {
+      disposed = true;
+      unlistenProgress?.();
+      unlistenDone?.();
+    };
   });
 
   async function scan() {
@@ -54,9 +75,9 @@
     scanMessage = `${selectedRoot} 스캔을 시작했습니다.`;
     try {
       await api.startScan(selectedRoot);
-    } catch (e) {
+    } catch {
       scanning = false;
-      loadError = `스캔 시작 실패: ${e}`;
+      loadError = "스캔을 시작하지 못했습니다. 위치를 확인한 뒤 다시 시도하십시오.";
       scanMessage = "스캔을 시작하지 못했습니다.";
     }
   }

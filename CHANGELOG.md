@@ -16,8 +16,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Render the provider status card in the running CloudArchive view, including the path-free iCloud
   indexing backlog and a bounded Finder-cancel escape; the card remains informational and cannot
   authorize cloud writes, attestation, or source eviction.
-- Reset the UX stall clock when a blocked iCloud transfer's progress fingerprint changes, while
-  retaining the persisted blocker-set timestamp only for the first observation after restart.
+- Reset the UX stall clock only when upload/download progress increases or the pending-indexable
+  backlog decreases, while retaining the persisted blocker-set timestamp only for the first
+  observation after restart.
 
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
   identity cleanup and dependent eviction helpers; the focused authority contract remains green.

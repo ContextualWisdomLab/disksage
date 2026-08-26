@@ -4,12 +4,17 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const screenFiles = ["src/lib", "src/routes"].flatMap((directory) =>
+  readdirSync(resolve(repositoryRoot, directory))
+    .filter((fileName) => fileName.endsWith(".svelte"))
+    .map((fileName) => resolve(repositoryRoot, directory, fileName))
+);
 
-function visibleText(fileName: string): string {
-  const source = readFileSync(resolve(repositoryRoot, "src/lib", fileName), "utf8");
+function visibleText(filePath: string): string {
+  const source = readFileSync(filePath, "utf8");
   const scriptEnd = source.indexOf("</script>");
   const styleStart = source.indexOf("<style>");
-  if (scriptEnd < 0) throw new Error(`${fileName}: customer script marker is missing`);
+  if (scriptEnd < 0) throw new Error(`${filePath}: customer script marker is missing`);
   const markupEnd = styleStart > scriptEnd ? styleStart : source.length;
   return source
     .slice(scriptEnd + "</script>".length, markupEnd)
@@ -17,19 +22,19 @@ function visibleText(fileName: string): string {
     .replace(/\{[\s\S]*?\}/g, " ");
 }
 
-function customerMarkup(fileName: string): string {
-  const source = readFileSync(resolve(repositoryRoot, "src/lib", fileName), "utf8");
+function customerMarkup(filePath: string): string {
+  const source = readFileSync(filePath, "utf8");
   const scriptEnd = source.indexOf("</script>");
   const styleStart = source.indexOf("<style>");
-  if (scriptEnd < 0) throw new Error(`${fileName}: customer script marker is missing`);
+  if (scriptEnd < 0) throw new Error(`${filePath}: customer script marker is missing`);
   const markupEnd = styleStart > scriptEnd ? styleStart : source.length;
   return source
     .slice(scriptEnd + "</script>".length, markupEnd)
     .replace(/<!--[\s\S]*?-->/g, "");
 }
 
-function staticActionParagraphs(fileName: string): string[] {
-  const source = readFileSync(resolve(repositoryRoot, "src/lib", fileName), "utf8");
+function staticActionParagraphs(filePath: string): string[] {
+  const source = readFileSync(filePath, "utf8");
   const paragraphs: string[] = [];
   const pattern = /<p[^>]*class=(?:"|')([^"']*)(?:"|')[^>]*>([\s\S]*?)<\/p>/g;
   for (const match of source.matchAll(pattern)) {
@@ -48,10 +53,9 @@ describe("customer copy contract", () => {
       "분리된 HEAD", "Git 등록 해제", "사전 할당량 기준", "tag가 없는", "tagged image",
       "지문을 검증합니다", "승인 기록", "결과 기록", "계획 지문", "감사 기록", "dry-run", "LLM",
     ];
-    for (const fileName of readdirSync(resolve(repositoryRoot, "src/lib"))) {
-      if (!fileName.endsWith(".svelte")) continue;
-      const text = visibleText(fileName);
-      for (const term of forbidden) expect(text, `${fileName}: ${term}`).not.toContain(term);
+    for (const filePath of screenFiles) {
+      const text = visibleText(filePath);
+      for (const term of forbidden) expect(text, `${filePath}: ${term}`).not.toContain(term);
     }
   });
 
@@ -61,21 +65,19 @@ describe("customer copy contract", () => {
       "대표 lineage", "lineage 연결", "access token", "refresh token", "Rust 내부", "exact record",
       "dangling 이미지", "ubiquitous identity", "Goal/ADR", "증거가 부족해",
     ];
-    for (const fileName of readdirSync(resolve(repositoryRoot, "src/lib"))) {
-      if (!fileName.endsWith(".svelte")) continue;
-      const markup = customerMarkup(fileName);
+    for (const filePath of screenFiles) {
+      const markup = customerMarkup(filePath);
       for (const term of forbiddenLiterals) {
-        expect(markup, `${fileName}: ${term}`).not.toContain(term);
+        expect(markup, `${filePath}: ${term}`).not.toContain(term);
       }
     }
   });
 
   it("uses bounded action guidance for static warnings and errors", () => {
     const nextAction = /(확인|다시|입력|선택|누르|비우|연결|진행|검토|승인|복원|이동|재시작|기다|조정|바꾸|재개|실행|확보|취소|보존|회수|미리보기|휴지통|스캔|시도|조건)/;
-    for (const fileName of readdirSync(resolve(repositoryRoot, "src/lib"))) {
-      if (!fileName.endsWith(".svelte")) continue;
-      for (const paragraph of staticActionParagraphs(fileName)) {
-        expect(paragraph, `${fileName}: ${paragraph}`).toMatch(nextAction);
+    for (const filePath of screenFiles) {
+      for (const paragraph of staticActionParagraphs(filePath)) {
+        expect(paragraph, `${filePath}: ${paragraph}`).toMatch(nextAction);
       }
     }
   });

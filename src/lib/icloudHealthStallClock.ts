@@ -89,7 +89,10 @@ export function updateIcloudHealthStallClock(
   }
 
   if (previousClock.fingerprint !== fingerprint && hasRealProgress(previousReport, next)) {
-    return { blockedSinceMs: observedAtMs, fingerprint };
+    return {
+      blockedSinceMs: next.observed_at_ms > 0 ? next.observed_at_ms : observedAtMs,
+      fingerprint,
+    };
   }
 
   return {

@@ -90,6 +90,36 @@ describe("iCloud health stall clock", () => {
     expect(unchanged.blockedSinceMs).toBe(2_000);
   });
 
+  it("uses provider observation time when it differs from local probe time", () => {
+    const previous = report(activity());
+    const previousFingerprint = icloudHealthStallClockFingerprint(previous);
+    const progressed = report(activity({ active_upload_progress_millionths: 200 }), {
+      observed_at_ms: 1_750,
+    });
+
+    expect(updateIcloudHealthStallClock(
+      previous,
+      { blockedSinceMs: 1_200, fingerprint: previousFingerprint },
+      progressed,
+      2_000,
+    ).blockedSinceMs).toBe(1_750);
+  });
+
+  it("falls back to local probe time when provider observation time is unavailable", () => {
+    const previous = report(activity());
+    const previousFingerprint = icloudHealthStallClockFingerprint(previous);
+    const progressed = report(activity({ active_upload_progress_millionths: 200 }), {
+      observed_at_ms: 0,
+    });
+
+    expect(updateIcloudHealthStallClock(
+      previous,
+      { blockedSinceMs: 1_200, fingerprint: previousFingerprint },
+      progressed,
+      2_000,
+    ).blockedSinceMs).toBe(2_000);
+  });
+
   it("does not reset when the indexing backlog grows", () => {
     const previous = report(activity({ pending_indexable_count: 12 }));
     const previousFingerprint = icloudHealthStallClockFingerprint(previous);
