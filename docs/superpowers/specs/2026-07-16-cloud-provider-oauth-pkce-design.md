@@ -3,9 +3,10 @@
 ## Scope
 
 This slice replaces manually pasted OneDrive and Google Drive access tokens with native desktop
-OAuth. It exists only to authorize the read-only provider metadata requests that bind an immutable
-copy receipt to a provider-native object ID, size, revision, and checksum. It does not upload,
-move, evict, trash, or delete a file.
+OAuth. Read-only connections authorize provider metadata requests that bind an immutable copy
+receipt to a provider-native object ID, size, revision, and checksum. An explicitly separate
+write-scope connection can also authorize the headless provider-API copy fallback; it never
+authorizes source eviction or cloud deletion.
 
 The flow is deterministic Rust code. It does not need an AI agent, an external LLM, or an
 LLM-as-a-Judge, so `noema`, `contextual-orchestrator`, and `fast-mlsirm` are deliberately outside
@@ -36,6 +37,14 @@ this security boundary.
 | --- | --- | --- |
 | OneDrive | `Files.Read offline_access` | Read the signed-in user's existing drive item metadata and refresh access without write permission. |
 | Google Drive | `https://www.googleapis.com/auth/drive.metadata.readonly` | Read metadata for an existing locally synced Drive file. `drive.file` cannot generally see pre-existing files unless the user selected/shared/created them through the app. |
+
+The explicit provider-API copy fallback requests a separate write connection only when the
+operator chooses `--provider-api-copy-fingerprint`:
+
+| Provider | Write scope | Boundary |
+| --- | --- | --- |
+| OneDrive | `Files.ReadWrite offline_access` | Upload the exact reviewed candidate to the exact destination; no source eviction. |
+| Google Drive | `https://www.googleapis.com/auth/drive` | Create destination folders/file and upload the exact reviewed candidate; no source eviction. |
 
 Google classifies `drive.metadata.readonly` as a restricted scope. A Google OAuth consent-screen
 configuration, test-user registration, and possibly app verification are therefore prerequisites.
@@ -99,12 +108,23 @@ where automatic browser launch is unavailable.
 - Create an OAuth Client ID of type **Desktop app**. Desktop loopback clients use the runtime
   `http://127.0.0.1:<port>` redirect and do not embed a client secret.
 
+## Provider API copy fallback
+
+The headless planner keeps the normal File Provider copy as the default. If that local admission
+gate is unavailable, `--provider-api-copy-fingerprint` requires a write-scope connection, fresh
+capacity, a fresh human-attributed copy approval, and a source pre-hash/re-hash pair. The upload
+is performed by the Rust provider API transport, the immutable receipt records
+`CopiedByProviderApi`, and DiskSage immediately attempts API attestation. A failed attestation
+leaves the source retained and the dynamic ADR/Goal in `copy-verified` or `pending-provider-sync`;
+it never upgrades the state from a missing proof.
+
 ## Remaining boundary
 
-The provider-native object ID is still entered explicitly. Automating object-ID discovery from a
-local sync root is a separate provider-mapping slice and must prove that the discovered object maps
-to the exact receipt destination before it can remove this input. No source-removal command is
-introduced by this design.
+Standalone attestation still requires the provider-native object ID explicitly (Google Drive). The
+provider-API copy fallback obtains that ID from its upload response and returns it for a later
+attestation hand-off; object discovery from a local sync root remains a separate provider-mapping
+slice that must prove the exact receipt destination. No source-removal command is introduced by
+this design.
 
 ## Primary references
 
