@@ -939,7 +939,7 @@
           {#if reconciliation.incomplete_reconciliation} · {reconciliation.unprocessed_count}개 미처리{/if}
         </span>
         {#if reconciliation.entries.length === 0}
-          <p class="muted">저장된 작업이 없습니다.</p>
+          <p class="muted">저장된 작업이 없습니다. 새 계획을 실행해 상태를 확인하십시오.</p>
         {:else}
           {#each reconciliation.entries as entry}
             <p class:warning={entry.error !== null || entry.blockers.length > 0}>
