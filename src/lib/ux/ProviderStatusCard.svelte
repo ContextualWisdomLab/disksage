@@ -32,8 +32,8 @@
   const stateLabel: Record<ProviderStatusState, string> = {
     clear: "새 복사 허용 가능",
     checking: "상태 확인 중",
-    "provider-sync-incomplete": "공급자 동기화 증거 불완전",
-    "materialization-stalled": "파일 materialization 정체",
+    "provider-sync-incomplete": "클라우드 상태 확인 불완전",
+    "materialization-stalled": "파일 준비 지연",
   };
 
   const stateTone: Record<ProviderStatusState, string> = {
@@ -57,9 +57,9 @@
   <p id={`${statusId}-details`}>{details}</p>
   {#if observedAt || blockedFor}
     <p class="metadata">
-      {#if observedAt}마지막 관찰 {observedAt}{/if}
+      {#if observedAt}마지막 확인 {observedAt}{/if}
       {#if observedAt && blockedFor} · {/if}
-      {#if blockedFor}동일 차단 {blockedFor}{/if}
+      {#if blockedFor}같은 상태 지속 {blockedFor}{/if}
     </p>
   {/if}
   {#if canCancel && state !== "clear"}

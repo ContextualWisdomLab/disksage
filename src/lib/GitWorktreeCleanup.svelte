@@ -36,6 +36,13 @@
     )];
   }
 
+  function worktreeBlockerLabel(blocker: string): string {
+    if (blocker.includes("dirty") || blocker.includes("modified")) return "변경 중인 파일이 있어 보류됨";
+    if (blocker.includes("active") || blocker.includes("use")) return "사용 중인 폴더라 보류됨";
+    if (blocker.includes("reference") || blocker.includes("branch")) return "보존 기준을 확인할 수 없음";
+    return "추가 확인이 필요함";
+  }
+
   function resetDecision() {
     report = null;
     confirmationPhrase = "";
@@ -56,8 +63,8 @@
       if (typeof selected !== "string") return;
       repositoryRoot = selected;
       resetDecision();
-    } catch (e) {
-      error = String(e);
+    } catch {
+      error = "저장소 폴더를 선택하지 못했습니다. 다시 시도하십시오.";
     }
   }
 
@@ -73,8 +80,8 @@
       retentionText = report.retention_references
         .map((binding) => binding.reference_ref)
         .join("\n");
-    } catch (e) {
-      error = String(e);
+    } catch {
+      error = "보조 폴더 상태를 확인하지 못했습니다. 저장소와 보존 기준을 확인한 뒤 다시 시도하십시오.";
     } finally {
       planning = false;
     }
@@ -95,7 +102,7 @@
     if (!report || !executionReady()) return;
     const approved = await confirm(
       `${report.removal_candidate_count}개 worktree 디렉터리(최대 ${fmtBytes(report.removal_candidate_allocated_bytes)})를 제거합니다.\n\n`
-        + "각 항목은 실행 직전에 다시 검사합니다. 브랜치와 커밋은 유지하며 force·prune은 사용하지 않습니다. 제거된 디렉터리는 휴지통으로 가지 않습니다.",
+        + "각 항목은 실행 직전에 다시 검사합니다. 브랜치와 커밋은 유지하며 제거된 디렉터리는 휴지통으로 가지 않습니다.",
       { title: "DiskSage 오래된 Git worktree 제거", kind: "warning" },
     );
     if (!approved) return;
@@ -111,8 +118,8 @@
       );
       confirmationPhrase = "";
       rationale = "";
-    } catch (e) {
-      error = String(e);
+    } catch {
+      error = "보조 폴더를 정리하지 못했습니다. 상태를 다시 확인한 뒤 시도하십시오.";
     } finally {
       executing = false;
     }
@@ -141,7 +148,7 @@
     <button onclick={chooseRepository} disabled={planning || executing}>폴더 선택</button>
   </div>
   <label>
-    보존할 Git ref — 한 줄에 하나, 현재 로컬에서 해석되는 정확한 ref
+    보존할 브랜치·태그 — 한 줄에 하나, 현재 로컬에서 확인되는 이름
     <textarea
       class="references"
       bind:value={retentionText}
@@ -156,7 +163,7 @@
     onclick={inspectWorktrees}
     disabled={planning || executing || !repositoryRoot.trim() || retentionReferences().length === 0}
   >
-    {planning ? "worktree·브랜치·활성 사용 확인 중…" : "읽기 전용 worktree 감사"}
+    {planning ? "보조 폴더와 사용 상태 확인 중…" : "보조 폴더 상태 확인"}
   </button>
 
   {#if error}<p class="error" role="alert">{error}</p>{/if}
@@ -166,18 +173,18 @@
       <div class="summary">
         <strong>제거 후보 {report.removal_candidate_count}개 · 최대 {fmtBytes(report.removal_candidate_allocated_bytes)}</strong>
         <span>보존 {report.preserved_count}개</span>
-        <span>증거 공백 {report.evidence_gap_count}개</span>
+        <span>추가 확인 필요 {report.evidence_gap_count}개</span>
       </div>
-      <p class="fingerprint">계획 지문: {report.removal_plan_fingerprint}</p>
-      <p class="fingerprint">보존 ref 지문: {report.retention_reference_set_fingerprint}</p>
+      <p class="fingerprint">확인 문구: {report.removal_plan_fingerprint}</p>
+      <p class="fingerprint">보존 기준 확인 문구: {report.retention_reference_set_fingerprint}</p>
 
       {#if candidateEntries().length > 0}
         <ul class="worktrees">
           {#each candidateEntries() as candidate (candidate.path_fingerprint)}
             <li>
-              <div><strong>{candidate.branch ?? "분리된 HEAD"}</strong> · {fmtBytes(candidate.size.allocated_bytes)}</div>
+              <div><strong>{candidate.branch ?? "브랜치 정보 없음"}</strong> · {fmtBytes(candidate.size.allocated_bytes)}</div>
               <div class="path" title={candidate.path}>{candidate.path}</div>
-              <div class="oid">HEAD {candidate.head}</div>
+              <div class="oid">현재 버전 확인됨</div>
             </li>
           {/each}
         </ul>
@@ -185,10 +192,10 @@
 
       {#if evidenceGapEntries().length > 0}
         <div class="blocked">
-          <strong>증거가 부족해 전체 실행을 차단했습니다.</strong>
+          <strong>확인 정보가 부족해 전체 실행을 막았습니다. 아래 항목을 확인한 뒤 다시 조사하십시오.</strong>
           <ul>
             {#each evidenceGapEntries() as entry (entry.path_fingerprint)}
-              <li><span class="path">{entry.path}</span> — {entry.blockers.join(", ")}</li>
+              <li><span class="path">{entry.path}</span> — {entry.blockers.map(worktreeBlockerLabel).join(", ")}</li>
             {/each}
           </ul>
         </div>
@@ -197,27 +204,26 @@
       {#if removal}
         {#if removal.result.verification_complete}
           <p class="safe">
-            {removal.result.removed_count}개 worktree 제거와 Git 등록 해제, 브랜치 보존을 확인했습니다.
-            사전 할당량 기준 최대 {fmtBytes(removal.result.removed_allocated_bytes_upper_bound)}입니다.
+            {removal.result.removed_count}개 보조 폴더를 정리했고 브랜치는 보존했습니다.
+            최대 {fmtBytes(removal.result.removed_allocated_bytes_upper_bound)}를 정리했습니다.
           </p>
         {:else}
           <p class="warning">
-            일부 또는 사후 검증이 완료되지 않았습니다: {removal.result.stopped_reason ?? "검증 불완전"}.
+            일부 또는 사후 검증이 완료되지 않았습니다. 상태를 확인한 뒤 다시 시도하십시오.
             확인된 제거 {removal.result.removed_count}/{removal.result.planned_candidate_count}개입니다.
           </p>
         {/if}
-        <p class="muted">승인 기록: {removal.approval_path}</p>
         {#if removal.result_path}
-          <p class="muted">결과 기록: {removal.result_path}</p>
+          <p class="muted">정리 결과를 확인했습니다.</p>
         {:else}
           <p class="error" role="alert">
-            실행 결과는 위와 같지만 결과 기록을 저장하지 못했습니다: {removal.result_record_error}
+            실행 결과는 위와 같지만 정리 결과를 저장하지 못했습니다. 저장 공간과 권한을 확인한 뒤 다시 시도하십시오.
           </p>
         {/if}
       {:else if report.evidence_complete && report.exact_approval_phrase}
         <div class="approval">
           <p class="warning">
-            아래 승인 문구 전체를 직접 입력해야 합니다. 실행 시 전체 계획과 각 후보를 재검증하며 한 항목이라도 달라지면 중단합니다.
+            아래 확인 문구 전체와 정리 사유를 입력해야 합니다. 실행 시 후보 상태를 다시 확인하며 달라지면 중단합니다.
           </p>
           <code>{report.exact_approval_phrase}</code>
           <label>
@@ -235,7 +241,7 @@
             <textarea
               bind:value={rationale}
               maxlength="1000"
-              placeholder="예: main에 병합되고 활성 사용이 없는 보조 worktree임을 검토"
+              placeholder="예: 병합이 끝났고 사용하지 않는 보조 폴더임을 확인"
               disabled={executing}
             ></textarea>
           </label>

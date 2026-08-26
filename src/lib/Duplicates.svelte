@@ -38,8 +38,8 @@
       }
       toDelete = next;
       loadVerdicts(groups.flatMap((g) => g.paths));
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "중복 파일을 확인하지 못했습니다. 경로와 권한을 확인한 뒤 다시 시도하십시오.";
     } finally {
       busy = false;
     }
@@ -68,7 +68,7 @@
     }
     const okay = await confirm(
       `${paths.length}개 중복 파일을 휴지통으로 보냅니다 (논리 크기 ${fmtBytes(reclaimable)}, 실제 회수량 미검증).\n` +
-        `각 그룹의 사본 1개는 보존됩니다. 휴지통을 비우기 전에는 물리 공간이 회수되지 않으며, APFS 공유 블록 때문에 실제 회수량은 더 작을 수 있습니다.`,
+       `각 그룹의 사본 1개는 보존됩니다. 실제 저장 공간을 회수하려면 휴지통을 비운 뒤 저장 공간을 새로고침하십시오.`,
       { title: "DiskSage", kind: "warning" },
     );
     if (!okay) return;
@@ -77,8 +77,8 @@
       const r = await api.cleanPaths(paths);
       await scan();
       results = r;
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "선택한 중복 파일을 휴지통으로 이동하지 못했습니다. 상태를 확인한 뒤 다시 시도하십시오.";
     } finally {
       busy = false;
     }
