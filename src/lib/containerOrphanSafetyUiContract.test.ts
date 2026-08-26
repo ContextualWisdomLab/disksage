@@ -59,6 +59,10 @@ describe("Container orphan cleanup safety UX", () => {
     expect(source).toContain('<p class="error" role="alert">');
     expect(source).toContain('aria-live="polite"');
     expect(source).toContain("데이터는 그대로입니다");
+    expect(source).toContain("containerOrphanInspectErrorMessage(error)");
+    expect(source).toContain("containerOrphanPruneErrorMessage(error)");
+    expect(source).not.toContain("error.slice(");
+    expect(source).not.toContain("detail.slice(");
     // 내부 구현 경계 용어가 고객에게 보이는 마크업에 노출되지 않는지 확인합니다.
     const markup = source.slice(source.indexOf("</script>"));
     expect(markup).not.toContain("candidate_set_sha256");
