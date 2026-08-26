@@ -768,21 +768,3 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - PR #263 remains open, protected, and auto-merge enabled. Its required hosted checks are pending
   and no qualifying independent approval is recorded; merge is therefore not claimed until the
   exact head receives green checks and approval.
-
-## 2026-08-26 physical-reclaim follow-up
-
-- PR #263 now includes the release artifact compatibility verifier at exact implementation head
-  `92df2ed` and the follow-up customer message at `dacedc06`. The hosted
-  `download-artifact-pr-compat` failure was traced to the missing
-  `.github/scripts/verify-release-artifacts.sh` (`exit 127`); the verifier is now present and
-  syntax-checked, so the same artifact contract can run on this branch.
-- Moving a cache or development artifact to the OS Trash is now followed by customer guidance to
-  inspect and empty macOS Trash, then refresh storage. DiskSage does not claim physical capacity
-  recovery at the reversible move boundary; only a measured post-operation available-space
-  observation can report a gain.
-- Local frontend contract tests passed (8/8 focused), `svelte-check` reported zero diagnostics,
-  and `git diff --check` passed. No user file, provider process, cloud object, or native Trash
-  entry was mutated by verification.
-- After the push, PR #263 was re-queried at exact head `dacedc06`; hosted checks restarted and are
-  pending, `mergeStateStatus=BLOCKED`, and `reviewDecision=REVIEW_REQUIRED`. No protected merge is
-  claimed; the next loop must re-check current-head checks, review threads, and qualifying approval.
