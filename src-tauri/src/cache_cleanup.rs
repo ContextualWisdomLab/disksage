@@ -166,7 +166,7 @@ fn bounded_tree_size(path: &Path, entries: &mut usize) -> Result<u64, String> {
     Ok(total)
 }
 
-fn trash_directory(home: &Path) -> Option<PathBuf> {
+pub(crate) fn trash_directory(home: &Path) -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         return Some(home.join(".Trash"));
