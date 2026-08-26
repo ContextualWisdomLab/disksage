@@ -29,16 +29,22 @@
     const initialize = async () => {
       try {
         const [progressCleanup, doneCleanup] = await Promise.all([
-          api.onScanProgress((s) => (stats = s)),
+          api.onScanProgress((s) => {
+            if (!disposed) stats = s;
+          }),
           api.onScanDone(async (s) => {
+            if (disposed) return;
             stats = s;
             scanning = false;
             scanMessage = `스캔 완료: ${s.files.toLocaleString()}개 파일, ${fmtBytes(s.bytes)}`;
             try {
               crumbs = [selectedRoot];
               node = await api.getNode(selectedRoot);
+              if (disposed) return;
               top = await api.topFiles(200);
+              if (disposed) return;
             } catch {
+              if (disposed) return;
               loadError = "스캔 결과를 화면에 불러오지 못했습니다.";
               scanMessage = "스캔 결과를 화면에 불러오지 못했습니다.";
             }
