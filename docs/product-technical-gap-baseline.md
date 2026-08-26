@@ -754,3 +754,17 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   pipe leak that could starve the independent `ps` probe and report a false active-use timeout.
   The focused Rust test passed 3/3. The same patch is present on stacked PR heads `a0fa7bc` (#247)
   and `741ab30` (#246); hosted checks are rerunning and protected merge/review is still pending.
+
+## 2026-08-26 cache purge outcome clarification
+
+- The current PR #263 implementation head is `7787c063269f897396f4a1e27c45f5432057d6d2`. Its
+  cache purge summary now separates physically removed items, retryable items that remain, and
+  items removed but not fully recorded. The customer notice only asks for a retry when an item
+  remains; a record-write gap asks the operator to inspect the displayed status instead of
+  claiming that deletion failed.
+- Local verification at this head passed 158 frontend tests, `svelte-check` with zero diagnostics,
+  the focused cache-Trash Rust regression, and `git diff --check`. No user file, provider process,
+  cloud object, or native Trash entry was changed by verification.
+- PR #263 remains open, protected, and auto-merge enabled. Its required hosted checks are pending
+  and no qualifying independent approval is recorded; merge is therefore not claimed until the
+  exact head receives green checks and approval.
