@@ -8,6 +8,12 @@
   import { executeContainerOrphanPruneFlow } from "./containerOrphanPruneFlow";
   import { confirm } from "@tauri-apps/plugin-dialog";
 
+  type RefreshFailedExecution = {
+    runtimeDisplayName: string;
+    category: api.OrphanCategory;
+    execution: api.ContainerOrphanPruneExecution;
+  };
+
   let plans: api.ContainerOrphanPlan[] = $state([]);
   let busy = $state(false);
   let loadError = $state("");
@@ -16,6 +22,7 @@
   let phrases = $state<Record<string, string>>({});
   let rationales = $state<Record<string, string>>({});
   let executions = $state<Record<string, api.ContainerOrphanPruneExecution>>({});
+  let lastRefreshFailedExecution: RefreshFailedExecution | null = $state(null);
   let healthyPlans = $derived(plans.filter((plan) => plan.runtime.healthy));
   let unavailableRuntimeCount = $derived(plans.length - healthyPlans.length);
 
@@ -66,6 +73,7 @@
       phrases = {};
       rationales = {};
       executions = {};
+      lastRefreshFailedExecution = null;
     } catch (error) {
       plans = [];
       // Backend diagnostics may contain local paths/runtime stderr. Keep customer feedback opaque.
@@ -101,14 +109,23 @@
         () => api.inspectContainerOrphans(),
       );
       executions[key] = result.execution;
-      // A completed mutation invalidates every approval phrase even when refresh fails.
-      plans = result.plans ?? [];
       pruneErrors = {};
       phrases = {};
       rationales = {};
-      loadError = result.refreshError === null
-        ? ""
-        : containerOrphanInspectErrorMessage(result.refreshError);
+      if (result.refreshError === null) {
+        plans = result.plans ?? [];
+        lastRefreshFailedExecution = null;
+        loadError = "";
+      } else {
+        // Discard stale approval-bearing plans, but keep the completed mutation receipt visible.
+        plans = [];
+        lastRefreshFailedExecution = {
+          runtimeDisplayName: plan.runtime.display_name,
+          category,
+          execution: result.execution,
+        };
+        loadError = containerOrphanInspectErrorMessage(result.refreshError);
+      }
     } catch (error) {
       pruneErrors[key] = containerOrphanPruneErrorMessage(error);
       delete executions[key];
@@ -128,6 +145,25 @@
     {busy ? "확인 중…" : "미사용 자원 확인"}
   </button>
   {#if loadError}<p class="error" role="alert">{loadError}</p>{/if}
+
+  {#if lastRefreshFailedExecution}
+    <div class="runtime-panel preserved-receipt" aria-live="polite">
+      <h4>{lastRefreshFailedExecution.runtimeDisplayName}</h4>
+      <p class="notice">
+        최근 정리 결과는 보존했습니다. 최신 런타임 상태를 다시 확인해야 새 정리 계획을 만들 수 있습니다.
+      </p>
+      <p class="notice">
+        {CATEGORY_LABELS[lastRefreshFailedExecution.category]} 결과:
+        {lastRefreshFailedExecution.execution.executed
+          ? "완료"
+          : `실패(${lastRefreshFailedExecution.execution.status_code})`} ·
+        호스트 여유 공간 변화
+        {lastRefreshFailedExecution.execution.observed_available_gain_bytes === null
+          ? "관측 불가"
+          : `+${fmtBytes(lastRefreshFailedExecution.execution.observed_available_gain_bytes)}`}
+      </p>
+    </div>
+  {/if}
 
   {#if unavailableRuntimeCount > 0}
     <p class="notice">사용할 수 없는 런타임 {unavailableRuntimeCount}개는 결과에서 숨겼습니다.</p>

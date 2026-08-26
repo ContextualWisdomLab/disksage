@@ -7,7 +7,7 @@
 
   let repositoryRoot = $state("");
   let retentionText = $state("");
-  let includeClosedPullRequests = $state(true);
+  let includeClosedPullRequests = $state(false);
   let planning = $state(false);
   let executing = $state(false);
   let error = $state("");
