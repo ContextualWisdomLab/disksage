@@ -279,14 +279,16 @@
   {#if cacheTrashExecution}
     {@const purgeSummary = summarizeCacheTrashPurge(cacheTrashExecution.items)}
     <div class="notice" role="status">
-      재생성 캐시 {purgeSummary.successfulCount}/{cacheTrashExecution.items.length}개를 영구 삭제했습니다.
+      재생성 캐시 {purgeSummary.purgedCount}/{cacheTrashExecution.items.length}개를 영구 삭제했습니다.
       {cacheTrashExecution.observed_available_gain_bytes === null
         ? "저장 공간 변화는 확인하지 못했습니다. 시스템 저장 공간에서 직접 확인하세요."
         : `가용 공간 증가 ${fmtBytes(cacheTrashExecution.observed_available_gain_bytes)}입니다.`}
       {#if purgeSummary.allSucceeded}
         모든 재생성 캐시를 영구 삭제했습니다.
-      {:else}
-        완료되지 않은 항목은 아래 결과를 확인한 뒤 다시 시도하십시오.
+      {:else if purgeSummary.retryableCount > 0}
+        완료되지 않은 {purgeSummary.retryableCount}개 항목은 아래 결과를 확인한 뒤 다시 시도하십시오.
+      {:else if purgeSummary.auditFailedCount > 0}
+        삭제는 완료했지만 일부 처리 상태를 표시하지 못했습니다. 아래 상태를 확인하십시오.
       {/if}
     </div>
     {#if purgeSummary.errors.length > 0}

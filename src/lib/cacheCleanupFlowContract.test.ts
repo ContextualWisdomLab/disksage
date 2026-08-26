@@ -22,6 +22,9 @@ describe("cache cleanup execution boundary", () => {
     expect(cleanup).toContain("reviewProvenCacheTrash()");
     expect(cleanup).toContain("purgeReviewedCacheTrash(reviewedCandidates, approvalPhrase)");
     expect(cleanup).toContain("summarizeCacheTrashPurge(cacheTrashExecution.items)");
+    expect(cleanup).toContain("purgeSummary.purgedCount");
+    expect(cleanup).toContain("purgeSummary.retryableCount");
+    expect(cleanup).toContain("purgeSummary.auditFailedCount");
     expect(cleanup).toContain("cacheTrashPurgeItemMessage(item)");
     expect(purgeItemMessage).toContain("영구 삭제는 완료했지만 정리 기록을 남기지 못했습니다");
     expect(purgeItemMessage).toContain("영구 삭제하지 못했습니다");
