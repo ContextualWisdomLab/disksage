@@ -225,3 +225,74 @@ fn non_utf8_cli_argument_prints_real_usage_not_a_literal_placeholder() {
     assert!(!stderr.contains("{USAGE}"));
     assert!(!stderr.contains("opaque"));
 }
+
+#[test]
+fn cli_help_must_be_a_terminal_solo_request() {
+    let binary = env!("CARGO_BIN_EXE_disksage-container-orphan-plan");
+    let output = Command::new(binary)
+        .args(["--runtime", "docker-native", "--help"])
+        .output()
+        .expect("run shipped container orphan plan CLI");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("bounded UTF-8 stderr");
+    assert!(stderr.contains("help must be used alone"));
+    assert!(stderr.contains("Usage: disksage-container-orphan-plan"));
+}
+
+#[test]
+fn unsupported_runtime_kind_is_not_reflected_in_diagnostics() {
+    let binary = env!("CARGO_BIN_EXE_disksage-container-orphan-plan");
+    let untrusted = "customer-secret-runtime-name";
+    let output = Command::new(binary)
+        .args(["--runtime", untrusted])
+        .output()
+        .expect("run shipped container orphan plan CLI");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("bounded UTF-8 stderr");
+    assert!(stderr.contains("unsupported runtime kind"));
+    assert!(!stderr.contains(untrusted));
+}
+
+#[cfg(unix)]
+#[test]
+fn podman_machine_cli_defaults_to_the_podman_binary() {
+    let binary = env!("CARGO_BIN_EXE_disksage-container-orphan-plan");
+    let temp = tempfile::tempdir().expect("temporary runtime directory");
+    let podman = temp.path().join("podman");
+    std::fs::write(
+        &podman,
+        r#"#!/bin/sh
+set -eu
+[ "${1:-}" = "--connection" ] || exit 91
+[ "${2:-}" = "machine-a" ] || exit 92
+shift 2
+case "${1:-}" in
+  info|container|images|volume|network) exit 0 ;;
+  *) exit 93 ;;
+esac
+"#,
+    )
+    .expect("write fake podman runtime");
+    let mut permissions = std::fs::metadata(&podman)
+        .expect("fake podman metadata")
+        .permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(&podman, permissions).expect("make fake podman executable");
+
+    let output = Command::new(binary)
+        .env("PATH", temp.path())
+        .args(["--runtime", "podman-machine", "--scope", "machine-a"])
+        .output()
+        .expect("run shipped container orphan plan CLI");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("machine-readable container orphan evidence");
+    assert_eq!(document["runtime"]["healthy"], true);
+    assert_eq!(document["evidence_complete"], true);
+}
