@@ -14,7 +14,7 @@ describe("CloudArchive iCloud admission contract", () => {
       'icloudHealth?.new_copy_admission_state !== "clear"\n            || (icloudHealth?.new_copy_admission_blockers.length ?? 0) > 0',
     );
     expect(source).toContain("managed_database_allocated_bytes");
-    expect(source).toContain("시스템 관리 데이터를 삭제하지 않습니다");
+    expect(source).toContain("이 시스템 데이터는 삭제하지 않습니다");
     expect(source).toContain("icloud-item-error-octagon-not-signed-in");
     expect(source).toContain("동기화 진단:");
     expect(source).toContain("iCloud 상태를 확인하지 못했습니다.");
