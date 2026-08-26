@@ -162,11 +162,8 @@ mod tests {
 
     #[test]
     fn help_must_be_used_alone() {
-        let error = parse_args([
-            OsString::from("--help"),
-            OsString::from("--execute"),
-        ])
-        .unwrap_err();
+        let error =
+            parse_args([OsString::from("--help"), OsString::from("--execute")]).unwrap_err();
         assert!(error.starts_with("--help must be used alone"));
     }
 
