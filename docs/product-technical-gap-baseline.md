@@ -194,6 +194,23 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   an unambiguous filename token such as `2026-04-28` or `251210`, then filesystem times. No cache
   purge, cloud transfer, or source eviction treats a filename date as authority.
 
+## 2026-08-26 follow-up loop
+
+- The exact implementation head is now `7d43bd0acc0a3520edf54d606dcf116099b9de31`. The customer-copy
+  contract test scans every Svelte screen and rejects internal implementation vocabulary or raw
+  error interpolation; the purge-result helper keeps incomplete journal state actionable without
+  exposing backend details.
+- Local verification at this head passed 156 frontend tests, `svelte-check` with zero diagnostics,
+  three focused cache-reclaim Rust integration suites, and `git diff --check`. Rust emits existing
+  dead-code warnings outside this change; no user file, provider process, cloud object, or native
+  Trash entry was mutated by verification.
+- Dependabot PR #252 was reviewed at its exact head and merged as commit
+  `c0dc7567ca044a6f652441bcbcef2cdebfb903b0` after all required checks passed. PR #263 remains open
+  with auto-merge enabled but its current hosted checks are still queued/running and it has no
+  qualifying independent approval, so protected merge is not claimed. PR #256's Strix failure was
+  traced to provider HTTP 429 rate limiting (not a vulnerability finding); a failed-job rerun is
+  queued and remains non-authoritative until it completes.
+
 ## 2026-08-21 lineage graph update
 
 - Source head `677042467b3398866757f39b9475bd0b267abc75` now exports path-free ontology relations for
