@@ -14,6 +14,14 @@ Without --execute it reports the command is a no-op. With --execute it moves onl
 inactive regenerable cache children to OS Trash. --purge-proven-cache-trash is read-only evidence;\n\
 permanent in-app deletion remains unavailable until the final syscall is object-bound.";
 
+fn read_only_notice(purge_proven_cache_trash: bool) -> &'static str {
+    if purge_proven_cache_trash {
+        "proven cache-Trash review is read-only; empty the native Trash manually to reclaim space; --execute cannot enable permanent deletion"
+    } else {
+        "pass --execute to move guarded cache children to OS Trash"
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
     execute: bool,
@@ -108,6 +116,7 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
         return Ok(());
     };
     if !args.execute {
+        let notice = read_only_notice(args.purge_proven_cache_trash);
         let (cache_trash, cache_trash_snapshot) = if args.purge_proven_cache_trash {
             let snapshot = proven_cache_trash_snapshot(&home_directory()?);
             let candidates =
@@ -128,7 +137,7 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
                 "purge_proven_cache_trash": args.purge_proven_cache_trash,
                 "proven_cache_trash": cache_trash,
                 "proven_cache_trash_snapshot": cache_trash_snapshot,
-                "notice": "pass --execute to perform the guarded OS-Trash operation"
+                "notice": notice
             })
         );
         return Ok(());
@@ -191,5 +200,13 @@ mod tests {
             .unwrap();
         assert!(!args.execute);
         assert!(args.purge_proven_cache_trash);
+    }
+
+    #[test]
+    fn read_only_notice_matches_the_requested_action() {
+        assert!(read_only_notice(false).contains("pass --execute"));
+        assert!(read_only_notice(true).contains("read-only"));
+        assert!(read_only_notice(true).contains("empty the native Trash"));
+        assert!(!read_only_notice(true).contains("pass --execute to move"));
     }
 }
