@@ -79,6 +79,19 @@ describe("Container orphan cleanup safety UX", () => {
     expect(source).not.toContain("executions[key] = undefined");
   });
 
+  it("keeps a completed prune receipt visible when the post-prune refresh fails", () => {
+    const source = readSource("src/lib/ContainerOrphanCleanup.svelte");
+    const pruneStart = source.indexOf("async function prune(");
+    const pruneBody = source.slice(pruneStart, source.indexOf("</script>", pruneStart));
+    const markup = source.slice(source.indexOf("</script>"));
+
+    expect(pruneBody).toContain("lastRefreshFailedExecution = {");
+    expect(pruneBody).toContain("plans = [];");
+    expect(markup).toContain("{#if lastRefreshFailedExecution}");
+    expect(markup).toContain("최근 정리 결과는 보존했습니다");
+    expect(markup).toContain("lastRefreshFailedExecution.execution.observed_available_gain_bytes");
+  });
+
   it("announces failures to assistive technology with actionable copy only", () => {
     const source = readSource("src/lib/ContainerOrphanCleanup.svelte");
 
