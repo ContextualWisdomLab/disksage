@@ -1,7 +1,7 @@
 # DiskSage Product Requirements Document
 
-**Status:** Baseline for implementation and release review  
-**Snapshot:** 2026-08-25 (Asia/Seoul)  
+**Status:** Baseline for implementation and release review
+**Snapshot:** 2026-08-25 (Asia/Seoul)
 **Product:** DiskSage by ContextualWisdomLab
 
 ## Product outcome
