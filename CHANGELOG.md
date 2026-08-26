@@ -8,6 +8,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
+  identity cleanup and dependent eviction helpers; the focused authority contract remains green.
+- Add durable private failure records in a separate journal directory and a receipt-bound
+  cancellation command for bounded native cloud copies; bind cancellation to the active candidate,
+  require provider-native local-current materialization evidence before existing-copy adoption can
+  hash a destination, cap the private failure journal at 10,000 records, and bind failed-copy
+  cleanup to Unix/Windows file identity while keeping shareable lineage exports path-free. Existing
+  copy adoption remains explicitly non-cancellable because it performs verification only.
 - Persist bounded, path-free local-volume snapshots from cloud plans with create-only files,
   content fingerprints, Unix `0400`/`0700` permissions, and shape-limited retention; surface a
   warning when incident-comparison evidence cannot be written without changing copy authority.
@@ -20,7 +28,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   fingerprints and a five-minute observation-skew ceiling; incomplete, malformed, or stale
   observations remain blocked and never become cloud-write or eviction authority.
 - Carry the integrity-checked iCloud pre-copy cohort and `pre_copy_evidence_met` through the
-  Naruon cloud-copy readiness envelope (schema version 7), so aggregate consumers also fail closed
+  Naruon cloud-copy readiness envelope (schema version 8), so aggregate consumers also fail closed
   when the provider queue is quiet but pre-copy evidence is absent.
 - Keep the hourly contextual-orchestrator loop on its published read-only API, bind context to
   the exact event commit, and remove foreign-repository checkout, KV mutation, and provider-secret
@@ -43,6 +51,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Refresh the Tauri CSP standards evidence to the current July 29, 2026 W3C Content Security Policy Level 3 Working Draft and regression-test its exact publication URL so future doctoring cannot silently drift back to an older draft.
 
 ### Fixed
+
+- Reject ontology organize destinations that are relative to the process working directory,
+  named-user tilde paths, or parent-traversal paths; only an absolute destination or a home token
+  (`~`/`~/`, plus native Windows `~\`) can produce a move plan, and literal tildes in absolute
+  paths are preserved.
+- Surface the bounded iCloud File Provider upload/download fractions and label repeated
+  `no progress` observations as a Finder “copy preparing” stall, so the operator can cancel the
+  pending Finder request before retrying; this remains diagnostic and never grants copy or eviction
+  authority.
 
 - Keep the shipped Naruon readiness verifier source includable by its integration boundary test;
   the terminal parser contract now compiles in both the binary and test-module contexts.
