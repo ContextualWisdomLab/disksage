@@ -18,11 +18,24 @@ fn next_utf8_argument(
 }
 
 fn run() -> Result<(), String> {
+    let raw_args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    let help_count = raw_args
+        .iter()
+        .filter(|arg| matches!(arg.to_str(), Some("-h" | "--help")))
+        .count();
+    if help_count > 0 {
+        if raw_args.len() == 1 && help_count == 1 {
+            println!("{USAGE}");
+            return Ok(());
+        }
+        return Err(format!("help must be used alone\n{USAGE}"));
+    }
+
     let mut runtime: Option<ContainerRuntimeKind> = None;
     let mut scope: Option<String> = None;
-    let mut binary_path = PathBuf::from("docker");
+    let mut binary_path: Option<PathBuf> = None;
     let mut pretty = false;
-    let mut args = std::env::args_os().skip(1);
+    let mut args = raw_args.into_iter();
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--runtime") => {
@@ -35,7 +48,7 @@ fn run() -> Result<(), String> {
                     "docker-native" => ContainerRuntimeKind::DockerNative,
                     "docker-colima-context" => ContainerRuntimeKind::DockerColimaContext,
                     "podman-machine" => ContainerRuntimeKind::PodmanMachine,
-                    other => return Err(format!("unknown runtime kind: {other}\n{USAGE}")),
+                    _ => return Err(format!("unsupported runtime kind\n{USAGE}")),
                 });
             }
             Some("--scope") => {
@@ -46,21 +59,25 @@ fn run() -> Result<(), String> {
                 )?);
             }
             Some("--bin") => {
-                binary_path = PathBuf::from(
+                binary_path = Some(PathBuf::from(
                     args.next()
                         .ok_or_else(|| "--bin requires a path".to_string())?,
-                );
+                ));
             }
             Some("--pretty") => pretty = true,
-            Some("-h" | "--help") => {
-                println!("{USAGE}");
-                return Ok(());
-            }
             Some(_) => return Err(format!("unknown option\n{USAGE}")),
             None => return Err(format!("non-UTF-8 argument\n{USAGE}")),
         }
     }
     let runtime = runtime.ok_or_else(|| format!("--runtime is required\n{USAGE}"))?;
+    let binary_path = binary_path.unwrap_or_else(|| {
+        PathBuf::from(match runtime {
+            ContainerRuntimeKind::PodmanMachine => "podman",
+            ContainerRuntimeKind::DockerNative | ContainerRuntimeKind::DockerColimaContext => {
+                "docker"
+            }
+        })
+    });
     let target = ContainerRuntimeTarget::new(runtime, binary_path, scope)?;
     let plan = probe_container_orphans(&target);
     if pretty {
