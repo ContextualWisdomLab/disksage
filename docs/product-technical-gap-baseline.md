@@ -167,8 +167,8 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 
 ## 2026-08-26 physical reclaim loop
 
-- PR #263 implementation head (`080274fc0b99017bda47bd7d17d18ac2698691e9`, base
-  `2a727dab04cd6bd73c68d75c54c3e1563bcb16ca`; documentation follow-up `baaa99f67e9d14894cd4268d0b06f65692bdb214`)
+- PR #263 current implementation head (`9a2a7fc7a3b5a46763f9eafcb0c658edc93bfa53`, base
+  `2a727dab04cd6bd73c68d75c54c3e1563bcb16ca`)
   closes the physical-reclaim gap after cache cleanup: the desktop cleanup screen lists only
   regenerable cache entries already in OS Trash, requires a native confirmation, permanently
   removes only those revalidated entries, and reports the observed before/after available-space
