@@ -1,7 +1,7 @@
 use crate::cloud::CloudProvider;
 use crate::cloud_transfer::{
-    CloudCopyReceipt, ProviderSyncEvidence, RemoteChecksumAlgorithm, RemoteContentProof,
-    SyncEvidenceKind,
+    CloudCopyReceipt, ProviderSyncEvidence, ProviderSyncState, RemoteChecksumAlgorithm,
+    RemoteContentProof, SyncEvidenceKind,
 };
 
 #[cfg(test)]
@@ -47,7 +47,7 @@ pub fn assess_provider_sync_timeliness(
     if evidence.confirmed_at_ms < receipt.copied_at_ms {
         return Err("provider-sync-timeliness-time-order-invalid".into());
     }
-    if evidence.sync_complete {
+    if evidence.sync_complete && evidence.sync_state.is_complete() {
         return Ok(ProviderSyncTimelinessAssessment {
             state: ProviderSyncTimeliness::Complete,
             pending_age_ms: 0,
@@ -88,6 +88,20 @@ pub struct IcloudStatusSnapshot {
     pub is_current: bool,
     pub observed_bytes: u64,
     pub destination_blake3: String,
+}
+
+fn icloud_sync_state(snapshot: &IcloudStatusSnapshot) -> ProviderSyncState {
+    if !snapshot.is_ubiquitous {
+        ProviderSyncState::NotUbiquitous
+    } else if !snapshot.is_current {
+        ProviderSyncState::NotLocalCurrent
+    } else if snapshot.is_uploading {
+        ProviderSyncState::Uploading
+    } else if snapshot.is_uploaded {
+        ProviderSyncState::Complete
+    } else {
+        ProviderSyncState::PendingUpload
+    }
 }
 
 fn icloud_evidence_id(
@@ -143,6 +157,7 @@ pub fn evidence_from_icloud_snapshot(
         kind: SyncEvidenceKind::ProviderNativeStatus,
         evidence_id: icloud_evidence_id(receipt, snapshot, confirmed_at_ms),
         sync_complete,
+        sync_state: icloud_sync_state(snapshot),
         remote_content: None,
     })
 }
@@ -209,6 +224,45 @@ impl FileProviderStatusSnapshot {
     }
 }
 
+/// Return the stable blocker used when a provider-native destination exists locally but has not
+/// reached a complete remote-sync state. This is diagnostic only; it never authorizes eviction.
+fn incomplete_sync_blocker(sync_complete: bool) -> Option<&'static str> {
+    (!sync_complete).then_some("provider-sync-incomplete")
+}
+
+fn icloud_sync_blocker(snapshot: &IcloudStatusSnapshot) -> Option<&'static str> {
+    incomplete_sync_blocker(
+        snapshot.is_ubiquitous
+            && snapshot.is_current
+            && !snapshot.is_uploading
+            && snapshot.is_uploaded,
+    )
+}
+
+fn file_provider_sync_blocker(snapshot: &FileProviderItemStatus) -> Option<&'static str> {
+    incomplete_sync_blocker(snapshot.is_sync_complete())
+}
+
+fn file_provider_sync_state(snapshot: &FileProviderStatusSnapshot) -> ProviderSyncState {
+    if snapshot.item.is_excluded_from_sync {
+        ProviderSyncState::ExcludedFromSync
+    } else if snapshot.item.is_sync_paused {
+        ProviderSyncState::SyncPaused
+    } else if snapshot.item.is_trashed {
+        ProviderSyncState::RemoteUnavailable
+    } else if !snapshot.is_local_current() {
+        ProviderSyncState::NotLocalCurrent
+    } else if snapshot.item.has_unresolved_conflicts {
+        ProviderSyncState::ContentMismatch
+    } else if snapshot.item.is_uploading {
+        ProviderSyncState::Uploading
+    } else if snapshot.item.is_uploaded {
+        ProviderSyncState::Complete
+    } else {
+        ProviderSyncState::PendingUpload
+    }
+}
+
 fn file_provider_evidence_id(
     receipt: &CloudCopyReceipt,
     snapshot: &FileProviderStatusSnapshot,
@@ -268,6 +322,7 @@ pub fn evidence_from_file_provider_snapshot(
         kind: SyncEvidenceKind::ProviderNativeStatus,
         evidence_id: file_provider_evidence_id(receipt, snapshot, confirmed_at_ms),
         sync_complete: snapshot.is_sync_complete(),
+        sync_state: file_provider_sync_state(snapshot),
         remote_content: None,
     })
 }
@@ -466,6 +521,13 @@ pub fn evidence_from_provider_api_snapshot_with_location(
             confirmed_at_ms,
         ),
         sync_complete,
+        sync_state: if sync_complete {
+            ProviderSyncState::Complete
+        } else if !snapshot.available || snapshot.trashed {
+            ProviderSyncState::RemoteUnavailable
+        } else {
+            ProviderSyncState::ContentMismatch
+        },
         remote_content: Some(RemoteContentProof {
             object_id: snapshot.remote_object_id.clone(),
             revision: snapshot.remote_revision.clone(),
@@ -636,23 +698,45 @@ fn hash_file(path: &std::path::Path) -> Result<String, String> {
 #[cfg(all(target_os = "macos", not(coverage)))]
 pub(crate) fn file_providerctl_status(path: &str) -> Result<String, String> {
     use std::io::Read;
+    use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
 
     const TIMEOUT: Duration = Duration::from_secs(5);
     const OUTPUT_LIMIT: u64 = 256 * 1_024;
 
-    let mut child = Command::new("/usr/bin/fileproviderctl")
+    let mut command = Command::new("/usr/bin/fileproviderctl");
+    command
         .arg("evaluate")
         .arg(path)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    // File Provider helpers can retain inherited stdout after the leader exits. Keep the
+    // helper in a private process group so bounded cleanup can always join the reader.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = command
         .spawn()
         .map_err(|_| "file-provider-status-command-unavailable".to_string())?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "file-provider-status-output-missing".to_string())?;
+    let child_pid = child.id();
+    let kill_group = || unsafe {
+        let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
+    };
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            kill_group();
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("file-provider-status-output-missing".into());
+        }
+    };
     let output_reader = std::thread::spawn(move || {
         let mut output = Vec::new();
         stdout
@@ -668,17 +752,23 @@ pub(crate) fn file_providerctl_status(path: &str) -> Result<String, String> {
                 std::thread::sleep(Duration::from_millis(25));
             }
             Ok(None) => {
+                kill_group();
                 let _ = child.kill();
                 let _ = child.wait();
+                let _ = output_reader.join();
                 return Err("file-provider-status-command-timeout".into());
             }
             Err(_) => {
+                kill_group();
                 let _ = child.kill();
                 let _ = child.wait();
+                let _ = output_reader.join();
                 return Err("file-provider-status-command-wait-failed".into());
             }
         }
     };
+    // The leader may exit while a descendant still owns the pipe.
+    kill_group();
     let output = output_reader
         .join()
         .map_err(|_| "file-provider-status-output-reader-panicked".to_string())?
@@ -690,6 +780,144 @@ pub(crate) fn file_providerctl_status(path: &str) -> Result<String, String> {
         return Err("file-provider-status-command-failed".into());
     }
     String::from_utf8(output).map_err(|_| "file-provider-status-output-not-utf8".into())
+}
+
+/// Inspect an already-existing destination during planning without retaining provider paths or
+/// identifiers. A failed probe deliberately falls back to the ordinary collision blocker.
+#[cfg(all(target_os = "macos", not(coverage)))]
+pub fn existing_destination_sync_blocker(
+    provider: CloudProvider,
+    destination: &std::path::Path,
+    expected_bytes: u64,
+) -> Option<&'static str> {
+    let metadata = std::fs::symlink_metadata(destination).ok()?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() != expected_bytes
+    {
+        return None;
+    }
+    let path = destination.to_str()?;
+    match provider {
+        CloudProvider::Icloud => {
+            let (is_ubiquitous, is_uploaded, is_uploading, is_current) =
+                foundation_icloud_status(path).ok()?;
+            icloud_sync_blocker(&IcloudStatusSnapshot {
+                is_ubiquitous,
+                is_uploaded,
+                is_uploading,
+                is_current,
+                observed_bytes: expected_bytes,
+                destination_blake3: String::new(),
+            })
+        }
+        CloudProvider::Onedrive | CloudProvider::GoogleDrive => {
+            let output = file_providerctl_status(path).ok()?;
+            let status = parse_file_providerctl_item_status(&output, expected_bytes).ok()?;
+            file_provider_sync_blocker(&status)
+        }
+    }
+}
+
+/// Prove that an existing File Provider destination is already materialized before any hash read.
+/// This gate is separate from sync attestation so adoption cannot hydrate a dataless placeholder.
+#[cfg(all(target_os = "macos", not(coverage)))]
+pub fn require_existing_destination_local_current(
+    provider: CloudProvider,
+    destination: &std::path::Path,
+    expected_bytes: u64,
+) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+
+    #[cfg(test)]
+    let _ = provider;
+
+    let metadata = std::fs::symlink_metadata(destination)
+        .map_err(|_| "existing-destination-status-unavailable".to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("existing-destination-must-be-regular-file".into());
+    }
+    if metadata.len() != expected_bytes || crate::cloud::metadata_is_dataless(&metadata) {
+        return Err("existing-destination-not-materialized".into());
+    }
+    #[cfg(not(test))]
+    let path = destination
+        .to_str()
+        .ok_or_else(|| "existing-destination-not-unicode".to_string())?;
+    #[cfg(not(test))]
+    let check_provider_status = |expected_size: u64| -> Result<(), String> {
+        match provider {
+            CloudProvider::Icloud => {
+                let (ubiquitous, _, uploading, current) = foundation_icloud_status(path)?;
+                if !ubiquitous || !current || uploading {
+                    return Err("existing-destination-not-local-current".into());
+                }
+            }
+            CloudProvider::Onedrive | CloudProvider::GoogleDrive => {
+                let snapshot = parse_file_providerctl_snapshot(
+                    &file_providerctl_status(path)?,
+                    expected_size,
+                    "hash-pending",
+                )?;
+                if !snapshot.is_local_current() {
+                    return Err("existing-destination-not-local-current".into());
+                }
+            }
+        }
+        Ok(())
+    };
+    // Production adoption always requires the provider-native status adapter. Unit tests use
+    // ordinary temporary files, so they retain deterministic metadata/identity coverage without
+    // invoking unavailable Foundation or File Provider CLIs.
+    #[cfg(not(test))]
+    check_provider_status(metadata.len())?;
+    let after = std::fs::symlink_metadata(destination)
+        .map_err(|_| "existing-destination-status-unavailable".to_string())?;
+    if after.file_type().is_symlink()
+        || !after.is_file()
+        || crate::cloud::metadata_is_dataless(&after)
+        || after.len() != metadata.len()
+        || after.dev() != metadata.dev()
+        || after.ino() != metadata.ino()
+        || after.modified().ok() != metadata.modified().ok()
+    {
+        return Err("existing-destination-status-changed".into());
+    }
+    #[cfg(not(test))]
+    check_provider_status(after.len())?;
+    Ok(())
+}
+
+#[cfg(any(not(target_os = "macos"), coverage))]
+pub fn require_existing_destination_local_current(
+    _provider: CloudProvider,
+    destination: &std::path::Path,
+    expected_bytes: u64,
+) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        // Windows Files On-Demand placeholders can report the logical file length while their
+        // bytes are not local. No provider-native local-current adapter exists on this target;
+        // reject adoption rather than letting metadata-only checks hydrate a placeholder.
+        let _ = (destination, expected_bytes);
+        return Err("existing-destination-provider-status-unavailable".into());
+    }
+    let metadata = std::fs::symlink_metadata(destination)
+        .map_err(|_| "existing-destination-status-unavailable".to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("existing-destination-must-be-regular-file".into());
+    }
+    if metadata.len() != expected_bytes || crate::cloud::metadata_is_dataless(&metadata) {
+        return Err("existing-destination-not-materialized".into());
+    }
+    Ok(())
+}
+
+#[cfg(any(not(target_os = "macos"), coverage))]
+pub fn existing_destination_sync_blocker(
+    _provider: CloudProvider,
+    _destination: &std::path::Path,
+    _expected_bytes: u64,
+) -> Option<&'static str> {
+    None
 }
 
 /// Read macOS File Provider status for a OneDrive or Google Drive destination and bind it to the
@@ -876,7 +1104,59 @@ mod tests {
         assert_eq!(evidence.kind, SyncEvidenceKind::ProviderNativeStatus);
         assert!(evidence.evidence_id.starts_with("foundation:"));
         assert_eq!(evidence.evidence_id.len(), 75);
+        assert_eq!(evidence.sync_state, ProviderSyncState::Complete);
         assert_eq!(evidence.remote_content, None);
+    }
+
+    #[test]
+    fn local_current_but_not_uploaded_is_pending_upload() {
+        let receipt = receipt(CloudProvider::Icloud);
+        let evidence = evidence_from_icloud_snapshot(
+            &receipt,
+            &IcloudStatusSnapshot {
+                is_ubiquitous: true,
+                is_uploaded: false,
+                is_uploading: false,
+                is_current: true,
+                observed_bytes: 42,
+                destination_blake3: "content-hash".into(),
+            },
+            30,
+        )
+        .unwrap();
+        assert_eq!(evidence.sync_state, ProviderSyncState::PendingUpload);
+        assert!(!evidence.sync_complete);
+
+        let mut record_evidence = evidence.clone();
+        record_evidence.receipt_id = "a".repeat(64);
+        record_evidence.destination_blake3 = "b".repeat(64);
+        let record =
+            crate::provider_evidence::create_sync_evidence_record(&record_evidence).unwrap();
+        let blockers = crate::cloud_transfer::approve_local_eviction(&receipt, &record)
+            .expect_err("pending iCloud upload must not issue an eviction permit");
+        assert!(blockers.contains(&"provider-sync-incomplete".to_string()));
+    }
+
+    #[test]
+    fn planner_marks_local_current_but_not_uploaded_as_incomplete() {
+        let snapshot = IcloudStatusSnapshot {
+            is_ubiquitous: true,
+            is_uploaded: false,
+            is_uploading: false,
+            is_current: true,
+            observed_bytes: 42,
+            destination_blake3: String::new(),
+        };
+        assert_eq!(
+            icloud_sync_blocker(&snapshot),
+            Some("provider-sync-incomplete")
+        );
+
+        let uploaded = IcloudStatusSnapshot {
+            is_uploaded: true,
+            ..snapshot
+        };
+        assert_eq!(icloud_sync_blocker(&uploaded), None);
     }
 
     #[test]
@@ -903,6 +1183,7 @@ mod tests {
             ["provider-sync-confirmation-pending"]
         );
         assert!(!pending.sync_complete);
+        assert_eq!(pending.sync_state, ProviderSyncState::Uploading);
 
         let overdue = evidence_from_icloud_snapshot(
             &receipt,
@@ -934,6 +1215,30 @@ mod tests {
         assert_eq!(complete_assessment.state, ProviderSyncTimeliness::Complete);
         assert_eq!(complete_assessment.pending_age_ms, 0);
         assert!(complete_assessment.reason_codes.is_empty());
+    }
+
+    #[test]
+    fn legacy_unknown_sync_state_is_not_timely_complete() {
+        let receipt = receipt(CloudProvider::GoogleDrive);
+        let evidence = ProviderSyncEvidence {
+            receipt_id: receipt.receipt_id.clone(),
+            provider: receipt.provider,
+            destination: receipt.destination.clone(),
+            observed_bytes: receipt.bytes,
+            destination_blake3: receipt.blake3.clone(),
+            confirmed_at_ms: receipt.copied_at_ms + 1,
+            kind: SyncEvidenceKind::ProviderNativeStatus,
+            evidence_id: "legacy-unknown".into(),
+            sync_complete: true,
+            sync_state: ProviderSyncState::Unknown,
+            remote_content: None,
+        };
+        let assessment = assess_provider_sync_timeliness(&receipt, &evidence).unwrap();
+        assert_eq!(assessment.state, ProviderSyncTimeliness::Pending);
+        assert_eq!(
+            assessment.reason_codes,
+            ["provider-sync-confirmation-pending"]
+        );
     }
 
     #[test]
@@ -1009,6 +1314,28 @@ mod tests {
                 .unwrap_err(),
             "third-party-file-provider-receipt-required"
         );
+    }
+
+    #[test]
+    fn planner_marks_pending_file_provider_item_as_incomplete() {
+        let output = uploaded_file_provider_output().replace("isUploaded = 1", "isUploaded = 0");
+        let snapshot = parse_file_providerctl_snapshot(&output, 42, "content-hash").unwrap();
+        assert_eq!(
+            file_provider_sync_blocker(&snapshot.item),
+            Some("provider-sync-incomplete")
+        );
+    }
+
+    #[test]
+    fn trashed_file_provider_item_remains_incomplete() {
+        let output = uploaded_file_provider_output().replace("isTrashed = 0", "isTrashed = 1");
+        let snapshot = parse_file_providerctl_snapshot(&output, 42, "content-hash").unwrap();
+        let evidence =
+            evidence_from_file_provider_snapshot(&receipt(CloudProvider::Onedrive), &snapshot, 30)
+                .unwrap();
+        assert!(!snapshot.is_sync_complete());
+        assert!(!evidence.sync_complete);
+        assert_eq!(evidence.sync_state, ProviderSyncState::RemoteUnavailable);
     }
 
     #[test]
@@ -1098,6 +1425,35 @@ mod tests {
             assert!(!snapshot.is_sync_complete(), "{field}");
         }
         assert!(parse_file_providerctl_snapshot("isUploaded = maybe;", 42, "hash").is_err());
+    }
+
+    #[cfg(all(not(target_os = "macos"), not(windows)))]
+    #[test]
+    fn existing_destination_gate_rejects_missing_or_wrong_size_without_reading_bytes() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("existing.bin");
+        std::fs::write(&path, b"bytes").unwrap();
+        assert_eq!(
+            require_existing_destination_local_current(CloudProvider::Onedrive, &path, 99)
+                .unwrap_err(),
+            "existing-destination-not-materialized"
+        );
+        assert!(
+            require_existing_destination_local_current(CloudProvider::Onedrive, &path, 5).is_ok()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn existing_destination_gate_fails_closed_without_provider_status_on_windows() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("existing.bin");
+        std::fs::write(&path, b"bytes").unwrap();
+        assert_eq!(
+            require_existing_destination_local_current(CloudProvider::Onedrive, &path, 5)
+                .unwrap_err(),
+            "existing-destination-provider-status-unavailable"
+        );
     }
 
     fn api_snapshot(provider: CloudProvider, checksum: &str) -> ProviderApiSnapshot {
