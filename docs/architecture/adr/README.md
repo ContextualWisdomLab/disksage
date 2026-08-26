@@ -15,6 +15,8 @@ new numbered record rather than rewriting history.
 | [0007](0007-pre-copy-evidence-cohort.md) | Gate iCloud plans on a fresh evidence cohort | Accepted |
 | [0008](0008-hourly-loop-foreign-dependencies-read-only.md) | Keep the hourly loop read-only at foreign dependency boundaries | Accepted |
 | [0009](0009-path-free-lineage-relation-graph.md) | Export a path-free lineage relation graph | Accepted |
+| [0010](0010-rooted-organize-destinations.md) | Require rooted, process-independent organize destinations | Accepted |
+| [0011](0011-cloud-transfer-failure-and-materialization.md) | Durable failed-copy evidence and placeholder-safe adoption | Accepted |
 
 New records must state context, decision, consequences, rejected alternatives, and the evidence or
 standard that led to the decision. A record never grants cloud-write or source-eviction authority;
