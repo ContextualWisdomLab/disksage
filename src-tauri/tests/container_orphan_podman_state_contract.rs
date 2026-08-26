@@ -46,12 +46,13 @@ esac
 
 #[cfg(unix)]
 #[test]
-fn podman_stopped_is_removable_while_transitional_known_states_are_preserved() {
+fn podman_stopped_is_removable_while_known_prestart_and_transitional_states_are_preserved() {
     const STOPPED_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const INITIALIZED_ID: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     const STOPPING_ID: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    const CONFIGURED_ID: &str = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
     let container_json = format!(
-        r#"[{{"Id":"{STOPPED_ID}","State":"stopped","Names":[]}},{{"Id":"{INITIALIZED_ID}","State":"initialized","Names":[]}},{{"Id":"{STOPPING_ID}","State":"stopping","Names":[]}}]"#,
+        r#"[{{"Id":"{STOPPED_ID}","State":"stopped","Names":[]}},{{"Id":"{INITIALIZED_ID}","State":"initialized","Names":[]}},{{"Id":"{STOPPING_ID}","State":"stopping","Names":[]}},{{"Id":"{CONFIGURED_ID}","State":"configured","Names":[]}}]"#,
     );
     let (_temp, target) = podman_target_with_container_json(&container_json);
 
@@ -64,7 +65,7 @@ fn podman_stopped_is_removable_while_transitional_known_states_are_preserved() {
 
     assert!(container.evidence_complete, "{:?}", container.issue);
     let evidence = container.evidence.as_ref().expect("container evidence");
-    assert_eq!(evidence.total_records, 3);
+    assert_eq!(evidence.total_records, 4);
     assert_eq!(evidence.candidate_records, 1);
     assert!(container.approval_phrase.is_some());
 }
@@ -72,7 +73,7 @@ fn podman_stopped_is_removable_while_transitional_known_states_are_preserved() {
 #[cfg(unix)]
 #[test]
 fn podman_unknown_state_remains_fail_closed() {
-    const UNKNOWN_ID: &str = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+    const UNKNOWN_ID: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
     let container_json = format!(r#"[{{"Id":"{UNKNOWN_ID}","State":"unknown","Names":[]}}]"#);
     let (_temp, target) = podman_target_with_container_json(&container_json);
 
