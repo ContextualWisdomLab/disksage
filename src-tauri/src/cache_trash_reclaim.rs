@@ -8,6 +8,7 @@ const REVIEW_SCHEMA_KIND: &str = "disksage.cache-trash-review";
 const REVIEW_SCHEMA_VERSION: u32 = 1;
 const MAX_APPROVED_CANDIDATES: usize = 9;
 const PERMANENT_DELETE_UNAVAILABLE: &str = "cache-trash-identity-bound-permanent-delete-unavailable";
+const NATIVE_REVIEW_MACOS_ONLY: &str = "cache-trash-native-review-macos-only";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -125,7 +126,7 @@ pub fn review_for_home(home: &Path) -> CacheTrashReview {
             supported: false,
             candidates: Vec::new(),
             approval_phrase: None,
-            notice: Some("cache-trash-native-discovery-macos-only".into()),
+            notice: Some(NATIVE_REVIEW_MACOS_ONLY.into()),
         }
     }
 }
@@ -366,6 +367,6 @@ mod tests {
         assert!(!review.supported);
         assert!(review.candidates.is_empty());
         assert!(review.approval_phrase.is_none());
-        assert_eq!(review.notice.as_deref(), Some("cache-trash-native-discovery-macos-only"));
+        assert_eq!(review.notice.as_deref(), Some(NATIVE_REVIEW_MACOS_ONLY));
     }
 }
