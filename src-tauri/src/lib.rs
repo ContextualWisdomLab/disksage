@@ -63,6 +63,8 @@ pub mod cloud_transfer;
 pub mod content_digest;
 /// Read-only, identity-bound orphan reclamation across docker/podman/colima runtimes.
 pub mod container_orphan_reclaim;
+/// Privacy-safe public serialization boundary for container orphan plans and prune receipts.
+pub mod container_orphan_public;
 pub mod duplicate_audit;
 pub mod icloud_sync_health;
 pub mod judge_calibration;
