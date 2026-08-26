@@ -33,6 +33,8 @@ describe("cache cleanup execution boundary", () => {
     expect(cleanup).toContain("observed_available_gain_bytes");
     expect(cleanup).toContain("각 항목의 크기와 수정 시각을 다시 확인합니다");
     expect(cleanup).toContain("재생성할 수 있는 캐시만 대상으로 합니다");
+    expect(cleanup).toContain("실제 저장 공간을 회수하려면 macOS 휴지통을 확인한 뒤 비우십시오");
+    expect(cleanup).toContain("비운 뒤 저장 공간을 새로고침해 결과를 확인하십시오");
     expect(cleanup).not.toContain("active-use");
     expect(cleanup).not.toContain("증거가 바뀐 항목");
     expect(backend).toContain("pub fn clean_cache_contents(");

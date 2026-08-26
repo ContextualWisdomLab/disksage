@@ -355,6 +355,11 @@
       {results.filter((r) => r.ok).length}/{results.length}개 휴지통으로 이동 완료 —
       휴지통에서 복원할 수 있습니다.
     </p>
+    {#if results.some((result) => result.ok)}
+      <p class="notice" role="status">
+        실제 저장 공간을 회수하려면 macOS 휴지통을 확인한 뒤 비우십시오. 비운 뒤 저장 공간을 새로고침해 결과를 확인하십시오.
+      </p>
+    {/if}
     {#if failedResults.length > 0}
       <ul class="errors">
         {#each failedResults as r (r.path)}
