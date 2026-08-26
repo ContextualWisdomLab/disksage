@@ -60,6 +60,10 @@ impl ContainerRuntimeKind {
             Self::PodmanMachine => "podman-machine",
         }
     }
+
+    fn is_docker(self) -> bool {
+        matches!(self, Self::DockerNative | Self::DockerColimaContext)
+    }
 }
 
 /// A concrete runtime target: binary plus optional scope name (context or machine).
@@ -444,6 +448,20 @@ fn parse_image_records(output: &str) -> Result<Vec<ImageRecord>, String> {
     Ok(records)
 }
 
+fn parse_docker_dangling_image_ids(output: &str) -> Result<Vec<String>, String> {
+    let values = split_json_envelopes(output)?;
+    if values.len() > MAX_CATEGORY_RECORDS {
+        return Err("record-count-exceeds-bound".to_string());
+    }
+    values
+        .into_iter()
+        .map(|value| {
+            let raw_id = string_field(&value, &["ID", "Id"])?;
+            normalize_hex_id(&raw_id, "image")
+        })
+        .collect()
+}
+
 /// Images are candidates only with proven zero references and no usable tag/digest.
 /// A missing container-reference count fails closed for that record.
 fn classify_image_candidates(records: &[ImageRecord]) -> Result<(u64, Vec<&ImageRecord>), String> {
@@ -791,7 +809,21 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
         let mut args: Vec<&str> = prefix.iter().skip(1).map(String::as_str).collect();
         match category {
             OrphanCategory::Container => {
-                args.extend(["container", "ps", "--all", "--format", "json"]);
+                args.extend(["container", "ps", "--all"]);
+                if target.kind.is_docker() {
+                    args.push("--no-trunc");
+                }
+                args.extend(["--format", "json"]);
+            }
+            OrphanCategory::Image if target.kind.is_docker() => {
+                args.extend([
+                    "images",
+                    "--filter",
+                    "dangling=true",
+                    "--no-trunc",
+                    "--format",
+                    "json",
+                ]);
             }
             OrphanCategory::Image => {
                 args.extend(["images", "--all", "--format", "json"]);
@@ -822,6 +854,18 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                 let (total, candidates) = classify_container_candidates(&records)?;
                 let ids: Vec<&str> = candidates.iter().map(|c| c.id.as_str()).collect();
                 Some(summarize_candidates(category, total, &ids, None)?)
+            }
+            OrphanCategory::Image if target.kind.is_docker() => {
+                // Docker's documented JSON formatter renders Size as a human string and
+                // Containers as "N/A". The daemon's `dangling=true` filter is the
+                // authoritative predicate for the exact default `image prune` category:
+                // untagged images not referenced by any container. Bind those full IDs
+                // directly instead of fabricating a reference count or byte size.
+                let ids = parse_docker_dangling_image_ids(&output)?;
+                let total = u64::try_from(ids.len())
+                    .map_err(|_| "record-count-overflow".to_string())?;
+                let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+                Some(summarize_candidates(category, total, &refs, None)?)
             }
             OrphanCategory::Image => {
                 let records = parse_image_records(&output)?;
@@ -1243,6 +1287,21 @@ mod tests {
         );
         let error = parse_image_records(&ok).unwrap_err();
         assert_eq!(error, "json-field-invalid:Containers");
+    }
+
+    #[test]
+    fn docker_dangling_image_records_bind_only_full_ids() {
+        let documented = format!(
+            "{{\"Containers\":\"N/A\",\"ID\":\"{DOCKER_ID_A}\",\"Repository\":\"<none>\",\"Size\":\"72.9MB\",\"Tag\":\"<none>\"}}"
+        );
+        assert_eq!(
+            parse_docker_dangling_image_ids(&documented).unwrap(),
+            vec![DOCKER_ID_A.to_string()]
+        );
+        assert_eq!(
+            parse_docker_dangling_image_ids("{\"ID\":\"a762a2b37a1d\"}").unwrap_err(),
+            "image-invalid-id"
+        );
     }
 
     #[test]
