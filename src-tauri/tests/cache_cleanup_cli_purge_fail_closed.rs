@@ -1,4 +1,6 @@
+#[cfg(all(unix, not(target_os = "macos")))]
 use std::fs;
+#[cfg(all(unix, not(target_os = "macos")))]
 use std::process::Command;
 
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -16,11 +18,7 @@ fn shipped_cli_refuses_path_recursive_permanent_cache_trash_deletion() {
     let output = Command::new(env!("CARGO_BIN_EXE_disksage-cache-cleanup"))
         .env("HOME", &home)
         .env_remove("XDG_DATA_HOME")
-        .args([
-            "--execute",
-            "--purge-proven-cache-trash",
-            "--journal-path",
-        ])
+        .args(["--execute", "--purge-proven-cache-trash", "--journal-path"])
         .arg(&journal)
         .output()
         .unwrap();
@@ -29,6 +27,12 @@ fn shipped_cli_refuses_path_recursive_permanent_cache_trash_deletion() {
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("cache-trash-identity-bound-permanent-delete-unavailable"));
-    assert!(npm.exists(), "fail-closed CLI must preserve the reviewed cache object");
-    assert!(!journal.exists(), "refusal must happen before journal mutation");
+    assert!(
+        npm.exists(),
+        "fail-closed CLI must preserve the reviewed cache object"
+    );
+    assert!(
+        !journal.exists(),
+        "refusal must happen before journal mutation"
+    );
 }
