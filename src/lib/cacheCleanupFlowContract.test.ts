@@ -18,8 +18,8 @@ describe("cache cleanup execution boundary", () => {
     expect(cleanup).toContain("api.listCacheTargets(candidate.path)");
     expect(cleanup).toContain("api.cleanCacheContents(candidate.path, targets)");
     expect(cleanup).toContain("api.cleanRegenerableCaches()");
-    expect(cleanup).toContain("api.listProvenCacheTrash()");
-    expect(cleanup).toContain("api.purgeProvenCacheTrash(cacheTrashSnapshot)");
+    expect(cleanup).toContain("reviewProvenCacheTrash()");
+    expect(cleanup).toContain("purgeReviewedCacheTrash(reviewedCandidates, approvalPhrase)");
     expect(cleanup).toContain("summarizeCacheTrashPurge(cacheTrashExecution.items)");
     expect(cleanup).toContain("정리 기록을 남기지 못했습니다");
     expect(cleanup).toContain("cache-trash-confirmation-mismatch");
@@ -37,8 +37,8 @@ describe("cache cleanup execution boundary", () => {
     expect(tauri).toContain("cache_cleanup::clean_cache_contents");
     expect(tauri).toContain("cache_cleanup::list_cache_targets");
     expect(tauri).toContain("commands::clean_regenerable_caches");
-    expect(tauri).toContain("commands::list_proven_cache_trash");
-    expect(tauri).toContain("commands::purge_proven_cache_trash");
+    expect(tauri).toContain("cache_trash_reclaim::review_proven_cache_trash");
+    expect(tauri).toContain("cache_trash_reclaim::purge_proven_cache_trash");
   });
 
   it("surfaces an actionable status when a cache candidate has no direct cleanup targets", () => {

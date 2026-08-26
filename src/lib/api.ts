@@ -44,10 +44,6 @@ export interface CacheTrashCandidate {
   bytes: number;
   signature: string;
 }
-export interface CacheTrashSnapshot {
-  candidates: CacheTrashCandidate[];
-  approval_phrase: string;
-}
 export interface CacheTrashPurgeResult {
   name: string;
   path: string;
@@ -162,10 +158,6 @@ export interface DupeGroup {
 export const listCacheCandidates = () => invoke<CacheCandidate[]>("list_cache_candidates");
 export const cleanRegenerableCaches = () =>
   invoke<CleanResult[]>("clean_regenerable_caches");
-export const listProvenCacheTrash = () =>
-  invoke<CacheTrashSnapshot>("list_proven_cache_trash");
-export const purgeProvenCacheTrash = (snapshot: CacheTrashSnapshot) =>
-  invoke<CacheTrashPurgeExecution>("purge_proven_cache_trash", { snapshot });
 export const listCacheTargets = (dir: string) =>
   invoke<CacheTarget[]>("list_cache_targets", { dir });
 export const cleanCacheContents = (dir: string, targets: CacheTarget[]) =>

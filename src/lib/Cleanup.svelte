@@ -3,6 +3,7 @@
   import { fmtBytes } from "./fmt";
   import { verdictBadge } from "./verdictBadge";
   import { summarizeCacheTrashPurge } from "./cacheTrashPurgeSummary";
+  import { purgeReviewedCacheTrash, reviewProvenCacheTrash } from "./cacheTrashReviewApi";
   import { confirm } from "@tauri-apps/plugin-dialog";
   import GitWorktreeCleanup from "./GitWorktreeCleanup.svelte";
   import BrewCleanup from "./BrewCleanup.svelte";
@@ -12,7 +13,9 @@
 
   let caches: api.CacheCandidate[] = $state([]);
   let cacheTrash: api.CacheTrashCandidate[] = $state([]);
-  let cacheTrashSnapshot: api.CacheTrashSnapshot | null = $state(null);
+  let cacheTrashApprovalPhrase = $state<string | null>(null);
+  let cacheTrashSupported = $state(true);
+  let cacheTrashNotice = $state<string | null>(null);
   let cacheTrashExecution: api.CacheTrashPurgeExecution | null = $state(null);
   let artifacts: api.DevArtifact[] = $state([]);
   let selected: Set<string> = $state(new Set());
@@ -44,12 +47,15 @@
     loadError = "";
     try {
       caches = await api.listCacheCandidates();
-      cacheTrashSnapshot = await api.listProvenCacheTrash();
-      cacheTrash = cacheTrashSnapshot.candidates;
+      const cacheTrashReview = await reviewProvenCacheTrash();
+      cacheTrash = cacheTrashReview.candidates;
+      cacheTrashApprovalPhrase = cacheTrashReview.approval_phrase;
+      cacheTrashSupported = cacheTrashReview.supported;
+      cacheTrashNotice = cacheTrashReview.notice;
       artifacts = scannedRoot ? await api.listDevArtifacts(scannedRoot) : [];
       loadVerdicts(artifacts.map((a) => a.path));
     } catch (e) {
-      loadError = String(e);
+      loadError = "정리 상태를 확인하지 못했습니다. 다시 시도하십시오.";
     }
   }
 
@@ -126,7 +132,7 @@
         await load();
         cacheRetryMessage = "캐시 내용이 바뀌어 최신 목록을 불러왔습니다. 다시 휴지통으로를 눌러 검토하세요.";
       } else {
-        loadError = error;
+        loadError = "캐시를 휴지통으로 보내지 못했습니다. 최신 상태를 확인한 뒤 다시 시도하십시오.";
       }
     } finally {
       busy = false;
@@ -140,31 +146,34 @@
     try {
       results = await api.cleanRegenerableCaches();
       await load();
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "재생성 캐시를 정리하지 못했습니다. 상태를 확인한 뒤 다시 시도하십시오.";
     } finally {
       busy = false;
     }
   }
 
   async function purgeProvenCacheTrash() {
-    if (busy || cacheTrashSnapshot === null || cacheTrashSnapshot.candidates.length === 0) return;
-    const bytes = cacheTrash.reduce((sum, candidate) => sum + candidate.bytes, 0);
+    if (busy || cacheTrash.length === 0 || cacheTrashApprovalPhrase === null) return;
+    const reviewedCandidates = cacheTrash.map((candidate) => ({ ...candidate }));
+    const bytes = reviewedCandidates.reduce((sum, candidate) => sum + candidate.bytes, 0);
     const okay = await confirm(
-      `휴지통에 남아 있는 재생성 가능한 캐시 ${cacheTrash.length}개(${fmtBytes(bytes)})를 영구 삭제합니다.\n\n` +
+      `휴지통에 남아 있는 재생성 가능한 캐시 ${reviewedCandidates.length}개(${fmtBytes(bytes)})를 영구 삭제합니다.\n\n` +
         "이 항목은 복원할 수 없습니다. 사용자 파일과 다른 휴지통 항목은 건드리지 않습니다.",
       { title: "DiskSage 휴지통 정리", kind: "warning" },
     );
     if (!okay) return;
+    const approvalPhrase = cacheTrashApprovalPhrase;
+    if (approvalPhrase === null) return;
     busy = true;
     loadError = "";
     cacheTrashExecution = null;
     try {
-      cacheTrashExecution = await api.purgeProvenCacheTrash(cacheTrashSnapshot);
+      cacheTrashExecution = await purgeReviewedCacheTrash(reviewedCandidates, approvalPhrase);
       await load();
     } catch (e) {
       if (String(e).includes("cache-trash-confirmation-mismatch")) {
-        cacheTrashSnapshot = null;
+        cacheTrashApprovalPhrase = null;
         cacheTrash = [];
         await load();
         loadError = "휴지통 내용이 바뀌어 최신 목록을 불러왔습니다. 목록을 확인한 뒤 다시 시도하세요.";
@@ -205,7 +214,7 @@
       `다음 ${summary.length}개 항목을 휴지통으로 보냅니다 (논리 크기 합계 ${fmtBytes(totalSelected)}):\n\n` +
         summary.slice(0, 15).join("\n") +
         (summary.length > 15 ? `\n… 외 ${summary.length - 15}개` : "") +
-        "\n\n휴지통에서 언제든 복원할 수 있습니다. 휴지통을 비우기 전에는 물리 공간이 회수되지 않으며, APFS 공유 블록 때문에 실제 회수량은 논리 크기보다 작을 수 있습니다.",
+        "\n\n휴지통에서 언제든 복원할 수 있습니다. 표시된 크기와 실제로 늘어나는 저장 공간은 다를 수 있습니다.",
       { title: "DiskSage", kind: "warning" },
     );
     if (!okay) return;
@@ -215,8 +224,8 @@
       results = await api.cleanDevArtifacts(scannedRoot, 30, selectedArtifacts);
       selected = new Set();
       await load();
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "선택한 항목을 휴지통으로 보내지 못했습니다. 상태를 확인한 뒤 다시 시도하십시오.";
     } finally {
       busy = false;
     }
@@ -239,14 +248,19 @@
   <p class="notice" role="status">
     재생성할 수 있는 캐시만 대상으로 하며, 사용 중이거나 상태가 바뀐 항목은 자동으로 건너뜁니다.
   </p>
+  {#if !cacheTrashSupported && cacheTrashNotice === "cache-trash-native-discovery-macos-only"}
+    <p class="notice" role="status">
+      휴지통 안의 캐시를 영구 삭제하는 물리 공간 회수 기능은 현재 macOS 기본 휴지통에서만 지원합니다.
+    </p>
+  {/if}
   {#if cacheTrash.length > 0}
     <div class="trash-cleanup">
       <p class="notice" role="status">
         휴지통에 남은 재생성 가능한 캐시 {cacheTrash.length}개({fmtBytes(cacheTrash.reduce((sum, item) => sum + item.bytes, 0))})가
         확인되었습니다. 영구 삭제하면 실제 저장 공간을 회수할 수 있습니다.
       </p>
-      <button onclick={purgeProvenCacheTrash} disabled={busy || cacheTrashSnapshot === null}>
-        {busy ? "휴지통 확인 중…" : cacheTrashSnapshot === null ? "정리 준비 중…" : "재생성 캐시 영구 삭제"}
+      <button onclick={purgeProvenCacheTrash} disabled={busy || cacheTrashApprovalPhrase === null}>
+        {busy ? "휴지통 확인 중…" : cacheTrashApprovalPhrase === null ? "정리 준비 중…" : "재생성 캐시 영구 삭제"}
       </button>
     </div>
   {/if}
@@ -301,7 +315,7 @@
           {a.kind} <em>({a.project}, {a.age_days}일)</em>
           <span class="size">
             {!a.scan_complete
-              ? `${fmtBytes(a.bytes)} · 메타데이터 스캔 미완료`
+              ? `${fmtBytes(a.bytes)} · 파일 정보 확인 중`
               : a.skipped > 0
                 ? `${fmtBytes(a.bytes)} · 읽기 오류 ${a.skipped}`
                 : fmtBytes(a.bytes)}

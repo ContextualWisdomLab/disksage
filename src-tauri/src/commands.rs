@@ -710,48 +710,6 @@ pub fn clean_regenerable_caches(app: AppHandle) -> Result<Vec<CleanResult>, Stri
     ))
 }
 
-/// Return the structurally proven cache-Trash candidates and their approval phrase from one scan.
-/// This is read-only evidence; arbitrary Trash entries are never included.
-#[cfg(not(coverage))]
-#[tauri::command]
-pub fn list_proven_cache_trash() -> Result<crate::cache_cleanup::CacheTrashSnapshot, String> {
-    let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
-    Ok(crate::cache_cleanup::proven_cache_trash_snapshot(&bases.home))
-}
-
-/// Permanently remove only the reviewed, structurally proven regenerable cache entries in Trash.
-/// The journal records each revalidated item and the operation is never a general Trash purge.
-#[cfg(not(coverage))]
-#[tauri::command]
-pub fn purge_proven_cache_trash(
-    app: AppHandle,
-    snapshot: crate::cache_cleanup::CacheTrashSnapshot,
-) -> Result<crate::cache_cleanup::CacheTrashPurgeExecution, String> {
-    let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
-    let journal_path = journal_file_path(&app)?;
-    let before = crate::volume_pressure::snapshot_volume(&bases.home, now_ms()).ok();
-    let items = crate::cache_cleanup::purge_proven_cache_trash(
-        &bases.home,
-        &journal_path,
-        now_ms(),
-        &snapshot,
-    )?;
-    let after = crate::volume_pressure::snapshot_volume(&bases.home, now_ms()).ok();
-    let before_available_bytes = before.as_ref().map(|snapshot| snapshot.available_bytes);
-    let after_available_bytes = after.as_ref().map(|snapshot| snapshot.available_bytes);
-    let observed_available_gain_bytes = before_available_bytes
-        .zip(after_available_bytes)
-        .and_then(|(before, after)| after.checked_sub(before));
-    Ok(crate::cache_cleanup::CacheTrashPurgeExecution {
-        schema_kind: "disksage.cache-trash-purge".into(),
-        schema_version: 1,
-        items,
-        before_available_bytes,
-        after_available_bytes,
-        observed_available_gain_bytes,
-    })
-}
-
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn list_dev_artifacts(

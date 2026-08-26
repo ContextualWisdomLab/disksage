@@ -221,10 +221,12 @@ pub fn proven_cache_trash_candidates(home: &Path) -> Vec<CacheTrashCandidate> {
     candidates
 }
 
-fn approval_phrase_for_candidates(candidates: &[CacheTrashCandidate]) -> String {
+pub(crate) fn approval_phrase_for_candidates(candidates: &[CacheTrashCandidate]) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"disksage.cache-trash-purge-approval.v1\0");
-    for candidate in candidates {
+    let mut ordered = candidates.to_vec();
+    ordered.sort_by(|left, right| left.path.cmp(&right.path));
+    for candidate in ordered {
         for field in [
             candidate.name.as_str(),
             candidate.path.as_str(),
