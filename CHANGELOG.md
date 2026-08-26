@@ -23,6 +23,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   contain history, sessions, and login data; only dedicated cache signatures are eligible.
 - Keep cache cleanup guidance focused on what the operator can do next without exposing internal
   identity or activity-check terminology.
+- Tell the operator that moving files to macOS Trash is reversible and that physical space is
+  reclaimed only after emptying Trash and refreshing storage; the UI does not claim a gain at the
+  move boundary.
+- Let the worktree review form read a resolvable `origin/HEAD` (or fall back to the current branch)
+  as a review-only retention suggestion, while preserving exact-plan approval and live re-audit
+  gates for every removal.
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
   identity cleanup and dependent eviction helpers; the focused authority contract remains green.
 - Add durable private failure records in a separate journal directory and a receipt-bound

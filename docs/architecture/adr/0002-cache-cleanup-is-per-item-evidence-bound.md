@@ -113,6 +113,13 @@ fail-closed state is intentional: checking an inode/device identity and then inv
 `remove_dir_all(path)` is not sufficient because a same-user pathname replacement can occur between
 the check and the irreversible recursive deletion.
 
+The Git worktree review screen may fill its retention reference field from Git's resolvable
+`origin/HEAD`; when that symbolic reference is absent or stale, it falls back to the current
+symbolic branch. This convenience command is read-only and never authorizes removal. The operator
+still reviews the selected reference, receives an exact plan fingerprint, and must pass the
+existing confirmation and live re-audit gates. No repository discovery, fetch, branch deletion, or
+implicit retention rule is performed.
+
 If a future implementation adds an exact-object-bound permanent-delete primitive, it must retain the
 current candidate-set snapshot, root-identity binding, immediate revalidation, per-item journaling,
 non-expansion of authority, and explicit operator confirmation before the UI can expose destructive
