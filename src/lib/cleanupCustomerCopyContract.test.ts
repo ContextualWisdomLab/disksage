@@ -32,6 +32,8 @@ describe("cleanup customer copy", () => {
     expect(source).not.toContain("loadError = String(e)");
     expect(source).not.toContain("podmanError = String(e)");
     expect(source).not.toContain("podmanPruneError = String(e)");
+    expect(source).toContain("cacheTrashPurgeAvailability(cacheTrashReview)");
+    expect(source).toContain("cacheTrashPurgeInstruction");
     expect(source).toContain("다시 시도하십시오");
     expect(source).toContain("최신 상태를 확인한 뒤 다시 시도하십시오");
   });

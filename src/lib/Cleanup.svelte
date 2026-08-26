@@ -3,6 +3,7 @@
   import { fmtBytes } from "./fmt";
   import { verdictBadge } from "./verdictBadge";
   import { summarizeCacheTrashPurge } from "./cacheTrashPurgeSummary";
+  import { cacheTrashPurgeAvailability } from "./cacheTrashPurgeAvailability";
   import { purgeReviewedCacheTrash, reviewProvenCacheTrash } from "./cacheTrashReviewApi";
   import { confirm } from "@tauri-apps/plugin-dialog";
   import GitWorktreeCleanup from "./GitWorktreeCleanup.svelte";
@@ -16,6 +17,8 @@
   let cacheTrashApprovalPhrase = $state<string | null>(null);
   let cacheTrashSupported = $state(true);
   let cacheTrashNotice = $state<string | null>(null);
+  let cacheTrashPurgeAvailable = $state(false);
+  let cacheTrashPurgeInstruction = $state<string | null>(null);
   let cacheTrashExecution: api.CacheTrashPurgeExecution | null = $state(null);
   let artifacts: api.DevArtifact[] = $state([]);
   let selected: Set<string> = $state(new Set());
@@ -48,10 +51,13 @@
     try {
       caches = await api.listCacheCandidates();
       const cacheTrashReview = await reviewProvenCacheTrash();
+      const purgeAvailability = cacheTrashPurgeAvailability(cacheTrashReview);
       cacheTrash = cacheTrashReview.candidates;
       cacheTrashApprovalPhrase = cacheTrashReview.approval_phrase;
       cacheTrashSupported = cacheTrashReview.supported;
       cacheTrashNotice = cacheTrashReview.notice;
+      cacheTrashPurgeAvailable = purgeAvailability.canPurge;
+      cacheTrashPurgeInstruction = purgeAvailability.instruction;
       artifacts = scannedRoot ? await api.listDevArtifacts(scannedRoot) : [];
       loadVerdicts(artifacts.map((a) => a.path));
     } catch (e) {
@@ -154,7 +160,7 @@
   }
 
   async function purgeProvenCacheTrash() {
-    if (busy || cacheTrash.length === 0 || cacheTrashApprovalPhrase === null) return;
+    if (busy || !cacheTrashPurgeAvailable || cacheTrash.length === 0 || cacheTrashApprovalPhrase === null) return;
     const reviewedCandidates = cacheTrash.map((candidate) => ({ ...candidate }));
     const bytes = reviewedCandidates.reduce((sum, candidate) => sum + candidate.bytes, 0);
     const okay = await confirm(
@@ -174,6 +180,7 @@
     } catch (e) {
       if (String(e).includes("cache-trash-confirmation-mismatch")) {
         cacheTrashApprovalPhrase = null;
+        cacheTrashPurgeAvailable = false;
         cacheTrash = [];
         await load();
         loadError = "휴지통 내용이 바뀌어 최신 목록을 불러왔습니다. 목록을 확인한 뒤 다시 시도하세요.";
@@ -253,15 +260,20 @@
       휴지통 안의 캐시를 영구 삭제하는 물리 공간 회수 기능은 현재 macOS 기본 휴지통에서만 지원합니다.
     </p>
   {/if}
+  {#if cacheTrashPurgeInstruction}
+    <p class="notice" role="status">{cacheTrashPurgeInstruction}</p>
+  {/if}
   {#if cacheTrash.length > 0}
     <div class="trash-cleanup">
       <p class="notice" role="status">
         휴지통에 남은 재생성 가능한 캐시 {cacheTrash.length}개({fmtBytes(cacheTrash.reduce((sum, item) => sum + item.bytes, 0))})가
-        확인되었습니다. 영구 삭제하면 실제 저장 공간을 회수할 수 있습니다.
+        확인되었습니다. 안전하게 처리할 수 있는 항목만 다음 단계에서 영구 삭제합니다.
       </p>
-      <button onclick={purgeProvenCacheTrash} disabled={busy || cacheTrashApprovalPhrase === null}>
-        {busy ? "휴지통 확인 중…" : cacheTrashApprovalPhrase === null ? "정리 준비 중…" : "재생성 캐시 영구 삭제"}
-      </button>
+      {#if cacheTrashPurgeAvailable}
+        <button onclick={purgeProvenCacheTrash} disabled={busy || cacheTrashApprovalPhrase === null}>
+          {busy ? "휴지통 확인 중…" : cacheTrashApprovalPhrase === null ? "정리 준비 중…" : "재생성 캐시 영구 삭제"}
+        </button>
+      {/if}
     </div>
   {/if}
   {#if cacheTrashExecution}

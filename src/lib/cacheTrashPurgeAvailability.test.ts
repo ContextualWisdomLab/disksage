@@ -37,4 +37,13 @@ describe("cacheTrashPurgeAvailability", () => {
       cacheTrashPurgeAvailability({ candidates: [], approval_phrase: "stale phrase", notice: null }),
     ).toEqual({ canPurge: false, instruction: null });
   });
+
+  it("asks the operator to restore the native Trash location before retrying", () => {
+    expect(
+      cacheTrashPurgeAvailability({ candidates: [], approval_phrase: null, notice: "cache-trash-native-root-unsafe" }),
+    ).toEqual({
+      canPurge: false,
+      instruction: "휴지통 위치를 확인하지 못했습니다. macOS 휴지통을 확인한 뒤 새로고침하세요.",
+    });
+  });
 });
