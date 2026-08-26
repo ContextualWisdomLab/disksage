@@ -682,12 +682,13 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 
 ## 2026-08-27 container and worktree reclamation loop
 
-- PR #267 exact head `18b37c5c819895eafa7aa088763f3c8b79c187ae` delivers evidence-bound cleanup for stopped
+- PR #267 observed head `2d0787537a964c319bd4ee994070268bd77f2284` delivers evidence-bound cleanup for stopped
   containers, untagged and unreferenced images, unreferenced volumes, and unused non-default
   networks across Docker, Podman, and the Colima Docker context. Execution re-audits the exact
   candidate identities and requires the matching approval phrase plus a rationale; runtime
   diagnostics remain outside customer-visible and public evidence boundaries. The local frontend
-  suite passes 35 files / 153 tests after repairing the stale UI ownership assertion.
+  suite passes 35 files / 155 tests after repairing the stale UI ownership assertion and adding
+  the closed-PR worktree contract.
 - The Git worktree authority removes clean, inactive secondary worktree folders whose commits are
   strict ancestors of explicitly retained refs. ADR-0013 additionally binds closed-but-unmerged
   cleanup to authenticated GitHub evidence: exact `CLOSED` state, same-repository identity, local
@@ -695,7 +696,7 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   removal and participates in the approved plan fingerprint; detached and fork PR worktrees remain
   preserved for manual review. Branches and commits are never deleted.
 - Current protected-delivery snapshot: `main` is
-  `79067c1160ddedf7fc962cbf8067ce7e83c4564a`; 40 PRs are open (16 ready, 24 draft) and none has an
-  exact-head independent approval. PR #267 is draft, mergeable, and blocked with four required
-  checks queued. Combined status alone is not proof of the active ruleset's required workflows,
+  `79067c1160ddedf7fc962cbf8067ce7e83c4564a`; 40 PRs are open (17 ready, 23 draft) and none has an
+  exact-head independent approval. PR #267 is ready for review and blocked; CodeRabbit passed while
+  CodeQL remained queued on the observed head. Combined status alone is not proof of required workflows,
   resolved threads, or approval gate, so no protected merge is claimed.
