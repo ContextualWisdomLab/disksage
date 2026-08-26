@@ -7,6 +7,8 @@ mod dupes;
 #[cfg_attr(coverage, allow(dead_code))]
 mod commands;
 #[cfg_attr(coverage, allow(dead_code))]
+mod generic_cleanup;
+#[cfg_attr(coverage, allow(dead_code))]
 mod node_navigation;
 #[cfg_attr(coverage, allow(dead_code))]
 pub mod cache_cleanup;
@@ -117,7 +119,7 @@ pub fn run() {
             cache_trash_reclaim::purge_proven_cache_trash,
             cache_cleanup::list_cache_targets,
             commands::list_dev_artifacts,
-            commands::clean_paths,
+            generic_cleanup::fail_closed_clean_paths,
             cache_cleanup::clean_cache_contents,
             commands::clean_dev_artifacts,
             commands::recent_operations,
