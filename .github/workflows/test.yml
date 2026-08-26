@@ -72,6 +72,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       - name: macOS bound-root traversal regressions
         run: cargo test --manifest-path src-tauri/Cargo.toml --test bound_read_root_macos_traversal
+      - name: macOS bound-root replacement regression
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test bound_read_root_descriptor_replacement --locked
 
   llm-engine-build:
     runs-on: ubuntu-latest
