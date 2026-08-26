@@ -1,14 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::cache_cleanup::{CacheTrashCandidate, CacheTrashPurgeExecution, CacheTrashPurgeResult};
 
 const REVIEW_SCHEMA_KIND: &str = "disksage.cache-trash-review";
 const REVIEW_SCHEMA_VERSION: u32 = 1;
 const MAX_APPROVED_CANDIDATES: usize = 9;
-static PURGE_STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -159,107 +157,30 @@ fn validate_approved_snapshot(approved: &[CacheTrashCandidate]) -> Result<(), St
     Ok(())
 }
 
-fn create_purge_staging_dir(path: &Path, now_ms: u64) -> Result<PathBuf, String> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| "cache-trash-approved-candidate-changed".to_string())?;
-    let pid = std::process::id();
-    for _ in 0..32 {
-        let serial = PURGE_STAGING_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let staging = parent.join(format!(
-            ".disksage-cache-purge-{}-{}-{}",
-            pid, now_ms, serial
-        ));
-        match std::fs::create_dir(&staging) {
-            Ok(()) => {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    std::fs::set_permissions(
-                        &staging,
-                        std::fs::Permissions::from_mode(0o700),
-                    )
-                    .map_err(|error| error.to_string())?;
-                }
-                return Ok(staging);
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(format!("cache-trash-staging-create-failed:{error}")),
-        }
-    }
-    Err("cache-trash-staging-create-collision".into())
-}
-
-fn restore_staged_candidate(path: &Path, staged: &Path, staging_dir: &Path) -> Result<(), String> {
-    let source_absent = matches!(
-        std::fs::symlink_metadata(path),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound
-    );
-    if !source_absent {
-        return Err("cache-trash-staged-candidate-retained-source-reappeared".into());
-    }
-    std::fs::rename(staged, path)
-        .map_err(|error| format!("cache-trash-staged-restore-failed:{error}"))?;
-    std::fs::remove_dir(staging_dir)
-        .map_err(|error| format!("cache-trash-staging-cleanup-failed:{error}"))?;
-    Ok(())
-}
-
-/// Permanently delete only the exact filesystem object whose identity was part of the reviewed
-/// approval phrase. The candidate is atomically moved to a private sibling staging directory and
-/// its identity is checked again after the rename, so a pathname replacement cannot win the final
-/// mutation race and be deleted under the reviewed authority.
+/// Refuse irreversible removal until DiskSage has a primitive whose final deletion syscall remains
+/// bound to the exact reviewed filesystem object. A pathname check immediately before
+/// `remove_dir_all` is still vulnerable to same-user replacement between that check and the final
+/// recursive deletion, even if the reviewed root was previously moved through a staging pathname.
 fn permanently_remove_identity_bound(
     path: &Path,
     expected_object_id: &str,
-    now_ms: u64,
+    _now_ms: u64,
 ) -> Result<(), String> {
     let actual = crate::safety::filesystem_object_id(path)
         .map_err(|_| "cache-trash-approved-candidate-changed".to_string())?;
     if actual != expected_object_id {
         return Err("cache-trash-approved-candidate-changed".into());
     }
-    let file_name = path
-        .file_name()
-        .ok_or_else(|| "cache-trash-approved-candidate-changed".to_string())?;
-    let staging_dir = create_purge_staging_dir(path, now_ms)?;
-    let staged = staging_dir.join(file_name);
-    if let Err(error) = std::fs::rename(path, &staged) {
-        let _ = std::fs::remove_dir(&staging_dir);
-        return Err(format!("cache-trash-staging-move-failed:{error}"));
-    }
-    let moved_id = match crate::safety::filesystem_object_id(&staged) {
-        Ok(identity) => identity,
-        Err(_) => {
-            return match restore_staged_candidate(path, &staged, &staging_dir) {
-                Ok(()) => Err("cache-trash-approved-candidate-changed".into()),
-                Err(restore_error) => Err(format!(
-                    "cache-trash-approved-candidate-changed;{restore_error}"
-                )),
-            };
-        }
-    };
-    if moved_id != expected_object_id {
-        return match restore_staged_candidate(path, &staged, &staging_dir) {
-            Ok(()) => Err("cache-trash-approved-candidate-changed".into()),
-            Err(restore_error) => Err(format!(
-                "cache-trash-approved-candidate-changed;{restore_error}"
-            )),
-        };
-    }
-    std::fs::remove_dir_all(&staged)
-        .map_err(|error| format!("cache-trash-permanent-delete-failed:{error}"))?;
-    std::fs::remove_dir(&staging_dir)
-        .map_err(|error| format!("cache-trash-staging-cleanup-failed:{error}"))?;
-    Ok(())
+    Err("cache-trash-identity-bound-permanent-delete-unavailable".into())
 }
 
-/// Permanently remove only candidates in the operator-reviewed snapshot.
+/// Evaluate only candidates in the operator-reviewed snapshot.
 ///
 /// The current Trash is rescanned only to revalidate each approved object. Newly appearing proven
 /// caches can never expand deletion authority because iteration is over `approved`, not the fresh
-/// discovery result. The reviewed phrase also binds each root filesystem identity, and the final
-/// deletion is performed only after an atomic staging move preserves that exact identity.
+/// discovery result. The reviewed phrase binds each root filesystem identity. Permanent deletion
+/// currently fails closed because the standard pathname-recursive primitive cannot preserve that
+/// identity through the final irreversible syscall boundary.
 #[cfg(target_os = "macos")]
 pub fn purge_approved_cache_trash(
     home: &Path,
@@ -316,9 +237,6 @@ pub fn purge_approved_cache_trash(
             continue;
         }
 
-        // Re-scan immediately before mutation. Exact equality rechecks path, signature and bounded
-        // bytes; the identity-bound staging primitive then closes the replacement race between this
-        // final observation and permanent deletion.
         let immediately_current = crate::cache_cleanup::proven_cache_trash_candidates(home);
         let outcome = if immediately_current.iter().any(|observed| observed == &candidate) {
             permanently_remove_identity_bound(&path, expected_object_id, now_ms)
