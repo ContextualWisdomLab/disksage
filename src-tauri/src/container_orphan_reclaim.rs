@@ -611,21 +611,13 @@ fn lower_hex(bytes: &[u8]) -> String {
 
 /// Binds the exact candidate identity set into a SHA-256 fingerprint.
 /// Identities are hashed in sorted order so report ordering cannot change evidence.
-fn candidate_fingerprint(domain_tag: &str, ids: &[&str], sizes: Option<&[u64]>) -> String {
+fn candidate_fingerprint(domain_tag: &str, ids: &[&str]) -> String {
     let mut ordered: Vec<&str> = ids.to_vec();
     ordered.sort_unstable();
     let mut hasher = Sha256::new();
     hasher.update(domain_tag.as_bytes());
     for id in &ordered {
         hash_frame(&mut hasher, id.as_bytes());
-    }
-    if let Some(sizes) = sizes {
-        // Sizes trail their identities by re-sorted position so pairing stays stable.
-        let mut pairs: Vec<(&str, u64)> = ids.iter().copied().zip(sizes.iter().copied()).collect();
-        pairs.sort_unstable_by_key(|(id, _)| *id);
-        for (_, size) in pairs {
-            hash_frame(&mut hasher, &size.to_be_bytes());
-        }
     }
     lower_hex(&hasher.finalize())
 }
@@ -655,7 +647,7 @@ fn summarize_candidates(
         total_records,
         candidate_records,
         candidate_size_sum_bytes: size_sum,
-        candidate_set_sha256: candidate_fingerprint(category.domain_tag(), &sorted_ids, None),
+        candidate_set_sha256: candidate_fingerprint(category.domain_tag(), &sorted_ids),
     })
 }
 
@@ -953,16 +945,40 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                         return Err("network-candidate-count-exceeds-bound".to_string());
                     }
                     inspected_candidates = inspected_candidates.saturating_add(1);
-                    let mut inspect_args: Vec<&str> =
-                        prefix.iter().skip(1).map(String::as_str).collect();
-                    inspect_args.extend(["network", "inspect", &record.name]);
-                    let inspect_output = command_text(
-                        &target.binary_path,
-                        &inspect_args,
-                        ORPHAN_COMMAND_TIMEOUT,
-                        "orphan-network-inspect",
-                    )?;
-                    if network_has_attached_containers(&inspect_output)? {
+                    let has_attached_containers = if target.kind
+                        == ContainerRuntimeKind::PodmanMachine
+                    {
+                        let filter = format!("network={}", record.name);
+                        let mut membership_args: Vec<&str> =
+                            prefix.iter().skip(1).map(String::as_str).collect();
+                        membership_args.extend([
+                            "container",
+                            "ps",
+                            "--all",
+                            "--filter",
+                            &filter,
+                            "--format",
+                            "json",
+                        ]);
+                        !split_json_envelopes(&command_text(
+                            &target.binary_path,
+                            &membership_args,
+                            ORPHAN_COMMAND_TIMEOUT,
+                            "orphan-network-membership",
+                        )?)?
+                        .is_empty()
+                    } else {
+                        let mut inspect_args: Vec<&str> =
+                            prefix.iter().skip(1).map(String::as_str).collect();
+                        inspect_args.extend(["network", "inspect", &record.name]);
+                        network_has_attached_containers(&command_text(
+                            &target.binary_path,
+                            &inspect_args,
+                            ORPHAN_COMMAND_TIMEOUT,
+                            "orphan-network-inspect",
+                        )?)?
+                    };
+                    if has_attached_containers {
                         attached.push(record.name.clone());
                     }
                 }
@@ -1532,12 +1548,12 @@ mod tests {
     #[test]
     fn fingerprint_binds_sorted_identity_set_and_domain() {
         let ids = vec![DOCKER_ID_B, DOCKER_ID_A];
-        let first = candidate_fingerprint("domain-a", &ids, None);
-        let reordered = candidate_fingerprint("domain-a", &[DOCKER_ID_A, DOCKER_ID_B], None);
+        let first = candidate_fingerprint("domain-a", &ids);
+        let reordered = candidate_fingerprint("domain-a", &[DOCKER_ID_A, DOCKER_ID_B]);
         assert_eq!(first, reordered);
-        let other_domain = candidate_fingerprint("domain-b", &ids, None);
+        let other_domain = candidate_fingerprint("domain-b", &ids);
         assert_ne!(first, other_domain);
-        let other_set = candidate_fingerprint("domain-a", &[DOCKER_ID_A, DOCKER_ID_A], None);
+        let other_set = candidate_fingerprint("domain-a", &[DOCKER_ID_A, DOCKER_ID_A]);
         assert_ne!(first, other_set);
         assert_eq!(first.len(), 64);
     }

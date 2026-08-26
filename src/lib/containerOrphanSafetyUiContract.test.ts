@@ -101,4 +101,13 @@ describe("Container orphan cleanup safety UX", () => {
     expect(source).toContain('aria-labelledby="container-orphan-heading"');
     expect(source).toContain("disabled={pruneBusyKey !== null}");
   });
+
+  it("hides unavailable runtime panels while preserving an actionable summary", () => {
+    const source = readSource("src/lib/ContainerOrphanCleanup.svelte");
+
+    expect(source).toContain("plans.filter((plan) => plan.runtime.healthy)");
+    expect(source).toContain("{#each healthyPlans as plan");
+    expect(source).toContain("사용할 수 없는 런타임");
+    expect(source).toContain("사용할 런타임을 시작한 뒤 다시 확인하세요");
+  });
 });

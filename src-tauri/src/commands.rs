@@ -482,8 +482,7 @@ fn podman_binary() -> PathBuf {
     .into_iter()
     .map(PathBuf::from)
     .find(|path| {
-        std::fs::symlink_metadata(path)
-            .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+        std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file())
     })
     .unwrap_or_else(|| PathBuf::from("podman"))
 }

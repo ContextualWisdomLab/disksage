@@ -15,6 +15,8 @@
   let phrases = $state<Record<string, string>>({});
   let rationales = $state<Record<string, string>>({});
   let executions = $state<Record<string, api.ContainerOrphanPruneExecution>>({});
+  let healthyPlans = $derived(plans.filter((plan) => plan.runtime.healthy));
+  let unavailableRuntimeCount = $derived(plans.length - healthyPlans.length);
 
   const CATEGORY_LABELS: Record<api.OrphanCategory, string> = {
     container: "정지된 컨테이너",
@@ -119,16 +121,17 @@
   </button>
   {#if loadError}<p class="error" role="alert">{loadError}</p>{/if}
 
-  {#each plans as plan (plan.runtime.kind)}
+  {#if unavailableRuntimeCount > 0}
+    <p class="notice">사용할 수 없는 런타임 {unavailableRuntimeCount}개는 결과에서 숨겼습니다.</p>
+  {/if}
+  {#if plans.length > 0 && healthyPlans.length === 0}
+    <p class="notice" role="status">연결 가능한 컨테이너 런타임이 없습니다. 사용할 런타임을 시작한 뒤 다시 확인하세요.</p>
+  {/if}
+  {#each healthyPlans as plan (plan.runtime.kind)}
     {@const pkey = planKey(plan)}
     <div class="runtime-panel" aria-live="polite">
       <h4>{plan.runtime.display_name}</h4>
-      {#if !plan.runtime.healthy}
-        <p class="notice">
-          이 런타임에 연결할 수 없습니다. 실행 중인지 확인한 뒤 다시 시도해 주세요.
-        </p>
-      {:else}
-        <ul class="categories">
+      <ul class="categories">
           {#each plan.categories as cat (cat.category)}
             {@const ckey = categoryKey(pkey, cat.category)}
             <li>
@@ -182,8 +185,7 @@
               {/if}
             </li>
           {/each}
-        </ul>
-      {/if}
+      </ul>
     </div>
   {/each}
 </section>

@@ -695,6 +695,10 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   branch ref, and exact head OID must all match. The evidence is refreshed immediately before
   removal and participates in the approved plan fingerprint; detached and fork PR worktrees remain
   preserved for manual review. Branches and commits are never deleted.
+- Review-driven runtime hardening verifies Podman network membership through the authoritative
+  all-container listing instead of assuming Docker-shaped network-inspect fields, follows valid
+  Homebrew/Docker Desktop CLI symlinks, and collapses unavailable runtimes into one actionable UI
+  summary rather than rendering repeated connection-failure panels.
 - Current protected-delivery snapshot: `main` is
   `79067c1160ddedf7fc962cbf8067ce7e83c4564a`; 40 PRs are open (17 ready, 23 draft) and none has an
   exact-head independent approval. PR #267 is ready for review and blocked; CodeRabbit passed while
