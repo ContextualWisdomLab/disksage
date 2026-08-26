@@ -1,7 +1,10 @@
+#![cfg(target_os = "macos")]
+
 use std::fs;
 
-use disksage_lib::cache_cleanup::{
-    proven_cache_trash_approval_phrase, proven_cache_trash_candidates, purge_proven_cache_trash,
+use disksage_lib::cache_cleanup::proven_cache_trash_candidates;
+use disksage_lib::cache_trash_reclaim::{
+    approval_phrase_for_candidates, purge_approved_cache_trash,
 };
 
 fn create_npm_cache(trash: &std::path::Path) {
@@ -28,21 +31,31 @@ fn purge_never_deletes_candidate_added_after_reviewed_approval_snapshot() {
     let reviewed = proven_cache_trash_candidates(home.path());
     assert_eq!(reviewed.len(), 1);
     assert_eq!(reviewed[0].name, "_cacache");
-    let reviewed_phrase = proven_cache_trash_approval_phrase(home.path());
+    let reviewed_phrase = approval_phrase_for_candidates(&reviewed);
 
     // This second structurally valid cache appears only after the operator-reviewed snapshot.
     // A safe purge may revalidate reviewed objects, but it must never expand deletion authority
     // by rescanning and deleting this newly appeared candidate.
     create_trivy_cache(&trash);
-    assert_ne!(reviewed_phrase, proven_cache_trash_approval_phrase(home.path()));
+    let current = proven_cache_trash_candidates(home.path());
+    assert_eq!(current.len(), 2);
+    assert_ne!(reviewed_phrase, approval_phrase_for_candidates(&current));
 
     let journal = home.path().join("journal.jsonl");
-    let results = purge_proven_cache_trash(home.path(), &journal, 7).unwrap();
+    let results = purge_approved_cache_trash(
+        home.path(),
+        &reviewed,
+        &reviewed_phrase,
+        &journal,
+        7,
+    )
+    .unwrap();
 
+    assert_eq!(results.len(), 1);
     assert!(results.iter().any(|item| item.name == "_cacache" && item.purged));
     assert!(
-        !results.iter().any(|item| item.name == "db" && item.purged),
-        "purge must not authorize a structurally valid cache that appeared after the reviewed snapshot"
+        !results.iter().any(|item| item.name == "db"),
+        "the unreviewed cache must never enter the execution result or deletion authority"
     );
     assert!(
         trash.join("db").exists(),
