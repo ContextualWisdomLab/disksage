@@ -4,10 +4,17 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+
+function svelteFiles(directory: string): string[] {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const entryPath = resolve(directory, entry.name);
+    if (entry.isDirectory()) return svelteFiles(entryPath);
+    return entry.isFile() && entry.name.endsWith(".svelte") ? [entryPath] : [];
+  });
+}
+
 const screenFiles = ["src/lib", "src/routes"].flatMap((directory) =>
-  readdirSync(resolve(repositoryRoot, directory))
-    .filter((fileName) => fileName.endsWith(".svelte"))
-    .map((fileName) => resolve(repositoryRoot, directory, fileName))
+  svelteFiles(resolve(repositoryRoot, directory)),
 );
 
 function visibleText(filePath: string): string {
