@@ -29,7 +29,8 @@ describe("cache cleanup fail-closed UX", () => {
     expect(cleanup).toContain('import { cacheTrashPurgeItemMessage } from "./cacheTrashPurgeItemMessage"');
     expect(cleanup).toContain("cacheTrashPurgeItemMessage(item)");
     expect(cleanup).toContain("{#if cacheTrashPurgeInstruction}");
-    expect(cleanup).toContain("{:else if cacheTrash.length > 0}");
+    expect(cleanup).toContain("{#if cacheTrash.length > 0}");
+    expect(cleanup).not.toContain("{:else if cacheTrash.length > 0}");
   });
 
   it("does not imply macOS currently authorizes in-app permanent deletion", () => {

@@ -49,12 +49,19 @@
     loadError = "";
     try {
       caches = await api.listCacheCandidates();
-      const cacheTrashReview = await reviewProvenCacheTrash();
-      const purgeAvailability = cacheTrashPurgeAvailability(cacheTrashReview);
-      cacheTrash = cacheTrashReview.candidates;
-      cacheTrashApprovalPhrase = purgeAvailability.canPurge ? cacheTrashReview.approval_phrase : null;
-      cacheTrashPurgeAvailable = purgeAvailability.canPurge;
-      cacheTrashPurgeInstruction = purgeAvailability.instruction;
+      try {
+        const cacheTrashReview = await reviewProvenCacheTrash();
+        const purgeAvailability = cacheTrashPurgeAvailability(cacheTrashReview);
+        cacheTrash = cacheTrashReview.candidates;
+        cacheTrashApprovalPhrase = purgeAvailability.canPurge ? cacheTrashReview.approval_phrase : null;
+        cacheTrashPurgeAvailable = purgeAvailability.canPurge;
+        cacheTrashPurgeInstruction = purgeAvailability.instruction;
+      } catch {
+        cacheTrash = [];
+        cacheTrashApprovalPhrase = null;
+        cacheTrashPurgeAvailable = false;
+        cacheTrashPurgeInstruction = "휴지통 상태를 확인하지 못했습니다. 새로고침한 뒤 다시 시도하십시오.";
+      }
       artifacts = scannedRoot ? await api.listDevArtifacts(scannedRoot) : [];
       loadVerdicts(artifacts.map((a) => a.path));
     } catch (e) {
@@ -254,11 +261,12 @@
   </p>
   {#if cacheTrashPurgeInstruction}
     <p class="notice" role="status">{cacheTrashPurgeInstruction}</p>
-  {:else if cacheTrash.length > 0}
+  {/if}
+  {#if cacheTrash.length > 0}
     <div class="trash-cleanup">
       <p class="notice" role="status">
         휴지통에 남은 재생성 가능한 캐시 {cacheTrash.length}개({fmtBytes(cacheTrash.reduce((sum, item) => sum + item.bytes, 0))})가
-        확인되었습니다. 안전하게 처리할 수 있는 항목만 다음 단계에서 영구 삭제합니다.
+        확인되었습니다. 항목을 확인한 뒤 macOS 휴지통을 비우면 저장 공간이 회복됩니다.
       </p>
       {#if cacheTrashPurgeAvailable}
         <button onclick={purgeProvenCacheTrash} disabled={busy || cacheTrashApprovalPhrase === null}>

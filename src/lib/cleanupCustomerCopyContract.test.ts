@@ -50,6 +50,14 @@ describe("cleanup customer copy", () => {
     expect(source).toContain("최신 상태를 확인한 뒤 다시 시도하십시오");
   });
 
+  it("keeps the reviewed cache summary visible when permanent deletion is unavailable", () => {
+    const source = readFileSync(resolve(repositoryRoot, "src/lib/Cleanup.svelte"), "utf8");
+
+    expect(source).toContain("{#if cacheTrash.length > 0}");
+    expect(source).not.toContain("{:else if cacheTrash.length > 0}");
+    expect(source).toContain("macOS 휴지통을 비우면 저장 공간이 회복됩니다");
+  });
+
   it("applies the implementation-boundary vocabulary rule to every customer screen", () => {
     const forbidden = [
       "온톨로지",
