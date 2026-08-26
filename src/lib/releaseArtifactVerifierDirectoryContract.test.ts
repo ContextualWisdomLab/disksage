@@ -97,4 +97,31 @@ describe('release artifact verifier directory contract', () => {
       }
     },
   );
+
+  it.runIf(process.platform !== 'win32')(
+    'rejects a Windows operational CLI and checksum outside the Windows artifact directory',
+    () => {
+      const fixtureRoot = mkdtempSync(join(tmpdir(), 'disksage-release-artifact-verifier-'));
+      const artifactRoot = join(fixtureRoot, 'release-artifacts');
+      try {
+        materializeExactArtifactSet(artifactRoot);
+        const cliName = 'disksage-cloud-plan-windows-x86_64.exe';
+        const source = join(artifactRoot, platformDirectories.windows, cliName);
+        const sourceChecksum = `${source}.sha256`;
+        const misplaced = join(artifactRoot, platformDirectories.linux, cliName);
+        const misplacedChecksum = `${misplaced}.sha256`;
+        renameSync(source, misplaced);
+        renameSync(sourceChecksum, misplacedChecksum);
+
+        const result = verify(artifactRoot);
+
+        expect(result.status).not.toBe(0);
+        expect(result.stdout).toBe('');
+        expect(result.stderr).toContain(cliName);
+        expect(result.stderr).toContain(platformDirectories.windows);
+      } finally {
+        rmSync(fixtureRoot, { recursive: true, force: true });
+      }
+    },
+  );
 });
