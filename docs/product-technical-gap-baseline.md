@@ -210,6 +210,10 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   qualifying independent approval, so protected merge is not claimed. PR #256's Strix failure was
   traced to provider HTTP 429 rate limiting (not a vulnerability finding); a failed-job rerun is
   queued and remains non-authoritative until it completes.
+- After the review follow-up, head `b85a31a23bb34623d0d8aae51fb6ceb25e7fd60c` keeps the reviewed
+  cache count and size visible even when in-app permanent deletion is unavailable, and isolates a
+  failed Trash review from the remaining cleanup lists. The customer-facing next step remains to
+  inspect and empty macOS Trash manually; no destructive action was enabled by this fix.
 
 ## 2026-08-21 lineage graph update
 
