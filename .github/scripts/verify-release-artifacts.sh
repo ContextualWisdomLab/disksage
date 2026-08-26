@@ -23,17 +23,17 @@ require_exactly_one_path() {
 }
 
 require_exactly_one_file() {
-  local file_name="$1" count=0 matched_path=""
-  while IFS= read -r -d '' matched_path; do count=$((count + 1)); done < <(find "$artifact_root" -type f -name "$file_name" -print0)
+  local directory="$1" file_name="$2" count=0 matched_path=""
+  while IFS= read -r -d '' matched_path; do count=$((count + 1)); done < <(find "$artifact_root/$directory" -type f -name "$file_name" -print0)
   if [[ $count -ne 1 ]]; then
-    printf 'Expected exactly one release artifact named %s, found %s.\n' "$file_name" "$count" >&2
+    printf 'Expected exactly one release artifact named %s in %s, found %s.\n' "$file_name" "$directory" "$count" >&2
     exit 1
   fi
 }
 
 expected_dirs=(
   "release-disksage-ubuntu-22.04-${run_attempt}"
-  "release-disksage-windows-latest-${run_attempt}"
+  "release-disksage-windows-2022-${run_attempt}"
   "release-disksage-macos-latest-${run_attempt}"
 )
 
@@ -55,22 +55,24 @@ if [[ -n "$unexpected_entry" ]]; then
   exit 1
 fi
 
-require_exactly_one_path '*/bundle/deb/*.deb' 'Debian bundle'
-require_exactly_one_path '*/bundle/appimage/*.AppImage' 'AppImage bundle'
-require_exactly_one_path '*/bundle/msi/*.msi' 'Windows MSI bundle'
-require_exactly_one_path '*/bundle/nsis/*.exe' 'Windows NSIS bundle'
-require_exactly_one_path '*/bundle/dmg/*.dmg' 'macOS DMG bundle'
+require_exactly_one_path "$artifact_root/${expected_dirs[0]}/bundle/deb/*.deb" 'Debian bundle'
+require_exactly_one_path "$artifact_root/${expected_dirs[0]}/bundle/appimage/*.AppImage" 'AppImage bundle'
+require_exactly_one_path "$artifact_root/${expected_dirs[1]}/bundle/msi/*.msi" 'Windows MSI bundle'
+require_exactly_one_path "$artifact_root/${expected_dirs[1]}/bundle/nsis/*.exe" 'Windows NSIS bundle'
+require_exactly_one_path "$artifact_root/${expected_dirs[2]}/bundle/dmg/*.dmg" 'macOS DMG bundle'
 
-for required_name in \
-  disksage-cloud-plan-linux-x86_64 \
-  disksage-duplicate-audit-linux-x86_64 \
-  disksage-cloud-plan-windows-x86_64.exe \
-  disksage-duplicate-audit-windows-x86_64.exe \
-  disksage-cloud-plan-macos-arm64 \
-  disksage-duplicate-audit-macos-arm64; do
-  require_exactly_one_file "$required_name"
-  require_exactly_one_file "$required_name.sha256"
-done
+require_exactly_one_file "${expected_dirs[0]}" disksage-cloud-plan-linux-x86_64
+require_exactly_one_file "${expected_dirs[0]}" disksage-cloud-plan-linux-x86_64.sha256
+require_exactly_one_file "${expected_dirs[0]}" disksage-duplicate-audit-linux-x86_64
+require_exactly_one_file "${expected_dirs[0]}" disksage-duplicate-audit-linux-x86_64.sha256
+require_exactly_one_file "${expected_dirs[1]}" disksage-cloud-plan-windows-x86_64.exe
+require_exactly_one_file "${expected_dirs[1]}" disksage-cloud-plan-windows-x86_64.exe.sha256
+require_exactly_one_file "${expected_dirs[1]}" disksage-duplicate-audit-windows-x86_64.exe
+require_exactly_one_file "${expected_dirs[1]}" disksage-duplicate-audit-windows-x86_64.exe.sha256
+require_exactly_one_file "${expected_dirs[2]}" disksage-cloud-plan-macos-arm64
+require_exactly_one_file "${expected_dirs[2]}" disksage-cloud-plan-macos-arm64.sha256
+require_exactly_one_file "${expected_dirs[2]}" disksage-duplicate-audit-macos-arm64
+require_exactly_one_file "${expected_dirs[2]}" disksage-duplicate-audit-macos-arm64.sha256
 
 checksum_files=()
 checksum_file=""
