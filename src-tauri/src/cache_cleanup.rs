@@ -149,6 +149,21 @@ fn bounded_tree_size(path: &Path, entries: &mut usize) -> Result<u64, String> {
     Ok(total)
 }
 
+#[cfg(all(unix, not(target_os = "macos")))]
+fn unix_trash_directory(
+    home: &Path,
+    configured_home: Option<&Path>,
+    xdg_data_home: Option<&Path>,
+) -> PathBuf {
+    xdg_data_home
+        .filter(|path| path.is_absolute())
+        .filter(|_| configured_home == Some(home))
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| home.join(".local").join("share"))
+        .join("Trash")
+        .join("files")
+}
+
 pub(crate) fn trash_directory(home: &Path) -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
@@ -158,20 +173,13 @@ pub(crate) fn trash_directory(home: &Path) -> Option<PathBuf> {
     {
         // XDG_DATA_HOME belongs to the configured user home. Tests and callers that
         // inspect an alternate home must remain hermetic and use that home's default.
-        let xdg_data_home = std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .filter(|path| path.is_absolute())
-            .filter(|_| {
-                std::env::var_os("HOME")
-                    .map(PathBuf::from)
-                    .is_some_and(|configured_home| configured_home == home)
-            });
-        return Some(
-            xdg_data_home
-                .unwrap_or_else(|| home.join(".local").join("share"))
-                .join("Trash")
-                .join("files"),
-        );
+        let configured_home = std::env::var_os("HOME").map(PathBuf::from);
+        let xdg_data_home = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from);
+        return Some(unix_trash_directory(
+            home,
+            configured_home.as_deref(),
+            xdg_data_home.as_deref(),
+        ));
     }
     #[cfg(windows)]
     {
@@ -487,6 +495,21 @@ mod tests {
         assert_eq!(
             active_use_blocker(&active),
             Some("cache-target-active-use-detected")
+        );
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn unix_trash_directory_uses_xdg_data_home_for_configured_home() {
+        let home = Path::new("/home/test-user");
+        let xdg = Path::new("/mnt/data");
+        assert_eq!(
+            unix_trash_directory(home, Some(home), Some(xdg)),
+            PathBuf::from("/mnt/data/Trash/files")
+        );
+        assert_eq!(
+            unix_trash_directory(home, Some(Path::new("/home/other")), Some(xdg)),
+            PathBuf::from("/home/test-user/.local/share/Trash/files")
         );
     }
 
