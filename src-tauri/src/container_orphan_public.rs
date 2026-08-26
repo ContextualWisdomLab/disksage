@@ -74,7 +74,7 @@ pub fn sanitize_execution(
 mod tests {
     use super::*;
     use crate::container_orphan_reclaim::{
-        probe_container_orphans, ContainerRuntimeKind, ContainerRuntimeTarget, OrphanCategory,
+        probe_container_orphans, ContainerRuntimeKind, ContainerRuntimeTarget,
         RuntimeHealthEvidence,
     };
     use std::path::PathBuf;
