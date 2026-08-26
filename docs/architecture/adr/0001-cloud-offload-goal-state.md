@@ -1,6 +1,6 @@
 # ADR-0001: Provider evidence drives the cloud-offload Goal
 
-**Status:** Accepted  
+**Status:** Accepted
 **Date:** 2026-08-13
 
 ## Context
@@ -546,3 +546,84 @@ File Provider databases, cloud objects, and user files remain outside the mutati
 focused Rust regression test passed 3/3. A timeout remains incomplete active-use evidence and
 keeps cache cleanup and cloud eviction fail-closed; this process-group cleanup is not a provider
 recovery or copy-cancellation operation.
+
+## Amendment: current iCloud Finder preparation evidence (2026-08-25)
+
+The current bounded read-only observation retained three `fetchContentsForItemWithID` requests
+with no progress, roughly 525,000 pending indexable entries, upload progress at zero, download
+progress at about 21.45%, and an active reconciliation state. Finder and the provider daemons were
+alive, but no DiskSage, ZIP, or `real_datasets` process was running; local headroom was about 12 GiB.
+These markers classify the user-visible “복사 준비 중” dialog as provider preflight/backlog evidence,
+not a completed copy or a local ZIP stall.
+
+PR #259 (`06c5b59ea6da6846f31a2d235698e38cfe041ece`) exposes the aggregate no-progress label,
+bounded transfer percentages, and same-blocker duration. This is diagnostic/operator guidance only:
+the UI may request Finder Escape cancellation, but DiskSage does not cancel automatically, kill
+`bird`/`fileproviderd`, touch CloudDocs databases, or grant copy, attestation, or eviction authority.
+New work remains fail-closed until a fresh complete and quiet provider observation plus independent
+per-item receipt evidence exists.
+
+The follow-up bounded observation at `2026-08-25 12:49:51 +0900` still retained seven
+`fetchContentsForItemWithID` requests with no progress and an active reconciliation backlog of
+`523,158` entries. Transfer state had advanced to upload fraction `0.9999` (11,812,609 of
+11,813,276 bytes) and download fraction `0.4273` (254,713,831 of 596,099,680 bytes), so the
+Finder dialog remains a provider preflight/reconciliation wait rather than evidence of a local
+ZIP worker. The data volume was still at 99% capacity with about 9 GiB available, so the local
+headroom gate also remains active for any candidate whose size plus the staging reserve exceeds
+that budget. This progress does not clear the no-progress or reconciliation blockers: DiskSage
+continues to admit no new copy, attestation, or source eviction until a fresh complete and quiet
+observation plus an independent per-item receipt exists.
+
+The bounded follow-up at `2026-08-25 13:04:12 +0900` timed out after 20 seconds while retaining
+two no-progress fetch requests, upload fraction `0.9999`, download fraction `0.4862`, and a
+`526,878`-entry reconciliation backlog with scheduling still `running`. The data volume had
+recovered to about 50 GiB available after removing only this session's generated Rust build
+artifacts; headroom is therefore no longer the immediate blocker, but the provider timeout and
+backlog still keep copy, attestation, and eviction fail-closed. The timeout itself is incomplete
+evidence and cannot be treated as a clear or per-item receipt.
+
+The operator's current Finder dialog still shows “real_datasets” copy preparation after several
+hours. A fresh bounded probe at `2026-08-25` found no Archive Utility, `ditto`, or `zip` worker and
+the Finder process was idle, while `cloudd` remained busy. `fileproviderctl dump` timed out with
+three no-progress fetch requests and `531,061` reconciliation entries. DiskSage therefore classifies
+the dialog as an iCloud File Provider materialization/reconciliation wait. The operator-visible
+Finder cancel control remains the only recovery action exposed here; it cancels the UI operation
+without deleting sources, mutating provider state, or granting copy, attestation, or eviction
+authority.
+
+The provider parser also records the redacted `itemIsFlockedCanNotPropagate` condition as
+`icloud-file-provider-item-locked-observed` and adds the corresponding
+`icloud-file-provider-item-locked` admission blocker. The provider-internal token, item identifier,
+and path are never retained. This makes a Finder “copy preparation” wait explainable without
+mistaking a lock/materialization failure for a completed copy.
+
+The bounded read-only probe at `2026-08-25 14:08:26 +0900` retained three no-progress fetch
+requests, a `541,234`-entry reconciliation backlog, upload fraction `0.9999`, and download
+fraction `0.5864`. It also retained provider error count `22`, including the already-classified
+`itemIsFlockedCanNotPropagate` condition observed about three hours earlier and repeated
+`noContentToFetch` failures. The Data volume had about `42 GiB` available. These are aggregate,
+path-free observations: provider activity is not a per-item receipt, the flock/error markers keep
+copy and eviction fail-closed, and no provider database or daemon mutation is authorized.
+
+The subsequent read-only probe at `2026-08-25 14:45:47 +0900` still retained one
+`fetchContentsForItemWithID` request, one `itemIsFlockedCanNotPropagate` marker, `22`
+`noContentToFetch` failures, and a maximum observed reconciliation backlog of `544,098` entries.
+The corresponding process snapshot showed `fileproviderd` at `52.5%` CPU, `bird` at `27.6%`, and
+the user `cloudd` at `6.1%`. This is current provider-pressure evidence, not proof of per-item
+completion or causal ownership by DiskSage; the copy and eviction gates therefore remain closed.
+
+The provider parser now also treats a redacted fetch/create operation age of at least 15 minutes
+as `icloud-file-provider-stalled`. This captures a multi-hour Finder “preparing” wait even after
+DiskSage restarts; it remains an observational blocker, not evidence of causal ownership by
+DiskSage or permission to mutate Finder, provider state, or source data.
+
+The exact-head follow-up `f184492a` also accepts a provider operation marker and its redacted age
+token on adjacent dump rows, because File Provider diagnostics may wrap one operation across lines.
+The focused Rust parser suite passed 12/12, including rejection of unrelated parenthesized durations,
+cross-record adjacent age pairing, old healthy operation timestamps without an error marker, and a
+fresh `last:` value paired with an older `expired:` value.
+A bounded read-only probe at `2026-08-25 15:26 +0900`
+timed out after 30 seconds while the earlier bounded output still showed `fetch-content` errors
+aged about six hours; that timeout is incomplete provider evidence and keeps copy, attestation,
+and eviction fail-closed. No Finder, provider daemon, CloudDocs database, source, or cloud object
+was mutated.
