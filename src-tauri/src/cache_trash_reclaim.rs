@@ -1,14 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::cache_cleanup::{CacheTrashCandidate, CacheTrashPurgeExecution, CacheTrashPurgeResult};
 
 const REVIEW_SCHEMA_KIND: &str = "disksage.cache-trash-review";
 const REVIEW_SCHEMA_VERSION: u32 = 1;
 const MAX_APPROVED_CANDIDATES: usize = 9;
-static PURGE_STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -80,14 +78,13 @@ pub fn approval_phrase_for_candidates(candidates: &[CacheTrashCandidate]) -> Str
 }
 
 fn native_trash_root_is_safe(home: &Path) -> bool {
-    let Some(trash) = crate::cache_cleanup::trash_directory(home) else {
-        return false;
-    };
+    let trash = home.join(".Trash");
     std::fs::symlink_metadata(trash)
         .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
 }
 
-fn native_review(home: &Path) -> CacheTrashReview {
+#[cfg(target_os = "macos")]
+fn macos_review(home: &Path) -> CacheTrashReview {
     if !native_trash_root_is_safe(home) {
         return CacheTrashReview {
             schema_kind: REVIEW_SCHEMA_KIND.into(),
@@ -102,8 +99,7 @@ fn native_review(home: &Path) -> CacheTrashReview {
     candidates.retain(|candidate| {
         crate::safety::filesystem_object_id(Path::new(&candidate.path)).is_ok()
     });
-    let approval_phrase =
-        (!candidates.is_empty()).then(|| approval_phrase_for_candidates(&candidates));
+    let approval_phrase = (!candidates.is_empty()).then(|| approval_phrase_for_candidates(&candidates));
     CacheTrashReview {
         schema_kind: REVIEW_SCHEMA_KIND.into(),
         schema_version: REVIEW_SCHEMA_VERSION,
@@ -115,17 +111,22 @@ fn native_review(home: &Path) -> CacheTrashReview {
 }
 
 pub fn review_for_home(home: &Path) -> CacheTrashReview {
-    if cfg!(target_os = "windows") {
-        return CacheTrashReview {
+    #[cfg(target_os = "macos")]
+    {
+        macos_review(home)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = home;
+        CacheTrashReview {
             schema_kind: REVIEW_SCHEMA_KIND.into(),
             schema_version: REVIEW_SCHEMA_VERSION,
             supported: false,
             candidates: Vec::new(),
             approval_phrase: None,
-            notice: Some("cache-trash-native-discovery-unsupported".into()),
-        };
+            notice: Some("cache-trash-native-discovery-macos-only".into()),
+        }
     }
-    native_review(home)
 }
 
 fn merge_purge_errors(operation_error: Option<String>, journal_error: Option<String>) -> String {
@@ -156,104 +157,31 @@ fn validate_approved_snapshot(approved: &[CacheTrashCandidate]) -> Result<(), St
     Ok(())
 }
 
-fn create_purge_staging_dir(path: &Path, now_ms: u64) -> Result<PathBuf, String> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| "cache-trash-approved-candidate-changed".to_string())?;
-    let pid = std::process::id();
-    for _ in 0..32 {
-        let serial = PURGE_STAGING_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let staging = parent.join(format!(
-            ".disksage-cache-purge-{}-{}-{}",
-            pid, now_ms, serial
-        ));
-        match std::fs::create_dir(&staging) {
-            Ok(()) => {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o700))
-                        .map_err(|error| error.to_string())?;
-                }
-                return Ok(staging);
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(format!("cache-trash-staging-create-failed:{error}")),
-        }
-    }
-    Err("cache-trash-staging-create-collision".into())
-}
-
-fn restore_staged_candidate(path: &Path, staged: &Path, staging_dir: &Path) -> Result<(), String> {
-    let source_absent = matches!(
-        std::fs::symlink_metadata(path),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound
-    );
-    if !source_absent {
-        return Err("cache-trash-staged-candidate-retained-source-reappeared".into());
-    }
-    std::fs::rename(staged, path)
-        .map_err(|error| format!("cache-trash-staged-restore-failed:{error}"))?;
-    std::fs::remove_dir(staging_dir)
-        .map_err(|error| format!("cache-trash-staging-cleanup-failed:{error}"))?;
-    Ok(())
-}
-
-/// Permanently delete only the exact filesystem object whose identity was part of the reviewed
-/// approval phrase. The candidate is atomically moved to a private sibling staging directory and
-/// its identity is checked again after the rename, so a pathname replacement cannot win the final
-/// mutation race and be deleted under the reviewed authority.
+/// Refuse irreversible removal until DiskSage has a primitive whose final deletion syscall remains
+/// bound to the exact reviewed filesystem object. A pathname check immediately before
+/// `remove_dir_all` is still vulnerable to same-user replacement between that check and the final
+/// recursive deletion, even if the reviewed root was previously moved through a staging pathname.
 fn permanently_remove_identity_bound(
     path: &Path,
     expected_object_id: &str,
-    now_ms: u64,
+    _now_ms: u64,
 ) -> Result<(), String> {
     let actual = crate::safety::filesystem_object_id(path)
         .map_err(|_| "cache-trash-approved-candidate-changed".to_string())?;
     if actual != expected_object_id {
         return Err("cache-trash-approved-candidate-changed".into());
     }
-    let file_name = path
-        .file_name()
-        .ok_or_else(|| "cache-trash-approved-candidate-changed".to_string())?;
-    let staging_dir = create_purge_staging_dir(path, now_ms)?;
-    let staged = staging_dir.join(file_name);
-    if let Err(error) = std::fs::rename(path, &staged) {
-        let _ = std::fs::remove_dir(&staging_dir);
-        return Err(format!("cache-trash-staging-move-failed:{error}"));
-    }
-    let moved_id = match crate::safety::filesystem_object_id(&staged) {
-        Ok(identity) => identity,
-        Err(_) => {
-            return match restore_staged_candidate(path, &staged, &staging_dir) {
-                Ok(()) => Err("cache-trash-approved-candidate-changed".into()),
-                Err(restore_error) => Err(format!(
-                    "cache-trash-approved-candidate-changed;{restore_error}"
-                )),
-            };
-        }
-    };
-    if moved_id != expected_object_id {
-        return match restore_staged_candidate(path, &staged, &staging_dir) {
-            Ok(()) => Err("cache-trash-approved-candidate-changed".into()),
-            Err(restore_error) => Err(format!(
-                "cache-trash-approved-candidate-changed;{restore_error}"
-            )),
-        };
-    }
-    std::fs::remove_dir_all(&staged)
-        .map_err(|error| format!("cache-trash-permanent-delete-failed:{error}"))?;
-    std::fs::remove_dir(&staging_dir)
-        .map_err(|error| format!("cache-trash-staging-cleanup-failed:{error}"))?;
-    Ok(())
+    Err("cache-trash-identity-bound-permanent-delete-unavailable".into())
 }
 
-/// Permanently remove only candidates in the operator-reviewed snapshot.
+/// Evaluate only candidates in the operator-reviewed snapshot.
 ///
 /// The current Trash is rescanned only to revalidate each approved object. Newly appearing proven
 /// caches can never expand deletion authority because iteration is over `approved`, not the fresh
-/// discovery result. The reviewed phrase also binds each root filesystem identity, and the final
-/// deletion is performed only after an atomic staging move preserves that exact identity.
+/// discovery result. The reviewed phrase binds each root filesystem identity. Permanent deletion
+/// currently fails closed because the standard pathname-recursive primitive cannot preserve that
+/// identity through the final irreversible syscall boundary.
+#[cfg(target_os = "macos")]
 pub fn purge_approved_cache_trash(
     home: &Path,
     approved: &[CacheTrashCandidate],
@@ -261,9 +189,6 @@ pub fn purge_approved_cache_trash(
     journal_path: &Path,
     now_ms: u64,
 ) -> Result<Vec<CacheTrashPurgeResult>, String> {
-    if cfg!(target_os = "windows") {
-        return Err("cache-trash-native-discovery-unsupported".into());
-    }
     validate_approved_snapshot(approved)?;
     if !native_trash_root_is_safe(home) {
         return Err("cache-trash-native-root-unsafe".into());
@@ -312,14 +237,8 @@ pub fn purge_approved_cache_trash(
             continue;
         }
 
-        // Re-scan immediately before mutation. Exact equality rechecks path, signature and bounded
-        // bytes; the identity-bound staging primitive then closes the replacement race between this
-        // final observation and permanent deletion.
         let immediately_current = crate::cache_cleanup::proven_cache_trash_candidates(home);
-        let outcome = if immediately_current
-            .iter()
-            .any(|observed| observed == &candidate)
-        {
+        let outcome = if immediately_current.iter().any(|observed| observed == &candidate) {
             permanently_remove_identity_bound(&path, expected_object_id, now_ms)
         } else {
             Err("cache-trash-approved-candidate-changed".into())
@@ -344,6 +263,17 @@ pub fn purge_approved_cache_trash(
     Ok(results)
 }
 
+#[cfg(not(target_os = "macos"))]
+pub fn purge_approved_cache_trash(
+    _home: &Path,
+    _approved: &[CacheTrashCandidate],
+    _confirmation_phrase: &str,
+    _journal_path: &Path,
+    _now_ms: u64,
+) -> Result<Vec<CacheTrashPurgeResult>, String> {
+    Err("cache-trash-native-discovery-unsupported".into())
+}
+
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn review_proven_cache_trash() -> Result<CacheTrashReview, String> {
@@ -360,8 +290,7 @@ pub fn purge_proven_cache_trash(
 ) -> Result<CacheTrashPurgeExecution, String> {
     let bases = crate::rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
     let journal_path = crate::commands::journal_file_path(&app)?;
-    let before =
-        crate::volume_pressure::snapshot_volume(&bases.home, crate::commands::now_ms()).ok();
+    let before = crate::volume_pressure::snapshot_volume(&bases.home, crate::commands::now_ms()).ok();
     let items = purge_approved_cache_trash(
         &bases.home,
         &approved_candidates,
@@ -369,8 +298,7 @@ pub fn purge_proven_cache_trash(
         &journal_path,
         crate::commands::now_ms(),
     )?;
-    let after =
-        crate::volume_pressure::snapshot_volume(&bases.home, crate::commands::now_ms()).ok();
+    let after = crate::volume_pressure::snapshot_volume(&bases.home, crate::commands::now_ms()).ok();
     let before_available_bytes = before.as_ref().map(|snapshot| snapshot.available_bytes);
     let after_available_bytes = after.as_ref().map(|snapshot| snapshot.available_bytes);
     let observed_available_gain_bytes = before_available_bytes
@@ -419,8 +347,7 @@ mod tests {
         let external = tempfile::tempdir().unwrap();
         #[cfg(unix)]
         {
-            let trash = crate::cache_cleanup::trash_directory(home.path()).unwrap();
-            std::os::unix::fs::symlink(external.path(), trash).unwrap();
+            std::os::unix::fs::symlink(external.path(), home.path().join(".Trash")).unwrap();
             assert!(!native_trash_root_is_safe(home.path()));
         }
         #[cfg(not(unix))]
@@ -429,18 +356,15 @@ mod tests {
         }
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(not(target_os = "macos"))]
     #[test]
-    fn unsupported_platform_never_pretends_trash_is_native() {
+    fn unsupported_platform_never_pretends_dot_trash_is_native() {
         let home = tempfile::tempdir().unwrap();
         std::fs::create_dir(home.path().join(".Trash")).unwrap();
         let review = review_for_home(home.path());
         assert!(!review.supported);
         assert!(review.candidates.is_empty());
         assert!(review.approval_phrase.is_none());
-        assert_eq!(
-            review.notice.as_deref(),
-            Some("cache-trash-native-discovery-unsupported")
-        );
+        assert_eq!(review.notice.as_deref(), Some("cache-trash-native-discovery-macos-only"));
     }
 }
