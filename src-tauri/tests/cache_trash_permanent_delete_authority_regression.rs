@@ -4,8 +4,31 @@ use std::fs;
 
 use disksage_lib::cache_cleanup::proven_cache_trash_candidates;
 use disksage_lib::cache_trash_reclaim::{
-    approval_phrase_for_candidates, purge_approved_cache_trash,
+    approval_phrase_for_candidates, purge_approved_cache_trash, review_for_home,
 };
+
+#[test]
+fn review_disables_purge_when_final_object_bound_delete_is_unavailable() {
+    let home = tempfile::tempdir().unwrap();
+    let trash = home.path().join(".Trash");
+    let cache = trash.join("_cacache");
+    fs::create_dir_all(cache.join("content-v2")).unwrap();
+    fs::create_dir(cache.join("tmp")).unwrap();
+    fs::write(cache.join("content-v2").join("entry"), b"cache").unwrap();
+
+    let review = review_for_home(home.path());
+    assert!(review.supported, "native Trash discovery remains available");
+    assert_eq!(review.candidates.len(), 1);
+    assert_eq!(review.candidates[0].name, "_cacache");
+    assert!(
+        review.approval_phrase.is_none(),
+        "the backend must not mint destructive approval while the final delete primitive is not object-bound"
+    );
+    assert_eq!(
+        review.notice.as_deref(),
+        Some("cache-trash-identity-bound-permanent-delete-unavailable")
+    );
+}
 
 #[test]
 fn reviewed_cache_remains_when_final_object_bound_delete_is_unavailable() {
