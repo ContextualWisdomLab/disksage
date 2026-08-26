@@ -66,18 +66,6 @@ pub struct CacheTrashPurgeResult {
     pub error: String,
 }
 
-/// Permanent cache-Trash cleanup result with optional filesystem evidence captured around it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CacheTrashPurgeExecution {
-    pub schema_kind: String,
-    pub schema_version: u32,
-    pub items: Vec<CacheTrashPurgeResult>,
-    pub before_available_bytes: Option<u64>,
-    pub after_available_bytes: Option<u64>,
-    pub observed_available_gain_bytes: Option<u64>,
-}
-
 fn direct_child_is_dir(path: &Path, name: &str) -> bool {
     let child = path.join(name);
     std::fs::symlink_metadata(child)
