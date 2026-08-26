@@ -69,42 +69,50 @@ fn parse_category(value: &str) -> Result<container_orphan_reclaim::OrphanCategor
     }
 }
 
+fn target_for_kind(
+    kind: container_orphan_reclaim::ContainerRuntimeKind,
+) -> Result<container_orphan_reclaim::ContainerRuntimeTarget, String> {
+    use container_orphan_reclaim::{ContainerRuntimeKind, ContainerRuntimeTarget};
+    match kind {
+        ContainerRuntimeKind::DockerNative => {
+            ContainerRuntimeTarget::new(kind, docker_binary(), None)
+        }
+        ContainerRuntimeKind::DockerColimaContext => ContainerRuntimeTarget::new(
+            kind,
+            docker_binary(),
+            Some("colima".to_string()),
+        ),
+        ContainerRuntimeKind::PodmanMachine => ContainerRuntimeTarget::new(
+            kind,
+            podman_binary(),
+            Some(podman_reclaim::DEFAULT_PODMAN_MACHINE.to_string()),
+        ),
+    }
+}
+
 /// Probes every supported container runtime target read-only and audits all four orphan
 /// categories on each healthy target. This shipped IPC surface remains present under coverage.
 #[tauri::command(async)]
 pub fn inspect_container_orphans() -> Vec<container_orphan_reclaim::ContainerOrphanPlan> {
-    use container_orphan_reclaim::{ContainerRuntimeKind, ContainerRuntimeTarget};
-    let targets = [
-        ContainerRuntimeTarget::new(
-            ContainerRuntimeKind::DockerNative,
-            docker_binary(),
-            None,
-        ),
-        ContainerRuntimeTarget::new(
-            ContainerRuntimeKind::DockerColimaContext,
-            docker_binary(),
-            Some("colima".to_string()),
-        ),
-        ContainerRuntimeTarget::new(
-            ContainerRuntimeKind::PodmanMachine,
-            podman_binary(),
-            Some(podman_reclaim::DEFAULT_PODMAN_MACHINE.to_string()),
-        ),
-    ];
-    targets
-        .iter()
-        .filter_map(|target| target.as_ref().ok())
-        .map(container_orphan_reclaim::probe_container_orphans)
-        .map(container_orphan_public::sanitize_plan)
-        .collect()
+    use container_orphan_reclaim::ContainerRuntimeKind;
+    [
+        ContainerRuntimeKind::DockerNative,
+        ContainerRuntimeKind::DockerColimaContext,
+        ContainerRuntimeKind::PodmanMachine,
+    ]
+    .into_iter()
+    .filter_map(|kind| target_for_kind(kind).ok())
+    .map(|target| container_orphan_reclaim::probe_container_orphans(&target))
+    .map(container_orphan_public::sanitize_plan)
+    .collect()
 }
 
-/// Re-audits one runtime/category immediately before exact identity-bound deletion. This shipped
-/// IPC surface remains present under coverage so coverage cannot silently compile out authority.
+/// Re-audits one runtime/category immediately before exact identity-bound deletion. Runtime scope
+/// is bound server-side to the same fixed target used by inspection, so public display metadata
+/// cannot become mutation authority. This shipped IPC surface remains present under coverage.
 #[tauri::command(async)]
 pub fn execute_container_orphan_prune(
     runtime_kind: String,
-    scope_name: Option<String>,
     category: String,
     confirmation_phrase: String,
     rationale: String,
@@ -114,15 +122,7 @@ pub fn execute_container_orphan_prune(
     }
     let kind = parse_runtime_kind(&runtime_kind)?;
     let category = parse_category(&category)?;
-    let binary_path = match kind {
-        container_orphan_reclaim::ContainerRuntimeKind::PodmanMachine => podman_binary(),
-        _ => docker_binary(),
-    };
-    let target = container_orphan_reclaim::ContainerRuntimeTarget::new(
-        kind,
-        binary_path,
-        scope_name,
-    )?;
+    let target = target_for_kind(kind)?;
     container_orphan_reclaim::execute_container_orphan_prune(
         &target,
         category,
@@ -145,5 +145,21 @@ mod tests {
         assert!(!valid_rationale(" leading"));
         assert!(!valid_rationale("bad\nline"));
         assert!(valid_rationale("Reviewed the fresh candidate-bound plan."));
+    }
+
+    #[test]
+    fn execution_targets_use_fixed_server_side_scopes() {
+        use container_orphan_reclaim::ContainerRuntimeKind;
+
+        let docker = target_for_kind(ContainerRuntimeKind::DockerNative).unwrap();
+        let colima = target_for_kind(ContainerRuntimeKind::DockerColimaContext).unwrap();
+        let podman = target_for_kind(ContainerRuntimeKind::PodmanMachine).unwrap();
+
+        assert_eq!(docker.scope_name, None);
+        assert_eq!(colima.scope_name.as_deref(), Some("colima"));
+        assert_eq!(
+            podman.scope_name.as_deref(),
+            Some(podman_reclaim::DEFAULT_PODMAN_MACHINE),
+        );
     }
 }
