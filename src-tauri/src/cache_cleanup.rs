@@ -219,17 +219,31 @@ pub fn purge_proven_cache_trash(
             Ok(()) => "ok".into(),
             Err(error) => format!("error:{error}"),
         };
-        crate::safety::journal_append(journal_path, &entry).map_err(|error| error.to_string())?;
+        let journal_error = crate::safety::journal_append(journal_path, &entry)
+            .err()
+            .map(|error| error.to_string());
+        let operation_error = outcome.as_ref().err().cloned();
         results.push(CacheTrashPurgeResult {
             name: candidate.name,
             path: candidate.path,
             bytes: candidate.bytes,
             signature: candidate.signature,
             purged: outcome.is_ok(),
-            error: outcome.err().unwrap_or_default(),
+            error: merge_purge_errors(operation_error, journal_error),
         });
     }
     Ok(results)
+}
+
+fn merge_purge_errors(operation_error: Option<String>, journal_error: Option<String>) -> String {
+    match (operation_error, journal_error) {
+        (None, None) => String::new(),
+        (Some(operation), None) => operation,
+        (None, Some(journal)) => format!("purged-but-journal-write-failed:{journal}"),
+        (Some(operation), Some(journal)) => {
+            format!("{operation};journal-write-failed:{journal}")
+        }
+    }
 }
 
 fn active_use_blocker(
@@ -482,6 +496,19 @@ mod tests {
         let journal_text = fs::read_to_string(journal).unwrap();
         assert!(journal_text.contains("permanent_cache_trash_delete"));
         assert!(journal_text.contains("\"outcome\":\"ok\""));
+    }
+
+    #[test]
+    fn purge_error_keeps_terminal_journal_failure_visible() {
+        assert_eq!(merge_purge_errors(None, None), "");
+        assert_eq!(
+            merge_purge_errors(None, Some("disk-full".into())),
+            "purged-but-journal-write-failed:disk-full"
+        );
+        assert_eq!(
+            merge_purge_errors(Some("remove-failed".into()), Some("disk-full".into())),
+            "remove-failed;journal-write-failed:disk-full"
+        );
     }
 
     #[cfg(unix)]
