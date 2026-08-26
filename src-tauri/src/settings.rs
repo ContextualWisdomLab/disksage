@@ -60,10 +60,12 @@ mod tests {
     }
     #[test]
     fn duplicate_online_mode_fails_closed_instead_of_accepting_ambiguous_authority() {
-        assert_eq!(
-            parse_settings(r#"{"online_mode":true,"online_mode":false}"#),
-            Settings::default()
-        );
+        for ambiguous in [
+            r#"{"online_mode":true,"online_mode":false}"#,
+            r#"{"online_mode":false,"online_mode":true}"#,
+        ] {
+            assert_eq!(parse_settings(ambiguous), Settings::default());
+        }
     }
     #[test]
     fn non_boolean_online_mode_fails_closed_instead_of_coercing_network_authority() {
