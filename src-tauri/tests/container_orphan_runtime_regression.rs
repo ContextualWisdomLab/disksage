@@ -76,6 +76,52 @@ esac
 
 #[cfg(unix)]
 #[test]
+fn docker_audit_requests_full_ids_and_uses_dangling_image_evidence() {
+    const FULL_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let (_temp, runtime) = fake_runtime(&format!(
+        r#"
+case "${{1:-}}" in
+  info) exit 0 ;;
+  container)
+    [ "${{2:-}}" = "ps" ] || exit 91
+    case " $* " in *" --no-trunc "*) ;; *) echo "missing container --no-trunc" >&2; exit 92 ;; esac
+    printf '%s\n' '{{"ID":"{FULL_ID}","State":"running","Names":[]}}'
+    ;;
+  images)
+    case " $* " in *" --no-trunc "*) ;; *) echo "missing image --no-trunc" >&2; exit 93 ;; esac
+    case " $* " in *" --filter dangling=true "*) ;; *) echo "missing dangling filter" >&2; exit 94 ;; esac
+    printf '%s\n' '{{"Containers":"N/A","ID":"{FULL_ID}","Repository":"<none>","Size":"72.9MB","Tag":"<none>"}}'
+    ;;
+  volume|network) exit 0 ;;
+  *) exit 95 ;;
+esac
+"#
+    ));
+
+    let plan = probe_container_orphans(&docker_target(&runtime));
+    let container = plan
+        .categories
+        .iter()
+        .find(|category| category.category == OrphanCategory::Container)
+        .expect("container category");
+    assert!(container.evidence_complete, "{:?}", container.issue);
+    assert_eq!(container.evidence.as_ref().unwrap().candidate_records, 0);
+
+    let image = plan
+        .categories
+        .iter()
+        .find(|category| category.category == OrphanCategory::Image)
+        .expect("image category");
+    assert!(image.evidence_complete, "{:?}", image.issue);
+    let evidence = image.evidence.as_ref().expect("image evidence");
+    assert_eq!(evidence.total_records, 1);
+    assert_eq!(evidence.candidate_records, 1);
+    assert_eq!(evidence.candidate_size_sum_bytes, None);
+    assert!(image.approval_phrase.is_some());
+}
+
+#[cfg(unix)]
+#[test]
 fn option_shaped_network_name_is_rejected_before_network_inspect() {
     let (_temp, runtime) = fake_runtime(
         r#"
