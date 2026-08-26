@@ -196,11 +196,11 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 
 ## 2026-08-26 follow-up loop
 
-- The exact implementation head is now `7d43bd0acc0a3520edf54d606dcf116099b9de31`. The customer-copy
+- The exact implementation head is now `c036d7cc675f1a1de23fb70abd1d272faa1b9691`. The customer-copy
   contract test scans every Svelte screen and rejects internal implementation vocabulary or raw
   error interpolation; the purge-result helper keeps incomplete journal state actionable without
   exposing backend details.
-- Local verification at this head passed 156 frontend tests, `svelte-check` with zero diagnostics,
+- Local verification at this head passed 157 frontend tests, `svelte-check` with zero diagnostics,
   three focused cache-reclaim Rust integration suites, and `git diff --check`. Rust emits existing
   dead-code warnings outside this change; no user file, provider process, cloud object, or native
   Trash entry was mutated by verification.
@@ -210,7 +210,7 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   qualifying independent approval, so protected merge is not claimed. PR #256's Strix failure was
   traced to provider HTTP 429 rate limiting (not a vulnerability finding); a failed-job rerun is
   queued and remains non-authoritative until it completes.
-- After the review follow-up, head `b85a31a23bb34623d0d8aae51fb6ceb25e7fd60c` keeps the reviewed
+- The review follow-up at head `b85a31a23bb34623d0d8aae51fb6ceb25e7fd60c` keeps the reviewed
   cache count and size visible even when in-app permanent deletion is unavailable, and isolates a
   failed Trash review from the remaining cleanup lists. The customer-facing next step remains to
   inspect and empty macOS Trash manually; no destructive action was enabled by this fix.
