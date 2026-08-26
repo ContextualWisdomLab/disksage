@@ -16,5 +16,7 @@ describe("Git worktree closed-PR opt-in", () => {
     expect(source).toContain("let includeClosedPullRequests = $state(false);");
     expect(source).toContain("GitHub에서 병합 없이 종료된 PR의 깨끗한 worktree도 포함");
     expect(source).toContain("로그인된 GitHub 연결이 필요합니다");
+    expect(source).toContain("보존 ref에 병합되지 않은 worktree도 후보에 포함합니다");
+    expect(source).toContain("브랜치와 커밋은 유지됩니다");
   });
 });
