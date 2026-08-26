@@ -2,6 +2,7 @@
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
   import { verdictBadge } from "./verdictBadge";
+  import { summarizeCacheTrashPurge } from "./cacheTrashPurgeSummary";
   import { confirm } from "@tauri-apps/plugin-dialog";
   import GitWorktreeCleanup from "./GitWorktreeCleanup.svelte";
   import BrewCleanup from "./BrewCleanup.svelte";
@@ -253,18 +254,25 @@
     </div>
   {/if}
   {#if cacheTrashExecution}
-    {@const purged = cacheTrashExecution.items.filter((item) => item.purged).length}
+    {@const purgeSummary = summarizeCacheTrashPurge(cacheTrashExecution.items)}
     <p class="notice" role="status">
-      재생성 캐시 {purged}/{cacheTrashExecution.items.length}개를 영구 삭제했습니다.
+      재생성 캐시 {purgeSummary.successfulCount}/{cacheTrashExecution.items.length}개를 영구 삭제하고 감사 기록까지 완료했습니다.
       {cacheTrashExecution.observed_available_gain_bytes === null
         ? "저장 공간 변화는 확인하지 못했습니다. 시스템 저장 공간에서 직접 확인하세요."
         : `가용 공간 증가 ${fmtBytes(cacheTrashExecution.observed_available_gain_bytes)}입니다.`}
-      {#if purged < cacheTrashExecution.items.length}
-        삭제되지 않은 항목은 위 목록에서 확인한 뒤 다시 시도하십시오.
+      {#if purgeSummary.allSucceeded}
+        모든 재생성 캐시를 영구 삭제하고 감사 기록까지 완료했습니다.
       {:else}
-        모든 재생성 캐시를 영구 삭제했습니다.
+        완료되지 않은 항목은 아래 결과를 확인한 뒤 다시 시도하십시오.
       {/if}
     </p>
+    {#if purgeSummary.errors.length > 0}
+      <ul class="errors" aria-label="캐시 영구 삭제 오류">
+        {#each purgeSummary.errors as error}
+          <li>{error}</li>
+        {/each}
+      </ul>
+    {/if}
   {/if}
   {#if cacheRetryMessage}<p class="notice" role="status">{cacheRetryMessage}</p>{/if}
   <ul class="list">
