@@ -12,6 +12,7 @@ function readSource(path: string): string {
 describe("cache cleanup execution boundary", () => {
   it("keeps cache mutation behind one fail-closed backend authority", () => {
     const cleanup = readSource("src/lib/Cleanup.svelte");
+    const purgeItemMessage = readSource("src/lib/cacheTrashPurgeItemMessage.ts");
     const backend = readSource("src-tauri/src/cache_cleanup.rs");
     const tauri = readSource("src-tauri/src/lib.rs");
 
@@ -21,7 +22,9 @@ describe("cache cleanup execution boundary", () => {
     expect(cleanup).toContain("reviewProvenCacheTrash()");
     expect(cleanup).toContain("purgeReviewedCacheTrash(reviewedCandidates, approvalPhrase)");
     expect(cleanup).toContain("summarizeCacheTrashPurge(cacheTrashExecution.items)");
-    expect(cleanup).toContain("정리 기록을 남기지 못했습니다");
+    expect(cleanup).toContain("cacheTrashPurgeItemMessage(item)");
+    expect(purgeItemMessage).toContain("영구 삭제는 완료했지만 정리 기록을 남기지 못했습니다");
+    expect(purgeItemMessage).toContain("영구 삭제하지 못했습니다");
     expect(cleanup).toContain("cache-trash-confirmation-mismatch");
     expect(cleanup).toContain("휴지통 내용이 바뀌어 최신 목록을 불러왔습니다");
     expect(cleanup).toContain("observed_available_gain_bytes");
