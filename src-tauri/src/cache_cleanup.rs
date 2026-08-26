@@ -31,6 +31,8 @@ const PROVEN_CACHE_TRASH_NAMES: [&str; 9] = [
     "db",
 ];
 const MAX_CACHE_TRASH_ENTRIES: usize = 1_000_000;
+const PERMANENT_CACHE_TRASH_DELETE_UNAVAILABLE: &str =
+    "cache-trash-identity-bound-permanent-delete-unavailable";
 
 /// A cache directory already in OS Trash whose structure is still recognizable without reading
 /// user file contents. Permanent removal is intentionally limited to these signatures.
@@ -45,9 +47,8 @@ pub struct CacheTrashCandidate {
 
 /// Candidate list and approval token produced by one Trash scan.
 ///
-/// The desktop must submit this exact snapshot for permanent removal. The backend still
-/// revalidates every item immediately before deleting it, but never expands the approved set by
-/// scanning for new entries during the destructive operation.
+/// The snapshot is read-only evidence. Permanent deletion remains unavailable until DiskSage can
+/// bind the final irreversible syscall to the exact reviewed filesystem object.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CacheTrashSnapshot {
@@ -253,99 +254,26 @@ pub fn proven_cache_trash_snapshot(home: &Path) -> CacheTrashSnapshot {
     }
 }
 
-/// Return a candidate-set-bound approval phrase for the desktop confirmation boundary.
+/// Return a candidate-set-bound approval phrase for read-only review evidence.
 /// The phrase is opaque to the customer and changes whenever the proven Trash set changes.
 pub fn proven_cache_trash_approval_phrase(home: &Path) -> String {
     proven_cache_trash_snapshot(home).approval_phrase
 }
 
-/// Permanently remove only the proven cache directories in OS Trash. The explicit CLI flag is the
-/// approval boundary; each object is rechecked immediately before removal and journaled.
+/// Refuse permanent cache-Trash deletion until the final irreversible syscall can be bound to the
+/// exact reviewed filesystem object. Candidate-only path/signature/size revalidation is not enough
+/// to authorize `remove_dir_all`, because a same-user replacement can occur after the pathname
+/// checks and before recursive deletion.
 pub fn purge_proven_cache_trash(
-    home: &Path,
-    journal_path: &Path,
-    now_ms: u64,
+    _home: &Path,
+    _journal_path: &Path,
+    _now_ms: u64,
     snapshot: &CacheTrashSnapshot,
 ) -> Result<Vec<CacheTrashPurgeResult>, String> {
     if snapshot.approval_phrase != approval_phrase_for_candidates(&snapshot.candidates) {
         return Err("cache-trash-confirmation-mismatch".into());
     }
-    let Some(trash) = trash_directory(home) else {
-        return Ok(Vec::new());
-    };
-    let planned = snapshot.candidates.clone();
-    let mut results = Vec::with_capacity(planned.len());
-    for candidate in planned {
-        let path = PathBuf::from(&candidate.path);
-        let path_is_direct_trash_child = path.parent() == Some(trash.as_path())
-            && path
-                .file_name()
-                .is_some_and(|name| name.to_string_lossy() == candidate.name)
-            && !path
-                .components()
-                .any(|component| matches!(component, std::path::Component::ParentDir));
-        let mut entry = crate::safety::JournalEntry {
-            ts_ms: now_ms,
-            op: "permanent_cache_trash_delete".into(),
-            path: candidate.path.clone(),
-            bytes: candidate.bytes,
-            outcome: "pending".into(),
-        };
-        if let Err(error) = crate::safety::journal_append(journal_path, &entry) {
-            results.push(CacheTrashPurgeResult {
-                name: candidate.name,
-                path: candidate.path,
-                bytes: candidate.bytes,
-                signature: candidate.signature,
-                purged: false,
-                error: format!("journal-write-failed:{error}"),
-            });
-            continue;
-        }
-        let mut count = 0;
-        let unchanged_size =
-            bounded_tree_size(&path, &mut count).is_ok_and(|bytes| bytes == candidate.bytes);
-        let outcome = if path_is_direct_trash_child
-            && unchanged_size
-            && looks_like_proven_cache_trash(&path, &candidate.name)
-                .is_some_and(|signature| signature == candidate.signature)
-        {
-            match std::fs::remove_dir_all(&path) {
-                Ok(()) => Ok(()),
-                Err(error) => Err(error.to_string()),
-            }
-        } else {
-            Err("cache-trash-signature-changed".into())
-        };
-        entry.outcome = match &outcome {
-            Ok(()) => "ok".into(),
-            Err(error) => format!("error:{error}"),
-        };
-        let journal_error = crate::safety::journal_append(journal_path, &entry)
-            .err()
-            .map(|error| error.to_string());
-        let operation_error = outcome.as_ref().err().cloned();
-        results.push(CacheTrashPurgeResult {
-            name: candidate.name,
-            path: candidate.path,
-            bytes: candidate.bytes,
-            signature: candidate.signature,
-            purged: outcome.is_ok(),
-            error: merge_purge_errors(operation_error, journal_error),
-        });
-    }
-    Ok(results)
-}
-
-fn merge_purge_errors(operation_error: Option<String>, journal_error: Option<String>) -> String {
-    match (operation_error, journal_error) {
-        (None, None) => String::new(),
-        (Some(operation), None) => operation,
-        (None, Some(journal)) => format!("purged-but-journal-write-failed:{journal}"),
-        (Some(operation), Some(journal)) => {
-            format!("{operation};journal-write-failed:{journal}")
-        }
-    }
+    Err(PERMANENT_CACHE_TRASH_DELETE_UNAVAILABLE.into())
 }
 
 fn active_use_blocker(
@@ -574,7 +502,7 @@ mod tests {
 
     #[cfg(not(windows))]
     #[test]
-    fn proven_cache_trash_requires_signature_and_journals_purge() {
+    fn proven_cache_trash_requires_signature_but_permanent_delete_is_unavailable() {
         let tmp = tempfile::tempdir().unwrap();
         let trash = trash_directory(tmp.path()).unwrap();
         fs::create_dir(&trash).unwrap();
@@ -595,58 +523,16 @@ mod tests {
 
         let journal = tmp.path().join("journal.jsonl");
         let snapshot = proven_cache_trash_snapshot(tmp.path());
-        let results = purge_proven_cache_trash(tmp.path(), &journal, 7, &snapshot).unwrap();
-        assert_eq!(results.len(), 1);
-        assert!(results[0].purged);
-        assert!(!npm.exists());
-        let journal_text = fs::read_to_string(journal).unwrap();
-        assert!(journal_text.contains("permanent_cache_trash_delete"));
-        assert!(journal_text.contains("\"outcome\":\"ok\""));
-        assert_ne!(
-            approval_phrase,
-            proven_cache_trash_approval_phrase(tmp.path())
-        );
-    }
-
-    #[test]
-    fn purge_error_keeps_terminal_journal_failure_visible() {
-        assert_eq!(merge_purge_errors(None, None), "");
-        assert_eq!(
-            merge_purge_errors(None, Some("disk-full".into())),
-            "purged-but-journal-write-failed:disk-full"
-        );
-        assert_eq!(
-            merge_purge_errors(Some("remove-failed".into()), Some("disk-full".into())),
-            "remove-failed;journal-write-failed:disk-full"
-        );
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn pending_journal_failure_is_returned_without_deleting() {
-        let tmp = tempfile::tempdir().unwrap();
-        let trash = trash_directory(tmp.path()).unwrap();
-        fs::create_dir(&trash).unwrap();
-        let npm = trash.join("_cacache");
-        fs::create_dir_all(npm.join("content-v2")).unwrap();
-        fs::create_dir(npm.join("tmp")).unwrap();
-        fs::write(npm.join("content-v2").join("entry"), b"cache").unwrap();
-        let journal_directory = tmp.path().join("journal-directory");
-        fs::create_dir(&journal_directory).unwrap();
-
-        let snapshot = proven_cache_trash_snapshot(tmp.path());
-        let results =
-            purge_proven_cache_trash(tmp.path(), &journal_directory, 7, &snapshot).unwrap();
-
-        assert_eq!(results.len(), 1);
-        assert!(!results[0].purged);
-        assert!(results[0].error.starts_with("journal-write-failed:"));
+        let error = purge_proven_cache_trash(tmp.path(), &journal, 7, &snapshot).unwrap_err();
+        assert_eq!(error, PERMANENT_CACHE_TRASH_DELETE_UNAVAILABLE);
         assert!(npm.exists());
+        assert!(!journal.exists());
+        assert_eq!(approval_phrase, proven_cache_trash_approval_phrase(tmp.path()));
     }
 
     #[cfg(not(windows))]
     #[test]
-    fn purge_never_expands_beyond_submitted_snapshot() {
+    fn fail_closed_purge_never_expands_or_mutates_submitted_snapshot() {
         let tmp = tempfile::tempdir().unwrap();
         let trash = trash_directory(tmp.path()).unwrap();
         fs::create_dir_all(&trash).unwrap();
@@ -662,11 +548,11 @@ mod tests {
         fs::create_dir(pnpm.join("metadata-full")).unwrap();
 
         let journal = tmp.path().join("journal.jsonl");
-        let results = purge_proven_cache_trash(tmp.path(), &journal, 7, &snapshot).unwrap();
-        assert_eq!(results.len(), 1);
-        assert!(results[0].purged);
-        assert!(!npm.exists());
-        assert!(pnpm.exists(), "entries added after approval must remain");
+        let error = purge_proven_cache_trash(tmp.path(), &journal, 7, &snapshot).unwrap_err();
+        assert_eq!(error, PERMANENT_CACHE_TRASH_DELETE_UNAVAILABLE);
+        assert!(npm.exists(), "reviewed cache must remain without object-bound delete");
+        assert!(pnpm.exists(), "entries added after review must remain");
+        assert!(!journal.exists());
     }
 
     #[cfg(not(windows))]
