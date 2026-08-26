@@ -545,6 +545,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn pending_journal_failure_is_returned_without_deleting() {
+        let tmp = tempfile::tempdir().unwrap();
+        let trash = tmp.path().join(".Trash");
+        fs::create_dir(&trash).unwrap();
+        let npm = trash.join("_cacache");
+        fs::create_dir_all(npm.join("content-v2")).unwrap();
+        fs::create_dir(npm.join("tmp")).unwrap();
+        fs::write(npm.join("content-v2").join("entry"), b"cache").unwrap();
+        let journal_directory = tmp.path().join("journal-directory");
+        fs::create_dir(&journal_directory).unwrap();
+
+        let results = purge_proven_cache_trash(tmp.path(), &journal_directory, 7).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].purged);
+        assert!(results[0].error.starts_with("journal-write-failed:"));
+        assert!(npm.exists());
+    }
+
     #[cfg(unix)]
     #[test]
     fn cleanup_rejects_symlinked_catalog_root_without_touching_outside_data() {
