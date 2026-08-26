@@ -167,27 +167,29 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 
 ## 2026-08-26 physical reclaim loop
 
-- PR #263 current implementation head (`9a2a7fc7a3b5a46763f9eafcb0c658edc93bfa53`, base
-  `2a727dab04cd6bd73c68d75c54c3e1563bcb16ca`)
-  closes the physical-reclaim gap after cache cleanup: the desktop cleanup screen lists only
-  regenerable cache entries already in OS Trash, requires a native confirmation, permanently
-  removes only those revalidated entries, and reports the observed before/after available-space
-  change when the filesystem probe succeeds. User files, cloud placeholders, and unrelated Trash
-  entries remain outside the action; each item remains journaled.
+- PR #263 review snapshot at implementation head `a05a443e8efecf9972dcd93b422f488ef40a54a9`
+  (base `2a727dab04cd6bd73c68d75c54c3e1563bcb16ca`) closes the unsafe-authority gap after cache
+  cleanup: the desktop cleanup screen lists only regenerable cache entries already in native
+  macOS Trash, binds review to one candidate snapshot, and reports before/after available-space
+  observations without claiming that concurrent changes were caused by DiskSage. The final
+  irreversible deletion primitive is not object-bound yet, so both the Tauri action and the
+  headless CLI fail closed; the screen directs the operator to empty Trash manually. User files,
+  cloud placeholders, and unrelated Trash entries remain outside the action; each attempted item
+  remains journaled.
 - The exact-head PR is open with auto-merge enabled, but hosted checks are still queued or running
   and no qualifying independent approval is recorded. This is not merge evidence; protected merge
   remains blocked until the current head has green required checks and a fresh approval.
 - A terminal journal-write failure after removal now remains attached to that item's result, so an
   irreversible deletion is never hidden behind a generic all-or-nothing error; the audit gap stays
   visible for follow-up instead of being mistaken for a successful complete journal.
-- The desktop purge command now requires an opaque phrase bound to the current proven-Trash set;
-  changed Trash contents invalidate the approval before deletion, and pending journal failures are
-  returned as item-level failures without discarding earlier results.
-- Local verification for the implementation passed 135 frontend tests, `svelte-check` with zero
-  diagnostics, 749 Rust library tests (one ignored), and `git diff --check`. Rebuildable temporary
-  `src-tauri/target` and `node_modules` artifacts were removed from the temporary checkout after
-  verification; APFS availability measured 36 GiB (96% capacity used) afterward. Active uv,
-  npm, OpenCode, Podman, File Provider, and user data were not removed.
+- The desktop review and purge boundary share an opaque candidate-set phrase; any changed Trash
+  contents invalidate the approval before the fail-closed operation. Per-item operation and
+  journal failures are surfaced through bounded customer messages, and successful physical
+  removal is never reported when its journal record is incomplete.
+- Local verification on the current implementation passed 156 frontend tests, `svelte-check`
+  with zero diagnostics, three focused Rust integration tests, Rust formatting checks for the
+  changed files, and `git diff --check`. No user file, provider process, cloud object, or native
+  Trash entry was removed by this verification.
 - Filename dates remain secondary production evidence: embedded metadata is evaluated first, then
   an unambiguous filename token such as `2026-04-28` or `251210`, then filesystem times. No cache
   purge, cloud transfer, or source eviction treats a filename date as authority.
