@@ -1,5 +1,6 @@
 use disksage_lib::container_orphan_reclaim::{
-    probe_container_orphans, ContainerRuntimeKind, ContainerRuntimeTarget, OrphanCategory,
+    execute_container_orphan_prune, probe_container_orphans, ContainerRuntimeKind,
+    ContainerRuntimeTarget, OrphanCategory,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -118,6 +119,63 @@ esac
     assert_eq!(evidence.candidate_records, 1);
     assert_eq!(evidence.candidate_size_sum_bytes, None);
     assert!(image.approval_phrase.is_some());
+}
+
+#[cfg(unix)]
+#[test]
+fn approved_container_execution_targets_only_the_fingerprinted_candidate() {
+    const FULL_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let (_temp, runtime) = fake_runtime(&format!(
+        r#"
+case "${{1:-}}" in
+  info) exit 0 ;;
+  container)
+    if [ "${{2:-}}" = "ps" ]; then
+      printf '%s\n' '{{"ID":"{FULL_ID}","State":"exited","Names":[]}}'
+      exit 0
+    fi
+    if [ "${{2:-}}" = "rm" ] && [ "${{3:-}}" = "{FULL_ID}" ] && [ "${{4:-}}" = "" ]; then
+      printf '%s\n' '{FULL_ID}'
+      exit 0
+    fi
+    if [ "${{2:-}}" = "prune" ]; then
+      echo "category-wide prune is not candidate-bound" >&2
+      exit 97
+    fi
+    exit 98
+    ;;
+  images|volume|network) exit 0 ;;
+  *) exit 99 ;;
+esac
+"#
+    ));
+    let target = docker_target(&runtime);
+    let plan = probe_container_orphans(&target);
+    let container = plan
+        .categories
+        .iter()
+        .find(|category| category.category == OrphanCategory::Container)
+        .expect("container category");
+    let phrase = container
+        .approval_phrase
+        .as_deref()
+        .expect("candidate-bound approval phrase");
+
+    let execution = execute_container_orphan_prune(
+        &target,
+        OrphanCategory::Container,
+        phrase,
+        "Remove the exact stopped-container candidate verified by DiskSage.",
+        1,
+    )
+    .expect("exact candidate removal must succeed");
+
+    assert!(execution.executed);
+    assert_eq!(execution.status_code, 0);
+    assert!(execution.stdout.contains(FULL_ID));
+    assert!(!execution.command.iter().any(|part| part == "prune"));
+    assert!(!execution.command.iter().any(|part| part == FULL_ID));
+    assert_eq!(execution.command.last().map(String::as_str), Some("<candidate-set>"));
 }
 
 #[cfg(unix)]
