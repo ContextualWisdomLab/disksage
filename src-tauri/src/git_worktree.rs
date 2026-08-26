@@ -2670,6 +2670,45 @@ mod tests {
         );
     }
 
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
+    fn suggested_retention_reference_prefers_a_resolvable_origin_head() {
+        let (_temp, repository, _secondary) = temporary_repository();
+        git(&repository, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        git(
+            &repository,
+            &[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/main",
+            ],
+        );
+        assert_eq!(
+            suggested_retention_references(&repository, GitWorktreeAuditOptions::default())
+                .unwrap(),
+            vec!["origin/main"]
+        );
+    }
+
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
+    fn suggested_retention_reference_ignores_a_stale_origin_head() {
+        let (_temp, repository, _secondary) = temporary_repository();
+        git(
+            &repository,
+            &[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/missing",
+            ],
+        );
+        assert_eq!(
+            suggested_retention_references(&repository, GitWorktreeAuditOptions::default())
+                .unwrap(),
+            vec!["main"]
+        );
+    }
+
     #[test]
     fn approval_requires_exact_phrase_human_attribution_and_intact_audit() {
         let report = executable_report();
