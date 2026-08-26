@@ -53,6 +53,12 @@ fn provider_home_root() -> Option<PathBuf> {
         .find(|home| home.is_absolute())
 }
 
+fn provider_identity_path(path: &Path, traversal_root: &Path, identity_root: &Path) -> PathBuf {
+    path.strip_prefix(traversal_root)
+        .map(|relative| identity_root.join(relative))
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
 fn is_managed_provider_root_with_home(
     path: &Path,
     traversal_root: &Path,
@@ -107,16 +113,22 @@ pub(crate) fn is_managed_provider_root(path: &Path, traversal_root: &Path) -> bo
 fn keep_scan_entry(
     entry: &walkdir::DirEntry,
     traversal_root: &Path,
+    provider_identity_root: &Path,
     provider_roots_skipped: &Cell<u64>,
     provider_home: Option<&Path>,
 ) -> bool {
     if !keep_entry(entry) {
         return false;
     }
-    let is_provider_root = provider_home.map_or_else(
-        || is_managed_provider_root(entry.path(), traversal_root),
-        |home| is_managed_provider_root_with_home(entry.path(), traversal_root, Some(home)),
-    );
+    let is_provider_root = provider_home.is_some_and(|home| {
+        let identity_path =
+            provider_identity_path(entry.path(), traversal_root, provider_identity_root);
+        is_managed_provider_root_with_home(
+            &identity_path,
+            provider_identity_root,
+            Some(home),
+        )
+    });
     if entry.file_type().is_dir() && is_provider_root {
         provider_roots_skipped.set(provider_roots_skipped.get().saturating_add(1));
         return false;
@@ -173,6 +185,11 @@ fn scan_dir_with_interval_inner(
     let mut cancelled = false;
     let mut seen: u64 = 0;
     let traversal_root = read_only_traversal_root(root);
+    // Compare provider identities in one canonical namespace without canonicalizing each walked
+    // entry. This avoids Windows `\\?\` path mismatches and macOS `/var` -> `/private/var`
+    // mismatches while preserving the requested/root spelling used for user-facing scan results.
+    let provider_identity_root = std::fs::canonicalize(&traversal_root)
+        .unwrap_or_else(|_| traversal_root.clone());
     let normalized_provider_home = provider_home.map(|home| {
         std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf())
     });
@@ -186,6 +203,7 @@ fn scan_dir_with_interval_inner(
             keep_scan_entry(
                 entry,
                 &traversal_root,
+                &provider_identity_root,
                 &provider_roots_skipped,
                 normalized_provider_home.as_deref(),
             )
@@ -293,6 +311,40 @@ mod tests {
 
     fn scan_with_home(root: &Path, provider_home: &Path) -> ScanResult {
         scan_dir_with_interval_for_home(root, &AtomicBool::new(false), 1, noop, provider_home)
+    }
+
+    #[test]
+    fn provider_identity_namespace_keeps_home_and_entries_comparable() {
+        let raw_root = Path::new("/raw-home");
+        let identity_root = Path::new("/identity-home");
+        let raw_provider = if cfg!(target_os = "macos") {
+            raw_root.join("Library").join("CloudStorage")
+        } else {
+            raw_root.join("OneDrive")
+        };
+        let identity_provider = provider_identity_path(&raw_provider, raw_root, identity_root);
+
+        assert!(is_managed_provider_root_with_home(
+            &identity_provider,
+            identity_root,
+            Some(identity_root),
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_verbatim_provider_identity_prunes_onedrive() {
+        let raw_root = PathBuf::from(r"C:\Users\DiskSage");
+        let identity_root = PathBuf::from(r"\\?\C:\Users\DiskSage");
+        let raw_provider = raw_root.join("OneDrive");
+        let identity_provider = provider_identity_path(&raw_provider, &raw_root, &identity_root);
+
+        assert_eq!(identity_provider, identity_root.join("OneDrive"));
+        assert!(is_managed_provider_root_with_home(
+            &identity_provider,
+            &identity_root,
+            Some(&identity_root),
+        ));
     }
 
     #[test]
