@@ -110,15 +110,6 @@ fn is_managed_provider_root_with_home(
     }
 }
 
-/// Return whether a directory is a known provider-managed root below the requested scan root.
-///
-/// Inventory scans must not descend into desktop cloud-provider trees: a metadata walk can ask a
-/// provider to materialize a dataless placeholder. The root itself remains scannable so an
-/// operator can explicitly inspect a provider tree; only an ancestor scan is pruned.
-pub(crate) fn is_managed_provider_root(path: &Path, traversal_root: &Path) -> bool {
-    is_managed_provider_root_with_home(path, traversal_root, provider_home_root().as_deref())
-}
-
 fn keep_scan_entry(
     entry: &walkdir::DirEntry,
     traversal_root: &Path,
