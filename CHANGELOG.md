@@ -8,6 +8,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Add a customer-copy contract that keeps implementation vocabulary out of Svelte screens, bounds
+  dynamic failure messages, and gives every warning or error a concrete next action.
 - Add an accessible, token-driven Svelte shell contract with Storybook scenes for provider-clear,
   incomplete-evidence, materialization-stall, checking, keyboard, responsive, and reduced-motion
   states. Storybook is development-only; Rust receipts and approval gates remain authoritative.

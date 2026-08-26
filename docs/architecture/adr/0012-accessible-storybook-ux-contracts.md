@@ -67,3 +67,11 @@ The provider status contract includes `provider-global-sync-indexing-pending` in
 bounded Finder-cancel event path. This keeps the Storybook event model aligned with the runtime
 provider-global blocker set without granting the browser cloud-write or source-eviction authority.
 The exact-head contract and Svelte checks pass at `b67ea3be`.
+
+## Amendment: customer-action copy contract (2026-08-26)
+
+Customer screens must describe the next safe action without exposing Rust command names, provider
+internals, ontology identifiers, receipt/attestation fields, or implementation-only error text.
+`cleanupCustomerCopyContract.test.ts` scans every Svelte customer surface, including dynamic
+messages and static warnings, and requires bounded recovery guidance. Technical evidence remains
+available to the backend and audit records; it is not rendered as customer instruction.
