@@ -51,4 +51,15 @@ describe("iCloud local eviction safety UI", () => {
       "iCloud 상태 확인이 완전하지 않습니다. 잠시 후 다시 판정하세요.",
     ]);
   });
+
+  it("shows the exact approval value required by executionReady", () => {
+    const source = readSource();
+    const approvalStart = source.indexOf("{:else if plan.eligible_after_human_approval}");
+    const approvalEnd = source.indexOf("{:else}", approvalStart + 1);
+    const approvalControls = source.slice(approvalStart, approvalEnd);
+
+    expect(source).toContain("confirmation === plan.plan_fingerprint");
+    expect(approvalControls).toContain("{plan.plan_fingerprint}");
+    expect(approvalControls).toContain("<code");
+  });
 });
