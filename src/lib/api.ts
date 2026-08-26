@@ -229,6 +229,76 @@ export const executePodmanDanglingImagePrune = (
   rationale,
 });
 
+export type ContainerRuntimeKind =
+  | "docker-native"
+  | "docker-colima-context"
+  | "podman-machine";
+
+export type OrphanCategory = "container" | "image" | "volume" | "network";
+
+export interface ContainerOrphanPlan {
+  schema_kind: "disksage.container-orphan-plan";
+  schema_version: number;
+  platform: string;
+  evidence_complete: boolean;
+  elapsed_ms: number;
+  runtime: {
+    kind: ContainerRuntimeKind;
+    display_name: string;
+    healthy: boolean;
+    detail_issue: string | null;
+  };
+  categories: Array<{
+    category: OrphanCategory;
+    evidence_complete: boolean;
+    issue: string | null;
+    evidence: {
+      total_records: number;
+      candidate_records: number;
+      candidate_size_sum_bytes: number | null;
+      candidate_set_sha256: string;
+    } | null;
+    approval_phrase: string | null;
+    prune_command: string[] | null;
+  }>;
+  issues: string[];
+}
+
+export const inspectContainerOrphans = () =>
+  invoke<ContainerOrphanPlan[]>("inspect_container_orphans");
+
+export interface ContainerOrphanPruneExecution {
+  schema_version: number;
+  runtime_display_name: string;
+  category: OrphanCategory;
+  candidate_set_sha256: string;
+  command: string[];
+  status_code: number;
+  stdout: string;
+  stderr: string;
+  output_truncated: boolean;
+  executed: boolean;
+  executed_at_ms: number;
+  before_available_bytes: number | null;
+  after_available_bytes: number | null;
+  observed_available_gain_bytes: number | null;
+  rationale: string;
+}
+
+export const executeContainerOrphanPrune = (
+  runtimeKind: ContainerRuntimeKind,
+  scopeName: string | null,
+  category: OrphanCategory,
+  confirmationPhrase: string,
+  rationale: string,
+) => invoke<ContainerOrphanPruneExecution>("execute_container_orphan_prune", {
+  runtimeKind,
+  scopeName,
+  category,
+  confirmationPhrase,
+  rationale,
+});
+
 export const onScanProgress = (cb: (s: ScanStats) => void) =>
   listen<ScanStats>("scan://progress", (e) => cb(e.payload));
 export const onScanDone = (cb: (s: ScanStats) => void) =>

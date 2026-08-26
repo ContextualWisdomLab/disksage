@@ -1,6 +1,7 @@
 # DiskSage product and technical gap baseline
 
-**Snapshot:** 2026-08-22 (Asia/Seoul)
+**Snapshot:** 2026-08-26 (Asia/Seoul) — latest cycle evidence appended at
+["2026-08-26 orphan-reclaim feature cycle"](#2026-08-26-orphan-reclaim-feature-cycle).
 **Repository heads at snapshot:** PR #213 `a6ec6e2`, PR #247 `a0fa7bc`, PR #246 `741ab30`,
 supporting PR #156 `39a08a7`, and PR #192 `30ceea2`; hosted checks and protected review remain
 authoritative, and no merge is claimed from queued or stale status.
@@ -679,3 +680,40 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   pipe leak that could starve the independent `ps` probe and report a false active-use timeout.
   The focused Rust test passed 3/3. The same patch is present on stacked PR heads `a0fa7bc` (#247)
   and `741ab30` (#246); hosted checks are rerunning and protected merge/review is still pending.
+
+## 2026-08-26 orphan-reclaim feature cycle
+
+- Feature verification, merged/closed worktree folder deletion: the existing
+  `git_worktree` boundary already deletes a secondary worktree's folder when its branch is
+  merged — `audit_git_worktrees` classifies a secondary worktree as a removal candidate only
+  when its status is clean, its HEAD commit is contained in the retention reference set
+  (i.e. reachable from the retained branch), it is not the primary/audit worktree, size
+  evidence is complete, and no process holds it active; `execute_stale_worktree_removal`
+  then removes only that exact fingerprint-bound path. A closed-but-unmerged branch's
+  commits are unreachable from retention references by definition, so such folders are
+  intentionally preserved rather than deleted: deletion would destroy unmerged work with no
+  recovery path. This is documented as verified coverage, not an open gap; the fail-closed
+  disposition is the product decision (ADR-0004 discipline).
+- Feature delivered, container orphan reclamation across docker/podman/colima (ADR-0012):
+  new `container_orphan_reclaim.rs` audits stopped containers (`exited`/`created`/`dead`),
+  untagged zero-reference images, dangling volumes, and unused custom networks for three
+  runtime targets — plain Docker, Colima via `docker --context colima`, and Podman machines.
+  Execution requires a fresh re-audit plus an approval phrase embedding the SHA-256 of the
+  sorted candidate identity set; running containers, tagged images, built-in networks, and
+  attached volumes are never candidates. Local proof: 31 focused Rust tests pass, the new
+  CLI `disksage-container-orphan-plan` compiles, the frontend suite is green at 34 files /
+  150 tests including six new safety-UX contract tests, and `svelte-check` reports 0 errors
+  / 0 warnings.
+- Remaining product gaps opened or updated by this cycle:
+  - P1: live cross-runtime receipt is not yet captured in this environment; the audit has
+    been proven against fixture-shaped output for both NDJSON (Docker) and array (Podman)
+    envelopes, but a real `colima` socket observation should be attached to the gap record
+    before claiming end-to-end parity on all three targets.
+  - P1: per-category prune removes the whole current orphan set of that category (runtime
+    prune semantics), so the UI must keep showing the exact candidate count at approval
+    time; a selective per-ID flow remains intentionally rejected in ADR-0012 unless a
+    consumer requires it.
+- Open-PR state at this snapshot: 12 non-draft PRs are open and mergeable with no failing
+  checks (several queued/in-progress); drafts remain parked behind their own gates. The
+  loop continues processing them one at a time under protected review without bypassing any
+  gate.

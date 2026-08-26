@@ -6,6 +6,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Add runtime-agnostic container orphan reclamation (ADR-0012): one fail-closed engine audits
+  stopped containers, unreferenced images, dangling volumes, and unused custom networks across
+  Docker (native), Colima (`docker --context colima`), and Podman machines. Every execution
+  re-audits immediately before mutating and requires an approval phrase embedding the SHA-256
+  fingerprint of the exact candidate identity set; running or paused containers, tagged images,
+  built-in networks, and attached volumes are never candidates. Exposed via the Cleanup screen
+  with confirmation gating, bounded rationale input, and actionable failure copy, plus a
+  read-only `disksage-container-orphan-plan` CLI for headless evidence.
+
 ### Changed
 
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy

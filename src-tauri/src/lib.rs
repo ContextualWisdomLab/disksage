@@ -59,6 +59,8 @@ pub mod cloud_eviction;
 pub mod cloud_review;
 pub mod cloud_transfer;
 pub mod content_digest;
+/// Read-only, identity-bound orphan reclamation across docker/podman/colima runtimes.
+pub mod container_orphan_reclaim;
 pub mod duplicate_audit;
 pub mod icloud_sync_health;
 pub mod judge_calibration;
@@ -139,6 +141,8 @@ pub fn run() {
             commands::plan_brew_cleanup,
             commands::inspect_podman_reclaim,
             commands::execute_podman_dangling_image_prune,
+            commands::inspect_container_orphans,
+            commands::execute_container_orphan_prune,
             commands::judge_brew_cleanup,
             commands::validate_judge_calibration,
             commands::execute_brew_cleanup,

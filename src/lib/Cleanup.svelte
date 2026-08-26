@@ -6,6 +6,7 @@
   import GitWorktreeCleanup from "./GitWorktreeCleanup.svelte";
   import BrewCleanup from "./BrewCleanup.svelte";
   import OrphanCleanup from "./OrphanCleanup.svelte";
+  import ContainerOrphanCleanup from "./ContainerOrphanCleanup.svelte";
 
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
@@ -328,6 +329,8 @@
       {/if}
     </div>
   {/if}
+
+  <ContainerOrphanCleanup />
 </section>
 
 <OrphanCleanup />
