@@ -214,6 +214,10 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   cache count and size visible even when in-app permanent deletion is unavailable, and isolates a
   failed Trash review from the remaining cleanup lists. The customer-facing next step remains to
   inspect and empty macOS Trash manually; no destructive action was enabled by this fix.
+- The current validation host reports 37 GiB available on the 926 GiB data volume (96% used), and
+  the audited checkout has no additional linked worktree in `git worktree list --porcelain`; the
+  worktree cleaner therefore reports no local reclaim candidate in this checkout instead of
+  inventing one.
 
 ## 2026-08-21 lineage graph update
 
