@@ -218,6 +218,9 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   the audited checkout has no additional linked worktree in `git worktree list --porcelain`; the
   worktree cleaner therefore reports no local reclaim candidate in this checkout instead of
   inventing one.
+- The cache-cleanup CLI fix at implementation head `a7a5241b19d47f291590f653f43280f4b9b0397c`
+  now gives separate guidance for read-only proven-Trash review and guarded cache movement; it no
+  longer tells a user to pass `--execute` when permanent in-app deletion is unavailable.
 
 ## 2026-08-21 lineage graph update
 
