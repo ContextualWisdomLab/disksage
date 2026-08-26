@@ -255,11 +255,6 @@
   <p class="notice" role="status">
     재생성할 수 있는 캐시만 대상으로 하며, 사용 중이거나 상태가 바뀐 항목은 자동으로 건너뜁니다.
   </p>
-  {#if !cacheTrashSupported && cacheTrashNotice === "cache-trash-native-discovery-macos-only"}
-    <p class="notice" role="status">
-      휴지통 안의 캐시를 영구 삭제하는 물리 공간 회수 기능은 현재 macOS 기본 휴지통에서만 지원합니다.
-    </p>
-  {/if}
   {#if cacheTrashPurgeInstruction}
     <p class="notice" role="status">{cacheTrashPurgeInstruction}</p>
   {:else if cacheTrash.length > 0}
