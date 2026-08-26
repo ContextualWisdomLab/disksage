@@ -5,6 +5,7 @@
     containerOrphanInspectErrorMessage,
     containerOrphanPruneErrorMessage,
   } from "./containerOrphanErrorFeedback";
+  import { executeContainerOrphanPruneFlow } from "./containerOrphanPruneFlow";
   import { confirm } from "@tauri-apps/plugin-dialog";
 
   let plans: api.ContainerOrphanPlan[] = $state([]);
@@ -89,18 +90,25 @@
     if (!granted) return;
     pruneBusyKey = key;
     try {
-      executions[key] = await api.executeContainerOrphanPrune(
-        plan.runtime.kind,
-        executionScope(plan.runtime.kind),
-        category,
-        typedPhrase,
-        rationale,
+      const result = await executeContainerOrphanPruneFlow(
+        () => api.executeContainerOrphanPrune(
+          plan.runtime.kind,
+          executionScope(plan.runtime.kind),
+          category,
+          typedPhrase,
+          rationale,
+        ),
+        () => api.inspectContainerOrphans(),
       );
-      // 실행 후 계획을 폐기해 만료된 승인 문구로 재실행되지 않게 합니다.
-      plans = await api.inspectContainerOrphans();
+      executions[key] = result.execution;
+      // A completed mutation invalidates every approval phrase even when refresh fails.
+      plans = result.plans ?? [];
       pruneErrors = {};
       phrases = {};
       rationales = {};
+      loadError = result.refreshError === null
+        ? ""
+        : containerOrphanInspectErrorMessage(result.refreshError);
     } catch (error) {
       pruneErrors[key] = containerOrphanPruneErrorMessage(error);
       delete executions[key];
