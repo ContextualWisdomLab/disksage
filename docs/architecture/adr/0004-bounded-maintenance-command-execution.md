@@ -1,6 +1,6 @@
 # ADR-0004: Bound fixed maintenance command execution
 
-**Status:** Accepted  
+**Status:** Accepted
 **Date:** 2026-08-20
 
 ## Context
