@@ -173,6 +173,14 @@ fn scan_dir_with_interval_inner(
     let mut cancelled = false;
     let mut seen: u64 = 0;
     let traversal_root = read_only_traversal_root(root);
+    let normalized_provider_home = provider_home.map(|home| {
+        let canonical_home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
+        if traversal_root.starts_with(&canonical_home) {
+            canonical_home
+        } else {
+            home.to_path_buf()
+        }
+    });
     let provider_roots_skipped = Cell::new(0_u64);
     let mut reported_provider_roots_skipped = 0_u64;
 
@@ -184,7 +192,7 @@ fn scan_dir_with_interval_inner(
                 entry,
                 &traversal_root,
                 &provider_roots_skipped,
-                provider_home,
+                normalized_provider_home.as_deref(),
             )
         });
 
@@ -551,6 +559,29 @@ mod tests {
         write(&tmp.path().join("local.bin"), 7);
 
         let result = scan_with_home(tmp.path(), tmp.path());
+
+        assert_eq!(result.stats.files, 1);
+        assert_eq!(result.stats.bytes, 7);
+        assert_eq!(result.stats.skipped, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_scan_root_still_prunes_provider_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real_home = tmp.path().join("real-home");
+        let alias = tmp.path().join("home-alias");
+        let provider_root = if cfg!(target_os = "macos") {
+            real_home.join("Library").join("CloudStorage")
+        } else {
+            real_home.join("OneDrive")
+        };
+        fs::create_dir_all(&provider_root).unwrap();
+        write(&provider_root.join("placeholder.bin"), 4096);
+        write(&real_home.join("local.bin"), 7);
+        std::os::unix::fs::symlink(&real_home, &alias).unwrap();
+
+        let result = scan_with_home(&alias, &real_home);
 
         assert_eq!(result.stats.files, 1);
         assert_eq!(result.stats.bytes, 7);
