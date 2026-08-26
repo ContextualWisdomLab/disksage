@@ -42,7 +42,7 @@
       rationale = "";
     } catch {
       plan = null;
-      error = "고아 후보를 조사하지 못했습니다. macOS Library 접근 권한을 확인한 뒤 다시 시도하세요.";
+      error = "정리 후보를 조사하지 못했습니다. 시스템 설정에서 DiskSage의 파일 접근 권한을 확인한 뒤 다시 시도하세요.";
     } finally {
       busy = false;
     }
@@ -64,7 +64,7 @@
     ) return;
     busy = true;
     const okay = await confirm(
-      `${selectedCandidates.length}개의 완전 스캔된 미사용 캐시(${fmtBytes(selectedBytes)})만 휴지통으로 보냅니다. Application Support와 불완전·사용 중 후보는 포함되지 않습니다.`,
+      `${selectedCandidates.length}개의 완전 확인된 미사용 캐시(${fmtBytes(selectedBytes)})만 휴지통으로 보냅니다. 앱이 사용하는 폴더와 확인이 끝나지 않았거나 사용 중인 후보는 포함되지 않습니다.`,
       { title: "DiskSage 관계 기반 고아 정리", kind: "warning" },
     );
     if (!okay) {
@@ -109,9 +109,9 @@
 <section>
   <h3>관계 기반 macOS 고아 후보</h3>
   <p class="notice">
-    설치 앱의 제한된 Info.plist 메타데이터와 Library 후보의 파일시스템 메타데이터만 비교합니다.
-    앱 정보와 파일 기본 정보를 비교해 사용하지 않는 캐시 후보를 찾습니다.
-    파일 내용은 읽지 않으며, 앱 데이터 폴더·확인이 끝나지 않은 후보·사용 중 후보는 자동 정리하지 않습니다.
+    앱이 사용하는 폴더와 파일의 기본 정보를 비교해 사용하지 않는 캐시 후보를 찾습니다.
+    파일 내용은 읽지 않으며, 앱이 사용하는 폴더·확인이 끝나지 않은 후보·사용 중 후보는 자동 정리하지 않습니다.
+    목록을 확인한 뒤 이동할 항목을 선택하세요.
   </p>
   <button onclick={inspect} disabled={busy}>{busy ? "고아 관계 조사 중…" : "고아 관계 조사"}</button>
   {#if error}<p class="error" role="alert">{error}</p>{/if}

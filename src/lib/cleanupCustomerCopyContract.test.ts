@@ -59,6 +59,8 @@ describe("customer copy contract", () => {
       "APFS 공유 블록", "메타데이터 스캔", "dangling 이미지", "VM 저장소", "증거 공백",
       "분리된 HEAD", "Git 등록 해제", "사전 할당량 기준", "tag가 없는", "tagged image",
       "지문을 검증합니다", "승인 기록", "결과 기록", "계획 지문", "감사 기록", "dry-run", "LLM",
+      "Info.plist", "Library 후보", "파일시스템 메타데이터", "Application Support",
+      "Keychain", "원격 API", "quota API", "Apple 네이티브", "원격 quota", "iCloud 네이티브",
     ];
     for (const filePath of screenFiles) {
       const text = visibleText(filePath);

@@ -708,10 +708,10 @@
       "provider-oauth-credential-unavailable": "저장된 클라우드 연결을 사용할 수 없습니다. 연결 해제 후 다시 연결하세요.",
       "provider-oauth-refresh-failed": "클라우드 인증을 갱신하지 못했습니다. 연결을 해제한 뒤 다시 연결하십시오.",
       "cloud-capacity-provider-api-unavailable": "클라우드 저장 공간을 확인할 수 없습니다. 잠시 후 다시 시도하십시오.",
-      "icloud-quota-api-unavailable": "iCloud는 제3자 계정 quota API를 제공하지 않습니다.",
+      "icloud-quota-api-unavailable": "iCloud 계정의 남은 공간을 이 화면에서 확인할 수 없습니다. iCloud 설정에서 저장 공간을 확인한 뒤 다시 시도하십시오.",
       "icloud-native-quota-command-unavailable": "이 macOS에서 iCloud 용량 확인 명령을 사용할 수 없습니다.",
       "icloud-native-quota-command-timeout": "iCloud 용량 확인이 시간 안에 완료되지 않았습니다.",
-      "icloud-native-quota-unsupported-platform": "iCloud 네이티브 용량 확인은 macOS에서만 지원됩니다.",
+      "icloud-native-quota-unsupported-platform": "iCloud 용량 확인은 macOS에서만 지원됩니다.",
       "icloud-native-quota-unavailable": "macOS가 iCloud 개인 계정 잔여 용량을 확인하지 못했습니다.",
     };
     return labels[reason ?? ""] ?? "클라우드 저장 공간을 확인할 수 없습니다. 잠시 후 다시 시도하십시오.";
@@ -1299,7 +1299,7 @@
         </button>
         {#if capacityForSelectedRoot()?.evidence_kind === "provider-native-status"}
           <p class="capacity-ok">
-            Apple 네이티브 계정 상태 확인 완료
+            iCloud 계정 상태 확인 완료
             · 원격 잔여 {fmtBytes(capacityForSelectedRoot()?.remaining_bytes ?? 0)}
           </p>
         {:else if capacityForSelectedRoot()}
@@ -1317,12 +1317,12 @@
       <div class="oauth-panel">
         {#if connectionForSelectedRoot()}
           <strong>{providerApiWriteConnected() ? "클라우드 업로드 연결" : "읽기 전용 연결 확인"}</strong>
-          <span class="context">범위: {connectionForSelectedRoot()?.scope}</span>
+          <span class="context">{providerApiWriteConnected() ? "업로드 권한이 활성화되어 있습니다." : "읽기 전용 권한으로 연결되어 있습니다."}</span>
           <button
             onclick={verifyProviderCapacity}
             disabled={checkingCapacity || disconnecting || connecting}
           >
-            {checkingCapacity ? "Keychain·원격 API 확인 중…" : "재시작 후 연결·원격 용량 검증"}
+            {checkingCapacity ? "연결 상태와 클라우드 저장 공간 확인 중…" : "연결 상태와 클라우드 저장 공간 다시 확인"}
           </button>
           <button onclick={disconnectProvider} disabled={disconnecting || connecting || checkingCapacity}>
             {disconnecting ? "연결 해제 중…" : "보안 저장소 연결 해제"}
@@ -1464,7 +1464,7 @@
         </p>
       {:else}
         <p class="warning">
-          원격 quota를 검증할 수 없음: {report.capacity.snapshot.unavailable_reason ?? "cloud-capacity-unavailable"}.
+          클라우드 저장 공간을 확인하지 못했습니다. 연결 상태를 확인한 뒤 다시 시도하십시오.
           {#if api.cloudNativeClientCopyAllowed(report.capacity, selectedRootDetails(), report.notices)}
             실행 중인 OneDrive·Google Drive 앱을 통해 복사할 수 있습니다. 업로드 확인 전에는 원본을 보존합니다.
           {:else}
