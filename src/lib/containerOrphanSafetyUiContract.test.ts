@@ -31,14 +31,17 @@ describe("Container orphan cleanup safety UX", () => {
     expect(pruneReady).toContain("(rationales[categoryKey(key, category)]?.trim().length ?? 0) > 0");
   });
 
-  it("never recovers a mutation scope from public display metadata", () => {
+  it("never recovers mutation scope from public display metadata", () => {
     const source = readSource("src/lib/ContainerOrphanCleanup.svelte");
-    const apiSource = readSource("src/lib/api.ts");
+    const start = source.indexOf("function executionScope(");
+    const end = source.indexOf("function categoryKey(", start);
+    const scopeContract = source.slice(start, end);
 
-    expect(source).not.toContain("function scopeOf(");
+    expect(start).toBeGreaterThanOrEqual(0);
     expect(source).not.toContain("plan.runtime.display_name.split(");
-    expect(apiSource).not.toContain("scopeName: string | null");
-    expect(apiSource).not.toContain("scopeName,");
+    expect(scopeContract).toContain('case "docker-native": return null;');
+    expect(scopeContract).toContain('case "docker-colima-context": return "colima";');
+    expect(scopeContract).toContain('case "podman-machine": return "podman-machine-default";');
   });
 
   it("requires an explicit confirmation dialog before any irreversible prune", () => {
