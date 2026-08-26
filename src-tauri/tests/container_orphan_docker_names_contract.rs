@@ -1,0 +1,53 @@
+#![cfg(unix)]
+
+use disksage_lib::container_orphan_reclaim::{
+    probe_container_orphans, ContainerRuntimeKind, ContainerRuntimeTarget, OrphanCategory,
+};
+use std::os::unix::fs::PermissionsExt;
+
+#[test]
+fn docker_plain_comma_joined_names_do_not_break_stopped_container_audit() {
+    const FULL_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let temp = tempfile::tempdir().expect("temporary runtime directory");
+    let runtime = temp.path().join("docker");
+    let script = format!(
+        r#"#!/bin/sh
+set -eu
+case "${{1:-}}" in
+  info) exit 0 ;;
+  container)
+    [ "${{2:-}}" = "ps" ] || exit 91
+    case " $* " in *" --no-trunc "*) ;; *) echo "missing --no-trunc" >&2; exit 92 ;; esac
+    printf '%s\n' '{{"ID":"{FULL_ID}","State":"exited","Names":"web,worker"}}'
+    ;;
+  images|volume|network) exit 0 ;;
+  *) exit 93 ;;
+esac
+"#
+    );
+    std::fs::write(&runtime, script).expect("write fake Docker runtime");
+    let mut permissions = std::fs::metadata(&runtime)
+        .expect("fake runtime metadata")
+        .permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(&runtime, permissions).expect("make fake runtime executable");
+
+    let target = ContainerRuntimeTarget::new(
+        ContainerRuntimeKind::DockerNative,
+        runtime,
+        None,
+    )
+    .expect("valid Docker target");
+    let plan = probe_container_orphans(&target);
+    let container = plan
+        .categories
+        .iter()
+        .find(|category| category.category == OrphanCategory::Container)
+        .expect("container category");
+
+    assert!(container.evidence_complete, "{:?}", container.issue);
+    let evidence = container.evidence.as_ref().expect("container evidence");
+    assert_eq!(evidence.total_records, 1);
+    assert_eq!(evidence.candidate_records, 1);
+    assert!(container.approval_phrase.is_some());
+}
