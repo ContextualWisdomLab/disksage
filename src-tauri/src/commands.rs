@@ -947,11 +947,21 @@ pub async fn evict_icloud_local_copy(
 pub async fn plan_stale_git_worktrees(
     repository_root: String,
     retention_references: Vec<String>,
+    include_closed_pull_requests: bool,
 ) -> Result<git_worktree::GitWorktreeAuditReport, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        git_worktree::audit_git_worktrees(
+        let closed_heads = if include_closed_pull_requests {
+            git_worktree::github_closed_pull_request_heads(
+                Path::new(&repository_root),
+                git_worktree::GitWorktreeAuditOptions::default().command_timeout_ms,
+            )?
+        } else {
+            Default::default()
+        };
+        git_worktree::audit_git_worktrees_with_closed_pull_request_heads(
             Path::new(&repository_root),
             &retention_references,
+            &closed_heads,
             git_worktree::GitWorktreeAuditOptions::default(),
             cloud::system_now_ms(),
         )
@@ -977,6 +987,7 @@ pub struct StaleGitWorktreeRemovalOutput {
 pub async fn remove_stale_git_worktrees(
     repository_root: String,
     retention_references: Vec<String>,
+    include_closed_pull_requests: bool,
     approved_removal_plan_fingerprint: String,
     confirmation_exact_approval_phrase: String,
     rationale: String,
@@ -990,9 +1001,18 @@ pub async fn remove_stale_git_worktrees(
     let approved_by = local_human_reviewer();
     tauri::async_runtime::spawn_blocking(move || {
         let options = git_worktree::GitWorktreeAuditOptions::default();
-        let report = git_worktree::audit_git_worktrees(
+        let closed_heads = if include_closed_pull_requests {
+            git_worktree::github_closed_pull_request_heads(
+                Path::new(&repository_root),
+                options.command_timeout_ms,
+            )?
+        } else {
+            Default::default()
+        };
+        let report = git_worktree::audit_git_worktrees_with_closed_pull_request_heads(
             Path::new(&repository_root),
             &retention_references,
+            &closed_heads,
             options,
             cloud::system_now_ms(),
         )?;
@@ -1016,10 +1036,11 @@ pub async fn remove_stale_git_worktrees(
             &format!("{}.approval.json", approval.approval_id),
             &approval,
         )?;
-        let result = git_worktree::execute_stale_worktree_removal(
+        let result = git_worktree::execute_stale_worktree_removal_with_github_closed_pull_requests(
             &report,
             &approval,
             &confirmation_exact_approval_phrase,
+            include_closed_pull_requests,
             options,
             cloud::system_now_ms(),
         )?;

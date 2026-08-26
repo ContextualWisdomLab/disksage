@@ -18,6 +18,7 @@ new numbered record rather than rewriting history.
 | [0010](0010-rooted-organize-destinations.md) | Require rooted, process-independent organize destinations | Accepted |
 | [0011](0011-cloud-transfer-failure-and-materialization.md) | Durable failed-copy evidence and placeholder-safe adoption | Accepted |
 | [0012](0012-container-orphan-reclaim-runtime-agnostic.md) | Runtime-agnostic container orphan reclamation is identity-bound and fail-closed | Accepted |
+| [0013](0013-closed-pull-request-worktree-authority.md) | Bind closed pull-request worktree cleanup to forge evidence | Accepted |
 
 New records must state context, decision, consequences, rejected alternatives, and the evidence or
 standard that led to the decision. A record never grants cloud-write or source-eviction authority;

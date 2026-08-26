@@ -688,13 +688,12 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   candidate identities and requires the matching approval phrase plus a rationale; runtime
   diagnostics remain outside customer-visible and public evidence boundaries. The local frontend
   suite passes 35 files / 153 tests after repairing the stale UI ownership assertion.
-- The existing Git worktree authority safely removes clean, inactive secondary worktree folders
-  whose commits are strict ancestors of explicitly retained refs, which covers merged branches
-  without deleting branches or commits. Closed-but-unmerged pull requests are **not** yet proven:
-  local Git reachability does not encode hosted PR state, and treating a missing upstream or old
-  timestamp as closure would be an unsupported heuristic. Gap acceptance requires authoritative
-  forge PR-state evidence bound to repository identity, branch ref, and head OID, followed by the
-  existing clean/inactive/path-identity revalidation immediately before folder removal.
+- The Git worktree authority removes clean, inactive secondary worktree folders whose commits are
+  strict ancestors of explicitly retained refs. ADR-0013 additionally binds closed-but-unmerged
+  cleanup to authenticated GitHub evidence: exact `CLOSED` state, same-repository identity, local
+  branch ref, and exact head OID must all match. The evidence is refreshed immediately before
+  removal and participates in the approved plan fingerprint; detached and fork PR worktrees remain
+  preserved for manual review. Branches and commits are never deleted.
 - Current protected-delivery snapshot: `main` is
   `79067c1160ddedf7fc962cbf8067ce7e83c4564a`; 40 PRs are open (16 ready, 24 draft) and none has an
   exact-head independent approval. PR #267 is draft, mergeable, and blocked with four required

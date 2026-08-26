@@ -647,6 +647,7 @@ export interface GitWorktreeAuditEntry {
   status_clean: boolean | null;
   status_entry_count: number | null;
   contained_in_reference: boolean | null;
+  closed_pull_request_head: boolean;
   head_is_retained_tip: boolean;
   actor_cwd_inside: boolean | null;
   size: GitWorktreeSizeEvidence;
@@ -662,13 +663,14 @@ export interface GitWorktreeReferenceBinding {
 }
 
 export interface GitWorktreeAuditReport {
-  schema_kind: "disksage.git-worktree-audit/v2";
+  schema_kind: "disksage.git-worktree-audit/v3";
   version: number;
   repository_root: string;
   common_dir: string;
   generated_at_ms: number;
   retention_references: GitWorktreeReferenceBinding[];
   retention_reference_set_fingerprint: string;
+  removal_authority_fingerprint: string;
   retention_reachable_commit_count: number;
   worktree_count: number;
   removal_candidate_count: number;
@@ -688,6 +690,7 @@ export interface GitWorktreeRemovalApproval {
   approval_id: string;
   removal_plan_fingerprint: string;
   retention_reference_set_fingerprint: string;
+  removal_authority_fingerprint: string;
   removal_candidate_count: number;
   removal_candidate_allocated_bytes: number;
   exact_approval_phrase: string;
@@ -717,6 +720,7 @@ export interface GitWorktreeRemovalResult {
   approval_id: string;
   removal_plan_fingerprint: string;
   retention_reference_set_fingerprint: string;
+  removal_authority_fingerprint: string;
   requested_at_ms: number;
   completed_at_ms: number;
   planned_candidate_count: number;
@@ -1285,19 +1289,23 @@ export const evictIcloudLocalCopy = (
 export const planStaleGitWorktrees = (
   repositoryRoot: string,
   retentionReferences: string[],
+  includeClosedPullRequests: boolean,
 ) => invoke<GitWorktreeAuditReport>("plan_stale_git_worktrees", {
   repositoryRoot,
   retentionReferences,
+  includeClosedPullRequests,
 });
 export const removeStaleGitWorktrees = (
   repositoryRoot: string,
   retentionReferences: string[],
+  includeClosedPullRequests: boolean,
   approvedRemovalPlanFingerprint: string,
   confirmationExactApprovalPhrase: string,
   rationale: string,
 ) => invoke<StaleGitWorktreeRemovalOutput>("remove_stale_git_worktrees", {
   repositoryRoot,
   retentionReferences,
+  includeClosedPullRequests,
   approvedRemovalPlanFingerprint,
   confirmationExactApprovalPhrase,
   rationale,

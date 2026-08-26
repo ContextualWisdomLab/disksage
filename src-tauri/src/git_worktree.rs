@@ -23,12 +23,12 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-pub const GIT_WORKTREE_AUDIT_SCHEMA_KIND: &str = "disksage.git-worktree-audit/v2";
+pub const GIT_WORKTREE_AUDIT_SCHEMA_KIND: &str = "disksage.git-worktree-audit/v3";
 const MAX_COMMAND_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 /// Maximum UTF-8 byte length accepted for a Git reference at the audit boundary.
 pub const MAX_REFERENCE_BYTES: usize = 1_024;
 const MAX_REACHABLE_COMMITS: usize = 100_000;
-const GIT_WORKTREE_REMOVAL_VERSION: u32 = 1;
+const GIT_WORKTREE_REMOVAL_VERSION: u32 = 2;
 const MAX_RATIONALE_BYTES: usize = 1_000;
 const MAX_ADMIN_FALLBACK_ENTRIES: usize = 512;
 const MAX_ADMIN_FALLBACK_FILE_BYTES: u64 = 16 * 1024;
@@ -105,6 +105,7 @@ pub struct GitWorktreeAuditEntry {
     pub status_clean: Option<bool>,
     pub status_entry_count: Option<u64>,
     pub contained_in_reference: Option<bool>,
+    pub closed_pull_request_head: bool,
     pub head_is_retained_tip: bool,
     pub actor_cwd_inside: Option<bool>,
     pub size: GitWorktreeSizeEvidence,
@@ -131,6 +132,7 @@ pub struct GitWorktreeAuditReport {
     pub generated_at_ms: u64,
     pub retention_references: Vec<GitWorktreeReferenceBinding>,
     pub retention_reference_set_fingerprint: String,
+    pub removal_authority_fingerprint: String,
     pub retention_reachable_commit_count: usize,
     pub worktree_count: usize,
     pub removal_candidate_count: usize,
@@ -152,6 +154,7 @@ pub struct GitWorktreeAuditPublicSummary {
     pub generated_at_ms: u64,
     pub retention_reference_count: usize,
     pub retention_reference_set_fingerprint: String,
+    pub removal_authority_fingerprint: String,
     pub retention_reachable_commit_count: usize,
     pub worktree_count: usize,
     pub removal_candidate_count: usize,
@@ -175,6 +178,7 @@ pub struct GitWorktreeRemovalApproval {
     pub approval_id: String,
     pub removal_plan_fingerprint: String,
     pub retention_reference_set_fingerprint: String,
+    pub removal_authority_fingerprint: String,
     pub removal_candidate_count: usize,
     pub removal_candidate_allocated_bytes: u64,
     pub exact_approval_phrase: String,
@@ -208,6 +212,7 @@ pub struct GitWorktreeRemovalResult {
     pub approval_id: String,
     pub removal_plan_fingerprint: String,
     pub retention_reference_set_fingerprint: String,
+    pub removal_authority_fingerprint: String,
     pub requested_at_ms: u64,
     pub completed_at_ms: u64,
     pub planned_candidate_count: usize,
@@ -302,6 +307,7 @@ struct ClassificationInput {
     path_valid: bool,
     status_clean: Option<bool>,
     contained_in_reference: Option<bool>,
+    closed_pull_request_head: bool,
     head_is_retained_tip: bool,
     actor_cwd_inside: Option<bool>,
     size_complete: bool,
@@ -385,6 +391,8 @@ fn run_bounded_command(
         .stderr(Stdio::piped());
     if program == "git" {
         command.env("GIT_OPTIONAL_LOCKS", "0");
+    } else if program == "gh" {
+        command.env_remove("GH_REPO");
     }
     #[cfg(unix)]
     // Keep descendants in a private process group so a timeout cannot leave a Git helper holding
@@ -472,6 +480,76 @@ fn run_git(
         return Err(format!("{reason}-output-truncated"));
     }
     Ok(result)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GitHubPullRequestHead {
+    #[serde(rename = "headRefName")]
+    head_ref_name: String,
+    #[serde(rename = "headRefOid")]
+    head_ref_oid: String,
+    #[serde(rename = "isCrossRepository")]
+    is_cross_repository: bool,
+    state: String,
+}
+
+pub type ClosedPullRequestHeads = BTreeSet<(String, String)>;
+
+fn parse_closed_pull_request_heads(bytes: &[u8]) -> Result<ClosedPullRequestHeads, String> {
+    let records: Vec<GitHubPullRequestHead> =
+        serde_json::from_slice(bytes).map_err(|_| "github-closed-pr-json-invalid".to_string())?;
+    if records.len() > 1_000 {
+        return Err("github-closed-pr-count-exceeds-limit".into());
+    }
+    records
+        .into_iter()
+        .filter(|record| record.state == "CLOSED" && !record.is_cross_repository)
+        .map(|record| {
+            let oid = record.head_ref_oid.to_ascii_lowercase();
+            let branch_ref = format!("refs/heads/{}", record.head_ref_name);
+            validate_reference(&branch_ref)?;
+            if !is_oid(&oid) {
+                return Err("github-closed-pr-head-invalid".to_string());
+            }
+            Ok((branch_ref, oid))
+        })
+        .collect()
+}
+
+/// Resolve exact head OIDs for GitHub pull requests closed without merge.
+///
+/// The authenticated `gh` client resolves repository identity from the selected repository and
+/// returns only bounded JSON. Runtime diagnostics are never reflected to the caller.
+pub fn github_closed_pull_request_heads(
+    repository_root: &Path,
+    timeout_ms: u64,
+) -> Result<ClosedPullRequestHeads, String> {
+    let result = run_bounded_command(
+        "gh",
+        &[
+            OsString::from("pr"),
+            OsString::from("list"),
+            OsString::from("--state"),
+            OsString::from("closed"),
+            OsString::from("--limit"),
+            OsString::from("1001"),
+            OsString::from("--json"),
+            OsString::from("headRefName,headRefOid,isCrossRepository,state"),
+        ],
+        repository_root,
+        timeout_ms,
+    )?;
+    if result.timed_out {
+        return Err("github-closed-pr-list-timeout".into());
+    }
+    if result.stdout_truncated || result.stderr_truncated {
+        return Err("github-closed-pr-list-output-truncated".into());
+    }
+    if result.status_code != Some(0) {
+        return Err("github-closed-pr-list-failed".into());
+    }
+    parse_closed_pull_request_heads(&result.stdout)
 }
 
 fn git_admin_metadata_blocker(
@@ -857,10 +935,10 @@ fn candidate_blockers(input: &ClassificationInput) -> Vec<String> {
         Some(false) => blockers.push("worktree-dirty".into()),
         None => blockers.push("git-status-evidence-incomplete".into()),
     }
-    match input.contained_in_reference {
-        Some(true) => {}
-        Some(false) => blockers.push("reference-does-not-contain-head".into()),
-        None => blockers.push("reference-containment-evidence-incomplete".into()),
+    match (input.contained_in_reference, input.closed_pull_request_head) {
+        (Some(true), _) | (_, true) => {}
+        (Some(false), false) => blockers.push("reference-does-not-contain-head".into()),
+        (None, false) => blockers.push("reference-containment-evidence-incomplete".into()),
     }
     if input.head_is_retained_tip {
         blockers.push("head-is-retained-tip".into());
@@ -928,6 +1006,20 @@ fn retention_reference_set_fingerprint(references: &[GitWorktreeReferenceBinding
     hasher.finalize().to_hex().to_string()
 }
 
+fn removal_authority_fingerprint(
+    retention_fingerprint: &str,
+    closed_pull_request_heads: &ClosedPullRequestHeads,
+) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage.git-worktree-removal-authority\0v1\0");
+    hash_field(&mut hasher, retention_fingerprint);
+    for (branch_ref, oid) in closed_pull_request_heads {
+        hash_field(&mut hasher, branch_ref);
+        hash_field(&mut hasher, oid);
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
 fn entry_fingerprint(
     common_dir: &str,
     reference_set_fingerprint: &str,
@@ -947,6 +1039,7 @@ fn entry_fingerprint(
     hasher.update(&[
         u8::from(entry.status_clean == Some(true)),
         u8::from(entry.contained_in_reference == Some(true)),
+        u8::from(entry.closed_pull_request_head),
         u8::from(entry.head_is_retained_tip),
         u8::from(entry.actor_cwd_inside == Some(true)),
         u8::from(entry.locked),
@@ -1331,7 +1424,32 @@ pub fn audit_git_worktrees(
     options: GitWorktreeAuditOptions,
     generated_at_ms: u64,
 ) -> Result<GitWorktreeAuditReport, String> {
+    audit_git_worktrees_with_closed_pull_request_heads(
+        repository_root,
+        retention_references,
+        &BTreeSet::new(),
+        options,
+        generated_at_ms,
+    )
+}
+
+/// Audit worktrees while accepting exact head OIDs from authoritatively closed pull requests as
+/// removal authority. Callers must refresh this evidence immediately before execution.
+pub fn audit_git_worktrees_with_closed_pull_request_heads(
+    repository_root: &Path,
+    retention_references: &[String],
+    closed_pull_request_heads: &ClosedPullRequestHeads,
+    options: GitWorktreeAuditOptions,
+    generated_at_ms: u64,
+) -> Result<GitWorktreeAuditReport, String> {
     validate_options(options)?;
+    if closed_pull_request_heads.len() > 10_000
+        || closed_pull_request_heads
+            .iter()
+            .any(|(branch_ref, oid)| validate_reference(branch_ref).is_err() || !is_oid(oid))
+    {
+        return Err("git-worktree-closed-pull-request-heads-invalid".into());
+    }
     if !repository_root.is_absolute() {
         return Err("git-worktree-repository-root-not-absolute".into());
     }
@@ -1343,7 +1461,9 @@ pub fn audit_git_worktrees(
         retention_references,
         options.command_timeout_ms,
     )?;
-    let reference_set_fingerprint = retention_reference_set_fingerprint(&retention_references);
+    let retention_fingerprint = retention_reference_set_fingerprint(&retention_references);
+    let authority_fingerprint =
+        removal_authority_fingerprint(&retention_fingerprint, closed_pull_request_heads);
     let retained_tip_oids: BTreeSet<_> = retention_references
         .iter()
         .map(|binding| binding.reference_oid.as_str())
@@ -1384,6 +1504,9 @@ pub fn audit_git_worktrees(
             (None, None)
         };
         let contained_in_reference = containment_observation(&raw.head, &reachable_commits);
+        let closed_pull_request_head = raw.branch.as_ref().is_some_and(|branch_ref| {
+            closed_pull_request_heads.contains(&(branch_ref.clone(), raw.head.clone()))
+        });
         let head_is_retained_tip = retained_tip_oids.contains(raw.head.as_str());
         let size = if path_valid {
             size_evidence(
@@ -1411,6 +1534,7 @@ pub fn audit_git_worktrees(
             path_valid,
             status_clean,
             contained_in_reference,
+            closed_pull_request_head,
             head_is_retained_tip,
             actor_cwd_inside,
             size_complete: size.evidence_complete,
@@ -1459,6 +1583,7 @@ pub fn audit_git_worktrees(
             status_clean,
             status_entry_count,
             contained_in_reference,
+            closed_pull_request_head,
             head_is_retained_tip,
             actor_cwd_inside,
             size,
@@ -1468,7 +1593,7 @@ pub fn audit_git_worktrees(
             entry_fingerprint: String::new(),
         };
         entry.entry_fingerprint =
-            entry_fingerprint(&common_dir_string, &reference_set_fingerprint, &entry);
+            entry_fingerprint(&common_dir_string, &authority_fingerprint, &entry);
         if entry.disposition == GitWorktreeDisposition::EvidenceGap {
             issues.extend(
                 entry
@@ -1500,7 +1625,7 @@ pub fn audit_git_worktrees(
         .filter(|entry| entry.disposition == GitWorktreeDisposition::EvidenceGap)
         .count();
     let removal_plan_fingerprint =
-        removal_plan_fingerprint(&common_dir_string, &reference_set_fingerprint, &entries);
+        removal_plan_fingerprint(&common_dir_string, &authority_fingerprint, &entries);
     let exact_approval_phrase = (removal_candidate_count > 0).then(|| {
         format!(
             "DiskSage stale worktree {removal_candidate_count} {removal_candidate_allocated_bytes} 승인 {removal_plan_fingerprint}"
@@ -1509,12 +1634,13 @@ pub fn audit_git_worktrees(
 
     Ok(GitWorktreeAuditReport {
         schema_kind: GIT_WORKTREE_AUDIT_SCHEMA_KIND.into(),
-        version: 2,
+        version: 3,
         repository_root: repository_root.to_string_lossy().into_owned(),
         common_dir: common_dir_string,
         generated_at_ms,
         retention_references,
-        retention_reference_set_fingerprint: reference_set_fingerprint,
+        retention_reference_set_fingerprint: retention_fingerprint,
+        removal_authority_fingerprint: authority_fingerprint,
         retention_reachable_commit_count: reachable_commits.len(),
         worktree_count: entries.len(),
         removal_candidate_count,
@@ -1537,6 +1663,7 @@ pub fn public_summary(report: &GitWorktreeAuditReport) -> GitWorktreeAuditPublic
         generated_at_ms: report.generated_at_ms,
         retention_reference_count: report.retention_references.len(),
         retention_reference_set_fingerprint: report.retention_reference_set_fingerprint.clone(),
+        removal_authority_fingerprint: report.removal_authority_fingerprint.clone(),
         retention_reachable_commit_count: report.retention_reachable_commit_count,
         worktree_count: report.worktree_count,
         removal_candidate_count: report.removal_candidate_count,
@@ -1584,11 +1711,12 @@ fn exact_removal_approval_phrase(
 
 fn validate_audit_for_removal(report: &GitWorktreeAuditReport) -> Result<(), String> {
     if report.schema_kind != GIT_WORKTREE_AUDIT_SCHEMA_KIND
-        || report.version != 2
+        || report.version != 3
         || report.filesystem_mutation_executed
         || !Path::new(&report.repository_root).is_absolute()
         || !Path::new(&report.common_dir).is_absolute()
         || !valid_hex64(&report.retention_reference_set_fingerprint)
+        || !valid_hex64(&report.removal_authority_fingerprint)
         || !valid_hex64(&report.removal_plan_fingerprint)
     {
         return Err("git-worktree-removal-audit-integrity-invalid".into());
@@ -1608,7 +1736,7 @@ fn validate_audit_for_removal(report: &GitWorktreeAuditReport) -> Result<(), Str
             || entry.entry_fingerprint
                 != entry_fingerprint(
                     &report.common_dir,
-                    &report.retention_reference_set_fingerprint,
+                    &report.removal_authority_fingerprint,
                     entry,
                 )
         {
@@ -1626,7 +1754,8 @@ fn validate_audit_for_removal(report: &GitWorktreeAuditReport) -> Result<(), Str
                     || entry.prunable
                     || entry.status_clean != Some(true)
                     || entry.status_entry_count != Some(0)
-                    || entry.contained_in_reference != Some(true)
+                    || (entry.contained_in_reference != Some(true)
+                        && !entry.closed_pull_request_head)
                     || entry.head_is_retained_tip
                     || entry.actor_cwd_inside != Some(false)
                     || !entry.size.evidence_complete
@@ -1649,7 +1778,7 @@ fn validate_audit_for_removal(report: &GitWorktreeAuditReport) -> Result<(), Str
         || report.evidence_complete != (report.issues.is_empty() && evidence_gaps == 0)
         || removal_plan_fingerprint(
             &report.common_dir,
-            &report.retention_reference_set_fingerprint,
+            &report.removal_authority_fingerprint,
             &report.entries,
         ) != report.removal_plan_fingerprint
     {
@@ -1680,6 +1809,7 @@ fn removal_approval_id_for(
     for value in [
         report.removal_plan_fingerprint.as_str(),
         report.retention_reference_set_fingerprint.as_str(),
+        report.removal_authority_fingerprint.as_str(),
         report.exact_approval_phrase.as_deref().unwrap_or_default(),
         approved_by,
         rationale,
@@ -1723,6 +1853,7 @@ pub fn approve_stale_worktree_removal(
         approval_id: removal_approval_id_for(report, approved_at_ms, approved_by, rationale),
         removal_plan_fingerprint: report.removal_plan_fingerprint.clone(),
         retention_reference_set_fingerprint: report.retention_reference_set_fingerprint.clone(),
+        removal_authority_fingerprint: report.removal_authority_fingerprint.clone(),
         removal_candidate_count: report.removal_candidate_count,
         removal_candidate_allocated_bytes: report.removal_candidate_allocated_bytes,
         exact_approval_phrase: expected.into(),
@@ -1743,6 +1874,7 @@ fn validate_removal_approval(
         || approval.removal_plan_fingerprint != report.removal_plan_fingerprint
         || approval.retention_reference_set_fingerprint
             != report.retention_reference_set_fingerprint
+        || approval.removal_authority_fingerprint != report.removal_authority_fingerprint
         || approval.removal_candidate_count != report.removal_candidate_count
         || approval.removal_candidate_allocated_bytes != report.removal_candidate_allocated_bytes
         || approval.exact_approval_phrase
@@ -1771,6 +1903,7 @@ fn live_audit_matches_approved(
     if live.common_dir != approved.common_dir
         || live.repository_root != approved.repository_root
         || live.retention_reference_set_fingerprint != approved.retention_reference_set_fingerprint
+        || live.removal_authority_fingerprint != approved.removal_authority_fingerprint
         || live.removal_plan_fingerprint != approved.removal_plan_fingerprint
         || live.removal_candidate_count != approved.removal_candidate_count
         || live.removal_candidate_allocated_bytes != approved.removal_candidate_allocated_bytes
@@ -1872,6 +2005,25 @@ pub fn execute_stale_worktree_removal(
     options: GitWorktreeAuditOptions,
     requested_at_ms: u64,
 ) -> Result<GitWorktreeRemovalResult, String> {
+    execute_stale_worktree_removal_with_github_closed_pull_requests(
+        approved_report,
+        approval,
+        confirmation_exact_approval_phrase,
+        false,
+        options,
+        requested_at_ms,
+    )
+}
+
+/// Execute with freshly queried GitHub closed-PR evidence before the plan and every candidate.
+pub fn execute_stale_worktree_removal_with_github_closed_pull_requests(
+    approved_report: &GitWorktreeAuditReport,
+    approval: &GitWorktreeRemovalApproval,
+    confirmation_exact_approval_phrase: &str,
+    include_closed_pull_requests: bool,
+    options: GitWorktreeAuditOptions,
+    requested_at_ms: u64,
+) -> Result<GitWorktreeRemovalResult, String> {
     validate_options(options)?;
     validate_removal_approval(
         approved_report,
@@ -1887,8 +2039,21 @@ pub fn execute_stale_worktree_removal(
         .iter()
         .map(|binding| binding.reference_ref.clone())
         .collect();
-    let initial_live =
-        audit_git_worktrees(&repository_root, &reference_names, options, requested_at_ms)?;
+    let audit_live = |observed_at_ms| {
+        let closed_heads = if include_closed_pull_requests {
+            github_closed_pull_request_heads(&repository_root, options.command_timeout_ms)?
+        } else {
+            Default::default()
+        };
+        audit_git_worktrees_with_closed_pull_request_heads(
+            &repository_root,
+            &reference_names,
+            &closed_heads,
+            options,
+            observed_at_ms,
+        )
+    };
+    let initial_live = audit_live(requested_at_ms)?;
     live_audit_matches_approved(approved_report, &initial_live)?;
 
     let mut candidates: Vec<_> = initial_live
@@ -1905,12 +2070,7 @@ pub fn execute_stale_worktree_removal(
         let live = if index == 0 {
             initial_live.clone()
         } else {
-            match audit_git_worktrees(
-                &repository_root,
-                &reference_names,
-                options,
-                current_unix_ms(),
-            ) {
+            match audit_live(current_unix_ms()) {
                 Ok(report) => report,
                 Err(error) => {
                     let mut item = pending_item(candidate);
@@ -2029,6 +2189,7 @@ pub fn execute_stale_worktree_removal(
         retention_reference_set_fingerprint: approved_report
             .retention_reference_set_fingerprint
             .clone(),
+        removal_authority_fingerprint: approved_report.removal_authority_fingerprint.clone(),
         requested_at_ms,
         completed_at_ms,
         planned_candidate_count: approved_report.removal_candidate_count,
@@ -2198,6 +2359,24 @@ mod tests {
         std::iter::repeat_n(character, 40).collect()
     }
 
+    #[test]
+    fn closed_pull_request_evidence_binds_same_repository_branch_and_head() {
+        let json = format!(
+            r#"[
+              {{"headRefName":"closed-local","headRefOid":"{}","isCrossRepository":false,"state":"CLOSED"}},
+              {{"headRefName":"merged","headRefOid":"{}","isCrossRepository":false,"state":"MERGED"}},
+              {{"headRefName":"forked","headRefOid":"{}","isCrossRepository":true,"state":"CLOSED"}}
+            ]"#,
+            oid('a'),
+            oid('b'),
+            oid('c'),
+        );
+        assert_eq!(
+            parse_closed_pull_request_heads(json.as_bytes()).unwrap(),
+            BTreeSet::from([("refs/heads/closed-local".into(), oid('a'))])
+        );
+    }
+
     fn executable_report() -> GitWorktreeAuditReport {
         let common_dir = "/tmp/repository/.git".to_string();
         let references = vec![GitWorktreeReferenceBinding {
@@ -2205,6 +2384,8 @@ mod tests {
             reference_oid: oid('a'),
         }];
         let reference_fingerprint = retention_reference_set_fingerprint(&references);
+        let authority_fingerprint =
+            removal_authority_fingerprint(&reference_fingerprint, &BTreeSet::new());
         let mut entry = GitWorktreeAuditEntry {
             path: "/tmp/secondary".into(),
             path_fingerprint: path_fingerprint(&common_dir, "/tmp/secondary"),
@@ -2221,6 +2402,7 @@ mod tests {
             status_clean: Some(true),
             status_entry_count: Some(0),
             contained_in_reference: Some(true),
+            closed_pull_request_head: false,
             head_is_retained_tip: false,
             actor_cwd_inside: Some(false),
             size: GitWorktreeSizeEvidence {
@@ -2244,18 +2426,19 @@ mod tests {
             blockers: Vec::new(),
             entry_fingerprint: String::new(),
         };
-        entry.entry_fingerprint = entry_fingerprint(&common_dir, &reference_fingerprint, &entry);
+        entry.entry_fingerprint = entry_fingerprint(&common_dir, &authority_fingerprint, &entry);
         let entries = vec![entry];
         let plan_fingerprint =
-            removal_plan_fingerprint(&common_dir, &reference_fingerprint, &entries);
+            removal_plan_fingerprint(&common_dir, &authority_fingerprint, &entries);
         GitWorktreeAuditReport {
             schema_kind: GIT_WORKTREE_AUDIT_SCHEMA_KIND.into(),
-            version: 2,
+            version: 3,
             repository_root: "/tmp/repository".into(),
             common_dir,
             generated_at_ms: 10,
             retention_references: references,
             retention_reference_set_fingerprint: reference_fingerprint,
+            removal_authority_fingerprint: authority_fingerprint,
             retention_reachable_commit_count: 2,
             worktree_count: 1,
             removal_candidate_count: 1,
@@ -2307,6 +2490,59 @@ mod tests {
             &["worktree", "add", secondary.to_str().unwrap(), "merged"],
         );
         (temp, repository, secondary)
+    }
+
+    #[cfg(all(unix, not(coverage)))]
+    #[test]
+    fn exact_closed_pull_request_branch_and_head_authorize_clean_unmerged_worktree() {
+        let temp = tempfile::tempdir().unwrap();
+        let repository = temp.path().join("repository");
+        let secondary = temp.path().join("closed-pr");
+        fs::create_dir(&repository).unwrap();
+        git(&repository, &["init", "-b", "main"]);
+        fs::write(repository.join("evidence.txt"), b"main\n").unwrap();
+        git(&repository, &["add", "evidence.txt"]);
+        git(&repository, &["commit", "-m", "main"]);
+        git(&repository, &["branch", "closed-pr"]);
+        git(
+            &repository,
+            &["worktree", "add", secondary.to_str().unwrap(), "closed-pr"],
+        );
+        fs::write(secondary.join("closed.txt"), b"closed\n").unwrap();
+        git(&secondary, &["add", "closed.txt"]);
+        git(&secondary, &["commit", "-m", "closed-only"]);
+        let head = command_text(
+            &run_git(
+                &secondary,
+                &[OsString::from("rev-parse"), OsString::from("HEAD")],
+                5_000,
+                "test-rev-parse",
+            )
+            .unwrap()
+            .stdout,
+            "test-head-not-utf8",
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+        let closed = BTreeSet::from([("refs/heads/closed-pr".into(), head)]);
+
+        let report = audit_git_worktrees_with_closed_pull_request_heads(
+            &repository,
+            &["refs/heads/main".into()],
+            &closed,
+            GitWorktreeAuditOptions::default(),
+            42,
+        )
+        .unwrap();
+        let entry = report
+            .entries
+            .iter()
+            .find(|entry| entry.branch.as_deref() == Some("refs/heads/closed-pr"))
+            .unwrap();
+        assert_eq!(entry.contained_in_reference, Some(false));
+        assert!(entry.closed_pull_request_head);
+        assert_eq!(entry.disposition, GitWorktreeDisposition::RemovalCandidate);
     }
 
     #[test]
@@ -2373,7 +2609,11 @@ mod tests {
         fs::create_dir_all(&worktree).unwrap();
         let admin = common_dir.join("worktrees").join("linked");
         fs::create_dir_all(&admin).unwrap();
-        fs::write(admin.join("gitdir"), format!("{}/.git\n", worktree.display())).unwrap();
+        fs::write(
+            admin.join("gitdir"),
+            format!("{}/.git\n", worktree.display()),
+        )
+        .unwrap();
         fs::write(admin.join("HEAD"), format!("{}\n", oid('a'))).unwrap();
 
         let (entries, _) =
@@ -2455,6 +2695,7 @@ mod tests {
             path_valid: true,
             status_clean: Some(true),
             contained_in_reference: Some(true),
+            closed_pull_request_head: false,
             head_is_retained_tip: false,
             actor_cwd_inside: Some(false),
             size_complete: true,
@@ -2463,6 +2704,13 @@ mod tests {
             active_use_active: false,
         };
         assert!(candidate_blockers(&safe).is_empty());
+
+        let closed_unmerged = ClassificationInput {
+            contained_in_reference: Some(false),
+            closed_pull_request_head: true,
+            ..safe
+        };
+        assert!(candidate_blockers(&closed_unmerged).is_empty());
 
         let dirty = ClassificationInput {
             status_clean: Some(false),
@@ -2534,6 +2782,7 @@ mod tests {
             status_clean: Some(true),
             status_entry_count: Some(0),
             contained_in_reference: Some(true),
+            closed_pull_request_head: false,
             head_is_retained_tip: false,
             actor_cwd_inside: Some(false),
             size,
@@ -2557,7 +2806,7 @@ mod tests {
     fn public_summary_redacts_local_identity_and_denies_execution_claims() {
         let report = GitWorktreeAuditReport {
             schema_kind: GIT_WORKTREE_AUDIT_SCHEMA_KIND.into(),
-            version: 2,
+            version: 3,
             repository_root: "/private/repo".into(),
             common_dir: "/private/repo/.git".into(),
             generated_at_ms: 1,
@@ -2566,6 +2815,7 @@ mod tests {
                 reference_oid: oid('a'),
             }],
             retention_reference_set_fingerprint: "r".repeat(64),
+            removal_authority_fingerprint: "a".repeat(64),
             retention_reachable_commit_count: 1,
             worktree_count: 1,
             removal_candidate_count: 0,

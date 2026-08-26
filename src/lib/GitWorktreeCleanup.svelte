@@ -7,6 +7,7 @@
 
   let repositoryRoot = $state("");
   let retentionText = $state("");
+  let includeClosedPullRequests = $state(true);
   let planning = $state(false);
   let executing = $state(false);
   let error = $state("");
@@ -68,7 +69,7 @@
     planning = true;
     resetDecision();
     try {
-      report = await api.planStaleGitWorktrees(root, references);
+      report = await api.planStaleGitWorktrees(root, references, includeClosedPullRequests);
       repositoryRoot = report.repository_root;
       retentionText = report.retention_references
         .map((binding) => binding.reference_ref)
@@ -105,6 +106,7 @@
       removal = await api.removeStaleGitWorktrees(
         report.repository_root,
         report.retention_references.map((binding) => binding.reference_ref),
+        includeClosedPullRequests,
         report.removal_plan_fingerprint,
         confirmationPhrase,
         rationale.trim(),
@@ -152,6 +154,18 @@
       disabled={planning || executing}
     ></textarea>
   </label>
+  <label class="closed-pr-option">
+    <input
+      type="checkbox"
+      bind:checked={includeClosedPullRequests}
+      onchange={resetDecision}
+      disabled={planning || executing}
+    />
+    GitHub에서 병합 없이 종료된 PR의 깨끗한 worktree도 포함
+  </label>
+  {#if includeClosedPullRequests}
+    <p class="muted">선택한 저장소에 로그인된 GitHub 연결이 필요합니다.</p>
+  {/if}
   <button
     onclick={inspectWorktrees}
     disabled={planning || executing || !repositoryRoot.trim() || retentionReferences().length === 0}
@@ -170,12 +184,14 @@
       </div>
       <p class="fingerprint">계획 지문: {report.removal_plan_fingerprint}</p>
       <p class="fingerprint">보존 ref 지문: {report.retention_reference_set_fingerprint}</p>
+      <p class="fingerprint">삭제 권한 지문: {report.removal_authority_fingerprint}</p>
 
       {#if candidateEntries().length > 0}
         <ul class="worktrees">
           {#each candidateEntries() as candidate (candidate.path_fingerprint)}
             <li>
               <div><strong>{candidate.branch ?? "분리된 HEAD"}</strong> · {fmtBytes(candidate.size.allocated_bytes)}</div>
+              <div class="muted">{candidate.closed_pull_request_head ? "종료된 PR" : "보존 ref에 병합됨"}</div>
               <div class="path" title={candidate.path}>{candidate.path}</div>
               <div class="oid">HEAD {candidate.head}</div>
             </li>
@@ -255,6 +271,8 @@
   .inputs { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end; }
   .inputs label { flex: 1 1 30rem; }
   label { display: grid; gap: 0.2rem; font-size: 0.82rem; color: #4d5660; }
+  .closed-pr-option { display: flex; align-items: center; gap: 0.45rem; }
+  .closed-pr-option input { margin: 0; }
   .path-input, .references, .confirmation { width: min(60rem, 90vw); font-family: ui-monospace, monospace; }
   .references { min-height: 4rem; }
   .confirmation { min-height: 4.5rem; }
