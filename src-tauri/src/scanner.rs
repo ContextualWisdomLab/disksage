@@ -174,6 +174,7 @@ fn scan_dir_with_interval_inner(
     let mut seen: u64 = 0;
     let traversal_root = read_only_traversal_root(root);
     let provider_roots_skipped = Cell::new(0_u64);
+    let mut reported_provider_roots_skipped = 0_u64;
 
     let walker = walkdir::WalkDir::new(&traversal_root)
         .follow_links(false)
@@ -223,14 +224,20 @@ fn scan_dir_with_interval_inner(
         }
         // dir도 file도 아닌 항목(FIFO/소켓 등)은 집계 없이 무시됨 (심링크/reparse는 keep_entry가 순회에서 제외)
         if seen % progress_every == 0 {
+            let skipped_provider_roots = provider_roots_skipped.get();
             let mut progress = stats.clone();
-            progress.skipped = progress
-                .skipped
-                .saturating_add(provider_roots_skipped.get());
+            progress.skipped = progress.skipped.saturating_add(skipped_provider_roots);
             on_progress(&progress);
+            reported_provider_roots_skipped = skipped_provider_roots;
         }
     }
-    stats.skipped = stats.skipped.saturating_add(provider_roots_skipped.get());
+    let final_provider_roots_skipped = provider_roots_skipped.get();
+    if final_provider_roots_skipped > reported_provider_roots_skipped {
+        let mut progress = stats.clone();
+        progress.skipped = progress.skipped.saturating_add(final_provider_roots_skipped);
+        on_progress(&progress);
+    }
+    stats.skipped = stats.skipped.saturating_add(final_provider_roots_skipped);
 
     let mut top_files: Vec<(PathBuf, u64)> = top
         .into_iter()
