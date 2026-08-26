@@ -39,6 +39,9 @@ fn run() -> Result<(), String> {
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--runtime") => {
+                if runtime.is_some() {
+                    return Err(format!("--runtime may be supplied once\n{USAGE}"));
+                }
                 let value = next_utf8_argument(
                     &mut args,
                     "--runtime requires a kind",
@@ -52,6 +55,9 @@ fn run() -> Result<(), String> {
                 });
             }
             Some("--scope") => {
+                if scope.is_some() {
+                    return Err(format!("--scope may be supplied once\n{USAGE}"));
+                }
                 scope = Some(next_utf8_argument(
                     &mut args,
                     "--scope requires a name",
@@ -59,12 +65,20 @@ fn run() -> Result<(), String> {
                 )?);
             }
             Some("--bin") => {
+                if binary_path.is_some() {
+                    return Err(format!("--bin may be supplied once\n{USAGE}"));
+                }
                 binary_path = Some(PathBuf::from(
                     args.next()
                         .ok_or_else(|| "--bin requires a path".to_string())?,
                 ));
             }
-            Some("--pretty") => pretty = true,
+            Some("--pretty") => {
+                if pretty {
+                    return Err(format!("--pretty may be supplied once\n{USAGE}"));
+                }
+                pretty = true;
+            }
             Some(_) => return Err(format!("unknown option\n{USAGE}")),
             None => return Err(format!("non-UTF-8 argument\n{USAGE}")),
         }
