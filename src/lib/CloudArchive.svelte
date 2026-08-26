@@ -1365,7 +1365,6 @@
         <strong>{copied.goal_status === "blocked" ? "복사 완료 · 클라우드 확인 대기" : copied.action === "adopt-existing-copy" ? "기존 클라우드 파일 확인·채택 완료" : "클라우드 복사 완료"} · 원본 보존됨</strong>
         <div class="context">복사한 크기 {fmtBytes(copied.receipt.bytes)}</div>
         <div class="path">{copied.receipt.destination}</div>
-        <p class="muted">클라우드 파일 확인 결과를 확인한 뒤 원본 정리를 선택할 수 있습니다.</p>
         <p class="muted">클라우드 파일을 확인한 뒤 원본을 정리할 수 있습니다.</p>
         {#if copied.receipt.provider === "google-drive"}
           <div class="provider-auth">
