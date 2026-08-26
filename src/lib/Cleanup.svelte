@@ -53,7 +53,7 @@
       const cacheTrashReview = await reviewProvenCacheTrash();
       const purgeAvailability = cacheTrashPurgeAvailability(cacheTrashReview);
       cacheTrash = cacheTrashReview.candidates;
-      cacheTrashApprovalPhrase = cacheTrashReview.approval_phrase;
+      cacheTrashApprovalPhrase = purgeAvailability.canPurge ? cacheTrashReview.approval_phrase : null;
       cacheTrashSupported = cacheTrashReview.supported;
       cacheTrashNotice = cacheTrashReview.notice;
       cacheTrashPurgeAvailable = purgeAvailability.canPurge;
@@ -262,8 +262,7 @@
   {/if}
   {#if cacheTrashPurgeInstruction}
     <p class="notice" role="status">{cacheTrashPurgeInstruction}</p>
-  {/if}
-  {#if cacheTrash.length > 0}
+  {:else if cacheTrash.length > 0}
     <div class="trash-cleanup">
       <p class="notice" role="status">
         휴지통에 남은 재생성 가능한 캐시 {cacheTrash.length}개({fmtBytes(cacheTrash.reduce((sum, item) => sum + item.bytes, 0))})가

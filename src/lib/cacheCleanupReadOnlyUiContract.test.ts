@@ -19,4 +19,14 @@ describe("cache cleanup fail-closed UX", () => {
     expect(cleanup).toContain("각 항목의 크기와 수정 시각을 다시 확인합니다");
     expect(cleanup).not.toContain("active-use");
   });
+
+  it("does not render the permanent-delete action when the backend withholds destructive authority", () => {
+    const cleanup = readSource("src/lib/Cleanup.svelte");
+
+    expect(cleanup).toContain('import { cacheTrashPurgeAvailability } from "./cacheTrashPurgeAvailability"');
+    expect(cleanup).toContain("cacheTrashPurgeInstruction = purgeAvailability.instruction");
+    expect(cleanup).toContain("cacheTrashApprovalPhrase = purgeAvailability.canPurge ? cacheTrashReview.approval_phrase : null");
+    expect(cleanup).toContain("{#if cacheTrashPurgeInstruction}");
+    expect(cleanup).toContain("{:else if cacheTrash.length > 0}");
+  });
 });

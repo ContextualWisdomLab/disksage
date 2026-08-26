@@ -8,18 +8,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
-- Show regenerable cache entries that are already in the Trash and let the operator permanently
-  remove only those structurally proven entries, so moving a cache to Trash can be followed by
-  an explicit action that actually releases local capacity. User files and unrelated Trash items
-  remain outside this action, each removal is revalidated and journaled, and the UI reports the
-  observed before/after available-space change when the filesystem provides it.
-- Preserve each deletion result when a terminal journal write fails, marking the audit failure on
-  that item instead of hiding an already-completed removal behind an all-or-nothing error.
-- Bind the desktop purge action to the current proven-Trash candidate set so a changed list is
-  rejected before deletion; pending journal failures now remain visible per item as well.
-- Produce the Trash list and approval phrase as one snapshot, revalidate only that submitted set
-  immediately before deletion, and support the native Trash directory on macOS/Linux while
-  returning no candidates on Windows until Recycle Bin identity guarantees are implemented.
+- Show structurally proven regenerable cache entries already in the macOS Trash as read-only review
+  evidence, but withhold destructive approval while the final irreversible deletion primitive cannot
+  stay bound to the exact reviewed filesystem object. The desktop gives the operator a manual macOS
+  Trash next action instead of advertising an in-app permanent-delete capability that is not safe.
+- Bind the reviewed cache-Trash snapshot to each root filesystem identity so pathname-compatible
+  replacements invalidate the review phrase; direct purge attempts fail closed with
+  `cache-trash-identity-bound-permanent-delete-unavailable` and leave the reviewed cache intact.
+- Keep candidate discovery scoped to native macOS Trash until equivalent Linux/Windows native Trash
+  enumeration is implemented; user files, unrelated Trash entries, and provider placeholders remain
+  outside the candidate set.
 - Keep cache cleanup guidance focused on what the operator can do next without exposing internal
   identity or activity-check terminology.
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
