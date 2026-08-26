@@ -23,10 +23,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -368,9 +368,10 @@ fn parse_container_records(output: &str) -> Result<Vec<ContainerRecord>, String>
                 .iter()
                 .filter_map(|item| item.as_str().map(str::to_string))
                 .collect(),
-            // Podman serializes Names as a JSON-encoded array string in some versions.
-            Some(Value::String(encoded)) => serde_json::from_str::<Vec<String>>(&encoded)
-                .map_err(|_| "container-names-invalid".to_string())?,
+            // Podman may serialize Names as a JSON-encoded array string; Docker emits a plain
+            // comma-joined string. Names are not used for candidacy, so accept both shapes.
+            Some(Value::String(encoded)) => serde_json::from_str::<Vec<String>>(encoded)
+                .unwrap_or_else(|_| encoded.split(',').map(str::to_string).collect()),
             None => Vec::new(),
             Some(_) => return Err("container-names-invalid".to_string()),
         };
