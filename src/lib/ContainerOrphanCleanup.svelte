@@ -33,6 +33,14 @@
     return plan.runtime.kind;
   }
 
+  function executionScope(kind: api.ContainerRuntimeKind): string | null {
+    switch (kind) {
+      case "docker-native": return null;
+      case "docker-colima-context": return "colima";
+      case "podman-machine": return "podman-machine-default";
+    }
+  }
+
   function categoryKey(key: string, category: api.OrphanCategory): string {
     return `${key}:${category}`;
   }
@@ -80,6 +88,7 @@
     try {
       executions[key] = await api.executeContainerOrphanPrune(
         plan.runtime.kind,
+        executionScope(plan.runtime.kind),
         category,
         phrase,
         rationale,
