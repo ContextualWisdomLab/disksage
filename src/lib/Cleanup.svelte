@@ -2,6 +2,7 @@
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
   import { verdictBadge } from "./verdictBadge";
+  import { podmanEvidenceErrorMessage } from "./podmanEvidenceError";
   import { confirm } from "@tauri-apps/plugin-dialog";
   import GitWorktreeCleanup from "./GitWorktreeCleanup.svelte";
   import BrewCleanup from "./BrewCleanup.svelte";
@@ -54,7 +55,7 @@
     try {
       podmanPlan = await api.inspectPodmanReclaim();
     } catch (e) {
-      podmanError = String(e);
+      podmanError = podmanEvidenceErrorMessage(e);
       podmanPlan = null;
     } finally {
       podmanBusy = false;
@@ -88,7 +89,7 @@
       podmanPruneRationale = "";
       podmanPlan = await api.inspectPodmanReclaim();
     } catch (e) {
-      podmanPruneError = String(e);
+      podmanPruneError = podmanEvidenceErrorMessage(e);
     } finally {
       podmanPruneBusy = false;
     }
@@ -274,7 +275,8 @@
 
   <h3>Podman VM 저장소</h3>
   <p class="notice">
-    게스트·이미지·volume 증거만 읽습니다. prune, 삭제, trim, 중지는 이 화면에서 실행하지 않습니다.
+    상태 조회는 읽기 전용입니다. dangling 이미지 정리는 정확한 승인 문구와 사유를 입력한 뒤에만 실행됩니다.
+    volume·컨테이너·tagged image·VM·TRIM·raw image는 이 흐름에서 변경하지 않으며,
     실제 물리 회수량은 전후 호스트 관측 없이는 확정하지 않습니다.
   </p>
   <button onclick={inspectPodman} disabled={podmanBusy}>
