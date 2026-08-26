@@ -4,7 +4,7 @@
 //! dangling volumes, and unused custom networks — across three runtime targets:
 //!
 //! - `docker` with the default context (`DockerNative`)
-//! - `docker --context colima` for Colima-managed Docker sockets (`DockerColimaContext`)
+//! - `docker --context colima` for a Colima-managed socket (`DockerColimaContext`)
 //! - `podman --connection <machine>` against a running Podman machine (`PodmanMachine`)
 //!
 //! Safety contract shared with [`crate::podman_reclaim`]:
@@ -272,12 +272,6 @@ pub struct ContainerOrphanPruneExecution {
     pub rationale: String,
 }
 
-// ---------------------------------------------------------------------------
-// Tolerant record parsing. Docker emits NDJSON (one object per line) while Podman
-// emits a JSON array; both use PascalCase keys except Podman's network listing,
-// which uses lowercase keys. Parsers accept either envelope and key casing.
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ContainerRecord {
     id: String,
@@ -313,8 +307,6 @@ fn split_json_envelopes(output: &str) -> Result<Vec<Value>, String> {
     if let Ok(Value::Array(records)) = serde_json::from_str::<Value>(trimmed) {
         return Ok(records);
     }
-    // NDJSON: skip blank lines, fail closed on any malformed line instead of skipping it,
-    // because silently dropping a record could hide a referenced resource from evidence.
     let mut records = Vec::new();
     for line in trimmed.lines() {
         let line = line.trim();
@@ -340,7 +332,6 @@ fn string_field(record: &Value, keys: &[&str]) -> Result<String, String> {
     Err(format!("json-field-missing:{}", keys[0]))
 }
 
-/// Normalizes a runtime-reported ID to bare lowercase hex, rejecting anything else.
 fn normalize_hex_id(raw: &str, label: &str) -> Result<String, String> {
     let stripped = raw.strip_prefix("sha256:").unwrap_or(raw);
     if stripped.len() == 64
@@ -368,9 +359,14 @@ fn parse_container_records(output: &str) -> Result<Vec<ContainerRecord>, String>
                 .iter()
                 .filter_map(|item| item.as_str().map(str::to_string))
                 .collect(),
-            // Podman serializes Names as a JSON-encoded array string in some versions.
-            Some(Value::String(encoded)) => serde_json::from_str::<Vec<String>>(&encoded)
-                .map_err(|_| "container-names-invalid".to_string())?,
+            Some(Value::String(encoded)) => match serde_json::from_str::<Vec<String>>(encoded) {
+                Ok(names) => names,
+                Err(_) => encoded
+                    .split(',')
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_string)
+                    .collect(),
+            },
             None => Vec::new(),
             Some(_) => return Err("container-names-invalid".to_string()),
         };
@@ -379,9 +375,6 @@ fn parse_container_records(output: &str) -> Result<Vec<ContainerRecord>, String>
     Ok(records)
 }
 
-/// Containers are orphan candidates only when fully stopped: `exited`, `created`, `dead`,
-/// or Podman's documented `stopped`. Known pre-start/transitional states are preserved; only
-/// unrecognized states fail the category closed.
 fn classify_container_candidates(
     records: &[ContainerRecord],
 ) -> Result<(u64, Vec<&ContainerRecord>), String> {
@@ -405,13 +398,11 @@ fn parse_u64_field(record: &Value, keys: &[&str]) -> Result<Option<u64>, String>
             None => continue,
         };
         return match field {
-            Value::Number(number) => {
-                Ok(Some(number.as_u64().ok_or_else(|| {
-                    format!("json-field-invalid:{}", keys[0])
-                })?))
-            }
-            // Docker serializes numeric fields as strings; "-1" means unknown and must
-            // fail closed rather than being treated as zero references.
+            Value::Number(number) => Ok(Some(
+                number
+                    .as_u64()
+                    .ok_or_else(|| format!("json-field-invalid:{}", keys[0]))?,
+            )),
             Value::String(text) if text == "-1" => Err(format!("json-field-invalid:{}", keys[0])),
             Value::String(text) => text
                 .parse::<u64>()
@@ -472,8 +463,6 @@ fn parse_docker_dangling_image_ids(output: &str) -> Result<Vec<String>, String> 
         .collect()
 }
 
-/// Images are candidates only with proven zero references and no usable tag/digest.
-/// A missing container-reference count fails closed for that record.
 fn classify_image_candidates(records: &[ImageRecord]) -> Result<(u64, Vec<&ImageRecord>), String> {
     let mut candidates = Vec::new();
     for record in records {
@@ -545,8 +534,6 @@ fn parse_network_records(output: &str) -> Result<Vec<NetworkRecord>, String> {
     Ok(records)
 }
 
-/// Networks are candidates when they are custom (driver `bridge` or equivalent), not
-/// built-in by name, and confirmed to carry zero attached containers via inspect.
 fn classify_network_candidates<'a>(
     records: &'a [NetworkRecord],
     attached_network_names: &[String],
@@ -567,9 +554,6 @@ fn classify_network_candidates<'a>(
     Ok((total, candidates))
 }
 
-/// Parses `network inspect <name>` output and reports whether any container endpoint
-/// is attached. Both runtimes expose an attached-container map keyed by endpoint ID;
-/// Docker uses `Containers`, Podman uses `containers` on the single inspected object.
 fn network_has_attached_containers(output: &str) -> Result<bool, String> {
     let value = serde_json::from_str::<Value>(output.trim())
         .map_err(|error| format!("invalid-network-inspect-json:{error}"))?;
@@ -592,10 +576,6 @@ fn network_has_attached_containers(output: &str) -> Result<bool, String> {
     })
 }
 
-// ---------------------------------------------------------------------------
-// Identity binding and approval phrasing.
-// ---------------------------------------------------------------------------
-
 fn hash_frame(hasher: &mut Sha256, value: &[u8]) {
     hasher.update((value.len() as u64).to_be_bytes());
     hasher.update(value);
@@ -611,8 +591,6 @@ fn lower_hex(bytes: &[u8]) -> String {
     encoded
 }
 
-/// Binds the exact candidate identity set into a SHA-256 fingerprint.
-/// Identities are hashed in sorted order so report ordering cannot change evidence.
 fn candidate_fingerprint(domain_tag: &str, ids: &[&str]) -> String {
     let mut ordered: Vec<&str> = ids.to_vec();
     ordered.sort_unstable();
@@ -681,10 +659,6 @@ fn redacted_exact_delete_command(
     }
     command
 }
-
-// ---------------------------------------------------------------------------
-// Bounded subprocess plumbing (same contract as podman_reclaim).
-// ---------------------------------------------------------------------------
 
 fn drain_bounded<R: std::io::Read>(mut reader: R) -> std::io::Result<(Vec<u8>, bool)> {
     let mut buffer = [0u8; 65_536];
@@ -815,11 +789,6 @@ fn command_text(
     Ok(output.stdout)
 }
 
-// ---------------------------------------------------------------------------
-// Audit and execution entry points.
-// ---------------------------------------------------------------------------
-
-/// Runs `info` against the target to confirm the runtime is reachable and healthy.
 pub fn probe_runtime_health(target: &ContainerRuntimeTarget) -> RuntimeHealthEvidence {
     let detail_issue = (|| -> Result<(), String> {
         let prefix = target.command_prefix()?;
@@ -877,22 +846,16 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                     "json",
                 ]);
             }
-            OrphanCategory::Image => {
-                args.extend(["images", "--all", "--format", "json"]);
-            }
-            OrphanCategory::Volume => {
-                args.extend([
-                    "volume",
-                    "ls",
-                    "--filter",
-                    "dangling=true",
-                    "--format",
-                    "json",
-                ]);
-            }
-            OrphanCategory::Network => {
-                args.extend(["network", "ls", "--format", "json"]);
-            }
+            OrphanCategory::Image => args.extend(["images", "--all", "--format", "json"]),
+            OrphanCategory::Volume => args.extend([
+                "volume",
+                "ls",
+                "--filter",
+                "dangling=true",
+                "--format",
+                "json",
+            ]),
+            OrphanCategory::Network => args.extend(["network", "ls", "--format", "json"]),
         }
         let output = command_text(
             &target.binary_path,
@@ -913,9 +876,6 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                 )
             }
             OrphanCategory::Image if target.kind.is_docker() => {
-                // Docker's documented JSON formatter renders Size as a human string and
-                // Containers as "N/A". The daemon's `dangling=true` filter is the
-                // authoritative predicate for the exact default image-prune category.
                 let candidate_ids = parse_docker_dangling_image_ids(&output)?;
                 let total = u64::try_from(candidate_ids.len())
                     .map_err(|_| "record-count-overflow".to_string())?;
@@ -943,8 +903,7 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                 let records = parse_volume_records(&output)?;
                 let total = u64::try_from(records.len())
                     .map_err(|_| "record-count-overflow".to_string())?;
-                let candidate_ids: Vec<String> =
-                    records.iter().map(|record| record.name.clone()).collect();
+                let candidate_ids: Vec<String> = records.iter().map(|record| record.name.clone()).collect();
                 let ids: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
                 (
                     Some(summarize_candidates(category, total, &ids, None)?),
@@ -953,8 +912,6 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
             }
             OrphanCategory::Network => {
                 let records = parse_network_records(&output)?;
-                // Confirm each non-builtin network carries zero endpoints before it can
-                // count as a candidate; any inspect failure fails the category closed.
                 let mut attached: Vec<String> = Vec::new();
                 let mut inspected_candidates = 0usize;
                 for record in &records {
@@ -967,9 +924,7 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                         return Err("network-candidate-count-exceeds-bound".to_string());
                     }
                     inspected_candidates = inspected_candidates.saturating_add(1);
-                    let has_attached_containers = if target.kind
-                        == ContainerRuntimeKind::PodmanMachine
-                    {
+                    let has_attached_containers = if target.kind == ContainerRuntimeKind::PodmanMachine {
                         let filter = format!("network={}", record.name);
                         let mut membership_args: Vec<&str> =
                             prefix.iter().skip(1).map(String::as_str).collect();
@@ -1005,8 +960,7 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                     }
                 }
                 let (total, candidates) = classify_network_candidates(&records, &attached)?;
-                let candidate_ids: Vec<String> =
-                    candidates.iter().map(|candidate| candidate.name.clone()).collect();
+                let candidate_ids: Vec<String> = candidates.iter().map(|candidate| candidate.name.clone()).collect();
                 let ids: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
                 (
                     Some(summarize_candidates(category, total, &ids, None)?),
@@ -1043,7 +997,6 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
     }
 }
 
-/// Audits every orphan category on one healthy runtime target, read-only.
 pub fn probe_container_orphans(target: &ContainerRuntimeTarget) -> ContainerOrphanPlan {
     let started = Instant::now();
     let runtime = probe_runtime_health(target);
@@ -1095,9 +1048,6 @@ fn current_epoch_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// Executes one category's deletion behind the full fail-closed gate:
-/// validated rationale, validated scope, fresh re-audit whose candidate set is
-/// non-empty, phrase equality, then exact identity-bound deletion.
 pub fn execute_container_orphan_prune(
     target: &ContainerRuntimeTarget,
     category: OrphanCategory,
@@ -1116,7 +1066,6 @@ pub fn execute_container_orphan_prune(
         return Err("orphan-prune-rationale-invalid".into());
     }
     let prefix = target.command_prefix()?;
-    // Fresh re-audit binds execution to evidence observed now, not to stale UI state.
     let plan = audit_category(target, category);
     if !plan.evidence_complete {
         return Err(format!(
@@ -1183,8 +1132,6 @@ mod tests {
 
     const DOCKER_ID_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const DOCKER_ID_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-
-    // -- scope validation and command prefix --------------------------------
 
     #[test]
     fn scope_name_rejects_option_injection() {
@@ -1286,8 +1233,6 @@ mod tests {
         );
     }
 
-    // -- envelope splitting ---------------------------------------------------
-
     #[test]
     fn envelopes_accept_array_and_ndjson() {
         let array = r#"[{"ID":"a"},{"ID":"b"}]"#;
@@ -1300,8 +1245,6 @@ mod tests {
             .unwrap_err()
             .starts_with("invalid-json-record:"));
     }
-
-    // -- container records -----------------------------------------------------
 
     #[test]
     fn docker_container_records_parse_from_ndjson() {
@@ -1326,7 +1269,6 @@ mod tests {
         let records = parse_container_records(&output).unwrap();
         assert_eq!(records[0].names, vec!["worker"]);
         let (_, candidates) = classify_container_candidates(&records).unwrap();
-        // `created` is a stop-state candidate; `paused` never is.
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].state, "created");
     }
@@ -1334,37 +1276,26 @@ mod tests {
     #[test]
     fn unknown_container_state_fails_closed() {
         let output = format!("{{\"ID\":\"{DOCKER_ID_A}\",\"State\":\"zombie\",\"Names\":[]}}");
-        let error =
-            classify_container_candidates(&parse_container_records(&output).unwrap()).unwrap_err();
+        let error = classify_container_candidates(&parse_container_records(&output).unwrap()).unwrap_err();
         assert_eq!(error, "unknown-container-state:zombie");
     }
 
     #[test]
     fn invalid_container_id_fails_closed() {
         let output = "{\"ID\":\"short\",\"State\":\"exited\",\"Names\":[]}";
-        assert_eq!(
-            parse_container_records(output).unwrap_err(),
-            "container-invalid-id"
-        );
+        assert_eq!(parse_container_records(output).unwrap_err(), "container-invalid-id");
     }
 
     #[test]
     fn uppercase_container_id_fails_closed() {
-        let output =
-            "{\"ID\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"State\":\"exited\",\"Names\":[]}";
-        assert_eq!(
-            parse_container_records(output).unwrap_err(),
-            "container-invalid-id"
-        );
+        let output = "{\"ID\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"State\":\"exited\",\"Names\":[]}";
+        assert_eq!(parse_container_records(output).unwrap_err(), "container-invalid-id");
     }
 
     #[test]
     fn malformed_container_names_fail_closed() {
         let output = format!("{{\"ID\":\"{DOCKER_ID_A}\",\"State\":\"exited\",\"Names\":5}}");
-        assert_eq!(
-            parse_container_records(&output).unwrap_err(),
-            "container-names-invalid"
-        );
+        assert_eq!(parse_container_records(&output).unwrap_err(), "container-names-invalid");
     }
 
     #[test]
@@ -1375,13 +1306,8 @@ mod tests {
                 "{{\"ID\":\"{index:064x}\",\"State\":\"exited\",\"Names\":[]}}\n"
             ));
         }
-        assert_eq!(
-            parse_container_records(&output).unwrap_err(),
-            "record-count-exceeds-bound"
-        );
+        assert_eq!(parse_container_records(&output).unwrap_err(), "record-count-exceeds-bound");
     }
-
-    // -- image records -----------------------------------------------------------
 
     #[test]
     fn docker_image_records_coerce_string_numbers_and_fail_on_negative() {
@@ -1397,10 +1323,7 @@ mod tests {
         let documented = format!(
             "{{\"Containers\":\"N/A\",\"ID\":\"{DOCKER_ID_A}\",\"Repository\":\"<none>\",\"Size\":\"72.9MB\",\"Tag\":\"<none>\"}}"
         );
-        assert_eq!(
-            parse_docker_dangling_image_ids(&documented).unwrap(),
-            vec![DOCKER_ID_A.to_string()]
-        );
+        assert_eq!(parse_docker_dangling_image_ids(&documented).unwrap(), vec![DOCKER_ID_A.to_string()]);
         assert_eq!(
             parse_docker_dangling_image_ids("{\"ID\":\"a762a2b37a1d\"}").unwrap_err(),
             "image-invalid-id"
@@ -1409,15 +1332,9 @@ mod tests {
 
     #[test]
     fn image_orphans_require_zero_references_and_no_tags() {
-        let referenced = format!(
-            "{{\"Containers\":\"2\",\"ID\":\"{DOCKER_ID_A}\",\"RepoTags\":[\"img:latest\"],\"RepoDigests\":[],\"Size\":\"100\"}}"
-        );
-        let tagged_unused = format!(
-            "{{\"Containers\":\"0\",\"ID\":\"{DOCKER_ID_A}\",\"RepoTags\":[\"img:v2\"],\"RepoDigests\":[],\"Size\":\"100\"}}"
-        );
-        let dangling = format!(
-            "{{\"Containers\":0,\"ID\":\"{DOCKER_ID_A}\",\"RepoTags\":null,\"RepoDigests\":[],\"Size\":100}}"
-        );
+        let referenced = format!("{{\"Containers\":\"2\",\"ID\":\"{DOCKER_ID_A}\",\"RepoTags\":[\"img:latest\"],\"RepoDigests\":[],\"Size\":\"100\"}}");
+        let tagged_unused = format!("{{\"Containers\":\"0\",\"ID\":\"{DOCKER_ID_A}\",\"RepoTags\":[\"img:v2\"],\"RepoDigests\":[],\"Size\":\"100\"}}");
+        let dangling = format!("{{\"Containers\":0,\"ID\":\"{DOCKER_ID_A}\",\"RepoTags\":null,\"RepoDigests\":[],\"Size\":100}}");
         let orphan_count = |text: &str| {
             let records = parse_image_records(text).unwrap();
             classify_image_candidates(&records).unwrap().1.len()
@@ -1429,8 +1346,7 @@ mod tests {
 
     #[test]
     fn missing_container_reference_count_fails_closed_per_record() {
-        let output =
-            format!("{{\"ID\":\"{DOCKER_ID_A}\",\"RepoTags\":[],\"RepoDigests\":[],\"Size\":10}}");
+        let output = format!("{{\"ID\":\"{DOCKER_ID_A}\",\"RepoTags\":[],\"RepoDigests\":[],\"Size\":10}}");
         let records = parse_image_records(&output).unwrap();
         assert_eq!(
             classify_image_candidates(&records).unwrap_err(),
@@ -1441,22 +1357,14 @@ mod tests {
     #[test]
     fn missing_size_field_fails_closed() {
         let output = format!("{{\"ID\":\"{DOCKER_ID_A}\",\"Containers\":0}}");
-        assert_eq!(
-            parse_image_records(&output).unwrap_err(),
-            "json-field-missing:Size"
-        );
+        assert_eq!(parse_image_records(&output).unwrap_err(), "json-field-missing:Size");
     }
 
     #[test]
     fn invalid_image_id_fails_closed() {
         let output = format!("{{\"ID\":\"zzzz\",\"Containers\":0,\"Size\":1}}");
-        assert_eq!(
-            parse_image_records(&output).unwrap_err(),
-            "image-invalid-id"
-        );
+        assert_eq!(parse_image_records(&output).unwrap_err(), "image-invalid-id");
     }
-
-    // -- volume records ------------------------------------------------------------
 
     #[test]
     fn volume_names_parse_from_both_envelopes() {
@@ -1469,23 +1377,13 @@ mod tests {
     #[test]
     fn unsafe_volume_names_fail_closed() {
         let overlong = format!("{{\"Name\":\"{}\"}}", "v".repeat(201));
-        assert_eq!(
-            parse_volume_records(&overlong).unwrap_err(),
-            "volume-invalid-name"
-        );
-        assert_eq!(
-            parse_volume_records("{\"Name\":\"\"}").unwrap_err(),
-            "volume-invalid-name"
-        );
+        assert_eq!(parse_volume_records(&overlong).unwrap_err(), "volume-invalid-name");
+        assert_eq!(parse_volume_records("{\"Name\":\"\"}").unwrap_err(), "volume-invalid-name");
     }
-
-    // -- network records ---------------------------------------------------------------
 
     #[test]
     fn network_records_parse_docker_casing_and_podman_casing() {
-        let docker = format!(
-            "[{{\"Driver\":\"bridge\",\"ID\":\"net-id-1\",\"Name\":\"app-net\"}},{{\"Driver\":\"host\",\"ID\":\"h\",\"Name\":\"host\"}}]"
-        );
+        let docker = format!("[{{\"Driver\":\"bridge\",\"ID\":\"net-id-1\",\"Name\":\"app-net\"}},{{\"Driver\":\"host\",\"ID\":\"h\",\"Name\":\"host\"}}]");
         let records = parse_network_records(&docker).unwrap();
         assert_eq!(records.len(), 2);
         let attached: Vec<String> = Vec::new();
@@ -1514,8 +1412,7 @@ mod tests {
     fn network_attached_container_detection_covers_shapes() {
         let docker_empty = r#"[{"Containers":{},"Name":"x"}]"#;
         assert!(!network_has_attached_containers(docker_empty).unwrap());
-        let docker_full =
-            format!(r#"[{{"Containers":{{"endpoint-1":{{"Name":"web"}}}},"Name":"x"}}]"#);
+        let docker_full = format!(r#"[{{"Containers":{{"endpoint-1":{{"Name":"web"}}}},"Name":"x"}}]"#);
         assert!(network_has_attached_containers(&docker_full).unwrap());
         let podman_empty = r#"{"containers":[],"name":"y"}"#;
         assert!(!network_has_attached_containers(podman_empty).unwrap());
@@ -1530,10 +1427,7 @@ mod tests {
         assert!(network_has_attached_containers("not json")
             .unwrap_err()
             .starts_with("invalid-network-inspect-json:"));
-        assert_eq!(
-            network_has_attached_containers("[]").unwrap_err(),
-            "network-inspect-empty"
-        );
+        assert_eq!(network_has_attached_containers("[]").unwrap_err(), "network-inspect-empty");
         assert_eq!(
             network_has_attached_containers("{\"Name\":\"x\"}").unwrap_err(),
             "network-inspect-containers-missing"
@@ -1542,30 +1436,18 @@ mod tests {
             network_has_attached_containers("{\"Containers\":true}").unwrap_err(),
             "network-inspect-containers-invalid"
         );
-        assert_eq!(
-            network_has_attached_containers("42").unwrap_err(),
-            "invalid-network-inspect-shape"
-        );
+        assert_eq!(network_has_attached_containers("42").unwrap_err(), "invalid-network-inspect-shape");
     }
 
     #[test]
     fn unsafe_network_names_fail_closed() {
-        let overlong = format!(
-            "[{{\"driver\":\"bridge\",\"id\":\"1\",\"name\":\"{}\"}}]",
-            "n".repeat(201)
-        );
+        let overlong = format!("[{{\"driver\":\"bridge\",\"id\":\"1\",\"name\":\"{}\"}}]", "n".repeat(201));
+        assert_eq!(parse_network_records(&overlong).unwrap_err(), "network-invalid-name");
         assert_eq!(
-            parse_network_records(&overlong).unwrap_err(),
-            "network-invalid-name"
-        );
-        assert_eq!(
-            parse_network_records("[{\"driver\":\"bridge\",\"name\":\"-danger\"}]")
-                .unwrap_err(),
+            parse_network_records("[{\"driver\":\"bridge\",\"name\":\"-danger\"}]").unwrap_err(),
             "network-invalid-name"
         );
     }
-
-    // -- fingerprints and phrases ---------------------------------------------------------
 
     #[test]
     fn fingerprint_binds_sorted_identity_set_and_domain() {
@@ -1596,7 +1478,6 @@ mod tests {
             Duration::from_millis(100),
             "descendant-timeout",
         );
-
         assert_eq!(result.unwrap_err(), "descendant-timeout-timeout");
         assert!(started.elapsed() < Duration::from_secs(2));
     }
@@ -1640,29 +1521,11 @@ mod tests {
         assert_eq!(OrphanCategory::Image.as_str(), "image");
         assert_eq!(OrphanCategory::Volume.as_str(), "volume");
         assert_eq!(OrphanCategory::Network.as_str(), "network");
-        assert_eq!(
-            OrphanCategory::Container.exact_delete_subcommand(),
-            ["container", "rm"]
-        );
-        assert_eq!(
-            OrphanCategory::Image.exact_delete_subcommand(),
-            ["image", "rm"]
-        );
-        assert_eq!(
-            OrphanCategory::Volume.exact_delete_subcommand(),
-            ["volume", "rm"]
-        );
-        assert_eq!(
-            OrphanCategory::Network.exact_delete_subcommand(),
-            ["network", "rm"]
-        );
-        assert_eq!(
-            serde_json::to_value(OrphanCategory::Container).unwrap(),
-            serde_json::json!("container")
-        );
-        assert_eq!(
-            ContainerRuntimeKind::PodmanMachine.as_str(),
-            "podman-machine"
-        );
+        assert_eq!(OrphanCategory::Container.exact_delete_subcommand(), ["container", "rm"]);
+        assert_eq!(OrphanCategory::Image.exact_delete_subcommand(), ["image", "rm"]);
+        assert_eq!(OrphanCategory::Volume.exact_delete_subcommand(), ["volume", "rm"]);
+        assert_eq!(OrphanCategory::Network.exact_delete_subcommand(), ["network", "rm"]);
+        assert_eq!(serde_json::to_value(OrphanCategory::Container).unwrap(), serde_json::json!("container"));
+        assert_eq!(ContainerRuntimeKind::PodmanMachine.as_str(), "podman-machine");
     }
 }
