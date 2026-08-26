@@ -505,7 +505,7 @@ mod tests {
     fn proven_cache_trash_requires_signature_but_permanent_delete_is_unavailable() {
         let tmp = tempfile::tempdir().unwrap();
         let trash = trash_directory(tmp.path()).unwrap();
-        fs::create_dir(&trash).unwrap();
+        fs::create_dir_all(&trash).unwrap();
         let npm = trash.join("_cacache");
         fs::create_dir_all(npm.join("content-v2")).unwrap();
         fs::create_dir(npm.join("tmp")).unwrap();
@@ -527,7 +527,10 @@ mod tests {
         assert_eq!(error, PERMANENT_CACHE_TRASH_DELETE_UNAVAILABLE);
         assert!(npm.exists());
         assert!(!journal.exists());
-        assert_eq!(approval_phrase, proven_cache_trash_approval_phrase(tmp.path()));
+        assert_eq!(
+            approval_phrase,
+            proven_cache_trash_approval_phrase(tmp.path())
+        );
     }
 
     #[cfg(not(windows))]
@@ -550,7 +553,10 @@ mod tests {
         let journal = tmp.path().join("journal.jsonl");
         let error = purge_proven_cache_trash(tmp.path(), &journal, 7, &snapshot).unwrap_err();
         assert_eq!(error, PERMANENT_CACHE_TRASH_DELETE_UNAVAILABLE);
-        assert!(npm.exists(), "reviewed cache must remain without object-bound delete");
+        assert!(
+            npm.exists(),
+            "reviewed cache must remain without object-bound delete"
+        );
         assert!(pnpm.exists(), "entries added after review must remain");
         assert!(!journal.exists());
     }
