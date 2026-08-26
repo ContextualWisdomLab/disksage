@@ -8,7 +8,13 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
 describe("Organize customer copy", () => {
   it("keeps ontology and lineage implementation details out of customer guidance", () => {
     const source = readFileSync(resolve(repositoryRoot, "src/lib/Organize.svelte"), "utf8");
-    const visible = source.slice(source.indexOf("</script>"), source.indexOf("<style>"));
+    const scriptEnd = source.indexOf("</script>");
+    const styleStart = source.indexOf("<style>");
+
+    expect(scriptEnd).toBeGreaterThanOrEqual(0);
+    expect(styleStart).toBeGreaterThan(scriptEnd);
+
+    const visible = source.slice(scriptEnd, styleStart);
 
     expect(visible).toContain("파일 정리 정보 복사");
     expect(visible).not.toContain("계보 계약 복사");
