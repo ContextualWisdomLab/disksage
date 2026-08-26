@@ -449,6 +449,30 @@ mod tests {
         assert!(result.top_files.is_empty());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn ancestor_of_symlinked_home_still_prunes_provider_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real_home = tmp.path().join("real-home");
+        fs::create_dir(&real_home).unwrap();
+        let provider_root = if cfg!(target_os = "macos") {
+            real_home.join("Library").join("CloudStorage")
+        } else {
+            real_home.join("OneDrive")
+        };
+        fs::create_dir_all(&provider_root).unwrap();
+        write(&provider_root.join("dataless-placeholder.bin"), 4096);
+        let home_alias = tmp.path().join("home-alias");
+        std::os::unix::fs::symlink(&real_home, &home_alias).unwrap();
+
+        let result = scan_with_home(tmp.path(), &home_alias);
+
+        assert_eq!(result.stats.files, 0);
+        assert_eq!(result.stats.bytes, 0);
+        assert_eq!(result.stats.skipped, 1);
+        assert!(result.top_files.is_empty());
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn library_ancestor_scan_prunes_cloud_storage_root() {
