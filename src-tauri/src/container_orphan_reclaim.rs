@@ -296,7 +296,7 @@ struct NetworkRecord {
 fn split_json_envelopes(output: &str) -> Result<Vec<Value>, String> {
     let trimmed = output.trim();
     if trimmed.is_empty() {
-        return Err("empty-json-output".to_string());
+        return Ok(Vec::new());
     }
     if let Ok(Value::Array(records)) = serde_json::from_str::<Value>(trimmed) {
         return Ok(records);
@@ -464,7 +464,11 @@ fn classify_image_candidates(records: &[ImageRecord]) -> Result<(u64, Vec<&Image
 }
 
 fn validate_resource_name(raw: &str, label: &str) -> Result<String, String> {
-    if raw.is_empty() || raw.len() > 200 || raw.chars().any(char::is_control) {
+    if raw.is_empty()
+        || raw.starts_with('-')
+        || raw.len() > 200
+        || raw.chars().any(char::is_control)
+    {
         return Err(format!("{label}-invalid-name"));
     }
     Ok(raw.to_string())
@@ -750,7 +754,7 @@ fn command_text(
 pub fn probe_runtime_health(target: &ContainerRuntimeTarget) -> RuntimeHealthEvidence {
     let detail_issue = (|| -> Result<(), String> {
         let prefix = target.command_prefix()?;
-        let mut args: Vec<&str> = prefix.iter().map(String::as_str).collect();
+        let mut args: Vec<&str> = prefix.iter().skip(1).map(String::as_str).collect();
         args.push("info");
         command_text(
             &target.binary_path,
@@ -784,7 +788,7 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
     };
     let outcome = (|| -> Result<Option<OrphanCandidateEvidence>, String> {
         let list_label = format!("orphan-list-{}", category.as_str());
-        let mut args: Vec<&str> = prefix.iter().map(String::as_str).collect();
+        let mut args: Vec<&str> = prefix.iter().skip(1).map(String::as_str).collect();
         match category {
             OrphanCategory::Container => {
                 args.extend(["container", "ps", "--all", "--format", "json"]);
@@ -855,7 +859,8 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                     if candidate_ids.len() >= MAX_NETWORK_CANDIDATES {
                         return Err("network-candidate-count-exceeds-bound".to_string());
                     }
-                    let mut inspect_args: Vec<&str> = prefix.iter().map(String::as_str).collect();
+                    let mut inspect_args: Vec<&str> =
+                        prefix.iter().skip(1).map(String::as_str).collect();
                     inspect_args.extend(["network", "inspect", &record.name]);
                     let inspect_output = command_text(
                         &target.binary_path,
@@ -993,7 +998,7 @@ pub fn execute_container_orphan_prune(
     }
 
     let before_available_bytes = host_available_bytes(executed_at_ms);
-    let mut args: Vec<&str> = prefix.iter().map(String::as_str).collect();
+    let mut args: Vec<&str> = prefix.iter().skip(1).map(String::as_str).collect();
     args.extend(category.prune_subcommand());
     let label = format!("orphan-prune-{}", category.as_str());
     let output = command_capture(&target.binary_path, &args, ORPHAN_COMMAND_TIMEOUT, &label)?;
@@ -1142,7 +1147,8 @@ mod tests {
         assert_eq!(split_json_envelopes(array).unwrap().len(), 2);
         let ndjson = "{\"ID\":\"a\"}\n{\"ID\":\"b\"}\n";
         assert_eq!(split_json_envelopes(ndjson).unwrap().len(), 2);
-        assert_eq!(split_json_envelopes("").unwrap_err(), "empty-json-output");
+        assert!(split_json_envelopes("").unwrap().is_empty());
+        assert!(split_json_envelopes("  \n\t").unwrap().is_empty());
         assert!(split_json_envelopes("{\"ID\":\"a\"\n{oops}")
             .unwrap_err()
             .starts_with("invalid-json-record:"));
@@ -1388,6 +1394,11 @@ mod tests {
         );
         assert_eq!(
             parse_network_records(&overlong).unwrap_err(),
+            "network-invalid-name"
+        );
+        assert_eq!(
+            parse_network_records("[{\"driver\":\"bridge\",\"name\":\"-danger\"}]")
+                .unwrap_err(),
             "network-invalid-name"
         );
     }
