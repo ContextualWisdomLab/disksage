@@ -159,7 +159,7 @@ impl ContainerRuntimeTarget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OrphanCategory {
-    /// Stopped containers (`exited`/`created`/`dead` states).
+    /// Stopped containers (`exited`/`created`/`dead`/`stopped` states).
     Container,
     /// Untagged images referencing zero containers (dangling images).
     Image,
@@ -377,16 +377,18 @@ fn parse_container_records(output: &str) -> Result<Vec<ContainerRecord>, String>
     Ok(records)
 }
 
-/// Containers are orphan candidates only when fully stopped: `exited`, `created`,
-/// or `dead`. Running, paused, restarting, removing, and unknown states fail closed.
+/// Containers are orphan candidates only when fully stopped: `exited`, `created`, `dead`,
+/// or Podman's documented `stopped`. Known pre-start/transitional states are preserved; only
+/// unrecognized states fail the category closed.
 fn classify_container_candidates(
     records: &[ContainerRecord],
 ) -> Result<(u64, Vec<&ContainerRecord>), String> {
     let mut candidates = Vec::new();
     for record in records {
         match record.state.as_str() {
-            "exited" | "created" | "dead" => candidates.push(record),
-            "running" | "paused" | "restarting" | "removing" => {}
+            "exited" | "created" | "dead" | "stopped" => candidates.push(record),
+            "running" | "paused" | "restarting" | "removing" | "initialized" | "stopping"
+            | "configured" => {}
             other => return Err(format!("unknown-container-state:{other}")),
         }
     }
