@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { invoke } from "@tauri-apps/api/core";
   import { fmtBytes } from "./fmt";
   import {
     loadPodmanEvidence,
@@ -21,11 +22,16 @@
     return value === null ? "관측되지 않음" : `${value}개`;
   }
 
+  /** Invoke only the privacy-safe read-only Podman projection registered by the desktop bridge. */
+  async function invokeDesktopEvidence<T>(_command: string): Promise<T> {
+    return invoke<T>("inspect_podman_desktop_evidence");
+  }
+
   async function load() {
     busy = true;
     error = "";
     try {
-      evidence = await loadPodmanEvidence();
+      evidence = await loadPodmanEvidence(invokeDesktopEvidence);
     } catch (reason) {
       evidence = null;
       error = podmanEvidenceErrorMessage(reason);
