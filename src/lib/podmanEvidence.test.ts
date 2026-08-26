@@ -6,6 +6,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 
 import {
   PODMAN_DESKTOP_SCHEMA_KIND,
+  hasActionableReasonCodes,
   loadPodmanEvidence,
   parsePodmanDesktopEvidence,
   podmanEvidenceView,
@@ -194,5 +195,12 @@ describe("podmanEvidenceView", () => {
       container_review_label: "중지된 작업 별도 확인 필요",
       volume_review_label: "저장 공간 별도 확인 필요",
     });
+  });
+
+  it("does not flag the standing physical-reclaim notice as an action", () => {
+    const evidence = parsePodmanDesktopEvidence(fixture());
+    expect(hasActionableReasonCodes(evidence)).toBe(false);
+    evidence.reason_codes.push("podman-api-evidence-missing");
+    expect(hasActionableReasonCodes(evidence)).toBe(true);
   });
 });

@@ -2,6 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { fmtBytes } from "./fmt";
   import {
+    hasActionableReasonCodes,
     loadPodmanEvidence,
     podmanEvidenceView,
     type OptionalBytes,
@@ -105,7 +106,7 @@
       </article>
     </div>
 
-    {#if evidence.reason_codes.length > 0}
+    {#if hasActionableReasonCodes(evidence)}
       <p class="notice">추가 확인이 필요한 항목이 있습니다. 상태를 다시 확인한 뒤 정리 여부를 판단하십시오.</p>
     {/if}
     {#if view.has_issues}

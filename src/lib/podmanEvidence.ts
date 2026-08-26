@@ -74,6 +74,13 @@ export interface PodmanEvidenceView {
   has_issues: boolean;
 }
 
+/** Return whether the evidence contains a reason that requires a fresh customer review. */
+export function hasActionableReasonCodes(
+  evidence: Pick<PodmanDesktopEvidence, "reason_codes">,
+): boolean {
+  return evidence.reason_codes.some((code) => code !== "host-physical-reclaim-unverified");
+}
+
 type InvokeFunction = <T>(command: string) => Promise<T>;
 type JsonRecord = Record<string, unknown>;
 
