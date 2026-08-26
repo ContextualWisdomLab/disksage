@@ -90,6 +90,16 @@ fn target_for_kind(
     }
 }
 
+fn validate_requested_scope(
+    target: &container_orphan_reclaim::ContainerRuntimeTarget,
+    requested_scope: &Option<String>,
+) -> Result<(), String> {
+    if &target.scope_name != requested_scope {
+        return Err("orphan-prune-runtime-scope-mismatch".into());
+    }
+    Ok(())
+}
+
 /// Probes every supported container runtime target read-only and audits all four orphan
 /// categories on each healthy target. This shipped IPC surface remains present under coverage.
 #[tauri::command(async)]
@@ -108,11 +118,12 @@ pub fn inspect_container_orphans() -> Vec<container_orphan_reclaim::ContainerOrp
 }
 
 /// Re-audits one runtime/category immediately before exact identity-bound deletion. Runtime scope
-/// is bound server-side to the same fixed target used by inspection, so public display metadata
-/// cannot become mutation authority. This shipped IPC surface remains present under coverage.
+/// is validated against the same fixed target used by inspection, so client display metadata can
+/// never expand mutation authority. This shipped IPC surface remains present under coverage.
 #[tauri::command(async)]
 pub fn execute_container_orphan_prune(
     runtime_kind: String,
+    scope_name: Option<String>,
     category: String,
     confirmation_phrase: String,
     rationale: String,
@@ -123,6 +134,7 @@ pub fn execute_container_orphan_prune(
     let kind = parse_runtime_kind(&runtime_kind)?;
     let category = parse_category(&category)?;
     let target = target_for_kind(kind)?;
+    validate_requested_scope(&target, &scope_name)?;
     container_orphan_reclaim::execute_container_orphan_prune(
         &target,
         category,
@@ -160,6 +172,18 @@ mod tests {
         assert_eq!(
             podman.scope_name.as_deref(),
             Some(podman_reclaim::DEFAULT_PODMAN_MACHINE),
+        );
+        assert!(validate_requested_scope(&docker, &None).is_ok());
+        assert!(validate_requested_scope(&colima, &Some("colima".into())).is_ok());
+        assert!(validate_requested_scope(
+            &podman,
+            &Some(podman_reclaim::DEFAULT_PODMAN_MACHINE.into())
+        )
+        .is_ok());
+        assert_eq!(
+            validate_requested_scope(&podman, &Some("attacker-controlled-machine".into()))
+                .unwrap_err(),
+            "orphan-prune-runtime-scope-mismatch"
         );
     }
 }
