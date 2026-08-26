@@ -116,10 +116,10 @@
 </script>
 
 <svelte:head>
-  <title>DiskSage · 로컬 저장공간과 클라우드 증거</title>
+  <title>DiskSage · 로컬 공간과 클라우드 정리</title>
   <meta
     name="description"
-    content="메타데이터와 공급자 증거를 먼저 확인하고 로컬 저장공간을 안전하게 정리합니다."
+    content="파일 정보를 먼저 확인하고 로컬 저장공간을 안전하게 정리합니다."
   />
 </svelte:head>
 

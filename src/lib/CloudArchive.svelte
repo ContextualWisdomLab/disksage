@@ -1018,7 +1018,7 @@
         {:else}
           {#each reconciliation.entries as entry}
             <p class:warning={entry.error !== null || entry.blockers.length > 0}>
-              영수증 {entry.receipt_id ?? "무효"} · {cloudProviderLabel(entry.provider)} ·
+              복사 확인 코드 {entry.receipt_id ?? "없음"} · {cloudProviderLabel(entry.provider)} ·
               상태 {transferStatusLabel(entry.goal_status, entry.goal_state)} ·
               동기화 {syncStateLabel(entry.provider_sync_state ?? undefined)}
               {#if entry.error} · 확인 실패: 다시 시도하십시오.{/if}
@@ -1163,8 +1163,8 @@
         {/if}
         {#if typeof icloudHealth.managed_database_allocated_bytes === "number"}
           <p class="warning">
-            macOS 관리 iCloud 동기화 DB가 {fmtBytes(icloudHealth.managed_database_allocated_bytes)}를 사용 중입니다.
-            DiskSage는 이 시스템 관리 데이터를 삭제하지 않습니다.
+            macOS가 관리하는 iCloud 동기화 데이터가 {fmtBytes(icloudHealth.managed_database_allocated_bytes)}를 사용 중입니다.
+            이 시스템 데이터는 삭제하지 않습니다.
           </p>
         {/if}
         {#if icloudHealth.notices.some((notice) => notice.startsWith("icloud-item-error-"))}
@@ -1492,7 +1492,7 @@
     {#if copied}
       <div class="receipt">
         <strong>{copied.goal_status === "blocked" ? "복사 완료 · 클라우드 확인 대기" : copied.action === "adopt-existing-copy" ? "기존 클라우드 파일 확인·사용 완료" : "복사 확인 완료"} · 원본 보존됨</strong>
-        <div class="context">영수증 {copied.receipt.receipt_id} · {fmtBytes(copied.receipt.bytes)}</div>
+        <div class="context">복사 확인 코드 {copied.receipt.receipt_id} · {fmtBytes(copied.receipt.bytes)}</div>
         <div class="path">{copied.receipt.destination}</div>
         <p class="muted">클라우드 복사 상태: {transferStatusLabel(copied.goal_status, null)}</p>
         {#if copied.receipt.provider === "google-drive"}
@@ -1536,9 +1536,9 @@
                 <p class="warning">
                   아래 확인값을 직접 입력하고 이 파일만 휴지통으로 옮기는 사유를 남겨야 합니다. 실행 시 파일 상태를 다시 확인하며 달라지면 중단합니다.
                 </p>
-                <div class="context">확인할 영수증 ID: {copied.receipt.receipt_id}</div>
-                <label>
-                  전체 영수증 ID 확인
+                <div class="context">입력할 복사 확인 코드: {copied.receipt.receipt_id}</div>
+                  <label>
+                    복사 확인 코드 입력
                   <input
                     class="receipt-confirmation"
                     type="text"
