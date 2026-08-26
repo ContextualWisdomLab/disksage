@@ -4,6 +4,7 @@
   import { verdictBadge } from "./verdictBadge";
   import { summarizeCacheTrashPurge } from "./cacheTrashPurgeSummary";
   import { purgeReviewedCacheTrash, reviewProvenCacheTrash } from "./cacheTrashReviewApi";
+  import { cacheTrashPurgeAvailability } from "./cacheTrashPurgeAvailability";
   import { confirm } from "@tauri-apps/plugin-dialog";
   import GitWorktreeCleanup from "./GitWorktreeCleanup.svelte";
   import BrewCleanup from "./BrewCleanup.svelte";
@@ -16,6 +17,7 @@
   let cacheTrashApprovalPhrase = $state<string | null>(null);
   let cacheTrashSupported = $state(true);
   let cacheTrashNotice = $state<string | null>(null);
+  let cacheTrashPurgeInstruction = $state<string | null>(null);
   let cacheTrashExecution: api.CacheTrashPurgeExecution | null = $state(null);
   let artifacts: api.DevArtifact[] = $state([]);
   let selected: Set<string> = $state(new Set());
@@ -48,10 +50,12 @@
     try {
       caches = await api.listCacheCandidates();
       const cacheTrashReview = await reviewProvenCacheTrash();
+      const purgeAvailability = cacheTrashPurgeAvailability(cacheTrashReview);
       cacheTrash = cacheTrashReview.candidates;
-      cacheTrashApprovalPhrase = cacheTrashReview.approval_phrase;
+      cacheTrashApprovalPhrase = purgeAvailability.canPurge ? cacheTrashReview.approval_phrase : null;
       cacheTrashSupported = cacheTrashReview.supported;
       cacheTrashNotice = cacheTrashReview.notice;
+      cacheTrashPurgeInstruction = purgeAvailability.instruction;
       artifacts = scannedRoot ? await api.listDevArtifacts(scannedRoot) : [];
       loadVerdicts(artifacts.map((a) => a.path));
     } catch (e) {
@@ -251,7 +255,9 @@
       휴지통 안의 캐시를 영구 삭제하는 물리 공간 회수 기능은 현재 macOS 기본 휴지통에서만 지원합니다.
     </p>
   {/if}
-  {#if cacheTrash.length > 0}
+  {#if cacheTrashPurgeInstruction}
+    <p class="notice" role="status">{cacheTrashPurgeInstruction}</p>
+  {:else if cacheTrash.length > 0}
     <div class="trash-cleanup">
       <p class="notice" role="status">
         휴지통에 남은 재생성 가능한 캐시 {cacheTrash.length}개({fmtBytes(cacheTrash.reduce((sum, item) => sum + item.bytes, 0))})가
