@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -29,6 +29,33 @@ function addCli(artifactRoot: string, directory: string, name: string) {
   );
 }
 
+function materializeExactArtifactSet(artifactRoot: string) {
+  write(join(artifactRoot, platformDirectories.linux, 'bundle/deb/disksage.deb'), 'deb');
+  write(join(artifactRoot, platformDirectories.linux, 'bundle/appimage/disksage.AppImage'), 'appimage');
+  write(join(artifactRoot, platformDirectories.windows, 'bundle/msi/disksage.msi'), 'msi');
+  write(join(artifactRoot, platformDirectories.windows, 'bundle/nsis/disksage-setup.exe'), 'nsis');
+  write(join(artifactRoot, platformDirectories.macos, 'bundle/dmg/disksage.dmg'), 'dmg');
+
+  addCli(artifactRoot, platformDirectories.linux, 'disksage-cloud-plan-linux-x86_64');
+  addCli(artifactRoot, platformDirectories.linux, 'disksage-duplicate-audit-linux-x86_64');
+  addCli(artifactRoot, platformDirectories.windows, 'disksage-cloud-plan-windows-x86_64.exe');
+  addCli(artifactRoot, platformDirectories.windows, 'disksage-duplicate-audit-windows-x86_64.exe');
+  addCli(artifactRoot, platformDirectories.macos, 'disksage-cloud-plan-macos-arm64');
+  addCli(artifactRoot, platformDirectories.macos, 'disksage-duplicate-audit-macos-arm64');
+}
+
+function verify(artifactRoot: string) {
+  return spawnSync(
+    'bash',
+    [
+      resolve(repositoryRoot, '.github/scripts/verify-release-artifacts.sh'),
+      artifactRoot,
+      runAttempt,
+    ],
+    { cwd: repositoryRoot, encoding: 'utf8' },
+  );
+}
+
 describe('release artifact verifier directory contract', () => {
   it.runIf(process.platform !== 'win32')(
     'accepts the exact platform namespaces uploaded by the release matrix',
@@ -36,31 +63,35 @@ describe('release artifact verifier directory contract', () => {
       const fixtureRoot = mkdtempSync(join(tmpdir(), 'disksage-release-artifact-verifier-'));
       const artifactRoot = join(fixtureRoot, 'release-artifacts');
       try {
-        write(join(artifactRoot, platformDirectories.linux, 'bundle/deb/disksage.deb'), 'deb');
-        write(join(artifactRoot, platformDirectories.linux, 'bundle/appimage/disksage.AppImage'), 'appimage');
-        write(join(artifactRoot, platformDirectories.windows, 'bundle/msi/disksage.msi'), 'msi');
-        write(join(artifactRoot, platformDirectories.windows, 'bundle/nsis/disksage-setup.exe'), 'nsis');
-        write(join(artifactRoot, platformDirectories.macos, 'bundle/dmg/disksage.dmg'), 'dmg');
+        materializeExactArtifactSet(artifactRoot);
 
-        addCli(artifactRoot, platformDirectories.linux, 'disksage-cloud-plan-linux-x86_64');
-        addCli(artifactRoot, platformDirectories.linux, 'disksage-duplicate-audit-linux-x86_64');
-        addCli(artifactRoot, platformDirectories.windows, 'disksage-cloud-plan-windows-x86_64.exe');
-        addCli(artifactRoot, platformDirectories.windows, 'disksage-duplicate-audit-windows-x86_64.exe');
-        addCli(artifactRoot, platformDirectories.macos, 'disksage-cloud-plan-macos-arm64');
-        addCli(artifactRoot, platformDirectories.macos, 'disksage-duplicate-audit-macos-arm64');
-
-        const result = spawnSync(
-          'bash',
-          [
-            resolve(repositoryRoot, '.github/scripts/verify-release-artifacts.sh'),
-            artifactRoot,
-            runAttempt,
-          ],
-          { cwd: repositoryRoot, encoding: 'utf8' },
-        );
+        const result = verify(artifactRoot);
 
         expect(result.status, result.stderr).toBe(0);
         expect(result.stderr).toBe('');
+      } finally {
+        rmSync(fixtureRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'rejects a Windows bundle that escaped its Windows artifact directory',
+    () => {
+      const fixtureRoot = mkdtempSync(join(tmpdir(), 'disksage-release-artifact-verifier-'));
+      const artifactRoot = join(fixtureRoot, 'release-artifacts');
+      try {
+        materializeExactArtifactSet(artifactRoot);
+        const source = join(artifactRoot, platformDirectories.windows, 'bundle/msi/disksage.msi');
+        const misplaced = join(artifactRoot, platformDirectories.linux, 'bundle/msi/disksage.msi');
+        mkdirSync(dirname(misplaced), { recursive: true });
+        renameSync(source, misplaced);
+
+        const result = verify(artifactRoot);
+
+        expect(result.status).not.toBe(0);
+        expect(result.stdout).toBe('');
+        expect(result.stderr).toContain('Windows MSI bundle');
       } finally {
         rmSync(fixtureRoot, { recursive: true, force: true });
       }
