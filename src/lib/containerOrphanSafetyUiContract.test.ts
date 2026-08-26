@@ -31,6 +31,16 @@ describe("Container orphan cleanup safety UX", () => {
     expect(pruneReady).toContain("(rationales[categoryKey(key, category)]?.trim().length ?? 0) > 0");
   });
 
+  it("never recovers a mutation scope from public display metadata", () => {
+    const source = readSource("src/lib/ContainerOrphanCleanup.svelte");
+    const apiSource = readSource("src/lib/api.ts");
+
+    expect(source).not.toContain("function scopeOf(");
+    expect(source).not.toContain("plan.runtime.display_name.split(");
+    expect(apiSource).not.toContain("scopeName: string | null");
+    expect(apiSource).not.toContain("scopeName,");
+  });
+
   it("requires an explicit confirmation dialog before any irreversible prune", () => {
     const source = readSource("src/lib/ContainerOrphanCleanup.svelte");
     const start = source.indexOf("async function prune(");
