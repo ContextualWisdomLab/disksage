@@ -31,7 +31,6 @@ function staticActionParagraphs(fileName: string): string[] {
 
 describe("cleanup customer copy", () => {
   it("keeps implementation vocabulary out of the customer action panel", () => {
-    const source = readFileSync(resolve(repositoryRoot, "src/lib/Cleanup.svelte"), "utf8");
     const visible = visibleText("Cleanup.svelte");
 
     for (const term of [
