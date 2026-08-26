@@ -1,4 +1,4 @@
-# ADR-0010: Accessible Storybook UX contracts and design tokens
+# ADR-0012: Accessible Storybook UX contracts and design tokens
 
 **Status:** Proposed  
 **Date:** 2026-08-21  
