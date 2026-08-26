@@ -15,8 +15,6 @@
   let caches: api.CacheCandidate[] = $state([]);
   let cacheTrash: api.CacheTrashCandidate[] = $state([]);
   let cacheTrashApprovalPhrase = $state<string | null>(null);
-  let cacheTrashSupported = $state(true);
-  let cacheTrashNotice = $state<string | null>(null);
   let cacheTrashPurgeAvailable = $state(false);
   let cacheTrashPurgeInstruction = $state<string | null>(null);
   let cacheTrashExecution: api.CacheTrashPurgeExecution | null = $state(null);
@@ -54,8 +52,6 @@
       const purgeAvailability = cacheTrashPurgeAvailability(cacheTrashReview);
       cacheTrash = cacheTrashReview.candidates;
       cacheTrashApprovalPhrase = purgeAvailability.canPurge ? cacheTrashReview.approval_phrase : null;
-      cacheTrashSupported = cacheTrashReview.supported;
-      cacheTrashNotice = cacheTrashReview.notice;
       cacheTrashPurgeAvailable = purgeAvailability.canPurge;
       cacheTrashPurgeInstruction = purgeAvailability.instruction;
       artifacts = scannedRoot ? await api.listDevArtifacts(scannedRoot) : [];
