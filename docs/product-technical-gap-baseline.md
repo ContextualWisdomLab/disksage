@@ -165,6 +165,26 @@ authoritative, and no merge is claimed from queued or stale status.
 
 At each scheduled or operator loop, update this file only with new dated evidence: current head, open-PR/check state, provider receipt state, disk headroom, and the smallest acceptance proof completed. Do not convert an incomplete provider probe, filename date, model answer, or GitHub review comment into a transfer or deletion authority.
 
+## 2026-08-26 physical reclaim loop
+
+- PR #263 (`50a897e75dbc0cec4e02b284da2e5cda03ab5511`, base `2a727dab04cd6bd73c68d75c54c3e1563bcb16ca`)
+  closes the physical-reclaim gap after cache cleanup: the desktop cleanup screen lists only
+  regenerable cache entries already in OS Trash, requires a native confirmation, permanently
+  removes only those revalidated entries, and reports the observed before/after available-space
+  change when the filesystem probe succeeds. User files, cloud placeholders, and unrelated Trash
+  entries remain outside the action; each item remains journaled.
+- The exact-head PR is open with auto-merge enabled, but hosted checks are still queued or running
+  and no qualifying independent approval is recorded. This is not merge evidence; protected merge
+  remains blocked until the current head has green required checks and a fresh approval.
+- Local verification for the implementation passed 135 frontend tests, `svelte-check` with zero
+  diagnostics, 749 Rust library tests (one ignored), and `git diff --check`. Rebuildable temporary
+  `src-tauri/target` and `node_modules` artifacts were removed from the temporary checkout after
+  verification; APFS availability measured 36 GiB (96% capacity used) afterward. Active uv,
+  npm, OpenCode, Podman, File Provider, and user data were not removed.
+- Filename dates remain secondary production evidence: embedded metadata is evaluated first, then
+  an unambiguous filename token such as `2026-04-28` or `251210`, then filesystem times. No cache
+  purge, cloud transfer, or source eviction treats a filename date as authority.
+
 ## 2026-08-21 lineage graph update
 
 - Source head `677042467b3398866757f39b9475bd0b267abc75` now exports path-free ontology relations for
