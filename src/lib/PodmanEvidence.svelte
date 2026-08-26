@@ -115,24 +115,24 @@
 </section>
 
 <style>
-  .podman-evidence { margin-top: 1.5rem; border-top: 1px solid #ddd; padding-top: 1rem; }
+  .podman-evidence { margin-top: 1.5rem; border-top: 1px solid var(--ds-border); padding-top: 1rem; }
   .heading-row { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; }
   .heading-row h3 { margin: 0; }
-  .description { margin: 0.35rem 0 0; color: #555; }
+  .description { margin: 0.35rem 0 0; color: var(--ds-text-muted); }
   .status-row { display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 1rem 0; }
-  .status-row span { border: 1px solid #bbb; border-radius: 999px; padding: 0.25rem 0.65rem; }
-  .status-row .complete { border-color: #2a8f4a; }
-  .status-row .partial { border-color: #b8860b; }
-  .boundary { border-left: 4px solid #b8860b; padding: 0.65rem 0.8rem; background: #fff8df; }
+  .status-row span { border: 1px solid var(--ds-border); border-radius: 999px; padding: 0.25rem 0.65rem; }
+  .status-row .complete { border-color: var(--ds-success-text); }
+  .status-row .partial { border-color: var(--ds-warning-text); }
+  .boundary { border-left: 4px solid var(--ds-warning-text); padding: 0.65rem 0.8rem; background: var(--ds-warning-surface); }
   .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: 0.6rem; }
-  .metrics > div, article dl > div { border-bottom: 1px solid #eee; padding-bottom: 0.35rem; }
-  dt { color: #666; font-size: 0.85rem; }
+  .metrics > div, article dl > div { border-bottom: 1px solid var(--ds-border); padding-bottom: 0.35rem; }
+  dt { color: var(--ds-text-muted); font-size: 0.85rem; }
   dd { margin: 0.15rem 0 0; font-variant-numeric: tabular-nums; }
   .review-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 0.75rem; }
-  article { border: 1px solid #ddd; border-radius: 8px; padding: 0.75rem; }
+  article { border: 1px solid var(--ds-border); border-radius: 8px; padding: 0.75rem; }
   article h5 { margin: 0; }
   article p { min-height: 2.5rem; }
   article dl { margin-bottom: 0; }
-  .error { color: #b00; }
+  .error { color: var(--ds-danger-text); }
   @media (max-width: 600px) { .heading-row { flex-direction: column; } .heading-row button { width: 100%; } }
 </style>
