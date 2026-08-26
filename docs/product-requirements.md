@@ -68,6 +68,30 @@ candidate/provider evidence states. Provider-sync evidence drives the listed
 Goal transitions, but it does not grant eviction authority until the current
 receipt, identity, provider attestation, and every eviction gate are complete.
 
+The provider-state projection is fixed as follows. Every state except `complete`
+remains `pending-provider-sync` and has no eviction permit; in particular,
+`content-mismatch`, `unknown`, and `excluded-from-sync` can never project to
+`provider-sync-confirmed`.
+
+| Provider state | Goal projection | Eviction permit | Required next action |
+| --- | --- | --- | --- |
+| `complete` | `provider-sync-confirmed`, or `eviction-ready` when every independent gate is valid | Only when the current receipt, identity, attestation, and source gates pass | Reconcile the receipt and review the source action |
+| `pending-upload` | `pending-provider-sync` | No | Wait for provider upload, then collect fresh evidence |
+| `not-ubiquitous` | `pending-provider-sync` | No | Make the destination available and collect fresh evidence |
+| `not-local-current` | `pending-provider-sync` | No | Restore a local current copy before verification |
+| `uploading` | `pending-provider-sync` | No | Wait for upload completion and refresh status |
+| `excluded-from-sync` | `pending-provider-sync` | No | Remove the sync exclusion in the provider, then refresh |
+| `sync-paused` | `pending-provider-sync` | No | Resume provider sync and refresh status |
+| `remote-unavailable` | `pending-provider-sync` | No | Restore provider access and collect fresh evidence |
+| `content-mismatch` | `pending-provider-sync` | No | Re-copy or reconcile the destination; do not evict the source |
+| `unknown` | `pending-provider-sync` | No | Collect a complete, unambiguous provider observation |
+
+The projection fixture is versioned with the API state vocabulary. For example,
+`{ "provider_state": "content-mismatch", "goal_state": "pending-provider-sync", "eviction_permit": false }`
+and `{ "provider_state": "complete", "goal_state": "provider-sync-confirmed", "eviction_permit": false }`
+are mandatory negative and positive fixtures; the latter becomes `eviction-ready`
+only when the independent permit gates pass.
+
 ### FR-3: Safe copy and eviction
 
 - Native File Provider operations are bounded, re-hashed, and source-identity
@@ -86,6 +110,9 @@ receipt, identity, provider attestation, and every eviction gate are complete.
   cancellation checks before start, between chunks, and immediately after a
   successful write; cleanup/retention and source/eviction invariants are tested
   for timeout and cancellation.
+- A successful native copy and a successful provider-API copy each write an
+  immutable receipt, read that receipt back after the writer is gone, and verify
+  receipt identity plus provider attestation before a permit can be returned.
 - Eviction is disabled until the receipt, identity, and provider attestation
   are current and complete.
 
@@ -93,7 +120,9 @@ receipt, identity, provider attestation, and every eviction gate are complete.
 
 Regenerable caches are a separate reclaim domain. Each proposal is identity
 bound, active-use checked, journaled, reversible through OS Trash, and excluded
-from user-data upload.
+from user-data upload. The cache exclusion fixture must produce no cloud-copy
+candidate, provider upload request, or cloud success receipt; only the local
+cleanup journal and reversible Trash result may be created.
 
 ### FR-5: Explanations and lineage
 
@@ -134,9 +163,9 @@ standalone transfer or deletion.
 | Requirement | Required proof |
 | --- | --- |
 | FR-1 | Metadata precedence fixtures prove embedded → filename token → filesystem creation → modification fallback; missing, malformed, conflicting, provider-managed, and ambiguous states retain blockers and no eviction permit; the inventory receipt remains path-free |
-| FR-2 | State-machine fixtures for `local-current + is_uploaded=false`, provider timeout, quota/auth uncertainty, stale or incomplete evidence, insufficient headroom, failed/pre-copy/cancelled observations, and sync completion prove the correct Goal transition while retaining blockers and no eviction permit until every gate is complete |
-| FR-3 | Native and provider-API bounded copy tests cover pre-start, between-chunk, post-success cancellation, timeout cleanup/retention, private failure-journal restart/readback, materialization-before-hash gating, hash/identity recheck, and eviction-permit denial |
-| FR-4 | Dry-run, identity, active-use, Trash, journal, and rollback tests |
+| FR-2 | The provider-state table and projection fixtures above cover every `ProviderSyncState`; state-machine fixtures for `local-current + is_uploaded=false`, provider timeout, quota/auth uncertainty, stale or incomplete evidence, insufficient headroom, failed/pre-copy/cancelled observations, and sync completion prove the correct Goal transition while retaining blockers and no eviction permit until every gate is complete |
+| FR-3 | Native receipt persistence/readback is covered by `verified_copy_keeps_source_and_writes_read_only_receipt`; provider-API receipt persistence/readback uses the same immutable writer contract and verifies `CopiedByProviderApi`, receipt identity, provider attestation, and permit denial until the attestation is valid; bounded copy tests cover pre-start, between-chunk, post-success cancellation, timeout cleanup/retention, private failure-journal restart/readback, materialization-before-hash gating, hash/identity recheck, and eviction-permit denial |
+| FR-4 | The cache-exclusion fixture proves no cloud candidate, provider upload, or success receipt is produced; dry-run, identity, active-use, Trash, journal, and rollback tests cover the local reclaim lifecycle |
 | FR-5 | UI/export fixtures prove stable identifiers, provenance, confidence, timestamps, blockers, and next-action wording; paths are redacted in shareable projections and Goal/ADR projections cannot authorize mutation |
 | FR-6 | No external-service startup test and optional integration boundary tests |
 
