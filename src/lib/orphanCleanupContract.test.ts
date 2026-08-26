@@ -13,13 +13,16 @@ describe("orphan cleanup safety contract", () => {
 
     expect(api).toContain("plan_orphan_cleanup");
     expect(api).toContain("clean_orphan_candidates");
-    expect(component).toContain("Application Support");
+    expect(component).not.toContain("Application Support");
+    expect(component).toContain("앱이 사용하는 데이터");
     expect(component).toContain("candidate.auto_trash_eligible");
     expect(component).toContain("plan.exact_approval_phrase");
     expect(component).toContain("candidate.metadata_fingerprint");
     expect(component).not.toContain("candidate.path");
     expect(component).toContain("cleanAndRefreshOrphanPlan");
     expect(component).toContain("outcome.refresh_failed");
+    expect(component).toContain("확인된 미사용 캐시");
+    expect(component).not.toContain("증거");
 
     // HOME identity must not exist in either the public TypeScript contract or the Rust wire type.
     expect(api).not.toContain("root_fingerprint");

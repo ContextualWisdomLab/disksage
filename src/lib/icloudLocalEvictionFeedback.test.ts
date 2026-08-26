@@ -67,7 +67,7 @@ describe("iCloud local eviction next-action feedback", () => {
       ["active-file-use-detected", "파일을 사용하는 앱을 모두 닫고 다시 판정하세요."],
       [
         "human-local-eviction-approval-required",
-        "표시된 상태를 확인한 뒤 계획 지문과 사유로 최종 승인하세요.",
+        "표시된 상태를 확인한 뒤 확인 문구와 사유로 최종 승인하세요.",
       ],
     ];
 
@@ -138,10 +138,10 @@ describe("iCloud local eviction next-action feedback", () => {
       "iCloud 상태를 확인하지 못했습니다. 파일이 iCloud Drive에 있고 접근 가능한지 확인한 뒤 다시 판정하세요.",
     );
     expect(ICLOUD_EVICTION_EXECUTION_FAILURE).toBe(
-      "로컬 사본 축출에 실패했습니다. iCloud 동기화가 완료됐는지 확인한 뒤 새 판정부터 다시 진행하세요.",
+      "로컬 사본 회수에 실패했습니다. iCloud 동기화가 완료됐는지 확인한 뒤 다시 시도하세요.",
     );
     expect(ICLOUD_RESULT_RECORD_FAILURE).toBe(
-      "축출 결과는 위와 같지만 기록을 저장하지 못했습니다. DiskSage 데이터 폴더의 권한과 여유 공간을 확인하고 이 화면의 결과를 별도로 보관하세요.",
+      "로컬 사본 회수 결과는 확인됐지만 저장하지 못했습니다. 권한과 여유 공간을 확인하고 결과를 별도로 보관하세요.",
     );
   });
 
@@ -157,5 +157,9 @@ describe("iCloud local eviction next-action feedback", () => {
       "verificationBlockerActions(eviction.result.verification_blockers)",
     );
     expect(source).not.toContain("{eviction.result_record_error}");
+    const visible = source.slice(source.indexOf("</script>"), source.indexOf("<style>"));
+    for (const internalTerm of ["File Provider", "계획 지문", "활성 사용", "승인 기록", "결과 기록"]) {
+      expect(visible).not.toContain(internalTerm);
+    }
   });
 });
