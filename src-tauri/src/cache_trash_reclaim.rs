@@ -7,7 +7,9 @@ use crate::cache_cleanup::{CacheTrashCandidate, CacheTrashPurgeExecution, CacheT
 const REVIEW_SCHEMA_KIND: &str = "disksage.cache-trash-review";
 const REVIEW_SCHEMA_VERSION: u32 = 1;
 const MAX_APPROVED_CANDIDATES: usize = 9;
-const PERMANENT_DELETE_UNAVAILABLE: &str = "cache-trash-identity-bound-permanent-delete-unavailable";
+const PERMANENT_DELETE_UNAVAILABLE: &str =
+    "cache-trash-identity-bound-permanent-delete-unavailable";
+#[cfg(not(target_os = "macos"))]
 const NATIVE_REVIEW_MACOS_ONLY: &str = "cache-trash-native-review-macos-only";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -240,7 +242,10 @@ pub fn purge_approved_cache_trash(
         }
 
         let immediately_current = crate::cache_cleanup::proven_cache_trash_candidates(home);
-        let outcome = if immediately_current.iter().any(|observed| observed == &candidate) {
+        let outcome = if immediately_current
+            .iter()
+            .any(|observed| observed == &candidate)
+        {
             permanently_remove_identity_bound(&path, expected_object_id, now_ms)
         } else {
             Err("cache-trash-approved-candidate-changed".into())
@@ -292,7 +297,8 @@ pub fn purge_proven_cache_trash(
 ) -> Result<CacheTrashPurgeExecution, String> {
     let bases = crate::rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
     let journal_path = crate::commands::journal_file_path(&app)?;
-    let before = crate::volume_pressure::snapshot_volume(&bases.home, crate::commands::now_ms()).ok();
+    let before =
+        crate::volume_pressure::snapshot_volume(&bases.home, crate::commands::now_ms()).ok();
     let items = purge_approved_cache_trash(
         &bases.home,
         &approved_candidates,
@@ -300,7 +306,8 @@ pub fn purge_proven_cache_trash(
         &journal_path,
         crate::commands::now_ms(),
     )?;
-    let after = crate::volume_pressure::snapshot_volume(&bases.home, crate::commands::now_ms()).ok();
+    let after =
+        crate::volume_pressure::snapshot_volume(&bases.home, crate::commands::now_ms()).ok();
     let before_available_bytes = before.as_ref().map(|snapshot| snapshot.available_bytes);
     let after_available_bytes = after.as_ref().map(|snapshot| snapshot.available_bytes);
     let observed_available_gain_bytes = before_available_bytes
