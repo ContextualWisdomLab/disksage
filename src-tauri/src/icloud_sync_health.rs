@@ -46,6 +46,7 @@ const FILEPROVIDER_DUMP_TIMEOUT: Duration = Duration::from_secs(30);
 // filename/root exclusion diagnostics after the aggregate summary in large dumps.
 const MAX_FILEPROVIDER_DUMP_BYTES: usize = 1024 * 1024;
 const ITEM_ERROR_AGE_NOTICE_MS: u64 = 86_400_000;
+const FILE_PROVIDER_STALE_ERROR_AGE_MS: u64 = 15 * 60 * 1_000;
 static SNAPSHOT_NONCE: AtomicU64 = AtomicU64::new(0);
 
 pub const ICLOUD_SYNC_HEALTH_SCHEMA_VERSION: u32 = 5;
@@ -923,6 +924,10 @@ fn native_status_summary_complete(output: &[u8]) -> bool {
     container_count && summary
 }
 
+/// Converts bounded `fileproviderctl` text into path-free activity evidence and notices.
+///
+/// Relative operation ages are considered stalled only when paired with a provider operation and
+/// an error marker, so unrelated diagnostic durations cannot block a copy by themselves.
 fn parse_file_provider_activity_output(
     output: &str,
     observed_at_ms: u64,
@@ -952,6 +957,45 @@ fn parse_file_provider_activity_output(
         .lines()
         .filter(|line| line.to_ascii_lowercase().contains("stageditemmissing"))
         .count() as u64;
+    let item_locked = output.lines().any(|line| {
+        line.to_ascii_lowercase()
+            .contains("itemisflockedcannotpropagate")
+    });
+    // fileproviderctl includes a relative age on queued operation errors. Treat an old fetch/create
+    // error as a stalled provider signal even when the current sample has no explicit "no progress"
+    // marker; this survives app restarts and matches the user-visible Finder "preparing" stall.
+    let provider_lines = output.lines().collect::<Vec<_>>();
+    let is_provider_operation = |line: &&str| {
+        let lower = line.to_ascii_lowercase();
+        lower.contains("fetch-content")
+            || lower.contains("fetchcontentsforitemwithid")
+            || lower.contains("create-item")
+            || lower.contains("createitembasedontemplate")
+    };
+    let is_stale_age = |line: &&str| {
+        relative_age_ms(line).is_some_and(|age| age >= FILE_PROVIDER_STALE_ERROR_AGE_MS)
+    };
+    let is_provider_error = |line: &&str| {
+        let lower = line.to_ascii_lowercase();
+        lower.contains("error:")
+            || lower.contains("nocontenttofetch")
+            || lower.contains("itemnotfound")
+            || lower.contains("materializationfailed")
+            || lower.contains("stageditemmissing")
+            || lower.contains("itemisflockedcannotpropagate")
+    };
+    let is_provider_record_start = |line: &&str| {
+        let lower = line.to_ascii_lowercase();
+        lower.contains("docid(") || is_provider_operation(line)
+    };
+    let stale_error_observed = provider_lines.iter().any(|line| {
+        is_provider_operation(line) && is_stale_age(line) && is_provider_error(line)
+    }) || provider_lines.windows(2).any(|record| {
+        is_provider_operation(&record[0])
+            && !is_provider_record_start(&record[1])
+            && is_stale_age(&record[1])
+            && (is_provider_error(&record[0]) || is_provider_error(&record[1]))
+    });
     let sync_excluded_filename_count = output
         .lines()
         .filter(|line| {
@@ -999,6 +1043,12 @@ fn parse_file_provider_activity_output(
     if staged_item_missing_count > 0 {
         notices.push("icloud-file-provider-staged-item-missing-observed".into());
     }
+    if item_locked {
+        notices.push("icloud-file-provider-item-locked-observed".into());
+    }
+    if stale_error_observed {
+        notices.push("icloud-file-provider-stale-error-observed".into());
+    }
     if sync_excluded_filename_count > 0 {
         notices.push("icloud-file-provider-sync-filename-excluded-observed".into());
     }
@@ -1031,6 +1081,55 @@ fn parse_file_provider_activity_output(
     }
 }
 
+/// Extracts the oldest bounded relative age from a provider `last:` or `expired:` field.
+fn relative_age_ms(line: &str) -> Option<u64> {
+    ["last:'", "expired:'"].iter().filter_map(|marker| {
+        let value_start = line.rfind(marker)?.saturating_add(marker.len());
+        let value_end = value_start.checked_add(line[value_start..].find('\'')?)?;
+        let value = &line[value_start..value_end];
+        let age_start = value.rfind("(-")?.saturating_add(2);
+        let age_end = age_start.checked_add(value[age_start..].find(')')?)?;
+        parse_age_components(&value[age_start..age_end])
+    })
+    .max()
+}
+
+/// Parses compact provider age components such as `4h9min` without floating-point rounding.
+fn parse_age_components(age: &str) -> Option<u64> {
+    let bytes = age.as_bytes();
+    let mut index = 0;
+    let mut total = 0_u64;
+    let mut saw_component = false;
+    while index < bytes.len() {
+        let number_start = index;
+        while index < bytes.len() && bytes[index].is_ascii_digit() {
+            index += 1;
+        }
+        if number_start == index {
+            return None;
+        }
+        let value = age[number_start..index].parse::<u64>().ok()?;
+        let (unit_ms, width) = if bytes[index..].starts_with(b"min") {
+            (60_000, 3)
+        } else if bytes[index..].starts_with(b"ms") {
+            (1, 2)
+        } else if bytes[index..].starts_with(b"d") {
+            (86_400_000, 1)
+        } else if bytes[index..].starts_with(b"h") {
+            (3_600_000, 1)
+        } else if bytes[index..].starts_with(b"s") {
+            (1_000, 1)
+        } else {
+            return None;
+        };
+        total = total.checked_add(value.checked_mul(unit_ms)?)?;
+        index += width;
+        saw_component = true;
+    }
+    saw_component.then_some(total)
+}
+
+/// Parses one provider progress fraction into millionths while rejecting malformed values.
 fn progress_millionths(output: &str, operation: &str) -> Option<u32> {
     output.lines().find_map(|line| {
         if !line.to_ascii_lowercase().contains(operation) {
@@ -1819,6 +1918,7 @@ fn build_report(
     })
 }
 
+/// Projects native iCloud observations into fail-closed copy-admission blockers.
 fn attach_native_status_admission(report: &mut IcloudSyncHealthReport) {
     if report
         .native_status
@@ -1910,6 +2010,20 @@ fn attach_native_status_admission(report: &mut IcloudSyncHealthReport) {
         }
         if materialization_failed {
             add_blocker("icloud-file-provider-materialization-failed");
+        }
+        if activity
+            .notices
+            .iter()
+            .any(|notice| notice == "icloud-file-provider-item-locked-observed")
+        {
+            add_blocker("icloud-file-provider-item-locked");
+        }
+        if activity
+            .notices
+            .iter()
+            .any(|notice| notice == "icloud-file-provider-stale-error-observed")
+        {
+            add_blocker("icloud-file-provider-stalled");
         }
         if activity.sync_excluded_filename_count > 0 {
             add_blocker("icloud-file-provider-filename-excluded");
@@ -2277,6 +2391,137 @@ mod tests {
             .contains(&"icloud-file-provider-staged-item-missing-observed".to_string()));
         assert!(validate_file_provider_activity_evidence(&evidence).is_ok());
         assert!(!serde_json::to_string(&evidence).unwrap().contains("stagedItemMissing"));
+    }
+
+    #[test]
+    fn file_provider_parser_records_locked_item_without_provider_identifiers() {
+        let evidence = parse_file_provider_activity_output(
+            "fetch-content: itemIsFlockedCanNotPropagate\n",
+            42,
+            true,
+            false,
+            false,
+        );
+        assert!(evidence
+            .notices
+            .contains(&"icloud-file-provider-item-locked-observed".to_string()));
+        assert!(validate_file_provider_activity_evidence(&evidence).is_ok());
+        assert!(!serde_json::to_string(&evidence)
+            .unwrap()
+            .contains("itemIsFlockedCanNotPropagate"));
+    }
+
+    #[test]
+    fn file_provider_parser_detects_old_fetch_create_errors_as_stalled() {
+        let evidence = parse_file_provider_activity_output(
+            "doc fetch-content: last:'1787622820 (-4h9min)' error:'noContentToFetch'\n\
+             doc create-item: last:'1787635515 (-37min30s)' error:'itemNotFound'\n",
+            42,
+            true,
+            false,
+            false,
+        );
+        assert!(evidence
+            .notices
+            .contains(&"icloud-file-provider-stale-error-observed".to_string()));
+        let mut report = build_report(1, vec![], IcloudUploadQueueSummary::default(), true, true)
+            .unwrap();
+        report.file_provider_activity = Some(evidence);
+        attach_native_status_admission(&mut report);
+        assert!(report
+            .new_copy_admission_blockers
+            .contains(&"icloud-file-provider-stalled".to_string()));
+    }
+
+    #[test]
+    fn file_provider_parser_detects_stale_error_age_on_adjacent_dump_row() {
+        let evidence = parse_file_provider_activity_output(
+            "doc fetch-content: error:'noContentToFetch'\n\
+             last:'1787622820 (-4h9min)' expired:'1787622820 (-4h9min)'\n",
+            42,
+            true,
+            false,
+            false,
+        );
+        assert!(evidence
+            .notices
+            .contains(&"icloud-file-provider-stale-error-observed".to_string()));
+    }
+
+    #[test]
+    fn file_provider_parser_ignores_unrelated_negative_duration() {
+        let evidence = parse_file_provider_activity_output(
+            "doc fetch-content: retry budget (-4h9min)\n",
+            42,
+            true,
+            false,
+            false,
+        );
+        assert!(!evidence
+            .notices
+            .contains(&"icloud-file-provider-stale-error-observed".to_string()));
+    }
+
+    #[test]
+    fn file_provider_parser_ignores_adjacent_operation_age_from_another_record() {
+        let evidence = parse_file_provider_activity_output(
+            "i:docID(1) fetch-content: request\n\
+             i:docID(2) last:'1787622820 (-4h9min)'\n",
+            42,
+            true,
+            false,
+            false,
+        );
+        assert!(!evidence
+            .notices
+            .contains(&"icloud-file-provider-stale-error-observed".to_string()));
+    }
+
+    #[test]
+    fn file_provider_parser_ignores_old_healthy_operation_timestamp() {
+        let evidence = parse_file_provider_activity_output(
+            "i:docID(1) fetch-content: last:'1787622820 (-4h9min)' state:complete\n",
+            42,
+            true,
+            false,
+            false,
+        );
+        assert!(!evidence
+            .notices
+            .contains(&"icloud-file-provider-stale-error-observed".to_string()));
+    }
+
+    #[test]
+    fn file_provider_parser_uses_expired_age_when_last_is_fresh() {
+        let evidence = parse_file_provider_activity_output(
+            "doc fetch-content: last:'1787622820 (-1min)' expired:'1787622820 (-16min)' error:'noContentToFetch'\n",
+            42,
+            true,
+            false,
+            false,
+        );
+        assert!(evidence
+            .notices
+            .contains(&"icloud-file-provider-stale-error-observed".to_string()));
+    }
+
+    #[test]
+    fn locked_file_provider_item_blocks_new_copy_admission() {
+        let mut report = build_report(1, vec![], IcloudUploadQueueSummary::default(), true, true)
+            .unwrap();
+        report.file_provider_activity = Some(parse_file_provider_activity_output(
+            "fetch-content: itemIsFlockedCanNotPropagate\n",
+            1,
+            true,
+            false,
+            false,
+        ));
+        attach_native_status_admission(&mut report);
+        assert!(report
+            .new_copy_admission_blockers
+            .contains(&"icloud-file-provider-item-locked".to_string()));
+        assert!(report.sync_backlog_present);
+        assert_eq!(report.new_copy_admission_state, "blocked");
     }
 
     #[test]
