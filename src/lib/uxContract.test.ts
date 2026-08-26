@@ -85,6 +85,10 @@ textarea {
     expect(page).toContain('role="group" aria-label="스캔 제어"');
     expect(page).toContain('aria-live="polite"');
     expect(page).not.toContain("alert(`스캔 시작 실패");
+    expect(page).toContain("onMount(() => {");
+    expect(page).toContain("return () => {");
+    expect(page).toContain("unlistenProgress?.();");
+    expect(page).toContain("unlistenDone?.();");
   });
 
   it("registers every provider state and interaction edge in Storybook", () => {

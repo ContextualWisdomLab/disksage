@@ -52,8 +52,10 @@
         unlistenProgress = progressCleanup;
         unlistenDone = doneCleanup;
         roots = await api.listRoots();
+        if (disposed) return;
         selectedRoot = roots[0] ?? "";
       } catch {
+        if (disposed) return;
         loadError = "스캔할 수 있는 위치를 불러오지 못했습니다.";
       }
     };
