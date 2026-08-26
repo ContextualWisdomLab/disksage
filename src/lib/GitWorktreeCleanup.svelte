@@ -164,7 +164,10 @@
     GitHub에서 병합 없이 종료된 PR의 깨끗한 worktree도 포함
   </label>
   {#if includeClosedPullRequests}
-    <p class="muted">선택한 저장소에 로그인된 GitHub 연결이 필요합니다.</p>
+    <p class="muted">
+      선택한 저장소에 로그인된 GitHub 연결이 필요합니다. 이 옵션은 보존 ref에 병합되지 않은 worktree도 후보에 포함합니다.
+      브랜치와 커밋은 유지됩니다.
+    </p>
   {/if}
   <button
     onclick={inspectWorktrees}
