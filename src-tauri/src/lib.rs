@@ -7,6 +7,8 @@ mod dupes;
 #[cfg_attr(coverage, allow(dead_code))]
 mod commands;
 #[cfg_attr(coverage, allow(dead_code))]
+mod generic_cleanup;
+#[cfg_attr(coverage, allow(dead_code))]
 mod preferred_scan_roots;
 #[cfg_attr(coverage, allow(dead_code))]
 mod node_navigation;
@@ -52,6 +54,7 @@ pub mod cloud_adr;
 pub mod cloud_plan_view;
 pub mod cloud_local_inventory;
 pub mod cloud_local_eviction;
+#[cfg(not(coverage))]
 pub mod cloud_local_eviction_batch;
 #[cfg(not(coverage))]
 pub mod cloud_eviction;
@@ -107,13 +110,14 @@ pub fn run() {
             preferred_scan_roots::list_roots,
             commands::start_scan,
             commands::cancel_scan,
+            commands::cancel_cloud_copy,
             node_navigation::get_node_secure,
             commands::top_files,
             commands::list_cache_candidates,
             commands::clean_regenerable_caches,
             cache_cleanup::list_cache_targets,
             commands::list_dev_artifacts,
-            commands::clean_paths,
+            generic_cleanup::fail_closed_clean_paths,
             cache_cleanup::clean_cache_contents,
             commands::clean_dev_artifacts,
             commands::recent_operations,
