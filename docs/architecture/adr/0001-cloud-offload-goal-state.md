@@ -653,6 +653,7 @@ resetting to zero without granting copy, attestation, or eviction authority. `Pr
 is the single Finder-cancel control for both iCloud and non-iCloud provider paths; duplicate
 detail-panel buttons were removed. Exact functional head `976d9300b438e9d010f8e030a4ffd09aa1c96632`
 carries the regression tests.
+
 ## Amendment: current iCloud Finder preparation evidence (2026-08-25)
 
 The current bounded read-only observation retained three `fetchContentsForItemWithID` requests
