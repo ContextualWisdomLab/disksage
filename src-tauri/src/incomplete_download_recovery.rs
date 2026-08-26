@@ -1,4 +1,5 @@
 use crate::cloud_local_eviction::observe_path_active_use;
+use crate::duplicate_audit::bound_read_root::BoundReadRoot;
 use crate::incomplete_download::{
     IncompleteDownloadAuditItem, IncompleteDownloadAuditReport, IncompleteDownloadState,
 };
@@ -313,7 +314,11 @@ fn parse_structural_zip_range(value: &str) -> Option<(u64, u64, usize)> {
     (end > start).then_some((start, end, entries))
 }
 
-fn safe_candidate_path(canonical_root: &Path, relative_path: &str) -> Result<PathBuf, String> {
+fn safe_candidate_path(
+    root_guard: &BoundReadRoot,
+    canonical_root: &Path,
+    relative_path: &str,
+) -> Result<PathBuf, String> {
     let relative = Path::new(relative_path);
     if relative.as_os_str().is_empty()
         || relative.is_absolute()
@@ -323,24 +328,31 @@ fn safe_candidate_path(canonical_root: &Path, relative_path: &str) -> Result<Pat
     {
         return Err("recovery-candidate-relative-path-unsafe".into());
     }
-    let mut current = canonical_root.to_path_buf();
+    let mut current = PathBuf::new();
     for component in relative.components() {
         let Component::Normal(value) = component else {
             return Err("recovery-candidate-relative-path-unsafe".into());
         };
         current.push(value);
-        let metadata = std::fs::symlink_metadata(&current)
+        let kind = root_guard
+            .entry_kind(&current)
             .map_err(|_| "recovery-candidate-unavailable".to_string())?;
-        if metadata.file_type().is_symlink() {
+        if matches!(
+            kind,
+            crate::duplicate_audit::bound_read_root::BoundEntryKind::Symlink
+        ) {
             return Err("recovery-candidate-symlink-rejected".into());
         }
     }
-    let canonical = std::fs::canonicalize(&current)
-        .map_err(|_| "recovery-candidate-unavailable".to_string())?;
-    if !canonical.starts_with(canonical_root) {
-        return Err("recovery-candidate-outside-root".into());
+    if !matches!(
+        root_guard
+            .entry_kind(&current)
+            .map_err(|_| "recovery-candidate-unavailable".to_string())?,
+        crate::duplicate_audit::bound_read_root::BoundEntryKind::File
+    ) {
+        return Err("recovery-candidate-unavailable".into());
     }
-    Ok(canonical)
+    Ok(canonical_root.join(current))
 }
 
 fn content_validation(
@@ -365,7 +377,7 @@ fn content_validation(
     }
 }
 
-fn validate_png(path: &Path, logical_bytes: u64, limit: u64) -> ContentValidation {
+fn validate_png(file: std::io::Result<File>, logical_bytes: u64, limit: u64) -> ContentValidation {
     let mut result = content_validation(
         RecoveryValidationKind::PngFullFile,
         ContentValidationStatus::Invalid,
@@ -373,7 +385,7 @@ fn validate_png(path: &Path, logical_bytes: u64, limit: u64) -> ContentValidatio
         logical_bytes,
         "png-decode-failed",
     );
-    let file = match File::open(path) {
+    let file = match file {
         Ok(file) => file,
         Err(_) => {
             result.reason_code = "png-open-failed".into();
@@ -440,7 +452,7 @@ fn validate_png(path: &Path, logical_bytes: u64, limit: u64) -> ContentValidatio
 }
 
 fn validate_zip_range(
-    path: &Path,
+    file: std::io::Result<File>,
     start: u64,
     end: u64,
     expected_entries: usize,
@@ -465,7 +477,7 @@ fn validate_zip_range(
         result.reason_code = "zip-structural-entry-limit-exceeded".into();
         return result;
     }
-    let file = match File::open(path) {
+    let file = match file {
         Ok(file) => file,
         Err(_) => {
             result.reason_code = "zip-open-failed".into();
@@ -611,6 +623,7 @@ fn skipped_item(
 }
 
 fn validate_item(
+    root_guard: &BoundReadRoot,
     canonical_root: &Path,
     item: &IncompleteDownloadAuditItem,
     limits: RecoveryValidationLimits,
@@ -625,13 +638,29 @@ fn validate_item(
     if item.active_use.active {
         return skipped_item(item, RecoveryItemStatus::SkippedActive, "audit-item-active");
     }
-    let path = match safe_candidate_path(canonical_root, &item.relative_path) {
+    let relative = Path::new(&item.relative_path);
+    let path = match safe_candidate_path(root_guard, canonical_root, &item.relative_path) {
         Ok(path) => path,
         Err(reason) => {
             return skipped_item(item, RecoveryItemStatus::SkippedEvidenceIncomplete, &reason)
         }
     };
-    let before = match std::fs::symlink_metadata(&path) {
+    // Keep reads on the identity-bound namespace path, but give external
+    // lsof/ps probes a canonical path they can inspect without /proc/fd noise.
+    let active_use_path = match std::fs::canonicalize(&path) {
+        Ok(path) => path,
+        Err(_) => {
+            return skipped_item(
+                item,
+                RecoveryItemStatus::SkippedEvidenceIncomplete,
+                "active-use-probe-path-unavailable",
+            )
+        }
+    };
+    let before = match root_guard
+        .open_file(relative)
+        .and_then(|file| file.metadata())
+    {
         Ok(metadata)
             if metadata.is_file()
                 && !metadata.file_type().is_symlink()
@@ -649,7 +678,7 @@ fn validate_item(
             )
         }
     };
-    let active_before = observe_path_active_use(&path);
+    let active_before = observe_path_active_use(&active_use_path);
     if !active_before.evidence_complete {
         return skipped_item(
             item,
@@ -668,7 +697,7 @@ fn validate_item(
     let mut validations = Vec::new();
     if item.detected_mime_type.as_deref() == Some("image/png") {
         validations.push(validate_png(
-            &path,
+            root_guard.open_file(relative),
             item.logical_bytes,
             limits.max_png_output_bytes,
         ));
@@ -683,7 +712,7 @@ fn validate_item(
     zip_ranges.dedup();
     for (start, end, expected_entries) in zip_ranges {
         validations.push(validate_zip_range(
-            &path,
+            root_guard.open_file(relative),
             start,
             end,
             expected_entries,
@@ -692,8 +721,11 @@ fn validate_item(
         ));
     }
 
-    let active_after = observe_path_active_use(&path);
-    let after = std::fs::symlink_metadata(&path).ok();
+    let active_after = observe_path_active_use(&active_use_path);
+    let after = root_guard
+        .open_file(relative)
+        .and_then(|file| file.metadata())
+        .ok();
     let stable = active_after.evidence_complete
         && !active_after.active
         && after.as_ref().is_some_and(|metadata| {
@@ -930,13 +962,11 @@ pub fn validate_incomplete_download_recovery(
     if !source_root.is_absolute() {
         return Err("recovery-validation-root-must-be-absolute".into());
     }
-    let canonical_root = std::fs::canonicalize(source_root)
-        .map_err(|_| "recovery-validation-root-unavailable".to_string())?;
-    let root_metadata = std::fs::symlink_metadata(&canonical_root)
-        .map_err(|_| "recovery-validation-root-unavailable".to_string())?;
-    if !root_metadata.is_dir() || root_metadata.file_type().is_symlink() {
-        return Err("recovery-validation-root-unsafe".into());
-    }
+    let root_guard = BoundReadRoot::open(source_root)
+        .ok_or_else(|| "recovery-validation-root-unsafe".to_string())?;
+    let canonical_root = root_guard
+        .canonical_path()
+        .ok_or_else(|| "recovery-validation-root-unsafe".to_string())?;
     if audit.source_root != canonical_root.to_string_lossy() {
         return Err("recovery-validation-audit-root-mismatch".into());
     }
@@ -948,7 +978,7 @@ pub fn validate_incomplete_download_recovery(
         .items
         .iter()
         .filter(|item| item.recovery_candidate)
-        .map(|item| validate_item(&canonical_root, item, limits))
+        .map(|item| validate_item(&root_guard, &canonical_root, item, limits))
         .collect::<Vec<_>>();
     items.sort_by(|left, right| left.candidate_fingerprint.cmp(&right.candidate_fingerprint));
     let mut issues = BTreeMap::new();
@@ -993,6 +1023,9 @@ pub fn validate_incomplete_download_recovery(
         total.saturating_add(item.validated_recoverable_bytes)
     });
     let fingerprint = validation_fingerprint(audit, limits, evidence_complete, &issues, &items);
+    if root_guard.canonical_path().as_ref() != Some(&canonical_root) {
+        return Err("recovery-validation-root-unsafe".into());
+    }
     Ok(IncompleteDownloadRecoveryReport {
         schema_version: INCOMPLETE_DOWNLOAD_RECOVERY_VERSION,
         observed_at_ms,
@@ -1136,7 +1169,7 @@ mod tests {
         let path = directory.path().join("range.bin");
         let (start, end) = write_zip(&path, b"prefix", b"payload");
         let validation = validate_zip_range(
-            &path,
+            File::open(&path),
             start,
             end,
             1,
@@ -1161,7 +1194,7 @@ mod tests {
         bytes[payload_offset] ^= 0xff;
         std::fs::write(&path, bytes).unwrap();
         let validation = validate_zip_range(
-            &path,
+            File::open(&path),
             start,
             end,
             1,
@@ -1178,7 +1211,7 @@ mod tests {
         let path = directory.path().join("archive.zip");
         let (_, end) = write_zip(&path, b"", b"payload");
         let validation = validate_zip_range(
-            &path,
+            File::open(&path),
             0,
             end,
             1,
@@ -1205,11 +1238,11 @@ mod tests {
             writer.write_image_data(&[1, 2, 3, 255]).unwrap();
         }
         std::fs::write(&path, &bytes).unwrap();
-        let validation = validate_png(&path, bytes.len() as u64, 1024);
+        let validation = validate_png(File::open(&path), bytes.len() as u64, 1024);
         assert_eq!(validation.status, ContentValidationStatus::Validated);
         assert_eq!(validation.decoded_frame_count, 1);
         assert_eq!(validation.decoded_output_bytes, 4);
-        let limited = validate_png(&path, bytes.len() as u64, 3);
+        let limited = validate_png(File::open(&path), bytes.len() as u64, 3);
         assert_eq!(limited.status, ContentValidationStatus::LimitExceeded);
     }
 
