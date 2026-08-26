@@ -45,68 +45,79 @@ pub(crate) fn logical_scan_path(path: &Path, traversal_root: &Path, requested_ro
         .unwrap_or_else(|_| path.to_path_buf())
 }
 
-/// Return whether a directory is a known provider-managed root below the requested scan root.
-///
-/// Inventory scans must not descend into desktop cloud-provider trees: a metadata walk can ask a
-/// provider to materialize a dataless placeholder. The root itself remains scannable so an
-/// operator can explicitly inspect a provider tree; only an ancestor scan is pruned.
-pub(crate) fn is_managed_provider_root(path: &Path, traversal_root: &Path) -> bool {
+fn provider_home_root() -> Option<PathBuf> {
+    ["HOME", "USERPROFILE"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from)
+        .find(|home| home.is_absolute())
+}
+
+fn is_managed_provider_root_with_home(
+    path: &Path,
+    traversal_root: &Path,
+    home_root: Option<&Path>,
+) -> bool {
     let Ok(relative) = path.strip_prefix(traversal_root) else {
         return false;
     };
     if relative.as_os_str().is_empty() {
         return false;
     }
+    let Some(home_root) = home_root else {
+        return false;
+    };
 
     #[cfg(target_os = "macos")]
-    {
-        // Check the directory's immediate parent rather than only the relative path. This also
-        // protects scans that start at `~/Library` (where `Library` is outside `relative`).
-        let file_name = path.file_name().and_then(|name| name.to_str());
-        if file_name == Some("Google Drive") {
-            // Older Google Drive for macOS installs used this home-level root.
-            return true;
-        }
-        let is_macos_provider_root =
-            matches!(file_name, Some("CloudStorage" | "Mobile Documents"));
-        return is_macos_provider_root
-            && path
-                .parent()
-                .and_then(Path::file_name)
-                .and_then(|name| name.to_str())
-                == Some("Library");
-    }
+    let managed_roots = [
+        home_root.join("Library").join("CloudStorage"),
+        home_root.join("Library").join("Mobile Documents"),
+        home_root.join("Google Drive"),
+    ];
+    #[cfg(target_os = "macos")]
+    return managed_roots
+        .iter()
+        .any(|managed_root| managed_root == path && managed_root.starts_with(traversal_root));
 
     #[cfg(not(target_os = "macos"))]
     {
-        let components: Vec<String> = relative
-            .components()
-            .filter_map(|component| match component {
-                std::path::Component::Normal(value) => Some(value.to_string_lossy().into_owned()),
-                _ => None,
-            })
-            .collect();
-        // Windows and Linux desktop clients conventionally expose these named roots under the
-        // user's selected home. Match only the provider's documented root names, not arbitrary
-        // descendants, so a folder named `OneDrive` elsewhere is not pruned unless it is the
-        // direct provider root selected by the operator.
-        return components.iter().any(|component| {
-            component == "OneDrive"
-                || component.starts_with("OneDrive - ")
-                || component == "Google Drive"
-        });
+        let is_known_root = [home_root.join("OneDrive"), home_root.join("Google Drive")]
+            .iter()
+            .any(|managed_root| managed_root == path);
+        let is_named_account_root = path
+            .parent()
+            .is_some_and(|parent| parent == home_root)
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name == "OneDrive" || name.starts_with("OneDrive - "));
+        return (is_known_root || is_named_account_root) && path.starts_with(traversal_root);
     }
+}
+
+/// Return whether a directory is a known provider-managed root below the requested scan root.
+///
+/// Inventory scans must not descend into desktop cloud-provider trees: a metadata walk can ask a
+/// provider to materialize a dataless placeholder. The root itself remains scannable so an
+/// operator can explicitly inspect a provider tree; only an ancestor scan is pruned.
+pub(crate) fn is_managed_provider_root(path: &Path, traversal_root: &Path) -> bool {
+    is_managed_provider_root_with_home(path, traversal_root, provider_home_root().as_deref())
 }
 
 fn keep_scan_entry(
     entry: &walkdir::DirEntry,
     traversal_root: &Path,
     provider_roots_skipped: &Cell<u64>,
+    provider_home: Option<&Path>,
 ) -> bool {
     if !keep_entry(entry) {
         return false;
     }
-    if entry.file_type().is_dir() && is_managed_provider_root(entry.path(), traversal_root) {
+    let is_provider_root = provider_home.map_or_else(
+        || is_managed_provider_root(entry.path(), traversal_root),
+        |home| is_managed_provider_root_with_home(entry.path(), traversal_root, Some(home)),
+    );
+    if entry.file_type().is_dir() && is_provider_root {
         provider_roots_skipped.set(provider_roots_skipped.get().saturating_add(1));
         return false;
     }
@@ -118,7 +129,41 @@ pub fn scan_dir_with_interval(
     root: &Path,
     cancel: &AtomicBool,
     progress_every: u64,
+    on_progress: impl FnMut(&ScanStats),
+) -> ScanResult {
+    let provider_home = provider_home_root();
+    scan_dir_with_interval_inner(
+        root,
+        cancel,
+        progress_every,
+        on_progress,
+        provider_home.as_deref(),
+    )
+}
+
+#[cfg(test)]
+fn scan_dir_with_interval_for_home(
+    root: &Path,
+    cancel: &AtomicBool,
+    progress_every: u64,
+    on_progress: impl FnMut(&ScanStats),
+    provider_home: &Path,
+) -> ScanResult {
+    scan_dir_with_interval_inner(
+        root,
+        cancel,
+        progress_every,
+        on_progress,
+        Some(provider_home),
+    )
+}
+
+fn scan_dir_with_interval_inner(
+    root: &Path,
+    cancel: &AtomicBool,
+    progress_every: u64,
     mut on_progress: impl FnMut(&ScanStats),
+    provider_home: Option<&Path>,
 ) -> ScanResult {
     let progress_every = progress_every.max(1);
     let mut dir_sizes: HashMap<PathBuf, u64> = HashMap::new();
@@ -133,7 +178,14 @@ pub fn scan_dir_with_interval(
     let walker = walkdir::WalkDir::new(&traversal_root)
         .follow_links(false)
         .into_iter()
-        .filter_entry(|entry| keep_scan_entry(entry, &traversal_root, &provider_roots_skipped));
+        .filter_entry(|entry| {
+            keep_scan_entry(
+                entry,
+                &traversal_root,
+                &provider_roots_skipped,
+                provider_home,
+            )
+        });
 
     for entry in walker {
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
@@ -228,6 +280,10 @@ mod tests {
     // 공유 no-op 진행 콜백 — progress_every_zero_does_not_panic(간격 1)에서 실제로 실행되므로
     // 각 테스트마다 실행되지 않는 클로저(커버리지에 0으로 집계됨)를 만들지 않는다
     fn noop(_: &ScanStats) {}
+
+    fn scan_with_home(root: &Path, provider_home: &Path) -> ScanResult {
+        scan_dir_with_interval_for_home(root, &AtomicBool::new(false), 1, noop, provider_home)
+    }
 
     #[test]
     fn aggregates_dir_sizes_up_the_tree() {
@@ -324,7 +380,7 @@ mod tests {
         write(&provider_root.join("dataless-placeholder.bin"), 4096);
         write(&tmp.path().join("local.bin"), 7);
 
-        let result = scan_dir(tmp.path(), &AtomicBool::new(false), noop);
+        let result = scan_with_home(tmp.path(), tmp.path());
 
         assert_eq!(result.stats.files, 1);
         assert_eq!(result.stats.bytes, 7);
@@ -347,7 +403,7 @@ mod tests {
         fs::create_dir_all(&provider_root).unwrap();
         write(&provider_root.join("selected.bin"), 11);
 
-        let result = scan_dir(&provider_root, &AtomicBool::new(false), noop);
+        let result = scan_with_home(&provider_root, tmp.path());
 
         assert_eq!(result.stats.files, 1);
         assert_eq!(result.stats.bytes, 11);
@@ -364,7 +420,7 @@ mod tests {
         write(&provider_root.join("dataless-placeholder.bin"), 4096);
         write(&library.join("local.bin"), 7);
 
-        let result = scan_dir(&library, &AtomicBool::new(false), noop);
+        let result = scan_with_home(&library, tmp.path());
 
         assert_eq!(result.stats.files, 1);
         assert_eq!(result.stats.bytes, 7);
@@ -380,7 +436,7 @@ mod tests {
         write(&provider_root.join("dataless-placeholder.bin"), 4096);
         write(&tmp.path().join("local.bin"), 7);
 
-        let result = scan_dir(tmp.path(), &AtomicBool::new(false), noop);
+        let result = scan_with_home(tmp.path(), tmp.path());
 
         assert_eq!(result.stats.files, 1);
         assert_eq!(result.stats.bytes, 7);
@@ -400,15 +456,51 @@ mod tests {
         write(&tmp.path().join("local.bin"), 7);
         let observed_skipped = Cell::new(0_u64);
 
-        let result = scan_dir_with_interval(
+        let result = scan_dir_with_interval_for_home(
             tmp.path(),
             &AtomicBool::new(false),
             1,
             |progress| observed_skipped.set(progress.skipped),
+            tmp.path(),
         );
 
         assert_eq!(result.stats.skipped, 1);
         assert_eq!(observed_skipped.get(), 1);
+    }
+
+    #[test]
+    fn nested_provider_named_directory_is_scanned() {
+        let tmp = tempfile::tempdir().unwrap();
+        let nested = tmp.path().join("Projects");
+        let nested_provider = nested.join(if cfg!(target_os = "macos") {
+            "Google Drive"
+        } else {
+            "OneDrive"
+        });
+        fs::create_dir_all(&nested_provider).unwrap();
+        write(&nested_provider.join("local.bin"), 13);
+
+        let result = scan_with_home(tmp.path(), tmp.path());
+
+        assert_eq!(result.stats.files, 1);
+        assert_eq!(result.stats.bytes, 13);
+        assert_eq!(result.stats.skipped, 0);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn named_onedrive_account_root_is_pruned() {
+        let tmp = tempfile::tempdir().unwrap();
+        let provider_root = tmp.path().join("OneDrive - Example");
+        fs::create_dir_all(&provider_root).unwrap();
+        write(&provider_root.join("placeholder.bin"), 4096);
+        write(&tmp.path().join("local.bin"), 7);
+
+        let result = scan_with_home(tmp.path(), tmp.path());
+
+        assert_eq!(result.stats.files, 1);
+        assert_eq!(result.stats.bytes, 7);
+        assert_eq!(result.stats.skipped, 1);
     }
 
     #[cfg(unix)]
