@@ -2,6 +2,14 @@
   import { confirm, open } from "@tauri-apps/plugin-dialog";
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
+  import {
+    ICLOUD_EVICTION_EXECUTION_FAILURE,
+    ICLOUD_FILE_SELECTION_FAILURE,
+    ICLOUD_RESULT_RECORD_FAILURE,
+    ICLOUD_STATE_INSPECTION_FAILURE,
+    planBlockerActions,
+    verificationBlockerActions,
+  } from "./icloudLocalEvictionFeedback";
 
   let { cloudRoot }: { cloudRoot: string } = $props();
 
@@ -35,7 +43,7 @@
       path = selected;
       resetDecision();
     } catch {
-      error = "iCloud 파일 선택을 완료하지 못했습니다. 다시 시도하십시오.";
+      error = ICLOUD_FILE_SELECTION_FAILURE;
     }
   }
 
@@ -47,7 +55,7 @@
     try {
       plan = await api.planIcloudLocalCopyEviction(cloudRoot, selectedPath);
     } catch {
-      error = "iCloud 로컬 사본 상태를 확인하지 못했습니다. 다시 시도하십시오.";
+      error = ICLOUD_STATE_INSPECTION_FAILURE;
     } finally {
       planning = false;
     }
@@ -83,7 +91,7 @@
       confirmation = "";
       rationale = "";
     } catch {
-      error = "iCloud 로컬 사본을 회수하지 못했습니다. 상태를 다시 확인하십시오.";
+      error = ICLOUD_EVICTION_EXECUTION_FAILURE;
     } finally {
       executing = false;
     }
@@ -110,23 +118,6 @@
     return "공급자 동기화 미완료";
   }
 
-  function blockerLabel(blocker: string): string {
-    const labels: Record<string, string> = {
-      "icloud-upload-not-confirmed": "로컬 최신본이지만 공급자 업로드가 아직 확인되지 않았습니다. 업로드 완료 후 다시 확인하십시오.",
-      "icloud-upload-still-running": "공급자 업로드가 진행 중입니다. 완료 후 다시 확인하십시오.",
-      "icloud-current-version-unconfirmed": "로컬 최신본 여부를 확인하지 못했습니다. File Provider 상태가 안정된 후 다시 확인하십시오.",
-      "icloud-file-provider-native-status-unavailable": "File Provider 상태 증거가 완전하지 않습니다. 잠시 후 다시 확인하십시오.",
-      "icloud-file-provider-sync-paused-or-unconfirmed": "File Provider 동기화가 일시중지됐거나 상태가 미확인입니다. 동기화를 재개한 후 다시 확인하십시오.",
-      "icloud-unresolved-conflict": "동기화 충돌이 해결되지 않았습니다. 충돌을 해결한 후 다시 확인하십시오.",
-      "active-file-use-detected": "현재 사용 중인 파일이라 회수할 수 없습니다. 파일을 닫은 후 다시 확인하십시오.",
-      "active-use-evidence-incomplete": "파일 사용 상태를 완전히 확인하지 못했습니다. 잠시 후 다시 확인하십시오.",
-    };
-    return labels[blocker] ?? "필수 iCloud 상태 증거가 완전하지 않아 회수할 수 없습니다. 상태를 다시 확인하십시오.";
-  }
-
-  function blockerSummary(blockers: string[]): string {
-    return [...new Set(blockers.map(blockerLabel))].join(" ");
-  }
 </script>
 
 <div class="local-eviction-panel">
@@ -184,18 +175,20 @@
             iCloud 항목 경로와 ubiquitous identity는 유지되었습니다.
           </p>
         {:else}
-          <p class="warning">
-            축출 요청은 성공했지만 로컬 할당 감소 검증은 불완전합니다:
-            {eviction.result.verification_blockers.join(", ")}
-          </p>
+          <div class="warning" role="alert">
+            <p>축출 결과 검증이 불완전합니다. 다음 항목을 확인하세요.</p>
+            <ul>
+              {#each verificationBlockerActions(eviction.result.verification_blockers) as action}
+                <li>{action}</li>
+              {/each}
+            </ul>
+          </div>
         {/if}
         <p class="muted">승인 기록: {eviction.approval_path}</p>
         {#if eviction.result_path}
           <p class="muted">결과 기록: {eviction.result_path}</p>
         {:else}
-          <p class="error" role="alert">
-            축출 결과는 위와 같지만 결과 기록을 저장하지 못했습니다.
-          </p>
+          <p class="error" role="alert">{ICLOUD_RESULT_RECORD_FAILURE}</p>
         {/if}
       {:else if plan.eligible_after_human_approval}
         <div class="approval-controls">
@@ -228,7 +221,14 @@
           </button>
         </div>
       {:else}
-        <p class="warning" role="status">현재 축출 불가: {blockerSummary(plan.blockers)}</p>
+        <div class="warning" role="status">
+          <p>현재 로컬 사본을 축출할 수 없습니다. 다음 항목을 확인하세요.</p>
+          <ul>
+            {#each planBlockerActions(plan.blockers.filter((blocker) => blocker !== "human-local-eviction-approval-required")) as action}
+              <li>{action}</li>
+            {/each}
+          </ul>
+        </div>
       {/if}
     </div>
   {/if}
@@ -247,6 +247,9 @@
   label { display: grid; gap: 0.2rem; font-size: 0.8rem; color: #555; }
   .muted { color: #777; margin: 0; }
   .warning { color: #8a5700; margin: 0; }
+  .warning > p { margin: 0; }
+  .warning ul { margin: 0.25rem 0 0; padding-left: 1.25rem; }
+  .warning li + li { margin-top: 0.2rem; }
   .safe { color: #276437; margin: 0; }
   .error { color: #b00; margin: 0; }
 </style>
