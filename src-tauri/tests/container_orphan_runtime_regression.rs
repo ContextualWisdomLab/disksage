@@ -257,6 +257,40 @@ fn unsupported_runtime_kind_is_not_reflected_in_diagnostics() {
     assert!(!stderr.contains(untrusted));
 }
 
+#[test]
+fn singleton_cli_options_reject_duplicates_before_domain_work() {
+    let binary = env!("CARGO_BIN_EXE_disksage-container-orphan-plan");
+    let cases = [
+        (
+            vec!["--runtime", "docker-native", "--runtime", "docker-native"],
+            "--runtime may be supplied once",
+        ),
+        (
+            vec!["--runtime", "docker-colima-context", "--scope", "one", "--scope", "two"],
+            "--scope may be supplied once",
+        ),
+        (
+            vec!["--runtime", "docker-native", "--bin", "first", "--bin", "second"],
+            "--bin may be supplied once",
+        ),
+        (
+            vec!["--runtime", "docker-native", "--pretty", "--pretty"],
+            "--pretty may be supplied once",
+        ),
+    ];
+
+    for (args, expected) in cases {
+        let output = Command::new(binary)
+            .args(args)
+            .output()
+            .expect("run shipped container orphan plan CLI");
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr).expect("bounded UTF-8 stderr");
+        assert!(stderr.contains(expected), "stderr={stderr}");
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn podman_machine_cli_defaults_to_the_podman_binary() {
