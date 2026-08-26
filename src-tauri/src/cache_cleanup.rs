@@ -394,7 +394,6 @@ pub fn clean_regenerable_caches_headless(
 }
 
 /// Read the exact cache children that may be included in a later identity-bound Trash request.
-#[cfg(not(coverage))]
 #[tauri::command]
 pub fn list_cache_targets(dir: String) -> Result<Vec<rules::CacheTarget>, String> {
     let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
@@ -405,7 +404,6 @@ pub fn list_cache_targets(dir: String) -> Result<Vec<rules::CacheTarget>, String
 }
 
 /// Move only the reviewed cache children to the OS Trash, retaining the cache root itself.
-#[cfg(not(coverage))]
 #[tauri::command]
 pub fn clean_cache_contents(
     dir: String,
