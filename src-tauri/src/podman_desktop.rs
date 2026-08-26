@@ -382,6 +382,7 @@ mod tests {
                 candidate_record_size_sum: 200,
                 candidate_set_sha256: "a".repeat(64),
             }),
+            dangling_prune_approval_phrase: None,
             assessment: PodmanReclaimAssessment {
                 physically_reclaimable_bytes: None,
                 podman_reported_reclaimable_bytes: Some(300),

@@ -364,10 +364,7 @@ export function podmanEvidenceView(evidence: PodmanDesktopEvidence): PodmanEvide
   return {
     completeness_label: evidence.evidence_complete ? "확인 완료" : "확인 불완전",
     completeness_tone: evidence.evidence_complete ? "complete" : "partial",
-    physical_reclaim_label:
-      evidence.physically_reclaimable_bytes === null
-        ? "검증되지 않음"
-        : `${evidence.physically_reclaimable_bytes} bytes`,
+    physical_reclaim_label: "검증되지 않음",
     image_review_label: evidence.review_boundaries.image_review_required
       ? "이미지 별도 검토 필요"
       : "이미지 검토 신호 없음",

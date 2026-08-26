@@ -23,6 +23,7 @@ fn contradictory_plan() -> PodmanReclaimPlan {
         store: None,
         system_df: None,
         unused_images: None,
+        dangling_prune_approval_phrase: None,
         assessment: PodmanReclaimAssessment {
             physically_reclaimable_bytes: Some(4096),
             podman_reported_reclaimable_bytes: None,
