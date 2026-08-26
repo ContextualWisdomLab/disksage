@@ -7,6 +7,8 @@ mod dupes;
 #[cfg_attr(coverage, allow(dead_code))]
 mod commands;
 #[cfg_attr(coverage, allow(dead_code))]
+mod container_orphan_commands;
+#[cfg_attr(coverage, allow(dead_code))]
 mod generic_cleanup;
 #[cfg_attr(coverage, allow(dead_code))]
 mod node_navigation;
@@ -141,8 +143,8 @@ pub fn run() {
             commands::plan_brew_cleanup,
             commands::inspect_podman_reclaim,
             commands::execute_podman_dangling_image_prune,
-            commands::inspect_container_orphans,
-            commands::execute_container_orphan_prune,
+            container_orphan_commands::inspect_container_orphans,
+            container_orphan_commands::execute_container_orphan_prune,
             commands::judge_brew_cleanup,
             commands::validate_judge_calibration,
             commands::execute_brew_cleanup,
