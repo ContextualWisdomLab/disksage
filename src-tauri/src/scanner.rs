@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::{BinaryHeap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -44,6 +45,71 @@ pub(crate) fn logical_scan_path(path: &Path, traversal_root: &Path, requested_ro
         .unwrap_or_else(|_| path.to_path_buf())
 }
 
+/// Return whether a directory is a known provider-managed root below the requested scan root.
+///
+/// Inventory scans must not descend into desktop cloud-provider trees: a metadata walk can ask a
+/// provider to materialize a dataless placeholder. The root itself remains scannable so an
+/// operator can explicitly inspect a provider tree; only an ancestor scan is pruned.
+pub(crate) fn is_managed_provider_root(path: &Path, traversal_root: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(traversal_root) else {
+        return false;
+    };
+    if relative.as_os_str().is_empty() {
+        return false;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // Check the directory's immediate parent rather than only the relative path. This also
+        // protects scans that start at `~/Library` (where `Library` is outside `relative`).
+        let is_macos_provider_root = matches!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("CloudStorage" | "Mobile Documents")
+        );
+        return is_macos_provider_root
+            && path
+                .parent()
+                .and_then(Path::file_name)
+                .and_then(|name| name.to_str())
+                == Some("Library");
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let components: Vec<String> = relative
+            .components()
+            .filter_map(|component| match component {
+                std::path::Component::Normal(value) => Some(value.to_string_lossy().into_owned()),
+                _ => None,
+            })
+            .collect();
+        // Windows and Linux desktop clients conventionally expose these named roots under the
+        // user's selected home. Match only the provider's documented root names, not arbitrary
+        // descendants, so a folder named `OneDrive` elsewhere is not pruned unless it is the
+        // direct provider root selected by the operator.
+        return components.iter().any(|component| {
+            component == "OneDrive"
+                || component.starts_with("OneDrive - ")
+                || component == "Google Drive"
+        });
+    }
+}
+
+fn keep_scan_entry(
+    entry: &walkdir::DirEntry,
+    traversal_root: &Path,
+    provider_roots_skipped: &Cell<u64>,
+) -> bool {
+    if !keep_entry(entry) {
+        return false;
+    }
+    if entry.file_type().is_dir() && is_managed_provider_root(entry.path(), traversal_root) {
+        provider_roots_skipped.set(provider_roots_skipped.get().saturating_add(1));
+        return false;
+    }
+    true
+}
+
 /// ponytail: progress 간격을 파라미터로 뺀 것은 테스트 주입용, 외부 API는 scan_dir
 pub fn scan_dir_with_interval(
     root: &Path,
@@ -59,11 +125,12 @@ pub fn scan_dir_with_interval(
     let mut cancelled = false;
     let mut seen: u64 = 0;
     let traversal_root = read_only_traversal_root(root);
+    let provider_roots_skipped = Cell::new(0_u64);
 
     let walker = walkdir::WalkDir::new(&traversal_root)
         .follow_links(false)
         .into_iter()
-        .filter_entry(keep_entry);
+        .filter_entry(|entry| keep_scan_entry(entry, &traversal_root, &provider_roots_skipped));
 
     for entry in walker {
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
@@ -104,6 +171,7 @@ pub fn scan_dir_with_interval(
             on_progress(&stats);
         }
     }
+    stats.skipped = stats.skipped.saturating_add(provider_roots_skipped.get());
 
     let mut top_files: Vec<(PathBuf, u64)> = top
         .into_iter()
@@ -235,6 +303,65 @@ mod tests {
         let res = scan_dir(root, &cancel, noop);
         assert!(res.cancelled);
         assert!(res.stats.files < 50);
+    }
+
+    #[test]
+    fn ancestor_scan_prunes_provider_root_before_file_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        let provider_root = if cfg!(target_os = "macos") {
+            tmp.path().join("Library").join("CloudStorage")
+        } else {
+            tmp.path().join("OneDrive")
+        };
+        fs::create_dir_all(&provider_root).unwrap();
+        write(&provider_root.join("dataless-placeholder.bin"), 4096);
+        write(&tmp.path().join("local.bin"), 7);
+
+        let result = scan_dir(tmp.path(), &AtomicBool::new(false), noop);
+
+        assert_eq!(result.stats.files, 1);
+        assert_eq!(result.stats.bytes, 7);
+        assert_eq!(result.stats.skipped, 1);
+        assert!(!result
+            .top_files
+            .iter()
+            .any(|(path, _)| path.starts_with(&provider_root)));
+        assert!(!result.dir_sizes.contains_key(&provider_root));
+    }
+
+    #[test]
+    fn explicitly_selected_provider_root_remains_scannable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let provider_root = if cfg!(target_os = "macos") {
+            tmp.path().join("Library").join("CloudStorage")
+        } else {
+            tmp.path().join("OneDrive")
+        };
+        fs::create_dir_all(&provider_root).unwrap();
+        write(&provider_root.join("selected.bin"), 11);
+
+        let result = scan_dir(&provider_root, &AtomicBool::new(false), noop);
+
+        assert_eq!(result.stats.files, 1);
+        assert_eq!(result.stats.bytes, 11);
+        assert_eq!(result.stats.skipped, 0);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn library_ancestor_scan_prunes_cloud_storage_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library = tmp.path().join("Library");
+        let provider_root = library.join("CloudStorage");
+        fs::create_dir_all(&provider_root).unwrap();
+        write(&provider_root.join("dataless-placeholder.bin"), 4096);
+        write(&library.join("local.bin"), 7);
+
+        let result = scan_dir(&library, &AtomicBool::new(false), noop);
+
+        assert_eq!(result.stats.files, 1);
+        assert_eq!(result.stats.bytes, 7);
+        assert_eq!(result.stats.skipped, 1);
     }
 
     #[cfg(unix)]
