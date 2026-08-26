@@ -291,6 +291,36 @@ fn singleton_cli_options_reject_duplicates_before_domain_work() {
     }
 }
 
+#[test]
+fn runtime_scope_relationship_is_validated_before_domain_work() {
+    let binary = env!("CARGO_BIN_EXE_disksage-container-orphan-plan");
+    let cases = [
+        (
+            vec!["--runtime", "docker-native", "--scope", "ignored"],
+            "--scope is not valid for docker-native",
+        ),
+        (
+            vec!["--runtime", "docker-colima-context"],
+            "--scope is required for docker-colima-context",
+        ),
+        (
+            vec!["--runtime", "podman-machine"],
+            "--scope is required for podman-machine",
+        ),
+    ];
+
+    for (args, expected) in cases {
+        let output = Command::new(binary)
+            .args(args)
+            .output()
+            .expect("run shipped container orphan plan CLI");
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr).expect("bounded UTF-8 stderr");
+        assert!(stderr.contains(expected), "stderr={stderr}");
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn podman_machine_cli_defaults_to_the_podman_binary() {
