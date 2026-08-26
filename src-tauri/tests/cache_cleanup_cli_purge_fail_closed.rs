@@ -36,3 +36,45 @@ fn shipped_cli_refuses_path_recursive_permanent_cache_trash_deletion() {
         "refusal must happen before journal mutation"
     );
 }
+
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn shipped_cli_honors_xdg_data_home_for_read_only_trash_evidence() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let xdg_data_home = temp.path().join("xdg-data");
+    let trash = xdg_data_home.join("Trash/files");
+    let npm = trash.join("_cacache");
+    fs::create_dir_all(npm.join("content-v2")).unwrap();
+    fs::create_dir(npm.join("tmp")).unwrap();
+    fs::write(npm.join("content-v2/entry"), b"cache").unwrap();
+
+    let default_trash = home.join(".local/share/Trash/files/v11");
+    fs::create_dir_all(default_trash.join("metadata")).unwrap();
+    fs::create_dir(default_trash.join("metadata-full")).unwrap();
+
+    let journal = temp.path().join("state/journal.jsonl");
+    let output = Command::new(env!("CARGO_BIN_EXE_disksage-cache-cleanup"))
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &xdg_data_home)
+        .args(["--purge-proven-cache-trash", "--journal-path"])
+        .arg(&journal)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let evidence: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let candidates = evidence["proven_cache_trash"].as_array().unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0]["name"], "_cacache");
+    assert_eq!(candidates[0]["path"], npm.to_string_lossy().as_ref());
+    assert!(
+        !candidates.iter().any(|candidate| candidate["name"] == "v11"),
+        "custom XDG_DATA_HOME must take precedence over the default home Trash"
+    );
+    assert!(
+        !journal.exists(),
+        "read-only evidence collection must not create the journal"
+    );
+}
