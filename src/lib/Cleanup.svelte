@@ -257,7 +257,8 @@
   </p>
   {#if !cacheTrashSupported && cacheTrashNotice === "cache-trash-native-discovery-macos-only"}
     <p class="notice" role="status">
-      휴지통 안의 캐시를 영구 삭제하는 물리 공간 회수 기능은 현재 macOS 기본 휴지통에서만 지원합니다.
+      휴지통 속 재생성 캐시 검토는 현재 macOS 기본 휴지통에서만 지원합니다.
+      앱 내 영구 삭제는 안전한 객체 결합 삭제를 제공할 때까지 모든 플랫폼에서 비활성화되어 있습니다.
     </p>
   {/if}
   {#if cacheTrashPurgeInstruction}
