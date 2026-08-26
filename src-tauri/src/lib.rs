@@ -112,7 +112,6 @@ pub fn run() {
             commands::list_cache_candidates,
             commands::clean_regenerable_caches,
             commands::list_proven_cache_trash,
-            commands::proven_cache_trash_approval_phrase,
             commands::purge_proven_cache_trash,
             cache_cleanup::list_cache_targets,
             commands::list_dev_artifacts,

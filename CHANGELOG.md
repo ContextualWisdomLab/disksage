@@ -17,6 +17,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   that item instead of hiding an already-completed removal behind an all-or-nothing error.
 - Bind the desktop purge action to the current proven-Trash candidate set so a changed list is
   rejected before deletion; pending journal failures now remain visible per item as well.
+- Produce the Trash list and approval phrase as one snapshot, revalidate only that submitted set
+  immediately before deletion, and support the native Trash directory on macOS/Linux while
+  returning no candidates on Windows until Recycle Bin identity guarantees are implemented.
 - Keep cache cleanup guidance focused on what the operator can do next without exposing internal
   identity or activity-check terminology.
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy

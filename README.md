@@ -11,6 +11,7 @@
 - 🧹 **Known cache & temp cleanup** — OS, browser, and package-manager caches
 - 🗑️ **Cache Trash recovery** — review regenerable cache items already in Trash, then permanently
   remove only those items to release local space; user files and other Trash entries stay untouched
+  (macOS and Linux; Windows remains fail-closed until Recycle Bin identity support is available)
 - 🛠 **Dev artifact cleanup** — stale `node_modules`, `target/`, `venv`, …
 - 👯 **Duplicate finder** — size → partial hash → BLAKE3 full hash
 - 🗂 **Ontology-based organizing** — files classified into an OWL taxonomy you can edit; move plans use a complete bounded scan, bind metadata-first production-time lineage and source size/mtime, revalidate them immediately before moving, and skip File Provider dataless sources

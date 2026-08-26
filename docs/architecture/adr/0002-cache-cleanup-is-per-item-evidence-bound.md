@@ -27,6 +27,12 @@ collected independently for each reviewed child with bounded, path-local `lsof` 
   OS-Trash children whose exact known cache name and structural signature are revalidated, whose
   bounded tree contains no symlink, and whose deletion is journaled as pending/ok/error. No
   arbitrary Trash entry, cloud placeholder, or user-file candidate qualifies.
+- The desktop list and approval phrase are one read-only `CacheTrashSnapshot`. Permanent cleanup
+  accepts that submitted snapshot, recomputes its phrase, and revalidates each direct child,
+  name, structure, and bounded byte count immediately before deletion; it never expands the
+  approved set by discovering new Trash entries during deletion. macOS uses `~/.Trash`; Linux
+  uses the freedesktop `~/.local/share/Trash/files` directory. Windows returns no candidates until
+  a native Recycle Bin implementation can provide the same identity and journal guarantees.
 
 This per-item probe is the authoritative cleanup boundary. A live process elsewhere under the
 same cache root must not prevent reclaiming an independently inactive entry, and it must never be

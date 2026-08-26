@@ -710,23 +710,13 @@ pub fn clean_regenerable_caches(app: AppHandle) -> Result<Vec<CleanResult>, Stri
     ))
 }
 
-/// Return only structurally proven, regenerable cache directories already in the user's Trash.
+/// Return the structurally proven cache-Trash candidates and their approval phrase from one scan.
 /// This is read-only evidence; arbitrary Trash entries are never included.
 #[cfg(not(coverage))]
 #[tauri::command]
-pub fn list_proven_cache_trash() -> Result<Vec<crate::cache_cleanup::CacheTrashCandidate>, String> {
+pub fn list_proven_cache_trash() -> Result<crate::cache_cleanup::CacheTrashSnapshot, String> {
     let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
-    Ok(crate::cache_cleanup::proven_cache_trash_candidates(&bases.home))
-}
-
-/// Return the candidate-set-bound phrase required by the desktop confirmation boundary.
-#[cfg(not(coverage))]
-#[tauri::command]
-pub fn proven_cache_trash_approval_phrase() -> Result<String, String> {
-    let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
-    Ok(crate::cache_cleanup::proven_cache_trash_approval_phrase(
-        &bases.home,
-    ))
+    Ok(crate::cache_cleanup::proven_cache_trash_snapshot(&bases.home))
 }
 
 /// Permanently remove only the reviewed, structurally proven regenerable cache entries in Trash.
@@ -735,20 +725,16 @@ pub fn proven_cache_trash_approval_phrase() -> Result<String, String> {
 #[tauri::command]
 pub fn purge_proven_cache_trash(
     app: AppHandle,
-    confirmation_phrase: String,
+    snapshot: crate::cache_cleanup::CacheTrashSnapshot,
 ) -> Result<crate::cache_cleanup::CacheTrashPurgeExecution, String> {
     let bases = rules::BaseDirs::from_env().ok_or("cache-base-directories-unavailable")?;
-    if confirmation_phrase
-        != crate::cache_cleanup::proven_cache_trash_approval_phrase(&bases.home)
-    {
-        return Err("cache-trash-confirmation-mismatch".into());
-    }
     let journal_path = journal_file_path(&app)?;
     let before = crate::volume_pressure::snapshot_volume(&bases.home, now_ms()).ok();
     let items = crate::cache_cleanup::purge_proven_cache_trash(
         &bases.home,
         &journal_path,
         now_ms(),
+        &snapshot,
     )?;
     let after = crate::volume_pressure::snapshot_volume(&bases.home, now_ms()).ok();
     let before_available_bytes = before.as_ref().map(|snapshot| snapshot.available_bytes);

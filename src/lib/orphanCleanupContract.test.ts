@@ -13,7 +13,9 @@ describe("orphan cleanup safety contract", () => {
 
     expect(api).toContain("plan_orphan_cleanup");
     expect(api).toContain("clean_orphan_candidates");
-    expect(component).toContain("Application Support");
+    expect(component).not.toContain("Application Support");
+    expect(component).not.toContain("증거");
+    expect(component).toContain("확인된 미사용 캐시");
     expect(component).toContain("candidate.auto_trash_eligible");
     expect(component).toContain("plan.exact_approval_phrase");
     expect(component).toContain("candidate.metadata_fingerprint");

@@ -4,7 +4,7 @@
 //! identity-bound children of the npm, pnpm, Adobe, Edge, uv, and Trivy cache roots to OS Trash.
 
 use disksage_lib::cache_cleanup::{
-    clean_regenerable_caches_headless, proven_cache_trash_candidates, purge_proven_cache_trash,
+    clean_regenerable_caches_headless, proven_cache_trash_snapshot, purge_proven_cache_trash,
 };
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -109,7 +109,7 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
     };
     if !args.execute {
         let cache_trash = if args.purge_proven_cache_trash {
-            serde_json::to_value(proven_cache_trash_candidates(&home_directory()?))
+            serde_json::to_value(proven_cache_trash_snapshot(&home_directory()?))
                 .map_err(|error| error.to_string())?
         } else {
             serde_json::Value::Array(Vec::new())
@@ -130,7 +130,13 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     if args.purge_proven_cache_trash {
-        let results = purge_proven_cache_trash(&home_directory()?, &args.journal_path, now_ms())?;
+        let snapshot = proven_cache_trash_snapshot(&home_directory()?);
+        let results = purge_proven_cache_trash(
+            &home_directory()?,
+            &args.journal_path,
+            now_ms(),
+            &snapshot,
+        )?;
         println!(
             "{}",
             serde_json::json!({

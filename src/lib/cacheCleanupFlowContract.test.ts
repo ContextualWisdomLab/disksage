@@ -19,8 +19,9 @@ describe("cache cleanup execution boundary", () => {
     expect(cleanup).toContain("api.cleanCacheContents(candidate.path, targets)");
     expect(cleanup).toContain("api.cleanRegenerableCaches()");
     expect(cleanup).toContain("api.listProvenCacheTrash()");
-    expect(cleanup).toContain("api.provenCacheTrashApprovalPhrase()");
-    expect(cleanup).toContain("api.purgeProvenCacheTrash(approvalPhrase)");
+    expect(cleanup).toContain("api.purgeProvenCacheTrash(cacheTrashSnapshot)");
+    expect(cleanup).toContain('item.purged && item.error === ""');
+    expect(cleanup).toContain("정리 기록을 남기지 못했습니다");
     expect(cleanup).toContain("cache-trash-confirmation-mismatch");
     expect(cleanup).toContain("휴지통 내용이 바뀌어 최신 목록을 불러왔습니다");
     expect(cleanup).toContain("observed_available_gain_bytes");
@@ -31,12 +32,12 @@ describe("cache cleanup execution boundary", () => {
     expect(backend).toContain("pub fn clean_cache_contents(");
     expect(backend).toContain("cache-cleanup-targets-stale");
     expect(backend).toContain("trash_delete_if_identity(");
-    expect(backend).toContain("pub fn proven_cache_trash_approval_phrase(");
+    expect(backend).toContain("pub fn proven_cache_trash_snapshot(");
+    expect(backend).toContain("snapshot: &CacheTrashSnapshot");
     expect(tauri).toContain("cache_cleanup::clean_cache_contents");
     expect(tauri).toContain("cache_cleanup::list_cache_targets");
     expect(tauri).toContain("commands::clean_regenerable_caches");
     expect(tauri).toContain("commands::list_proven_cache_trash");
-    expect(tauri).toContain("commands::proven_cache_trash_approval_phrase");
     expect(tauri).toContain("commands::purge_proven_cache_trash");
   });
 
