@@ -1,3 +1,4 @@
+use disksage_lib::container_orphan_public::sanitize_plan;
 use disksage_lib::container_orphan_reclaim::{
     probe_container_orphans, ContainerRuntimeKind, ContainerRuntimeTarget,
 };
@@ -105,7 +106,7 @@ fn run() -> Result<(), String> {
         })
     });
     let target = ContainerRuntimeTarget::new(runtime, binary_path, scope)?;
-    let plan = probe_container_orphans(&target);
+    let plan = sanitize_plan(probe_container_orphans(&target));
     if pretty {
         println!(
             "{}",
