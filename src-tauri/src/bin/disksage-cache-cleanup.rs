@@ -3,16 +3,16 @@
 //! Without `--execute` this command is read-only. With it, the library path moves only inactive,
 //! identity-bound children of the npm, pnpm, Adobe, Edge, uv, and Trivy cache roots to OS Trash.
 
-use disksage_lib::cache_cleanup::{
-    clean_regenerable_caches_headless, proven_cache_trash_snapshot, purge_proven_cache_trash,
-};
+use disksage_lib::cache_cleanup::{clean_regenerable_caches_headless, proven_cache_trash_snapshot};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+const PERMANENT_CACHE_TRASH_DELETE_UNAVAILABLE: &str =
+    "cache-trash-identity-bound-permanent-delete-unavailable";
 const USAGE: &str = "Usage: disksage-cache-cleanup [--execute] [--purge-proven-cache-trash] [--journal-path PATH]\n\
 Without --execute it reports the command is a no-op. With --execute it moves only observed,\n\
-inactive regenerable cache children to OS Trash. --purge-proven-cache-trash permanently removes\n\
-only structurally proven cache directories already in OS Trash.";
+inactive regenerable cache children to OS Trash. --purge-proven-cache-trash is read-only evidence;\n\
+permanent in-app deletion remains unavailable until the final syscall is object-bound.";
 
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
@@ -126,27 +126,11 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
         );
         return Ok(());
     }
+    if args.purge_proven_cache_trash {
+        return Err(PERMANENT_CACHE_TRASH_DELETE_UNAVAILABLE.into());
+    }
     if let Some(parent) = args.journal_path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    if args.purge_proven_cache_trash {
-        let snapshot = proven_cache_trash_snapshot(&home_directory()?);
-        let results = purge_proven_cache_trash(
-            &home_directory()?,
-            &args.journal_path,
-            now_ms(),
-            &snapshot,
-        )?;
-        println!(
-            "{}",
-            serde_json::json!({
-                "executed": true,
-                "purge_proven_cache_trash": true,
-                "journal_path": args.journal_path,
-                "results": results
-            })
-        );
-        return Ok(());
     }
     let evidence = clean_regenerable_caches_headless(&args.journal_path, now_ms())?;
     println!(
