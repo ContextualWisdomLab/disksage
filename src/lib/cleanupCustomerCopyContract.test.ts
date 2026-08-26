@@ -7,14 +7,20 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
 
 function visibleText(fileName: string): string {
   const source = readFileSync(resolve(repositoryRoot, "src/lib", fileName), "utf8");
-  const markup = source.slice(source.indexOf("</script>") + "</script>".length, source.indexOf("<style>"));
+  const scriptEnd = source.indexOf("</script>");
+  const styleStart = source.indexOf("<style>");
+  if (scriptEnd < 0) {
+    throw new Error(`${fileName}: customer script marker is missing`);
+  }
+  const markupEnd = styleStart > scriptEnd ? styleStart : source.length;
+  const markup = source.slice(scriptEnd + "</script>".length, markupEnd);
   return markup.replace(/<[^>]*>/g, " ").replace(/\{[\s\S]*?\}/g, " ");
 }
 
 describe("cleanup customer copy", () => {
   it("keeps implementation vocabulary out of the customer action panel", () => {
     const source = readFileSync(resolve(repositoryRoot, "src/lib/Cleanup.svelte"), "utf8");
-    const visible = source.slice(source.indexOf("</script>"), source.indexOf("<style>"));
+    const visible = visibleText("Cleanup.svelte");
 
     for (const term of [
       "온톨로지",
