@@ -8,6 +8,7 @@
   let repositoryRoot = $state("");
   let retentionText = $state("");
   let planning = $state(false);
+  let suggesting = $state(false);
   let executing = $state(false);
   let error = $state("");
   let report: api.GitWorktreeAuditReport | null = $state(null);
@@ -80,6 +81,22 @@
     }
   }
 
+  async function suggestReferences() {
+    const root = repositoryRoot.trim();
+    if (!root) return;
+    suggesting = true;
+    error = "";
+    try {
+      const references = await api.suggestGitWorktreeReferences(root);
+      retentionText = references.join("\n");
+      resetDecision();
+    } catch {
+      error = "저장소의 기본 보존 기준을 찾지 못했습니다. 저장소 경로를 확인하고 기준을 직접 입력하십시오.";
+    } finally {
+      suggesting = false;
+    }
+  }
+
   function executionReady(): boolean {
     return report !== null
       && report.evidence_complete
@@ -135,10 +152,10 @@
         oninput={resetDecision}
         autocomplete="off"
         spellcheck="false"
-        disabled={planning || executing}
+        disabled={planning || suggesting || executing}
       />
     </label>
-    <button onclick={chooseRepository} disabled={planning || executing}>폴더 선택</button>
+    <button onclick={chooseRepository} disabled={planning || suggesting || executing}>폴더 선택</button>
   </div>
   <label>
     보존할 기준 — 한 줄에 하나씩 입력
@@ -149,12 +166,16 @@
       placeholder={'예: origin/main\norigin/develop'}
       autocomplete="off"
       spellcheck="false"
-      disabled={planning || executing}
+      disabled={planning || suggesting || executing}
     ></textarea>
   </label>
+  <p class="muted">기본 보존 기준을 자동 입력하거나, 보존할 기준을 직접 입력하십시오.</p>
+  <button onclick={suggestReferences} disabled={planning || suggesting || executing || !repositoryRoot.trim()}>
+    {suggesting ? "보존 기준 확인 중…" : "보존 기준 자동 입력"}
+  </button>
   <button
     onclick={inspectWorktrees}
-    disabled={planning || executing || !repositoryRoot.trim() || retentionReferences().length === 0}
+    disabled={planning || suggesting || executing || !repositoryRoot.trim() || retentionReferences().length === 0}
   >
     {planning ? "보조 폴더·브랜치·사용 중 여부 확인 중…" : "보조 폴더 상태 확인"}
   </button>

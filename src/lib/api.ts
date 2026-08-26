@@ -1241,6 +1241,8 @@ export const planStaleGitWorktrees = (
   repositoryRoot,
   retentionReferences,
 });
+export const suggestGitWorktreeReferences = (repositoryRoot: string) =>
+  invoke<string[]>("suggest_git_worktree_references", { repositoryRoot });
 export const removeStaleGitWorktrees = (
   repositoryRoot: string,
   retentionReferences: string[],

@@ -148,6 +148,7 @@ pub fn run() {
             commands::inspect_cloud_roots,
             commands::plan_icloud_local_copy_eviction,
             commands::evict_icloud_local_copy,
+            commands::suggest_git_worktree_references,
             commands::plan_stale_git_worktrees,
             commands::remove_stale_git_worktrees,
             commands::list_cloud_provider_connections,

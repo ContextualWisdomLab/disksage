@@ -11,6 +11,8 @@ describe("Git worktree cleanup customer copy", () => {
     const visible = source.slice(source.indexOf("</script>"), source.indexOf("<style>"));
 
     expect(visible).toContain("보존할 기준");
+    expect(visible).toContain("보존 기준 자동 입력");
+    expect(visible).toContain("기준을 직접 입력하십시오");
     expect(visible).toContain("상태를 확인한 뒤 다시 시도하십시오");
     expect(visible).not.toContain("force");
     expect(visible).not.toContain("prune");
