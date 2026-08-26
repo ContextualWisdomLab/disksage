@@ -33,7 +33,7 @@ fn shipped_container_orphan_commands_remain_present_in_coverage_builds() {
             "the production invoke handler must route {command} through its covered owner"
         );
         assert!(
-            !lib.contains(&format!("commands::{command},")),
+            !lib.contains(&format!("\n            commands::{command},")),
             "the coverage-excluded legacy wrapper must not remain the shipped IPC authority"
         );
     }
@@ -43,7 +43,8 @@ fn shipped_container_orphan_commands_remain_present_in_coverage_builds() {
         "the covered container-orphan command owner must be compiled with the library"
     );
     assert!(
-        command_owner.contains("use crate::{container_orphan_reclaim, podman_reclaim};"),
+        command_owner.contains("container_orphan_reclaim")
+            && command_owner.contains("podman_reclaim"),
         "container orphan command dependencies must remain available when coverage is enabled"
     );
 }

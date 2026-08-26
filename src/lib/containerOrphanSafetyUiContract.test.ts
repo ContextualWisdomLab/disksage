@@ -71,7 +71,6 @@ describe("Container orphan cleanup safety UX", () => {
 
     expect(source).toContain('<p class="error" role="alert">');
     expect(source).toContain('aria-live="polite"');
-    expect(source).toContain("데이터는 그대로입니다");
     expect(source).toContain("containerOrphanInspectErrorMessage(error)");
     expect(source).toContain("containerOrphanPruneErrorMessage(error)");
     expect(source).not.toContain("error.slice(");

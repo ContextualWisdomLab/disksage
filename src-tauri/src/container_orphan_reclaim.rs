@@ -609,7 +609,7 @@ fn lower_hex(bytes: &[u8]) -> String {
 
 /// Binds the exact candidate identity set into a SHA-256 fingerprint.
 /// Identities are hashed in sorted order so report ordering cannot change evidence.
-fn candidate_fingerprint(domain_tag: &str, ids: &[&str], sizes: Option<&[(u64)]>) -> String {
+fn candidate_fingerprint(domain_tag: &str, ids: &[&str], sizes: Option<&[u64]>) -> String {
     let mut ordered: Vec<&str> = ids.to_vec();
     ordered.sort_unstable();
     let mut hasher = Sha256::new();
@@ -937,8 +937,6 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
             }
             OrphanCategory::Network => {
                 let records = parse_network_records(&output)?;
-                let total = u64::try_from(records.len())
-                    .map_err(|_| "record-count-overflow".to_string())?;
                 // Confirm each non-builtin network carries zero endpoints before it can
                 // count as a candidate; any inspect failure fails the category closed.
                 let mut attached: Vec<String> = Vec::new();

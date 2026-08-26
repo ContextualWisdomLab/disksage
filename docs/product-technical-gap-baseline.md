@@ -679,3 +679,24 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   pipe leak that could starve the independent `ps` probe and report a false active-use timeout.
   The focused Rust test passed 3/3. The same patch is present on stacked PR heads `a0fa7bc` (#247)
   and `741ab30` (#246); hosted checks are rerunning and protected merge/review is still pending.
+
+## 2026-08-27 container and worktree reclamation loop
+
+- PR #267 exact head `18b37c5c819895eafa7aa088763f3c8b79c187ae` delivers evidence-bound cleanup for stopped
+  containers, untagged and unreferenced images, unreferenced volumes, and unused non-default
+  networks across Docker, Podman, and the Colima Docker context. Execution re-audits the exact
+  candidate identities and requires the matching approval phrase plus a rationale; runtime
+  diagnostics remain outside customer-visible and public evidence boundaries. The local frontend
+  suite passes 35 files / 153 tests after repairing the stale UI ownership assertion.
+- The existing Git worktree authority safely removes clean, inactive secondary worktree folders
+  whose commits are strict ancestors of explicitly retained refs, which covers merged branches
+  without deleting branches or commits. Closed-but-unmerged pull requests are **not** yet proven:
+  local Git reachability does not encode hosted PR state, and treating a missing upstream or old
+  timestamp as closure would be an unsupported heuristic. Gap acceptance requires authoritative
+  forge PR-state evidence bound to repository identity, branch ref, and head OID, followed by the
+  existing clean/inactive/path-identity revalidation immediately before folder removal.
+- Current protected-delivery snapshot: `main` is
+  `79067c1160ddedf7fc962cbf8067ce7e83c4564a`; 40 PRs are open (16 ready, 24 draft) and none has an
+  exact-head independent approval. PR #267 is draft, mergeable, and blocked with four required
+  checks queued. Combined status alone is not proof of the active ruleset's required workflows,
+  resolved threads, or approval gate, so no protected merge is claimed.

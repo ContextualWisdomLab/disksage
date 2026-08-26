@@ -20,7 +20,7 @@ use crate::dev_artifacts;
 #[cfg(not(coverage))]
 use crate::{
     brew_cleanup, cloud, cloud_adr, cloud_eviction, cloud_local_eviction, cloud_plan_view,
-    cloud_review, cloud_transfer, container_orphan_reclaim, dupes, git_worktree,
+    cloud_review, cloud_transfer, dupes, git_worktree,
     icloud_sync_health, organization_lineage,
     podman_reclaim, provider_api_client, provider_api_write, provider_capacity,
     provider_client_runtime, provider_evidence, provider_global_sync, provider_oauth,
@@ -512,106 +512,6 @@ pub fn execute_podman_dangling_image_prune(
     podman_reclaim::prune_dangling_images(
         &podman_binary(),
         podman_reclaim::DEFAULT_PODMAN_MACHINE,
-        &confirmation_phrase,
-        &rationale,
-        now_ms(),
-    )
-}
-
-fn docker_binary() -> PathBuf {
-    [
-        "/opt/homebrew/bin/docker",
-        "/usr/local/bin/docker",
-        "/usr/bin/docker",
-    ]
-    .into_iter()
-    .map(PathBuf::from)
-    .find(|path| {
-        std::fs::symlink_metadata(path)
-            .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
-    })
-    .unwrap_or_else(|| PathBuf::from("docker"))
-}
-
-/// Probes every supported container runtime target read-only and audits all four
-/// orphan categories on each healthy one. Unhealthy targets still produce a plan
-/// whose runtime evidence records the exact bounded failure.
-#[cfg(not(coverage))]
-#[tauri::command(async)]
-pub fn inspect_container_orphans() -> Vec<container_orphan_reclaim::ContainerOrphanPlan> {
-    use container_orphan_reclaim::{ContainerRuntimeKind, ContainerRuntimeTarget};
-    let targets = [
-        ContainerRuntimeTarget::new(
-            ContainerRuntimeKind::DockerNative,
-            docker_binary(),
-            None,
-        ),
-        ContainerRuntimeTarget::new(
-            ContainerRuntimeKind::DockerColimaContext,
-            docker_binary(),
-            Some("colima".to_string()),
-        ),
-        ContainerRuntimeTarget::new(
-            ContainerRuntimeKind::PodmanMachine,
-            podman_binary(),
-            Some(podman_reclaim::DEFAULT_PODMAN_MACHINE.to_string()),
-        ),
-    ];
-    targets
-        .iter()
-        .filter_map(|target| target.as_ref().ok())
-        .map(container_orphan_reclaim::probe_container_orphans)
-        .collect()
-}
-
-fn parse_runtime_kind(value: &str) -> Result<container_orphan_reclaim::ContainerRuntimeKind, String> {
-    match value {
-        "docker-native" => Ok(container_orphan_reclaim::ContainerRuntimeKind::DockerNative),
-        "docker-colima-context" => {
-            Ok(container_orphan_reclaim::ContainerRuntimeKind::DockerColimaContext)
-        }
-        "podman-machine" => Ok(container_orphan_reclaim::ContainerRuntimeKind::PodmanMachine),
-        other => Err(format!("unknown-runtime-kind:{other}")),
-    }
-}
-
-/// Executes one approved orphan prune on one runtime target. The engine re-audits
-/// immediately before mutating so the approval phrase binds to fresh evidence only.
-#[cfg(not(coverage))]
-#[tauri::command(async)]
-pub fn execute_container_orphan_prune(
-    runtime_kind: String,
-    scope_name: Option<String>,
-    category: String,
-    confirmation_phrase: String,
-    rationale: String,
-) -> Result<container_orphan_reclaim::ContainerOrphanPruneExecution, String> {
-    use container_orphan_reclaim::{
-        execute_container_orphan_prune as execute_prune, OrphanCategory,
-    };
-    if !valid_brew_rationale(&rationale) {
-        return Err("orphan-prune-rationale-invalid".into());
-    }
-    let kind = parse_runtime_kind(&runtime_kind)?;
-    let parsed_category = match category.as_str() {
-        "container" => OrphanCategory::Container,
-        "image" => OrphanCategory::Image,
-        "volume" => OrphanCategory::Volume,
-        "network" => OrphanCategory::Network,
-        other => return Err(format!("unknown-orphan-category:{other}")),
-    };
-    let binary_path = match kind {
-        container_orphan_reclaim::ContainerRuntimeKind::PodmanMachine => podman_binary(),
-        _ => docker_binary(),
-    };
-    let target = container_orphan_reclaim::ContainerRuntimeTarget::new(
-        kind,
-        binary_path,
-        scope_name,
-    )?;
-    execute_prune(
-        &target,
-        parsed_category,
         &confirmation_phrase,
         &rationale,
         now_ms(),
