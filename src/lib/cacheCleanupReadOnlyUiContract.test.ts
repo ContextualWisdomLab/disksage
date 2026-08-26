@@ -23,7 +23,7 @@ describe("cache cleanup fail-closed UX", () => {
   it("does not render the permanent-delete action when the backend withholds destructive authority", () => {
     const cleanup = readSource("src/lib/Cleanup.svelte");
 
-    expect(cleanup).toContain('import { cacheTrashPurgeAvailability } from "./cacheTrashPurgeAvailability"');
+    expect(cleanup).toContain('cacheTrashPurgeAvailability,');
     expect(cleanup).toContain("cacheTrashPurgeInstruction = purgeAvailability.instruction");
     expect(cleanup).toContain("cacheTrashApprovalPhrase = purgeAvailability.canPurge ? cacheTrashReview.approval_phrase : null");
     expect(cleanup).toContain("{#if cacheTrashPurgeInstruction}");

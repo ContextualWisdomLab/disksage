@@ -3,7 +3,10 @@
   import { fmtBytes } from "./fmt";
   import { verdictBadge } from "./verdictBadge";
   import { summarizeCacheTrashPurge } from "./cacheTrashPurgeSummary";
-  import { cacheTrashPurgeAvailability } from "./cacheTrashPurgeAvailability";
+  import {
+    CACHE_TRASH_NATIVE_REVIEW_MACOS_ONLY,
+    cacheTrashPurgeAvailability,
+  } from "./cacheTrashPurgeAvailability";
   import { purgeReviewedCacheTrash, reviewProvenCacheTrash } from "./cacheTrashReviewApi";
   import { confirm } from "@tauri-apps/plugin-dialog";
   import GitWorktreeCleanup from "./GitWorktreeCleanup.svelte";
@@ -255,7 +258,7 @@
   <p class="notice" role="status">
     재생성할 수 있는 캐시만 대상으로 하며, 사용 중이거나 상태가 바뀐 항목은 자동으로 건너뜁니다.
   </p>
-  {#if !cacheTrashSupported && cacheTrashNotice === "cache-trash-native-discovery-macos-only"}
+  {#if !cacheTrashSupported && cacheTrashNotice === CACHE_TRASH_NATIVE_REVIEW_MACOS_ONLY}
     <p class="notice" role="status">
       휴지통 속 재생성 캐시 검토는 현재 macOS 기본 휴지통에서만 지원합니다.
       앱 내 영구 삭제는 안전한 객체 결합 삭제를 제공할 때까지 모든 플랫폼에서 비활성화되어 있습니다.
