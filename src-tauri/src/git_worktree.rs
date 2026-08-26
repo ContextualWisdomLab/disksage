@@ -56,7 +56,7 @@ impl Default for GitWorktreeAuditOptions {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy,PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum GitWorktreeDisposition {
     RemovalCandidate,
@@ -552,6 +552,13 @@ pub fn github_closed_pull_request_heads(
     if result.status_code != Some(0) {
         return Err("github-closed-pr-list-failed".into());
     }
+    let stderr = String::from_utf8_lossy(&result.stderr).to_ascii_lowercase();
+    if stderr.contains("search")
+        && stderr.contains("1000")
+        && (stderr.contains("cap") || stderr.contains("limit"))
+    {
+        return Err("github-closed-pr-list-incomplete".into());
+    }
     parse_closed_pull_request_heads(&result.stdout)
 }
 
@@ -567,7 +574,6 @@ fn check_file_provider_git_metadata(path: &Path) -> Result<Option<&'static str>,
         .map_err(|_| "git-worktree-admin-metadata-stat-failed".to_string())?;
     let output = match crate::provider_sync::file_providerctl_status(&path.to_string_lossy()) {
         Ok(output) => output,
-        // A regular local file is not a File Provider item; Git can inspect it normally.
         Err(error) if error == "file-provider-status-command-failed" => return Ok(None),
         Err(error) => return Err(format!("git-worktree-admin-metadata-{error}")),
     };
@@ -778,8 +784,6 @@ pub(crate) fn active_use_evidence(
     max_pids: usize,
     recursive: bool,
 ) -> GitWorktreeActiveUseEvidence {
-    // Running lsof with its own CWD inside the audited tree would make the probe observe itself.
-    // A canonical worktree has an existing parent, which is outside the candidate directory.
     let command_cwd = path.parent().unwrap_or(path);
     let method = if recursive {
         "lsof-recursive-pid"
@@ -843,9 +847,6 @@ pub(crate) fn active_use_evidence(
     }
     let mut pids = BTreeSet::new();
     for field in result.stdout.split(|byte| *byte == 0) {
-        // `lsof -F0` terminates each field with NUL and each process/file set with NL. Therefore
-        // every PID field after the first may begin with that set-separator newline. Strip exactly
-        // the protocol separator before interpreting the field; do not trim arbitrary bytes.
         let field = field.strip_prefix(b"\n").unwrap_or(field);
         let Some(raw_pid) = field.strip_prefix(b"p") else {
             continue;
@@ -1478,9 +1479,6 @@ pub fn audit_git_worktrees_with_closed_pull_request_heads(
     )?;
     let (raw_worktrees, fallback_issues) = match list_worktrees(&repository_root, options) {
         Ok(raw_worktrees) => (raw_worktrees, Vec::new()),
-        // `run_git` appends `-timeout` to the operation reason. Only that typed-by-contract
-        // condition permits the read-only admin fallback; malformed output and spawn failures
-        // remain hard errors.
         Err(error) if error == GIT_WORKTREE_LIST_TIMEOUT => {
             admin_fallback_worktrees(&common_dir, options)
         }
