@@ -180,6 +180,9 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - A terminal journal-write failure after removal now remains attached to that item's result, so an
   irreversible deletion is never hidden behind a generic all-or-nothing error; the audit gap stays
   visible for follow-up instead of being mistaken for a successful complete journal.
+- The desktop purge command now requires an opaque phrase bound to the current proven-Trash set;
+  changed Trash contents invalidate the approval before deletion, and pending journal failures are
+  returned as item-level failures without discarding earlier results.
 - Local verification for the implementation passed 135 frontend tests, `svelte-check` with zero
   diagnostics, 749 Rust library tests (one ignored), and `git diff --check`. Rebuildable temporary
   `src-tauri/target` and `node_modules` artifacts were removed from the temporary checkout after

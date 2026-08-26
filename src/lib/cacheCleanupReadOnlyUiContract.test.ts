@@ -16,6 +16,7 @@ describe("cache cleanup fail-closed UX", () => {
     expect(cleanup).toContain("cleanCacheContents");
     expect(cleanup).not.toContain("selectedRules");
     expect(cleanup).toContain('role="status"');
-    expect(cleanup).toContain("객체 지문·크기·수정시각");
+    expect(cleanup).toContain("각 항목의 크기와 수정 시각을 다시 확인합니다");
+    expect(cleanup).not.toContain("active-use");
   });
 });

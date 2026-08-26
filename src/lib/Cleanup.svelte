@@ -11,6 +11,7 @@
 
   let caches: api.CacheCandidate[] = $state([]);
   let cacheTrash: api.CacheTrashCandidate[] = $state([]);
+  let cacheTrashApprovalPhrase = $state<string | null>(null);
   let cacheTrashExecution: api.CacheTrashPurgeExecution | null = $state(null);
   let artifacts: api.DevArtifact[] = $state([]);
   let selected: Set<string> = $state(new Set());
@@ -42,7 +43,11 @@
     loadError = "";
     try {
       caches = await api.listCacheCandidates();
+      cacheTrashApprovalPhrase = null;
       cacheTrash = await api.listProvenCacheTrash();
+      if (cacheTrash.length > 0) {
+        cacheTrashApprovalPhrase = await api.provenCacheTrashApprovalPhrase();
+      }
       artifacts = scannedRoot ? await api.listDevArtifacts(scannedRoot) : [];
       loadVerdicts(artifacts.map((a) => a.path));
     } catch (e) {
@@ -111,7 +116,7 @@
       const targetBytes = targets.reduce((sum, target) => sum + target.bytes, 0);
       const okay = await confirm(
         `${candidate.label}의 직계 캐시 ${targets.length}개(${fmtBytes(targetBytes)})를 휴지통으로 보냅니다.\n\n` +
-          "캐시 루트는 보존하며, 각 항목은 객체 지문·크기·수정시각·active-use를 다시 검증합니다. 사용 중이거나 증명이 불완전한 항목은 건너뜁니다. 휴지통에서 복원할 수 있습니다.",
+          "캐시 위치는 보존하며, 각 항목의 크기와 수정 시각을 다시 확인합니다. 사용 중이거나 안전하게 확인되지 않은 항목은 건너뜁니다. 휴지통에서 복원할 수 있습니다.",
         { title: "DiskSage", kind: "warning" },
       );
       if (!okay) return;
@@ -145,22 +150,29 @@
   }
 
   async function purgeProvenCacheTrash() {
-    if (busy || cacheTrash.length === 0) return;
+    if (busy || cacheTrash.length === 0 || cacheTrashApprovalPhrase === null) return;
     const bytes = cacheTrash.reduce((sum, candidate) => sum + candidate.bytes, 0);
     const okay = await confirm(
       `휴지통에 남아 있는 재생성 가능한 캐시 ${cacheTrash.length}개(${fmtBytes(bytes)})를 영구 삭제합니다.\n\n` +
         "이 항목은 복원할 수 없습니다. 사용자 파일과 다른 휴지통 항목은 건드리지 않습니다.",
       { title: "DiskSage 휴지통 정리", kind: "warning" },
     );
-    if (!okay) return;
+    const approvalPhrase = cacheTrashApprovalPhrase;
+    if (!okay || approvalPhrase === null) return;
     busy = true;
     loadError = "";
     cacheTrashExecution = null;
     try {
-      cacheTrashExecution = await api.purgeProvenCacheTrash();
+      cacheTrashExecution = await api.purgeProvenCacheTrash(approvalPhrase);
       await load();
     } catch (e) {
-      loadError = String(e);
+      if (String(e).includes("cache-trash-confirmation-mismatch")) {
+        cacheTrashApprovalPhrase = null;
+        await load();
+        loadError = "휴지통 내용이 바뀌어 최신 목록을 불러왔습니다. 목록을 확인한 뒤 다시 시도하세요.";
+      } else {
+        loadError = "재생성 캐시를 영구 삭제하지 못했습니다. 목록을 다시 확인한 뒤 재시도하세요.";
+      }
     } finally {
       busy = false;
     }
@@ -221,13 +233,13 @@
 
   <h3>캐시</h3>
   <p class="notice" role="status">
-    알려진 캐시 루트의 직계 항목만 객체 지문·크기·수정시각을 재검증한 뒤 휴지통으로 보냅니다. 캐시 루트 자체는 보존됩니다.
+    알려진 캐시 위치 안의 항목만 크기와 수정 시각을 다시 확인한 뒤 휴지통으로 보냅니다. 캐시 위치 자체는 보존됩니다.
   </p>
   <button onclick={cleanRegenerableCaches} disabled={busy}>
     {busy ? "재생성 캐시 확인 중…" : "관측된 재생성 캐시 자동 정리"}
   </button>
   <p class="notice" role="status">
-    npm·pnpm·Adobe·Edge·uv·Trivy 캐시만 대상으로 하며, 사용 중이거나 증거가 바뀐 항목은 자동으로 건너뜁니다.
+    재생성할 수 있는 캐시만 대상으로 하며, 사용 중이거나 상태가 바뀐 항목은 자동으로 건너뜁니다.
   </p>
   {#if cacheTrash.length > 0}
     <div class="trash-cleanup">
@@ -235,8 +247,8 @@
         휴지통에 남은 재생성 가능한 캐시 {cacheTrash.length}개({fmtBytes(cacheTrash.reduce((sum, item) => sum + item.bytes, 0))})가
         확인되었습니다. 영구 삭제하면 실제 저장 공간을 회수할 수 있습니다.
       </p>
-      <button onclick={purgeProvenCacheTrash} disabled={busy}>
-        {busy ? "휴지통 확인 중…" : "재생성 캐시 영구 삭제"}
+      <button onclick={purgeProvenCacheTrash} disabled={busy || cacheTrashApprovalPhrase === null}>
+        {busy ? "휴지통 확인 중…" : cacheTrashApprovalPhrase === null ? "정리 준비 중…" : "재생성 캐시 영구 삭제"}
       </button>
     </div>
   {/if}
@@ -245,9 +257,13 @@
     <p class="notice" role="status">
       재생성 캐시 {purged}/{cacheTrashExecution.items.length}개를 영구 삭제했습니다.
       {cacheTrashExecution.observed_available_gain_bytes === null
-        ? "전후 저장 공간은 확인하지 못했습니다."
+        ? "저장 공간 변화는 확인하지 못했습니다. 시스템 저장 공간에서 직접 확인하세요."
         : `가용 공간 증가 ${fmtBytes(cacheTrashExecution.observed_available_gain_bytes)}입니다.`}
-      실패한 항목은 다시 확인하십시오.
+      {#if purged < cacheTrashExecution.items.length}
+        삭제되지 않은 항목은 위 목록에서 확인한 뒤 다시 시도하십시오.
+      {:else}
+        모든 재생성 캐시를 영구 삭제했습니다.
+      {/if}
     </p>
   {/if}
   {#if cacheRetryMessage}<p class="notice" role="status">{cacheRetryMessage}</p>{/if}

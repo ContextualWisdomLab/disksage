@@ -102,6 +102,10 @@ The screen reports the count and observed bytes rather than exposing structural 
 filesystem available-space observations around the purge when the native probe succeeds, and
 refreshes the read-only list after execution so the operator can verify what remains. A missing
 before/after observation never becomes a claim that physical capacity was recovered.
+The desktop command also requires a candidate-set-bound approval phrase generated from the current
+proven list; a changed Trash set invalidates the phrase before any deletion. If a pending or terminal
+journal write fails, the affected item is returned as an explicit failed result while earlier
+deletions remain visible, so a partial operation is never reported as an unqualified success.
 If a terminal journal write fails after an item was removed, the item result keeps `purged=true`
 and carries the journal error so the caller cannot mistake a partial audit failure for an all-or-
 nothing operation or silently lose the deletion outcome.

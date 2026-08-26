@@ -186,6 +186,24 @@ pub fn proven_cache_trash_candidates(home: &Path) -> Vec<CacheTrashCandidate> {
     candidates
 }
 
+/// Return a candidate-set-bound approval phrase for the desktop confirmation boundary.
+/// The phrase is opaque to the customer and changes whenever the proven Trash set changes.
+pub fn proven_cache_trash_approval_phrase(home: &Path) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage.cache-trash-purge-approval.v1\0");
+    for candidate in proven_cache_trash_candidates(home) {
+        for field in [candidate.name, candidate.path, candidate.signature] {
+            hasher.update(&(field.len() as u64).to_le_bytes());
+            hasher.update(field.as_bytes());
+        }
+        hasher.update(&candidate.bytes.to_le_bytes());
+    }
+    format!(
+        "DiskSage cache-trash purge approval {}",
+        hasher.finalize().to_hex()
+    )
+}
+
 /// Permanently remove only the proven cache directories in OS Trash. The explicit CLI flag is the
 /// approval boundary; each object is rechecked immediately before removal and journaled.
 pub fn purge_proven_cache_trash(
@@ -204,7 +222,17 @@ pub fn purge_proven_cache_trash(
             bytes: candidate.bytes,
             outcome: "pending".into(),
         };
-        crate::safety::journal_append(journal_path, &entry).map_err(|error| error.to_string())?;
+        if let Err(error) = crate::safety::journal_append(journal_path, &entry) {
+            results.push(CacheTrashPurgeResult {
+                name: candidate.name,
+                path: candidate.path,
+                bytes: candidate.bytes,
+                signature: candidate.signature,
+                purged: false,
+                error: format!("journal-write-failed:{error}"),
+            });
+            continue;
+        }
         let outcome = if looks_like_proven_cache_trash(&path, &candidate.name)
             .is_some_and(|signature| signature == candidate.signature)
         {
@@ -487,6 +515,8 @@ mod tests {
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].signature, "npm-cacache");
         assert_eq!(candidates[0].bytes, 5);
+        let approval_phrase = proven_cache_trash_approval_phrase(tmp.path());
+        assert!(approval_phrase.starts_with("DiskSage cache-trash purge approval "));
 
         let journal = tmp.path().join("journal.jsonl");
         let results = purge_proven_cache_trash(tmp.path(), &journal, 7).unwrap();
@@ -496,6 +526,10 @@ mod tests {
         let journal_text = fs::read_to_string(journal).unwrap();
         assert!(journal_text.contains("permanent_cache_trash_delete"));
         assert!(journal_text.contains("\"outcome\":\"ok\""));
+        assert_ne!(
+            approval_phrase,
+            proven_cache_trash_approval_phrase(tmp.path())
+        );
     }
 
     #[test]

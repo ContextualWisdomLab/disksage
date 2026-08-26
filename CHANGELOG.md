@@ -15,6 +15,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   observed before/after available-space change when the filesystem provides it.
 - Preserve each deletion result when a terminal journal write fails, marking the audit failure on
   that item instead of hiding an already-completed removal behind an all-or-nothing error.
+- Bind the desktop purge action to the current proven-Trash candidate set so a changed list is
+  rejected before deletion; pending journal failures now remain visible per item as well.
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
   identity cleanup and dependent eviction helpers; the focused authority contract remains green.
 - Add durable private failure records in a separate journal directory and a receipt-bound

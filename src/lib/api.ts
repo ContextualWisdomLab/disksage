@@ -160,8 +160,10 @@ export const cleanRegenerableCaches = () =>
   invoke<CleanResult[]>("clean_regenerable_caches");
 export const listProvenCacheTrash = () =>
   invoke<CacheTrashCandidate[]>("list_proven_cache_trash");
-export const purgeProvenCacheTrash = () =>
-  invoke<CacheTrashPurgeExecution>("purge_proven_cache_trash");
+export const provenCacheTrashApprovalPhrase = () =>
+  invoke<string>("proven_cache_trash_approval_phrase");
+export const purgeProvenCacheTrash = (confirmationPhrase: string) =>
+  invoke<CacheTrashPurgeExecution>("purge_proven_cache_trash", { confirmationPhrase });
 export const listCacheTargets = (dir: string) =>
   invoke<CacheTarget[]>("list_cache_targets", { dir });
 export const cleanCacheContents = (dir: string, targets: CacheTarget[]) =>
