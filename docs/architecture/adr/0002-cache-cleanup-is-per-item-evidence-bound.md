@@ -92,10 +92,16 @@ untouched. This observation is bound to source head `e71ecd13e8c91acf10093271fd5
 
 When the native macOS Trash contains the exact regenerable cache directories observed during this
 incident, DiskSage may expose them as read-only candidates. The scanner accepts only known direct
-names/signatures for npm, pnpm, Edge, uv, and Trivy caches, bounds traversal, rejects symlinks, and
-binds the reviewed snapshot to each candidate root filesystem identity. Linux and Windows are not
-silently treated as `~/.Trash`; the feature remains explicitly scoped to native macOS Trash until
-those platforms have native enumeration contracts.
+names/signatures for npm, pnpm, uv, and Trivy caches, bounds traversal, rejects symlinks, and
+binds the reviewed snapshot to each candidate root filesystem identity. The desktop review remains
+explicitly scoped to native macOS Trash until Linux and Windows have native review contracts; the
+headless CLI may inspect a platform-native Trash path for read-only evidence, but never grants
+deletion authority on that evidence.
+
+Browser profile roots such as `Default` are deliberately excluded even when they contain `Cache`
+and `Code Cache` children: the root may also contain history, sessions, or login data. A future
+platform-specific implementation must enumerate dedicated cache children without exposing the
+profile root itself.
 
 The desktop cleanup screen shows the proven cache entries and their observed bytes, but the backend
 mints no destructive approval phrase while the final irreversible deletion primitive is not bound

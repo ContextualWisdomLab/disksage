@@ -15,9 +15,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Bind the reviewed cache-Trash snapshot to each root filesystem identity so pathname-compatible
   replacements invalidate the review phrase; direct purge attempts fail closed with
   `cache-trash-identity-bound-permanent-delete-unavailable` and leave the reviewed cache intact.
-- Keep candidate discovery scoped to native macOS Trash until equivalent Linux/Windows native Trash
-  enumeration is implemented; user files, unrelated Trash entries, and provider placeholders remain
+- Keep desktop review and mutation scoped to native macOS Trash until equivalent Linux/Windows
+  native review contracts are implemented; the headless CLI may report platform-native Trash
+  evidence read-only, while user files, unrelated Trash entries, and provider placeholders remain
   outside the candidate set.
+- Exclude browser `Default` profile roots from proven cache candidates because profile roots can
+  contain history, sessions, and login data; only dedicated cache signatures are eligible.
 - Keep cache cleanup guidance focused on what the operator can do next without exposing internal
   identity or activity-check terminology.
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy

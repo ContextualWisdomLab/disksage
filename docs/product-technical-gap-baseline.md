@@ -222,6 +222,24 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   now gives separate guidance for read-only proven-Trash review and guarded cache movement; it no
   longer tells a user to pass `--execute` when permanent in-app deletion is unavailable.
 
+## 2026-08-26 customer guidance and cache boundary loop
+
+- Implementation head `b4acaaf5a6d1dec4b153586beccba4444b5e4870` now enforces the customer-copy
+  boundary in code: static warning/error/notice paragraphs in every Svelte screen must contain a
+  concrete next-action cue, and the existing screen-wide vocabulary contract rejects internal
+  implementation terms and raw runtime-error interpolation. Empty, blocked, and failure states in
+  cloud, iCloud, cache, worktree, and orphan panels now tell the operator what to check or retry.
+- Browser `Default` profile roots are no longer proven Trash candidates. The Rust regression creates
+  both `Cache` and `Code Cache` children and confirms the profile root remains outside the candidate
+  set, preventing history, session, or login data from entering the review surface.
+- Local verification at this implementation head passed 158 frontend tests, `svelte-check` with
+  zero diagnostics, the focused cache-Trash Rust regression, and `git diff --check`. Existing Rust
+  dead-code/unused-import warnings remain outside this change; verification performed no filesystem,
+  cloud, provider, or Trash mutation.
+- PR #263 remains protected and open with auto-merge enabled; after the push, hosted checks are
+  queued/running and no qualifying independent approval is recorded. The exact-head review must be
+  re-evaluated after those checks and the external reviewer finish.
+
 ## 2026-08-21 lineage graph update
 
 - Source head `677042467b3398866757f39b9475bd0b267abc75` now exports path-free ontology relations for

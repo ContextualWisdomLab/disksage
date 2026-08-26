@@ -512,7 +512,9 @@ mod tests {
         assert_eq!(candidates[0].signature, "npm-cacache");
         assert_eq!(candidates[0].bytes, 5);
         assert!(
-            candidates.iter().all(|candidate| candidate.name != "Default"),
+            candidates
+                .iter()
+                .all(|candidate| candidate.name != "Default"),
             "a browser profile root must never be exposed as a cache candidate"
         );
         let approval_phrase = proven_cache_trash_approval_phrase(tmp.path());
