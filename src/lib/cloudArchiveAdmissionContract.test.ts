@@ -70,6 +70,13 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("cancelDisabled={checkingIcloudHealth || cancellingFinderCopy}");
     expect(source).toContain("cancelLabel={cancellingFinderCopy ?");
     expect(source).toContain("canCancelFinderCopyForProviderGlobalSync");
+    const icloudCancelStart = source.indexOf("canCancel={Boolean(icloudHealth?.file_provider_activity");
+    const icloudCancelEnd = source.indexOf("cancelDisabled={checkingIcloudHealth", icloudCancelStart);
+    expect(icloudCancelStart).toBeGreaterThanOrEqual(0);
+    expect(icloudCancelEnd).toBeGreaterThan(icloudCancelStart);
+    const icloudCancelGate = source.slice(icloudCancelStart, icloudCancelEnd);
+    expect(icloudCancelGate).toContain("icloud-file-provider-item-locked");
+    expect(icloudCancelGate).toContain("icloud-file-provider-stalled");
     expect(source).toContain("provider-global-sync-reconciliation-pending");
     expect(source).toContain("provider-global-sync-indexing-pending");
     expect(source).toContain("provider-global-sync-local-disk-full");

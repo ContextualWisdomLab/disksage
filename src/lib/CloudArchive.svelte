@@ -1055,6 +1055,8 @@
           || icloudHealth.file_provider_activity.timed_out
           || icloudHealth.file_provider_activity.active_upload_count > 0
           || icloudHealth.file_provider_activity.active_download_count > 0
+          || icloudHealth.new_copy_admission_blockers.includes("icloud-file-provider-item-locked")
+          || icloudHealth.new_copy_admission_blockers.includes("icloud-file-provider-stalled")
         ))}
         cancelDisabled={checkingIcloudHealth || cancellingFinderCopy}
         cancelLabel={cancellingFinderCopy ? "Finder 복사 취소 요청 중…" : "Finder 복사 취소 요청"}
