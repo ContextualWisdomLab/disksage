@@ -180,7 +180,7 @@ describe("loadPodmanEvidence", () => {
   it("uses the registered read-only command by default", async () => {
     invokeMock.mockResolvedValue(fixture());
     await expect(loadPodmanEvidence()).resolves.toMatchObject({ schema_version: 1 });
-    expect(invokeMock).toHaveBeenCalledWith("inspect_podman_reclaim");
+    expect(invokeMock).toHaveBeenCalledWith("inspect_podman_desktop_evidence");
   });
 });
 

@@ -355,7 +355,7 @@ export async function loadPodmanEvidence(
   invokeFunction: InvokeFunction = invoke,
 ): Promise<PodmanDesktopEvidence> {
   return parsePodmanDesktopEvidence(
-    await invokeFunction<unknown>("inspect_podman_reclaim"),
+    await invokeFunction<unknown>("inspect_podman_desktop_evidence"),
   );
 }
 

@@ -23,6 +23,7 @@ fn plan_with_assessment(status: &str, reason_codes: &[&str]) -> PodmanReclaimPla
         store: None,
         system_df: None,
         unused_images: None,
+        dangling_prune_approval_phrase: None,
         assessment: PodmanReclaimAssessment {
             physically_reclaimable_bytes: None,
             podman_reported_reclaimable_bytes: None,
@@ -73,7 +74,9 @@ fn registered_command_is_not_removed_only_from_coverage_builds() {
     let command_source = include_str!("../src/podman_desktop.rs").replace("\r\n", "\n");
     let library_source = include_str!("../src/lib.rs").replace("\r\n", "\n");
 
-    assert!(library_source.contains("podman_desktop::inspect_podman_reclaim"));
+    assert!(library_source.contains(
+        "podman_desktop_bridge::inspect_podman_desktop_evidence",
+    ));
     assert!(!command_source.contains(
         "#[cfg(not(coverage))]\n#[tauri::command]\npub fn inspect_podman_reclaim",
     ));

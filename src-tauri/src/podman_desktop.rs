@@ -308,7 +308,6 @@ pub fn redact_podman_reclaim_plan(plan: PodmanReclaimPlan) -> PodmanDesktopEvide
 ///
 /// The command passes an argument vector directly to `std::process::Command` through the
 /// headless probe. It never constructs a shell command and never executes a mutation.
-#[tauri::command]
 pub fn inspect_podman_reclaim() -> PodmanDesktopEvidence {
     redact_podman_reclaim_plan(probe_podman_reclaim(
         Path::new("podman"),
