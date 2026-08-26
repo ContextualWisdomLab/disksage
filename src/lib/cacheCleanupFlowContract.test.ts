@@ -29,7 +29,7 @@ describe("cache cleanup execution boundary", () => {
     expect(cleanup).toContain("휴지통 내용이 바뀌어 최신 목록을 불러왔습니다");
     expect(cleanup).toContain("observed_available_gain_bytes");
     expect(cleanup).toContain("각 항목의 크기와 수정 시각을 다시 확인합니다");
-    expect(cleanup).toContain("재생성할 수 있는 캐시만 대상으로 하며");
+    expect(cleanup).toContain("재생성할 수 있는 캐시만 대상으로 합니다");
     expect(cleanup).not.toContain("active-use");
     expect(cleanup).not.toContain("증거가 바뀐 항목");
     expect(backend).toContain("pub fn clean_cache_contents(");

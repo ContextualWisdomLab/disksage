@@ -892,7 +892,7 @@
   </p>
 
   {#if roots.length === 0}
-    <p class="warning">탐지된 클라우드 루트가 없습니다.</p>
+    <p class="warning">탐지된 클라우드 루트가 없습니다. 클라우드 앱이 연결되어 있는지 확인한 뒤 새로고침하십시오.</p>
   {:else}
     <div class="controls">
       <label>
@@ -1015,7 +1015,7 @@
           {#if icloudHealth.file_provider_activity && (icloudHealth.file_provider_activity.materialization_failure_count > 0 || icloudHealth.file_provider_activity.staged_item_missing_count > 0)}
             <p class="warning">
               클라우드 파일을 준비하지 못했습니다. 현재 복사는 완료로 간주하지 않으며,
-              상태가 정상화될 때까지 새 복사와 원본 정리를 막습니다.
+              상태가 정상화될 때까지 새 복사와 원본 정리를 막습니다. 상태가 정상화된 뒤 새 계획을 다시 실행하십시오.
             </p>
           {/if}
           {#if icloudHealth.new_copy_admission_blockers.includes("icloud-file-provider-item-locked")}
@@ -1416,7 +1416,7 @@
       </div>
     {/if}
     {#if report.candidates.length === 0}
-      <p class="muted">현재 크기·경과일·지원 파일 유형 조건에 맞는 후보가 없습니다.</p>
+      <p class="muted">현재 크기·경과일·지원 파일 유형 조건에 맞는 후보가 없습니다. 조건을 조정한 뒤 다시 미리보기 하십시오.</p>
     {:else}
       <div class="review-queue" aria-label="클라우드 파일 검토 목록">
         <div class="review-progress" aria-live="polite">
@@ -1484,7 +1484,7 @@
         </div>
       </div>
       {#if reviewPageData.items.length === 0}
-        <p class="muted">현재 상태·사유 필터에 맞는 후보가 없습니다.</p>
+        <p class="muted">현재 상태·사유 필터에 맞는 후보가 없습니다. 필터를 바꾸거나 전체를 선택하십시오.</p>
       {:else}
       <ul class="candidates">
         {#each reviewPageData.items as candidate (candidate.metadata_fingerprint)}

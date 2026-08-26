@@ -257,7 +257,8 @@
     {busy ? "재생성 캐시 확인 중…" : "관측된 재생성 캐시 자동 정리"}
   </button>
   <p class="notice" role="status">
-    재생성할 수 있는 캐시만 대상으로 하며, 사용 중이거나 상태가 바뀐 항목은 자동으로 건너뜁니다.
+    재생성할 수 있는 캐시만 대상으로 합니다. 목록을 확인한 뒤 정리 버튼을 누르십시오.
+    사용 중이거나 상태가 바뀐 항목은 자동으로 건너뜁니다.
   </p>
   {#if cacheTrashPurgeInstruction}
     <p class="notice" role="status">{cacheTrashPurgeInstruction}</p>

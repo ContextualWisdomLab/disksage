@@ -19,10 +19,9 @@ pub const AUTO_REGENERABLE_CACHE_IDS: [&str; 6] = [
     "trivy-cache",
 ];
 
-const PROVEN_CACHE_TRASH_NAMES: [&str; 9] = [
+const PROVEN_CACHE_TRASH_NAMES: [&str; 8] = [
     "_cacache",
     "v11",
-    "Default",
     "simple-v21",
     "typequest",
     "wheels-v6",
@@ -103,11 +102,6 @@ fn looks_like_proven_cache_trash(path: &Path, name: &str) -> Option<&'static str
                 && direct_child_is_dir(path, "metadata-full") =>
         {
             "pnpm-store-v11"
-        }
-        "Default"
-            if direct_child_is_dir(path, "Cache") && direct_child_is_dir(path, "Code Cache") =>
-        {
-            "edge-profile-cache"
         }
         "simple-v21" if direct_child_is_dir(path, "pypi") => "uv-simple-index-cache",
         "typequest" if direct_child_is_dir(path, "common") && direct_child_is_dir(path, ".2") => {
@@ -511,11 +505,16 @@ mod tests {
         let unrelated = trash.join("Default");
         fs::create_dir(&unrelated).unwrap();
         fs::create_dir(unrelated.join("Cache")).unwrap();
+        fs::create_dir(unrelated.join("Code Cache")).unwrap();
 
         let candidates = proven_cache_trash_candidates(tmp.path());
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].signature, "npm-cacache");
         assert_eq!(candidates[0].bytes, 5);
+        assert!(
+            candidates.iter().all(|candidate| candidate.name != "Default"),
+            "a browser profile root must never be exposed as a cache candidate"
+        );
         let approval_phrase = proven_cache_trash_approval_phrase(tmp.path());
         assert!(approval_phrase.starts_with("DiskSage cache-trash purge approval "));
 

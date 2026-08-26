@@ -17,6 +17,18 @@ function visibleText(fileName: string): string {
   return markup.replace(/<[^>]*>/g, " ").replace(/\{[\s\S]*?\}/g, " ");
 }
 
+function staticActionParagraphs(fileName: string): string[] {
+  const source = readFileSync(resolve(repositoryRoot, "src/lib", fileName), "utf8");
+  const paragraphs: string[] = [];
+  const paragraphPattern = /<p[^>]*class=(?:"|')([^"']*)(?:"|')[^>]*>([\s\S]*?)<\/p>/g;
+  for (const match of source.matchAll(paragraphPattern)) {
+    if (!/(warning|error|notice)/.test(match[1]) || /[{@]/.test(match[2])) continue;
+    const text = match[2].replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+    if (text) paragraphs.push(text);
+  }
+  return paragraphs;
+}
+
 describe("cleanup customer copy", () => {
   it("keeps implementation vocabulary out of the customer action panel", () => {
     const source = readFileSync(resolve(repositoryRoot, "src/lib/Cleanup.svelte"), "utf8");
@@ -97,6 +109,16 @@ describe("cleanup customer copy", () => {
       const source = readFileSync(resolve(repositoryRoot, "src/lib", fileName), "utf8");
       expect(source).not.toContain("String(e)");
       expect(source).toContain("다시 시도하십시오");
+    }
+  });
+
+  it("requires static warnings and errors to tell the customer what to do next", () => {
+    const nextAction = /(확인|다시|입력|선택|누르|비우|연결|진행|검토|승인|복원|이동|재시작|기다|조정|바꾸|재개|실행|확보|취소|보존|회수|미리보기|휴지통|스캔|시도|조건)/;
+    for (const fileName of readdirSync(resolve(repositoryRoot, "src/lib"))) {
+      if (!fileName.endsWith(".svelte")) continue;
+      for (const paragraph of staticActionParagraphs(fileName)) {
+        expect(paragraph, `${fileName}: ${paragraph}`).toMatch(nextAction);
+      }
     }
   });
 });

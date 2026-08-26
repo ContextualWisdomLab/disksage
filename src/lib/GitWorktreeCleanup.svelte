@@ -240,7 +240,7 @@
           </button>
         </div>
       {:else if report.removal_candidate_count === 0}
-        <p class="muted">현재 엄격한 제거 조건을 모두 만족하는 보조 폴더가 없습니다.</p>
+        <p class="muted">현재 엄격한 제거 조건을 모두 만족하는 보조 폴더가 없습니다. 보존 기준과 저장소 상태를 확인한 뒤 다시 실행하십시오.</p>
       {/if}
     </div>
   {/if}

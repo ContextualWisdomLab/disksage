@@ -132,7 +132,7 @@
 <div class="local-eviction-panel">
   <strong>iCloud 로컬 사본 회수</strong>
   <p class="muted">
-    이미 iCloud에 있는 파일의 로컬 캐시만 검사합니다. 파일 내용과 클라우드 객체는 변경하지 않습니다.
+    이미 iCloud에 있는 파일의 로컬 사본만 검사합니다. 파일 선택 후 상태를 확인하십시오. 파일 내용과 클라우드 객체는 변경하지 않습니다.
   </p>
   <div class="path-controls">
     <label>
