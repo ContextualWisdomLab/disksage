@@ -5,7 +5,7 @@
 //!
 //! - `docker` with the default context (`DockerNative`)
 //! - `docker --context colima` for Colima-managed Docker sockets (`DockerColimaContext`)
-//! - `podman --connection <machine>` for a running Podman machine (`PodmanMachine`)
+//! - `podman --connection <machine>` against a running Podman machine (`PodmanMachine`)
 //!
 //! Safety contract shared with [`crate::podman_reclaim`]:
 //!
@@ -14,11 +14,11 @@
 //!    a SHA-256 fingerprint of the exact sorted candidate identity set.
 //! 3. Running or paused containers are never candidates. Built-in networks
 //!    (`bridge`, `host`, `none`, `podman`) are never candidates. Tagged images are never
-//!    pruned: image prune only removes untagged images that reference zero containers,
+//!    pruned: image deletion only targets untagged images that reference zero containers,
 //!    matching the existing Podman dangling-image boundary.
-//! 4. A known TOCTOU window exists between the pre-execution audit and the prune command;
-//!    the engine re-audits immediately before executing so the window is seconds, and the
-//!    execution receipt records the command output verbatim for operator attribution.
+//! 4. Mutation targets only the exact identities observed by the fresh audit. Category-wide
+//!    `prune` commands are never used, so a resource that becomes orphaned after the audit cannot
+//!    be swept into the approved mutation set.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -38,6 +38,9 @@ const MAX_CAPTURE_BYTES: usize = 1_048_576;
 pub const MAX_NETWORK_CANDIDATES: usize = 64;
 /// Maximum number of records retained per category before the audit fails closed.
 pub const MAX_CATEGORY_RECORDS: usize = 4_096;
+/// Exact deletion is deliberately capped so a single runtime invocation remains bounded on every
+/// supported host, including Windows command-line limits and 200-byte volume/network names.
+const MAX_EXACT_DELETE_CANDIDATES: usize = 64;
 
 /// Runtime target kinds supported by the orphan reclaim engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -185,12 +188,12 @@ impl OrphanCategory {
         }
     }
 
-    fn prune_subcommand(self) -> [&'static str; 3] {
+    fn exact_delete_subcommand(self) -> [&'static str; 2] {
         match self {
-            Self::Container => ["container", "prune", "--force"],
-            Self::Image => ["image", "prune", "--force"],
-            Self::Volume => ["volume", "prune", "--force"],
-            Self::Network => ["network", "prune", "--force"],
+            Self::Container => ["container", "rm"],
+            Self::Image => ["image", "rm"],
+            Self::Volume => ["volume", "rm"],
+            Self::Network => ["network", "rm"],
         }
     }
 }
@@ -216,8 +219,11 @@ pub struct OrphanCategoryPlan {
     pub evidence: Option<OrphanCandidateEvidence>,
     /// Present only when fresh evidence contains at least one candidate.
     pub approval_phrase: Option<String>,
-    /// Exact command that would run after the phrase check; informational until approved.
+    /// Redacted exact-delete command shape; candidate identities never enter serialized reports.
     pub prune_command: Option<Vec<String>>,
+    /// Exact validated identities bound to `evidence`; deliberately excluded from serialization.
+    #[serde(skip_serializing)]
+    candidate_ids: Vec<String>,
 }
 
 /// Health observation for the probed runtime target.
@@ -651,6 +657,35 @@ fn summarize_candidates(
     })
 }
 
+fn bounded_exact_candidate_ids(mut candidate_ids: Vec<String>) -> Result<Vec<String>, String> {
+    if candidate_ids.len() > MAX_EXACT_DELETE_CANDIDATES {
+        return Err("exact-delete-candidate-count-exceeds-bound".to_string());
+    }
+    candidate_ids.sort_unstable();
+    if candidate_ids.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err("duplicate-candidate-id".to_string());
+    }
+    Ok(candidate_ids)
+}
+
+fn redacted_exact_delete_command(
+    prefix: &[String],
+    category: OrphanCategory,
+    has_candidates: bool,
+) -> Vec<String> {
+    let mut command = prefix.to_vec();
+    command.extend(
+        category
+            .exact_delete_subcommand()
+            .into_iter()
+            .map(str::to_string),
+    );
+    if has_candidates {
+        command.push("<candidate-set>".to_string());
+    }
+    command
+}
+
 // ---------------------------------------------------------------------------
 // Bounded subprocess plumbing (same contract as podman_reclaim).
 // ---------------------------------------------------------------------------
@@ -799,12 +834,13 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
         evidence: None,
         approval_phrase: None,
         prune_command: None,
+        candidate_ids: Vec::new(),
     };
     let prefix = match target.command_prefix() {
         Ok(prefix) => prefix,
         Err(error) => return build_issue_plan(error),
     };
-    let outcome = (|| -> Result<Option<OrphanCandidateEvidence>, String> {
+    let outcome = (|| -> Result<(Option<OrphanCandidateEvidence>, Vec<String>), String> {
         let list_label = format!("orphan-list-{}", category.as_str());
         let mut args: Vec<&str> = prefix.iter().skip(1).map(String::as_str).collect();
         match category {
@@ -848,43 +884,56 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
             ORPHAN_COMMAND_TIMEOUT,
             &list_label,
         )?;
-        let evidence = match category {
+        let (evidence, candidate_ids) = match category {
             OrphanCategory::Container => {
                 let records = parse_container_records(&output)?;
                 let (total, candidates) = classify_container_candidates(&records)?;
-                let ids: Vec<&str> = candidates.iter().map(|c| c.id.as_str()).collect();
-                Some(summarize_candidates(category, total, &ids, None)?)
+                let candidate_ids: Vec<String> =
+                    candidates.iter().map(|candidate| candidate.id.clone()).collect();
+                let ids: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
+                (
+                    Some(summarize_candidates(category, total, &ids, None)?),
+                    candidate_ids,
+                )
             }
             OrphanCategory::Image if target.kind.is_docker() => {
                 // Docker's documented JSON formatter renders Size as a human string and
                 // Containers as "N/A". The daemon's `dangling=true` filter is the
-                // authoritative predicate for the exact default `image prune` category:
-                // untagged images not referenced by any container. Bind those full IDs
-                // directly instead of fabricating a reference count or byte size.
-                let ids = parse_docker_dangling_image_ids(&output)?;
-                let total = u64::try_from(ids.len())
+                // authoritative predicate for the exact default image-prune category.
+                let candidate_ids = parse_docker_dangling_image_ids(&output)?;
+                let total = u64::try_from(candidate_ids.len())
                     .map_err(|_| "record-count-overflow".to_string())?;
-                let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
-                Some(summarize_candidates(category, total, &refs, None)?)
+                let refs: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
+                (
+                    Some(summarize_candidates(category, total, &refs, None)?),
+                    candidate_ids,
+                )
             }
             OrphanCategory::Image => {
                 let records = parse_image_records(&output)?;
                 let (total, candidates) = classify_image_candidates(&records)?;
-                let ids: Vec<&str> = candidates.iter().map(|c| c.id.as_str()).collect();
+                let candidate_ids: Vec<String> =
+                    candidates.iter().map(|candidate| candidate.id.clone()).collect();
+                let ids: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
                 let size_sum = candidates.iter().try_fold(0u64, |sum, record| {
                     sum.checked_add(record.size_bytes)
                         .ok_or_else(|| "size-overflow".to_string())
                 })?;
                 let mut evidence = summarize_candidates(category, total, &ids, None)?;
                 evidence.candidate_size_sum_bytes = Some(size_sum);
-                Some(evidence)
+                (Some(evidence), candidate_ids)
             }
             OrphanCategory::Volume => {
                 let records = parse_volume_records(&output)?;
                 let total = u64::try_from(records.len())
                     .map_err(|_| "record-count-overflow".to_string())?;
-                let ids: Vec<&str> = records.iter().map(|r| r.name.as_str()).collect();
-                Some(summarize_candidates(category, total, &ids, None)?)
+                let candidate_ids: Vec<String> =
+                    records.iter().map(|record| record.name.clone()).collect();
+                let ids: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
+                (
+                    Some(summarize_candidates(category, total, &ids, None)?),
+                    candidate_ids,
+                )
             }
             OrphanCategory::Network => {
                 let records = parse_network_records(&output)?;
@@ -893,16 +942,17 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                 // Confirm each non-builtin network carries zero endpoints before it can
                 // count as a candidate; any inspect failure fails the category closed.
                 let mut attached: Vec<String> = Vec::new();
-                let mut candidate_ids: Vec<String> = Vec::new();
+                let mut inspected_candidates = 0usize;
                 for record in &records {
                     if BUILTIN_NETWORK_NAMES.contains(&record.name.as_str())
                         || matches!(record.driver.as_str(), "host" | "null")
                     {
                         continue;
                     }
-                    if candidate_ids.len() >= MAX_NETWORK_CANDIDATES {
+                    if inspected_candidates >= MAX_NETWORK_CANDIDATES {
                         return Err("network-candidate-count-exceeds-bound".to_string());
                     }
+                    inspected_candidates = inspected_candidates.saturating_add(1);
                     let mut inspect_args: Vec<&str> =
                         prefix.iter().skip(1).map(String::as_str).collect();
                     inspect_args.extend(["network", "inspect", &record.name]);
@@ -914,19 +964,22 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                     )?;
                     if network_has_attached_containers(&inspect_output)? {
                         attached.push(record.name.clone());
-                    } else {
-                        candidate_ids.push(record.name.clone());
                     }
                 }
                 let (total, candidates) = classify_network_candidates(&records, &attached)?;
-                let ids: Vec<&str> = candidates.iter().map(|c| c.name.as_str()).collect();
-                Some(summarize_candidates(category, total, &ids, None)?)
+                let candidate_ids: Vec<String> =
+                    candidates.iter().map(|candidate| candidate.name.clone()).collect();
+                let ids: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
+                (
+                    Some(summarize_candidates(category, total, &ids, None)?),
+                    candidate_ids,
+                )
             }
         };
-        Ok(evidence)
+        Ok((evidence, bounded_exact_candidate_ids(candidate_ids)?))
     })();
     match outcome {
-        Ok(evidence) => {
+        Ok((evidence, candidate_ids)) => {
             let has_candidates = evidence
                 .as_ref()
                 .is_some_and(|item| item.candidate_records > 0);
@@ -940,11 +993,12 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                 issue: None,
                 evidence,
                 approval_phrase,
-                prune_command: Some({
-                    let mut command = prefix.clone();
-                    command.extend(category.prune_subcommand().into_iter().map(str::to_string));
-                    command
-                }),
+                prune_command: Some(redacted_exact_delete_command(
+                    &prefix,
+                    category,
+                    has_candidates,
+                )),
+                candidate_ids,
             }
         }
         Err(issue) => build_issue_plan(issue),
@@ -1003,9 +1057,9 @@ fn current_epoch_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// Executes one category's prune behind the full fail-closed gate:
+/// Executes one category's deletion behind the full fail-closed gate:
 /// validated rationale, validated scope, fresh re-audit whose candidate set is
-/// non-empty, phrase equality, then the bounded prune command.
+/// non-empty, phrase equality, then exact identity-bound deletion.
 pub fn execute_container_orphan_prune(
     target: &ContainerRuntimeTarget,
     category: OrphanCategory,
@@ -1032,9 +1086,17 @@ pub fn execute_container_orphan_prune(
             plan.issue.unwrap_or_else(|| "unknown".into())
         ));
     }
-    let evidence = plan.evidence.ok_or("orphan-prune-evidence-missing")?;
+    let evidence = plan
+        .evidence
+        .as_ref()
+        .ok_or("orphan-prune-evidence-missing")?;
     if evidence.candidate_records == 0 {
         return Err("orphan-prune-empty-candidate-set".into());
+    }
+    let candidate_count = usize::try_from(evidence.candidate_records)
+        .map_err(|_| "record-count-overflow".to_string())?;
+    if plan.candidate_ids.len() != candidate_count {
+        return Err("orphan-prune-candidate-set-internal-mismatch".into());
     }
     let expected_phrase = approval_phrase(category, &evidence.candidate_set_sha256);
     if confirmation_phrase != expected_phrase {
@@ -1042,8 +1104,15 @@ pub fn execute_container_orphan_prune(
     }
 
     let before_available_bytes = host_available_bytes(executed_at_ms);
-    let mut args: Vec<&str> = prefix.iter().skip(1).map(String::as_str).collect();
-    args.extend(category.prune_subcommand());
+    let mut owned_args: Vec<String> = prefix.iter().skip(1).cloned().collect();
+    owned_args.extend(
+        category
+            .exact_delete_subcommand()
+            .into_iter()
+            .map(str::to_string),
+    );
+    owned_args.extend(plan.candidate_ids.iter().cloned());
+    let args: Vec<&str> = owned_args.iter().map(String::as_str).collect();
     let label = format!("orphan-prune-{}", category.as_str());
     let output = command_capture(&target.binary_path, &args, ORPHAN_COMMAND_TIMEOUT, &label)?;
     let after_observed_at_ms = current_epoch_ms().max(executed_at_ms);
@@ -1055,12 +1124,8 @@ pub fn execute_container_orphan_prune(
         schema_version: CONTAINER_ORPHAN_SCHEMA_VERSION,
         runtime_display_name: target.display_name(),
         category,
-        candidate_set_sha256: evidence.candidate_set_sha256,
-        command: {
-            let mut full = prefix.clone();
-            full.extend(category.prune_subcommand().into_iter().map(str::to_string));
-            full
-        },
+        candidate_set_sha256: evidence.candidate_set_sha256.clone(),
+        command: redacted_exact_delete_command(&prefix, category, true),
         status_code: output.status_code,
         stdout: output.stdout,
         stderr: output.stderr,
@@ -1506,26 +1571,37 @@ mod tests {
     }
 
     #[test]
+    fn exact_delete_candidate_bound_is_enforced() {
+        let ids: Vec<String> = (0..=MAX_EXACT_DELETE_CANDIDATES)
+            .map(|index| format!("{index:064x}"))
+            .collect();
+        assert_eq!(
+            bounded_exact_candidate_ids(ids).unwrap_err(),
+            "exact-delete-candidate-count-exceeds-bound"
+        );
+    }
+
+    #[test]
     fn category_metadata_is_stable() {
         assert_eq!(OrphanCategory::Container.as_str(), "container");
         assert_eq!(OrphanCategory::Image.as_str(), "image");
         assert_eq!(OrphanCategory::Volume.as_str(), "volume");
         assert_eq!(OrphanCategory::Network.as_str(), "network");
         assert_eq!(
-            OrphanCategory::Container.prune_subcommand(),
-            ["container", "prune", "--force"]
+            OrphanCategory::Container.exact_delete_subcommand(),
+            ["container", "rm"]
         );
         assert_eq!(
-            OrphanCategory::Image.prune_subcommand(),
-            ["image", "prune", "--force"]
+            OrphanCategory::Image.exact_delete_subcommand(),
+            ["image", "rm"]
         );
         assert_eq!(
-            OrphanCategory::Volume.prune_subcommand(),
-            ["volume", "prune", "--force"]
+            OrphanCategory::Volume.exact_delete_subcommand(),
+            ["volume", "rm"]
         );
         assert_eq!(
-            OrphanCategory::Network.prune_subcommand(),
-            ["network", "prune", "--force"]
+            OrphanCategory::Network.exact_delete_subcommand(),
+            ["network", "rm"]
         );
         assert_eq!(
             serde_json::to_value(OrphanCategory::Container).unwrap(),
