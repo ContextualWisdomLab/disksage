@@ -20,7 +20,7 @@ describe("cache cleanup execution boundary", () => {
     expect(cleanup).toContain("api.cleanRegenerableCaches()");
     expect(cleanup).toContain("api.listProvenCacheTrash()");
     expect(cleanup).toContain("api.purgeProvenCacheTrash(cacheTrashSnapshot)");
-    expect(cleanup).toContain('item.purged && item.error === ""');
+    expect(cleanup).toContain("summarizeCacheTrashPurge(cacheTrashExecution.items)");
     expect(cleanup).toContain("정리 기록을 남기지 못했습니다");
     expect(cleanup).toContain("cache-trash-confirmation-mismatch");
     expect(cleanup).toContain("휴지통 내용이 바뀌어 최신 목록을 불러왔습니다");
