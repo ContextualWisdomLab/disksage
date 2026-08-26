@@ -174,12 +174,7 @@ fn scan_dir_with_interval_inner(
     let mut seen: u64 = 0;
     let traversal_root = read_only_traversal_root(root);
     let normalized_provider_home = provider_home.map(|home| {
-        let canonical_home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
-        if traversal_root.starts_with(&canonical_home) {
-            canonical_home
-        } else {
-            home.to_path_buf()
-        }
+        std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf())
     });
     let provider_roots_skipped = Cell::new(0_u64);
     let mut reported_provider_roots_skipped = 0_u64;
