@@ -1,5 +1,5 @@
 use crate::container_orphan_reclaim::{
-    ContainerOrphanPlan, ContainerOrphanPruneExecution,
+    ContainerOrphanPlan, ContainerOrphanPruneExecution, OrphanCategory,
 };
 
 const FALLBACK_ISSUE: &str = "container-runtime-evidence-unavailable";
@@ -18,12 +18,28 @@ fn stable_issue(raw: &str) -> String {
     }
 }
 
+fn public_command_shape(category: OrphanCategory, has_candidates: bool) -> Vec<String> {
+    let mut command = vec![category.as_str().to_string(), "rm".to_string()];
+    if has_candidates {
+        command.push("<candidate-set>".to_string());
+    }
+    command
+}
+
 /// Removes runtime stderr, paths, socket details, local machine names, and record fragments from
 /// the machine-readable public plan while retaining stable fail-closed issue categories.
 pub fn sanitize_plan(mut plan: ContainerOrphanPlan) -> ContainerOrphanPlan {
     plan.runtime.detail_issue = plan.runtime.detail_issue.as_deref().map(stable_issue);
+    plan.runtime.display_name = plan.runtime.kind.as_str().to_string();
     for category in &mut plan.categories {
         category.issue = category.issue.as_deref().map(stable_issue);
+        if category.prune_command.is_some() {
+            let has_candidates = category
+                .evidence
+                .as_ref()
+                .is_some_and(|evidence| evidence.candidate_records > 0);
+            category.prune_command = Some(public_command_shape(category.category, has_candidates));
+        }
     }
     let mut issues = plan
         .categories
@@ -43,10 +59,12 @@ pub fn sanitize_plan(mut plan: ContainerOrphanPlan) -> ContainerOrphanPlan {
 }
 
 /// Keeps the mutation receipt useful for authorization/accounting without returning arbitrary
-/// runtime stdout/stderr (which can contain local identifiers, paths, or engine diagnostics).
+/// runtime stdout/stderr, local executable paths, or runtime scope names.
 pub fn sanitize_execution(
     mut execution: ContainerOrphanPruneExecution,
 ) -> ContainerOrphanPruneExecution {
+    execution.runtime_display_name = "container-runtime".to_string();
+    execution.command = public_command_shape(execution.category, true);
     execution.stdout.clear();
     execution.stderr.clear();
     execution
@@ -100,6 +118,7 @@ mod tests {
         let sanitized = sanitize_plan(probe_container_orphans(&target));
         let json = serde_json::to_string(&sanitized).unwrap();
 
+        assert_eq!(sanitized.runtime.display_name, "docker-colima-context");
         assert!(!json.contains(secret_scope));
     }
 
@@ -133,6 +152,8 @@ mod tests {
         };
         let sanitized = sanitize_execution(execution);
         let json = serde_json::to_string(&sanitized).unwrap();
+        assert_eq!(sanitized.runtime_display_name, "container-runtime");
+        assert_eq!(sanitized.command, vec!["container", "rm", "<candidate-set>"]);
         assert!(sanitized.stdout.is_empty());
         assert!(sanitized.stderr.is_empty());
         assert!(!json.contains(secret_binary));
