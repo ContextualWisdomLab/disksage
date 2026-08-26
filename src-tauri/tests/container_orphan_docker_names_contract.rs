@@ -5,8 +5,7 @@ use disksage_lib::container_orphan_reclaim::{
 };
 use std::os::unix::fs::PermissionsExt;
 
-#[test]
-fn docker_plain_comma_joined_names_do_not_break_stopped_container_audit() {
+fn assert_docker_names_shape_is_accepted(names: &str) {
     const FULL_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let temp = tempfile::tempdir().expect("temporary runtime directory");
     let runtime = temp.path().join("docker");
@@ -18,7 +17,7 @@ case "${{1:-}}" in
   container)
     [ "${{2:-}}" = "ps" ] || exit 91
     case " $* " in *" --no-trunc "*) ;; *) echo "missing --no-trunc" >&2; exit 92 ;; esac
-    printf '%s\n' '{{"ID":"{FULL_ID}","State":"exited","Names":"web,worker"}}'
+    printf '%s\n' '{{"ID":"{FULL_ID}","State":"exited","Names":"{names}"}}'
     ;;
   images|volume|network) exit 0 ;;
   *) exit 93 ;;
@@ -50,4 +49,14 @@ esac
     assert_eq!(evidence.total_records, 1);
     assert_eq!(evidence.candidate_records, 1);
     assert!(container.approval_phrase.is_some());
+}
+
+#[test]
+fn docker_plain_comma_joined_names_do_not_break_stopped_container_audit() {
+    assert_docker_names_shape_is_accepted("web,worker");
+}
+
+#[test]
+fn docker_plain_single_name_does_not_break_stopped_container_audit() {
+    assert_docker_names_shape_is_accepted("web");
 }
