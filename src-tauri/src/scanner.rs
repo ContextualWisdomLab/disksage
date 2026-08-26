@@ -469,6 +469,29 @@ mod tests {
     }
 
     #[test]
+    fn final_progress_reports_provider_root_skip_without_followup_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let provider_root = if cfg!(target_os = "macos") {
+            tmp.path().join("Library").join("CloudStorage")
+        } else {
+            tmp.path().join("OneDrive")
+        };
+        fs::create_dir_all(&provider_root).unwrap();
+        let observed_skipped = Cell::new(0_u64);
+
+        let result = scan_dir_with_interval_for_home(
+            tmp.path(),
+            &AtomicBool::new(false),
+            1,
+            |progress| observed_skipped.set(progress.skipped),
+            tmp.path(),
+        );
+
+        assert_eq!(result.stats.skipped, 1);
+        assert_eq!(observed_skipped.get(), 1);
+    }
+
+    #[test]
     fn nested_provider_named_directory_is_scanned() {
         let tmp = tempfile::tempdir().unwrap();
         let nested = tmp.path().join("Projects");
