@@ -191,6 +191,7 @@
           <p class="warning">
             아래 확인 문구 전체를 직접 입력해야 합니다. 실행 시 파일 크기·업로드·충돌·회수 가능 여부를 다시 확인하며 달라지면 중단합니다.
           </p>
+          <p class="muted">입력할 확인 문구: <code>{plan.plan_fingerprint}</code></p>
           <label>
             전체 확인 문구
             <input
