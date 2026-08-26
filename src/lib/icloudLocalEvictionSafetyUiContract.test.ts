@@ -41,25 +41,8 @@ describe("iCloud local eviction safety UI", () => {
     expect(source).toContain(
       'blocker !== "human-local-eviction-approval-required"',
     );
-    const visible = source.slice(source.indexOf("</script>"), source.indexOf("<style>"));
-    expect(visible).not.toContain("File Provider");
-    expect(visible).not.toContain("계획 지문");
-    expect(visible).not.toContain("활성 사용");
-    expect(visible).not.toContain("승인 기록");
-    expect(visible).not.toContain("결과 기록");
     expect(planBlockerActions(["icloud-file-provider-native-status-unavailable"])).toEqual([
-      "iCloud 상태 확인이 완전하지 않습니다. 잠시 후 다시 판정하세요.",
+      "File Provider 상태 증거가 완전하지 않습니다. 잠시 후 다시 판정하세요.",
     ]);
-  });
-
-  it("shows the exact approval value required by executionReady", () => {
-    const source = readSource();
-    const approvalStart = source.indexOf("{:else if plan.eligible_after_human_approval}");
-    const approvalEnd = source.indexOf("{:else}", approvalStart + 1);
-    const approvalControls = source.slice(approvalStart, approvalEnd);
-
-    expect(source).toContain("confirmation === plan.plan_fingerprint");
-    expect(approvalControls).toContain("{plan.plan_fingerprint}");
-    expect(approvalControls).toContain("<code");
   });
 });

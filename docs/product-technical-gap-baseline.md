@@ -165,81 +165,6 @@ authoritative, and no merge is claimed from queued or stale status.
 
 At each scheduled or operator loop, update this file only with new dated evidence: current head, open-PR/check state, provider receipt state, disk headroom, and the smallest acceptance proof completed. Do not convert an incomplete provider probe, filename date, model answer, or GitHub review comment into a transfer or deletion authority.
 
-## 2026-08-26 physical reclaim loop
-
-- PR #263 review snapshot at implementation head `a05a443e8efecf9972dcd93b422f488ef40a54a9`
-  (base `2a727dab04cd6bd73c68d75c54c3e1563bcb16ca`) closes the unsafe-authority gap after cache
-  cleanup: the desktop cleanup screen lists only regenerable cache entries already in native
-  macOS Trash, binds review to one candidate snapshot, and reports before/after available-space
-  observations without claiming that concurrent changes were caused by DiskSage. The final
-  irreversible deletion primitive is not object-bound yet, so both the Tauri action and the
-  headless CLI fail closed; the screen directs the operator to empty Trash manually. User files,
-  cloud placeholders, and unrelated Trash entries remain outside the action; each attempted item
-  remains journaled.
-- The exact-head PR is open with auto-merge enabled, but hosted checks are still queued or running
-  and no qualifying independent approval is recorded. This is not merge evidence; protected merge
-  remains blocked until the current head has green required checks and a fresh approval.
-- A terminal journal-write failure after removal now remains attached to that item's result, so an
-  irreversible deletion is never hidden behind a generic all-or-nothing error; the audit gap stays
-  visible for follow-up instead of being mistaken for a successful complete journal.
-- The desktop review and purge boundary share an opaque candidate-set phrase; any changed Trash
-  contents invalidate the approval before the fail-closed operation. Per-item operation and
-  journal failures are surfaced through bounded customer messages, and successful physical
-  removal is never reported when its journal record is incomplete.
-- Local verification on the current implementation passed 156 frontend tests, `svelte-check`
-  with zero diagnostics, three focused Rust integration tests, Rust formatting checks for the
-  changed files, and `git diff --check`. No user file, provider process, cloud object, or native
-  Trash entry was removed by this verification.
-- Filename dates remain secondary production evidence: embedded metadata is evaluated first, then
-  an unambiguous filename token such as `2026-04-28` or `251210`, then filesystem times. No cache
-  purge, cloud transfer, or source eviction treats a filename date as authority.
-
-## 2026-08-26 follow-up loop
-
-- The exact implementation head is now `c036d7cc675f1a1de23fb70abd1d272faa1b9691`. The customer-copy
-  contract test scans every Svelte screen and rejects internal implementation vocabulary or raw
-  error interpolation; the purge-result helper keeps incomplete journal state actionable without
-  exposing backend details.
-- Local verification at this head passed 157 frontend tests, `svelte-check` with zero diagnostics,
-  three focused cache-reclaim Rust integration suites, and `git diff --check`. Rust emits existing
-  dead-code warnings outside this change; no user file, provider process, cloud object, or native
-  Trash entry was mutated by verification.
-- Dependabot PR #252 was reviewed at its exact head and merged as commit
-  `c0dc7567ca044a6f652441bcbcef2cdebfb903b0` after all required checks passed. PR #263 remains open
-  with auto-merge enabled but its current hosted checks are still queued/running and it has no
-  qualifying independent approval, so protected merge is not claimed. PR #256's Strix failure was
-  traced to provider HTTP 429 rate limiting (not a vulnerability finding); a failed-job rerun is
-  queued and remains non-authoritative until it completes.
-- The review follow-up at head `b85a31a23bb34623d0d8aae51fb6ceb25e7fd60c` keeps the reviewed
-  cache count and size visible even when in-app permanent deletion is unavailable, and isolates a
-  failed Trash review from the remaining cleanup lists. The customer-facing next step remains to
-  inspect and empty macOS Trash manually; no destructive action was enabled by this fix.
-- The current validation host reports 37 GiB available on the 926 GiB data volume (96% used), and
-  the audited checkout has no additional linked worktree in `git worktree list --porcelain`; the
-  worktree cleaner therefore reports no local reclaim candidate in this checkout instead of
-  inventing one.
-- The cache-cleanup CLI fix at implementation head `a7a5241b19d47f291590f653f43280f4b9b0397c`
-  now gives separate guidance for read-only proven-Trash review and guarded cache movement; it no
-  longer tells a user to pass `--execute` when permanent in-app deletion is unavailable.
-
-## 2026-08-26 customer guidance and cache boundary loop
-
-- Implementation head `b4acaaf5a6d1dec4b153586beccba4444b5e4870` now enforces the customer-copy
-  boundary in code: static warning/error/notice paragraphs in every Svelte screen must contain a
-  concrete next-action cue, and the existing screen-wide vocabulary contract rejects internal
-  implementation terms and raw runtime-error interpolation. Empty, blocked, and failure states in
-  cloud, iCloud, cache, worktree, and orphan panels now tell the operator what to check or retry.
-- Browser `Default` profile roots are no longer proven Trash candidates. The Rust regression creates
-  both `Cache` and `Code Cache` children and confirms the profile root remains outside the candidate
-  set, preventing history, session, or login data from entering the review surface.
-- Local verification at this implementation head passed 158 frontend tests, `svelte-check` with
-  zero diagnostics, the focused cache-Trash Rust regression, and `git diff --check`. Existing Rust
-  dead-code/unused-import warnings remain outside this change; verification performed no filesystem,
-  cloud, provider, or Trash mutation.
-- PR #263 remains protected and open with auto-merge enabled; after the push, hosted checks are
-  queued/running and no qualifying independent approval is recorded. The exact-head review must be
-  re-evaluated after those checks and the external reviewer finish.
-
 ## 2026-08-21 lineage graph update
 
 - Source head `677042467b3398866757f39b9475bd0b267abc75` now exports path-free ontology relations for
@@ -754,17 +679,3 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   pipe leak that could starve the independent `ps` probe and report a false active-use timeout.
   The focused Rust test passed 3/3. The same patch is present on stacked PR heads `a0fa7bc` (#247)
   and `741ab30` (#246); hosted checks are rerunning and protected merge/review is still pending.
-
-## 2026-08-26 cache purge outcome clarification
-
-- The current PR #263 implementation head is `7787c063269f897396f4a1e27c45f5432057d6d2`. Its
-  cache purge summary now separates physically removed items, retryable items that remain, and
-  items removed but not fully recorded. The customer notice only asks for a retry when an item
-  remains; a record-write gap asks the operator to inspect the displayed status instead of
-  claiming that deletion failed.
-- Local verification at this head passed 158 frontend tests, `svelte-check` with zero diagnostics,
-  the focused cache-Trash Rust regression, and `git diff --check`. No user file, provider process,
-  cloud object, or native Trash entry was changed by verification.
-- PR #263 remains open, protected, and auto-merge enabled. Its required hosted checks are pending
-  and no qualifying independent approval is recorded; merge is therefore not claimed until the
-  exact head receives green checks and approval.

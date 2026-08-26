@@ -35,7 +35,7 @@
       rationale = "";
     } catch {
       plan = null;
-      error = "미사용 캐시를 확인하지 못했습니다. macOS 파일 접근 권한을 확인한 뒤 다시 시도하세요.";
+      error = "고아 후보를 조사하지 못했습니다. macOS Library 접근 권한을 확인한 뒤 다시 시도하세요.";
     } finally {
       busy = false;
     }
@@ -57,8 +57,8 @@
     ) return;
     busy = true;
     const okay = await confirm(
-      `${selectedCandidates.length}개의 확인된 미사용 캐시(${fmtBytes(selectedBytes)})만 휴지통으로 보냅니다. 앱 지원 데이터와 확인되지 않은 항목은 포함되지 않습니다.`,
-      { title: "DiskSage 미사용 캐시 정리", kind: "warning" },
+      `${selectedCandidates.length}개의 완전 스캔된 미사용 캐시(${fmtBytes(selectedBytes)})만 휴지통으로 보냅니다. Application Support와 불완전·사용 중 후보는 포함되지 않습니다.`,
+      { title: "DiskSage 관계 기반 고아 정리", kind: "warning" },
     );
     if (!okay) {
       busy = false;
@@ -89,7 +89,7 @@
       confirmationPhrase = "";
       rationale = "";
       if (outcome.refresh_failed) {
-        error = "휴지통 이동 요청은 처리됐지만 새 후보 목록을 불러오지 못했습니다. 이동 결과를 확인한 뒤 미사용 캐시 확인을 다시 실행하세요.";
+        error = "휴지통 이동 요청은 처리됐지만 새 후보 목록을 불러오지 못했습니다. 이동 결과를 확인한 뒤 고아 관계 조사를 다시 실행하세요.";
       }
     } catch {
       error = "선택 캐시를 휴지통으로 이동하지 못했습니다. 후보를 다시 조사한 뒤 재시도하세요.";
@@ -100,18 +100,18 @@
 </script>
 
 <section>
-  <h3>사용하지 않는 macOS 캐시 후보</h3>
+  <h3>관계 기반 macOS 고아 후보</h3>
   <p class="notice">
-    설치된 앱 정보와 캐시 파일 정보를 비교해 사용하지 않는 후보를 찾습니다.
-    파일 내용은 읽지 않으며 개인 파일 경로를 결과에 포함하지 않습니다.
-    앱 지원 데이터와 확인되지 않은 후보는 자동 정리하지 않습니다. 확인 버튼을 눌러 후보를 검토하십시오.
+    설치 앱의 제한된 Info.plist 메타데이터와 Library 후보의 파일시스템 메타데이터만 비교합니다.
+    Library 후보의 파일 내용은 읽지 않으며 공개 증거에는 로컬 경로가 없습니다.
+    Application Support·불완전 스캔·사용 중 후보는 자동 정리하지 않습니다.
   </p>
-  <button onclick={inspect} disabled={busy}>{busy ? "미사용 캐시 확인 중…" : "미사용 캐시 확인"}</button>
+  <button onclick={inspect} disabled={busy}>{busy ? "고아 관계 조사 중…" : "고아 관계 조사"}</button>
   {#if error}<p class="error" role="alert">{error}</p>{/if}
   {#if plan}
     <p class="muted" role="status">
       후보 {plan.candidate_count}개 · {fmtBytes(plan.candidate_bytes)} ·
-      {plan.scan_complete ? "전체 확인 완료" : "확인되지 않은 항목이 있어 정리 차단"}
+      {plan.scan_complete ? "전체 증거 완료" : "증거 불완전 — 정리 차단"}
     </p>
     <ul class="list">
       {#each plan.candidates as candidate (candidate.candidate_id)}
@@ -123,10 +123,10 @@
               checked={selected.has(candidate.candidate_id)}
               onchange={() => toggle(candidate.candidate_id)}
             />
-            {candidate.kind} · {fmtBytes(candidate.bytes)}
+            {candidate.kind} · {candidate.bundle_id ?? "식별 불가"} · {fmtBytes(candidate.bytes)}
           </label>
           <span class="muted">
-            {candidate.auto_trash_eligible ? "확인된 미사용 캐시" : "추가 확인이 필요해 자동 정리하지 않음"}
+            {candidate.auto_trash_eligible ? "완전 스캔·미사용 캐시" : candidate.review_reasons.join(", ")}
           </span>
         </li>
       {/each}

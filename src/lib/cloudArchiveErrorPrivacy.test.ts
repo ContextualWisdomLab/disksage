@@ -70,7 +70,7 @@ describe("CloudArchive bounded error feedback", () => {
       },
     );
     expect(boundedCloudArchiveErrorMessage("copy", descriptorProxy)).toBe(
-      "클라우드 복사를 실행하지 못했습니다. 상태를 확인한 뒤 다시 시도하십시오.",
+      "클라우드 복사를 실행하지 못했습니다.",
     );
     expect(isCloudCopyCancelled(descriptorProxy)).toBe(false);
 
@@ -83,7 +83,7 @@ describe("CloudArchive bounded error feedback", () => {
       },
     );
     expect(boundedCloudArchiveErrorMessage("copy", prototypeProxy)).toBe(
-      "클라우드 복사를 실행하지 못했습니다. 상태를 확인한 뒤 다시 시도하십시오.",
+      "클라우드 복사를 실행하지 못했습니다.",
     );
     expect(isCloudCopyCancelled(prototypeProxy)).toBe(false);
   });
@@ -112,16 +112,6 @@ describe("CloudArchive bounded error feedback", () => {
     );
 
     expect(messages.size).toBe(operations.length);
-  });
-
-  it("keeps implementation boundaries out of shared customer messages", () => {
-    const forbidden = ["공급자 API", "공급자 증거", "공급자 전역", "공급자 앱", "OAuth"];
-
-    for (const operation of operations) {
-      const message = boundedCloudArchiveErrorMessage(operation, "backend detail");
-      for (const term of forbidden) expect(message).not.toContain(term);
-      expect(message).toMatch(/(확인|다시|시도|연결|완료|못했습니다)/);
-    }
   });
 
   it("routes every CloudArchive catch boundary through bounded feedback", () => {

@@ -961,21 +961,6 @@ pub async fn plan_stale_git_worktrees(
 }
 
 #[cfg(not(coverage))]
-#[tauri::command(async)]
-pub async fn suggest_git_worktree_references(
-    repository_root: String,
-) -> Result<Vec<String>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        git_worktree::suggested_retention_references(
-            Path::new(&repository_root),
-            git_worktree::GitWorktreeAuditOptions::default(),
-        )
-    })
-    .await
-    .map_err(|_| "git-worktree-reference-discovery-task-failed".to_string())?
-}
-
-#[cfg(not(coverage))]
 #[derive(serde::Serialize)]
 pub struct StaleGitWorktreeRemovalOutput {
     pub action: &'static str,

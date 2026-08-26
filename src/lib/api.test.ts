@@ -67,7 +67,6 @@ describe("api wrappers", () => {
       [() => api.inspectCloudRoots(), "inspect_cloud_roots"],
       [() => api.planIcloudLocalCopyEviction("/cloud", "/cloud/archive.wav"), "plan_icloud_local_copy_eviction", { cloudRoot: "/cloud", path: "/cloud/archive.wav" }],
       [() => api.evictIcloudLocalCopy("/cloud", "/cloud/archive.wav", "a".repeat(64), "a".repeat(64), "verified local cache eviction"), "evict_icloud_local_copy", { cloudRoot: "/cloud", path: "/cloud/archive.wav", approvedPlanFingerprint: "a".repeat(64), confirmPlanFingerprint: "a".repeat(64), rationale: "verified local cache eviction" }],
-      [() => api.suggestGitWorktreeReferences("/repo"), "suggest_git_worktree_references", { repositoryRoot: "/repo" }],
       [() => api.planStaleGitWorktrees("/repo", ["origin/main", "origin/develop"]), "plan_stale_git_worktrees", { repositoryRoot: "/repo", retentionReferences: ["origin/main", "origin/develop"] }],
       [() => api.removeStaleGitWorktrees("/repo", ["origin/main"], "b".repeat(64), `DiskSage stale worktree 2 4096 승인 ${"b".repeat(64)}`, "merged and idle worktrees reviewed"), "remove_stale_git_worktrees", { repositoryRoot: "/repo", retentionReferences: ["origin/main"], approvedRemovalPlanFingerprint: "b".repeat(64), confirmationExactApprovalPhrase: `DiskSage stale worktree 2 4096 승인 ${"b".repeat(64)}`, rationale: "merged and idle worktrees reviewed" }],
       [() => api.listCloudProviderConnections(), "list_cloud_provider_connections"],

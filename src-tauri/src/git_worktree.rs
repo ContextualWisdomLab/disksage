@@ -1052,71 +1052,6 @@ fn resolve_references(
     Ok(bindings)
 }
 
-fn symbolic_reference(
-    repository_root: &Path,
-    symbolic_name: &str,
-    timeout_ms: u64,
-) -> Result<Option<String>, String> {
-    let result = run_git(
-        repository_root,
-        &[
-            OsString::from("symbolic-ref"),
-            OsString::from("--quiet"),
-            OsString::from("--short"),
-            OsString::from(symbolic_name),
-        ],
-        timeout_ms,
-        "git-retention-reference-discovery",
-    )?;
-    match result.status_code {
-        Some(0) => {
-            let reference =
-                command_text(&result.stdout, "git-retention-reference-discovery-not-utf8")?
-                    .trim()
-                    .to_string();
-            if reference.is_empty() {
-                return Err("git-retention-reference-discovery-empty".into());
-            }
-            validate_reference(&reference)?;
-            Ok(Some(reference))
-        }
-        // `symbolic-ref --quiet` uses status 1 when a symbolic reference does not exist (for
-        // example, a repository without origin/HEAD or a detached HEAD). That is a normal
-        // fallback condition, not a failed audit.
-        Some(1) => Ok(None),
-        Some(_) | None => Err("git-retention-reference-discovery-failed".into()),
-    }
-}
-
-/// Suggest one deterministic retention reference for the worktree review screen.
-///
-/// The remote default branch is preferred when Git has recorded `origin/HEAD`; otherwise the
-/// current symbolic branch is used. This is read-only convenience only: the returned reference
-/// still appears in the review form and the existing exact-plan approval remains mandatory.
-pub fn suggested_retention_references(
-    repository_root: &Path,
-    options: GitWorktreeAuditOptions,
-) -> Result<Vec<String>, String> {
-    validate_options(options)?;
-    if !repository_root.is_absolute() {
-        return Err("git-worktree-repository-root-not-absolute".into());
-    }
-    let repository_root = canonical_real_directory(repository_root)?;
-    ensure_git_admin_metadata_local(&repository_root)?;
-    for symbolic_name in ["refs/remotes/origin/HEAD", "HEAD"] {
-        if let Some(reference) =
-            symbolic_reference(&repository_root, symbolic_name, options.command_timeout_ms)?
-        {
-            // A stale origin/HEAD can survive a remote removal. Only suggest references that the
-            // existing planner can resolve, otherwise fall back to the local symbolic branch.
-            if resolve_reference(&repository_root, &reference, options.command_timeout_ms).is_ok() {
-                return Ok(vec![reference]);
-            }
-        }
-    }
-    Err("git-retention-reference-discovery-unavailable".into())
-}
-
 fn resolve_common_dir(repository_root: &Path, timeout_ms: u64) -> Result<PathBuf, String> {
     let result = run_git(
         repository_root,
@@ -2662,56 +2597,6 @@ mod tests {
         validate_reference("origin/develop").unwrap();
         assert!(validate_reference("--all").is_err());
         assert!(validate_reference("bad\nref").is_err());
-    }
-
-    #[cfg(all(unix, not(coverage)))]
-    #[test]
-    fn suggested_retention_reference_uses_the_current_branch_when_origin_head_is_absent() {
-        let (_temp, repository, _secondary) = temporary_repository();
-        assert_eq!(
-            suggested_retention_references(&repository, GitWorktreeAuditOptions::default())
-                .unwrap(),
-            vec!["main"]
-        );
-    }
-
-    #[cfg(all(unix, not(coverage)))]
-    #[test]
-    fn suggested_retention_reference_prefers_a_resolvable_origin_head() {
-        let (_temp, repository, _secondary) = temporary_repository();
-        git(&repository, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
-        git(
-            &repository,
-            &[
-                "symbolic-ref",
-                "refs/remotes/origin/HEAD",
-                "refs/remotes/origin/main",
-            ],
-        );
-        assert_eq!(
-            suggested_retention_references(&repository, GitWorktreeAuditOptions::default())
-                .unwrap(),
-            vec!["origin/main"]
-        );
-    }
-
-    #[cfg(all(unix, not(coverage)))]
-    #[test]
-    fn suggested_retention_reference_ignores_a_stale_origin_head() {
-        let (_temp, repository, _secondary) = temporary_repository();
-        git(
-            &repository,
-            &[
-                "symbolic-ref",
-                "refs/remotes/origin/HEAD",
-                "refs/remotes/origin/missing",
-            ],
-        );
-        assert_eq!(
-            suggested_retention_references(&repository, GitWorktreeAuditOptions::default())
-                .unwrap(),
-            vec!["main"]
-        );
     }
 
     #[test]

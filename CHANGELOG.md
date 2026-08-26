@@ -8,27 +8,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
-- Show structurally proven regenerable cache entries already in the macOS Trash as read-only review
-  evidence, but withhold destructive approval while the final irreversible deletion primitive cannot
-  stay bound to the exact reviewed filesystem object. The desktop gives the operator a manual macOS
-  Trash next action instead of advertising an in-app permanent-delete capability that is not safe.
-- Bind the reviewed cache-Trash snapshot to each root filesystem identity so pathname-compatible
-  replacements invalidate the review phrase; direct purge attempts fail closed with
-  `cache-trash-identity-bound-permanent-delete-unavailable` and leave the reviewed cache intact.
-- Keep desktop review and mutation scoped to native macOS Trash until equivalent Linux/Windows
-  native review contracts are implemented; the headless CLI may report platform-native Trash
-  evidence read-only, while user files, unrelated Trash entries, and provider placeholders remain
-  outside the candidate set.
-- Exclude browser `Default` profile roots from proven cache candidates because profile roots can
-  contain history, sessions, and login data; only dedicated cache signatures are eligible.
-- Keep cache cleanup guidance focused on what the operator can do next without exposing internal
-  identity or activity-check terminology.
-- Tell the operator that moving files to macOS Trash is reversible and that physical space is
-  reclaimed only after emptying Trash and refreshing storage; the UI does not claim a gain at the
-  move boundary.
-- Let the worktree review form read a resolvable `origin/HEAD` (or fall back to the current branch)
-  as a review-only retention suggestion, while preserving exact-plan approval and live re-audit
-  gates for every removal.
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
   identity cleanup and dependent eviction helpers; the focused authority contract remains green.
 - Add durable private failure records in a separate journal directory and a receipt-bound

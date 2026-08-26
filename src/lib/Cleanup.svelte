@@ -2,10 +2,6 @@
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
   import { verdictBadge } from "./verdictBadge";
-  import { summarizeCacheTrashPurge } from "./cacheTrashPurgeSummary";
-  import { cacheTrashPurgeItemMessage } from "./cacheTrashPurgeItemMessage";
-  import { cacheTrashPurgeAvailability } from "./cacheTrashPurgeAvailability";
-  import { purgeReviewedCacheTrash, reviewProvenCacheTrash } from "./cacheTrashReviewApi";
   import { confirm } from "@tauri-apps/plugin-dialog";
   import GitWorktreeCleanup from "./GitWorktreeCleanup.svelte";
   import BrewCleanup from "./BrewCleanup.svelte";
@@ -14,11 +10,6 @@
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
   let caches: api.CacheCandidate[] = $state([]);
-  let cacheTrash: api.CacheTrashCandidate[] = $state([]);
-  let cacheTrashApprovalPhrase = $state<string | null>(null);
-  let cacheTrashPurgeAvailable = $state(false);
-  let cacheTrashPurgeInstruction = $state<string | null>(null);
-  let cacheTrashExecution: api.CacheTrashPurgeExecution | null = $state(null);
   let artifacts: api.DevArtifact[] = $state([]);
   let selected: Set<string> = $state(new Set());
   let results: api.CleanResult[] = $state([]);
@@ -49,23 +40,10 @@
     loadError = "";
     try {
       caches = await api.listCacheCandidates();
-      try {
-        const cacheTrashReview = await reviewProvenCacheTrash();
-        const purgeAvailability = cacheTrashPurgeAvailability(cacheTrashReview);
-        cacheTrash = cacheTrashReview.candidates;
-        cacheTrashApprovalPhrase = purgeAvailability.canPurge ? cacheTrashReview.approval_phrase : null;
-        cacheTrashPurgeAvailable = purgeAvailability.canPurge;
-        cacheTrashPurgeInstruction = purgeAvailability.instruction;
-      } catch {
-        cacheTrash = [];
-        cacheTrashApprovalPhrase = null;
-        cacheTrashPurgeAvailable = false;
-        cacheTrashPurgeInstruction = "휴지통 상태를 확인하지 못했습니다. 새로고침한 뒤 다시 시도하십시오.";
-      }
       artifacts = scannedRoot ? await api.listDevArtifacts(scannedRoot) : [];
       loadVerdicts(artifacts.map((a) => a.path));
     } catch (e) {
-      loadError = "정리 상태를 확인하지 못했습니다. 다시 시도하십시오.";
+      loadError = String(e);
     }
   }
 
@@ -76,7 +54,7 @@
     try {
       podmanPlan = await api.inspectPodmanReclaim();
     } catch (e) {
-      podmanError = "Podman 상태를 확인하지 못했습니다. 다시 시도하십시오.";
+      podmanError = String(e);
       podmanPlan = null;
     } finally {
       podmanBusy = false;
@@ -95,7 +73,7 @@
   async function prunePodmanDanglingImages() {
     if (!podmanPlan || !podmanPruneReady()) return;
     const okay = await confirm(
-      "확인된 미사용 Podman 이미지만 정리합니다. 사용 중인 환경과 다른 저장 데이터는 건드리지 않습니다.\n\n실행 직전에 이미지 목록을 다시 확인합니다.",
+      "참조 컨테이너가 없고 tag가 없는 Podman 이미지만 삭제합니다. volume·컨테이너·tagged image·VM은 건드리지 않습니다.\n\n실행 직전에 이미지 목록을 다시 읽어 지문을 검증합니다.",
       { title: "DiskSage Podman 정리", kind: "warning" },
     );
     if (!okay) return;
@@ -110,7 +88,7 @@
       podmanPruneRationale = "";
       podmanPlan = await api.inspectPodmanReclaim();
     } catch (e) {
-      podmanPruneError = "Podman 이미지를 정리하지 못했습니다. 상태를 다시 확인하십시오.";
+      podmanPruneError = String(e);
     } finally {
       podmanPruneBusy = false;
     }
@@ -130,7 +108,7 @@
       const targetBytes = targets.reduce((sum, target) => sum + target.bytes, 0);
       const okay = await confirm(
         `${candidate.label}의 직계 캐시 ${targets.length}개(${fmtBytes(targetBytes)})를 휴지통으로 보냅니다.\n\n` +
-          "캐시 위치는 보존하며, 각 항목의 크기와 수정 시각을 다시 확인합니다. 사용 중이거나 안전하게 확인되지 않은 항목은 건너뜁니다. 휴지통에서 복원할 수 있습니다.",
+          "캐시 루트는 보존하며, 각 항목은 객체 지문·크기·수정시각·active-use를 다시 검증합니다. 사용 중이거나 증명이 불완전한 항목은 건너뜁니다. 휴지통에서 복원할 수 있습니다.",
         { title: "DiskSage", kind: "warning" },
       );
       if (!okay) return;
@@ -142,7 +120,7 @@
         await load();
         cacheRetryMessage = "캐시 내용이 바뀌어 최신 목록을 불러왔습니다. 다시 휴지통으로를 눌러 검토하세요.";
       } else {
-        loadError = "캐시를 휴지통으로 보내지 못했습니다. 최신 상태를 확인한 뒤 다시 시도하십시오.";
+        loadError = error;
       }
     } finally {
       busy = false;
@@ -156,41 +134,8 @@
     try {
       results = await api.cleanRegenerableCaches();
       await load();
-    } catch {
-      loadError = "재생성 캐시를 정리하지 못했습니다. 상태를 확인한 뒤 다시 시도하십시오.";
-    } finally {
-      busy = false;
-    }
-  }
-
-  async function purgeProvenCacheTrash() {
-    if (busy || !cacheTrashPurgeAvailable || cacheTrash.length === 0 || cacheTrashApprovalPhrase === null) return;
-    const reviewedCandidates = cacheTrash.map((candidate) => ({ ...candidate }));
-    const bytes = reviewedCandidates.reduce((sum, candidate) => sum + candidate.bytes, 0);
-    const okay = await confirm(
-      `휴지통에 남아 있는 재생성 가능한 캐시 ${reviewedCandidates.length}개(${fmtBytes(bytes)})를 영구 삭제합니다.\n\n` +
-        "이 항목은 복원할 수 없습니다. 사용자 파일과 다른 휴지통 항목은 건드리지 않습니다.",
-      { title: "DiskSage 휴지통 정리", kind: "warning" },
-    );
-    if (!okay) return;
-    const approvalPhrase = cacheTrashApprovalPhrase;
-    if (approvalPhrase === null) return;
-    busy = true;
-    loadError = "";
-    cacheTrashExecution = null;
-    try {
-      cacheTrashExecution = await purgeReviewedCacheTrash(reviewedCandidates, approvalPhrase);
-      await load();
     } catch (e) {
-      if (String(e).includes("cache-trash-confirmation-mismatch")) {
-        cacheTrashApprovalPhrase = null;
-        cacheTrashPurgeAvailable = false;
-        cacheTrash = [];
-        await load();
-        loadError = "휴지통 내용이 바뀌어 최신 목록을 불러왔습니다. 목록을 확인한 뒤 다시 시도하세요.";
-      } else {
-        loadError = "재생성 캐시를 영구 삭제하지 못했습니다. 목록을 다시 확인한 뒤 재시도하세요.";
-      }
+      loadError = String(e);
     } finally {
       busy = false;
     }
@@ -219,13 +164,13 @@
     );
     if (selectedArtifacts.length === 0 || !scannedRoot) return;
     const summary = selectedArtifacts.map(
-      (a) => `${a.path} (${fmtBytes(a.bytes)}, ${a.files}개)`,
+      (a) => `${a.path} (${fmtBytes(a.bytes)}, ${a.files}개) — 메타데이터 지문 ${a.fingerprint.slice(0, 12)}`,
     );
     const okay = await confirm(
       `다음 ${summary.length}개 항목을 휴지통으로 보냅니다 (논리 크기 합계 ${fmtBytes(totalSelected)}):\n\n` +
         summary.slice(0, 15).join("\n") +
         (summary.length > 15 ? `\n… 외 ${summary.length - 15}개` : "") +
-        "\n\n휴지통에서 언제든 복원할 수 있습니다. 표시된 크기와 실제로 늘어나는 저장 공간은 다를 수 있습니다.",
+        "\n\n휴지통에서 언제든 복원할 수 있습니다. 휴지통을 비우기 전에는 물리 공간이 회수되지 않으며, APFS 공유 블록 때문에 실제 회수량은 논리 크기보다 작을 수 있습니다.",
       { title: "DiskSage", kind: "warning" },
     );
     if (!okay) return;
@@ -235,8 +180,8 @@
       results = await api.cleanDevArtifacts(scannedRoot, 30, selectedArtifacts);
       selected = new Set();
       await load();
-    } catch {
-      loadError = "선택한 항목을 휴지통으로 보내지 못했습니다. 상태를 확인한 뒤 다시 시도하십시오.";
+    } catch (e) {
+      loadError = String(e);
     } finally {
       busy = false;
     }
@@ -251,54 +196,14 @@
 
   <h3>캐시</h3>
   <p class="notice" role="status">
-    알려진 캐시 위치 안의 항목만 크기와 수정 시각을 다시 확인한 뒤 휴지통으로 보냅니다. 캐시 위치 자체는 보존됩니다.
+    알려진 캐시 루트의 직계 항목만 객체 지문·크기·수정시각을 재검증한 뒤 휴지통으로 보냅니다. 캐시 루트 자체는 보존됩니다.
   </p>
   <button onclick={cleanRegenerableCaches} disabled={busy}>
     {busy ? "재생성 캐시 확인 중…" : "관측된 재생성 캐시 자동 정리"}
   </button>
   <p class="notice" role="status">
-    재생성할 수 있는 캐시만 대상으로 합니다. 목록을 확인한 뒤 정리 버튼을 누르십시오.
-    사용 중이거나 상태가 바뀐 항목은 자동으로 건너뜁니다.
+    npm·pnpm·Adobe·Edge·uv·Trivy 캐시만 대상으로 하며, 사용 중이거나 증거가 바뀐 항목은 자동으로 건너뜁니다.
   </p>
-  {#if cacheTrashPurgeInstruction}
-    <p class="notice" role="status">{cacheTrashPurgeInstruction}</p>
-  {/if}
-  {#if cacheTrash.length > 0}
-    <div class="trash-cleanup">
-      <p class="notice" role="status">
-        휴지통에 남은 재생성 가능한 캐시 {cacheTrash.length}개({fmtBytes(cacheTrash.reduce((sum, item) => sum + item.bytes, 0))})가
-        확인되었습니다. 항목을 확인한 뒤 macOS 휴지통을 비우면 저장 공간이 회복됩니다.
-      </p>
-      {#if cacheTrashPurgeAvailable}
-        <button onclick={purgeProvenCacheTrash} disabled={busy || cacheTrashApprovalPhrase === null}>
-          {busy ? "휴지통 확인 중…" : cacheTrashApprovalPhrase === null ? "정리 준비 중…" : "재생성 캐시 영구 삭제"}
-        </button>
-      {/if}
-    </div>
-  {/if}
-  {#if cacheTrashExecution}
-    {@const purgeSummary = summarizeCacheTrashPurge(cacheTrashExecution.items)}
-    <div class="notice" role="status">
-      재생성 캐시 {purgeSummary.purgedCount}/{cacheTrashExecution.items.length}개를 영구 삭제했습니다.
-      {cacheTrashExecution.observed_available_gain_bytes === null
-        ? "저장 공간 변화는 확인하지 못했습니다. 시스템 저장 공간에서 직접 확인하세요."
-        : `가용 공간 증가 ${fmtBytes(cacheTrashExecution.observed_available_gain_bytes)}입니다.`}
-      {#if purgeSummary.allSucceeded}
-        모든 재생성 캐시를 영구 삭제했습니다.
-      {:else if purgeSummary.retryableCount > 0}
-        완료되지 않은 {purgeSummary.retryableCount}개 항목은 아래 결과를 확인한 뒤 다시 시도하십시오.
-      {:else if purgeSummary.auditFailedCount > 0}
-        삭제는 완료했지만 일부 처리 상태를 표시하지 못했습니다. 아래 상태를 확인하십시오.
-      {/if}
-    </div>
-    {#if purgeSummary.errors.length > 0}
-      <ul class="errors" aria-label="캐시 영구 삭제 오류">
-        {#each cacheTrashExecution.items.filter((item) => item.error.length > 0) as item (item.path)}
-          <li>{cacheTrashPurgeItemMessage(item)}</li>
-        {/each}
-      </ul>
-    {/if}
-  {/if}
   {#if cacheRetryMessage}<p class="notice" role="status">{cacheRetryMessage}</p>{/if}
   <ul class="list">
     {#each caches as c (c.id)}
@@ -329,7 +234,7 @@
           {a.kind} <em>({a.project}, {a.age_days}일)</em>
           <span class="size">
             {!a.scan_complete
-              ? `${fmtBytes(a.bytes)} · 파일 정보 확인 중`
+              ? `${fmtBytes(a.bytes)} · 메타데이터 스캔 미완료`
               : a.skipped > 0
                 ? `${fmtBytes(a.bytes)} · 읽기 오류 ${a.skipped}`
                 : fmtBytes(a.bytes)}
@@ -355,15 +260,10 @@
       {results.filter((r) => r.ok).length}/{results.length}개 휴지통으로 이동 완료 —
       휴지통에서 복원할 수 있습니다.
     </p>
-    {#if results.some((result) => result.ok)}
-      <p class="notice" role="status">
-        실제 저장 공간을 회수하려면 macOS 휴지통을 확인한 뒤 비우십시오. 비운 뒤 저장 공간을 새로고침해 결과를 확인하십시오.
-      </p>
-    {/if}
     {#if failedResults.length > 0}
       <ul class="errors">
         {#each failedResults as r (r.path)}
-          <li title={r.path}>⚠ {r.path} — 정리하지 못했습니다. 상태를 다시 확인하십시오.</li>
+          <li title={r.path}>⚠ {r.path} — {r.error}</li>
         {/each}
       </ul>
     {/if}
@@ -372,10 +272,10 @@
   <GitWorktreeCleanup {scannedRoot} />
   <BrewCleanup />
 
-  <h3>Podman 저장 공간</h3>
+  <h3>Podman VM 저장소</h3>
   <p class="notice">
-    Podman 저장 공간 상태만 확인합니다. 이 화면에서는 사용 중인 환경이나 일반 파일을 자동으로 정리하지 않습니다.
-    실제 회수량은 확인 후 시스템 저장 공간에서 직접 확인하십시오.
+    게스트·이미지·volume 증거만 읽습니다. prune, 삭제, trim, 중지는 이 화면에서 실행하지 않습니다.
+    실제 물리 회수량은 전후 호스트 관측 없이는 확정하지 않습니다.
   </p>
   <button onclick={inspectPodman} disabled={podmanBusy}>
     {podmanBusy ? "확인 중…" : "Podman 상태 확인"}
@@ -384,45 +284,45 @@
   {#if podmanPlan}
     <div class="podman-evidence" aria-live="polite">
       <p>
-        상태 확인 {podmanPlan.evidence_complete ? "완료" : "부분 완료"} ·
-        사용 가능한 공간 {podmanPlan.guest_filesystem ? fmtBytes(podmanPlan.guest_filesystem.available_bytes) : "확인 불가"} ·
-        정리 가능 공간 {podmanPlan.assessment.podman_reported_reclaimable_bytes === null
+        {podmanPlan.evidence_complete ? "증거 완전" : "증거 불완전"} ·
+        게스트 여유 {podmanPlan.guest_filesystem ? fmtBytes(podmanPlan.guest_filesystem.available_bytes) : "확인 불가"} ·
+        보고 reclaimable {podmanPlan.assessment.podman_reported_reclaimable_bytes === null
           ? "미확인"
           : fmtBytes(podmanPlan.assessment.podman_reported_reclaimable_bytes)}
       </p>
       {#if podmanPlan.unused_images}
-        <p>미사용 이미지 {podmanPlan.unused_images.unused_records}개 · 후보 합계 {fmtBytes(podmanPlan.unused_images.candidate_record_size_sum)}</p>
+        <p>미사용 이미지 {podmanPlan.unused_images.unused_records}개 · exact record 합계 {fmtBytes(podmanPlan.unused_images.candidate_record_size_sum)}</p>
       {/if}
       {#if podmanPlan.dangling_prune_approval_phrase}
         <div class="podman-prune">
-          <p>사용하지 않는 이미지 중 안전하게 확인된 항목만 정리할 수 있습니다.</p>
-          <label>확인 문구
+          <p>dangling 이미지(무tag·참조 컨테이너 0)만 실행 대상으로 확인되었습니다.</p>
+          <label>정확한 승인 문구
             <input bind:value={podmanPrunePhrase} placeholder={podmanPlan.dangling_prune_approval_phrase} disabled={podmanPruneBusy} />
           </label>
           <label>정리 사유
-            <textarea bind:value={podmanPruneRationale} maxlength="1000" placeholder="예: 다시 만들 수 있는 미사용 이미지라 정리함" disabled={podmanPruneBusy}></textarea>
+            <textarea bind:value={podmanPruneRationale} maxlength="1000" placeholder="예: 재생성 가능한 미사용 dangling 이미지라 정리함" disabled={podmanPruneBusy}></textarea>
           </label>
           <button onclick={prunePodmanDanglingImages} disabled={!podmanPruneReady()}>
-            {podmanPruneBusy ? "상태를 다시 확인한 뒤 이미지 정리 중…" : "확인된 미사용 이미지 정리"}
+            {podmanPruneBusy ? "재검증 후 dangling 이미지 정리 중…" : "dangling 이미지 정리"}
           </button>
           {#if podmanPruneError}<p class="error" role="alert">{podmanPruneError}</p>{/if}
         </div>
       {/if}
       {#if podmanPruneExecution}
         <p class="notice">
-          {podmanPruneExecution.executed ? "이미지 정리를 완료했습니다." : "이미지 정리를 완료하지 못했습니다."}
-          저장 공간 증가 {podmanPruneExecution.observed_available_gain_bytes === null
-            ? "미확인 — 시스템 저장 공간에서 직접 확인하십시오."
+          실행 결과: {podmanPruneExecution.executed ? "성공" : `실패(${podmanPruneExecution.status_code})`} ·
+          호스트 가용 공간 증가 관측 {podmanPruneExecution.observed_available_gain_bytes === null
+            ? "미확인"
             : fmtBytes(podmanPruneExecution.observed_available_gain_bytes)}
         </p>
       {/if}
       {#if podmanPlan.system_df}
-        <p>연결되지 않은 저장 공간 후보 {fmtBytes(podmanPlan.system_df.local_volumes.reclaimable_bytes)}</p>
+        <p>연결 없는 volume 후보 {fmtBytes(podmanPlan.system_df.local_volumes.reclaimable_bytes)}</p>
       {/if}
       {#if podmanPlan.assessment.recommended_actions.length > 0}
         <ul class="errors">
           {#each podmanPlan.assessment.recommended_actions as action (action.kind)}
-            <li>추가 확인이 필요한 항목입니다. 상태를 확인한 뒤 진행하십시오.</li>
+            <li>{action.kind}: {action.rationale}</li>
           {/each}
         </ul>
       {/if}
@@ -441,7 +341,6 @@
   .path { color: #999; font-size: 0.8rem; overflow-wrap: anywhere; text-align: right; }
   .disabled { color: #aaa; }
   .notice { color: #555; font-size: 0.9rem; }
-  .trash-cleanup { display: grid; gap: 0.5rem; }
   .error, .errors { color: #b00; }
   .errors { font-size: 0.85rem; }
   .podman-evidence { margin-top: 0.75rem; padding: 0.75rem; border: 1px solid #b7c6d8; border-radius: 4px; background: #f8fafc; }

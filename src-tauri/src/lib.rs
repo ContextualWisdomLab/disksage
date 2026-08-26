@@ -7,11 +7,11 @@ mod dupes;
 #[cfg_attr(coverage, allow(dead_code))]
 mod commands;
 #[cfg_attr(coverage, allow(dead_code))]
+mod generic_cleanup;
+#[cfg_attr(coverage, allow(dead_code))]
 mod node_navigation;
 #[cfg_attr(coverage, allow(dead_code))]
 pub mod cache_cleanup;
-#[cfg_attr(coverage, allow(dead_code))]
-pub mod cache_trash_reclaim;
 #[cfg_attr(coverage, allow(dead_code))]
 mod scanner;
 #[cfg_attr(coverage, allow(dead_code))]
@@ -113,11 +113,9 @@ pub fn run() {
             commands::top_files,
             commands::list_cache_candidates,
             commands::clean_regenerable_caches,
-            cache_trash_reclaim::review_proven_cache_trash,
-            cache_trash_reclaim::purge_proven_cache_trash,
             cache_cleanup::list_cache_targets,
             commands::list_dev_artifacts,
-            commands::clean_paths,
+            generic_cleanup::fail_closed_clean_paths,
             cache_cleanup::clean_cache_contents,
             commands::clean_dev_artifacts,
             commands::recent_operations,
@@ -148,7 +146,6 @@ pub fn run() {
             commands::inspect_cloud_roots,
             commands::plan_icloud_local_copy_eviction,
             commands::evict_icloud_local_copy,
-            commands::suggest_git_worktree_references,
             commands::plan_stale_git_worktrees,
             commands::remove_stale_git_worktrees,
             commands::list_cloud_provider_connections,

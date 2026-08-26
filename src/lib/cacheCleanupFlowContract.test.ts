@@ -12,41 +12,20 @@ function readSource(path: string): string {
 describe("cache cleanup execution boundary", () => {
   it("keeps cache mutation behind one fail-closed backend authority", () => {
     const cleanup = readSource("src/lib/Cleanup.svelte");
-    const purgeItemMessage = readSource("src/lib/cacheTrashPurgeItemMessage.ts");
     const backend = readSource("src-tauri/src/cache_cleanup.rs");
     const tauri = readSource("src-tauri/src/lib.rs");
 
     expect(cleanup).toContain("api.listCacheTargets(candidate.path)");
     expect(cleanup).toContain("api.cleanCacheContents(candidate.path, targets)");
     expect(cleanup).toContain("api.cleanRegenerableCaches()");
-    expect(cleanup).toContain("reviewProvenCacheTrash()");
-    expect(cleanup).toContain("purgeReviewedCacheTrash(reviewedCandidates, approvalPhrase)");
-    expect(cleanup).toContain("summarizeCacheTrashPurge(cacheTrashExecution.items)");
-    expect(cleanup).toContain("purgeSummary.purgedCount");
-    expect(cleanup).toContain("purgeSummary.retryableCount");
-    expect(cleanup).toContain("purgeSummary.auditFailedCount");
-    expect(cleanup).toContain("cacheTrashPurgeItemMessage(item)");
-    expect(purgeItemMessage).toContain("영구 삭제는 완료했지만 정리 기록을 남기지 못했습니다");
-    expect(purgeItemMessage).toContain("영구 삭제하지 못했습니다");
-    expect(cleanup).toContain("cache-trash-confirmation-mismatch");
-    expect(cleanup).toContain("휴지통 내용이 바뀌어 최신 목록을 불러왔습니다");
-    expect(cleanup).toContain("observed_available_gain_bytes");
-    expect(cleanup).toContain("각 항목의 크기와 수정 시각을 다시 확인합니다");
-    expect(cleanup).toContain("재생성할 수 있는 캐시만 대상으로 합니다");
-    expect(cleanup).toContain("실제 저장 공간을 회수하려면 macOS 휴지통을 확인한 뒤 비우십시오");
-    expect(cleanup).toContain("비운 뒤 저장 공간을 새로고침해 결과를 확인하십시오");
-    expect(cleanup).not.toContain("active-use");
-    expect(cleanup).not.toContain("증거가 바뀐 항목");
+    expect(cleanup).toContain("객체 지문·크기·수정시각");
+    expect(cleanup).toContain("npm·pnpm·Adobe·Edge·uv·Trivy 캐시만 대상으로");
     expect(backend).toContain("pub fn clean_cache_contents(");
     expect(backend).toContain("cache-cleanup-targets-stale");
     expect(backend).toContain("trash_delete_if_identity(");
-    expect(backend).toContain("pub fn proven_cache_trash_snapshot(");
-    expect(backend).toContain("snapshot: &CacheTrashSnapshot");
     expect(tauri).toContain("cache_cleanup::clean_cache_contents");
     expect(tauri).toContain("cache_cleanup::list_cache_targets");
     expect(tauri).toContain("commands::clean_regenerable_caches");
-    expect(tauri).toContain("cache_trash_reclaim::review_proven_cache_trash");
-    expect(tauri).toContain("cache_trash_reclaim::purge_proven_cache_trash");
   });
 
   it("surfaces an actionable status when a cache candidate has no direct cleanup targets", () => {

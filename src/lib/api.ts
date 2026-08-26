@@ -38,28 +38,6 @@ export interface CacheTarget {
   modified_ms: number;
   object_id: string;
 }
-export interface CacheTrashCandidate {
-  name: string;
-  path: string;
-  bytes: number;
-  signature: string;
-}
-export interface CacheTrashPurgeResult {
-  name: string;
-  path: string;
-  bytes: number;
-  signature: string;
-  purged: boolean;
-  error: string;
-}
-export interface CacheTrashPurgeExecution {
-  schema_kind: "disksage.cache-trash-purge";
-  schema_version: number;
-  items: CacheTrashPurgeResult[];
-  before_available_bytes: number | null;
-  after_available_bytes: number | null;
-  observed_available_gain_bytes: number | null;
-}
 export interface DevArtifact {
   path: string;
   kind: string;
@@ -1241,8 +1219,6 @@ export const planStaleGitWorktrees = (
   repositoryRoot,
   retentionReferences,
 });
-export const suggestGitWorktreeReferences = (repositoryRoot: string) =>
-  invoke<string[]>("suggest_git_worktree_references", { repositoryRoot });
 export const removeStaleGitWorktrees = (
   repositoryRoot: string,
   retentionReferences: string[],
