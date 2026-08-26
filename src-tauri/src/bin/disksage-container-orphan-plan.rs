@@ -57,7 +57,7 @@ fn run() -> Result<(), String> {
                 return Ok(());
             }
             Some(_) => return Err(format!("unknown option\n{USAGE}")),
-            None => return Err("non-UTF-8 argument\n{USAGE}".to_string()),
+            None => return Err(format!("non-UTF-8 argument\n{USAGE}")),
         }
     }
     let runtime = runtime.ok_or_else(|| format!("--runtime is required\n{USAGE}"))?;
