@@ -3,6 +3,7 @@
   import { fmtBytes } from "./fmt";
   import { verdictBadge } from "./verdictBadge";
   import { summarizeCacheTrashPurge } from "./cacheTrashPurgeSummary";
+  import { cacheTrashPurgeItemMessage } from "./cacheTrashPurgeItemMessage";
   import { cacheTrashPurgeAvailability } from "./cacheTrashPurgeAvailability";
   import { purgeReviewedCacheTrash, reviewProvenCacheTrash } from "./cacheTrashReviewApi";
   import { confirm } from "@tauri-apps/plugin-dialog";
@@ -282,7 +283,7 @@
     {#if purgeSummary.errors.length > 0}
       <ul class="errors" aria-label="캐시 영구 삭제 오류">
         {#each cacheTrashExecution.items.filter((item) => item.error.length > 0) as item (item.path)}
-          <li>{item.name}: 정리 기록을 남기지 못했습니다. 목록을 확인한 뒤 다시 시도하십시오.</li>
+          <li>{cacheTrashPurgeItemMessage(item)}</li>
         {/each}
       </ul>
     {/if}

@@ -21,7 +21,7 @@ describe("cache cleanup execution boundary", () => {
     expect(cleanup).toContain("reviewProvenCacheTrash()");
     expect(cleanup).toContain("purgeReviewedCacheTrash(reviewedCandidates, approvalPhrase)");
     expect(cleanup).toContain("summarizeCacheTrashPurge(cacheTrashExecution.items)");
-    expect(cleanup).toContain("정리 기록을 남기지 못했습니다");
+    expect(cleanup).toContain("cacheTrashPurgeItemMessage(item)");
     expect(cleanup).toContain("cache-trash-confirmation-mismatch");
     expect(cleanup).toContain("휴지통 내용이 바뀌어 최신 목록을 불러왔습니다");
     expect(cleanup).toContain("observed_available_gain_bytes");

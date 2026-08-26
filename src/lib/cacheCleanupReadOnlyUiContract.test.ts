@@ -26,6 +26,8 @@ describe("cache cleanup fail-closed UX", () => {
     expect(cleanup).toContain('cacheTrashPurgeAvailability } from "./cacheTrashPurgeAvailability"');
     expect(cleanup).toContain("cacheTrashPurgeInstruction = purgeAvailability.instruction");
     expect(cleanup).toContain("cacheTrashApprovalPhrase = purgeAvailability.canPurge ? cacheTrashReview.approval_phrase : null");
+    expect(cleanup).toContain('import { cacheTrashPurgeItemMessage } from "./cacheTrashPurgeItemMessage"');
+    expect(cleanup).toContain("cacheTrashPurgeItemMessage(item)");
     expect(cleanup).toContain("{#if cacheTrashPurgeInstruction}");
     expect(cleanup).toContain("{:else if cacheTrash.length > 0}");
   });
