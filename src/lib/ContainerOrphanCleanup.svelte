@@ -1,6 +1,10 @@
 <script lang="ts">
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
+  import {
+    containerOrphanInspectErrorMessage,
+    containerOrphanPruneErrorMessage,
+  } from "./containerOrphanErrorFeedback";
   import { confirm } from "@tauri-apps/plugin-dialog";
 
   let plans: api.ContainerOrphanPlan[] = $state([]);
@@ -53,11 +57,8 @@
       executions = {};
     } catch (error) {
       plans = [];
-      // 고객 다음 행동을 돕는 문구만 노출하고 내부 오류 상세는 진단 로그로 남깁니다.
-      loadError =
-        typeof error === "string" && error.length > 0
-          ? `런타임 확인 실패 — 잠시 후 다시 시도해 주세요. (${error.slice(0, 160)})`
-          : "런타임 확인 실패 — 잠시 후 다시 시도해 주세요.";
+      // Backend diagnostics may contain local paths/runtime stderr. Keep customer feedback opaque.
+      loadError = containerOrphanInspectErrorMessage(error);
     } finally {
       busy = false;
     }
@@ -90,14 +91,7 @@
       phrases = {};
       rationales = {};
     } catch (error) {
-      const detail = typeof error === "string" ? error : "알 수 없는 오류";
-      pruneErrors[key] = detail.startsWith("orphan-prune-confirmation-mismatch")
-        ? "승인 문구가 최신 증거와 일치하지 않습니다. 새로 확인한 뒤 문구를 다시 입력해 주세요."
-        : detail.startsWith("orphan-prune-empty-candidate-set")
-          ? "삭제 대상이 사라졌습니다. 다시 확인해 주세요."
-          : detail.startsWith("orphan-prune-evidence-incomplete")
-            ? "증거가 불완전해 실행이 중단되었습니다. 런타임 상태를 확인한 뒤 다시 시도해 주세요."
-            : `정리 실행 실패 — 데이터는 그대로입니다. (${detail.slice(0, 160)})`;
+      pruneErrors[key] = containerOrphanPruneErrorMessage(error);
       delete executions[key];
     } finally {
       pruneBusyKey = null;
