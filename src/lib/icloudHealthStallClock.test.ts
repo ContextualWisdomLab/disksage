@@ -186,6 +186,20 @@ describe("iCloud health stall clock", () => {
     ).blockedSinceMs).toBe(700);
   });
 
+  it("uses local probe time when the first blocked report has no timestamps", () => {
+    const next = report(activity(), {
+      observed_at_ms: 0,
+      admission_blocked_since_ms: null,
+    });
+
+    expect(updateIcloudHealthStallClock(
+      null,
+      { blockedSinceMs: 0, fingerprint: "" },
+      next,
+      2_000,
+    ).blockedSinceMs).toBe(2_000);
+  });
+
   it("adopts a persisted blocker age supplied after the first poll", () => {
     const previous = report(activity(), { admission_blocked_since_ms: null });
     const fingerprint = icloudHealthStallClockFingerprint(previous);

@@ -72,9 +72,8 @@ export function updateIcloudHealthStallClock(
     || admissionFingerprint(previousReport) !== admissionFingerprint(next);
   if (admissionChanged) {
     return {
-      blockedSinceMs: previousReport
-        ? next.admission_blocked_since_ms ?? next.observed_at_ms
-        : next.admission_blocked_since_ms ?? next.observed_at_ms,
+      blockedSinceMs: next.admission_blocked_since_ms
+        ?? (next.observed_at_ms > 0 ? next.observed_at_ms : observedAtMs),
       fingerprint,
     };
   }
@@ -98,7 +97,8 @@ export function updateIcloudHealthStallClock(
   return {
     blockedSinceMs: previousClock.blockedSinceMs > 0
       ? previousClock.blockedSinceMs
-      : next.admission_blocked_since_ms ?? next.observed_at_ms,
+      : next.admission_blocked_since_ms
+        ?? (next.observed_at_ms > 0 ? next.observed_at_ms : observedAtMs),
     fingerprint,
   };
 }
