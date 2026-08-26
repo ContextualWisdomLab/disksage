@@ -59,6 +59,10 @@ fn provider_identity_path(path: &Path, traversal_root: &Path, identity_root: &Pa
         .unwrap_or_else(|_| path.to_path_buf())
 }
 
+fn is_windows_icloud_drive_root(path: &Path, home_root: &Path) -> bool {
+    path == home_root.join("iCloud Drive")
+}
+
 fn is_managed_provider_root_with_home(
     path: &Path,
     traversal_root: &Path,
@@ -97,7 +101,12 @@ fn is_managed_provider_root_with_home(
                 .file_name()
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| name == "OneDrive" || name.starts_with("OneDrive - "));
-        return (is_known_root || is_named_account_root) && path.starts_with(traversal_root);
+        #[cfg(windows)]
+        let is_windows_icloud_root = is_windows_icloud_drive_root(path, home_root);
+        #[cfg(not(windows))]
+        let is_windows_icloud_root = false;
+        return (is_known_root || is_named_account_root || is_windows_icloud_root)
+            && path.starts_with(traversal_root);
     }
 }
 
@@ -120,18 +129,20 @@ fn keep_scan_entry(
     if !keep_entry(entry) {
         return false;
     }
-    let is_provider_root = provider_home.is_some_and(|home| {
-        let identity_path =
-            provider_identity_path(entry.path(), traversal_root, provider_identity_root);
-        is_managed_provider_root_with_home(
-            &identity_path,
-            provider_identity_root,
-            Some(home),
-        )
-    });
-    if entry.file_type().is_dir() && is_provider_root {
-        provider_roots_skipped.set(provider_roots_skipped.get().saturating_add(1));
-        return false;
+    if entry.file_type().is_dir() {
+        let is_provider_root = provider_home.is_some_and(|home| {
+            let identity_path =
+                provider_identity_path(entry.path(), traversal_root, provider_identity_root);
+            is_managed_provider_root_with_home(
+                &identity_path,
+                provider_identity_root,
+                Some(home),
+            )
+        });
+        if is_provider_root {
+            provider_roots_skipped.set(provider_roots_skipped.get().saturating_add(1));
+            return false;
+        }
     }
     true
 }
@@ -331,6 +342,19 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn windows_icloud_drive_identity_is_home_level_only() {
+        let home_root = Path::new("/synthetic-home");
+        assert!(is_windows_icloud_drive_root(
+            &home_root.join("iCloud Drive"),
+            home_root,
+        ));
+        assert!(!is_windows_icloud_drive_root(
+            &home_root.join("Projects").join("iCloud Drive"),
+            home_root,
+        ));
+    }
+
     #[cfg(windows)]
     #[test]
     fn windows_verbatim_provider_identity_prunes_onedrive() {
@@ -345,6 +369,23 @@ mod tests {
             &identity_root,
             Some(&identity_root),
         ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_icloud_drive_root_is_pruned() {
+        let tmp = tempfile::tempdir().unwrap();
+        let provider_root = tmp.path().join("iCloud Drive");
+        fs::create_dir_all(&provider_root).unwrap();
+        write(&provider_root.join("placeholder.bin"), 4096);
+        write(&tmp.path().join("local.bin"), 7);
+
+        let result = scan_with_home(tmp.path(), tmp.path());
+
+        assert_eq!(result.stats.files, 1);
+        assert_eq!(result.stats.bytes, 7);
+        assert_eq!(result.stats.skipped, 1);
+        assert!(!result.dir_sizes.contains_key(&provider_root));
     }
 
     #[test]
