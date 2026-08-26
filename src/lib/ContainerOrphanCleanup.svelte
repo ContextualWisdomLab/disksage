@@ -76,8 +76,9 @@
     const key = categoryKey(planKey(plan), category);
     const cat = plan.categories.find((item) => item.category === category);
     if (!cat?.approval_phrase) return;
-    const phrase = cat.approval_phrase;
+    const typedPhrase = phrases[key]?.trim();
     const rationale = rationales[key]?.trim();
+    if (!typedPhrase || typedPhrase !== cat.approval_phrase) return;
     if (!rationale || pruneBusyKey !== null) return;
     const granted = await confirm(
       `${CATEGORY_LABELS[category]}만 삭제합니다.\n\n${CATEGORY_HINTS[category]}\n\n실행 직전 목록을 다시 읽어 승인 문구(지문)를 재검증합니다. 이후 휴지통 없이 되돌릴 수 없습니다.`,
@@ -90,7 +91,7 @@
         plan.runtime.kind,
         executionScope(plan.runtime.kind),
         category,
-        phrase,
+        typedPhrase,
         rationale,
       );
       // 실행 후 계획을 폐기해 만료된 승인 문구로 재실행되지 않게 합니다.
