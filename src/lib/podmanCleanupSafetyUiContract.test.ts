@@ -8,7 +8,13 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
 describe("Podman cleanup customer copy", () => {
   it("describes storage checks without exposing machine or image-maintenance jargon", () => {
     const source = readFileSync(resolve(repositoryRoot, "src/lib/Cleanup.svelte"), "utf8");
-    const visible = source.slice(source.indexOf("</script>"), source.indexOf("<style>"));
+    const scriptEnd = source.indexOf("</script>");
+    const styleStart = source.indexOf("<style>");
+
+    expect(scriptEnd).toBeGreaterThanOrEqual(0);
+    expect(styleStart).toBeGreaterThan(scriptEnd);
+
+    const visible = source.slice(scriptEnd, styleStart);
 
     expect(visible).toContain("Podman 저장 공간");
     expect(visible).toContain("사용 가능한 공간");
