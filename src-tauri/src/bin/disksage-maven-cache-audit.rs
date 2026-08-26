@@ -12,6 +12,7 @@ use disksage_lib::private_evidence::{
 };
 
 const MAX_MAVEN_CACHE_ENTRIES: u64 = 2_000_000;
+const MAX_MAVEN_CACHE_OUTPUT_ITEMS: usize = 10_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Args {
@@ -115,6 +116,16 @@ fn parse_args_os(args: &[OsString]) -> Result<Args, String> {
     if !(1..=MAX_MAVEN_CACHE_ENTRIES).contains(&max_entries) {
         return Err(format!(
             "--max-entries는 1..={MAX_MAVEN_CACHE_ENTRIES} 범위여야 함"
+        ));
+    }
+    if max_candidates > MAX_MAVEN_CACHE_OUTPUT_ITEMS {
+        return Err(format!(
+            "--max-candidates는 0..={MAX_MAVEN_CACHE_OUTPUT_ITEMS} 범위여야 함"
+        ));
+    }
+    if max_issues > MAX_MAVEN_CACHE_OUTPUT_ITEMS {
+        return Err(format!(
+            "--max-issues는 0..={MAX_MAVEN_CACHE_OUTPUT_ITEMS} 범위여야 함"
         ));
     }
     Ok(Args {
