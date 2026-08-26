@@ -160,7 +160,7 @@
   .report { display: grid; gap: 0.55rem; padding: 0.75rem; border: 1px solid #72889c; border-radius: 4px; background: #f7fafc; }
   .approval { display: grid; gap: 0.55rem; justify-items: start; padding: 0.7rem; border: 1px solid #b78335; border-radius: 4px; background: #fffaf1; }
   .approval code { max-width: min(60rem, 90vw); overflow-wrap: anywhere; user-select: all; }
-  label { display: grid; gap: 0.2rem; font-size: 0.82rem; color: #4d5660; }
+  label { display: grid; gap: 0.2rem; font-size: 0.82rem; color: var(--ds-text-muted); }
   textarea { width: min(60rem, 90vw); min-height: 3.5rem; resize: vertical; }
   .muted { color: var(--ds-text-muted); margin: 0; }
   .warning { color: #8a5700; margin: 0; }

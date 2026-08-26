@@ -260,7 +260,7 @@
   .worktree-panel { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #b7c6d8; display: grid; gap: 0.55rem; }
   .inputs { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end; }
   .inputs label { flex: 1 1 30rem; }
-  label { display: grid; gap: 0.2rem; font-size: 0.82rem; color: #4d5660; }
+  label { display: grid; gap: 0.2rem; font-size: 0.82rem; color: var(--ds-text-muted); }
   .path-input, .references, .confirmation { width: min(60rem, 90vw); font-family: ui-monospace, monospace; }
   .references { min-height: 4rem; }
   .confirmation { min-height: 4.5rem; }

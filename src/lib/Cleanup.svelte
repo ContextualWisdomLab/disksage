@@ -346,7 +346,7 @@
   .size { color: #666; font-variant-numeric: tabular-nums; margin-left: 0.5rem; }
   .path { color: var(--ds-text-muted); font-size: 0.8rem; overflow-wrap: anywhere; text-align: right; }
   .disabled { color: #aaa; }
-  .notice { color: #555; font-size: 0.9rem; }
+  .notice { color: var(--ds-text-muted); font-size: 0.9rem; }
   .error, .errors { color: #b00; }
   .errors { font-size: 0.85rem; }
   .podman-evidence { margin-top: 0.75rem; padding: 0.75rem; border: 1px solid #b7c6d8; border-radius: 4px; background: #f8fafc; }

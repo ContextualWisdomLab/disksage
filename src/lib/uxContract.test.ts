@@ -53,6 +53,19 @@ describe("UI/UX design and Storybook contract", () => {
     expect(providerStatus).toContain("h1, h2 { margin: 0; font-size: 1.1rem; }");
   });
 
+  it("keeps form labels and notices readable in dark mode", () => {
+    for (const relativePath of [
+      "src/lib/CloudArchive.svelte",
+      "src/lib/BrewCleanup.svelte",
+      "src/lib/GitWorktreeCleanup.svelte",
+      "src/lib/Cleanup.svelte",
+      "src/lib/OrphanCleanup.svelte",
+    ]) {
+      const source = read(relativePath);
+      expect(source).not.toMatch(/(?:label|\.notice)[^{}]*color:\s*#(?:555|4d5660)\b/);
+    }
+  });
+
   it("rejects a bare-control sizing regression instead of passing vacuously", () => {
     const unsafeCss = `
 button,

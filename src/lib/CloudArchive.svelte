@@ -1920,7 +1920,7 @@
   .controls { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: end; }
   .provider-auth { display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 0.5rem 0; }
   .oauth-panel { margin-top: 0.75rem; padding: 0.75rem; border: 1px solid #b7c6d8; border-radius: 4px; background: #f6f9fc; display: grid; gap: 0.45rem; justify-items: start; }
-  label { display: grid; gap: 0.2rem; font-size: 0.8rem; color: #555; }
+  label { display: grid; gap: 0.2rem; font-size: 0.8rem; color: var(--ds-text-muted); }
   select { max-width: 32rem; }
   input { width: 7rem; }
   .provider-auth input { width: min(32rem, 75vw); }
