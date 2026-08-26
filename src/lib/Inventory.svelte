@@ -37,9 +37,9 @@
       const rules = await api.getUserRules();
       userRulesCount = rules.length;
       userRulesError = "";
-    } catch (e) {
+    } catch {
       userRulesCount = null;
-      userRulesError = String(e);
+      userRulesError = "개인 정리 기준을 불러오지 못했습니다. 설정을 확인한 뒤 다시 시도하세요.";
     }
   }
 
@@ -54,8 +54,8 @@
       await loadUserRules();
       // 미분류 확장자 인사이트: 비차단(fire-and-forget) — 실패해도 인벤토리 표시를 막지 않음
       api.reasonUnknownExtensions(report.unknown_samples).then((r) => (insights = r)).catch(() => {});
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "저장 공간 요약을 불러오지 못했습니다. 스캔 범위를 확인한 뒤 다시 시도하세요.";
     } finally {
       busy = false;
     }
@@ -74,8 +74,8 @@
     try {
       await api.downloadModel();
       await loadModel();
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "파일 분류 지원을 준비하지 못했습니다. 다시 시도하세요.";
     } finally {
       modelBusy = false;
     }
@@ -87,8 +87,8 @@
     summaryBusy = true;
     try {
       summary = await api.summarizeUnknownBucket(report?.unknown_samples ?? []);
-    } catch (e) {
-      summary = String(e);
+    } catch {
+      summary = "미분류 파일 요약을 불러오지 못했습니다. 파일 목록을 확인하세요.";
     } finally {
       summaryLoaded = true;
       summaryBusy = false;
@@ -111,18 +111,18 @@
 
 <section>
   <h2>
-    인벤토리 {scannedRoot ? "" : "(먼저 스캔하세요)"}
-    <button onclick={load} disabled={busy || !scannedRoot}>{busy ? "집계 중…" : "인벤토리 집계"}</button>
+    저장 공간 요약 {scannedRoot ? "" : "(먼저 스캔하세요)"}
+    <button onclick={load} disabled={busy || !scannedRoot}>{busy ? "집계 중…" : "저장 공간 집계"}</button>
   </h2>
   {#if loadError}<p class="error">{loadError}</p>{/if}
 
   <div class="model-status">
     {#if model?.present}
-      <span>모델: {model.name} ✓</span>
+      <span>파일 분류 지원 ✓</span>
     {:else}
-      <button onclick={doDownload} disabled={modelBusy}>{modelBusy ? "다운로드 중…" : "모델 다운로드"}</button>
+      <button onclick={doDownload} disabled={modelBusy}>{modelBusy ? "분류 지원 준비 중…" : "파일 분류 지원 준비"}</button>
     {/if}
-    <span class="muted small">판정은 참고용(자문)입니다 — 모델 없이도 규칙 기반으로 전체 기능이 동작합니다.</span>
+    <span class="muted small">자동 분류는 참고용입니다. 결과를 확인한 뒤 다음 작업을 선택하세요.</span>
   </div>
 
   <Settings />
@@ -148,7 +148,7 @@
           <div class="unknown-summary">
             <button onclick={summarizeUnknown} disabled={summaryBusy}>{summaryBusy ? "요약 중…" : "요약 보기"}</button>
             {#if summaryLoaded}
-              <span class="summary-text">{summary ?? "미판정 (모델 없음)"}</span>
+              <span class="summary-text">{summary ?? "자동 요약을 사용할 수 없습니다. 파일 목록을 확인하세요."}</span>
             {/if}
           </div>
           {#if insights.length > 0}
@@ -168,13 +168,12 @@
     {#if issues !== null}
       <div class="coherence">
         {#if issues.length === 0}
-          <span class="ok small">온톨로지 정합 ✓</span>
+          <span class="ok small">파일 분류 기준 확인 완료 ✓</span>
         {:else}
           <ul class="issues">
             {#each issues as i}
               <li class="warn">
-                불충족 클래스: {i.UnsatisfiableClass.class}
-                (분리 공리: {i.UnsatisfiableClass.via_disjoint[0]} ↔ {i.UnsatisfiableClass.via_disjoint[1]})
+                파일 분류 기준을 확인하지 못했습니다. 결과를 직접 확인한 뒤 다시 시도하세요.
               </li>
             {/each}
           </ul>
@@ -183,9 +182,9 @@
     {/if}
 
     {#if userRulesCount}
-      <p class="ok small">사용자 규칙 {userRulesCount}개 적용 중</p>
+      <p class="ok small">개인 정리 기준 {userRulesCount}개 적용 중</p>
     {:else if userRulesError}
-      <p class="warn small">규칙 파일 오류: {userRulesError}</p>
+      <p class="warn small">{userRulesError}</p>
     {/if}
   {/if}
 </section>

@@ -24,6 +24,11 @@ const screens = [
   "src/lib/Cleanup.svelte",
   "src/lib/GitWorktreeCleanup.svelte",
   "src/lib/Organize.svelte",
+  "src/lib/Inventory.svelte",
+  "src/lib/Settings.svelte",
+  "src/lib/Duplicates.svelte",
+  "src/lib/TopFiles.svelte",
+  "src/lib/Treemap.svelte",
 ];
 const cloudOperations = [
   "initialize", "preview", "review", "copy", "cancel", "provider-api-copy", "adopt", "attest",
@@ -35,7 +40,11 @@ function visibleText(path: string): string {
   let source = readFileSync(resolve(repositoryRoot, path), "utf8");
   source = source.replace(/<script[\s\S]*?<\/script>/gi, "");
   source = source.replace(/<style[\s\S]*?<\/style>/gi, "");
-  source = source.replace(/<[^>]+>/g, " ");
+  source = source.replace(/<[^>]+>/g, (tag) =>
+    [...tag.matchAll(/\b(?:aria-label|title|placeholder|alt)=["']([^"']*)["']/gi)]
+      .map((match) => match[1])
+      .join(" "),
+  );
   for (let pass = 0; pass < 3; pass += 1) source = source.replace(/\{[^{}]*\}/g, " ");
   return source.replace(/\s+/g, " ").trim();
 }
