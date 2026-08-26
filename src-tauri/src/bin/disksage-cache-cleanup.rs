@@ -108,11 +108,17 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
         return Ok(());
     };
     if !args.execute {
-        let cache_trash = if args.purge_proven_cache_trash {
-            serde_json::to_value(proven_cache_trash_snapshot(&home_directory()?))
-                .map_err(|error| error.to_string())?
+        let (cache_trash, cache_trash_snapshot) = if args.purge_proven_cache_trash {
+            let snapshot = proven_cache_trash_snapshot(&home_directory()?);
+            let candidates =
+                serde_json::to_value(&snapshot.candidates).map_err(|error| error.to_string())?;
+            let snapshot = serde_json::to_value(snapshot).map_err(|error| error.to_string())?;
+            (candidates, snapshot)
         } else {
-            serde_json::Value::Array(Vec::new())
+            (
+                serde_json::Value::Array(Vec::new()),
+                serde_json::Value::Null,
+            )
         };
         println!(
             "{}",
@@ -121,6 +127,7 @@ fn run_with_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<(), Str
                 "journal_path": args.journal_path,
                 "purge_proven_cache_trash": args.purge_proven_cache_trash,
                 "proven_cache_trash": cache_trash,
+                "proven_cache_trash_snapshot": cache_trash_snapshot,
                 "notice": "pass --execute to perform the guarded OS-Trash operation"
             })
         );
