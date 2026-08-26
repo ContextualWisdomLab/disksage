@@ -167,7 +167,8 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 
 ## 2026-08-26 physical reclaim loop
 
-- PR #263 (`50a897e75dbc0cec4e02b284da2e5cda03ab5511`, base `2a727dab04cd6bd73c68d75c54c3e1563bcb16ca`)
+- PR #263 implementation head (`080274fc0b99017bda47bd7d17d18ac2698691e9`, base
+  `2a727dab04cd6bd73c68d75c54c3e1563bcb16ca`; documentation follow-up `baaa99f67e9d14894cd4268d0b06f65692bdb214`)
   closes the physical-reclaim gap after cache cleanup: the desktop cleanup screen lists only
   regenerable cache entries already in OS Trash, requires a native confirmation, permanently
   removes only those revalidated entries, and reports the observed before/after available-space
@@ -176,6 +177,9 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - The exact-head PR is open with auto-merge enabled, but hosted checks are still queued or running
   and no qualifying independent approval is recorded. This is not merge evidence; protected merge
   remains blocked until the current head has green required checks and a fresh approval.
+- A terminal journal-write failure after removal now remains attached to that item's result, so an
+  irreversible deletion is never hidden behind a generic all-or-nothing error; the audit gap stays
+  visible for follow-up instead of being mistaken for a successful complete journal.
 - Local verification for the implementation passed 135 frontend tests, `svelte-check` with zero
   diagnostics, 749 Rust library tests (one ignored), and `git diff --check`. Rebuildable temporary
   `src-tauri/target` and `node_modules` artifacts were removed from the temporary checkout after
