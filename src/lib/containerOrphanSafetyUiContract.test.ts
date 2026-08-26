@@ -31,6 +31,19 @@ describe("Container orphan cleanup safety UX", () => {
     expect(pruneReady).toContain("(rationales[categoryKey(key, category)]?.trim().length ?? 0) > 0");
   });
 
+  it("submits the exact user-typed approval phrase to the mutation boundary", () => {
+    const source = readSource("src/lib/ContainerOrphanCleanup.svelte");
+    const start = source.indexOf("async function prune(");
+    const end = source.indexOf("</script>", start);
+    const pruneBody = source.slice(start, end);
+
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(pruneBody).toContain("const typedPhrase = phrases[key]?.trim();");
+    expect(pruneBody).toContain("if (!typedPhrase || typedPhrase !== cat.approval_phrase) return;");
+    expect(pruneBody).toMatch(/category,\s*typedPhrase,\s*rationale,/);
+    expect(pruneBody).not.toContain("const phrase = cat.approval_phrase;");
+  });
+
   it("never recovers mutation scope from public display metadata", () => {
     const source = readSource("src/lib/ContainerOrphanCleanup.svelte");
     const start = source.indexOf("function executionScope(");
