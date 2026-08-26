@@ -156,9 +156,19 @@ pub(crate) fn trash_directory(home: &Path) -> Option<PathBuf> {
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
+        // XDG_DATA_HOME belongs to the configured user home. Tests and callers that
+        // inspect an alternate home must remain hermetic and use that home's default.
+        let xdg_data_home = std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .filter(|_| {
+                std::env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .is_some_and(|configured_home| configured_home == home)
+            });
         return Some(
-            home.join(".local")
-                .join("share")
+            xdg_data_home
+                .unwrap_or_else(|| home.join(".local").join("share"))
                 .join("Trash")
                 .join("files"),
         );
