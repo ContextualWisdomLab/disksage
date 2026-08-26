@@ -34,29 +34,37 @@ identity-bound discipline that governs worktree removal and cache cleanup must a
      proves zero attached endpoints, bounded at 64 probes per audit.
 4. Every execution requires a fresh re-audit at execution time; the approval phrase embeds a
    SHA-256 fingerprint of the exact sorted candidate identity set. A stale phrase, empty
-   candidate set, or incomplete evidence aborts before any mutation.
-5. The known TOCTOU window between pre-execution audit and prune is minimized by the fresh
-   re-audit and disclosed in the module documentation; the receipt records command output
-   verbatim plus before/after host free-space observation. Physical reclaim remains
-   attribution-weak and is never claimed as proof.
+   candidate set, incomplete evidence, duplicate identity, or candidate set above the bounded
+   exact-delete limit aborts before any mutation.
+5. Mutation uses only exact identities produced by that fresh audit (`container rm`, `image rm`,
+   `volume rm`, or `network rm`). Category-wide `prune --force` is forbidden because a resource
+   that becomes orphaned after the audit is not part of the approved fingerprinted set. Candidate
+   identities remain private execution state: serialized plans and receipts expose only the
+   fingerprint and a redacted `<candidate-set>` command marker.
+6. The receipt records bounded command output plus before/after host free-space observation.
+   Physical reclaim remains attribution-weak and is never claimed as proof.
 
 ## Consequences
 
 - Positive: one mental model and one UI surface cover Docker, Colima, and Podman; evidence
   and receipts are schema-compatible with the existing Podman plan.
-- Negative: per-category pruning uses the runtime's own prune command, so it removes all
-  currently-orphaned resources of that category rather than an exact subset. This matches
-  the existing dangling-image boundary and is why the approval phrase binds to the full
-  candidate set instead of individual IDs.
+- Positive: approval and deletion authority now refer to the same exact resource identities;
+  resources that become orphaned after the fresh audit cannot be swept into the mutation.
+- Negative: exact deletion is capped at 64 candidates per category per execution so command
+  length and mutation scope remain bounded. Larger candidate sets fail closed and must be
+  reduced before a new audited execution.
 - Neutral: no Figma redesign was required; the panel reuses Cleanup-screen patterns. If the
   Cleanup information architecture is redesigned later, record the Figma File ID in the
   superseding ADR first.
 
 ## Rejected alternatives
 
-- Per-ID selective deletion (`docker rm <id>` loops): rejected because partial success
-  mid-loop leaves ambiguous state without improving safety over a verified whole-category
-  prune with a bound candidate set.
+- Whole-category prune (`docker ... prune --force`, Podman equivalent): rejected because the
+  runtime can delete a resource that becomes orphaned after the re-audit but was never part of
+  the approved candidate fingerprint.
+- Per-ID shell loops: rejected because repeated independent process launches enlarge partial-
+  success ambiguity. DiskSage instead submits the bounded exact identity set in one runtime
+  invocation and records the bounded result.
 - Trusting cached UI plans: rejected; stale plans are the primary footgun this design
   eliminates via mandatory re-audit.
 - Auto-detecting Colima by spawning the `colima` binary: rejected to keep the runtime
@@ -64,9 +72,12 @@ identity-bound discipline that governs worktree removal and cache cleanup must a
 
 ## Evidence
 
-- Rust unit tests: 31 focused tests covering envelope tolerance, ID normalization,
-  classification fail-closed branches, network endpoint inspection shapes, fingerprint
-  order-independence, scope validation, and prefix construction.
-- Frontend contract tests: 6 tests binding visible copy to non-target guarantees, exact
-  phrase + rationale gating, confirmation dialog, post-execution state invalidation, and
-  assistive-technology announcements with actionable copy only.
+- Rust unit tests cover envelope tolerance, ID normalization, classification fail-closed
+  branches, network endpoint inspection shapes, fingerprint order-independence, scope
+  validation, exact-delete candidate bounds, and redacted command construction.
+- Runtime integration tests execute a fake Docker boundary and require an approved container
+  execution to invoke `container rm <fingerprinted-id>` while explicitly rejecting any
+  category-wide `prune` invocation.
+- Frontend contract tests bind visible copy to non-target guarantees, exact phrase + rationale
+  gating, confirmation dialog, post-execution state invalidation, and assistive-technology
+  announcements with actionable copy only.
