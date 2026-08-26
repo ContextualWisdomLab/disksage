@@ -56,8 +56,10 @@ pub fn sanitize_execution(
 mod tests {
     use super::*;
     use crate::container_orphan_reclaim::{
-        ContainerRuntimeKind, OrphanCategory, RuntimeHealthEvidence,
+        probe_container_orphans, ContainerRuntimeKind, ContainerRuntimeTarget, OrphanCategory,
+        RuntimeHealthEvidence,
     };
+    use std::path::PathBuf;
 
     #[test]
     fn public_plan_keeps_only_stable_runtime_issue_codes() {
@@ -86,13 +88,38 @@ mod tests {
     }
 
     #[test]
-    fn public_execution_never_returns_runtime_output() {
+    fn public_plan_never_returns_runtime_scope_name() {
+        let secret_scope = "customer-colima-secret";
+        let target = ContainerRuntimeTarget::new(
+            ContainerRuntimeKind::DockerColimaContext,
+            PathBuf::from("__disksage_missing_runtime__"),
+            Some(secret_scope.into()),
+        )
+        .unwrap();
+
+        let sanitized = sanitize_plan(probe_container_orphans(&target));
+        let json = serde_json::to_string(&sanitized).unwrap();
+
+        assert!(!json.contains(secret_scope));
+    }
+
+    #[test]
+    fn public_execution_never_returns_runtime_output_or_local_identity() {
+        let secret_binary = "/Users/customer/private/bin/docker";
+        let secret_scope = "customer-colima-secret";
         let execution = ContainerOrphanPruneExecution {
             schema_version: 1,
-            runtime_display_name: "docker (docker-native)".into(),
+            runtime_display_name: format!("docker {secret_scope}"),
             category: OrphanCategory::Container,
             candidate_set_sha256: "a".repeat(64),
-            command: vec!["docker".into(), "container".into(), "rm".into(), "<candidate-set>".into()],
+            command: vec![
+                secret_binary.into(),
+                "--context".into(),
+                secret_scope.into(),
+                "container".into(),
+                "rm".into(),
+                "<candidate-set>".into(),
+            ],
             status_code: 1,
             stdout: "container-secret-id".into(),
             stderr: "/Users/customer/private.sock".into(),
@@ -105,8 +132,11 @@ mod tests {
             rationale: "Reviewed exact evidence.".into(),
         };
         let sanitized = sanitize_execution(execution);
+        let json = serde_json::to_string(&sanitized).unwrap();
         assert!(sanitized.stdout.is_empty());
         assert!(sanitized.stderr.is_empty());
+        assert!(!json.contains(secret_binary));
+        assert!(!json.contains(secret_scope));
     }
 
     #[test]
