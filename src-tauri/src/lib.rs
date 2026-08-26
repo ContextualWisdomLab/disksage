@@ -50,6 +50,7 @@ pub mod cloud_adr;
 pub mod cloud_plan_view;
 pub mod cloud_local_inventory;
 pub mod cloud_local_eviction;
+#[cfg(not(coverage))]
 pub mod cloud_local_eviction_batch;
 #[cfg(not(coverage))]
 pub mod cloud_eviction;
@@ -105,6 +106,7 @@ pub fn run() {
             commands::list_roots,
             commands::start_scan,
             commands::cancel_scan,
+            commands::cancel_cloud_copy,
             node_navigation::get_node_secure,
             commands::top_files,
             commands::list_cache_candidates,
