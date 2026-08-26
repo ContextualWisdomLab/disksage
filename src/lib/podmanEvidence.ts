@@ -362,7 +362,7 @@ export async function loadPodmanEvidence(
 /** Derive stable user-facing state labels without granting any cleanup authority. */
 export function podmanEvidenceView(evidence: PodmanDesktopEvidence): PodmanEvidenceView {
   return {
-    completeness_label: evidence.evidence_complete ? "증거 완전" : "부분 증거",
+    completeness_label: evidence.evidence_complete ? "확인 완료" : "확인 불완전",
     completeness_tone: evidence.evidence_complete ? "complete" : "partial",
     physical_reclaim_label:
       evidence.physically_reclaimable_bytes === null
@@ -372,11 +372,11 @@ export function podmanEvidenceView(evidence: PodmanDesktopEvidence): PodmanEvide
       ? "이미지 별도 검토 필요"
       : "이미지 검토 신호 없음",
     container_review_label: evidence.review_boundaries.stopped_container_review_required
-      ? "중지 컨테이너 별도 검토 필요"
-      : "중지 컨테이너 검토 신호 없음",
+      ? "중지된 작업 별도 확인 필요"
+      : "중지된 작업 확인 사항 없음",
     volume_review_label: evidence.review_boundaries.volume_review_required
-      ? "볼륨 별도 검토 필요"
-      : "볼륨 검토 신호 없음",
+      ? "저장 공간 별도 확인 필요"
+      : "저장 공간 확인 사항 없음",
     has_issues: evidence.issue_codes.length > 0,
   };
 }

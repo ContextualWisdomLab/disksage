@@ -188,11 +188,11 @@ describe("podmanEvidenceView", () => {
   it("labels complete evidence while keeping physical reclaim unknown", () => {
     const evidence = parsePodmanDesktopEvidence(fixture());
     expect(podmanEvidenceView(evidence)).toMatchObject({
-      completeness_label: "증거 완전",
+      completeness_label: "확인 완료",
       physical_reclaim_label: "검증되지 않음",
       image_review_label: "이미지 별도 검토 필요",
-      container_review_label: "중지 컨테이너 별도 검토 필요",
-      volume_review_label: "볼륨 별도 검토 필요",
+      container_review_label: "중지된 작업 별도 확인 필요",
+      volume_review_label: "저장 공간 별도 확인 필요",
     });
   });
 });
