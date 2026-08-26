@@ -7,6 +7,7 @@ use crate::cache_cleanup::{CacheTrashCandidate, CacheTrashPurgeExecution, CacheT
 const REVIEW_SCHEMA_KIND: &str = "disksage.cache-trash-review";
 const REVIEW_SCHEMA_VERSION: u32 = 1;
 const MAX_APPROVED_CANDIDATES: usize = 9;
+const PERMANENT_DELETE_UNAVAILABLE: &str = "cache-trash-identity-bound-permanent-delete-unavailable";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -99,14 +100,14 @@ fn macos_review(home: &Path) -> CacheTrashReview {
     candidates.retain(|candidate| {
         crate::safety::filesystem_object_id(Path::new(&candidate.path)).is_ok()
     });
-    let approval_phrase = (!candidates.is_empty()).then(|| approval_phrase_for_candidates(&candidates));
+    let notice = (!candidates.is_empty()).then(|| PERMANENT_DELETE_UNAVAILABLE.into());
     CacheTrashReview {
         schema_kind: REVIEW_SCHEMA_KIND.into(),
         schema_version: REVIEW_SCHEMA_VERSION,
         supported: true,
         candidates,
-        approval_phrase,
-        notice: None,
+        approval_phrase: None,
+        notice,
     }
 }
 
@@ -171,7 +172,7 @@ fn permanently_remove_identity_bound(
     if actual != expected_object_id {
         return Err("cache-trash-approved-candidate-changed".into());
     }
-    Err("cache-trash-identity-bound-permanent-delete-unavailable".into())
+    Err(PERMANENT_DELETE_UNAVAILABLE.into())
 }
 
 /// Evaluate only candidates in the operator-reviewed snapshot.
