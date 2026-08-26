@@ -96,6 +96,13 @@ rejects symlinks, rechecks the signature immediately before removal, and writes 
 for both the pending and terminal outcome. This path never empties the Trash generally and never
 applies to user files or cloud-provider placeholders.
 
+The desktop cleanup screen exposes the same two-step lifecycle: it lists the proven cache entries
+already in Trash, then requires a native confirmation before calling the narrow purge command.
+The screen reports the count and observed bytes rather than exposing structural signatures, captures
+filesystem available-space observations around the purge when the native probe succeeds, and
+refreshes the read-only list after execution so the operator can verify what remains. A missing
+before/after observation never becomes a claim that physical capacity was recovered.
+
 ## References
 
 - [ADR-0001: Provider evidence drives the cloud-offload Goal](0001-cloud-offload-goal-state.md)

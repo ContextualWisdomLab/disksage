@@ -18,6 +18,9 @@ describe("cache cleanup execution boundary", () => {
     expect(cleanup).toContain("api.listCacheTargets(candidate.path)");
     expect(cleanup).toContain("api.cleanCacheContents(candidate.path, targets)");
     expect(cleanup).toContain("api.cleanRegenerableCaches()");
+    expect(cleanup).toContain("api.listProvenCacheTrash()");
+    expect(cleanup).toContain("api.purgeProvenCacheTrash()");
+    expect(cleanup).toContain("observed_available_gain_bytes");
     expect(cleanup).toContain("객체 지문·크기·수정시각");
     expect(cleanup).toContain("npm·pnpm·Adobe·Edge·uv·Trivy 캐시만 대상으로");
     expect(backend).toContain("pub fn clean_cache_contents(");
@@ -26,6 +29,8 @@ describe("cache cleanup execution boundary", () => {
     expect(tauri).toContain("cache_cleanup::clean_cache_contents");
     expect(tauri).toContain("cache_cleanup::list_cache_targets");
     expect(tauri).toContain("commands::clean_regenerable_caches");
+    expect(tauri).toContain("commands::list_proven_cache_trash");
+    expect(tauri).toContain("commands::purge_proven_cache_trash");
   });
 
   it("surfaces an actionable status when a cache candidate has no direct cleanup targets", () => {

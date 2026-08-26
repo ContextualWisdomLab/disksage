@@ -10,6 +10,8 @@
   let { scannedRoot }: { scannedRoot: string | null } = $props();
 
   let caches: api.CacheCandidate[] = $state([]);
+  let cacheTrash: api.CacheTrashCandidate[] = $state([]);
+  let cacheTrashExecution: api.CacheTrashPurgeExecution | null = $state(null);
   let artifacts: api.DevArtifact[] = $state([]);
   let selected: Set<string> = $state(new Set());
   let results: api.CleanResult[] = $state([]);
@@ -40,6 +42,7 @@
     loadError = "";
     try {
       caches = await api.listCacheCandidates();
+      cacheTrash = await api.listProvenCacheTrash();
       artifacts = scannedRoot ? await api.listDevArtifacts(scannedRoot) : [];
       loadVerdicts(artifacts.map((a) => a.path));
     } catch (e) {
@@ -141,6 +144,28 @@
     }
   }
 
+  async function purgeProvenCacheTrash() {
+    if (busy || cacheTrash.length === 0) return;
+    const bytes = cacheTrash.reduce((sum, candidate) => sum + candidate.bytes, 0);
+    const okay = await confirm(
+      `휴지통에 남아 있는 재생성 가능한 캐시 ${cacheTrash.length}개(${fmtBytes(bytes)})를 영구 삭제합니다.\n\n` +
+        "이 항목은 복원할 수 없습니다. 사용자 파일과 다른 휴지통 항목은 건드리지 않습니다.",
+      { title: "DiskSage 휴지통 정리", kind: "warning" },
+    );
+    if (!okay) return;
+    busy = true;
+    loadError = "";
+    cacheTrashExecution = null;
+    try {
+      cacheTrashExecution = await api.purgeProvenCacheTrash();
+      await load();
+    } catch (e) {
+      loadError = String(e);
+    } finally {
+      busy = false;
+    }
+  }
+
   function toggle(set: Set<string>, key: string) {
     const next = new Set(set);
     next.has(key) ? next.delete(key) : next.add(key);
@@ -204,6 +229,27 @@
   <p class="notice" role="status">
     npm·pnpm·Adobe·Edge·uv·Trivy 캐시만 대상으로 하며, 사용 중이거나 증거가 바뀐 항목은 자동으로 건너뜁니다.
   </p>
+  {#if cacheTrash.length > 0}
+    <div class="trash-cleanup">
+      <p class="notice" role="status">
+        휴지통에 남은 재생성 가능한 캐시 {cacheTrash.length}개({fmtBytes(cacheTrash.reduce((sum, item) => sum + item.bytes, 0))})가
+        확인되었습니다. 영구 삭제하면 실제 저장 공간을 회수할 수 있습니다.
+      </p>
+      <button onclick={purgeProvenCacheTrash} disabled={busy}>
+        {busy ? "휴지통 확인 중…" : "재생성 캐시 영구 삭제"}
+      </button>
+    </div>
+  {/if}
+  {#if cacheTrashExecution}
+    {@const purged = cacheTrashExecution.items.filter((item) => item.purged).length}
+    <p class="notice" role="status">
+      재생성 캐시 {purged}/{cacheTrashExecution.items.length}개를 영구 삭제했습니다.
+      {cacheTrashExecution.observed_available_gain_bytes === null
+        ? "전후 저장 공간은 확인하지 못했습니다."
+        : `가용 공간 증가 ${fmtBytes(cacheTrashExecution.observed_available_gain_bytes)}입니다.`}
+      실패한 항목은 다시 확인하십시오.
+    </p>
+  {/if}
   {#if cacheRetryMessage}<p class="notice" role="status">{cacheRetryMessage}</p>{/if}
   <ul class="list">
     {#each caches as c (c.id)}
@@ -341,6 +387,7 @@
   .path { color: #999; font-size: 0.8rem; overflow-wrap: anywhere; text-align: right; }
   .disabled { color: #aaa; }
   .notice { color: #555; font-size: 0.9rem; }
+  .trash-cleanup { display: grid; gap: 0.5rem; }
   .error, .errors { color: #b00; }
   .errors { font-size: 0.85rem; }
   .podman-evidence { margin-top: 0.75rem; padding: 0.75rem; border: 1px solid #b7c6d8; border-radius: 4px; background: #f8fafc; }

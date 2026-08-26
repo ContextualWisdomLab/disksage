@@ -111,6 +111,8 @@ pub fn run() {
             commands::top_files,
             commands::list_cache_candidates,
             commands::clean_regenerable_caches,
+            commands::list_proven_cache_trash,
+            commands::purge_proven_cache_trash,
             cache_cleanup::list_cache_targets,
             commands::list_dev_artifacts,
             commands::clean_paths,

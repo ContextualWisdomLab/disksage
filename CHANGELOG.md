@@ -8,6 +8,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Show regenerable cache entries that are already in the Trash and let the operator permanently
+  remove only those structurally proven entries, so moving a cache to Trash can be followed by
+  an explicit action that actually releases local capacity. User files and unrelated Trash items
+  remain outside this action, each removal is revalidated and journaled, and the UI reports the
+  observed before/after available-space change when the filesystem provides it.
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
   identity cleanup and dependent eviction helpers; the focused authority contract remains green.
 - Add durable private failure records in a separate journal directory and a receipt-bound
