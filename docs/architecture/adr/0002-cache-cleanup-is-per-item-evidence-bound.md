@@ -23,10 +23,9 @@ collected independently for each reviewed child with bounded, path-local `lsof` 
 - an inactive child may be moved through DiskSage's identity-bound OS-Trash path;
 - the cache root and all unrelated children remain untouched;
 - the operation is journaled; the normal path never permanently deletes cache content.
-- a separate, explicit --purge-proven-cache-trash path may permanently remove only direct
-  OS-Trash children whose exact known cache name and structural signature are revalidated, whose
-  bounded tree contains no symlink, and whose deletion is journaled as pending/ok/error. No
-  arbitrary Trash entry, cloud placeholder, or user-file candidate qualifies.
+- a separate cache-Trash review may surface structurally proven direct children of the native macOS
+  Trash, but it does **not** grant permanent-delete authority while the final irreversible deletion
+  primitive is pathname-recursive rather than bound to the exact reviewed filesystem object.
 
 This per-item probe is the authoritative cleanup boundary. A live process elsewhere under the
 same cache root must not prevent reclaiming an independently inactive entry, and it must never be
@@ -38,8 +37,8 @@ treated as evidence that the inactive entry is safe without its own probe.
 - Changed, replaced, symlinked, or unreadable entries fail closed before they reach the OS Trash.
 - The normal operation is reversible through the OS Trash; physical space is not claimed until the
   user empties that Trash, and APFS shared blocks may make physical reclaim smaller than logical
-  size. The explicit proven-cache purge is irreversible by design and is limited to cache data
-  already placed in Trash.
+  size. DiskSage may identify proven cache entries already in Trash, but in-app permanent deletion
+  remains disabled until the final irreversible deletion primitive itself is object-bound.
 - Cache cleanup does not create cloud-copy receipts, provider-sync evidence, or source-eviction
   permits. User files still require the cloud-offload ADR and its provider evidence gates.
 
@@ -47,8 +46,11 @@ treated as evidence that the inactive entry is safe without its own probe.
 
 - **Root-wide active-use probe:** safe but unnecessarily blocks unrelated inactive entries.
 - **Direct recursive deletion of live cache roots:** not reversible and cannot prove per-entry
-  identity at mutation time. Permanent deletion is allowed only for a structurally proven cache
-  already in OS Trash through the separate explicit flag.
+  identity at mutation time.
+- **Pathname-recursive deletion after an identity check or staging rename:** rejected because a
+  same-user replacement can still occur between the last identity check and the final recursive
+  pathname deletion. Until an exact-object-bound irreversible primitive exists, the operation must
+  fail closed and preserve the reviewed cache.
 - **Copying caches to iCloud/OneDrive/Google Drive:** wastes cloud capacity for reproducible data and
   conflates cache cleanup with user-file lineage.
 
@@ -86,32 +88,33 @@ not user-file lineage, and sending them through a stalled provider would consume
 space. The provider process, Finder copy, CloudDocs database, cloud objects, and user files remained
 untouched. This observation is bound to source head `e71ecd13e8c91acf10093271fd58414cae5fe349`.
 
-## Incident policy: proven cache Trash purge
+## Incident policy: proven cache Trash review
 
-When the OS Trash itself contains the exact regenerable cache directories observed during this
-incident, DiskSage may expose them as read-only candidates and permanently remove them only when
-the operator passes --execute --purge-proven-cache-trash. The candidate scanner accepts only the
-known direct names/signatures for npm, pnpm, Edge, uv, and Trivy caches; it bounds traversal,
-rejects symlinks, rechecks the signature immediately before removal, and writes a journal record
-for both the pending and terminal outcome. This path never empties the Trash generally and never
-applies to user files or cloud-provider placeholders.
+When the native macOS Trash contains the exact regenerable cache directories observed during this
+incident, DiskSage may expose them as read-only candidates. The scanner accepts only known direct
+names/signatures for npm, pnpm, Edge, uv, and Trivy caches, bounds traversal, rejects symlinks, and
+binds the reviewed snapshot to each candidate root filesystem identity. Linux and Windows are not
+silently treated as `~/.Trash`; the feature remains explicitly scoped to native macOS Trash until
+those platforms have native enumeration contracts.
 
-The desktop cleanup screen exposes the same two-step lifecycle: it lists the proven cache entries
-already in Trash, then requires a native confirmation before calling the narrow purge command.
-The screen reports the count and observed bytes rather than exposing structural signatures, captures
-filesystem available-space observations around the purge when the native probe succeeds, and
-refreshes the read-only list after execution so the operator can verify what remains. A missing
-before/after observation never becomes a claim that physical capacity was recovered.
-The desktop command also requires a candidate-set-bound approval phrase generated from the current
-proven list; a changed Trash set invalidates the phrase before any deletion. If a pending or terminal
-journal write fails, the affected item is returned as an explicit failed result while earlier
-deletions remain visible, so a partial operation is never reported as an unqualified success.
-If a terminal journal write fails after an item was removed, the item result keeps `purged=true`
-and carries the journal error so the caller cannot mistake a partial audit failure for an all-or-
-nothing operation or silently lose the deletion outcome.
+The desktop cleanup screen shows the proven cache entries and their observed bytes, but the backend
+mints no destructive approval phrase while the final irreversible deletion primitive is not bound
+to the exact reviewed object. The UI therefore does not render an in-app permanent-delete action;
+it tells the operator to inspect and empty the macOS Trash manually when physical capacity must be
+reclaimed. A direct purge attempt also returns
+`cache-trash-identity-bound-permanent-delete-unavailable` and leaves the candidate intact. This
+fail-closed state is intentional: checking an inode/device identity and then invoking
+`remove_dir_all(path)` is not sufficient because a same-user pathname replacement can occur between
+the check and the irreversible recursive deletion.
+
+If a future implementation adds an exact-object-bound permanent-delete primitive, it must retain the
+current candidate-set snapshot, root-identity binding, immediate revalidation, per-item journaling,
+non-expansion of authority, and explicit operator confirmation before the UI can expose destructive
+authority again.
 
 ## References
 
 - [ADR-0001: Provider evidence drives the cloud-offload Goal](0001-cloud-offload-goal-state.md)
 - `src-tauri/src/cache_cleanup.rs`
+- `src-tauri/src/cache_trash_reclaim.rs`
 - `src-tauri/src/rules.rs`
