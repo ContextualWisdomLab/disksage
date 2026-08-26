@@ -62,10 +62,13 @@ pub(crate) fn is_managed_provider_root(path: &Path, traversal_root: &Path) -> bo
     {
         // Check the directory's immediate parent rather than only the relative path. This also
         // protects scans that start at `~/Library` (where `Library` is outside `relative`).
-        let is_macos_provider_root = matches!(
-            path.file_name().and_then(|name| name.to_str()),
-            Some("CloudStorage" | "Mobile Documents")
-        );
+        let file_name = path.file_name().and_then(|name| name.to_str());
+        if file_name == Some("Google Drive") {
+            // Older Google Drive for macOS installs used this home-level root.
+            return true;
+        }
+        let is_macos_provider_root =
+            matches!(file_name, Some("CloudStorage" | "Mobile Documents"));
         return is_macos_provider_root
             && path
                 .parent()
@@ -358,6 +361,22 @@ mod tests {
         write(&library.join("local.bin"), 7);
 
         let result = scan_dir(&library, &AtomicBool::new(false), noop);
+
+        assert_eq!(result.stats.files, 1);
+        assert_eq!(result.stats.bytes, 7);
+        assert_eq!(result.stats.skipped, 1);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn legacy_google_drive_root_is_pruned() {
+        let tmp = tempfile::tempdir().unwrap();
+        let provider_root = tmp.path().join("Google Drive");
+        fs::create_dir_all(&provider_root).unwrap();
+        write(&provider_root.join("dataless-placeholder.bin"), 4096);
+        write(&tmp.path().join("local.bin"), 7);
+
+        let result = scan_dir(tmp.path(), &AtomicBool::new(false), noop);
 
         assert_eq!(result.stats.files, 1);
         assert_eq!(result.stats.bytes, 7);
