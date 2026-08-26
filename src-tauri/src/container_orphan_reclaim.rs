@@ -13,9 +13,8 @@
 //! 2. Every execution requires a fresh audit at execution time; the approval phrase embeds
 //!    a SHA-256 fingerprint of the exact sorted candidate identity set.
 //! 3. Running or paused containers are never candidates. Built-in networks
-//!    (`bridge`, `host`, `none`, `podman`) are never candidates. Tagged images are never
-//!    pruned: image deletion only targets untagged images that reference zero containers,
-//!    matching the existing Podman dangling-image boundary.
+//!    (`bridge`, `host`, `none`, `podman`) are never candidates. Image deletion targets only
+//!    full identities returned by each runtime's authoritative `dangling=true` image filter.
 //! 4. Mutation targets only the exact identities observed by the fresh audit. Category-wide
 //!    `prune` commands are never used, so a resource that becomes orphaned after the audit cannot
 //!    be swept into the approved mutation set.
@@ -163,7 +162,7 @@ impl ContainerRuntimeTarget {
 pub enum OrphanCategory {
     /// Stopped containers (`exited`/`created`/`dead`/`stopped` states).
     Container,
-    /// Untagged images referencing zero containers (dangling images).
+    /// Runtime-reported dangling images.
     Image,
     /// Dangling volumes not referenced by any container.
     Volume,
@@ -432,7 +431,7 @@ fn parse_image_records(output: &str) -> Result<Vec<ImageRecord>, String> {
     }
     let mut records = Vec::with_capacity(values.len());
     for value in values {
-        let raw_id = string_field(&value, &["ID", "Id"])?;
+        let raw_id = string_field(&value, &["ID", "Id", "id"])?;
         let id = normalize_hex_id(&raw_id, "image")?;
         let mut tags = Vec::new();
         for tag_key in ["RepoTags", "RepoDigests"] {
@@ -879,7 +878,14 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                 ]);
             }
             OrphanCategory::Image => {
-                args.extend(["images", "--all", "--format", "json"]);
+                args.extend([
+                    "images",
+                    "--filter",
+                    "dangling=true",
+                    "--no-trunc",
+                    "--format",
+                    "json",
+                ]);
             }
             OrphanCategory::Volume => {
                 args.extend([
@@ -927,12 +933,17 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                 )
             }
             OrphanCategory::Image => {
+                // Podman's documented `dangling=true` filter is the authority predicate.
+                // Its JSON example exposes lowercase full `id` and numeric `size`, while a
+                // container-reference count is not guaranteed to be serialized. Bind every
+                // filtered full identity and retain the reported size only as evidence.
                 let records = parse_image_records(&output)?;
-                let (total, candidates) = classify_image_candidates(&records)?;
+                let total = u64::try_from(records.len())
+                    .map_err(|_| "record-count-overflow".to_string())?;
                 let candidate_ids: Vec<String> =
-                    candidates.iter().map(|candidate| candidate.id.clone()).collect();
+                    records.iter().map(|record| record.id.clone()).collect();
                 let ids: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
-                let size_sum = candidates.iter().try_fold(0u64, |sum, record| {
+                let size_sum = records.iter().try_fold(0u64, |sum, record| {
                     sum.checked_add(record.size_bytes)
                         .ok_or_else(|| "size-overflow".to_string())
                 })?;
