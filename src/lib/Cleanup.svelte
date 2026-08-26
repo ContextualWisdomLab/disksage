@@ -2,6 +2,7 @@
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
   import { verdictBadge } from "./verdictBadge";
+  import { summarizeCacheTrashPurge } from "./cacheTrashPurgeSummary";
   import { confirm } from "@tauri-apps/plugin-dialog";
   import GitWorktreeCleanup from "./GitWorktreeCleanup.svelte";
   import BrewCleanup from "./BrewCleanup.svelte";
@@ -250,26 +251,25 @@
     </div>
   {/if}
   {#if cacheTrashExecution}
-    {@const purged = cacheTrashExecution.items.filter((item) => item.purged && item.error === "").length}
-    {@const errors = cacheTrashExecution.items.filter((item) => item.error !== "")}
+    {@const purgeSummary = summarizeCacheTrashPurge(cacheTrashExecution.items)}
     <div class="notice" role="status">
-      재생성 캐시 {purged}/{cacheTrashExecution.items.length}개를 영구 삭제했습니다.
+      재생성 캐시 {purgeSummary.successfulCount}/{cacheTrashExecution.items.length}개를 영구 삭제했습니다.
       {cacheTrashExecution.observed_available_gain_bytes === null
         ? "저장 공간 변화는 확인하지 못했습니다. 시스템 저장 공간에서 직접 확인하세요."
         : `가용 공간 증가 ${fmtBytes(cacheTrashExecution.observed_available_gain_bytes)}입니다.`}
-      {#if errors.length > 0}
-        <ul class="errors">
-          {#each errors as item (item.path)}
-            <li>{item.name}: 정리 기록을 남기지 못했습니다. 목록을 확인한 뒤 다시 시도하십시오.</li>
-          {/each}
-        </ul>
-      {/if}
-      {#if purged < cacheTrashExecution.items.length}
-        삭제되지 않은 항목은 위 목록에서 확인한 뒤 다시 시도하십시오.
-      {:else if errors.length === 0}
+      {#if purgeSummary.allSucceeded}
         모든 재생성 캐시를 영구 삭제했습니다.
+      {:else}
+        완료되지 않은 항목은 아래 결과를 확인한 뒤 다시 시도하십시오.
       {/if}
     </div>
+    {#if purgeSummary.errors.length > 0}
+      <ul class="errors" aria-label="캐시 영구 삭제 오류">
+        {#each cacheTrashExecution.items.filter((item) => item.error.length > 0) as item (item.path)}
+          <li>{item.name}: 정리 기록을 남기지 못했습니다. 목록을 확인한 뒤 다시 시도하십시오.</li>
+        {/each}
+      </ul>
+    {/if}
   {/if}
   {#if cacheRetryMessage}<p class="notice" role="status">{cacheRetryMessage}</p>{/if}
   <ul class="list">
