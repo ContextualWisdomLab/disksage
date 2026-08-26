@@ -7,6 +7,7 @@ const MULTIPART_ARCHIVE: &str = include_str!("../src/multipart_archive.rs");
 const INCOMPLETE_DOWNLOAD: &str = include_str!("../src/incomplete_download.rs");
 const RECOVERY: &str = include_str!("../src/incomplete_download_recovery.rs");
 const MATERIALIZATION: &str = include_str!("../src/incomplete_download_materialization.rs");
+const TEST_WORKFLOW: &str = include_str!("../../.github/workflows/test.yml");
 
 #[test]
 fn shared_root_guard_exposes_identity_bound_contract() {
@@ -52,6 +53,10 @@ fn public_read_only_roots_bind_traversal_to_open_directory_identity() {
             "{name} must perform filesystem I/O through the handle-bound root namespace"
         );
         assert!(
+            !compact_source.contains("root_guard.stable_path()"),
+            "{name} must not reopen child traversal or reads through the compatibility/display pathname"
+        );
+        assert!(
             compact_source
                 .matches("root_guard.canonical_path()")
                 .count()
@@ -79,5 +84,21 @@ fn public_read_only_roots_bind_traversal_to_open_directory_identity() {
     assert!(
         MATERIALIZATION.contains("observe_path_active_use(&active_use_path)"),
         "materialization active-use probes must not receive the Linux proc namespace path"
+    );
+}
+
+#[test]
+fn macos_ci_runs_descriptor_replacement_regression() {
+    let macos_job = TEST_WORKFLOW
+        .split("  macos-bound-root:")
+        .nth(1)
+        .and_then(|remainder| remainder.split("\n  llm-engine-build:").next())
+        .expect("test workflow must keep the macos-bound-root job");
+
+    assert!(
+        macos_job.contains(
+            "cargo test --manifest-path src-tauri/Cargo.toml --test bound_read_root_descriptor_replacement --locked"
+        ),
+        "macOS CI must execute the root-replacement regression against the held directory descriptor"
     );
 }
