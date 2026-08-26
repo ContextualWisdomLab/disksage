@@ -30,7 +30,7 @@
   };
 
   function planKey(plan: api.ContainerOrphanPlan): string {
-    return `${plan.runtime.kind}:${plan.runtime.display_name}`;
+    return plan.runtime.kind;
   }
 
   function categoryKey(key: string, category: api.OrphanCategory): string {
@@ -80,7 +80,6 @@
     try {
       executions[key] = await api.executeContainerOrphanPrune(
         plan.runtime.kind,
-        plan.runtime.kind === "docker-native" ? null : scopeOf(plan),
         category,
         phrase,
         rationale,
@@ -97,12 +96,6 @@
       pruneBusyKey = null;
     }
   }
-
-  function scopeOf(plan: api.ContainerOrphanPlan): string {
-    // display_name is "<binary> <scope>" for scoped runtimes.
-    const parts = plan.runtime.display_name.split(" ");
-    return parts.length > 1 ? parts[1]! : "colima";
-  }
 </script>
 
 <section aria-labelledby="container-orphan-heading">
@@ -116,7 +109,7 @@
   </button>
   {#if loadError}<p class="error" role="alert">{loadError}</p>{/if}
 
-  {#each plans as plan (plan.runtime.kind + plan.runtime.display_name)}
+  {#each plans as plan (plan.runtime.kind)}
     {@const pkey = planKey(plan)}
     <div class="runtime-panel" aria-live="polite">
       <h4>{plan.runtime.display_name}</h4>
