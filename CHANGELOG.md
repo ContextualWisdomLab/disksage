@@ -23,7 +23,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Changed
 
 - Verify Podman network membership through its container listing, follow installed CLI symlinks,
-  and hide unavailable runtime panels behind one actionable summary.
+  hide unavailable runtime panels behind one actionable summary, terminate runtime subprocess
+  groups on timeout, and exclude merged history before bounding closed-PR evidence.
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
   identity cleanup and dependent eviction helpers; the focused authority contract remains green.
 - Add durable private failure records in a separate journal directory and a receipt-bound

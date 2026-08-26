@@ -499,10 +499,7 @@ pub type ClosedPullRequestHeads = BTreeSet<(String, String)>;
 fn parse_closed_pull_request_heads(bytes: &[u8]) -> Result<ClosedPullRequestHeads, String> {
     let records: Vec<GitHubPullRequestHead> =
         serde_json::from_slice(bytes).map_err(|_| "github-closed-pr-json-invalid".to_string())?;
-    if records.len() > 1_000 {
-        return Err("github-closed-pr-count-exceeds-limit".into());
-    }
-    records
+    let closed_heads: ClosedPullRequestHeads = records
         .into_iter()
         .filter(|record| record.state == "CLOSED" && !record.is_cross_repository)
         .map(|record| {
@@ -514,7 +511,11 @@ fn parse_closed_pull_request_heads(bytes: &[u8]) -> Result<ClosedPullRequestHead
             }
             Ok((branch_ref, oid))
         })
-        .collect()
+        .collect::<Result<_, _>>()?;
+    if closed_heads.len() > 10_000 {
+        return Err("github-closed-pr-count-exceeds-limit".into());
+    }
+    Ok(closed_heads)
 }
 
 /// Resolve exact head OIDs for GitHub pull requests closed without merge.
@@ -532,8 +533,10 @@ pub fn github_closed_pull_request_heads(
             OsString::from("list"),
             OsString::from("--state"),
             OsString::from("closed"),
+            OsString::from("--search"),
+            OsString::from("is:unmerged"),
             OsString::from("--limit"),
-            OsString::from("1001"),
+            OsString::from("10001"),
             OsString::from("--json"),
             OsString::from("headRefName,headRefOid,isCrossRepository,state"),
         ],
@@ -2374,6 +2377,28 @@ mod tests {
         assert_eq!(
             parse_closed_pull_request_heads(json.as_bytes()).unwrap(),
             BTreeSet::from([("refs/heads/closed-local".into(), oid('a'))])
+        );
+    }
+
+    #[test]
+    fn merged_history_does_not_exhaust_closed_pull_request_authority() {
+        let mut records = (0..1_001)
+            .map(|index| {
+                format!(
+                    r#"{{"headRefName":"merged-{index}","headRefOid":"{}","isCrossRepository":false,"state":"MERGED"}}"#,
+                    oid('a')
+                )
+            })
+            .collect::<Vec<_>>();
+        records.push(format!(
+            r#"{{"headRefName":"closed-local","headRefOid":"{}","isCrossRepository":false,"state":"CLOSED"}}"#,
+            oid('b')
+        ));
+        let json = format!("[{}]", records.join(","));
+
+        assert_eq!(
+            parse_closed_pull_request_heads(json.as_bytes()).unwrap(),
+            BTreeSet::from([("refs/heads/closed-local".into(), oid('b'))])
         );
     }
 

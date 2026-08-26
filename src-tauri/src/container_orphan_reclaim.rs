@@ -25,6 +25,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -727,12 +729,24 @@ fn command_capture(
     timeout: Duration,
     label: &str,
 ) -> Result<CommandCapture, String> {
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    command
         .args(args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = command
         .spawn()
         .map_err(|error| format!("{label}-spawn:{error}"))?;
+    let child_pid = child.id();
     let stdout = child
         .stdout
         .take()
@@ -749,6 +763,10 @@ fn command_capture(
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if started.elapsed() >= timeout => {
+                #[cfg(unix)]
+                unsafe {
+                    let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
+                }
                 let _ = child.kill();
                 let _ = child.wait();
                 let _ = join_capture(stdout_reader, label, "stdout");
@@ -757,6 +775,10 @@ fn command_capture(
             }
             Ok(None) => thread::sleep(Duration::from_millis(25)),
             Err(error) => {
+                #[cfg(unix)]
+                unsafe {
+                    let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
+                }
                 let _ = child.kill();
                 let _ = child.wait();
                 let _ = join_capture(stdout_reader, label, "stdout");
@@ -1562,6 +1584,21 @@ mod tests {
     fn approval_phrases_embed_category_and_fingerprint() {
         let phrase = approval_phrase(OrphanCategory::Volume, "abc123");
         assert_eq!(phrase, "DiskSage volume orphan prune 승인 abc123");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn timeout_terminates_descendants_that_hold_capture_pipes() {
+        let started = Instant::now();
+        let result = command_capture(
+            Path::new("/bin/sh"),
+            &["-c", "sleep 30 & wait"],
+            Duration::from_millis(100),
+            "descendant-timeout",
+        );
+
+        assert_eq!(result.unwrap_err(), "descendant-timeout-timeout");
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[test]

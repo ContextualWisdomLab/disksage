@@ -698,7 +698,9 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - Review-driven runtime hardening verifies Podman network membership through the authoritative
   all-container listing instead of assuming Docker-shaped network-inspect fields, follows valid
   Homebrew/Docker Desktop CLI symlinks, and collapses unavailable runtimes into one actionable UI
-  summary rather than rendering repeated connection-failure panels.
+  summary rather than rendering repeated connection-failure panels. Runtime command descendants
+  share a private process group so timeout enforcement also closes inherited output pipes; closed
+  PR discovery filters merged history before applying its bounded exact-head authority set.
 - Current protected-delivery snapshot: `main` is
   `79067c1160ddedf7fc962cbf8067ce7e83c4564a`; 40 PRs are open (17 ready, 23 draft) and none has an
   exact-head independent approval. PR #267 is ready for review and blocked; CodeRabbit passed while
