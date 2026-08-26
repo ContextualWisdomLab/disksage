@@ -1,4 +1,4 @@
-use crate::{container_orphan_reclaim, podman_reclaim};
+use crate::{container_orphan_public, container_orphan_reclaim, podman_reclaim};
 use std::path::PathBuf;
 
 fn docker_binary() -> PathBuf {
@@ -95,6 +95,7 @@ pub fn inspect_container_orphans() -> Vec<container_orphan_reclaim::ContainerOrp
         .iter()
         .filter_map(|target| target.as_ref().ok())
         .map(container_orphan_reclaim::probe_container_orphans)
+        .map(container_orphan_public::sanitize_plan)
         .collect()
 }
 
@@ -129,6 +130,7 @@ pub fn execute_container_orphan_prune(
         &rationale,
         now_ms(),
     )
+    .map(container_orphan_public::sanitize_execution)
 }
 
 #[cfg(test)]
