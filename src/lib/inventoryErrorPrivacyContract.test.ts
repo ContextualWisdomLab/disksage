@@ -9,6 +9,14 @@ function readSource(path: string): string {
   return readFileSync(resolve(repositoryRoot, path), "utf8");
 }
 
+function functionSlice(source: string, startToken: string, nextToken: string): string {
+  const start = source.indexOf(startToken);
+  const end = source.indexOf(nextToken, start);
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  return source.slice(start, end);
+}
+
 describe("Inventory privacy-safe failure feedback", () => {
   it("never renders arbitrary backend exception text", () => {
     const source = readSource("src/lib/Inventory.svelte");
@@ -31,17 +39,20 @@ describe("Inventory privacy-safe failure feedback", () => {
 
   it("clears stale inventory and summary evidence before a replacement load", () => {
     const source = readSource("src/lib/Inventory.svelte");
+    const clearBody = functionSlice(source, "function clearInventoryEvidence()", "function requestIsCurrent(");
     const loadStart = source.indexOf("async function load()");
-    const inventoryCall = source.indexOf("report = await api.diskInventory(scannedRoot)", loadStart);
+    const inventoryCall = source.indexOf("await api.diskInventory(root)", loadStart);
     const loadPrefix = source.slice(loadStart, inventoryCall);
 
     expect(loadStart).toBeGreaterThanOrEqual(0);
     expect(inventoryCall).toBeGreaterThan(loadStart);
-    expect(loadPrefix).toContain('loadError = ""');
-    expect(loadPrefix).toContain("report = null");
-    expect(loadPrefix).toContain("summary = null");
-    expect(loadPrefix).toContain("summaryLoaded = false");
-    expect(loadPrefix).toContain('summaryError = ""');
+    expect(loadPrefix).toContain("clearInventoryEvidence()");
+    expect(clearBody).toContain('loadError = ""');
+    expect(clearBody).toContain("report = null");
+    expect(clearBody).toContain("summary = null");
+    expect(clearBody).toContain("summaryLoaded = false");
+    expect(clearBody).toContain('summaryError = ""');
+    expect(clearBody).toContain("summaryBusy = false");
   });
 
   it("separates summary failure from summary content and announces failures", () => {
@@ -55,7 +66,7 @@ describe("Inventory privacy-safe failure feedback", () => {
   it("preserves inventory, rules, model, and advisory-summary authority calls", () => {
     const source = readSource("src/lib/Inventory.svelte");
 
-    expect(source).toContain("api.diskInventory(scannedRoot)");
+    expect(source).toContain("api.diskInventory(root)");
     expect(source).toContain("api.getUserRules()");
     expect(source).toContain("api.downloadModel()");
     expect(source).toContain("api.summarizeUnknownBucket(report?.unknown_samples ?? [])");
@@ -80,47 +91,39 @@ describe("Inventory privacy-safe failure feedback", () => {
     expect(source).toContain("api.ontologyCoherence()");
     expect(source).toContain("api.modelStatus()");
     expect(source).toContain(
-      "requestUnknownExtensionInsights(report.unknown_samples, api.reasonUnknownExtensions)",
+      "requestUnknownExtensionInsights(nextReport.unknown_samples, api.reasonUnknownExtensions)",
     );
   });
 
   it("invalidates stale advisory state and ignores an older extension-reasoning response", () => {
     const source = readSource("src/lib/Inventory.svelte");
+    const clearBody = functionSlice(source, "function clearInventoryEvidence()", "function requestIsCurrent(");
     const loadStart = source.indexOf("async function load()");
-    const inventoryCall = source.indexOf("report = await api.diskInventory(scannedRoot)", loadStart);
+    const inventoryCall = source.indexOf("await api.diskInventory(root)", loadStart);
     const loadPrefix = source.slice(loadStart, inventoryCall);
 
     expect(source).toContain("let loadGeneration = 0");
     expect(loadPrefix).toContain("const generation = ++loadGeneration");
-    expect(loadPrefix).toContain("issues = null");
-    expect(loadPrefix).toContain('coherenceError = ""');
-    expect(loadPrefix).toContain("insights = []");
-    expect(loadPrefix).toContain('insightsError = ""');
-    expect(source).toContain("generation === loadGeneration");
+    expect(loadPrefix).toContain("clearInventoryEvidence()");
+    expect(clearBody).toContain("issues = null");
+    expect(clearBody).toContain('coherenceError = ""');
+    expect(clearBody).toContain("insights = []");
+    expect(clearBody).toContain('insightsError = ""');
+    expect(source).toContain("requestIsCurrent(root, generation)");
   });
 
   it("ignores a stale unknown-bucket summary that resolves after a newer load started", () => {
     const source = readSource("src/lib/Inventory.svelte");
-    const summarizeStart = source.indexOf("async function summarizeUnknown()");
-    const summarizeCall = source.indexOf(
-      "await api.summarizeUnknownBucket(report?.unknown_samples ?? [])",
-      summarizeStart,
-    );
-    const summarizeBody = source.slice(summarizeStart, source.indexOf("\n  }", summarizeCall));
+    const summarizeBody = functionSlice(source, "async function summarizeUnknown()", "\n  $effect(() => {");
 
-    expect(summarizeStart).toBeGreaterThanOrEqual(0);
-    expect(summarizeCall).toBeGreaterThan(summarizeStart);
-    // The in-flight summarize call must capture the load generation up front, and every
-    // subsequent state write (success, failure, and the busy/loaded finally block) must be
-    // guarded against a newer load() having started in the meantime.
     expect(summarizeBody).toContain("const generation = loadGeneration");
-    expect(summarizeBody.match(/generation === loadGeneration/g)?.length).toBeGreaterThanOrEqual(3);
+    expect(summarizeBody.match(/requestIsCurrent\(root, generation\)/g)?.length).toBeGreaterThanOrEqual(3);
 
-    // A fresh load() must clear a stale summarize's busy flag so a superseded response
-    // cannot leave the "요약 보기" button permanently disabled.
+    const clearBody = functionSlice(source, "function clearInventoryEvidence()", "function requestIsCurrent(");
     const loadStart = source.indexOf("async function load()");
-    const inventoryCall = source.indexOf("report = await api.diskInventory(scannedRoot)", loadStart);
+    const inventoryCall = source.indexOf("await api.diskInventory(root)", loadStart);
     const loadPrefix = source.slice(loadStart, inventoryCall);
-    expect(loadPrefix).toContain("summaryBusy = false");
+    expect(loadPrefix).toContain("clearInventoryEvidence()");
+    expect(clearBody).toContain("summaryBusy = false");
   });
 });
