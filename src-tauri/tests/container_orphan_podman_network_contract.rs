@@ -8,6 +8,10 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 #[cfg(unix)]
+const NETWORK_ID: &str =
+    "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+
+#[cfg(unix)]
 fn podman_network_target(attached: bool) -> (tempfile::TempDir, ContainerRuntimeTarget) {
     let temp = tempfile::tempdir().expect("temporary Podman runtime directory");
     let runtime = temp.path().join("podman");
@@ -27,20 +31,20 @@ case "${{1:-}}" in
   container)
     [ "${{2:-}}" = "ps" ] || exit 93
     case " $* " in
-      *" --filter network=custom-net "*) printf '%s\n' '{filtered_membership}' ;;
+      *" --filter network={NETWORK_ID} "*) printf '%s\n' '{filtered_membership}' ;;
       *) printf '%s\n' '[]' ;;
     esac
     ;;
   images|volume) printf '%s\n' '[]' ;;
   network)
     if [ "${{2:-}}" = "ls" ]; then
-      printf '%s\n' '[{{"driver":"bridge","id":"net-1","name":"custom-net"}}]'
+      printf '%s\n' '[{{"driver":"bridge","id":"{NETWORK_ID}","name":"custom-net"}}]'
       exit 0
     fi
     if [ "${{2:-}}" = "inspect" ]; then
       # Current Podman documentation shows valid inspect JSON that can omit Containers
       # when no running containers are present. Membership must come from `ps --all`.
-      printf '%s\n' '[{{"name":"custom-net","id":"net-1","driver":"bridge","dns_enabled":true}}]'
+      printf '%s\n' '[{{"name":"custom-net","id":"{NETWORK_ID}","driver":"bridge","dns_enabled":true}}]'
       exit 0
     fi
     exit 94
