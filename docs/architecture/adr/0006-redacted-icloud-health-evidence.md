@@ -1,6 +1,6 @@
 # ADR-0006: Persist redacted iCloud health evidence as a bounded observation stream
 
-**Status:** Accepted  
+**Status:** Accepted
 **Date:** 2026-08-20
 
 ## Context
