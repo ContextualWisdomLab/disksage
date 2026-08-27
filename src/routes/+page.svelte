@@ -139,18 +139,24 @@
       {/each}
     </nav>
     <Treemap {node} onOpen={open} />
-    <ul class="entries">
-      {#each node.entries as e}
-        <li>
-          {#if e.is_dir}
-            <button class="dir" onclick={() => open(e.path)}>📁 {e.name}</button>
-          {:else}
-            <span>📄 {e.name}</span>
-          {/if}
-          <span class="size">{fmtBytes(e.size)}</span>
-        </li>
-      {/each}
-    </ul>
+    <div class="entry-scroll" role="region" tabindex="0" aria-label="현재 폴더 항목 목록">
+      {#if node.entries.length === 0}
+        <p class="empty-entries" role="status">표시할 항목이 없습니다. 상위 폴더로 이동하거나 다른 폴더를 스캔하세요.</p>
+      {:else}
+        <ul class="entries">
+          {#each node.entries as e}
+            <li>
+              {#if e.is_dir}
+                <button class="dir" onclick={() => open(e.path)}>📁 {e.name}</button>
+              {:else}
+                <span>📄 {e.name}</span>
+              {/if}
+              <span class="size">{fmtBytes(e.size)}</span>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </div>
   {/if}
 
   {#if top.length > 0}
@@ -175,8 +181,11 @@
   .error { margin: 0.75rem 0; font-weight: 600; }
   .crumbs { margin: 0.75rem 0; display: flex; gap: 0.25rem; flex-wrap: wrap; }
   .crumb { background: none; border: none; color: #06c; cursor: pointer; padding: 0; }
-  .entries { list-style: none; padding: 0; max-height: 40vh; overflow-y: auto; }
+  .entry-scroll { max-height: 40vh; overflow-y: auto; }
+  .entry-scroll:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+  .entries { list-style: none; padding: 0; margin: 0; }
   .entries li { display: flex; justify-content: space-between; padding: 2px 0; }
   .dir { background: none; border: none; cursor: pointer; font: inherit; padding: 0; }
   .size { color: #666; font-variant-numeric: tabular-nums; }
+  .empty-entries { margin: 0; color: #555; }
 </style>
