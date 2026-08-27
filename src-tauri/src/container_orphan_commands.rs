@@ -1,6 +1,9 @@
 use crate::{container_orphan_public, container_orphan_reclaim, podman_reclaim};
 use std::path::PathBuf;
 
+const MAX_DOCKER_CONFIG_BYTES: usize = 64 * 1024;
+const MAX_DOCKER_CONTEXT_BYTES: usize = 128;
+
 fn docker_binary() -> PathBuf {
     [
         "/opt/homebrew/bin/docker",
@@ -98,8 +101,71 @@ fn validate_requested_scope(
     Ok(())
 }
 
+fn bounded_docker_context(value: &str) -> Option<String> {
+    (!value.is_empty()
+        && value.len() <= MAX_DOCKER_CONTEXT_BYTES
+        && !value.chars().any(char::is_control))
+    .then(|| value.to_string())
+}
+
+fn parse_docker_current_context(bytes: &[u8]) -> Option<String> {
+    if bytes.len() > MAX_DOCKER_CONFIG_BYTES {
+        return None;
+    }
+    let document: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    bounded_docker_context(document.get("currentContext")?.as_str()?)
+}
+
+fn docker_config_path() -> Option<PathBuf> {
+    if let Some(directory) = std::env::var_os("DOCKER_CONFIG").filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(directory).join("config.json"));
+    }
+    std::env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .or_else(|| std::env::var_os("USERPROFILE").filter(|value| !value.is_empty()))
+        .map(PathBuf::from)
+        .map(|home| home.join(".docker").join("config.json"))
+}
+
+fn docker_current_context() -> Option<String> {
+    if let Ok(context) = std::env::var("DOCKER_CONTEXT") {
+        if let Some(context) = bounded_docker_context(&context) {
+            return Some(context);
+        }
+    }
+
+    let path = docker_config_path()?;
+    let metadata = std::fs::symlink_metadata(&path).ok()?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > MAX_DOCKER_CONFIG_BYTES as u64
+    {
+        return None;
+    }
+    let bytes = std::fs::read(path).ok()?;
+    parse_docker_current_context(&bytes)
+}
+
+fn runtime_kinds_for_default_docker_context(
+    current_context: Option<&str>,
+) -> Vec<container_orphan_reclaim::ContainerRuntimeKind> {
+    use container_orphan_reclaim::ContainerRuntimeKind::{
+        DockerColimaContext, DockerNative, PodmanMachine,
+    };
+
+    let mut kinds = Vec::with_capacity(3);
+    if current_context != Some("colima") {
+        kinds.push(DockerNative);
+    }
+    kinds.push(DockerColimaContext);
+    kinds.push(PodmanMachine);
+    kinds
+}
+
 /// Probes every supported container runtime target read-only and audits all four orphan
-/// categories on each healthy target. This shipped IPC surface remains present under coverage.
+/// categories on each healthy target. If Docker's effective default context is already Colima,
+/// the explicit Colima target is retained and the duplicate default-context probe is omitted.
+/// This shipped IPC surface remains present under coverage.
 #[tauri::command(async)]
 pub fn inspect_container_orphans() -> Vec<container_orphan_reclaim::ContainerOrphanPlan> {
     runtime_kinds_for_default_docker_context(docker_current_context().as_deref())
