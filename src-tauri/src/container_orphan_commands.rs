@@ -1,9 +1,11 @@
 use crate::{container_orphan_public, container_orphan_reclaim, podman_reclaim};
+use sha2::{Digest, Sha256};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
 const MAX_DOCKER_CONFIG_BYTES: usize = 64 * 1024;
 const MAX_DOCKER_CONTEXT_BYTES: usize = 128;
+const DOCKER_CONTEXT_APPROVAL_DOMAIN: &[u8] = b"disksage.container-orphan-docker-context.v1";
 
 fn docker_binary() -> PathBuf {
     [
@@ -13,9 +15,7 @@ fn docker_binary() -> PathBuf {
     ]
     .into_iter()
     .map(PathBuf::from)
-    .find(|path| {
-        std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file())
-    })
+    .find(|path| std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file()))
     .unwrap_or_else(|| PathBuf::from("docker"))
 }
 
@@ -27,9 +27,7 @@ fn podman_binary() -> PathBuf {
     ]
     .into_iter()
     .map(PathBuf::from)
-    .find(|path| {
-        std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file())
-    })
+    .find(|path| std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file()))
     .unwrap_or_else(|| PathBuf::from("podman"))
 }
 
@@ -79,11 +77,9 @@ fn target_for_kind(
         ContainerRuntimeKind::DockerNative => {
             ContainerRuntimeTarget::new(kind, docker_binary(), None)
         }
-        ContainerRuntimeKind::DockerColimaContext => ContainerRuntimeTarget::new(
-            kind,
-            docker_binary(),
-            Some("colima".to_string()),
-        ),
+        ContainerRuntimeKind::DockerColimaContext => {
+            ContainerRuntimeTarget::new(kind, docker_binary(), Some("colima".to_string()))
+        }
         ContainerRuntimeKind::PodmanMachine => ContainerRuntimeTarget::new(
             kind,
             podman_binary(),
@@ -152,23 +148,29 @@ fn docker_config_path() -> Option<PathBuf> {
         .map(|home| home.join(".docker").join("config.json"))
 }
 
-fn docker_current_context() -> Option<String> {
+fn docker_current_context() -> Result<Option<String>, String> {
     match docker_context_environment(std::env::var_os("DOCKER_CONTEXT")) {
-        DockerContextEnvironment::Context(context) => return Some(context),
-        DockerContextEnvironment::Invalid => return None,
+        DockerContextEnvironment::Context(context) => return Ok(Some(context)),
+        DockerContextEnvironment::Invalid => return Err("docker-context-invalid".to_string()),
         DockerContextEnvironment::AbsentOrEmpty => {}
     }
 
-    let path = docker_config_path()?;
-    let metadata = std::fs::symlink_metadata(&path).ok()?;
+    let Some(path) = docker_config_path() else {
+        return Ok(None);
+    };
+    let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+        return Ok(None);
+    };
     if metadata.file_type().is_symlink()
         || !metadata.is_file()
         || metadata.len() > MAX_DOCKER_CONFIG_BYTES as u64
     {
-        return None;
+        return Ok(None);
     }
-    let bytes = std::fs::read(path).ok()?;
-    parse_docker_current_context(&bytes)
+    let Ok(bytes) = std::fs::read(path) else {
+        return Ok(None);
+    };
+    Ok(parse_docker_current_context(&bytes))
 }
 
 fn runtime_kinds_for_default_docker_context(
@@ -187,23 +189,90 @@ fn runtime_kinds_for_default_docker_context(
     kinds
 }
 
+fn runtime_kinds_for_docker_context(
+    current_context: &Result<Option<String>, String>,
+) -> Vec<container_orphan_reclaim::ContainerRuntimeKind> {
+    use container_orphan_reclaim::ContainerRuntimeKind::{DockerColimaContext, PodmanMachine};
+    match current_context {
+        Ok(context) => runtime_kinds_for_default_docker_context(context.as_deref()),
+        // An inherited, non-empty Docker context that DiskSage cannot represent must never fall
+        // through to plain `docker`, because that child would still inherit the opaque override.
+        // Explicit `--context colima` remains safe and Podman is independent of Docker context.
+        Err(_) => vec![DockerColimaContext, PodmanMachine],
+    }
+}
+
+fn docker_context_binding(current_context: Option<&str>) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(DOCKER_CONTEXT_APPROVAL_DOMAIN);
+    hasher.update([0]);
+    hasher.update(current_context.unwrap_or("<default>").as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+fn bind_docker_context_approval(base_phrase: &str, current_context: Option<&str>) -> String {
+    format!(
+        "{base_phrase} docker-context {}",
+        docker_context_binding(current_context)
+    )
+}
+
+fn unbind_docker_context_approval(
+    bound_phrase: &str,
+    current_context: Option<&str>,
+) -> Result<String, String> {
+    let suffix = format!(" docker-context {}", docker_context_binding(current_context));
+    bound_phrase
+        .strip_suffix(&suffix)
+        .map(str::to_string)
+        .ok_or_else(|| "orphan-prune-docker-context-mismatch".to_string())
+}
+
+fn bind_docker_context_plan(
+    mut plan: container_orphan_reclaim::ContainerOrphanPlan,
+    current_context: Option<&str>,
+) -> container_orphan_reclaim::ContainerOrphanPlan {
+    for category in &mut plan.categories {
+        if let Some(base_phrase) = category.approval_phrase.take() {
+            category.approval_phrase = Some(bind_docker_context_approval(
+                &base_phrase,
+                current_context,
+            ));
+        }
+    }
+    plan
+}
+
 /// Probes every supported container runtime target read-only and audits all four orphan
 /// categories on each healthy target. If Docker's effective default context is already Colima,
 /// the explicit Colima target is retained and the duplicate default-context probe is omitted.
+/// An unrepresentable inherited Docker context suppresses the ambient Docker target fail-closed.
 /// This shipped IPC surface remains present under coverage.
 #[tauri::command(async)]
 pub fn inspect_container_orphans() -> Vec<container_orphan_reclaim::ContainerOrphanPlan> {
-    runtime_kinds_for_default_docker_context(docker_current_context().as_deref())
+    let docker_context = docker_current_context();
+    runtime_kinds_for_docker_context(&docker_context)
         .into_iter()
-        .filter_map(|kind| target_for_kind(kind).ok())
-        .map(|target| container_orphan_reclaim::probe_container_orphans(&target))
-        .map(container_orphan_public::sanitize_plan)
+        .filter_map(|kind| {
+            let target = target_for_kind(kind).ok()?;
+            let plan = container_orphan_public::sanitize_plan(
+                container_orphan_reclaim::probe_container_orphans(&target),
+            );
+            if kind == container_orphan_reclaim::ContainerRuntimeKind::DockerNative {
+                let context = docker_context.as_ref().ok()?.as_deref();
+                Some(bind_docker_context_plan(plan, context))
+            } else {
+                Some(plan)
+            }
+        })
         .collect()
 }
 
 /// Re-audits one runtime/category immediately before exact identity-bound deletion. Runtime scope
-/// is validated against the same fixed target used by inspection, so client display metadata can
-/// never expand mutation authority. This shipped IPC surface remains present under coverage.
+/// is validated against the same fixed target used by inspection, and Docker-native approvals are
+/// additionally bound to the fresh effective Docker context so context drift cannot reuse an
+/// approval even when two daemons expose the same candidate IDs. This shipped IPC surface remains
+/// present under coverage.
 #[tauri::command(async)]
 pub fn execute_container_orphan_prune(
     runtime_kind: String,
@@ -219,10 +288,17 @@ pub fn execute_container_orphan_prune(
     let category = parse_category(&category)?;
     let target = target_for_kind(kind)?;
     validate_requested_scope(&target, &scope_name)?;
+    let engine_confirmation = if kind == container_orphan_reclaim::ContainerRuntimeKind::DockerNative {
+        let current_context = docker_current_context()
+            .map_err(|_| "orphan-prune-docker-context-invalid".to_string())?;
+        unbind_docker_context_approval(&confirmation_phrase, current_context.as_deref())?
+    } else {
+        confirmation_phrase
+    };
     container_orphan_reclaim::execute_container_orphan_prune(
         &target,
         category,
-        &confirmation_phrase,
+        &engine_confirmation,
         &rationale,
         now_ms(),
     )
@@ -293,18 +369,36 @@ mod tests {
 
     #[test]
     fn invalid_docker_context_must_not_fall_through_to_native_target() {
-        use container_orphan_reclaim::ContainerRuntimeKind::DockerNative;
+        use container_orphan_reclaim::ContainerRuntimeKind::{DockerColimaContext, DockerNative, PodmanMachine};
 
-        let invalid = docker_context_environment(Some(OsString::from("bad\ncontext")));
-        let effective_context = match invalid {
-            DockerContextEnvironment::Context(context) => Some(context),
-            DockerContextEnvironment::AbsentOrEmpty | DockerContextEnvironment::Invalid => None,
-        };
-        let kinds = runtime_kinds_for_default_docker_context(effective_context.as_deref());
+        let invalid = Err("docker-context-invalid".to_string());
+        let kinds = runtime_kinds_for_docker_context(&invalid);
 
-        assert!(
-            !kinds.contains(&DockerNative),
-            "an invalid inherited DOCKER_CONTEXT must not silently authorize DockerNative"
+        assert!(!kinds.contains(&DockerNative));
+        assert_eq!(kinds, vec![DockerColimaContext, PodmanMachine]);
+    }
+
+    #[test]
+    fn docker_native_approval_is_context_bound_without_disclosing_context_name() {
+        let base = "DiskSage image orphan prune 승인 abcdef";
+        let desktop = bind_docker_context_approval(base, Some("desktop-linux"));
+        let other = bind_docker_context_approval(base, Some("customer-context"));
+        let default = bind_docker_context_approval(base, None);
+
+        assert_ne!(desktop, other);
+        assert_ne!(desktop, default);
+        assert!(!desktop.contains("desktop-linux"));
+        assert_eq!(
+            unbind_docker_context_approval(&desktop, Some("desktop-linux")).unwrap(),
+            base
+        );
+        assert_eq!(
+            unbind_docker_context_approval(&desktop, Some("customer-context")).unwrap_err(),
+            "orphan-prune-docker-context-mismatch"
+        );
+        assert_eq!(
+            unbind_docker_context_approval(&desktop, None).unwrap_err(),
+            "orphan-prune-docker-context-mismatch"
         );
     }
 
@@ -344,16 +438,16 @@ mod tests {
     #[test]
     fn docker_current_context_parser_is_bounded_and_exact() {
         assert_eq!(
-            parse_docker_current_context(br#"{\"currentContext\":\"colima\"}"#).as_deref(),
+            parse_docker_current_context(br#"{"currentContext":"colima"}"#).as_deref(),
             Some("colima")
         );
         assert_eq!(
-            parse_docker_current_context(br#"{\"currentContext\":\"desktop-linux\"}"#).as_deref(),
+            parse_docker_current_context(br#"{"currentContext":"desktop-linux"}"#).as_deref(),
             Some("desktop-linux")
         );
         assert_eq!(parse_docker_current_context(b"not-json"), None);
         assert_eq!(
-            parse_docker_current_context(br#"{\"currentContext\":12}"#),
+            parse_docker_current_context(br#"{"currentContext":12}"#),
             None
         );
         assert_eq!(
