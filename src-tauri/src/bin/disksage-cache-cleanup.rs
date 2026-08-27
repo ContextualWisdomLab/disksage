@@ -77,12 +77,31 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
     let mut execute = false;
     let mut purge_proven_cache_trash = false;
     let mut journal_path = default_journal_path()?;
+    let mut seen_execute = false;
+    let mut seen_purge_proven_cache_trash = false;
+    let mut seen_journal_path = false;
     let mut args = first_arg.into_iter().chain(args);
     while let Some(arg) = args.next() {
         match arg.to_str() {
-            Some("--execute") => execute = true,
-            Some("--purge-proven-cache-trash") => purge_proven_cache_trash = true,
+            Some("--execute") => {
+                if seen_execute {
+                    return Err("--execute may be supplied once".into());
+                }
+                seen_execute = true;
+                execute = true;
+            }
+            Some("--purge-proven-cache-trash") => {
+                if seen_purge_proven_cache_trash {
+                    return Err("--purge-proven-cache-trash may be supplied once".into());
+                }
+                seen_purge_proven_cache_trash = true;
+                purge_proven_cache_trash = true;
+            }
             Some("--journal-path") => {
+                if seen_journal_path {
+                    return Err("--journal-path may be supplied once".into());
+                }
+                seen_journal_path = true;
                 journal_path = PathBuf::from(
                     args.next()
                         .ok_or_else(|| "--journal-path requires PATH".to_string())?,
@@ -191,6 +210,26 @@ mod tests {
         ])
         .unwrap_err();
         assert_eq!(error, "--journal-path must be absolute");
+    }
+
+    #[test]
+    fn duplicate_authority_singletons_are_rejected() {
+        let duplicate_execute = parse_args([
+            OsString::from("--execute"),
+            OsString::from("--execute"),
+        ])
+        .unwrap_err();
+        assert_eq!(duplicate_execute, "--execute may be supplied once");
+
+        let duplicate_purge = parse_args([
+            OsString::from("--purge-proven-cache-trash"),
+            OsString::from("--purge-proven-cache-trash"),
+        ])
+        .unwrap_err();
+        assert_eq!(
+            duplicate_purge,
+            "--purge-proven-cache-trash may be supplied once"
+        );
     }
 
     #[test]
