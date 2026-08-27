@@ -29,6 +29,21 @@ pub fn scan_dir(
     scan_dir_with_interval(root, cancel, 8192, on_progress)
 }
 
+pub(crate) fn read_only_traversal_root(root: &Path) -> PathBuf {
+    match std::fs::symlink_metadata(root) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf())
+        }
+        _ => root.to_path_buf(),
+    }
+}
+
+pub(crate) fn logical_scan_path(path: &Path, traversal_root: &Path, requested_root: &Path) -> PathBuf {
+    path.strip_prefix(traversal_root)
+        .map(|relative| requested_root.join(relative))
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
 /// ponytail: progress 간격을 파라미터로 뺀 것은 테스트 주입용, 외부 API는 scan_dir
 pub fn scan_dir_with_interval(
     root: &Path,
@@ -43,14 +58,12 @@ pub fn scan_dir_with_interval(
     let mut stats = ScanStats::default();
     let mut cancelled = false;
     let mut seen: u64 = 0;
+    let traversal_root = read_only_traversal_root(root);
 
-    let walker = jwalk::WalkDir::new(root)
+    let walker = walkdir::WalkDir::new(&traversal_root)
         .follow_links(false)
-        .skip_hidden(false)
-        .process_read_dir(|_depth, _path, _state, children| {
-            // 에러 엔트리는 유지해서 skipped로 집계
-            children.retain(|r| r.as_ref().map(keep_entry).unwrap_or(true));
-        });
+        .into_iter()
+        .filter_entry(keep_entry);
 
     for entry in walker {
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
@@ -61,27 +74,23 @@ pub fn scan_dir_with_interval(
         // 순회/메타데이터 오류는 skipped로 집계 — 한 줄 let-else (오류 분기가 플랫폼별 테스트에만
         // 잡히더라도 라인 자체는 항상 실행돼 커버리지가 안정적)
         let Ok(e) = entry else { stats.skipped += 1; continue };
+        let logical_path = logical_scan_path(e.path(), &traversal_root, root);
         if e.file_type().is_dir() {
             stats.dirs += 1;
-            // jwalk는 하위 목록 읽기 실패를 Err 항목이 아니라 디렉토리 엔트리의
-            // read_children_error에 담아 전달한다 — 놓치면 스킵 집계가 새는 버그
-            if e.read_children_error.is_some() {
-                stats.skipped += 1;
-            }
-            dir_sizes.entry(e.path()).or_insert(0);
+            dir_sizes.entry(logical_path).or_insert(0);
         } else if e.file_type().is_file() {
             let Ok(md) = e.metadata() else { stats.skipped += 1; continue };
             let size = md.len();
             stats.files += 1;
             stats.bytes += size;
-            top.push(std::cmp::Reverse((size, e.path())));
+            top.push(std::cmp::Reverse((size, logical_path.clone())));
             if top.len() > TOP_FILES_CAP {
                 top.pop();
             }
             // 파일 크기를 root까지의 모든 조상 디렉토리에 누적
             // ponytail: PathBuf 키 HashMap — 초대형 드라이브에서 스캔이 수십 초를
             // 넘기면 인터닝된 디렉토리 인덱스로 교체
-            let mut anc = e.path().parent().map(|p| p.to_path_buf());
+            let mut anc = logical_path.parent().map(|p| p.to_path_buf());
             while let Some(d) = anc {
                 *dir_sizes.entry(d.clone()).or_insert(0) += size;
                 if d == root {
@@ -113,7 +122,7 @@ pub fn scan_dir_with_interval(
 
 /// 심링크(전 플랫폼)와 reparse point(Windows 정션 등)를 순회에서 제외
 /// (crate 내 다른 순회 지점 — dev_artifacts 등 — 에서도 재사용)
-pub(crate) fn keep_entry(e: &jwalk::DirEntry<((), ())>) -> bool {
+pub(crate) fn keep_entry(e: &walkdir::DirEntry) -> bool {
     if e.file_type().is_symlink() {
         return false;
     }
@@ -121,7 +130,7 @@ pub(crate) fn keep_entry(e: &jwalk::DirEntry<((), ())>) -> bool {
     {
         use std::os::windows::fs::MetadataExt;
         const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-        if let Ok(md) = e.metadata() {
+        if let Ok(md) = std::fs::symlink_metadata(e.path()) {
             if md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
                 return false;
             }
@@ -242,6 +251,30 @@ mod tests {
         // 심링크를 따라갔다면 200이 된다
         assert_eq!(res.stats.bytes, 100);
         assert!(!res.dir_sizes.contains_key(&root.join("link")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_root_scans_target_but_not_nested_symlinks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        let outside = tmp.path().join("outside");
+        fs::create_dir(&real).unwrap();
+        fs::create_dir(&outside).unwrap();
+        write(&real.join("inside.bin"), 11);
+        write(&outside.join("outside.bin"), 37);
+        std::os::unix::fs::symlink(&outside, real.join("nested-link")).unwrap();
+        let selected = tmp.path().join("selected-root");
+        std::os::unix::fs::symlink(&real, &selected).unwrap();
+
+        let res = scan_dir(&selected, &AtomicBool::new(false), noop);
+
+        assert_eq!(res.root, selected);
+        assert_eq!(res.stats.files, 1);
+        assert_eq!(res.stats.bytes, 11);
+        assert_eq!(res.dir_sizes[&selected], 11);
+        assert_eq!(res.top_files[0].0, selected.join("inside.bin"));
+        assert!(!res.dir_sizes.contains_key(&selected.join("nested-link")));
     }
 
     #[cfg(unix)]
