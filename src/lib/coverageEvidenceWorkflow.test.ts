@@ -104,6 +104,9 @@ describe('Test workflow coverage evidence contract', () => {
     expect(measureStep).toContain('diagnostic_status=$?');
     expect(measureStep).toContain('redaction_status=$?');
     expect(measureStep).toContain('coverage diagnostic rendering failed');
+    expect(measureStep).toContain(
+      "printf '%s\\n' 'coverage diagnostic rendering failed; raw diagnostic withheld' > coverage-command-diagnostic.log",
+    );
     expect(measureStep).toContain('exit "$coverage_status"');
     expect(measureStep.indexOf('set -e')).toBeGreaterThan(
       measureStep.indexOf('redaction_status=$?'),
