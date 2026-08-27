@@ -15,15 +15,16 @@ use crate::cloud_review::{
 };
 use crate::cloud_transfer::{
     validate_receipt_copy_approval, CloudCopyApprovalAction, CloudCopyReceipt,
-    CloudCopyVerificationMethod, SyncEvidenceKind,
+    CloudCopyVerificationMethod, ProviderSyncState, SyncEvidenceKind,
 };
 use crate::provider_evidence::{validate_sync_evidence_record, ProviderSyncEvidenceRecord};
 #[cfg(test)]
 use crate::provider_sync::PROVIDER_SYNC_OVERDUE_AFTER_MS;
 use crate::provider_sync::{assess_provider_sync_timeliness, ProviderSyncTimeliness};
 
-pub const NARUON_FILE_LINEAGE_SCHEMA_VERSION: u32 = 2;
+pub const NARUON_FILE_LINEAGE_SCHEMA_VERSION: u32 = 3;
 pub const NARUON_FILE_LINEAGE_SCHEMA_KIND: &str = "disksage.file-lineage";
+const ONTOLOGY_NAMESPACE: &str = "https://disksage.app/ontology#";
 
 const EVIDENCE_PRECEDENCE: [&str; 4] = [
     "embedded_metadata",
@@ -64,6 +65,15 @@ pub struct NaruonReviewLineage {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct NaruonFileLineageRelation {
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NaruonCloudCopyLineage {
     pub receipt_id: String,
     pub lineage_fingerprint: String,
@@ -81,6 +91,7 @@ pub struct NaruonCloudCopyLineage {
     /// DiskSage's local File Provider copy is not proof that a provider API write executed.
     pub provider_write_executed: bool,
     pub provider_sync_confirmed: bool,
+    pub provider_sync_state: ProviderSyncState,
     pub sync_evidence_record_id: Option<String>,
     pub sync_evidence_kind: Option<SyncEvidenceKind>,
     pub sync_evidence_id: Option<String>,
@@ -104,6 +115,8 @@ pub struct NaruonFileLineageEnvelope {
     pub source_filename: String,
     pub source_relative_path: String,
     pub source_context: String,
+    pub ontology_class: String,
+    pub ontology_relations: Vec<NaruonFileLineageRelation>,
     pub raw_content_sha256: String,
     pub raw_content_blake3: String,
     pub bytes: u64,
@@ -120,6 +133,120 @@ pub struct NaruonFileLineageEnvelope {
 
 fn valid_hex64(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn ontology_class(kind: ArchiveKind) -> String {
+    let label = match kind {
+        ArchiveKind::Document => "Document",
+        ArchiveKind::Media => "Media",
+        ArchiveKind::Archive => "Archive",
+        ArchiveKind::Dataset => "Dataset",
+        ArchiveKind::Backup => "Backup",
+        ArchiveKind::Creative => "Creative",
+        ArchiveKind::IncompleteDownload => "IncompleteDownload",
+        ArchiveKind::SensitiveConfig => "SensitiveConfig",
+    };
+    format!("{ONTOLOGY_NAMESPACE}{label}")
+}
+
+/// Return a deterministic, path-free node identifier for the exported relation graph.
+///
+/// The envelope still carries the legacy relative/destination paths for compatibility, but graph
+/// edges must not repeat private paths as identifiers. A domain-separated digest keeps IDs stable
+/// for the same receipt while avoiding accidental disclosure in catalog consumers.
+fn opaque_node(kind: &str, value: impl AsRef<[u8]>) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage-file-lineage-node\0");
+    hasher.update(kind.as_bytes());
+    hasher.update(&[0]);
+    hasher.update(value.as_ref());
+    format!("{kind}:{}", hasher.finalize().to_hex())
+}
+
+fn relation(subject: String, predicate: &str, object: String) -> NaruonFileLineageRelation {
+    NaruonFileLineageRelation {
+        subject,
+        predicate: format!("{ONTOLOGY_NAMESPACE}{predicate}"),
+        object,
+        source: "disksage.cloud-offload".into(),
+    }
+}
+
+fn lineage_relations(
+    receipt: &CloudCopyReceipt,
+    lineage: &crate::cloud_transfer::CloudLineageSnapshot,
+    evidence_record: Option<&ProviderSyncEvidenceRecord>,
+    remote_content: Option<&crate::cloud_transfer::RemoteContentProof>,
+) -> Vec<NaruonFileLineageRelation> {
+    let source = opaque_node("source", &receipt.blake3);
+    let metadata = opaque_node("metadata", &receipt.candidate_fingerprint);
+    let archive = opaque_node(
+        "archive",
+        receipt.lineage_fingerprint.as_deref().unwrap_or_default(),
+    );
+    let destination = opaque_node("destination", receipt.destination.as_bytes());
+    let receipt_node = opaque_node("receipt", &receipt.receipt_id);
+    let provider = format!("{ONTOLOGY_NAMESPACE}Provider/{}", receipt.provider.as_str());
+    let mut relations = vec![
+        relation(source.clone(), "hasMetadataEvidence", metadata),
+        relation(
+            source.clone(),
+            "hasProductionEvidence",
+            opaque_node(
+                "production",
+                format!(
+                    "{}:{}:{}",
+                    lineage.production_time_ms,
+                    lineage.production_time_source,
+                    lineage.production_time_confidence
+                ),
+            ),
+        ),
+        NaruonFileLineageRelation {
+            subject: source.clone(),
+            predicate: format!("{ONTOLOGY_NAMESPACE}classifiedAs"),
+            object: ontology_class(lineage.kind),
+            source: "disksage.cloud-offload".into(),
+        },
+        relation(source, "archivedTo", archive.clone()),
+        relation(archive.clone(), "materializedAt", destination),
+        relation(archive.clone(), "hasReceipt", receipt_node.clone()),
+        relation(archive.clone(), "managedBy", provider),
+        relation(
+            receipt_node.clone(),
+            "hasSyncState",
+            opaque_node(
+                "sync-state",
+                evidence_record.map_or("unknown", |record| record.evidence.sync_state.as_str()),
+            ),
+        ),
+    ];
+    if let Some(decision_id) = lineage.review_decision_id.as_deref() {
+        relations.push(relation(
+            receipt_node.clone(),
+            "reviewedBy",
+            opaque_node("review", decision_id),
+        ));
+    }
+    if let Some(record) = evidence_record {
+        let evidence_node = opaque_node("provider-evidence", &record.record_id);
+        relations.push(relation(
+            receipt_node.clone(),
+            "attestedBy",
+            evidence_node.clone(),
+        ));
+        if let Some(remote) = remote_content {
+            relations.push(relation(
+                evidence_node,
+                "hasRemoteObject",
+                opaque_node(
+                    "remote-object",
+                    format!("{}:{}", remote.object_id, remote.revision),
+                ),
+            ));
+        }
+    }
+    relations
 }
 
 fn source_filename(relative_path: &str) -> Result<String, String> {
@@ -273,6 +400,8 @@ pub fn export_naruon_file_lineage(
         source_filename,
         source_relative_path: lineage.relative_path.clone(),
         source_context: lineage.source_context.clone(),
+        ontology_class: ontology_class(lineage.kind),
+        ontology_relations: lineage_relations(receipt, lineage, evidence_record, remote_content),
         raw_content_sha256: receipt.sha256.clone(),
         raw_content_blake3: receipt.blake3.clone(),
         bytes: receipt.bytes,
@@ -335,7 +464,11 @@ pub fn export_naruon_file_lineage(
                 .map(|approval| approval.rationale.clone()),
             local_copy_verified: receipt.copy_verified,
             provider_write_executed: false,
-            provider_sync_confirmed: evidence.is_some_and(|item| item.sync_complete),
+            provider_sync_confirmed: evidence
+                .is_some_and(|item| item.sync_complete && item.sync_state.is_complete()),
+            provider_sync_state: evidence
+                .map(|item| item.sync_state)
+                .unwrap_or(ProviderSyncState::Unknown),
             sync_evidence_record_id: evidence_record.map(|record| record.record_id.clone()),
             sync_evidence_kind: evidence.map(|item| item.kind),
             sync_evidence_id: evidence.map(|item| item.evidence_id.clone()),
@@ -450,6 +583,8 @@ mod tests {
                 review_rationale: Some(decision.rationale),
                 destination_account_scope: candidate.destination_account_scope,
                 kind: candidate.kind,
+                ontology_class: None,
+                ontology_relations: None,
                 created_ms: candidate.created_ms,
                 modified_ms: candidate.modified_ms,
                 production_time_ms: candidate.production_time_ms,
@@ -466,8 +601,28 @@ mod tests {
                 duration_ms: candidate.duration_ms,
                 dataset_profile: candidate.dataset_profile,
                 metadata_evidence: candidate.metadata_evidence,
+                capacity: None,
                 copy_approval: None,
             }),
+        }
+    }
+
+    #[test]
+    fn ontology_class_covers_every_archive_kind() {
+        for (kind, expected) in [
+            (ArchiveKind::Document, "Document"),
+            (ArchiveKind::Media, "Media"),
+            (ArchiveKind::Archive, "Archive"),
+            (ArchiveKind::Dataset, "Dataset"),
+            (ArchiveKind::Backup, "Backup"),
+            (ArchiveKind::Creative, "Creative"),
+            (ArchiveKind::IncompleteDownload, "IncompleteDownload"),
+            (ArchiveKind::SensitiveConfig, "SensitiveConfig"),
+        ] {
+            assert_eq!(
+                ontology_class(kind),
+                format!("{ONTOLOGY_NAMESPACE}{expected}")
+            );
         }
     }
 
@@ -536,6 +691,7 @@ mod tests {
             kind: SyncEvidenceKind::ProviderNativeStatus,
             evidence_id: format!("file-provider:{}", "1".repeat(64)),
             sync_complete: true,
+            sync_state: crate::cloud_transfer::ProviderSyncState::Complete,
             remote_content: None,
         })
         .unwrap()
@@ -546,9 +702,32 @@ mod tests {
         let receipt = receipt();
         let envelope = export_naruon_file_lineage(&receipt, Some(&evidence(&receipt))).unwrap();
 
-        assert_eq!(envelope.schema_version, 2);
+        assert_eq!(envelope.schema_version, 3);
         assert_eq!(envelope.schema_kind, "disksage.file-lineage");
         assert_eq!(envelope.source_filename, "report.pdf");
+        assert_eq!(
+            envelope.ontology_class,
+            "https://disksage.app/ontology#Document"
+        );
+        assert!(envelope
+            .ontology_relations
+            .iter()
+            .any(|edge| { edge.predicate == "https://disksage.app/ontology#archivedTo" }));
+        assert!(envelope
+            .ontology_relations
+            .iter()
+            .any(|edge| { edge.predicate == "https://disksage.app/ontology#attestedBy" }));
+        let metadata_edge = envelope
+            .ontology_relations
+            .iter()
+            .find(|edge| edge.predicate == "https://disksage.app/ontology#hasMetadataEvidence")
+            .unwrap();
+        assert_ne!(metadata_edge.subject, metadata_edge.object);
+        assert!(envelope
+            .ontology_relations
+            .iter()
+            .flat_map(|edge| [&edge.subject, &edge.object])
+            .all(|node| !node.contains("/source/") && !node.contains("/cloud/")));
         assert_eq!(envelope.raw_content_sha256, "d".repeat(64));
         assert_eq!(envelope.metadata_evidence[0].field, "production-date");
         assert_eq!(
@@ -575,6 +754,10 @@ mod tests {
         assert!(envelope.cloud_copy.local_copy_verified);
         assert_eq!(envelope.cloud_copy.copy_approval_id, None);
         assert!(envelope.cloud_copy.provider_sync_confirmed);
+        assert_eq!(
+            envelope.cloud_copy.provider_sync_state,
+            ProviderSyncState::Complete
+        );
         assert!(!envelope.cloud_copy.provider_write_executed);
         assert!(envelope.cloud_copy.sync_evidence_record_id.is_some());
         assert_eq!(
@@ -659,6 +842,10 @@ mod tests {
         let envelope = export_naruon_file_lineage(&receipt(), None).unwrap();
 
         assert!(!envelope.cloud_copy.provider_sync_confirmed);
+        assert_eq!(
+            envelope.cloud_copy.provider_sync_state,
+            ProviderSyncState::Unknown
+        );
         assert_eq!(envelope.cloud_copy.sync_evidence_id, None);
         assert_eq!(envelope.cloud_copy.sync_confirmed_at_ms, None);
         assert_eq!(envelope.cloud_copy.sync_timeliness, None);
@@ -672,11 +859,16 @@ mod tests {
         let mut pending = evidence(&receipt).evidence;
         pending.confirmed_at_ms = receipt.copied_at_ms + PROVIDER_SYNC_OVERDUE_AFTER_MS;
         pending.sync_complete = false;
+        pending.sync_state = crate::cloud_transfer::ProviderSyncState::Uploading;
         let record = create_sync_evidence_record(&pending).unwrap();
 
         let envelope = export_naruon_file_lineage(&receipt, Some(&record)).unwrap();
 
         assert!(!envelope.cloud_copy.provider_sync_confirmed);
+        assert_eq!(
+            envelope.cloud_copy.provider_sync_state,
+            ProviderSyncState::Uploading
+        );
         assert_eq!(
             envelope.cloud_copy.sync_timeliness,
             Some(ProviderSyncTimeliness::Overdue)
