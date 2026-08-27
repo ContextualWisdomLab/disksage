@@ -91,10 +91,11 @@ describe("customer copy contract", () => {
     }
   });
 
-  it("does not render raw caught errors in inventory or duplicate views", () => {
+  it("does not render raw caught or per-item errors in inventory or duplicate views", () => {
     for (const fileName of ["Inventory.svelte", "Duplicates.svelte"]) {
       const source = readFileSync(resolve(repositoryRoot, "src/lib", fileName), "utf8");
       expect(source).not.toContain("String(e)");
+      expect(source).not.toContain("{r.error}");
       expect(source).toContain("다시 시도하십시오");
     }
   });
