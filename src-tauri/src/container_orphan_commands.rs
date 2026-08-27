@@ -1,4 +1,5 @@
 use crate::{container_orphan_public, container_orphan_reclaim, podman_reclaim};
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 const MAX_DOCKER_CONFIG_BYTES: usize = 64 * 1024;
@@ -108,6 +109,30 @@ fn bounded_docker_context(value: &str) -> Option<String> {
     .then(|| value.to_string())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DockerContextEnvironment {
+    /// The Docker CLI treats an absent or empty override as no override and consults config.
+    AbsentOrEmpty,
+    /// A bounded non-empty override takes precedence over Docker's config file.
+    Context(String),
+    /// A present non-empty override that DiskSage cannot represent safely must not fall back to
+    /// config, because Docker itself will not silently replace that override with currentContext.
+    Invalid,
+}
+
+fn docker_context_environment(value: Option<OsString>) -> DockerContextEnvironment {
+    match value {
+        None => DockerContextEnvironment::AbsentOrEmpty,
+        Some(value) if value.is_empty() => DockerContextEnvironment::AbsentOrEmpty,
+        Some(value) => match value.into_string() {
+            Ok(context) => bounded_docker_context(&context)
+                .map(DockerContextEnvironment::Context)
+                .unwrap_or(DockerContextEnvironment::Invalid),
+            Err(_) => DockerContextEnvironment::Invalid,
+        },
+    }
+}
+
 fn parse_docker_current_context(bytes: &[u8]) -> Option<String> {
     if bytes.len() > MAX_DOCKER_CONFIG_BYTES {
         return None;
@@ -128,10 +153,10 @@ fn docker_config_path() -> Option<PathBuf> {
 }
 
 fn docker_current_context() -> Option<String> {
-    if let Ok(context) = std::env::var("DOCKER_CONTEXT") {
-        if let Some(context) = bounded_docker_context(&context) {
-            return Some(context);
-        }
+    match docker_context_environment(std::env::var_os("DOCKER_CONTEXT")) {
+        DockerContextEnvironment::Context(context) => return Some(context),
+        DockerContextEnvironment::Invalid => return None,
+        DockerContextEnvironment::AbsentOrEmpty => {}
     }
 
     let path = docker_config_path()?;
@@ -264,6 +289,39 @@ mod tests {
             runtime_kinds_for_default_docker_context(None),
             vec![DockerNative, DockerColimaContext, PodmanMachine]
         );
+    }
+
+    #[test]
+    fn docker_context_environment_precedence_is_fail_closed_and_matches_empty_override_fallback() {
+        assert_eq!(
+            docker_context_environment(None),
+            DockerContextEnvironment::AbsentOrEmpty
+        );
+        assert_eq!(
+            docker_context_environment(Some(OsString::new())),
+            DockerContextEnvironment::AbsentOrEmpty
+        );
+        assert_eq!(
+            docker_context_environment(Some(OsString::from("colima"))),
+            DockerContextEnvironment::Context("colima".to_string())
+        );
+        assert_eq!(
+            docker_context_environment(Some(OsString::from("bad\ncontext"))),
+            DockerContextEnvironment::Invalid
+        );
+        assert_eq!(
+            docker_context_environment(Some(OsString::from("x".repeat(MAX_DOCKER_CONTEXT_BYTES + 1)))),
+            DockerContextEnvironment::Invalid
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            assert_eq!(
+                docker_context_environment(Some(OsString::from_vec(vec![0xff]))),
+                DockerContextEnvironment::Invalid
+            );
+        }
     }
 
     #[test]
