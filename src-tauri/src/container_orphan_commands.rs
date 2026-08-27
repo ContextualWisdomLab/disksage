@@ -203,11 +203,18 @@ fn runtime_kinds_for_docker_context(
 }
 
 fn docker_context_binding(current_context: Option<&str>) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut hasher = Sha256::new();
     hasher.update(DOCKER_CONTEXT_APPROVAL_DOMAIN);
     hasher.update([0]);
     hasher.update(current_context.unwrap_or("<default>").as_bytes());
-    format!("{:x}", hasher.finalize())
+    let digest = hasher.finalize();
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    encoded
 }
 
 fn bind_docker_context_approval(base_phrase: &str, current_context: Option<&str>) -> String {
