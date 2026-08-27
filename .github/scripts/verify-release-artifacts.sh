@@ -13,6 +13,7 @@ if [[ ! -d "$artifact_root" ]]; then
   exit 1
 fi
 
+# Require exactly one regular file matching a path-scoped release artifact pattern.
 require_exactly_one_path() {
   local path_pattern="$1" label="$2" count=0 matched_path=""
   while IFS= read -r -d '' matched_path; do count=$((count + 1)); done < <(find "$artifact_root" -type f -path "$path_pattern" -print0)
@@ -22,6 +23,7 @@ require_exactly_one_path() {
   fi
 }
 
+# Require exactly one named operational artifact inside its platform-scoped directory.
 require_exactly_one_file() {
   local directory="$1" file_name="$2" count=0 matched_path=""
   while IFS= read -r -d '' matched_path; do count=$((count + 1)); done < <(find "$artifact_root/$directory" -type f -name "$file_name" -print0)
