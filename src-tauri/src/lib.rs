@@ -7,7 +7,11 @@ mod dupes;
 #[cfg_attr(coverage, allow(dead_code))]
 mod commands;
 #[cfg_attr(coverage, allow(dead_code))]
-mod cache_cleanup;
+mod generic_cleanup;
+#[cfg_attr(coverage, allow(dead_code))]
+mod node_navigation;
+#[cfg_attr(coverage, allow(dead_code))]
+pub mod cache_cleanup;
 #[cfg_attr(coverage, allow(dead_code))]
 mod scanner;
 #[cfg_attr(coverage, allow(dead_code))]
@@ -18,10 +22,12 @@ mod settings;
 mod safety;
 #[cfg(all(test, target_os = "macos"))]
 mod macos_temp_guard_tests;
+#[cfg(all(test, unix))]
+mod node_view_security_tests;
 #[cfg_attr(coverage, allow(dead_code))]
 mod rules;
 #[cfg_attr(coverage, allow(dead_code))]
-mod dev_artifacts;
+pub mod dev_artifacts;
 #[cfg_attr(coverage, allow(dead_code))]
 mod ontology;
 #[cfg_attr(coverage, allow(dead_code))]
@@ -41,10 +47,12 @@ mod brew_cleanup;
 pub mod archive_git_tree;
 #[cfg_attr(coverage, allow(dead_code))]
 pub mod cloud;
+pub mod cloud_adr;
 /// Typed backend-authored presentation contract for cloud archive plans.
 pub mod cloud_plan_view;
 pub mod cloud_local_inventory;
 pub mod cloud_local_eviction;
+#[cfg(not(coverage))]
 pub mod cloud_local_eviction_batch;
 #[cfg(not(coverage))]
 pub mod cloud_eviction;
@@ -53,6 +61,7 @@ pub mod cloud_transfer;
 pub mod content_digest;
 pub mod duplicate_audit;
 pub mod icloud_sync_health;
+pub mod judge_calibration;
 pub mod incomplete_download;
 pub mod incomplete_download_materialization;
 pub mod incomplete_download_materialization_destination;
@@ -64,11 +73,16 @@ pub mod multipart_archive;
 pub mod naruon_capacity;
 pub mod naruon_cloud_copy_readiness;
 pub mod naruon_lineage;
-/// Read-only, fail-closed Podman VM/store reclaim evidence.
+/// Path-free ontology organization lineage handoff for Naruon/semantic-data-portal.
+pub mod organization_lineage;
+/// Read-only evidence plus exact-identity-bound Podman reclaim execution authority.
+#[path = "podman_reclaim_public.rs"]
 pub mod podman_reclaim;
 pub mod provider_api_client;
+pub mod provider_api_write;
 pub mod provider_capacity;
 pub mod provider_client_runtime;
+pub mod provider_recovery;
 pub mod provider_evidence;
 pub mod provider_oauth;
 pub mod provider_global_sync;
@@ -78,6 +92,9 @@ pub mod private_evidence;
 pub mod reclaim;
 pub mod semantic_catalog;
 pub mod volume_pressure;
+pub mod zotero_local;
+/// Bounded, path-free ontology planning for uninstalled macOS application data.
+pub mod orphan;
 
 // coverage 빌드에서 제외 — GUI 런타임은 헤드리스 테스트로 실행 불가
 #[cfg(not(coverage))]
@@ -91,11 +108,14 @@ pub fn run() {
             commands::list_roots,
             commands::start_scan,
             commands::cancel_scan,
-            commands::get_node,
+            commands::cancel_cloud_copy,
+            node_navigation::get_node_secure,
             commands::top_files,
             commands::list_cache_candidates,
+            commands::clean_regenerable_caches,
+            cache_cleanup::list_cache_targets,
             commands::list_dev_artifacts,
-            commands::clean_paths,
+            generic_cleanup::fail_closed_clean_paths,
             cache_cleanup::clean_cache_contents,
             commands::clean_dev_artifacts,
             commands::recent_operations,
@@ -105,6 +125,7 @@ pub fn run() {
             commands::disk_inventory,
             commands::ontology_coherence,
             commands::plan_organize,
+            commands::export_organization_lineage,
             commands::user_rules,
             commands::execute_moves,
             commands::undo_last_moves,
@@ -116,7 +137,10 @@ pub fn run() {
             commands::set_settings,
             commands::reason_unknown_extensions,
             commands::plan_brew_cleanup,
+            commands::inspect_podman_reclaim,
+            commands::execute_podman_dangling_image_prune,
             commands::judge_brew_cleanup,
+            commands::validate_judge_calibration,
             commands::execute_brew_cleanup,
             commands::list_cloud_roots,
             commands::inspect_cloud_roots,
@@ -127,15 +151,22 @@ pub fn run() {
             commands::list_cloud_provider_connections,
             commands::verify_cloud_provider_capacity,
             commands::inspect_cloud_provider_client_runtime,
+            commands::recover_cloud_provider_client,
+            provider_recovery::cancel_finder_copy,
+            commands::plan_orphan_cleanup,
+            commands::clean_orphan_candidates,
             commands::inspect_icloud_new_copy_admission,
+            commands::inspect_cloud_provider_global_sync,
             commands::list_cloud_review_decisions,
             commands::connect_cloud_provider,
             commands::disconnect_cloud_provider,
             commands::plan_cloud_archive,
             commands::review_cloud_candidate,
             commands::copy_cloud_candidate,
+            commands::copy_cloud_candidate_via_provider_api,
             commands::adopt_existing_cloud_candidate,
             commands::attest_cloud_copy,
+            commands::reconcile_cloud_receipts,
             commands::trash_verified_cloud_source
         ])
         .run(tauri::generate_context!())

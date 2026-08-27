@@ -18,10 +18,20 @@ use std::path::Path;
 
 #[cfg(not(coverage))]
 use crate::content_digest::{ContentDigests, ContentHasher};
+#[cfg(all(not(coverage), not(target_os = "macos")))]
+use same_file::Handle;
+#[cfg(all(not(coverage), target_os = "macos"))]
+use std::ffi::OsStr;
 #[cfg(not(coverage))]
 use std::io::{Read, Write};
 #[cfg(not(coverage))]
 use std::path::PathBuf;
+#[cfg(not(coverage))]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(all(not(coverage), target_os = "macos"))]
+use std::process::{Command, Stdio};
+#[cfg(all(not(coverage), target_os = "macos"))]
+use std::time::{Duration, Instant};
 
 /// Legacy receipt schema version retained for backward-compatible reads.
 pub const LEGACY_RECEIPT_VERSION: u32 = 2;
@@ -31,16 +41,120 @@ pub const PRE_APPROVAL_RECEIPT_VERSION: u32 = 3;
 pub const RECEIPT_VERSION: u32 = 4;
 /// Schema version for one exact human cloud-copy approval.
 pub const CLOUD_COPY_APPROVAL_VERSION: u32 = 1;
+/// Schema version for private local copy-failure journals.
+pub const CLOUD_COPY_FAILURE_VERSION: u32 = 1;
 /// Maximum age accepted for an exact cloud-copy approval.
 pub const MAX_CLOUD_COPY_APPROVAL_AGE_MS: u64 = 15 * 60 * 1000;
+
+/// Return a bounded blocker when the source cannot be safely revalidated for a later eviction.
+///
+/// This is deliberately separate from receipt integrity: a valid receipt may outlive its local
+/// source, and that state must keep the dynamic ADR/Goal projection blocked rather than implying
+/// that the source was safely removed.
+#[cfg(not(coverage))]
+pub fn source_eviction_blocker(source: &Path) -> Option<&'static str> {
+    match std::fs::symlink_metadata(source) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Some("source-not-regular-file"),
+        Ok(metadata) if metadata.is_file() && crate::cloud::metadata_is_dataless(&metadata) => {
+            Some("source-content-not-local")
+        }
+        Ok(metadata) if metadata.is_file() => None,
+        Ok(_) => Some("source-not-regular-file"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some("source-not-present"),
+        Err(_) => Some("source-state-unavailable"),
+    }
+}
 #[cfg(not(coverage))]
 const MAX_RECEIPT_BYTES: u64 = 64 * 1024;
+/// Keep the private diagnostic journal bounded without deleting evidence implicitly.
+#[cfg(not(coverage))]
+const MAX_CLOUD_COPY_FAILURE_RECORDS: usize = 10_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SyncEvidenceKind {
     ProviderApi,
     ProviderNativeStatus,
+}
+
+/// Provider state observed alongside content-bound synchronization evidence.
+///
+/// A local-current item with `is_uploaded=false` is deliberately represented as
+/// `pending-upload`; it is not an incomplete-but-unknown result and never authorizes eviction.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProviderSyncState {
+    Complete,
+    PendingUpload,
+    NotUbiquitous,
+    NotLocalCurrent,
+    Uploading,
+    ExcludedFromSync,
+    SyncPaused,
+    RemoteUnavailable,
+    ContentMismatch,
+    #[default]
+    Unknown,
+}
+
+impl ProviderSyncState {
+    pub fn is_complete(&self) -> bool {
+        *self == Self::Complete
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Complete => "complete",
+            Self::PendingUpload => "pending-upload",
+            Self::NotUbiquitous => "not-ubiquitous",
+            Self::NotLocalCurrent => "not-local-current",
+            Self::Uploading => "uploading",
+            Self::ExcludedFromSync => "excluded-from-sync",
+            Self::SyncPaused => "sync-paused",
+            Self::RemoteUnavailable => "remote-unavailable",
+            Self::ContentMismatch => "content-mismatch",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn is_unknown(&self) -> bool {
+        *self == Self::Unknown
+    }
+}
+
+/// Runtime state of one metadata-bound cloud offload. This state machine never deletes a source;
+/// `EvictionReady` only permits a separately approved OS-Trash operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CloudOffloadGoalState {
+    CopyVerified,
+    PendingProviderSync,
+    ProviderSyncConfirmed,
+    EvictionReady,
+    SourceEvicted,
+}
+
+impl CloudOffloadGoalState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CopyVerified => "copy-verified",
+            Self::PendingProviderSync => "pending-provider-sync",
+            Self::ProviderSyncConfirmed => "provider-sync-confirmed",
+            Self::EvictionReady => "eviction-ready",
+            Self::SourceEvicted => "source-evicted",
+        }
+    }
+
+    pub fn after_attestation(evidence: &ProviderSyncEvidence, permit_available: bool) -> Self {
+        if !evidence.sync_complete || !evidence.sync_state.is_complete() {
+            return Self::PendingProviderSync;
+        }
+        if permit_available {
+            Self::EvictionReady
+        } else {
+            Self::ProviderSyncConfirmed
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -55,6 +169,9 @@ pub enum RemoteChecksumAlgorithm {
 pub enum CloudCopyVerificationMethod {
     #[default]
     CopiedByDiskSage,
+    /// The source was uploaded through an authenticated provider API because the local File
+    /// Provider could not admit a new copy. The same copy-only approval still binds the action.
+    CopiedByProviderApi,
     AdoptedExisting,
 }
 
@@ -83,12 +200,26 @@ impl CloudCopyApprovalAction {
         }
     }
 
-    fn verification_method(self) -> CloudCopyVerificationMethod {
+    fn accepts_verification_method(self, method: CloudCopyVerificationMethod) -> bool {
         match self {
-            Self::CopyOnly => CloudCopyVerificationMethod::CopiedByDiskSage,
-            Self::AdoptExistingCopy => CloudCopyVerificationMethod::AdoptedExisting,
+            Self::CopyOnly => matches!(
+                method,
+                CloudCopyVerificationMethod::CopiedByDiskSage
+                    | CloudCopyVerificationMethod::CopiedByProviderApi
+            ),
+            Self::AdoptExistingCopy => method == CloudCopyVerificationMethod::AdoptedExisting,
         }
     }
+}
+
+/// Fields retained only so lineage fingerprints from older receipts can be revalidated exactly.
+/// They are not populated on new receipts; the immutable receipt remains the authority.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct LegacyOntologyRelation {
+    subject: String,
+    predicate: String,
+    object: String,
+    source: String,
 }
 
 /// A fresh, human-attributed authorization for one exact candidate, destination, and action.
@@ -162,6 +293,11 @@ pub struct CloudLineageSnapshot {
     pub review_rationale: Option<String>,
     pub destination_account_scope: CloudAccountScope,
     pub kind: ArchiveKind,
+    /// Backward-compatible v3 lineage fields from the pre-Naruon receipt schema.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) ontology_class: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) ontology_relations: Option<Vec<LegacyOntologyRelation>>,
     pub created_ms: u64,
     pub modified_ms: u64,
     pub production_time_ms: u64,
@@ -178,6 +314,8 @@ pub struct CloudLineageSnapshot {
     pub duration_ms: Option<u64>,
     pub dataset_profile: Option<DatasetProfile>,
     pub metadata_evidence: Vec<MetadataEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) capacity: Option<crate::provider_capacity::CloudCapacityAssessment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub copy_approval: Option<CloudCopyApproval>,
 }
@@ -204,6 +342,21 @@ pub struct CloudCopyReceipt {
     pub lineage: Option<CloudLineageSnapshot>,
 }
 
+/// Private local evidence for a failed copy attempt. It never grants sync or eviction authority.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CloudCopyFailureRecord {
+    pub version: u32,
+    pub failure_id: String,
+    pub candidate_fingerprint: String,
+    pub provider: CloudProvider,
+    pub source: String,
+    pub destination: String,
+    pub action: CloudCopyApprovalAction,
+    pub error_code: String,
+    pub occurred_at_ms: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderSyncEvidence {
@@ -216,6 +369,9 @@ pub struct ProviderSyncEvidence {
     pub kind: SyncEvidenceKind,
     pub evidence_id: String,
     pub sync_complete: bool,
+    /// Older evidence records omit this field and deserialize as `unknown`.
+    #[serde(default, skip_serializing_if = "ProviderSyncState::is_unknown")]
+    pub sync_state: ProviderSyncState,
     pub remote_content: Option<RemoteContentProof>,
 }
 
@@ -592,6 +748,8 @@ fn lineage_snapshot(
             .map(|decision| decision.rationale.clone()),
         destination_account_scope: candidate.destination_account_scope,
         kind: candidate.kind,
+        ontology_class: None,
+        ontology_relations: None,
         created_ms: candidate.created_ms,
         modified_ms: candidate.modified_ms,
         production_time_ms: candidate.production_time_ms,
@@ -608,6 +766,7 @@ fn lineage_snapshot(
         duration_ms: candidate.duration_ms,
         dataset_profile: candidate.dataset_profile.clone(),
         metadata_evidence: candidate.metadata_evidence.clone(),
+        capacity: None,
         copy_approval: copy_approval.cloned(),
     }
 }
@@ -664,7 +823,9 @@ pub fn validate_receipt_copy_approval(receipt: &CloudCopyReceipt) -> Result<(), 
         || approval.review_fingerprint != lineage.review_fingerprint
         || approval.provider != receipt.provider
         || approval.destination_account_scope != lineage.destination_account_scope
-        || approval.action.verification_method() != lineage.copy_verification_method
+        || !approval
+            .action
+            .accepts_verification_method(lineage.copy_verification_method)
         || approval.exact_confirmation_phrase != expected_phrase
         || approval.approved_at_ms > receipt.copied_at_ms
         || receipt.copied_at_ms.saturating_sub(approval.approved_at_ms)
@@ -974,10 +1135,303 @@ fn remove_created_file(path: &Path) {
     let _ = std::fs::remove_file(path);
 }
 
+#[cfg(all(not(coverage), not(target_os = "macos")))]
+fn remove_created_file_if_identity_matches(path: &Path, expected: Option<&Handle>) {
+    let can_remove = expected.is_some_and(|identity| {
+        let Ok(metadata) = std::fs::symlink_metadata(path) else {
+            return false;
+        };
+        !metadata.file_type().is_symlink()
+            && metadata.is_file()
+            && Handle::from_path(path).is_ok_and(|current| current.eq(identity))
+    });
+    if can_remove {
+        remove_created_file(path);
+    }
+}
+
+#[cfg(not(coverage))]
+fn failure_id_for(record: &CloudCopyFailureRecord) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage-cloud-copy-failure-v1\0");
+    for value in [
+        record.candidate_fingerprint.as_str(),
+        record.provider.as_str(),
+        record.source.as_str(),
+        record.destination.as_str(),
+        record.action.as_str(),
+        record.error_code.as_str(),
+    ] {
+        hasher.update(value.as_bytes());
+        hasher.update(&[0]);
+    }
+    hasher.update(&record.occurred_at_ms.to_le_bytes());
+    hasher.finalize().to_hex().to_string()
+}
+
+#[cfg(not(coverage))]
+fn write_copy_failure_record(
+    record: &CloudCopyFailureRecord,
+    receipt_dir: &Path,
+) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(receipt_dir).map_err(|error| error.to_string())?;
+    let metadata = std::fs::symlink_metadata(receipt_dir)
+        .map_err(|_| "failure-record-directory-unavailable".to_string())?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err("failure-record-directory-unsafe".into());
+    }
+    let mut existing_records = 0_usize;
+    for entry in std::fs::read_dir(receipt_dir)
+        .map_err(|_| "failure-record-directory-unavailable".to_string())?
+    {
+        let entry = entry.map_err(|_| "failure-record-directory-unavailable".to_string())?;
+        let entry_metadata = std::fs::symlink_metadata(entry.path())
+            .map_err(|_| "failure-record-directory-unavailable".to_string())?;
+        if entry_metadata.is_file()
+            && !entry_metadata.file_type().is_symlink()
+            && entry.file_name().to_string_lossy().ends_with("-failure.json")
+        {
+            existing_records = existing_records.saturating_add(1);
+        }
+    }
+    if existing_records >= MAX_CLOUD_COPY_FAILURE_RECORDS {
+        return Err("failure-record-retention-limit".into());
+    }
+    // A repeated failure in the same millisecond has the same content-derived base id. Retry with
+    // a bounded suffix so diagnostic evidence is append-only instead of silently dropped by
+    // `create_new`.
+    for suffix in 0..=MAX_CLOUD_COPY_FAILURE_RECORDS {
+        let mut candidate = record.clone();
+        if suffix > 0 {
+            candidate.failure_id = format!("{}-{suffix}", record.failure_id);
+        }
+        let encoded = serde_json::to_vec_pretty(&candidate)
+            .map_err(|_| "failure-record-json-invalid".to_string())?;
+        if encoded.len() as u64 > MAX_RECEIPT_BYTES {
+            return Err("failure-record-too-large".into());
+        }
+        let path = receipt_dir.join(format!("{}-failure.json", candidate.failure_id));
+        #[cfg(unix)]
+        let file_result = {
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o400)
+                .open(&path)
+        };
+        #[cfg(not(unix))]
+        let file_result = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path);
+        let mut file = match file_result {
+            Ok(file) => file,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::AlreadyExists
+                    && suffix < MAX_CLOUD_COPY_FAILURE_RECORDS =>
+            {
+                continue;
+            }
+            Err(_) => return Err("failure-record-create-failed".into()),
+        };
+        let result = (|| -> Result<(), String> {
+            file.write_all(&encoded)
+                .and_then(|_| file.sync_all())
+                .map_err(|_| "failure-record-write-failed".to_string())?;
+            #[cfg(not(unix))]
+            {
+                let mut permissions = file
+                    .metadata()
+                    .map_err(|_| "failure-record-permissions-failed".to_string())?
+                    .permissions();
+                permissions.set_readonly(true);
+                std::fs::set_permissions(&path, permissions)
+                    .map_err(|_| "failure-record-permissions-failed".to_string())?;
+            }
+            #[cfg(unix)]
+            std::fs::File::open(receipt_dir)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|_| "failure-record-directory-sync-failed".to_string())?;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            drop(file);
+            remove_created_file(&path);
+            return Err(error);
+        }
+        return Ok(path);
+    }
+    Err("failure-record-create-failed".into())
+}
+
+#[cfg(not(coverage))]
+pub(crate) fn record_copy_failure(
+    candidate: &CloudCandidate,
+    action: CloudCopyApprovalAction,
+    error_code: &str,
+    occurred_at_ms: u64,
+    receipt_dir: &Path,
+) -> Result<(), String> {
+    let mut record = CloudCopyFailureRecord {
+        version: CLOUD_COPY_FAILURE_VERSION,
+        failure_id: String::new(),
+        candidate_fingerprint: candidate.metadata_fingerprint.clone(),
+        provider: candidate.provider,
+        source: candidate.src.clone(),
+        destination: candidate.dst.clone(),
+        action,
+        error_code: error_code.chars().take(160).collect(),
+        occurred_at_ms,
+    };
+    record.failure_id = failure_id_for(&record);
+    write_copy_failure_record(&record, receipt_dir).map(|_| ())
+}
+
+#[cfg(all(not(coverage), target_os = "macos"))]
+const COPY_TIMEOUT_BASE_SECS: u64 = 120;
+#[cfg(all(not(coverage), target_os = "macos"))]
+const COPY_TIMEOUT_MAX_SECS: u64 = 30 * 60;
+#[cfg(all(not(coverage), target_os = "macos"))]
+const COPY_EXPECTED_BYTES_PER_SEC: u64 = 4 * 1024 * 1024;
+
+#[cfg(all(not(coverage), target_os = "macos"))]
+fn copy_timeout_for_bytes(bytes: u64) -> Duration {
+    let transfer_secs =
+        bytes.saturating_add(COPY_EXPECTED_BYTES_PER_SEC - 1) / COPY_EXPECTED_BYTES_PER_SEC;
+    Duration::from_secs(
+        COPY_TIMEOUT_BASE_SECS
+            .saturating_add(transfer_secs)
+            .min(COPY_TIMEOUT_MAX_SECS),
+    )
+}
+
+/// Run one fixed macOS filesystem helper outside the UI process so a File Provider
+/// materialization/write cannot leave the Tauri command waiting forever.
+#[cfg(all(not(coverage), target_os = "macos"))]
+fn bounded_macos_command(
+    program: &Path,
+    args: &[&OsStr],
+    timeout: Duration,
+    cancel: Option<&AtomicBool>,
+) -> Result<(), String> {
+    use std::os::unix::process::CommandExt;
+
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    if cancel.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+        return Err("cloud-copy-cancelled".into());
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|_| "cloud-copy-helper-failed".to_string())?;
+    let child_pid = child.id();
+    let kill_group = || unsafe {
+        let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
+    };
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(_)) => return Err("cloud-copy-helper-failed".into()),
+            Ok(None) => {
+                if cancel.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+                    kill_group();
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err("cloud-copy-cancelled".into());
+                }
+                if Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(50));
+                } else {
+                    kill_group();
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err("cloud-copy-timeout".into());
+                }
+            }
+            Err(_) => {
+                kill_group();
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("cloud-copy-helper-failed".into());
+            }
+        }
+    }
+}
+
+#[cfg(all(not(coverage), target_os = "macos"))]
+fn bounded_macos_mkdir(path: &Path, timeout: Duration, cancel: Option<&AtomicBool>) -> Result<(), String> {
+    bounded_macos_command(
+        Path::new("/bin/mkdir"),
+        &[OsStr::new("-p"), path.as_os_str()],
+        timeout,
+        cancel,
+    )
+}
+
+/// Copy outside the UI process; the parent verifies bytes and hashes after the child exits.
+#[cfg(all(not(coverage), target_os = "macos"))]
+fn bounded_macos_copy(source: &Path, destination: &Path, timeout: Duration, cancel: Option<&AtomicBool>) -> Result<(), String> {
+    bounded_macos_command(
+        Path::new("/bin/cp"),
+        // Never replace a File Provider object that appeared after the read-only preflight.
+        &[OsStr::new("-n"), source.as_os_str(), destination.as_os_str()],
+        timeout,
+        cancel,
+    )
+}
+
+#[cfg(all(not(coverage), target_os = "macos"))]
+fn bounded_macos_move_create_only(
+    source: &Path,
+    destination: &Path,
+    timeout: Duration,
+    cancel: Option<&AtomicBool>,
+) -> Result<(), String> {
+    bounded_macos_command(
+        Path::new("/bin/mv"),
+        &[
+            OsStr::new("-n"),
+            source.as_os_str(),
+            destination.as_os_str(),
+        ],
+        timeout,
+        cancel,
+    )?;
+    if std::fs::symlink_metadata(source).is_ok() {
+        return Err("cloud-copy-finalize-race".into());
+    }
+    Ok(())
+}
+
+#[cfg(all(not(coverage), target_os = "macos"))]
+fn create_macos_copy_staging(parent: &Path) -> Result<(tempfile::TempDir, PathBuf), String> {
+    let directory = tempfile::Builder::new()
+        .prefix(".disksage-copy-")
+        .tempdir_in(parent)
+        .map_err(|_| "cloud-copy-staging-create-failed".to_string())?;
+    let path = directory.path().join("payload");
+    Ok((directory, path))
+}
+
 #[cfg(not(coverage))]
 fn copy_and_verify(
     candidate: &CloudCandidate,
     cloud_root: &CloudRoot,
+    cancel: Option<&AtomicBool>,
 ) -> Result<(u64, ContentDigests), String> {
     let source = Path::new(&candidate.src);
     let destination = Path::new(&candidate.dst);
@@ -985,16 +1439,26 @@ fn copy_and_verify(
     if before.file_type().is_symlink() || !before.is_file() {
         return Err("source-must-be-regular-file".into());
     }
+    if crate::cloud::metadata_is_dataless(&before) {
+        return Err("source-content-not-local".into());
+    }
     let before_modified_ms = modified_ms(&before)?;
     if before.len() != candidate.bytes || before_modified_ms != candidate.modified_ms {
         return Err("source-changed-since-plan".into());
     }
-    if destination.exists() {
-        return Err("destination-already-exists".into());
+    match std::fs::symlink_metadata(destination) {
+        Ok(_) => return Err("destination-already-exists".into()),
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            return Err("destination-state-unavailable".into())
+        }
+        Err(_) => {}
     }
     let parent = destination
         .parent()
         .ok_or_else(|| "destination-parent-missing".to_string())?;
+    #[cfg(target_os = "macos")]
+    bounded_macos_mkdir(parent, copy_timeout_for_bytes(candidate.bytes), cancel)?;
+    #[cfg(not(target_os = "macos"))]
     std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     let canonical_root =
         std::fs::canonicalize(&cloud_root.path).map_err(|error| error.to_string())?;
@@ -1007,18 +1471,78 @@ fn copy_and_verify(
         return Err("source-already-in-cloud-root".into());
     }
 
-    let mut source_file = std::fs::File::open(source).map_err(|error| error.to_string())?;
-    let mut destination_file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(destination)
-        .map_err(|error| error.to_string())?;
+    #[cfg(target_os = "macos")]
+    let (_staging_directory, staging) = create_macos_copy_staging(parent)?;
 
+    #[cfg(target_os = "macos")]
     let copy_result = (|| -> Result<(u64, ContentDigests), String> {
+        bounded_macos_copy(source, &staging, copy_timeout_for_bytes(candidate.bytes), cancel)?;
+        let source_hashes = hash_file(source)?;
+        let staging_hashes = hash_file(&staging)?;
+        let after = std::fs::symlink_metadata(source).map_err(|error| error.to_string())?;
+        let unchanged = after.is_file()
+            && !after.file_type().is_symlink()
+            && after.len() == before.len()
+            && modified_ms(&after)? == before_modified_ms;
+        let staging_metadata =
+            std::fs::symlink_metadata(&staging).map_err(|error| error.to_string())?;
+        let staging_len = staging_metadata.len();
+        if !unchanged
+            || !staging_metadata.is_file()
+            || staging_metadata.file_type().is_symlink()
+            || staging_len != candidate.bytes
+            || source_hashes != staging_hashes
+        {
+            return Err("copy-verification-failed".into());
+        }
+        if std::fs::symlink_metadata(destination).is_ok() {
+            return Err("destination-created-during-copy".into());
+        }
+        bounded_macos_move_create_only(
+            &staging,
+            destination,
+            copy_timeout_for_bytes(candidate.bytes),
+            cancel,
+        )?;
+        let finalized = std::fs::symlink_metadata(destination)
+            .map_err(|_| "cloud-copy-finalize-failed".to_string())?;
+        if !finalized.is_file() || finalized.file_type().is_symlink() {
+            return Err("cloud-copy-finalize-failed".into());
+        }
+        Ok((staging_len, staging_hashes))
+    })();
+
+    #[cfg(all(not(coverage), not(target_os = "macos")))]
+    let mut destination_identity: Option<Handle> = None;
+
+    #[cfg(not(target_os = "macos"))]
+    let copy_result = (|| -> Result<(u64, ContentDigests), String> {
+        let mut source_file = std::fs::File::open(source).map_err(|error| error.to_string())?;
+        let mut destination_file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(destination)
+            .map_err(|error| error.to_string())?;
+        #[cfg(all(not(coverage), not(target_os = "macos")))]
+        {
+            // Capture ownership from the create-new handle itself. A path lookup here could
+            // observe a provider/foreign replacement between creation and cleanup.
+            destination_identity = Some(
+                Handle::from_file(
+                    destination_file
+                        .try_clone()
+                        .map_err(|_| "destination-identity-unavailable".to_string())?,
+                )
+                .map_err(|_| "destination-identity-unavailable".to_string())?,
+            );
+        }
         let mut source_hasher = ContentHasher::default();
         let mut copied = 0_u64;
         let mut buffer = vec![0_u8; 1024 * 1024];
         loop {
+            if cancel.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+                return Err("cloud-copy-cancelled".into());
+            }
             let read = source_file
                 .read(&mut buffer)
                 .map_err(|error| error.to_string())?;
@@ -1031,14 +1555,24 @@ fn copy_and_verify(
             source_hasher.update(&buffer[..read]);
             copied = copied.saturating_add(read as u64);
         }
+        if cancel.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+            return Err("cloud-copy-cancelled".into());
+        }
         destination_file
             .sync_all()
             .map_err(|error| error.to_string())?;
         drop(destination_file);
 
+        if cancel.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+            return Err("cloud-copy-cancelled".into());
+        }
+
         let streamed_hashes = source_hasher.finalize();
         let source_hashes = hash_file(source)?;
         let destination_hashes = hash_file(destination)?;
+        if cancel.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+            return Err("cloud-copy-cancelled".into());
+        }
         let after = std::fs::symlink_metadata(source).map_err(|error| error.to_string())?;
         let unchanged = after.is_file()
             && !after.file_type().is_symlink()
@@ -1058,8 +1592,11 @@ fn copy_and_verify(
         Ok((copied, destination_hashes))
     })();
 
+    // The TempDir owns the only pathname created for a macOS copy. On Unix, a native copy's
+    // cleanup is identity-bound so a concurrent replacement cannot be deleted accidentally.
+    #[cfg(all(not(coverage), not(target_os = "macos")))]
     if copy_result.is_err() {
-        remove_created_file(destination);
+        remove_created_file_if_identity_matches(destination, destination_identity.as_ref());
     }
     copy_result
 }
@@ -1074,6 +1611,9 @@ fn verify_existing_destination(
     let source_before = std::fs::symlink_metadata(source).map_err(|error| error.to_string())?;
     if source_before.file_type().is_symlink() || !source_before.is_file() {
         return Err("source-must-be-regular-file".into());
+    }
+    if crate::cloud::metadata_is_dataless(&source_before) {
+        return Err("source-content-not-local".into());
     }
     let source_modified_ms = modified_ms(&source_before)?;
     if source_before.len() != candidate.bytes || source_modified_ms != candidate.modified_ms {
@@ -1102,8 +1642,13 @@ fn verify_existing_destination(
         return Err("existing-destination-escapes-cloud-root".into());
     }
 
-    // Opening a File Provider placeholder can materialize it. This happens only after an explicit
-    // adoption action and is required to prove byte identity before a receipt can be issued.
+    // Never hash a dataless File Provider placeholder: opening it can materialize bytes and consume
+    // local headroom. Provider-native status must succeed before any content read.
+    crate::provider_sync::require_existing_destination_local_current(
+        candidate.provider,
+        destination,
+        candidate.bytes,
+    )?;
     let source_hashes = hash_file(source)?;
     let destination_hashes = hash_file(destination)?;
 
@@ -1179,7 +1724,15 @@ fn write_immutable_receipt(
 }
 
 #[cfg(not(coverage))]
-fn build_verified_receipt(
+pub fn write_provider_api_receipt(
+    receipt: &CloudCopyReceipt,
+    receipt_dir: &Path,
+) -> Result<PathBuf, String> {
+    write_immutable_receipt(receipt, receipt_dir)
+}
+
+#[cfg(not(coverage))]
+pub(crate) fn build_verified_receipt(
     candidate: &CloudCandidate,
     review_decision: Option<&CloudReviewDecision>,
     copy_approval: &CloudCopyApproval,
@@ -1231,6 +1784,78 @@ fn build_verified_receipt(
     Ok(receipt)
 }
 
+/// Hash and bind a source before an authenticated provider upload. This deliberately does not
+/// touch the destination: a disconnected File Provider may not expose a usable local directory.
+#[cfg(not(coverage))]
+pub fn prepare_provider_api_source_receipt(
+    candidate: &CloudCandidate,
+    cloud_root: &CloudRoot,
+    review_decision: Option<&CloudReviewDecision>,
+    copy_approval: &CloudCopyApproval,
+    copied_at_ms: u64,
+) -> Result<(CloudCopyReceipt, ContentDigests), String> {
+    validate_cloud_copy_approval_for_action(
+        copy_approval,
+        candidate,
+        cloud_root,
+        CloudCopyApprovalAction::CopyOnly,
+        copied_at_ms,
+    )?;
+    let blockers = candidate_blockers_with_review(candidate, cloud_root, review_decision);
+    if !blockers.is_empty() {
+        return Err(blockers.join(","));
+    }
+    let source = Path::new(&candidate.src);
+    let before = std::fs::symlink_metadata(source).map_err(|error| error.to_string())?;
+    if before.file_type().is_symlink() || !before.is_file() {
+        return Err("source-must-be-regular-file".into());
+    }
+    if crate::cloud::metadata_is_dataless(&before) {
+        return Err("source-content-not-local".into());
+    }
+    let before_modified_ms = modified_ms(&before)?;
+    if before.len() != candidate.bytes || before_modified_ms != candidate.modified_ms {
+        return Err("source-changed-since-plan".into());
+    }
+    let hashes = hash_file(source)?;
+    let after = std::fs::symlink_metadata(source).map_err(|error| error.to_string())?;
+    if after.file_type().is_symlink()
+        || !after.is_file()
+        || after.len() != before.len()
+        || modified_ms(&after)? != before_modified_ms
+    {
+        return Err("source-changed-during-provider-upload-preflight".into());
+    }
+    let receipt = build_verified_receipt(
+        candidate,
+        review_decision,
+        copy_approval,
+        hashes.clone(),
+        copied_at_ms,
+        CloudCopyVerificationMethod::CopiedByProviderApi,
+    )?;
+    Ok((receipt, hashes))
+}
+
+#[cfg(not(coverage))]
+pub fn verify_provider_api_source_unchanged(
+    candidate: &CloudCandidate,
+    hashes: &ContentDigests,
+) -> Result<(), String> {
+    let source = Path::new(&candidate.src);
+    let metadata = std::fs::symlink_metadata(source).map_err(|_| "source-unavailable".to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("source-changed-during-provider-upload".into());
+    }
+    if metadata.len() != candidate.bytes || modified_ms(&metadata)? != candidate.modified_ms {
+        return Err("source-changed-during-provider-upload".into());
+    }
+    if hash_file(source)? != *hashes {
+        return Err("source-changed-during-provider-upload".into());
+    }
+    Ok(())
+}
+
 /// Copy a candidate only after validating both the optional metadata review decision and a fresh,
 /// exact, human-attributed copy approval. The production entrypoint reads the live clock at the
 /// mutation boundary so an earlier preflight cannot silently extend the approval lifetime.
@@ -1252,6 +1877,28 @@ pub fn prepare_cloud_copy_with_approval(
     )
 }
 
+/// Production command variant that can stop the bounded helper or chunked copy at a safe
+/// boundary. The token is process-local and never persisted as authority.
+#[cfg(not(coverage))]
+pub fn prepare_cloud_copy_with_approval_cancelable(
+    candidate: &CloudCandidate,
+    cloud_root: &CloudRoot,
+    receipt_dir: &Path,
+    review_decision: Option<&CloudReviewDecision>,
+    copy_approval: &CloudCopyApproval,
+    cancel: &AtomicBool,
+) -> Result<(CloudCopyReceipt, PathBuf), String> {
+    prepare_cloud_copy_with_approval_at_cancel(
+        candidate,
+        cloud_root,
+        receipt_dir,
+        crate::cloud::system_now_ms(),
+        review_decision,
+        copy_approval,
+        Some(cancel),
+    )
+}
+
 #[cfg(not(coverage))]
 fn prepare_cloud_copy_with_approval_at(
     candidate: &CloudCandidate,
@@ -1260,6 +1907,27 @@ fn prepare_cloud_copy_with_approval_at(
     copied_at_ms: u64,
     review_decision: Option<&CloudReviewDecision>,
     copy_approval: &CloudCopyApproval,
+) -> Result<(CloudCopyReceipt, PathBuf), String> {
+    prepare_cloud_copy_with_approval_at_cancel(
+        candidate,
+        cloud_root,
+        receipt_dir,
+        copied_at_ms,
+        review_decision,
+        copy_approval,
+        None,
+    )
+}
+
+#[cfg(not(coverage))]
+fn prepare_cloud_copy_with_approval_at_cancel(
+    candidate: &CloudCandidate,
+    cloud_root: &CloudRoot,
+    receipt_dir: &Path,
+    copied_at_ms: u64,
+    review_decision: Option<&CloudReviewDecision>,
+    copy_approval: &CloudCopyApproval,
+    cancel: Option<&AtomicBool>,
 ) -> Result<(CloudCopyReceipt, PathBuf), String> {
     validate_cloud_copy_approval_for_action(
         copy_approval,
@@ -1272,7 +1940,7 @@ fn prepare_cloud_copy_with_approval_at(
     if !blockers.is_empty() {
         return Err(blockers.join(","));
     }
-    let (_, hashes) = copy_and_verify(candidate, cloud_root)?;
+    let (_, hashes) = copy_and_verify(candidate, cloud_root, cancel)?;
     let receipt = build_verified_receipt(
         candidate,
         review_decision,
@@ -1429,6 +2097,10 @@ mod tests {
     use crate::provider_evidence::{
         create_sync_evidence_record, ProviderSyncEvidenceRecord, PROVIDER_EVIDENCE_RECORD_VERSION,
     };
+    use crate::provider_capacity::{
+        self, CapacityEvidenceKind, CloudCapacitySnapshot, CloudCapacityState,
+        CAPACITY_SCHEMA_VERSION,
+    };
 
     #[cfg(windows)]
     const ROOT: &str = r"C:\cloud";
@@ -1506,8 +2178,152 @@ mod tests {
         candidate
     }
 
+    #[cfg(not(coverage))]
+    #[test]
+    fn cancelled_copy_stops_before_writing_destination() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("source.bin");
+        std::fs::write(&source, b"copy-me").unwrap();
+        let cloud_path = temporary.path().join("cloud");
+        std::fs::create_dir(&cloud_path).unwrap();
+        let destination = cloud_path.join("archive.bin");
+        let metadata = std::fs::symlink_metadata(&source).unwrap();
+        let mut planned = candidate();
+        planned.src = source.to_string_lossy().into_owned();
+        planned.dst = destination.to_string_lossy().into_owned();
+        planned.bytes = metadata.len();
+        planned.modified_ms = modified_ms(&metadata).unwrap();
+        let mut selected_root = root();
+        selected_root.path = cloud_path.to_string_lossy().into_owned();
+        let cancel = AtomicBool::new(true);
+
+        let error = copy_and_verify(&planned, &selected_root, Some(&cancel)).unwrap_err();
+        assert_eq!(error, "cloud-copy-cancelled");
+        assert!(!destination.exists());
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn copy_failure_record_is_private_durable_and_round_trips() {
+        let temporary = tempfile::tempdir().unwrap();
+        let receipt_dir = temporary.path().join("receipts");
+        record_copy_failure(
+            &candidate(),
+            CloudCopyApprovalAction::CopyOnly,
+            "cloud-copy-timeout",
+            123,
+            &receipt_dir,
+        )
+        .unwrap();
+        let entries: Vec<_> = std::fs::read_dir(&receipt_dir).unwrap().collect();
+        assert_eq!(entries.len(), 1);
+        let path = entries[0].as_ref().unwrap().path();
+        assert!(path.file_name().unwrap().to_string_lossy().ends_with("-failure.json"));
+        let decoded: CloudCopyFailureRecord =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(decoded.error_code, "cloud-copy-timeout");
+        assert_eq!(decoded.occurred_at_ms, 123);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(path).unwrap().permissions().mode() & 0o777, 0o400);
+        }
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn copy_failure_record_surfaces_unwritable_journal() {
+        let temporary = tempfile::tempdir().unwrap();
+        let receipt_path = temporary.path().join("not-a-directory");
+        std::fs::write(&receipt_path, b"occupied").unwrap();
+
+        let error = record_copy_failure(
+            &candidate(),
+            CloudCopyApprovalAction::CopyOnly,
+            "cloud-copy-timeout",
+            123,
+            &receipt_path,
+        )
+        .unwrap_err();
+        assert!(!error.is_empty());
+    }
+
+    #[cfg(not(coverage))]
+    #[test]
+    fn same_millisecond_copy_failures_get_distinct_records() {
+        let temporary = tempfile::tempdir().unwrap();
+        let receipt_dir = temporary.path().join("receipts");
+        for _ in 0..2 {
+            record_copy_failure(
+                &candidate(),
+                CloudCopyApprovalAction::CopyOnly,
+                "cloud-copy-timeout",
+                123,
+                &receipt_dir,
+            )
+            .unwrap();
+        }
+        let mut entries: Vec<_> = std::fs::read_dir(&receipt_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        entries.sort();
+        assert_eq!(entries.len(), 2);
+        let records: Vec<CloudCopyFailureRecord> = entries
+            .iter()
+            .map(|path| serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap())
+            .collect();
+        assert_ne!(records[0].failure_id, records[1].failure_id);
+        assert!(records
+            .iter()
+            .all(|record| record.occurred_at_ms == 123));
+    }
+
     fn refresh_review_fingerprint(candidate: &mut CloudCandidate) {
         candidate.review_fingerprint = candidate_review_fingerprint(candidate);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_copy_timeout_scales_but_has_a_hard_ceiling() {
+        assert_eq!(copy_timeout_for_bytes(0), Duration::from_secs(120));
+        assert!(copy_timeout_for_bytes(4 * 1024 * 1024) > copy_timeout_for_bytes(0));
+        assert_eq!(
+            copy_timeout_for_bytes(u64::MAX),
+            Duration::from_secs(COPY_TIMEOUT_MAX_SECS)
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_copy_staging_is_owned_and_removed_with_the_temp_directory() {
+        let parent = tempfile::tempdir().unwrap();
+        let (directory, staging) = create_macos_copy_staging(parent.path()).unwrap();
+        assert!(staging.starts_with(directory.path()));
+        std::fs::write(&staging, b"partial").unwrap();
+        drop(directory);
+        assert!(!staging.exists());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_move_create_only_preserves_staging_on_destination_race() {
+        let parent = tempfile::tempdir().unwrap();
+        let staging = parent.path().join("staging-payload");
+        let destination = parent.path().join("provider-payload");
+        std::fs::write(&staging, b"staging").unwrap();
+        std::fs::write(&destination, b"provider").unwrap();
+
+        let result = bounded_macos_move_create_only(
+            &staging,
+            &destination,
+            Duration::from_secs(5),
+            None,
+        );
+
+        assert_eq!(result, Err("cloud-copy-finalize-race".into()));
+        assert_eq!(std::fs::read(&staging).unwrap(), b"staging");
+        assert_eq!(std::fs::read(&destination).unwrap(), b"provider");
     }
 
     fn receipt() -> CloudCopyReceipt {
@@ -1646,8 +2462,21 @@ mod tests {
             kind: SyncEvidenceKind::ProviderNativeStatus,
             evidence_id: "icloud-uploaded-flag".into(),
             sync_complete: true,
+            sync_state: ProviderSyncState::Complete,
             remote_content: None,
         }
+    }
+
+    #[test]
+    fn unknown_legacy_sync_state_cannot_promote_goal_to_eviction_ready() {
+        let evidence = evidence();
+        assert_eq!(evidence.sync_state, ProviderSyncState::Complete);
+        let mut legacy = evidence;
+        legacy.sync_state = ProviderSyncState::Unknown;
+        assert_eq!(
+            CloudOffloadGoalState::after_attestation(&legacy, true),
+            CloudOffloadGoalState::PendingProviderSync
+        );
     }
 
     #[test]
@@ -1881,6 +2710,62 @@ mod tests {
         let decoded: CloudCopyReceipt = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(decoded, legacy);
         assert!(!String::from_utf8(encoded).unwrap().contains("lineage"));
+    }
+
+    #[test]
+    fn historical_lineage_extensions_remain_integrity_bound() {
+        let mut historical = pre_approval_receipt();
+        let lineage = historical.lineage.as_mut().unwrap();
+        lineage.ontology_class = Some("https://disksage.app/ontology#Document".into());
+        lineage.ontology_relations = Some(vec![LegacyOntologyRelation {
+            subject: SOURCE.into(),
+            predicate: "https://disksage.app/ontology#archivedTo".into(),
+            object: DESTINATION.into(),
+            source: "archive-destination-planner".into(),
+        }]);
+        lineage.capacity = Some(provider_capacity::assess_capacity(
+            CloudCapacitySnapshot {
+                schema_version: CAPACITY_SCHEMA_VERSION,
+                provider: CloudProvider::Icloud,
+                account_scope: None,
+                evidence_kind: CapacityEvidenceKind::ProviderNativeStatus,
+                observed_at_ms: 4,
+                total_bytes: None,
+                used_bytes: None,
+                remaining_bytes: Some(1024),
+                trashed_bytes: None,
+                max_upload_size_bytes: None,
+                state: CloudCapacityState::Available,
+                evidence_fingerprint: Some("f".repeat(64)),
+                unavailable_reason: None,
+            },
+            12,
+            12,
+            0,
+        ));
+        historical.lineage_fingerprint = Some(lineage_fingerprint(lineage).unwrap());
+        historical.receipt_id = receipt_id_for(
+            historical.version,
+            &historical.candidate_fingerprint,
+            historical.provider,
+            &historical.source,
+            &historical.destination,
+            historical.bytes,
+            &historical.blake3,
+            &historical.sha256,
+            &historical.quick_xor_base64,
+            historical.source_modified_ms,
+            historical.copied_at_ms,
+            historical.copy_verified,
+            historical.provider_sync_confirmed,
+            historical.lineage_fingerprint.as_deref(),
+        );
+        assert!(receipt_blockers(&historical).is_empty());
+
+        let mut tampered = historical;
+        tampered.lineage.as_mut().unwrap().ontology_class = Some("tampered".into());
+        assert!(receipt_blockers(&tampered)
+            .contains(&"receipt-lineage-integrity-mismatch".to_string()));
     }
 
     #[test]
@@ -2135,6 +3020,7 @@ mod tests {
                 kind: SyncEvidenceKind::ProviderApi,
                 evidence_id: "authenticated-provider-response".into(),
                 sync_complete: true,
+                sync_state: ProviderSyncState::Complete,
                 remote_content: Some(RemoteContentProof {
                     object_id: "remote-id".into(),
                     revision: "revision-1".into(),
@@ -2169,6 +3055,7 @@ mod tests {
             kind: SyncEvidenceKind::ProviderApi,
             evidence_id: "authenticated-provider-response".into(),
             sync_complete: true,
+            sync_state: ProviderSyncState::Complete,
             remote_content: None,
         };
         assert!(approve_evidence(&provider_receipt, &api_evidence)
