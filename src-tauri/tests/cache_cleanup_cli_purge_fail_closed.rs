@@ -78,3 +78,59 @@ fn shipped_cli_honors_xdg_data_home_for_read_only_trash_evidence() {
         "read-only evidence collection must not create the journal"
     );
 }
+
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn shipped_cli_rejects_duplicate_authority_singletons_before_side_effects() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let journal_a = temp.path().join("state/a.jsonl");
+    let journal_b = temp.path().join("state/b.jsonl");
+
+    let duplicate_journal = Command::new(env!("CARGO_BIN_EXE_disksage-cache-cleanup"))
+        .env("HOME", &home)
+        .env_remove("XDG_DATA_HOME")
+        .arg("--journal-path")
+        .arg(&journal_a)
+        .arg("--journal-path")
+        .arg(&journal_b)
+        .output()
+        .unwrap();
+    assert_eq!(duplicate_journal.status.code(), Some(2));
+    assert!(duplicate_journal.stdout.is_empty());
+    assert!(String::from_utf8(duplicate_journal.stderr)
+        .unwrap()
+        .contains("--journal-path may be supplied once"));
+
+    let duplicate_purge = Command::new(env!("CARGO_BIN_EXE_disksage-cache-cleanup"))
+        .env("HOME", &home)
+        .env_remove("XDG_DATA_HOME")
+        .args(["--purge-proven-cache-trash", "--purge-proven-cache-trash"])
+        .output()
+        .unwrap();
+    assert_eq!(duplicate_purge.status.code(), Some(2));
+    assert!(duplicate_purge.stdout.is_empty());
+    assert!(String::from_utf8(duplicate_purge.stderr)
+        .unwrap()
+        .contains("--purge-proven-cache-trash may be supplied once"));
+
+    let duplicate_execute = Command::new(env!("CARGO_BIN_EXE_disksage-cache-cleanup"))
+        .env("HOME", &home)
+        .env_remove("XDG_DATA_HOME")
+        .args([
+            "--execute",
+            "--execute",
+            "--purge-proven-cache-trash",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(duplicate_execute.status.code(), Some(2));
+    assert!(duplicate_execute.stdout.is_empty());
+    assert!(String::from_utf8(duplicate_execute.stderr)
+        .unwrap()
+        .contains("--execute may be supplied once"));
+
+    assert!(!journal_a.exists());
+    assert!(!journal_b.exists());
+}
