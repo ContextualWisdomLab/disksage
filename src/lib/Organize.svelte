@@ -163,6 +163,10 @@
     {#if exportStatus}<p class="muted">{exportStatus}</p>{/if}
   {/if}
 
+  {#if resultAction === "undo" && results.length === 0}
+    <p role="status">되돌릴 최근 이동 기록이 없습니다.</p>
+  {/if}
+
   {#if results.length > 0}
     {#if resultAction === "undo"}
       <p role="status">{results.filter((r) => r.ok).length}/{results.length}개 되돌리기를 완료했습니다. 다시 정리하려면 새 미리보기를 만드세요.</p>
