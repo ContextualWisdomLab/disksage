@@ -42,16 +42,6 @@ pub fn load_settings_file(path: &Path) -> Settings {
     parse_settings(json)
 }
 
-/// Tauri 설정 읽기 경계. 파일 전체를 메모리에 적재하지 않고 bounded loader를 사용한다.
-#[cfg(not(coverage))]
-#[tauri::command]
-pub fn get_settings(app: tauri::AppHandle) -> Result<Settings, String> {
-    use tauri::Manager;
-    let dir = app.path().app_config_dir().map_err(|error| error.to_string())?;
-    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
-    Ok(load_settings_file(&dir.join("settings.json")))
-}
-
 /// Settings → JSON(영속용).
 pub fn serialize_settings(s: &Settings) -> String {
     // ponytail: to_string() can't fail for a bool-only struct (no maps/NaN); unwrap() avoids an unreachable fallback branch that coverage can't exercise.
