@@ -6,13 +6,13 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 
 #[test]
-fn closed_pr_listing_avoids_search_cap_and_accepts_more_than_1000_complete_records() {
+fn search_cap_warning_never_counts_as_complete_closed_pr_evidence() {
     let temp = tempfile::tempdir().expect("temporary repository root");
     let bin_dir = temp.path().join("bin");
     fs::create_dir(&bin_dir).expect("create fake bin directory");
 
     let output_path = temp.path().join("closed-prs.json");
-    let records: Vec<_> = (0..1_001u64)
+    let records: Vec<_> = (0..1_000u64)
         .map(|index| {
             json!({
                 "headRefName": format!("closed-{index}"),
@@ -31,7 +31,7 @@ fn closed_pr_listing_avoids_search_cap_and_accepts_more_than_1000_complete_recor
     let gh_path = bin_dir.join("gh");
     fs::write(
         &gh_path,
-        "#!/bin/sh\nset -eu\nfor arg in \"$@\"; do\n  if [ \"$arg\" = \"--search\" ]; then\n    printf '%s\\n' 'warning: search results capped at 1000' >&2\n  fi\ndone\ncat \"$DISKSAGE_FAKE_GH_OUTPUT\"\n",
+        "#!/bin/sh\nset -eu\ncat \"$DISKSAGE_FAKE_GH_OUTPUT\"\nprintf '%s\\n' 'warning: search results capped at 1000' >&2\n",
     )
     .expect("write fake gh executable");
     let mut permissions = fs::metadata(&gh_path).expect("fake gh metadata").permissions();
@@ -58,14 +58,8 @@ fn closed_pr_listing_avoids_search_cap_and_accepts_more_than_1000_complete_recor
     }
     std::env::remove_var("DISKSAGE_FAKE_GH_OUTPUT");
 
-    let heads = result.expect("non-search closed-PR listing must remain complete past 1,000 records");
-    assert_eq!(heads.len(), 1_001);
-    assert!(heads.contains(&(
-        "refs/heads/closed-0".to_string(),
-        "0000000000000000000000000000000000000000".to_string()
-    )));
-    assert!(heads.contains(&(
-        "refs/heads/closed-1000".to_string(),
-        "00000000000000000000000000000000000003e8".to_string()
-    )));
+    assert_eq!(
+        result.expect_err("capped GitHub search evidence must fail closed"),
+        "github-closed-pr-list-incomplete"
+    );
 }
