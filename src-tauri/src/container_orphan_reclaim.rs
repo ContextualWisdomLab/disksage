@@ -568,7 +568,7 @@ fn classify_network_candidates<'a>(
     Ok((total, candidates))
 }
 
-/// Parses `network inspect <name>` output and reports whether any container endpoint
+/// Parses `network inspect <id>` output and reports whether any container endpoint
 /// is attached. Both runtimes expose an attached-container map keyed by endpoint ID;
 /// Docker uses `Containers`, Podman uses `containers` on the single inspected object.
 fn network_has_attached_containers(output: &str) -> Result<bool, String> {
@@ -899,7 +899,7 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                 ]);
             }
             OrphanCategory::Network => {
-                args.extend(["network", "ls", "--format", "json"]);
+                args.extend(["network", "ls", "--no-trunc", "--format", "json"]);
             }
         }
         let output = command_text(
@@ -1000,7 +1000,8 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
             OrphanCategory::Network => {
                 let records = parse_network_records(&output)?;
                 // Confirm each non-builtin network carries zero endpoints before it can
-                // count as a candidate; any inspect failure fails the category closed.
+                // count as a candidate; any missing/truncated identity or inspect failure
+                // fails the category closed.
                 let mut attached: Vec<String> = Vec::new();
                 let mut inspected_candidates = 0usize;
                 for record in &records {
@@ -1013,10 +1014,15 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                         return Err("network-candidate-count-exceeds-bound".to_string());
                     }
                     inspected_candidates = inspected_candidates.saturating_add(1);
+                    let network_id = record
+                        .id
+                        .as_deref()
+                        .ok_or_else(|| "network-id-missing".to_string())
+                        .and_then(|id| normalize_hex_id(id, "network"))?;
                     let has_attached_containers = if target.kind
                         == ContainerRuntimeKind::PodmanMachine
                     {
-                        let filter = format!("network={}", record.name);
+                        let filter = format!("network={network_id}");
                         let mut membership_args: Vec<&str> =
                             prefix.iter().skip(1).map(String::as_str).collect();
                         membership_args.extend([
@@ -1038,7 +1044,7 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                     } else {
                         let mut inspect_args: Vec<&str> =
                             prefix.iter().skip(1).map(String::as_str).collect();
-                        inspect_args.extend(["network", "inspect", &record.name]);
+                        inspect_args.extend(["network", "inspect", &network_id]);
                         network_has_attached_containers(&command_text(
                             &target.binary_path,
                             &inspect_args,
@@ -1051,8 +1057,16 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                     }
                 }
                 let (total, candidates) = classify_network_candidates(&records, &attached)?;
-                let candidate_ids: Vec<String> =
-                    candidates.iter().map(|candidate| candidate.name.clone()).collect();
+                let candidate_ids: Vec<String> = candidates
+                    .iter()
+                    .map(|candidate| {
+                        candidate
+                            .id
+                            .as_deref()
+                            .ok_or_else(|| "network-id-missing".to_string())
+                            .and_then(|id| normalize_hex_id(id, "network"))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
                 let ids: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
                 (
                     Some(summarize_candidates(category, total, &ids, None)?),
@@ -1372,7 +1386,6 @@ mod tests {
         let records = parse_container_records(&output).unwrap();
         assert_eq!(records[0].names, vec!["worker"]);
         let (_, candidates) = classify_container_candidates(&records).unwrap();
-        // `created` is a stop-state candidate; `paused` never is.
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].state, "created");
     }
