@@ -14,10 +14,12 @@
   let toDelete: Set<string> = $state(new Set());
   let results: api.CleanResult[] = $state([]);
   let verdicts: Record<string, api.Verdict> = $state({});
+  let scanGeneration = $state(0);
 
-  async function loadVerdicts(paths: string[]) {
+  async function loadVerdicts(paths: string[], generation: number) {
     try {
       const fvs = await api.fileVerdicts(paths);
+      if (generation !== scanGeneration) return;
       verdicts = Object.fromEntries(fvs.map((f) => [f.path, f.verdict]));
     } catch {
       /* advisory only — ignore */
@@ -26,6 +28,7 @@
 
   async function scan() {
     if (!scannedRoot) return;
+    const generation = ++scanGeneration;
     busy = true;
     loadError = "";
     groups = [];
@@ -40,7 +43,7 @@
         for (const p of g.paths.slice(1)) next.add(p);
       }
       toDelete = next;
-      loadVerdicts(groups.flatMap((g) => g.paths));
+      loadVerdicts(groups.flatMap((g) => g.paths), generation);
     } catch {
       loadError = "중복 파일 검색에 실패했습니다. 스캔 대상 폴더의 접근 권한을 확인하고 스캔을 다시 실행한 뒤 중복 찾기를 다시 누르세요.";
     } finally {
