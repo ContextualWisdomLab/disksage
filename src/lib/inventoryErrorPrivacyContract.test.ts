@@ -79,7 +79,9 @@ describe("Inventory privacy-safe failure feedback", () => {
     );
     expect(source).toContain("api.ontologyCoherence()");
     expect(source).toContain("api.modelStatus()");
-    expect(source).toContain("api.reasonUnknownExtensions(report.unknown_samples)");
+    expect(source).toContain(
+      "requestUnknownExtensionInsights(report.unknown_samples, api.reasonUnknownExtensions)",
+    );
   });
 
   it("invalidates stale advisory state and ignores an older extension-reasoning response", () => {
