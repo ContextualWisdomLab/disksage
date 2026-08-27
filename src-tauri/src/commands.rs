@@ -340,10 +340,7 @@ fn settings_file_path(app: &AppHandle) -> Result<PathBuf, String> {
 #[tauri::command]
 pub fn get_settings(app: AppHandle) -> Result<crate::settings::Settings, String> {
     let path = settings_file_path(&app)?;
-    match std::fs::read_to_string(&path) {
-        Ok(s) => Ok(crate::settings::parse_settings(&s)),
-        Err(_) => Ok(crate::settings::Settings::default()),
-    }
+    Ok(crate::settings::load_settings_file(&path))
 }
 
 #[cfg(not(coverage))]
