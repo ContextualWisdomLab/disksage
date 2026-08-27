@@ -10,37 +10,28 @@ describe("CloudArchive iCloud admission contract", () => {
     const source = readFileSync(resolve(repositoryRoot, "src/lib/CloudArchive.svelte"), "utf8");
     expect(source).toContain("icloudHealth = null;");
     expect(source).toContain("icloudHealth?.new_copy_admission_state !== \"clear\"");
-    expect(source).toContain(
-      'icloudHealth?.new_copy_admission_state !== "clear"\n            || (icloudHealth?.new_copy_admission_blockers.length ?? 0) > 0',
-    );
     expect(source).toContain("managed_database_allocated_bytes");
-    expect(source).toContain("이 시스템 데이터는 삭제하지 않습니다");
+    expect(source).toContain("시스템 관리 데이터를 삭제하지 않습니다");
     expect(source).toContain("icloud-item-error-octagon-not-signed-in");
     expect(source).toContain("동기화 진단:");
-    expect(source).toContain("iCloud 상태를 확인하지 못했습니다.");
-    expect(source).toContain("pending_indexable_count");
-    expect(source).toContain("icloud-file-provider-indexing-pending");
+    expect(source).toContain("iCloud File Provider 증거를 확인하지 못했습니다.");
     expect(source).toContain("no_progress_create_count");
     expect(source).toContain("providerProgressPercent");
     expect(source).toContain("active_upload_progress_millionths");
-    expect(source).toContain("Finder가 “복사 준비 중”에서 멈춰 있습니다. Finder에 남은 복사 대기를 취소하고,");
+    expect(source).toContain("Finder가 “복사 준비 중”에서 멈춘 동안 File Provider의 no-progress 요청이 함께 관찰되었습니다.");
     expect(source).not.toContain("Finder가 “복사 준비 중”에서 멈춘 원인은");
-    expect(source).toContain("Finder에 남은 복사 대기를 취소하고");
-    expect(source).toContain("클라우드 상태 확인이 오래 걸립니다. Finder에 남은 복사 대기를 취소하고,");
-    expect(source).not.toContain("File Provider 상태 확인이 제한시간을 넘었습니다");
-    expect(source).not.toContain("Lineage 연결관계");
-    expect(source).not.toContain("검증 복사 영수증 → provider attestation → Goal/ADR");
+    expect(source).toContain("Finder에 남은 복사 대기는 취소");
+    expect(source).toContain("File Provider 상태 확인이 제한시간을 넘었습니다");
+    expect(source).toContain("Lineage 연결관계");
+    expect(source).toContain("검증 복사 영수증 → provider attestation → Goal/ADR");
     expect(source).toContain("candidate.metadata_fingerprint");
-    expect(source).toContain("마지막 확인:");
+    expect(source).toContain("마지막 증거 확인:");
     expect(source).toContain("evidenceObservedAt(icloudHealth.observed_at_ms)");
     expect(source).toContain("ICLOUD_HEALTH_BLOCKED_RETRY_INTERVAL_MS");
     expect(source).toContain("icloudHealthNextCheckAt");
     expect(source).toContain("icloudHealthBlockedSinceMs");
     expect(source).toContain("icloudHealthFingerprint");
-    expect(source).toContain('import { updateIcloudHealthStallClock } from "./icloudHealthStallClock";');
-    expect(source).toContain("const stallClock = updateIcloudHealthStallClock(");
-    expect(source).toContain("icloudHealthBlockedSinceMs = stallClock.blockedSinceMs;");
-    expect(source).toContain("icloudHealthFingerprint = stallClock.fingerprint;");
+    expect(source).toContain("const admissionClear = next.new_copy_admission_state === \"clear\"");
     expect(source).toContain("동일한 iCloud 차단 상태가 15분 이상 지속되었습니다.");
     expect(source).toContain("refreshIcloudHealth(true)");
     expect(source).toContain("refreshProviderGlobalSync(true)");
@@ -52,48 +43,29 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(source).toContain("next.pending_indexable_count !== null && next.pending_indexable_count > 0");
     expect(source).toContain("provider-global-sync-item-not-found");
     expect(source).toContain("icloud-file-provider-item-locked");
-    expect(source).toContain("클라우드 파일 처리가 잠겨 Finder 복사 준비가 지연되고 있습니다. Finder의 대기 작업을 취소하고,");
-    expect(source).toContain("클라우드 파일 처리 오류가 15분 이상 지속되었습니다. Finder의 “복사 준비 중” 작업을 취소하고,");
+    expect(source).toContain("File Provider 항목이 전파 잠금 상태임");
+    expect(source).toContain("File Provider 항목의 전파 잠금 상태가 Finder 복사 준비 지연과 함께 관찰되었습니다.");
+    expect(source).toContain("File Provider 큐에서 15분 이상 묵은 fetch/create 오류가 관찰되었습니다.");
     expect(source).toContain("icloud-file-provider-stalled");
     expect(source).not.toContain("Finder의 복사 준비가 진행되지 않습니다.");
-    expect(source).toContain("같은 상태 지속");
-    expect(source).toContain("동일한 클라우드 차단 상태가 15분 이상 지속되었습니다.");
-    expect(source).not.toContain("공급자 전역 증거를 확인하지 못했습니다.");
-    expect(source).toContain("마지막 확인 {evidenceObservedAt(providerGlobalSyncObservedAtMs)}");
+    expect(source).toContain("동일 차단 지속");
+    expect(source).toContain("동일한 공급자 차단 상태가 15분 이상 지속되었습니다.");
+    expect(source).toContain("공급자 전역 증거를 확인하지 못했습니다.");
+    expect(source).toContain("마지막 관찰 {evidenceObservedAt(providerGlobalSyncObservedAtMs)}");
     expect(source).toContain('providerGlobalSync.blockers.length === 0 ? "1분" : "5분"');
     expect(source).toContain("후 자동 재확인");
     expect(source).toContain("접근 불가·진단만 가능");
-    expect(source).not.toContain("공급자 전역 상태 진단과 고정된 데스크톱 클라이언트 복구만 허용");
+    expect(source).toContain("공급자 전역 상태 진단과 고정된 데스크톱 클라이언트 복구만 허용");
     expect(source).toContain("!selectedRootDetails()?.readable");
     expect(source).toContain("async function cancelFinderCopy()");
     expect(source).toContain("await api.cancelFinderCopy();");
-    expect(source).toContain("cancelDisabled={checkingIcloudHealth || cancellingFinderCopy}");
-    expect(source).toContain("cancelLabel={cancellingFinderCopy ?");
+    expect(source).toContain("cancellingFinderCopy || checkingIcloudHealth");
     expect(source).toContain("canCancelFinderCopyForProviderGlobalSync");
-    const icloudCancelStart = source.indexOf("canCancel={Boolean(icloudHealth?.file_provider_activity");
-    const icloudCancelEnd = source.indexOf("cancelDisabled={checkingIcloudHealth", icloudCancelStart);
-    expect(icloudCancelStart).toBeGreaterThanOrEqual(0);
-    expect(icloudCancelEnd).toBeGreaterThan(icloudCancelStart);
-    const icloudCancelGate = source.slice(icloudCancelStart, icloudCancelEnd);
-    expect(icloudCancelGate).toContain("icloud-file-provider-item-locked");
-    expect(icloudCancelGate).toContain("icloud-file-provider-stalled");
     expect(source).toContain("provider-global-sync-reconciliation-pending");
-    expect(source).toContain("provider-global-sync-indexing-pending");
     expect(source).toContain("provider-global-sync-local-disk-full");
     expect(source).toContain("provider-global-sync-item-not-found");
-    expect(source.match(/onCancel={cancelFinderCopy}/g)?.length).toBe(2);
-    expect(source).not.toContain("<button onclick={cancelFinderCopy}");
+    expect(source).toContain("cancellingFinderCopy || checkingProviderGlobalSync");
     expect(source).toContain("finderCopyCancelStatus = \"Finder 복사 취소 요청을 보냈습니다. 상태를 다시 확인하십시오.\"");
-    expect(source).toContain('import ProviderStatusCard from "./ux/ProviderStatusCard.svelte";');
-    expect(source).toContain('state={providerStatusState(');
-    expect(source).toContain("observedAtMs: number");
-    expect(source).toContain("blockedDuration(icloudHealthBlockedSinceMs, icloudHealth?.observed_at_ms ?? 0)");
-    expect(source).toContain("blockedDuration(providerGlobalSyncBlockedSinceMs, providerGlobalSyncObservedAtMs)");
-    expect(source).toContain('"materialization-stalled"');
-    expect(source).toContain('statusId="icloud-provider-status"');
-    expect(source).toContain("cancelDisabled={checkingIcloudHealth || cancellingFinderCopy}");
-    expect(source).toContain('selectedRootDetails()?.provider !== "icloud" && providerGlobalSyncError && !providerGlobalSync');
-    expect(source).toContain("cancelDisabled={checkingProviderGlobalSync || cancellingFinderCopy}");
   });
 
   it("exposes cancellation only for the cancellable native copy path", () => {
@@ -152,42 +124,11 @@ describe("CloudArchive iCloud admission contract", () => {
     expect(probeCall).toBeGreaterThan(providerGuard);
   });
 
-  it("keeps cancel confirmation visible after a refresh clears admission", () => {
-    const source = readFileSync(resolve(repositoryRoot, "src/lib/CloudArchive.svelte"), "utf8");
-    const icloudStart = source.indexOf("<strong>iCloud 새 복사 상태</strong>");
-    const icloudEnd = source.indexOf("<strong>{cloudProviderLabel(providerGlobalSync.provider)} 전체 동기화 상태</strong>");
-    const icloudReceipt = source.slice(icloudStart, icloudEnd);
-    const providerStart = icloudEnd;
-    const providerReceipt = source.slice(providerStart);
-
-    expect(icloudReceipt.indexOf("finderCopyCancelStatus")).toBeGreaterThanOrEqual(0);
-    expect(icloudReceipt.indexOf("finderCopyCancelStatus")).toBeLessThan(
-      icloudReceipt.indexOf("icloudHealth.new_copy_admission_blockers.length > 0"),
-    );
-    expect(providerReceipt.indexOf("finderCopyCancelStatus")).toBeLessThan(
-      providerReceipt.indexOf("providerGlobalSync.blockers.length > 0"),
-    );
-  });
-
   it("defaults provider OAuth consent to read-only until write access is explicitly selected", () => {
     const source = readFileSync(resolve(repositoryRoot, "src/lib/CloudArchive.svelte"), "utf8");
     expect(source).toContain("let oauthWriteAccess = $state(false);");
     expect(source).not.toContain("let oauthWriteAccess = $state(true);");
     expect(source).toContain("bind:checked={oauthWriteAccess}");
     expect(source).toContain("oauthWriteAccess,");
-  });
-
-  it("never escalates an unread provider probe failure into a materialization-stall claim", () => {
-    const source = readFileSync(resolve(repositoryRoot, "src/lib/CloudArchive.svelte"), "utf8");
-    const fnStart = source.indexOf("function providerStatusState(");
-    const errorGuard = source.indexOf('if (error) return "provider-sync-incomplete";', fnStart);
-    const stalledBranch = source.indexOf('? "materialization-stalled"', fnStart);
-
-    expect(fnStart).toBeGreaterThanOrEqual(0);
-    // The error short-circuit must come before the time-based branch that can return
-    // "materialization-stalled", so a probe failure (no observed evidence) can never be
-    // reported as a specific, observed stall condition.
-    expect(errorGuard).toBeGreaterThan(fnStart);
-    expect(stalledBranch).toBeGreaterThan(errorGuard);
   });
 });

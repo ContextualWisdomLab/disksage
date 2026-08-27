@@ -2,7 +2,7 @@
 
 ## Decision
 
-DiskSage's Rust manifest is part of release-visible build, SBOM, provenance, incident-response, and operator-audit evidence even though the desktop application is not intended for publication as a crates.io library. The `[package]` metadata therefore identifies the product and its source repository without generator placeholders, records the repository's MIT license identifier, and sets `publish = false` so an ordinary Cargo publication command cannot publish this application package to a registry.
+DiskSage's Rust manifest is part of buyer-visible build, SBOM, provenance, incident-response, and acquisition-diligence evidence even though the desktop application is not intended for publication as a crates.io library. The `[package]` metadata therefore identifies the product and its source repository without generator placeholders, records the repository's MIT license identifier, and sets `publish = false` so an ordinary Cargo publication command cannot publish this application package to a registry.
 
 The authoritative metadata is:
 

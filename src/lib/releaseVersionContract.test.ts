@@ -40,7 +40,7 @@ describe('release version contract', () => {
     expect(
       readCargoPackageVersion(
         'Cargo.toml',
-        () => '# preamble\n[workspace]\nmembers = []\n\n[package]\nname = "disksage"\nversion = "1.2.3" # release-visible\nedition = "2021"\n\n[dependencies]\n',
+        () => '# preamble\n[workspace]\nmembers = []\n\n[package]\nname = "disksage"\nversion = "1.2.3" # buyer-visible\nedition = "2021"\n\n[dependencies]\n',
       ),
     ).toBe('1.2.3');
   });

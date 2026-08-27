@@ -139,7 +139,7 @@ describe('release artifact exact-set admission', () => {
       try {
         writeFileSync(
           join(fixtureRoot, 'release-artifacts', 'ubuntu', 'unexpected-debug-dump.txt'),
-          'operator-private-or-unreviewed-output',
+          'buyer-private-or-unreviewed-output',
         );
 
         const result = runReleaseArtifactVerifier(fixtureRoot);

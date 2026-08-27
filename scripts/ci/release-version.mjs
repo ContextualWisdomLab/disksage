@@ -34,7 +34,7 @@ export function readJsonVersion(manifestPath, readText = readFileSync) {
  * Read the Cargo package section and return its single literal version.
  *
  * Workspace-inherited or duplicated versions are refused because the packaged
- * application must expose one operator-verifiable version before publication.
+ * application must expose one buyer-verifiable version before publication.
  *
  * @param {string} manifestPath Repository-relative Cargo manifest path.
  * @param {(path: string, encoding: BufferEncoding) => string} readText Text reader seam.

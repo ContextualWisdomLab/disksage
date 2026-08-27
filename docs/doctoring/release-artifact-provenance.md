@@ -39,7 +39,7 @@ The release contract requires all of the following:
 
 GitHub's action emits an in-toto Statement v1 containing a SLSA Provenance v1 predicate. SLSA specification version 1.2 is the current approved framework version, while the stable build-provenance predicate URI remains `https://slsa.dev/provenance/v1`.
 
-## Operator and release-consumer verification
+## Buyer and operator verification
 
 Download one release artifact without renaming or modifying it, install a current GitHub CLI, authenticate if the repository visibility requires it, and run:
 

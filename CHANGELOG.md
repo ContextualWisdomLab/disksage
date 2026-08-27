@@ -8,18 +8,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
-- Add a customer-copy contract that keeps implementation vocabulary out of Svelte screens, bounds
-  dynamic failure messages, and gives every warning or error a concrete next action.
-- Add an accessible, token-driven Svelte shell contract with Storybook scenes for provider-clear,
-  incomplete-evidence, materialization-stall, checking, keyboard, responsive, and reduced-motion
-  states. Storybook is development-only; Rust receipts and approval gates remain authoritative.
-- Render the provider status card in the running CloudArchive view, including the path-free iCloud
-  indexing backlog and a bounded Finder-cancel escape; the card remains informational and cannot
-  authorize cloud writes, attestation, or source eviction.
-- Reset the UX stall clock only when upload/download progress increases or the pending-indexable
-  backlog decreases, while retaining the persisted blocker-set timestamp only for the first
-  observation after restart.
-
 - Keep coverage builds compile-safe by applying the same `not(coverage)` boundary to native-copy
   identity cleanup and dependent eviction helpers; the focused authority contract remains green.
 - Add durable private failure records in a separate journal directory and a receipt-bound
@@ -64,25 +52,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
-- Use the provider observation timestamp consistently for stall thresholds and durations so the
-  summary card and detailed evidence panel cannot disagree during blocked-probe backoff.
-- Keep legacy light-only panels readable with dark-scheme token overrides; disable provider cancel
-  actions during in-flight probes and show non-iCloud probe errors in the shared status card without
-  changing copy or eviction authority.
-- Preserve the backend-provided iCloud admission-blocker start time across app restarts, with a
-  current-observation fallback for older reports; the running card remains diagnostic/cancel-only.
-- Retain the existing iCloud blocker fingerprint clock when older backends omit the persisted
-  start-time field, so legacy responses still reach the 15-minute stalled-copy warning.
-- Keep iCloud stall-counter changes (`no progress`, materialization failures, and timeouts) out of
-  the progress fingerprint, so a blocked Finder copy still reaches the 15-minute warning; retain
-  a real transfer/indexing progress reset across subsequent polls.
-- Do not treat a growing or unknown iCloud pending-indexable backlog as progress; only a drained
-  backlog or actual transfer progress resets the stalled-copy interval.
-- Prefer `~/Downloads` and then the home directory over `/` for the initial non-Windows desktop
-  scan root, so a first scan does not recursively enumerate iCloud/OneDrive File Provider trees by
-  accident.
-- Keep the iCloud status card blocked when the admission state is `blocked` even if a malformed or
-  partially populated provider report temporarily has no blocker codes.
 - Reject ontology organize destinations that are relative to the process working directory,
   named-user tilde paths, or parent-traversal paths; only an absolute destination or a home token
   (`~`/`~/`, plus native Windows `~\`) can produce a move plan, and literal tildes in absolute
@@ -142,7 +111,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Catalog the observed Node.js, PyTorch, Prisma, and GitHub CLI cache trees as identity-bound
   manual-review targets; keep them out of automatic cleanup until their active-use and rebuild
   contracts are independently established.
-- Add operator-verifiable release artifact provenance with read-only platform build jobs, a tag-only least-privilege attestation job, exact 18-file admission including a source-bound SPDX SBOM, adjacent operational-CLI SHA-256 verification, preserved artifact namespaces, non-regular-entry rejection, and a separate publication job that cannot publish before attestation succeeds.
+- Add buyer-verifiable release artifact provenance with read-only platform build jobs, a tag-only least-privilege attestation job, exact 18-file admission including a source-bound SPDX SBOM, adjacent operational-CLI SHA-256 verification, preserved artifact namespaces, non-regular-entry rejection, and a separate publication job that cannot publish before attestation succeeds.
 - Require explicit organization-tenant authority when either the destination account scope is organization-owned or the canonical organization-sensitive review reason is present; fail closed in both frontend projection and durable Rust transfer authorization even when the ordinary review flag is absent, and regression-test contradictory signal combinations.
 - Enable an explicit fail-closed Tauri Content Security Policy to keep executable scripts and fonts local, grant production network authority only to the Tauri IPC transport, confine Vite WebSocket HMR to a separate development-only CSP, deny object/frame/base-URI authority, deny form submissions with explicit `form-action 'none'`, deny unused worker, media, and web-app-manifest fetch authority with explicit `'none'` directives, and regression-test against null, wildcard, remote-script/style, eval, and development-authority leakage.
 - Re-verify the installed GGUF immediately before llama.cpp initialization and retain the verified model handle through llama.cpp loading: reject missing, linked, non-regular, identity-raced, short, oversized, unreadable, or SHA-256-mismatched artifacts with stable path-free errors; use a stable descriptor path on Unix and a Windows read-sharing guard so the mutable source pathname cannot be substituted between verification and model parsing.

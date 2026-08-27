@@ -529,101 +529,12 @@ new-copy admission blocker (`icloud-file-provider-filename-excluded` or
 The Finder preparation dialog therefore remains an incomplete provider operation, not a successful
 copy receipt, and copy, attestation, and eviction stay fail-closed until the provider is quiet.
 
-## Amendment: running UX exposes provider-stall state (2026-08-21)
-
-The CloudArchive screen now renders the shared `ProviderStatusCard` for iCloud and third-party
-provider-global observations, not only in Storybook. It maps a missing/error observation to
-`provider-sync-incomplete`, a repeated blocker lasting at least 15 minutes to
-`materialization-stalled`, and a quiet observation to `clear`; elapsed time, bounded evidence time,
-and the existing Finder-cancel request remain visible. The card is informational/cancel-only and
-does not grant copy, attestation, or eviction authority. This is implemented by the UX follow-up
-head `bda817d`; `svelte-check`, the CloudArchive contract suite, and the Storybook interaction/a11y
-scenes pass.
-
-## Amendment: latest runtime evidence surfaced by the UX (2026-08-21 22:22 +0900)
-
-The latest bounded iCloud receipt observed pending indexable `13,737`, a `12,449`-entry
-reconciliation backlog, active upload/download markers, one no-progress fetch, and filename/root
-exclusions `18/2`. CloudArchive displays these aggregate blockers and the elapsed provider-stall
-state; it does not expose raw provider paths or grant mutation authority. The bounded observation
-completed without provider or source mutation.
-
-## Amendment: provider stall duration uses receipt time (2026-08-21)
-
-The running status card now derives both its stall threshold and displayed duration from the
-provider observation timestamp, matching the detail panel and avoiding wall-clock drift during the
-five-minute blocked-probe backoff. A missing observation remains `checking` or
-`provider-sync-incomplete`; no UI clock can promote a provider to copy, attestation, or eviction
-authority. The latest UX safety follow-up is tracked at DiskSage PR #246 functional head `bda817d`.
-
-## Amendment: legacy panel contrast and probe-action consistency (2026-08-21)
-
-Automatic dark-scheme surface inversion is enabled with global overrides for the pre-existing
-light-only cleanup and cloud panels, preserving readable foreground/background pairs in both
-schemes. The running provider card now keeps its cancel action disabled during an in-flight probe
-and remains visible when a non-iCloud provider probe fails, while retaining the same
-observation-time stall clock and fail-closed mutation boundary.
-
-## Amendment: restart-safe iCloud admission duration (2026-08-21)
-
-CloudArchive now consumes the backend's `admission_blocked_since_ms` when it is available, falling
-back to the current observation time for older reports. The backend derives that timestamp from
-the earliest contiguous, integrity-checked, bounded iCloud evidence record with the same blocker
-set, so an application restart cannot reset a multi-hour Finder stall to zero. This remains a
-diagnostic/cancel-only display; copy, provider attestation, and local eviction stay fail-closed.
-The UX implementation is at functional head `bda817d`.
-
-Legacy backend responses without `admission_blocked_since_ms` now keep the existing blocker
-fingerprint clock on repeated polls; a newly supplied persisted timestamp still takes precedence.
-This preserves the 15-minute stalled-copy warning during a staged rollout of the backend field.
-The compatibility repair is at functional head `bda817d`.
-
-## Amendment: stall counters do not reset the iCloud progress clock (2026-08-22)
-
-The UX now fingerprints only admission blockers and genuine transfer/indexing progress: pending
-indexable count, active upload/download counts, and their progress counters. No-progress counters,
-materialization failures, staged-item misses, and timeout flags remain diagnostic evidence and cannot
-restart the stall interval. A real progress change resets the interval and that reset is retained on
-the following poll; a newly blocked admission still uses the backend timestamp when present. This
-keeps a Finder preparation dialog from hiding behind fluctuating error counters while preserving the
-fail-closed copy, attestation, and eviction boundary. The implementation and regression tests are
-tracked in DiskSage PR #246.
-
-## Amendment: safe default scan root avoids provider enumeration (2026-08-22)
-
-On non-Windows desktop targets the generic scanner now offers `~/Downloads` first when it exists,
-then the home directory, and the filesystem root last. This preserves explicit access to `/` while
-preventing a first click on “scan” from recursively enumerating iCloud, OneDrive, or Google Drive
-File Provider trees. Cloud
-provider roots remain discovered separately by the metadata/provider evidence flow; this UI default
-does not grant copy, attestation, eviction, or provider-write authority. The root-order contract is
-covered by the Rust command test and is tracked in DiskSage PR #246.
-
-## Amendment: iCloud admission state remains fail-closed in the status card (2026-08-22)
-
-The iCloud status card treats `new_copy_admission_state != clear` as blocked independently of the
-blocker-code list. The backend currently validates state/code consistency, but the UI remains
-fail-closed if a provider report is partial or malformed. This keeps copy, attestation, and eviction
-guidance conservative and is tracked in DiskSage PR #246.
-
 ## Amendment: keep the readiness verifier boundary testable (2026-08-22)
 
 The shipped Naruon readiness verifier uses a plain source comment rather than a crate-inner doc
 comment so the same parser can be included by its integration boundary test module. This is a
 compile-boundary repair only; the verifier's path-redacted output and readiness authority do not
 change.
-
-## Amendment: progress-aware iCloud stall clock (2026-08-21 23:38 +0900)
-
-The UX stall clock now distinguishes an admission-blocker run from transfer progress. After an
-application restart, the first blocked observation may restore the backend's persisted
-`admission_blocked_since_ms`; while the admission blocker set is unchanged, only an increase in
-actual upload/download progress or a decrease in the pending-indexable backlog starts a new
-observation interval. Fingerprint changes caused by backlog growth, unknown backlog, counters, or
-materialization diagnostics do not reset the interval. This prevents a healthy progressing transfer
-from being mislabeled as a 15-minute Finder stall merely because the backend's blocker-set duration
-spans the whole sync run. The behavior is diagnostic/cancel-only and does not grant copy,
-attestation, or eviction authority.
 
 ## Amendment: bound active-use probes without touching provider state (2026-08-22)
 
@@ -635,26 +546,6 @@ File Provider databases, cloud objects, and user files remain outside the mutati
 focused Rust regression test passed 3/3. A timeout remains incomplete active-use evidence and
 keeps cache cleanup and cloud eviction fail-closed; this process-group cleanup is not a provider
 recovery or copy-cancellation operation.
-
-## Amendment: indexing backlog growth does not reset the stall clock (2026-08-22)
-
-The UX stall clock now treats a smaller pending-indexable count as progress, while an increasing or
-unknown count only refreshes the displayed fingerprint and preserves the existing blocked duration.
-Active upload/download counters and progress markers retain their existing progress semantics. This
-prevents a growing provider queue from postponing the 15-minute Finder-stall guidance indefinitely;
-the clock remains diagnostic/cancel-only and never grants copy, attestation, or eviction authority.
-The implementation at source head `44756d1` is covered by seven focused Vitest cases and a clean
-`svelte-check` run.
-
-## Amendment: restore persisted stall age after probe errors (2026-08-25)
-
-The UX stall clock now restores `admission_blocked_since_ms` when the first blocked report arrives
-after restart or a failed probe, then falls back to the backend observation timestamp and finally
-the local observation time. This keeps an ongoing Finder stall's 15-minute diagnostic warning from
-resetting to zero without granting copy, attestation, or eviction authority. `ProviderStatusCard`
-is the single Finder-cancel control for both iCloud and non-iCloud provider paths; duplicate
-detail-panel buttons were removed. Exact functional head `976d9300b438e9d010f8e030a4ffd09aa1c96632`
-carries the regression tests.
 
 ## Amendment: current iCloud Finder preparation evidence (2026-08-25)
 

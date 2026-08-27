@@ -826,7 +826,6 @@ export interface LocalVolumeSnapshot {
 
 export interface IcloudSyncHealthReport {
   observed_at_ms: number;
-  admission_blocked_since_ms?: number | null;
   evidence_complete: boolean;
   managed_database_allocated_bytes?: number;
   upload_queue: {
@@ -846,7 +845,6 @@ export interface IcloudSyncHealthReport {
     staged_item_missing_count: number;
     sync_excluded_filename_count: number;
     sync_excluded_root_count: number;
-    pending_indexable_count?: number | null;
     active_upload_count: number;
     active_download_count: number;
     active_upload_progress_millionths?: number | null;
