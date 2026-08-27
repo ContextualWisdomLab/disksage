@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
+/** Reads the source-controlled release workflow with normalized line endings for stable assertions. */
 function readReleaseWorkflow(): string {
   return readFileSync(resolve(repositoryRoot, '.github/workflows/release.yml'), 'utf8').replace(/\r\n?/g, '\n');
 }
