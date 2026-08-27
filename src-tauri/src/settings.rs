@@ -1,5 +1,8 @@
 //! 사용자 설정(현재 online_mode 하나) — app_config_dir/settings.json에 영속. 파싱 실패는 안전측(offline) 기본값.
 
+use std::io::Read;
+use std::path::Path;
+
 const MAX_SETTINGS_DOCUMENT_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -19,6 +22,24 @@ pub fn parse_settings(json: &str) -> Settings {
         return Settings::default();
     }
     serde_json::from_str(json).unwrap_or_default()
+}
+
+/// 설정 파일을 최대 64KiB + 1 byte까지만 읽고 초과/손상 입력은 offline 기본값으로 처리한다.
+pub fn load_settings_file(path: &Path) -> Settings {
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(_) => return Settings::default(),
+    };
+    let mut bytes = Vec::with_capacity(MAX_SETTINGS_DOCUMENT_BYTES + 1);
+    let mut bounded = file.take((MAX_SETTINGS_DOCUMENT_BYTES + 1) as u64);
+    if bounded.read_to_end(&mut bytes).is_err() || bytes.len() > MAX_SETTINGS_DOCUMENT_BYTES {
+        return Settings::default();
+    }
+    let json = match std::str::from_utf8(&bytes) {
+        Ok(json) => json,
+        Err(_) => return Settings::default(),
+    };
+    parse_settings(json)
 }
 
 /// Settings → JSON(영속용).
