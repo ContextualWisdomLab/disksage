@@ -133,7 +133,7 @@ pub fn run() {
             commands::download_model,
             commands::file_verdicts,
             commands::summarize_unknown_bucket,
-            commands::get_settings,
+            settings::get_settings,
             commands::set_settings,
             commands::reason_unknown_extensions,
             commands::plan_brew_cleanup,
