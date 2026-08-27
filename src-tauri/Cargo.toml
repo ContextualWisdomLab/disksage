@@ -81,6 +81,10 @@ required-features = ["cloud-cli"]
 [[bin]]
 name = "disksage-git-worktree-audit"
 path = "src/bin/disksage-git-worktree-audit.rs"
+
+[[bin]]
+name = "disksage-git-worktree-remove"
+path = "src/bin/disksage-git-worktree-remove.rs"
 required-features = ["cloud-cli"]
 
 [[bin]]
@@ -98,8 +102,21 @@ name = "disksage-reclaim-plan"
 path = "src/bin/disksage-reclaim-plan.rs"
 
 [[bin]]
+name = "disksage-cache-cleanup"
+path = "src/bin/disksage-cache-cleanup.rs"
+
+[[bin]]
+name = "disksage-dev-artifacts"
+path = "src/bin/disksage-dev-artifacts.rs"
+
+[[bin]]
 name = "disksage-provider-client-runtime"
 path = "src/bin/disksage-provider-client-runtime.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
+name = "disksage-provider-recovery"
+path = "src/bin/disksage-provider-recovery.rs"
 required-features = ["cloud-cli"]
 
 [[bin]]
@@ -112,9 +129,18 @@ path = "src/bin/disksage-provider-oauth.rs"
 required-features = ["cloud-cli"]
 
 [[bin]]
+name = "disksage-zotero-local"
+path = "src/bin/disksage-zotero-local.rs"
+
+[[bin]]
 name = "disksage-naruon-copy-readiness-verify"
 path = "src/bin/disksage-naruon-copy-readiness-verify.rs"
 required-features = ["cloud-cli"]
+
+[[test]]
+name = "archive_tree_help_exit"
+path = "tests/archive_tree_help_exit.rs"
+required-features = ["archive-cli"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -125,13 +151,14 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-jwalk = "0.8"
+walkdir = "2.5.0"
 trash = "5.2.6"
 blake3 = "1.8.5"
 base64 = "0.23.1"
+md-5 = "0.10.6"
 oxttl = "0.2.3"
 oxrdf = "0.3.3"
-llama-cpp-2 = { version = "0.1.151", optional = true }
+llama-cpp-2 = { version = "0.1.151", default-features = false, features = ["common"], optional = true }
 sha2 = "0.11.0"
 sha1 = "0.11.0"
 same-file = "1.0.6"
@@ -142,21 +169,22 @@ unicode-normalization = "0.1"
 unicode-general-category = "1.1.0"
 csv = "1.4.0"
 calamine = "0.36.0"
-getrandom = "0.3.4"
+getrandom = "0.4.3"
 keyring = "4.1.5"
 zeroize = { version = "1.9.0", features = ["derive"] }
 zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 memchr = "2.8.3"
 infer = "0.22.0"
-png = "0.17.16"
+png = "0.18.1"
 mail-parser = "0.11.5"
+libc = "0.2"
+mlsirm-core = { git = "https://github.com/ContextualWisdomLab/fast-mlsirm", rev = "4f9276b6fe6063f86c4cd4453fb72a13f3f6db11", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 winapi-util = "0.1.11"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 embed_plist = "1.2.2"
-libc = "0.2"
 objc2 = "0.6.4"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSError", "NSFileManager", "NSObject", "NSString", "NSURL", "NSValue"] }
 plist = "1"

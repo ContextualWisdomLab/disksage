@@ -12,6 +12,7 @@
   let results: api.CleanResult[] = $state([]);
   let resultAction: "move" | "undo" | null = $state(null);
   let verdicts: Record<string, api.Verdict> = $state({});
+  let exportStatus = $state("");
 
   async function loadVerdicts(paths: string[]) {
     try {
@@ -26,6 +27,7 @@
     if (!scannedRoot) return;
     busy = true;
     loadError = "";
+    exportStatus = "";
     plans = [];
     verdicts = {};
     results = [];
@@ -60,6 +62,7 @@
     if (!okay) return;
     busy = true;
     loadError = "";
+    exportStatus = "";
     results = [];
     resultAction = null;
     try {
@@ -92,6 +95,21 @@
       busy = false;
     }
   }
+
+  async function copyLineageHandoff() {
+    if (plans.length === 0) return;
+    busy = true;
+    exportStatus = "";
+    try {
+      const batch = await api.exportOrganizationLineage(plans);
+      await navigator.clipboard.writeText(JSON.stringify(batch, null, 2));
+      exportStatus = "경로 없는 계보 계약을 클립보드에 복사했습니다.";
+    } catch {
+      exportStatus = "계보 계약을 클립보드에 복사하지 못했습니다. 클립보드 권한을 확인한 뒤 다시 시도하세요.";
+    } finally {
+      busy = false;
+    }
+  }
 </script>
 
 <section>
@@ -119,6 +137,12 @@
               {@const b = verdictBadge(verdicts[p.src])}
               <span class={b.cls} title={b.title}>{b.label}</span>
             {/if}
+            {#if p.lineage?.production_time_ms}
+              <span class="lineage" title={p.lineage.lineage_fingerprint}>
+                생산 {new Date(p.lineage.production_time_ms).toISOString().slice(0, 10)}
+                · {p.lineage.production_time_source ?? "미상"}
+              </span>
+            {/if}
             <span class="arrow">→</span>
             <span class="path" title={p.dst}>{p.dst}</span>
           </li>
@@ -132,7 +156,11 @@
       <button onclick={executeSelected} disabled={busy}>
         {plans.length}개 파일 정리
       </button>
+      <button onclick={copyLineageHandoff} disabled={busy}>
+        계보 계약 복사
+      </button>
     </div>
+    {#if exportStatus}<p class="muted">{exportStatus}</p>{/if}
   {/if}
 
   {#if results.length > 0}
@@ -164,6 +192,7 @@
   .group li { padding: 1px 0; display: flex; gap: 0.5rem; align-items: center; }
   .path { overflow-wrap: anywhere; flex: 1; }
   .arrow { color: #999; flex-shrink: 0; }
+  .lineage { color: #666; font-size: 0.75rem; flex-shrink: 0; }
   .muted { color: #999; }
   .error { color: #b00; }
   .errors { color: #b00; font-size: 0.85rem; list-style: none; padding: 0; }
