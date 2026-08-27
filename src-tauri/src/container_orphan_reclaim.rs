@@ -14,7 +14,8 @@
 //!    a SHA-256 fingerprint of the exact sorted candidate identity set.
 //! 3. Running or paused containers are never candidates. Built-in networks
 //!    (`bridge`, `host`, `none`, `podman`) are never candidates. Image deletion targets only
-//!    full identities returned by each runtime's authoritative `dangling=true` image filter.
+//!    full identities returned by each runtime's authoritative `dangling=true` image filter
+//!    after a bounded container-membership query proves no container references the image.
 //! 4. Mutation targets only the exact identities observed by the fresh audit. Category-wide
 //!    `prune` commands are never used, so a resource that becomes orphaned after the audit cannot
 //!    be swept into the approved mutation set.
@@ -907,6 +908,23 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
             ORPHAN_COMMAND_TIMEOUT,
             &list_label,
         )?;
+        let image_has_container_reference = |image_id: &str| -> Result<bool, String> {
+            let filter = format!("ancestor={image_id}");
+            let mut membership_args: Vec<&str> =
+                prefix.iter().skip(1).map(String::as_str).collect();
+            membership_args.extend(["container", "ps", "--all", "--filter", &filter]);
+            if target.kind.is_docker() {
+                membership_args.push("--no-trunc");
+            }
+            membership_args.extend(["--format", "json"]);
+            let membership = command_text(
+                &target.binary_path,
+                &membership_args,
+                ORPHAN_COMMAND_TIMEOUT,
+                "orphan-image-container-membership",
+            )?;
+            Ok(!split_json_envelopes(&membership)?.is_empty())
+        };
         let (evidence, candidate_ids) = match category {
             OrphanCategory::Container => {
                 let records = parse_container_records(&output)?;
@@ -920,12 +938,19 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                 )
             }
             OrphanCategory::Image if target.kind.is_docker() => {
-                // Docker's documented JSON formatter renders Size as a human string and
-                // Containers as "N/A". The daemon's `dangling=true` filter is the
-                // authoritative predicate for the exact default image-prune category.
-                let candidate_ids = parse_docker_dangling_image_ids(&output)?;
-                let total = u64::try_from(candidate_ids.len())
+                // Docker's dangling filter supplies full untagged identities, but it can still
+                // list an image used by a container. Prove zero membership before granting
+                // deletion authority; a failed membership query fails the category closed.
+                let listed_ids =
+                    bounded_exact_candidate_ids(parse_docker_dangling_image_ids(&output)?)?;
+                let total = u64::try_from(listed_ids.len())
                     .map_err(|_| "record-count-overflow".to_string())?;
+                let mut candidate_ids = Vec::with_capacity(listed_ids.len());
+                for image_id in listed_ids {
+                    if !image_has_container_reference(&image_id)? {
+                        candidate_ids.push(image_id);
+                    }
+                }
                 let refs: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
                 (
                     Some(summarize_candidates(category, total, &refs, None)?),
@@ -933,20 +958,29 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                 )
             }
             OrphanCategory::Image => {
-                // Podman's documented `dangling=true` filter is the authority predicate.
-                // Its JSON example exposes lowercase full `id` and numeric `size`, while a
-                // container-reference count is not guaranteed to be serialized. Bind every
-                // filtered full identity and retain the reported size only as evidence.
+                // Podman's dangling filter is a first-pass authority predicate. Its JSON output
+                // does not guarantee a container-reference count, so independently prove that
+                // no container uses each full identity before granting deletion authority.
                 let records = parse_image_records(&output)?;
                 let total = u64::try_from(records.len())
                     .map_err(|_| "record-count-overflow".to_string())?;
-                let candidate_ids: Vec<String> =
-                    records.iter().map(|record| record.id.clone()).collect();
+                let listed_ids = bounded_exact_candidate_ids(
+                    records.iter().map(|record| record.id.clone()).collect(),
+                )?;
+                let mut candidate_ids = Vec::with_capacity(listed_ids.len());
+                for image_id in listed_ids {
+                    if !image_has_container_reference(&image_id)? {
+                        candidate_ids.push(image_id);
+                    }
+                }
                 let ids: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
-                let size_sum = records.iter().try_fold(0u64, |sum, record| {
-                    sum.checked_add(record.size_bytes)
-                        .ok_or_else(|| "size-overflow".to_string())
-                })?;
+                let size_sum = records
+                    .iter()
+                    .filter(|record| candidate_ids.binary_search(&record.id).is_ok())
+                    .try_fold(0u64, |sum, record| {
+                        sum.checked_add(record.size_bytes)
+                            .ok_or_else(|| "size-overflow".to_string())
+                    })?;
                 let mut evidence = summarize_candidates(category, total, &ids, None)?;
                 evidence.candidate_size_sum_bytes = Some(size_sum);
                 (Some(evidence), candidate_ids)
