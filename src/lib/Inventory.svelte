@@ -1,6 +1,7 @@
 <script lang="ts">
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
+  import { requestUnknownExtensionInsights } from "./inventoryInsightPolicy";
   import Settings from "./Settings.svelte";
 
   let { scannedRoot }: { scannedRoot: string | null } = $props();
@@ -71,10 +72,10 @@
       report = await api.diskInventory(scannedRoot);
       await loadCoherence();
       await loadUserRules();
-      // 미분류 확장자 인사이트: 비차단(fire-and-forget). 이전 집계 응답은 새 집계의 증거를 덮지 못한다.
-      void api.reasonUnknownExtensions(report.unknown_samples)
+      // 미분류 확장자 인사이트: 샘플이 있을 때만 비차단으로 요청하고, 이전 집계 응답은 새 증거를 덮지 못한다.
+      void requestUnknownExtensionInsights(report.unknown_samples, api.reasonUnknownExtensions)
         .then((nextInsights) => {
-          if (generation === loadGeneration) {
+          if (generation === loadGeneration && nextInsights !== null) {
             insights = nextInsights;
             insightsError = "";
           }
