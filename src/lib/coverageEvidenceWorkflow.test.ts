@@ -90,6 +90,26 @@ describe('Test workflow coverage evidence contract', () => {
     );
   });
 
+  it('preserves the authoritative coverage exit status when diagnostic rendering fails', () => {
+    const measureStart = workflow.indexOf('name: Measure exact-head Rust coverage');
+    const uploadStart = workflow.indexOf(
+      'name: Upload bounded coverage command diagnostic',
+      measureStart,
+    );
+    expect(measureStart).toBeGreaterThanOrEqual(0);
+    expect(uploadStart).toBeGreaterThan(measureStart);
+    const measureStep = workflow.slice(measureStart, uploadStart);
+
+    expect(measureStep).toContain('coverage_status=$?');
+    expect(measureStep).toContain('diagnostic_status=$?');
+    expect(measureStep).toContain('redaction_status=$?');
+    expect(measureStep).toContain('coverage diagnostic rendering failed');
+    expect(measureStep).toContain('exit "$coverage_status"');
+    expect(measureStep.indexOf('set -e')).toBeGreaterThan(
+      measureStep.indexOf('redaction_status=$?'),
+    );
+  });
+
   it('identifies the largest exact-head Rust coverage gaps without leaking runner paths', () => {
     expect(workflow).toContain('top_uncovered_files');
     expect(workflow).toContain("const marker = '/src-tauri/'");
