@@ -21,4 +21,11 @@ describe("Organize accessibility status contract", () => {
 
     expect(source).toContain('<p role="status">{results.filter((r) => r.ok).length}/{results.length}개 완료');
   });
+
+  it("announces when undo succeeds but there is no recent move record to restore", () => {
+    const source = readSource("src/lib/Organize.svelte");
+
+    expect(source).toContain('resultAction === "undo" && results.length === 0');
+    expect(source).toContain('<p role="status">되돌릴 최근 이동 기록이 없습니다.</p>');
+  });
 });
