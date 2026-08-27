@@ -192,8 +192,8 @@ jobs:
           set +e
           cargo llvm-cov --locked --no-cfg-coverage --no-cfg-coverage-nightly --all-features --manifest-path src-tauri/Cargo.toml --branch --json --output-path coverage.json >coverage-command.raw.log 2>&1
           coverage_status=$?
-          set -e
           bash .github/scripts/bound-coverage-command-diagnostic.sh coverage-command.raw.log coverage-command.bounded.log
+          diagnostic_status=$?
           node --input-type=module <<'NODE'
           import { readFileSync, writeFileSync } from 'node:fs';
 
@@ -206,7 +206,12 @@ jobs:
           if (runnerTemp) diagnostic = diagnostic.replaceAll(runnerTemp, '<runner-temp>');
           writeFileSync('coverage-command-diagnostic.log', diagnostic);
           NODE
+          redaction_status=$?
           rm -f coverage-command.raw.log coverage-command.bounded.log
+          set -e
+          if [ "$diagnostic_status" -ne 0 ] || [ "$redaction_status" -ne 0 ]; then
+            echo "::warning::coverage diagnostic rendering failed; preserving authoritative coverage exit status" >&2
+          fi
           exit "$coverage_status"
       - name: Upload bounded coverage command diagnostic
         if: failure() && steps.rust-coverage.outcome == 'failure'
