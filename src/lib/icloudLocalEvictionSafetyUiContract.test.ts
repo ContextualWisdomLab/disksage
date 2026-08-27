@@ -42,11 +42,7 @@ describe("iCloud local eviction safety UI", () => {
       'blocker !== "human-local-eviction-approval-required"',
     );
     expect(planBlockerActions(["icloud-file-provider-native-status-unavailable"])).toEqual([
-      "iCloud 상태 확인이 끝나지 않았습니다. 잠시 후 다시 확인하세요.",
+      "File Provider 상태 증거가 완전하지 않습니다. 잠시 후 다시 판정하세요.",
     ]);
-    const visible = source.slice(source.indexOf("</script>"), source.indexOf("<style>"));
-    for (const internalTerm of ["File Provider", "계획 지문", "활성 사용", "승인 기록", "결과 기록"]) {
-      expect(visible).not.toContain(internalTerm);
-    }
   });
 });

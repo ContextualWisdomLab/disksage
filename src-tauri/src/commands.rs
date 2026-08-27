@@ -6,9 +6,8 @@ use std::sync::{Arc, Mutex};
 #[cfg(not(coverage))]
 use std::time::{Duration, Instant};
 
-use tauri::AppHandle;
 #[cfg(not(coverage))]
-use tauri::{Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[cfg(not(coverage))]
 use crate::scanner;
@@ -440,6 +439,7 @@ pub fn top_files(limit: usize, state: State<AppState>) -> Result<Vec<EntryView>,
         .collect())
 }
 
+#[cfg(not(coverage))]
 pub(crate) fn journal_file_path(app: &AppHandle) -> Result<PathBuf, String> {
     use tauri::Manager;
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
@@ -447,6 +447,7 @@ pub(crate) fn journal_file_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("journal.jsonl"))
 }
 
+#[cfg(not(coverage))]
 pub(crate) fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

@@ -53,8 +53,8 @@
     podmanError = "";
     try {
       podmanPlan = await api.inspectPodmanReclaim();
-    } catch {
-      podmanError = "Podman 상태를 확인하지 못했습니다. 다시 시도하십시오.";
+    } catch (e) {
+      podmanError = String(e);
       podmanPlan = null;
     } finally {
       podmanBusy = false;
@@ -73,7 +73,7 @@
   async function prunePodmanDanglingImages() {
     if (!podmanPlan || !podmanPruneReady()) return;
     const okay = await confirm(
-      "확인된 미사용 Podman 이미지만 정리합니다. 사용 중인 환경과 다른 저장 데이터는 건드리지 않습니다.\n\n실행 직전에 이미지 목록을 다시 확인합니다.",
+      "참조 컨테이너가 없고 tag가 없는 Podman 이미지만 삭제합니다. volume·컨테이너·tagged image·VM은 건드리지 않습니다.\n\n실행 직전에 이미지 목록을 다시 읽어 지문을 검증합니다.",
       { title: "DiskSage Podman 정리", kind: "warning" },
     );
     if (!okay) return;
@@ -87,8 +87,8 @@
       podmanPrunePhrase = "";
       podmanPruneRationale = "";
       podmanPlan = await api.inspectPodmanReclaim();
-    } catch {
-      podmanPruneError = "Podman 이미지를 정리하지 못했습니다. 상태를 다시 확인하십시오.";
+    } catch (e) {
+      podmanPruneError = String(e);
     } finally {
       podmanPruneBusy = false;
     }
@@ -108,7 +108,7 @@
       const targetBytes = targets.reduce((sum, target) => sum + target.bytes, 0);
       const okay = await confirm(
         `${candidate.label}의 직계 캐시 ${targets.length}개(${fmtBytes(targetBytes)})를 휴지통으로 보냅니다.\n\n` +
-          "캐시 루트는 보존하며, 각 항목의 파일 정보·크기·수정 시각·사용 여부를 다시 확인합니다. 사용 중이거나 확인이 불완전한 항목은 건너뜁니다. 휴지통에서 복원할 수 있습니다.",
+          "캐시 루트는 보존하며, 각 항목은 객체 지문·크기·수정시각·active-use를 다시 검증합니다. 사용 중이거나 증명이 불완전한 항목은 건너뜁니다. 휴지통에서 복원할 수 있습니다.",
         { title: "DiskSage", kind: "warning" },
       );
       if (!okay) return;
@@ -164,7 +164,7 @@
     );
     if (selectedArtifacts.length === 0 || !scannedRoot) return;
     const summary = selectedArtifacts.map(
-      (a) => `${a.path} (${fmtBytes(a.bytes)}, ${a.files}개)`,
+      (a) => `${a.path} (${fmtBytes(a.bytes)}, ${a.files}개) — 메타데이터 지문 ${a.fingerprint.slice(0, 12)}`,
     );
     const okay = await confirm(
       `다음 ${summary.length}개 항목을 휴지통으로 보냅니다 (논리 크기 합계 ${fmtBytes(totalSelected)}):\n\n` +
@@ -180,8 +180,8 @@
       results = await api.cleanDevArtifacts(scannedRoot, 30, selectedArtifacts);
       selected = new Set();
       await load();
-    } catch {
-      loadError = "개발 아티팩트를 정리하지 못했습니다. 상태를 확인한 뒤 다시 시도하십시오.";
+    } catch (e) {
+      loadError = String(e);
     } finally {
       busy = false;
     }
@@ -196,13 +196,13 @@
 
   <h3>캐시</h3>
   <p class="notice" role="status">
-    알려진 캐시 루트의 직계 항목만 파일 정보·크기·수정 시각을 다시 확인한 뒤 휴지통으로 보냅니다. 캐시 루트 자체는 보존됩니다.
+    알려진 캐시 루트의 직계 항목만 객체 지문·크기·수정시각을 재검증한 뒤 휴지통으로 보냅니다. 캐시 루트 자체는 보존됩니다.
   </p>
   <button onclick={cleanRegenerableCaches} disabled={busy}>
     {busy ? "재생성 캐시 확인 중…" : "관측된 재생성 캐시 자동 정리"}
   </button>
   <p class="notice" role="status">
-    npm·pnpm·Adobe·Edge·uv·Trivy 캐시만 대상으로 하며, 사용 중이거나 상태가 바뀐 항목은 자동으로 건너뜁니다. 정리 범위를 확인하세요.
+    npm·pnpm·Adobe·Edge·uv·Trivy 캐시만 대상으로 하며, 사용 중이거나 증거가 바뀐 항목은 자동으로 건너뜁니다.
   </p>
   {#if cacheRetryMessage}<p class="notice" role="status">{cacheRetryMessage}</p>{/if}
   <ul class="list">
@@ -234,7 +234,7 @@
           {a.kind} <em>({a.project}, {a.age_days}일)</em>
           <span class="size">
             {!a.scan_complete
-              ? `${fmtBytes(a.bytes)} · 파일 정보 확인 미완료`
+              ? `${fmtBytes(a.bytes)} · 메타데이터 스캔 미완료`
               : a.skipped > 0
                 ? `${fmtBytes(a.bytes)} · 읽기 오류 ${a.skipped}`
                 : fmtBytes(a.bytes)}
@@ -263,7 +263,7 @@
     {#if failedResults.length > 0}
       <ul class="errors">
         {#each failedResults as r (r.path)}
-          <li title={r.path}>⚠ {r.path} — 정리하지 못했습니다. 상태를 다시 확인하십시오.</li>
+          <li title={r.path}>⚠ {r.path} — {r.error}</li>
         {/each}
       </ul>
     {/if}
@@ -272,10 +272,10 @@
   <GitWorktreeCleanup {scannedRoot} />
   <BrewCleanup />
 
-  <h3>Podman 저장 공간</h3>
+  <h3>Podman VM 저장소</h3>
   <p class="notice">
-    Podman 저장 공간 상태만 확인합니다. 이 화면에서는 사용 중인 환경이나 일반 파일을 자동으로 정리하지 않습니다.
-    실제 회수량은 확인 후 시스템 저장 공간에서 직접 확인하십시오.
+    게스트·이미지·volume 증거만 읽습니다. prune, 삭제, trim, 중지는 이 화면에서 실행하지 않습니다.
+    실제 물리 회수량은 전후 호스트 관측 없이는 확정하지 않습니다.
   </p>
   <button onclick={inspectPodman} disabled={podmanBusy}>
     {podmanBusy ? "확인 중…" : "Podman 상태 확인"}
@@ -284,45 +284,45 @@
   {#if podmanPlan}
     <div class="podman-evidence" aria-live="polite">
       <p>
-        상태 확인 {podmanPlan.evidence_complete ? "완료" : "부분 완료"} ·
-        사용 가능한 공간 {podmanPlan.guest_filesystem ? fmtBytes(podmanPlan.guest_filesystem.available_bytes) : "확인 불가"} ·
-        정리 가능 공간 {podmanPlan.assessment.podman_reported_reclaimable_bytes === null
+        {podmanPlan.evidence_complete ? "증거 완전" : "증거 불완전"} ·
+        게스트 여유 {podmanPlan.guest_filesystem ? fmtBytes(podmanPlan.guest_filesystem.available_bytes) : "확인 불가"} ·
+        보고 reclaimable {podmanPlan.assessment.podman_reported_reclaimable_bytes === null
           ? "미확인"
           : fmtBytes(podmanPlan.assessment.podman_reported_reclaimable_bytes)}
       </p>
       {#if podmanPlan.unused_images}
-        <p>미사용 이미지 {podmanPlan.unused_images.unused_records}개 · 후보 합계 {fmtBytes(podmanPlan.unused_images.candidate_record_size_sum)}</p>
+        <p>미사용 이미지 {podmanPlan.unused_images.unused_records}개 · exact record 합계 {fmtBytes(podmanPlan.unused_images.candidate_record_size_sum)}</p>
       {/if}
       {#if podmanPlan.dangling_prune_approval_phrase}
         <div class="podman-prune">
-          <p>사용하지 않는 이미지 중 안전하게 확인된 항목만 정리할 수 있습니다.</p>
-          <label>확인 문구
+          <p>dangling 이미지(무tag·참조 컨테이너 0)만 실행 대상으로 확인되었습니다.</p>
+          <label>정확한 승인 문구
             <input bind:value={podmanPrunePhrase} placeholder={podmanPlan.dangling_prune_approval_phrase} disabled={podmanPruneBusy} />
           </label>
           <label>정리 사유
-            <textarea bind:value={podmanPruneRationale} maxlength="1000" placeholder="예: 다시 만들 수 있는 미사용 이미지라 정리함" disabled={podmanPruneBusy}></textarea>
+            <textarea bind:value={podmanPruneRationale} maxlength="1000" placeholder="예: 재생성 가능한 미사용 dangling 이미지라 정리함" disabled={podmanPruneBusy}></textarea>
           </label>
           <button onclick={prunePodmanDanglingImages} disabled={!podmanPruneReady()}>
-            {podmanPruneBusy ? "상태를 다시 확인한 뒤 이미지 정리 중…" : "확인된 미사용 이미지 정리"}
+            {podmanPruneBusy ? "재검증 후 dangling 이미지 정리 중…" : "dangling 이미지 정리"}
           </button>
           {#if podmanPruneError}<p class="error" role="alert">{podmanPruneError}</p>{/if}
         </div>
       {/if}
       {#if podmanPruneExecution}
         <p class="notice">
-          {podmanPruneExecution.executed ? "이미지 정리를 완료했습니다." : "이미지 정리를 완료하지 못했습니다."}
-          저장 공간 증가 {podmanPruneExecution.observed_available_gain_bytes === null
-            ? "미확인 — 시스템 저장 공간에서 직접 확인하십시오."
-            : `${fmtBytes(podmanPruneExecution.observed_available_gain_bytes)} — 시스템 저장 공간에서 결과를 확인하십시오.`}
+          실행 결과: {podmanPruneExecution.executed ? "성공" : `실패(${podmanPruneExecution.status_code})`} ·
+          호스트 가용 공간 증가 관측 {podmanPruneExecution.observed_available_gain_bytes === null
+            ? "미확인"
+            : fmtBytes(podmanPruneExecution.observed_available_gain_bytes)}
         </p>
       {/if}
       {#if podmanPlan.system_df}
-        <p>연결되지 않은 저장 공간 후보 {fmtBytes(podmanPlan.system_df.local_volumes.reclaimable_bytes)}</p>
+        <p>연결 없는 volume 후보 {fmtBytes(podmanPlan.system_df.local_volumes.reclaimable_bytes)}</p>
       {/if}
       {#if podmanPlan.assessment.recommended_actions.length > 0}
         <ul class="errors">
           {#each podmanPlan.assessment.recommended_actions as action (action.kind)}
-            <li>추가 확인이 필요한 항목입니다. 상태를 확인한 뒤 진행하십시오.</li>
+            <li>{action.kind}: {action.rationale}</li>
           {/each}
         </ul>
       {/if}
