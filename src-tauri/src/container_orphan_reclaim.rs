@@ -411,8 +411,6 @@ fn parse_u64_field(record: &Value, keys: &[&str]) -> Result<Option<u64>, String>
                     format!("json-field-invalid:{}", keys[0])
                 })?))
             }
-            // Docker serializes numeric fields as strings; "-1" means unknown and must
-            // fail closed rather than being treated as zero references.
             Value::String(text) if text == "-1" => Err(format!("json-field-invalid:{}", keys[0])),
             Value::String(text) => text
                 .parse::<u64>()
@@ -546,8 +544,6 @@ fn parse_network_records(output: &str) -> Result<Vec<NetworkRecord>, String> {
     Ok(records)
 }
 
-/// Networks are candidates when they are custom (driver `bridge` or equivalent), not
-/// built-in by name, and confirmed to carry zero attached containers via inspect.
 fn classify_network_candidates<'a>(
     records: &'a [NetworkRecord],
     attached_network_names: &[String],
@@ -568,9 +564,6 @@ fn classify_network_candidates<'a>(
     Ok((total, candidates))
 }
 
-/// Parses `network inspect <id>` output and reports whether any container endpoint
-/// is attached. Both runtimes expose an attached-container map keyed by endpoint ID;
-/// Docker uses `Containers`, Podman uses `containers` on the single inspected object.
 fn network_has_attached_containers(output: &str) -> Result<bool, String> {
     let value = serde_json::from_str::<Value>(output.trim())
         .map_err(|error| format!("invalid-network-inspect-json:{error}"))?;
@@ -593,10 +586,6 @@ fn network_has_attached_containers(output: &str) -> Result<bool, String> {
     })
 }
 
-// ---------------------------------------------------------------------------
-// Identity binding and approval phrasing.
-// ---------------------------------------------------------------------------
-
 fn hash_frame(hasher: &mut Sha256, value: &[u8]) {
     hasher.update((value.len() as u64).to_be_bytes());
     hasher.update(value);
@@ -612,8 +601,6 @@ fn lower_hex(bytes: &[u8]) -> String {
     encoded
 }
 
-/// Binds the exact candidate identity set into a SHA-256 fingerprint.
-/// Identities are hashed in sorted order so report ordering cannot change evidence.
 fn candidate_fingerprint(domain_tag: &str, ids: &[&str]) -> String {
     let mut ordered: Vec<&str> = ids.to_vec();
     ordered.sort_unstable();
@@ -682,10 +669,6 @@ fn redacted_exact_delete_command(
     }
     command
 }
-
-// ---------------------------------------------------------------------------
-// Bounded subprocess plumbing (same contract as podman_reclaim).
-// ---------------------------------------------------------------------------
 
 fn drain_bounded<R: std::io::Read>(mut reader: R) -> std::io::Result<(Vec<u8>, bool)> {
     let mut buffer = [0u8; 65_536];
@@ -789,6 +772,14 @@ fn command_capture(
         }
     };
 
+    // The direct CLI may exit while a descendant still owns the capture pipes. The child was
+    // isolated in its own process group, so terminate any such descendants before joining the
+    // reader threads; otherwise a successful probe can hang until the descendant exits.
+    #[cfg(unix)]
+    unsafe {
+        let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
+    }
+
     let (stdout, stdout_truncated) = join_capture(stdout_reader, label, "stdout")?;
     let (stderr, stderr_truncated) = join_capture(stderr_reader, label, "stderr")?;
     if stdout_truncated || stderr_truncated {
@@ -816,11 +807,6 @@ fn command_text(
     Ok(output.stdout)
 }
 
-// ---------------------------------------------------------------------------
-// Audit and execution entry points.
-// ---------------------------------------------------------------------------
-
-/// Runs `info` against the target to confirm the runtime is reachable and healthy.
 pub fn probe_runtime_health(target: &ContainerRuntimeTarget) -> RuntimeHealthEvidence {
     let detail_issue = (|| -> Result<(), String> {
         let prefix = target.command_prefix()?;
@@ -938,9 +924,6 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                 )
             }
             OrphanCategory::Image if target.kind.is_docker() => {
-                // Docker's dangling filter supplies full untagged identities, but it can still
-                // list an image used by a container. Prove zero membership before granting
-                // deletion authority; a failed membership query fails the category closed.
                 let listed_ids =
                     bounded_exact_candidate_ids(parse_docker_dangling_image_ids(&output)?)?;
                 let total = u64::try_from(listed_ids.len())
@@ -958,9 +941,6 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                 )
             }
             OrphanCategory::Image => {
-                // Podman's dangling filter is a first-pass authority predicate. Its JSON output
-                // does not guarantee a container-reference count, so independently prove that
-                // no container uses each full identity before granting deletion authority.
                 let records = parse_image_records(&output)?;
                 let total = u64::try_from(records.len())
                     .map_err(|_| "record-count-overflow".to_string())?;
@@ -999,9 +979,6 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
             }
             OrphanCategory::Network => {
                 let records = parse_network_records(&output)?;
-                // Confirm each non-builtin network carries zero endpoints before it can
-                // count as a candidate; any missing/truncated identity or inspect failure
-                // fails the category closed.
                 let mut attached: Vec<String> = Vec::new();
                 let mut inspected_candidates = 0usize;
                 for record in &records {
@@ -1103,7 +1080,6 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
     }
 }
 
-/// Audits every orphan category on one healthy runtime target, read-only.
 pub fn probe_container_orphans(target: &ContainerRuntimeTarget) -> ContainerOrphanPlan {
     let started = Instant::now();
     let runtime = probe_runtime_health(target);
@@ -1155,9 +1131,6 @@ fn current_epoch_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// Executes one category's deletion behind the full fail-closed gate:
-/// validated rationale, validated scope, fresh re-audit whose candidate set is
-/// non-empty, phrase equality, then exact identity-bound deletion.
 pub fn execute_container_orphan_prune(
     target: &ContainerRuntimeTarget,
     category: OrphanCategory,
@@ -1176,7 +1149,6 @@ pub fn execute_container_orphan_prune(
         return Err("orphan-prune-rationale-invalid".into());
     }
     let prefix = target.command_prefix()?;
-    // Fresh re-audit binds execution to evidence observed now, not to stale UI state.
     let plan = audit_category(target, category);
     if !plan.evidence_complete {
         return Err(format!(
@@ -1243,8 +1215,6 @@ mod tests {
 
     const DOCKER_ID_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const DOCKER_ID_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-
-    // -- scope validation and command prefix --------------------------------
 
     #[test]
     fn scope_name_rejects_option_injection() {
@@ -1346,8 +1316,6 @@ mod tests {
         );
     }
 
-    // -- envelope splitting ---------------------------------------------------
-
     #[test]
     fn envelopes_accept_array_and_ndjson() {
         let array = r#"[{"ID":"a"},{"ID":"b"}]"#;
@@ -1360,8 +1328,6 @@ mod tests {
             .unwrap_err()
             .starts_with("invalid-json-record:"));
     }
-
-    // -- container records -----------------------------------------------------
 
     #[test]
     fn docker_container_records_parse_from_ndjson() {
@@ -1440,8 +1406,6 @@ mod tests {
         );
     }
 
-    // -- image records -----------------------------------------------------------
-
     #[test]
     fn docker_image_records_coerce_string_numbers_and_fail_on_negative() {
         let ok = format!(
@@ -1515,8 +1479,6 @@ mod tests {
         );
     }
 
-    // -- volume records ------------------------------------------------------------
-
     #[test]
     fn volume_names_parse_from_both_envelopes() {
         let ndjson = "{\"Availability\":\"active\",\"Driver\":\"local\",\"Name\":\"data-vol\"}\n";
@@ -1537,8 +1499,6 @@ mod tests {
             "volume-invalid-name"
         );
     }
-
-    // -- network records ---------------------------------------------------------------
 
     #[test]
     fn network_records_parse_docker_casing_and_podman_casing() {
@@ -1623,8 +1583,6 @@ mod tests {
             "network-invalid-name"
         );
     }
-
-    // -- fingerprints and phrases ---------------------------------------------------------
 
     #[test]
     fn fingerprint_binds_sorted_identity_set_and_domain() {
