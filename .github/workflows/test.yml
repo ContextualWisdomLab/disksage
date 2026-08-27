@@ -210,6 +210,7 @@ jobs:
           rm -f coverage-command.raw.log coverage-command.bounded.log
           set -e
           if [ "$diagnostic_status" -ne 0 ] || [ "$redaction_status" -ne 0 ]; then
+            printf '%s\n' 'coverage diagnostic rendering failed; raw diagnostic withheld' > coverage-command-diagnostic.log
             echo "::warning::coverage diagnostic rendering failed; preserving authoritative coverage exit status" >&2
           fi
           exit "$coverage_status"
