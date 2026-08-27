@@ -14,11 +14,13 @@ const platformDirectories = {
   macos: `release-disksage-macos-latest-${runAttempt}`,
 } as const;
 
+/** Writes one fixture file, creating only the parent directories required by that fixture. */
 function write(path: string, bytes: Buffer | string) {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, bytes);
 }
 
+/** Adds one operational CLI fixture together with its adjacent SHA-256 receipt. */
 function addCli(artifactRoot: string, directory: string, name: string) {
   const bytes = Buffer.from(`cli:${name}`);
   const assetPath = join(artifactRoot, directory, name);
@@ -29,6 +31,7 @@ function addCli(artifactRoot: string, directory: string, name: string) {
   );
 }
 
+/** Materializes the exact 17-file Linux, Windows, and macOS release artifact contract. */
 function materializeExactArtifactSet(artifactRoot: string) {
   write(join(artifactRoot, platformDirectories.linux, 'bundle/deb/disksage.deb'), 'deb');
   write(join(artifactRoot, platformDirectories.linux, 'bundle/appimage/disksage.AppImage'), 'appimage');
@@ -44,6 +47,7 @@ function materializeExactArtifactSet(artifactRoot: string) {
   addCli(artifactRoot, platformDirectories.macos, 'disksage-duplicate-audit-macos-arm64');
 }
 
+/** Runs the repository-owned verifier against one isolated downloaded-artifact fixture. */
 function verify(artifactRoot: string) {
   return spawnSync(
     'bash',
