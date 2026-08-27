@@ -86,7 +86,10 @@ case "${{1:-}}" in
   container)
     [ "${{2:-}}" = "ps" ] || exit 91
     case " $* " in *" --no-trunc "*) ;; *) echo "missing container --no-trunc" >&2; exit 92 ;; esac
-    printf '%s\n' '{{"ID":"{FULL_ID}","State":"running","Names":[]}}'
+    case " $* " in
+      *" --filter ancestor={FULL_ID} "*) exit 0 ;;
+      *) printf '%s\n' '{{"ID":"{FULL_ID}","State":"running","Names":[]}}' ;;
+    esac
     ;;
   images)
     case " $* " in *" --no-trunc "*) ;; *) echo "missing image --no-trunc" >&2; exit 93 ;; esac
