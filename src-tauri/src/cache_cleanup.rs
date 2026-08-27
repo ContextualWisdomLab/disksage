@@ -55,17 +55,6 @@ pub struct CacheTrashSnapshot {
     pub approval_phrase: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CacheTrashPurgeResult {
-    pub name: String,
-    pub path: String,
-    pub bytes: u64,
-    pub signature: String,
-    pub purged: bool,
-    pub error: String,
-}
-
 fn direct_child_is_dir(path: &Path, name: &str) -> bool {
     let child = path.join(name);
     std::fs::symlink_metadata(child)
@@ -269,7 +258,7 @@ pub fn purge_proven_cache_trash(
     _journal_path: &Path,
     _now_ms: u64,
     snapshot: &CacheTrashSnapshot,
-) -> Result<Vec<CacheTrashPurgeResult>, String> {
+) -> Result<(), String> {
     if snapshot.approval_phrase != approval_phrase_for_candidates(&snapshot.candidates) {
         return Err("cache-trash-confirmation-mismatch".into());
     }
