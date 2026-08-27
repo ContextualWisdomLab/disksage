@@ -550,6 +550,9 @@ pub fn collect_exact_duplicate_audit(
     }
     let canonical_root = std::fs::canonicalize(source_root)
         .map_err(|_| "duplicate-audit-root-unavailable".to_string())?;
+    if canonical_root.to_str().is_none() {
+        return Err("duplicate-audit-root-non-unicode".into());
+    }
     let root_metadata = std::fs::symlink_metadata(&canonical_root)
         .map_err(|_| "duplicate-audit-root-unavailable".to_string())?;
     if !root_metadata.is_dir() || root_metadata.file_type().is_symlink() {
