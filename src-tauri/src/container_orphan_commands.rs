@@ -102,17 +102,12 @@ fn validate_requested_scope(
 /// categories on each healthy target. This shipped IPC surface remains present under coverage.
 #[tauri::command(async)]
 pub fn inspect_container_orphans() -> Vec<container_orphan_reclaim::ContainerOrphanPlan> {
-    use container_orphan_reclaim::ContainerRuntimeKind;
-    [
-        ContainerRuntimeKind::DockerNative,
-        ContainerRuntimeKind::DockerColimaContext,
-        ContainerRuntimeKind::PodmanMachine,
-    ]
-    .into_iter()
-    .filter_map(|kind| target_for_kind(kind).ok())
-    .map(|target| container_orphan_reclaim::probe_container_orphans(&target))
-    .map(container_orphan_public::sanitize_plan)
-    .collect()
+    runtime_kinds_for_default_docker_context(docker_current_context().as_deref())
+        .into_iter()
+        .filter_map(|kind| target_for_kind(kind).ok())
+        .map(|target| container_orphan_reclaim::probe_container_orphans(&target))
+        .map(container_orphan_public::sanitize_plan)
+        .collect()
 }
 
 /// Re-audits one runtime/category immediately before exact identity-bound deletion. Runtime scope
@@ -182,6 +177,47 @@ mod tests {
             validate_requested_scope(&podman, &Some("attacker-controlled-machine".into()))
                 .unwrap_err(),
             "orphan-prune-runtime-scope-mismatch"
+        );
+    }
+
+    #[test]
+    fn colima_default_context_does_not_create_duplicate_runtime_targets() {
+        use container_orphan_reclaim::ContainerRuntimeKind::{
+            DockerColimaContext, DockerNative, PodmanMachine,
+        };
+
+        assert_eq!(
+            runtime_kinds_for_default_docker_context(Some("colima")),
+            vec![DockerColimaContext, PodmanMachine]
+        );
+        assert_eq!(
+            runtime_kinds_for_default_docker_context(Some("desktop-linux")),
+            vec![DockerNative, DockerColimaContext, PodmanMachine]
+        );
+        assert_eq!(
+            runtime_kinds_for_default_docker_context(None),
+            vec![DockerNative, DockerColimaContext, PodmanMachine]
+        );
+    }
+
+    #[test]
+    fn docker_current_context_parser_is_bounded_and_exact() {
+        assert_eq!(
+            parse_docker_current_context(br#"{"currentContext":"colima"}"#).as_deref(),
+            Some("colima")
+        );
+        assert_eq!(
+            parse_docker_current_context(br#"{"currentContext":"desktop-linux"}"#).as_deref(),
+            Some("desktop-linux")
+        );
+        assert_eq!(parse_docker_current_context(b"not-json"), None);
+        assert_eq!(
+            parse_docker_current_context(br#"{"currentContext":12}"#),
+            None
+        );
+        assert_eq!(
+            parse_docker_current_context(&vec![b'x'; MAX_DOCKER_CONFIG_BYTES + 1]),
+            None
         );
     }
 }
