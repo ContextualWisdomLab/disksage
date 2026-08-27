@@ -41,7 +41,11 @@ exit 0
     let health = probe_runtime_health(&target);
     let elapsed = started.elapsed();
 
-    assert!(health.healthy, "runtime probe should succeed: {:?}", health.issue);
+    assert!(
+        health.healthy,
+        "runtime probe should succeed: {:?}",
+        health.detail_issue
+    );
     assert!(
         elapsed < Duration::from_secs(1),
         "successful direct child exit must not wait for a descendant holding stdout/stderr; elapsed={elapsed:?}"
