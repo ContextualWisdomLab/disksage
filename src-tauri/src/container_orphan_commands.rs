@@ -292,6 +292,23 @@ mod tests {
     }
 
     #[test]
+    fn invalid_docker_context_must_not_fall_through_to_native_target() {
+        use container_orphan_reclaim::ContainerRuntimeKind::DockerNative;
+
+        let invalid = docker_context_environment(Some(OsString::from("bad\ncontext")));
+        let effective_context = match invalid {
+            DockerContextEnvironment::Context(context) => Some(context),
+            DockerContextEnvironment::AbsentOrEmpty | DockerContextEnvironment::Invalid => None,
+        };
+        let kinds = runtime_kinds_for_default_docker_context(effective_context.as_deref());
+
+        assert!(
+            !kinds.contains(&DockerNative),
+            "an invalid inherited DOCKER_CONTEXT must not silently authorize DockerNative"
+        );
+    }
+
+    #[test]
     fn docker_context_environment_precedence_is_fail_closed_and_matches_empty_override_fallback() {
         assert_eq!(
             docker_context_environment(None),
@@ -327,16 +344,16 @@ mod tests {
     #[test]
     fn docker_current_context_parser_is_bounded_and_exact() {
         assert_eq!(
-            parse_docker_current_context(br#"{"currentContext":"colima"}"#).as_deref(),
+            parse_docker_current_context(br#"{\"currentContext\":\"colima\"}"#).as_deref(),
             Some("colima")
         );
         assert_eq!(
-            parse_docker_current_context(br#"{"currentContext":"desktop-linux"}"#).as_deref(),
+            parse_docker_current_context(br#"{\"currentContext\":\"desktop-linux\"}"#).as_deref(),
             Some("desktop-linux")
         );
         assert_eq!(parse_docker_current_context(b"not-json"), None);
         assert_eq!(
-            parse_docker_current_context(br#"{"currentContext":12}"#),
+            parse_docker_current_context(br#"{\"currentContext\":12}"#),
             None
         );
         assert_eq!(
