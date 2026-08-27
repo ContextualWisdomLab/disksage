@@ -41,6 +41,19 @@ describe("Duplicates privacy-safe failure feedback", () => {
     expect(scanPrefix).toContain("results = []");
   });
 
+  it("prevents a verdict response from an older scan replacing current evidence", () => {
+    const source = readSource("src/lib/Duplicates.svelte");
+    const verdictStart = source.indexOf("async function loadVerdicts");
+    const scanStart = source.indexOf("async function scan()");
+    const verdictBody = source.slice(verdictStart, scanStart);
+
+    expect(source).toContain("let scanGeneration = $state(0)");
+    expect(verdictBody).toContain("generation: number");
+    expect(verdictBody).toContain("if (generation !== scanGeneration) return");
+    expect(source).toContain("const generation = ++scanGeneration");
+    expect(source).toContain("loadVerdicts(groups.flatMap((g) => g.paths), generation)");
+  });
+
   it("uses the accessible failure region for an invalid all-selected group", () => {
     const source = readSource("src/lib/Duplicates.svelte");
 
