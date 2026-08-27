@@ -84,4 +84,23 @@ mod tests {
         assert!(oversized.len() > MAX_SETTINGS_DOCUMENT_BYTES);
         assert_eq!(parse_settings(&oversized), Settings::default());
     }
+    #[test]
+    fn load_settings_file_bounds_disk_read_before_parsing() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("settings.json");
+        let mut oversized = vec![b' '; MAX_SETTINGS_DOCUMENT_BYTES + 1];
+        let prefix = br#"{"online_mode":true}"#;
+        oversized[..prefix.len()].copy_from_slice(prefix);
+        std::fs::write(&path, oversized).unwrap();
+
+        assert_eq!(load_settings_file(&path), Settings::default());
+    }
+    #[test]
+    fn load_settings_file_preserves_in_limit_settings() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("settings.json");
+        std::fs::write(&path, br#"{"online_mode":true}"#).unwrap();
+
+        assert_eq!(load_settings_file(&path), Settings { online_mode: true });
+    }
 }
