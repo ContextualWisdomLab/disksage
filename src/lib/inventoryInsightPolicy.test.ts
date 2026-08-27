@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { requestUnknownExtensionInsights } from "./inventoryInsightPolicy";
+import {
+  isCurrentInventoryRequest,
+  requestUnknownExtensionInsights,
+} from "./inventoryInsightPolicy";
 
 describe("Inventory unknown-extension insight admission", () => {
   it("does not invoke advisory reasoning when the inventory has no unknown samples", async () => {
@@ -20,5 +23,19 @@ describe("Inventory unknown-extension insight admission", () => {
     expect(reason).toHaveBeenCalledTimes(1);
     expect(reason).toHaveBeenCalledWith(samples);
     expect(result).toEqual(samples.map((path) => ({ path })));
+  });
+});
+
+describe("Inventory request authority", () => {
+  it("rejects a response when the scanned root changed while the request was in flight", () => {
+    expect(isCurrentInventoryRequest("/disk-a", 7, "/disk-b", 7)).toBe(false);
+  });
+
+  it("rejects a response superseded by a newer request for the same root", () => {
+    expect(isCurrentInventoryRequest("/disk-a", 7, "/disk-a", 8)).toBe(false);
+  });
+
+  it("accepts evidence only when both root identity and generation still match", () => {
+    expect(isCurrentInventoryRequest("/disk-a", 7, "/disk-a", 7)).toBe(true);
   });
 });
