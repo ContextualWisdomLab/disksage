@@ -1,7 +1,10 @@
 <script lang="ts">
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
-  import { requestUnknownExtensionInsights } from "./inventoryInsightPolicy";
+  import {
+    isCurrentInventoryRequest,
+    requestUnknownExtensionInsights,
+  } from "./inventoryInsightPolicy";
   import Settings from "./Settings.svelte";
 
   let { scannedRoot }: { scannedRoot: string | null } = $props();
@@ -10,6 +13,7 @@
   let busy = $state(false);
   let loadError = $state("");
   let loadGeneration = 0;
+  let observedRoot: string | null = scannedRoot;
 
   let model = $state<api.ModelStatus | null>(null);
   let modelBusy = $state(false);
@@ -31,31 +35,7 @@
   let insights = $state<api.ExtInsight[]>([]);
   let insightsError = $state("");
 
-  async function loadCoherence() {
-    coherenceError = "";
-    try {
-      issues = await api.ontologyCoherence();
-    } catch {
-      issues = null;
-      coherenceError = "온톨로지 정합성 확인에 실패했습니다. DiskSage 리소스와 설정을 확인한 뒤 인벤토리를 다시 집계하세요.";
-    }
-  }
-
-  async function loadUserRules() {
-    try {
-      const rules = await api.getUserRules();
-      userRulesCount = rules.length;
-      userRulesError = "";
-    } catch {
-      userRulesCount = null;
-      userRulesError = "규칙 파일을 불러오지 못했습니다. DiskSage 데이터 폴더의 규칙 파일 권한과 형식을 확인한 뒤 인벤토리를 다시 집계하세요.";
-    }
-  }
-
-  async function load() {
-    if (!scannedRoot) return;
-    const generation = ++loadGeneration;
-    busy = true;
+  function clearInventoryEvidence() {
     loadError = "";
     report = null;
     summary = null;
@@ -68,28 +48,74 @@
     userRulesError = "";
     insights = [];
     insightsError = "";
+  }
+
+  function requestIsCurrent(root: string, generation: number): boolean {
+    return isCurrentInventoryRequest(root, generation, scannedRoot, loadGeneration);
+  }
+
+  async function loadCoherence(root: string, generation: number) {
     try {
-      report = await api.diskInventory(scannedRoot);
-      await loadCoherence();
-      await loadUserRules();
-      // 미분류 확장자 인사이트: 샘플이 있을 때만 비차단으로 요청하고, 이전 집계 응답은 새 증거를 덮지 못한다.
-      void requestUnknownExtensionInsights(report.unknown_samples, api.reasonUnknownExtensions)
+      const nextIssues = await api.ontologyCoherence();
+      if (!requestIsCurrent(root, generation)) return;
+      issues = nextIssues;
+      coherenceError = "";
+    } catch {
+      if (!requestIsCurrent(root, generation)) return;
+      issues = null;
+      coherenceError = "온톨로지 정합성 확인에 실패했습니다. DiskSage 리소스와 설정을 확인한 뒤 인벤토리를 다시 집계하세요.";
+    }
+  }
+
+  async function loadUserRules(root: string, generation: number) {
+    try {
+      const rules = await api.getUserRules();
+      if (!requestIsCurrent(root, generation)) return;
+      userRulesCount = rules.length;
+      userRulesError = "";
+    } catch {
+      if (!requestIsCurrent(root, generation)) return;
+      userRulesCount = null;
+      userRulesError = "규칙 파일을 불러오지 못했습니다. DiskSage 데이터 폴더의 규칙 파일 권한과 형식을 확인한 뒤 인벤토리를 다시 집계하세요.";
+    }
+  }
+
+  async function load() {
+    const root = scannedRoot;
+    if (!root) return;
+    const generation = ++loadGeneration;
+    busy = true;
+    clearInventoryEvidence();
+    try {
+      const nextReport = await api.diskInventory(root);
+      if (!requestIsCurrent(root, generation)) return;
+      report = nextReport;
+      await loadCoherence(root, generation);
+      if (!requestIsCurrent(root, generation)) return;
+      await loadUserRules(root, generation);
+      if (!requestIsCurrent(root, generation)) return;
+      // 미분류 확장자 인사이트: 샘플이 있을 때만 비차단으로 요청하고, 이전 root/집계 응답은 새 증거를 덮지 못한다.
+      void requestUnknownExtensionInsights(nextReport.unknown_samples, api.reasonUnknownExtensions)
         .then((nextInsights) => {
-          if (generation === loadGeneration && nextInsights !== null) {
+          if (requestIsCurrent(root, generation) && nextInsights !== null) {
             insights = nextInsights;
             insightsError = "";
           }
         })
         .catch(() => {
-          if (generation === loadGeneration) {
+          if (requestIsCurrent(root, generation)) {
             insights = [];
             insightsError = "미분류 확장자 자문에 실패했습니다. 인벤토리는 그대로 사용할 수 있으며 필요하면 다시 집계해 자문을 재시도하세요.";
           }
         });
     } catch {
-      loadError = "인벤토리 집계에 실패했습니다. 스캔 대상 폴더의 접근 권한을 확인하고 스캔을 다시 실행한 뒤 집계하세요.";
+      if (requestIsCurrent(root, generation)) {
+        loadError = "인벤토리 집계에 실패했습니다. 스캔 대상 폴더의 접근 권한을 확인하고 스캔을 다시 실행한 뒤 집계하세요.";
+      }
     } finally {
-      busy = false;
+      if (generation === loadGeneration) {
+        busy = false;
+      }
     }
   }
 
@@ -119,6 +145,8 @@
   // 미분류 버킷 요약: 스캔된 미분류 파일 경로 샘플(unknown_samples)을 백엔드가 모델로 요약.
   // 샘플이 없거나 모델이 없으면 null(안내 문구로 대체).
   async function summarizeUnknown() {
+    const root = scannedRoot;
+    if (!root) return;
     const generation = loadGeneration;
     summaryBusy = true;
     summaryLoaded = false;
@@ -126,20 +154,30 @@
     summaryError = "";
     try {
       const result = await api.summarizeUnknownBucket(report?.unknown_samples ?? []);
-      if (generation === loadGeneration) {
+      if (requestIsCurrent(root, generation)) {
         summary = result;
       }
     } catch {
-      if (generation === loadGeneration) {
+      if (requestIsCurrent(root, generation)) {
         summaryError = "미분류 요약에 실패했습니다. 모델 설치 상태를 확인한 뒤 요약을 다시 실행하세요.";
       }
     } finally {
-      if (generation === loadGeneration) {
+      if (requestIsCurrent(root, generation)) {
         summaryLoaded = true;
         summaryBusy = false;
       }
     }
   }
+
+  $effect(() => {
+    const nextRoot = scannedRoot;
+    if (nextRoot !== observedRoot) {
+      observedRoot = nextRoot;
+      ++loadGeneration;
+      busy = false;
+      clearInventoryEvidence();
+    }
+  });
 
   $effect(() => {
     loadModel();
