@@ -2,7 +2,7 @@
 
 **Snapshot:** 2026-08-28 (Asia/Seoul)
 **Repository heads at snapshot:** `main` `79067c1160ddedf7fc962cbf8067ce7e83c4564a`, PR #267
-`db7c9b07081cdbad5d2e3e377373dab95d0757f5`, and the current open queue (41 PRs: 20 ready, 21
+`0deb9048751b4dc4fe545f313f40cfe47a547216`, and the current open queue (41 PRs: 20 ready, 21
 draft); hosted checks and protected review remain authoritative, and no merge is claimed from
 queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
@@ -24,6 +24,12 @@ queued or stale status.
   emergency headroom. `cargo clean --manifest-path src-tauri/Cargo.toml` removed the generated
   target; the latest APFS observation was about 4.3 GiB available. This is volatile host evidence,
   not a deletion guarantee.
+- Follow-up re-audit found a short-lived `psychometrics-commons-pr427-coverage-20260828`
+  PostgreSQL container running with the anonymous volume
+  `0208f7d42ddb6bb800a6cda08e3d93b7aed3ac39d8f64718c841e02e44233878`; direct Podman inspection
+  shows the volume mounted at `/var/lib/postgresql`, so it remains protected while the container
+  is active. The host then had three running containers, one default `podman` network, and ten
+  local volumes; no new stale network or image was proven removable.
 
 ## Current product contract
 
