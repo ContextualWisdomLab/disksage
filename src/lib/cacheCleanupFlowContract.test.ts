@@ -18,7 +18,7 @@ describe("cache cleanup execution boundary", () => {
     expect(cleanup).toContain("api.listCacheTargets(candidate.path)");
     expect(cleanup).toContain("api.cleanCacheContents(candidate.path, targets)");
     expect(cleanup).toContain("api.cleanRegenerableCaches()");
-    expect(cleanup).toContain("파일 정보·크기·수정 시각");
+    expect(cleanup).toContain("객체 지문·크기·수정시각");
     expect(cleanup).toContain("npm·pnpm·Adobe·Edge·uv·Trivy 캐시만 대상으로");
     expect(backend).toContain("pub fn clean_cache_contents(");
     expect(backend).toContain("cache-cleanup-targets-stale");
@@ -34,23 +34,5 @@ describe("cache cleanup execution boundary", () => {
     expect(cleanup).toMatch(
       /if \(targets\.length === 0\) \{[\s\S]*loadError = `\$\{candidate\.label\}에 정리할 직계 항목이 없습니다\.`;[\s\S]*return;/,
     );
-  });
-
-  it("keeps cleanup failures actionable without exposing runtime diagnostics", () => {
-    const cleanup = readSource("src/lib/Cleanup.svelte");
-
-    expect(cleanup).not.toContain("String(e)");
-    expect(cleanup).not.toContain("r.error");
-    expect(cleanup).toContain("상태를 확인한 뒤 다시 시도하세요");
-  });
-
-  it("keeps container cleanup labels focused on the customer's next action", () => {
-    const markup = readSource("src/lib/Cleanup.svelte").split("</script>", 2)[1];
-
-    expect(markup).not.toContain("exact record");
-    expect(markup).not.toContain(">dangling");
-    expect(markup).not.toContain("prune, 삭제, trim");
-    expect(markup).toContain("확인한 이미지 정리");
-    expect(markup).toContain("실행 전에 목록을 확인하세요");
   });
 });

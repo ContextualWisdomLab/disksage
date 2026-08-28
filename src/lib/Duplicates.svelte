@@ -38,8 +38,8 @@
       }
       toDelete = next;
       loadVerdicts(groups.flatMap((g) => g.paths));
-    } catch {
-      loadError = "중복 파일을 불러오지 못했습니다. 저장 공간을 확인한 뒤 다시 시도하세요.";
+    } catch (e) {
+      loadError = String(e);
     } finally {
       busy = false;
     }
@@ -68,7 +68,7 @@
     }
     const okay = await confirm(
       `${paths.length}개 중복 파일을 휴지통으로 보냅니다 (논리 크기 ${fmtBytes(reclaimable)}, 실제 회수량 미검증).\n` +
-        `각 그룹의 사본 1개는 보존됩니다. 휴지통을 비우기 전에는 저장 공간이 회수되지 않을 수 있습니다. 휴지통에서 복원할 수 있습니다.`,
+        `각 그룹의 사본 1개는 보존됩니다. 휴지통을 비우기 전에는 물리 공간이 회수되지 않으며, APFS 공유 블록 때문에 실제 회수량은 더 작을 수 있습니다.`,
       { title: "DiskSage", kind: "warning" },
     );
     if (!okay) return;
@@ -77,8 +77,8 @@
       const r = await api.cleanPaths(paths);
       await scan();
       results = r;
-    } catch {
-      loadError = "선택한 파일을 정리하지 못했습니다. 상태를 확인한 뒤 다시 시도하세요.";
+    } catch (e) {
+      loadError = String(e);
     } finally {
       busy = false;
     }
@@ -90,7 +90,7 @@
     중복 파일 {scannedRoot ? "" : "(먼저 스캔하세요)"}
     <button onclick={scan} disabled={busy || !scannedRoot}>{busy ? "찾는 중…" : "중복 찾기"}</button>
   </h2>
-  {#if loadError}<p class="error">작업에 실패했습니다. 상태를 확인한 뒤 다시 시도하세요: {loadError}</p>{/if}
+  {#if loadError}<p class="error">{loadError}</p>{/if}
 
   {#if groups.length === 0 && !busy}
     <p class="muted">중복을 찾으려면 스캔 후 "중복 찾기"를 누르세요.</p>
@@ -137,7 +137,7 @@
     {#if results.some((r) => !r.ok)}
       <ul class="errors">
         {#each results.filter((r) => !r.ok) as r (r.path)}
-          <li title={r.path}>⚠ {r.path} — 정리하지 못했습니다. 상태를 확인한 뒤 다시 시도하세요.</li>
+          <li title={r.path}>⚠ {r.path} — {r.error}</li>
         {/each}
       </ul>
     {/if}
