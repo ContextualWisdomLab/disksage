@@ -26,6 +26,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Clarify reclaim-domain contracts and customer actions: exact-content photo groups remain
+  reversible, non-identical photos require a manual comparison, and cleanup messages no longer
+  expose implementation details.
 - Verify Podman network membership through its container listing, follow installed CLI symlinks,
   hide unavailable runtime panels behind one actionable summary, terminate runtime subprocess
   groups on timeout, and exclude merged history before bounding closed-PR evidence.
