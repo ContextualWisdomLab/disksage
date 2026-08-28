@@ -13,14 +13,6 @@
   let verdicts: Record<string, api.Verdict> = $state({});
   let exportStatus = $state("");
 
-  function productionSourceLabel(source: string | null | undefined): string {
-    if (!source) return "확인되지 않은 정보";
-    if (source.startsWith("embedded:")) return "파일 안의 정보";
-    if (source.includes("filename")) return "파일 이름";
-    if (source.includes("filesystem")) return "파일 시스템 정보";
-    return "파일 정보";
-  }
-
   async function loadVerdicts(paths: string[]) {
     try {
       const fvs = await api.fileVerdicts(paths);
@@ -38,8 +30,8 @@
     try {
       plans = await api.planOrganize(scannedRoot);
       loadVerdicts(plans.map((p) => p.src));
-    } catch {
-      loadError = "정리 계획을 불러오지 못했습니다. 경로와 권한을 확인한 뒤 다시 시도하십시오.";
+    } catch (e) {
+      loadError = String(e);
     } finally {
       busy = false;
     }
@@ -58,7 +50,7 @@
   async function executeSelected() {
     if (plans.length === 0) return;
     const okay = await confirm(
-      `${plans.length}개 파일을 정리합니다.\n` +
+      `${plans.length}개 파일을 정리합니다 (온톨로지 targetFolder로 이동).\n` +
         `되돌리기 버튼으로 복원할 수 있습니다.`,
       { title: "DiskSage", kind: "warning" },
     );
@@ -68,8 +60,8 @@
       const r = await api.executeMoves(plans);
       results = r;
       plans = [];
-    } catch {
-      loadError = "파일을 정리하지 못했습니다. 상태를 확인한 뒤 다시 시도하십시오.";
+    } catch (e) {
+      loadError = String(e);
     } finally {
       busy = false;
     }
@@ -80,8 +72,8 @@
     try {
       const r = await api.undoLastMoves();
       results = r;
-    } catch {
-      loadError = "이동한 파일을 복원하지 못했습니다. 상태를 확인한 뒤 다시 시도하십시오.";
+    } catch (e) {
+      loadError = String(e);
     } finally {
       busy = false;
     }
@@ -94,9 +86,9 @@
     try {
       const batch = await api.exportOrganizationLineage(plans);
       await navigator.clipboard.writeText(JSON.stringify(batch, null, 2));
-      exportStatus = "파일 정리 정보를 클립보드에 복사했습니다.";
-    } catch {
-      exportStatus = "파일 정리 정보를 복사하지 못했습니다. 다시 시도하십시오.";
+      exportStatus = "경로 없는 계보 계약을 클립보드에 복사했습니다.";
+    } catch (e) {
+      exportStatus = `계보 내보내기 실패: ${String(e)}`;
     } finally {
       busy = false;
     }
@@ -129,9 +121,9 @@
               <span class={b.cls} title={b.title}>{b.label}</span>
             {/if}
             {#if p.lineage?.production_time_ms}
-              <span class="lineage">
+              <span class="lineage" title={p.lineage.lineage_fingerprint}>
                 생산 {new Date(p.lineage.production_time_ms).toISOString().slice(0, 10)}
-                · {productionSourceLabel(p.lineage.production_time_source)}
+                · {p.lineage.production_time_source ?? "미상"}
               </span>
             {/if}
             <span class="arrow">→</span>
@@ -148,7 +140,7 @@
         {plans.length}개 파일 정리
       </button>
       <button onclick={copyLineageHandoff} disabled={busy}>
-        파일 정리 정보 복사
+        계보 계약 복사
       </button>
     </div>
     {#if exportStatus}<p class="muted">{exportStatus}</p>{/if}
@@ -159,7 +151,7 @@
     {#if results.some((r) => !r.ok)}
       <ul class="errors">
         {#each results.filter((r) => !r.ok) as r (r.path)}
-          <li title={r.path}>⚠ {r.path} — 처리하지 못했습니다. 상태를 확인한 뒤 다시 시도하십시오.</li>
+          <li title={r.path}>⚠ {r.path} — {r.error}</li>
         {/each}
       </ul>
     {/if}
@@ -174,9 +166,9 @@
   .group ul { list-style: none; padding: 0; margin: 0; }
   .group li { padding: 1px 0; display: flex; gap: 0.5rem; align-items: center; }
   .path { overflow-wrap: anywhere; flex: 1; }
-  .arrow { color: var(--ds-text-muted); flex-shrink: 0; }
+  .arrow { color: #999; flex-shrink: 0; }
   .lineage { color: #666; font-size: 0.75rem; flex-shrink: 0; }
-  .muted { color: var(--ds-text-muted); }
+  .muted { color: #999; }
   .error { color: #b00; }
   .errors { color: #b00; font-size: 0.85rem; list-style: none; padding: 0; }
   .actions { margin-top: 0.5rem; display: flex; gap: 0.5rem; }
