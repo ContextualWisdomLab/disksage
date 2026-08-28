@@ -74,6 +74,8 @@ pub mod incomplete_download_materialization_destination;
 pub mod incomplete_download_materialization_execution;
 pub mod incomplete_download_recovery;
 pub mod git_worktree;
+/// Exact-head, identity-bound reclamation for standalone clones left on stale PR branches.
+pub mod git_clone_reclaim;
 pub mod maven_cache;
 pub mod multipart_archive;
 pub mod naruon_capacity;
@@ -160,6 +162,8 @@ pub fn run() {
             commands::evict_icloud_local_copy,
             commands::plan_stale_git_worktrees,
             commands::remove_stale_git_worktrees,
+            commands::plan_stale_git_clone,
+            commands::remove_stale_git_clone,
             commands::list_cloud_provider_connections,
             commands::verify_cloud_provider_capacity,
             commands::inspect_cloud_provider_client_runtime,

@@ -795,6 +795,59 @@ export interface StaleGitWorktreeRemovalOutput {
   result_record_error: string | null;
 }
 
+export interface GitCloneReclaimPlan {
+  schema_kind: "disksage.git-clone-reclaim-plan";
+  version: number;
+  generated_at_ms: number;
+  repository_root: string;
+  repository_object_id: string;
+  head: string;
+  branch: string;
+  closed_pull_request_head: boolean;
+  stale_open_pull_request_head: boolean;
+  stale_open_pull_request_cutoff_ms: number | null;
+  size: GitWorktreeSizeEvidence;
+  active_use: GitWorktreeActiveUseEvidence;
+  authority_fingerprint: string;
+  plan_fingerprint: string;
+  exact_approval_phrase: string | null;
+  eligible_after_human_approval: boolean;
+  blockers: string[];
+  filesystem_mutation_executed: false;
+}
+
+export interface GitCloneReclaimApproval {
+  version: number;
+  approval_id: string;
+  plan_fingerprint: string;
+  exact_approval_phrase: string;
+  approved_at_ms: number;
+  approved_by: string;
+  rationale: string;
+}
+
+export interface GitCloneReclaimResult {
+  version: number;
+  approval_id: string;
+  plan_fingerprint: string;
+  requested_at_ms: number;
+  completed_at_ms: number;
+  allocated_bytes_upper_bound: number;
+  trash_move_executed: boolean;
+  path_absence_verified: boolean;
+  branch_delete_command_executed: false;
+  git_prune_executed: false;
+  physically_reclaimed_bytes: number | null;
+}
+
+export interface StaleGitCloneRemovalOutput {
+  action: "remove-stale-git-clone";
+  plan: GitCloneReclaimPlan;
+  approval: GitCloneReclaimApproval;
+  approval_path: string;
+  result: GitCloneReclaimResult;
+}
+
 export interface OAuthConnection {
   connection_id: string;
   provider: CloudProvider;
@@ -1359,6 +1412,34 @@ export const removeStaleGitWorktrees = (
   includeClosedPullRequests,
   staleOpenPullRequestCutoffMs,
   approvedRemovalPlanFingerprint,
+  confirmationExactApprovalPhrase,
+  rationale,
+});
+export const planStaleGitClone = (
+  repositoryRoot: string,
+  retentionReferences: string[],
+  includeClosedPullRequests: boolean,
+  staleOpenPullRequestCutoffMs: number | null = null,
+) => invoke<GitCloneReclaimPlan>("plan_stale_git_clone", {
+  repositoryRoot,
+  retentionReferences,
+  includeClosedPullRequests,
+  staleOpenPullRequestCutoffMs,
+});
+export const removeStaleGitClone = (
+  repositoryRoot: string,
+  retentionReferences: string[],
+  includeClosedPullRequests: boolean,
+  staleOpenPullRequestCutoffMs: number | null,
+  approvedPlanFingerprint: string,
+  confirmationExactApprovalPhrase: string,
+  rationale: string,
+) => invoke<StaleGitCloneRemovalOutput>("remove_stale_git_clone", {
+  repositoryRoot,
+  retentionReferences,
+  includeClosedPullRequests,
+  staleOpenPullRequestCutoffMs,
+  approvedPlanFingerprint,
   confirmationExactApprovalPhrase,
   rationale,
 });

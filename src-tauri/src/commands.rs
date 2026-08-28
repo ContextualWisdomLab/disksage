@@ -20,7 +20,7 @@ use crate::dev_artifacts;
 #[cfg(not(coverage))]
 use crate::{
     brew_cleanup, cloud, cloud_adr, cloud_eviction, cloud_local_eviction, cloud_plan_view,
-    cloud_review, cloud_transfer, dupes, git_worktree,
+    cloud_review, cloud_transfer, dupes, git_clone_reclaim, git_worktree,
     icloud_sync_health, organization_lineage,
     podman_reclaim, provider_api_client, provider_api_write, provider_capacity,
     provider_client_runtime, provider_evidence, provider_global_sync, provider_oauth,
@@ -1112,6 +1112,106 @@ pub async fn remove_stale_git_worktrees(
     })
     .await
     .map_err(|_| "git-worktree-removal-task-failed".to_string())?
+}
+
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn plan_stale_git_clone(
+    repository_root: String,
+    retention_references: Vec<String>,
+    include_closed_pull_requests: bool,
+    stale_open_pull_request_cutoff_ms: Option<u64>,
+) -> Result<git_clone_reclaim::GitCloneReclaimPlan, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git_clone_reclaim::plan_git_clone_reclaim(
+            Path::new(&repository_root),
+            &retention_references,
+            include_closed_pull_requests,
+            stale_open_pull_request_cutoff_ms,
+            git_worktree::GitWorktreeAuditOptions::default(),
+            cloud::system_now_ms(),
+        )
+    })
+    .await
+    .map_err(|_| "git-clone-reclaim-plan-task-failed".to_string())?
+}
+
+#[cfg(not(coverage))]
+#[derive(serde::Serialize)]
+pub struct StaleGitCloneRemovalOutput {
+    pub action: &'static str,
+    pub plan: git_clone_reclaim::GitCloneReclaimPlan,
+    pub approval: git_clone_reclaim::GitCloneReclaimApproval,
+    pub approval_path: String,
+    pub result: git_clone_reclaim::GitCloneReclaimResult,
+}
+
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub async fn remove_stale_git_clone(
+    repository_root: String,
+    retention_references: Vec<String>,
+    include_closed_pull_requests: bool,
+    stale_open_pull_request_cutoff_ms: Option<u64>,
+    approved_plan_fingerprint: String,
+    confirmation_exact_approval_phrase: String,
+    rationale: String,
+    app: AppHandle,
+) -> Result<StaleGitCloneRemovalOutput, String> {
+    use tauri::Manager;
+    let journal_path = journal_file_path(&app)?;
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "app-data-directory-unavailable".to_string())?;
+    let approved_by = local_human_reviewer();
+    tauri::async_runtime::spawn_blocking(move || {
+        let options = git_worktree::GitWorktreeAuditOptions::default();
+        let plan = git_clone_reclaim::plan_git_clone_reclaim(
+            Path::new(&repository_root),
+            &retention_references,
+            include_closed_pull_requests,
+            stale_open_pull_request_cutoff_ms,
+            options,
+            cloud::system_now_ms(),
+        )?;
+        if plan.plan_fingerprint != approved_plan_fingerprint {
+            return Err("git-clone-reclaim-plan-fingerprint-mismatch".into());
+        }
+        let approval = git_clone_reclaim::approve_git_clone_reclaim(
+            &plan,
+            &confirmation_exact_approval_phrase,
+            cloud::system_now_ms(),
+            &approved_by,
+            &rationale,
+        )?;
+        let approval_path =
+            app_data_dir.join(format!("{}.git-clone-approval.json", approval.approval_id));
+        crate::private_evidence::write_private_json_create_new(
+            Path::new(&plan.repository_root),
+            &approval_path,
+            &approval,
+        )?;
+        let result = git_clone_reclaim::execute_git_clone_reclaim(
+            &plan,
+            &approval,
+            &retention_references,
+            include_closed_pull_requests,
+            stale_open_pull_request_cutoff_ms,
+            options,
+            &journal_path,
+            cloud::system_now_ms(),
+        )?;
+        Ok(StaleGitCloneRemovalOutput {
+            action: "remove-stale-git-clone",
+            plan,
+            approval,
+            approval_path: approval_path.to_string_lossy().into_owned(),
+            result,
+        })
+    })
+    .await
+    .map_err(|_| "git-clone-reclaim-task-failed".to_string())?
 }
 
 /// Build a bounded, path-free ontology plan for uninstalled macOS application data.
