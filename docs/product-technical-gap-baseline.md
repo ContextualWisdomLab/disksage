@@ -1134,6 +1134,16 @@ runner's private workspace temp root instead of weakening the shared production 
 
 ## 2026-08-29 merged-worktree and isolated-project-cache execution
 
+- A live Naruon audit exposed a second squash-merge boundary: PR #1370's clean, inactive worktree
+  has the exact merged pull-request head, but that head is not an ancestor of the retained branch.
+  DiskSage now obtains closed-unmerged and merged heads from separate bounded GitHub queries and
+  accepts only an exact same-repository branch-and-head match. PR #1454 remains preserved because
+  its detached intermediate commit is also part of open PR #1466; open work always vetoes reclaim.
+  The fingerprint-bound native removal path then re-audited and removed only PR #1370's worktree;
+  path and Git registration absence were verified, the branch was retained, and the fresh audit
+  reports 28 preserved worktrees, zero candidates, complete evidence, and zero gaps. Its
+  253,673,472-byte allocated upper bound is not presented as physical APFS recovery.
+
 - A fresh Naruon audit proved exactly one removable worktree: PR #1429 was merged, its detached
   head was retained by current `origin/develop`, the checkout was clean and inactive, and no open
   PR stack retained it. DiskSage removed only `/Users/seonghobae/naruon-wt/pr1429` through its

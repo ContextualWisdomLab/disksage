@@ -510,7 +510,9 @@ fn parse_closed_pull_request_heads(bytes: &[u8]) -> Result<ClosedPullRequestHead
         serde_json::from_slice(bytes).map_err(|_| "github-closed-pr-json-invalid".to_string())?;
     let closed_heads: ClosedPullRequestHeads = records
         .into_iter()
-        .filter(|record| record.state == "CLOSED" && !record.is_cross_repository)
+        .filter(|record| {
+            matches!(record.state.as_str(), "CLOSED" | "MERGED") && !record.is_cross_repository
+        })
         .map(|record| {
             let oid = record.head_ref_oid.to_ascii_lowercase();
             let branch_ref = format!("refs/heads/{}", record.head_ref_name);
@@ -632,7 +634,7 @@ fn parse_stale_open_pull_request_heads(
     Ok(stale_heads)
 }
 
-/// Resolve exact head OIDs for GitHub pull requests closed without merge.
+/// Resolve exact head OIDs for same-repository GitHub pull requests that are closed or merged.
 ///
 /// The authenticated `gh` client resolves repository identity from the selected repository and
 /// returns only bounded JSON. Runtime diagnostics are never reflected to the caller.
@@ -640,40 +642,59 @@ pub fn github_closed_pull_request_heads(
     repository_root: &Path,
     timeout_ms: u64,
 ) -> Result<ClosedPullRequestHeads, String> {
-    let result = run_bounded_command(
-        "gh",
-        &[
-            OsString::from("pr"),
-            OsString::from("list"),
-            OsString::from("--state"),
-            OsString::from("closed"),
-            OsString::from("--search"),
-            OsString::from("is:unmerged"),
-            OsString::from("--limit"),
-            OsString::from("10001"),
-            OsString::from("--json"),
-            OsString::from("headRefName,headRefOid,isCrossRepository,state"),
+    let mut heads = ClosedPullRequestHeads::new();
+    for args in [
+        vec![
+            "pr",
+            "list",
+            "--state",
+            "closed",
+            "--search",
+            "is:unmerged",
+            "--limit",
+            "10001",
+            "--json",
+            "headRefName,headRefOid,isCrossRepository,state",
         ],
-        repository_root,
-        timeout_ms,
-    )?;
-    if result.timed_out {
-        return Err("github-closed-pr-list-timeout".into());
+        vec![
+            "pr",
+            "list",
+            "--state",
+            "merged",
+            "--limit",
+            "10001",
+            "--json",
+            "headRefName,headRefOid,isCrossRepository,state",
+        ],
+    ] {
+        let result = run_bounded_command(
+            "gh",
+            &args.into_iter().map(OsString::from).collect::<Vec<_>>(),
+            repository_root,
+            timeout_ms,
+        )?;
+        if result.timed_out {
+            return Err("github-closed-pr-list-timeout".into());
+        }
+        if result.stdout_truncated || result.stderr_truncated {
+            return Err("github-closed-pr-list-output-truncated".into());
+        }
+        if result.status_code != Some(0) {
+            return Err("github-closed-pr-list-failed".into());
+        }
+        let stderr = String::from_utf8_lossy(&result.stderr).to_ascii_lowercase();
+        if stderr.contains("search")
+            && stderr.contains("1000")
+            && (stderr.contains("cap") || stderr.contains("limit"))
+        {
+            return Err("github-closed-pr-list-incomplete".into());
+        }
+        heads.extend(parse_closed_pull_request_heads(&result.stdout)?);
+        if heads.len() > 10_000 {
+            return Err("github-closed-pr-count-exceeds-limit".into());
+        }
     }
-    if result.stdout_truncated || result.stderr_truncated {
-        return Err("github-closed-pr-list-output-truncated".into());
-    }
-    if result.status_code != Some(0) {
-        return Err("github-closed-pr-list-failed".into());
-    }
-    let stderr = String::from_utf8_lossy(&result.stderr).to_ascii_lowercase();
-    if stderr.contains("search")
-        && stderr.contains("1000")
-        && (stderr.contains("cap") || stderr.contains("limit"))
-    {
-        return Err("github-closed-pr-list-incomplete".into());
-    }
-    parse_closed_pull_request_heads(&result.stdout)
+    Ok(heads)
 }
 
 /// Resolve exact head OIDs for same-repository open pull requests created before an explicit cutoff.
@@ -2641,29 +2662,22 @@ mod tests {
         );
         assert_eq!(
             parse_closed_pull_request_heads(json.as_bytes()).unwrap(),
-            BTreeSet::from([("refs/heads/closed-local".into(), oid('a'))])
+            BTreeSet::from([
+                ("refs/heads/closed-local".into(), oid('a')),
+                ("refs/heads/merged".into(), oid('b')),
+            ])
         );
     }
 
     #[test]
-    fn merged_history_does_not_exhaust_closed_pull_request_authority() {
-        let mut records = (0..1_001)
-            .map(|index| {
-                format!(
-                    r#"{{"headRefName":"merged-{index}","headRefOid":"{}","isCrossRepository":false,"state":"MERGED"}}"#,
-                    oid('a')
-                )
-            })
-            .collect::<Vec<_>>();
-        records.push(format!(
-            r#"{{"headRefName":"closed-local","headRefOid":"{}","isCrossRepository":false,"state":"CLOSED"}}"#,
-            oid('b')
-        ));
-        let json = format!("[{}]", records.join(","));
-
+    fn merged_pull_request_evidence_binds_exact_branch_and_head() {
+        let json = format!(
+            r#"[{{"headRefName":"merged-local","headRefOid":"{}","isCrossRepository":false,"state":"MERGED"}}]"#,
+            oid('a')
+        );
         assert_eq!(
             parse_closed_pull_request_heads(json.as_bytes()).unwrap(),
-            BTreeSet::from([("refs/heads/closed-local".into(), oid('b'))])
+            BTreeSet::from([("refs/heads/merged-local".into(), oid('a'))])
         );
     }
 
