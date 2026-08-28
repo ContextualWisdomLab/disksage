@@ -38,8 +38,8 @@
       }
       toDelete = next;
       loadVerdicts(groups.flatMap((g) => g.paths));
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "중복 파일을 확인하지 못했습니다. 스캔 범위와 저장 공간을 확인한 뒤 다시 시도하세요.";
     } finally {
       busy = false;
     }
@@ -77,8 +77,8 @@
       const r = await api.cleanPaths(paths);
       await scan();
       results = r;
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "중복 파일을 휴지통으로 보내지 못했습니다. 상태를 확인한 뒤 다시 시도하세요.";
     } finally {
       busy = false;
     }

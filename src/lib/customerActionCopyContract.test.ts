@@ -27,6 +27,9 @@ describe("customer action copy", () => {
     expect(source).not.toContain("fast-mlsirm");
     expect(source).not.toContain("targetFolder");
     expect(source).not.toContain("온톨로지 정합");
+    expect(source).not.toContain("LLM 판정");
+    expect(source).not.toContain("model_name");
+    expect(source).not.toContain("String(e)");
     expect(source).not.toContain("호스트 이미지");
     expect(source).not.toContain("게스트 저장 공간");
     expect(source).not.toContain("실행 파일을 찾지 못함");

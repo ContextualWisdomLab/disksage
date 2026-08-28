@@ -25,8 +25,8 @@
     reset();
     try {
       judgment = await api.judgeBrewCleanup();
-    } catch (e) {
-      error = String(e);
+    } catch {
+      error = "Homebrew 정리 계획을 확인하지 못했습니다. 상태를 확인한 뒤 다시 시도하세요.";
     } finally {
       planning = false;
     }
@@ -81,8 +81,8 @@
         confirmationPhrase.trim(),
         rationale.trim(),
       );
-    } catch (e) {
-      error = String(e);
+    } catch {
+      error = "Homebrew 정리를 실행하지 못했습니다. 상태를 확인한 뒤 다시 시도하세요.";
     } finally {
       judgment = null;
       confirmationPhrase = "";
@@ -107,7 +107,7 @@
     {@const report = (judgment ?? completedJudgment)!}
     <div class="report" aria-live="polite">
       <div><strong>안전성 검토: {report.verdict === "safe" ? "실행 가능" : "실행 보류"}</strong></div>
-      <p class="muted">{report.reason || "모델이 설명을 반환하지 않았습니다."}</p>
+      <p class="muted">{report.reason || "안전성 검토 설명이 제공되지 않았습니다."}</p>
       <p class="fingerprint">계획 지문: {report.plan_fingerprint}</p>
       <p class="fingerprint">실행 예정: brew cleanup --prune-prefix</p>
       {#if report.calibration}
@@ -118,7 +118,7 @@
       {:else}
         <p class="muted">안전성 검토 증거가 없어 독립적인 사람 승인 문구가 계속 필요합니다.</p>
       {/if}
-      <pre>{report.plan.dry_run_output || "dry-run에서 정리 대상이 보고되지 않았습니다."}</pre>
+      <pre>{report.plan.dry_run_output || "미리보기에서 정리 대상이 보고되지 않았습니다."}</pre>
 
       {#if judgment && judgment.verdict === "safe" && !execution}
         <div class="approval">
@@ -130,7 +130,7 @@
           </label>
           <label>
             실행 사유
-            <textarea bind:value={rationale} maxlength="1000" placeholder="예: dry-run 결과를 검토했고 끊어진 심볼릭 링크와 빈 디렉터리 정리가 필요함" disabled={executing}></textarea>
+            <textarea bind:value={rationale} maxlength="1000" placeholder="예: 미리보기 결과를 검토했고 끊어진 심볼릭 링크와 빈 디렉터리 정리가 필요함" disabled={executing}></textarea>
           </label>
           {#if approvalGuidance()}
             <p class="warning" role="status">{approvalGuidance()}</p>
@@ -147,12 +147,10 @@
         <p class:success={execution.status_code === 0} class:error={execution.status_code !== 0}>
           {execution.executed ? `실행 완료 (종료 코드 ${execution.status_code})` : "실행되지 않음"}
         </p>
-        {#if execution.stdout}<pre>{execution.stdout}</pre>{/if}
-        {#if execution.stderr}<pre class="error">{execution.stderr}</pre>{/if}
         {#if execution.record_path}
-          <p class="muted">감사 기록: {execution.record_path}</p>
+          <p class="muted">감사 기록을 저장했습니다. 다음 정리 전에 최신 상태를 다시 확인하세요.</p>
         {:else}
-          <p class="error" role="alert">명령 결과는 반환됐지만 감사 기록을 저장하지 못했습니다: {execution.record_error}</p>
+          <p class="error" role="alert">명령 결과는 반환됐지만 감사 기록을 저장하지 못했습니다. 상태를 확인한 뒤 다시 시도하세요.</p>
         {/if}
       {/if}
     </div>
