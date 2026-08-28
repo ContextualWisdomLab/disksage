@@ -7,6 +7,7 @@
 
   let repositoryRoot = $state("");
   let retentionText = $state("");
+  let includeClosedPullRequests = $state(false);
   let planning = $state(false);
   let executing = $state(false);
   let error = $state("");
@@ -51,7 +52,7 @@
         multiple: false,
         directory: true,
         defaultPath: repositoryRoot || scannedRoot || undefined,
-      title: "Git 저장소 또는 보조 폴더 선택",
+        title: "Git 저장소 또는 보조 폴더 선택",
       });
       if (typeof selected !== "string") return;
       repositoryRoot = selected;
@@ -68,7 +69,7 @@
     planning = true;
     resetDecision();
     try {
-      report = await api.planStaleGitWorktrees(root, references);
+      report = await api.planStaleGitWorktrees(root, references, includeClosedPullRequests);
       repositoryRoot = report.repository_root;
       retentionText = report.retention_references
         .map((binding) => binding.reference_ref)
@@ -105,6 +106,7 @@
       removal = await api.removeStaleGitWorktrees(
         report.repository_root,
         report.retention_references.map((binding) => binding.reference_ref),
+        includeClosedPullRequests,
         report.removal_plan_fingerprint,
         confirmationPhrase,
         rationale.trim(),
@@ -150,7 +152,11 @@
       autocomplete="off"
       spellcheck="false"
       disabled={planning || executing}
-    ></textarea>
+  ></textarea>
+  </label>
+  <label class="option">
+    <input type="checkbox" bind:checked={includeClosedPullRequests} onchange={resetDecision} disabled={planning || executing} />
+    완료된 작업 기록도 확인
   </label>
   <button
     onclick={inspectWorktrees}

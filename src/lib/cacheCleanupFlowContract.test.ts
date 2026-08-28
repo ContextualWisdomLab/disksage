@@ -41,7 +41,7 @@ describe("cache cleanup execution boundary", () => {
 
     expect(cleanup).not.toContain("String(e)");
     expect(cleanup).not.toContain("r.error");
-    expect(cleanup).toContain("최신 목록을 다시 확인한 뒤 재시도하세요");
+    expect(cleanup).toContain("상태를 확인한 뒤 다시 시도하세요");
   });
 
   it("keeps container cleanup labels focused on the customer's next action", () => {
@@ -50,7 +50,7 @@ describe("cache cleanup execution boundary", () => {
     expect(markup).not.toContain("exact record");
     expect(markup).not.toContain(">dangling");
     expect(markup).not.toContain("prune, 삭제, trim");
-    expect(markup).toContain("미사용 이미지 정리");
-    expect(markup).toContain("최신 상태를 확인하세요");
+    expect(markup).toContain("확인한 이미지 정리");
+    expect(markup).toContain("실행 전에 목록을 확인하세요");
   });
 });
