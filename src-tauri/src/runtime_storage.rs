@@ -353,6 +353,7 @@ pub fn execute_trim(
     if rationale.trim().is_empty()
         || rationale != rationale.trim()
         || rationale.chars().count() > 1_000
+        || rationale.chars().any(char::is_control)
     {
         return Err("runtime-storage-rationale-invalid".into());
     }
@@ -422,5 +423,18 @@ mod tests {
         let (captured, truncated) = drain_bounded(Cursor::new(input)).expect("reader succeeds");
         assert_eq!(captured.len(), MAX_CAPTURE_BYTES);
         assert!(truncated);
+    }
+
+    #[test]
+    fn trim_rejects_control_characters_before_runtime_probe() {
+        assert_eq!(
+            execute_trim(
+                RuntimeStorageKind::Colima,
+                "",
+                "operator\u{0007}note"
+            )
+            .unwrap_err(),
+            "runtime-storage-rationale-invalid"
+        );
     }
 }
