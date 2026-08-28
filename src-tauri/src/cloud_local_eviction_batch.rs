@@ -61,7 +61,7 @@ pub struct IcloudLocalEvictionBatchUnavailable {
 pub struct IcloudLocalEvictionBatchPlan {
     /// Serialized schema version used for fail-closed compatibility checks.
     pub version: u32,
-    /// Cloud provider that owns every planned item; this must be iCloud.
+    /// Cloud provider that owns every planned item; iCloud and OneDrive are supported.
     pub provider: CloudProvider,
     /// Account boundary within which every planned item was discovered.
     pub account_scope: CloudAccountScope,
