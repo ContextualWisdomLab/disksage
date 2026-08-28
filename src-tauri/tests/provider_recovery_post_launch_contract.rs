@@ -16,3 +16,20 @@ fn general_recovery_keeps_slow_post_launch_observation_structured() {
         "slow or unavailable post-launch observation must remain structured recovery evidence"
     );
 }
+
+#[test]
+fn bounded_output_wait_errors_reap_the_spawned_child() {
+    let source = include_str!("../src/provider_recovery.rs");
+    let bounded_output = source
+        .split("fn run_bounded_output")
+        .nth(1)
+        .and_then(|tail| tail.split("fn launch_provider").next())
+        .expect("run_bounded_output source boundary");
+
+    assert!(
+        bounded_output.contains(
+            "Err(_) => {\n                let _ = child.kill();\n                let _ = child.wait();\n                return Err(\"provider-recovery-command-wait-failed\".into());\n            }"
+        ),
+        "a wait failure must not leave the OneDrive helper process unreaped"
+    );
+}
