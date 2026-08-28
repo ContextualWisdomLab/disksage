@@ -92,7 +92,7 @@
     if (!typedPhrase || typedPhrase !== cat.approval_phrase) return;
     if (!rationale || pruneBusyKey !== null) return;
     const granted = await confirm(
-      `${CATEGORY_LABELS[category]}만 삭제합니다.\n\n${CATEGORY_HINTS[category]}\n\n실행 직전 목록을 다시 읽어 승인 문구(지문)를 재검증합니다. 이후 휴지통 없이 되돌릴 수 없습니다.`,
+      `${CATEGORY_LABELS[category]}만 삭제합니다.\n\n${CATEGORY_HINTS[category]}\n\n실행 직전 목록을 다시 읽어 승인 확인 코드를 재검증합니다. 이후 휴지통 없이 되돌릴 수 없습니다.`,
       { title: "DiskSage 컨테이너 정리", kind: "warning" },
     );
     if (!granted) return;
@@ -138,7 +138,7 @@
 <section aria-labelledby="container-orphan-heading">
   <h3 id="container-orphan-heading">Docker · Podman · Colima 미사용 자원</h3>
   <p class="notice">
-    각 런타임의 컨테이너·이미지·볼륨·네트워크 중 아무것도 연결되지 않은 항목만 찾아줍니다.
+    각 개발 환경의 컨테이너·이미지·볼륨·네트워크 중 아무것도 연결되지 않은 항목만 찾아줍니다.
     실행 중인 서비스와 기본 네트워크는 절대 건드리지 않습니다. 삭제 전 승인 문구와 사유를 요구합니다.
   </p>
   <button onclick={inspect} disabled={busy}>
@@ -150,10 +150,10 @@
     <div class="runtime-panel preserved-receipt" aria-live="polite">
       <h4>{lastRefreshFailedExecution.runtimeDisplayName}</h4>
       <p class="notice">
-        최근 정리 결과는 보존했습니다. 최신 런타임 상태를 다시 확인해야 새 정리 계획을 만들 수 있습니다.
+        최근 정리 결과는 보존했습니다. 최신 개발 환경 상태를 다시 확인해야 새 정리 계획을 만들 수 있습니다.
       </p>
       <p class="notice">
-        {CATEGORY_LABELS[lastRefreshFailedExecution.category]} 결과:
+        {CATEGORY_LABELS[lastRefreshFailedExecution.category]} 정리 결과를 확인하세요:
         {lastRefreshFailedExecution.execution.executed
           ? "완료"
           : `실패(${lastRefreshFailedExecution.execution.status_code})`} ·
@@ -166,10 +166,10 @@
   {/if}
 
   {#if unavailableRuntimeCount > 0}
-    <p class="notice">사용할 수 없는 런타임 {unavailableRuntimeCount}개는 결과에서 숨겼습니다.</p>
+    <p class="notice">사용할 수 없는 개발 환경 {unavailableRuntimeCount}개가 있습니다. 연결 상태를 확인한 뒤 다시 확인하세요.</p>
   {/if}
   {#if plans.length > 0 && healthyPlans.length === 0}
-    <p class="notice" role="status">연결 가능한 컨테이너 런타임이 없습니다. 사용할 런타임을 시작한 뒤 다시 확인하세요.</p>
+    <p class="notice" role="status">연결 가능한 개발 환경이 없습니다. 사용할 환경을 시작한 뒤 다시 확인하세요.</p>
   {/if}
   {#each healthyPlans as plan (plan.runtime.kind)}
     {@const pkey = planKey(plan)}
@@ -181,7 +181,7 @@
             <li>
               <span class="cat-label">{CATEGORY_LABELS[cat.category]}</span>
               {#if !cat.evidence_complete}
-                <span class="notice">증거 불완전 — 안전을 위해 실행할 수 없습니다.</span>
+                <span class="notice">확인이 끝나지 않아 안전을 위해 실행할 수 없습니다.</span>
               {:else if cat.evidence && cat.evidence.candidate_records > 0}
                 <span>
                   대상 {cat.evidence.candidate_records}개
@@ -223,7 +223,7 @@
               {/if}
               {#if executions[ckey]}
                 <p class="notice">
-                  결과: {executions[ckey].executed ? "완료" : `실패(${executions[ckey].status_code})`} ·
+                  결과를 확인하세요: {executions[ckey].executed ? "완료" : `실패(${executions[ckey].status_code})`} ·
                   호스트 여유 공간 변화 {executions[ckey].observed_available_gain_bytes === null ? "관측 불가" : `+${fmtBytes(executions[ckey].observed_available_gain_bytes)}`}
                 </p>
               {/if}

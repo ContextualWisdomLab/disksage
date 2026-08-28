@@ -18,6 +18,7 @@ const screens = [
   "Duplicates.svelte",
   "TopFiles.svelte",
   "Treemap.svelte",
+  "ContainerOrphanCleanup.svelte",
 ];
 
 const forbidden = [
@@ -60,6 +61,10 @@ const forbidden = [
   /인벤토리/i,
   /모델/i,
   /APFS/i,
+  /TOCTOU/i,
+  /candidate_set_sha256/i,
+  /\b런타임\b/i,
+  /승인 문구\(지문\)/i,
 ];
 
 function readScreen(name: string): string {
@@ -106,6 +111,7 @@ describe("customer copy boundary", () => {
         const attributes = match[1] ?? "";
         if (!/(warning|error|notice|role=["'](?:alert|status)["'])/i.test(attributes)) continue;
         const text = visibleText(match[0]);
+        if (!text.trim()) continue;
         expect(text, `${screen} has non-actionable guidance`).toMatch(action);
       }
     }

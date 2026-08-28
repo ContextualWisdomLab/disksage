@@ -120,7 +120,7 @@ describe("Container orphan cleanup safety UX", () => {
 
     expect(source).toContain("plans.filter((plan) => plan.runtime.healthy)");
     expect(source).toContain("{#each healthyPlans as plan");
-    expect(source).toContain("사용할 수 없는 런타임");
-    expect(source).toContain("사용할 런타임을 시작한 뒤 다시 확인하세요");
+    expect(source).toContain("사용할 수 없는 개발 환경");
+    expect(source).toContain("사용할 환경을 시작한 뒤 다시 확인하세요");
   });
 });
