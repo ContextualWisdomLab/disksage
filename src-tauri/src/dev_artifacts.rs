@@ -9,10 +9,13 @@ use crate::scanner;
 const ARTIFACT_MANIFEST_BUDGET: Duration = Duration::from_secs(3);
 const ARTIFACT_MANIFEST_MAX_RECORDS: usize = 250_000;
 const VSCODE_OBSOLETE_METADATA_MAX_BYTES: u64 = 1024 * 1024;
+// Reversible Trash cleanup backs an interactive path, so an incomplete active-use probe must fail
+// closed without inheriting the longer latency budget reserved for irreversible deletion.
+const ARTIFACT_REVERSIBLE_ACTIVE_USE_TIMEOUT_MS: u64 = 2_000;
 // Recursive lsof must enumerate the artifact tree. Real Python environments exceeded the generic
-// 2-second probe while completing in roughly 3 seconds, so this destructive boundary owns a
+// 2-second probe while completing in roughly 3 seconds, so the irreversible boundary owns a
 // longer operational timeout instead of silently weakening the active-use gate.
-const ARTIFACT_ACTIVE_USE_TIMEOUT_MS: u64 = 30_000;
+const ARTIFACT_PERMANENT_ACTIVE_USE_TIMEOUT_MS: u64 = 30_000;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DevArtifact {
@@ -416,6 +419,14 @@ pub fn permanently_delete_artifacts(
     clean_artifacts_with_disposition(requests, root, min_age_days, journal_path, now_ms, true)
 }
 
+fn artifact_active_use_timeout_ms(permanent: bool) -> u64 {
+    if permanent {
+        ARTIFACT_PERMANENT_ACTIVE_USE_TIMEOUT_MS
+    } else {
+        ARTIFACT_REVERSIBLE_ACTIVE_USE_TIMEOUT_MS
+    }
+}
+
 fn clean_artifacts_with_disposition(
     requests: &[DevArtifact],
     root: &Path,
@@ -453,29 +464,29 @@ fn clean_artifacts_with_disposition(
             }
 
             let active_use = crate::git_worktree::active_use_evidence(
-                    Path::new(&request.path),
-                    ARTIFACT_ACTIVE_USE_TIMEOUT_MS,
-                    crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
-                    true,
-                );
-                if !active_use.assessed
-                    || !active_use.evidence_complete
-                    || active_use.error.is_some()
-                    || active_use.results_truncated
-                {
-                    return DevArtifactCleanResult {
-                        path: request.path.clone(),
-                        ok: false,
-                        error: "development artifact active-use evidence incomplete; rescan before cleanup".into(),
-                    };
-                }
-                if active_use.active {
-                    return DevArtifactCleanResult {
-                        path: request.path.clone(),
-                        ok: false,
-                        error: "development artifact is active; close the using process before cleanup".into(),
-                    };
-                }
+                Path::new(&request.path),
+                artifact_active_use_timeout_ms(permanent),
+                crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
+                true,
+            );
+            if !active_use.assessed
+                || !active_use.evidence_complete
+                || active_use.error.is_some()
+                || active_use.results_truncated
+            {
+                return DevArtifactCleanResult {
+                    path: request.path.clone(),
+                    ok: false,
+                    error: "development artifact active-use evidence incomplete; rescan before cleanup".into(),
+                };
+            }
+            if active_use.active {
+                return DevArtifactCleanResult {
+                    path: request.path.clone(),
+                    ok: false,
+                    error: "development artifact is active; close the using process before cleanup".into(),
+                };
+            }
 
             let mutation = if permanent {
                 crate::safety::permanent_delete_dir_if_identity(
