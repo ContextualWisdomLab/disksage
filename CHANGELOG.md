@@ -42,6 +42,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Resolve macOS cache roots from the effective XDG/UV environment and observed native locations:
+  `~/.cache` for uv, Codex runtimes, Node, PyTorch, Prisma, and GitHub CLI, plus
+  `~/Library/pnpm/store` for pnpm's content-addressed store. The existing guarded cleanup keeps
+  identity, active-use, Trash, and journal gates; caches without an established automatic policy
+  remain manual-review candidates.
+- Recognize macOS Trash collision-renamed cache directories only when their known base name and
+  cache-specific directory structure both revalidate, including uv git and pnpm registry metadata
+  caches; arbitrary Trash entries remain excluded from permanent purge.
+- Extend the same structural purge proof to uv archive caches and pnpm v10/v11 store layouts while
+  preserving the bounded no-symlink traversal and pending/terminal journal records.
 - Reject control characters in the Podman/Colima VM-trim rationale before any runtime probe or
   receipt write, keeping maintenance records bounded and consistent with other actions.
 - Fix Colima runtime-state parsing to retain validated status values before temporary JSON data is

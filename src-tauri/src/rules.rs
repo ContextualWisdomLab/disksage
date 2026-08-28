@@ -26,7 +26,11 @@ impl BaseDirs {
         let local_data = std::env::var("LOCALAPPDATA").map(PathBuf::from).ok()?;
         #[cfg(not(windows))]
         let local_data = absolute_env_path("XDG_CACHE_HOME").unwrap_or_else(|| home.join(".cache"));
-        Some(BaseDirs { temp, local_data, home })
+        Some(BaseDirs {
+            temp,
+            local_data,
+            home,
+        })
     }
 }
 
@@ -95,51 +99,64 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
         ("os-temp", "OS 임시 폴더", bases.temp.clone()),
         ("npm-cache", "npm 캐시", npm),
         ("pip-cache", "pip 캐시", pip),
-        ("cargo-registry-cache", "cargo 레지스트리 캐시",
-            bases.home.join(".cargo").join("registry").join("cache")),
-        ("cargo-registry-source", "cargo 레지스트리 소스 캐시",
-            bases.home.join(".cargo").join("registry").join("src")),
+        (
+            "cargo-registry-cache",
+            "cargo 레지스트리 캐시",
+            bases.home.join(".cargo").join("registry").join("cache"),
+        ),
+        (
+            "cargo-registry-source",
+            "cargo 레지스트리 소스 캐시",
+            bases.home.join(".cargo").join("registry").join("src"),
+        ),
     ];
 
     #[cfg(target_os = "macos")]
-    let uv = absolute_env_path("UV_CACHE_DIR").unwrap_or_else(|| bases.local_data.join("uv"));
+    let posix_cache =
+        absolute_env_path("XDG_CACHE_HOME").unwrap_or_else(|| bases.home.join(".cache"));
+    #[cfg(target_os = "macos")]
+    let uv = absolute_env_path("UV_CACHE_DIR").unwrap_or_else(|| posix_cache.join("uv"));
     #[cfg(target_os = "macos")]
     let huggingface = absolute_env_path("HF_HUB_CACHE")
         .or_else(|| absolute_env_path("HF_HOME").map(|path| path.join("hub")))
-        .unwrap_or_else(|| bases.local_data.join("huggingface"));
+        .unwrap_or_else(|| posix_cache.join("huggingface"));
     #[cfg(target_os = "macos")]
     entries.extend([
         ("uv-cache", "uv 캐시", uv),
         ("huggingface-cache", "Hugging Face 캐시", huggingface),
-        ("codex-runtimes-cache", "Codex 런타임 캐시", bases.local_data.join("codex-runtimes")),
-        ("gradle-cache", "Gradle 캐시", bases.home.join(".gradle").join("caches")),
-        ("macos-app-support-cache", "macOS 응용 프로그램 업데이트 캐시",
-            bases.home.join("Library").join("Application Support").join("Caches")),
         (
-            "pnpm-cache",
-            "pnpm 캐시",
+            "codex-runtimes-cache",
+            "Codex 런타임 캐시",
+            posix_cache.join("codex-runtimes"),
+        ),
+        (
+            "gradle-cache",
+            "Gradle 캐시",
+            bases.home.join(".gradle").join("caches"),
+        ),
+        (
+            "macos-app-support-cache",
+            "macOS 응용 프로그램 업데이트 캐시",
+            bases
+                .home
+                .join("Library")
+                .join("Application Support")
+                .join("Caches"),
+        ),
+        (
+            "pnpm-store-cache",
+            "pnpm 패키지 저장소 캐시",
+            bases.home.join("Library").join("pnpm").join("store"),
+        ),
+        (
+            "pnpm-metadata-cache",
+            "pnpm 메타데이터 캐시",
             bases.home.join("Library").join("Caches").join("pnpm"),
         ),
-        (
-            "node-cache",
-            "Node.js 캐시",
-            bases.local_data.join("node"),
-        ),
-        (
-            "torch-cache",
-            "PyTorch 캐시",
-            bases.local_data.join("torch"),
-        ),
-        (
-            "prisma-cache",
-            "Prisma 캐시",
-            bases.local_data.join("prisma"),
-        ),
-        (
-            "gh-cache",
-            "GitHub CLI 캐시",
-            bases.local_data.join("gh"),
-        ),
+        ("node-cache", "Node.js 캐시", posix_cache.join("node")),
+        ("torch-cache", "PyTorch 캐시", posix_cache.join("torch")),
+        ("prisma-cache", "Prisma 캐시", posix_cache.join("prisma")),
+        ("gh-cache", "GitHub CLI 캐시", posix_cache.join("gh")),
         (
             "adobe-cache",
             "Adobe 캐시",
@@ -148,7 +165,11 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
         (
             "edge-cache",
             "Microsoft Edge 캐시",
-            bases.home.join("Library").join("Caches").join("Microsoft Edge"),
+            bases
+                .home
+                .join("Library")
+                .join("Caches")
+                .join("Microsoft Edge"),
         ),
         (
             "trivy-cache",
@@ -169,12 +190,25 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
     // 사용자가 크기를 보고 그것만 콕 집어 정리하게 한다. WER/CrashDumps도 동류의 진단 산출물.
     #[cfg(windows)]
     entries.extend([
-        ("rdp-autotrace", "원격 데스크톱 추적 로그",
-            bases.temp.join("DiagOutputDir").join("RdClientAutoTrace")),
-        ("windows-crashdumps", "앱 크래시 덤프",
-            bases.local_data.join("CrashDumps")),
-        ("windows-wer", "Windows 오류 보고 (WER)",
-            bases.local_data.join("Microsoft").join("Windows").join("WER")),
+        (
+            "rdp-autotrace",
+            "원격 데스크톱 추적 로그",
+            bases.temp.join("DiagOutputDir").join("RdClientAutoTrace"),
+        ),
+        (
+            "windows-crashdumps",
+            "앱 크래시 덤프",
+            bases.local_data.join("CrashDumps"),
+        ),
+        (
+            "windows-wer",
+            "Windows 오류 보고 (WER)",
+            bases
+                .local_data
+                .join("Microsoft")
+                .join("Windows")
+                .join("WER"),
+        ),
     ]);
 
     entries
@@ -318,9 +352,13 @@ impl CatalogRoot {
         }
 
         #[cfg(not(target_os = "macos"))]
-        let Some(stable) = self.stable_path() else { return 0 };
+        let Some(stable) = self.stable_path() else {
+            return 0;
+        };
         #[cfg(not(target_os = "macos"))]
-        let Ok(entries) = std::fs::read_dir(stable) else { return 0 };
+        let Ok(entries) = std::fs::read_dir(stable) else {
+            return 0;
+        };
         #[cfg(not(target_os = "macos"))]
         let mut bytes = 0u64;
 
@@ -330,7 +368,9 @@ impl CatalogRoot {
             if is_disksage_trash_staging(&path) {
                 continue;
             }
-            let Ok(metadata) = std::fs::symlink_metadata(&path) else { continue };
+            let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
             if metadata.file_type().is_symlink() {
                 continue;
             }
@@ -363,9 +403,13 @@ impl CatalogRoot {
         }
 
         #[cfg(not(target_os = "macos"))]
-        let Some(stable) = self.stable_path() else { return Vec::new() };
+        let Some(stable) = self.stable_path() else {
+            return Vec::new();
+        };
         #[cfg(not(target_os = "macos"))]
-        let Ok(entries) = std::fs::read_dir(stable) else { return Vec::new() };
+        let Ok(entries) = std::fs::read_dir(stable) else {
+            return Vec::new();
+        };
 
         #[cfg(not(target_os = "macos"))]
         entries
@@ -609,7 +653,11 @@ mod tests {
         let bases = fake_bases(tmp.path());
         // npm 캐시만 실제로 만들어 둔다 (한 줄: 각 arm이 별도 라인이면 플랫폼별로 반대쪽이
         // 영구 미커버로 남는다 — is_protected의 home 변수명 선택과 동일한 관례)
-        let npm = if cfg!(windows) { bases.local_data.join("npm-cache") } else { bases.home.join(".npm") };
+        let npm = if cfg!(windows) {
+            bases.local_data.join("npm-cache")
+        } else {
+            bases.home.join(".npm")
+        };
         fs::create_dir_all(&npm).unwrap();
         fs::write(npm.join("blob.bin"), vec![0u8; 128]).unwrap();
 
@@ -621,7 +669,10 @@ mod tests {
         let temp_c = cands.iter().find(|c| c.id == "os-temp").unwrap();
         assert!(!temp_c.exists);
         assert_eq!(temp_c.bytes, 0);
-        let cargo_source = cands.iter().find(|c| c.id == "cargo-registry-source").unwrap();
+        let cargo_source = cands
+            .iter()
+            .find(|c| c.id == "cargo-registry-source")
+            .unwrap();
         assert!(cargo_source.path.ends_with(".cargo/registry/src"));
         // 카탈로그에 최소 4개 규칙
         assert!(cands.len() >= 4);
@@ -651,7 +702,9 @@ mod tests {
         let targets = cache_targets(tmp.path()).unwrap();
         assert_eq!(targets.len(), 1);
         assert!(targets[0].path.ends_with("owned.bin"));
-        assert!(crate::safety::is_user_owned_shared_temp_tree(Path::new(&targets[0].path)));
+        assert!(crate::safety::is_user_owned_shared_temp_tree(Path::new(
+            &targets[0].path
+        )));
     }
 
     #[cfg(windows)]
@@ -679,7 +732,9 @@ mod tests {
             .iter()
             .find(|candidate| candidate.id == "macos-app-support-cache")
             .expect("macOS application-support cache must be catalogued");
-        assert!(candidate.path.ends_with("Library/Application Support/Caches"));
+        assert!(candidate
+            .path
+            .ends_with("Library/Application Support/Caches"));
     }
 
     #[cfg(target_os = "macos")]
@@ -689,11 +744,13 @@ mod tests {
         let bases = fake_bases(tmp.path());
         let candidates = cache_candidates(&bases);
         for (id, suffix) in [
-            ("pnpm-cache", "Library/Caches/pnpm"),
-            ("node-cache", "local/node"),
-            ("torch-cache", "local/torch"),
-            ("prisma-cache", "local/prisma"),
-            ("gh-cache", "local/gh"),
+            ("pnpm-store-cache", "Library/pnpm/store"),
+            ("pnpm-metadata-cache", "Library/Caches/pnpm"),
+            ("node-cache", ".cache/node"),
+            ("torch-cache", ".cache/torch"),
+            ("prisma-cache", ".cache/prisma"),
+            ("gh-cache", ".cache/gh"),
+            ("codex-runtimes-cache", ".cache/codex-runtimes"),
             ("adobe-cache", "Library/Caches/Adobe"),
             ("edge-cache", "Library/Caches/Microsoft Edge"),
             ("trivy-cache", "Library/Caches/trivy"),
@@ -708,7 +765,7 @@ mod tests {
             .iter()
             .find(|candidate| candidate.id == "uv-cache")
             .expect("uv cache must be catalogued");
-        assert!(uv.path.ends_with("local/uv"));
+        assert!(uv.path.ends_with(".cache/uv"));
     }
 
     #[test]
@@ -762,7 +819,9 @@ mod tests {
         fs::write(tmp.path().join("keep.bin"), b"keep").unwrap();
         fs::create_dir(tmp.path().join(".disksage-trash-fixture")).unwrap();
         fs::write(
-            tmp.path().join(".disksage-trash-fixture").join("staged.bin"),
+            tmp.path()
+                .join(".disksage-trash-fixture")
+                .join("staged.bin"),
             b"staged",
         )
         .unwrap();
@@ -783,7 +842,8 @@ mod tests {
     fn clean_targets_excludes_symlinks() {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("real.bin"), b"x").unwrap();
-        std::os::unix::fs::symlink(tmp.path().join("real.bin"), tmp.path().join("link.bin")).unwrap();
+        std::os::unix::fs::symlink(tmp.path().join("real.bin"), tmp.path().join("link.bin"))
+            .unwrap();
         let names: Vec<String> = clean_targets(tmp.path())
             .iter()
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())

@@ -939,3 +939,34 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - The 300 GB objective is not yet satisfied: the latest observation proves about 65 GiB available.
   Cloud eviction remains blocked for items without current provider-upload proof, and non-identical
   photos remain blocked pending measured quality evidence and a selected survivor.
+
+## 2026-08-28 effective macOS cache-root correction
+
+- Native read-only discovery reported `uv cache dir` as `~/.cache/uv`, npm cache as `~/.npm`,
+  pnpm store as `~/Library/pnpm/store/v11`, and pip cache as `~/Library/Caches/pip`. The former
+  macOS catalog pointed uv, pnpm, Codex runtime, Node, PyTorch, Prisma, and GitHub CLI entries at
+  non-effective directories, so DiskSage could report zero bytes while about 2.8 GB remained under
+  `~/.cache` alone.
+- The catalog now uses an absolute `XDG_CACHE_HOME` when supplied and otherwise `~/.cache`, retains
+  explicit UV/Hugging Face overrides, and scopes pnpm to its content-addressed store root plus its
+  separate metadata cache. Node, PyTorch, Prisma, GitHub CLI, and Codex runtime caches remain
+  manual-review candidates rather than gaining automatic deletion authority from path discovery.
+  Headless execution still re-lists exact children, rejects changed
+  identities or incomplete/active-use evidence, moves candidates to OS Trash, and journals each
+  mutation; the cache root itself is preserved.
+- The live Trash contained about 695 MB, including a 368 MB uv `git-v0` cache and collision-renamed
+  uv build/wheel/source cache directories. The proven-cache purge now recognizes such macOS
+  collision names only when both a known base name and cache-specific structure match; unrelated
+  Trash entries and user data remain outside this irreversible path.
+- The corrected headless path moved only inactive, identity-matched children from npm, uv, and pnpm
+  into Trash; active or incomplete-use entries (`uv/.lock`, npm `_npx`, and pnpm v3) remained in
+  place. Structure-bound purge then permanently removed uv git and pnpm metadata caches totaling
+  410,257,515 bytes, followed by npm `_cacache`, uv archive/index, and pnpm v10 caches totaling
+  1,896,107,386 bytes. The measured APFS available-space increases were 327,860 KiB and
+  1,361,876 KiB respectively; logical bytes are not substituted for those host observations.
+- A fresh GitHub/current-HEAD audit of 235 `/private/tmp` repositories found only two clean,
+  inactive, exact-head candidates: contextual-orchestrator PR #902 (merged) and
+  accounting-information-platform PR #30 (closed unmerged). Their linked worktrees were removed
+  through `git worktree remove` without force. Dirty, active-evidence-incomplete, open-PR, and
+  head-mismatched paths were preserved; the immediate APFS sample fluctuated downward, so no
+  positive physical gain is attributed to those 32 MiB of logical worktree data.

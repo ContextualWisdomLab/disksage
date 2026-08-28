@@ -56,7 +56,9 @@ treated as evidence that the inactive entry is safe without its own probe.
 
 When provider upload is blocked and local pressure is high, DiskSage may run the
 `clean_regenerable_caches` command without a second approval prompt for the observed regenerable
-macOS roots (npm, uv, pnpm, Adobe, Microsoft Edge, and Trivy). This is a narrow policy, not a
+macOS roots (npm, uv, pnpm store and metadata, Adobe, Microsoft Edge, and Trivy). Effective uv and
+tool-cache paths use an absolute `XDG_CACHE_HOME` or fall back to `~/.cache`; pnpm's package store
+is rooted at `~/Library/pnpm/store`. This is a narrow policy, not a
 general path-based delete rule: each direct child is still bound to its reviewed object identity,
 byte count, and modification time, and the active-use probe must be complete and idle. DiskSage
 staging entries named `.disksage-trash-*` are excluded so a prior cleanup cannot become a recursive
@@ -65,15 +67,15 @@ entry is written. Any child in use is reported and left untouched.
 
 The Cargo registry source tree (`~/.cargo/registry/src`) is catalogued as
 `cargo-registry-source` for explicit review because it is regenerable but may require network
-downloads to rebuild. It is intentionally excluded from the automatic six-cache action. During
+downloads to rebuild. It is intentionally excluded from the automatic seven-ID action. During
 the 2026-08-21 low-disk incident, no Cargo process was running; DiskSage development reclaimed the
 observed 1.3 GiB source cache only after recording this boundary, while retaining the Cargo index,
 package archives, git checkouts, all user files, and provider-managed data.
 
 The observed `~/.cache/node`, `~/.cache/torch`, `~/.cache/prisma`, and `~/.cache/gh` trees are
-catalogued as explicit manual-review targets for the same reason. Their paths are now stable
+catalogued as explicit manual-review targets for the same reason. Their effective XDG paths are now stable
 catalog identities, but they are deliberately excluded from `AUTO_REGENERABLE_CACHE_IDS`; the
-automatic action remains limited to the six incident-approved roots until each tool's rebuild and
+automatic action remains limited to the incident-approved roots until each tool's rebuild and
 active-use contract is independently established.
 
 The same incident later reached 289 MiB of APFS availability while a Finder/File Provider copy was
@@ -95,6 +97,14 @@ known direct names/signatures for npm, pnpm, Edge, uv, and Trivy caches; it boun
 rejects symlinks, rechecks the signature immediately before removal, and writes a journal record
 for both the pending and terminal outcome. This path never empties the Trash generally and never
 applies to user files or cloud-provider placeholders.
+
+macOS may append a localized collision suffix when multiple cache directories share a Trash name.
+DiskSage accepts the known base name followed by a space only when the cache-specific structure is
+also revalidated. uv git caches require `locks`, `checkouts`, and `db`; pnpm registry metadata
+requires its registry directory. uv archives require a package entry with distribution metadata;
+pnpm v10 stores require `files` and `index`, while v11 requires its files, index database, projects,
+and links. The bounded tree still rejects every symlink before deletion. A matching prefix without
+the corresponding structure is not a candidate.
 
 ## References
 
