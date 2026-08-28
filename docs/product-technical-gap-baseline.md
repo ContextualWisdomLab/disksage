@@ -811,3 +811,16 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   passed with `npm run check` (0 errors, 0 warnings) and 38 frontend test files / 165 tests. The
   protected PR remains open and blocked until current-head hosted checks and an independent approval
   pass; this UI proof does not authorize a merge or a deletion.
+
+## 2026-08-28 stale anonymous volume follow-up
+
+- A new local Podman inventory found one additional anonymous volume,
+  `2b9caeb3e63f84fffcc87c0ad365fed7b9f09812581d7389061488857831ca4c`, created at 12:22 KST.
+  It had no Compose labels, no container reference (`docker ps -a --filter volume=...` returned no
+  containers), and a runtime-accounted size of 462.9 MB. The volume was removed only after that
+  identity and reference check; the seven labeled database/graph volumes and the BuildKit-linked
+  volume remain retained.
+- Runtime accounting changed from 1.268 GB to 804.9 MB of local volumes and host availability moved
+  from about 8.5 GiB to 8.7 GiB. APFS and concurrent hosted builds make the host delta non-authoritative;
+  the product records the exact identity and re-audit rather than promising a fixed byte gain. The
+  same per-volume evidence and re-audit path is available in PR #267 (head `b4105f8e47f165c702fedd4d05f7d4af6d29b603`).
