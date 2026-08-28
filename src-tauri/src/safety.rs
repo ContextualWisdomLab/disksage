@@ -480,6 +480,24 @@ fn restore_staged_if_source_absent(
     Ok(())
 }
 
+fn remove_staged_permanently_with<F>(
+    staged: &Path,
+    staging_dir: &Path,
+    remove: F,
+) -> Result<(), SafetyError>
+where
+    F: FnOnce(&Path) -> std::io::Result<()>,
+{
+    if let Err(error) = remove(staged) {
+        return Err(SafetyError::Trash(format!(
+            "permanent deletion failed; staged object retained at {}: {error}",
+            staged.display()
+        )));
+    }
+    let _ = std::fs::remove_dir(staging_dir);
+    Ok(())
+}
+
 pub fn trash_delete_if_identity(
     path: &Path,
     expected_object_id: &str,
@@ -659,14 +677,7 @@ pub fn permanent_delete_dir_if_identity(
                 ))),
             };
         }
-        if let Err(error) = std::fs::remove_dir_all(&staged) {
-            return match restore_staged_if_source_absent(path, &staged, &staging_dir) {
-                Ok(()) => Err(SafetyError::Trash(error.to_string())),
-                Err(restore_error) => Err(SafetyError::Trash(format!("{error}; {restore_error}"))),
-            };
-        }
-        let _ = std::fs::remove_dir(&staging_dir);
-        Ok(())
+        remove_staged_permanently_with(&staged, &staging_dir, |path| std::fs::remove_dir_all(path))
     })();
     entry.outcome = match &result {
         Ok(()) => "ok".into(),
@@ -1089,6 +1100,32 @@ mod tests {
             .file_name()
             .to_string_lossy()
             .starts_with(".disksage-trash-")));
+    }
+
+    #[test]
+    fn permanent_delete_does_not_restore_a_partially_removed_staged_tree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("node_modules");
+        let staging_dir = tmp.path().join(".disksage-trash");
+        let staged = staging_dir.join("node_modules");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("removed.bin"), b"removed").unwrap();
+        std::fs::write(source.join("retained.bin"), b"retained").unwrap();
+        std::fs::create_dir(&staging_dir).unwrap();
+        std::fs::rename(&source, &staged).unwrap();
+
+        let result = remove_staged_permanently_with(&staged, &staging_dir, |path| {
+            std::fs::remove_file(path.join("removed.bin")).unwrap();
+            Err(std::io::Error::other("simulated recursive delete failure"))
+        });
+
+        assert!(result.is_err());
+        assert!(
+            !source.exists(),
+            "a partial tree must not be restored as live"
+        );
+        assert!(!staged.join("removed.bin").exists());
+        assert!(staged.join("retained.bin").exists());
     }
 
     #[test]

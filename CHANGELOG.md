@@ -55,6 +55,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - Stop descending once a marker-validated development artifact is found, avoiding a second full
   traversal of large nested `node_modules`, `target`, and generated index trees before cleanup.
+- Keep a partially failed permanent artifact deletion in its private staging location; never restore
+  a partially removed tree to the live path as if it were intact.
 - Require complete inactive-use evidence for every development artifact immediately before Trash,
   including `node_modules`, Rust targets, generated indexes, and editor-obsolete extensions.
 - Resolve macOS cache roots from the effective XDG/UV environment and observed native locations:
