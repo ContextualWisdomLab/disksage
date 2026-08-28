@@ -4,7 +4,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const BINARIES: [(&str, &str, &str, &str); 3] = [
+const BINARIES: [(&str, &str, &str, &str); 4] = [
     (
         "disksage-icloud-local-eviction",
         "usage: disksage-icloud-local-eviction --cloud-root ABSOLUTE_PATH --path ABSOLUTE_FILE [--execute --approved-plan-fingerprint HEX64 --confirm-plan-fingerprint HEX64 --approved-by human:IDENTITY --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]",
@@ -20,6 +20,12 @@ const BINARIES: [(&str, &str, &str, &str); 3] = [
     (
         "disksage-cloud-local-eviction-batch",
         "usage: disksage-cloud-local-eviction-batch --cloud-root ABSOLUTE_PATH --manifest ABSOLUTE_JSON [--execute --approved-batch-fingerprint HEX64 --confirm-batch-fingerprint HEX64 --approved-by human:IDENTITY --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]",
+        "알 수 없는 인자",
+        "icloud-local-eviction-batch-invalid-utf8-argument",
+    ),
+    (
+        "disksage-icloud-local-eviction-batch",
+        "usage: disksage-icloud-local-eviction-batch --cloud-root ABSOLUTE_PATH --manifest ABSOLUTE_JSON [--execute --approved-batch-fingerprint HEX64 --confirm-batch-fingerprint HEX64 --approved-by human:IDENTITY --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]",
         "알 수 없는 인자",
         "icloud-local-eviction-batch-invalid-utf8-argument",
     ),
