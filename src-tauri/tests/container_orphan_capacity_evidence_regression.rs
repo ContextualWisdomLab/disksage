@@ -1,5 +1,6 @@
 #![cfg(unix)]
 
+use disksage_lib::container_orphan_public::sanitize_execution;
 use disksage_lib::container_orphan_reclaim::{
     execute_container_orphan_prune, probe_container_orphans, ContainerRuntimeKind,
     ContainerRuntimeTarget, OrphanCategory,
@@ -7,7 +8,7 @@ use disksage_lib::container_orphan_reclaim::{
 use std::os::unix::fs::PermissionsExt;
 
 #[test]
-fn prune_receipt_does_not_claim_host_capacity_without_runtime_store_volume_authority() {
+fn public_prune_receipt_does_not_claim_host_capacity_without_runtime_store_volume_authority() {
     const FULL_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let temp = tempfile::tempdir().expect("temporary runtime directory");
     let runtime = temp.path().join("docker");
@@ -65,12 +66,13 @@ esac
         1,
     )
     .expect("exact candidate removal must succeed");
-
     assert!(execution.executed);
+
+    let public_receipt = sanitize_execution(execution);
     assert_eq!(
-        execution.before_available_bytes, None,
+        public_receipt.before_available_bytes, None,
         "the process working-directory volume is not authoritative for runtime-store capacity"
     );
-    assert_eq!(execution.after_available_bytes, None);
-    assert_eq!(execution.observed_available_gain_bytes, None);
+    assert_eq!(public_receipt.after_available_bytes, None);
+    assert_eq!(public_receipt.observed_available_gain_bytes, None);
 }
