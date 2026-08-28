@@ -398,7 +398,7 @@ pub fn trash_delete(
         outcome: "pending".into(),
     };
     journal_append(journal_path, &entry)?;
-    match trash::delete(path) {
+    match platform_trash_delete(path) {
         Ok(()) => {
             entry.outcome = "ok".into();
             journal_append(journal_path, &entry)?;
@@ -410,6 +410,19 @@ pub fn trash_delete(
             Err(SafetyError::Trash(e.to_string()))
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+fn platform_trash_delete(path: &Path) -> Result<(), trash::Error> {
+    use trash::macos::{DeleteMethod, TrashContextExtMacos};
+    let mut context = trash::TrashContext::new();
+    context.set_delete_method(DeleteMethod::NsFileManager);
+    context.delete(path)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn platform_trash_delete(path: &Path) -> Result<(), trash::Error> {
+    trash::delete(path)
 }
 
 static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);

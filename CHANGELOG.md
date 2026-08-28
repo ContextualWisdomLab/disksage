@@ -119,6 +119,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Use macOS `NSFileManager` for reversible Trash moves so cleanup does not wait on Finder
+  AppleEvents or inherit a stalled Finder copy queue.
 - Permit fully current-user-owned real children of the shared Unix temporary root while retaining
   fail-closed protection for the root, symlinks, mixed ownership, unreadable trees, and oversized
   ownership observations.
