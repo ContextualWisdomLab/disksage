@@ -40,6 +40,7 @@
       node_modules: "Node.js 의존 파일",
       target: "개발 도구 빌드 산출물",
       ".venv": "Python 환경 파일",
+      ".venv314": "Python 3.14 환경 파일",
       dist: "배포용 빌드 파일",
       build: "빌드 파일",
       ".codegraph": "코드 분석 자료",

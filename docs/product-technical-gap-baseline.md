@@ -1114,6 +1114,8 @@ runner's private workspace temp root instead of weakening the shared production 
 
 ## 2026-08-29 temporary-workspace generated-cache recovery
 
+- Project-local Python 3.14 `.venv314` environments now share the same manifest, active-use, journal, and permanent-reclaim checks as `.venv`.
+
 ### Podman external-container image authority
 
 - Live deletion exposed Buildah storage containers hidden from ordinary `podman container ps --all`; their images rejected deletion despite appearing dangling.

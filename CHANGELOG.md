@@ -12,6 +12,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   and `.nox` through the existing identity, active-use, rescan, and journal safety contract.
 - Reclaim downloaded Playwright browser runtimes through the same regenerable-cache contract.
 - Exclude images retained by Podman/Buildah external storage containers from orphan deletion plans.
+- Reclaim project-local Python 3.14 `.venv314` environments as regenerable development artifacts.
 - Release uploaded, current, idle OneDrive files through Microsoft's signed Files On-Demand
   command only after the provider-wide queue is quiet, then restart sync and verify allocation
   reduction while retaining the cloud item and the existing approval and receipt contract.

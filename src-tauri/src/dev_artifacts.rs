@@ -46,6 +46,7 @@ const ARTIFACT_KINDS: &[(&str, &[&str])] = &[
     ("node_modules", &["package.json"]),
     ("target", &["Cargo.toml"]),
     (".venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
+    (".venv314", &["pyproject.toml", "requirements.txt", "setup.py"]),
     ("venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
     ("__pycache__", &[]), // 마커 불필요 — 이름 자체가 파이썬 캐시
     (".mypy_cache", &[]),
@@ -726,5 +727,17 @@ mod tests {
 
         assert!(artifacts.iter().any(|artifact| artifact.kind == ".tox"));
         assert!(artifacts.iter().any(|artifact| artifact.kind == ".nox"));
+    }
+
+    #[test]
+    fn discovers_python_314_project_environment() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("pyproject.toml"), "[project]").unwrap();
+        fs::create_dir(tmp.path().join(".venv314")).unwrap();
+
+        let artifacts = find_artifacts(tmp.path(), 0, u64::MAX);
+
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].kind, ".venv314");
     }
 }
