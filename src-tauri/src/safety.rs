@@ -612,6 +612,12 @@ pub fn permanent_delete_dir_if_identity(
             "generated directory identity changed; rescan before deletion".into(),
         ));
     }
+    let file_name = path.file_name().ok_or_else(|| {
+        SafetyError::Trash("generated directory has no file name; rescan before deletion".into())
+    })?;
+    let staging_dir = create_private_staging_dir(path, now_ms)
+        .map_err(|error| SafetyError::Trash(error.to_string()))?;
+    let staged = staging_dir.join(file_name);
     let mut entry = JournalEntry {
         ts_ms: now_ms,
         op: "permanent_generated_directory_delete".into(),
@@ -619,14 +625,54 @@ pub fn permanent_delete_dir_if_identity(
         bytes,
         outcome: "pending".into(),
     };
-    journal_append(journal_path, &entry)?;
-    let outcome = std::fs::remove_dir_all(path).map_err(|error| error.to_string());
-    entry.outcome = match &outcome {
+    if let Err(error) = journal_append(journal_path, &entry) {
+        let _ = std::fs::remove_dir(&staging_dir);
+        return Err(error);
+    }
+    let result = (|| -> Result<(), SafetyError> {
+        if let Err(error) = std::fs::rename(path, &staged) {
+            let _ = std::fs::remove_dir(&staging_dir);
+            return Err(SafetyError::Trash(format!(
+                "atomic staging move failed: {error}"
+            )));
+        }
+        let moved_id = filesystem_object_id(&staged).map_err(|error| {
+            let restore = restore_staged_if_source_absent(path, &staged, &staging_dir);
+            match restore {
+                Ok(()) => SafetyError::Trash(format!(
+                    "staged generated directory identity unavailable: {error}"
+                )),
+                Err(restore_error) => SafetyError::Trash(format!(
+                    "staged generated directory identity unavailable: {error}; {restore_error}"
+                )),
+            }
+        })?;
+        if moved_id != expected_object_id {
+            return match restore_staged_if_source_absent(path, &staged, &staging_dir) {
+                Ok(()) => Err(SafetyError::Trash(
+                    "atomic staging move changed the generated directory; nothing was deleted"
+                        .into(),
+                )),
+                Err(restore_error) => Err(SafetyError::Trash(format!(
+                    "atomic staging move changed the generated directory; {restore_error}"
+                ))),
+            };
+        }
+        if let Err(error) = std::fs::remove_dir_all(&staged) {
+            return match restore_staged_if_source_absent(path, &staged, &staging_dir) {
+                Ok(()) => Err(SafetyError::Trash(error.to_string())),
+                Err(restore_error) => Err(SafetyError::Trash(format!("{error}; {restore_error}"))),
+            };
+        }
+        let _ = std::fs::remove_dir(&staging_dir);
+        Ok(())
+    })();
+    entry.outcome = match &result {
         Ok(()) => "ok".into(),
         Err(error) => format!("error:{error}"),
     };
     journal_append(journal_path, &entry)?;
-    outcome.map_err(SafetyError::Trash)
+    result
 }
 
 pub fn same_volume(src: &Path, dst: &Path) -> bool {
@@ -1021,6 +1067,11 @@ mod tests {
         assert_eq!(entries[0].op, "permanent_generated_directory_delete");
         assert_eq!(entries[0].outcome, "ok");
         assert_eq!(entries[1].outcome, "pending");
+        assert!(std::fs::read_dir(tmp.path()).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".disksage-trash-")));
     }
 
     #[test]
