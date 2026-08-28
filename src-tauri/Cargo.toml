@@ -44,6 +44,11 @@ path = "src/bin/disksage-icloud-local-eviction.rs"
 required-features = ["cloud-cli"]
 
 [[bin]]
+name = "disksage-icloud-local-eviction-batch"
+path = "src/bin/disksage-icloud-local-eviction-batch.rs"
+required-features = ["cloud-cli"]
+
+[[bin]]
 name = "disksage-cloud-local-eviction-batch"
 path = "src/bin/disksage-icloud-local-eviction-batch.rs"
 required-features = ["cloud-cli"]
