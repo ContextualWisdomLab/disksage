@@ -3,11 +3,13 @@
 //! The default operation is read-only. `--execute` re-scans every requested artifact and moves it
 //! to OS Trash only when its path, metadata manifest, and filesystem identity still match.
 
-use disksage_lib::dev_artifacts::{clean_artifacts, find_artifacts, DevArtifactCleanResult};
+use disksage_lib::dev_artifacts::{
+    clean_artifacts, find_artifacts, permanently_delete_artifacts, DevArtifactCleanResult,
+};
 use std::path::{Component, Path, PathBuf};
 
 const MAX_AGE_DAYS: u64 = 3_650;
-const USAGE: &str = "usage: disksage-dev-artifacts --root ABSOLUTE_PATH [--kind ARTIFACT_KIND] [--min-age-days N] [--journal-path ABSOLUTE_PATH] [--execute]";
+const USAGE: &str = "usage: disksage-dev-artifacts --root ABSOLUTE_PATH [--kind ARTIFACT_KIND] [--min-age-days N] [--journal-path ABSOLUTE_PATH] [--execute] [--permanent]";
 
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
@@ -16,6 +18,7 @@ struct Args {
     min_age_days: u64,
     journal_path: PathBuf,
     execute: bool,
+    permanent: bool,
 }
 
 fn absolute_without_parent(path: &Path) -> bool {
@@ -59,6 +62,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     let mut min_age_days = 30;
     let mut journal_path = default_journal_path()?;
     let mut execute = false;
+    let mut permanent = false;
     let mut index = 0usize;
     while index < raw.len() {
         match raw[index].as_str() {
@@ -98,6 +102,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                 );
             }
             "--execute" => execute = true,
+            "--permanent" => permanent = true,
             "--help" | "-h" => return Err(USAGE.into()),
             flag => return Err(format!("알 수 없는 인자: {flag}")),
         }
@@ -110,12 +115,16 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     if !absolute_without_parent(&journal_path) {
         return Err("--journal-path는 상위 탐색이 없는 절대 경로여야 함".into());
     }
+    if permanent && !execute {
+        return Err("--permanent requires --execute".into());
+    }
     Ok(Args {
         root,
         kind,
         min_age_days,
         journal_path,
         execute,
+        permanent,
     })
 }
 
@@ -141,13 +150,23 @@ fn run(args: Args) -> Result<serde_json::Value, String> {
             std::fs::create_dir_all(parent)
                 .map_err(|_| "development-artifact-journal-parent-create-failed".to_string())?;
         }
-        clean_artifacts(
-            &candidates,
-            &args.root,
-            args.min_age_days,
-            &args.journal_path,
-            observed_at_ms,
-        )
+        if args.permanent {
+            permanently_delete_artifacts(
+                &candidates,
+                &args.root,
+                args.min_age_days,
+                &args.journal_path,
+                observed_at_ms,
+            )
+        } else {
+            clean_artifacts(
+                &candidates,
+                &args.root,
+                args.min_age_days,
+                &args.journal_path,
+                observed_at_ms,
+            )
+        }
     } else {
         Vec::new()
     };
@@ -159,6 +178,7 @@ fn run(args: Args) -> Result<serde_json::Value, String> {
         "min_age_days": args.min_age_days,
         "observed_at_ms": observed_at_ms,
         "executed": args.execute,
+        "permanent": args.permanent,
         "candidate_count": candidates.len(),
         "candidates": candidates,
         "results": results,
@@ -229,6 +249,20 @@ mod tests {
         assert_eq!(
             parsed.journal_path,
             PathBuf::from("/tmp/disksage-dev-artifacts-journal.jsonl")
+        );
+    }
+
+    #[test]
+    fn permanent_deletion_requires_explicit_execute() {
+        let root = std::env::temp_dir();
+        assert_eq!(
+            parse_args(&[
+                "--root".into(),
+                root.to_string_lossy().into_owned(),
+                "--permanent".into(),
+            ])
+            .unwrap_err(),
+            "--permanent requires --execute"
         );
     }
 }

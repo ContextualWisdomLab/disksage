@@ -384,6 +384,29 @@ pub fn clean_artifacts(
     journal_path: &Path,
     now_ms: u64,
 ) -> Vec<DevArtifactCleanResult> {
+    clean_artifacts_with_disposition(requests, root, min_age_days, journal_path, now_ms, false)
+}
+
+/// Permanently delete only unchanged, inactive development artifacts after an explicit caller
+/// approval. This provides physical reclaim without requiring a global Trash-empty operation.
+pub fn permanently_delete_artifacts(
+    requests: &[DevArtifact],
+    root: &Path,
+    min_age_days: u64,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Vec<DevArtifactCleanResult> {
+    clean_artifacts_with_disposition(requests, root, min_age_days, journal_path, now_ms, true)
+}
+
+fn clean_artifacts_with_disposition(
+    requests: &[DevArtifact],
+    root: &Path,
+    min_age_days: u64,
+    journal_path: &Path,
+    now_ms: u64,
+    permanent: bool,
+) -> Vec<DevArtifactCleanResult> {
     let current = find_artifacts(root, min_age_days, now_ms);
     requests
         .iter()
@@ -437,13 +460,24 @@ pub fn clean_artifacts(
                     };
                 }
 
-            match crate::safety::trash_delete_if_identity(
-                Path::new(&request.path),
-                &request.object_id,
-                request.bytes,
-                journal_path,
-                now_ms,
-            ) {
+            let mutation = if permanent {
+                crate::safety::permanent_delete_dir_if_identity(
+                    Path::new(&request.path),
+                    &request.object_id,
+                    request.bytes,
+                    journal_path,
+                    now_ms,
+                )
+            } else {
+                crate::safety::trash_delete_if_identity(
+                    Path::new(&request.path),
+                    &request.object_id,
+                    request.bytes,
+                    journal_path,
+                    now_ms,
+                )
+            };
+            match mutation {
                 Ok(()) => DevArtifactCleanResult {
                     path: request.path.clone(),
                     ok: true,
@@ -609,6 +643,25 @@ mod tests {
         assert!(
             !journal.exists(),
             "stale identity must not create a journal"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn permanent_cleanup_physically_removes_an_unchanged_inactive_artifact() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifact = project(tmp.path(), "app", "package.json", "node_modules");
+        let candidates = find_artifacts(tmp.path(), 0, u64::MAX);
+        let journal = tmp.path().join("journal.jsonl");
+
+        let results = permanently_delete_artifacts(&candidates, tmp.path(), 0, &journal, 1);
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].ok, "{}", results[0].error);
+        assert!(!artifact.exists());
+        assert_eq!(
+            crate::safety::journal_recent(&journal, 1)[0].op,
+            "permanent_generated_directory_delete"
         );
     }
 }

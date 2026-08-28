@@ -573,6 +573,62 @@ pub fn trash_delete_if_identity(
     result
 }
 
+/// Permanently remove one unchanged, current-user-owned generated directory.
+///
+/// Callers must perform their domain-specific regenerability and active-use checks first. This
+/// boundary rechecks path safety and filesystem identity, journals both intent and outcome, and
+/// never follows a symbolic-link root.
+pub fn permanent_delete_dir_if_identity(
+    path: &Path,
+    expected_object_id: &str,
+    bytes: u64,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Result<(), SafetyError> {
+    if path
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(SafetyError::Protected(path.to_path_buf()));
+    }
+    let guard_path =
+        strip_verbatim(&std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
+    let shared_temp_authorized =
+        is_shared_temp_path(&guard_path) && is_user_owned_shared_temp_tree(&guard_path);
+    if !shared_temp_authorized && is_protected(&guard_path) {
+        return Err(SafetyError::Protected(path.to_path_buf()));
+    }
+    let metadata =
+        std::fs::symlink_metadata(path).map_err(|error| SafetyError::Trash(error.to_string()))?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(SafetyError::Trash(
+            "permanent deletion requires a real generated directory".into(),
+        ));
+    }
+    let actual = filesystem_object_id(path)
+        .map_err(|error| SafetyError::Trash(format!("object identity unavailable: {error}")))?;
+    if actual != expected_object_id {
+        return Err(SafetyError::Trash(
+            "generated directory identity changed; rescan before deletion".into(),
+        ));
+    }
+    let mut entry = JournalEntry {
+        ts_ms: now_ms,
+        op: "permanent_generated_directory_delete".into(),
+        path: path.to_string_lossy().into_owned(),
+        bytes,
+        outcome: "pending".into(),
+    };
+    journal_append(journal_path, &entry)?;
+    let outcome = std::fs::remove_dir_all(path).map_err(|error| error.to_string());
+    entry.outcome = match &outcome {
+        Ok(()) => "ok".into(),
+        Err(error) => format!("error:{error}"),
+    };
+    journal_append(journal_path, &entry)?;
+    outcome.map_err(SafetyError::Trash)
+}
+
 pub fn same_volume(src: &Path, dst: &Path) -> bool {
     let dst_probe = dst.parent().unwrap_or(dst);
     #[cfg(windows)]
@@ -946,6 +1002,25 @@ mod tests {
         assert!(victim.exists());
         assert!(original.exists());
         assert!(journal_recent(&jp, 10).is_empty());
+    }
+
+    #[test]
+    fn permanent_generated_directory_delete_rechecks_identity_and_journals() {
+        let tmp = tempfile::tempdir().unwrap();
+        let generated = tmp.path().join("node_modules");
+        std::fs::create_dir(&generated).unwrap();
+        std::fs::write(generated.join("generated.bin"), b"generated").unwrap();
+        let object_id = filesystem_object_id(&generated).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+
+        permanent_delete_dir_if_identity(&generated, &object_id, 9, &journal, 1).unwrap();
+
+        assert!(!generated.exists());
+        let entries = journal_recent(&journal, 2);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].op, "permanent_generated_directory_delete");
+        assert_eq!(entries[0].outcome, "ok");
+        assert_eq!(entries[1].outcome, "pending");
     }
 
     #[test]

@@ -8,6 +8,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Add an explicit `--execute --permanent` development-artifact mode that physically removes only
+  a freshly rescanned, inactive, identity-matched generated directory and journals the irreversible
+  outcome; the default remains reversible OS Trash.
 - Reclaim Superset's isolated HTTP and compiled-code caches while retaining cookies, local and
   session storage, IndexedDB, preferences, and historical network diagnostics.
 - Reclaim only VS Code, VS Code Insiders/Server, and Cursor extension directories named by each

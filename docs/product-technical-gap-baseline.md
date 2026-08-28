@@ -1039,3 +1039,12 @@ runner's private workspace temp root instead of weakening the shared production 
   `node_modules` roots totaling 189,125,777 logical bytes to Trash. This is reversible logical
   cleanup only: DiskSage does not claim physical recovery until an exact DiskSage-attributed Trash
   entry can be purged without touching unrelated user Trash.
+- A later `/private/tmp/opencode` audit found five ignored dependency environments in three dirty
+  but inactive BandScope worktrees: two `node_modules` roots and three Python `.venv` roots totaling
+  3,378,668 KiB before removal. Git status was preserved, every path was confirmed ignored, and
+  recursive `lsof` plus process-command evidence found no active user. The immediate APFS sample
+  rose by only 500,316 KiB while background provider/build activity continued, so the larger
+  logical total is not reported as physical recovery. DiskSage now exposes this path only through
+  the explicit headless `--execute --permanent` disposition: it re-scans the bounded manifest,
+  rejects active or changed roots, rechecks filesystem identity, and journals the irreversible
+  deletion without emptying unrelated user Trash.
