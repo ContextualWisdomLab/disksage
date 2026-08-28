@@ -39,6 +39,39 @@ fn usage() -> &'static str {
     "usage: disksage-provider-client-runtime [--output ABSOLUTE_NEW_FILE.json]"
 }
 
+#[cfg(target_os = "macos")]
+fn resolve_platform_output_parent_alias(parent: &Path) -> Result<PathBuf, String> {
+    for (alias, expected_target) in [
+        (Path::new("/var"), Path::new("/private/var")),
+        (Path::new("/tmp"), Path::new("/private/tmp")),
+        (Path::new("/etc"), Path::new("/private/etc")),
+    ] {
+        if !parent.starts_with(alias) {
+            continue;
+        }
+        let metadata = std::fs::symlink_metadata(alias)
+            .map_err(|_| "provider-client-runtime-output-parent-unavailable".to_string())?;
+        if !metadata.file_type().is_symlink() {
+            return Ok(parent.to_path_buf());
+        }
+        let resolved = std::fs::canonicalize(alias)
+            .map_err(|_| "provider-client-runtime-output-parent-unavailable".to_string())?;
+        if resolved != expected_target {
+            return Err("provider-client-runtime-output-parent-unsafe".into());
+        }
+        let suffix = parent
+            .strip_prefix(alias)
+            .map_err(|_| "provider-client-runtime-output-parent-unsafe".to_string())?;
+        return Ok(expected_target.join(suffix));
+    }
+    Ok(parent.to_path_buf())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn resolve_platform_output_parent_alias(parent: &Path) -> Result<PathBuf, String> {
+    Ok(parent.to_path_buf())
+}
+
 fn resolve_output_path(path: &Path) -> Result<PathBuf, String> {
     let parent = path
         .parent()
@@ -47,8 +80,7 @@ fn resolve_output_path(path: &Path) -> Result<PathBuf, String> {
     let file_name = path
         .file_name()
         .ok_or_else(|| "provider-client-runtime-output-parent-missing".to_string())?;
-    let parent = std::fs::canonicalize(parent)
-        .map_err(|_| "provider-client-runtime-output-parent-unavailable".to_string())?;
+    let parent = resolve_platform_output_parent_alias(parent)?;
     let metadata = std::fs::symlink_metadata(&parent)
         .map_err(|_| "provider-client-runtime-output-parent-unavailable".to_string())?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
@@ -284,7 +316,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn symlinked_output_parent_alias_is_resolved_before_authority_validation() {
+    fn arbitrary_symlinked_output_parent_is_rejected() {
         use std::os::unix::fs::symlink;
 
         let directory = tempfile::tempdir().unwrap();
@@ -294,11 +326,11 @@ mod tests {
         symlink(&actual_parent, &alias).unwrap();
         let requested = alias.join("audit.json");
 
-        let parsed = parse_args(&["--output".into(), requested.into_os_string()]).unwrap();
         assert_eq!(
-            parsed.output.unwrap(),
-            actual_parent.canonicalize().unwrap().join("audit.json")
+            parse_args(&["--output".into(), requested.into_os_string()]).unwrap_err(),
+            "provider-client-runtime-output-parent-unsafe"
         );
+        assert!(!actual_parent.join("audit.json").exists());
     }
 
     #[test]
