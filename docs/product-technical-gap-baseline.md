@@ -899,3 +899,9 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   bounded action while the exact approval, re-audit, and receipt authority remain unchanged.
 - Local targeted frontend checks passed (7 tests) and `npm run check` reported zero errors and zero
   warnings. Hosted checks and independent review remain required before protected merge.
+
+## 2026-08-28 runtime-maintenance input boundary follow-up
+
+- PR #267 head `f06d21015a9881fa3090ab1f1106eee8fea5fc20` rejects control characters in a Podman or
+  Colima trim rationale before runtime probing or receipt persistence. The same fail-closed input
+  boundary is now shared by cache, container, Homebrew, worktree, and VM-maintenance actions.

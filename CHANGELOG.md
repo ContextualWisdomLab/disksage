@@ -32,6 +32,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Reject control characters in the Podman/Colima VM-trim rationale before any runtime probe or
+  receipt write, keeping maintenance records bounded and consistent with other actions.
 - Fix Colima runtime-state parsing to retain validated status values before temporary JSON data is
   dropped; Rust hosted test compilation now remains borrow-safe while invalid state still fails
   closed.
