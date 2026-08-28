@@ -14,7 +14,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Reclaim downloaded Playwright browser runtimes through the same regenerable-cache contract.
 - Exclude images retained by Podman/Buildah external storage containers from orphan deletion plans.
 - Reclaim project-local Python 3.14 `.venv314` environments as regenerable development artifacts.
-  Every discovery path verifies bounded `pyvenv.cfg` metadata for Python 3.14, and the
+  Every discovery path verifies bounded `pyvenv.cfg` metadata for Python 3.14, skips rejected
+  environment trees without recursively scanning them, and the
   cleanup screen names each Python cache and test environment so the next action is clear.
 - Release uploaded, current, idle OneDrive files through Microsoft's signed Files On-Demand
   command only after the provider-wide queue is quiet, then restart sync and verify allocation
