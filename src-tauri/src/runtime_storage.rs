@@ -6,11 +6,13 @@
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::io::Read;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const SCHEMA_VERSION: u32 = 1;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
@@ -100,36 +102,112 @@ fn bounded_output(bytes: Vec<u8>) -> (String, bool) {
     (String::from_utf8_lossy(&bytes).into_owned(), truncated)
 }
 
+fn drain_bounded<R: Read>(mut reader: R) -> std::io::Result<(Vec<u8>, bool)> {
+    let mut buffer = [0_u8; 8 * 1024];
+    let mut captured = Vec::with_capacity(MAX_CAPTURE_BYTES);
+    let mut truncated = false;
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        let room = MAX_CAPTURE_BYTES.saturating_sub(captured.len());
+        captured.extend_from_slice(&buffer[..read.min(room)]);
+        truncated |= read > room;
+    }
+    Ok((captured, truncated))
+}
+
 fn run_bounded(binary: &Path, args: &[&str]) -> Result<(i32, String, String, bool), String> {
-    let binary = binary.to_path_buf();
-    let args = args
-        .iter()
-        .map(|arg| (*arg).to_string())
-        .collect::<Vec<_>>();
-    let (sender, receiver) = mpsc::channel();
-    thread::spawn(move || {
-        let result = Command::new(binary)
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .map(|output| {
-                let (stdout, stdout_truncated) = bounded_output(output.stdout);
-                let (stderr, stderr_truncated) = bounded_output(output.stderr);
-                (
-                    output.status.code().unwrap_or(-1),
-                    stdout,
-                    stderr,
-                    stdout_truncated || stderr_truncated,
-                )
-            })
-            .map_err(|_| "runtime-storage-command-failed".to_string());
-        let _ = sender.send(result);
-    });
-    receiver
-        .recv_timeout(COMMAND_TIMEOUT)
-        .map_err(|_| "runtime-storage-command-timeout".to_string())?
+    let mut command = Command::new(binary);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|_| "runtime-storage-command-failed".to_string())?;
+    let child_pid = child.id();
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("runtime-storage-stdout-pipe-unavailable".into());
+        }
+    };
+    let stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("runtime-storage-stderr-pipe-unavailable".into());
+        }
+    };
+    let stdout_reader = thread::spawn(move || drain_bounded(stdout));
+    let stderr_reader = thread::spawn(move || drain_bounded(stderr));
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() >= COMMAND_TIMEOUT => {
+                #[cfg(unix)]
+                unsafe {
+                    let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                return Err("runtime-storage-command-timeout".into());
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(25)),
+            Err(_) => {
+                #[cfg(unix)]
+                unsafe {
+                    let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                return Err("runtime-storage-command-failed".into());
+            }
+        }
+    };
+    #[cfg(unix)]
+    unsafe {
+        let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
+    }
+    let (stdout, stdout_truncated) = stdout_reader
+        .join()
+        .map_err(|_| "runtime-storage-stdout-reader-panicked".to_string())?
+        .map_err(|_| "runtime-storage-stdout-read-failed".to_string())?;
+    let (stderr, stderr_truncated) = stderr_reader
+        .join()
+        .map_err(|_| "runtime-storage-stderr-reader-panicked".to_string())?
+        .map_err(|_| "runtime-storage-stderr-read-failed".to_string())?;
+    let (stdout, stdout_truncated_by_utf8) = bounded_output(stdout);
+    let (stderr, stderr_truncated_by_utf8) = bounded_output(stderr);
+    Ok((
+        status.code().unwrap_or(-1),
+        stdout,
+        stderr,
+        stdout_truncated
+            || stderr_truncated
+            || stdout_truncated_by_utf8
+            || stderr_truncated_by_utf8,
+    ))
 }
 
 fn now_ms() -> u64 {
