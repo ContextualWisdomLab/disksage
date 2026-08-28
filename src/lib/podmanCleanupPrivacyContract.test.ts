@@ -11,11 +11,13 @@ function cleanupSource(): string {
 }
 
 describe("Cleanup Podman privacy and authority copy", () => {
-  it("routes Podman failures through the tested privacy mapper", () => {
+  it("routes inspection and prune failures through their privacy-safe customer mappers", () => {
     const source = cleanupSource();
-    expect(source).toContain('import { podmanEvidenceErrorMessage } from "./podmanEvidenceError";');
+    expect(source).toContain(
+      'import { podmanEvidenceErrorMessage, podmanPruneErrorMessage } from "./podmanEvidenceError";',
+    );
     expect(source).toContain("podmanError = podmanEvidenceErrorMessage(e);");
-    expect(source).toContain("podmanPruneError = podmanEvidenceErrorMessage(e);");
+    expect(source).toContain("podmanPruneError = podmanPruneErrorMessage(e);");
     expect(source).not.toContain("podmanError = String(e);");
     expect(source).not.toContain("podmanPruneError = String(e);");
   });

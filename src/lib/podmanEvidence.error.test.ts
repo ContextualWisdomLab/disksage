@@ -6,6 +6,9 @@ describe("podmanEvidenceErrorMessage", () => {
   it.each([
     new Error("podman failed at /Users/alice/.local/share/containers"),
     "transport error: private-machine.sock",
+    "toString",
+    "constructor",
+    "__proto__",
     { secret: "account-local-context" },
     null,
     undefined,
@@ -47,11 +50,17 @@ describe("podmanPruneErrorMessage", () => {
   it.each([
     new Error("podman-prune-candidate-set-changed: /Users/alice/private"),
     "socket private-machine.sock failed",
+    "toString",
+    "constructor",
+    "__proto__",
     { reason: "podman-prune-confirmation-mismatch", secret: "account-local-context" },
     null,
     undefined,
   ])("does not reflect untrusted prune failure detail %#", (reason) => {
     const message = podmanPruneErrorMessage(reason);
+    expect(message).toBe(
+      "Podman 정리를 완료하지 못했습니다. 최신 상태를 다시 확인한 뒤 정리 계획을 재검토하십시오.",
+    );
     expect(message).not.toContain("alice");
     expect(message).not.toContain("private-machine");
     expect(message).not.toContain("account-local-context");
