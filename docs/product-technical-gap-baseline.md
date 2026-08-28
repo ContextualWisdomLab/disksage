@@ -744,3 +744,19 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - After the customer-copy hardening, the local frontend suite completed with 37 files and 163 tests
   passing; `npm run check` reported zero errors and zero warnings. The exact PR #267 head for this
   evidence is `e14879118377f4716b4bbb5dd5f5dcbc9571fbaf`.
+
+## 2026-08-28 DiskSage cache cleanup execution evidence
+
+- The PR #267 Rust headless cache command was built once in an isolated target directory and run
+  with `--execute`. It moved 15 inactive, identity-bound cache children (1,171,384,438 bytes) to
+  the user Trash. Active-use or incomplete-evidence blockers rejected the npm `_npx` child and the
+  uv lock/archive roots; no live MCP cache was forced out.
+- With the separate explicit `--purge-proven-cache-trash` approval flag, the command rechecked
+  structural signatures and permanently removed four DiskSage-owned cache directories from Trash
+  (npm `_cacache`, pnpm `v11`, uv `simple-v21`, and Edge `Default`, 1,108,914,878 bytes). The
+  journal records pending and terminal outcomes for every object; no unrelated Trash entry matched
+  a proven cache signature. The data volume's available space rose from about 6.2 GiB during the
+  build to 7.2 GiB after purge; APFS accounting may fluctuate while other builds run.
+- This is the same fail-closed path exposed by the product UI: inactive regenerable children can be
+  staged and explicitly purged only after structural re-audit, while active processes and
+  incomplete provider evidence remain preserved.
