@@ -85,10 +85,12 @@ textarea {
     expect(unsafeBareRules.some(({ body }) => /\bmin-height\s*:/.test(body))).toBe(true);
   });
 
-  it("keeps the Storybook-owned shell skip-link boundary explicit", () => {
+  it("keeps the Storybook-owned shell skip-link boundary explicit and focusable", () => {
     const layout = read("src/routes/+layout.svelte");
+    const page = read("src/routes/+page.svelte");
     expect(layout).toContain('class="ds-skip-link"');
     expect(layout).toContain('href="#main-content"');
+    expect(page).toMatch(/<main\b[^>]*\bid="main-content"[^>]*\btabindex="-1"[^>]*>/);
     expect(layout).toContain('import "$lib/ui/design-tokens.css"');
   });
 
