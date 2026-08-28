@@ -8,6 +8,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Reclaim Superset's isolated HTTP and compiled-code caches while retaining cookies, local and
+  session storage, IndexedDB, preferences, and historical network diagnostics.
 - Reclaim only VS Code, VS Code Insiders/Server, and Cursor extension directories named by each
   editor's native `.obsolete` lifecycle metadata, with bounded manifests, symlink rejection,
   identity revalidation, Trash, and journaling.

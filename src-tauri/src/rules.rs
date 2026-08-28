@@ -170,6 +170,16 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
                 .join("Superset")
                 .join("network-logs"),
         ),
+        (
+            "superset-http-cache",
+            "Superset 임시 웹 콘텐츠",
+            bases.home.join("Library/Application Support/Superset/Partitions/superset/Cache"),
+        ),
+        (
+            "superset-code-cache",
+            "Superset 임시 실행 파일",
+            bases.home.join("Library/Application Support/Superset/Partitions/superset/Code Cache"),
+        ),
     ]);
 
     // `/tmp` is a symlink on macOS; use `/private/tmp` so the root itself is a real directory.
@@ -716,6 +726,14 @@ mod tests {
             (
                 "superset-network-logs",
                 "Library/Application Support/Superset/network-logs",
+            ),
+            (
+                "superset-http-cache",
+                "Library/Application Support/Superset/Partitions/superset/Cache",
+            ),
+            (
+                "superset-code-cache",
+                "Library/Application Support/Superset/Partitions/superset/Code Cache",
             ),
         ] {
             let candidate = candidates

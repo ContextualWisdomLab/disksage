@@ -1017,3 +1017,14 @@ cloud-eviction, clone, and safety suites pass locally on the corrected exact hea
   incomplete repository audits, and journals located inside the clone or behind unsafe path types.
   Stale-open PR eligibility still requires an explicit operator cutoff; DiskSage does not invent an
   age threshold. Focused clone and inherited worktree safety tests pass without mutating user data.
+
+## 2026-08-28 Superset partition-cache boundary
+
+- Superset's isolated HTTP cache measured 1,237,960 KiB and its compiled-code cache measured
+  48,200 KiB. DiskSage now catalogs only those two regenerable roots; cookies, local/session
+  storage, IndexedDB, preferences, and historical network diagnostics remain excluded.
+- The live execution moved `No_Vary_Search`, JavaScript, and WebAssembly cache children after
+  identity and active-use checks. The large `Cache_Data` child remained fail-closed because the
+  recursive native open-file observation exceeded its evidence timeout; process inactivity alone
+  was not promoted to deletion authority. The same bounded run and proven-cache purge increased
+  APFS availability by 170,104 KiB without claiming the blocked 1.2 GiB.
