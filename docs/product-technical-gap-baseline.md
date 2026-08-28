@@ -1103,9 +1103,11 @@ runner's private workspace temp root instead of weakening the shared production 
   unpin action; its allocated subtree remains roughly 32 GiB. Presence in `CloudStorage` alone is
   not used as upload or eviction authority.
 - DiskSage now reuses its exact-path, provider-status, active-use, fingerprint approval, immutable
-  receipt, and post-allocation verification contract for individual OneDrive files. The mutation
-  uses the URL-derived registered domain and item identifier, which is the native equivalent of
-  Finder's **Free up space**. It does not require OAuth and never deletes the visible cloud item.
-- Focused Rust tests pass for 21 local-eviction cases, including the OneDrive provider boundary;
-  the frontend suite passes 167 tests. Recursive/batch OneDrive eviction and a physical-space
-  receipt from the live provider remain open, so the 300 GB goal is not claimed complete.
+  receipt, and post-allocation verification contract for individual OneDrive files. Execution
+  additionally requires a quiet provider-wide queue, gracefully stops the verified OneDrive app,
+  uses Microsoft's `/getpin` and `/unpin` Files On-Demand commands, and restarts the client. It does
+  not require OAuth and never deletes the visible cloud item.
+- The live provider-wide probe currently shows active upload/download, indexing, and reconciliation
+  work, so mutation remains blocked and no sync process was interrupted. Recursive/batch OneDrive
+  eviction and a physical-space receipt from the live provider remain open; the 300 GB goal is not
+  claimed complete.

@@ -142,6 +142,13 @@ fn app_path(provider: CloudProvider) -> Result<PathBuf, String> {
         .ok_or_else(|| "provider-recovery-client-app-not-found".to_string())
 }
 
+#[cfg(all(target_os = "macos", not(coverage)))]
+pub(crate) fn onedrive_files_on_demand_available() -> bool {
+    app_path(CloudProvider::Onedrive)
+        .map(|app| app.join("Contents/MacOS/OneDrive").is_file())
+        .unwrap_or(false)
+}
+
 #[cfg(not(coverage))]
 fn run_bounded(program: &Path, args: &[&str]) -> Result<bool, String> {
     let mut child = Command::new(program)
@@ -170,6 +177,109 @@ fn run_bounded(program: &Path, args: &[&str]) -> Result<bool, String> {
             }
         }
     }
+}
+
+#[cfg(all(target_os = "macos", not(coverage)))]
+fn onedrive_command_succeeded(status_success: bool, output: &[u8]) -> bool {
+    status_success
+        && !output
+            .windows(b"Failed operation=".len())
+            .any(|window| window == b"Failed operation=")
+}
+
+#[cfg(all(target_os = "macos", not(coverage)))]
+fn run_bounded_output(program: &Path, args: &[&str]) -> Result<(), String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut capture = tempfile::tempfile()
+        .map_err(|_| "provider-recovery-command-output-unavailable".to_string())?;
+    let stderr = capture
+        .try_clone()
+        .map_err(|_| "provider-recovery-command-output-unavailable".to_string())?;
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(capture.try_clone().map_err(|_| {
+            "provider-recovery-command-output-unavailable".to_string()
+        })?))
+        .stderr(Stdio::from(stderr))
+        .spawn()
+        .map_err(|_| "provider-recovery-command-spawn-failed".to_string())?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("provider-recovery-command-timeout".into());
+            }
+            Err(_) => return Err("provider-recovery-command-wait-failed".into()),
+        }
+    };
+    capture
+        .seek(SeekFrom::Start(0))
+        .map_err(|_| "provider-recovery-command-output-unavailable".to_string())?;
+    let mut output = Vec::new();
+    capture
+        .take(64 * 1024 + 1)
+        .read_to_end(&mut output)
+        .map_err(|_| "provider-recovery-command-output-unavailable".to_string())?;
+    if output.len() > 64 * 1024 {
+        return Err("provider-recovery-command-output-too-large".into());
+    }
+    if onedrive_command_succeeded(status.success(), &output) {
+        Ok(())
+    } else {
+        Err("onedrive-files-on-demand-command-failed".into())
+    }
+}
+
+#[cfg(all(target_os = "macos", not(coverage)))]
+fn launch_provider(provider: CloudProvider, path: &Path) -> Result<(), String> {
+    let path = path
+        .to_str()
+        .ok_or_else(|| "provider-recovery-client-path-invalid".to_string())?;
+    if !run_bounded(Path::new("/usr/bin/open"), &["-a", path])? {
+        return Err("provider-recovery-launch-failed".into());
+    }
+    std::thread::sleep(Duration::from_secs(1));
+    match runtime_observation(provider, 0) {
+        Some(true) => Ok(()),
+        Some(false) => Err("provider-client-runtime-not-observed-after-restart".into()),
+        None => Err("provider-client-runtime-evidence-unavailable-after-restart".into()),
+    }
+}
+
+/// Invoke OneDrive's documented Files On-Demand command while its sync app is stopped, then
+/// always restart the verified app. This changes only the selected local materialization state.
+#[cfg(all(target_os = "macos", not(coverage)))]
+pub(crate) fn unpin_onedrive_local_copy(path: &Path) -> Result<(), String> {
+    let app = app_path(CloudProvider::Onedrive)?;
+    let executable = app.join("Contents/MacOS/OneDrive");
+    if !executable.is_file() {
+        return Err("onedrive-files-on-demand-command-unavailable".into());
+    }
+    let path = path
+        .to_str()
+        .ok_or_else(|| "cloud-local-eviction-path-not-unicode".to_string())?;
+    if !require_runtime_observation(CloudProvider::Onedrive, 0)? {
+        return Err("provider-client-runtime-not-observed-before-eviction".into());
+    }
+    request_quit("OneDrive")?;
+    let operation = (|| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while require_runtime_observation(CloudProvider::Onedrive, 0)? {
+            if Instant::now() >= deadline {
+                return Err("provider-recovery-quit-timeout".into());
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        run_bounded_output(&executable, &["/getpin", path])?;
+        run_bounded_output(&executable, &["/unpin", path])
+    })();
+    let restart = launch_provider(CloudProvider::Onedrive, &app);
+    restart.and(operation)
 }
 
 #[cfg(not(coverage))]
@@ -272,13 +382,7 @@ pub fn recover_provider_client_with_options(
             std::thread::sleep(Duration::from_millis(250));
         }
 
-        let path_string = path
-            .to_str()
-            .ok_or_else(|| "provider-recovery-client-path-invalid".to_string())?;
-        if !run_bounded(Path::new("/usr/bin/open"), &["-a", path_string])? {
-            return Err("provider-recovery-launch-failed".into());
-        }
-        std::thread::sleep(Duration::from_secs(1));
+        launch_provider(provider, &path)?;
         let post_runtime_observed = runtime_observation(provider, observed_at_ms);
         let blockers = post_runtime_blockers(post_runtime_observed);
         Ok(ProviderRecoveryOutput {
@@ -339,6 +443,17 @@ mod tests {
         .unwrap();
         assert_eq!(json["cloud_write_executed"], false);
         assert_eq!(json["source_eviction_executed"], false);
+    }
+
+    #[cfg(all(target_os = "macos", not(coverage)))]
+    #[test]
+    fn onedrive_command_rejects_failure_text_even_with_zero_exit() {
+        assert!(onedrive_command_succeeded(true, b""));
+        assert!(!onedrive_command_succeeded(
+            true,
+            b"Failed operation=2 status=-2"
+        ));
+        assert!(!onedrive_command_succeeded(false, b""));
     }
 
     #[cfg(all(not(target_os = "macos"), not(coverage)))]

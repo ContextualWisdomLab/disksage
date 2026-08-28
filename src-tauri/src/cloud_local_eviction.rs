@@ -927,10 +927,15 @@ fn observe_file_provider_icloud_state(
     }
     let output = crate::provider_sync::file_providerctl_status(path)?;
     let status = crate::provider_sync::parse_file_providerctl_item_status(&output, observed_bytes)?;
-    Ok(file_provider_icloud_state(
+    let mut state = file_provider_icloud_state(
         is_ubiquitous || root.provider == CloudProvider::Onedrive,
         &status,
-    ))
+    );
+    if root.provider == CloudProvider::Onedrive {
+        state.allows_eviction =
+            Some(crate::provider_recovery::onedrive_files_on_demand_available());
+    }
+    Ok(state)
 }
 
 #[cfg(all(target_os = "macos", not(coverage)))]
@@ -1079,85 +1084,11 @@ fn validate_approval(
 }
 
 #[cfg(all(target_os = "macos", not(coverage)))]
-fn request_native_file_provider_eviction(path: &Path) -> Result<(), String> {
-    use block2::RcBlock;
-    use objc2::rc::{autoreleasepool, Retained};
-    use objc2_file_provider::{NSFileProviderDomain, NSFileProviderManager};
-    use objc2_foundation::{NSError, NSString, NSURL};
-    use std::ptr::NonNull;
-    use std::sync::mpsc;
-
-    let path = path
-        .to_str()
-        .ok_or_else(|| "cloud-local-eviction-path-not-unicode".to_string())?;
-    let (sender, receiver) = mpsc::channel();
-    autoreleasepool(|_| {
-        let url = NSURL::fileURLWithPath(&NSString::from_str(path));
-        let identify = RcBlock::new(move |item, domain, error: *mut NSError| {
-            if let Some(error) = unsafe { Retained::retain(error) } {
-                let _ = sender.send(Err(error.localizedDescription().to_string()));
-                return;
-            }
-            let Some(item) = (unsafe { Retained::retain(item) }) else {
-                let _ = sender.send(Err("file-provider-item-identity-unavailable".into()));
-                return;
-            };
-            let Some(domain_identifier) = (unsafe { Retained::retain(domain) }) else {
-                let _ = sender.send(Err("file-provider-domain-identity-unavailable".into()));
-                return;
-            };
-            let domains_sender = sender.clone();
-            let domains = RcBlock::new(
-                move |registered: NonNull<objc2_foundation::NSArray<NSFileProviderDomain>>,
-                      error: *mut NSError| {
-                    if let Some(error) = unsafe { Retained::retain(error) } {
-                        let _ = domains_sender.send(Err(error.localizedDescription().to_string()));
-                        return;
-                    }
-                    let registered = unsafe { registered.as_ref() };
-                    let Some(domain) = registered.iter().find(|candidate| unsafe {
-                        candidate.identifier().isEqualToString(&domain_identifier)
-                    }) else {
-                        let _ =
-                            domains_sender.send(Err("file-provider-domain-not-registered".into()));
-                        return;
-                    };
-                    let Some(manager) =
-                        (unsafe { NSFileProviderManager::managerForDomain(&domain) })
-                    else {
-                        let _ =
-                            domains_sender.send(Err("file-provider-manager-unavailable".into()));
-                        return;
-                    };
-                    let eviction_sender = domains_sender.clone();
-                    let completion = RcBlock::new(move |error: *mut NSError| {
-                        let result = unsafe { Retained::retain(error) }
-                            .map(|error| Err(error.localizedDescription().to_string()))
-                            .unwrap_or(Ok(()));
-                        let _ = eviction_sender.send(result);
-                    });
-                    unsafe {
-                        manager.evictItemWithIdentifier_completionHandler(&item, &completion)
-                    };
-                },
-            );
-            unsafe { NSFileProviderManager::getDomainsWithCompletionHandler(&domains) };
-        });
-        unsafe {
-            NSFileProviderManager::getIdentifierForUserVisibleFileAtURL_completionHandler(
-                &url, &identify,
-            )
-        };
-    });
-    receiver
-        .recv_timeout(Duration::from_secs(30))
-        .map_err(|_| "file-provider-eviction-timeout".to_string())?
-}
-
-#[cfg(all(target_os = "macos", not(coverage)))]
 fn request_native_icloud_eviction(root: &CloudRoot, path: &Path) -> Result<(), String> {
     if root.provider == CloudProvider::Onedrive {
-        return request_native_file_provider_eviction(path);
+        let sync = crate::provider_global_sync::inspect_new_copy_admission(root.provider)?;
+        crate::provider_global_sync::require_new_copy_admission(&sync)?;
+        return crate::provider_recovery::unpin_onedrive_local_copy(path);
     }
     if root.provider != CloudProvider::Icloud {
         return Err("cloud-local-eviction-provider-unsupported".into());

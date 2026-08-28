@@ -8,9 +8,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
-- Release uploaded, current, idle OneDrive files from local storage through their registered
-  macOS File Provider domain while retaining the cloud item and the existing fingerprint-bound
-  approval, immutable receipt, and post-action verification contract.
+- Release uploaded, current, idle OneDrive files through Microsoft's signed Files On-Demand
+  command only after the provider-wide queue is quiet, then restart sync and verify allocation
+  reduction while retaining the cloud item and the existing approval and receipt contract.
 - Partition iCloud eviction manifests automatically: keep freshly verified, fully uploaded local
   copies in the approval batch and exclude sync-incomplete items without exposing their paths.
 - Add an explicit `--execute --permanent` development-artifact mode that physically removes only
