@@ -43,7 +43,7 @@ pub const MAX_NETWORK_CANDIDATES: usize = 64;
 pub const MAX_CATEGORY_RECORDS: usize = 4_096;
 /// Exact deletion is deliberately capped so a single runtime invocation remains bounded on every
 /// supported host, including Windows command-line limits and 200-byte volume/network names.
-const MAX_EXACT_DELETE_CANDIDATES: usize = 64;
+const MAX_EXACT_DELETE_CANDIDATES: usize = 256;
 
 /// Runtime target kinds supported by the orphan reclaim engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1412,6 +1412,14 @@ mod tests {
         let (total, candidates) = classify_container_candidates(&records).unwrap();
         assert_eq!(total, 2);
         assert_eq!(candidates.len(), 1);
+    }
+
+    #[test]
+    fn docker_container_plain_name_is_one_name() {
+        let output = format!(
+            "{{\"ID\":\"{DOCKER_ID_A}\",\"State\":\"exited\",\"Names\":\"web\"}}"
+        );
+        assert_eq!(parse_container_records(&output).unwrap()[0].names, ["web"]);
     }
 
     #[test]
