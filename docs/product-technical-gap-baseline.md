@@ -2,11 +2,28 @@
 
 **Snapshot:** 2026-08-28 (Asia/Seoul)
 **Repository heads at snapshot:** `main` `79067c1160ddedf7fc962cbf8067ce7e83c4564a`, PR #267
-`cdda4f9fdc4001f588d61ef3a152e5f4f418262e`, and the current open queue (41 PRs: 20 ready, 21
+`ea88b4e387629dce73423b2efc9eb6773821d68d`, and the current open queue (41 PRs: 20 ready, 21
 draft); hosted checks and protected review remain authoritative, and no merge is claimed from
 queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
+
+## 2026-08-28 container cleanup loop evidence
+
+- On Podman 5.8.2 (the local `docker` wrapper), the live inventory contained two running
+  containers (`buildx_buildkit_default` and `accounting-information-platform-test-postgres`), one
+  default `podman` network, nine local volumes, and no stopped containers. The running Postgres
+  container is mounted on the previously anonymous volume
+  `bed31c452be785c238f9cb4c53cb04bc85e3233f0f05450327161c996778a349`; that volume was retained.
+- `docker container prune --force`, `docker network prune --force`, `docker image prune --force`,
+  `podman image prune --all --force`, and `podman system prune --all --force` removed zero items
+  (`Total reclaimed space: 0B`). All seven detached, named compose volumes remain protected as
+  data-bearing project stores; BuildKit state remains attached and protected. No source, provider
+  database, or cloud object was deleted.
+- The local Rust CLI probe was stopped before completion because its fresh Cargo target consumed
+  emergency headroom. `cargo clean --manifest-path src-tauri/Cargo.toml` removed the generated
+  target; the latest APFS observation was about 4.3 GiB available. This is volatile host evidence,
+  not a deletion guarantee.
 
 ## Current product contract
 
