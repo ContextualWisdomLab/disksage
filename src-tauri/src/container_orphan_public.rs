@@ -60,7 +60,8 @@ pub fn sanitize_plan(mut plan: ContainerOrphanPlan) -> ContainerOrphanPlan {
 }
 
 /// Keeps the mutation receipt useful for authorization/accounting without returning arbitrary
-/// runtime stdout/stderr, local executable paths, or runtime scope names. A non-zero multi-target
+/// runtime stdout/stderr, local executable paths, runtime scope names, or capacity observations
+/// whose filesystem has not been proven to contain the runtime store. A non-zero multi-target
 /// remove command cannot prove that no target was removed, so its public receipt keeps a stable
 /// indeterminate-outcome code instead of presenting the sanitized runtime failure as a clean
 /// no-mutation result. Callers must refresh runtime evidence before making a new decision.
@@ -71,6 +72,13 @@ pub fn sanitize_execution(
     execution.command = public_command_shape(execution.category, true);
     execution.stdout.clear();
     execution.stderr.clear();
+    // The reclaim engine currently has no authoritative runtime-store filesystem path for native
+    // Docker, Colima, or Podman. Its internal current-working-directory snapshot therefore cannot
+    // support a customer-facing capacity attribution. Fail closed until store-bound evidence
+    // exists rather than serializing an unrelated host-volume delta as reclaim evidence.
+    execution.before_available_bytes = None;
+    execution.after_available_bytes = None;
+    execution.observed_available_gain_bytes = None;
     if execution.status_code != 0 {
         execution.stderr = INDETERMINATE_PRUNE_OUTCOME.to_string();
     }
@@ -130,7 +138,7 @@ mod tests {
     }
 
     #[test]
-    fn public_execution_never_returns_runtime_output_or_local_identity() {
+    fn public_execution_never_returns_runtime_output_local_identity_or_unbound_capacity() {
         let secret_binary = "/Users/customer/private/bin/docker";
         let secret_scope = "customer-colima-secret";
         let execution = ContainerOrphanPruneExecution {
@@ -152,9 +160,9 @@ mod tests {
             output_truncated: false,
             executed: false,
             executed_at_ms: 1,
-            before_available_bytes: None,
-            after_available_bytes: None,
-            observed_available_gain_bytes: None,
+            before_available_bytes: Some(1_000),
+            after_available_bytes: Some(1_200),
+            observed_available_gain_bytes: Some(200),
             rationale: "Reviewed exact evidence.".into(),
         };
         let sanitized = sanitize_execution(execution);
@@ -163,6 +171,9 @@ mod tests {
         assert_eq!(sanitized.command, vec!["container", "rm", "<candidate-set>"]);
         assert!(sanitized.stdout.is_empty());
         assert_eq!(sanitized.stderr, INDETERMINATE_PRUNE_OUTCOME);
+        assert_eq!(sanitized.before_available_bytes, None);
+        assert_eq!(sanitized.after_available_bytes, None);
+        assert_eq!(sanitized.observed_available_gain_bytes, None);
         assert!(!json.contains(secret_binary));
         assert!(!json.contains(secret_scope));
     }
