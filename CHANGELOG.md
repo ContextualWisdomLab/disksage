@@ -8,6 +8,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Add an explicit `--execute --permanent` development-artifact mode that physically removes only
+  a freshly rescanned, inactive, identity-matched generated directory and journals the irreversible
+  outcome; the default remains reversible OS Trash.
+- Reclaim Superset's isolated HTTP and compiled-code caches while retaining cookies, local and
+  session storage, IndexedDB, preferences, and historical network diagnostics.
 - Reclaim only VS Code, VS Code Insiders/Server, and Cursor extension directories named by each
   editor's native `.obsolete` lifecycle metadata, with bounded manifests, symlink rejection,
   identity revalidation, Trash, and journaling.
@@ -50,6 +55,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - Stop descending once a marker-validated development artifact is found, avoiding a second full
   traversal of large nested `node_modules`, `target`, and generated index trees before cleanup.
+- Keep a partially failed permanent artifact deletion in its private staging location; never restore
+  a partially removed tree to the live path as if it were intact.
 - Require complete inactive-use evidence for every development artifact immediately before Trash,
   including `node_modules`, Rust targets, generated indexes, and editor-obsolete extensions.
 - Resolve macOS cache roots from the effective XDG/UV environment and observed native locations:
@@ -117,6 +124,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Use macOS `NSFileManager` for reversible Trash moves so cleanup does not wait on Finder
+  AppleEvents or inherit a stalled Finder copy queue.
 - Permit fully current-user-owned real children of the shared Unix temporary root while retaining
   fail-closed protection for the root, symlinks, mixed ownership, unreadable trees, and oversized
   ownership observations.

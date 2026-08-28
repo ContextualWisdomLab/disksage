@@ -9,6 +9,13 @@ use crate::scanner;
 const ARTIFACT_MANIFEST_BUDGET: Duration = Duration::from_secs(3);
 const ARTIFACT_MANIFEST_MAX_RECORDS: usize = 250_000;
 const VSCODE_OBSOLETE_METADATA_MAX_BYTES: u64 = 1024 * 1024;
+// Reversible Trash cleanup backs an interactive path, so an incomplete active-use probe must fail
+// closed without inheriting the longer latency budget reserved for irreversible deletion.
+const ARTIFACT_REVERSIBLE_ACTIVE_USE_TIMEOUT_MS: u64 = crate::reclaim::ACTIVE_USE_PROBE_TIMEOUT_MS;
+// Recursive lsof must enumerate the artifact tree. Real Python environments exceeded the generic
+// 2-second probe while completing in roughly 3 seconds, so the irreversible boundary owns a
+// longer operational timeout instead of silently weakening the active-use gate.
+const ARTIFACT_PERMANENT_ACTIVE_USE_TIMEOUT_MS: u64 = 30_000;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DevArtifact {
@@ -397,6 +404,37 @@ pub fn clean_artifacts(
     journal_path: &Path,
     now_ms: u64,
 ) -> Vec<DevArtifactCleanResult> {
+    clean_artifacts_with_disposition(requests, root, min_age_days, journal_path, now_ms, false)
+}
+
+/// Permanently delete only unchanged, inactive development artifacts after an explicit caller
+/// approval. This provides physical reclaim without requiring a global Trash-empty operation.
+pub fn permanently_delete_artifacts(
+    requests: &[DevArtifact],
+    root: &Path,
+    min_age_days: u64,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Vec<DevArtifactCleanResult> {
+    clean_artifacts_with_disposition(requests, root, min_age_days, journal_path, now_ms, true)
+}
+
+fn artifact_active_use_timeout_ms(permanent: bool) -> u64 {
+    if permanent {
+        ARTIFACT_PERMANENT_ACTIVE_USE_TIMEOUT_MS
+    } else {
+        ARTIFACT_REVERSIBLE_ACTIVE_USE_TIMEOUT_MS
+    }
+}
+
+fn clean_artifacts_with_disposition(
+    requests: &[DevArtifact],
+    root: &Path,
+    min_age_days: u64,
+    journal_path: &Path,
+    now_ms: u64,
+    permanent: bool,
+) -> Vec<DevArtifactCleanResult> {
     let current = find_artifacts(root, min_age_days, now_ms);
     requests
         .iter()
@@ -426,37 +464,48 @@ pub fn clean_artifacts(
             }
 
             let active_use = crate::git_worktree::active_use_evidence(
-                    Path::new(&request.path),
-                    crate::reclaim::ACTIVE_USE_PROBE_TIMEOUT_MS,
-                    crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
-                    true,
-                );
-                if !active_use.assessed
-                    || !active_use.evidence_complete
-                    || active_use.error.is_some()
-                    || active_use.results_truncated
-                {
-                    return DevArtifactCleanResult {
-                        path: request.path.clone(),
-                        ok: false,
-                        error: "development artifact active-use evidence incomplete; rescan before cleanup".into(),
-                    };
-                }
-                if active_use.active {
-                    return DevArtifactCleanResult {
-                        path: request.path.clone(),
-                        ok: false,
-                        error: "development artifact is active; close the using process before cleanup".into(),
-                    };
-                }
-
-            match crate::safety::trash_delete_if_identity(
                 Path::new(&request.path),
-                &request.object_id,
-                request.bytes,
-                journal_path,
-                now_ms,
-            ) {
+                artifact_active_use_timeout_ms(permanent),
+                crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
+                true,
+            );
+            if !active_use.assessed
+                || !active_use.evidence_complete
+                || active_use.error.is_some()
+                || active_use.results_truncated
+            {
+                return DevArtifactCleanResult {
+                    path: request.path.clone(),
+                    ok: false,
+                    error: "development artifact active-use evidence incomplete; rescan before cleanup".into(),
+                };
+            }
+            if active_use.active {
+                return DevArtifactCleanResult {
+                    path: request.path.clone(),
+                    ok: false,
+                    error: "development artifact is active; close the using process before cleanup".into(),
+                };
+            }
+
+            let mutation = if permanent {
+                crate::safety::permanent_delete_dir_if_identity(
+                    Path::new(&request.path),
+                    &request.object_id,
+                    request.bytes,
+                    journal_path,
+                    now_ms,
+                )
+            } else {
+                crate::safety::trash_delete_if_identity(
+                    Path::new(&request.path),
+                    &request.object_id,
+                    request.bytes,
+                    journal_path,
+                    now_ms,
+                )
+            };
+            match mutation {
                 Ok(()) => DevArtifactCleanResult {
                     path: request.path.clone(),
                     ok: true,
@@ -622,6 +671,25 @@ mod tests {
         assert!(
             !journal.exists(),
             "stale identity must not create a journal"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn permanent_cleanup_physically_removes_an_unchanged_inactive_artifact() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifact = project(tmp.path(), "app", "package.json", "node_modules");
+        let candidates = find_artifacts(tmp.path(), 0, u64::MAX);
+        let journal = tmp.path().join("journal.jsonl");
+
+        let results = permanently_delete_artifacts(&candidates, tmp.path(), 0, &journal, 1);
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].ok, "{}", results[0].error);
+        assert!(!artifact.exists());
+        assert_eq!(
+            crate::safety::journal_recent(&journal, 1)[0].op,
+            "permanent_generated_directory_delete"
         );
     }
 }

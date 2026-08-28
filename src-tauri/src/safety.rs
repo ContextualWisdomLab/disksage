@@ -72,8 +72,9 @@ pub(crate) fn is_shared_temp_path(_path: &Path) -> bool {
 }
 
 /// Returns true only when every object below a shared temporary child belongs to this user.
-/// Symlinks and unreadable trees fail closed so a shared system directory cannot become a
-/// broad deletion authority.
+/// Symlink roots and unreadable trees fail closed so a shared system directory cannot become a
+/// broad deletion authority. Owned symlink children are safe because traversal uses
+/// `symlink_metadata` and never descends through them.
 #[cfg(unix)]
 pub(crate) fn is_user_owned_shared_temp_tree(path: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
@@ -93,7 +94,7 @@ pub(crate) fn is_user_owned_shared_temp_tree(path: &Path) -> bool {
         let Ok(metadata) = std::fs::symlink_metadata(&current) else {
             return false;
         };
-        if metadata.file_type().is_symlink() || metadata.uid() != expected_uid {
+        if metadata.uid() != expected_uid {
             return false;
         }
         if metadata.is_dir() {
@@ -398,7 +399,7 @@ pub fn trash_delete(
         outcome: "pending".into(),
     };
     journal_append(journal_path, &entry)?;
-    match trash::delete(path) {
+    match platform_trash_delete(path) {
         Ok(()) => {
             entry.outcome = "ok".into();
             journal_append(journal_path, &entry)?;
@@ -410,6 +411,19 @@ pub fn trash_delete(
             Err(SafetyError::Trash(e.to_string()))
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+fn platform_trash_delete(path: &Path) -> Result<(), trash::Error> {
+    use trash::macos::{DeleteMethod, TrashContextExtMacos};
+    let mut context = trash::TrashContext::new();
+    context.set_delete_method(DeleteMethod::NsFileManager);
+    context.delete(path)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn platform_trash_delete(path: &Path) -> Result<(), trash::Error> {
+    trash::delete(path)
 }
 
 static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -463,6 +477,24 @@ fn restore_staged_if_source_absent(
             staging_dir.display()
         )
     })?;
+    Ok(())
+}
+
+fn remove_staged_permanently_with<F>(
+    staged: &Path,
+    staging_dir: &Path,
+    remove: F,
+) -> Result<(), SafetyError>
+where
+    F: FnOnce(&Path) -> std::io::Result<()>,
+{
+    if let Err(error) = remove(staged) {
+        return Err(SafetyError::Trash(format!(
+            "permanent deletion failed; staged object retained at {}: {error}",
+            staged.display()
+        )));
+    }
+    let _ = std::fs::remove_dir(staging_dir);
     Ok(())
 }
 
@@ -542,7 +574,7 @@ pub fn trash_delete_if_identity(
                 ))),
             };
         }
-        if let Err(error) = trash::delete(&staged) {
+        if let Err(error) = platform_trash_delete(&staged) {
             return match restore_staged_if_source_absent(path, &staged, &staging_dir) {
                 Ok(()) => Err(SafetyError::Trash(error.to_string())),
                 Err(restore_error) => {
@@ -551,6 +583,101 @@ pub fn trash_delete_if_identity(
             };
         }
         Ok(())
+    })();
+    entry.outcome = match &result {
+        Ok(()) => "ok".into(),
+        Err(error) => format!("error:{error}"),
+    };
+    journal_append(journal_path, &entry)?;
+    result
+}
+
+/// Permanently remove one unchanged, current-user-owned generated directory.
+///
+/// Callers must perform their domain-specific regenerability and active-use checks first. This
+/// boundary rechecks path safety and filesystem identity, journals both intent and outcome, and
+/// never follows a symbolic-link root.
+pub fn permanent_delete_dir_if_identity(
+    path: &Path,
+    expected_object_id: &str,
+    bytes: u64,
+    journal_path: &Path,
+    now_ms: u64,
+) -> Result<(), SafetyError> {
+    if path
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(SafetyError::Protected(path.to_path_buf()));
+    }
+    let guard_path =
+        strip_verbatim(&std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
+    let shared_temp_authorized =
+        is_shared_temp_path(&guard_path) && is_user_owned_shared_temp_tree(&guard_path);
+    if !shared_temp_authorized && is_protected(&guard_path) {
+        return Err(SafetyError::Protected(path.to_path_buf()));
+    }
+    let metadata =
+        std::fs::symlink_metadata(path).map_err(|error| SafetyError::Trash(error.to_string()))?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(SafetyError::Trash(
+            "permanent deletion requires a real generated directory".into(),
+        ));
+    }
+    let actual = filesystem_object_id(path)
+        .map_err(|error| SafetyError::Trash(format!("object identity unavailable: {error}")))?;
+    if actual != expected_object_id {
+        return Err(SafetyError::Trash(
+            "generated directory identity changed; rescan before deletion".into(),
+        ));
+    }
+    let file_name = path.file_name().ok_or_else(|| {
+        SafetyError::Trash("generated directory has no file name; rescan before deletion".into())
+    })?;
+    let staging_dir = create_private_staging_dir(path, now_ms)
+        .map_err(|error| SafetyError::Trash(error.to_string()))?;
+    let staged = staging_dir.join(file_name);
+    let mut entry = JournalEntry {
+        ts_ms: now_ms,
+        op: "permanent_generated_directory_delete".into(),
+        path: path.to_string_lossy().into_owned(),
+        bytes,
+        outcome: "pending".into(),
+    };
+    if let Err(error) = journal_append(journal_path, &entry) {
+        let _ = std::fs::remove_dir(&staging_dir);
+        return Err(error);
+    }
+    let result = (|| -> Result<(), SafetyError> {
+        if let Err(error) = std::fs::rename(path, &staged) {
+            let _ = std::fs::remove_dir(&staging_dir);
+            return Err(SafetyError::Trash(format!(
+                "atomic staging move failed: {error}"
+            )));
+        }
+        let moved_id = filesystem_object_id(&staged).map_err(|error| {
+            let restore = restore_staged_if_source_absent(path, &staged, &staging_dir);
+            match restore {
+                Ok(()) => SafetyError::Trash(format!(
+                    "staged generated directory identity unavailable: {error}"
+                )),
+                Err(restore_error) => SafetyError::Trash(format!(
+                    "staged generated directory identity unavailable: {error}; {restore_error}"
+                )),
+            }
+        })?;
+        if moved_id != expected_object_id {
+            return match restore_staged_if_source_absent(path, &staged, &staging_dir) {
+                Ok(()) => Err(SafetyError::Trash(
+                    "atomic staging move changed the generated directory; nothing was deleted"
+                        .into(),
+                )),
+                Err(restore_error) => Err(SafetyError::Trash(format!(
+                    "atomic staging move changed the generated directory; {restore_error}"
+                ))),
+            };
+        }
+        remove_staged_permanently_with(&staged, &staging_dir, |path| std::fs::remove_dir_all(path))
     })();
     entry.outcome = match &result {
         Ok(()) => "ok".into(),
@@ -818,6 +945,22 @@ mod tests {
         assert!(is_protected(shared_temp_root_path()));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn owned_symlink_child_does_not_block_exact_shared_temp_tree_authority() {
+        use std::os::unix::fs::symlink;
+
+        let Ok(tmp) = tempfile::tempdir_in(shared_temp_root_path()) else {
+            return;
+        };
+        let target = tmp.path().join("target.bin");
+        let link = tmp.path().join("runtime-link");
+        std::fs::write(&target, b"owned").unwrap();
+        symlink(&target, &link).unwrap();
+
+        assert!(is_user_owned_shared_temp_tree(tmp.path()));
+    }
+
     #[cfg(windows)]
     #[test]
     fn windows_guard_follows_system_root_env() {
@@ -933,6 +1076,56 @@ mod tests {
         assert!(victim.exists());
         assert!(original.exists());
         assert!(journal_recent(&jp, 10).is_empty());
+    }
+
+    #[test]
+    fn permanent_generated_directory_delete_rechecks_identity_and_journals() {
+        let tmp = tempfile::tempdir().unwrap();
+        let generated = tmp.path().join("node_modules");
+        std::fs::create_dir(&generated).unwrap();
+        std::fs::write(generated.join("generated.bin"), b"generated").unwrap();
+        let object_id = filesystem_object_id(&generated).unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+
+        permanent_delete_dir_if_identity(&generated, &object_id, 9, &journal, 1).unwrap();
+
+        assert!(!generated.exists());
+        let entries = journal_recent(&journal, 2);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].op, "permanent_generated_directory_delete");
+        assert_eq!(entries[0].outcome, "ok");
+        assert_eq!(entries[1].outcome, "pending");
+        assert!(std::fs::read_dir(tmp.path()).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".disksage-trash-")));
+    }
+
+    #[test]
+    fn permanent_delete_does_not_restore_a_partially_removed_staged_tree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("node_modules");
+        let staging_dir = tmp.path().join(".disksage-trash");
+        let staged = staging_dir.join("node_modules");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("removed.bin"), b"removed").unwrap();
+        std::fs::write(source.join("retained.bin"), b"retained").unwrap();
+        std::fs::create_dir(&staging_dir).unwrap();
+        std::fs::rename(&source, &staged).unwrap();
+
+        let result = remove_staged_permanently_with(&staged, &staging_dir, |path| {
+            std::fs::remove_file(path.join("removed.bin")).unwrap();
+            Err(std::io::Error::other("simulated recursive delete failure"))
+        });
+
+        assert!(result.is_err());
+        assert!(
+            !source.exists(),
+            "a partial tree must not be restored as live"
+        );
+        assert!(!staged.join("removed.bin").exists());
+        assert!(staged.join("retained.bin").exists());
     }
 
     #[test]

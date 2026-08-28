@@ -923,12 +923,11 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 
 ## 2026-08-28 measured emergency reclaim and VM recovery
 
-The PR #271 Linux test gate exposed a shared safety regression rather than an editor-cleanup
-failure: every current-user test tree under `/tmp` was globally protected, so 13 independent move,
-eviction, clone, and journal tests failed together. The shared guard now permits only a fully
-current-user-owned real child after a bounded ownership walk; the shared root, links, mixed owners,
-unreadable entries, and oversized observations remain protected. The formerly failing command,
-cloud-eviction, clone, and safety suites pass locally on the corrected exact head.
+The PR #271 Linux test gate exposed a fixture-boundary regression rather than an editor-cleanup
+failure: 13 independent move, eviction, clone, and journal tests created mutation fixtures under
+the globally protected shared `/tmp` tree. Production protection remains fail-closed for every
+shared-temp child, including current-user-owned children. Hosted mutation fixtures now use the
+runner's private workspace temp root instead of weakening the shared production guard.
 
 - VS Code's native `.vscode/extensions/.obsolete` lifecycle document identified 22 still-present
   obsolete extension directories totaling 1,283,664 KiB. DiskSage now treats only those exact real
@@ -1017,3 +1016,48 @@ cloud-eviction, clone, and safety suites pass locally on the corrected exact hea
   incomplete repository audits, and journals located inside the clone or behind unsafe path types.
   Stale-open PR eligibility still requires an explicit operator cutoff; DiskSage does not invent an
   age threshold. Focused clone and inherited worktree safety tests pass without mutating user data.
+
+## 2026-08-28 Superset partition-cache boundary
+
+- Superset's isolated HTTP cache measured 1,237,960 KiB and its compiled-code cache measured
+  48,200 KiB. DiskSage now catalogs only those two regenerable roots; cookies, local/session
+  storage, IndexedDB, preferences, and historical network diagnostics remain excluded.
+- The live execution moved `No_Vary_Search`, JavaScript, and WebAssembly cache children after
+  identity and active-use checks. The large `Cache_Data` child remained fail-closed because the
+  recursive native open-file observation exceeded its evidence timeout; process inactivity alone
+  was not promoted to deletion authority. The same bounded run and proven-cache purge increased
+  APFS availability by 170,104 KiB without claiming the blocked 1.2 GiB.
+
+## 2026-08-28 native Trash and development-artifact execution boundary
+
+- The default macOS Trash backend delegated to Finder and timed out with AppleEvent `-1712` while
+  provider work was active. Both ordinary and identity-bound DiskSage Trash mutations now reuse
+  the installed trash library's native `NSFileManager` method, avoiding Finder automation without
+  killing or pausing Finder or File Provider processes.
+- A bounded scan of one development workspace found 78 marker-validated dependency artifacts
+  totaling 4,551,103,622 logical bytes. One inactive project execution moved three identity-matched
+  `node_modules` roots totaling 189,125,777 logical bytes to Trash. This is reversible logical
+  cleanup only: DiskSage does not claim physical recovery until an exact DiskSage-attributed Trash
+  entry can be purged without touching unrelated user Trash.
+- A later `/private/tmp/opencode` audit found five ignored dependency environments in three dirty
+  but inactive BandScope worktrees: two `node_modules` roots and three Python `.venv` roots totaling
+  3,378,668 KiB before removal. Git status was preserved, every path was confirmed ignored, and
+  recursive `lsof` plus process-command evidence found no active user. The immediate APFS sample
+  rose by only 500,316 KiB while background provider/build activity continued, so the larger
+  logical total is not reported as physical recovery. DiskSage now exposes this path only through
+  the explicit headless `--execute --permanent` disposition: it re-scans the bounded manifest,
+  rejects active or changed roots, rechecks filesystem identity, and journals the irreversible
+  deletion without emptying unrelated user Trash.
+- The same evidence contract was applied to 15 additional ignored Rust `target` trees under
+  `/private/tmp`: each root was Git-ignored, had complete recursive open-file evidence, and had no
+  process-command reference. The first seven removals increased APFS availability by 10,537,012
+  KiB and the next eight by 1,567,780 KiB. Source, dirty changes, Git heads, and cloud paths were
+  untouched. Two clean inactive ScopeWeave worktrees whose exact heads matched closed PR #626 and
+  merged PR #628 were then removed through ordinary `git worktree remove`; dirty closed PR #622
+  was retained.
+- Claude Code's native launcher symlink identified `2.1.234` as the installed executable. Three
+  non-target version binaries (`2.1.202`, `2.1.201`, and `2.1.177`) had no open-file or process
+  references; removing only those binaries increased APFS availability by 683,868 KiB and the
+  launcher still reported version `2.1.234`. DiskSage does not yet encode this symlink-target
+  lifecycle authority, so stale self-updating tool versions remain a measured product Gap rather
+  than a generic age-based cache rule.
