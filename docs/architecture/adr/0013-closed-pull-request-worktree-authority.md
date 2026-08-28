@@ -15,8 +15,9 @@ unsupported heuristics. GitHub CLI exposes structured pull-request state and hea
 When the operator includes closed pull requests, DiskSage obtains bounded structured evidence from
 the authenticated GitHub CLI. A clean, inactive secondary worktree is eligible only when:
 
-1. the PR state is exactly `CLOSED` or `MERGED`, obtained from separate bounded queries so neither
-   lifecycle can crowd the other out;
+1. the PR state is exactly `CLOSED` or `MERGED`; merged evidence is queried only for branch names
+   registered in the current Git worktree list, so repository-wide merged history cannot crowd the
+   bounded authority set; all forge queries share one overall timeout budget;
 2. the PR is from the same repository, not a fork;
 3. the local `refs/heads/<headRefName>` and exact worktree HEAD equal the reported ref and OID;
 4. the worktree is not primary, selected, locked, prunable, dirty, active, or a retained tip; and

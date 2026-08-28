@@ -153,10 +153,7 @@ fn execute(args: Args) -> Result<RemovalOutput, String> {
     let options = git_worktree::GitWorktreeAuditOptions::default();
     let audited_at_ms = cloud::system_now_ms();
     let closed_heads = if args.include_closed_pull_requests {
-        git_worktree::github_closed_pull_request_heads(
-            &args.repository_root,
-            options.command_timeout_ms,
-        )?
+        git_worktree::github_closed_pull_request_heads_with_options(&args.repository_root, options)?
     } else {
         Default::default()
     };

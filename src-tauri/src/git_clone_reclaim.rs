@@ -301,7 +301,7 @@ pub fn plan_git_clone_reclaim(
     generated_at_ms: u64,
 ) -> Result<GitCloneReclaimPlan, String> {
     let closed = if include_closed_pull_requests {
-        git_worktree::github_closed_pull_request_heads(repository_root, options.command_timeout_ms)?
+        git_worktree::github_closed_pull_request_heads_with_options(repository_root, options)?
     } else {
         ClosedPullRequestHeads::new()
     };

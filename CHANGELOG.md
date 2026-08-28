@@ -49,7 +49,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   and preserve fork, detached, dirty, active, or changed worktrees.
 - Reclaim clean, inactive worktrees whose exact branch and head match a same-repository merged pull
   request even when squash or rebase history does not retain that head. Closed-unmerged and merged
-  evidence use separate bounded GitHub queries and are refreshed before removal.
+  evidence use separate bounded GitHub queries, and merged lookup is scoped to branches currently
+  registered as worktrees so repositories with long merged histories remain auditable. All lookup
+  calls consume one shared timeout budget rather than multiplying the configured wait per branch.
 - Exclude macOS Photos library packages from exact-duplicate traversal and reject a managed Photos
   library selected as the scan root. External files remain auditable without interpreting Photos'
   private databases and derivatives as independent duplicate-delete candidates.
