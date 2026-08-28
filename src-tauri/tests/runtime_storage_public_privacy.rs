@@ -23,6 +23,8 @@ fn runtime_storage_execution_serialization_omits_guest_output() {
         executed: false,
         executed_at_ms: 42,
         rationale: "operator approved trim".into(),
+        volume_comparison: None,
+        volume_evidence_error: None,
     };
 
     let json = serde_json::to_string(&execution).expect("runtime storage execution serializes");

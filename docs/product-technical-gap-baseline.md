@@ -920,3 +920,22 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   `opencode-agent` verdict had been posted. A review-only `@opencode-agent` dispatch request was
   recorded on the PR; no self-approval, bypass, or merge was attempted. The remaining native build
   and test jobs were still running at this observation, so release readiness is not claimed.
+
+## 2026-08-28 measured emergency reclaim and VM recovery
+
+- A bounded inventory found about 146 GB under `/private/tmp`, dominated by isolated Cargo and
+  coverage target roots. DiskSage removed only current-user-owned generated roots after signature,
+  open-file, and process-reference checks; `/private/tmp` fell to about 20 GB and APFS available
+  space rose from about 3.6 GiB to 53 GiB after additional inactive dependency/build roots were
+  removed. Source trees, active worktrees, provider data, and user documents were preserved.
+- The running Podman guest initially failed its SSH probe with EOF and its journal reported I/O
+  errors. A runtime-native stop/start restored the guest connection. DiskSage then removed only a
+  stopped BuildKit container, its dedicated state volume, and its unreferenced image. Same-day
+  PostgreSQL containers and every data-bearing named volume were preserved.
+- The fixed guest `fstrim` reported 99.5 GiB trimmed. The host sparse image allocation changed from
+  43,951,260 KiB to 30,440,160 KiB, while APFS available space rose from about 53 GiB to 65 GiB.
+  These are separate before/after observations, not a promise that logical trimmed bytes equal
+  host bytes. No raw image rewrite, truncation, or category-wide prune was used.
+- The 300 GB objective is not yet satisfied: the latest observation proves about 65 GiB available.
+  Cloud eviction remains blocked for items without current provider-upload proof, and non-identical
+  photos remain blocked pending measured quality evidence and a selected survivor.

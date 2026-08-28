@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 const SCHEMA_VERSION: u32 = 1;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+const RECOVERY_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_CAPTURE_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -42,12 +43,15 @@ pub struct RuntimeStoragePlan {
     pub display_name: String,
     pub executable_available: bool,
     pub guest_running: Option<bool>,
+    pub guest_reachable: Option<bool>,
     pub trim_command: Option<Vec<String>>,
+    pub recovery_command: Option<Vec<Vec<String>>>,
     pub host_compaction_supported: bool,
     pub host_compaction_blockers: Vec<String>,
     pub observed_at_ms: u64,
     pub plan_fingerprint: String,
     pub exact_approval_phrase: Option<String>,
+    pub recovery_approval_phrase: Option<String>,
     pub evidence_complete: bool,
     pub issue: Option<String>,
 }
@@ -64,6 +68,22 @@ pub struct RuntimeStorageExecution {
     #[serde(skip_serializing)]
     pub stderr: String,
     pub output_truncated: bool,
+    pub executed: bool,
+    pub executed_at_ms: u64,
+    pub rationale: String,
+    pub volume_comparison: Option<crate::volume_pressure::LocalVolumeComparison>,
+    pub volume_evidence_error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RuntimeStorageRecoveryExecution {
+    pub schema_kind: &'static str,
+    pub schema_version: u32,
+    pub runtime: RuntimeStorageKind,
+    pub command: Vec<Vec<String>>,
+    pub stop_status_code: i32,
+    pub start_status_code: i32,
+    pub guest_reachable_after_recovery: bool,
     pub executed: bool,
     pub executed_at_ms: u64,
     pub rationale: String,
@@ -121,6 +141,14 @@ fn drain_bounded<R: Read>(mut reader: R) -> std::io::Result<(Vec<u8>, bool)> {
 }
 
 fn run_bounded(binary: &Path, args: &[&str]) -> Result<(i32, String, String, bool), String> {
+    run_bounded_with_timeout(binary, args, COMMAND_TIMEOUT)
+}
+
+fn run_bounded_with_timeout(
+    binary: &Path,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<(i32, String, String, bool), String> {
     let mut command = Command::new(binary);
     command
         .args(args)
@@ -162,7 +190,7 @@ fn run_bounded(binary: &Path, args: &[&str]) -> Result<(i32, String, String, boo
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) if started.elapsed() >= COMMAND_TIMEOUT => {
+            Ok(None) if started.elapsed() >= timeout => {
                 #[cfg(unix)]
                 unsafe {
                     let _ = libc::kill(-(child_pid as libc::pid_t), libc::SIGKILL);
@@ -212,6 +240,10 @@ fn run_bounded(binary: &Path, args: &[&str]) -> Result<(i32, String, String, boo
     ))
 }
 
+fn reachability_from_probe(result: Result<(i32, String, String, bool), String>) -> Option<bool> {
+    result.ok().map(|output| output.0 == 0)
+}
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -242,11 +274,16 @@ fn trim_command(runtime: RuntimeStorageKind) -> Vec<String> {
     }
 }
 
-fn fingerprint(runtime: RuntimeStorageKind, running: Option<bool>) -> String {
+fn fingerprint(
+    runtime: RuntimeStorageKind,
+    running: Option<bool>,
+    reachable: Option<bool>,
+) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"disksage.runtime-storage-plan.v1\0");
     hasher.update(runtime.as_str().as_bytes());
     hasher.update([running.unwrap_or(false) as u8]);
+    hasher.update([reachable.unwrap_or(false) as u8]);
     hasher
         .finalize()
         .iter()
@@ -302,8 +339,44 @@ fn inspect_runtime(runtime: RuntimeStorageKind, observed_at_ms: u64) -> RuntimeS
             Err(error) => (None, Some(error)),
         }
     };
-    let fingerprint = fingerprint(runtime, guest_running);
-    let ready = executable_available && guest_running == Some(true);
+    let guest_reachable = if guest_running == Some(true) {
+        let args = match runtime {
+            RuntimeStorageKind::PodmanMachine => {
+                ["machine", "ssh", "podman-machine-default", "--", "true"].as_slice()
+            }
+            RuntimeStorageKind::Colima => ["ssh", "--", "true"].as_slice(),
+        };
+        // A completed non-zero probe proves the guest is unreachable. Probe failures and
+        // timeouts are incomplete evidence and must not authorize a restart.
+        reachability_from_probe(run_bounded(&binary, args))
+    } else {
+        None
+    };
+    let fingerprint = fingerprint(runtime, guest_running, guest_reachable);
+    let ready =
+        executable_available && guest_running == Some(true) && guest_reachable == Some(true);
+    let recovery_ready =
+        executable_available && guest_running == Some(true) && guest_reachable == Some(false);
+    let recovery_command = recovery_ready.then(|| match runtime {
+        RuntimeStorageKind::PodmanMachine => vec![
+            vec![
+                "podman".into(),
+                "machine".into(),
+                "stop".into(),
+                "podman-machine-default".into(),
+            ],
+            vec![
+                "podman".into(),
+                "machine".into(),
+                "start".into(),
+                "podman-machine-default".into(),
+            ],
+        ],
+        RuntimeStorageKind::Colima => vec![
+            vec!["colima".into(), "stop".into()],
+            vec!["colima".into(), "start".into()],
+        ],
+    });
     RuntimeStoragePlan {
         schema_kind: "disksage.runtime-storage-plan",
         schema_version: SCHEMA_VERSION,
@@ -314,7 +387,9 @@ fn inspect_runtime(runtime: RuntimeStorageKind, observed_at_ms: u64) -> RuntimeS
         },
         executable_available,
         guest_running,
+        guest_reachable,
         trim_command: ready.then(|| trim_command(runtime)),
+        recovery_command,
         host_compaction_supported: false,
         host_compaction_blockers: vec![
             "host-image-compaction-requires-runtime-native-tool".into(),
@@ -329,9 +404,71 @@ fn inspect_runtime(runtime: RuntimeStorageKind, observed_at_ms: u64) -> RuntimeS
                 fingerprint
             )
         }),
-        evidence_complete: executable_available && guest_running.is_some(),
+        recovery_approval_phrase: recovery_ready.then(|| {
+            format!(
+                "DiskSage {} 연결 복구 승인 {}",
+                runtime.as_str(),
+                fingerprint
+            )
+        }),
+        evidence_complete: executable_available
+            && guest_running.is_some()
+            && (guest_running != Some(true) || guest_reachable.is_some()),
         issue,
     }
+}
+
+/// Restart a runtime only when it reports running but its guest is unreachable.
+pub fn execute_recovery(
+    runtime: RuntimeStorageKind,
+    confirmation_phrase: &str,
+    rationale: &str,
+) -> Result<RuntimeStorageRecoveryExecution, String> {
+    if rationale.trim().is_empty()
+        || rationale != rationale.trim()
+        || rationale.chars().count() > 1_000
+        || rationale.chars().any(char::is_control)
+    {
+        return Err("runtime-storage-rationale-invalid".into());
+    }
+    let plan = inspect_runtime(runtime, now_ms());
+    let expected = plan
+        .recovery_approval_phrase
+        .as_deref()
+        .ok_or("runtime-storage-recovery-not-ready")?;
+    if confirmation_phrase != expected {
+        return Err("runtime-storage-confirmation-mismatch".into());
+    }
+    let binary = fixed_binary(runtime);
+    let (stop_args, start_args): (&[&str], &[&str]) = match runtime {
+        RuntimeStorageKind::PodmanMachine => (
+            &["machine", "stop", "podman-machine-default"],
+            &["machine", "start", "podman-machine-default"],
+        ),
+        RuntimeStorageKind::Colima => (&["stop"], &["start"]),
+    };
+    let stop = run_bounded_with_timeout(&binary, stop_args, RECOVERY_TIMEOUT)?;
+    if stop.0 != 0 {
+        return Err("runtime-storage-recovery-stop-failed".into());
+    }
+    let start = run_bounded_with_timeout(&binary, start_args, RECOVERY_TIMEOUT)?;
+    if start.0 != 0 {
+        return Err("runtime-storage-recovery-start-failed".into());
+    }
+    let live = inspect_runtime(runtime, now_ms());
+    let reachable = live.guest_reachable == Some(true);
+    Ok(RuntimeStorageRecoveryExecution {
+        schema_kind: "disksage.runtime-storage-recovery-execution",
+        schema_version: SCHEMA_VERSION,
+        runtime,
+        command: plan.recovery_command.unwrap_or_default(),
+        stop_status_code: stop.0,
+        start_status_code: start.0,
+        guest_reachable_after_recovery: reachable,
+        executed: reachable,
+        executed_at_ms: now_ms(),
+        rationale: rationale.into(),
+    })
 }
 
 /// Inspect both supported VM-backed runtimes without mutating their stores.
@@ -381,7 +518,26 @@ pub fn execute_trim(
         .as_slice(),
         RuntimeStorageKind::Colima => ["ssh", "--", "sudo", "fstrim", "-av"].as_slice(),
     };
+    let home =
+        std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from);
+    let before = home
+        .as_deref()
+        .ok_or_else(|| "runtime-storage-home-unavailable".to_string())
+        .and_then(|path| crate::volume_pressure::snapshot_volume(path, now_ms()));
     let output = run_bounded(&fixed_binary(runtime), args)?;
+    let after = home
+        .as_deref()
+        .ok_or_else(|| "runtime-storage-home-unavailable".to_string())
+        .and_then(|path| crate::volume_pressure::snapshot_volume(path, now_ms()));
+    let (volume_comparison, volume_evidence_error) = match (before, after) {
+        (Ok(before), Ok(after)) => {
+            match crate::volume_pressure::compare_snapshots(&before, &after, None) {
+                Ok(comparison) => (Some(comparison), None),
+                Err(error) => (None, Some(error)),
+            }
+        }
+        (Err(error), _) | (_, Err(error)) => (None, Some(error)),
+    };
     Ok(RuntimeStorageExecution {
         schema_kind: "disksage.runtime-storage-execution",
         schema_version: SCHEMA_VERSION,
@@ -394,6 +550,8 @@ pub fn execute_trim(
         executed: output.0 == 0,
         executed_at_ms: now_ms(),
         rationale: rationale.into(),
+        volume_comparison,
+        volume_evidence_error,
     })
 }
 
@@ -420,6 +578,30 @@ mod tests {
     }
 
     #[test]
+    fn reachability_is_bound_into_the_plan_fingerprint() {
+        assert_ne!(
+            fingerprint(RuntimeStorageKind::PodmanMachine, Some(true), Some(true)),
+            fingerprint(RuntimeStorageKind::PodmanMachine, Some(true), Some(false))
+        );
+    }
+
+    #[test]
+    fn failed_reachability_probe_remains_incomplete() {
+        assert_eq!(
+            reachability_from_probe(Err("runtime-storage-command-timeout".into())),
+            None
+        );
+        assert_eq!(
+            reachability_from_probe(Ok((255, String::new(), String::new(), false))),
+            Some(false)
+        );
+        assert_eq!(
+            reachability_from_probe(Ok((0, String::new(), String::new(), false))),
+            Some(true)
+        );
+    }
+
+    #[test]
     fn bounded_reader_drains_large_output_without_retaining_it() {
         let input = vec![b'x'; MAX_CAPTURE_BYTES + 1];
         let (captured, truncated) = drain_bounded(Cursor::new(input)).expect("reader succeeds");
@@ -430,12 +612,7 @@ mod tests {
     #[test]
     fn trim_rejects_control_characters_before_runtime_probe() {
         assert_eq!(
-            execute_trim(
-                RuntimeStorageKind::Colima,
-                "",
-                "operator\u{0007}note"
-            )
-            .unwrap_err(),
+            execute_trim(RuntimeStorageKind::Colima, "", "operator\u{0007}note").unwrap_err(),
             "runtime-storage-rationale-invalid"
         );
     }

@@ -151,6 +151,7 @@ pub fn run() {
             commands::execute_podman_dangling_image_prune,
             commands::inspect_runtime_storage,
             commands::execute_runtime_storage_trim,
+            commands::execute_runtime_storage_recovery,
             container_orphan_commands::inspect_container_orphans,
             container_orphan_commands::execute_container_orphan_prune,
             commands::judge_brew_cleanup,

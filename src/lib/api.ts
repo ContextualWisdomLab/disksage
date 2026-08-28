@@ -238,12 +238,15 @@ export interface RuntimeStoragePlan {
   display_name: string;
   executable_available: boolean;
   guest_running: boolean | null;
+  guest_reachable: boolean | null;
   trim_command: string[] | null;
+  recovery_command: string[][] | null;
   host_compaction_supported: boolean;
   host_compaction_blockers: string[];
   observed_at_ms: number;
   plan_fingerprint: string;
   exact_approval_phrase: string | null;
+  recovery_approval_phrase: string | null;
   evidence_complete: boolean;
   issue: string | null;
 }
@@ -260,6 +263,21 @@ export interface RuntimeStorageExecution {
   executed: boolean;
   executed_at_ms: number;
   rationale: string;
+  volume_comparison: LocalVolumeComparison | null;
+  volume_evidence_error: string | null;
+}
+
+export interface RuntimeStorageRecoveryExecution {
+  schema_kind: "disksage.runtime-storage-recovery-execution";
+  schema_version: number;
+  runtime: RuntimeStorageKind;
+  command: string[][];
+  stop_status_code: number;
+  start_status_code: number;
+  guest_reachable_after_recovery: boolean;
+  executed: boolean;
+  executed_at_ms: number;
+  rationale: string;
 }
 
 export const inspectRuntimeStorage = () =>
@@ -270,6 +288,16 @@ export const executeRuntimeStorageTrim = (
   confirmationPhrase: string,
   rationale: string,
 ) => invoke<RuntimeStorageExecution>("execute_runtime_storage_trim", {
+  runtime,
+  confirmationPhrase,
+  rationale,
+});
+
+export const executeRuntimeStorageRecovery = (
+  runtime: RuntimeStorageKind,
+  confirmationPhrase: string,
+  rationale: string,
+) => invoke<RuntimeStorageRecoveryExecution>("execute_runtime_storage_recovery", {
   runtime,
   confirmationPhrase,
   rationale,
@@ -996,6 +1024,27 @@ export interface LocalVolumeSnapshot {
   pressure: LocalVolumePressure;
   evidence_kind: string;
   limitations: string[];
+  evidence_fingerprint: string;
+}
+
+export interface LocalVolumeComparison {
+  schema_version: number;
+  before: LocalVolumeSnapshot;
+  after: LocalVolumeSnapshot;
+  observed_elapsed_ms: number;
+  total_bytes_stable: boolean;
+  available_change: {
+    direction: "increased" | "decreased" | "unchanged";
+    bytes: number;
+  };
+  free_change: {
+    direction: "increased" | "decreased" | "unchanged";
+    bytes: number;
+  };
+  logical_removed_bytes: number | null;
+  physical_reclaim_bytes: null;
+  physical_reclaim_attribution: "unproven";
+  reason_codes: string[];
   evidence_fingerprint: string;
 }
 

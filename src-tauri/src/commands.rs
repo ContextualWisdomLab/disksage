@@ -540,6 +540,22 @@ pub fn execute_runtime_storage_trim(
     crate::runtime_storage::execute_trim(kind, &confirmation_phrase, &rationale)
 }
 
+/// Restarts a runtime that reports running but cannot serve guest commands.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn execute_runtime_storage_recovery(
+    runtime: String,
+    confirmation_phrase: String,
+    rationale: String,
+) -> Result<crate::runtime_storage::RuntimeStorageRecoveryExecution, String> {
+    let kind = match runtime.as_str() {
+        "podman-machine" => crate::runtime_storage::RuntimeStorageKind::PodmanMachine,
+        "colima" => crate::runtime_storage::RuntimeStorageKind::Colima,
+        _ => return Err("runtime-storage-unknown-runtime".into()),
+    };
+    crate::runtime_storage::execute_recovery(kind, &confirmation_phrase, &rationale)
+}
+
 #[cfg(not(coverage))]
 #[cfg_attr(not(feature = "llm-engine"), allow(unused_variables))]
 #[tauri::command(async)]

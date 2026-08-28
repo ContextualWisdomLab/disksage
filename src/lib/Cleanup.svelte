@@ -31,6 +31,7 @@
   let runtimeStoragePhrase = $state<Record<string, string>>({});
   let runtimeStorageRationale = $state<Record<string, string>>({});
   let runtimeStorageExecutions: Record<string, api.RuntimeStorageExecution> = $state({});
+  let runtimeStorageRecoveryExecutions: Record<string, api.RuntimeStorageRecoveryExecution> = $state({});
   // ponytail: 배지는 개별 파일/디렉토리 후보(artifacts)에만 표시 — caches는 소수의 고정 규칙 카테고리라 자동 자문 가치가 낮음.
   let verdicts: Record<string, api.Verdict> = $state({});
 
@@ -44,6 +45,10 @@
       ".codegraph": "코드 분석 자료",
     };
     return labels[kind] ?? "개발 파일";
+  }
+
+  function runtimeStorageLabel(runtime: api.RuntimeStorageKind): string {
+    return runtime === "podman-machine" ? "Podman" : "Colima";
   }
 
   async function loadVerdicts(paths: string[]) {
@@ -89,9 +94,10 @@
       runtimeStoragePhrase = {};
       runtimeStorageRationale = {};
       runtimeStorageExecutions = {};
+      runtimeStorageRecoveryExecutions = {};
     } catch {
       runtimeStoragePlans = [];
-      runtimeStorageError = "가상 머신 저장 공간 상태를 확인하지 못했습니다. 다시 시도하세요.";
+      runtimeStorageError = "저장 공간 상태를 확인하지 못했습니다. 다시 시도하세요.";
     } finally {
       runtimeStorageBusy = false;
     }
@@ -104,10 +110,17 @@
       && !runtimeStorageBusy;
   }
 
+  function runtimeStorageRecoveryReady(plan: api.RuntimeStoragePlan): boolean {
+    return plan.recovery_approval_phrase !== null
+      && runtimeStoragePhrase[plan.runtime]?.trim() === plan.recovery_approval_phrase
+      && (runtimeStorageRationale[plan.runtime]?.trim().length ?? 0) > 0
+      && !runtimeStorageBusy;
+  }
+
   async function trimRuntimeStorage(plan: api.RuntimeStoragePlan) {
     if (!runtimeStorageReady(plan) || !plan.exact_approval_phrase) return;
     const okay = await confirm(
-      `${plan.display_name}에서 회수 가능한 영역만 정리합니다. 개인 파일과 설정은 변경하지 않습니다.\n\n실행 전에 상태를 다시 확인합니다.`,
+      `${runtimeStorageLabel(plan.runtime)}에서 회수 가능한 영역만 정리합니다. 개인 파일과 설정은 변경하지 않습니다.\n\n실행 전에 상태를 다시 확인합니다.`,
       { title: "DiskSage 저장 공간 정리", kind: "warning" },
     );
     if (!okay) return;
@@ -123,7 +136,32 @@
       runtimeStorageRationale = {};
       runtimeStoragePlans = await api.inspectRuntimeStorage();
     } catch {
-      runtimeStorageError = "가상 머신 저장 공간 정리를 실행하지 못했습니다. 최신 상태를 확인한 뒤 다시 시도하세요.";
+      runtimeStorageError = "저장 공간 정리를 실행하지 못했습니다. 최신 상태를 확인한 뒤 다시 시도하세요.";
+    } finally {
+      runtimeStorageBusy = false;
+    }
+  }
+
+  async function recoverRuntimeStorage(plan: api.RuntimeStoragePlan) {
+    if (!runtimeStorageRecoveryReady(plan) || !plan.recovery_approval_phrase) return;
+    const okay = await confirm(
+      `${runtimeStorageLabel(plan.runtime)} 연결을 정상 종료한 뒤 다시 시작합니다. 실행 중인 작업이 있다면 중단될 수 있습니다.\n\n복구 후 저장 공간 상태를 다시 확인합니다.`,
+      { title: "저장 공간 연결 복구", kind: "warning" },
+    );
+    if (!okay) return;
+    runtimeStorageBusy = true;
+    runtimeStorageError = "";
+    try {
+      runtimeStorageRecoveryExecutions[plan.runtime] = await api.executeRuntimeStorageRecovery(
+        plan.runtime,
+        runtimeStoragePhrase[plan.runtime].trim(),
+        runtimeStorageRationale[plan.runtime].trim(),
+      );
+      runtimeStoragePhrase = {};
+      runtimeStorageRationale = {};
+      runtimeStoragePlans = await api.inspectRuntimeStorage();
+    } catch {
+      runtimeStorageError = "연결을 복구하지 못했습니다. 실행 중인 작업을 확인한 뒤 다시 시도하세요.";
     } finally {
       runtimeStorageBusy = false;
     }
@@ -395,37 +433,55 @@
 
   <ContainerOrphanCleanup />
 
-  <h3>가상 머신 저장 공간</h3>
+  <h3>Podman·Colima 저장 공간</h3>
   <p class="notice">
-    Podman과 Colima의 가상 머신 저장 공간 상태를 확인합니다. 정리는 명시적으로 승인한 경우에만 실행하며,
-    가상 머신 전체 파일 크기 줄이기는 안전성을 확인할 수 있을 때만 별도로 진행합니다.
+    Podman과 Colima가 사용하는 저장 공간 상태를 확인합니다. 정리는 목록과 사유를 검토하고 승인한 경우에만 실행합니다.
+    전체 저장 공간을 줄이는 기능은 자동으로 실행하지 않으며, 필요하면 해당 도구의 관리 화면에서 상태를 확인하세요.
   </p>
   <button onclick={inspectRuntimeStorage} disabled={runtimeStorageBusy}>
-    {runtimeStorageBusy ? "가상 머신 상태 확인 중…" : "Podman·Colima 저장 공간 확인"}
+    {runtimeStorageBusy ? "저장 공간 상태 확인 중…" : "Podman·Colima 저장 공간 확인"}
   </button>
   {#if runtimeStorageError}<p class="error" role="alert">{runtimeStorageError}</p>{/if}
   {#if runtimeStoragePlans.length > 0}
     {#each runtimeStoragePlans as plan (plan.runtime)}
       <div class="podman-evidence" aria-live="polite">
-        <strong>{plan.display_name}</strong>
+        <strong>{runtimeStorageLabel(plan.runtime)} 저장 공간</strong>
         <p>
-          {plan.executable_available ? "정리 도구 사용 가능" : "정리 도구를 사용할 수 없음"} ·
+          {plan.executable_available ? "저장 공간 정리 가능" : "저장 공간 정리를 사용할 수 없음"} ·
           {plan.guest_running === true ? "실행 중" : plan.guest_running === false ? "중지됨" : "상태 미확인"}
+          {#if plan.guest_running === true}
+            · {plan.guest_reachable === true ? "연결됨" : plan.guest_reachable === false ? "연결 복구 필요" : "연결 상태 미확인"}
+          {/if}
         </p>
         {#if plan.host_compaction_supported}
-          <p>가상 머신 전체 파일 크기 줄이기를 실행할 수 있습니다.</p>
+          <p>정리 후 해당 도구의 관리 화면에서 전체 저장 공간을 확인하세요.</p>
         {:else}
-          <p class="notice">전체 파일 크기 줄이기는 자동 실행하지 않습니다. 정리 후 런타임 관리 화면에서 상태를 확인하세요.</p>
+          <p class="notice">전체 저장 공간 줄이기는 자동 실행하지 않습니다. 정리 후 해당 도구의 관리 화면에서 상태를 확인하세요.</p>
         {/if}
         {#if plan.exact_approval_phrase}
+          <p class="notice">아래 확인 문구를 그대로 입력하고 정리 사유를 남겨야 실행됩니다.</p>
+          <code>{plan.exact_approval_phrase}</code>
           <label>확인 문구
-            <input bind:value={runtimeStoragePhrase[plan.runtime]} placeholder={plan.exact_approval_phrase} disabled={runtimeStorageBusy} />
+            <input bind:value={runtimeStoragePhrase[plan.runtime]} placeholder="위 확인 문구를 직접 입력하세요" disabled={runtimeStorageBusy} />
           </label>
           <label>정리 사유
-            <textarea bind:value={runtimeStorageRationale[plan.runtime]} maxlength="1000" disabled={runtimeStorageBusy}></textarea>
+            <textarea bind:value={runtimeStorageRationale[plan.runtime]} maxlength="1000" placeholder="예: 저장 공간 상태를 확인하고 정리하기로 결정함" disabled={runtimeStorageBusy}></textarea>
           </label>
           <button onclick={() => trimRuntimeStorage(plan)} disabled={!runtimeStorageReady(plan)}>
             {runtimeStorageBusy ? "저장 공간 정리 중…" : "저장 공간 정리"}
+          </button>
+        {:else if plan.recovery_approval_phrase}
+          <p class="notice">저장 공간을 확인할 수 없습니다. 연결을 복구한 뒤 다시 확인하세요.</p>
+          <p class="notice">아래 확인 문구를 그대로 입력하고 복구 사유를 남겨야 실행됩니다.</p>
+          <code>{plan.recovery_approval_phrase}</code>
+          <label>확인 문구
+            <input bind:value={runtimeStoragePhrase[plan.runtime]} placeholder="위 확인 문구를 직접 입력하세요" disabled={runtimeStorageBusy} />
+          </label>
+          <label>복구 사유
+            <textarea bind:value={runtimeStorageRationale[plan.runtime]} maxlength="1000" placeholder="예: 연결 상태를 확인하고 다시 시작하기로 결정함" disabled={runtimeStorageBusy}></textarea>
+          </label>
+          <button onclick={() => recoverRuntimeStorage(plan)} disabled={!runtimeStorageRecoveryReady(plan)}>
+            {runtimeStorageBusy ? "연결 복구 중…" : "연결 복구"}
           </button>
         {/if}
         {#if runtimeStorageExecutions[plan.runtime]}
@@ -433,6 +489,18 @@
           <p class="notice" role="status">
             {execution.executed ? "저장 공간 정리를 완료했습니다." : "저장 공간 정리가 완료되지 않았습니다."}
             상태를 다시 확인하세요.
+          </p>
+          {#if execution.volume_comparison?.available_change.direction === "increased"}
+            <p class="notice">
+              확인된 사용 가능 공간 증가: {fmtBytes(execution.volume_comparison.available_change.bytes)}
+            </p>
+          {/if}
+        {/if}
+        {#if runtimeStorageRecoveryExecutions[plan.runtime]}
+          <p class="notice" role="status">
+            {runtimeStorageRecoveryExecutions[plan.runtime].executed
+              ? "연결을 복구했습니다. 저장 공간을 다시 확인하세요."
+              : "연결 복구가 완료되지 않았습니다. 실행 중인 작업을 확인하세요."}
           </p>
         {/if}
       </div>

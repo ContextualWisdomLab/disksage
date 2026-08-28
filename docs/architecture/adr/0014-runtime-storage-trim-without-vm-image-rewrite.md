@@ -14,15 +14,20 @@ could corrupt running workloads and data-bearing volumes.
 ## Decision
 
 1. DiskSage exposes a read-only plan for the Podman machine and Colima independently. The plan
-   records executable/state availability and a deterministic approval phrase.
+   records executable availability, running state, guest reachability, and a deterministic
+   approval phrase.
 2. After a fresh plan and explicit rationale, DiskSage may run only the fixed guest command
    `sudo fstrim -av` through `podman machine ssh` or `colima ssh`. The command is bounded and its
    output is returned as a receipt; no user path or image bytes are accepted as input.
-3. Host-image compaction is reported as unsupported unless a future runtime-native, integrity-
+3. If a running guest is unreachable, trim remains blocked. A separate, explicitly approved
+   recovery action may run only the runtime-native stop/start sequence, warns that running work
+   can be interrupted, and must prove guest reachability again before trim becomes available.
+4. Host-image compaction is reported as unsupported unless a future runtime-native, integrity-
    checked API is added. DiskSage never invokes `qemu-img`, deletes a VM image, stops a runtime,
    or removes a volume as part of trim.
-4. A positive space change is measured only by a later host observation and is not attributed to
-   trim without before/after evidence.
+5. Trim captures host-volume observations immediately before and after execution. The UI reports
+   only the measured available-space change and does not infer that all of the change came from
+   trim.
 
 ## Consequences
 
@@ -42,6 +47,7 @@ could corrupt running workloads and data-bearing volumes.
 ## Evidence
 
 - Rust tests verify fixed command construction and fail-closed unavailable-runtime plans.
+- Recovery and trim use distinct approvals; reachability is included in the plan fingerprint so a
+  stale recovery or trim plan cannot authorize execution after guest state changes.
 - The existing container-orphan and Podman planners remain the authority for exact image,
   volume, network, and container candidates; this ADR adds no alternate deletion path.
-
