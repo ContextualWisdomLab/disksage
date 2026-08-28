@@ -2,7 +2,7 @@
 
 **Snapshot:** 2026-08-28 (Asia/Seoul)
 **Repository heads at snapshot:** `main` `79067c1160ddedf7fc962cbf8067ce7e83c4564a`, PR #267
-`b5d3b5f57d8d517e422af3c8b65b1050cb29d928`, and the current open queue (41 PRs: 20 ready, 21
+`cdda4f9fdc4001f588d61ef3a152e5f4f418262e`, and the current open queue (41 PRs: 20 ready, 21
 draft); hosted checks and protected review remain authoritative, and no merge is claimed from
 queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
@@ -798,3 +798,16 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   updated and the exact DiskSage head re-reviewed. The pin update is tracked in central
   [`.github#1371`](https://github.com/ContextualWisdomLab/.github/pull/1371) at head
   `78f5c5642f5a49da6827f7a786b1ad4e79a6d03a`.
+
+## 2026-08-28 customer-copy boundary
+
+- PR #267 exact implementation head `cdda4f9fdc4001f588d61ef3a152e5f4f418262e` now applies one
+  customer-copy contract to cloud transfer, local-copy cleanup, cache and developer-folder cleanup,
+  Homebrew, duplicate/orphan cleanup, inventory, and container-resource screens. Native diagnostics,
+  identifiers, provider protocol terms, and command output are no longer reflected in visible
+  messages; each warning, error, or notice names a bounded next action.
+- The contract test covers every existing screen, including the container image/volume/network
+  cleanup panel, and rejects implementation terms in visible text and attributes. The local checks
+  passed with `npm run check` (0 errors, 0 warnings) and 38 frontend test files / 165 tests. The
+  protected PR remains open and blocked until current-head hosted checks and an independent approval
+  pass; this UI proof does not authorize a merge or a deletion.
