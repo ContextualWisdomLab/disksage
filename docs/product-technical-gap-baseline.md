@@ -1114,6 +1114,11 @@ runner's private workspace temp root instead of weakening the shared production 
 
 ## 2026-08-29 temporary-workspace generated-cache recovery
 
+### Podman external-container image authority
+
+- Live deletion exposed Buildah storage containers hidden from ordinary `podman container ps --all`; their images rejected deletion despite appearing dangling.
+- Podman image membership now includes native `--external` evidence before issuing an approval phrase. The same live store now produces zero image candidates rather than unsafe partial execution.
+
 - The live `/private/tmp` inventory exposed repeated Rust, Node, Python environment, type-check,
   test, lint, and CodeGraph outputs inside review worktrees. DiskSage's identity-bound permanent
   generated-artifact action removed these outputs without removing a worktree, branch, source
