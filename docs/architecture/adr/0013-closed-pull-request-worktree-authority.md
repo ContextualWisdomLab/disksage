@@ -17,7 +17,7 @@ the authenticated GitHub CLI. A clean, inactive secondary worktree is eligible o
 
 1. the PR state is exactly `CLOSED` or `MERGED`; merged evidence is queried only for branch names
    registered in the current Git worktree list, so repository-wide merged history cannot crowd the
-   bounded authority set;
+   bounded authority set; all forge queries share one overall timeout budget;
 2. the PR is from the same repository, not a fork;
 3. the local `refs/heads/<headRefName>` and exact worktree HEAD equal the reported ref and OID;
 4. the worktree is not primary, selected, locked, prunable, dirty, active, or a retained tip; and

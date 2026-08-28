@@ -642,6 +642,7 @@ pub fn github_closed_pull_request_heads(
     repository_root: &Path,
     timeout_ms: u64,
 ) -> Result<ClosedPullRequestHeads, String> {
+    let started = Instant::now();
     let mut heads = ClosedPullRequestHeads::new();
     let mut queries = vec![vec![
         OsString::from("pr"),
@@ -681,12 +682,11 @@ pub fn github_closed_pull_request_heads(
         ]);
     }
     for args in queries {
-        let result = run_bounded_command(
-            "gh",
-            &args,
-            repository_root,
-            timeout_ms,
-        )?;
+        let remaining_ms = timeout_ms.saturating_sub(started.elapsed().as_millis() as u64);
+        if remaining_ms == 0 {
+            return Err("github-closed-pr-list-timeout".into());
+        }
+        let result = run_bounded_command("gh", &args, repository_root, remaining_ms)?;
         if result.timed_out {
             return Err("github-closed-pr-list-timeout".into());
         }
