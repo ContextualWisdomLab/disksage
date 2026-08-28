@@ -26,8 +26,8 @@ that operation. Deleting, moving, or trashing the visible cloud item is never an
 
 Unsynced edits, an active provider-wide queue, provider mismatch, non-evictable items, open handles,
 incomplete evidence, restart failure, and unchanged post-action allocation fail closed. OneDrive
-gains a native single-item path without weakening iCloud behavior. Recursive/batch OneDrive
-eviction remains separate work.
+uses the same bounded batch fingerprint, per-item re-plan, immutable checkpoint, and stop-on-first-
+failure contract as iCloud without weakening either provider's native execution boundary.
 
 ## Rejected alternatives
 

@@ -1,4 +1,4 @@
-//! Evidence-bound batch coordination for iCloud local-copy eviction.
+//! Evidence-bound batch coordination for iCloud and OneDrive local-copy eviction.
 //!
 //! The coordinator deliberately separates three phases:
 //! 1. plan every input path without opening file content,
@@ -300,7 +300,7 @@ fn bounded_error_code(error: &str) -> String {
 
 fn item_plan_is_safe(plan: &IcloudLocalEvictionPlan) -> bool {
     plan.version == crate::cloud_local_eviction::ICLOUD_LOCAL_EVICTION_VERSION
-        && plan.provider == CloudProvider::Icloud
+        && matches!(plan.provider, CloudProvider::Icloud | CloudProvider::Onedrive)
         && valid_hex64(&plan.plan_fingerprint)
         && plan.logical_bytes > 0
         && plan.allocated_bytes > 0
@@ -353,7 +353,7 @@ fn validate_batch_plan(
     plan: &IcloudLocalEvictionBatchPlan,
 ) -> Result<(), String> {
     if plan.version != ICLOUD_LOCAL_EVICTION_BATCH_VERSION
-        || plan.provider != CloudProvider::Icloud
+        || !matches!(plan.provider, CloudProvider::Icloud | CloudProvider::Onedrive)
         || plan.provider != root.provider
         || plan.account_scope != root.account_scope
         || plan.cloud_root != root.path
@@ -446,7 +446,7 @@ fn build_batch_plan(
         blockers == ["human-local-eviction-batch-approval-required"];
     let mut plan = IcloudLocalEvictionBatchPlan {
         version: ICLOUD_LOCAL_EVICTION_BATCH_VERSION,
-        provider: CloudProvider::Icloud,
+        provider: root.provider,
         account_scope: root.account_scope,
         cloud_root: root.path.clone(),
         observed_at_ms,
@@ -479,8 +479,8 @@ fn plan_batch_with<F>(
 where
     F: FnMut(&CloudRoot, &Path, u64) -> Result<IcloudLocalEvictionPlan, String>,
 {
-    if root.provider != CloudProvider::Icloud {
-        return Err("icloud-local-eviction-batch-requires-icloud-root".into());
+    if !matches!(root.provider, CloudProvider::Icloud | CloudProvider::Onedrive) {
+        return Err("cloud-local-eviction-batch-provider-unsupported".into());
     }
     if paths.is_empty() || paths.len() > MAX_BATCH_ITEMS {
         return Err("icloud-local-eviction-batch-input-count-invalid".into());
@@ -1006,6 +1006,25 @@ mod tests {
         );
         assert!(plan.eligible_after_human_approval);
         validate_batch_plan(&root(), &plan).unwrap();
+    }
+
+    #[test]
+    fn onedrive_batch_reuses_the_same_native_file_provider_safety_contract() {
+        let mut onedrive_root = root();
+        onedrive_root.id = "onedrive:test".into();
+        onedrive_root.provider = CloudProvider::Onedrive;
+        onedrive_root.label = "OneDrive test".into();
+        let plan = plan_batch_with(&onedrive_root, &[path(0)], 20, |_, _, _| {
+            let mut plan = safe_plan(0);
+            plan.provider = CloudProvider::Onedrive;
+            Ok(plan)
+        })
+        .unwrap();
+
+        assert_eq!(plan.provider, CloudProvider::Onedrive);
+        assert_eq!(plan.planned_count, 1);
+        assert!(plan.eligible_after_human_approval);
+        validate_batch_plan(&onedrive_root, &plan).unwrap();
     }
 
     #[test]

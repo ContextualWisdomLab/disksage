@@ -22,6 +22,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   reduction while retaining the cloud item and the existing approval and receipt contract.
 - Partition iCloud eviction manifests automatically: keep freshly verified, fully uploaded local
   copies in the approval batch and exclude sync-incomplete items without exposing their paths.
+- Extend the same batch planner, exact fingerprint approval, live re-plan, immutable checkpoint,
+  and post-allocation verification contract to OneDrive Files On-Demand. The generic
+  `disksage-cloud-local-eviction-batch` CLI replaces the provider-specific batch command name.
 - Add an explicit `--execute --permanent` development-artifact mode that physically removes only
   a freshly rescanned, inactive, identity-matched generated directory and journals the irreversible
   outcome; the default remains reversible OS Trash.

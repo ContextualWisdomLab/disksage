@@ -1107,9 +1107,13 @@ runner's private workspace temp root instead of weakening the shared production 
   additionally requires a quiet provider-wide queue, gracefully stops the verified OneDrive app,
   uses Microsoft's `/getpin` and `/unpin` Files On-Demand commands, and restarts the client. It does
   not require OAuth and never deletes the visible cloud item.
+- The same evidence contract now supports bounded OneDrive batches through the provider-neutral
+  `disksage-cloud-local-eviction-batch` CLI. Sync-incomplete items are excluded by index, every
+  selected item is replanned before the first mutation, and execution stops after the first failed
+  or incompletely verified item.
 - The live provider-wide probe currently shows active upload/download, indexing, and reconciliation
   work, so mutation remains blocked and no sync process was interrupted. Recursive/batch OneDrive
-  eviction and a physical-space receipt from the live provider remain open; the 300 GB goal is not
+  a physical-space receipt from the live provider remain open; the 300 GB goal is not
   claimed complete.
 
 ## 2026-08-29 temporary-workspace generated-cache recovery
