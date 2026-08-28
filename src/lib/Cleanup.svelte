@@ -3,6 +3,7 @@
   import { fmtBytes } from "./fmt";
   import { verdictBadge } from "./verdictBadge";
   import { podmanEvidenceErrorMessage } from "./podmanEvidenceError";
+  import { podmanRecommendedActionLabel } from "./podmanRecommendedActionLabel";
   import { confirm } from "@tauri-apps/plugin-dialog";
   import GitWorktreeCleanup from "./GitWorktreeCleanup.svelte";
   import BrewCleanup from "./BrewCleanup.svelte";
@@ -325,7 +326,7 @@
       {#if podmanPlan.assessment.recommended_actions.length > 0}
         <ul class="errors">
           {#each podmanPlan.assessment.recommended_actions as action (action.kind)}
-            <li>{action.kind}: {action.rationale}</li>
+            <li>{podmanRecommendedActionLabel(action.kind)} — 범위를 확인한 뒤 진행하십시오.</li>
           {/each}
         </ul>
       {/if}
