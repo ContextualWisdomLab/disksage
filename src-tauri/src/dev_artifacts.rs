@@ -11,7 +11,7 @@ const ARTIFACT_MANIFEST_MAX_RECORDS: usize = 250_000;
 const VSCODE_OBSOLETE_METADATA_MAX_BYTES: u64 = 1024 * 1024;
 // Reversible Trash cleanup backs an interactive path, so an incomplete active-use probe must fail
 // closed without inheriting the longer latency budget reserved for irreversible deletion.
-const ARTIFACT_REVERSIBLE_ACTIVE_USE_TIMEOUT_MS: u64 = 2_000;
+const ARTIFACT_REVERSIBLE_ACTIVE_USE_TIMEOUT_MS: u64 = crate::reclaim::ACTIVE_USE_PROBE_TIMEOUT_MS;
 // Recursive lsof must enumerate the artifact tree. Real Python environments exceeded the generic
 // 2-second probe while completing in roughly 3 seconds, so the irreversible boundary owns a
 // longer operational timeout instead of silently weakening the active-use gate.
