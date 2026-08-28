@@ -2,7 +2,7 @@
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
   import { verdictBadge } from "./verdictBadge";
-  import { podmanEvidenceErrorMessage } from "./podmanEvidenceError";
+  import { podmanEvidenceErrorMessage, podmanPruneErrorMessage } from "./podmanEvidenceError";
   import { podmanRecommendedActionLabel } from "./podmanRecommendedActionLabel";
   import { confirm } from "@tauri-apps/plugin-dialog";
   import GitWorktreeCleanup from "./GitWorktreeCleanup.svelte";
@@ -90,7 +90,7 @@
       podmanPruneRationale = "";
       podmanPlan = await api.inspectPodmanReclaim();
     } catch (e) {
-      podmanPruneError = podmanEvidenceErrorMessage(e);
+      podmanPruneError = podmanPruneErrorMessage(e);
     } finally {
       podmanPruneBusy = false;
     }

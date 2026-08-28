@@ -12,6 +12,7 @@ const PODMAN_PRUNE_RECOVERY_MESSAGES: Readonly<Record<string, string>> = {
 
 function pruneRecoveryMessage(reason: unknown): string | null {
   const code = typeof reason === "string" ? reason : reason instanceof Error ? reason.message : "";
+  if (!Object.prototype.hasOwnProperty.call(PODMAN_PRUNE_RECOVERY_MESSAGES, code)) return null;
   return PODMAN_PRUNE_RECOVERY_MESSAGES[code] ?? null;
 }
 
