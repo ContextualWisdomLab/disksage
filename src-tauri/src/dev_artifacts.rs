@@ -194,6 +194,28 @@ fn editor_product(root_name: &str) -> Option<&'static str> {
     }
 }
 
+fn editor_product_for_extensions_dir(extensions: &Path) -> Option<&'static str> {
+    if extensions.file_name().and_then(|name| name.to_str()) != Some("extensions") {
+        return None;
+    }
+    let parent = extensions.parent()?;
+    let editor_root = if parent.file_name().and_then(|name| name.to_str()) == Some("data") {
+        parent.parent()?
+    } else {
+        parent
+    };
+    editor_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(editor_product)
+}
+
+fn is_editor_extension_directory(path: &Path) -> bool {
+    path.parent()
+        .and_then(editor_product_for_extensions_dir)
+        .is_some()
+}
+
 /// Return extension directories that VS Code itself marked obsolete.
 ///
 /// `.obsolete` is native lifecycle authority, so no version-age heuristic is needed. Only a real
@@ -204,20 +226,7 @@ fn vscode_obsolete_extension_paths(metadata_path: &Path) -> Vec<(PathBuf, &'stat
     let Some(extensions) = metadata_path.parent() else {
         return paths;
     };
-    if extensions.file_name().and_then(|name| name.to_str()) != Some("extensions") {
-        return paths;
-    }
-    let editor_root = extensions.parent().and_then(|parent| {
-        (parent.file_name().and_then(|name| name.to_str()) == Some("data"))
-            .then(|| parent.parent())
-            .flatten()
-            .or(Some(parent))
-    });
-    let Some(product) = editor_root
-        .and_then(Path::file_name)
-        .and_then(|name| name.to_str())
-        .and_then(editor_product)
-    else {
+    let Some(product) = editor_product_for_extensions_dir(extensions) else {
         return paths;
     };
     let Ok(metadata) = std::fs::symlink_metadata(metadata_path) else {
@@ -288,6 +297,10 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
             continue;
         }
         let path = e.path();
+        if is_editor_extension_directory(path) {
+            walker.skip_current_dir();
+            continue;
+        }
         let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
             continue;
         };
