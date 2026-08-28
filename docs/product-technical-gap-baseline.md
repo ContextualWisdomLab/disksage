@@ -733,3 +733,8 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   `pg-erd-cloud-pr-alembic-reconcile_pgdata`. Non-empty PostgreSQL volumes were retained because a
   zero runtime link count alone does not prove that their data is disposable. PR #267 exposes the same
   evidence-bound per-volume review and exact-identity re-audit in the product UI.
+- An unregistered local checkout of open draft PR #247 had no active file holders; `cargo clean` removed
+  its 2.7 GiB Rust target while preserving the source, branch head, and PR worktree content. Registered
+  open-PR worktrees and active build targets were not removed. The shared uv archive cache was left
+  untouched because live MCP processes were executing from it; cache eviction must first obtain the same
+  active-use evidence through the product flow.
