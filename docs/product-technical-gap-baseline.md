@@ -1095,3 +1095,19 @@ runner's private workspace temp root instead of weakening the shared production 
   native uploaded/current evidence, non-identical photo selection still requires measured quality
   evidence and explicit survivor confirmation, and active Podman/Colima resources remain outside
   prune authority.
+
+## 2026-08-29 OneDrive native local-eviction boundary
+
+- The selected OneDrive root is a registered macOS File Provider domain. A bounded native status
+  probe reported the root uploaded, current, unpaused, untrashed, and eligible for the provider's
+  unpin action; its allocated subtree remains roughly 32 GiB. Presence in `CloudStorage` alone is
+  not used as upload or eviction authority.
+- DiskSage now reuses its exact-path, provider-status, active-use, fingerprint approval, immutable
+  receipt, and post-allocation verification contract for individual OneDrive files. Execution
+  additionally requires a quiet provider-wide queue, gracefully stops the verified OneDrive app,
+  uses Microsoft's `/getpin` and `/unpin` Files On-Demand commands, and restarts the client. It does
+  not require OAuth and never deletes the visible cloud item.
+- The live provider-wide probe currently shows active upload/download, indexing, and reconciliation
+  work, so mutation remains blocked and no sync process was interrupted. Recursive/batch OneDrive
+  eviction and a physical-space receipt from the live provider remain open; the 300 GB goal is not
+  claimed complete.

@@ -11,7 +11,8 @@
     verificationBlockerActions,
   } from "./icloudLocalEvictionFeedback";
 
-  let { cloudRoot }: { cloudRoot: string } = $props();
+  let { cloudRoot, provider }: { cloudRoot: string; provider: "icloud" | "onedrive" } = $props();
+  const providerName = $derived(provider === "icloud" ? "iCloud" : "OneDrive");
 
   let path = $state("");
   let planning = $state(false);
@@ -37,7 +38,7 @@
         multiple: false,
         directory: false,
         defaultPath: cloudRoot,
-        title: "로컬 사본 상태를 확인할 iCloud 파일 선택",
+        title: `로컬 사본 상태를 확인할 ${providerName} 파일 선택`,
       });
       if (typeof selected !== "string") return;
       path = selected;
@@ -73,9 +74,9 @@
   async function evictLocalCopy() {
     if (!plan || !executionReady()) return;
     const approved = await confirm(
-      `${fmtBytes(plan.allocated_bytes)}의 로컬 iCloud 사본만 축출합니다.\n` +
+      `${fmtBytes(plan.allocated_bytes)}의 로컬 ${providerName} 사본만 축출합니다.\n` +
         "클라우드 항목은 유지되며 실행 직전에 상태를 다시 검증합니다.",
-      { title: "DiskSage iCloud 로컬 사본 축출", kind: "warning" },
+      { title: `DiskSage ${providerName} 로컬 사본 축출`, kind: "warning" },
     );
     if (!approved) return;
     executing = true;
@@ -99,8 +100,8 @@
 
   function observationLabel(method: api.IcloudStateObservationMethod): string {
     return method === "file-provider-ctl-evaluate"
-      ? "macOS File Provider"
-      : "Foundation ubiquitous item";
+      ? "공급자 상태 확인 완료"
+      : "업로드 상태를 다시 확인하세요";
   }
 
   function uploadLabel(state: api.IcloudLocalState): string {
@@ -121,13 +122,13 @@
 </script>
 
 <div class="local-eviction-panel">
-  <strong>iCloud 로컬 사본 회수</strong>
+  <strong>{providerName} 로컬 사본 회수</strong>
   <p class="muted">
-    이미 iCloud에 있는 파일의 로컬 캐시만 검사합니다. 파일 내용과 클라우드 객체는 변경하지 않습니다.
+    이미 {providerName}에 있는 파일의 로컬 캐시만 검사합니다. 파일 내용과 클라우드 객체는 변경하지 않습니다.
   </p>
   <div class="path-controls">
     <label>
-      iCloud 파일 절대 경로
+      {providerName} 파일 절대 경로
       <input
         class="local-path"
         type="text"
@@ -172,7 +173,7 @@
         {#if eviction.result.verification_complete}
           <p class="safe">
             로컬 할당 {fmtBytes(eviction.result.observed_allocation_reduction_bytes)} 감소를 확인했습니다.
-            iCloud 항목 경로와 ubiquitous identity는 유지되었습니다.
+            클라우드 항목 경로와 정체성은 유지되었습니다.
           </p>
         {:else}
           <div class="warning" role="alert">

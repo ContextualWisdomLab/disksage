@@ -874,8 +874,11 @@ pub async fn plan_icloud_local_copy_eviction(
     app: AppHandle,
 ) -> Result<cloud_local_eviction::IcloudLocalEvictionPlan, String> {
     let selected = selected_cloud_root(&app, &cloud_root)?;
-    if selected.provider != cloud::CloudProvider::Icloud {
-        return Err("icloud-local-eviction-root-required".into());
+    if !matches!(
+        selected.provider,
+        cloud::CloudProvider::Icloud | cloud::CloudProvider::Onedrive
+    ) {
+        return Err("file-provider-local-eviction-root-required".into());
     }
     cloud::validate_cloud_root_readable(&selected)?;
     let path = PathBuf::from(path);
@@ -912,8 +915,11 @@ pub async fn evict_icloud_local_copy(
         return Err("icloud-local-eviction-double-confirmation-mismatch".into());
     }
     let selected = selected_cloud_root(&app, &cloud_root)?;
-    if selected.provider != cloud::CloudProvider::Icloud {
-        return Err("icloud-local-eviction-root-required".into());
+    if !matches!(
+        selected.provider,
+        cloud::CloudProvider::Icloud | cloud::CloudProvider::Onedrive
+    ) {
+        return Err("file-provider-local-eviction-root-required".into());
     }
     cloud::validate_cloud_root_readable(&selected)?;
     let path = PathBuf::from(path);
@@ -922,7 +928,7 @@ pub async fn evict_icloud_local_copy(
         .path()
         .app_data_dir()
         .map_err(|_| "app-data-directory-unavailable".to_string())?;
-    let record_dir = app_data_dir.join("icloud-local-evictions");
+    let record_dir = app_data_dir.join("cloud-local-evictions");
     if record_dir.starts_with(Path::new(&selected.path)) || path.starts_with(&record_dir) {
         return Err("icloud-local-eviction-record-dir-overlaps-cloud-data".into());
     }
@@ -931,7 +937,7 @@ pub async fn evict_icloud_local_copy(
         let record_dir = cloud_local_eviction::prepare_immutable_record_directory(
             &app_data_dir,
             Path::new(&selected.path),
-            "icloud-local-evictions",
+            "cloud-local-evictions",
         )?;
         let plan = cloud_local_eviction::plan_icloud_local_eviction(
             &selected,
@@ -967,7 +973,7 @@ pub async fn evict_icloud_local_copy(
             Err(error) => (None, Some(error)),
         };
         Ok(IcloudLocalCopyEvictionOutput {
-            action: "evict-icloud-local-copy",
+            action: "evict-cloud-local-copy",
             plan,
             approval,
             approval_path: approval_path.to_string_lossy().into_owned(),
