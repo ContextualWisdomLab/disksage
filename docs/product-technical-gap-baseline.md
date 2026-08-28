@@ -888,3 +888,14 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   from about 8.5 GiB to 8.7 GiB. APFS and concurrent hosted builds make the host delta non-authoritative;
   the product records the exact identity and re-audit rather than promising a fixed byte gain. The
   same per-volume evidence and re-audit path is available in PR #267 (head `b4105f8e47f165c702fedd4d05f7d4af6d29b603`).
+
+## 2026-08-28 exact Docker image-size and customer-copy follow-up
+
+- PR #267 head `e24037bb78a66aeed2ae78bb03ff8503904b0902` now obtains Docker dangling-image
+  reclaim bytes from one exact-ID `image inspect` response. Docker's human-readable listing size is
+  not converted; missing, duplicate, non-numeric, or mismatched identity evidence blocks the plan.
+- The same head removes internal engine/model names and raw exception text from customer-facing
+  cleanup, organize, inventory, duplicate, and Homebrew messages. The user is given the next
+  bounded action while the exact approval, re-audit, and receipt authority remain unchanged.
+- Local targeted frontend checks passed (7 tests) and `npm run check` reported zero errors and zero
+  warnings. Hosted checks and independent review remain required before protected merge.
