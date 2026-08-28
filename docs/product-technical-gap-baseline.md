@@ -2,7 +2,7 @@
 
 **Snapshot:** 2026-08-28 (Asia/Seoul)
 **Repository heads at snapshot:** `main` `79067c1160ddedf7fc962cbf8067ce7e83c4564a`, PR #267
-`6a5198eea0438d525c9d0408d8c95e7c7fe7268f`, PR #263
+`3630e1eefacbeb996e6176373e6010da93bfa16c`, PR #263
 `060358340e922db7c36b6303dd0a959007a878c5`, and the current open queue (41 PRs: 20 ready, 21
 draft); hosted checks and protected review remain authoritative, and no merge is claimed from
 queued or stale status.
@@ -40,7 +40,21 @@ queued or stale status.
 4. Regenerable caches are a separate reclaim domain. They are per-child, identity-bound, active-use checked, journaled, and moved to OS Trash; they are not uploaded as user data.
 5. Deterministic Rust gates own safety. A local model may judge only the fixed maintenance command after dry-run evidence, calibration, and explicit human confirmation. No external LLM or OAuth service is a runtime prerequisite for the standalone product.
 
-## Buyer-observable product gaps
+## Reclaim-domain contract
+
+| Domain | What DiskSage may propose | Required proof before mutation | Explicitly out of scope |
+| --- | --- | --- | --- |
+| Cloud/local duplicate | Copy or adopt an already-present cloud object, then evict only the local copy | Provider item identity, content digest, sync attestation, current local identity, and fresh headroom | Deleting a local placeholder or treating `is_uploaded=false` as uploaded |
+| Exact duplicate photos/files | Keep one user-selected member and move the others to Trash | Stable content digest, complete metadata probe, source recheck, and per-group confirmation | Perceptual/near-duplicate deletion or “best quality” guessed from names |
+| Podman/Docker | Remove only stopped, unreferenced resources proven by a runtime re-audit | Runtime inventory, reference/label evidence, size evidence, and exact approval | Removing active volumes, BuildKit state, or raw VM images |
+| Colima/Podman VM storage | Run bounded guest `fstrim` while the guest is running | Fresh runtime state, fixed command, exact phrase, and bounded output receipt | `qemu-img`, sparse-file truncation, VM stop/delete, or host allocation claims |
+| Git worktrees | Remove a clean, inactive secondary worktree whose exact head is no longer retained | Fresh Git registration/status/size/open-file evidence and, for PR authority, same-repository state + head OID | Branch deletion, `git prune`, fork worktrees, dirty/active worktrees, or age-only deletion |
+
+The dashboard must sum these domains separately. A displayed target such as 300 GB is a
+measurement goal, not an authorization: unresolved bytes stay visible with their blocker and are
+never converted into a deletion estimate by a heuristic.
+
+## Customer-observable product gaps
 
 | Priority | Gap / observable symptom | Evidence | Acceptance criterion |
 | --- | --- | --- | --- |
@@ -51,6 +65,8 @@ queued or stale status.
 | P1 | “Orphan”/duplicate cleanup is difficult to trust because relationship evidence is not visible before action. | Ontology and duplicate/orphan PRs are open; current default path remains fail-closed. | Every proposed removal has an explainable parent/child/duplicate relation, identity recheck, reversible Trash action, and a no-candidate result when evidence is incomplete. |
 | P2 | Cross-platform behavior and accessibility are not presented as one release contract. | macOS/Linux/Windows release checks exist; several UI accessibility PRs remain open. | Release notes and UI expose platform capability matrix, keyboard/assistive labels, and bounded failure messages for each action. |
 | P0 | A 300 GB target cannot be met by cache pruning alone; VM-backed stores and user data need separate measured plans. | Current host observations show only tens of GB in proven regenerable/runtime candidates, while DaisyDisk’s large Application Support/Mobile Documents totals are not deletion authority. | Dashboard reports measured reclaimable bytes by domain, requires provider confirmation before local eviction, and leaves the remainder explicitly unresolved. |
+| P1 | Photo copies with different bytes cannot be safely ranked from a filename or an arbitrary quality score. | Exact-content duplicate audit can prove byte identity; non-identical images need dimensions, codec, and metadata evidence plus a human choice. | Group exact matches automatically, show measured image evidence when available, keep one selected original, and never delete a non-identical photo automatically. |
+| P1 | A stale PR worktree may point at a branch that is still open, so age alone is not deletion authority. | The worktree audit already binds same-repository closed/merged PR head OIDs and protects dirty, active, detached, fork, locked, and retained-tip worktrees. | Require an explicit cutoff and fresh same-repository PR state before proposing an old open-PR worktree; preserve the branch/commit and remove only a clean, inactive worktree after exact approval. |
 
 ## Technical and operational gaps
 

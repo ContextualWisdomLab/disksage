@@ -107,7 +107,7 @@
   async function trimRuntimeStorage(plan: api.RuntimeStoragePlan) {
     if (!runtimeStorageReady(plan) || !plan.exact_approval_phrase) return;
     const okay = await confirm(
-      `${plan.display_name}의 게스트 파일시스템에서 회수 가능한 영역만 정리합니다. 호스트 이미지와 사용자 파일은 변경하지 않습니다.\n\n실행 전에 상태를 다시 확인합니다.`,
+      `${plan.display_name}에서 회수 가능한 영역만 정리합니다. 개인 파일과 설정은 변경하지 않습니다.\n\n실행 전에 상태를 다시 확인합니다.`,
       { title: "DiskSage 저장 공간 정리", kind: "warning" },
     );
     if (!okay) return;
@@ -397,8 +397,8 @@
 
   <h3>가상 머신 저장 공간</h3>
   <p class="notice">
-    Podman과 Colima의 게스트 저장 공간 상태를 확인합니다. 게스트 정리는 명시적으로 승인한 경우에만 실행하며,
-    호스트 이미지 압축은 지원 도구가 확인되지 않으면 시도하지 않습니다.
+    Podman과 Colima의 가상 머신 저장 공간 상태를 확인합니다. 정리는 명시적으로 승인한 경우에만 실행하며,
+    가상 머신 전체 파일 크기 줄이기는 안전성을 확인할 수 있을 때만 별도로 진행합니다.
   </p>
   <button onclick={inspectRuntimeStorage} disabled={runtimeStorageBusy}>
     {runtimeStorageBusy ? "가상 머신 상태 확인 중…" : "Podman·Colima 저장 공간 확인"}
@@ -413,9 +413,9 @@
           {plan.guest_running === true ? "실행 중" : plan.guest_running === false ? "중지됨" : "상태 미확인"}
         </p>
         {#if plan.host_compaction_supported}
-          <p>호스트 이미지 압축을 실행할 수 있습니다.</p>
+          <p>가상 머신 전체 파일 크기 줄이기를 실행할 수 있습니다.</p>
         {:else}
-          <p class="notice">호스트 이미지 압축은 자동 실행하지 않습니다. 게스트 정리 후 런타임 도구에서 확인하세요.</p>
+          <p class="notice">전체 파일 크기 줄이기는 자동 실행하지 않습니다. 정리 후 런타임 관리 화면에서 상태를 확인하세요.</p>
         {/if}
         {#if plan.exact_approval_phrase}
           <label>확인 문구
