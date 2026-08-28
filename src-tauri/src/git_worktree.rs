@@ -642,6 +642,22 @@ pub fn github_closed_pull_request_heads(
     repository_root: &Path,
     timeout_ms: u64,
 ) -> Result<ClosedPullRequestHeads, String> {
+    github_closed_pull_request_heads_with_options(
+        repository_root,
+        GitWorktreeAuditOptions {
+            command_timeout_ms: timeout_ms,
+            ..GitWorktreeAuditOptions::default()
+        },
+    )
+}
+
+/// Resolve closed or merged pull-request heads within the caller's worktree bounds.
+pub fn github_closed_pull_request_heads_with_options(
+    repository_root: &Path,
+    options: GitWorktreeAuditOptions,
+) -> Result<ClosedPullRequestHeads, String> {
+    validate_options(options)?;
+    let timeout_ms = options.command_timeout_ms;
     let started = Instant::now();
     let mut heads = ClosedPullRequestHeads::new();
     let mut queries = vec![vec![
@@ -656,10 +672,6 @@ pub fn github_closed_pull_request_heads(
         OsString::from("--json"),
         OsString::from("headRefName,headRefOid,isCrossRepository,state"),
     ]];
-    let options = GitWorktreeAuditOptions {
-        command_timeout_ms: timeout_ms,
-        ..GitWorktreeAuditOptions::default()
-    };
     let branches = list_worktrees(repository_root, options)?
         .into_iter()
         .filter_map(|worktree| worktree.branch)
@@ -2333,7 +2345,7 @@ pub fn execute_stale_worktree_removal_with_github_pull_requests(
         .collect();
     let audit_live = |observed_at_ms| {
         let closed_heads = if include_closed_pull_requests {
-            github_closed_pull_request_heads(&repository_root, options.command_timeout_ms)?
+            github_closed_pull_request_heads_with_options(&repository_root, options)?
         } else {
             Default::default()
         };

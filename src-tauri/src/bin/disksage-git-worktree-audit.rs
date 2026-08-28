@@ -208,9 +208,9 @@ fn write_private_report(
 
 fn run_with_args(args: Args, observed_at_ms: u64) -> Result<serde_json::Value, String> {
     let closed_heads = if args.include_closed_pull_requests {
-        disksage_lib::git_worktree::github_closed_pull_request_heads(
+        disksage_lib::git_worktree::github_closed_pull_request_heads_with_options(
             &args.repository_root,
-            args.options.command_timeout_ms,
+            args.options,
         )?
     } else {
         Default::default()
