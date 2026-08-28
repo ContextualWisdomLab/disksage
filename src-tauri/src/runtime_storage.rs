@@ -524,7 +524,7 @@ pub fn execute_trim(
         .as_deref()
         .ok_or_else(|| "runtime-storage-home-unavailable".to_string())
         .and_then(|path| crate::volume_pressure::snapshot_volume(path, now_ms()));
-    let output = run_bounded(&fixed_binary(runtime), args)?;
+    let output = run_bounded_with_timeout(&fixed_binary(runtime), args, RECOVERY_TIMEOUT)?;
     let after = home
         .as_deref()
         .ok_or_else(|| "runtime-storage-home-unavailable".to_string())
