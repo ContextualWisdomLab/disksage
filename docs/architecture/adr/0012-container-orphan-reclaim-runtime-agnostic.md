@@ -32,6 +32,10 @@ identity-bound discipline that governs worktree removal and cache cleanup must a
    - dangling volumes reported by the runtime's own `dangling=true` filter;
    - custom networks excluding built-ins (`bridge`, `host`, `none`, `podman`) whose inspect
      proves zero attached endpoints, bounded at 64 probes per audit.
+   - Docker image reclaim bytes come only from a numeric `docker image inspect` `Size` for the
+     already-authorized full IDs. The human-readable `docker image ls` size is never converted by
+     a unit heuristic; missing, duplicate, or mismatched inspect identities fail the category
+     closed.
 4. Every execution requires a fresh re-audit at execution time; the approval phrase embeds a
    SHA-256 fingerprint of the exact sorted candidate identity set. A stale phrase, empty
    candidate set, incomplete evidence, duplicate identity, or candidate set above the bounded
@@ -81,3 +85,9 @@ identity-bound discipline that governs worktree removal and cache cleanup must a
 - Frontend contract tests bind visible copy to non-target guarantees, exact phrase + rationale
   gating, confirmation dialog, post-execution state invalidation, and assistive-technology
   announcements with actionable copy only.
+
+## References
+
+Docker, Inc. (2026). *docker image inspect*. Docker Docs. https://docs.docker.com/reference/cli/docker/image/inspect/
+
+Docker, Inc. (2026). *docker image ls*. Docker Docs. https://docs.docker.com/reference/cli/docker/image/ls/
