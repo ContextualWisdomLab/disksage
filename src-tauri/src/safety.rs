@@ -167,7 +167,11 @@ pub fn is_protected(path: &Path) -> bool {
     }
     #[cfg(unix)]
     {
-        if std::fs::canonicalize(shared_temp_root_path()).is_ok_and(|root| path == root) {
+        if std::fs::canonicalize(shared_temp_root_path())
+            .ok()
+            .zip(std::fs::canonicalize(path).ok())
+            .is_some_and(|(root, canonical)| root == canonical)
+        {
             return true;
         }
         // macOS의 사용자별 임시 디렉터리는 /private 아래로 canonicalize된다. 그 하위만
