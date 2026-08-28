@@ -712,19 +712,19 @@
 
   function capacityUnavailableLabel(reason: string | null): string {
     const labels: Record<string, string> = {
-      "provider-oauth-connection-missing": "저장된 연결 설정이 없습니다.",
-      "provider-oauth-connection-ambiguous": "이 루트와 일치하는 연결 설정이 여러 개입니다.",
-      "provider-oauth-connection-document-invalid": "연결 설정 문서를 안전하게 읽을 수 없습니다.",
-      "provider-oauth-credential-unavailable": "OS Keychain의 refresh token을 사용할 수 없습니다. 연결 해제 후 다시 연결하세요.",
-      "provider-oauth-refresh-failed": "공급자 인증 갱신에 실패했습니다. 연결 해제 후 다시 동의해야 할 수 있습니다.",
-      "cloud-capacity-provider-api-unavailable": "공급자 용량 API를 현재 확인할 수 없습니다.",
-      "icloud-quota-api-unavailable": "iCloud는 제3자 계정 quota API를 제공하지 않습니다.",
-      "icloud-native-quota-command-unavailable": "이 macOS에서 iCloud 용량 확인 명령을 사용할 수 없습니다.",
-      "icloud-native-quota-command-timeout": "iCloud 용량 확인이 시간 안에 완료되지 않았습니다.",
-      "icloud-native-quota-unsupported-platform": "iCloud 네이티브 용량 확인은 macOS에서만 지원됩니다.",
-      "icloud-native-quota-unavailable": "macOS가 iCloud 개인 계정 잔여 용량을 확인하지 못했습니다.",
+      "provider-oauth-connection-missing": "저장된 연결이 없습니다. 클라우드 연결을 먼저 설정하세요.",
+      "provider-oauth-connection-ambiguous": "일치하는 연결이 여러 개입니다. 연결 설정을 확인하세요.",
+      "provider-oauth-connection-document-invalid": "연결 설정을 읽지 못했습니다. 연결을 다시 설정하세요.",
+      "provider-oauth-credential-unavailable": "클라우드 연결을 사용할 수 없습니다. 연결을 해제한 뒤 다시 연결하세요.",
+      "provider-oauth-refresh-failed": "클라우드 연결을 갱신하지 못했습니다. 연결을 해제한 뒤 다시 연결하세요.",
+      "cloud-capacity-provider-api-unavailable": "클라우드 저장 공간을 확인하지 못했습니다. 잠시 후 다시 시도하세요.",
+      "icloud-quota-api-unavailable": "iCloud 저장 공간을 자동으로 확인할 수 없습니다. 상태를 직접 확인하세요.",
+      "icloud-native-quota-command-unavailable": "이 macOS에서는 iCloud 저장 공간을 확인할 수 없습니다. macOS 상태를 확인하세요.",
+      "icloud-native-quota-command-timeout": "iCloud 저장 공간 확인이 늦어지고 있습니다. 잠시 후 다시 시도하세요.",
+      "icloud-native-quota-unsupported-platform": "iCloud 저장 공간 확인은 macOS에서 지원됩니다. macOS에서 다시 시도하세요.",
+      "icloud-native-quota-unavailable": "iCloud 저장 공간을 확인하지 못했습니다. 잠시 후 다시 시도하세요.",
     };
-    return labels[reason ?? ""] ?? "원격 용량을 확인할 수 없습니다.";
+    return labels[reason ?? ""] ?? "클라우드 저장 공간을 확인하지 못했습니다. 잠시 후 다시 시도하세요.";
   }
 
   async function verifyProviderCapacity() {
@@ -797,63 +797,63 @@
 
   function syncStateLabel(state: api.ProviderSyncState | undefined): string {
     const labels: Record<api.ProviderSyncState, string> = {
-      complete: "공급자 동기화 완료",
-      "pending-upload": "로컬 최신본이지만 공급자 업로드 대기 중",
-      "not-ubiquitous": "iCloud 관리 대상 아님",
-      "not-local-current": "로컬 최신본 아님",
-      uploading: "공급자 업로드 중",
-      "excluded-from-sync": "공급자 동기화 제외됨",
-      "sync-paused": "공급자 동기화 일시중지됨",
-      "remote-unavailable": "원격 객체를 확인할 수 없음",
-      "content-mismatch": "원격 콘텐츠가 로컬 복사본과 다름",
-      unknown: "공급자 상태 미확인",
+      complete: "클라우드 동기화 완료",
+      "pending-upload": "로컬 최신 파일의 클라우드 업로드를 기다리는 중",
+      "not-ubiquitous": "iCloud 동기화 대상이 아님",
+      "not-local-current": "로컬 최신 파일이 아님",
+      uploading: "클라우드 업로드 중",
+      "excluded-from-sync": "클라우드 동기화에서 제외됨",
+      "sync-paused": "클라우드 동기화가 일시 중지됨",
+      "remote-unavailable": "클라우드 파일을 확인할 수 없음",
+      "content-mismatch": "클라우드 파일과 로컬 파일이 다름",
+      unknown: "클라우드 상태 미확인",
     };
     return labels[state ?? "unknown"] ?? labels.unknown;
   }
 
   function icloudBlockerLabel(blocker: string): string {
     const labels: Record<string, string> = {
-      "icloud-sync-health-evidence-incomplete": "iCloud 동기화 증거가 불완전함",
-      "icloud-upload-queue-nonempty": "iCloud 업로드 대기열이 남아 있음",
+      "icloud-sync-health-evidence-incomplete": "iCloud 동기화 상태 확인이 끝나지 않음",
+      "icloud-upload-queue-nonempty": "iCloud 업로드 대기 항목이 남아 있음",
       "icloud-upload-in-flight": "iCloud 업로드가 진행 중임",
-      "icloud-upload-blocked-on-sync-up": "iCloud sync-up 대기 항목이 있음",
-      "icloud-upload-out-of-quota": "iCloud 용량 부족 항목이 있음",
-      "icloud-upload-queue-state-unclassified": "분류되지 않은 iCloud 대기 상태가 있음",
-      "icloud-local-sync-item-error-present": "iCloud 로컬 동기화 오류가 있음",
-      "icloud-native-sync-up-pending": "macOS iCloud sync-up이 아직 끝나지 않음",
-      "icloud-native-sync-down-pending": "macOS iCloud sync-down이 아직 끝나지 않음",
-      "icloud-native-status-evidence-incomplete": "macOS iCloud 상태 증거가 불완전함",
-      "icloud-native-status-command-timeout": "macOS iCloud 상태 확인이 시간 초과되어 복사를 보류함",
-      "icloud-file-provider-no-progress": "File Provider fetch/create 요청이 진행률 없이 정지함",
-      "icloud-file-provider-materialization-failed": "File Provider 파일 materialization이 실패함(staged item 없음)",
-      "icloud-file-provider-item-locked": "File Provider 항목이 전파 잠금 상태임",
-      "icloud-file-provider-stalled": "File Provider 오래된 오류로 전송이 정지된 상태임",
-      "icloud-file-provider-filename-excluded": "iCloud가 파일 이름 때문에 동기화에서 제외한 항목이 있음",
-      "icloud-file-provider-root-excluded": "iCloud가 동기화 루트에서 제외한 항목이 있음",
-      "icloud-file-provider-transfer-active": "File Provider 기존 upload/download가 진행 중임",
-      "icloud-file-provider-dump-timeout": "File Provider 상태 확인이 시간 초과됨",
-      "icloud-file-provider-dump-output-truncated": "File Provider 상태 증거가 잘려 불완전함",
-      "icloud-file-provider-evidence-unavailable": "File Provider 상태 증거를 확인할 수 없음",
-      "icloud-item-error-octagon-not-signed-in": "iCloud 계정 인증이 필요함",
+      "icloud-upload-blocked-on-sync-up": "iCloud 업로드 확인이 끝나지 않음",
+      "icloud-upload-out-of-quota": "iCloud 저장 공간이 부족함",
+      "icloud-upload-queue-state-unclassified": "iCloud 대기 상태를 확인하지 못함",
+      "icloud-local-sync-item-error-present": "iCloud 동기화 오류가 있음",
+      "icloud-native-sync-up-pending": "macOS iCloud 업로드가 아직 끝나지 않음",
+      "icloud-native-sync-down-pending": "macOS iCloud 다운로드가 아직 끝나지 않음",
+      "icloud-native-status-evidence-incomplete": "macOS iCloud 상태 확인이 끝나지 않음",
+      "icloud-native-status-command-timeout": "macOS iCloud 상태 확인이 늦어져 복사를 보류함",
+      "icloud-file-provider-no-progress": "iCloud 파일 전송이 진행되지 않음",
+      "icloud-file-provider-materialization-failed": "iCloud 파일 준비가 끝나지 않음",
+      "icloud-file-provider-item-locked": "iCloud 파일이 잠겨 있음",
+      "icloud-file-provider-stalled": "iCloud 파일 전송이 멈춤",
+      "icloud-file-provider-filename-excluded": "파일 이름 때문에 iCloud 동기화에서 제외됨",
+      "icloud-file-provider-root-excluded": "iCloud 동기화에서 제외된 위치임",
+      "icloud-file-provider-transfer-active": "iCloud 파일 전송이 진행 중임",
+      "icloud-file-provider-dump-timeout": "iCloud 상태 확인이 늦어짐",
+      "icloud-file-provider-dump-output-truncated": "iCloud 상태 확인이 끝나지 않음",
+      "icloud-file-provider-evidence-unavailable": "iCloud 상태를 확인할 수 없음",
+      "icloud-item-error-octagon-not-signed-in": "iCloud 계정 로그인이 필요함",
       "icloud-item-error-older-than-24h": "iCloud 동기화 오류가 24시간 이상 지속됨",
     };
-    return labels[blocker] ?? blocker;
+    return labels[blocker] ?? "추가 확인 필요. iCloud 상태를 다시 확인하세요.";
   }
 
   function providerGlobalSyncBlockerLabel(blocker: string): string {
     const labels: Record<string, string> = {
-      "provider-global-sync-transfer-active": "전역 파일 전송이 진행 중임",
-      "provider-global-sync-indexing-pending": "공급자 인덱싱이 끝나지 않음",
-      "provider-global-sync-reconciliation-pending": "공급자 reconciliation 대기 항목이 있음",
+      "provider-global-sync-transfer-active": "클라우드 파일 전송이 진행 중임",
+      "provider-global-sync-indexing-pending": "클라우드 파일 확인이 끝나지 않음",
+      "provider-global-sync-reconciliation-pending": "클라우드 상태 확인 대기 항목이 있음",
       "provider-global-sync-filename-too-long": "파일명 제한 오류가 있음",
-      "provider-global-sync-temporarily-disconnected": "공급자가 일시적으로 연결 해제됨",
-      "provider-global-sync-server-unreachable": "공급자 서버에 연결할 수 없음",
-      "provider-global-sync-local-disk-full": "로컬 디스크 공간 부족으로 공급자 작업이 실패함",
-      "provider-global-sync-item-not-found": "공급자가 요청한 항목을 찾지 못함",
-      "provider-global-sync-error": "공급자 전역 동기화 오류가 있음",
-      "provider-global-sync-probe-timeout": "공급자 동기화 상태 확인이 시간 초과됨",
+      "provider-global-sync-temporarily-disconnected": "클라우드 연결이 잠시 끊김",
+      "provider-global-sync-server-unreachable": "클라우드에 연결할 수 없음",
+      "provider-global-sync-local-disk-full": "로컬 저장 공간 부족으로 클라우드 작업이 실패함",
+      "provider-global-sync-item-not-found": "클라우드 파일을 찾지 못함",
+      "provider-global-sync-error": "클라우드 동기화 오류가 있음",
+      "provider-global-sync-probe-timeout": "클라우드 상태 확인이 늦어짐",
     };
-    return labels[blocker] ?? blocker;
+    return labels[blocker] ?? "추가 확인 필요. 클라우드 상태를 다시 확인하세요.";
   }
 
   function duration(ms: number): string {
@@ -871,16 +871,76 @@
       unknown: "범위 미확인",
     }[scope];
   }
+
+  function cloudProviderLabel(provider: api.CloudProvider | string | null | undefined): string {
+    return provider === "icloud"
+      ? "iCloud"
+      : provider === "onedrive"
+        ? "OneDrive"
+        : provider === "google-drive"
+          ? "Google Drive"
+          : "클라우드";
+  }
+
+  function customerDecisionReasonLabel(reason: string): string {
+    const label = cloudDecisionReasonLabel(reason);
+    if (label === reason) return "추가 확인 필요. 파일 상태를 다시 확인하세요.";
+    return label
+      .replaceAll("공급자", "클라우드")
+      .replaceAll("증거", "확인")
+      .replaceAll("메타데이터", "파일 정보")
+      .replaceAll("attestation", "업로드 확인")
+      .replaceAll("provider", "클라우드")
+      .replaceAll("eviction", "원본 정리");
+  }
+
+  function productionSourceLabel(source: string): string {
+    if (source.startsWith("embedded:")) return "파일에 기록된 생산 시점";
+    if (source.includes("filename")) return "파일명에서 확인한 날짜";
+    if (source.includes("birth")) return "파일 생성 시각";
+    if (source.includes("mtime")) return "파일 수정 시각";
+    return "파일 정보 확인 필요";
+  }
+
+  function confidenceLabel(confidence: string): string {
+    return { high: "높음", medium: "중간", low: "낮음" }[confidence] ?? "확인 필요";
+  }
+
+  function sourceContextLabel(context: string): string {
+    if (context.toLowerCase().includes("download")) return "다운로드 파일";
+    if (context.toLowerCase().includes("archive")) return "보관 파일";
+    return "일반 파일";
+  }
+
+  function candidateKindLabel(kind: string): string {
+    return {
+      document: "문서",
+      image: "이미지",
+      audio: "음성·음악",
+      video: "동영상",
+      archive: "압축 파일",
+    }[kind] ?? "파일";
+  }
+
+  function workStatusLabel(status: string | null | undefined): string {
+    return status === "complete"
+      ? "완료"
+      : status === "blocked"
+        ? "확인 대기"
+        : status === "in_progress"
+          ? "진행 중"
+          : "확인 필요";
+  }
 </script>
 
 <section>
-  <h2>클라우드 오프로드 <span class="dry">DRY-RUN</span></h2>
+  <h2>클라우드 파일 정리 <span class="dry">미리보기</span></h2>
   <p class="muted">
-    iCloud Drive·OneDrive·Google Drive의 로컬 루트를 탐지하고, 파일 내부 메타데이터를 우선하여 생산 시점과 원래 상대 경로를 보존하는 이동 계획만 만듭니다.
+    iCloud Drive·OneDrive·Google Drive에서 정리할 파일을 찾고, 파일 정보와 원래 위치를 확인한 뒤 클라우드 복사 계획을 만듭니다.
   </p>
 
   {#if roots.length === 0}
-    <p class="warning">탐지된 클라우드 루트가 없습니다.</p>
+    <p class="warning">클라우드 위치를 찾지 못했습니다. 연결 상태를 확인한 뒤 다시 불러오세요.</p>
   {:else}
     <div class="controls">
       <label>
@@ -902,69 +962,68 @@
         <input type="number" min="0" step="1" bind:value={minAgeDays} disabled={busy} />
       </label>
       <button onclick={preview} disabled={busy || nativeCopyActive || !scannedRoot || !selectedRoot || !selectedRootDetails()?.readable}>
-        {busy ? "계획 중…" : "오프로드 후보 미리보기"}
+        {busy ? "계획 중…" : "정리 후보 미리보기"}
       </button>
       <button onclick={reconcileCloudReceipts} disabled={reconciling || busy}>
-        {reconciling ? "기존 영수증 재검증 중…" : "기존 영수증·ADR/Goal 재검증"}
+        {reconciling ? "기존 작업 확인 중…" : "기존 작업 다시 확인"}
       </button>
       <button onclick={() => refreshIcloudHealth(true)} disabled={checkingIcloudHealth || busy}>
         {checkingIcloudHealth ? "iCloud 상태 확인 중…" : "iCloud 상태 즉시 재확인"}
       </button>
-      <span class="muted">화면이 열려 있는 동안 클라우드 쓰기·원본 삭제 없이 provider 증거와 ADR/Goal을 갱신합니다. iCloud가 막히면 자동 확인은 최대 5분 간격으로 줄어듭니다.</span>
+      <span class="muted">화면이 열려 있는 동안 파일을 바꾸지 않고 클라우드 상태를 확인합니다. iCloud 확인이 늦어지면 최대 5분 뒤 다시 확인합니다.</span>
     </div>
     {#if selectedRootDetails() && !selectedRootDetails()?.readable}
       <p class="warning">
-        이 File Provider 루트는 현재 읽을 수 없습니다. 공급자 전역 상태 진단과 고정된 데스크톱 클라이언트 복구만 허용하며,
-        복사·attestation·원본 정리는 루트가 다시 읽힐 때까지 차단합니다.
+        이 클라우드 위치를 지금 읽을 수 없습니다. 연결 상태를 확인하고 다시 불러오세요. 위치를 읽을 수 있을 때까지 복사와 원본 정리를 시작하지 않습니다.
       </p>
     {/if}
     {#if reconciliation}
       <div class="receipt-reconciliation" aria-live="polite">
-        <strong>재시작 후 영수증 재검증</strong>
+        <strong>이전 작업 다시 확인</strong>
         <span class="context">
-          {reconciliation.receipts_seen}개 확인 · {reconciliation.attested_count}개 provider 증거 갱신 ·
+          {reconciliation.receipts_seen}개 확인 · {reconciliation.attested_count}개 클라우드 상태 갱신 ·
           {reconciliation.pending_count}개 업로드 대기 · {reconciliation.error_count}개 확인 실패
           {#if reconciliation.incomplete_reconciliation} · {reconciliation.unprocessed_count}개 미처리{/if}
         </span>
         {#if reconciliation.entries.length === 0}
-          <p class="muted">저장된 cloud receipt가 없습니다.</p>
+          <p class="muted">저장된 이전 작업이 없습니다. 후보를 먼저 확인하세요.</p>
         {:else}
           {#each reconciliation.entries as entry}
             <p class:warning={entry.error !== null || entry.blockers.length > 0}>
-              영수증 {entry.receipt_id ?? "무효"} · {entry.provider ?? "미확인"} ·
-              Goal {entry.goal_status ?? "미확인"} ({entry.goal_state ?? "미확인"}) ·
+              작업 {entry.receipt_id ?? "확인 필요"} · {cloudProviderLabel(entry.provider)} ·
+              진행 상태 {workStatusLabel(entry.goal_status)} ·
               동기화 {syncStateLabel(entry.provider_sync_state ?? undefined)}
-              {#if entry.error} · {entry.error}{/if}
-              {#if entry.blockers.length > 0} · 차단: {entry.blockers.join(", ")}{/if}
+              {#if entry.error} · 확인이 필요합니다. 다시 시도하세요.{/if}
+              {#if entry.blockers.length > 0} · 확인이 필요합니다. 상태를 다시 확인하세요.{/if}
             </p>
           {/each}
         {/if}
-        <p class="muted">이 작업은 provider 증거와 동적 ADR/Goal만 갱신하며 클라우드 쓰기·원본 삭제는 수행하지 않습니다.</p>
+        <p class="muted">이 작업은 클라우드 상태만 다시 확인하며 파일 복사나 원본 삭제는 수행하지 않습니다.</p>
       </div>
     {/if}
-    {#if reconciliationError}<p class="error" role="alert">{reconciliationError}</p>{/if}
+    {#if reconciliationError}<p class="error" role="alert">이전 작업을 확인하지 못했습니다. 다시 시도하세요.</p>{/if}
     {#if icloudHealth}
       <div class="receipt-reconciliation" aria-live="polite">
-        <strong>iCloud 새 복사 admission</strong>
+        <strong>iCloud 새 복사 상태</strong>
         <span class="context">
           {icloudHealth.new_copy_admission_state === "clear" ? "새 복사 허용 가능" : "새 복사 차단"} ·
           대기 {icloudHealth.upload_queue.scheduled_waiting_count}개 ·
           진행 {icloudHealth.upload_queue.scheduled_active_count}개 ·
-          sync-up 차단 {icloudHealth.upload_queue.blocked_on_sync_up_count}개 ·
+          업로드 확인 대기 {icloudHealth.upload_queue.blocked_on_sync_up_count}개 ·
           오류 {icloudHealth.upload_queue.item_error_count}개
           {#if icloudHealth.file_provider_activity}
-            · File Provider 무진행 fetch {icloudHealth.file_provider_activity.no_progress_fetch_count}개 / create {icloudHealth.file_provider_activity.no_progress_create_count}개 ·
-            materialization 실패 {icloudHealth.file_provider_activity.materialization_failure_count}개 / staged item 없음 {icloudHealth.file_provider_activity.staged_item_missing_count}개 ·
-            활성 upload {icloudHealth.file_provider_activity.active_upload_count}개 / download {icloudHealth.file_provider_activity.active_download_count}개
+            · 진행되지 않는 파일 전송 {icloudHealth.file_provider_activity.no_progress_fetch_count + icloudHealth.file_provider_activity.no_progress_create_count}개 ·
+            파일 준비 실패 {icloudHealth.file_provider_activity.materialization_failure_count}개 / 준비 대기 {icloudHealth.file_provider_activity.staged_item_missing_count}개 ·
+            활성 업로드 {icloudHealth.file_provider_activity.active_upload_count}개 / 다운로드 {icloudHealth.file_provider_activity.active_download_count}개
             {#if providerProgressPercent(icloudHealth.file_provider_activity.active_upload_progress_millionths)}
-              · upload 진행률 {providerProgressPercent(icloudHealth.file_provider_activity.active_upload_progress_millionths)}
+              · 업로드 진행률 {providerProgressPercent(icloudHealth.file_provider_activity.active_upload_progress_millionths)}
             {/if}
             {#if providerProgressPercent(icloudHealth.file_provider_activity.active_download_progress_millionths)}
-              · download 진행률 {providerProgressPercent(icloudHealth.file_provider_activity.active_download_progress_millionths)}
+              · 다운로드 진행률 {providerProgressPercent(icloudHealth.file_provider_activity.active_download_progress_millionths)}
             {/if}
           {/if}
         </span>
-        <p class="muted">마지막 증거 확인: {evidenceObservedAt(icloudHealth.observed_at_ms)}</p>
+        <p class="muted">마지막 상태 확인: {evidenceObservedAt(icloudHealth.observed_at_ms)}</p>
         {#if icloudHealthBlockedSinceMs > 0}
           <p class="muted">
             동일 차단 지속: {duration(Math.max(0, icloudHealth.observed_at_ms - icloudHealthBlockedSinceMs))}
@@ -972,14 +1031,13 @@
         {/if}
         {#if hasIcloudHealthEvidencePersistenceFailure(icloudHealth.notices)}
           <p class="warning">
-            iCloud 동기화 요약 증거를 저장하지 못했습니다. 이번 관찰값은 표시하되 장기 비교에는 사용하지 않으며,
-            복사·원본 정리 판정은 현재 증거가 다시 저장될 때까지 보수적으로 유지합니다.
+            iCloud 동기화 상태를 저장하지 못했습니다. 현재 상태를 확인한 뒤 다시 시도하세요. 저장이 완료될 때까지 복사와 원본 정리를 보류합니다.
           </p>
         {/if}
         {#if icloudHealth.new_copy_admission_blockers.length > 0}
           <p class="warning">
-            차단 사유:
-            {icloudHealth.new_copy_admission_blockers.map(icloudBlockerLabel).join(", ")}
+            확인이 필요한 항목:
+            {icloudHealth.new_copy_admission_blockers.map(icloudBlockerLabel).join(", ")} · 상태를 다시 확인하세요.
           </p>
           {#if icloudHealth.file_provider_activity && (
             icloudHealth.file_provider_activity.no_progress_fetch_count > 0
@@ -999,83 +1057,74 @@
           {/if}
           {#if icloudHealth.file_provider_activity && (icloudHealth.file_provider_activity.no_progress_fetch_count > 0 || icloudHealth.file_provider_activity.no_progress_create_count > 0)}
             <p class="warning">
-              Finder가 “복사 준비 중”에서 멈춘 동안 File Provider의 no-progress 요청이 함께 관찰되었습니다. Finder에 남은 복사 대기는 취소하고,
-              File Provider 상태가 정상으로 관찰된 뒤 DiskSage에서 새 계획을 다시 실행해야 합니다.
+              Finder가 “복사 준비 중”에서 멈췄습니다. Finder에 남은 복사 대기를 취소하고, 상태가 정상으로 확인된 뒤 새 계획을 다시 실행하세요.
             </p>
           {/if}
           {#if icloudHealth.file_provider_activity && (icloudHealth.file_provider_activity.materialization_failure_count > 0 || icloudHealth.file_provider_activity.staged_item_missing_count > 0)}
             <p class="warning">
-              File Provider가 파일 materialization에 실패했거나 staged item을 잃었습니다. 현재 복사는 완료로 간주하지 않으며,
-              새 복사·attestation·원본 정리는 상태가 정상화될 때까지 차단합니다.
+              파일 준비가 끝나지 않아 현재 복사를 완료로 처리할 수 없습니다. 복사 상태가 정상으로 확인될 때까지 새 복사와 원본 정리를 보류합니다.
             </p>
           {/if}
           {#if icloudHealth.new_copy_admission_blockers.includes("icloud-file-provider-item-locked")}
             <p class="warning">
-              File Provider 항목의 전파 잠금 상태가 Finder 복사 준비 지연과 함께 관찰되었습니다. Finder의 대기 작업을 취소하고,
-              상태가 정상화된 뒤 DiskSage에서 새 복사를 다시 시작하십시오.
+              iCloud 파일이 잠겨 Finder 복사가 늦어지고 있습니다. Finder의 대기 작업을 취소하고, 상태가 정상으로 확인된 뒤 새 복사를 다시 시작하세요.
             </p>
           {/if}
           {#if icloudHealth.new_copy_admission_blockers.includes("icloud-file-provider-stalled")}
             <p class="warning">
-              File Provider 큐에서 15분 이상 묵은 fetch/create 오류가 관찰되었습니다. Finder의 “복사 준비 중” 작업을 취소하고,
-              상태가 정상화된 뒤 DiskSage에서 새 복사를 다시 시작하십시오.
+              iCloud 파일 전송 오류가 15분 이상 지속되었습니다. Finder의 “복사 준비 중” 작업을 취소하고, 상태가 정상으로 확인된 뒤 새 복사를 다시 시작하세요.
             </p>
           {/if}
           {#if icloudHealth.file_provider_activity?.timed_out}
             <p class="warning">
-              File Provider 상태 확인이 제한시간을 넘었습니다. Finder에 남은 복사 대기를 취소하고,
-              DiskSage에서 상태를 다시 확인한 뒤 admission이 clear일 때만 새 복사를 시작하십시오.
+              iCloud 상태 확인이 늦어지고 있습니다. Finder에 남은 복사 대기를 취소하고, DiskSage에서 상태를 다시 확인한 뒤 새 복사를 시작하세요.
             </p>
           {/if}
           {#if icloudHealth.file_provider_activity && (icloudHealth.file_provider_activity.active_upload_count > 0 || icloudHealth.file_provider_activity.active_download_count > 0)}
             <p class="warning">
-              iCloud에 기존 전송이 진행 중입니다. 기존 upload/download가 끝나고 새 복사 admission이
-              clear가 될 때까지 Finder 복사와 원본 정리를 진행하지 않습니다.
+              iCloud에 기존 전송이 진행 중입니다. 기존 전송이 끝나고 상태가 정상으로 확인될 때까지 Finder 복사와 원본 정리를 진행하지 않습니다.
             </p>
           {/if}
           {#if icloudHealthBlockedSinceMs > 0 && icloudHealth.observed_at_ms - icloudHealthBlockedSinceMs >= PROVIDER_STALL_WARNING_MS}
             <p class="warning">
-              동일한 iCloud 차단 상태가 15분 이상 지속되었습니다. Finder에 남은 복사 대기를 취소하고,
-              iCloud 상태가 clear가 될 때까지 새 복사·attestation·원본 정리를 시작하지 마십시오.
+              동일한 iCloud 차단 상태가 15분 이상 지속되었습니다. Finder에 남은 복사 대기를 취소하고, iCloud 상태가 정상으로 확인될 때까지 새 복사와 원본 정리를 시작하지 마세요.
             </p>
           {/if}
         {:else}
-          <p class="capacity-ok">iCloud 전역 업로드 대기열이 비어 있습니다. 개별 파일은 별도 provider 증거가 필요합니다.</p>
+          <p class="capacity-ok">iCloud 업로드 대기열이 비어 있습니다. 파일별 상태를 확인한 뒤 다음 작업을 진행하세요.</p>
         {/if}
         {#if typeof icloudHealth.managed_database_allocated_bytes === "number"}
           <p class="warning">
-            macOS 관리 iCloud 동기화 DB가 {fmtBytes(icloudHealth.managed_database_allocated_bytes)}를 사용 중입니다.
-            DiskSage는 이 시스템 관리 데이터를 삭제하지 않습니다.
+            iCloud 동기화가 {fmtBytes(icloudHealth.managed_database_allocated_bytes)}의 저장 공간을 사용 중입니다. 저장 공간을 확인하세요.
           </p>
         {/if}
         {#if icloudHealth.notices.some((notice) => notice.startsWith("icloud-item-error-"))}
           <p class="warning">
-            동기화 진단:
+            동기화 상태 확인:
             {icloudHealth.notices
               .filter((notice) => notice.startsWith("icloud-item-error-"))
               .map(icloudBlockerLabel)
-              .join(", ")}
+              .join(", ")} · 상태를 다시 확인하세요.
           </p>
         {/if}
-        <p class="muted">읽기 전용 로컬 증거이며, 원격 용량·개별 파일 업로드 완료·원본 삭제 권한을 대신 증명하지 않습니다.</p>
+        <p class="muted">현재 macOS 상태를 읽어 확인했습니다. 저장 공간과 파일별 업로드 상태를 확인한 뒤 원본 정리를 결정하세요.</p>
       </div>
     {/if}
     {#if icloudHealthError}
-      <p class="error" role="alert">iCloud 상태 확인: {icloudHealthError}</p>
+      <p class="error" role="alert">iCloud 상태 확인에 실패했습니다. 다시 시도하세요.</p>
       <p class="warning">
-        iCloud File Provider 증거를 확인하지 못했습니다. Finder에 남은 복사 대기를 취소하고,
-        로컬 여유공간을 확보한 뒤 DiskSage에서 상태를 다시 확인하십시오.
+        iCloud 상태를 확인하지 못했습니다. Finder에 남은 복사 대기를 취소하고, 로컬 여유 공간을 확보한 뒤 상태를 다시 확인하세요.
       </p>
     {/if}
     {#if providerGlobalSync}
       <div class="receipt-reconciliation" aria-live="polite">
-        <strong>{providerGlobalSync.provider} 전역 동기화 admission</strong>
+        <strong>{cloudProviderLabel(providerGlobalSync.provider)} 전체 동기화 상태</strong>
         <span class="context">
           {providerGlobalSync.state === "clear" && providerGlobalSync.blockers.length === 0 ? "새 복사 허용 가능" : "새 복사 차단"} ·
           업로드 전송 {providerGlobalSync.upload_progress_present ? "진행 중" : "없음"} ·
           다운로드 전송 {providerGlobalSync.download_progress_present ? "진행 중" : "없음"}
           {#if providerGlobalSync.pending_indexable_count !== null}
-            · 인덱싱 대기 {providerGlobalSync.pending_indexable_count}개
+          · 확인 대기 {providerGlobalSync.pending_indexable_count}개
           {/if}
           · 마지막 관찰 {evidenceObservedAt(providerGlobalSyncObservedAtMs)} ·
           {providerGlobalSync.blockers.length === 0 ? "1분" : "5분"} 후 자동 재확인
@@ -1085,17 +1134,16 @@
         </span>
         {#if providerGlobalSync.blockers.length > 0}
           <p class="warning">
-            차단 사유: {providerGlobalSync.blockers.map(providerGlobalSyncBlockerLabel).join(", ")}
+            확인이 필요한 이유: {providerGlobalSync.blockers.map(providerGlobalSyncBlockerLabel).join(", ")} · 상태를 다시 확인하세요.
           </p>
           {#if providerGlobalSyncBlockedSinceMs > 0 && providerGlobalSyncObservedAtMs - providerGlobalSyncBlockedSinceMs >= PROVIDER_STALL_WARNING_MS}
             <p class="warning">
-              동일한 공급자 차단 상태가 15분 이상 지속되었습니다. Finder에 남은 복사 대기를 취소하고,
-              공급자 앱을 재기동한 뒤 상태가 clear가 될 때까지 새 복사·attestation·원본 정리를 시작하지 마십시오.
+              동일한 클라우드 차단 상태가 15분 이상 지속되었습니다. Finder에 남은 복사 대기를 취소하고, 클라우드 앱을 다시 시작한 뒤 상태를 재확인하세요.
             </p>
           {/if}
           {#if selectedRootDetails()?.provider !== "icloud"}
             <button onclick={recoverProviderClient} disabled={recoveringProvider || checkingProviderGlobalSync}>
-              {recoveringProvider ? "공급자 앱 재기동 중…" : "공급자 앱 재기동 후 상태 재확인"}
+            {recoveringProvider ? "클라우드 앱 재시작 중…" : "클라우드 앱 재시작 후 상태 확인"}
             </button>
             {#if canCancelFinderCopyForProviderGlobalSync(providerGlobalSync)}
               <button onclick={cancelFinderCopy} disabled={cancellingFinderCopy || checkingProviderGlobalSync}>
@@ -1105,23 +1153,22 @@
             {/if}
           {/if}
         {:else}
-          <p class="capacity-ok">공급자 전역 동기화 대기열이 비어 있습니다. 개별 파일은 별도 provider 증거가 필요합니다.</p>
+          <p class="capacity-ok">클라우드 전체 동기화 대기열이 비어 있습니다. 파일별 상태를 확인한 뒤 다음 작업을 진행하세요.</p>
         {/if}
         {#if providerRecovery}
           <p class:warning={providerRecovery.blockers.length > 0} class="muted">
             앱 종료·재기동 요청 완료 · 재관찰
             {providerRecovery.post_runtime_observed === true ? "확인됨" : "아직 확인되지 않음"}
-            {#if providerRecovery.blockers.length > 0} · {providerRecovery.blockers.join(", ")}{/if}
+            {#if providerRecovery.blockers.length > 0} · 상태를 다시 확인하세요.{/if}
           </p>
         {/if}
-        <p class="muted">읽기 전용 File Provider 집계 증거이며, 클라우드 쓰기·개별 파일 attestation·원본 삭제 권한을 대신 증명하지 않습니다.</p>
+        <p class="muted">클라우드 전체 상태를 읽어 확인했습니다. 파일별 업로드와 원본 정리 여부는 각 파일에서 확인하세요.</p>
       </div>
     {/if}
     {#if providerGlobalSyncError}
-      <p class="error" role="alert">공급자 전역 동기화 상태 확인: {providerGlobalSyncError}</p>
+      <p class="error" role="alert">클라우드 전체 동기화 상태 확인에 실패했습니다. 다시 시도하세요.</p>
       <p class="warning">
-        공급자 전역 증거를 확인하지 못했습니다. Finder에 남은 복사 대기를 취소하고,
-        공급자 앱이 정상으로 관찰될 때까지 새 복사·attestation·원본 정리를 시작하지 마십시오.
+        클라우드 전체 상태를 확인하지 못했습니다. Finder에 남은 복사 대기를 취소하고, 클라우드 앱을 다시 시작한 뒤 상태를 확인하세요.
       </p>
     {/if}
     {#if roots.some((root) => !root.readable)}
@@ -1131,26 +1178,24 @@
     {/if}
     {#if rootIssues.length > 0}
       <p class="warning">
-        클라우드 루트 탐지 문제 {rootIssues.length}건: {rootIssues.map((issue) => `${issue.provider ?? "file-provider"}/${issue.account_scope}/${issue.reason}`).join(", ")}
+        클라우드 위치 {rootIssues.length}곳을 확인하지 못했습니다. 접근 권한과 연결 상태를 확인한 뒤 다시 불러오세요.
       </p>
     {/if}
     {#if selectedRootDetails()?.provider === "icloud"}
       <div class="oauth-panel">
-        <strong>macOS iCloud 계정 용량 증거</strong>
+        <strong>iCloud 저장 공간</strong>
         <button onclick={verifyProviderCapacity} disabled={checkingCapacity}>
-          {checkingCapacity ? "iCloud 계정 확인 중…" : "iCloud 원격 잔여 용량 검증"}
+          {checkingCapacity ? "iCloud 저장 공간 확인 중…" : "iCloud 저장 공간 확인"}
         </button>
         {#if capacityForSelectedRoot()?.evidence_kind === "provider-native-status"}
           <p class="capacity-ok">
-            Apple 네이티브 계정 상태 확인 완료
+            Apple 계정 상태 확인 완료
             · 원격 잔여 {fmtBytes(capacityForSelectedRoot()?.remaining_bytes ?? 0)}
           </p>
         {:else if capacityForSelectedRoot()}
-          <p class="warning">
-            {capacityUnavailableLabel(capacityForSelectedRoot()?.unavailable_reason ?? null)}
-          </p>
+          <p class="warning">저장 공간을 확인한 뒤 다시 시도하세요. {capacityUnavailableLabel(capacityForSelectedRoot()?.unavailable_reason ?? null)}</p>
         {:else}
-          <p class="muted">관리자 권한이나 OAuth 없이 macOS의 읽기 전용 iCloud 계정 상태를 사용합니다.</p>
+          <p class="muted">macOS의 iCloud 상태를 확인합니다. 파일을 변경하지 않습니다.</p>
         {/if}
         {#key selectedRoot}
           <IcloudLocalEviction cloudRoot={selectedRoot} />
@@ -1159,38 +1204,36 @@
     {:else if selectedRootDetails()}
       <div class="oauth-panel">
         {#if connectionForSelectedRoot()}
-          <strong>{providerApiWriteConnected() ? "OAuth 업로드 연결" : "읽기 전용 OAuth descriptor 발견"}</strong>
-          <span class="context">범위: {connectionForSelectedRoot()?.scope}</span>
+          <strong>{providerApiWriteConnected() ? "클라우드 업로드 연결" : "읽기 전용 연결 확인"}</strong>
+          <span class="context">클라우드 연결이 설정되었습니다. 저장 공간을 확인하세요.</span>
           <button
             onclick={verifyProviderCapacity}
             disabled={checkingCapacity || disconnecting || connecting}
           >
-            {checkingCapacity ? "Keychain·원격 API 확인 중…" : "재시작 후 연결·원격 용량 검증"}
+            {checkingCapacity ? "클라우드 저장 공간 확인 중…" : "연결 및 저장 공간 다시 확인"}
           </button>
           <button onclick={disconnectProvider} disabled={disconnecting || connecting || checkingCapacity}>
-            {disconnecting ? "연결 해제 중…" : "보안 저장소 연결 해제"}
+            {disconnecting ? "연결 해제 중…" : "클라우드 연결 해제"}
           </button>
           {#if capacityForSelectedRoot()?.evidence_kind === "provider-api"}
             <p class="capacity-ok">
-              Keychain 인증 갱신과 공급자 API 확인 완료
+              클라우드 연결과 저장 공간 확인 완료
               {#if capacityForSelectedRoot()?.remaining_bytes !== null}
                 · 원격 잔여 {fmtBytes(capacityForSelectedRoot()?.remaining_bytes ?? 0)}
               {:else}
-                · 공급자 무제한 계정
+                · 저장 공간 제한 없음
               {/if}
             </p>
           {:else if capacityForSelectedRoot()}
-            <p class="warning">
-              {capacityUnavailableLabel(capacityForSelectedRoot()?.unavailable_reason ?? null)}
-            </p>
+            <p class="warning">저장 공간을 확인한 뒤 다시 시도하세요. {capacityUnavailableLabel(capacityForSelectedRoot()?.unavailable_reason ?? null)}</p>
           {:else}
             <p class="muted">
-              descriptor만 확인했습니다. 재시작 후 Keychain 자격 증명과 실제 공급자 API는 아직 검증하지 않았습니다.
+              연결 정보만 확인했습니다. 다시 연결한 뒤 저장 공간을 확인하세요.
             </p>
           {/if}
         {:else}
           <label>
-            {selectedRootDetails()?.provider === "onedrive" ? "Microsoft Desktop OAuth Client ID" : "Google Desktop OAuth Client ID"}
+            {selectedRootDetails()?.provider === "onedrive" ? "Microsoft 연결 정보" : "Google 연결 정보"}
             <input
               class="client-id"
               type="text"
@@ -1202,19 +1245,19 @@
           </label>
           <label>
             <input type="checkbox" bind:checked={oauthWriteAccess} disabled={connecting} />
-            File Provider 장애 시 API로 파일 업로드할 권한도 요청
+            클라우드에 파일을 업로드할 권한 요청
           </label>
           <button onclick={connectProvider} disabled={connecting || !oauthClientId.trim()}>
-            {connecting ? "브라우저 동의 대기 중…" : "시스템 브라우저로 OAuth 연결"}
+            {connecting ? "브라우저 확인 대기 중…" : "시스템 브라우저로 클라우드 연결"}
           </button>
           <p class="muted">
-            Client ID는 비밀키가 아닙니다. PKCE와 임의 loopback 포트를 사용하고 refresh token만 OS 보안 저장소에 보관합니다.
+            연결 정보는 안전하게 보관하며 화면과 작업 기록에 표시하지 않습니다. 연결 후 저장 공간을 확인하세요.
           </p>
           {#if selectedRootDetails()?.provider === "onedrive"}
-            <p class="muted">Microsoft Entra 앱은 Mobile/Desktop public client로 만들고 loopback redirect URI <code>http://localhost</code>를 등록해야 합니다. 실행 시 임의 포트를 붙이며 IPv4·IPv6 loopback만 수신합니다.</p>
+            <p class="muted">Microsoft 연결 정보를 준비한 뒤 시스템 브라우저에서 권한을 허용하세요.</p>
           {/if}
           {#if selectedRootDetails()?.provider === "google-drive"}
-            <p class="warning">Google OAuth Client 유형은 Desktop app이어야 합니다. 업로드 fallback을 선택하면 Drive 파일 쓰기 권한 동의가 필요합니다. 동의하지 않으면 읽기 전용 attestation만 사용합니다.</p>
+            <p class="warning">Google Drive 연결을 준비한 뒤 업로드 권한을 허용하세요. 권한이 없으면 파일을 복사할 수 없습니다.</p>
           {/if}
         {/if}
       </div>
@@ -1222,7 +1265,7 @@
   {/if}
 
   {#if !scannedRoot}<p class="muted">먼저 스캔을 완료하세요.</p>{/if}
-  {#if loadError}<p class="error">{loadError}</p>{/if}
+  {#if loadError}<p class="error">요청을 처리하지 못했습니다. 다시 시도하세요.</p>{/if}
 
   {#if nativeCopyActive && copyingFingerprint}
     <div class="copy-progress" aria-live="polite">
@@ -1245,8 +1288,7 @@
     </div>
     {#if hasProviderAdmissionBlocker(report.notices)}
       <p class="warning">
-        현재 공급자 전역 동기화 증거가 불완전하거나 전송 중입니다. 새 copy-only 버튼은 비활성화되며,
-        상태가 해소된 뒤 다시 계획해야 합니다. 기존 복사본 채택·per-item attestation은 별도 경로로 동작합니다.
+        클라우드 전체 동기화 확인이 끝나지 않았거나 전송 중입니다. 상태가 정상으로 확인될 때까지 새 복사를 시작하지 마세요. 기존 파일 확인은 파일별로 진행할 수 있습니다.
       </p>
     {/if}
     {#if hasIncompleteSourceScan(report.notices)}
@@ -1259,35 +1301,34 @@
       <p class:warning={report.local_volume.pressure !== "normal"}>
         원본 볼륨 압력: {localPressureLabel(report.local_volume.pressure)} · 사용 가능
         {fmtBytes(report.local_volume.available_bytes)}
-        ({(report.local_volume.available_basis_points / 100).toFixed(2)}%)
+        ({(report.local_volume.available_basis_points / 100).toFixed(2)}%) · 저장 공간 상태를 확인하세요.
       </p>
       {#if hasLocalEvidencePersistenceFailure(report.notices)}
         <p class="warning">
-          디스크 용량 증거를 저장하지 못했습니다. 이번 계획은 실행할 수 있지만, 사고 비교용 용량 이력은 남지 않습니다.
+          디스크 저장 공간 상태를 저장하지 못했습니다. 상태를 확인한 뒤 다시 시도하세요.
         </p>
       {/if}
       {#if report.candidates.some(nativeCopyHeadroomBlocked)}
         <p class="warning">
-          네이티브 File Provider 복사는 후보 크기와 {fmtBytes(api.LOCAL_COPY_RESERVE_BYTES)} 여유공간을 함께 확보해야 합니다.
-          현재 여유공간이 부족한 후보는 버튼을 비활성화합니다. 명시적 OAuth 공급자 API 업로드는 별도 경로입니다.
+          클라우드 복사에는 파일 크기와 {fmtBytes(api.LOCAL_COPY_RESERVE_BYTES)}의 여유 공간이 필요합니다.
+          여유 공간이 부족한 파일은 복사할 수 없습니다. 저장 공간을 확보한 뒤 다시 시도하세요.
         </p>
       {/if}
     {/if}
     {#if hasRuntimeEvidencePersistenceFailure(report.notices)}
       <p class="warning">
-        공급자 클라이언트 관찰 증거를 저장하지 못했습니다. 프로세스 이력은 남지 않으며, 복사·동기화 판정은 현재 관찰값으로만 제한됩니다.
+        클라우드 상태를 저장하지 못했습니다. 상태를 다시 확인한 뒤 복사 또는 동기화를 결정하세요.
       </p>
     {/if}
     {#if hasIcloudHealthEvidencePersistenceFailure(report.notices)}
       <p class="warning">
-        iCloud 동기화 요약 증거를 저장하지 못했습니다. 이번 계획은 표시하되 장기 비교용 provider 이력은 남지 않습니다.
-        상태가 정상으로 관찰된 뒤 다시 계획하십시오.
+        iCloud 동기화 상태를 저장하지 못했습니다. 상태를 다시 확인한 뒤 계획을 다시 만드세요.
       </p>
     {/if}
     {#if report.pre_copy_evidence && !report.pre_copy_evidence.complete}
       <p class="warning">
-        사전 복사 증거 시점/무결성 cohort가 완성되지 않아 새 복사를 차단합니다:
-        {report.pre_copy_evidence.blockers.join(", ")}
+        복사 전 상태 확인이 끝나지 않아 새 복사를 차단합니다. 다음 항목을 확인하세요:
+        {report.pre_copy_evidence.blockers.map(customerDecisionReasonLabel).join(", ")}
       </p>
     {/if}
     {#if report.capacity}
@@ -1298,20 +1339,20 @@
           {#if report.capacity.snapshot.remaining_bytes !== null}
             · 원격 잔여 {fmtBytes(report.capacity.snapshot.remaining_bytes)}
           {:else}
-            · 공급자 무제한 계정
+            · 저장 공간 제한 없음
           {/if}
         </p>
       {:else if report.capacity.can_fit === false}
         <p class="warning">
-          원격 용량 gate 실패: {report.capacity.blockers.join(", ")}
+          클라우드 저장 공간이 부족합니다. 저장 공간을 확보한 뒤 다시 시도하세요.
         </p>
       {:else}
         <p class="warning">
-          원격 quota를 검증할 수 없음: {report.capacity.snapshot.unavailable_reason ?? "cloud-capacity-unavailable"}.
+          클라우드 저장 공간을 확인할 수 없습니다. 연결 상태를 확인한 뒤 다시 시도하세요.
           {#if api.cloudNativeClientCopyAllowed(report.capacity, selectedRootDetails(), report.notices)}
-            개인 native-client 모드: 실행 중인 OneDrive·Google Drive 앱으로 copy-only를 진행하고, 개별 sync 증거 전에는 원본을 보존합니다.
+            실행 중인 OneDrive·Google Drive 앱을 사용해 복사할 수 있습니다. 파일 동기화가 끝나기 전에는 원본을 보존합니다.
           {:else}
-            OneDrive·Google Drive는 읽기 전용 OAuth 연결 후 다시 계획해야 복사할 수 있습니다.
+            OneDrive·Google Drive를 연결한 뒤 계획을 다시 만들어야 복사할 수 있습니다.
           {/if}
           iCloud는 macOS 네이티브 계정 상태 확인 후 다시 계획해야 복사할 수 있습니다.
         </p>
@@ -1322,36 +1363,36 @@
         정확 중복 {report.exact_duplicates.candidate_count.toLocaleString()}개 ·
         {report.exact_duplicates.cluster_count.toLocaleString()}개 콘텐츠 클러스터 ·
         대표본 외 중복 경로 {fmtBytes(report.exact_duplicates.redundant_bytes)}.
-        동일 크기 후보만 로컬 SHA-256·BLAKE3로 확인했으며, 대표 lineage를 선택하기 전에는 자동 복사하지 않습니다.
-        정본 추천은 내장 생산일·신뢰도·내장 메타데이터를 먼저 비교하고, 다운로드·압축해제
+        동일 크기 후보만 확인했으며, 대표 파일을 선택하기 전에는 자동 복사하지 않습니다.
+        대표 파일 추천은 파일 정보와 생산 시점을 먼저 비교하고, 다운로드·압축해제
         출처 맥락과 격리·복사본 경로를 별도 보조 기준으로 사용합니다. 추천
         {report.exact_duplicates.clusters.length.toLocaleString()}건 모두 사람 확인이 필요하며, 낮은 신뢰도 추천은
         {report.exact_duplicates.clusters.filter((cluster) => cluster.recommendation_confidence === "low").length.toLocaleString()}건입니다.
       </p>
     {/if}
     <p class="warning">
-      생산일 우선순위는 내장 메타데이터 → 명시적 파일명 날짜 → 파일시스템 생성 → 수정 시각입니다. 파일명 날짜와 파일시스템 시각은 저신뢰 잠정값이며, 현재 메타데이터와 목적지에 결박된 명시적 승인 없이는 복사할 수 없습니다. 이미 존재하는 클라우드 파일은 전체 콘텐츠 해시가 모두 같을 때만 채택합니다. 원본은 공급자 증거를 실행 순간 다시 확인하고 전체 영수증 ID와 사유를 직접 승인한 경우에만 휴지통으로 이동하며, 휴지통은 비우지 않습니다.
+      파일 생산 시점과 위치를 확인한 뒤 클라우드 복사 계획을 만듭니다. 확인이 불완전하면 복사하지 않습니다. 이미 있는 클라우드 파일은 내용이 같은지 확인한 뒤에만 채택합니다. 원본은 업로드 완료를 다시 확인하고 승인한 경우에만 휴지통으로 이동하며, 휴지통은 비우지 않습니다.
     </p>
     {#if copied}
       <div class="receipt">
-        <strong>{copied.goal_status === "blocked" ? "복사 완료 · 공급자 확인 차단" : copied.action === "adopt-existing-copy" ? "기존 클라우드 복사본 검증·채택 완료" : "검증 복사 완료"} · 원본 보존됨</strong>
-        <div class="context">영수증 {copied.receipt.receipt_id} · {fmtBytes(copied.receipt.bytes)}</div>
+        <strong>{copied.goal_status === "blocked" ? "복사 완료 · 확인 대기" : copied.action === "adopt-existing-copy" ? "기존 클라우드 파일 확인·채택 완료" : "클라우드 복사 완료"} · 원본 보존됨</strong>
+        <div class="context">작업 {copied.receipt.receipt_id} · {fmtBytes(copied.receipt.bytes)}</div>
         <div class="path">{copied.receipt.destination}</div>
-        <p class="muted">Goal: {copied.goal_state} · 상태: {copied.goal_status ?? "미확인"} · 동적 ADR: {copied.adr_path ?? "실패"} · 동적 Goal: {copied.goal_path ?? "실패"}</p>
+        <p class="muted">진행 상태를 확인하세요. {workStatusLabel(copied.goal_status)}</p>
         {#each copied.projection_warnings as warning}
-          <p class="warning">동적 ADR/Goal 투영 경고: {warning}</p>
+          <p class="warning">작업 기록 확인이 필요합니다. 상태를 확인한 뒤 다시 시도하세요.</p>
         {/each}
         {#if copied.receipt.provider === "google-drive"}
           <div class="provider-auth">
             <label>
-              Google Drive file ID (선택)
+              Google Drive 파일 ID (선택)
               <input type="text" bind:value={objectId} autocomplete="off" disabled={attesting} />
             </label>
           </div>
-          <p class="muted">먼저 macOS File Provider의 업로드·최신 버전 메타데이터를 확인합니다. file ID를 입력하면 네이티브 증거가 불완전할 때 OAuth API로 SHA-256과 부모 폴더 체인을 My Drive 루트까지 두 차례 검증합니다. 영수증 목적지와 정확히 일치하고 검증 중 변경되지 않은 경우에만 원본 제거 허가를 생성합니다. 공유 드라이브는 아직 실패 폐쇄합니다.</p>
-          <p class="muted">API 보완 시 access token은 OS 보안 저장소의 refresh token으로 Rust 내부에서 한 번만 갱신하며 UI·설정·영수증에 노출하지 않습니다.</p>
+          <p class="muted">Google Drive 파일 ID를 입력하면 클라우드 파일과 복사본의 내용을 다시 확인합니다. 목적지와 내용이 일치하고 확인 중 변경되지 않은 경우에만 원본 정리를 진행할 수 있습니다.</p>
+          <p class="muted">연결 정보는 안전하게 보관하며 화면과 작업 기록에 표시하지 않습니다.</p>
         {:else if copied.receipt.provider === "onedrive"}
-          <p class="muted">macOS File Provider 증거가 불완전하면 OAuth 연결을 사용해 영수증의 OneDrive 상대 경로를 직접 조회하고 QuickXorHash를 검증합니다. 임의 item ID는 받지 않습니다.</p>
+          <p class="muted">OneDrive 파일 위치를 확인해 클라우드 파일과 복사본의 내용을 다시 확인합니다. 확인이 끝나기 전에는 원본을 정리하지 않습니다.</p>
         {/if}
         <button
           onclick={attestCopy}
@@ -1361,38 +1402,34 @@
         </button>
         {#if attestation}
           <p class:warning={attestation.goal_state !== "eviction-ready"} class:safe={attestation.goal_state === "eviction-ready"}>
-            Goal: {attestation.goal_state} · 상태 {attestation.goal_status ?? "미확인"} ·
-            {syncStateLabel(attestation.evidence.sync_state)}
+            클라우드 확인 상태: {workStatusLabel(attestation.goal_status)} ·
+            {syncStateLabel(attestation.evidence.sync_state)} · 상태를 확인하세요.
           </p>
           {#if attestation.assessment.state === "overdue"}
             <p class="warning">
-              공급자 확인이 {Math.floor(attestation.assessment.pending_age_ms / 3_600_000)}시간째 완료되지 않았습니다. 원본은 계속 보존하며 iCloud/File Provider 상태를 점검해야 합니다.
+              클라우드 파일 확인이 {Math.floor(attestation.assessment.pending_age_ms / 3_600_000)}시간째 끝나지 않았습니다. 원본은 계속 보존하며 상태를 다시 확인하세요.
             </p>
           {:else if attestation.assessment.state === "pending"}
             <p class="muted">
-              공급자 확인 대기 {Math.floor(attestation.assessment.pending_age_ms / 60_000)}분. 완료 전에는 원본을 제거하지 않습니다.
+              클라우드 파일 확인 대기 {Math.floor(attestation.assessment.pending_age_ms / 60_000)}분입니다. 완료 전에는 원본을 정리하지 않습니다.
             </p>
           {/if}
           {#if attestation.permit}
             {#if eviction}
               <p class="safe">원본을 운영체제 휴지통으로 이동했습니다. 클라우드 목적지는 유지되며 휴지통은 비우지 않았습니다.</p>
-              <p class="muted">사람 승인 {eviction.approval.approval_id} · 완료 {eviction.eviction.completion_id}</p>
-              <p class="muted">변경 불가 승인 기록: {eviction.approval_path}</p>
-              {#if eviction.adr_path || eviction.goal_path}
-                <p class="muted">동적 ADR: {eviction.adr_path || "실패"} · 동적 Goal: {eviction.goal_path || "실패"}</p>
-              {/if}
+              <p class="muted">승인한 작업을 완료했습니다. 결과를 확인하세요.</p>
               {#each eviction.projection_warnings as warning}
-                <p class="warning">동적 ADR/Goal 투영 경고: {warning}</p>
+                <p class="warning">작업 기록 확인이 필요합니다. 결과를 확인한 뒤 다시 시도하세요.</p>
               {/each}
             {:else}
-              <p class="safe">업로드 상태와 복사 콘텐츠 검증 완료. 로컬 제거 허가 증거가 생성되었지만 파일은 아직 그대로 보존됩니다.</p>
+              <p class="safe">클라우드 업로드와 파일 내용 확인을 완료했습니다. 원본은 아직 그대로 보존됩니다.</p>
               <div class="eviction-controls">
                 <p class="warning">
-                  아래 전체 영수증 ID를 직접 입력하고 이 파일만 휴지통으로 옮기는 사유를 남겨야 합니다. 실행 시 공급자 상태와 열린 파일·프로세스 참조를 다시 확인하며, 달라지면 중단합니다.
+                  아래 작업 확인 코드를 입력하고 이 파일을 휴지통으로 옮길 사유를 남기세요. 실행 직전에 클라우드 상태와 사용 여부를 다시 확인하며, 달라지면 중단합니다.
                 </p>
-                <div class="context">확인할 영수증 ID: {copied.receipt.receipt_id}</div>
+                <div class="context">확인할 작업 코드: {copied.receipt.receipt_id}</div>
                 <label>
-                  전체 영수증 ID 확인
+                  작업 확인 코드
                   <input
                     class="receipt-confirmation"
                     type="text"
@@ -1403,26 +1440,25 @@
                   />
                 </label>
                 <label>
-                  원본 휴지통 이동 사유
+                  원본 정리 사유
                   <textarea
                     bind:value={evictionRationale}
                     maxlength="1000"
                     disabled={evicting}
-                    placeholder="예: 공급자 업로드·콘텐츠 검증 완료 후 이 영수증의 로컬 원본만 휴지통으로 이동"
+                    placeholder="예: 클라우드 업로드와 파일 내용 확인 후 이 원본만 휴지통으로 이동"
                   ></textarea>
                 </label>
                 <button onclick={evictVerifiedSource} disabled={!sourceEvictionReady()}>
-                  {evicting ? "공급자·사용 중 상태 재검증 후 이동 중…" : "검증을 다시 수행하고 원본을 휴지통으로 이동"}
+                  {evicting ? "클라우드·사용 여부 재확인 후 이동 중…" : "확인 후 원본을 휴지통으로 이동"}
                 </button>
               </div>
             {/if}
           {:else}
-            <p class="warning">아직 제거 불가: {attestation.blockers.join(", ")}</p>
+            <p class="warning">아직 원본을 정리할 수 없습니다. 클라우드 상태를 확인한 뒤 다시 시도하세요.</p>
           {/if}
-          <p class="muted">변경 불가 공급자 증거 기록: {attestation.evidence_path}</p>
-          <p class="muted">동적 ADR: {attestation.adr_path ?? "실패"} · 동적 Goal: {attestation.goal_path ?? "실패"}</p>
-          {#each attestation.projection_warnings as warning}
-            <p class="warning">동적 ADR/Goal 투영 경고: {warning}</p>
+          <p class="muted">클라우드 확인 기록을 저장했습니다.</p>
+        {#each attestation.projection_warnings as warning}
+            <p class="warning">작업 기록 확인이 필요합니다. 결과를 확인한 뒤 다시 시도하세요.</p>
           {/each}
         {/if}
       </div>
@@ -1430,7 +1466,7 @@
     {#if report.candidates.length === 0}
       <p class="muted">현재 크기·경과일·지원 파일 유형 조건에 맞는 후보가 없습니다.</p>
     {:else}
-      <div class="review-queue" aria-label="클라우드 메타데이터 검토 큐">
+      <div class="review-queue" aria-label="클라우드 파일 확인 큐">
         <div class="review-progress" aria-live="polite">
           <strong>
             검토 진행 {reviewStats.reviewed.toLocaleString()} / {reviewStats.reviewable.toLocaleString()}개
@@ -1438,7 +1474,7 @@
           <progress
             max={Math.max(1, reviewStats.reviewable)}
             value={reviewStats.reviewed}
-            aria-label={`메타데이터 검토 ${reviewStats.reviewed}개 완료, ${reviewStats.unreviewed}개 남음`}
+            aria-label={`파일 확인 ${reviewStats.reviewed}개 완료, ${reviewStats.unreviewed}개 남음`}
           ></progress>
           <span>
             남음 {reviewStats.unreviewed.toLocaleString()}개 · {fmtBytes(reviewStats.unreviewedBytes)}
@@ -1467,7 +1503,7 @@
             <select bind:value={reviewReason} onchange={() => reviewPage = 1}>
               <option value="">모든 사유</option>
               {#each reviewReasons as reason}
-                <option value={reason}>{cloudDecisionReasonLabel(reason)}</option>
+                <option value={reason}>{customerDecisionReasonLabel(reason)}</option>
               {/each}
             </select>
           </label>
@@ -1503,16 +1539,16 @@
           <li class:blocked={candidate.blocked_reason !== null} class:adoptable={adoptEligible(candidate)}>
             <div class="line">
               <strong>{fmtBytes(candidate.bytes)}</strong>
-              <span>{candidate.kind}</span>
+              <span>{candidateKindLabel(candidate.kind)}</span>
               <span>생산 {productionDate(candidate.production_time_ms)}</span>
-              <span>근거 {candidate.production_time_source} ({candidate.production_time_confidence})</span>
+              <span>확인 기준 {productionSourceLabel(candidate.production_time_source)} ({confidenceLabel(candidate.production_time_confidence)})</span>
               <span>수정 후 {candidate.age_days.toLocaleString()}일</span>
               {#if candidate.requires_review}<em>맥락/민감정보 검토 필요</em>{/if}
-              {#if candidate.blocked_reason}<em>{cloudDecisionReasonLabel(candidate.blocked_reason)}</em>{/if}
+              {#if candidate.blocked_reason}<em>{customerDecisionReasonLabel(candidate.blocked_reason)}</em>{/if}
             </div>
             <div class="path" title={candidate.src}>{candidate.src}</div>
             {#if candidate.content_title}
-              <div class="metadata">내장 제목: {candidate.content_title}</div>
+              <div class="metadata">제목: {candidate.content_title}</div>
             {/if}
             {#if candidate.content_authors.length > 0}
               <div class="metadata">작성자/아티스트: {candidate.content_authors.join(", ")}</div>
@@ -1526,7 +1562,7 @@
             {#if candidate.dataset_profile}
               <div class="dataset-profile">
                 <strong>
-                  데이터 메타데이터: {candidate.dataset_profile.format.toUpperCase()} ·
+                  파일 정보: {candidate.dataset_profile.format.toUpperCase()} ·
                   표본 {candidate.dataset_profile.sampled_rows.toLocaleString()}행 ·
                   {candidate.dataset_profile.columns.length.toLocaleString()}열
                 </strong>
@@ -1537,7 +1573,7 @@
                   </div>
                 {/if}
                 <div class="metadata">
-                  {candidate.dataset_profile.profile_complete ? "스키마 표본 완료" : "스키마 표본 불완전·검토 필요"}
+                  {candidate.dataset_profile.profile_complete ? "열 정보 확인 완료" : "열 정보 확인 불완전·검토 필요"}
                   {candidate.dataset_profile.sample_truncated ? " · 제한 범위까지만 읽음" : ""}
                 </div>
                 {#if candidate.dataset_profile.columns.length > 0}
@@ -1546,55 +1582,54 @@
                       <li>
                         {column.name}: {column.inferred_type} · 관측 {column.observed_values.toLocaleString()} ·
                         결측 {column.missing_values.toLocaleString()}
-                        {#if column.sensitive_name}<em>민감 컬럼명 징후</em>{/if}
+                        {#if column.sensitive_name}<em>민감 정보 가능성</em>{/if}
                       </li>
                     {/each}
                   </ul>
                 {/if}
                 {#if candidate.dataset_profile.quality_warnings.length > 0}
-                  <div class="context">데이터 품질 경고: {candidate.dataset_profile.quality_warnings.join(", ")}</div>
+                  <div class="context">데이터 품질을 확인하세요. ({candidate.dataset_profile.quality_warnings.length}건)</div>
                 {/if}
                 <div class="context">셀 값은 저장하거나 표시하지 않습니다.</div>
               </div>
             {/if}
             <div class="arrow">→ {candidate.dst}</div>
             <div class="context">
-              맥락: {candidate.source_context} · 대상 계정: {accountScopeLabel(candidate.destination_account_scope)} · lineage: {candidate.metadata_fingerprint.slice(0, 12)}
+              맥락: {sourceContextLabel(candidate.source_context)} · 대상 계정: {accountScopeLabel(candidate.destination_account_scope)}
             </div>
             <details class="lineage">
-              <summary>Lineage 연결관계</summary>
+              <summary>파일과 클라우드 연결 정보</summary>
               <ol>
                 <li>
-                  원본 Entity · <code>{candidate.metadata_fingerprint}</code> · {candidate.source_context}
+                  원본 파일 · {sourceContextLabel(candidate.source_context)}
                 </li>
                 <li>
-                  생산 시각 Activity · {candidate.production_time_source} · 신뢰도 {candidate.production_time_confidence}
+                  생산 시점 · {productionSourceLabel(candidate.production_time_source)} · 확인 수준 {confidenceLabel(candidate.production_time_confidence)}
                 </li>
-                <li>아카이브 Entity · {candidate.kind} · {fmtBytes(candidate.bytes)}</li>
-                <li>공급자 Entity · {candidate.provider} · {candidate.destination_account_scope} · {candidate.dst}</li>
+                <li>보관 파일 · {candidateKindLabel(candidate.kind)} · {fmtBytes(candidate.bytes)}</li>
+                <li>클라우드 파일 · {cloudProviderLabel(candidate.provider)} · {accountScopeLabel(candidate.destination_account_scope)} · {candidate.dst}</li>
               </ol>
               <p class="context">
-                검증 복사 영수증 → provider attestation → Goal/ADR → 명시적 휴지통 이동 순서로 연결됩니다.
+                파일 확인 → 클라우드 복사 → 원본 정리 순서로 진행됩니다.
                 {candidate.blocked_reason
-                  ? ` 현재 관계 차단: ${cloudDecisionReasonLabel(candidate.blocked_reason)}.`
-                  : " 아직 영수증이 없어 provider item과 eviction permit은 확정되지 않았습니다."}
+                  ? ` 현재 확인이 필요한 이유: ${customerDecisionReasonLabel(candidate.blocked_reason)}.`
+                  : " 아직 클라우드 복사 확인이 끝나지 않았습니다."}
               </p>
             </details>
             {#if candidate.requires_review}
               <div class="review-controls">
                 {#if matchingReviewDecision(candidate)?.disposition === "approved"}
-                  <strong class="approved">현재 메타데이터 증거 검토 승인됨</strong>
+                  <strong class="approved">현재 파일 확인 승인됨</strong>
                 {:else if matchingReviewDecision(candidate)?.disposition === "held"}
-                  <strong class="held">현재 메타데이터 증거 보류됨</strong>
+                  <strong class="held">현재 파일 확인 보류됨</strong>
                 {:else if reviewDecision(candidate)}
-                  <strong class="held">메타데이터 증거가 바뀌어 이전 결정이 만료됨</strong>
+                  <strong class="held">파일 정보가 바뀌어 이전 결정이 만료됨</strong>
                 {:else}
-                  <span class="context">아래 증거를 확인한 뒤 승인 또는 보류하세요.</span>
+                  <span class="context">아래 파일 정보를 확인한 뒤 승인 또는 보류하세요.</span>
                 {/if}
                 {#if matchingReviewDecision(candidate)}
                   <span class="context">
-                    검토자: {matchingReviewDecision(candidate)?.reviewed_by ?? "legacy-local-operator"} ·
-                    근거: {matchingReviewDecision(candidate)?.rationale ?? "legacy decision"}
+                    검토자 확인됨 · 검토 메모: {matchingReviewDecision(candidate)?.rationale ?? "확인 메모 없음"}
                   </span>
                 {/if}
                 <label class="review-rationale">
@@ -1634,7 +1669,7 @@
                     || (organizationTenantAuthorityRequired(candidate)
                       && !(reviewTenantAuthorities[candidate.metadata_fingerprint] ?? false))}
                 >
-                  {reviewingFingerprint === candidate.metadata_fingerprint ? "기록 중…" : "메타데이터 검토 승인"}
+                  {reviewingFingerprint === candidate.metadata_fingerprint ? "기록 중…" : "파일 확인 승인"}
                 </button>
                 <button
                   onclick={() => reviewCandidate(candidate, "held")}
@@ -1645,7 +1680,7 @@
             {#if copyEligible(candidate) || providerApiCopyEligible(candidate)}
               {@const copyApprovalPhrase = api.cloudCopyApprovalPhrase(candidate, "copy-only")}
               <div class="copy-approval">
-                <div class="context">현재 메타데이터·출발지·목적지에 결부된 문구를 정확히 입력해야 합니다.</div>
+                <div class="context">현재 파일·출발지·목적지에 결부된 문구를 정확히 입력해야 합니다.</div>
                 <code>{copyApprovalPhrase ?? "현재 계획의 승인 문구를 확인할 수 없습니다."}</code>
                 <label>
                   복사 승인 사유
@@ -1690,7 +1725,7 @@
                 </button>
                 {/if}
                 {#if providerApiCopyEligible(candidate)}
-                  <p class="warning">File Provider 전역 동기화가 막혀 있어, 명시적 OAuth 쓰기 연결로 공급자 API에 직접 업로드합니다. 원본은 유지되고 이후 API attestation이 필요합니다.</p>
+                  <p class="warning">클라우드 앱의 전체 동기화가 막혀 있어 연결된 클라우드로 직접 업로드합니다. 원본은 유지되며 업로드 확인 후 다음 작업을 진행합니다.</p>
                   <button
                     class="copy"
                     onclick={() => copyCandidateViaProviderApi(candidate)}
@@ -1701,7 +1736,7 @@
                       || (copyConfirmations[candidate.metadata_fingerprint] ?? "").trim()
                         !== copyApprovalPhrase}
                   >
-                    {copyingFingerprint === candidate.metadata_fingerprint ? "공급자 API 업로드 중…" : "File Provider를 우회해 공급자 API로 업로드"}
+                    {copyingFingerprint === candidate.metadata_fingerprint ? "클라우드 업로드 중…" : "클라우드에 직접 업로드"}
                   </button>
                 {/if}
               </div>
@@ -1754,15 +1789,15 @@
               </div>
             {/if}
             <details>
-              <summary>메타데이터 증거 {candidate.metadata_evidence.length}건</summary>
+              <summary>파일 정보 확인 항목 {candidate.metadata_evidence.length}건</summary>
               <ul class="evidence">
                 {#each candidate.metadata_evidence as evidence}
-                  <li>{evidence.field}: {evidence.value} · {evidence.source} · {evidence.confidence}</li>
+                  <li>{evidence.field}: {evidence.value} · 확인 수준 {confidenceLabel(evidence.confidence)}</li>
                 {/each}
               </ul>
             </details>
             {#if candidate.review_reasons.length > 0}
-              <div class="context">검토 사유: {candidate.review_reasons.map(cloudDecisionReasonLabel).join(", ")}</div>
+                <div class="context">검토 사유: {candidate.review_reasons.map(customerDecisionReasonLabel).join(", ")}</div>
             {/if}
           </li>
         {/each}
