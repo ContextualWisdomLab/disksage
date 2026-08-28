@@ -795,4 +795,6 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   `d1bd3626ddb04a7b14e43aebf60827ac50ef8d17`; it is independently protected and not yet merged.
 - DiskSage therefore keeps the Noema gate fail-closed and does not bypass it or treat the PR as
   merge-ready. Once the upstream repair is normally merged, the central sidecar pin must be
-  updated and the exact DiskSage head re-reviewed.
+  updated and the exact DiskSage head re-reviewed. The pin update is tracked in central
+  [`.github#1371`](https://github.com/ContextualWisdomLab/.github/pull/1371) at head
+  `78f5c5642f5a49da6827f7a786b1ad4e79a6d03a`.
