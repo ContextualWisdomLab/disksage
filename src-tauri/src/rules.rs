@@ -155,6 +155,21 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
             "Trivy 취약점 스캔 캐시",
             bases.home.join("Library").join("Caches").join("trivy"),
         ),
+        (
+            "appmap-download-cache",
+            "AppMap 다운로드 캐시",
+            bases.home.join(".appmap").join("lib"),
+        ),
+        (
+            "superset-network-logs",
+            "Superset 네트워크 진단 로그",
+            bases
+                .home
+                .join("Library")
+                .join("Application Support")
+                .join("Superset")
+                .join("network-logs"),
+        ),
     ]);
 
     // `/tmp` is a symlink on macOS; use `/private/tmp` so the root itself is a real directory.
@@ -697,6 +712,11 @@ mod tests {
             ("adobe-cache", "Library/Caches/Adobe"),
             ("edge-cache", "Library/Caches/Microsoft Edge"),
             ("trivy-cache", "Library/Caches/trivy"),
+            ("appmap-download-cache", ".appmap/lib"),
+            (
+                "superset-network-logs",
+                "Library/Application Support/Superset/network-logs",
+            ),
         ] {
             let candidate = candidates
                 .iter()

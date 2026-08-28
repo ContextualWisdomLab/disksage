@@ -8,6 +8,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Catalog AppMap downloaded tool binaries and Superset network diagnostics as regenerable macOS
+  data, reusing the existing per-child identity, active-use, Trash, and journal gates.
 - Add standalone stale-PR clone reclamation: only a clean, inactive, single-worktree clone whose
   exact branch and head OID match fresh same-repository GitHub evidence can move to OS Trash.
   Branch deletion, Git pruning, detached clones, dirty clones, and implicit age thresholds remain
