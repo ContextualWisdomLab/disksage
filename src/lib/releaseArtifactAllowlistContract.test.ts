@@ -132,6 +132,18 @@ function runReleaseArtifactVerifier(fixtureRoot: string) {
 }
 
 describe('release artifact exact-set admission', () => {
+  it('keeps PR artifact directory checks aligned with the build matrix', () => {
+    const workflow = readRepositoryFile('.github/workflows/release.yml');
+    const verifier = readRepositoryFile('.github/scripts/verify-release-artifacts.sh');
+
+    expect(workflow).toContain('os: windows-2022');
+    expect(workflow).toContain(
+      'name: release-disksage-${{ matrix.os }}-${{ github.run_attempt }}',
+    );
+    expect(verifier).toContain('"release-disksage-windows-2022-${run_attempt}"');
+    expect(verifier).not.toContain('"release-disksage-windows-latest-${run_attempt}"');
+  });
+
   it.runIf(process.platform !== 'win32')(
     'rejects an unexpected file that would otherwise be attested and published',
     () => {

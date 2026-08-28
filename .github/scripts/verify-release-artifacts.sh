@@ -14,8 +14,8 @@ if [[ ! -d "$artifact_root" ]]; then
 fi
 
 require_exactly_one_path() {
-  local path_pattern="$1" label="$2" count=0 matched_path=""
-  while IFS= read -r -d '' matched_path; do count=$((count + 1)); done < <(find "$artifact_root" -type f -path "$path_pattern" -print0)
+  local path_pattern="$1" label="$2" count=0
+  while IFS= read -r -d '' _; do count=$((count + 1)); done < <(find "$artifact_root" -type f -path "$path_pattern" -print0)
   if [[ $count -ne 1 ]]; then
     printf 'Expected exactly one %s, found %s.\n' "$label" "$count" >&2
     exit 1
@@ -23,8 +23,8 @@ require_exactly_one_path() {
 }
 
 require_exactly_one_file() {
-  local file_name="$1" count=0 matched_path=""
-  while IFS= read -r -d '' matched_path; do count=$((count + 1)); done < <(find "$artifact_root" -type f -name "$file_name" -print0)
+  local file_name="$1" count=0
+  while IFS= read -r -d '' _; do count=$((count + 1)); done < <(find "$artifact_root" -type f -name "$file_name" -print0)
   if [[ $count -ne 1 ]]; then
     printf 'Expected exactly one release artifact named %s, found %s.\n' "$file_name" "$count" >&2
     exit 1
@@ -33,7 +33,7 @@ require_exactly_one_file() {
 
 expected_dirs=(
   "release-disksage-ubuntu-22.04-${run_attempt}"
-  "release-disksage-windows-latest-${run_attempt}"
+  "release-disksage-windows-2022-${run_attempt}"
   "release-disksage-macos-latest-${run_attempt}"
 )
 
@@ -113,8 +113,7 @@ for checksum_file in "${checksum_files[@]}"; do
 done
 
 regular_file_count=0
-matched_path=""
-while IFS= read -r -d '' matched_path; do regular_file_count=$((regular_file_count + 1)); done < <(find "$artifact_root" -type f -print0)
+while IFS= read -r -d '' _; do regular_file_count=$((regular_file_count + 1)); done < <(find "$artifact_root" -type f -print0)
 if [[ $regular_file_count -ne 17 ]]; then
   printf 'Unexpected release artifact entries: expected exactly 17 regular files, found %s.\n' "$regular_file_count" >&2
   exit 1

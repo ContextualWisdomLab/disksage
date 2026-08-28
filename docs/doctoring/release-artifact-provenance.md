@@ -21,6 +21,8 @@ The release contract requires all of the following:
 - checkout binds every platform build to `github.event.pull_request.head.sha` for pull requests and `github.sha` for tags or manual runs, rather than silently treating a generated pull-request merge ref as exact-head evidence;
 - release concurrency uses `github.run_attempt == 1`, so a fresh first attempt supersedes stale work while explicit rerun attempts do not cancel themselves inside the same concurrency group;
 - the three platform builds upload the exact bundle and operational CLI paths that later jobs consume;
+- the pull-request compatibility verifier expects the exact artifact directories emitted by the
+  build matrix, including `windows-2022`, rather than a different runner alias;
 - release workflow artifacts use the `release-disksage-*` namespace, which excludes concurrently uploaded `disksage-gpu-*` diagnostic bundles;
 - attestation and publication downloads preserve each workflow artifact in its own directory instead of flattening archives, so duplicate basenames remain observable and last-writer-wins extraction cannot erase evidence before admission;
 - release publication is absent from the matrix build job, preventing any matrix member from publishing before the complete set exists;
