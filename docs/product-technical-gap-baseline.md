@@ -784,3 +784,14 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - The exact PR #267 head for this follow-up is `bc57679b6d7bc78dec5fa86dc3922b11e5092751`.
   Host free-space readings remain volatile while unrelated builds run, so the product records
   the resource identities and re-audit result rather than claiming a stable net free-space delta.
+
+## 2026-08-28 Noema sidecar dependency gap
+
+- The required Noema review for PR #267 remains non-passing because the central sidecar pins
+  contextual-orchestrator `c60ec889...`, whose generated catalog is list-shaped while its
+  `load_agents` implementation expects an `agents` object key (`KeyError: 'agents'`). The
+  upstream compatibility repair is present on contextual-orchestrator PR #901 at head
+  `d1bd3626ddb04a7b14e43aebf60827ac50ef8d17`; it is independently protected and not yet merged.
+- DiskSage therefore keeps the Noema gate fail-closed and does not bypass it or treat the PR as
+  merge-ready. Once the upstream repair is normally merged, the central sidecar pin must be
+  updated and the exact DiskSage head re-reviewed.
