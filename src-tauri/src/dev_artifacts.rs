@@ -8,6 +8,7 @@ use crate::scanner;
 // a partial observation into permission to move a recreated directory to the trash.
 const ARTIFACT_MANIFEST_BUDGET: Duration = Duration::from_secs(3);
 const ARTIFACT_MANIFEST_MAX_RECORDS: usize = 250_000;
+const VSCODE_OBSOLETE_METADATA_MAX_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DevArtifact {
@@ -40,7 +41,7 @@ const ARTIFACT_KINDS: &[(&str, &[&str])] = &[
     (".venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
     ("venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
     ("__pycache__", &[]), // 마커 불필요 — 이름 자체가 파이썬 캐시
-    (".codegraph", &[]), // 재생성 가능한 CodeGraph 인덱스
+    (".codegraph", &[]),  // 재생성 가능한 CodeGraph 인덱스
 ];
 
 fn artifact_kind(name: &str) -> Option<&'static (&'static str, &'static [&'static str])> {
@@ -50,7 +51,9 @@ fn artifact_kind(name: &str) -> Option<&'static (&'static str, &'static [&'stati
 fn age_days(path: &Path, now_ms: u64) -> u64 {
     let Ok(md) = path.metadata() else { return 0 };
     let Ok(mtime) = md.modified() else { return 0 };
-    let Ok(dur) = mtime.duration_since(std::time::UNIX_EPOCH) else { return 0 };
+    let Ok(dur) = mtime.duration_since(std::time::UNIX_EPOCH) else {
+        return 0;
+    };
     let mtime_ms = dur.as_millis() as u64;
     now_ms.saturating_sub(mtime_ms) / 86_400_000
 }
@@ -142,14 +145,17 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
             });
             manifest.bytes = manifest.bytes.saturating_add(metadata.len());
             manifest.files = manifest.files.saturating_add(1);
-            manifest
-                .records
-                .push(format!("F\0{relative}\0{identity}\0{}\0{modified}", metadata.len()));
+            manifest.records.push(format!(
+                "F\0{relative}\0{identity}\0{}\0{modified}",
+                metadata.len()
+            ));
         }
     }
 
     if !manifest.scan_complete {
-        manifest.records.push("!incomplete\0bounded-artifact-manifest".into());
+        manifest
+            .records
+            .push("!incomplete\0bounded-artifact-manifest".into());
     }
     manifest.records.sort_unstable();
     manifest.fingerprint = metadata_fingerprint(&manifest.records);
@@ -157,8 +163,16 @@ fn artifact_manifest(root: &Path) -> ArtifactManifest {
 }
 
 fn modified_stamp(metadata: &std::fs::Metadata) -> Option<String> {
-    let duration = metadata.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
-    Some(format!("{}:{}", duration.as_secs(), duration.subsec_nanos()))
+    let duration = metadata
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    Some(format!(
+        "{}:{}",
+        duration.as_secs(),
+        duration.subsec_nanos()
+    ))
 }
 
 fn metadata_fingerprint(records: &[String]) -> String {
@@ -168,6 +182,76 @@ fn metadata_fingerprint(records: &[String]) -> String {
         hasher.update(record.as_bytes());
     }
     hasher.finalize().to_hex().to_string()
+}
+
+/// Return extension directories that VS Code itself marked obsolete.
+///
+/// `.obsolete` is native lifecycle authority, so no version-age heuristic is needed. Only a real
+/// metadata file at `.vscode/extensions/.obsolete` and single-component real child directories are
+/// accepted.
+fn vscode_obsolete_extension_paths(root: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let walker = walkdir::WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| entry.depth() == 0 || scanner::keep_entry(entry));
+    for entry in walker.filter_map(Result::ok) {
+        if !entry.file_type().is_file() || entry.file_name() != ".obsolete" {
+            continue;
+        }
+        let Some(extensions) = entry.path().parent() else {
+            continue;
+        };
+        if extensions.file_name().and_then(|name| name.to_str()) != Some("extensions")
+            || extensions
+                .parent()
+                .and_then(Path::file_name)
+                .and_then(|name| name.to_str())
+                != Some(".vscode")
+        {
+            continue;
+        }
+        let Ok(metadata) = std::fs::symlink_metadata(entry.path()) else {
+            continue;
+        };
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || metadata.len() > VSCODE_OBSOLETE_METADATA_MAX_BYTES
+        {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(entry.path()) else {
+            continue;
+        };
+        let Ok(document) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            continue;
+        };
+        let Some(names) = document.as_object() else {
+            continue;
+        };
+        for (name, obsolete) in names {
+            if obsolete.as_bool() != Some(true) {
+                continue;
+            }
+            let mut components = Path::new(name).components();
+            let Some(std::path::Component::Normal(component)) = components.next() else {
+                continue;
+            };
+            if components.next().is_some() || component.is_empty() {
+                continue;
+            }
+            let candidate = extensions.join(component);
+            let Ok(candidate_metadata) = std::fs::symlink_metadata(&candidate) else {
+                continue;
+            };
+            if candidate_metadata.is_dir() && !candidate_metadata.file_type().is_symlink() {
+                paths.push(candidate);
+            }
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    paths
 }
 
 /// 마커 인접 아티팩트 디렉토리를 찾아 mtime 나이로 걸러 크기 내림차순으로 반환.
@@ -194,8 +278,12 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
             continue;
         }
         let path = e.path();
-        let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
-        let Some((_, markers)) = artifact_kind(&name) else { continue };
+        let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+            continue;
+        };
+        let Some((_, markers)) = artifact_kind(&name) else {
+            continue;
+        };
         let parent = path.parent().unwrap_or(root);
         let marker_ok = markers.is_empty() || markers.iter().any(|m| parent.join(m).exists());
         if marker_ok {
@@ -216,10 +304,20 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
         .map(|(_, p)| p.as_path())
         .collect();
 
+    let obsolete_extensions = vscode_obsolete_extension_paths(root);
     let mut found: Vec<DevArtifact> = top_level
         .into_iter()
+        .filter(|path| {
+            !obsolete_extensions
+                .iter()
+                .any(|obsolete| path.starts_with(obsolete))
+        })
         .filter_map(|path| {
-            let age = if now_ms == u64::MAX { u64::MAX } else { age_days(path, now_ms) };
+            let age = if now_ms == u64::MAX {
+                u64::MAX
+            } else {
+                age_days(path, now_ms)
+            };
             if age < min_age_days {
                 return None;
             }
@@ -244,6 +342,30 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
             })
         })
         .collect();
+
+    found.extend(obsolete_extensions.into_iter().filter_map(|path| {
+        let age = if now_ms == u64::MAX {
+            u64::MAX
+        } else {
+            age_days(&path, now_ms)
+        };
+        if age < min_age_days {
+            return None;
+        }
+        let manifest = artifact_manifest(&path);
+        Some(DevArtifact {
+            path: path.to_string_lossy().into_owned(),
+            kind: "vscode-obsolete-extension".into(),
+            project: "Visual Studio Code".into(),
+            bytes: manifest.bytes,
+            files: manifest.files,
+            skipped: manifest.skipped,
+            scan_complete: manifest.scan_complete,
+            fingerprint: manifest.fingerprint,
+            object_id: manifest.object_id,
+            age_days: if age == u64::MAX { 0 } else { age },
+        })
+    }));
 
     found.sort_by(|a, b| b.bytes.cmp(&a.bytes));
     found
@@ -289,6 +411,31 @@ pub fn clean_artifacts(
                 };
             }
 
+            let active_use = crate::git_worktree::active_use_evidence(
+                Path::new(&request.path),
+                crate::reclaim::ACTIVE_USE_PROBE_TIMEOUT_MS,
+                crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
+                true,
+            );
+            if !active_use.assessed
+                || !active_use.evidence_complete
+                || active_use.error.is_some()
+                || active_use.results_truncated
+            {
+                return DevArtifactCleanResult {
+                    path: request.path.clone(),
+                    ok: false,
+                    error: "development artifact active-use evidence incomplete; rescan before cleanup".into(),
+                };
+            }
+            if active_use.active {
+                return DevArtifactCleanResult {
+                    path: request.path.clone(),
+                    ok: false,
+                    error: "development artifact is active; close the using process before cleanup".into(),
+                };
+            }
+
             match crate::safety::trash_delete_if_identity(
                 Path::new(&request.path),
                 &request.object_id,
@@ -316,7 +463,12 @@ mod tests {
     use super::*;
     use std::fs;
 
-    fn project(root: &std::path::Path, name: &str, marker: &str, artifact: &str) -> std::path::PathBuf {
+    fn project(
+        root: &std::path::Path,
+        name: &str,
+        marker: &str,
+        artifact: &str,
+    ) -> std::path::PathBuf {
         let p = root.join(name);
         fs::create_dir_all(&p).unwrap();
         fs::write(p.join(marker), b"{}").unwrap();
@@ -364,6 +516,34 @@ mod tests {
         }));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn finds_only_native_marked_real_vscode_extension_directories() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let extensions = tmp.path().join(".vscode/extensions");
+        let obsolete = extensions.join("publisher.tool-1.0.0");
+        let retained = extensions.join("publisher.keep-1.0.0");
+        let outside = tmp.path().join("outside");
+        fs::create_dir_all(&obsolete).unwrap();
+        fs::create_dir(&retained).unwrap();
+        fs::create_dir(&outside).unwrap();
+        symlink(&outside, extensions.join("linked-1.0.0")).unwrap();
+        fs::write(obsolete.join("package.json"), b"{}").unwrap();
+        fs::write(
+            extensions.join(".obsolete"),
+            br#"{"publisher.tool-1.0.0":true,"publisher.keep-1.0.0":false,"../outside":true,"linked-1.0.0":true}"#,
+        )
+        .unwrap();
+
+        let found = find_artifacts(tmp.path(), 0, u64::MAX);
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].kind, "vscode-obsolete-extension");
+        assert_eq!(found[0].path, obsolete.to_string_lossy());
+    }
+
     #[test]
     fn respects_min_age() {
         let tmp = tempfile::tempdir().unwrap();
@@ -408,6 +588,9 @@ mod tests {
         assert!(results[0].error.contains("changed"));
         assert!(live.exists());
         assert!(original.exists());
-        assert!(!journal.exists(), "stale identity must not create a journal");
+        assert!(
+            !journal.exists(),
+            "stale identity must not create a journal"
+        );
     }
 }
