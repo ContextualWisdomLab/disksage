@@ -190,10 +190,12 @@
                 </span>
                 {#if cat.approval_phrase}
                   <div class="prune-form">
+                    <p class="hint">아래 승인 문구를 직접 입력하세요.</p>
+                    <code>{cat.approval_phrase}</code>
                     <label>승인 문구
                       <input
                         bind:value={phrases[ckey]}
-                        placeholder={cat.approval_phrase}
+                        placeholder="위 승인 문구를 직접 입력하세요"
                         disabled={pruneBusyKey !== null}
                       />
                     </label>
@@ -243,5 +245,6 @@
   .prune-form { margin-top: 0.35rem; display: grid; gap: 0.4rem; }
   .prune-form label { display: grid; gap: 0.2rem; }
   .prune-form input, .prune-form textarea { width: 100%; box-sizing: border-box; }
+  .prune-form code { overflow-wrap: anywhere; }
   .hint { color: #666; font-size: 0.8rem; }
 </style>
