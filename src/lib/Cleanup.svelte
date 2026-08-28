@@ -31,7 +31,7 @@
   let runtimeStoragePhrase = $state<Record<string, string>>({});
   let runtimeStorageRationale = $state<Record<string, string>>({});
   let runtimeStorageExecutions: Record<string, api.RuntimeStorageExecution> = $state({});
-  // ponytail: 배지는 개별 파일/디렉토리 후보(artifacts)에만 표시 — caches는 소수의 고정 규칙 카테고리라 LLM 판정 가치가 낮음.
+  // ponytail: 배지는 개별 파일/디렉토리 후보(artifacts)에만 표시 — caches는 소수의 고정 규칙 카테고리라 자동 자문 가치가 낮음.
   let verdicts: Record<string, api.Verdict> = $state({});
 
   function artifactKindLabel(kind: string): string {
