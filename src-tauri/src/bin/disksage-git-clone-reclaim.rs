@@ -8,12 +8,13 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const USAGE: &str = "usage: disksage-git-clone-reclaim --repository-root ABSOLUTE_PATH --reference-ref REF [--reference-ref REF ...] [--stale-open-cutoff-ms N] [--execute --plan-fingerprint HEX64 --confirm EXACT_PHRASE --approved-by HUMAN_ID --rationale TEXT --journal-path ABSOLUTE_PATH]";
+const USAGE: &str = "usage: disksage-git-clone-reclaim --repository-root ABSOLUTE_PATH --reference-ref REF [--reference-ref REF ...] [--include-closed-pull-requests] [--stale-open-pull-request-cutoff-ms N] [--execute --plan-fingerprint HEX64 --confirm EXACT_PHRASE --approved-by HUMAN_ID --rationale TEXT --journal-path ABSOLUTE_PATH]";
 
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
     repository_root: PathBuf,
     retention_references: Vec<String>,
+    include_closed_pull_requests: bool,
     stale_open_cutoff_ms: Option<u64>,
     execution: Option<ExecutionArgs>,
 }
@@ -54,6 +55,7 @@ fn parse_args(raw: &[OsString]) -> Result<Option<Args>, String> {
     }
     let mut root = None;
     let mut references = Vec::new();
+    let mut include_closed_pull_requests = false;
     let mut cutoff = None;
     let mut execute = false;
     let mut fingerprint = None;
@@ -75,7 +77,13 @@ fn parse_args(raw: &[OsString]) -> Result<Option<Args>, String> {
                 validate_reference(&reference)?;
                 references.push(reference);
             }
-            "--stale-open-cutoff-ms" => set_once(
+            "--include-closed-pull-requests" if !include_closed_pull_requests => {
+                include_closed_pull_requests = true;
+            }
+            "--include-closed-pull-requests" => {
+                return Err("git-clone-reclaim-duplicate-option".into())
+            }
+            "--stale-open-pull-request-cutoff-ms" => set_once(
                 &mut cutoff,
                 text(raw, &mut index, flag)?
                     .parse()
@@ -129,6 +137,7 @@ fn parse_args(raw: &[OsString]) -> Result<Option<Args>, String> {
     Ok(Some(Args {
         repository_root,
         retention_references: references,
+        include_closed_pull_requests,
         stale_open_cutoff_ms: cutoff,
         execution,
     }))
@@ -147,7 +156,7 @@ fn run(args: Args) -> Result<serde_json::Value, String> {
     let plan = plan_git_clone_reclaim(
         &args.repository_root,
         &args.retention_references,
-        true,
+        args.include_closed_pull_requests,
         args.stale_open_cutoff_ms,
         options,
         now_ms(),
@@ -169,7 +178,7 @@ fn run(args: Args) -> Result<serde_json::Value, String> {
         &plan,
         &approval,
         &args.retention_references,
-        true,
+        args.include_closed_pull_requests,
         args.stale_open_cutoff_ms,
         options,
         &execution.journal_path,
