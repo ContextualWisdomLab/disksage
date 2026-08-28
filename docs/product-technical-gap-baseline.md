@@ -722,9 +722,12 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - The host-compatible `docker` command is backed by Podman 5.8.2. The running BuildKit builder and
   `accounting-information-platform-test-postgres` container were retained; no running workload was
   stopped or restarted.
-- `docker image prune -f` removed only two dangling images (the runtime reported them as untagged and
-  unreferenced). `docker network prune -f` removed `pg-erd-cloud-pr-alembic-reconcile_default` after
-  authoritative inspection showed an empty container map; the built-in `podman` network was retained.
+- `docker image prune -f` removed two dangling images (the runtime reported them as untagged and
+  unreferenced). After confirming that only the BuildKit builder and the test PostgreSQL container were
+  running, `docker image prune -a -f` removed 19 additional images that no container referenced; images
+  needed by those running containers were retained. `docker network prune -f` removed
+  `pg-erd-cloud-pr-alembic-reconcile_default` after authoritative inspection showed an empty container
+  map; the built-in `podman` network was retained.
 - Three unreferenced zero-byte test-state volumes were removed:
   `github-actions-modernize_data_redis`, `naruonprivmail_live-e2e-state`, and
   `pg-erd-cloud-pr-alembic-reconcile_pgdata`. Non-empty PostgreSQL volumes were retained because a
