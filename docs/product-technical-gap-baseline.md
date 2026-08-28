@@ -773,3 +773,14 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   (4,574,395,074 bytes). Nine entries were no longer purge candidates after re-audit and were
   preserved. The available-space reading reached about 3.1 GiB afterward; the remaining archive
   content is still in use or was not proven safe.
+
+## 2026-08-28 stale container-volume follow-up
+
+- A fresh Podman-backed Docker inventory found no further removable images or networks after the
+  earlier 21-image and one-network cleanup. Four anonymous 64-character volumes had zero
+  container links, no Compose labels, and were created by the same day's isolated test runs;
+  they were removed explicitly. Seven labeled, non-empty database/graph volumes remain retained:
+  an unlinked data volume is not evidence that its contents are disposable.
+- The exact PR #267 head for this follow-up is `bc57679b6d7bc78dec5fa86dc3922b11e5092751`.
+  Host free-space readings remain volatile while unrelated builds run, so the product records
+  the resource identities and re-audit result rather than claiming a stable net free-space delta.
