@@ -180,7 +180,15 @@ fn run() -> Result<(), String> {
             "--confirm and --rationale require --execute\n{USAGE}"
         ));
     }
-    let plan = sanitize_plan(probe_container_orphans(&target));
+    let mut plan = sanitize_plan(probe_container_orphans(&target));
+    if runtime == ContainerRuntimeKind::DockerNative {
+        // Native Docker desktop approval is bound to the effective Docker authority by the Tauri
+        // IPC boundary. This standalone CLI deliberately cannot reproduce that private authority
+        // proof, so its read-only evidence must not publish a phrase that cannot be executed.
+        for category in &mut plan.categories {
+            category.approval_phrase = None;
+        }
+    }
     if pretty {
         println!(
             "{}",
