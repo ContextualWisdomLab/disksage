@@ -760,3 +760,16 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - This is the same fail-closed path exposed by the product UI: inactive regenerable children can be
   staged and explicitly purged only after structural re-audit, while active processes and
   incomplete provider evidence remain preserved.
+
+## 2026-08-28 uv archive child-level reclamation
+
+- The first automatic run correctly skipped the uv `archive-v0` parent when its active-use probe was
+  incomplete. The implementation was then corrected so both the reviewed and current snapshots use
+  the same child-expanded set; a focused Rust suite passed 7/7.
+- A second run re-audited 865 direct uv archive children independently. 855 inactive children
+  (4,640,480,301 bytes) were moved to Trash; active or incomplete evidence remained in place. The
+  explicit journal-backed purge rechecked the original cache parent, source absence, non-symlink
+  directory type, and bounded byte count before permanently removing 846 children
+  (4,574,395,074 bytes). Nine entries were no longer purge candidates after re-audit and were
+  preserved. The available-space reading reached about 3.1 GiB afterward; the remaining archive
+  content is still in use or was not proven safe.

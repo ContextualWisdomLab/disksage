@@ -174,6 +174,83 @@ pub fn proven_cache_trash_candidates(home: &Path) -> Vec<CacheTrashCandidate> {
     candidates
 }
 
+fn journal_proven_uv_cache_trash_candidates(
+    home: &Path,
+    journal_path: &Path,
+) -> Vec<CacheTrashCandidate> {
+    let archive_root = home.join(".cache").join("uv").join("archive-v0");
+    let trash_root = home.join(".Trash");
+    let Ok(content) = std::fs::read_to_string(journal_path) else {
+        return Vec::new();
+    };
+    let mut candidates = Vec::new();
+    for line in content.lines() {
+        let Ok(entry) = serde_json::from_str::<crate::safety::JournalEntry>(line) else {
+            continue;
+        };
+        if entry.op != "trash_delete" || entry.outcome != "ok" {
+            continue;
+        }
+        let source = PathBuf::from(entry.path);
+        if source.parent() != Some(archive_root.as_path()) || source.exists() {
+            continue;
+        }
+        let Some(name) = source.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        let path = trash_root.join(name);
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            continue;
+        }
+        let mut count = 0;
+        let Ok(bytes) = bounded_tree_size(&path, &mut count) else {
+            continue;
+        };
+        if bytes != entry.bytes {
+            continue;
+        }
+        candidates.push(CacheTrashCandidate {
+            name: name.to_owned(),
+            path: path.to_string_lossy().into_owned(),
+            bytes,
+            signature: "uv-archive-cache".into(),
+        });
+    }
+    candidates.sort_by(|left, right| left.path.cmp(&right.path));
+    candidates.dedup_by(|left, right| left.path == right.path);
+    candidates
+}
+
+fn journal_proves_uv_cache_trash(
+    home: &Path,
+    candidate: &CacheTrashCandidate,
+    proven_paths: &std::collections::HashSet<String>,
+) -> bool {
+    if !proven_paths.contains(&candidate.path) {
+        return false;
+    }
+    let source = home
+        .join(".cache")
+        .join("uv")
+        .join("archive-v0")
+        .join(&candidate.name);
+    if source.exists() {
+        return false;
+    }
+    let path = Path::new(&candidate.path);
+    let Ok(metadata) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return false;
+    }
+    let mut count = 0;
+    bounded_tree_size(path, &mut count).is_ok_and(|bytes| bytes == candidate.bytes)
+}
+
 /// Permanently remove only the proven cache directories in OS Trash. The explicit CLI flag is the
 /// approval boundary; each object is rechecked immediately before removal and journaled.
 pub fn purge_proven_cache_trash(
@@ -181,7 +258,15 @@ pub fn purge_proven_cache_trash(
     journal_path: &Path,
     now_ms: u64,
 ) -> Result<Vec<CacheTrashPurgeResult>, String> {
-    let planned = proven_cache_trash_candidates(home);
+    let mut planned = proven_cache_trash_candidates(home);
+    let journal_uv = journal_proven_uv_cache_trash_candidates(home, journal_path);
+    let proven_uv_paths = journal_uv
+        .iter()
+        .map(|candidate| candidate.path.clone())
+        .collect::<std::collections::HashSet<_>>();
+    planned.extend(journal_uv);
+    planned.sort_by(|left, right| left.path.cmp(&right.path));
+    planned.dedup_by(|left, right| left.path == right.path);
     let mut results = Vec::with_capacity(planned.len());
     for candidate in planned {
         let path = PathBuf::from(&candidate.path);
@@ -193,8 +278,10 @@ pub fn purge_proven_cache_trash(
             outcome: "pending".into(),
         };
         crate::safety::journal_append(journal_path, &entry).map_err(|error| error.to_string())?;
-        let outcome = if looks_like_proven_cache_trash(&path, &candidate.name)
-            .is_some_and(|signature| signature == candidate.signature)
+        let outcome = if (candidate.signature == "uv-archive-cache"
+            && journal_proves_uv_cache_trash(home, &candidate, &proven_uv_paths))
+            || looks_like_proven_cache_trash(&path, &candidate.name)
+                .is_some_and(|signature| signature == candidate.signature)
         {
             match std::fs::remove_dir_all(&path) {
                 Ok(()) => Ok(()),
@@ -232,19 +319,52 @@ fn active_use_blocker(
     }
 }
 
-pub(crate) fn clean_cache_contents_inner(
+fn is_uv_archive_root(path: &Path) -> bool {
+    path.file_name().is_some_and(|name| name == "archive-v0")
+}
+
+/// Expand uv's archive root so each package archive receives an independent identity and
+/// active-use check. A live process using one archive must not block unrelated archives.
+fn automatic_cache_targets(
+    candidate_id: &str,
+    targets: Vec<rules::CacheTarget>,
+) -> Result<Vec<rules::CacheTarget>, String> {
+    if candidate_id != "uv-cache" {
+        return Ok(targets);
+    }
+
+    let mut expanded = Vec::with_capacity(targets.len());
+    for target in targets {
+        if is_uv_archive_root(Path::new(&target.path)) {
+            expanded.extend(rules::cache_targets(Path::new(&target.path))?);
+        } else {
+            expanded.push(target);
+        }
+    }
+    sort_targets(&mut expanded);
+    Ok(expanded)
+}
+
+fn clean_cache_contents_inner_for_candidate(
     bases: &rules::BaseDirs,
     dir: &Path,
     requested_targets: &[rules::CacheTarget],
     journal_path: &Path,
     now_ms: u64,
+    candidate_id: Option<&str>,
 ) -> Result<Vec<CleanResult>, String> {
     if !rules::is_catalog_path(bases, dir) {
         return Err("cache-root-not-current-or-safe".into());
     }
     let mut expected = requested_targets.to_vec();
+    if let Some(id) = candidate_id {
+        expected = automatic_cache_targets(id, expected)?;
+    }
     sort_targets(&mut expected);
     let mut current = rules::cache_targets(dir)?;
+    if let Some(id) = candidate_id {
+        current = automatic_cache_targets(id, current)?;
+    }
     sort_targets(&mut current);
     if current != expected {
         return Err("cache-cleanup-targets-stale".into());
@@ -293,6 +413,23 @@ pub(crate) fn clean_cache_contents_inner(
         .collect())
 }
 
+pub(crate) fn clean_cache_contents_inner(
+    bases: &rules::BaseDirs,
+    dir: &Path,
+    requested_targets: &[rules::CacheTarget],
+    journal_path: &Path,
+    now_ms: u64,
+) -> Result<Vec<CleanResult>, String> {
+    clean_cache_contents_inner_for_candidate(
+        bases,
+        dir,
+        requested_targets,
+        journal_path,
+        now_ms,
+        None,
+    )
+}
+
 pub(crate) fn clean_regenerable_caches_inner(
     bases: &rules::BaseDirs,
     journal_path: &Path,
@@ -307,16 +444,21 @@ pub(crate) fn clean_regenerable_caches_inner(
             let path = std::path::PathBuf::from(&candidate.path);
             match rules::cache_targets(&path) {
                 Ok(targets) if targets.is_empty() => Vec::new(),
-                Ok(targets) => {
-                    clean_cache_contents_inner(bases, &path, &targets, journal_path, now_ms)
-                        .unwrap_or_else(|error| {
-                            vec![CleanResult {
-                                path: candidate.path,
-                                ok: false,
-                                error,
-                            }]
-                        })
-                }
+                Ok(targets) => clean_cache_contents_inner_for_candidate(
+                    bases,
+                    &path,
+                    &targets,
+                    journal_path,
+                    now_ms,
+                    Some(&candidate.id),
+                )
+                .unwrap_or_else(|error| {
+                    vec![CleanResult {
+                        path: candidate.path,
+                        ok: false,
+                        error,
+                    }]
+                }),
                 Err(error) => vec![CleanResult {
                     path: candidate.path,
                     ok: false,
@@ -445,6 +587,26 @@ mod tests {
     }
 
     #[test]
+    fn automatic_uv_targets_replace_archive_parent_with_children() {
+        let tmp = tempfile::tempdir().unwrap();
+        let archive_root = tmp.path().join("archive-v0");
+        fs::create_dir(&archive_root).unwrap();
+        fs::write(archive_root.join("package-a"), b"cache").unwrap();
+        fs::write(tmp.path().join("simple-v21"), b"index").unwrap();
+
+        let targets = rules::cache_targets(tmp.path()).unwrap();
+        let expanded = automatic_cache_targets("uv-cache", targets).unwrap();
+
+        assert_eq!(expanded.len(), 2);
+        assert!(expanded
+            .iter()
+            .any(|target| target.path == archive_root.join("package-a").to_string_lossy()));
+        assert!(expanded
+            .iter()
+            .all(|target| target.path != archive_root.to_string_lossy()));
+    }
+
+    #[test]
     fn proven_cache_trash_requires_signature_and_journals_purge() {
         let tmp = tempfile::tempdir().unwrap();
         let trash = tmp.path().join(".Trash");
@@ -470,6 +632,38 @@ mod tests {
         let journal_text = fs::read_to_string(journal).unwrap();
         assert!(journal_text.contains("permanent_cache_trash_delete"));
         assert!(journal_text.contains("\"outcome\":\"ok\""));
+    }
+
+    #[test]
+    fn journal_proven_uv_archive_trash_is_purged_only_when_source_is_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source_root = tmp.path().join(".cache").join("uv").join("archive-v0");
+        let source = source_root.join("package-a");
+        let trash = tmp.path().join(".Trash").join("package-a");
+        fs::create_dir_all(&source_root).unwrap();
+        fs::create_dir_all(&trash).unwrap();
+        fs::write(trash.join("payload"), b"cache").unwrap();
+        let journal = tmp.path().join("journal.jsonl");
+        crate::safety::journal_append(
+            &journal,
+            &crate::safety::JournalEntry {
+                ts_ms: 1,
+                op: "trash_delete".into(),
+                path: source.to_string_lossy().into_owned(),
+                bytes: 5,
+                outcome: "ok".into(),
+            },
+        )
+        .unwrap();
+
+        let candidates = journal_proven_uv_cache_trash_candidates(tmp.path(), &journal);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].signature, "uv-archive-cache");
+
+        let results = purge_proven_cache_trash(tmp.path(), &journal, 2).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].purged);
+        assert!(!trash.exists());
     }
 
     #[cfg(unix)]
