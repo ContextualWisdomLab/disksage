@@ -48,7 +48,12 @@ const ARTIFACT_KINDS: &[(&str, &[&str])] = &[
     (".venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
     ("venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
     ("__pycache__", &[]), // 마커 불필요 — 이름 자체가 파이썬 캐시
-    (".codegraph", &[]),  // 재생성 가능한 CodeGraph 인덱스
+    (".mypy_cache", &[]),
+    (".pytest_cache", &[]),
+    (".ruff_cache", &[]),
+    (".tox", &["pyproject.toml", "tox.ini"]),
+    (".nox", &["pyproject.toml", "noxfile.py"]),
+    (".codegraph", &[]), // 재생성 가능한 CodeGraph 인덱스
 ];
 
 fn artifact_kind(name: &str) -> Option<&'static (&'static str, &'static [&'static str])> {
@@ -691,5 +696,21 @@ mod tests {
             crate::safety::journal_recent(&journal, 1)[0].op,
             "permanent_generated_directory_delete"
         );
+    }
+
+    #[test]
+    fn discovers_regenerable_python_tool_caches() {
+        let tmp = tempfile::tempdir().unwrap();
+        for name in [".mypy_cache", ".pytest_cache", ".ruff_cache"] {
+            let path = tmp.path().join(name);
+            std::fs::create_dir(&path).unwrap();
+            std::fs::write(path.join("cache.bin"), b"cache").unwrap();
+        }
+        let mut kinds = find_artifacts(tmp.path(), 0, u64::MAX)
+            .into_iter()
+            .map(|artifact| artifact.kind)
+            .collect::<Vec<_>>();
+        kinds.sort();
+        assert_eq!(kinds, [".mypy_cache", ".pytest_cache", ".ruff_cache"]);
     }
 }

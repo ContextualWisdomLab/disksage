@@ -8,6 +8,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Reclaim regenerable Python tool state from `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `.tox`,
+  and `.nox` through the existing identity, active-use, rescan, and journal safety contract.
 - Release uploaded, current, idle OneDrive files through Microsoft's signed Files On-Demand
   command only after the provider-wide queue is quiet, then restart sync and verify allocation
   reduction while retaining the cloud item and the existing approval and receipt contract.

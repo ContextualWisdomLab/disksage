@@ -1111,3 +1111,16 @@ runner's private workspace temp root instead of weakening the shared production 
   work, so mutation remains blocked and no sync process was interrupted. Recursive/batch OneDrive
   eviction and a physical-space receipt from the live provider remain open; the 300 GB goal is not
   claimed complete.
+
+## 2026-08-29 temporary-workspace generated-cache recovery
+
+- The live `/private/tmp` inventory exposed repeated Rust, Node, Python environment, type-check,
+  test, lint, and CodeGraph outputs inside review worktrees. DiskSage's identity-bound permanent
+  generated-artifact action removed these outputs without removing a worktree, branch, source
+  file, or untracked source change; each mutation was recorded in the private operation journal.
+- The reusable artifact catalog now includes `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `.tox`,
+  and `.nox`. Discovery tests prove the new cache names are admitted, while the existing rescan,
+  filesystem-object identity, active-use, and bounded traversal gates remain unchanged.
+- OneDrive continued a large download while cleanup ran, so physical APFS availability fluctuated
+  independently of the bytes removed. Provider transfer cancellation and a fresh capacity snapshot
+  remain required before the 300 GB outcome can be claimed.
