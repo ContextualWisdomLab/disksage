@@ -39,12 +39,17 @@ fn usage() -> &'static str {
     "usage: disksage-provider-client-runtime [--output ABSOLUTE_NEW_FILE.json]"
 }
 
-fn validate_output_parent(path: &Path) -> Result<(), String> {
+fn resolve_output_path(path: &Path) -> Result<PathBuf, String> {
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .ok_or_else(|| "provider-client-runtime-output-parent-missing".to_string())?;
-    let metadata = std::fs::symlink_metadata(parent)
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| "provider-client-runtime-output-parent-missing".to_string())?;
+    let parent = std::fs::canonicalize(parent)
+        .map_err(|_| "provider-client-runtime-output-parent-unavailable".to_string())?;
+    let metadata = std::fs::symlink_metadata(&parent)
         .map_err(|_| "provider-client-runtime-output-parent-unavailable".to_string())?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err("provider-client-runtime-output-parent-unsafe".into());
@@ -69,7 +74,11 @@ fn validate_output_parent(path: &Path) -> Result<(), String> {
             }
         }
     }
-    Ok(())
+    Ok(parent.join(file_name))
+}
+
+fn validate_output_parent(path: &Path) -> Result<(), String> {
+    resolve_output_path(path).map(|_| ())
 }
 
 fn parse_args(args: &[OsString]) -> Result<Args, String> {
@@ -93,8 +102,7 @@ fn parse_args(args: &[OsString]) -> Result<Args, String> {
                 if !path.is_absolute() {
                     return Err("--output must be absolute".into());
                 }
-                validate_output_parent(&path)?;
-                output = Some(path);
+                output = Some(resolve_output_path(&path)?);
             }
             "--help" | "-h" => return Err(usage().into()),
             _ => return Err("provider-client-runtime-unknown-argument".into()),
@@ -151,7 +159,7 @@ fn audit(generated_at_ms: u64) -> ProviderClientRuntimeAudit {
 }
 
 fn write_create_new(path: &Path, encoded: &[u8]) -> Result<(), String> {
-    validate_output_parent(path)?;
+    let path = resolve_output_path(path)?;
     #[cfg(unix)]
     let mut file = {
         use std::os::unix::fs::OpenOptionsExt;
@@ -159,14 +167,14 @@ fn write_create_new(path: &Path, encoded: &[u8]) -> Result<(), String> {
             .write(true)
             .create_new(true)
             .mode(0o600)
-            .open(path)
+            .open(&path)
             .map_err(|_| "provider-client-runtime-output-create-failed".to_string())?
     };
     #[cfg(not(unix))]
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(path)
+        .open(&path)
         .map_err(|_| "provider-client-runtime-output-create-failed".to_string())?;
     file.write_all(encoded)
         .and_then(|_| file.sync_all())
