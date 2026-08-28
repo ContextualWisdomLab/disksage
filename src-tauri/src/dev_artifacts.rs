@@ -412,8 +412,7 @@ pub fn clean_artifacts(
                 };
             }
 
-            if request.kind == "vscode-obsolete-extension" {
-                let active_use = crate::git_worktree::active_use_evidence(
+            let active_use = crate::git_worktree::active_use_evidence(
                     Path::new(&request.path),
                     crate::reclaim::ACTIVE_USE_PROBE_TIMEOUT_MS,
                     crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
@@ -437,7 +436,6 @@ pub fn clean_artifacts(
                         error: "development artifact is active; close the using process before cleanup".into(),
                     };
                 }
-            }
 
             match crate::safety::trash_delete_if_identity(
                 Path::new(&request.path),
