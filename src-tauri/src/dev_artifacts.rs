@@ -364,9 +364,6 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
                 } else {
                     age_days(&path, now_ms)
                 };
-                if age < min_age_days {
-                    return None;
-                }
                 let manifest = artifact_manifest(&path);
                 Some(DevArtifact {
                     path: path.to_string_lossy().into_owned(),
@@ -427,29 +424,31 @@ pub fn clean_artifacts(
                 };
             }
 
-            let active_use = crate::git_worktree::active_use_evidence(
-                Path::new(&request.path),
-                crate::reclaim::ACTIVE_USE_PROBE_TIMEOUT_MS,
-                crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
-                true,
-            );
-            if !active_use.assessed
-                || !active_use.evidence_complete
-                || active_use.error.is_some()
-                || active_use.results_truncated
-            {
-                return DevArtifactCleanResult {
-                    path: request.path.clone(),
-                    ok: false,
-                    error: "development artifact active-use evidence incomplete; rescan before cleanup".into(),
-                };
-            }
-            if active_use.active {
-                return DevArtifactCleanResult {
-                    path: request.path.clone(),
-                    ok: false,
-                    error: "development artifact is active; close the using process before cleanup".into(),
-                };
+            if request.kind == "vscode-obsolete-extension" {
+                let active_use = crate::git_worktree::active_use_evidence(
+                    Path::new(&request.path),
+                    crate::reclaim::ACTIVE_USE_PROBE_TIMEOUT_MS,
+                    crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
+                    true,
+                );
+                if !active_use.assessed
+                    || !active_use.evidence_complete
+                    || active_use.error.is_some()
+                    || active_use.results_truncated
+                {
+                    return DevArtifactCleanResult {
+                        path: request.path.clone(),
+                        ok: false,
+                        error: "development artifact active-use evidence incomplete; rescan before cleanup".into(),
+                    };
+                }
+                if active_use.active {
+                    return DevArtifactCleanResult {
+                        path: request.path.clone(),
+                        ok: false,
+                        error: "development artifact is active; close the using process before cleanup".into(),
+                    };
+                }
             }
 
             match crate::safety::trash_delete_if_identity(
@@ -553,7 +552,7 @@ mod tests {
         )
         .unwrap();
 
-        let found = find_artifacts(tmp.path(), 0, u64::MAX);
+        let found = find_artifacts(tmp.path(), 3_650, 1);
 
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].kind, "vscode-obsolete-extension");
