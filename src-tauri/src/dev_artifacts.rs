@@ -51,7 +51,7 @@ const ARTIFACT_KINDS: &[(&str, &[&str])] = &[
     (".mypy_cache", &[]),
     (".pytest_cache", &[]),
     (".ruff_cache", &[]),
-    (".tox", &["pyproject.toml", "tox.ini"]),
+    (".tox", &["pyproject.toml", "tox.ini", "setup.cfg"]),
     (".nox", &["pyproject.toml", "noxfile.py"]),
     (".codegraph", &[]), // 재생성 가능한 CodeGraph 인덱스
 ];
@@ -712,5 +712,19 @@ mod tests {
             .collect::<Vec<_>>();
         kinds.sort();
         assert_eq!(kinds, [".mypy_cache", ".pytest_cache", ".ruff_cache"]);
+    }
+
+    #[test]
+    fn discovers_marker_gated_python_tool_environments() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("setup.cfg"), "[tox]").unwrap();
+        fs::create_dir(tmp.path().join(".tox")).unwrap();
+        fs::write(tmp.path().join("noxfile.py"), "").unwrap();
+        fs::create_dir(tmp.path().join(".nox")).unwrap();
+
+        let artifacts = find_artifacts(tmp.path(), 0, u64::MAX);
+
+        assert!(artifacts.iter().any(|artifact| artifact.kind == ".tox"));
+        assert!(artifacts.iter().any(|artifact| artifact.kind == ".nox"));
     }
 }

@@ -3783,6 +3783,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
                 "appmap-download-cache",
                 "superset-http-cache",
                 "superset-code-cache",
+                "playwright-cache",
             ]
         );
         let tmp = tempfile::tempdir().unwrap();
@@ -3802,13 +3803,14 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
                 "appmap-download-cache" => bases.home.join(".appmap/lib"),
                 "superset-http-cache" => bases.home.join("Library/Application Support/Superset/Partitions/superset/Cache"),
                 "superset-code-cache" => bases.home.join("Library/Application Support/Superset/Partitions/superset/Code Cache"),
+                "playwright-cache" => bases.home.join("Library/Caches/ms-playwright"),
                 _ => unreachable!(),
             };
             fs::create_dir_all(&path).unwrap();
             fs::write(path.join("fixture.bin"), b"regenerable").unwrap();
         }
         let results = clean_regenerable_caches_inner(&bases, &tmp.path().join("journal.jsonl"), 7);
-        assert_eq!(results.len(), 9);
+        assert_eq!(results.len(), 10);
         assert!(results.iter().all(|result| result.ok));
     }
 
