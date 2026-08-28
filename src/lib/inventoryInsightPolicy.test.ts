@@ -1,8 +1,43 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  inventoryFailureMessage,
   isCurrentInventoryRequest,
   requestUnknownExtensionInsights,
+  type InventoryFailureKind,
 } from "./inventoryInsightPolicy";
+
+const inventoryFailureKinds: readonly InventoryFailureKind[] = [
+  "inventory-load",
+  "ontology-coherence",
+  "user-rules",
+  "model-status",
+  "model-download",
+  "unknown-extension-insight",
+  "unknown-summary",
+];
+
+describe("Inventory failure privacy", () => {
+  it.each(inventoryFailureKinds)(
+    "never reflects backend causes through the %s customer message",
+    (kind) => {
+      const privatePath = "/Users/alice/Documents/customer-secret.txt";
+      const secret = `backend-sentinel-${kind}`;
+      const fromError = inventoryFailureMessage(kind, new Error(`${secret}:${privatePath}`));
+      const fromObject = inventoryFailureMessage(kind, {
+        message: `${secret}:${privatePath}`,
+        token: secret,
+      });
+
+      for (const message of [fromError, fromObject]) {
+        expect(message.length).toBeGreaterThan(0);
+        expect(message).not.toContain(secret);
+        expect(message).not.toContain(privatePath);
+        expect(message).not.toContain("alice");
+      }
+      expect(fromError).toBe(fromObject);
+    },
+  );
+});
 
 describe("Inventory unknown-extension insight admission", () => {
   it("does not invoke advisory reasoning when the inventory has no unknown samples", async () => {
