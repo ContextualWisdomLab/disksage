@@ -1,11 +1,12 @@
 use disksage_lib::container_orphan_public::sanitize_plan;
 use disksage_lib::container_orphan_reclaim::{
-    probe_container_orphans, ContainerRuntimeKind, ContainerRuntimeTarget,
+    execute_container_orphan_prune, probe_container_orphans, ContainerRuntimeKind,
+    ContainerRuntimeTarget, OrphanCategory,
 };
 use std::path::PathBuf;
 
-const USAGE: &str = "Usage: disksage-container-orphan-plan --runtime <docker-native|docker-colima-context|podman-machine> [--scope NAME] [--bin PATH] [--pretty]\n\
-Builds read-only orphan evidence for containers, images, volumes, and networks across docker/podman/colima. It never prunes anything.";
+const USAGE: &str = "Usage: disksage-container-orphan-plan --runtime <docker-native|docker-colima-context|podman-machine> [--scope NAME] [--bin PATH] [--pretty] [--execute CATEGORY --confirm EXACT_PHRASE --rationale TEXT]\n\
+Builds orphan evidence for containers, images, volumes, and networks. Execution re-audits and removes only the exact approved candidate set.";
 
 fn next_utf8_argument(
     args: &mut impl Iterator<Item = std::ffi::OsString>,
@@ -36,6 +37,9 @@ fn run() -> Result<(), String> {
     let mut scope: Option<String> = None;
     let mut binary_path: Option<PathBuf> = None;
     let mut pretty = false;
+    let mut execute = None;
+    let mut confirmation = None;
+    let mut rationale = None;
     let mut args = raw_args.into_iter();
     while let Some(arg) = args.next() {
         match arg.to_str() {
@@ -80,6 +84,40 @@ fn run() -> Result<(), String> {
                 }
                 pretty = true;
             }
+            Some("--execute") => {
+                if execute.is_some() {
+                    return Err(format!("--execute may be supplied once\n{USAGE}"));
+                }
+                execute = Some(
+                    match next_utf8_argument(
+                        &mut args,
+                        "--execute requires a category",
+                        "--execute requires a UTF-8 category",
+                    )?
+                    .as_str()
+                    {
+                        "container" => OrphanCategory::Container,
+                        "image" => OrphanCategory::Image,
+                        "volume" => OrphanCategory::Volume,
+                        "network" => OrphanCategory::Network,
+                        _ => return Err(format!("unsupported category\n{USAGE}")),
+                    },
+                );
+            }
+            Some("--confirm") if confirmation.is_none() => {
+                confirmation = Some(next_utf8_argument(
+                    &mut args,
+                    "--confirm requires the exact phrase",
+                    "--confirm requires a UTF-8 phrase",
+                )?)
+            }
+            Some("--rationale") if rationale.is_none() => {
+                rationale = Some(next_utf8_argument(
+                    &mut args,
+                    "--rationale requires text",
+                    "--rationale requires UTF-8 text",
+                )?)
+            }
             Some(_) => return Err(format!("unknown option\n{USAGE}")),
             None => return Err(format!("non-UTF-8 argument\n{USAGE}")),
         }
@@ -90,7 +128,9 @@ fn run() -> Result<(), String> {
             return Err(format!("--scope is not valid for docker-native\n{USAGE}"));
         }
         ContainerRuntimeKind::DockerColimaContext if scope.is_none() => {
-            return Err(format!("--scope is required for docker-colima-context\n{USAGE}"));
+            return Err(format!(
+                "--scope is required for docker-colima-context\n{USAGE}"
+            ));
         }
         ContainerRuntimeKind::PodmanMachine if scope.is_none() => {
             return Err(format!("--scope is required for podman-machine\n{USAGE}"));
@@ -106,6 +146,33 @@ fn run() -> Result<(), String> {
         })
     });
     let target = ContainerRuntimeTarget::new(runtime, binary_path, scope)?;
+    if let Some(category) = execute {
+        let confirmation =
+            confirmation.ok_or_else(|| format!("--execute requires --confirm\n{USAGE}"))?;
+        let rationale =
+            rationale.ok_or_else(|| format!("--execute requires --rationale\n{USAGE}"))?;
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| "system time is before epoch".to_string())?
+            .as_millis() as u64;
+        let result =
+            execute_container_orphan_prune(&target, category, &confirmation, &rationale, now_ms)?;
+        println!(
+            "{}",
+            if pretty {
+                serde_json::to_string_pretty(&result)
+            } else {
+                serde_json::to_string(&result)
+            }
+            .map_err(|error| error.to_string())?
+        );
+        return Ok(());
+    }
+    if confirmation.is_some() || rationale.is_some() {
+        return Err(format!(
+            "--confirm and --rationale require --execute\n{USAGE}"
+        ));
+    }
     let plan = sanitize_plan(probe_container_orphans(&target));
     if pretty {
         println!(

@@ -49,7 +49,7 @@ impl Default for GitWorktreeAuditOptions {
         Self {
             command_timeout_ms: 10_000,
             size_scan_timeout_ms: 60_000,
-            max_worktrees: 512,
+            max_worktrees: 2_048,
             max_entries_per_worktree: 2_000_000,
             max_active_pids: 64,
         }
@@ -929,7 +929,7 @@ fn skipped_active_use(reason: &str) -> GitWorktreeActiveUseEvidence {
 }
 
 #[cfg(unix)]
-pub(crate) fn active_use_evidence(
+pub fn active_use_evidence(
     path: &Path,
     timeout_ms: u64,
     max_pids: usize,
