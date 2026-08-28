@@ -5,6 +5,7 @@
     containerOrphanInspectErrorMessage,
     containerOrphanPruneErrorMessage,
   } from "./containerOrphanErrorFeedback";
+  import { containerOrphanExecutionStatus } from "./containerOrphanExecutionFeedback";
   import { executeContainerOrphanPruneFlow } from "./containerOrphanPruneFlow";
   import { confirm } from "@tauri-apps/plugin-dialog";
 
@@ -154,9 +155,7 @@
       </p>
       <p class="notice">
         {CATEGORY_LABELS[lastRefreshFailedExecution.category]} 정리 결과를 확인하세요:
-        {lastRefreshFailedExecution.execution.executed
-          ? "완료"
-          : `실패(${lastRefreshFailedExecution.execution.status_code})`} ·
+        {containerOrphanExecutionStatus(lastRefreshFailedExecution.execution)} ·
         호스트 여유 공간 변화
         {lastRefreshFailedExecution.execution.observed_available_gain_bytes === null
           ? "관측 불가"
@@ -223,7 +222,7 @@
               {/if}
               {#if executions[ckey]}
                 <p class="notice">
-                  결과를 확인하세요: {executions[ckey].executed ? "완료" : `실패(${executions[ckey].status_code})`} ·
+                  결과를 확인하세요: {containerOrphanExecutionStatus(executions[ckey])} ·
                   호스트 여유 공간 변화 {executions[ckey].observed_available_gain_bytes === null ? "관측 불가" : `+${fmtBytes(executions[ckey].observed_available_gain_bytes)}`}
                 </p>
               {/if}
