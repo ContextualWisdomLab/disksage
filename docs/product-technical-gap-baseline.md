@@ -970,3 +970,17 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   through `git worktree remove` without force. Dirty, active-evidence-incomplete, open-PR, and
   head-mismatched paths were preserved; the immediate APFS sample fluctuated downward, so no
   positive physical gain is attributed to those 32 MiB of logical worktree data.
+
+## 2026-08-28 exact-head hosted-test repair and additional measured reclaim
+
+- The hosted container-capacity regression failed before exercising its assertion because its fake
+  Docker process omitted the mandatory `info` health response. The fixture now implements that
+  production precondition; the safety behavior remains unchanged.
+- Release builds uploaded `release-disksage-windows-2022-1`, while the verification script expected
+  `windows-latest`. The verifier now uses the pinned matrix identity, and a synthetic exact 17-file
+  artifact set passes the checksum, path, type, and count contract.
+- Three clean inactive temporary Git checkouts were removed only after a fresh fetch proved their
+  exact local commits remained reachable from remote branches; generated Rust output was removed
+  separately after ignore and active-use checks. APFS available space increased by 1,283,576 KiB
+  across those two bounded operations. Provider synchronization paths and locally unique commits
+  were preserved.

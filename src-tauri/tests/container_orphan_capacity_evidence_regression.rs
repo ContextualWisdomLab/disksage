@@ -18,6 +18,10 @@ fn public_prune_receipt_does_not_claim_host_capacity_without_runtime_store_volum
             r#"#!/bin/sh
 set -eu
 case "${{1:-}}" in
+  info)
+    printf '%s\n' '{{}}'
+    exit 0
+    ;;
   container)
     if [ "${{2:-}}" = "ps" ]; then
       printf '%s\n' '{{"ID":"{FULL_ID}","State":"exited","Names":[]}}'
