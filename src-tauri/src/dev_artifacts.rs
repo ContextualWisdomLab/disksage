@@ -184,12 +184,22 @@ fn metadata_fingerprint(records: &[String]) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
+fn editor_product(root_name: &str) -> Option<&'static str> {
+    match root_name {
+        ".vscode" => Some("Visual Studio Code"),
+        ".vscode-insiders" => Some("Visual Studio Code Insiders"),
+        ".vscode-server" => Some("Visual Studio Code Server"),
+        ".cursor" => Some("Cursor"),
+        _ => None,
+    }
+}
+
 /// Return extension directories that VS Code itself marked obsolete.
 ///
 /// `.obsolete` is native lifecycle authority, so no version-age heuristic is needed. Only a real
 /// metadata file at `.vscode/extensions/.obsolete` and single-component real child directories are
 /// accepted.
-fn vscode_obsolete_extension_paths(root: &Path) -> Vec<PathBuf> {
+fn vscode_obsolete_extension_paths(root: &Path) -> Vec<(PathBuf, &'static str)> {
     let mut paths = Vec::new();
     let walker = walkdir::WalkDir::new(root)
         .follow_links(false)
@@ -202,15 +212,17 @@ fn vscode_obsolete_extension_paths(root: &Path) -> Vec<PathBuf> {
         let Some(extensions) = entry.path().parent() else {
             continue;
         };
-        if extensions.file_name().and_then(|name| name.to_str()) != Some("extensions")
-            || extensions
-                .parent()
-                .and_then(Path::file_name)
-                .and_then(|name| name.to_str())
-                != Some(".vscode")
-        {
+        if extensions.file_name().and_then(|name| name.to_str()) != Some("extensions") {
             continue;
         }
+        let Some(product) = extensions
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            .and_then(editor_product)
+        else {
+            continue;
+        };
         let Ok(metadata) = std::fs::symlink_metadata(entry.path()) else {
             continue;
         };
@@ -245,7 +257,7 @@ fn vscode_obsolete_extension_paths(root: &Path) -> Vec<PathBuf> {
                 continue;
             };
             if candidate_metadata.is_dir() && !candidate_metadata.file_type().is_symlink() {
-                paths.push(candidate);
+                paths.push((candidate, product));
             }
         }
     }
@@ -310,7 +322,7 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
         .filter(|path| {
             !obsolete_extensions
                 .iter()
-                .any(|obsolete| path.starts_with(obsolete))
+                .any(|(obsolete, _)| path.starts_with(obsolete))
         })
         .filter_map(|path| {
             let age = if now_ms == u64::MAX {
@@ -343,29 +355,33 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
         })
         .collect();
 
-    found.extend(obsolete_extensions.into_iter().filter_map(|path| {
-        let age = if now_ms == u64::MAX {
-            u64::MAX
-        } else {
-            age_days(&path, now_ms)
-        };
-        if age < min_age_days {
-            return None;
-        }
-        let manifest = artifact_manifest(&path);
-        Some(DevArtifact {
-            path: path.to_string_lossy().into_owned(),
-            kind: "vscode-obsolete-extension".into(),
-            project: "Visual Studio Code".into(),
-            bytes: manifest.bytes,
-            files: manifest.files,
-            skipped: manifest.skipped,
-            scan_complete: manifest.scan_complete,
-            fingerprint: manifest.fingerprint,
-            object_id: manifest.object_id,
-            age_days: if age == u64::MAX { 0 } else { age },
-        })
-    }));
+    found.extend(
+        obsolete_extensions
+            .into_iter()
+            .filter_map(|(path, product)| {
+                let age = if now_ms == u64::MAX {
+                    u64::MAX
+                } else {
+                    age_days(&path, now_ms)
+                };
+                if age < min_age_days {
+                    return None;
+                }
+                let manifest = artifact_manifest(&path);
+                Some(DevArtifact {
+                    path: path.to_string_lossy().into_owned(),
+                    kind: "vscode-obsolete-extension".into(),
+                    project: product.into(),
+                    bytes: manifest.bytes,
+                    files: manifest.files,
+                    skipped: manifest.skipped,
+                    scan_complete: manifest.scan_complete,
+                    fingerprint: manifest.fingerprint,
+                    object_id: manifest.object_id,
+                    age_days: if age == u64::MAX { 0 } else { age },
+                })
+            }),
+    );
 
     found.sort_by(|a, b| b.bytes.cmp(&a.bytes));
     found
@@ -542,6 +558,8 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].kind, "vscode-obsolete-extension");
         assert_eq!(found[0].path, obsolete.to_string_lossy());
+        assert_eq!(editor_product(".cursor"), Some("Cursor"));
+        assert_eq!(editor_product(".unknown-editor"), None);
     }
 
     #[test]

@@ -928,7 +928,10 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   child directories as development artifacts; it does not infer obsolescence from directory age or
   version ordering. The filtered headless execution revalidated all 22 identities, moved them to
   Trash, journaled them, and purged only those exact Trash entries; APFS available space increased
-  by 1,291,364 KiB in the bounded before/after sample.
+  by 1,291,364 KiB in the bounded before/after sample. The same native lifecycle contract found
+  and revalidated 15 additional obsolete directories in Cursor, VS Code Insiders, and VS Code
+  Server; purging only their journal-matched Trash entries increased APFS availability by another
+  692,768 KiB.
 - A focused physical-allocation audit found about 7.7 GiB in AppMap downloaded tool binaries and
   1.9 GiB in inactive Superset network diagnostics. AppMap uses the existing regenerable-data
   cleanup contract. Superset diagnostics remain an explicit-review catalog item because historical

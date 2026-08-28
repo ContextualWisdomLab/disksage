@@ -8,8 +8,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
-- Reclaim only VS Code extension directories named by VS Code's native `.obsolete` lifecycle
-  metadata, with bounded manifests, symlink rejection, identity revalidation, Trash, and journaling.
+- Reclaim only VS Code, VS Code Insiders/Server, and Cursor extension directories named by each
+  editor's native `.obsolete` lifecycle metadata, with bounded manifests, symlink rejection,
+  identity revalidation, Trash, and journaling.
 - Catalog AppMap downloaded tool binaries as regenerable macOS data. Superset network diagnostics
   remain separately visible for explicit review because historical logs cannot be regenerated.
 - Add standalone stale-PR clone reclamation: only a clean, inactive, single-worktree clone whose
