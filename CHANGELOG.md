@@ -50,6 +50,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Stop descending once a marker-validated development artifact is found, avoiding a second full
+  traversal of large nested `node_modules`, `target`, and generated index trees before cleanup.
 - Resolve macOS cache roots from the effective XDG/UV environment and observed native locations:
   `~/.cache` for uv, Codex runtimes, Node, PyTorch, Prisma, and GitHub CLI, plus
   `~/Library/pnpm/store` for pnpm's content-addressed store. The existing guarded cleanup keeps

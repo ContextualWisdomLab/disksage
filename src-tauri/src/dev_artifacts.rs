@@ -264,25 +264,22 @@ fn vscode_obsolete_extension_paths(metadata_path: &Path) -> Vec<(PathBuf, &'stat
 
 /// 마커 인접 아티팩트 디렉토리를 찾아 mtime 나이로 걸러 크기 내림차순으로 반환.
 ///
-/// 2패스로 나눈 이유: 순회 백엔드의 방문 순서에 의존하지 않고 부모/자식 관계를
-/// 보장하지 않는다. 그래서 "이미 찾은 아티팩트의 하위는 건너뛴다" 식으로 순회
-/// 도중 걸러내면, 중첩 node_modules의 자식이 부모보다 먼저 방문될 경우 둘 다
-/// 별도 항목으로 남는다. 1패스에서는 마커 인접 검증까지만 마친 후보 경로를 전부
-/// 모으고(순서 무관), 2패스에서 다른 후보의 하위 경로인 것을 제거한 뒤에야 크기를
-/// 계산해 중첩분을 이중 계산하지 않는다.
+/// WalkDir의 부모 우선 순회를 이용해 검증된 아티팩트 아래는 즉시 건너뛴다. 생성물
+/// 내부의 중첩 `node_modules`까지 다시 훑지 않으므로 큰 개발 트리에서도 같은 바이트를
+/// 탐색 단계와 manifest 단계에서 두 번 읽지 않는다.
 pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArtifact> {
     let mut candidates: Vec<PathBuf> = Vec::new();
     let mut obsolete_extensions = Vec::new();
-    let walker = walkdir::WalkDir::new(root)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|entry| {
-            // 심링크/reparse point 제외 — scanner의 순회 전반 패턴과 동일
-            entry.depth() == 0 || scanner::keep_entry(entry)
-        });
+    let mut walker = walkdir::WalkDir::new(root).follow_links(false).into_iter();
 
-    for entry in walker {
+    while let Some(entry) = walker.next() {
         let Ok(e) = entry else { continue };
+        if e.depth() > 0 && !scanner::keep_entry(&e) {
+            if e.file_type().is_dir() {
+                walker.skip_current_dir();
+            }
+            continue;
+        }
         if e.file_type().is_file() && e.file_name() == ".obsolete" {
             obsolete_extensions.extend(vscode_obsolete_extension_paths(e.path()));
             continue;
@@ -301,26 +298,15 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
         let marker_ok = markers.is_empty() || markers.iter().any(|m| parent.join(m).exists());
         if marker_ok {
             candidates.push(path.to_path_buf());
+            walker.skip_current_dir();
         }
     }
 
-    // 다른 후보의 하위 경로(중첩 아티팩트)는 제거 — 방문 순서에 의존하지 않는 비교
-    let top_level: Vec<&Path> = candidates
-        .iter()
-        .enumerate()
-        .filter(|(i, p)| {
-            !candidates
-                .iter()
-                .enumerate()
-                .any(|(j, other)| *i != j && p.starts_with(other))
-        })
-        .map(|(_, p)| p.as_path())
-        .collect();
-
     obsolete_extensions.sort();
     obsolete_extensions.dedup();
-    let mut found: Vec<DevArtifact> = top_level
-        .into_iter()
+    let mut found: Vec<DevArtifact> = candidates
+        .iter()
+        .map(PathBuf::as_path)
         .filter(|path| {
             !obsolete_extensions
                 .iter()
