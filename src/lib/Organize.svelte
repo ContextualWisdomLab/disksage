@@ -50,7 +50,7 @@
   async function executeSelected() {
     if (plans.length === 0) return;
     const okay = await confirm(
-      `${plans.length}개 파일을 정리합니다 (온톨로지 targetFolder로 이동).\n` +
+      `${plans.length}개 파일을 분류된 폴더로 이동합니다.\n` +
         `되돌리기 버튼으로 복원할 수 있습니다.`,
       { title: "DiskSage", kind: "warning" },
     );

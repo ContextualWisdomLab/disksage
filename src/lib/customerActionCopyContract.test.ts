@@ -16,10 +16,17 @@ describe("customer action copy", () => {
       readUi("CloudArchive.svelte"),
       readUi("Duplicates.svelte"),
       readUi("GitWorktreeCleanup.svelte"),
+      readUi("Organize.svelte"),
+      readUi("BrewCleanup.svelte"),
+      readUi("Inventory.svelte"),
     ].join("\n");
 
     expect(source).not.toContain("Rust 내부");
+    expect(source).not.toContain("Rust 빌드");
     expect(source).not.toContain("backend");
+    expect(source).not.toContain("fast-mlsirm");
+    expect(source).not.toContain("targetFolder");
+    expect(source).not.toContain("온톨로지 정합");
     expect(source).not.toContain("호스트 이미지");
     expect(source).not.toContain("게스트 저장 공간");
     expect(source).not.toContain("실행 파일을 찾지 못함");

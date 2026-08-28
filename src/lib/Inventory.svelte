@@ -15,7 +15,7 @@
   let summaryLoaded = $state(false);
   let summaryBusy = $state(false);
 
-  // 온톨로지 정합성(advisory) — 인벤토리 집계와 별개로 로드 실패해도 조용히 무시(게이트 아님)
+  // 분류 일관성(advisory) — 인벤토리 집계와 별개로 로드 실패해도 조용히 무시(게이트 아님)
   let issues = $state<api.Issue[] | null>(null);
 
   // 활성 사용자 규칙 개수(advisory) — 손상된 규칙 파일은 조용히 무시하지 않고 안내만(게이트 아님)
@@ -168,7 +168,7 @@
     {#if issues !== null}
       <div class="coherence">
         {#if issues.length === 0}
-          <span class="ok small">온톨로지 정합 ✓</span>
+          <span class="ok small">분류 일관성 확인 ✓</span>
         {:else}
           <ul class="issues">
             {#each issues as i}
