@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 const USAGE: &str = "usage: disksage-git-worktree-remove \
 --repository-root ABSOLUTE_PATH --reference-ref REF [--reference-ref REF ...] \
+[--include-closed-pull-requests] [--stale-open-pull-request-cutoff-ms N] \
 --approved-removal-plan-fingerprint HEX64 \
 --confirmation-exact-approval-phrase PHRASE --reviewed-by human:ID --rationale TEXT \
 --record-root ABSOLUTE_PATH";
@@ -17,6 +18,8 @@ const USAGE: &str = "usage: disksage-git-worktree-remove \
 struct Args {
     repository_root: PathBuf,
     retention_references: Vec<String>,
+    include_closed_pull_requests: bool,
+    stale_open_pull_request_cutoff_ms: Option<u64>,
     plan_fingerprint: String,
     confirmation_phrase: String,
     reviewed_by: String,
@@ -47,6 +50,8 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
     let mut repository_root = None;
     let mut retention_references = Vec::new();
     let mut plan_fingerprint = None;
+    let mut include_closed_pull_requests = false;
+    let mut stale_open_pull_request_cutoff_ms = None;
     let mut confirmation_phrase = None;
     let mut reviewed_by = None;
     let mut rationale = None;
@@ -61,6 +66,20 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
             Some("--reference-ref") => {
                 retention_references.push(next_utf8(&mut args, "--reference-ref")?)
             }
+            Some("--include-closed-pull-requests") if !include_closed_pull_requests => {
+                include_closed_pull_requests = true
+            }
+            Some("--include-closed-pull-requests") => return Err("duplicate option".into()),
+            Some("--stale-open-pull-request-cutoff-ms")
+                if stale_open_pull_request_cutoff_ms.is_none() =>
+            {
+                stale_open_pull_request_cutoff_ms = Some(
+                    next_utf8(&mut args, "--stale-open-pull-request-cutoff-ms")?
+                        .parse()
+                        .map_err(|_| "--stale-open-pull-request-cutoff-ms must be an integer")?,
+                )
+            }
+            Some("--stale-open-pull-request-cutoff-ms") => return Err("duplicate option".into()),
             Some("--approved-removal-plan-fingerprint") => {
                 plan_fingerprint =
                     Some(next_utf8(&mut args, "--approved-removal-plan-fingerprint")?)
@@ -109,6 +128,8 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<ParseResul
     Ok(ParseResult::Run(Args {
         repository_root,
         retention_references,
+        include_closed_pull_requests,
+        stale_open_pull_request_cutoff_ms,
         plan_fingerprint,
         confirmation_phrase,
         reviewed_by,
@@ -131,9 +152,29 @@ struct RemovalOutput {
 fn execute(args: Args) -> Result<RemovalOutput, String> {
     let options = git_worktree::GitWorktreeAuditOptions::default();
     let audited_at_ms = cloud::system_now_ms();
-    let report = git_worktree::audit_git_worktrees(
+    let closed_heads = if args.include_closed_pull_requests {
+        git_worktree::github_closed_pull_request_heads(
+            &args.repository_root,
+            options.command_timeout_ms,
+        )?
+    } else {
+        Default::default()
+    };
+    let stale_open_heads = if let Some(cutoff_ms) = args.stale_open_pull_request_cutoff_ms {
+        git_worktree::github_stale_open_pull_request_heads(
+            &args.repository_root,
+            cutoff_ms,
+            options.command_timeout_ms,
+        )?
+    } else {
+        Default::default()
+    };
+    let report = git_worktree::audit_git_worktrees_with_pull_request_heads(
         &args.repository_root,
         &args.retention_references,
+        &closed_heads,
+        &stale_open_heads,
+        args.stale_open_pull_request_cutoff_ms,
         options,
         audited_at_ms,
     )?;
@@ -157,10 +198,12 @@ fn execute(args: Args) -> Result<RemovalOutput, String> {
         &format!("{}.approval.json", approval.approval_id),
         &approval,
     )?;
-    let result = git_worktree::execute_stale_worktree_removal(
+    let result = git_worktree::execute_stale_worktree_removal_with_github_pull_requests(
         &report,
         &approval,
         &args.confirmation_phrase,
+        args.include_closed_pull_requests,
+        args.stale_open_pull_request_cutoff_ms,
         options,
         cloud::system_now_ms(),
     )?;
