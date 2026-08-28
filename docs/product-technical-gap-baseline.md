@@ -1,9 +1,10 @@
 # DiskSage product and technical gap baseline
 
-**Snapshot:** 2026-08-22 (Asia/Seoul)
-**Repository heads at snapshot:** PR #213 `a6ec6e2`, PR #247 `a0fa7bc`, PR #246 `741ab30`,
-supporting PR #156 `39a08a7`, and PR #192 `30ceea2`; hosted checks and protected review remain
-authoritative, and no merge is claimed from queued or stale status.
+**Snapshot:** 2026-08-28 (Asia/Seoul)
+**Repository heads at snapshot:** `main` `79067c1160ddedf7fc962cbf8067ce7e83c4564a`, PR #267
+`b5d3b5f57d8d517e422af3c8b65b1050cb29d928`, and the current open queue (41 PRs: 20 ready, 21
+draft); hosted checks and protected review remain authoritative, and no merge is claimed from
+queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
 
