@@ -1146,8 +1146,8 @@ runner's private workspace temp root instead of weakening the shared production 
   indexes. Both executions completed without a failed candidate, were journaled, and re-audited to
   zero candidates. The second bounded execution increased APFS availability by 820,188 KiB; logical
   candidate totals are kept separate from that physical observation.
-- Repository-root `.venv314` discovery now requires a bounded regular `pyvenv.cfg` whose version is
-  Python 3.14, rather than treating a Git checkout name as sufficient deletion evidence. The UI
+- Every `.venv314` discovery path now requires a bounded regular `pyvenv.cfg` whose version is
+  Python 3.14, rather than treating a Git or project marker as sufficient deletion evidence. The UI
   names each newly supported Python cache and test environment so the operator can decide what to
   review next without seeing internal implementation labels.
 - A subsequent `/private/tmp` execution revalidated 752 generated candidates and permanently
@@ -1159,6 +1159,8 @@ runner's private workspace temp root instead of weakening the shared production 
   2.3 GiB test target and increased APFS availability by another 2,285,228 KiB.
   A final fresh `/private/tmp` pass removed 29 newly safe candidates, preserved eight active and
   two changed candidates, and increased APFS availability by a further 1,335,132 KiB.
+  On the next continuation, 11 more candidates became safe and added 365,312 KiB; eight active
+  candidates and one changed candidate again remained untouched.
 - The live Podman machine retains five running PostgreSQL containers and two recent stopped
   PostgreSQL containers. All 13 dangling images are referenced by external Buildah storage
   containers, no custom network is unused, and volume safety cannot be completed while one stopped

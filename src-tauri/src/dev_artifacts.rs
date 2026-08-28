@@ -59,31 +59,31 @@ const ARTIFACT_KINDS: &[(&str, &[&str])] = &[
 
 fn marker_exists(parent: &Path, artifact_name: &str, marker: &str) -> bool {
     let path = parent.join(marker);
-    if artifact_name == ".venv314" && marker == ".git" {
-        let config = parent.join(artifact_name).join("pyvenv.cfg");
-        return path.exists()
-            && std::fs::metadata(&config)
-                .is_ok_and(|metadata| metadata.is_file() && metadata.len() <= 65_536)
-            && std::fs::read_to_string(config).is_ok_and(|text| {
-                text.lines().any(|line| {
-                    line.split_once('=').is_some_and(|(key, value)| {
-                        let key = key.trim();
-                        (key.eq_ignore_ascii_case("version")
-                            || key.eq_ignore_ascii_case("version_info"))
-                            && value
-                                .trim()
-                                .strip_prefix("3.14")
-                                .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
-                    })
-                })
-            });
-    }
     if artifact_name != ".tox" || marker != "setup.cfg" {
         return path.exists();
     }
     std::fs::metadata(&path).is_ok_and(|metadata| metadata.is_file() && metadata.len() <= 1_048_576)
         && std::fs::read_to_string(path).is_ok_and(|text| {
             text.lines().any(|line| line.trim().eq_ignore_ascii_case("[tox]"))
+        })
+}
+
+fn is_python_314_environment(path: &Path) -> bool {
+    let config = path.join("pyvenv.cfg");
+    std::fs::metadata(&config)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.len() <= 65_536)
+        && std::fs::read_to_string(config).is_ok_and(|text| {
+            text.lines().any(|line| {
+                line.split_once('=').is_some_and(|(key, value)| {
+                    let key = key.trim();
+                    (key.eq_ignore_ascii_case("version")
+                        || key.eq_ignore_ascii_case("version_info"))
+                        && value
+                            .trim()
+                            .strip_prefix("3.14")
+                            .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+                })
+            })
         })
 }
 
@@ -355,7 +355,7 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
             || markers
                 .iter()
                 .any(|marker| marker_exists(parent, &name, marker));
-        if marker_ok {
+        if marker_ok && (name != ".venv314" || is_python_314_environment(path)) {
             candidates.push(path.to_path_buf());
             walker.skip_current_dir();
         }
@@ -794,6 +794,10 @@ mod tests {
         assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
 
         fs::write(tmp.path().join(".venv314/pyvenv.cfg"), "version = 3.140.0").unwrap();
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
+
+        fs::remove_file(tmp.path().join(".git")).unwrap();
+        fs::write(tmp.path().join("pyproject.toml"), "[project]").unwrap();
         assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
     }
 }
