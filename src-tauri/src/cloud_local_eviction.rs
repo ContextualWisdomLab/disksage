@@ -171,8 +171,11 @@ fn allocated_bytes(metadata: &Metadata) -> u64 {
 }
 
 fn observe_local_file(root: &CloudRoot, path: &Path) -> Result<LocalFileObservation, String> {
-    if root.provider != CloudProvider::Icloud {
-        return Err("icloud-local-eviction-requires-icloud-root".into());
+    if !matches!(
+        root.provider,
+        CloudProvider::Icloud | CloudProvider::Onedrive
+    ) {
+        return Err("file-provider-local-eviction-root-required".into());
     }
     let root_path = Path::new(&root.path);
     if !absolute_without_parent(root_path) || !absolute_without_parent(path) {
