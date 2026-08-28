@@ -694,6 +694,7 @@ export interface GitWorktreeAuditEntry {
   status_entry_count: number | null;
   contained_in_reference: boolean | null;
   closed_pull_request_head: boolean;
+  stale_open_pull_request_head: boolean;
   head_is_retained_tip: boolean;
   actor_cwd_inside: boolean | null;
   size: GitWorktreeSizeEvidence;
@@ -714,6 +715,7 @@ export interface GitWorktreeAuditReport {
   repository_root: string;
   common_dir: string;
   generated_at_ms: number;
+  stale_open_pull_request_cutoff_ms: number | null;
   retention_references: GitWorktreeReferenceBinding[];
   retention_reference_set_fingerprint: string;
   removal_authority_fingerprint: string;
@@ -1336,15 +1338,18 @@ export const planStaleGitWorktrees = (
   repositoryRoot: string,
   retentionReferences: string[],
   includeClosedPullRequests: boolean,
+  staleOpenPullRequestCutoffMs: number | null = null,
 ) => invoke<GitWorktreeAuditReport>("plan_stale_git_worktrees", {
   repositoryRoot,
   retentionReferences,
   includeClosedPullRequests,
+  staleOpenPullRequestCutoffMs,
 });
 export const removeStaleGitWorktrees = (
   repositoryRoot: string,
   retentionReferences: string[],
   includeClosedPullRequests: boolean,
+  staleOpenPullRequestCutoffMs: number | null,
   approvedRemovalPlanFingerprint: string,
   confirmationExactApprovalPhrase: string,
   rationale: string,
@@ -1352,6 +1357,7 @@ export const removeStaleGitWorktrees = (
   repositoryRoot,
   retentionReferences,
   includeClosedPullRequests,
+  staleOpenPullRequestCutoffMs,
   approvedRemovalPlanFingerprint,
   confirmationExactApprovalPhrase,
   rationale,

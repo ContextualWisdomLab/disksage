@@ -970,6 +970,7 @@ pub async fn plan_stale_git_worktrees(
     repository_root: String,
     retention_references: Vec<String>,
     include_closed_pull_requests: bool,
+    stale_open_pull_request_cutoff_ms: Option<u64>,
 ) -> Result<git_worktree::GitWorktreeAuditReport, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let closed_heads = if include_closed_pull_requests {
@@ -980,10 +981,21 @@ pub async fn plan_stale_git_worktrees(
         } else {
             Default::default()
         };
-        git_worktree::audit_git_worktrees_with_closed_pull_request_heads(
+        let stale_open_heads = if let Some(cutoff_ms) = stale_open_pull_request_cutoff_ms {
+            git_worktree::github_stale_open_pull_request_heads(
+                Path::new(&repository_root),
+                cutoff_ms,
+                git_worktree::GitWorktreeAuditOptions::default().command_timeout_ms,
+            )?
+        } else {
+            Default::default()
+        };
+        git_worktree::audit_git_worktrees_with_pull_request_heads(
             Path::new(&repository_root),
             &retention_references,
             &closed_heads,
+            &stale_open_heads,
+            stale_open_pull_request_cutoff_ms,
             git_worktree::GitWorktreeAuditOptions::default(),
             cloud::system_now_ms(),
         )
@@ -1010,6 +1022,7 @@ pub async fn remove_stale_git_worktrees(
     repository_root: String,
     retention_references: Vec<String>,
     include_closed_pull_requests: bool,
+    stale_open_pull_request_cutoff_ms: Option<u64>,
     approved_removal_plan_fingerprint: String,
     confirmation_exact_approval_phrase: String,
     rationale: String,
@@ -1031,10 +1044,21 @@ pub async fn remove_stale_git_worktrees(
         } else {
             Default::default()
         };
-        let report = git_worktree::audit_git_worktrees_with_closed_pull_request_heads(
+        let stale_open_heads = if let Some(cutoff_ms) = stale_open_pull_request_cutoff_ms {
+            git_worktree::github_stale_open_pull_request_heads(
+                Path::new(&repository_root),
+                cutoff_ms,
+                options.command_timeout_ms,
+            )?
+        } else {
+            Default::default()
+        };
+        let report = git_worktree::audit_git_worktrees_with_pull_request_heads(
             Path::new(&repository_root),
             &retention_references,
             &closed_heads,
+            &stale_open_heads,
+            stale_open_pull_request_cutoff_ms,
             options,
             cloud::system_now_ms(),
         )?;
@@ -1058,11 +1082,12 @@ pub async fn remove_stale_git_worktrees(
             &format!("{}.approval.json", approval.approval_id),
             &approval,
         )?;
-        let result = git_worktree::execute_stale_worktree_removal_with_github_closed_pull_requests(
+        let result = git_worktree::execute_stale_worktree_removal_with_github_pull_requests(
             &report,
             &approval,
             &confirmation_exact_approval_phrase,
             include_closed_pull_requests,
+            stale_open_pull_request_cutoff_ms,
             options,
             cloud::system_now_ms(),
         )?;

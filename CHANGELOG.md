@@ -8,6 +8,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Add an explicit operator-supplied cutoff for stale same-repository open pull-request worktrees
+  (ADR-0015). GitHub creation time, state, branch, and exact head OID are refreshed before each
+  removal; branches and commits remain untouched and no implicit age threshold is used.
 - Reclaim clean, inactive worktrees for same-repository pull requests closed without merge only
   when GitHub reports an exact branch-and-head match; refresh that evidence before each removal
   and preserve fork, detached, dirty, active, or changed worktrees.

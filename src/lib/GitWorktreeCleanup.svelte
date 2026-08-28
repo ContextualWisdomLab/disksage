@@ -8,6 +8,8 @@
   let repositoryRoot = $state("");
   let retentionText = $state("");
   let includeClosedPullRequests = $state(false);
+  let includeStaleOpenPullRequests = $state(false);
+  let staleOpenPullRequestCutoffDate = $state("");
   let planning = $state(false);
   let executing = $state(false);
   let error = $state("");
@@ -45,6 +47,17 @@
     error = "";
   }
 
+  function staleOpenPullRequestCutoffMs(): number | null {
+    if (!includeStaleOpenPullRequests || !/^\d{4}-\d{2}-\d{2}$/.test(staleOpenPullRequestCutoffDate)) {
+      return null;
+    }
+    const parsed = Date.parse(`${staleOpenPullRequestCutoffDate}T00:00:00.000Z`);
+    return Number.isFinite(parsed)
+      && new Date(parsed).toISOString().slice(0, 10) === staleOpenPullRequestCutoffDate
+      ? parsed
+      : null;
+  }
+
   async function chooseRepository() {
     error = "";
     try {
@@ -66,10 +79,15 @@
     const root = repositoryRoot.trim();
     const references = retentionReferences();
     if (!root || references.length === 0) return;
+    const staleCutoffMs = staleOpenPullRequestCutoffMs();
+    if (includeStaleOpenPullRequests && staleCutoffMs === null) {
+      error = "오래된 진행 중 작업을 확인하려면 기준일을 입력하세요.";
+      return;
+    }
     planning = true;
     resetDecision();
     try {
-      report = await api.planStaleGitWorktrees(root, references, includeClosedPullRequests);
+      report = await api.planStaleGitWorktrees(root, references, includeClosedPullRequests, staleCutoffMs);
       repositoryRoot = report.repository_root;
       retentionText = report.retention_references
         .map((binding) => binding.reference_ref)
@@ -107,6 +125,7 @@
         report.repository_root,
         report.retention_references.map((binding) => binding.reference_ref),
         includeClosedPullRequests,
+        report.stale_open_pull_request_cutoff_ms,
         report.removal_plan_fingerprint,
         confirmationPhrase,
         rationale.trim(),
@@ -158,6 +177,21 @@
     <input type="checkbox" bind:checked={includeClosedPullRequests} onchange={resetDecision} disabled={planning || executing} />
     완료된 작업과 연결된 항목도 확인
   </label>
+  <label class="option">
+    <input type="checkbox" bind:checked={includeStaleOpenPullRequests} onchange={resetDecision} disabled={planning || executing} />
+    오래된 진행 중 작업도 확인
+  </label>
+  {#if includeStaleOpenPullRequests}
+    <label>
+      기준일 (이 날짜보다 먼저 생성된 작업)
+      <input
+        type="date"
+        bind:value={staleOpenPullRequestCutoffDate}
+        onchange={resetDecision}
+        disabled={planning || executing}
+      />
+    </label>
+  {/if}
   <button
     onclick={inspectWorktrees}
     disabled={planning || executing || !repositoryRoot.trim() || retentionReferences().length === 0}

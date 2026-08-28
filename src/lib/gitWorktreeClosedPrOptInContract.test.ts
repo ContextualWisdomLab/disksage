@@ -14,8 +14,11 @@ describe("Git worktree closed-PR opt-in", () => {
     const source = readSource("src/lib/GitWorktreeCleanup.svelte");
 
     expect(source).toContain("let includeClosedPullRequests = $state(false);");
+    expect(source).toContain("let includeStaleOpenPullRequests = $state(false);");
     expect(source).toContain("완료된 작업과 연결된 항목도 확인");
-    expect(source).toContain("planStaleGitWorktrees(root, references, includeClosedPullRequests)");
+    expect(source).toContain("오래된 진행 중 작업도 확인");
+    expect(source).toContain("기준일 (이 날짜보다 먼저 생성된 작업)");
+    expect(source).toContain("planStaleGitWorktrees(root, references, includeClosedPullRequests, staleCutoffMs)");
     expect(source).toContain("removeStaleGitWorktrees(");
     expect(source).toContain("보존할 작업 기록은 유지됩니다");
   });
