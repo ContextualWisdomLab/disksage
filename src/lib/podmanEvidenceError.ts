@@ -13,25 +13,25 @@ const PODMAN_PRUNE_RECOVERY_MESSAGES: Readonly<Record<string, string>> = {
 function pruneRecoveryMessage(reason: unknown): string | null {
   const code = typeof reason === "string" ? reason : reason instanceof Error ? reason.message : "";
   if (!Object.prototype.hasOwnProperty.call(PODMAN_PRUNE_RECOVERY_MESSAGES, code)) return null;
-  return PODMAN_PRUNE_RECOVERY_MESSAGES[code] ?? null;
+  return PODMAN_PRUNE_RECOVERY_MESSAGES[code];
 }
 
+const PODMAN_INSPECTION_FALLBACK =
+  "Podman 저장 공간을 확인하지 못했습니다. 상태를 확인한 뒤 다시 시도하십시오.";
+
 /**
- * Convert any untrusted Podman failure into stable privacy-safe customer guidance.
+ * Convert any untrusted read-only Podman inspection failure into stable privacy-safe guidance.
  *
- * Tauri transport failures, operating-system errors, and thrown JavaScript values may contain
- * machine names, account-local paths, socket locations, or command details. Only exact,
- * production-owned prune failure codes receive specialized recovery guidance; every other value
- * collapses to the inspection fallback without reflecting untrusted detail.
+ * Inspection does not execute prune operations, so prune-only failure codes are deliberately not
+ * interpreted on this boundary. Tauri transport failures, operating-system errors, and thrown
+ * JavaScript values may contain machine names, account-local paths, socket locations, or command
+ * details; none of that detail is reflected to the customer.
  *
- * @param reason - Untrusted failure detail that is never copied into the returned message.
- * @returns A stable, actionable sentence without local paths or command details.
+ * @param _reason - Untrusted failure detail that is deliberately ignored.
+ * @returns A stable, actionable sentence without local paths or prune-only recovery guidance.
  */
-export function podmanEvidenceErrorMessage(reason: unknown): string {
-  return (
-    pruneRecoveryMessage(reason) ??
-    "Podman 저장 공간을 확인하지 못했습니다. 상태를 확인한 뒤 다시 시도하십시오."
-  );
+export function podmanEvidenceErrorMessage(_reason: unknown): string {
+  return PODMAN_INSPECTION_FALLBACK;
 }
 
 /**
