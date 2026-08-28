@@ -35,4 +35,22 @@ describe("cache cleanup execution boundary", () => {
       /if \(targets\.length === 0\) \{[\s\S]*loadError = `\$\{candidate\.label\}에 정리할 직계 항목이 없습니다\.`;[\s\S]*return;/,
     );
   });
+
+  it("keeps cleanup failures actionable without exposing runtime diagnostics", () => {
+    const cleanup = readSource("src/lib/Cleanup.svelte");
+
+    expect(cleanup).not.toContain("String(e)");
+    expect(cleanup).not.toContain("r.error");
+    expect(cleanup).toContain("최신 목록을 다시 확인한 뒤 재시도하세요");
+  });
+
+  it("keeps container cleanup labels focused on the customer's next action", () => {
+    const markup = readSource("src/lib/Cleanup.svelte").split("</script>", 2)[1];
+
+    expect(markup).not.toContain("exact record");
+    expect(markup).not.toContain(">dangling");
+    expect(markup).not.toContain("prune, 삭제, trim");
+    expect(markup).toContain("미사용 이미지 정리");
+    expect(markup).toContain("최신 상태를 확인하세요");
+  });
 });
