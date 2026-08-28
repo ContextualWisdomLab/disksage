@@ -753,6 +753,10 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 
 ## 2026-08-27 container and worktree reclamation loop
 
+- Docker dangling-image plans now obtain reclaim bytes from a single exact-identity `image inspect`
+  pass. The human-readable `image ls` size is never converted heuristically; missing, duplicate, or
+  mismatched numeric size evidence blocks the category instead of overstating the 300 GB target.
+
 - PR #267 observed head `2d0787537a964c319bd4ee994070268bd77f2284` delivers evidence-bound cleanup for stopped
   containers, untagged and unreferenced images, unreferenced volumes, and unused non-default
   networks across Docker, Podman, and the Colima Docker context. Execution re-audits the exact

@@ -23,6 +23,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -469,6 +470,66 @@ fn parse_docker_dangling_image_ids(output: &str) -> Result<Vec<String>, String> 
             normalize_hex_id(&raw_id, "image")
         })
         .collect()
+}
+
+/// Parse the exact byte sizes returned by `docker image inspect` for the already-authorized
+/// dangling image identities.  The list command's `Size` field is human-readable, so it is not
+/// converted with a unit heuristic; inspect's numeric `Size` is the only accepted estimate.
+fn parse_docker_image_sizes(output: &str) -> Result<BTreeMap<String, u64>, String> {
+    let values = split_json_envelopes(output)?;
+    if values.len() > MAX_CATEGORY_RECORDS {
+        return Err("record-count-exceeds-bound".to_string());
+    }
+    let mut sizes = BTreeMap::new();
+    for value in values {
+        let raw_id = string_field(&value, &["Id", "ID", "id"])?;
+        let id = normalize_hex_id(&raw_id, "image")?;
+        let size = ["Size", "size"]
+            .iter()
+            .find_map(|key| value.get(*key).and_then(Value::as_u64))
+            .ok_or_else(|| "json-field-invalid-or-missing:Size".to_string())?;
+        if sizes.insert(id, size).is_some() {
+            return Err("duplicate-image-id".to_string());
+        }
+    }
+    Ok(sizes)
+}
+
+fn inspect_docker_image_sizes(
+    target: &ContainerRuntimeTarget,
+    prefix: &[String],
+    image_ids: &[String],
+) -> Result<BTreeMap<String, u64>, String> {
+    if image_ids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let mut args: Vec<String> = prefix.iter().skip(1).cloned().collect();
+    args.extend([
+        "image".to_string(),
+        "inspect".to_string(),
+        "--format".to_string(),
+        "{{json .}}".to_string(),
+    ]);
+    args.extend(image_ids.iter().cloned());
+    let references: Vec<&str> = args.iter().map(String::as_str).collect();
+    let output = command_text(
+        &target.binary_path,
+        &references,
+        ORPHAN_COMMAND_TIMEOUT,
+        "orphan-docker-image-size-inspect",
+    )?;
+    let sizes = parse_docker_image_sizes(&output)?;
+    if sizes.len() != image_ids.len()
+        || image_ids
+            .iter()
+            .any(|image_id| !sizes.contains_key(image_id))
+        || sizes
+            .keys()
+            .any(|image_id| !image_ids.iter().any(|expected| expected == image_id))
+    {
+        return Err("docker-image-size-identity-mismatch".to_string());
+    }
+    Ok(sizes)
 }
 
 /// Images are candidates only with proven zero references and no usable tag/digest.
@@ -934,9 +995,18 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                         candidate_ids.push(image_id);
                     }
                 }
+                let sizes = inspect_docker_image_sizes(target, &prefix, &candidate_ids)?;
+                let size_sum = candidate_ids.iter().try_fold(0u64, |sum, image_id| {
+                    sum.checked_add(
+                        *sizes
+                            .get(image_id)
+                            .ok_or_else(|| "docker-image-size-identity-mismatch".to_string())?,
+                    )
+                    .ok_or_else(|| "size-overflow".to_string())
+                })?;
                 let refs: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
                 (
-                    Some(summarize_candidates(category, total, &refs, None)?),
+                    Some(summarize_candidates(category, total, &refs, Some(size_sum))?),
                     candidate_ids,
                 )
             }
@@ -1427,6 +1497,33 @@ mod tests {
         assert_eq!(
             parse_docker_dangling_image_ids("{\"ID\":\"a762a2b37a1d\"}").unwrap_err(),
             "image-invalid-id"
+        );
+    }
+
+    #[test]
+    fn docker_image_size_parser_accepts_only_numeric_inspect_sizes() {
+        let output = format!(
+            "{{\"Id\":\"sha256:{DOCKER_ID_A}\",\"Size\":72900000}}\n{{\"ID\":\"{DOCKER_ID_B}\",\"Size\":5}}"
+        );
+        let sizes = parse_docker_image_sizes(&output).unwrap();
+        assert_eq!(sizes.get(DOCKER_ID_A), Some(&72_900_000));
+        assert_eq!(sizes.get(DOCKER_ID_B), Some(&5));
+        let missing = format!("{{\"Id\":\"{DOCKER_ID_A}\"}}");
+        assert_eq!(
+            parse_docker_image_sizes(&missing).unwrap_err(),
+            "json-field-invalid-or-missing:Size"
+        );
+        let human = format!("{{\"Id\":\"{DOCKER_ID_A}\",\"Size\":\"72.9MB\"}}");
+        assert_eq!(
+            parse_docker_image_sizes(&human).unwrap_err(),
+            "json-field-invalid-or-missing:Size"
+        );
+        let duplicate = format!(
+            "{{\"Id\":\"{DOCKER_ID_A}\",\"Size\":1}}\n{{\"Id\":\"{DOCKER_ID_A}\",\"Size\":2}}"
+        );
+        assert_eq!(
+            parse_docker_image_sizes(&duplicate).unwrap_err(),
+            "duplicate-image-id"
         );
     }
 

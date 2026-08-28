@@ -96,8 +96,13 @@ case "${{1:-}}" in
     case " $* " in *" --filter dangling=true "*) ;; *) echo "missing dangling filter" >&2; exit 94 ;; esac
     printf '%s\n' '{{"Containers":"N/A","ID":"{FULL_ID}","Repository":"<none>","Size":"72.9MB","Tag":"<none>"}}'
     ;;
+  image)
+    [ "${{2:-}}" = "inspect" ] || exit 96
+    case " $* " in *" --format {{json .}} "*) ;; *) echo "missing image inspect format" >&2; exit 97 ;; esac
+    printf '%s\n' '{{"Id":"sha256:{FULL_ID}","Size":72900000}}'
+    ;;
   volume|network) exit 0 ;;
-  *) exit 95 ;;
+  *) exit 98 ;;
 esac
 "#
     ));
@@ -120,7 +125,7 @@ esac
     let evidence = image.evidence.as_ref().expect("image evidence");
     assert_eq!(evidence.total_records, 1);
     assert_eq!(evidence.candidate_records, 1);
-    assert_eq!(evidence.candidate_size_sum_bytes, None);
+    assert_eq!(evidence.candidate_size_sum_bytes, Some(72_900_000));
     assert!(image.approval_phrase.is_some());
 }
 

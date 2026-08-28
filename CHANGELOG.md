@@ -22,6 +22,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   built-in networks, and attached volumes are never candidates. Exposed via the Cleanup screen
   with confirmation gating, bounded rationale input, and actionable failure copy, plus a
   read-only `disksage-container-orphan-plan` CLI for headless evidence.
+- Report Docker dangling-image reclaim bytes from the runtime's numeric `image inspect` size, never
+  by converting the human-readable listing with a unit heuristic; missing or mismatched identity
+  evidence keeps the category blocked.
 - Add Podman/Colima VM storage maintenance planning (ADR-0014): inspect guest state and offer a
   bounded, exact-phrase-approved `fstrim` operation. Host VM-image compaction remains explicitly
   unsupported until a runtime-native integrity proof exists; no VM image, volume, or user file is
