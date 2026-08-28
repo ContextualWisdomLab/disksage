@@ -57,6 +57,17 @@ const ARTIFACT_KINDS: &[(&str, &[&str])] = &[
     (".codegraph", &[]), // 재생성 가능한 CodeGraph 인덱스
 ];
 
+fn marker_exists(parent: &Path, artifact_name: &str, marker: &str) -> bool {
+    let path = parent.join(marker);
+    if artifact_name != ".tox" || marker != "setup.cfg" {
+        return path.exists();
+    }
+    std::fs::metadata(&path).is_ok_and(|metadata| metadata.is_file() && metadata.len() <= 1_048_576)
+        && std::fs::read_to_string(path).is_ok_and(|text| {
+            text.lines().any(|line| line.trim().eq_ignore_ascii_case("[tox]"))
+        })
+}
+
 fn artifact_kind(name: &str) -> Option<&'static (&'static str, &'static [&'static str])> {
     ARTIFACT_KINDS.iter().find(|(k, _)| *k == name)
 }
@@ -321,7 +332,10 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
             continue;
         };
         let parent = path.parent().unwrap_or(root);
-        let marker_ok = markers.is_empty() || markers.iter().any(|m| parent.join(m).exists());
+        let marker_ok = markers.is_empty()
+            || markers
+                .iter()
+                .any(|marker| marker_exists(parent, &name, marker));
         if marker_ok {
             candidates.push(path.to_path_buf());
             walker.skip_current_dir();
@@ -727,6 +741,15 @@ mod tests {
 
         assert!(artifacts.iter().any(|artifact| artifact.kind == ".tox"));
         assert!(artifacts.iter().any(|artifact| artifact.kind == ".nox"));
+    }
+
+    #[test]
+    fn ignores_tox_directory_when_setup_cfg_has_no_tox_section() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("setup.cfg"), "[metadata]").unwrap();
+        fs::create_dir(tmp.path().join(".tox")).unwrap();
+
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
     }
 
     #[test]
