@@ -9,11 +9,8 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
 // Other product surfaces have separate canonical PR owners; asserting their current-main copy here
 // would turn unrelated dependency movement into a false-negative gate.
 const screenFiles = [
-  "src/lib/BrewCleanup.svelte",
   "src/lib/Cleanup.svelte",
-  "src/lib/GitWorktreeCleanup.svelte",
   "src/lib/IcloudLocalEviction.svelte",
-  "src/lib/Organize.svelte",
   "src/lib/OrphanCleanup.svelte",
 ].map((path) => resolve(repositoryRoot, path));
 
