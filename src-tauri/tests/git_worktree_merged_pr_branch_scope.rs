@@ -1,22 +1,24 @@
 #![cfg(unix)]
 
-use disksage_lib::git_worktree::github_closed_pull_request_heads;
+use disksage_lib::git_worktree::{
+    github_closed_pull_request_heads, github_closed_pull_request_heads_with_options,
+    GitWorktreeAuditOptions,
+};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
-#[test]
-fn merged_pull_request_query_is_scoped_to_registered_branch() {
-    let temp = tempfile::tempdir().expect("temporary repository root");
+fn init_fixture_repository(path: &std::path::Path, branch: &str) -> String {
+    fs::create_dir_all(path).expect("create fixture repository root");
     Command::new("git")
-        .args(["init", "-q", "-b", "merged-work"])
-        .current_dir(temp.path())
+        .args(["init", "-q", "-b", branch])
+        .current_dir(path)
         .status()
         .expect("initialize fixture repository");
-    fs::write(temp.path().join("tracked.txt"), b"fixture\n").expect("write tracked fixture");
+    fs::write(path.join("tracked.txt"), b"fixture\n").expect("write tracked fixture");
     Command::new("git")
         .args(["add", "tracked.txt"])
-        .current_dir(temp.path())
+        .current_dir(path)
         .status()
         .expect("stage fixture");
     Command::new("git")
@@ -30,15 +32,21 @@ fn merged_pull_request_query_is_scoped_to_registered_branch() {
             "-m",
             "fixture",
         ])
-        .current_dir(temp.path())
+        .current_dir(path)
         .status()
         .expect("commit fixture");
     let head = Command::new("git")
         .args(["rev-parse", "HEAD"])
-        .current_dir(temp.path())
+        .current_dir(path)
         .output()
         .expect("resolve fixture head");
-    let head = String::from_utf8(head.stdout).unwrap().trim().to_string();
+    String::from_utf8(head.stdout).unwrap().trim().to_string()
+}
+
+#[test]
+fn merged_pull_request_query_is_scoped_to_registered_branch() {
+    let temp = tempfile::tempdir().expect("temporary repository root");
+    let head = init_fixture_repository(temp.path(), "merged-work");
 
     let bin_dir = temp.path().join("bin");
     fs::create_dir(&bin_dir).expect("create fake bin directory");
@@ -71,5 +79,34 @@ fn merged_pull_request_query_is_scoped_to_registered_branch() {
         [("refs/heads/merged-work".to_string(), head)]
             .into_iter()
             .collect()
+    );
+}
+
+#[test]
+fn merged_pull_request_lookup_honors_the_callers_worktree_limit() {
+    let temp = tempfile::tempdir().expect("temporary fixture parent");
+    let repository = temp.path().join("repository");
+    let linked = temp.path().join("linked");
+    init_fixture_repository(&repository, "main");
+    Command::new("git")
+        .args(["branch", "linked-work"])
+        .current_dir(&repository)
+        .status()
+        .expect("create linked worktree branch");
+    Command::new("git")
+        .args(["worktree", "add", "-q"])
+        .arg(&linked)
+        .arg("linked-work")
+        .current_dir(&repository)
+        .status()
+        .expect("create linked worktree");
+
+    let options = GitWorktreeAuditOptions {
+        max_worktrees: 1,
+        ..GitWorktreeAuditOptions::default()
+    };
+    assert_eq!(
+        github_closed_pull_request_heads_with_options(&repository, options).unwrap_err(),
+        "git-worktree-list-exceeds-limit"
     );
 }
