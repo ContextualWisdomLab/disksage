@@ -59,6 +59,20 @@ const ARTIFACT_KINDS: &[(&str, &[&str])] = &[
 
 fn marker_exists(parent: &Path, artifact_name: &str, marker: &str) -> bool {
     let path = parent.join(marker);
+    if artifact_name == ".venv314" && marker == ".git" {
+        let config = parent.join(artifact_name).join("pyvenv.cfg");
+        return path.exists()
+            && std::fs::metadata(&config)
+                .is_ok_and(|metadata| metadata.is_file() && metadata.len() <= 65_536)
+            && std::fs::read_to_string(config).is_ok_and(|text| {
+                text.lines().any(|line| {
+                    line.split_once('=').is_some_and(|(key, value)| {
+                        key.trim().eq_ignore_ascii_case("version")
+                            && value.trim().starts_with("3.14")
+                    })
+                })
+            });
+    }
     if artifact_name != ".tox" || marker != "setup.cfg" {
         return path.exists();
     }
@@ -757,10 +771,21 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join(".git"), "gitdir: /private/fixture").unwrap();
         fs::create_dir(tmp.path().join(".venv314")).unwrap();
+        fs::write(tmp.path().join(".venv314/pyvenv.cfg"), "version = 3.14.0").unwrap();
 
         let artifacts = find_artifacts(tmp.path(), 0, u64::MAX);
 
         assert_eq!(artifacts.len(), 1);
         assert_eq!(artifacts[0].kind, ".venv314");
+    }
+
+    #[test]
+    fn ignores_named_python_314_directory_without_matching_environment_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join(".git"), "gitdir: /private/fixture").unwrap();
+        fs::create_dir(tmp.path().join(".venv314")).unwrap();
+        fs::write(tmp.path().join(".venv314/pyvenv.cfg"), "version = 3.13.9").unwrap();
+
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
     }
 }
