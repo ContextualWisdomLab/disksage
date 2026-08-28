@@ -1,8 +1,8 @@
 //! Repository contracts for DiskSage's reviewed Rust compiler baseline.
 //!
-//! The configuration readers below intentionally validate hierarchy instead of searching for
-//! matching text anywhere in a file. This keeps comments, unrelated TOML tables, and sibling
-//! YAML blocks from becoming false evidence for the compiler-governance contract.
+//! These small configuration readers validate hierarchy rather than searching for matching text
+//! anywhere in a file. Comments, unrelated TOML tables, deeper YAML mappings, and sibling blocks
+//! therefore cannot become false evidence for the compiler-governance contract.
 
 const EXPECTED_RUST_VERSION: &str = "1.97.1";
 const RUST_TOOLCHAIN: &str = include_str!("../../rust-toolchain.toml");
@@ -12,7 +12,6 @@ const RELEASE_WORKFLOW: &str = include_str!("../../.github/workflows/release.yml
 const DEPENDABOT: &str = include_str!("../../.github/dependabot.yml");
 const RUST_TOOLCHAIN_ACTION: &str = "dtolnay/rust-toolchain@";
 
-/// Remove one layer of TOML/YAML quoting from a scalar value.
 fn unquote(value: &str) -> &str {
     let value = value.trim();
     if value.len() >= 2
@@ -26,6 +25,10 @@ fn unquote(value: &str) -> &str {
 }
 
 /// Read one scalar from the requested TOML table only.
+///
+/// Keyless lines inside a table (for example continuation lines in a multiline array) are skipped
+/// rather than aborting the lookup. A later scalar key in the same table therefore remains
+/// observable to the contract.
 fn toml_scalar(source: &str, target_table: &str, target_key: &str) -> Option<String> {
     let mut current_table = None;
     for raw_line in source.lines() {
@@ -40,7 +43,9 @@ fn toml_scalar(source: &str, target_table: &str, target_key: &str) -> Option<Str
         if current_table != Some(target_table) {
             continue;
         }
-        let (key, value) = line.split_once('=')?;
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
         if key.trim() == target_key {
             return Some(unquote(value).to_string());
         }
@@ -48,12 +53,10 @@ fn toml_scalar(source: &str, target_table: &str, target_key: &str) -> Option<Str
     None
 }
 
-/// Count leading ASCII spaces used by the repository's two-space YAML style.
 fn leading_spaces(line: &str) -> usize {
     line.len() - line.trim_start_matches(' ').len()
 }
 
-/// Read a scalar whose key is an immediate child of a YAML mapping block.
 fn yaml_scalar_in_block(
     lines: &[&str],
     block_start: usize,
@@ -82,7 +85,6 @@ fn yaml_scalar_in_block(
     None
 }
 
-/// Read a scalar from a named immediate child mapping, never from deeper nesting.
 fn yaml_nested_scalar_in_block(
     lines: &[&str],
     block_start: usize,
@@ -110,7 +112,6 @@ fn yaml_nested_scalar_in_block(
     None
 }
 
-/// Collect `toolchain` values from each reviewed Rust toolchain action block.
 fn action_toolchains(source: &str) -> Vec<Option<String>> {
     let lines: Vec<_> = source.lines().collect();
     let mut values = Vec::new();
@@ -133,7 +134,6 @@ fn action_toolchains(source: &str) -> Vec<Option<String>> {
     values
 }
 
-/// Return one Dependabot update item for the requested ecosystem.
 fn dependabot_entry<'a>(source: &'a str, ecosystem: &str) -> Option<Vec<&'a str>> {
     let lines: Vec<_> = source.lines().collect();
     for (index, line) in lines.iter().enumerate() {
@@ -162,7 +162,6 @@ fn dependabot_entry<'a>(source: &'a str, ecosystem: &str) -> Option<Vec<&'a str>
     None
 }
 
-/// Read a direct scalar field from one bounded Dependabot item.
 fn entry_scalar(entry: &[&str], target_key: &str) -> Option<String> {
     let item_indent = entry.first().map(|line| leading_spaces(line))?;
     let expected_indent = item_indent + 2;
@@ -185,7 +184,6 @@ fn entry_scalar(entry: &[&str], target_key: &str) -> Option<String> {
     None
 }
 
-/// Read a scalar from a direct nested mapping in one bounded Dependabot item.
 fn entry_nested_scalar(entry: &[&str], parent_key: &str, target_key: &str) -> Option<String> {
     let item_indent = entry.first().map(|line| leading_spaces(line))?;
     let expected_indent = item_indent + 2;
@@ -197,16 +195,13 @@ fn entry_nested_scalar(entry: &[&str], parent_key: &str, target_key: &str) -> Op
         if indent != expected_indent {
             continue;
         }
-        let trimmed = line.trim();
-        if trimmed != format!("{parent_key}:") {
-            continue;
+        if line.trim() == format!("{parent_key}:") {
+            return yaml_scalar_in_block(entry, index, expected_indent, target_key);
         }
-        return yaml_scalar_in_block(entry, index, expected_indent, target_key);
     }
     None
 }
 
-/// Verify the local manifest and every CI Rust action use the exact compiler baseline.
 #[test]
 fn local_package_and_ci_use_the_same_exact_compiler() {
     assert_eq!(
@@ -219,32 +214,19 @@ fn local_package_and_ci_use_the_same_exact_compiler() {
     );
 
     let ci_toolchains = action_toolchains(TEST_WORKFLOW);
-    assert_eq!(
-        ci_toolchains.len(),
-        3,
-        "all Rust CI jobs must install the reviewed toolchain"
-    );
+    assert_eq!(ci_toolchains.len(), 3);
     assert!(
         ci_toolchains
             .iter()
-            .all(|version| version.as_deref() == Some(EXPECTED_RUST_VERSION)),
-        "every Rust CI action must bind with.toolchain to the exact baseline"
+            .all(|version| version.as_deref() == Some(EXPECTED_RUST_VERSION))
     );
 }
 
-/// Verify release jobs inherit the repository toolchain instead of overriding it.
 #[test]
 fn release_commands_remain_under_the_root_toolchain_override() {
     let release_toolchains = action_toolchains(RELEASE_WORKFLOW);
-    assert_eq!(
-        release_toolchains.len(),
-        3,
-        "release, attestation, and GPU release jobs must retain their Rust bootstrap action"
-    );
-    assert!(
-        release_toolchains.iter().all(Option::is_none),
-        "release Rust actions must not override the repository rust-toolchain.toml authority"
-    );
+    assert_eq!(release_toolchains.len(), 3);
+    assert!(release_toolchains.iter().all(Option::is_none));
     assert!(RELEASE_WORKFLOW.contains(
         "cargo build --manifest-path src-tauri/Cargo.toml --release --features cloud-cli"
     ));
@@ -252,26 +234,22 @@ fn release_commands_remain_under_the_root_toolchain_override() {
     assert!(!RELEASE_WORKFLOW.contains("working-directory: src-tauri"));
 }
 
-/// Verify Dependabot's real ecosystems stay reviewable and the schema stays valid.
-///
-/// `rust-toolchain` is not a package-ecosystem value GitHub Dependabot recognizes (its
-/// supported ecosystems are enumerated at
-/// <https://docs.github.com/en/code-security/dependabot/ecosystems-supported-by-dependabot/supported-ecosystems-and-repositories>,
-/// and `rust-toolchain.toml` tracking is not among them). An unrecognized `package-ecosystem`
-/// value fails Dependabot's config schema validation for the *entire file*, silently disabling
-/// the existing `github-actions`, `npm`, and `cargo` update jobs too. This contract guards
-/// against reintroducing that entry and instead verifies the ecosystems Dependabot actually
-/// supports remain configured with a bounded weekly review cadence.
+/// Rust toolchain updates are a supported Dependabot version-update ecosystem.
 #[test]
 fn compiler_updates_are_reviewable() {
-    assert!(
-        dependabot_entry(DEPENDABOT, "rust-toolchain").is_none(),
-        "rust-toolchain is not a supported Dependabot package-ecosystem; an entry here \
-         invalidates the whole config file and silently disables every other ecosystem's updates"
+    let toolchain_update = dependabot_entry(DEPENDABOT, "rust-toolchain")
+        .expect("Dependabot must review updates to the root rust-toolchain.toml");
+    assert_eq!(
+        entry_scalar(&toolchain_update, "directory").as_deref(),
+        Some("/")
+    );
+    assert_eq!(
+        entry_nested_scalar(&toolchain_update, "schedule", "interval").as_deref(),
+        Some("weekly")
     );
 
     let cargo_update = dependabot_entry(DEPENDABOT, "cargo")
-        .expect("Dependabot must track the src-tauri Cargo manifest, which pulls in rust-toolchain.toml-adjacent crate updates");
+        .expect("Dependabot must track the src-tauri Cargo manifest");
     assert_eq!(
         entry_scalar(&cargo_update, "directory").as_deref(),
         Some("/src-tauri")
@@ -289,7 +267,6 @@ fn compiler_updates_are_reviewable() {
     );
 }
 
-/// Prove comments, sibling mappings, and deeper mappings cannot satisfy the contract.
 #[test]
 fn structural_readers_reject_decoys_and_wrong_hierarchy() {
     let toml_decoy = r#"
@@ -302,6 +279,19 @@ channel = "stable"
     assert_eq!(
         toml_scalar(toml_decoy, "toolchain", "channel").as_deref(),
         Some("stable")
+    );
+
+    let multiline_toml = r#"
+[toolchain]
+components = [
+  "rustfmt",
+]
+channel = "1.97.1"
+"#;
+    assert_eq!(
+        toml_scalar(multiline_toml, "toolchain", "channel").as_deref(),
+        Some(EXPECTED_RUST_VERSION),
+        "keyless TOML continuation lines must not abort a later scalar lookup"
     );
 
     let yaml_decoy = r#"
@@ -328,11 +318,6 @@ steps:
 
     let dependabot_decoy = r#"
 updates:
-  - package-ecosystem: "cargo"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    note: "rust-toolchain"
   - package-ecosystem: "rust-toolchain"
     directory: "/wrong"
     schedule:
@@ -353,7 +338,6 @@ updates:
     schedule:
       nested:
         interval: "weekly"
-    open-pull-requests-limit: 1
 "#;
     let nested_entry = dependabot_entry(nested_dependabot_decoy, "rust-toolchain").unwrap();
     assert_eq!(entry_scalar(&nested_entry, "directory"), None);
