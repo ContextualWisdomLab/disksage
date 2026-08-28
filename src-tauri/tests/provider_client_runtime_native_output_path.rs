@@ -17,10 +17,9 @@ fn binary_path() -> &'static Path {
     BINARY_PATH
         .get_or_init(|| {
             let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-            let target_dir = std::env::temp_dir().join(format!(
-                "disksage-provider-runtime-native-output-{}",
-                std::process::id()
-            ));
+            let target_dir = manifest_dir.join("target").join("cloud-cli-contracts");
+            std::fs::create_dir_all(&target_dir)
+                .expect("shared Cargo contract target directory must be created");
             let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
             let output = Command::new(cargo)
                 .current_dir(&manifest_dir)
