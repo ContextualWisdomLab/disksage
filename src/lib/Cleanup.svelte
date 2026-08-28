@@ -25,6 +25,12 @@
   let podmanPrunePhrase = $state("");
   let podmanPruneRationale = $state("");
   let podmanPruneExecution: api.PodmanDanglingImagePruneExecution | null = $state(null);
+  let runtimeStoragePlans: api.RuntimeStoragePlan[] = $state([]);
+  let runtimeStorageBusy = $state(false);
+  let runtimeStorageError = $state("");
+  let runtimeStoragePhrase = $state<Record<string, string>>({});
+  let runtimeStorageRationale = $state<Record<string, string>>({});
+  let runtimeStorageExecutions: Record<string, api.RuntimeStorageExecution> = $state({});
   // ponytail: 배지는 개별 파일/디렉토리 후보(artifacts)에만 표시 — caches는 소수의 고정 규칙 카테고리라 LLM 판정 가치가 낮음.
   let verdicts: Record<string, api.Verdict> = $state({});
 
@@ -71,6 +77,55 @@
       podmanPlan = null;
     } finally {
       podmanBusy = false;
+    }
+  }
+
+  async function inspectRuntimeStorage() {
+    if (runtimeStorageBusy) return;
+    runtimeStorageBusy = true;
+    runtimeStorageError = "";
+    try {
+      runtimeStoragePlans = await api.inspectRuntimeStorage();
+      runtimeStoragePhrase = {};
+      runtimeStorageRationale = {};
+      runtimeStorageExecutions = {};
+    } catch {
+      runtimeStoragePlans = [];
+      runtimeStorageError = "가상 머신 저장 공간 상태를 확인하지 못했습니다. 다시 시도하세요.";
+    } finally {
+      runtimeStorageBusy = false;
+    }
+  }
+
+  function runtimeStorageReady(plan: api.RuntimeStoragePlan): boolean {
+    return plan.exact_approval_phrase !== null
+      && runtimeStoragePhrase[plan.runtime]?.trim() === plan.exact_approval_phrase
+      && (runtimeStorageRationale[plan.runtime]?.trim().length ?? 0) > 0
+      && !runtimeStorageBusy;
+  }
+
+  async function trimRuntimeStorage(plan: api.RuntimeStoragePlan) {
+    if (!runtimeStorageReady(plan) || !plan.exact_approval_phrase) return;
+    const okay = await confirm(
+      `${plan.display_name}의 게스트 파일시스템에서 회수 가능한 영역만 정리합니다. 호스트 이미지와 사용자 파일은 변경하지 않습니다.\n\n실행 전에 상태를 다시 확인합니다.`,
+      { title: "DiskSage 저장 공간 정리", kind: "warning" },
+    );
+    if (!okay) return;
+    runtimeStorageBusy = true;
+    runtimeStorageError = "";
+    try {
+      runtimeStorageExecutions[plan.runtime] = await api.executeRuntimeStorageTrim(
+        plan.runtime,
+        runtimeStoragePhrase[plan.runtime].trim(),
+        runtimeStorageRationale[plan.runtime].trim(),
+      );
+      runtimeStoragePhrase = {};
+      runtimeStorageRationale = {};
+      runtimeStoragePlans = await api.inspectRuntimeStorage();
+    } catch {
+      runtimeStorageError = "게스트 저장 공간 정리를 실행하지 못했습니다. 최신 상태를 확인한 뒤 다시 시도하세요.";
+    } finally {
+      runtimeStorageBusy = false;
     }
   }
 
@@ -339,6 +394,50 @@
   {/if}
 
   <ContainerOrphanCleanup />
+
+  <h3>가상 머신 저장 공간</h3>
+  <p class="notice">
+    Podman과 Colima의 게스트 저장 공간 상태를 확인합니다. 게스트 정리는 명시적으로 승인한 경우에만 실행하며,
+    호스트 이미지 압축은 지원 도구가 확인되지 않으면 시도하지 않습니다.
+  </p>
+  <button onclick={inspectRuntimeStorage} disabled={runtimeStorageBusy}>
+    {runtimeStorageBusy ? "가상 머신 상태 확인 중…" : "Podman·Colima 저장 공간 확인"}
+  </button>
+  {#if runtimeStorageError}<p class="error" role="alert">{runtimeStorageError}</p>{/if}
+  {#if runtimeStoragePlans.length > 0}
+    {#each runtimeStoragePlans as plan (plan.runtime)}
+      <div class="podman-evidence" aria-live="polite">
+        <strong>{plan.display_name}</strong>
+        <p>
+          {plan.executable_available ? "실행 파일 확인" : "실행 파일을 찾지 못함"} ·
+          {plan.guest_running === true ? "실행 중" : plan.guest_running === false ? "중지됨" : "상태 미확인"}
+        </p>
+        {#if plan.host_compaction_supported}
+          <p>호스트 이미지 압축을 실행할 수 있습니다.</p>
+        {:else}
+          <p class="notice">호스트 이미지 압축은 자동 실행하지 않습니다. 게스트 정리 후 런타임 도구에서 확인하세요.</p>
+        {/if}
+        {#if plan.exact_approval_phrase}
+          <label>확인 문구
+            <input bind:value={runtimeStoragePhrase[plan.runtime]} placeholder={plan.exact_approval_phrase} disabled={runtimeStorageBusy} />
+          </label>
+          <label>정리 사유
+            <textarea bind:value={runtimeStorageRationale[plan.runtime]} maxlength="1000" disabled={runtimeStorageBusy}></textarea>
+          </label>
+          <button onclick={() => trimRuntimeStorage(plan)} disabled={!runtimeStorageReady(plan)}>
+            {runtimeStorageBusy ? "게스트 정리 중…" : "게스트 저장 공간 정리"}
+          </button>
+        {/if}
+        {#if runtimeStorageExecutions[plan.runtime]}
+          {@const execution = runtimeStorageExecutions[plan.runtime]}
+          <p class="notice" role="status">
+            {execution.executed ? "게스트 정리를 완료했습니다." : "게스트 정리가 완료되지 않았습니다."}
+            상태를 다시 확인하세요.
+          </p>
+        {/if}
+      </div>
+    {/each}
+  {/if}
 </section>
 
 <OrphanCleanup />

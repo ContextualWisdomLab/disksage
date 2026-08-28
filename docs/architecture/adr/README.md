@@ -19,6 +19,7 @@ new numbered record rather than rewriting history.
 | [0011](0011-cloud-transfer-failure-and-materialization.md) | Durable failed-copy evidence and placeholder-safe adoption | Accepted |
 | [0012](0012-container-orphan-reclaim-runtime-agnostic.md) | Runtime-agnostic container orphan reclamation is identity-bound and fail-closed | Accepted |
 | [0013](0013-closed-pull-request-worktree-authority.md) | Bind closed pull-request worktree cleanup to forge evidence | Accepted |
+| [0014](0014-runtime-storage-trim-without-vm-image-rewrite.md) | Trim guest extents without rewriting VM images | Accepted |
 
 New records must state context, decision, consequences, rejected alternatives, and the evidence or
 standard that led to the decision. A record never grants cloud-write or source-eviction authority;

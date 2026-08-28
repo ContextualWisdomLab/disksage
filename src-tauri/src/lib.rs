@@ -84,6 +84,8 @@ pub mod organization_lineage;
 /// Read-only evidence plus exact-identity-bound Podman reclaim execution authority.
 #[path = "podman_reclaim_public.rs"]
 pub mod podman_reclaim;
+/// Read-only VM-backed storage inspection plus explicit guest trim for Podman and Colima.
+pub mod runtime_storage;
 pub mod provider_api_client;
 pub mod provider_api_write;
 pub mod provider_capacity;
@@ -145,6 +147,8 @@ pub fn run() {
             commands::plan_brew_cleanup,
             commands::inspect_podman_reclaim,
             commands::execute_podman_dangling_image_prune,
+            commands::inspect_runtime_storage,
+            commands::execute_runtime_storage_trim,
             container_orphan_commands::inspect_container_orphans,
             container_orphan_commands::execute_container_orphan_prune,
             commands::judge_brew_cleanup,

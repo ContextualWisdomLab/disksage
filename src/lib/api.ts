@@ -229,6 +229,52 @@ export const executePodmanDanglingImagePrune = (
   rationale,
 });
 
+export type RuntimeStorageKind = "podman-machine" | "colima";
+
+export interface RuntimeStoragePlan {
+  schema_kind: "disksage.runtime-storage-plan";
+  schema_version: number;
+  runtime: RuntimeStorageKind;
+  display_name: string;
+  executable_available: boolean;
+  guest_running: boolean | null;
+  trim_command: string[] | null;
+  host_compaction_supported: boolean;
+  host_compaction_blockers: string[];
+  observed_at_ms: number;
+  plan_fingerprint: string;
+  exact_approval_phrase: string | null;
+  evidence_complete: boolean;
+  issue: string | null;
+}
+
+export interface RuntimeStorageExecution {
+  schema_kind: "disksage.runtime-storage-execution";
+  schema_version: number;
+  runtime: RuntimeStorageKind;
+  command: string[];
+  status_code: number;
+  stdout: string;
+  stderr: string;
+  output_truncated: boolean;
+  executed: boolean;
+  executed_at_ms: number;
+  rationale: string;
+}
+
+export const inspectRuntimeStorage = () =>
+  invoke<RuntimeStoragePlan[]>("inspect_runtime_storage");
+
+export const executeRuntimeStorageTrim = (
+  runtime: RuntimeStorageKind,
+  confirmationPhrase: string,
+  rationale: string,
+) => invoke<RuntimeStorageExecution>("execute_runtime_storage_trim", {
+  runtime,
+  confirmationPhrase,
+  rationale,
+});
+
 export type ContainerRuntimeKind =
   | "docker-native"
   | "docker-colima-context"

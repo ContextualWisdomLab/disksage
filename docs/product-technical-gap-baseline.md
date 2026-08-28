@@ -2,7 +2,8 @@
 
 **Snapshot:** 2026-08-28 (Asia/Seoul)
 **Repository heads at snapshot:** `main` `79067c1160ddedf7fc962cbf8067ce7e83c4564a`, PR #267
-`0deb9048751b4dc4fe545f313f40cfe47a547216`, and the current open queue (41 PRs: 20 ready, 21
+`6a5198eea0438d525c9d0408d8c95e7c7fe7268f`, PR #263
+`060358340e922db7c36b6303dd0a959007a878c5`, and the current open queue (41 PRs: 20 ready, 21
 draft); hosted checks and protected review remain authoritative, and no merge is claimed from
 queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
@@ -49,6 +50,7 @@ queued or stale status.
 | P1 | Users cannot yet see a full lineage graph connecting source, metadata, archive member, provider item, receipt, Goal, and eviction decision. | The candidate UI now exposes a compact source→metadata→archive→provider lineage panel using the stable fingerprint, confidence, and blocker state; provider item/receipt/permit remain explicitly pending until their evidence exists. | Export and UI show stable content IDs, provenance edges, confidence, and blockers without exposing raw private paths. |
 | P1 | “Orphan”/duplicate cleanup is difficult to trust because relationship evidence is not visible before action. | Ontology and duplicate/orphan PRs are open; current default path remains fail-closed. | Every proposed removal has an explainable parent/child/duplicate relation, identity recheck, reversible Trash action, and a no-candidate result when evidence is incomplete. |
 | P2 | Cross-platform behavior and accessibility are not presented as one release contract. | macOS/Linux/Windows release checks exist; several UI accessibility PRs remain open. | Release notes and UI expose platform capability matrix, keyboard/assistive labels, and bounded failure messages for each action. |
+| P0 | A 300 GB target cannot be met by cache pruning alone; VM-backed stores and user data need separate measured plans. | Current host observations show only tens of GB in proven regenerable/runtime candidates, while DaisyDisk’s large Application Support/Mobile Documents totals are not deletion authority. | Dashboard reports measured reclaimable bytes by domain, requires provider confirmation before local eviction, and leaves the remainder explicitly unresolved. |
 
 ## Technical and operational gaps
 
@@ -61,6 +63,7 @@ queued or stale status.
 | P1 | Current UI coverage is contract-heavy rather than runtime E2E for native File Provider states. | The UI now displays `로컬 최신본·업로드 미확인` and maps blockers without backend detail; provider operations are not safely reproducible on this full disk. Rust fixtures now cover `local-current + is_uploaded=false`, provider timeout, timeliness transitions, and receipt/evidence invalidation; native runtime E2E remains unavailable while the provider is unhealthy. | Keep the fixture-backed state machine green and add a bounded native E2E receipt only after a quiet provider observation is authoritative. |
 | P1 | Ontology/catalog integrations are export boundaries, not deployed services. | Naruon/semantic catalog and Zotero local API docs/contracts exist; no Noema/contextual-orchestrator runtime dependency is required. | Keep integrations optional and path-free; add live service tests only when a concrete consumer and secret boundary exist. |
 | P2 | 100% documentation/docstring and edge-case coverage is not yet evidenced. | Existing checks cover core Rust/TS behavior, not a repository-wide percentage claim. | Publish measured coverage per language and close high-risk edge paths before claiming 100%. |
+| P1 | VM guest free space and host image allocation are conflated by runtime tools. | Podman/Colima logical reclaim values do not prove APFS allocation; raw image rewriting is unsafe while a VM is active. | Runtime maintenance plan offers bounded guest `fstrim`, records before/after host observations, and reports host-image compaction as unsupported without a native proof. |
 | P2 | Figma design source is not part of the current change. | No visual redesign or Figma artifact was introduced in this baseline. | If a product UI redesign is approved, record the Figma File ID in a new ADR before implementation. |
 
 ## Architecture and decision linkage

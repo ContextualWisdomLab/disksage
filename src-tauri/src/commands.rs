@@ -517,6 +517,29 @@ pub fn execute_podman_dangling_image_prune(
     )
 }
 
+/// Read-only evidence for VM-backed Podman and Colima storage maintenance.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn inspect_runtime_storage() -> Vec<crate::runtime_storage::RuntimeStoragePlan> {
+    crate::runtime_storage::inspect()
+}
+
+/// Reclaims guest filesystem extents without rewriting a VM image or deleting user data.
+#[cfg(not(coverage))]
+#[tauri::command(async)]
+pub fn execute_runtime_storage_trim(
+    runtime: String,
+    confirmation_phrase: String,
+    rationale: String,
+) -> Result<crate::runtime_storage::RuntimeStorageExecution, String> {
+    let kind = match runtime.as_str() {
+        "podman-machine" => crate::runtime_storage::RuntimeStorageKind::PodmanMachine,
+        "colima" => crate::runtime_storage::RuntimeStorageKind::Colima,
+        _ => return Err("runtime-storage-unknown-runtime".into()),
+    };
+    crate::runtime_storage::execute_trim(kind, &confirmation_phrase, &rationale)
+}
+
 #[cfg(not(coverage))]
 #[cfg_attr(not(feature = "llm-engine"), allow(unused_variables))]
 #[tauri::command(async)]
