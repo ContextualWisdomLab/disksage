@@ -131,6 +131,39 @@ esac
 
 #[cfg(unix)]
 #[test]
+fn docker_image_size_identity_mismatch_blocks_only_image_category() {
+    const FULL_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const OTHER_ID: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let (_temp, runtime) = fake_runtime(&format!(
+        r#"
+case "${{1:-}}" in
+  info|container|volume|network) exit 0 ;;
+  images)
+    printf '%s\n' '{{"Containers":"N/A","ID":"{FULL_ID}","Repository":"<none>","Size":"72.9MB","Tag":"<none>"}}'
+    ;;
+  image)
+    [ "${{2:-}}" = "inspect" ] || exit 96
+    printf '%s\n' '{{"Id":"sha256:{OTHER_ID}","Size":72900000}}'
+    ;;
+  *) exit 98 ;;
+esac
+"#
+    ));
+    let plan = probe_container_orphans(&docker_target(&runtime));
+    let image = plan
+        .categories
+        .iter()
+        .find(|category| category.category == OrphanCategory::Image)
+        .expect("image category");
+    assert!(!image.evidence_complete);
+    assert_eq!(
+        image.issue.as_deref(),
+        Some("docker-image-size-identity-mismatch")
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn approved_container_execution_targets_only_the_fingerprinted_candidate() {
     const FULL_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let (_temp, runtime) = fake_runtime(&format!(
