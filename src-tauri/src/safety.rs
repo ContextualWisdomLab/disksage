@@ -555,7 +555,7 @@ pub fn trash_delete_if_identity(
                 ))),
             };
         }
-        if let Err(error) = trash::delete(&staged) {
+        if let Err(error) = platform_trash_delete(&staged) {
             return match restore_staged_if_source_absent(path, &staged, &staging_dir) {
                 Ok(()) => Err(SafetyError::Trash(error.to_string())),
                 Err(restore_error) => {
