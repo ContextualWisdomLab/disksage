@@ -56,7 +56,7 @@ impl Default for GitWorktreeAuditOptions {
     }
 }
 
-#[derive(Debug, Clone, Copy,PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum GitWorktreeDisposition {
     RemovalCandidate,
