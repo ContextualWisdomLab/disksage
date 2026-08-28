@@ -274,25 +274,23 @@ fn inspect_runtime(runtime: RuntimeStorageKind, observed_at_ms: u64) -> RuntimeS
         };
         match state {
             Ok((status, stdout, _, _)) if status == 0 => {
-                let running = match runtime {
+                let (running, state_valid) = match runtime {
                     RuntimeStorageKind::PodmanMachine => {
-                        stdout.trim().eq_ignore_ascii_case("running")
+                        (stdout.trim().eq_ignore_ascii_case("running"), true)
                     }
                     RuntimeStorageKind::Colima => {
-                        serde_json::from_str::<serde_json::Value>(&stdout)
-                            .ok()
-                            .and_then(|value| {
-                                value.get("status").and_then(serde_json::Value::as_str)
-                            })
-                            .is_some_and(|status| status.eq_ignore_ascii_case("running"))
+                        let parsed = serde_json::from_str::<serde_json::Value>(&stdout).ok();
+                        let status = parsed
+                            .as_ref()
+                            .and_then(|value| value.get("status"))
+                            .and_then(serde_json::Value::as_str);
+                        (
+                            status.is_some_and(|value| value.eq_ignore_ascii_case("running")),
+                            status.is_some(),
+                        )
                     }
                 };
-                if runtime == RuntimeStorageKind::Colima
-                    && serde_json::from_str::<serde_json::Value>(&stdout)
-                        .ok()
-                        .and_then(|value| value.get("status").and_then(serde_json::Value::as_str))
-                        .is_none()
-                {
+                if runtime == RuntimeStorageKind::Colima && !state_valid {
                     (None, Some("runtime-storage-state-invalid".into()))
                 } else {
                     (Some(running), None)
