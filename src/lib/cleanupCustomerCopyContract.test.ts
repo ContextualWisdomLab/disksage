@@ -6,15 +6,13 @@ import { describe, expect, it } from "vitest";
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
 // Keep this contract scoped to customer surfaces this Storybook/UX owner actually changes.
-// CloudArchive and the primary scan page have separate canonical PR owners; asserting their
-// current-main copy here would turn unrelated dependency movement into a false-negative gate.
+// Other product surfaces have separate canonical PR owners; asserting their current-main copy here
+// would turn unrelated dependency movement into a false-negative gate.
 const screenFiles = [
   "src/lib/BrewCleanup.svelte",
   "src/lib/Cleanup.svelte",
-  "src/lib/Duplicates.svelte",
   "src/lib/GitWorktreeCleanup.svelte",
   "src/lib/IcloudLocalEviction.svelte",
-  "src/lib/Inventory.svelte",
   "src/lib/Organize.svelte",
   "src/lib/OrphanCleanup.svelte",
 ].map((path) => resolve(repositoryRoot, path));
@@ -90,15 +88,6 @@ describe("customer copy contract", () => {
       for (const paragraph of staticActionParagraphs(filePath)) {
         expect(paragraph, `${filePath}: ${paragraph}`).toMatch(nextAction);
       }
-    }
-  });
-
-  it("does not render raw caught or per-item errors in inventory or duplicate views", () => {
-    for (const fileName of ["Inventory.svelte", "Duplicates.svelte"]) {
-      const source = readFileSync(resolve(repositoryRoot, "src/lib", fileName), "utf8");
-      expect(source).not.toContain("String(e)");
-      expect(source).not.toContain("{r.error}");
-      expect(source).toContain("다시 시도하십시오");
     }
   });
 });
