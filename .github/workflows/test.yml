@@ -11,9 +11,6 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    env:
-      # Mutation fixtures must live outside the globally protected shared /tmp tree.
-      TMPDIR: ${{ runner.temp }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -29,6 +26,9 @@ jobs:
           workspaces: src-tauri
           cache-targets: false
       - name: Rust tests (includes unix symlink test)
+        env:
+          # Mutation fixtures must live outside the globally protected shared /tmp tree.
+          TMPDIR: ${{ runner.temp }}
         run: cargo test --manifest-path src-tauri/Cargo.toml
       - name: Headless cloud planner tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --features cloud-cli --bin disksage-cloud-plan
