@@ -31,6 +31,10 @@ queued or stale status.
   shows the volume mounted at `/var/lib/postgresql`, so it remains protected while the container
   is active. The host then had three running containers, one default `podman` network, and ten
   local volumes; no new stale network or image was proven removable.
+- The latest read-only Podman inventory could not connect because the machine SSH handshake
+  returned EOF. DiskSage therefore did not start, initialize, prune, or remove any runtime
+  resource; the host had about 1.3 GiB available at that observation. The failed connection is a
+  runtime-availability blocker, not evidence that any volume, image, or network is stale.
 
 ## Current product contract
 
