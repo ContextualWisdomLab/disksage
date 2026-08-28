@@ -19,6 +19,9 @@ queued or stale status.
 - Local frontend evidence for that head is green (`npm test -- --run`: 39 files/166 tests;
   `npm run check`: zero errors/warnings). Hosted Rust, coverage, security, and review gates remain
   the authority for integration and merge readiness.
+- The hosted Rust test exposed and the next head repaired a temporary-JSON borrow error in the
+  Colima runtime-state parser; the fix retains only a validated boolean and state-present flag and
+  does not relax the unavailable-state blocker.
 
 ## 2026-08-28 container cleanup loop evidence
 

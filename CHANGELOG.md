@@ -29,6 +29,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Fix Colima runtime-state parsing to retain validated status values before temporary JSON data is
+  dropped; Rust hosted test compilation now remains borrow-safe while invalid state still fails
+  closed.
 - Clarify reclaim-domain contracts and customer actions: exact-content photo groups remain
   reversible, non-identical photos require a manual comparison, and cleanup messages no longer
   expose implementation details.
