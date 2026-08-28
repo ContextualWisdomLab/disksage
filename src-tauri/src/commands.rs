@@ -3778,6 +3778,8 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
                 "edge-cache",
                 "uv-cache",
                 "trivy-cache",
+                "appmap-download-cache",
+                "superset-network-logs",
             ]
         );
         let tmp = tempfile::tempdir().unwrap();
@@ -3795,13 +3797,17 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
                 "edge-cache" => bases.home.join("Library/Caches/Microsoft Edge"),
                 "uv-cache" => bases.home.join(".cache/uv"),
                 "trivy-cache" => bases.home.join("Library/Caches/trivy"),
+                "appmap-download-cache" => bases.home.join(".appmap/lib"),
+                "superset-network-logs" => {
+                    bases.home.join("Library/Application Support/Superset/network-logs")
+                }
                 _ => unreachable!(),
             };
             fs::create_dir_all(&path).unwrap();
             fs::write(path.join("fixture.bin"), b"regenerable").unwrap();
         }
         let results = clean_regenerable_caches_inner(&bases, &tmp.path().join("journal.jsonl"), 7);
-        assert_eq!(results.len(), 7);
+        assert_eq!(results.len(), 9);
         assert!(results.iter().all(|result| result.ok));
     }
 

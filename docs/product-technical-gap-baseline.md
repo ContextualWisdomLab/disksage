@@ -923,6 +923,15 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 
 ## 2026-08-28 measured emergency reclaim and VM recovery
 
+- A focused physical-allocation audit found about 7.7 GiB in AppMap downloaded tool binaries and
+  1.9 GiB in inactive Superset network diagnostics. Both now use the existing regenerable-data
+  cleanup contract: every direct child is identity-bound, checked for active use immediately
+  before mutation, journaled, and moved to OS Trash. No application database or cloud-provider
+  state is included.
+- The new headless path moved all three inactive AppMap cache children and four inactive Superset
+  diagnostic files to Trash. Only those journal-matched regenerable objects were then purged;
+  APFS available bytes rose from 56,603,525,120 before execution to 66,297,540,608 after purge.
+  Active npm and uv children were blocked and retained.
 - A bounded inventory found about 146 GB under `/private/tmp`, dominated by isolated Cargo and
   coverage target roots. DiskSage removed only current-user-owned generated roots after signature,
   open-file, and process-reference checks; `/private/tmp` fell to about 20 GB and APFS available
