@@ -207,6 +207,9 @@
         <strong>제거 후보 {report.removal_candidate_count}개 · 최대 {fmtBytes(report.removal_candidate_allocated_bytes)}</strong>
         <span>보존 {report.preserved_count}개</span>
         <span>확인 필요 {report.evidence_gap_count}개</span>
+        {#if report.stale_open_pull_request_cutoff_ms !== null}
+          <span>진행 중 작업 기준일 {new Date(report.stale_open_pull_request_cutoff_ms).toISOString().slice(0, 10)}</span>
+        {/if}
       </div>
       <p class="fingerprint">승인 확인 코드: {report.removal_plan_fingerprint}</p>
 
