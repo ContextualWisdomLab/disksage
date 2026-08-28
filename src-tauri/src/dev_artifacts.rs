@@ -67,7 +67,9 @@ fn marker_exists(parent: &Path, artifact_name: &str, marker: &str) -> bool {
             && std::fs::read_to_string(config).is_ok_and(|text| {
                 text.lines().any(|line| {
                     line.split_once('=').is_some_and(|(key, value)| {
-                        key.trim().eq_ignore_ascii_case("version")
+                        let key = key.trim();
+                        (key.eq_ignore_ascii_case("version")
+                            || key.eq_ignore_ascii_case("version_info"))
                             && value.trim().starts_with("3.14")
                     })
                 })
