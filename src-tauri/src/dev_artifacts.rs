@@ -356,7 +356,7 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
             || markers
                 .iter()
                 .any(|marker| marker_exists(parent, &name, marker));
-        if marker_ok && name == ".venv314" && !is_python_314_environment(path) {
+        if name == ".venv314" && (!marker_ok || !is_python_314_environment(path)) {
             walker.skip_current_dir();
             continue;
         }
