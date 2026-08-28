@@ -64,7 +64,11 @@ fn marker_exists(parent: &Path, artifact_name: &str, marker: &str) -> bool {
     }
     std::fs::metadata(&path).is_ok_and(|metadata| metadata.is_file() && metadata.len() <= 1_048_576)
         && std::fs::read_to_string(path).is_ok_and(|text| {
-            text.lines().any(|line| line.trim().eq_ignore_ascii_case("[tox]"))
+            text.lines().any(|line| {
+                let section = line.trim();
+                section.eq_ignore_ascii_case("[tox]")
+                    || section.eq_ignore_ascii_case("[tox:tox]")
+            })
         })
 }
 
@@ -751,7 +755,7 @@ mod tests {
     #[test]
     fn discovers_marker_gated_python_tool_environments() {
         let tmp = tempfile::tempdir().unwrap();
-        fs::write(tmp.path().join("setup.cfg"), "[tox]").unwrap();
+        fs::write(tmp.path().join("setup.cfg"), "[tox:tox]").unwrap();
         fs::create_dir(tmp.path().join(".tox")).unwrap();
         fs::write(tmp.path().join("noxfile.py"), "").unwrap();
         fs::create_dir(tmp.path().join(".nox")).unwrap();

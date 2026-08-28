@@ -9,7 +9,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Added
 
 - Reclaim regenerable Python tool state from `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `.tox`,
-  and `.nox` through the existing identity, active-use, rescan, and journal safety contract.
+  and `.nox` through the existing identity, active-use, rescan, and journal safety contract;
+  `setup.cfg` discovery recognizes the exact tox `[tox:tox]` section.
 - Reclaim downloaded Playwright browser runtimes through the same regenerable-cache contract.
 - Exclude images retained by Podman/Buildah external storage containers from orphan deletion plans.
 - Reclaim project-local Python 3.14 `.venv314` environments as regenerable development artifacts.
