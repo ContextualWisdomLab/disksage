@@ -1069,3 +1069,29 @@ runner's private workspace temp root instead of weakening the shared production 
   launcher still reported version `2.1.234`. DiskSage does not yet encode this symlink-target
   lifecycle authority, so stale self-updating tool versions remain a measured product Gap rather
   than a generic age-based cache rule.
+
+## 2026-08-29 exact-head reclaim and stacked-PR baseline
+
+- The session opened with 74,082,400 KiB available on the APFS Data volume. Bounded DiskSage
+  executions removed only marker-validated generated artifacts and one clean, inactive worktree
+  whose exact head was proven closed and retained. Availability reached 97,770,624 KiB before
+  concurrent builds consumed new space; no logical-size total is substituted for that physical
+  observation.
+- A focused current-HEAD test proved the File Provider Git-metadata blocker, and the test-only
+  helper is now excluded from production builds. The resulting 2,386,748,792-byte Rust `target`
+  tree was then permanently removed through the same manifest, active-use, identity-recheck, and
+  immutable-journal path that DiskSage exposes to operators.
+- A fresh audit of 97 BandScope worktrees found no candidate satisfying all containment,
+  cleanliness, inactivity, and closed-PR requirements. All 97 remain preserved; worktree names or
+  age alone did not grant removal authority.
+- VS Code's native obsolete-extension evidence had previously identified 22 directories totaling
+  1,314,471,936 allocated bytes. A fresh exact-path recheck now finds none of those directories,
+  so DiskSage neither repeats a mutation nor attributes additional physical recovery.
+- PRs #273, #275, and #276 are ready for review at exact heads `03585345`, `020b2e19`, and
+  `10fcbdeb`. The first two inherited the same Windows release-artifact identity repair and are
+  undergoing new hosted checks. Merge remains blocked until every current-head required check is
+  terminal-success and repository review policy is satisfied.
+- The 300 GB physical-recovery objective remains open. Provider-local eviction still requires
+  native uploaded/current evidence, non-identical photo selection still requires measured quality
+  evidence and explicit survivor confirmation, and active Podman/Colima resources remain outside
+  prune authority.
