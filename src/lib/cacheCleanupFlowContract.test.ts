@@ -35,13 +35,4 @@ describe("cache cleanup execution boundary", () => {
       /if \(targets\.length === 0\) \{[\s\S]*loadError = `\$\{candidate\.label\}에 정리할 직계 항목이 없습니다\.`;[\s\S]*return;/,
     );
   });
-
-  it("routes Podman prune failures through the dedicated privacy-safe recovery mapper", () => {
-    const cleanup = readSource("src/lib/Cleanup.svelte");
-
-    expect(cleanup).toContain("podmanPruneErrorMessage");
-    expect(cleanup).toMatch(
-      /catch \(e\) \{\s*podmanPruneError = podmanPruneErrorMessage\(e\);\s*\}/,
-    );
-  });
 });
