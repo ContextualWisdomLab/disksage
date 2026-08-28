@@ -24,6 +24,11 @@ pub struct ProviderRecoveryOutput {
     pub source_eviction_executed: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OneDriveUnpinOutcome {
+    pub restart_blockers: Vec<String>,
+}
+
 pub fn recovery_supported(provider: CloudProvider) -> bool {
     matches!(
         provider,
@@ -61,6 +66,16 @@ fn recovery_output_after_launch(
         cloud_write_executed: false,
         source_eviction_executed: false,
     }
+}
+
+fn finish_onedrive_unpin(
+    operation: Result<(), String>,
+    restart: Result<(), String>,
+) -> Result<OneDriveUnpinOutcome, String> {
+    operation?;
+    Ok(OneDriveUnpinOutcome {
+        restart_blockers: restart.err().into_iter().collect(),
+    })
 }
 
 /// Request Finder to cancel its active copy/materialization dialog without touching any provider
@@ -277,7 +292,7 @@ fn launch_provider(path: &Path) -> Result<(), String> {
 /// Invoke OneDrive's documented Files On-Demand command while its sync app is stopped, then
 /// always restart the verified app. This changes only the selected local materialization state.
 #[cfg(all(target_os = "macos", not(coverage)))]
-pub(crate) fn unpin_onedrive_local_copy(path: &Path) -> Result<(), String> {
+pub(crate) fn unpin_onedrive_local_copy(path: &Path) -> Result<OneDriveUnpinOutcome, String> {
     let app = app_path(CloudProvider::Onedrive)?;
     let executable = app.join("Contents/MacOS/OneDrive");
     if !executable.is_file() {
@@ -309,7 +324,7 @@ pub(crate) fn unpin_onedrive_local_copy(path: &Path) -> Result<(), String> {
             None => Err("provider-client-runtime-evidence-unavailable-after-restart".into()),
         }
     });
-    restart.and(operation)
+    finish_onedrive_unpin(operation, restart)
 }
 
 #[cfg(not(coverage))]
@@ -492,6 +507,31 @@ mod tests {
             vec!["provider-client-runtime-evidence-unavailable-after-restart"]
         );
         assert_eq!(output.action, "restart-provider-client-with-graceful-term");
+    }
+
+    #[test]
+    fn successful_unpin_preserves_restart_failure_as_a_blocker() {
+        let outcome = finish_onedrive_unpin(
+            Ok(()),
+            Err("provider-client-runtime-not-observed-after-restart".into()),
+        )
+        .unwrap();
+        assert_eq!(
+            outcome.restart_blockers,
+            vec!["provider-client-runtime-not-observed-after-restart"]
+        );
+    }
+
+    #[test]
+    fn failed_unpin_remains_a_hard_operation_failure() {
+        assert_eq!(
+            finish_onedrive_unpin(
+                Err("onedrive-files-on-demand-command-failed".into()),
+                Err("provider-client-runtime-not-observed-after-restart".into()),
+            )
+            .unwrap_err(),
+            "onedrive-files-on-demand-command-failed"
+        );
     }
 
     #[cfg(all(target_os = "macos", not(coverage)))]
