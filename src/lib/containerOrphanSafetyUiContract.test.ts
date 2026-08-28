@@ -31,6 +31,15 @@ describe("Container orphan cleanup safety UX", () => {
     expect(pruneReady).toContain("(rationales[categoryKey(key, category)]?.trim().length ?? 0) > 0");
   });
 
+  it("requires deliberate re-entry instead of revealing the destructive approval phrase in the input", () => {
+    const source = readSource("src/lib/ContainerOrphanCleanup.svelte");
+    const markup = source.slice(source.indexOf("</script>"));
+
+    expect(markup).toContain("<code>{cat.approval_phrase}</code>");
+    expect(markup).toContain('placeholder="위 승인 문구를 직접 입력하세요"');
+    expect(markup).not.toContain("placeholder={cat.approval_phrase}");
+  });
+
   it("submits the exact user-typed approval phrase to the mutation boundary", () => {
     const source = readSource("src/lib/ContainerOrphanCleanup.svelte");
     const start = source.indexOf("async function prune(");
