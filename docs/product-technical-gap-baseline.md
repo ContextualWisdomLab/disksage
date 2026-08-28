@@ -2,7 +2,7 @@
 
 **Snapshot:** 2026-08-28 (Asia/Seoul)
 **Repository heads at snapshot:** `main` `79067c1160ddedf7fc962cbf8067ce7e83c4564a`, PR #267
-`ea88b4e387629dce73423b2efc9eb6773821d68d`, and the current open queue (41 PRs: 20 ready, 21
+`6c79c02be97421abf02d8e34c9938521d26d000b`, and the current open queue (41 PRs: 20 ready, 21
 draft); hosted checks and protected review remain authoritative, and no merge is claimed from
 queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
