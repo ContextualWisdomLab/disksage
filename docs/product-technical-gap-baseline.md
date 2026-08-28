@@ -1143,6 +1143,11 @@ runner's private workspace temp root instead of weakening the shared production 
   path and Git registration absence were verified, the branch was retained, and the fresh audit
   reports 28 preserved worktrees, zero candidates, complete evidence, and zero gaps. Its
   253,673,472-byte allocated upper bound is not presented as physical APFS recovery.
+- The exact-duplicate collector now prunes `.photoslibrary` and `.photolibrary` packages and rejects
+  either package as a scan root. A regression test proves identical bytes inside a Photos package
+  cannot form a deletion cluster with an external file. The 44 external Pictures images currently
+  have unique exact-content digests; perceptual comparison and measured quality-survivor selection
+  remain an open product Gap and no non-identical photo was deleted.
 
 - A fresh Naruon audit proved exactly one removable worktree: PR #1429 was merged, its detached
   head was retained by current `origin/develop`, the checkout was clean and inactive, and no open

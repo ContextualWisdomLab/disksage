@@ -179,6 +179,15 @@ fn valid_relative_path(path: &Path) -> bool {
             .all(|component| matches!(component, Component::Normal(_)))
 }
 
+fn is_managed_photo_library(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_ascii_lowercase();
+    name.ends_with(".photoslibrary") || name.ends_with(".photolibrary")
+}
+
 fn system_time_ms(value: std::io::Result<std::time::SystemTime>) -> u64 {
     value
         .ok()
@@ -818,6 +827,9 @@ pub fn collect_exact_duplicate_audit(
     if !root_metadata.is_dir() || root_metadata.file_type().is_symlink() {
         return Err("duplicate-audit-root-unsafe".into());
     }
+    if is_managed_photo_library(&canonical_root) {
+        return Err("duplicate-audit-root-system-managed-photo-library".into());
+    }
 
     let mut evidence_complete = true;
     let mut entries_seen = 0usize;
@@ -869,6 +881,13 @@ pub fn collect_exact_duplicate_audit(
             }
             let path = entry.path();
             if file_type.is_dir() {
+                if is_managed_photo_library(&path) {
+                    increment_issue(
+                        &mut issue_counts,
+                        "duplicate-audit-system-managed-photo-library-excluded",
+                    );
+                    continue;
+                }
                 if depth >= MAX_DEPTH {
                     evidence_complete = false;
                     increment_issue(&mut issue_counts, "duplicate-audit-depth-limit-reached");
@@ -1370,6 +1389,30 @@ mod tests {
         assert_eq!(report.file_count, 1);
         assert_eq!(report.cluster_count, 0);
         assert!(exact_duplicate_audit_integrity_valid(&report));
+    }
+
+    #[test]
+    fn managed_photo_libraries_are_never_traversed() {
+        let root = tempfile::tempdir().unwrap();
+        let library = root.path().join("Photos Library.photoslibrary");
+        std::fs::create_dir(&library).unwrap();
+        std::fs::write(root.path().join("outside.bin"), b"same exact content").unwrap();
+        std::fs::write(library.join("database.bin"), b"same exact content").unwrap();
+
+        let report = collect_exact_duplicate_audit(root.path(), 42, 1, 100).unwrap();
+
+        assert!(report.evidence_complete);
+        assert_eq!(report.file_count, 1);
+        assert_eq!(report.cluster_count, 0);
+        assert_eq!(
+            report.issue_counts["duplicate-audit-system-managed-photo-library-excluded"],
+            1
+        );
+        assert!(exact_duplicate_audit_integrity_valid(&report));
+        assert_eq!(
+            collect_exact_duplicate_audit(&library, 42, 1, 100).unwrap_err(),
+            "duplicate-audit-root-system-managed-photo-library"
+        );
     }
 
     #[test]
