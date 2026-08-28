@@ -181,11 +181,11 @@ pub fn is_protected(path: &Path) -> bool {
         if is_macos_user_temp_descendant(path) {
             return false;
         }
-        // The shared root remains protected, while a fully current-user-owned real child is safe
-        // for the same guarded operations as a macOS per-user temporary child. Symlinks,
-        // unreadable trees, mixed ownership, and oversized observations remain fail-closed.
+        // Shared system temporary trees stay globally protected. Current-user ownership is a
+        // purpose-bound deletion authority checked only by the two Trash entry points below;
+        // it must not widen cloud eviction, clone reclaim, or other callers of this guard.
         if is_shared_temp_path(path) {
-            return !is_user_owned_shared_temp_tree(path);
+            return true;
         }
         // macOS는 extend로 시스템 경로를 더 넣는다 — 다른 unix에선 그 라인이 cfg-out되어 mut가
         // 미사용이므로 allow(unused_mut). Linux 게이트는 macOS 전용 라인을 컴파일하지 않아 커버 불필요.
@@ -819,7 +819,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn current_user_owned_shared_temp_child_is_not_globally_protected() {
+    fn current_user_owned_shared_temp_child_stays_globally_protected() {
         let Ok(tmp) = tempfile::tempdir_in(shared_temp_root_path()) else {
             return;
         };
@@ -827,7 +827,7 @@ mod tests {
         std::fs::write(&child, b"owned").unwrap();
         assert!(is_shared_temp_path(&child));
         assert!(is_user_owned_shared_temp_tree(&child));
-        assert!(!is_protected(&child));
+        assert!(is_protected(&child));
         assert!(is_protected(shared_temp_root_path()));
     }
 
