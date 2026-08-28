@@ -75,7 +75,7 @@
         .map((binding) => binding.reference_ref)
         .join("\n");
     } catch {
-      error = "보조 폴더를 확인하지 못했습니다. 경로와 보존할 브랜치를 확인한 뒤 다시 시도하세요.";
+      error = "보조 폴더를 확인하지 못했습니다. 경로와 보존할 기준을 확인한 뒤 다시 시도하세요.";
     } finally {
       planning = false;
     }
@@ -96,7 +96,7 @@
     if (!report || !executionReady()) return;
     const approved = await confirm(
         `${report.removal_candidate_count}개 보조 폴더(최대 ${fmtBytes(report.removal_candidate_allocated_bytes)})를 정리합니다.\n\n`
-        + "각 항목은 실행 직전에 다시 확인합니다. 브랜치와 커밋은 유지됩니다. 정리한 폴더는 휴지통으로 가지 않습니다.",
+        + "각 항목은 실행 직전에 다시 확인합니다. 보존할 작업 기록은 유지됩니다. 정리한 폴더는 휴지통으로 가지 않습니다.",
       { title: "오래된 보조 폴더 정리", kind: "warning" },
     );
     if (!approved) return;
@@ -124,7 +124,7 @@
 <div class="worktree-panel">
   <strong>오래된 보조 폴더</strong>
   <p class="muted">
-    명시한 브랜치 또는 태그에 이미 포함된 깨끗하고 사용하지 않는 보조 폴더만 찾습니다. 확인 단계에서는 파일을 변경하지 않습니다.
+    지정한 보존 기준에 이미 포함된 깨끗하고 사용하지 않는 보조 폴더만 찾습니다. 확인 단계에서는 파일을 변경하지 않습니다.
   </p>
 
   <div class="inputs">
@@ -143,7 +143,7 @@
     <button onclick={chooseRepository} disabled={planning || executing}>폴더 선택</button>
   </div>
   <label>
-    보존할 브랜치 또는 태그 — 한 줄에 하나
+    보존할 버전 기준 — 한 줄에 하나
     <textarea
       class="references"
       bind:value={retentionText}
@@ -156,7 +156,7 @@
   </label>
   <label class="option">
     <input type="checkbox" bind:checked={includeClosedPullRequests} onchange={resetDecision} disabled={planning || executing} />
-    완료된 작업 기록도 확인
+    완료된 작업과 연결된 항목도 확인
   </label>
   <button
     onclick={inspectWorktrees}
@@ -180,7 +180,7 @@
         <ul class="worktrees">
           {#each candidateEntries() as candidate (candidate.path_fingerprint)}
             <li>
-              <div><strong>{candidate.branch ?? "브랜치 정보 없음"}</strong> · {fmtBytes(candidate.size.allocated_bytes)}</div>
+              <div><strong>보존 기준 연결 확인됨</strong> · {fmtBytes(candidate.size.allocated_bytes)}</div>
               <div class="path" title={candidate.path}>{candidate.path}</div>
             </li>
           {/each}
@@ -201,7 +201,7 @@
       {#if removal}
         {#if removal.result.verification_complete}
           <p class="safe">
-            {removal.result.removed_count}개 보조 폴더를 정리했고 브랜치는 보존했습니다.
+            {removal.result.removed_count}개 보조 폴더를 정리했고 보존할 작업 기록은 유지했습니다.
             사전 할당량 기준 최대 {fmtBytes(removal.result.removed_allocated_bytes_upper_bound)}입니다.
           </p>
         {:else}
@@ -238,7 +238,7 @@
             <textarea
               bind:value={rationale}
               maxlength="1000"
-              placeholder="예: 보존할 브랜치에 포함되고 사용하지 않는 보조 폴더임을 확인"
+              placeholder="예: 보존 기준에 포함되고 사용하지 않는 보조 폴더임을 확인"
               disabled={executing}
             ></textarea>
           </label>

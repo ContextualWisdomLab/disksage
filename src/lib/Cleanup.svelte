@@ -123,7 +123,7 @@
       runtimeStorageRationale = {};
       runtimeStoragePlans = await api.inspectRuntimeStorage();
     } catch {
-      runtimeStorageError = "게스트 저장 공간 정리를 실행하지 못했습니다. 최신 상태를 확인한 뒤 다시 시도하세요.";
+      runtimeStorageError = "가상 머신 저장 공간 정리를 실행하지 못했습니다. 최신 상태를 확인한 뒤 다시 시도하세요.";
     } finally {
       runtimeStorageBusy = false;
     }
@@ -425,13 +425,13 @@
             <textarea bind:value={runtimeStorageRationale[plan.runtime]} maxlength="1000" disabled={runtimeStorageBusy}></textarea>
           </label>
           <button onclick={() => trimRuntimeStorage(plan)} disabled={!runtimeStorageReady(plan)}>
-            {runtimeStorageBusy ? "게스트 정리 중…" : "게스트 저장 공간 정리"}
+            {runtimeStorageBusy ? "저장 공간 정리 중…" : "저장 공간 정리"}
           </button>
         {/if}
         {#if runtimeStorageExecutions[plan.runtime]}
           {@const execution = runtimeStorageExecutions[plan.runtime]}
           <p class="notice" role="status">
-            {execution.executed ? "게스트 정리를 완료했습니다." : "게스트 정리가 완료되지 않았습니다."}
+            {execution.executed ? "저장 공간 정리를 완료했습니다." : "저장 공간 정리가 완료되지 않았습니다."}
             상태를 다시 확인하세요.
           </p>
         {/if}
