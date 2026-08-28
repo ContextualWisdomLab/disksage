@@ -906,3 +906,15 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - PR #267 head `f06d21015a9881fa3090ab1f1106eee8fea5fc20` rejects control characters in a Podman or
   Colima trim rationale before runtime probing or receipt persistence. The same fail-closed input
   boundary is now shared by cache, container, Homebrew, worktree, and VM-maintenance actions.
+
+## 2026-08-28 PR #267 exact-head hosted-gate observation
+
+- PR #267 current head `c09cc30f137680597ceeef9db9d4e5a29206b389` passed the hosted static-analysis,
+  dependency, vulnerability, coverage-source, and Windows path checks. The required Strix scan
+  retried its contextual-orchestrator provider three times and received HTTP 500 each time without
+  producing a vulnerability artifact; the required gate therefore remained fail-closed as provider
+  infrastructure unavailable, not as a code finding.
+- The required OpenCode gate also remained fail-closed because no authenticated current-head
+  `opencode-agent` verdict had been posted. A review-only `@opencode-agent` dispatch request was
+  recorded on the PR; no self-approval, bypass, or merge was attempted. The remaining native build
+  and test jobs were still running at this observation, so release readiness is not claimed.
