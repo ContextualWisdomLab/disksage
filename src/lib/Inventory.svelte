@@ -2,6 +2,7 @@
   import * as api from "./api";
   import { fmtBytes } from "./fmt";
   import {
+    inventoryFailureMessage,
     isCurrentInventoryRequest,
     requestUnknownExtensionInsights,
   } from "./inventoryInsightPolicy";
@@ -60,10 +61,10 @@
       if (!requestIsCurrent(root, generation)) return;
       issues = nextIssues;
       coherenceError = "";
-    } catch {
+    } catch (error) {
       if (!requestIsCurrent(root, generation)) return;
       issues = null;
-      coherenceError = "온톨로지 정합성 확인에 실패했습니다. DiskSage 리소스와 설정을 확인한 뒤 인벤토리를 다시 집계하세요.";
+      coherenceError = inventoryFailureMessage("ontology-coherence", error);
     }
   }
 
@@ -73,10 +74,10 @@
       if (!requestIsCurrent(root, generation)) return;
       userRulesCount = rules.length;
       userRulesError = "";
-    } catch {
+    } catch (error) {
       if (!requestIsCurrent(root, generation)) return;
       userRulesCount = null;
-      userRulesError = "규칙 파일을 불러오지 못했습니다. DiskSage 데이터 폴더의 규칙 파일 권한과 형식을 확인한 뒤 인벤토리를 다시 집계하세요.";
+      userRulesError = inventoryFailureMessage("user-rules", error);
     }
   }
 
@@ -102,15 +103,15 @@
             insightsError = "";
           }
         })
-        .catch(() => {
+        .catch((error) => {
           if (requestIsCurrent(root, generation)) {
             insights = [];
-            insightsError = "미분류 확장자 자문에 실패했습니다. 인벤토리는 그대로 사용할 수 있으며 필요하면 다시 집계해 자문을 재시도하세요.";
+            insightsError = inventoryFailureMessage("unknown-extension-insight", error);
           }
         });
-    } catch {
+    } catch (error) {
       if (requestIsCurrent(root, generation)) {
-        loadError = "인벤토리 집계에 실패했습니다. 스캔 대상 폴더의 접근 권한을 확인하고 스캔을 다시 실행한 뒤 집계하세요.";
+        loadError = inventoryFailureMessage("inventory-load", error);
       }
     } finally {
       if (generation === loadGeneration) {
@@ -123,9 +124,9 @@
     modelStatusError = "";
     try {
       model = await api.modelStatus();
-    } catch {
+    } catch (error) {
       model = null;
-      modelStatusError = "모델 상태를 확인하지 못했습니다. 모델 다운로드 여부를 다시 확인하거나 잠시 후 상태를 새로고침하세요.";
+      modelStatusError = inventoryFailureMessage("model-status", error);
     }
   }
 
@@ -135,8 +136,8 @@
     try {
       await api.downloadModel();
       await loadModel();
-    } catch {
-      modelError = "모델 다운로드에 실패했습니다. 네트워크 연결과 DiskSage 데이터 폴더의 여유 공간을 확인한 뒤 다시 다운로드하세요.";
+    } catch (error) {
+      modelError = inventoryFailureMessage("model-download", error);
     } finally {
       modelBusy = false;
     }
@@ -157,9 +158,9 @@
       if (requestIsCurrent(root, generation)) {
         summary = result;
       }
-    } catch {
+    } catch (error) {
       if (requestIsCurrent(root, generation)) {
-        summaryError = "미분류 요약에 실패했습니다. 모델 설치 상태를 확인한 뒤 요약을 다시 실행하세요.";
+        summaryError = inventoryFailureMessage("unknown-summary", error);
       }
     } finally {
       if (requestIsCurrent(root, generation)) {
