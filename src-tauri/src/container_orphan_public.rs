@@ -3,6 +3,7 @@ use crate::container_orphan_reclaim::{
 };
 
 const FALLBACK_ISSUE: &str = "container-runtime-evidence-unavailable";
+const INDETERMINATE_PRUNE_OUTCOME: &str = "container-orphan-prune-outcome-indeterminate";
 
 fn stable_issue(raw: &str) -> String {
     let token = raw.split(':').next().unwrap_or_default();
@@ -59,7 +60,10 @@ pub fn sanitize_plan(mut plan: ContainerOrphanPlan) -> ContainerOrphanPlan {
 }
 
 /// Keeps the mutation receipt useful for authorization/accounting without returning arbitrary
-/// runtime stdout/stderr, local executable paths, or runtime scope names.
+/// runtime stdout/stderr, local executable paths, or runtime scope names. A non-zero multi-target
+/// remove command cannot prove that no target was removed, so its public receipt keeps a stable
+/// indeterminate-outcome code instead of presenting the sanitized runtime failure as a clean
+/// no-mutation result. Callers must refresh runtime evidence before making a new decision.
 pub fn sanitize_execution(
     mut execution: ContainerOrphanPruneExecution,
 ) -> ContainerOrphanPruneExecution {
@@ -67,6 +71,9 @@ pub fn sanitize_execution(
     execution.command = public_command_shape(execution.category, true);
     execution.stdout.clear();
     execution.stderr.clear();
+    if execution.status_code != 0 {
+        execution.stderr = INDETERMINATE_PRUNE_OUTCOME.to_string();
+    }
     execution
 }
 
@@ -155,7 +162,7 @@ mod tests {
         assert_eq!(sanitized.runtime_display_name, "container-runtime");
         assert_eq!(sanitized.command, vec!["container", "rm", "<candidate-set>"]);
         assert!(sanitized.stdout.is_empty());
-        assert_eq!(sanitized.stderr, "container-orphan-prune-outcome-indeterminate");
+        assert_eq!(sanitized.stderr, INDETERMINATE_PRUNE_OUTCOME);
         assert!(!json.contains(secret_binary));
         assert!(!json.contains(secret_scope));
     }
