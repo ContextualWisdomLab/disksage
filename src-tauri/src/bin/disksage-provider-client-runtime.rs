@@ -276,6 +276,25 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
+    fn symlinked_output_parent_alias_is_resolved_before_authority_validation() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let actual_parent = directory.path().join("actual-parent");
+        std::fs::create_dir(&actual_parent).unwrap();
+        let alias = directory.path().join("alias-parent");
+        symlink(&actual_parent, &alias).unwrap();
+        let requested = alias.join("audit.json");
+
+        let parsed = parse_args(&["--output".into(), requested.into_os_string()]).unwrap();
+        assert_eq!(
+            parsed.output.unwrap(),
+            actual_parent.canonicalize().unwrap().join("audit.json")
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
     fn output_is_create_new_mode_0600() {
         use std::os::unix::fs::PermissionsExt;
 
