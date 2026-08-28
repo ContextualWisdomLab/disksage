@@ -22,7 +22,12 @@ set -eu
 shift 2
 case "${{1:-}}" in
   info) exit 0 ;;
-  container) printf '[]\n' ;;
+  container)
+    case " $* " in
+      *" --filter ancestor="*) case " $* " in *" --external "*) ;; *) exit 90 ;; esac ;;
+    esac
+    printf '[]\n'
+    ;;
   images)
     [ "$#" -eq 6 ] || exit 93
     [ "${{2:-}}" = "--filter" ] || exit 94

@@ -960,6 +960,10 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
             let mut membership_args: Vec<&str> =
                 prefix.iter().skip(1).map(String::as_str).collect();
             membership_args.extend(["container", "ps", "--all", "--filter", &filter]);
+            if target.kind == ContainerRuntimeKind::PodmanMachine {
+                // Buildah working containers are hidden without --external but still retain images.
+                membership_args.push("--external");
+            }
             if target.kind.is_docker() {
                 membership_args.push("--no-trunc");
             }

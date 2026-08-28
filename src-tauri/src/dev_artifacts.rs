@@ -46,10 +46,47 @@ const ARTIFACT_KINDS: &[(&str, &[&str])] = &[
     ("node_modules", &["package.json"]),
     ("target", &["Cargo.toml"]),
     (".venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
+    (".venv314", &["pyproject.toml", "requirements.txt", "setup.py", ".git"]),
     ("venv", &["pyproject.toml", "requirements.txt", "setup.py"]),
     ("__pycache__", &[]), // 마커 불필요 — 이름 자체가 파이썬 캐시
-    (".codegraph", &[]),  // 재생성 가능한 CodeGraph 인덱스
+    (".mypy_cache", &[]),
+    (".pytest_cache", &[]),
+    (".ruff_cache", &[]),
+    (".tox", &["pyproject.toml", "tox.ini", "setup.cfg"]),
+    (".nox", &["pyproject.toml", "noxfile.py"]),
+    (".codegraph", &[]), // 재생성 가능한 CodeGraph 인덱스
 ];
+
+fn marker_exists(parent: &Path, artifact_name: &str, marker: &str) -> bool {
+    let path = parent.join(marker);
+    if artifact_name != ".tox" || marker != "setup.cfg" {
+        return path.exists();
+    }
+    std::fs::metadata(&path).is_ok_and(|metadata| metadata.is_file() && metadata.len() <= 1_048_576)
+        && std::fs::read_to_string(path).is_ok_and(|text| {
+            text.lines()
+                .any(|line| line.trim().eq_ignore_ascii_case("[tox:tox]"))
+        })
+}
+
+fn is_python_314_environment(path: &Path) -> bool {
+    let config = path.join("pyvenv.cfg");
+    std::fs::metadata(&config)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.len() <= 65_536)
+        && std::fs::read_to_string(config).is_ok_and(|text| {
+            text.lines().any(|line| {
+                line.split_once('=').is_some_and(|(key, value)| {
+                    let key = key.trim();
+                    (key.eq_ignore_ascii_case("version")
+                        || key.eq_ignore_ascii_case("version_info"))
+                        && value
+                            .trim()
+                            .strip_prefix("3.14")
+                            .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+                })
+            })
+        })
+}
 
 fn artifact_kind(name: &str) -> Option<&'static (&'static str, &'static [&'static str])> {
     ARTIFACT_KINDS.iter().find(|(k, _)| *k == name)
@@ -315,7 +352,14 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
             continue;
         };
         let parent = path.parent().unwrap_or(root);
-        let marker_ok = markers.is_empty() || markers.iter().any(|m| parent.join(m).exists());
+        let marker_ok = markers.is_empty()
+            || markers
+                .iter()
+                .any(|marker| marker_exists(parent, &name, marker));
+        if name == ".venv314" && (!marker_ok || !is_python_314_environment(path)) {
+            walker.skip_current_dir();
+            continue;
+        }
         if marker_ok {
             candidates.push(path.to_path_buf());
             walker.skip_current_dir();
@@ -691,5 +735,74 @@ mod tests {
             crate::safety::journal_recent(&journal, 1)[0].op,
             "permanent_generated_directory_delete"
         );
+    }
+
+    #[test]
+    fn discovers_regenerable_python_tool_caches() {
+        let tmp = tempfile::tempdir().unwrap();
+        for name in [".mypy_cache", ".pytest_cache", ".ruff_cache"] {
+            let path = tmp.path().join(name);
+            std::fs::create_dir(&path).unwrap();
+            std::fs::write(path.join("cache.bin"), b"cache").unwrap();
+        }
+        let mut kinds = find_artifacts(tmp.path(), 0, u64::MAX)
+            .into_iter()
+            .map(|artifact| artifact.kind)
+            .collect::<Vec<_>>();
+        kinds.sort();
+        assert_eq!(kinds, [".mypy_cache", ".pytest_cache", ".ruff_cache"]);
+    }
+
+    #[test]
+    fn discovers_marker_gated_python_tool_environments() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("setup.cfg"), "[tox:tox]").unwrap();
+        fs::create_dir(tmp.path().join(".tox")).unwrap();
+        fs::write(tmp.path().join("noxfile.py"), "").unwrap();
+        fs::create_dir(tmp.path().join(".nox")).unwrap();
+
+        let artifacts = find_artifacts(tmp.path(), 0, u64::MAX);
+
+        assert!(artifacts.iter().any(|artifact| artifact.kind == ".tox"));
+        assert!(artifacts.iter().any(|artifact| artifact.kind == ".nox"));
+    }
+
+    #[test]
+    fn ignores_tox_directory_when_setup_cfg_has_no_tox_section() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("setup.cfg"), "[metadata]").unwrap();
+        fs::create_dir(tmp.path().join(".tox")).unwrap();
+
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
+    }
+
+    #[test]
+    fn discovers_python_314_project_environment() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join(".git"), "gitdir: /private/fixture").unwrap();
+        fs::create_dir(tmp.path().join(".venv314")).unwrap();
+        fs::write(tmp.path().join(".venv314/pyvenv.cfg"), "version = 3.14.0").unwrap();
+
+        let artifacts = find_artifacts(tmp.path(), 0, u64::MAX);
+
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].kind, ".venv314");
+    }
+
+    #[test]
+    fn ignores_named_python_314_directory_without_matching_environment_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join(".git"), "gitdir: /private/fixture").unwrap();
+        fs::create_dir(tmp.path().join(".venv314")).unwrap();
+        fs::write(tmp.path().join(".venv314/pyvenv.cfg"), "version = 3.13.9").unwrap();
+
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
+
+        fs::write(tmp.path().join(".venv314/pyvenv.cfg"), "version = 3.140.0").unwrap();
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
+
+        fs::remove_file(tmp.path().join(".git")).unwrap();
+        fs::write(tmp.path().join("pyproject.toml"), "[project]").unwrap();
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
     }
 }

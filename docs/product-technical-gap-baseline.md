@@ -1111,3 +1111,63 @@ runner's private workspace temp root instead of weakening the shared production 
   work, so mutation remains blocked and no sync process was interrupted. Recursive/batch OneDrive
   eviction and a physical-space receipt from the live provider remain open; the 300 GB goal is not
   claimed complete.
+
+## 2026-08-29 temporary-workspace generated-cache recovery
+
+- Project-local Python 3.14 `.venv314` environments now share the same manifest, active-use, journal, and permanent-reclaim checks as `.venv`.
+
+### Podman external-container image authority
+
+- Live deletion exposed Buildah storage containers hidden from ordinary `podman container ps --all`; their images rejected deletion despite appearing dangling.
+- Podman image membership now includes native `--external` evidence before issuing an approval phrase. The same live store now produces zero image candidates rather than unsafe partial execution.
+
+- The live `/private/tmp` inventory exposed repeated Rust, Node, Python environment, type-check,
+  test, lint, and CodeGraph outputs inside review worktrees. DiskSage's identity-bound permanent
+  generated-artifact action removed these outputs without removing a worktree, branch, source
+  file, or untracked source change; each mutation was recorded in the private operation journal.
+- The reusable artifact catalog now includes `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `.tox`,
+  and `.nox`. Discovery tests prove the new cache names are admitted, while the existing rescan,
+  filesystem-object identity, active-use, and bounded traversal gates remain unchanged.
+- OneDrive continued a large download while cleanup ran, so physical APFS availability fluctuated
+  independently of the bytes removed. Provider transfer cancellation and a fresh capacity snapshot
+  remain required before the 300 GB outcome can be claimed.
+
+## 2026-08-29 merged-worktree and isolated-project-cache execution
+
+- A fresh Naruon audit proved exactly one removable worktree: PR #1429 was merged, its detached
+  head was retained by current `origin/develop`, the checkout was clean and inactive, and no open
+  PR stack retained it. DiskSage removed only `/Users/seonghobae/naruon-wt/pr1429` through its
+  fingerprint-bound approval path without force, branch deletion, or Git pruning. Path and Git
+  registration absence were both verified; the post-audit reports 29 retained worktrees, zero
+  candidates, complete evidence, and zero gaps. Its 253,587,456-byte allocated upper bound is not
+  presented as APFS recovery because concurrent provider writes reduced free space during removal.
+- DiskSage then permanently removed 543 identity-matched, inactive generated artifacts from
+  Superset's isolated project copies: Python environments and caches, `node_modules`, and CodeGraph
+  indexes. Both executions completed without a failed candidate, were journaled, and re-audited to
+  zero candidates. The second bounded execution increased APFS availability by 820,188 KiB; logical
+  candidate totals are kept separate from that physical observation.
+- Every `.venv314` discovery path now requires a bounded regular `pyvenv.cfg` whose version is
+  Python 3.14, rather than treating a Git or project marker as sufficient deletion evidence. The UI
+  names each newly supported Python cache and test environment so the operator can decide what to
+  review next without seeing internal implementation labels.
+- A subsequent `/private/tmp` execution revalidated 752 generated candidates and permanently
+  removed 740. It preserved nine active candidates, two whose manifests changed, and one whose
+  active-use evidence was incomplete. APFS availability increased by 4,043,844 KiB between the
+  bounded before/after observations; the remaining generated candidates are not counted as
+  reclaimable while their safety evidence is incomplete or a process still uses them.
+  After the focused Rust verification finished, native `cargo clean` removed its regenerated
+  2.3 GiB test target and increased APFS availability by another 2,285,228 KiB.
+  A final fresh `/private/tmp` pass removed 29 newly safe candidates, preserved eight active and
+  two changed candidates, and increased APFS availability by a further 1,335,132 KiB.
+  On the next continuation, 11 more candidates became safe and added 365,312 KiB; eight active
+  candidates and one changed candidate again remained untouched.
+  A later exact-identity pass removed 66 of 77 candidates representing 3,294,878,422 logical
+  bytes. Ten active candidates and one changed or incomplete manifest remained untouched. The
+  private journal is `/private/tmp/disksage-dev-permanent-1787954077.jsonl`; concurrent provider
+  and build writes mean this logical total is not presented as an APFS free-space increase.
+- The live Podman machine retains five running PostgreSQL containers and two recent stopped
+  PostgreSQL containers. All 13 dangling images are referenced by external Buildah storage
+  containers, no custom network is unused, and volume safety cannot be completed while one stopped
+  container has corrupt overlay metadata. The 100 GiB raw disk is already sparse and native
+  `fstrim --dry-run` reports 0 B, so DiskSage offers no destructive prune or unsupported host
+  compaction claim for this state.

@@ -10,7 +10,7 @@ fn sort_targets(targets: &mut Vec<rules::CacheTarget>) {
 /// Local caches observed during the current low-disk incident and safe to regenerate.
 /// npm's content-addressed cache is rebuilt by npm on demand; it is included only after the same
 /// per-child identity and active-use checks as the other caches.
-pub const AUTO_REGENERABLE_CACHE_IDS: [&str; 9] = [
+pub const AUTO_REGENERABLE_CACHE_IDS: [&str; 10] = [
     "npm-cache",
     "pnpm-cache",
     "adobe-cache",
@@ -20,6 +20,7 @@ pub const AUTO_REGENERABLE_CACHE_IDS: [&str; 9] = [
     "appmap-download-cache",
     "superset-http-cache",
     "superset-code-cache",
+    "playwright-cache",
 ];
 
 const PROVEN_CACHE_TRASH_NAMES: [&str; 9] = [
