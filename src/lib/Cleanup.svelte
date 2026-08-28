@@ -409,7 +409,7 @@
       <div class="podman-evidence" aria-live="polite">
         <strong>{plan.display_name}</strong>
         <p>
-          {plan.executable_available ? "실행 파일 확인" : "실행 파일을 찾지 못함"} ·
+          {plan.executable_available ? "정리 도구 사용 가능" : "정리 도구를 사용할 수 없음"} ·
           {plan.guest_running === true ? "실행 중" : plan.guest_running === false ? "중지됨" : "상태 미확인"}
         </p>
         {#if plan.host_compaction_supported}

@@ -22,6 +22,7 @@ describe("customer action copy", () => {
     expect(source).not.toContain("backend");
     expect(source).not.toContain("호스트 이미지");
     expect(source).not.toContain("게스트 저장 공간");
+    expect(source).not.toContain("실행 파일을 찾지 못함");
     expect(source).toContain("상태를 다시 확인하세요");
     expect(source).toContain("해상도나 압축이 다른 사진은 자동 삭제하지 않으니 먼저 비교하세요");
   });
