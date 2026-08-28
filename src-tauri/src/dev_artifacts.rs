@@ -70,7 +70,10 @@ fn marker_exists(parent: &Path, artifact_name: &str, marker: &str) -> bool {
                         let key = key.trim();
                         (key.eq_ignore_ascii_case("version")
                             || key.eq_ignore_ascii_case("version_info"))
-                            && value.trim().starts_with("3.14")
+                            && value
+                                .trim()
+                                .strip_prefix("3.14")
+                                .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
                     })
                 })
             });
@@ -788,6 +791,9 @@ mod tests {
         fs::create_dir(tmp.path().join(".venv314")).unwrap();
         fs::write(tmp.path().join(".venv314/pyvenv.cfg"), "version = 3.13.9").unwrap();
 
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
+
+        fs::write(tmp.path().join(".venv314/pyvenv.cfg"), "version = 3.140.0").unwrap();
         assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
     }
 }

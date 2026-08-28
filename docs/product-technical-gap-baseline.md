@@ -1150,3 +1150,14 @@ runner's private workspace temp root instead of weakening the shared production 
   Python 3.14, rather than treating a Git checkout name as sufficient deletion evidence. The UI
   names each newly supported Python cache and test environment so the operator can decide what to
   review next without seeing internal implementation labels.
+- A subsequent `/private/tmp` execution revalidated 752 generated candidates and permanently
+  removed 740. It preserved nine active candidates, two whose manifests changed, and one whose
+  active-use evidence was incomplete. APFS availability increased by 4,043,844 KiB between the
+  bounded before/after observations; the remaining generated candidates are not counted as
+  reclaimable while their safety evidence is incomplete or a process still uses them.
+- The live Podman machine retains five running PostgreSQL containers and two recent stopped
+  PostgreSQL containers. All 13 dangling images are referenced by external Buildah storage
+  containers, no custom network is unused, and volume safety cannot be completed while one stopped
+  container has corrupt overlay metadata. The 100 GiB raw disk is already sparse and native
+  `fstrim --dry-run` reports 0 B, so DiskSage offers no destructive prune or unsupported host
+  compaction claim for this state.
