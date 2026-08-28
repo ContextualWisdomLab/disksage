@@ -738,3 +738,6 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   open-PR worktrees and active build targets were not removed. The shared uv archive cache was left
   untouched because live MCP processes were executing from it; cache eviction must first obtain the same
   active-use evidence through the product flow.
+- The previously requested macOS Homebrew maintenance command was dry-run first and then executed:
+  `brew cleanup --prune-prefix` removed 2,169 broken symbolic links and 85 stale Homebrew directories.
+  No package or application data outside Homebrew's own prefix was targeted.
