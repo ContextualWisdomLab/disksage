@@ -660,45 +660,8 @@ pub fn github_closed_pull_request_heads_with_options(
     let timeout_ms = options.command_timeout_ms;
     let started = Instant::now();
     let mut heads = ClosedPullRequestHeads::new();
-    let mut queries = vec![vec![
-        OsString::from("pr"),
-        OsString::from("list"),
-        OsString::from("--state"),
-        OsString::from("closed"),
-        OsString::from("--search"),
-        OsString::from("is:unmerged"),
-        OsString::from("--limit"),
-        OsString::from("10001"),
-        OsString::from("--json"),
-        OsString::from("headRefName,headRefOid,isCrossRepository,state"),
-    ]];
-    let branches = list_worktrees(repository_root, options)?
-        .into_iter()
-        .filter_map(|worktree| worktree.branch)
-        .collect::<BTreeSet<_>>();
-    for branch in branches {
-        let head = branch
-            .strip_prefix("refs/heads/")
-            .ok_or_else(|| "git-worktree-porcelain-branch-invalid".to_string())?;
-        queries.push(vec![
-            OsString::from("pr"),
-            OsString::from("list"),
-            OsString::from("--state"),
-            OsString::from("merged"),
-            OsString::from("--head"),
-            OsString::from(head),
-            OsString::from("--limit"),
-            OsString::from("10001"),
-            OsString::from("--json"),
-            OsString::from("headRefName,headRefOid,isCrossRepository,state"),
-        ]);
-    }
-    for args in queries {
-        let remaining_ms = timeout_ms.saturating_sub(started.elapsed().as_millis() as u64);
-        if remaining_ms == 0 {
-            return Err("github-closed-pr-list-timeout".into());
-        }
-        let result = run_bounded_command("gh", &args, repository_root, remaining_ms)?;
+
+    let mut accept_result = |result: CommandResult| -> Result<(), String> {
         if result.timed_out {
             return Err("github-closed-pr-list-timeout".into());
         }
@@ -718,6 +681,85 @@ pub fn github_closed_pull_request_heads_with_options(
         heads.extend(parse_closed_pull_request_heads(&result.stdout)?);
         if heads.len() > 10_000 {
             return Err("github-closed-pr-count-exceeds-limit".into());
+        }
+        Ok(())
+    };
+
+    let closed_args = vec![
+        OsString::from("pr"),
+        OsString::from("list"),
+        OsString::from("--state"),
+        OsString::from("closed"),
+        OsString::from("--search"),
+        OsString::from("is:unmerged"),
+        OsString::from("--limit"),
+        OsString::from("10001"),
+        OsString::from("--json"),
+        OsString::from("headRefName,headRefOid,isCrossRepository,state"),
+    ];
+    let remaining_ms = timeout_ms.saturating_sub(started.elapsed().as_millis() as u64);
+    if remaining_ms == 0 {
+        return Err("github-closed-pr-list-timeout".into());
+    }
+    accept_result(run_bounded_command(
+        "gh",
+        &closed_args,
+        repository_root,
+        remaining_ms,
+    )?)?;
+
+    let branches = list_worktrees(repository_root, options)?
+        .into_iter()
+        .filter_map(|worktree| worktree.branch)
+        .collect::<BTreeSet<_>>();
+    let merged_queries = branches
+        .into_iter()
+        .map(|branch| {
+            let head = branch
+                .strip_prefix("refs/heads/")
+                .ok_or_else(|| "git-worktree-porcelain-branch-invalid".to_string())?;
+            Ok::<_, String>(vec![
+                OsString::from("pr"),
+                OsString::from("list"),
+                OsString::from("--state"),
+                OsString::from("merged"),
+                OsString::from("--head"),
+                OsString::from(head),
+                OsString::from("--limit"),
+                OsString::from("10001"),
+                OsString::from("--json"),
+                OsString::from("headRefName,headRefOid,isCrossRepository,state"),
+            ])
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    const MERGED_QUERY_CONCURRENCY: usize = 8;
+    for query_chunk in merged_queries.chunks(MERGED_QUERY_CONCURRENCY) {
+        let remaining_ms = timeout_ms.saturating_sub(started.elapsed().as_millis() as u64);
+        if remaining_ms == 0 {
+            return Err("github-closed-pr-list-timeout".into());
+        }
+        let results = thread::scope(|scope| {
+            let workers = query_chunk
+                .iter()
+                .map(|args| {
+                    scope.spawn(move || {
+                        run_bounded_command("gh", args, repository_root, remaining_ms)
+                    })
+                })
+                .collect::<Vec<_>>();
+            workers
+                .into_iter()
+                .map(|worker| {
+                    worker
+                        .join()
+                        .map_err(|_| "github-closed-pr-list-worker-failed".to_string())
+                        .and_then(|result| result)
+                })
+                .collect::<Result<Vec<_>, String>>()
+        })?;
+        for result in results {
+            accept_result(result)?;
         }
     }
     Ok(heads)
