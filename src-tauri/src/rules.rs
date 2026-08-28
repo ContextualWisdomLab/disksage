@@ -56,7 +56,7 @@ fn is_disksage_trash_staging(path: &Path) -> bool {
 }
 
 /// 정적 캐시 카탈로그 (스펙 §4 rules). 항목 = (id, 라벨, 베이스 기준 상대경로).
-/// ponytail: 브라우저 캐시는 프로필 글롭이 필요해 M2 범위 밖 — 카탈로그에 추가만 하면 확장됨
+/// 브라우저 설치 캐시는 고정된 사용자 경로를 사용하며, 하위 항목별 사용 중 여부를 확인한 뒤 정리한다.
 fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
     // #[cfg]로 걸어 각 타겟 빌드엔 자신의 arm만 존재 — cfg!()런타임 분기였다면 리눅스 게이트에서
     // windows/macOS arm이 컴파일은 되지만 죽은 채로 남아 라인 커버리지 갭이 된다
@@ -72,6 +72,13 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
     #[cfg(not(any(windows, target_os = "macos")))]
     let pip = bases.local_data.join("pip"); // linux: ~/.cache/pip
 
+    #[cfg(windows)]
+    let playwright = bases.local_data.join("ms-playwright");
+    #[cfg(target_os = "macos")]
+    let playwright = bases.home.join("Library").join("Caches").join("ms-playwright");
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    let playwright = bases.local_data.join("ms-playwright");
+
     // Windows 전용 진단/트레이스 캐시는 아래 extend로 추가 — 다른 플랫폼선 그 라인이 cfg-absent라
     // mut가 미사용이므로 allow(unused_mut). (npm/pip와 같은 cfg 규율)
     #[allow(unused_mut)]
@@ -83,6 +90,7 @@ fn catalog(bases: &BaseDirs) -> Vec<(&'static str, &'static str, PathBuf)> {
             bases.home.join(".cargo").join("registry").join("cache")),
         ("cargo-registry-source", "cargo 레지스트리 소스 캐시",
             bases.home.join(".cargo").join("registry").join("src")),
+        ("playwright-cache", "Playwright 브라우저 캐시", playwright),
     ];
 
     #[cfg(target_os = "macos")]
@@ -632,6 +640,7 @@ mod tests {
             ("adobe-cache", "Library/Caches/Adobe"),
             ("edge-cache", "Library/Caches/Microsoft Edge"),
             ("trivy-cache", "Library/Caches/trivy"),
+            ("playwright-cache", "Library/Caches/ms-playwright"),
         ] {
             let candidate = candidates
                 .iter()
