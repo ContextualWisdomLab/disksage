@@ -14,16 +14,17 @@ use crate::scanner;
 use crate::scanner::ScanResult;
 
 // clean_paths_inner/execute_moves_inner/undo_last_moves_inner(순수 함수)가 쓰는 것은 무조건 import; 래퍼 전용은 cfg(not(coverage))
-use crate::dev_artifacts;
 use crate::organize;
 use crate::safety;
+use crate::dev_artifacts;
 #[cfg(not(coverage))]
 use crate::{
     brew_cleanup, cloud, cloud_adr, cloud_eviction, cloud_local_eviction, cloud_plan_view,
-    cloud_review, cloud_transfer, dupes, git_clone_reclaim, git_worktree, icloud_sync_health,
-    organization_lineage, orphan, podman_reclaim, provider_api_client, provider_api_write,
-    provider_capacity, provider_client_runtime, provider_evidence, provider_global_sync,
-    provider_oauth, provider_recovery, provider_sync, rules,
+    cloud_review, cloud_transfer, dupes, git_clone_reclaim, git_worktree,
+    icloud_sync_health, organization_lineage,
+    podman_reclaim, provider_api_client, provider_api_write, provider_capacity,
+    provider_client_runtime, provider_evidence, provider_global_sync, provider_oauth,
+    provider_recovery, provider_sync, rules, orphan,
 };
 
 #[cfg(not(coverage))]
@@ -176,8 +177,7 @@ pub fn clean_dev_artifacts_inner(
                 .error
                 .starts_with("development artifact changed or its bounded manifest is incomplete")
             {
-                "개발 아티팩트가 변경되었거나 bounded manifest가 불완전합니다. 다시 스캔하세요"
-                    .into()
+                "개발 아티팩트가 변경되었거나 bounded manifest가 불완전합니다. 다시 스캔하세요".into()
             } else {
                 result.error
             },
@@ -481,7 +481,9 @@ fn podman_binary() -> PathBuf {
     ]
     .into_iter()
     .map(PathBuf::from)
-    .find(|path| std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file()))
+    .find(|path| {
+        std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file())
+    })
     .unwrap_or_else(|| PathBuf::from("podman"))
 }
 
@@ -1533,13 +1535,9 @@ fn attach_pre_copy_evidence_cohort(
         });
     let cohort = cloud::compare_pre_copy_evidence(vec![local, runtime, health]);
     if cohort.complete {
-        report
-            .notices
-            .push("pre-copy-evidence-cohort-complete".into());
+        report.notices.push("pre-copy-evidence-cohort-complete".into());
     } else {
-        report
-            .notices
-            .push("pre-copy-evidence-cohort-blocked".into());
+        report.notices.push("pre-copy-evidence-cohort-blocked".into());
         report.notices.extend(cohort.blockers.iter().cloned());
     }
     report.pre_copy_evidence = Some(cohort);
@@ -1643,14 +1641,11 @@ fn cloud_plan_for_inputs(
         )
     });
     if native_client_mode {
-        report
-            .notices
-            .push("native-client-copy-capacity-unverified".into());
+        report.notices.push("native-client-copy-capacity-unverified".into());
     }
     let (icloud_health, provider_global_sync) = if selected.provider == cloud::CloudProvider::Icloud
     {
-        let health =
-            icloud_sync_health::inspect_new_copy_admission(&home, cloud::system_now_ms()).ok();
+        let health = icloud_sync_health::inspect_new_copy_admission(&home, cloud::system_now_ms()).ok();
         if let Some(health) = health.as_ref() {
             if !persist_icloud_health_evidence(app, health) {
                 report
@@ -1952,7 +1947,8 @@ fn create_cloud_candidate_receipt(
     if !adopt_existing {
         require_native_copy_not_cancelled(cancel)?;
     }
-    let planning = cloud_plan_for_inputs(root, cloud_root, min_size_mib, min_age_days, limit, app)?;
+    let planning =
+        cloud_plan_for_inputs(root, cloud_root, min_size_mib, min_age_days, limit, app)?;
     let CloudPlanningOutput {
         selected,
         report,
@@ -2028,12 +2024,13 @@ fn create_cloud_candidate_receipt(
             .capacity
             .as_ref()
             .ok_or_else(|| "cloud-capacity-verification-required".to_string())?;
-        let native_client_mode = provider_capacity::native_personal_client_copy_capacity_exception(
-            selected.provider,
-            selected.account_scope,
-            runtime.copy_prerequisite_met,
-            &snapshot.snapshot,
-        );
+        let native_client_mode =
+            provider_capacity::native_personal_client_copy_capacity_exception(
+                selected.provider,
+                selected.account_scope,
+                runtime.copy_prerequisite_met,
+                &snapshot.snapshot,
+            );
         require_capacity_for_copy(candidate, &snapshot.snapshot, native_client_mode)?;
         require_native_copy_not_cancelled_with_failure(cancel, candidate, action, &failure_dir)?;
     }
@@ -2096,10 +2093,12 @@ fn create_cloud_candidate_receipt(
             (None, None)
         }
     };
-    let goal_status =
-        cloud_adr::read_goal_status(&app_data_dir.join("cloud-goals"), &receipt.receipt_id)
-            .ok()
-            .flatten();
+    let goal_status = cloud_adr::read_goal_status(
+        &app_data_dir.join("cloud-goals"),
+        &receipt.receipt_id,
+    )
+    .ok()
+    .flatten();
     Ok(CloudCopyOutput {
         action: if adopt_existing {
             "adopt-existing-copy"
@@ -2137,9 +2136,12 @@ fn create_cloud_candidate_provider_api_receipt(
     {
         return Err("metadata-fingerprint-invalid".into());
     }
-    let planning = cloud_plan_for_inputs(root, cloud_root, min_size_mib, min_age_days, limit, app)?;
+    let planning =
+        cloud_plan_for_inputs(root, cloud_root, min_size_mib, min_age_days, limit, app)?;
     let CloudPlanningOutput {
-        selected, report, ..
+        selected,
+        report,
+        ..
     } = planning;
     if selected.provider == cloud::CloudProvider::Icloud {
         return Err("provider-api-icloud-unsupported".into());
@@ -2204,8 +2206,7 @@ fn create_cloud_candidate_provider_api_receipt(
         candidate.bytes,
         access_token.as_str(),
     )?;
-    if let Err(error) =
-        cloud_transfer::verify_provider_api_source_unchanged(candidate, &source_hashes)
+    if let Err(error) = cloud_transfer::verify_provider_api_source_unchanged(candidate, &source_hashes)
     {
         let cleanup = provider_api_write::delete_uploaded_object(
             selected.provider,
@@ -2214,9 +2215,9 @@ fn create_cloud_candidate_provider_api_receipt(
         );
         return Err(match cleanup {
             Ok(()) => error,
-            Err(cleanup_error) => {
-                format!("{error},provider-api-upload-cleanup-failed:{cleanup_error}")
-            }
+            Err(cleanup_error) => format!(
+                "{error},provider-api-upload-cleanup-failed:{cleanup_error}"
+            ),
         });
     }
     let app_data_dir = app
@@ -2234,9 +2235,9 @@ fn create_cloud_candidate_provider_api_receipt(
             );
             return Err(match cleanup {
                 Ok(()) => error,
-                Err(cleanup_error) => {
-                    format!("{error},provider-api-upload-cleanup-failed:{cleanup_error}")
-                }
+                Err(cleanup_error) => format!(
+                    "{error},provider-api-upload-cleanup-failed:{cleanup_error}"
+                ),
             });
         }
     };
@@ -2266,8 +2267,8 @@ fn create_cloud_candidate_provider_api_receipt(
     let mut goal_state = cloud_transfer::CloudOffloadGoalState::CopyVerified;
     let home = resolve_home(app)?;
     let cloud_roots = cloud::discover_cloud_roots(&home);
-    let attestation_object_id =
-        (selected.provider == cloud::CloudProvider::GoogleDrive).then(|| upload.object_id.clone());
+    let attestation_object_id = (selected.provider == cloud::CloudProvider::GoogleDrive)
+        .then(|| upload.object_id.clone());
     match collect_cloud_attestation_for_receipt(
         &receipt,
         attestation_object_id,
@@ -2306,10 +2307,12 @@ fn create_cloud_candidate_provider_api_receipt(
             ));
         }
     }
-    let goal_status =
-        cloud_adr::read_goal_status(&app_data_dir.join("cloud-goals"), &receipt.receipt_id)
-            .ok()
-            .flatten();
+    let goal_status = cloud_adr::read_goal_status(
+        &app_data_dir.join("cloud-goals"),
+        &receipt.receipt_id,
+    )
+    .ok()
+    .flatten();
     Ok(CloudCopyOutput {
         action: "copy-only",
         goal_state,
@@ -3500,16 +3503,10 @@ mod tests {
             &[],
         )
         .unwrap();
-        assert_eq!(
-            output.receipts_seen,
-            MAX_CLOUD_RECEIPTS_PER_RECONCILIATION as u64
-        );
+        assert_eq!(output.receipts_seen, MAX_CLOUD_RECEIPTS_PER_RECONCILIATION as u64);
         assert_eq!(output.unprocessed_count, 1);
         assert!(output.incomplete_reconciliation);
-        assert_eq!(
-            output.error_count,
-            MAX_CLOUD_RECEIPTS_PER_RECONCILIATION as u64
-        );
+        assert_eq!(output.error_count, MAX_CLOUD_RECEIPTS_PER_RECONCILIATION as u64);
     }
 
     #[cfg(not(coverage))]
@@ -3772,8 +3769,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
             crate::cache_cleanup::AUTO_REGENERABLE_CACHE_IDS,
             [
                 "npm-cache",
-                "pnpm-store-cache",
-                "pnpm-metadata-cache",
+                "pnpm-cache",
                 "adobe-cache",
                 "edge-cache",
                 "uv-cache",
@@ -3789,11 +3785,10 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
         for id in crate::cache_cleanup::AUTO_REGENERABLE_CACHE_IDS {
             let path = match id {
                 "npm-cache" => bases.home.join(".npm"),
-                "pnpm-store-cache" => bases.home.join("Library/pnpm/store"),
-                "pnpm-metadata-cache" => bases.home.join("Library/Caches/pnpm"),
+                "pnpm-cache" => bases.home.join("Library/Caches/pnpm"),
                 "adobe-cache" => bases.home.join("Library/Caches/Adobe"),
                 "edge-cache" => bases.home.join("Library/Caches/Microsoft Edge"),
-                "uv-cache" => bases.home.join(".cache/uv"),
+                "uv-cache" => bases.local_data.join("uv"),
                 "trivy-cache" => bases.home.join("Library/Caches/trivy"),
                 _ => unreachable!(),
             };
@@ -3801,7 +3796,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
             fs::write(path.join("fixture.bin"), b"regenerable").unwrap();
         }
         let results = clean_regenerable_caches_inner(&bases, &tmp.path().join("journal.jsonl"), 7);
-        assert_eq!(results.len(), 7);
+        assert_eq!(results.len(), 6);
         assert!(results.iter().all(|result| result.ok));
     }
 
@@ -3819,11 +3814,7 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko .
             .as_millis() as u64;
         let observed = crate::dev_artifacts::find_artifacts(tmp.path(), 0, now);
         assert_eq!(observed.len(), 1);
-        fs::write(
-            artifact.join("payload.bin"),
-            b"recreated-with-different-size",
-        )
-        .unwrap();
+        fs::write(artifact.join("payload.bin"), b"recreated-with-different-size").unwrap();
         let results = clean_dev_artifacts_inner(
             &observed,
             tmp.path(),

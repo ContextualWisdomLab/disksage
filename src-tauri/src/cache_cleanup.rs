@@ -10,17 +10,16 @@ fn sort_targets(targets: &mut Vec<rules::CacheTarget>) {
 /// Local caches observed during the current low-disk incident and safe to regenerate.
 /// npm's content-addressed cache is rebuilt by npm on demand; it is included only after the same
 /// per-child identity and active-use checks as the other caches.
-pub const AUTO_REGENERABLE_CACHE_IDS: [&str; 7] = [
+pub const AUTO_REGENERABLE_CACHE_IDS: [&str; 6] = [
     "npm-cache",
-    "pnpm-store-cache",
-    "pnpm-metadata-cache",
+    "pnpm-cache",
     "adobe-cache",
     "edge-cache",
     "uv-cache",
     "trivy-cache",
 ];
 
-const PROVEN_CACHE_TRASH_NAMES: [&str; 13] = [
+const PROVEN_CACHE_TRASH_NAMES: [&str; 9] = [
     "_cacache",
     "v11",
     "Default",
@@ -30,10 +29,6 @@ const PROVEN_CACHE_TRASH_NAMES: [&str; 13] = [
     "sdists-v9",
     "builds-v0",
     "db",
-    "git-v0",
-    "metadata-v1.3",
-    "archive-v0",
-    "v10",
 ];
 const MAX_CACHE_TRASH_ENTRIES: usize = 1_000_000;
 
@@ -71,43 +66,8 @@ fn direct_child_is_file(path: &Path, name: &str) -> bool {
         .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
 }
 
-fn has_uv_archive_entry(path: &Path) -> bool {
-    std::fs::read_dir(path)
-        .ok()
-        .into_iter()
-        .flatten()
-        .filter_map(Result::ok)
-        .take(MAX_CACHE_TRASH_ENTRIES)
-        .any(|entry| {
-            let package = entry.path();
-            entry
-                .file_type()
-                .is_ok_and(|file_type| file_type.is_dir() && !file_type.is_symlink())
-                && std::fs::read_dir(package)
-                    .ok()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(Result::ok)
-                    .any(|child| {
-                        child
-                            .file_type()
-                            .is_ok_and(|file_type| file_type.is_dir() && !file_type.is_symlink())
-                            && child.file_name().to_string_lossy().ends_with(".dist-info")
-                    })
-        })
-}
-
 fn looks_like_proven_cache_trash(path: &Path, name: &str) -> Option<&'static str> {
-    let base_name = PROVEN_CACHE_TRASH_NAMES
-        .iter()
-        .find(|known| {
-            name == **known
-                || name
-                    .strip_prefix(**known)
-                    .is_some_and(|suffix| suffix.starts_with(' '))
-        })
-        .copied()?;
-    let signature = match base_name {
+    let signature = match name {
         "_cacache"
             if direct_child_is_dir(path, "content-v2") && direct_child_is_dir(path, "tmp") =>
         {
@@ -115,16 +75,9 @@ fn looks_like_proven_cache_trash(path: &Path, name: &str) -> Option<&'static str
         }
         "v11"
             if direct_child_is_dir(path, "metadata")
-                && direct_child_is_dir(path, "metadata-full")
-                || direct_child_is_dir(path, "files")
-                    && direct_child_is_file(path, "index.db")
-                    && direct_child_is_dir(path, "projects")
-                    && direct_child_is_dir(path, "links") =>
+                && direct_child_is_dir(path, "metadata-full") =>
         {
             "pnpm-store-v11"
-        }
-        "v10" if direct_child_is_dir(path, "files") && direct_child_is_dir(path, "index") => {
-            "pnpm-store-v10"
         }
         "Default"
             if direct_child_is_dir(path, "Cache") && direct_child_is_dir(path, "Code Cache") =>
@@ -160,17 +113,6 @@ fn looks_like_proven_cache_trash(path: &Path, name: &str) -> Option<&'static str
         {
             "trivy-database-cache"
         }
-        "git-v0"
-            if direct_child_is_dir(path, "locks")
-                && direct_child_is_dir(path, "checkouts")
-                && direct_child_is_dir(path, "db") =>
-        {
-            "uv-git-cache"
-        }
-        "metadata-v1.3" if direct_child_is_dir(path, "registry.npmjs.org") => {
-            "pnpm-registry-metadata-cache"
-        }
-        "archive-v0" if has_uv_archive_entry(path) => "uv-archive-cache",
         _ => return None,
     };
     Some(signature)
@@ -210,6 +152,9 @@ pub fn proven_cache_trash_candidates(home: &Path) -> Vec<CacheTrashCandidate> {
     let mut candidates = Vec::new();
     for entry in entries.filter_map(Result::ok) {
         let name = entry.file_name().to_string_lossy().into_owned();
+        if !PROVEN_CACHE_TRASH_NAMES.contains(&name.as_str()) {
+            continue;
+        }
         let path = entry.path();
         let Some(signature) = looks_like_proven_cache_trash(&path, &name) else {
             continue;
@@ -525,46 +470,6 @@ mod tests {
         let journal_text = fs::read_to_string(journal).unwrap();
         assert!(journal_text.contains("permanent_cache_trash_delete"));
         assert!(journal_text.contains("\"outcome\":\"ok\""));
-    }
-
-    #[test]
-    fn proven_cache_trash_accepts_collision_renames_only_with_structure() {
-        let tmp = tempfile::tempdir().unwrap();
-        let trash = tmp.path().join(".Trash");
-        let renamed = trash.join("git-v0 오후 12.19.24");
-        fs::create_dir_all(renamed.join("locks")).unwrap();
-        fs::create_dir(renamed.join("checkouts")).unwrap();
-        fs::create_dir(renamed.join("db")).unwrap();
-        fs::create_dir(trash.join("git-v0 notes")).unwrap();
-
-        let candidates = proven_cache_trash_candidates(tmp.path());
-
-        assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].name, "git-v0 오후 12.19.24");
-        assert_eq!(candidates[0].signature, "uv-git-cache");
-    }
-
-    #[test]
-    fn proven_cache_trash_recognizes_uv_archive_and_pnpm_store_layouts() {
-        let tmp = tempfile::tempdir().unwrap();
-        let trash = tmp.path().join(".Trash");
-        fs::create_dir_all(trash.join("archive-v0/hash/package-1.0.dist-info")).unwrap();
-        fs::create_dir_all(trash.join("v10/files")).unwrap();
-        fs::create_dir(trash.join("v10/index")).unwrap();
-        fs::create_dir_all(trash.join("v11/files")).unwrap();
-        fs::create_dir(trash.join("v11/projects")).unwrap();
-        fs::create_dir(trash.join("v11/links")).unwrap();
-        fs::write(trash.join("v11/index.db"), b"index").unwrap();
-
-        let signatures: Vec<String> = proven_cache_trash_candidates(tmp.path())
-            .into_iter()
-            .map(|candidate| candidate.signature)
-            .collect();
-
-        assert_eq!(
-            signatures,
-            ["uv-archive-cache", "pnpm-store-v10", "pnpm-store-v11"]
-        );
     }
 
     #[cfg(unix)]
