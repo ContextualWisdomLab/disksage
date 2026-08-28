@@ -18,8 +18,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   environment trees without recursively scanning them, and the
   cleanup screen names each Python cache and test environment so the next action is clear.
 - Release uploaded, current, idle OneDrive files through Microsoft's signed Files On-Demand
-  command only after the provider-wide queue is quiet, then restart sync and verify allocation
-  reduction while retaining the cloud item and the existing approval and receipt contract.
+  command after stopping the sync app, then restart sync and verify allocation reduction while
+  retaining the cloud item and the existing approval and receipt contract. Provider-wide
+  new-copy admission remains confined to copy/upload workflows and cannot deadlock local-space
+  recovery while unrelated downloads, indexing, or historical provider errors exist. If the
+  normal quit request stalls, DiskSage uses one bounded graceful `SIGTERM` fallback and never
+  force-kills the client; the stop check distinguishes the desktop app from its resident File
+  Provider helper.
 - Partition iCloud eviction manifests automatically: keep freshly verified, fully uploaded local
   copies in the approval batch and exclude sync-incomplete items without exposing their paths.
 - Extend the same batch planner, exact fingerprint approval, live re-plan, immutable checkpoint,

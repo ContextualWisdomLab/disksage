@@ -9,6 +9,21 @@ queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
 
+## 2026-08-29 OneDrive local-space recovery observation
+
+- A metadata-only inventory completed across 277,410 entries and found 118 locally materialized
+  candidates totaling 62,060,163,072 allocated bytes. A fresh plan after provider drift retained
+  110 eligible items totaling 58,836,140,032 allocated bytes and excluded eight items; private
+  paths remain outside this document.
+- The first exact-item execution performed no eviction because the desktop client would not finish
+  its bounded quit sequence. DiskSage now keeps copy/upload admission separate from local-only
+  Files On-Demand eviction, observes the primary app separately from its resident File Provider
+  helper, and permits only one bounded graceful `SIGTERM` fallback. It never force-kills the sync
+  client, deletes a cloud item, or claims reclaimed bytes without post-action allocation proof.
+- The remaining acceptance proof is a successful vendor `/unpin` on a freshly replanned item,
+  immutable result recording, and observed allocation reduction. Until then the measured 58.8 GB
+  is opportunity, not reclaimed capacity.
+
 ## 2026-08-28 explicit open-PR worktree cutoff observation
 
 - PR #267 observed head `4b6dc492926a48aa0f29e867316177de31c92f4d` adds an opt-in calendar cutoff

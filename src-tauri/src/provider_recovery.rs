@@ -306,10 +306,20 @@ pub(crate) fn unpin_onedrive_local_copy(path: &Path) -> Result<OneDriveUnpinOutc
     }
     request_quit("OneDrive")?;
     let operation = (|| {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while require_runtime_observation(CloudProvider::Onedrive, 0)? {
+        let mut deadline = Instant::now() + Duration::from_secs(10);
+        let mut graceful_term_requested = false;
+        while crate::provider_client_runtime::collect_provider_primary_runtime(
+            CloudProvider::Onedrive,
+        )
+        .ok_or_else(|| "provider-recovery-runtime-evidence-unavailable".to_string())?
+        {
             if Instant::now() >= deadline {
-                return Err("provider-recovery-quit-timeout".into());
+                if graceful_term_requested {
+                    return Err("provider-recovery-quit-timeout".into());
+                }
+                request_graceful_term("OneDrive")?;
+                graceful_term_requested = true;
+                deadline = Instant::now() + Duration::from_secs(10);
             }
             std::thread::sleep(Duration::from_millis(250));
         }
