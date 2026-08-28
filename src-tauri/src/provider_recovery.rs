@@ -24,6 +24,11 @@ pub struct ProviderRecoveryOutput {
     pub source_eviction_executed: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OneDriveUnpinOutcome {
+    pub restart_blockers: Vec<String>,
+}
+
 pub fn recovery_supported(provider: CloudProvider) -> bool {
     matches!(
         provider,
@@ -37,6 +42,40 @@ fn post_runtime_blockers(runtime_observed: Option<bool>) -> Vec<String> {
         Some(false) => vec!["provider-client-runtime-not-observed-after-restart".into()],
         None => vec!["provider-client-runtime-evidence-unavailable-after-restart".into()],
     }
+}
+
+fn recovery_output_after_launch(
+    provider: CloudProvider,
+    pre_runtime_observed: bool,
+    allow_graceful_term: bool,
+    post_runtime_observed: Option<bool>,
+) -> ProviderRecoveryOutput {
+    ProviderRecoveryOutput {
+        schema_version: PROVIDER_RECOVERY_SCHEMA_VERSION,
+        provider,
+        action: if allow_graceful_term {
+            "restart-provider-client-with-graceful-term".into()
+        } else {
+            "restart-provider-client".into()
+        },
+        pre_runtime_observed,
+        quit_requested: true,
+        launch_requested: true,
+        post_runtime_observed,
+        blockers: post_runtime_blockers(post_runtime_observed),
+        cloud_write_executed: false,
+        source_eviction_executed: false,
+    }
+}
+
+fn finish_onedrive_unpin(
+    operation: Result<(), String>,
+    restart: Result<(), String>,
+) -> Result<OneDriveUnpinOutcome, String> {
+    operation?;
+    Ok(OneDriveUnpinOutcome {
+        restart_blockers: restart.err().into_iter().collect(),
+    })
 }
 
 /// Request Finder to cancel its active copy/materialization dialog without touching any provider
@@ -214,7 +253,11 @@ fn run_bounded_output(program: &Path, args: &[&str]) -> Result<(), String> {
                 let _ = child.wait();
                 return Err("provider-recovery-command-timeout".into());
             }
-            Err(_) => return Err("provider-recovery-command-wait-failed".into()),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("provider-recovery-command-wait-failed".into());
+            }
         }
     };
     capture
@@ -236,25 +279,20 @@ fn run_bounded_output(program: &Path, args: &[&str]) -> Result<(), String> {
 }
 
 #[cfg(all(target_os = "macos", not(coverage)))]
-fn launch_provider(provider: CloudProvider, path: &Path) -> Result<(), String> {
+fn launch_provider(path: &Path) -> Result<(), String> {
     let path = path
         .to_str()
         .ok_or_else(|| "provider-recovery-client-path-invalid".to_string())?;
     if !run_bounded(Path::new("/usr/bin/open"), &["-a", path])? {
         return Err("provider-recovery-launch-failed".into());
     }
-    std::thread::sleep(Duration::from_secs(1));
-    match runtime_observation(provider, 0) {
-        Some(true) => Ok(()),
-        Some(false) => Err("provider-client-runtime-not-observed-after-restart".into()),
-        None => Err("provider-client-runtime-evidence-unavailable-after-restart".into()),
-    }
+    Ok(())
 }
 
 /// Invoke OneDrive's documented Files On-Demand command while its sync app is stopped, then
 /// always restart the verified app. This changes only the selected local materialization state.
 #[cfg(all(target_os = "macos", not(coverage)))]
-pub(crate) fn unpin_onedrive_local_copy(path: &Path) -> Result<(), String> {
+pub(crate) fn unpin_onedrive_local_copy(path: &Path) -> Result<OneDriveUnpinOutcome, String> {
     let app = app_path(CloudProvider::Onedrive)?;
     let executable = app.join("Contents/MacOS/OneDrive");
     if !executable.is_file() {
@@ -278,8 +316,15 @@ pub(crate) fn unpin_onedrive_local_copy(path: &Path) -> Result<(), String> {
         run_bounded_output(&executable, &["/getpin", path])?;
         run_bounded_output(&executable, &["/unpin", path])
     })();
-    let restart = launch_provider(CloudProvider::Onedrive, &app);
-    restart.and(operation)
+    let restart = launch_provider(&app).and_then(|_| {
+        std::thread::sleep(Duration::from_secs(1));
+        match runtime_observation(CloudProvider::Onedrive, 0) {
+            Some(true) => Ok(()),
+            Some(false) => Err("provider-client-runtime-not-observed-after-restart".into()),
+            None => Err("provider-client-runtime-evidence-unavailable-after-restart".into()),
+        }
+    });
+    finish_onedrive_unpin(operation, restart)
 }
 
 #[cfg(not(coverage))]
@@ -382,25 +427,15 @@ pub fn recover_provider_client_with_options(
             std::thread::sleep(Duration::from_millis(250));
         }
 
-        launch_provider(provider, &path)?;
+        launch_provider(&path)?;
+        std::thread::sleep(Duration::from_secs(1));
         let post_runtime_observed = runtime_observation(provider, observed_at_ms);
-        let blockers = post_runtime_blockers(post_runtime_observed);
-        Ok(ProviderRecoveryOutput {
-            schema_version: PROVIDER_RECOVERY_SCHEMA_VERSION,
+        Ok(recovery_output_after_launch(
             provider,
-            action: if allow_graceful_term {
-                "restart-provider-client-with-graceful-term".into()
-            } else {
-                "restart-provider-client".into()
-            },
             pre_runtime_observed,
-            quit_requested: true,
-            launch_requested: true,
+            allow_graceful_term,
             post_runtime_observed,
-            blockers,
-            cloud_write_executed: false,
-            source_eviction_executed: false,
-        })
+        ))
     }
 }
 
@@ -443,6 +478,60 @@ mod tests {
         .unwrap();
         assert_eq!(json["cloud_write_executed"], false);
         assert_eq!(json["source_eviction_executed"], false);
+    }
+
+    #[test]
+    fn slow_post_restart_observation_is_structured_recovery_evidence() {
+        let output = recovery_output_after_launch(
+            CloudProvider::Onedrive,
+            true,
+            false,
+            Some(false),
+        );
+        assert_eq!(output.post_runtime_observed, Some(false));
+        assert_eq!(
+            output.blockers,
+            vec!["provider-client-runtime-not-observed-after-restart"]
+        );
+        assert!(output.launch_requested);
+        assert!(!output.cloud_write_executed);
+        assert!(!output.source_eviction_executed);
+    }
+
+    #[test]
+    fn unavailable_post_restart_observation_is_structured_recovery_evidence() {
+        let output = recovery_output_after_launch(CloudProvider::GoogleDrive, true, true, None);
+        assert_eq!(output.post_runtime_observed, None);
+        assert_eq!(
+            output.blockers,
+            vec!["provider-client-runtime-evidence-unavailable-after-restart"]
+        );
+        assert_eq!(output.action, "restart-provider-client-with-graceful-term");
+    }
+
+    #[test]
+    fn successful_unpin_preserves_restart_failure_as_a_blocker() {
+        let outcome = finish_onedrive_unpin(
+            Ok(()),
+            Err("provider-client-runtime-not-observed-after-restart".into()),
+        )
+        .unwrap();
+        assert_eq!(
+            outcome.restart_blockers,
+            vec!["provider-client-runtime-not-observed-after-restart"]
+        );
+    }
+
+    #[test]
+    fn failed_unpin_remains_a_hard_operation_failure() {
+        assert_eq!(
+            finish_onedrive_unpin(
+                Err("onedrive-files-on-demand-command-failed".into()),
+                Err("provider-client-runtime-not-observed-after-restart".into()),
+            )
+            .unwrap_err(),
+            "onedrive-files-on-demand-command-failed"
+        );
     }
 
     #[cfg(all(target_os = "macos", not(coverage)))]
