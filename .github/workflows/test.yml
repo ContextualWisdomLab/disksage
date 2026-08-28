@@ -11,7 +11,9 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Current full Rust + cloud + duplicate + archive + frontend evidence exceeds 30 minutes
+    # on hosted runners. Preserve the complete gate instead of cancelling it mid-suite.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
