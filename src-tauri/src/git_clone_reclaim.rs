@@ -115,6 +115,70 @@ fn approval_id(plan: &GitCloneReclaimPlan, approved_at_ms: u64, approved_by: &st
     hasher.finalize().to_hex().to_string()
 }
 
+/// Return whether the requested root is a regular standalone clone rather than a linked
+/// worktree or a repository whose administrative directory is redirected through a symlink.
+///
+/// `git-worktree list` identifies the checkout, while this check binds the administrative
+/// directory to the canonical root. Keeping both observations is important: a linked worktree
+/// may look like an ordinary checkout at its own path, and a symlinked `.git` can change what a
+/// later Trash operation affects without changing the displayed repository path.
+fn has_bounded_standalone_git_directory(repository_root: &Path, common_dir: &Path) -> bool {
+    let git_entry = repository_root.join(".git");
+    let Ok(metadata) = std::fs::symlink_metadata(&git_entry) else {
+        return false;
+    };
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return false;
+    }
+    common_dir
+        .parent()
+        .is_some_and(|parent| parent == repository_root)
+        && std::fs::canonicalize(git_entry).ok().as_deref() == Some(common_dir)
+}
+
+/// Validate the append-only journal destination before the source clone can be moved.
+///
+/// The journal is part of the rollback contract. It must live outside the clone being moved,
+/// have a real private parent, and be either absent or a regular file. This prevents an
+/// application-data misconfiguration from moving the journal into Trash together with its source
+/// or from appending through a symlink.
+fn validate_journal_destination(repository_root: &Path, journal_path: &Path) -> Result<(), String> {
+    if !journal_path.is_absolute()
+        || journal_path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err("git-clone-journal-path-invalid".into());
+    }
+    let parent = journal_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .ok_or_else(|| "git-clone-journal-parent-invalid".to_string())?;
+    let parent_metadata = std::fs::symlink_metadata(parent)
+        .map_err(|_| "git-clone-journal-parent-unavailable".to_string())?;
+    if !parent_metadata.is_dir() || parent_metadata.file_type().is_symlink() {
+        return Err("git-clone-journal-parent-unsafe".into());
+    }
+    let canonical_source = std::fs::canonicalize(repository_root)
+        .map_err(|_| "git-clone-source-root-unavailable".to_string())?;
+    let canonical_parent = std::fs::canonicalize(parent)
+        .map_err(|_| "git-clone-journal-parent-unavailable".to_string())?;
+    if canonical_parent.starts_with(&canonical_source) {
+        return Err("git-clone-journal-inside-source".into());
+    }
+    match std::fs::symlink_metadata(journal_path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                Err("git-clone-journal-file-unsafe".into())
+            } else {
+                Ok(())
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err("git-clone-journal-file-unavailable".into()),
+    }
+}
+
 /// Build a plan from already-resolved GitHub PR heads. This is also the deterministic test seam.
 pub fn plan_git_clone_reclaim_with_pull_request_heads(
     repository_root: &Path,
@@ -151,6 +215,9 @@ pub fn plan_git_clone_reclaim_with_pull_request_heads(
     let repository_object_id = crate::safety::filesystem_object_id(&repository_path)
         .map_err(|_| "git-clone-object-identity-unavailable".to_string())?;
     let mut blockers = Vec::new();
+    if !report.evidence_complete {
+        blockers.push("git-clone-audit-evidence-incomplete".into());
+    }
     if report.worktree_count != 1 {
         blockers.push("git-clone-linked-worktrees-present".into());
     }
@@ -180,8 +247,8 @@ pub fn plan_git_clone_reclaim_with_pull_request_heads(
     } else if active_use.active {
         blockers.push("git-clone-active-use-detected".into());
     }
-    if !common_dir.starts_with(&repository_path) || common_dir == repository_path {
-        blockers.push("git-clone-git-directory-external".into());
+    if !has_bounded_standalone_git_directory(&repository_path, &common_dir) {
+        blockers.push("git-clone-git-directory-not-real-or-bounded".into());
     }
     if crate::safety::is_protected(&repository_path) {
         blockers.push("git-clone-path-protected".into());
@@ -305,6 +372,7 @@ pub fn execute_git_clone_reclaim(
     {
         return Err("git-clone-execution-approval-invalid-or-stale".into());
     }
+    validate_journal_destination(Path::new(&approved_plan.repository_root), journal_path)?;
     let live = plan_git_clone_reclaim(
         Path::new(&approved_plan.repository_root),
         retention_references,
@@ -450,5 +518,100 @@ mod tests {
             .contains(&"git-clone-working-tree-not-clean".into()));
         assert!(approve_git_clone_reclaim(&plan, "wrong", 11, "human:test", "reviewed").is_err());
         assert!(repository.path().join("untracked.txt").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_git_directory_is_not_a_standalone_clone() {
+        let repository = tempfile::tempdir().unwrap();
+        git(repository.path(), &["init", "-b", "main"]);
+        git(
+            repository.path(),
+            &["config", "user.email", "clone@example.invalid"],
+        );
+        git(
+            repository.path(),
+            &["config", "user.name", "DiskSage Clone Test"],
+        );
+        std::fs::write(repository.path().join("tracked.txt"), b"main\n").unwrap();
+        git(repository.path(), &["add", "tracked.txt"]);
+        git(repository.path(), &["commit", "-m", "main"]);
+        let head = git(repository.path(), &["rev-parse", "HEAD"]);
+        let git_directory = repository.path().join(".git");
+        let real_git_directory = repository.path().join(".git-real");
+        std::fs::rename(&git_directory, &real_git_directory).unwrap();
+        std::os::unix::fs::symlink(".git-real", &git_directory).unwrap();
+
+        let closed = ClosedPullRequestHeads::from([("refs/heads/main".into(), head)]);
+        let plan = plan_git_clone_reclaim_with_pull_request_heads(
+            repository.path(),
+            &["refs/heads/main".into()],
+            &closed,
+            &StaleOpenPullRequestHeads::new(),
+            None,
+            GitWorktreeAuditOptions::default(),
+            10,
+        )
+        .unwrap();
+
+        assert!(!plan.eligible_after_human_approval);
+        assert!(plan
+            .blockers
+            .contains(&"git-clone-git-directory-not-real-or-bounded".into()));
+    }
+
+    #[test]
+    fn journal_destination_must_be_outside_the_clone() {
+        let repository = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let inside = repository.path().join("journal.jsonl");
+        assert_eq!(
+            validate_journal_destination(repository.path(), &inside).unwrap_err(),
+            "git-clone-journal-inside-source"
+        );
+
+        let relative = Path::new("journal.jsonl");
+        assert_eq!(
+            validate_journal_destination(repository.path(), relative).unwrap_err(),
+            "git-clone-journal-path-invalid"
+        );
+
+        let journal = outside.path().join("journal.jsonl");
+        assert!(validate_journal_destination(repository.path(), &journal).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stale_open_authority_requires_an_explicit_cutoff() {
+        let repository = tempfile::tempdir().unwrap();
+        git(repository.path(), &["init", "-b", "main"]);
+        git(
+            repository.path(),
+            &["config", "user.email", "clone@example.invalid"],
+        );
+        git(
+            repository.path(),
+            &["config", "user.name", "DiskSage Clone Test"],
+        );
+        std::fs::write(repository.path().join("tracked.txt"), b"main\n").unwrap();
+        git(repository.path(), &["add", "tracked.txt"]);
+        git(repository.path(), &["commit", "-m", "main"]);
+        git(repository.path(), &["switch", "-c", "open-pr"]);
+        std::fs::write(repository.path().join("tracked.txt"), b"open\n").unwrap();
+        git(repository.path(), &["commit", "-am", "open"]);
+        let head = git(repository.path(), &["rev-parse", "HEAD"]);
+        let stale = StaleOpenPullRequestHeads::from([("refs/heads/open-pr".into(), head)]);
+
+        let error = plan_git_clone_reclaim_with_pull_request_heads(
+            repository.path(),
+            &["refs/heads/main".into()],
+            &ClosedPullRequestHeads::new(),
+            &stale,
+            None,
+            GitWorktreeAuditOptions::default(),
+            10,
+        )
+        .unwrap_err();
+        assert_eq!(error, "git-worktree-stale-open-pull-request-heads-invalid");
     }
 }
