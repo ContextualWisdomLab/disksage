@@ -5,6 +5,8 @@ DiskSage treats iCloud local-copy eviction as a destructive, evidence-bound oper
 ## Fail-closed execution contract
 
 - Every item receives a fresh clock reading; timestamps are never synthesized from a batch start time.
+- Planning excludes sync-incomplete or otherwise unsafe items by index and bounded error code, so
+  one unsafe item cannot prevent separately verified items from reaching human approval.
 - The executor stops at the first failed or verification-incomplete item.
 - A successful item result and a refreshed batch checkpoint are written before the next item begins.
 - Failure to persist an item result marks verification incomplete, records the bounded failure code in the batch checkpoint, and halts execution.

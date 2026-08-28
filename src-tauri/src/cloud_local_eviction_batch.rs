@@ -496,7 +496,13 @@ where
         let input_index = u32::try_from(index)
             .map_err(|_| "icloud-local-eviction-batch-input-index-overflow".to_string())?;
         match planner(root, path, observed_at_ms) {
-            Ok(plan) => items.push(IcloudLocalEvictionBatchItem { input_index, plan }),
+            Ok(plan) if item_plan_is_safe(&plan) => {
+                items.push(IcloudLocalEvictionBatchItem { input_index, plan });
+            }
+            Ok(_) => unavailable.push(IcloudLocalEvictionBatchUnavailable {
+                input_index,
+                error_code: "icloud-local-eviction-batch-item-not-eligible".into(),
+            }),
             Err(error) => unavailable.push(IcloudLocalEvictionBatchUnavailable {
                 input_index,
                 error_code: bounded_error_code(&error),
@@ -506,8 +512,8 @@ where
     build_batch_plan(root, paths.len(), items, unavailable, observed_at_ms)
 }
 
-/// Build a bounded read-only batch plan. Unavailable paths are represented by index and a bounded,
-/// path-free error code. No file content is opened and no local allocation is changed.
+/// Build a bounded read-only batch plan. Unsafe or unavailable paths are excluded by index with a
+/// bounded, path-free error code. No file content is opened and no local allocation is changed.
 #[cfg(not(coverage))]
 pub fn plan_icloud_local_eviction_batch(
     root: &CloudRoot,
@@ -973,6 +979,32 @@ mod tests {
             vec!["human-local-eviction-batch-approval-required"]
         );
         assert!(valid_hex64(&plan.batch_fingerprint));
+        validate_batch_plan(&root(), &plan).unwrap();
+    }
+
+    #[test]
+    fn batch_plan_excludes_sync_incomplete_items_without_blocking_safe_items() {
+        let paths = vec![path(0), path(1)];
+        let plan = plan_batch_with(&root(), &paths, 20, |_, path, _| {
+            if path.ends_with("file-0.bin") {
+                Ok(safe_plan(0))
+            } else {
+                let mut incomplete = safe_plan(1);
+                incomplete.icloud_state.is_uploaded = false;
+                incomplete.eligible_after_human_approval = false;
+                incomplete.blockers = vec!["provider-sync-incomplete".into()];
+                Ok(incomplete)
+            }
+        })
+        .unwrap();
+
+        assert_eq!(plan.planned_count, 1);
+        assert_eq!(plan.unavailable_count, 1);
+        assert_eq!(
+            plan.unavailable[0].error_code,
+            "icloud-local-eviction-batch-item-not-eligible"
+        );
+        assert!(plan.eligible_after_human_approval);
         validate_batch_plan(&root(), &plan).unwrap();
     }
 
