@@ -106,6 +106,7 @@ pub struct GitWorktreeAuditEntry {
     pub status_entry_count: Option<u64>,
     pub contained_in_reference: Option<bool>,
     pub closed_pull_request_head: bool,
+    #[serde(default)]
     pub stale_open_pull_request_head: bool,
     pub head_is_retained_tip: bool,
     pub actor_cwd_inside: Option<bool>,
@@ -131,6 +132,7 @@ pub struct GitWorktreeAuditReport {
     pub repository_root: String,
     pub common_dir: String,
     pub generated_at_ms: u64,
+    #[serde(default)]
     pub stale_open_pull_request_cutoff_ms: Option<u64>,
     pub retention_references: Vec<GitWorktreeReferenceBinding>,
     pub retention_reference_set_fingerprint: String,
