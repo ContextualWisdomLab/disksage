@@ -25,6 +25,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Report Docker dangling-image reclaim bytes from the runtime's numeric `image inspect` size, never
   by converting the human-readable listing with a unit heuristic; missing or mismatched identity
   evidence keeps the category blocked.
+- Include shared temporary storage (`/tmp`, or macOS `/private/tmp`) in the cleanup catalog. Only
+  current-user-owned, non-linked trees with a complete ownership walk can become identity-bound
+  Trash targets; the shared root and other-user/system-owned objects remain protected.
 - Add Podman/Colima VM storage maintenance planning (ADR-0014): inspect guest state and offer a
   bounded, exact-phrase-approved `fstrim` operation. Host VM-image compaction remains explicitly
   unsupported until a runtime-native integrity proof exists; no VM image, volume, or user file is

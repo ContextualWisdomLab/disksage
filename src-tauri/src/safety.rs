@@ -39,6 +39,83 @@ fn is_macos_user_temp_descendant(path: &Path) -> bool {
         && path.starts_with(temp_root)
 }
 
+#[cfg(target_os = "macos")]
+fn shared_temp_root_path() -> &'static Path {
+    Path::new("/private/tmp")
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn shared_temp_root_path() -> &'static Path {
+    Path::new("/tmp")
+}
+
+#[cfg(unix)]
+pub(crate) fn is_shared_temp_path(path: &Path) -> bool {
+    let Ok(root) = std::fs::canonicalize(shared_temp_root_path()) else {
+        return false;
+    };
+    let Ok(metadata) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    if metadata.file_type().is_symlink() {
+        return false;
+    }
+    let Ok(canonical) = std::fs::canonicalize(path) else {
+        return false;
+    };
+    canonical != root && canonical.starts_with(root)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn is_shared_temp_path(_path: &Path) -> bool {
+    false
+}
+
+/// Returns true only when every object below a shared temporary child belongs to this user.
+/// Symlinks and unreadable trees fail closed so a shared system directory cannot become a
+/// broad deletion authority.
+#[cfg(unix)]
+pub(crate) fn is_user_owned_shared_temp_tree(path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    if !is_shared_temp_path(path) {
+        return false;
+    }
+    const MAX_OWNERSHIP_ENTRIES: usize = 1_000_000;
+    let expected_uid = unsafe { libc::geteuid() };
+    let mut pending = vec![path.to_path_buf()];
+    let mut inspected = 0usize;
+    while let Some(current) = pending.pop() {
+        inspected = inspected.saturating_add(1);
+        if inspected > MAX_OWNERSHIP_ENTRIES {
+            return false;
+        }
+        let Ok(metadata) = std::fs::symlink_metadata(&current) else {
+            return false;
+        };
+        if metadata.file_type().is_symlink() || metadata.uid() != expected_uid {
+            return false;
+        }
+        if metadata.is_dir() {
+            let Ok(entries) = std::fs::read_dir(&current) else {
+                return false;
+            };
+            for entry in entries {
+                let Ok(entry) = entry else {
+                    return false;
+                };
+                pending.push(entry.path());
+            }
+        }
+    }
+    true
+}
+
+#[cfg(not(unix))]
+pub(crate) fn is_user_owned_shared_temp_tree(_path: &Path) -> bool {
+    false
+}
+
 /// 시스템·루트 경로 하드 거부 목록 (스펙 §7-3).
 /// 안전 계층의 최후 방어선 — 호출자가 무엇을 넘기든 여기서 걸러진다.
 pub fn is_protected(path: &Path) -> bool {
@@ -90,11 +167,17 @@ pub fn is_protected(path: &Path) -> bool {
     }
     #[cfg(unix)]
     {
+        if std::fs::canonicalize(shared_temp_root_path()).is_ok_and(|root| path == root) {
+            return true;
+        }
         // macOS의 사용자별 임시 디렉터리는 /private 아래로 canonicalize된다. 그 하위만
         // 허용하되 임시 루트 자체와 그 밖의 /private 트리는 계속 보호한다. 보호 경로를
         // 가리키는 심링크는 호출부에서 먼저 canonicalize되므로 이 예외를 우회할 수 없다.
         #[cfg(target_os = "macos")]
         if is_macos_user_temp_descendant(path) {
+            return false;
+        }
+        if is_user_owned_shared_temp_tree(path) {
             return false;
         }
         // macOS는 extend로 시스템 경로를 더 넣는다 — 다른 unix에선 그 라인이 cfg-out되어 mut가
@@ -303,6 +386,9 @@ pub fn trash_delete(
     // 가드는 정규화된 경로로 판정. canonicalize 실패(예: 이미 사라진 경로)면
     // lexical 경로로 판정한다 (ParentDir는 위에서 이미 거부됨) — 어느 쪽이든 verbatim은 재구성.
     let guard_path = strip_verbatim(&std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
+    if is_shared_temp_path(&guard_path) && !is_user_owned_shared_temp_tree(&guard_path) {
+        return Err(SafetyError::Protected(path.to_path_buf()));
+    }
     if is_protected(&guard_path) {
         return Err(SafetyError::Protected(path.to_path_buf()));
     }
@@ -413,6 +499,9 @@ pub fn trash_delete_if_identity(
     let guard_path = strip_verbatim(
         &std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()),
     );
+    if is_shared_temp_path(&guard_path) && !is_user_owned_shared_temp_tree(&guard_path) {
+        return Err(SafetyError::Protected(path.to_path_buf()));
+    }
     if is_protected(&guard_path) {
         return Err(SafetyError::Protected(path.to_path_buf()));
     }
@@ -763,6 +852,20 @@ mod tests {
     fn allows_ordinary_deep_paths() {
         let tmp = tempfile::tempdir().unwrap();
         assert!(!is_protected(&tmp.path().join("node_modules")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shared_temp_allows_only_current_user_owned_children() {
+        let Ok(tmp) = tempfile::tempdir_in(shared_temp_root_path()) else {
+            return;
+        };
+        let child = tmp.path().join("owned.bin");
+        std::fs::write(&child, b"owned").unwrap();
+        assert!(is_shared_temp_path(&child));
+        assert!(is_user_owned_shared_temp_tree(&child));
+        assert!(!is_protected(&child));
+        assert!(is_protected(shared_temp_root_path()));
     }
 
     #[cfg(windows)]

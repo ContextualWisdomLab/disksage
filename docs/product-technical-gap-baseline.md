@@ -66,6 +66,7 @@ queued or stale status.
 | Exact duplicate photos/files | Keep one user-selected member and move the others to Trash | Stable content digest, complete metadata probe, source recheck, and per-group confirmation | Perceptual/near-duplicate deletion or “best quality” guessed from names |
 | Podman/Docker | Remove only stopped, unreferenced resources proven by a runtime re-audit | Runtime inventory, reference/label evidence, size evidence, and exact approval | Removing active volumes, BuildKit state, or raw VM images |
 | Colima/Podman VM storage | Run bounded guest `fstrim` while the guest is running | Fresh runtime state, fixed command, exact phrase, and bounded output receipt | `qemu-img`, sparse-file truncation, VM stop/delete, or host allocation claims |
+| Shared temporary storage (`/tmp` or macOS `/private/tmp`) | Show and move only current-user-owned, non-linked temporary children to OS Trash | Real-directory root, complete ownership walk, active-use evidence, exact object identity, and per-item journal | Other-user/system-owned trees, symlinks, and deleting the shared root itself |
 | Git worktrees | Remove a clean, inactive secondary worktree whose exact head is no longer retained | Fresh Git registration/status/size/open-file evidence and, for PR authority, same-repository state + head OID | Branch deletion, `git prune`, fork worktrees, dirty/active worktrees, or age-only deletion |
 
 The dashboard must sum these domains separately. A displayed target such as 300 GB is a
