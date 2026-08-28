@@ -137,6 +137,13 @@ fn run() -> Result<(), String> {
         }
         _ => {}
     }
+    if execute.is_some() && runtime == ContainerRuntimeKind::DockerNative {
+        // The desktop IPC contract binds Docker-native approval to the effective DOCKER_CONTEXT /
+        // DOCKER_HOST authority. This standalone CLI cannot safely reproduce that private
+        // authority boundary, so destructive native-Docker execution remains fail-closed while
+        // read-only inspection stays available.
+        return Err("docker-native-cli-execution-requires-authority-binding".into());
+    }
     let binary_path = binary_path.unwrap_or_else(|| {
         PathBuf::from(match runtime {
             ContainerRuntimeKind::PodmanMachine => "podman",
