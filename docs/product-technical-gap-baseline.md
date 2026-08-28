@@ -984,3 +984,10 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   separately after ignore and active-use checks. APFS available space increased by 1,283,576 KiB
   across those two bounded operations. Provider synchronization paths and locally unique commits
   were preserved.
+
+## 2026-08-28 standalone-clone execution hardening
+
+- Standalone clone cleanup now rejects redirected or symlinked Git administration directories,
+  incomplete repository audits, and journals located inside the clone or behind unsafe path types.
+  Stale-open PR eligibility still requires an explicit operator cutoff; DiskSage does not invent an
+  age threshold. Focused clone and inherited worktree safety tests pass without mutating user data.
