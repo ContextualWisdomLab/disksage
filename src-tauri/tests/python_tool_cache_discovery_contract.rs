@@ -34,3 +34,20 @@ fn rejected_python_314_environment_is_not_descended_for_nested_cache_candidates(
         "a marker-qualified .venv314 that fails its Python 3.14 proof must be pruned from discovery"
     );
 }
+
+#[test]
+fn markerless_python_314_environment_is_not_descended_for_nested_cache_candidates() {
+    let tmp = tempfile::tempdir().unwrap();
+    let environment = tmp.path().join(".venv314");
+    let nested_cache = environment.join(".mypy_cache");
+    fs::create_dir_all(&nested_cache).unwrap();
+    fs::write(environment.join("pyvenv.cfg"), "version = 3.14.1\n").unwrap();
+    fs::write(nested_cache.join("cache.bin"), b"cache").unwrap();
+
+    let artifacts = find_artifacts(tmp.path(), 0, u64::MAX);
+
+    assert!(
+        artifacts.is_empty(),
+        "an unowned .venv314 must be pruned instead of lending authority to marker-free nested caches"
+    );
+}
