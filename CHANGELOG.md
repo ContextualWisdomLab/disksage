@@ -8,6 +8,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Reclaim only VS Code, VS Code Insiders/Server, and Cursor extension directories named by each
+  editor's native `.obsolete` lifecycle metadata, with bounded manifests, symlink rejection,
+  identity revalidation, Trash, and journaling.
+
 - Catalog AppMap downloaded tool binaries as regenerable macOS data. Superset network diagnostics
   remain separately visible for explicit review because historical logs cannot be regenerated.
 - Add standalone stale-PR clone reclamation: only a clean, inactive, single-worktree clone whose
@@ -44,6 +48,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Stop descending once a marker-validated development artifact is found, avoiding a second full
+  traversal of large nested `node_modules`, `target`, and generated index trees before cleanup.
+- Require complete inactive-use evidence for every development artifact immediately before Trash,
+  including `node_modules`, Rust targets, generated indexes, and editor-obsolete extensions.
 - Resolve macOS cache roots from the effective XDG/UV environment and observed native locations:
   `~/.cache` for uv, Codex runtimes, Node, PyTorch, Prisma, and GitHub CLI, plus
   `~/Library/pnpm/store` for pnpm's content-addressed store. The existing guarded cleanup keeps
@@ -109,6 +117,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Permit fully current-user-owned real children of the shared Unix temporary root while retaining
+  fail-closed protection for the root, symlinks, mixed ownership, unreadable trees, and oversized
+  ownership observations.
 - Reject ontology organize destinations that are relative to the process working directory,
   named-user tilde paths, or parent-traversal paths; only an absolute destination or a home token
   (`~`/`~/`, plus native Windows `~\`) can produce a move plan, and literal tildes in absolute

@@ -923,6 +923,22 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 
 ## 2026-08-28 measured emergency reclaim and VM recovery
 
+The PR #271 Linux test gate exposed a shared safety regression rather than an editor-cleanup
+failure: every current-user test tree under `/tmp` was globally protected, so 13 independent move,
+eviction, clone, and journal tests failed together. The shared guard now permits only a fully
+current-user-owned real child after a bounded ownership walk; the shared root, links, mixed owners,
+unreadable entries, and oversized observations remain protected. The formerly failing command,
+cloud-eviction, clone, and safety suites pass locally on the corrected exact head.
+
+- VS Code's native `.vscode/extensions/.obsolete` lifecycle document identified 22 still-present
+  obsolete extension directories totaling 1,283,664 KiB. DiskSage now treats only those exact real
+  child directories as development artifacts; it does not infer obsolescence from directory age or
+  version ordering. The filtered headless execution revalidated all 22 identities, moved them to
+  Trash, journaled them, and purged only those exact Trash entries; APFS available space increased
+  by 1,291,364 KiB in the bounded before/after sample. The same native lifecycle contract found
+  and revalidated 15 additional obsolete directories in Cursor, VS Code Insiders, and VS Code
+  Server; purging only their journal-matched Trash entries increased APFS availability by another
+  692,768 KiB.
 - A focused physical-allocation audit found about 7.7 GiB in AppMap downloaded tool binaries and
   1.9 GiB in inactive Superset network diagnostics. AppMap uses the existing regenerable-data
   cleanup contract. Superset diagnostics remain an explicit-review catalog item because historical

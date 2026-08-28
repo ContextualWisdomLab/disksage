@@ -7,11 +7,12 @@ use disksage_lib::dev_artifacts::{clean_artifacts, find_artifacts, DevArtifactCl
 use std::path::{Component, Path, PathBuf};
 
 const MAX_AGE_DAYS: u64 = 3_650;
-const USAGE: &str = "usage: disksage-dev-artifacts --root ABSOLUTE_PATH [--min-age-days N] [--journal-path ABSOLUTE_PATH] [--execute]";
+const USAGE: &str = "usage: disksage-dev-artifacts --root ABSOLUTE_PATH [--kind ARTIFACT_KIND] [--min-age-days N] [--journal-path ABSOLUTE_PATH] [--execute]";
 
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
     root: PathBuf,
+    kind: Option<String>,
     min_age_days: u64,
     journal_path: PathBuf,
     execute: bool,
@@ -54,6 +55,7 @@ fn default_journal_path() -> Result<PathBuf, String> {
 
 fn parse_args(raw: &[String]) -> Result<Args, String> {
     let mut root = None;
+    let mut kind = None;
     let mut min_age_days = 30;
     let mut journal_path = default_journal_path()?;
     let mut execute = false;
@@ -79,6 +81,15 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
                     return Err(format!("--min-age-days는 {MAX_AGE_DAYS} 이하이어야 함"));
                 }
             }
+            "--kind" => {
+                index += 1;
+                kind = Some(
+                    raw.get(index)
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| "--kind 값이 필요함".to_string())?
+                        .clone(),
+                );
+            }
             "--journal-path" => {
                 index += 1;
                 journal_path = PathBuf::from(
@@ -101,6 +112,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     }
     Ok(Args {
         root,
+        kind,
         min_age_days,
         journal_path,
         execute,
@@ -116,7 +128,14 @@ fn now_ms() -> u64 {
 
 fn run(args: Args) -> Result<serde_json::Value, String> {
     let observed_at_ms = now_ms();
-    let candidates = find_artifacts(&args.root, args.min_age_days, observed_at_ms);
+    let candidates = find_artifacts(&args.root, args.min_age_days, observed_at_ms)
+        .into_iter()
+        .filter(|candidate| {
+            args.kind
+                .as_deref()
+                .is_none_or(|kind| candidate.kind == kind)
+        })
+        .collect::<Vec<_>>();
     let results: Vec<DevArtifactCleanResult> = if args.execute {
         if let Some(parent) = args.journal_path.parent() {
             std::fs::create_dir_all(parent)
@@ -136,6 +155,7 @@ fn run(args: Args) -> Result<serde_json::Value, String> {
         "schema_version": 1,
         "schema_kind": "disksage.dev-artifact-cleanup",
         "root": args.root,
+        "kind": args.kind,
         "min_age_days": args.min_age_days,
         "observed_at_ms": observed_at_ms,
         "executed": args.execute,
@@ -176,6 +196,7 @@ mod tests {
         let root = std::env::temp_dir();
         let parsed = parse_args(&["--root".into(), root.to_string_lossy().into_owned()]).unwrap();
         assert_eq!(parsed.min_age_days, 30);
+        assert_eq!(parsed.kind, None);
         assert!(!parsed.execute);
         assert!(parse_args(&["--root".into(), "relative".into()]).is_err());
         assert!(parse_args(&[
@@ -195,12 +216,15 @@ mod tests {
             root.to_string_lossy().into_owned(),
             "--min-age-days".into(),
             "7".into(),
+            "--kind".into(),
+            "vscode-obsolete-extension".into(),
             "--journal-path".into(),
             "/tmp/disksage-dev-artifacts-journal.jsonl".into(),
             "--execute".into(),
         ])
         .unwrap();
         assert_eq!(parsed.min_age_days, 7);
+        assert_eq!(parsed.kind.as_deref(), Some("vscode-obsolete-extension"));
         assert!(parsed.execute);
         assert_eq!(
             parsed.journal_path,
