@@ -756,6 +756,10 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 
 ## 2026-08-27 container and worktree reclamation loop
 
+- The standalone-clone authority now has a headless plan/execute boundary. It reuses the desktop
+  contract unchanged: current same-repository GitHub PR branch and head, clean status, one worktree,
+  inactivity, filesystem identity, exact confirmation, and an external journal are all required
+  before moving the clone to OS Trash; branch deletion and Git pruning remain prohibited.
 - The live iCloud inventory contained both fully uploaded local copies and `local-current` items
   with `is_uploaded=false`. Batch planning now partitions those states automatically: only exact
   item plans that pass the existing provider, active-use, conflict, and allocation checks remain

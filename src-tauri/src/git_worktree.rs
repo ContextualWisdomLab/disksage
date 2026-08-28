@@ -728,9 +728,10 @@ fn check_file_provider_git_metadata(path: &Path) -> Result<Option<&'static str>,
         Err(error) if error == "file-provider-status-command-failed" => return Ok(None),
         Err(error) => return Err(format!("git-worktree-admin-metadata-{error}")),
     };
-    let status = crate::provider_sync::parse_file_providerctl_item_status(&output, metadata.len())
+    let local_current =
+        crate::provider_sync::parse_file_providerctl_local_current(&output, metadata.len())
         .map_err(|error| format!("git-worktree-admin-metadata-{error}"))?;
-    Ok(git_admin_metadata_blocker(&status))
+    Ok((!local_current).then_some("git-worktree-admin-metadata-not-local-current"))
 }
 
 #[cfg(all(target_os = "macos", not(coverage)))]
