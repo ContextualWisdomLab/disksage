@@ -14,12 +14,11 @@ fn binary_path() -> &'static Path {
     static BINARY_PATH: OnceLock<PathBuf> = OnceLock::new();
     BINARY_PATH
         .get_or_init(|| {
-            let target_dir = std::env::temp_dir().join(format!(
-                "disksage-cloud-local-inventory-relative-subpath-{}",
-                std::process::id()
-            ));
+            let target_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("target")
+                .join("cloud-cli-contracts");
             std::fs::create_dir_all(&target_dir)
-                .expect("isolated Cargo target directory must be created");
+                .expect("shared Cargo contract target directory must be created");
             let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
             let status = Command::new(cargo)
                 .current_dir(env!("CARGO_MANIFEST_DIR"))
