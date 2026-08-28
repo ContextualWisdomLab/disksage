@@ -9,6 +9,17 @@ queued or stale status.
 **Product boundary:** local-first macOS disk pressure relief with iCloud, OneDrive, and Google Drive destinations.
 **Evidence rule:** this document is a dated baseline, not an authority for transfer or deletion. Runtime receipts, provider attestations, object identity, and current GitHub checks remain authoritative.
 
+## 2026-08-28 explicit open-PR worktree cutoff observation
+
+- PR #267 observed head `4b6dc492926a48aa0f29e867316177de31c92f4d` adds an opt-in calendar cutoff
+  for same-repository open pull requests. The plan and every removal re-query GitHub state,
+  creation time, branch, and exact head OID; the authority fingerprint binds that evidence and the
+  operator cutoff. Branches and commits remain preserved, and no implicit age or filesystem-time
+  threshold is used.
+- Local frontend evidence for that head is green (`npm test -- --run`: 39 files/166 tests;
+  `npm run check`: zero errors/warnings). Hosted Rust, coverage, security, and review gates remain
+  the authority for integration and merge readiness.
+
 ## 2026-08-28 container cleanup loop evidence
 
 - On Podman 5.8.2 (the local `docker` wrapper), the live inventory contained two running
