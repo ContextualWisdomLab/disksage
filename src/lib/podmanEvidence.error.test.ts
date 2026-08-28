@@ -22,9 +22,13 @@ describe("podmanEvidenceErrorMessage", () => {
     expect(message).toContain("다시 시도하십시오");
   });
 
-  it("preserves actionable guidance for exact production-owned prune codes used by Cleanup", () => {
-    expect(podmanEvidenceErrorMessage("podman-prune-candidate-set-changed")).toBe(
-      "정리 후보가 변경되었습니다. 최신 Podman 상태를 다시 확인하고 새 계획을 검토하십시오.",
+  it.each([
+    "podman-prune-confirmation-mismatch",
+    "podman-prune-candidate-set-changed",
+    "podman-prune-machine-not-running",
+  ])("does not surface prune-only recovery guidance during read-only inspection for %s", (reason) => {
+    expect(podmanEvidenceErrorMessage(reason)).toBe(
+      "Podman 저장 공간을 확인하지 못했습니다. 상태를 확인한 뒤 다시 시도하십시오.",
     );
   });
 });
