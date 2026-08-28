@@ -399,6 +399,7 @@ pub fn execute_trim(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
 
     #[test]
     fn trim_commands_are_fixed_and_do_not_include_user_input() {
@@ -415,5 +416,13 @@ mod tests {
         let plan = inspect_runtime(RuntimeStorageKind::Colima, 42);
         assert!(!plan.host_compaction_supported);
         assert!(plan.exact_approval_phrase.is_none() || plan.guest_running == Some(true));
+    }
+
+    #[test]
+    fn bounded_reader_drains_large_output_without_retaining_it() {
+        let input = vec![b'x'; MAX_CAPTURE_BYTES + 1];
+        let (captured, truncated) = drain_bounded(Cursor::new(input)).expect("reader succeeds");
+        assert_eq!(captured.len(), MAX_CAPTURE_BYTES);
+        assert!(truncated);
     }
 }
