@@ -11,6 +11,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Reclaim only VS Code, VS Code Insiders/Server, and Cursor extension directories named by each
   editor's native `.obsolete` lifecycle metadata, with bounded manifests, symlink rejection,
   identity revalidation, Trash, and journaling.
+
+### Fixed
+
+- Permit fully current-user-owned real children of the shared Unix temporary root while retaining
+  fail-closed protection for the root, symlinks, mixed ownership, unreadable trees, and oversized
+  ownership observations.
 - Catalog AppMap downloaded tool binaries as regenerable macOS data. Superset network diagnostics
   remain separately visible for explicit review because historical logs cannot be regenerated.
 - Add standalone stale-PR clone reclamation: only a clean, inactive, single-worktree clone whose

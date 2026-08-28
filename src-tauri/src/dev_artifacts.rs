@@ -199,66 +199,62 @@ fn editor_product(root_name: &str) -> Option<&'static str> {
 /// `.obsolete` is native lifecycle authority, so no version-age heuristic is needed. Only a real
 /// metadata file at `.vscode/extensions/.obsolete` and single-component real child directories are
 /// accepted.
-fn vscode_obsolete_extension_paths(root: &Path) -> Vec<(PathBuf, &'static str)> {
+fn vscode_obsolete_extension_paths(metadata_path: &Path) -> Vec<(PathBuf, &'static str)> {
     let mut paths = Vec::new();
-    let walker = walkdir::WalkDir::new(root)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|entry| entry.depth() == 0 || scanner::keep_entry(entry));
-    for entry in walker.filter_map(Result::ok) {
-        if !entry.file_type().is_file() || entry.file_name() != ".obsolete" {
+    let Some(extensions) = metadata_path.parent() else {
+        return paths;
+    };
+    if extensions.file_name().and_then(|name| name.to_str()) != Some("extensions") {
+        return paths;
+    }
+    let editor_root = extensions.parent().and_then(|parent| {
+        (parent.file_name().and_then(|name| name.to_str()) == Some("data"))
+            .then(|| parent.parent())
+            .flatten()
+            .or(Some(parent))
+    });
+    let Some(product) = editor_root
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .and_then(editor_product)
+    else {
+        return paths;
+    };
+    let Ok(metadata) = std::fs::symlink_metadata(metadata_path) else {
+        return paths;
+    };
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > VSCODE_OBSOLETE_METADATA_MAX_BYTES
+    {
+        return paths;
+    }
+    let Ok(bytes) = std::fs::read(metadata_path) else {
+        return paths;
+    };
+    let Ok(document) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return paths;
+    };
+    let Some(names) = document.as_object() else {
+        return paths;
+    };
+    for (name, obsolete) in names {
+        if obsolete.as_bool() != Some(true) {
             continue;
         }
-        let Some(extensions) = entry.path().parent() else {
+        let mut components = Path::new(name).components();
+        let Some(std::path::Component::Normal(component)) = components.next() else {
             continue;
         };
-        if extensions.file_name().and_then(|name| name.to_str()) != Some("extensions") {
+        if components.next().is_some() || component.is_empty() {
             continue;
         }
-        let Some(product) = extensions
-            .parent()
-            .and_then(Path::file_name)
-            .and_then(|name| name.to_str())
-            .and_then(editor_product)
-        else {
+        let candidate = extensions.join(component);
+        let Ok(candidate_metadata) = std::fs::symlink_metadata(&candidate) else {
             continue;
         };
-        let Ok(metadata) = std::fs::symlink_metadata(entry.path()) else {
-            continue;
-        };
-        if metadata.file_type().is_symlink()
-            || !metadata.is_file()
-            || metadata.len() > VSCODE_OBSOLETE_METADATA_MAX_BYTES
-        {
-            continue;
-        }
-        let Ok(bytes) = std::fs::read(entry.path()) else {
-            continue;
-        };
-        let Ok(document) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-            continue;
-        };
-        let Some(names) = document.as_object() else {
-            continue;
-        };
-        for (name, obsolete) in names {
-            if obsolete.as_bool() != Some(true) {
-                continue;
-            }
-            let mut components = Path::new(name).components();
-            let Some(std::path::Component::Normal(component)) = components.next() else {
-                continue;
-            };
-            if components.next().is_some() || component.is_empty() {
-                continue;
-            }
-            let candidate = extensions.join(component);
-            let Ok(candidate_metadata) = std::fs::symlink_metadata(&candidate) else {
-                continue;
-            };
-            if candidate_metadata.is_dir() && !candidate_metadata.file_type().is_symlink() {
-                paths.push((candidate, product));
-            }
+        if candidate_metadata.is_dir() && !candidate_metadata.file_type().is_symlink() {
+            paths.push((candidate, product));
         }
     }
     paths.sort();
@@ -276,6 +272,7 @@ fn vscode_obsolete_extension_paths(root: &Path) -> Vec<(PathBuf, &'static str)> 
 /// 계산해 중첩분을 이중 계산하지 않는다.
 pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArtifact> {
     let mut candidates: Vec<PathBuf> = Vec::new();
+    let mut obsolete_extensions = Vec::new();
     let walker = walkdir::WalkDir::new(root)
         .follow_links(false)
         .into_iter()
@@ -286,6 +283,10 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
 
     for entry in walker {
         let Ok(e) = entry else { continue };
+        if e.file_type().is_file() && e.file_name() == ".obsolete" {
+            obsolete_extensions.extend(vscode_obsolete_extension_paths(e.path()));
+            continue;
+        }
         if !e.file_type().is_dir() {
             continue;
         }
@@ -316,7 +317,8 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
         .map(|(_, p)| p.as_path())
         .collect();
 
-    let obsolete_extensions = vscode_obsolete_extension_paths(root);
+    obsolete_extensions.sort();
+    obsolete_extensions.dedup();
     let mut found: Vec<DevArtifact> = top_level
         .into_iter()
         .filter(|path| {
@@ -540,9 +542,12 @@ mod tests {
         let extensions = tmp.path().join(".vscode/extensions");
         let obsolete = extensions.join("publisher.tool-1.0.0");
         let retained = extensions.join("publisher.keep-1.0.0");
+        let server_extensions = tmp.path().join(".vscode-server/data/extensions");
+        let server_obsolete = server_extensions.join("publisher.server-1.0.0");
         let outside = tmp.path().join("outside");
         fs::create_dir_all(&obsolete).unwrap();
         fs::create_dir(&retained).unwrap();
+        fs::create_dir_all(&server_obsolete).unwrap();
         fs::create_dir(&outside).unwrap();
         symlink(&outside, extensions.join("linked-1.0.0")).unwrap();
         fs::write(obsolete.join("package.json"), b"{}").unwrap();
@@ -551,12 +556,24 @@ mod tests {
             br#"{"publisher.tool-1.0.0":true,"publisher.keep-1.0.0":false,"../outside":true,"linked-1.0.0":true}"#,
         )
         .unwrap();
+        fs::write(
+            server_extensions.join(".obsolete"),
+            br#"{"publisher.server-1.0.0":true}"#,
+        )
+        .unwrap();
 
         let found = find_artifacts(tmp.path(), 3_650, 1);
 
-        assert_eq!(found.len(), 1);
-        assert_eq!(found[0].kind, "vscode-obsolete-extension");
-        assert_eq!(found[0].path, obsolete.to_string_lossy());
+        assert_eq!(found.len(), 2);
+        assert!(found
+            .iter()
+            .all(|item| item.kind == "vscode-obsolete-extension"));
+        assert!(found
+            .iter()
+            .any(|item| item.path == obsolete.to_string_lossy()));
+        assert!(found
+            .iter()
+            .any(|item| item.path == server_obsolete.to_string_lossy()));
         assert_eq!(editor_product(".cursor"), Some("Cursor"));
         assert_eq!(editor_product(".unknown-editor"), None);
     }

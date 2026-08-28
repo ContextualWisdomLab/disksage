@@ -923,6 +923,13 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 
 ## 2026-08-28 measured emergency reclaim and VM recovery
 
+The PR #271 Linux test gate exposed a shared safety regression rather than an editor-cleanup
+failure: every current-user test tree under `/tmp` was globally protected, so 13 independent move,
+eviction, clone, and journal tests failed together. The shared guard now permits only a fully
+current-user-owned real child after a bounded ownership walk; the shared root, links, mixed owners,
+unreadable entries, and oversized observations remain protected. The formerly failing command,
+cloud-eviction, clone, and safety suites pass locally on the corrected exact head.
+
 - VS Code's native `.vscode/extensions/.obsolete` lifecycle document identified 22 still-present
   obsolete extension directories totaling 1,283,664 KiB. DiskSage now treats only those exact real
   child directories as development artifacts; it does not infer obsolescence from directory age or

@@ -181,20 +181,27 @@ pub fn is_protected(path: &Path) -> bool {
         if is_macos_user_temp_descendant(path) {
             return false;
         }
-        // Shared system temporary trees are globally protected. Current-user ownership is a
-        // purpose-bound deletion authority checked only by the two Trash entry points below;
-        // it must not widen every caller of this global guard.
+        // The shared root remains protected, while a fully current-user-owned real child is safe
+        // for the same guarded operations as a macOS per-user temporary child. Symlinks,
+        // unreadable trees, mixed ownership, and oversized observations remain fail-closed.
         if is_shared_temp_path(path) {
-            return true;
+            return !is_user_owned_shared_temp_tree(path);
         }
         // macOS는 extend로 시스템 경로를 더 넣는다 — 다른 unix에선 그 라인이 cfg-out되어 mut가
         // 미사용이므로 allow(unused_mut). Linux 게이트는 macOS 전용 라인을 컴파일하지 않아 커버 불필요.
         #[allow(unused_mut)]
-        let mut denied_prefixes: Vec<&str> =
-            vec!["/usr", "/etc", "/bin", "/sbin", "/lib", "/boot", "/proc", "/sys", "/dev"];
+        let mut denied_prefixes: Vec<&str> = vec![
+            "/usr", "/etc", "/bin", "/sbin", "/lib", "/boot", "/proc", "/sys", "/dev",
+        ];
         #[cfg(target_os = "macos")]
         denied_prefixes.extend_from_slice(&[
-            "/System", "/Library", "/Applications", "/private", "/Volumes", "/cores", "/Network",
+            "/System",
+            "/Library",
+            "/Applications",
+            "/private",
+            "/Volumes",
+            "/cores",
+            "/Network",
         ]);
         let s = path.to_string_lossy();
         if denied_prefixes
@@ -296,7 +303,9 @@ pub fn journal_append(journal_path: &Path, entry: &JournalEntry) -> Result<(), S
 }
 
 pub fn journal_recent(journal_path: &Path, limit: usize) -> Vec<JournalEntry> {
-    let Ok(content) = std::fs::read_to_string(journal_path) else { return Vec::new() };
+    let Ok(content) = std::fs::read_to_string(journal_path) else {
+        return Vec::new();
+    };
     let mut entries: Vec<JournalEntry> = content
         .lines()
         .filter_map(|l| serde_json::from_str(l).ok())
@@ -310,7 +319,9 @@ pub fn journal_recent(journal_path: &Path, limit: usize) -> Vec<JournalEntry> {
 fn strip_verbatim(p: &Path) -> PathBuf {
     use std::path::{Component, Prefix};
     let mut comps = p.components();
-    let Some(Component::Prefix(pr)) = comps.next() else { return p.to_path_buf() };
+    let Some(Component::Prefix(pr)) = comps.next() else {
+        return p.to_path_buf();
+    };
     match pr.kind() {
         Prefix::VerbatimDisk(d) => {
             let mut out = PathBuf::from(format!("{}:\\", d as char));
@@ -363,10 +374,14 @@ pub fn trash_delete(
     journal_path: &Path,
     now_ms: u64,
 ) -> Result<(), SafetyError> {
-    if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+    if path
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
         return Err(SafetyError::Protected(path.to_path_buf()));
     }
-    let guard_path = strip_verbatim(&std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
+    let guard_path =
+        strip_verbatim(&std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
     let shared_temp = is_shared_temp_path(&guard_path);
     let shared_temp_authorized = shared_temp && is_user_owned_shared_temp_tree(&guard_path);
     if shared_temp && !shared_temp_authorized {
@@ -425,19 +440,28 @@ fn create_private_staging_dir(path: &Path, now_ms: u64) -> std::io::Result<PathB
     ))
 }
 
-fn restore_staged_if_source_absent(path: &Path, staged: &Path, staging_dir: &Path) -> Result<(), String> {
+fn restore_staged_if_source_absent(
+    path: &Path,
+    staged: &Path,
+    staging_dir: &Path,
+) -> Result<(), String> {
     let source_absent = matches!(
         std::fs::symlink_metadata(path),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound
     );
     if !source_absent {
-        return Err(format!("staged object retained at {}; source path reappeared", staged.display()));
+        return Err(format!(
+            "staged object retained at {}; source path reappeared",
+            staged.display()
+        ));
     }
-    std::fs::rename(staged, path).map_err(|error| {
-        format!("staged restore failed for {}: {error}", staged.display())
-    })?;
+    std::fs::rename(staged, path)
+        .map_err(|error| format!("staged restore failed for {}: {error}", staged.display()))?;
     std::fs::remove_dir(staging_dir).map_err(|error| {
-        format!("staging directory cleanup failed for {}: {error}", staging_dir.display())
+        format!(
+            "staging directory cleanup failed for {}: {error}",
+            staging_dir.display()
+        )
     })?;
     Ok(())
 }
@@ -449,12 +473,14 @@ pub fn trash_delete_if_identity(
     journal_path: &Path,
     now_ms: u64,
 ) -> Result<(), SafetyError> {
-    if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+    if path
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
         return Err(SafetyError::Protected(path.to_path_buf()));
     }
-    let guard_path = strip_verbatim(
-        &std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()),
-    );
+    let guard_path =
+        strip_verbatim(&std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
     let shared_temp = is_shared_temp_path(&guard_path);
     let shared_temp_authorized = shared_temp && is_user_owned_shared_temp_tree(&guard_path);
     if shared_temp && !shared_temp_authorized {
@@ -491,12 +517,16 @@ pub fn trash_delete_if_identity(
     let result = (|| -> Result<(), SafetyError> {
         if let Err(error) = std::fs::rename(path, &staged) {
             let _ = std::fs::remove_dir(&staging_dir);
-            return Err(SafetyError::Trash(format!("atomic staging move failed: {error}")));
+            return Err(SafetyError::Trash(format!(
+                "atomic staging move failed: {error}"
+            )));
         }
         let moved_id = filesystem_object_id(&staged).map_err(|error| {
             let restore = restore_staged_if_source_absent(path, &staged, &staging_dir);
             match restore {
-                Ok(()) => SafetyError::Trash(format!("staged object identity unavailable: {error}")),
+                Ok(()) => {
+                    SafetyError::Trash(format!("staged object identity unavailable: {error}"))
+                }
                 Err(restore_error) => SafetyError::Trash(format!(
                     "staged object identity unavailable: {error}; {restore_error}"
                 )),
@@ -515,7 +545,9 @@ pub fn trash_delete_if_identity(
         if let Err(error) = trash::delete(&staged) {
             return match restore_staged_if_source_absent(path, &staged, &staging_dir) {
                 Ok(()) => Err(SafetyError::Trash(error.to_string())),
-                Err(restore_error) => Err(SafetyError::Trash(format!("{}; {restore_error}", error))),
+                Err(restore_error) => {
+                    Err(SafetyError::Trash(format!("{}; {restore_error}", error)))
+                }
             };
         }
         Ok(())
@@ -534,7 +566,9 @@ pub fn same_volume(src: &Path, dst: &Path) -> bool {
     {
         fn drive(p: &Path) -> Option<String> {
             p.components().next().and_then(|c| match c {
-                std::path::Component::Prefix(pr) => Some(pr.as_os_str().to_string_lossy().to_lowercase()),
+                std::path::Component::Prefix(pr) => {
+                    Some(pr.as_os_str().to_string_lossy().to_lowercase())
+                }
                 _ => None,
             })
         }
@@ -557,7 +591,10 @@ fn copy_then_hash(
 ) -> std::io::Result<(u64, u64, Result<String, String>, Result<String, String>)> {
     {
         let mut src_file = std::fs::File::open(src)?;
-        let mut dst_file = std::fs::OpenOptions::new().write(true).create_new(true).open(dst)?;
+        let mut dst_file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dst)?;
         std::io::copy(&mut src_file, &mut dst_file)?;
     }
     let src_len = std::fs::metadata(src)?.len();
@@ -581,7 +618,10 @@ fn finalize_verified_copy(dst: &Path, verified: bool) -> std::io::Result<()> {
         Ok(())
     } else {
         let _ = std::fs::remove_file(dst);
-        Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "복사 검증 실패"))
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "복사 검증 실패",
+        ))
     }
 }
 
@@ -591,7 +631,10 @@ fn preserve_source_metadata(src: &Path, dst: &Path) -> std::io::Result<()> {
     if let Ok(accessed) = src_md.accessed() {
         times = times.set_accessed(accessed);
     }
-    std::fs::OpenOptions::new().write(true).open(dst)?.set_times(times)?;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(dst)?
+        .set_times(times)?;
     std::fs::set_permissions(dst, src_md.permissions())?;
     Ok(())
 }
@@ -662,7 +705,9 @@ pub fn move_file(
     now_ms: u64,
 ) -> Result<(), SafetyError> {
     for p in [src, dst] {
-        if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        if p.components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
             return Err(SafetyError::Protected(p.to_path_buf()));
         }
         let guard = normalize_for_guard(p);
@@ -671,7 +716,10 @@ pub fn move_file(
         }
     }
     if dst.exists() {
-        return Err(SafetyError::Trash(format!("목적지가 이미 존재: {}", dst.display())));
+        return Err(SafetyError::Trash(format!(
+            "목적지가 이미 존재: {}",
+            dst.display()
+        )));
     }
     let dst_parent = dst.parent().unwrap_or(dst);
     std::fs::create_dir_all(dst_parent).map_err(|e| SafetyError::Trash(e.to_string()))?;
@@ -723,9 +771,15 @@ mod tests {
 
     #[test]
     fn safety_error_display_messages() {
-        assert!(SafetyError::Protected(PathBuf::from("/x")).to_string().contains("보호"));
-        assert!(SafetyError::Trash("boom".into()).to_string().contains("휴지통"));
-        assert!(SafetyError::Journal("boom".into()).to_string().contains("저널"));
+        assert!(SafetyError::Protected(PathBuf::from("/x"))
+            .to_string()
+            .contains("보호"));
+        assert!(SafetyError::Trash("boom".into())
+            .to_string()
+            .contains("휴지통"));
+        assert!(SafetyError::Journal("boom".into())
+            .to_string()
+            .contains("저널"));
     }
 
     #[test]
@@ -735,7 +789,11 @@ mod tests {
 
     #[test]
     fn protects_home_root_but_not_home_children() {
-        let home = if cfg!(windows) { std::env::var("USERPROFILE").unwrap() } else { std::env::var("HOME").unwrap() };
+        let home = if cfg!(windows) {
+            std::env::var("USERPROFILE").unwrap()
+        } else {
+            std::env::var("HOME").unwrap()
+        };
         assert!(is_protected(Path::new(&home)));
         assert!(!is_protected(&Path::new(&home).join("some-cache-dir")));
     }
@@ -748,7 +806,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn shared_temp_child_remains_globally_protected() {
+    fn current_user_owned_shared_temp_child_is_not_globally_protected() {
         let Ok(tmp) = tempfile::tempdir_in(shared_temp_root_path()) else {
             return;
         };
@@ -756,7 +814,7 @@ mod tests {
         std::fs::write(&child, b"owned").unwrap();
         assert!(is_shared_temp_path(&child));
         assert!(is_user_owned_shared_temp_tree(&child));
-        assert!(is_protected(&child));
+        assert!(!is_protected(&child));
         assert!(is_protected(shared_temp_root_path()));
     }
 
@@ -765,7 +823,9 @@ mod tests {
     fn windows_guard_follows_system_root_env() {
         let sysroot = std::env::var("SystemRoot").unwrap();
         assert!(is_protected(std::path::Path::new(&sysroot)));
-        assert!(is_protected(&std::path::Path::new(&sysroot).join("System32")));
+        assert!(is_protected(
+            &std::path::Path::new(&sysroot).join("System32")
+        ));
     }
 
     #[cfg(windows)]
@@ -930,7 +990,11 @@ mod tests {
         let items: Vec<_> = trash::os_limited::list()
             .unwrap()
             .into_iter()
-            .filter(|i| i.name.to_string_lossy().contains("disksage-roundtrip-fixture"))
+            .filter(|i| {
+                i.name
+                    .to_string_lossy()
+                    .contains("disksage-roundtrip-fixture")
+            })
             .collect();
         assert!(!items.is_empty());
         trash::os_limited::purge_all(items).unwrap();
@@ -967,9 +1031,17 @@ mod tests {
             strip_verbatim(Path::new(r"\\?\UNC\srv\share\dir")),
             Path::new(r"\\srv\share\dir")
         );
-        assert_eq!(strip_verbatim(Path::new(r"C:\plain")), Path::new(r"C:\plain"));
-        assert_eq!(strip_verbatim(Path::new("relative/only")), Path::new("relative/only"));
-        assert!(is_protected(&strip_verbatim(Path::new(r"\\?\UNC\srv\share"))));
+        assert_eq!(
+            strip_verbatim(Path::new(r"C:\plain")),
+            Path::new(r"C:\plain")
+        );
+        assert_eq!(
+            strip_verbatim(Path::new("relative/only")),
+            Path::new("relative/only")
+        );
+        assert!(is_protected(&strip_verbatim(Path::new(
+            r"\\?\UNC\srv\share"
+        ))));
     }
 
     #[test]
@@ -999,10 +1071,24 @@ mod tests {
         let jp = tmp.path().join("j.jsonl");
         let f = tmp.path().join("f.bin");
         std::fs::write(&f, b"x").unwrap();
-        let protected = std::path::PathBuf::from(if cfg!(windows) { "C:\\Windows\\x" } else { "/usr/x" });
-        assert!(matches!(move_file(&f, &protected, &jp, 1), Err(SafetyError::Protected(_))));
-        let pf = std::path::PathBuf::from(if cfg!(windows) { "C:\\Windows\\y" } else { "/usr/y" });
-        assert!(matches!(move_file(&pf, &tmp.path().join("z"), &jp, 1), Err(SafetyError::Protected(_))));
+        let protected = std::path::PathBuf::from(if cfg!(windows) {
+            "C:\\Windows\\x"
+        } else {
+            "/usr/x"
+        });
+        assert!(matches!(
+            move_file(&f, &protected, &jp, 1),
+            Err(SafetyError::Protected(_))
+        ));
+        let pf = std::path::PathBuf::from(if cfg!(windows) {
+            "C:\\Windows\\y"
+        } else {
+            "/usr/y"
+        });
+        assert!(matches!(
+            move_file(&pf, &tmp.path().join("z"), &jp, 1),
+            Err(SafetyError::Protected(_))
+        ));
         assert!(journal_recent(&jp, 10).is_empty());
     }
 
@@ -1020,7 +1106,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let missing = tmp.path().join("nested").join("does-not-exist.bin");
         let expected_base = strip_verbatim(&std::fs::canonicalize(tmp.path()).unwrap());
-        assert_eq!(normalize_for_guard(&missing), expected_base.join("nested").join("does-not-exist.bin"));
+        assert_eq!(
+            normalize_for_guard(&missing),
+            expected_base.join("nested").join("does-not-exist.bin")
+        );
     }
 
     #[test]
@@ -1082,8 +1171,11 @@ mod tests {
         do_move(&src, &dst, false, &jp, 2).unwrap();
         assert!(!src.exists());
         assert_eq!(std::fs::read(&dst).unwrap().len(), 40);
-        let items: Vec<_> = trash::os_limited::list().unwrap().into_iter()
-            .filter(|i| i.name.to_string_lossy().contains("disksage-xvol-fixture")).collect();
+        let items: Vec<_> = trash::os_limited::list()
+            .unwrap()
+            .into_iter()
+            .filter(|i| i.name.to_string_lossy().contains("disksage-xvol-fixture"))
+            .collect();
         trash::os_limited::purge_all(items).unwrap();
     }
 
@@ -1096,7 +1188,8 @@ mod tests {
         let dst = tmp.path().join("moved-disksage-xvol-meta-fixture.bin");
         std::fs::write(&src, vec![7u8; 32]).unwrap();
         std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let past = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_577_836_800);
+        let past =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_577_836_800);
         std::fs::OpenOptions::new()
             .write(true)
             .open(&src)
