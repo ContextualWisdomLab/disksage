@@ -13,6 +13,18 @@
   let verdicts: Record<string, api.Verdict> = $state({});
   let exportStatus = $state("");
 
+  function classLabel(classId: string): string {
+    const labels: Record<string, string> = {
+      documents: "문서",
+      images: "이미지",
+      audio: "음성·음악",
+      video: "동영상",
+      archives: "압축 파일",
+      code: "코드",
+    };
+    return labels[classId] ?? "기타 파일";
+  }
+
   async function loadVerdicts(paths: string[]) {
     try {
       const fvs = await api.fileVerdicts(paths);
@@ -30,8 +42,8 @@
     try {
       plans = await api.planOrganize(scannedRoot);
       loadVerdicts(plans.map((p) => p.src));
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "정리 계획을 불러오지 못했습니다. 스캔 위치를 확인한 뒤 다시 시도하세요.";
     } finally {
       busy = false;
     }
@@ -50,7 +62,7 @@
   async function executeSelected() {
     if (plans.length === 0) return;
     const okay = await confirm(
-      `${plans.length}개 파일을 정리합니다 (온톨로지 targetFolder로 이동).\n` +
+      `${plans.length}개 파일을 정리합니다.\n` +
         `되돌리기 버튼으로 복원할 수 있습니다.`,
       { title: "DiskSage", kind: "warning" },
     );
@@ -60,8 +72,8 @@
       const r = await api.executeMoves(plans);
       results = r;
       plans = [];
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "파일을 정리하지 못했습니다. 상태를 확인한 뒤 다시 시도하세요.";
     } finally {
       busy = false;
     }
@@ -72,8 +84,8 @@
     try {
       const r = await api.undoLastMoves();
       results = r;
-    } catch (e) {
-      loadError = String(e);
+    } catch {
+      loadError = "최근 이동을 되돌리지 못했습니다. 상태를 확인한 뒤 다시 시도하세요.";
     } finally {
       busy = false;
     }
@@ -86,9 +98,9 @@
     try {
       const batch = await api.exportOrganizationLineage(plans);
       await navigator.clipboard.writeText(JSON.stringify(batch, null, 2));
-      exportStatus = "경로 없는 계보 계약을 클립보드에 복사했습니다.";
-    } catch (e) {
-      exportStatus = `계보 내보내기 실패: ${String(e)}`;
+      exportStatus = "정리 계획을 클립보드에 복사했습니다.";
+    } catch {
+      exportStatus = "정리 계획을 복사하지 못했습니다. 다시 시도하세요.";
     } finally {
       busy = false;
     }
@@ -97,13 +109,13 @@
 
 <section>
   <h2>
-    정리정돈 {scannedRoot ? "" : "(먼저 스캔하세요)"}
+    파일 정리 {scannedRoot ? "" : "(먼저 스캔하세요)"}
     <button onclick={loadPlans} disabled={busy || !scannedRoot}>{busy ? "계획 중…" : "정리정돈 미리보기"}</button>
     <!-- 되돌리기는 상시 안전장치 — 저널에 이동 기록이 있으면 언제든 최근 이동을 복원한다.
          미리보기/실행 상태와 무관하게 항상 노출되어야 한다(그렇지 않으면 재-미리보기로 사라짐). -->
-    <button class="undo" onclick={undoMoves} disabled={busy}>마지막 이동 되돌리기</button>
+    <button class="undo" onclick={undoMoves} disabled={busy}>최근 이동 되돌리기</button>
   </h2>
-  {#if loadError}<p class="error">{loadError}</p>{/if}
+  {#if loadError}<p class="error">작업을 다시 시도하세요. {loadError}</p>{/if}
 
   {#if plans.length === 0 && !busy}
     <p class="muted">미리보기를 눌러 정리 계획을 확인하세요.</p>
@@ -111,7 +123,7 @@
 
   {#each grouped as [classId, group] (classId)}
     <div class="group">
-      <div class="ghead">{classId} — {group.length}개 파일</div>
+      <div class="ghead">{classLabel(classId)} — {group.length}개 파일</div>
       <ul>
         {#each group as p (p.src)}
           <li>
@@ -121,9 +133,8 @@
               <span class={b.cls} title={b.title}>{b.label}</span>
             {/if}
             {#if p.lineage?.production_time_ms}
-              <span class="lineage" title={p.lineage.lineage_fingerprint}>
-                생산 {new Date(p.lineage.production_time_ms).toISOString().slice(0, 10)}
-                · {p.lineage.production_time_source ?? "미상"}
+              <span class="lineage">
+                파일 날짜 {new Date(p.lineage.production_time_ms).toISOString().slice(0, 10)}
               </span>
             {/if}
             <span class="arrow">→</span>
@@ -140,7 +151,7 @@
         {plans.length}개 파일 정리
       </button>
       <button onclick={copyLineageHandoff} disabled={busy}>
-        계보 계약 복사
+        정리 계획 복사
       </button>
     </div>
     {#if exportStatus}<p class="muted">{exportStatus}</p>{/if}
@@ -151,7 +162,7 @@
     {#if results.some((r) => !r.ok)}
       <ul class="errors">
         {#each results.filter((r) => !r.ok) as r (r.path)}
-          <li title={r.path}>⚠ {r.path} — {r.error}</li>
+          <li title={r.path}>⚠ {r.path} — 정리하지 못했습니다. 상태를 확인한 뒤 다시 시도하세요.</li>
         {/each}
       </ul>
     {/if}

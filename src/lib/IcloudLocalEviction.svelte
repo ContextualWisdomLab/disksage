@@ -73,9 +73,9 @@
   async function evictLocalCopy() {
     if (!plan || !executionReady()) return;
     const approved = await confirm(
-      `${fmtBytes(plan.allocated_bytes)}의 로컬 iCloud 사본만 축출합니다.\n` +
+      `${fmtBytes(plan.allocated_bytes)}의 로컬 iCloud 사본만 정리합니다.\n` +
         "클라우드 항목은 유지되며 실행 직전에 상태를 다시 검증합니다.",
-      { title: "DiskSage iCloud 로컬 사본 축출", kind: "warning" },
+      { title: "iCloud 로컬 사본 정리", kind: "warning" },
     );
     if (!approved) return;
     executing = true;
@@ -99,8 +99,8 @@
 
   function observationLabel(method: api.IcloudStateObservationMethod): string {
     return method === "file-provider-ctl-evaluate"
-      ? "macOS File Provider"
-      : "Foundation ubiquitous item";
+      ? "macOS 상태 확인"
+      : "iCloud 상태 확인";
   }
 
   function uploadLabel(state: api.IcloudLocalState): string {
@@ -113,21 +113,21 @@
     if (state.downloading_status_current && !state.is_uploaded && !state.is_uploading) {
       return "로컬 최신본·업로드 미확인";
     }
-    if (state.is_uploaded && !state.is_uploading) return "공급자 동기화 완료";
-    if (state.is_uploading) return "공급자 업로드 중";
-    return "공급자 동기화 미완료";
+    if (state.is_uploaded && !state.is_uploading) return "iCloud 동기화 완료";
+    if (state.is_uploading) return "iCloud 동기화 중";
+    return "iCloud 동기화 미완료";
   }
 
 </script>
 
 <div class="local-eviction-panel">
-  <strong>iCloud 로컬 사본 회수</strong>
+  <strong>iCloud 파일의 로컬 사본 정리</strong>
   <p class="muted">
     이미 iCloud에 있는 파일의 로컬 캐시만 검사합니다. 파일 내용과 클라우드 객체는 변경하지 않습니다.
   </p>
   <div class="path-controls">
     <label>
-      iCloud 파일 절대 경로
+    iCloud 파일 위치
       <input
         class="local-path"
         type="text"
@@ -140,11 +140,11 @@
     </label>
     <button onclick={chooseFile} disabled={planning || executing}>파일 선택</button>
     <button onclick={inspectLocalCopy} disabled={planning || executing || !path.trim()}>
-      {planning ? "File Provider 상태 확인 중…" : "로컬 사본 판정"}
+      {planning ? "iCloud 상태 확인 중…" : "로컬 사본 확인"}
     </button>
   </div>
 
-  {#if error}<p class="error" role="alert">{error}</p>{/if}
+  {#if error}<p class="error" role="alert">작업에 실패했습니다. 상태를 확인한 뒤 다시 시도하세요: {error}</p>{/if}
 
   {#if plan}
     <div class="plan" aria-live="polite">
@@ -155,28 +155,28 @@
       </div>
       <div class="status-grid">
         <span>업로드 {uploadLabel(plan.icloud_state)}</span>
-        <span>공급자 상태 {syncLabel(plan.icloud_state)}</span>
-        <span>로컬 current {plan.icloud_state.downloading_status_current ? "예" : "아니오"}</span>
+        <span>클라우드 상태 {syncLabel(plan.icloud_state)}</span>
+        <span>로컬 최신 상태 {plan.icloud_state.downloading_status_current ? "예" : "아니오"}</span>
         <span>충돌 {plan.icloud_state.has_unresolved_conflicts ? "있음" : "없음"}</span>
-        <span>활성 사용 {plan.active_use.active ? "감지" : "없음"}</span>
+        <span>사용 중 {plan.active_use.active ? "감지" : "없음"}</span>
         <span>동기화 일시정지 {plan.icloud_state.is_sync_paused === false ? "아님" : "미확인/해당"}</span>
         <span>동기화 제외 {plan.icloud_state.is_excluded_from_sync ? "해당" : "아님"}</span>
         <span>휴지통 {plan.icloud_state.is_trashed === false ? "아님" : "미확인/해당"}</span>
-        <span>축출 정책 {plan.icloud_state.allows_eviction === true ? "허용" : "미확인/불가"}</span>
+        <span>정리 가능 여부 {plan.icloud_state.allows_eviction === true ? "허용" : "확인 필요"}</span>
       </div>
       <div class="fingerprint">
-        계획 지문: {plan.plan_fingerprint}
+        승인 확인 코드: {plan.plan_fingerprint}
       </div>
 
       {#if eviction}
         {#if eviction.result.verification_complete}
           <p class="safe">
             로컬 할당 {fmtBytes(eviction.result.observed_allocation_reduction_bytes)} 감소를 확인했습니다.
-            iCloud 항목 경로와 ubiquitous identity는 유지되었습니다.
+            iCloud 파일과 클라우드 내용은 유지되었습니다.
           </p>
         {:else}
           <div class="warning" role="alert">
-            <p>축출 결과 검증이 불완전합니다. 다음 항목을 확인하세요.</p>
+            <p>정리 결과 확인이 끝나지 않았습니다. 아래 항목을 확인하세요.</p>
             <ul>
               {#each verificationBlockerActions(eviction.result.verification_blockers) as action}
                 <li>{action}</li>
@@ -184,19 +184,19 @@
             </ul>
           </div>
         {/if}
-        <p class="muted">승인 기록: {eviction.approval_path}</p>
+        <p class="muted">승인 기록을 저장했습니다.</p>
         {#if eviction.result_path}
-          <p class="muted">결과 기록: {eviction.result_path}</p>
+          <p class="muted">정리 결과를 저장했습니다.</p>
         {:else}
-          <p class="error" role="alert">{ICLOUD_RESULT_RECORD_FAILURE}</p>
+          <p class="error" role="alert">작업 결과를 확인하세요. {ICLOUD_RESULT_RECORD_FAILURE}</p>
         {/if}
       {:else if plan.eligible_after_human_approval}
         <div class="approval-controls">
           <p class="warning">
-            아래 계획 지문 전체를 직접 입력해야 합니다. 실행 시 크기·업로드·충돌·정책·항목 정체성·활성 사용을 다시 검사하며 달라지면 중단합니다.
+            아래 승인 확인 코드를 입력하세요. 실행 직전에 파일 상태와 사용 여부를 다시 확인하며 달라지면 중단합니다.
           </p>
           <label>
-            전체 계획 지문 확인
+            승인 확인 코드
             <input
               class="fingerprint-input"
               type="text"
@@ -208,21 +208,21 @@
             />
           </label>
           <label>
-            로컬 사본 축출 사유
+            로컬 사본 정리 사유
             <textarea
               bind:value={rationale}
               maxlength="1000"
               disabled={executing}
-              placeholder="예: 업로드 완료와 항목 정체성을 확인한 이 파일의 로컬 캐시만 회수"
+              placeholder="예: 동기화 완료를 확인한 이 파일의 로컬 사본만 정리"
             ></textarea>
           </label>
           <button onclick={evictLocalCopy} disabled={!executionReady()}>
-            {executing ? "상태 재검증 후 축출 중…" : "재검증하고 로컬 사본만 축출"}
+            {executing ? "상태 재확인 후 정리 중…" : "재확인하고 로컬 사본 정리"}
           </button>
         </div>
       {:else}
         <div class="warning" role="status">
-          <p>현재 로컬 사본을 축출할 수 없습니다. 다음 항목을 확인하세요.</p>
+          <p>현재 로컬 사본을 정리할 수 없습니다. 아래 항목을 확인하세요.</p>
           <ul>
             {#each planBlockerActions(plan.blockers.filter((blocker) => blocker !== "human-local-eviction-approval-required")) as action}
               <li>{action}</li>

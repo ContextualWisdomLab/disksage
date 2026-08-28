@@ -18,7 +18,7 @@ describe("Homebrew cleanup safety UX", () => {
 
     expect(panelStart).toBeGreaterThanOrEqual(0);
     expect(panelEnd).toBeGreaterThan(panelStart);
-    expect(panelIntroduction).toContain("Homebrew prefix 안의 끊어진 심볼릭 링크와 빈 디렉터리");
+    expect(panelIntroduction).toContain("끊어진 연결과 비어 있는 폴더만 대상으로 하며");
     expect(source).not.toContain("Homebrew의 오래된 파일과 prefix");
     expect(source).not.toContain("오래된 Homebrew 파일");
   });
@@ -39,6 +39,6 @@ describe("Homebrew cleanup safety UX", () => {
     expect(source).toContain("confirmationPhrase.trim() === judgment.exact_approval_phrase");
     expect(source).toContain("confirmationPhrase.trim(),");
     expect(source).toContain("승인 문구가 일치하지 않습니다.");
-    expect(source).toContain("실행 사유를 입력하십시오.");
+    expect(source).toContain("정리 사유를 입력하십시오.");
   });
 });

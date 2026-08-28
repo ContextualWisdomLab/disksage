@@ -2,11 +2,10 @@ import { describe, expect, it } from "vitest";
 import { verdictBadge } from "./verdictBadge";
 
 describe("verdictBadge", () => {
-  it("keeps model advice distinct without presenting safe as deletion authorization", () => {
+  it("keeps automatic guidance distinct without presenting safe as deletion authorization", () => {
     const safe = verdictBadge("safe");
     expect(safe.label).toBe("낮은 위험");
-    expect(safe.title).toContain("자문");
-    expect(safe.title).toContain("검증");
+    expect(safe.title).toContain("작업 전에 내용을 확인하세요");
     expect(safe.title).not.toContain("삭제해도 안전");
 
     expect(verdictBadge("caution").label).toBe("주의");
