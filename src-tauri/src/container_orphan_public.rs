@@ -155,7 +155,7 @@ mod tests {
         assert_eq!(sanitized.runtime_display_name, "container-runtime");
         assert_eq!(sanitized.command, vec!["container", "rm", "<candidate-set>"]);
         assert!(sanitized.stdout.is_empty());
-        assert!(sanitized.stderr.is_empty());
+        assert_eq!(sanitized.stderr, "container-orphan-prune-outcome-indeterminate");
         assert!(!json.contains(secret_binary));
         assert!(!json.contains(secret_scope));
     }
