@@ -1161,6 +1161,10 @@ runner's private workspace temp root instead of weakening the shared production 
   two changed candidates, and increased APFS availability by a further 1,335,132 KiB.
   On the next continuation, 11 more candidates became safe and added 365,312 KiB; eight active
   candidates and one changed candidate again remained untouched.
+  A later exact-identity pass removed 66 of 77 candidates representing 3,294,878,422 logical
+  bytes. Ten active candidates and one changed or incomplete manifest remained untouched. The
+  private journal is `/private/tmp/disksage-dev-permanent-1787954077.jsonl`; concurrent provider
+  and build writes mean this logical total is not presented as an APFS free-space increase.
 - The live Podman machine retains five running PostgreSQL containers and two recent stopped
   PostgreSQL containers. All 13 dangling images are referenced by external Buildah storage
   containers, no custom network is unused, and volume safety cannot be completed while one stopped
