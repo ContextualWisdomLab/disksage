@@ -1048,3 +1048,16 @@ runner's private workspace temp root instead of weakening the shared production 
   the explicit headless `--execute --permanent` disposition: it re-scans the bounded manifest,
   rejects active or changed roots, rechecks filesystem identity, and journals the irreversible
   deletion without emptying unrelated user Trash.
+- The same evidence contract was applied to 15 additional ignored Rust `target` trees under
+  `/private/tmp`: each root was Git-ignored, had complete recursive open-file evidence, and had no
+  process-command reference. The first seven removals increased APFS availability by 10,537,012
+  KiB and the next eight by 1,567,780 KiB. Source, dirty changes, Git heads, and cloud paths were
+  untouched. Two clean inactive ScopeWeave worktrees whose exact heads matched closed PR #626 and
+  merged PR #628 were then removed through ordinary `git worktree remove`; dirty closed PR #622
+  was retained.
+- Claude Code's native launcher symlink identified `2.1.234` as the installed executable. Three
+  non-target version binaries (`2.1.202`, `2.1.201`, and `2.1.177`) had no open-file or process
+  references; removing only those binaries increased APFS availability by 683,868 KiB and the
+  launcher still reported version `2.1.234`. DiskSage does not yet encode this symlink-target
+  lifecycle authority, so stale self-updating tool versions remain a measured product Gap rather
+  than a generic age-based cache rule.
