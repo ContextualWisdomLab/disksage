@@ -643,33 +643,47 @@ pub fn github_closed_pull_request_heads(
     timeout_ms: u64,
 ) -> Result<ClosedPullRequestHeads, String> {
     let mut heads = ClosedPullRequestHeads::new();
-    for args in [
-        vec![
-            "pr",
-            "list",
-            "--state",
-            "closed",
-            "--search",
-            "is:unmerged",
-            "--limit",
-            "10001",
-            "--json",
-            "headRefName,headRefOid,isCrossRepository,state",
-        ],
-        vec![
-            "pr",
-            "list",
-            "--state",
-            "merged",
-            "--limit",
-            "10001",
-            "--json",
-            "headRefName,headRefOid,isCrossRepository,state",
-        ],
-    ] {
+    let mut queries = vec![vec![
+        OsString::from("pr"),
+        OsString::from("list"),
+        OsString::from("--state"),
+        OsString::from("closed"),
+        OsString::from("--search"),
+        OsString::from("is:unmerged"),
+        OsString::from("--limit"),
+        OsString::from("10001"),
+        OsString::from("--json"),
+        OsString::from("headRefName,headRefOid,isCrossRepository,state"),
+    ]];
+    let options = GitWorktreeAuditOptions {
+        command_timeout_ms: timeout_ms,
+        ..GitWorktreeAuditOptions::default()
+    };
+    let branches = list_worktrees(repository_root, options)?
+        .into_iter()
+        .filter_map(|worktree| worktree.branch)
+        .collect::<BTreeSet<_>>();
+    for branch in branches {
+        let head = branch
+            .strip_prefix("refs/heads/")
+            .ok_or_else(|| "git-worktree-porcelain-branch-invalid".to_string())?;
+        queries.push(vec![
+            OsString::from("pr"),
+            OsString::from("list"),
+            OsString::from("--state"),
+            OsString::from("merged"),
+            OsString::from("--head"),
+            OsString::from(head),
+            OsString::from("--limit"),
+            OsString::from("10001"),
+            OsString::from("--json"),
+            OsString::from("headRefName,headRefOid,isCrossRepository,state"),
+        ]);
+    }
+    for args in queries {
         let result = run_bounded_command(
             "gh",
-            &args.into_iter().map(OsString::from).collect::<Vec<_>>(),
+            &args,
             repository_root,
             timeout_ms,
         )?;

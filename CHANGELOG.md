@@ -49,7 +49,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   and preserve fork, detached, dirty, active, or changed worktrees.
 - Reclaim clean, inactive worktrees whose exact branch and head match a same-repository merged pull
   request even when squash or rebase history does not retain that head. Closed-unmerged and merged
-  evidence use separate bounded GitHub queries and are refreshed before removal.
+  evidence use separate bounded GitHub queries, and merged lookup is scoped to branches currently
+  registered as worktrees so repositories with long merged histories remain auditable.
 - Add runtime-agnostic container orphan reclamation (ADR-0012): one fail-closed engine audits
   stopped containers, unreferenced images, dangling volumes, and unused custom networks across
   Docker (native), Colima (`docker --context colima`), and Podman machines. Every execution
