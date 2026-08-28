@@ -9,6 +9,10 @@ use crate::scanner;
 const ARTIFACT_MANIFEST_BUDGET: Duration = Duration::from_secs(3);
 const ARTIFACT_MANIFEST_MAX_RECORDS: usize = 250_000;
 const VSCODE_OBSOLETE_METADATA_MAX_BYTES: u64 = 1024 * 1024;
+// Recursive lsof must enumerate the artifact tree. Real Python environments exceeded the generic
+// 2-second probe while completing in roughly 3 seconds, so this destructive boundary owns a
+// longer operational timeout instead of silently weakening the active-use gate.
+const ARTIFACT_ACTIVE_USE_TIMEOUT_MS: u64 = 30_000;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DevArtifact {
@@ -450,7 +454,7 @@ fn clean_artifacts_with_disposition(
 
             let active_use = crate::git_worktree::active_use_evidence(
                     Path::new(&request.path),
-                    crate::reclaim::ACTIVE_USE_PROBE_TIMEOUT_MS,
+                    ARTIFACT_ACTIVE_USE_TIMEOUT_MS,
                     crate::reclaim::ACTIVE_USE_PROBE_MAX_PIDS,
                     true,
                 );

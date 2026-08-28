@@ -72,8 +72,9 @@ pub(crate) fn is_shared_temp_path(_path: &Path) -> bool {
 }
 
 /// Returns true only when every object below a shared temporary child belongs to this user.
-/// Symlinks and unreadable trees fail closed so a shared system directory cannot become a
-/// broad deletion authority.
+/// Symlink roots and unreadable trees fail closed so a shared system directory cannot become a
+/// broad deletion authority. Owned symlink children are safe because traversal uses
+/// `symlink_metadata` and never descends through them.
 #[cfg(unix)]
 pub(crate) fn is_user_owned_shared_temp_tree(path: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
@@ -93,7 +94,7 @@ pub(crate) fn is_user_owned_shared_temp_tree(path: &Path) -> bool {
         let Ok(metadata) = std::fs::symlink_metadata(&current) else {
             return false;
         };
-        if metadata.file_type().is_symlink() || metadata.uid() != expected_uid {
+        if metadata.uid() != expected_uid {
             return false;
         }
         if metadata.is_dir() {
@@ -931,6 +932,22 @@ mod tests {
         assert!(is_user_owned_shared_temp_tree(&child));
         assert!(is_protected(&child));
         assert!(is_protected(shared_temp_root_path()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owned_symlink_child_does_not_block_exact_shared_temp_tree_authority() {
+        use std::os::unix::fs::symlink;
+
+        let Ok(tmp) = tempfile::tempdir_in(shared_temp_root_path()) else {
+            return;
+        };
+        let target = tmp.path().join("target.bin");
+        let link = tmp.path().join("runtime-link");
+        std::fs::write(&target, b"owned").unwrap();
+        symlink(&target, &link).unwrap();
+
+        assert!(is_user_owned_shared_temp_tree(tmp.path()));
     }
 
     #[cfg(windows)]
