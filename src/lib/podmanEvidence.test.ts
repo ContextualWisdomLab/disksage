@@ -190,10 +190,36 @@ describe("podmanEvidenceView", () => {
     const evidence = parsePodmanDesktopEvidence(fixture());
     expect(podmanEvidenceView(evidence)).toMatchObject({
       completeness_label: "확인 완료",
+      completeness_tone: "complete",
       physical_reclaim_label: "검증되지 않음",
       image_review_label: "이미지 별도 검토 필요",
       container_review_label: "중지된 작업 별도 확인 필요",
       volume_review_label: "저장 공간 별도 확인 필요",
+      has_issues: false,
+    });
+  });
+
+  it("labels partial evidence without candidate review signals and surfaces issue presence", () => {
+    const value = cloneFixture();
+    value.evidence_complete = false;
+    value.issue_codes = ["partial-evidence"];
+    value.candidates.image_candidate_bytes = 0;
+    value.candidates.stopped_container_candidate_bytes = 0;
+    value.candidates.volume_candidate_bytes = 0;
+    value.candidates.unused_image_records = 0;
+    value.candidates.stopped_container_records = 0;
+    value.review_boundaries.image_review_required = false;
+    value.review_boundaries.stopped_container_review_required = false;
+    value.review_boundaries.volume_review_required = false;
+
+    const evidence = parsePodmanDesktopEvidence(value);
+    expect(podmanEvidenceView(evidence)).toMatchObject({
+      completeness_label: "확인 불완전",
+      completeness_tone: "partial",
+      image_review_label: "이미지 검토 신호 없음",
+      container_review_label: "중지된 작업 확인 사항 없음",
+      volume_review_label: "저장 공간 확인 사항 없음",
+      has_issues: true,
     });
   });
 
