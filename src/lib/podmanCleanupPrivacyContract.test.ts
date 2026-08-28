@@ -25,4 +25,11 @@ describe("Cleanup Podman privacy and authority copy", () => {
     expect(source).toContain("dangling 이미지 정리는 정확한 승인 문구와 사유를 입력한 뒤에만 실행됩니다.");
     expect(source).not.toContain("prune, 삭제, trim, 중지는 이 화면에서 실행하지 않습니다.");
   });
+
+  it("keeps the exact destructive approval phrase out of the input placeholder", () => {
+    const source = cleanupSource();
+    expect(source).not.toContain('placeholder={podmanPlan.dangling_prune_approval_phrase}');
+    expect(source).toContain('필요한 승인 문구: <code>{podmanPlan.dangling_prune_approval_phrase}</code>');
+    expect(source).toContain('placeholder="승인 문구를 직접 입력하십시오"');
+  });
 });
