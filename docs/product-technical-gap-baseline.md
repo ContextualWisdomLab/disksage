@@ -741,3 +741,6 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 - The previously requested macOS Homebrew maintenance command was dry-run first and then executed:
   `brew cleanup --prune-prefix` removed 2,169 broken symbolic links and 85 stale Homebrew directories.
   No package or application data outside Homebrew's own prefix was targeted.
+- After the customer-copy hardening, the local frontend suite completed with 37 files and 163 tests
+  passing; `npm run check` reported zero errors and zero warnings. The exact PR #267 head for this
+  evidence is `e14879118377f4716b4bbb5dd5f5dcbc9571fbaf`.
