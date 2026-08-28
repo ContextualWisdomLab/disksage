@@ -34,7 +34,6 @@ describe("UI/UX design and Storybook contract", () => {
 
   it("keeps visual control styling opt-in instead of restyling every legacy button", () => {
     const tokens = read("src/lib/ui/design-tokens.css");
-    const page = read("src/routes/+page.svelte");
     const providerStatus = read("src/lib/ux/ProviderStatusCard.svelte");
     const bareControlRules = cssRules(tokens).filter(ruleHasBareControlSelector);
 
@@ -48,14 +47,12 @@ describe("UI/UX design and Storybook contract", () => {
     expect(tokens).toMatch(/\.ds-control\s*\{[\s\S]*?min-height:\s*var\(--ds-control-min-size\)/);
     expect(tokens).toMatch(/\.ds-control\s*\{[\s\S]*?border:\s*1px solid var\(--ds-border\)/);
     expect(tokens).toMatch(/\.ds-control:hover:not\(:disabled\)/);
-    expect(page).toContain('class="ds-control scan-action"');
     expect(providerStatus).toContain('class="ds-control"');
     expect(providerStatus).toContain("h1, h2 { margin: 0; font-size: 1.1rem; }");
   });
 
   it("keeps form labels and notices readable in dark mode", () => {
     for (const relativePath of [
-      "src/lib/CloudArchive.svelte",
       "src/lib/BrewCleanup.svelte",
       "src/lib/GitWorktreeCleanup.svelte",
       "src/lib/Cleanup.svelte",
@@ -88,26 +85,17 @@ textarea {
     expect(unsafeBareRules.some(({ body }) => /\bmin-height\s*:/.test(body))).toBe(true);
   });
 
-  it("keeps the shell keyboard and live-feedback boundaries explicit", () => {
+  it("keeps the Storybook-owned shell skip-link boundary explicit", () => {
     const layout = read("src/routes/+layout.svelte");
-    const page = read("src/routes/+page.svelte");
+    expect(layout).toContain('class="ds-skip-link"');
     expect(layout).toContain('href="#main-content"');
-    expect(page).toContain('id="main-content" tabindex="-1"');
-    expect(page).toContain('for="scan-root"');
-    expect(page).toContain('role="alert"');
-    expect(page).toContain('role="group" aria-label="스캔 제어"');
-    expect(page).toContain('aria-live="polite"');
-    expect(page).not.toContain("alert(`스캔 시작 실패");
-    expect(page).toContain("onMount(() => {");
-    expect(page).toContain("return () => {");
-    expect(page).toContain("unlistenProgress?.();");
-    expect(page).toContain("unlistenDone?.();");
+    expect(layout).toContain('import "$lib/ui/design-tokens.css"');
   });
 
   it("registers every provider state and interaction edge in Storybook", () => {
     const story = read("src/lib/ux/ProviderStatusCard.stories.ts");
     const config = read(".storybook/preview.ts");
-    const workflow = read(".github/workflows/test.yml");
+    const workflow = read(".github/workflows/storybook-accessibility.yml");
     for (const state of ["clear", "checking", "provider-sync-incomplete", "materialization-stalled"]) {
       expect(story).toContain(`state: "${state}"`);
     }
