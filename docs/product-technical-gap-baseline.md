@@ -1095,3 +1095,17 @@ runner's private workspace temp root instead of weakening the shared production 
   native uploaded/current evidence, non-identical photo selection still requires measured quality
   evidence and explicit survivor confirmation, and active Podman/Colima resources remain outside
   prune authority.
+
+## 2026-08-29 OneDrive native local-eviction boundary
+
+- The selected OneDrive root is a registered macOS File Provider domain. A bounded native status
+  probe reported the root uploaded, current, unpaused, untrashed, and eligible for the provider's
+  unpin action; its allocated subtree remains roughly 32 GiB. Presence in `CloudStorage` alone is
+  not used as upload or eviction authority.
+- DiskSage now reuses its exact-path, provider-status, active-use, fingerprint approval, immutable
+  receipt, and post-allocation verification contract for individual OneDrive files. The mutation
+  uses the URL-derived registered domain and item identifier, which is the native equivalent of
+  Finder's **Free up space**. It does not require OAuth and never deletes the visible cloud item.
+- Focused Rust tests pass for 21 local-eviction cases, including the OneDrive provider boundary;
+  the frontend suite passes 167 tests. Recursive/batch OneDrive eviction and a physical-space
+  receipt from the live provider remain open, so the 300 GB goal is not claimed complete.

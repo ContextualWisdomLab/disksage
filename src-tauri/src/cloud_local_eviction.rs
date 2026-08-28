@@ -1,4 +1,4 @@
-//! Evidence-bound removal of local iCloud bytes while retaining the cloud object.
+//! Evidence-bound removal of local cloud bytes while retaining the cloud object.
 //!
 //! Planning is read-only and never opens file content. Execution is macOS-only, requires a
 //! fingerprint-bound human approval, revalidates native iCloud state and active handles, calls
@@ -733,18 +733,14 @@ fn observe_process_command_use(path: &Path, deadline: Instant) -> ActiveUseEvide
 fn observe_active_use_until(path: &Path, deadline: Instant) -> ActiveUseEvidence {
     let started = Instant::now();
     let remaining = deadline.saturating_duration_since(started);
-    let per_probe_budget = std::cmp::min(
-        remaining / 2,
-        Duration::from_millis(ACTIVE_USE_TIMEOUT_MS),
-    );
+    let per_probe_budget =
+        std::cmp::min(remaining / 2, Duration::from_millis(ACTIVE_USE_TIMEOUT_MS));
     // Reserve an independent bounded slice for each source. A recursive `lsof +D` may consume its
     // entire allocation; it must not starve the process-command probe and hide an active PID.
     let lsof = observe_lsof_active_use(path, started + per_probe_budget);
     let ps_started = Instant::now();
-    let process_commands = observe_process_command_use(
-        path,
-        std::cmp::min(deadline, ps_started + per_probe_budget),
-    );
+    let process_commands =
+        observe_process_command_use(path, std::cmp::min(deadline, ps_started + per_probe_budget));
     let mut pids = lsof.observed_pids;
     pids.extend(process_commands.observed_pids);
     pids.sort_unstable();
@@ -789,9 +785,7 @@ fn observe_active_use_until(_path: &Path, _deadline: Instant) -> ActiveUseEviden
 pub fn observe_path_active_use(path: &Path) -> ActiveUseEvidence {
     observe_active_use_until(
         path,
-        Instant::now() + Duration::from_millis(
-            ACTIVE_USE_TIMEOUT_MS.saturating_mul(2),
-        ),
+        Instant::now() + Duration::from_millis(ACTIVE_USE_TIMEOUT_MS.saturating_mul(2)),
     )
 }
 
@@ -908,6 +902,7 @@ fn file_provider_icloud_state(
 
 #[cfg(all(target_os = "macos", not(coverage)))]
 fn observe_file_provider_icloud_state(
+    root: &CloudRoot,
     path: &Path,
     observed_bytes: u64,
 ) -> Result<IcloudLocalState, String> {
@@ -921,17 +916,27 @@ fn observe_file_provider_icloud_state(
         let url = NSURL::fileURLWithPath(&NSString::from_str(path));
         Ok::<bool, String>(NSFileManager::defaultManager().isUbiquitousItemAtURL(&url))
     })?;
-    if !is_ubiquitous {
+    if root.provider == CloudProvider::GoogleDrive {
+        return Err("cloud-local-eviction-provider-unsupported".into());
+    }
+    if root.provider == CloudProvider::Icloud && !is_ubiquitous {
         return Err("icloud-item-not-ubiquitous".into());
     }
     let output = crate::provider_sync::file_providerctl_status(path)?;
     let status = crate::provider_sync::parse_file_providerctl_item_status(&output, observed_bytes)?;
-    Ok(file_provider_icloud_state(is_ubiquitous, &status))
+    Ok(file_provider_icloud_state(
+        is_ubiquitous || root.provider == CloudProvider::Onedrive,
+        &status,
+    ))
 }
 
 #[cfg(all(target_os = "macos", not(coverage)))]
-fn observe_icloud_state(path: &Path, observed_bytes: u64) -> Result<IcloudLocalState, String> {
-    match observe_file_provider_icloud_state(path, observed_bytes) {
+fn observe_icloud_state(
+    root: &CloudRoot,
+    path: &Path,
+    observed_bytes: u64,
+) -> Result<IcloudLocalState, String> {
+    match observe_file_provider_icloud_state(root, path, observed_bytes) {
         Ok(state) => Ok(state),
         Err(error) if file_provider_command_allows_foundation_fallback(&error) => {
             observe_foundation_icloud_state(path)
@@ -952,7 +957,11 @@ fn file_provider_command_allows_foundation_fallback(error: &str) -> bool {
 }
 
 #[cfg(any(not(target_os = "macos"), coverage))]
-fn observe_icloud_state(_path: &Path, _observed_bytes: u64) -> Result<IcloudLocalState, String> {
+fn observe_icloud_state(
+    _root: &CloudRoot,
+    _path: &Path,
+    _observed_bytes: u64,
+) -> Result<IcloudLocalState, String> {
     Err("icloud-local-eviction-unsupported-platform".into())
 }
 
@@ -964,7 +973,7 @@ pub fn plan_icloud_local_eviction(
     observed_at_ms: u64,
 ) -> Result<IcloudLocalEvictionPlan, String> {
     let file = observe_local_file(root, path)?;
-    let state = observe_icloud_state(path, file.logical_bytes)?;
+    let state = observe_icloud_state(root, path, file.logical_bytes)?;
     let active_use = observe_path_active_use(path);
     Ok(build_plan(
         root,
@@ -1067,7 +1076,89 @@ fn validate_approval(
 }
 
 #[cfg(all(target_os = "macos", not(coverage)))]
-fn request_native_icloud_eviction(path: &Path) -> Result<(), String> {
+fn request_native_file_provider_eviction(path: &Path) -> Result<(), String> {
+    use block2::RcBlock;
+    use objc2::rc::{autoreleasepool, Retained};
+    use objc2_file_provider::{NSFileProviderDomain, NSFileProviderManager};
+    use objc2_foundation::{NSError, NSString, NSURL};
+    use std::ptr::NonNull;
+    use std::sync::mpsc;
+
+    let path = path
+        .to_str()
+        .ok_or_else(|| "cloud-local-eviction-path-not-unicode".to_string())?;
+    let (sender, receiver) = mpsc::channel();
+    autoreleasepool(|_| {
+        let url = NSURL::fileURLWithPath(&NSString::from_str(path));
+        let identify = RcBlock::new(move |item, domain, error: *mut NSError| {
+            if let Some(error) = unsafe { Retained::retain(error) } {
+                let _ = sender.send(Err(error.localizedDescription().to_string()));
+                return;
+            }
+            let Some(item) = (unsafe { Retained::retain(item) }) else {
+                let _ = sender.send(Err("file-provider-item-identity-unavailable".into()));
+                return;
+            };
+            let Some(domain_identifier) = (unsafe { Retained::retain(domain) }) else {
+                let _ = sender.send(Err("file-provider-domain-identity-unavailable".into()));
+                return;
+            };
+            let domains_sender = sender.clone();
+            let domains = RcBlock::new(
+                move |registered: NonNull<objc2_foundation::NSArray<NSFileProviderDomain>>,
+                      error: *mut NSError| {
+                    if let Some(error) = unsafe { Retained::retain(error) } {
+                        let _ = domains_sender.send(Err(error.localizedDescription().to_string()));
+                        return;
+                    }
+                    let registered = unsafe { registered.as_ref() };
+                    let Some(domain) = registered.iter().find(|candidate| unsafe {
+                        candidate.identifier().isEqualToString(&domain_identifier)
+                    }) else {
+                        let _ =
+                            domains_sender.send(Err("file-provider-domain-not-registered".into()));
+                        return;
+                    };
+                    let Some(manager) =
+                        (unsafe { NSFileProviderManager::managerForDomain(&domain) })
+                    else {
+                        let _ =
+                            domains_sender.send(Err("file-provider-manager-unavailable".into()));
+                        return;
+                    };
+                    let eviction_sender = domains_sender.clone();
+                    let completion = RcBlock::new(move |error: *mut NSError| {
+                        let result = unsafe { Retained::retain(error) }
+                            .map(|error| Err(error.localizedDescription().to_string()))
+                            .unwrap_or(Ok(()));
+                        let _ = eviction_sender.send(result);
+                    });
+                    unsafe {
+                        manager.evictItemWithIdentifier_completionHandler(&item, &completion)
+                    };
+                },
+            );
+            unsafe { NSFileProviderManager::getDomainsWithCompletionHandler(&domains) };
+        });
+        unsafe {
+            NSFileProviderManager::getIdentifierForUserVisibleFileAtURL_completionHandler(
+                &url, &identify,
+            )
+        };
+    });
+    receiver
+        .recv_timeout(Duration::from_secs(30))
+        .map_err(|_| "file-provider-eviction-timeout".to_string())?
+}
+
+#[cfg(all(target_os = "macos", not(coverage)))]
+fn request_native_icloud_eviction(root: &CloudRoot, path: &Path) -> Result<(), String> {
+    if root.provider == CloudProvider::Onedrive {
+        return request_native_file_provider_eviction(path);
+    }
+    if root.provider != CloudProvider::Icloud {
+        return Err("cloud-local-eviction-provider-unsupported".into());
+    }
     use objc2::rc::autoreleasepool;
     use objc2_foundation::{NSFileManager, NSString, NSURL};
 
@@ -1083,11 +1174,11 @@ fn request_native_icloud_eviction(path: &Path) -> Result<(), String> {
 }
 
 #[cfg(any(not(target_os = "macos"), coverage))]
-fn request_native_icloud_eviction(_path: &Path) -> Result<(), String> {
+fn request_native_icloud_eviction(_root: &CloudRoot, _path: &Path) -> Result<(), String> {
     Err("icloud-local-eviction-unsupported-platform".into())
 }
 
-fn observe_post_eviction(path: &Path) -> PostEvictionObservation {
+fn observe_post_eviction(root: &CloudRoot, path: &Path) -> PostEvictionObservation {
     let Ok(metadata) = std::fs::symlink_metadata(path) else {
         return PostEvictionObservation {
             path_retained: false,
@@ -1095,7 +1186,7 @@ fn observe_post_eviction(path: &Path) -> PostEvictionObservation {
             allocated_bytes: 0,
         };
     };
-    let is_ubiquitous = observe_icloud_state(path, metadata.len())
+    let is_ubiquitous = observe_icloud_state(root, path, metadata.len())
         .map(|state| state.is_ubiquitous)
         .unwrap_or(false);
     PostEvictionObservation {
@@ -1204,11 +1295,11 @@ pub fn execute_icloud_local_eviction(
     {
         return Err("icloud-local-eviction-live-plan-changed".into());
     }
-    request_native_icloud_eviction(path)?;
+    request_native_icloud_eviction(root, path)?;
 
     let started = Instant::now();
     let post = loop {
-        let observed = observe_post_eviction(path);
+        let observed = observe_post_eviction(root, path);
         if !observed.path_retained
             || !observed.is_ubiquitous
             || observed.allocated_bytes < approved_plan.allocated_bytes
@@ -1347,9 +1438,13 @@ mod tests {
     use super::*;
 
     fn root(path: &Path) -> CloudRoot {
+        root_for(path, CloudProvider::Icloud)
+    }
+
+    fn root_for(path: &Path, provider: CloudProvider) -> CloudRoot {
         CloudRoot {
-            id: "icloud:test".into(),
-            provider: CloudProvider::Icloud,
+            id: format!("{}:test", provider.as_str()),
+            provider,
             account_scope: CloudAccountScope::Personal,
             label: "iCloud".into(),
             path: path.to_string_lossy().into_owned(),
@@ -1488,6 +1583,22 @@ mod tests {
     }
 
     #[test]
+    fn synced_idle_onedrive_item_uses_the_same_fail_closed_plan_contract() {
+        let temp = tempfile::tempdir().unwrap();
+        let plan = build_plan(
+            &root_for(temp.path(), CloudProvider::Onedrive),
+            &temp.path().join("file.bin"),
+            file(),
+            file_provider_state(),
+            idle(),
+            20,
+        );
+        assert_eq!(plan.provider, CloudProvider::Onedrive);
+        assert!(plan.eligible_after_human_approval);
+        assert_eq!(plan.blockers, ["human-local-eviction-approval-required"]);
+    }
+
+    #[test]
     fn sync_conflict_and_active_use_fail_closed() {
         let temp = tempfile::tempdir().unwrap();
         let mut state = state();
@@ -1616,7 +1727,10 @@ mod tests {
             b"lsof: WARNING: can't stat() /Users/test/Library/Caches/example/nested\n",
             target,
         ));
-        assert!(!lsof_stderr_is_benign(b"lsof: error: permission denied\n", target));
+        assert!(!lsof_stderr_is_benign(
+            b"lsof: error: permission denied\n",
+            target
+        ));
     }
 
     #[cfg(all(unix, not(coverage)))]

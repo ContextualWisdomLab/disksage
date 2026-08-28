@@ -630,7 +630,7 @@ export interface IcloudLocalState {
 
 export interface IcloudLocalEvictionPlan {
   version: number;
-  provider: "icloud";
+  provider: "icloud" | "onedrive";
   account_scope: CloudAccountScope;
   cloud_root: string;
   path: string;
@@ -675,7 +675,7 @@ export interface IcloudLocalEvictionResult {
 }
 
 export interface IcloudLocalCopyEvictionOutput {
-  action: "evict-icloud-local-copy";
+  action: "evict-cloud-local-copy";
   plan: IcloudLocalEvictionPlan;
   approval: IcloudLocalEvictionApproval;
   approval_path: string;

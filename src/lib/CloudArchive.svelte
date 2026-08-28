@@ -1153,11 +1153,16 @@
           <p class="muted">관리자 권한이나 OAuth 없이 macOS의 읽기 전용 iCloud 계정 상태를 사용합니다.</p>
         {/if}
         {#key selectedRoot}
-          <IcloudLocalEviction cloudRoot={selectedRoot} />
+          <IcloudLocalEviction cloudRoot={selectedRoot} provider="icloud" />
         {/key}
       </div>
     {:else if selectedRootDetails()}
       <div class="oauth-panel">
+        {#if selectedRootDetails()?.provider === "onedrive"}
+          {#key selectedRoot}
+            <IcloudLocalEviction cloudRoot={selectedRoot} provider="onedrive" />
+          {/key}
+        {/if}
         {#if connectionForSelectedRoot()}
           <strong>{providerApiWriteConnected() ? "OAuth 업로드 연결" : "읽기 전용 OAuth descriptor 발견"}</strong>
           <span class="context">범위: {connectionForSelectedRoot()?.scope}</span>
