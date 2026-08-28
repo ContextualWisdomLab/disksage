@@ -7,8 +7,12 @@ use std::process::Command;
 const EXPECTED_USAGE: &str =
     "usage: disksage-provider-client-runtime [--output ABSOLUTE_NEW_FILE.json]";
 
-fn build_feature_gated_binary() -> (tempfile::TempDir, PathBuf) {
-    let target_dir = tempfile::tempdir().expect("isolated Cargo target directory must be created");
+fn build_feature_gated_binary() -> PathBuf {
+    let target_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join("cloud-cli-contracts");
+    std::fs::create_dir_all(&target_dir)
+        .expect("shared Cargo contract target directory must be created");
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
     let status = Command::new(cargo)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -21,7 +25,7 @@ fn build_feature_gated_binary() -> (tempfile::TempDir, PathBuf) {
             "disksage-provider-client-runtime",
             "--target-dir",
         ])
-        .arg(target_dir.path())
+        .arg(&target_dir)
         .status()
         .expect("provider client-runtime CLI must be buildable for its process contract");
     assert!(
@@ -29,18 +33,15 @@ fn build_feature_gated_binary() -> (tempfile::TempDir, PathBuf) {
         "feature-gated provider client-runtime CLI build must succeed before process assertions"
     );
 
-    let binary = target_dir
-        .path()
-        .join("debug")
-        .join(format!(
-            "disksage-provider-client-runtime{}",
-            std::env::consts::EXE_SUFFIX
-        ));
+    let binary = target_dir.join("debug").join(format!(
+        "disksage-provider-client-runtime{}",
+        std::env::consts::EXE_SUFFIX
+    ));
     assert!(
         binary.is_file(),
         "provider client-runtime binary must exist after the explicit cloud-cli build"
     );
-    (target_dir, binary)
+    binary
 }
 
 fn assert_help_success(binary: &Path, flag: &str) {
@@ -237,7 +238,7 @@ fn assert_non_utf8_argument_is_bounded(binary: &Path) {
 
 #[test]
 fn provider_client_runtime_help_is_successful_and_invalid_arguments_are_bounded() {
-    let (_target_dir, binary) = build_feature_gated_binary();
+    let binary = build_feature_gated_binary();
     assert_help_success(&binary, "--help");
     assert_help_success(&binary, "-h");
     assert_invalid_argument_is_bounded(&binary);
