@@ -716,3 +716,17 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   exact-head independent approval. PR #267 is ready for review and blocked; CodeRabbit passed while
   CodeQL remained queued on the observed head. Combined status alone is not proof of required workflows,
   resolved threads, or approval gate, so no protected merge is claimed.
+
+## 2026-08-28 host container-resource cleanup evidence
+
+- The host-compatible `docker` command is backed by Podman 5.8.2. The running BuildKit builder and
+  `accounting-information-platform-test-postgres` container were retained; no running workload was
+  stopped or restarted.
+- `docker image prune -f` removed only two dangling images (the runtime reported them as untagged and
+  unreferenced). `docker network prune -f` removed `pg-erd-cloud-pr-alembic-reconcile_default` after
+  authoritative inspection showed an empty container map; the built-in `podman` network was retained.
+- Three unreferenced zero-byte test-state volumes were removed:
+  `github-actions-modernize_data_redis`, `naruonprivmail_live-e2e-state`, and
+  `pg-erd-cloud-pr-alembic-reconcile_pgdata`. Non-empty PostgreSQL volumes were retained because a
+  zero runtime link count alone does not prove that their data is disposable. PR #267 exposes the same
+  evidence-bound per-volume review and exact-identity re-audit in the product UI.
