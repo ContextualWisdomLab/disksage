@@ -923,12 +923,11 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 
 ## 2026-08-28 measured emergency reclaim and VM recovery
 
-The PR #271 Linux test gate exposed a shared safety regression rather than an editor-cleanup
-failure: every current-user test tree under `/tmp` was globally protected, so 13 independent move,
-eviction, clone, and journal tests failed together. The shared guard now permits only a fully
-current-user-owned real child after a bounded ownership walk; the shared root, links, mixed owners,
-unreadable entries, and oversized observations remain protected. The formerly failing command,
-cloud-eviction, clone, and safety suites pass locally on the corrected exact head.
+The PR #271 Linux test gate exposed a fixture-boundary regression rather than an editor-cleanup
+failure: 13 independent move, eviction, clone, and journal tests created mutation fixtures under
+the globally protected shared `/tmp` tree. Production protection remains fail-closed for every
+shared-temp child, including current-user-owned children. Hosted mutation fixtures now use the
+runner's private workspace temp root instead of weakening the shared production guard.
 
 - VS Code's native `.vscode/extensions/.obsolete` lifecycle document identified 22 still-present
   obsolete extension directories totaling 1,283,664 KiB. DiskSage now treats only those exact real
@@ -1028,3 +1027,15 @@ cloud-eviction, clone, and safety suites pass locally on the corrected exact hea
   recursive native open-file observation exceeded its evidence timeout; process inactivity alone
   was not promoted to deletion authority. The same bounded run and proven-cache purge increased
   APFS availability by 170,104 KiB without claiming the blocked 1.2 GiB.
+
+## 2026-08-28 native Trash and development-artifact execution boundary
+
+- The default macOS Trash backend delegated to Finder and timed out with AppleEvent `-1712` while
+  provider work was active. Both ordinary and identity-bound DiskSage Trash mutations now reuse
+  the installed trash library's native `NSFileManager` method, avoiding Finder automation without
+  killing or pausing Finder or File Provider processes.
+- A bounded scan of one development workspace found 78 marker-validated dependency artifacts
+  totaling 4,551,103,622 logical bytes. One inactive project execution moved three identity-matched
+  `node_modules` roots totaling 189,125,777 logical bytes to Trash. This is reversible logical
+  cleanup only: DiskSage does not claim physical recovery until an exact DiskSage-attributed Trash
+  entry can be purged without touching unrelated user Trash.
