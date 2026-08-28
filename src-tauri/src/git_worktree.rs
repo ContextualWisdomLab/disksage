@@ -713,6 +713,7 @@ pub fn github_stale_open_pull_request_heads(
     parse_stale_open_pull_request_heads(&result.stdout, cutoff_ms)
 }
 
+#[cfg(test)]
 fn git_admin_metadata_blocker(
     status: &crate::provider_sync::FileProviderItemStatus,
 ) -> Option<&'static str> {
