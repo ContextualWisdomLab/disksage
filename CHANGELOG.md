@@ -8,6 +8,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Partition iCloud eviction manifests automatically: keep freshly verified, fully uploaded local
+  copies in the approval batch and exclude sync-incomplete items without exposing their paths.
 - Add an explicit `--execute --permanent` development-artifact mode that physically removes only
   a freshly rescanned, inactive, identity-matched generated directory and journals the irreversible
   outcome; the default remains reversible OS Trash.

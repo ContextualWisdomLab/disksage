@@ -756,6 +756,10 @@ At each scheduled or operator loop, update this file only with new dated evidenc
 
 ## 2026-08-27 container and worktree reclamation loop
 
+- The live iCloud inventory contained both fully uploaded local copies and `local-current` items
+  with `is_uploaded=false`. Batch planning now partitions those states automatically: only exact
+  item plans that pass the existing provider, active-use, conflict, and allocation checks remain
+  actionable; excluded indices and bounded reasons are fingerprint-bound without disclosing paths.
 - Docker dangling-image plans now obtain reclaim bytes from a single exact-identity `image inspect`
   pass. The human-readable `image ls` size is never converted heuristically; missing, duplicate, or
   mismatched numeric size evidence blocks the category instead of overstating the 300 GB target.
