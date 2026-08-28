@@ -1131,3 +1131,22 @@ runner's private workspace temp root instead of weakening the shared production 
 - OneDrive continued a large download while cleanup ran, so physical APFS availability fluctuated
   independently of the bytes removed. Provider transfer cancellation and a fresh capacity snapshot
   remain required before the 300 GB outcome can be claimed.
+
+## 2026-08-29 merged-worktree and isolated-project-cache execution
+
+- A fresh Naruon audit proved exactly one removable worktree: PR #1429 was merged, its detached
+  head was retained by current `origin/develop`, the checkout was clean and inactive, and no open
+  PR stack retained it. DiskSage removed only `/Users/seonghobae/naruon-wt/pr1429` through its
+  fingerprint-bound approval path without force, branch deletion, or Git pruning. Path and Git
+  registration absence were both verified; the post-audit reports 29 retained worktrees, zero
+  candidates, complete evidence, and zero gaps. Its 253,587,456-byte allocated upper bound is not
+  presented as APFS recovery because concurrent provider writes reduced free space during removal.
+- DiskSage then permanently removed 543 identity-matched, inactive generated artifacts from
+  Superset's isolated project copies: Python environments and caches, `node_modules`, and CodeGraph
+  indexes. Both executions completed without a failed candidate, were journaled, and re-audited to
+  zero candidates. The second bounded execution increased APFS availability by 820,188 KiB; logical
+  candidate totals are kept separate from that physical observation.
+- Repository-root `.venv314` discovery now requires a bounded regular `pyvenv.cfg` whose version is
+  Python 3.14, rather than treating a Git checkout name as sufficient deletion evidence. The UI
+  names each newly supported Python cache and test environment so the operator can decide what to
+  review next without seeing internal implementation labels.
