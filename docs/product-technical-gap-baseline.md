@@ -1157,6 +1157,8 @@ runner's private workspace temp root instead of weakening the shared production 
   reclaimable while their safety evidence is incomplete or a process still uses them.
   After the focused Rust verification finished, native `cargo clean` removed its regenerated
   2.3 GiB test target and increased APFS availability by another 2,285,228 KiB.
+  A final fresh `/private/tmp` pass removed 29 newly safe candidates, preserved eight active and
+  two changed candidates, and increased APFS availability by a further 1,335,132 KiB.
 - The live Podman machine retains five running PostgreSQL containers and two recent stopped
   PostgreSQL containers. All 13 dangling images are referenced by external Buildah storage
   containers, no custom network is unused, and volume safety cannot be completed while one stopped
