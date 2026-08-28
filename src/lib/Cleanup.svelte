@@ -298,8 +298,9 @@
       {#if podmanPlan.dangling_prune_approval_phrase}
         <div class="podman-prune">
           <p>dangling 이미지(무tag·참조 컨테이너 0)만 실행 대상으로 확인되었습니다.</p>
+          <p class="notice">필요한 승인 문구: <code>{podmanPlan.dangling_prune_approval_phrase}</code> — 아래 입력란에 직접 입력하십시오.</p>
           <label>정확한 승인 문구
-            <input bind:value={podmanPrunePhrase} placeholder={podmanPlan.dangling_prune_approval_phrase} disabled={podmanPruneBusy} />
+            <input bind:value={podmanPrunePhrase} placeholder="승인 문구를 직접 입력하십시오" disabled={podmanPruneBusy} />
           </label>
           <label>정리 사유
             <textarea bind:value={podmanPruneRationale} maxlength="1000" placeholder="예: 재생성 가능한 미사용 dangling 이미지라 정리함" disabled={podmanPruneBusy}></textarea>
