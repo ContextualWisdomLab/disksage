@@ -186,7 +186,6 @@ pub fn purge_proven_cache_trash(
     home: &Path,
     journal_path: &Path,
     now_ms: u64,
-    permanent_directories: bool,
 ) -> Result<Vec<CacheTrashPurgeResult>, String> {
     let planned = proven_cache_trash_candidates(home);
     let mut results = Vec::with_capacity(planned.len());
@@ -245,6 +244,7 @@ pub(crate) fn clean_cache_contents_inner(
     requested_targets: &[rules::CacheTarget],
     journal_path: &Path,
     now_ms: u64,
+    permanent_directories: bool,
 ) -> Result<Vec<CleanResult>, String> {
     if !rules::is_catalog_path(bases, dir) {
         return Err("cache-root-not-current-or-safe".into());
