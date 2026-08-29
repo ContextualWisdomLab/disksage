@@ -111,6 +111,54 @@ pub struct IcloudLocalEvictionBatchApproval {
     pub rationale: String,
 }
 
+/// Immutable evidence that Finder selected the exact approved OneDrive items.
+///
+/// This record does not claim that local bytes were released. The customer must choose
+/// OneDrive's **Free Up Space** action in Finder and then run verification.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OnedriveFinderAssistanceReceipt {
+    pub version: u32,
+    pub receipt_id: String,
+    pub batch_fingerprint: String,
+    pub approval_id: String,
+    pub requested_at_ms: u64,
+    pub selected_count: u32,
+    pub total_allocated_bytes_before: u64,
+    pub items: Vec<OnedriveFinderAssistanceItem>,
+    pub finder_selection_requested: bool,
+    pub customer_next_action: String,
+}
+
+/// Private, identity-bound evidence for one Finder-selected item.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OnedriveFinderAssistanceItem {
+    pub path: String,
+    pub plan_fingerprint: String,
+    pub item_identifier_fingerprint: String,
+    pub logical_bytes: u64,
+    pub allocated_bytes_before: u64,
+    pub filesystem_modified_ms: u64,
+}
+
+/// Postcheck of local allocation after the customer used OneDrive's Finder action.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OnedriveFinderAssistanceVerification {
+    pub version: u32,
+    pub verification_id: String,
+    pub receipt_id: String,
+    pub verified_at_ms: u64,
+    pub retained_count: u32,
+    pub verified_count: u32,
+    pub total_allocated_bytes_before: u64,
+    pub total_allocated_bytes_after: u64,
+    pub observed_allocation_reduction_bytes: u64,
+    pub verification_complete: bool,
+    pub customer_next_action: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 /// Outcome recorded for one attempted item in an executed batch.
@@ -299,16 +347,22 @@ fn bounded_error_code(error: &str) -> String {
 }
 
 fn item_plan_is_safe(plan: &IcloudLocalEvictionPlan) -> bool {
+    let expected_blockers = if plan.provider == CloudProvider::Onedrive {
+        [
+            "onedrive-use-finder-free-up-space",
+            "human-local-eviction-approval-required",
+        ]
+        .as_slice()
+    } else {
+        ["human-local-eviction-approval-required"].as_slice()
+    };
     plan.version == crate::cloud_local_eviction::ICLOUD_LOCAL_EVICTION_VERSION
         && matches!(plan.provider, CloudProvider::Icloud | CloudProvider::Onedrive)
         && valid_hex64(&plan.plan_fingerprint)
         && plan.logical_bytes > 0
         && plan.allocated_bytes > 0
-        && plan.eligible_after_human_approval
-        && plan
-            .blockers
-            .iter()
-            .all(|blocker| blocker == "human-local-eviction-approval-required")
+        && (plan.eligible_after_human_approval || plan.provider == CloudProvider::Onedrive)
+        && plan.blockers.iter().map(String::as_str).eq(expected_blockers.iter().copied())
         && plan.active_use.evidence_complete
         && !plan.active_use.active
         && !plan.active_use.results_truncated
@@ -354,7 +408,10 @@ fn validate_batch_plan(
     plan: &IcloudLocalEvictionBatchPlan,
 ) -> Result<(), String> {
     if plan.version != ICLOUD_LOCAL_EVICTION_BATCH_VERSION
-        || !matches!(plan.provider, CloudProvider::Icloud | CloudProvider::Onedrive)
+        || !matches!(
+            plan.provider,
+            CloudProvider::Icloud | CloudProvider::Onedrive
+        )
         || plan.provider != root.provider
         || plan.account_scope != root.account_scope
         || plan.cloud_root != root.path
@@ -480,7 +537,10 @@ fn plan_batch_with<F>(
 where
     F: FnMut(&CloudRoot, &Path, u64) -> Result<IcloudLocalEvictionPlan, String>,
 {
-    if !matches!(root.provider, CloudProvider::Icloud | CloudProvider::Onedrive) {
+    if !matches!(
+        root.provider,
+        CloudProvider::Icloud | CloudProvider::Onedrive
+    ) {
         return Err("cloud-local-eviction-batch-provider-unsupported".into());
     }
     if paths.is_empty() || paths.len() > MAX_BATCH_ITEMS {
@@ -593,6 +653,261 @@ fn validate_batch_approval(
     Ok(())
 }
 
+fn finder_receipt_id(receipt: &OnedriveFinderAssistanceReceipt) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage-onedrive-finder-assistance-v1\0");
+    hasher.update(&receipt.version.to_le_bytes());
+    hash_field(&mut hasher, receipt.batch_fingerprint.as_bytes());
+    hash_field(&mut hasher, receipt.approval_id.as_bytes());
+    hasher.update(&receipt.requested_at_ms.to_le_bytes());
+    hasher.update(&receipt.selected_count.to_le_bytes());
+    hasher.update(&receipt.total_allocated_bytes_before.to_le_bytes());
+    for item in &receipt.items {
+        hash_field(&mut hasher, item.path.as_bytes());
+        hash_field(&mut hasher, item.plan_fingerprint.as_bytes());
+        hash_field(&mut hasher, item.item_identifier_fingerprint.as_bytes());
+        hasher.update(&item.logical_bytes.to_le_bytes());
+        hasher.update(&item.allocated_bytes_before.to_le_bytes());
+        hasher.update(&item.filesystem_modified_ms.to_le_bytes());
+    }
+    hasher.update(&[receipt.finder_selection_requested as u8]);
+    hash_field(&mut hasher, receipt.customer_next_action.as_bytes());
+    hasher.finalize().to_hex().to_string()
+}
+
+fn finder_verification_id(value: &OnedriveFinderAssistanceVerification) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"disksage-onedrive-finder-assistance-verification-v1\0");
+    hasher.update(&value.version.to_le_bytes());
+    hash_field(&mut hasher, value.receipt_id.as_bytes());
+    hasher.update(&value.verified_at_ms.to_le_bytes());
+    hasher.update(&value.retained_count.to_le_bytes());
+    hasher.update(&value.verified_count.to_le_bytes());
+    hasher.update(&value.total_allocated_bytes_before.to_le_bytes());
+    hasher.update(&value.total_allocated_bytes_after.to_le_bytes());
+    hasher.update(&value.observed_allocation_reduction_bytes.to_le_bytes());
+    hasher.update(&[value.verification_complete as u8]);
+    hash_field(&mut hasher, value.customer_next_action.as_bytes());
+    hasher.finalize().to_hex().to_string()
+}
+
+fn prepare_onedrive_finder_assistance_with<P, F>(
+    root: &CloudRoot,
+    plan: &IcloudLocalEvictionBatchPlan,
+    approval: &IcloudLocalEvictionBatchApproval,
+    confirmation_batch_fingerprint: &str,
+    record_dir: &Path,
+    requested_at_ms: u64,
+    mut planner: P,
+    reveal: F,
+) -> Result<OnedriveFinderAssistanceReceipt, String>
+where
+    P: FnMut(&CloudRoot, &Path, u64) -> Result<IcloudLocalEvictionPlan, String>,
+    F: FnOnce(&[PathBuf]) -> Result<(), String>,
+{
+    if root.provider != CloudProvider::Onedrive {
+        return Err("onedrive-finder-assistance-provider-required".into());
+    }
+    validate_batch_approval(root, plan, approval, confirmation_batch_fingerprint)?;
+    let live = preflight_with(root, plan, requested_at_ms, &mut planner)?;
+    write_immutable_record(
+        record_dir,
+        &format!("{}.batch-approval.json", approval.approval_id),
+        approval,
+    )?;
+    let paths = live
+        .iter()
+        .map(|item| PathBuf::from(&item.path))
+        .collect::<Vec<_>>();
+    reveal(&paths)?;
+    let items = live
+        .iter()
+        .map(|item| {
+            Ok(OnedriveFinderAssistanceItem {
+                path: item.path.clone(),
+                plan_fingerprint: item.plan_fingerprint.clone(),
+                item_identifier_fingerprint: item
+                    .icloud_state
+                    .item_identifier_fingerprint
+                    .clone()
+                    .filter(|value| valid_hex64(value))
+                    .ok_or_else(|| {
+                        "onedrive-finder-assistance-item-identity-unconfirmed".to_string()
+                    })?,
+                logical_bytes: item.logical_bytes,
+                allocated_bytes_before: item.allocated_bytes,
+                filesystem_modified_ms: item.filesystem_modified_ms,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let mut receipt = OnedriveFinderAssistanceReceipt {
+        version: ICLOUD_LOCAL_EVICTION_BATCH_VERSION,
+        receipt_id: String::new(),
+        batch_fingerprint: plan.batch_fingerprint.clone(),
+        approval_id: approval.approval_id.clone(),
+        requested_at_ms,
+        selected_count: plan.planned_count,
+        total_allocated_bytes_before: plan.total_allocated_bytes,
+        items,
+        finder_selection_requested: true,
+        customer_next_action:
+            "In Finder, choose OneDrive Free Up Space for the selected items, then verify in DiskSage."
+                .into(),
+    };
+    receipt.receipt_id = finder_receipt_id(&receipt);
+    write_immutable_record(
+        record_dir,
+        &format!("{}.finder-assistance.json", receipt.receipt_id),
+        &receipt,
+    )?;
+    Ok(receipt)
+}
+
+/// Select the exact approved OneDrive items in Finder without invoking private APIs or changing
+/// cloud/local data. OneDrive's context-menu action remains an explicit customer action.
+#[cfg(all(target_os = "macos", not(coverage)))]
+pub fn prepare_onedrive_finder_assistance(
+    root: &CloudRoot,
+    plan: &IcloudLocalEvictionBatchPlan,
+    approval: &IcloudLocalEvictionBatchApproval,
+    confirmation_batch_fingerprint: &str,
+    record_dir: &Path,
+    requested_at_ms: u64,
+) -> Result<OnedriveFinderAssistanceReceipt, String> {
+    prepare_onedrive_finder_assistance_with(
+        root,
+        plan,
+        approval,
+        confirmation_batch_fingerprint,
+        record_dir,
+        requested_at_ms,
+        plan_icloud_local_eviction,
+        |paths| {
+            tauri_plugin_opener::reveal_items_in_dir(paths)
+                .map_err(|_| "onedrive-finder-selection-failed".to_string())
+        },
+    )
+}
+
+#[cfg(any(not(target_os = "macos"), coverage))]
+pub fn prepare_onedrive_finder_assistance(
+    _root: &CloudRoot,
+    _plan: &IcloudLocalEvictionBatchPlan,
+    _approval: &IcloudLocalEvictionBatchApproval,
+    _confirmation_batch_fingerprint: &str,
+    _record_dir: &Path,
+    _requested_at_ms: u64,
+) -> Result<OnedriveFinderAssistanceReceipt, String> {
+    Err("onedrive-finder-assistance-requires-macos".into())
+}
+
+fn verify_onedrive_finder_assistance_with<P>(
+    root: &CloudRoot,
+    receipt: &OnedriveFinderAssistanceReceipt,
+    verified_at_ms: u64,
+    mut planner: P,
+) -> Result<OnedriveFinderAssistanceVerification, String>
+where
+    P: FnMut(&CloudRoot, &Path, u64) -> Result<IcloudLocalEvictionPlan, String>,
+{
+    if root.provider != CloudProvider::Onedrive
+        || receipt.version != ICLOUD_LOCAL_EVICTION_BATCH_VERSION
+        || receipt.receipt_id != finder_receipt_id(receipt)
+        || receipt.items.len() != usize::try_from(receipt.selected_count).unwrap_or(usize::MAX)
+        || !receipt.finder_selection_requested
+        || receipt.customer_next_action
+            != "In Finder, choose OneDrive Free Up Space for the selected items, then verify in DiskSage."
+    {
+        return Err("onedrive-finder-assistance-receipt-invalid".into());
+    }
+    let mut unique_paths = BTreeSet::new();
+    let total_before = receipt.items.iter().try_fold(0u64, |total, item| {
+        let path = Path::new(&item.path);
+        if !path.is_absolute()
+            || path
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+            || !unique_paths.insert(item.path.as_str())
+            || !valid_hex64(&item.plan_fingerprint)
+            || !valid_hex64(&item.item_identifier_fingerprint)
+        {
+            return Err("onedrive-finder-assistance-receipt-invalid".to_string());
+        }
+        total
+            .checked_add(item.allocated_bytes_before)
+            .ok_or_else(|| "onedrive-finder-assistance-receipt-invalid".to_string())
+    })?;
+    if total_before != receipt.total_allocated_bytes_before {
+        return Err("onedrive-finder-assistance-receipt-invalid".into());
+    }
+    let mut retained_count = 0u32;
+    let mut verified_count = 0u32;
+    let mut total_after = 0u64;
+    for item in &receipt.items {
+        let current = planner(root, Path::new(&item.path), verified_at_ms)
+            .map_err(|_| "onedrive-finder-assistance-postcheck-unavailable".to_string())?;
+        retained_count = retained_count.saturating_add(1);
+        let identity_matches = current.icloud_state.item_identifier_fingerprint.as_deref()
+            == Some(item.item_identifier_fingerprint.as_str());
+        if !identity_matches
+            || current.logical_bytes != item.logical_bytes
+            || current.filesystem_modified_ms != item.filesystem_modified_ms
+        {
+            return Err("onedrive-finder-assistance-item-identity-changed".into());
+        }
+        total_after = total_after.saturating_add(current.allocated_bytes);
+        if current.allocated_bytes < item.allocated_bytes_before {
+            verified_count = verified_count.saturating_add(1);
+        }
+    }
+    let reduction = receipt
+        .total_allocated_bytes_before
+        .saturating_sub(total_after);
+    let complete = verified_count == receipt.selected_count;
+    let mut result = OnedriveFinderAssistanceVerification {
+        version: ICLOUD_LOCAL_EVICTION_BATCH_VERSION,
+        verification_id: String::new(),
+        receipt_id: receipt.receipt_id.clone(),
+        verified_at_ms,
+        retained_count,
+        verified_count,
+        total_allocated_bytes_before: receipt.total_allocated_bytes_before,
+        total_allocated_bytes_after: total_after,
+        observed_allocation_reduction_bytes: reduction,
+        verification_complete: complete,
+        customer_next_action: if complete {
+            "Local space release verified; keep the cloud copy available in OneDrive.".into()
+        } else {
+            "Wait for OneDrive to finish, then verify again in DiskSage.".into()
+        },
+    };
+    result.verification_id = finder_verification_id(&result);
+    Ok(result)
+}
+
+/// Verify path retention, provider item identity, and allocated-byte reduction after the customer
+/// used OneDrive's Finder action. This function never opens file content.
+#[cfg(not(coverage))]
+pub fn verify_onedrive_finder_assistance(
+    root: &CloudRoot,
+    receipt: &OnedriveFinderAssistanceReceipt,
+    record_dir: &Path,
+    verified_at_ms: u64,
+) -> Result<OnedriveFinderAssistanceVerification, String> {
+    let result = verify_onedrive_finder_assistance_with(
+        root,
+        receipt,
+        verified_at_ms,
+        plan_icloud_local_eviction,
+    )?;
+    write_immutable_record(
+        record_dir,
+        &format!("{}.finder-verification.json", result.verification_id),
+        &result,
+    )?;
+    Ok(result)
+}
+
 fn preflight_with<F>(
     root: &CloudRoot,
     plan: &IcloudLocalEvictionBatchPlan,
@@ -702,6 +1017,9 @@ pub fn execute_icloud_local_eviction_batch(
     record_dir: &Path,
     requested_at_ms: u64,
 ) -> Result<IcloudLocalEvictionBatchResult, String> {
+    if root.provider == CloudProvider::Onedrive {
+        return Err("onedrive-use-finder-free-up-space".into());
+    }
     let mut recorder = ImmutableBatchRecordWriter;
     execute_icloud_local_eviction_batch_with(
         root,
@@ -1010,7 +1328,7 @@ mod tests {
     }
 
     #[test]
-    fn onedrive_batch_reuses_the_same_native_file_provider_safety_contract() {
+    fn onedrive_batch_is_approved_only_for_finder_assistance() {
         let mut onedrive_root = root();
         onedrive_root.id = "onedrive:test".into();
         onedrive_root.provider = CloudProvider::Onedrive;
@@ -1018,6 +1336,11 @@ mod tests {
         let plan = plan_batch_with(&onedrive_root, &[path(0)], 20, |_, _, _| {
             let mut plan = safe_plan(0);
             plan.provider = CloudProvider::Onedrive;
+            plan.eligible_after_human_approval = false;
+            plan.blockers = vec![
+                "onedrive-use-finder-free-up-space".into(),
+                "human-local-eviction-approval-required".into(),
+            ];
             Ok(plan)
         })
         .unwrap();
@@ -1026,6 +1349,76 @@ mod tests {
         assert_eq!(plan.planned_count, 1);
         assert!(plan.eligible_after_human_approval);
         validate_batch_plan(&onedrive_root, &plan).unwrap();
+    }
+
+    #[test]
+    fn finder_assistance_selects_only_the_exact_live_approved_items() {
+        let mut onedrive_root = root();
+        onedrive_root.id = "onedrive:test".into();
+        onedrive_root.provider = CloudProvider::Onedrive;
+        onedrive_root.label = "OneDrive test".into();
+        let mut item = safe_plan(0);
+        item.provider = CloudProvider::Onedrive;
+        item.eligible_after_human_approval = false;
+        item.blockers = vec![
+            "onedrive-use-finder-free-up-space".into(),
+            "human-local-eviction-approval-required".into(),
+        ];
+        let plan =
+            plan_batch_with(&onedrive_root, &[path(0)], 20, |_, _, _| Ok(item.clone())).unwrap();
+        let approval = approve_icloud_local_eviction_batch(
+            &plan,
+            &onedrive_root,
+            &plan.batch_fingerprint,
+            21,
+            "human:operator",
+            "Exact Finder selection reviewed",
+        )
+        .unwrap();
+        let records = tempfile::tempdir().unwrap();
+        let selected = std::cell::RefCell::new(Vec::new());
+        let receipt = prepare_onedrive_finder_assistance_with(
+            &onedrive_root,
+            &plan,
+            &approval,
+            &plan.batch_fingerprint,
+            records.path(),
+            22,
+            |_, _, _| Ok(item.clone()),
+            |paths| {
+                selected.borrow_mut().extend_from_slice(paths);
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(*selected.borrow(), vec![path(0)]);
+        assert!(receipt.finder_selection_requested);
+        assert!(records
+            .path()
+            .join(format!("{}.finder-assistance.json", receipt.receipt_id))
+            .is_file());
+
+        let mut online_only = item;
+        online_only.allocated_bytes = 0;
+        let verification =
+            verify_onedrive_finder_assistance_with(&onedrive_root, &receipt, 23, |_, _, _| {
+                Ok(online_only.clone())
+            })
+            .unwrap();
+        assert!(verification.verification_complete);
+        assert_eq!(verification.observed_allocation_reduction_bytes, 2_000);
+
+        let mut tampered = receipt;
+        tampered.total_allocated_bytes_before += 1;
+        tampered.receipt_id = finder_receipt_id(&tampered);
+        assert_eq!(
+            verify_onedrive_finder_assistance_with(&onedrive_root, &tampered, 24, |_, _, _| Ok(
+                online_only.clone()
+            ),)
+            .unwrap_err(),
+            "onedrive-finder-assistance-receipt-invalid"
+        );
     }
 
     #[test]

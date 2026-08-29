@@ -439,6 +439,9 @@ fn build_plan(
     if active_use.active {
         push_unique(&mut blockers, "active-file-use-detected");
     }
+    if root.provider == CloudProvider::Onedrive && !ONEDRIVE_NATIVE_EVICTION_RUNTIME_PROVEN {
+        push_unique(&mut blockers, "onedrive-use-finder-free-up-space");
+    }
     let eligible_after_human_approval = blockers.is_empty();
     push_unique(&mut blockers, "human-local-eviction-approval-required");
     let fingerprint = plan_fingerprint(root, path, &file, &state, &active_use);
@@ -962,7 +965,6 @@ fn observe_file_provider_icloud_state(
     if root.provider == CloudProvider::Onedrive {
         state.allows_eviction =
             Some(crate::provider_recovery::onedrive_files_on_demand_available());
-        state.item_identifier_fingerprint = Some(resolve_file_provider_identity(Path::new(path))?);
     }
     Ok(state)
 }
@@ -1110,7 +1112,6 @@ fn validate_approval(
     Ok(())
 }
 
-#[cfg(all(target_os = "macos", not(coverage)))]
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FileProviderEvictionReply {
@@ -1258,14 +1259,6 @@ fn run_file_provider_helper(
         return Err(native_file_provider_customer_action(&reply.code).into());
     }
     Ok(reply)
-}
-
-#[cfg(all(target_os = "macos", not(coverage)))]
-fn resolve_file_provider_identity(path: &Path) -> Result<String, String> {
-    run_file_provider_helper(path, None)?
-        .identity_fingerprint
-        .filter(|value| valid_hex64(value))
-        .ok_or_else(|| "native-file-provider-item-identity-unconfirmed".into())
 }
 
 #[cfg(all(target_os = "macos", not(coverage)))]
@@ -1806,8 +1799,14 @@ mod tests {
             20,
         );
         assert_eq!(plan.provider, CloudProvider::Onedrive);
-        assert!(plan.eligible_after_human_approval);
-        assert_eq!(plan.blockers, ["human-local-eviction-approval-required"]);
+        assert!(!plan.eligible_after_human_approval);
+        assert_eq!(
+            plan.blockers,
+            [
+                "onedrive-use-finder-free-up-space",
+                "human-local-eviction-approval-required"
+            ]
+        );
     }
 
     #[test]

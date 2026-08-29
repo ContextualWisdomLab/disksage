@@ -26,6 +26,15 @@ uploaded local copy. Exact
 item evidence still fails closed. The result must retain the path and show a reduced
 allocation before DiskSage reports verification complete.
 
+OneDrive registers `com.microsoft.OneDrive.FileProviderActions.MarkUnpinned` as a File Provider
+extension custom action. Apple's public API exposes `performAction` to the provider extension that
+implements that protocol; it does not expose a third-party caller for an arbitrary registered
+action identifier. DiskSage therefore uses the already-installed Tauri opener boundary, which on
+macOS calls public `NSWorkspace.activateFileViewerSelectingURLs`, to select only the freshly
+replanned, fingerprint-approved items. The customer then chooses **Free Up Space** in Finder and
+DiskSage verifies retained item identity and reduced allocated bytes. Selection is explicitly not
+reported as eviction or reclaimed capacity.
+
 Google Drive remains blocked until its provider behavior is verified against the same contract.
 OAuth is not required for local cache eviction because the signed-in desktop File Provider owns
 that operation. Deleting, moving, or trashing the visible cloud item is never an eviction fallback.
@@ -44,7 +53,9 @@ failure contract as iCloud without weakening either provider's native execution 
   exiting successfully, so process exit status cannot prove completion.
 - Cross-provider `NSFileProviderManager` eviction without runtime proof: the harmless identity
   probe failed with the SDK-defined provider-not-found error.
-- Finder UI automation: it is not an identity-bound or deterministic execution boundary.
+- Finder UI automation or Accessibility scripting: it is not an identity-bound or deterministic
+  execution boundary. Revealing the exact approved selection for an explicit customer action is
+  retained because it uses public AppKit and performs no provider mutation.
 - OAuth or direct deletion: neither is necessary for local cache eviction, and deletion changes the
   cloud object.
 
@@ -52,6 +63,12 @@ failure contract as iCloud without weakening either provider's native execution 
 
 Apple Inc. (2026). *NSFileProviderManager*. Apple Developer Documentation.
 https://developer.apple.com/documentation/fileprovider/nsfileprovidermanager
+
+Apple Inc. (2026). *NSFileProviderCustomAction*. Apple Developer Documentation.
+https://developer.apple.com/documentation/fileprovider/nsfileprovidercustomaction
+
+Apple Inc. (2026). *activateFileViewerSelecting(_:)*. Apple Developer Documentation.
+https://developer.apple.com/documentation/appkit/nsworkspace/activatefileviewerselecting(_:)
 
 Microsoft. (2026). *Deploy and configure OneDrive on macOS*. Microsoft Learn.
 https://learn.microsoft.com/en-us/sharepoint/files-on-demand-mac

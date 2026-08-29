@@ -27,6 +27,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   native completion stalls, DiskSage terminates only its private helper process group. The macOS 11
   helper binds item and domain identity and rejects replacement paths; vendor-private `/unpin`,
   OAuth, and cloud-object deletion are not used.
+- Select only freshly replanned, fingerprint-approved OneDrive items in Finder through public
+  AppKit, then direct the customer to choose **Free Up Space** and verify retained provider identity
+  plus reduced allocated bytes. Finder selection is recorded as non-mutating assistance and never
+  reported as reclaimed capacity; private action invocation and Accessibility automation remain
+  excluded.
 - Partition iCloud eviction manifests automatically: keep freshly verified, fully uploaded local
   copies in the approval batch and exclude sync-incomplete items without exposing their paths.
 - Extend the same batch planner, exact fingerprint approval, live re-plan, immutable checkpoint,
