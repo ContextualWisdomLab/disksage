@@ -1,9 +1,9 @@
 //! Exact-evidence cleanup for provider-owned, regenerable macOS caches.
 //!
-//! Only Podman's downloaded machine seed and Microsoft Edge Updater's superseded installed-copy
-//! cache are eligible. The active Podman raw disk and Edge's installed/current versions are never
-//! candidates. Every permanent cache purge is re-planned, explicitly approved, active-use checked,
-//! identity-bound, journaled, and preceded by an immutable private receipt.
+//! Only provider-owned caches with exact regeneration evidence are eligible. The active Podman raw
+//! disk, Edge's installed/current versions, and OneDrive temporary data while its client is running
+//! or cannot be observed are never candidates. Every purge is re-planned, explicitly approved,
+//! active-use checked, identity-bound, journaled, and preceded by an immutable private receipt.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -24,6 +24,7 @@ pub enum ProviderCacheKind {
     PodmanMachineSeed,
     EdgeSupersededInstalledCopy,
     EdgeCrxCache,
+    OneDriveTemporaryCache,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -184,10 +185,22 @@ fn tree_manifest(path: &Path) -> Result<(u64, Option<u64>, String), String> {
 }
 
 fn active_use_safe(evidence: &crate::cloud_local_eviction::ActiveUseEvidence) -> bool {
-    evidence.evidence_complete
+    evidence.method == "lsof-fp+ps-command"
+        && evidence.evidence_complete
         && !evidence.active
+        && evidence.observed_pids.is_empty()
         && !evidence.results_truncated
         && evidence.error.is_none()
+}
+
+fn onedrive_runtime_safe(
+    snapshot: &crate::provider_client_runtime::ProviderClientRuntimeSnapshot,
+) -> bool {
+    crate::provider_client_runtime::validate_provider_client_runtime_snapshot(snapshot).is_ok()
+        && snapshot.provider == crate::cloud::CloudProvider::Onedrive
+        && snapshot.process_observation_complete
+        && snapshot.runtime_observed == Some(false)
+        && snapshot.state == crate::provider_client_runtime::ProviderClientRuntimeState::NotObserved
 }
 
 fn candidate(
@@ -285,8 +298,8 @@ fn podman_recreation_source(podman_bin: &Path, machine: &str) -> Result<String, 
             "podman-recreation-machine-inspect-unavailable"
         }
     })?;
-    let value: serde_json::Value = serde_json::from_str(&inspect)
-        .map_err(|_| "podman-recreation-machine-inspect-invalid")?;
+    let value: serde_json::Value =
+        serde_json::from_str(&inspect).map_err(|_| "podman-recreation-machine-inspect-invalid")?;
     let record = value
         .as_array()
         .and_then(|records| (records.len() == 1).then(|| &records[0]))
@@ -324,8 +337,53 @@ pub fn plan_with_runtime(
     podman_bin: &Path,
     observed_at_ms: u64,
 ) -> ProviderCacheReclaimPlan {
+    let onedrive_cache = home.join("Library/Application Support/OneDrive/tmp");
+    #[cfg(not(coverage))]
+    let onedrive_runtime = onedrive_cache.is_dir().then(|| {
+        crate::provider_client_runtime::collect_provider_client_runtime(
+            crate::cloud::CloudProvider::Onedrive,
+            observed_at_ms,
+        )
+    });
+    #[cfg(coverage)]
+    let onedrive_runtime = None;
+    plan_with_runtime_evidence(
+        home,
+        applications,
+        podman_bin,
+        observed_at_ms,
+        onedrive_runtime.as_ref(),
+    )
+}
+
+fn plan_with_runtime_evidence(
+    home: &Path,
+    applications: &Path,
+    podman_bin: &Path,
+    observed_at_ms: u64,
+    onedrive_runtime: Option<&crate::provider_client_runtime::ProviderClientRuntimeSnapshot>,
+) -> ProviderCacheReclaimPlan {
     let mut candidates = Vec::new();
     let mut issues = Vec::new();
+    let onedrive_cache = home.join("Library/Application Support/OneDrive/tmp");
+    if onedrive_cache.is_dir() {
+        match onedrive_runtime.filter(|snapshot| onedrive_runtime_safe(snapshot)) {
+            Some(snapshot) => match candidate(
+                ProviderCacheKind::OneDriveTemporaryCache,
+                &onedrive_cache,
+                format!(
+                    "onedrive-client-not-observed:{}",
+                    snapshot.snapshot_fingerprint_sha256
+                ),
+                None,
+            ) {
+                Ok(value) => candidates.push(value),
+                Err(error) => issues.push(format!("onedrive-temporary-cache:{error}")),
+            },
+            None => issues
+                .push("onedrive-temporary-cache:provider-client-active-or-evidence-gap".into()),
+        }
+    }
     let edge_info = applications.join("Microsoft Edge.app/Contents/Info.plist");
     let installed_edge_version = plist_version(&edge_info);
     let edge_root = home.join("Library/Application Support/Microsoft/EdgeUpdater");
@@ -633,7 +691,17 @@ pub fn execute(
     for candidate in selected {
         let active =
             crate::cloud_local_eviction::observe_path_active_use(Path::new(&candidate.path));
-        let (outcome, audit_error) = if active_use_safe(&active) {
+        #[cfg(not(coverage))]
+        let provider_runtime_safe = candidate.kind != ProviderCacheKind::OneDriveTemporaryCache
+            || onedrive_runtime_safe(
+                &crate::provider_client_runtime::collect_provider_client_runtime(
+                    crate::cloud::CloudProvider::Onedrive,
+                    executed_at_ms,
+                ),
+            );
+        #[cfg(coverage)]
+        let provider_runtime_safe = candidate.kind != ProviderCacheKind::OneDriveTemporaryCache;
+        let (outcome, audit_error) = if active_use_safe(&active) && provider_runtime_safe {
             match mode {
                 ProviderCacheCleanupMode::Trash => crate::safety::trash_delete_if_identity(
                     Path::new(&candidate.path),
@@ -649,9 +717,12 @@ pub fn execute(
                 }
             }
         } else {
-            Err("provider-cache-active-use-or-evidence-gap".into())
+            Err("provider-cache-active-use-or-provider-evidence-gap".into())
         }
-        .map_or_else(|error| (Err(error), None), |audit_error| (Ok(()), audit_error));
+        .map_or_else(
+            |error| (Err(error), None),
+            |audit_error| (Ok(()), audit_error),
+        );
         items.push(ProviderCacheCleanupItemResult {
             path: candidate.path,
             completed: outcome.is_ok(),
@@ -675,6 +746,91 @@ pub fn execute(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn onedrive_runtime(
+        process_names: Option<&[u8]>,
+    ) -> crate::provider_client_runtime::ProviderClientRuntimeSnapshot {
+        crate::provider_client_runtime::assess_provider_client_runtime(
+            crate::cloud::CloudProvider::Onedrive,
+            process_names,
+            1,
+        )
+    }
+
+    #[test]
+    fn active_use_requires_the_complete_empty_bounded_observation() {
+        let mut evidence = crate::cloud_local_eviction::ActiveUseEvidence {
+            method: "lsof-fp+ps-command".into(),
+            evidence_complete: true,
+            active: false,
+            observed_pids: Vec::new(),
+            results_truncated: false,
+            error: None,
+        };
+        assert!(active_use_safe(&evidence));
+        evidence.observed_pids.push(42);
+        assert!(!active_use_safe(&evidence));
+        evidence.observed_pids.clear();
+        evidence.method = "unrecognized".into();
+        assert!(!active_use_safe(&evidence));
+    }
+
+    #[test]
+    fn onedrive_temporary_cache_fails_closed_while_client_runs_or_evidence_is_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let cache = home.join("Library/Application Support/OneDrive/tmp");
+        fs::create_dir_all(&cache).unwrap();
+        fs::write(cache.join("provider.tmp"), b"in-flight").unwrap();
+        let apps = temp.path().join("Applications");
+
+        for runtime in [
+            onedrive_runtime(Some(b"OneDrive\n")),
+            onedrive_runtime(None),
+        ] {
+            let plan = plan_with_runtime_evidence(
+                &home,
+                &apps,
+                Path::new("/missing/podman"),
+                1,
+                Some(&runtime),
+            );
+            assert!(plan.candidates.is_empty());
+            assert!(!plan.evidence_complete);
+            assert_eq!(
+                plan.issues,
+                ["onedrive-temporary-cache:provider-client-active-or-evidence-gap"]
+            );
+            assert!(plan.exact_approval_phrase.is_none());
+            assert!(plan.trash_approval_phrase.is_none());
+        }
+    }
+
+    #[test]
+    fn onedrive_temporary_cache_requires_complete_process_absence_evidence() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let cache = home.join("Library/Application Support/OneDrive/tmp");
+        fs::create_dir_all(&cache).unwrap();
+        fs::write(cache.join("provider.tmp"), b"stable-cache").unwrap();
+        let runtime = onedrive_runtime(Some(b"Finder\n"));
+        let plan = plan_with_runtime_evidence(
+            &home,
+            &temp.path().join("Applications"),
+            Path::new("/missing/podman"),
+            1,
+            Some(&runtime),
+        );
+        assert!(plan.evidence_complete, "{:?}", plan.issues);
+        assert_eq!(plan.candidates.len(), 1);
+        assert_eq!(
+            plan.candidates[0].kind,
+            ProviderCacheKind::OneDriveTemporaryCache
+        );
+        assert!(plan.candidates[0]
+            .recreation_source
+            .ends_with(&runtime.snapshot_fingerprint_sha256));
+    }
 
     #[cfg(target_os = "macos")]
     #[test]
@@ -742,6 +898,30 @@ mod tests {
             &path,
             "source".into(),
             Some(file_sha256(&path).unwrap()),
+        )
+        .unwrap();
+        assert_ne!(first.evidence_fingerprint, second.evidence_fingerprint);
+    }
+
+    #[test]
+    fn directory_activity_changes_candidate_fingerprint_before_execution() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("provider-cache");
+        fs::create_dir(&path).unwrap();
+        fs::write(path.join("first.tmp"), b"first").unwrap();
+        let first = candidate(
+            ProviderCacheKind::OneDriveTemporaryCache,
+            &path,
+            "provider-not-observed".into(),
+            None,
+        )
+        .unwrap();
+        fs::write(path.join("second.tmp"), b"second").unwrap();
+        let second = candidate(
+            ProviderCacheKind::OneDriveTemporaryCache,
+            &path,
+            "provider-not-observed".into(),
+            None,
         )
         .unwrap();
         assert_ne!(first.evidence_fingerprint, second.evidence_fingerprint);
@@ -816,8 +996,7 @@ mod tests {
             1,
         )
         .unwrap();
-        let value: serde_json::Value =
-            serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
         assert_eq!(value["approval_phrase"], "trash phrase");
         assert!(value.get("exact_approval_phrase").is_none());
     }
