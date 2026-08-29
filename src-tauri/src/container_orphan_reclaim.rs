@@ -137,7 +137,10 @@ impl ContainerRuntimeTarget {
     }
 
     /// Pins Docker-native commands to a named CLI context, preserving its TLS material.
-    pub(crate) fn docker_native_context(binary_path: PathBuf, context: String) -> Result<Self, String> {
+    pub(crate) fn docker_native_context(
+        binary_path: PathBuf,
+        context: String,
+    ) -> Result<Self, String> {
         if !valid_scope_name(&context) {
             return Err("unsafe-runtime-scope-name".into());
         }
@@ -211,7 +214,13 @@ pub(crate) fn resolve_docker_context_host(
     }
     let output = command_text(
         binary_path,
-        &["context", "inspect", context, "--format", "{{json .Endpoints.docker.Host}}"],
+        &[
+            "context",
+            "inspect",
+            context,
+            "--format",
+            "{{json .Endpoints.docker.Host}}",
+        ],
         ORPHAN_COMMAND_TIMEOUT,
         "docker-context-host-inspect",
     )?;
@@ -235,8 +244,8 @@ pub(crate) fn resolve_docker_context_fingerprint(
         ORPHAN_COMMAND_TIMEOUT,
         "docker-context-inspect",
     )?;
-    let value: Value = serde_json::from_str(output.trim())
-        .map_err(|_| "docker-context-invalid".to_string())?;
+    let value: Value =
+        serde_json::from_str(output.trim()).map_err(|_| "docker-context-invalid".to_string())?;
     let canonical = serde_json::to_vec(&value).map_err(|_| "docker-context-invalid".to_string())?;
     let digest = Sha256::digest(canonical);
     let mut encoded = String::with_capacity(digest.len() * 2);
@@ -373,6 +382,12 @@ struct ContainerRecord {
     id: String,
     state: String,
     names: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResourceOwnershipEvidence {
+    identity_binding: String,
+    explicitly_reclaimable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -731,6 +746,112 @@ fn parse_volume_ownership(
         identity_binding: lower_hex(&hasher.finalize()),
         explicitly_reclaimable,
     })
+}
+
+fn parsed_labels<'a>(
+    record: &'a Value,
+    nested: Option<&str>,
+) -> Result<&'a serde_json::Map<String, Value>, String> {
+    let owner = nested.and_then(|key| record.get(key)).unwrap_or(record);
+    match owner.get("Labels").or_else(|| owner.get("labels")) {
+        Some(Value::Object(labels)) => Ok(labels),
+        Some(_) => Err("resource-inspect-label-invalid".to_string()),
+        None => Err("resource-inspect-labels-incomplete".to_string()),
+    }
+}
+
+fn ownership_binding(
+    domain: &[u8],
+    fields: &[&str],
+    labels: &serde_json::Map<String, Value>,
+) -> Result<ResourceOwnershipEvidence, String> {
+    let mut ordered = Vec::with_capacity(labels.len());
+    for (key, value) in labels {
+        ordered.push((
+            key.as_str(),
+            value
+                .as_str()
+                .ok_or_else(|| "resource-inspect-label-invalid".to_string())?,
+        ));
+    }
+    ordered.sort_unstable();
+    let compose_owned = ordered
+        .iter()
+        .any(|(key, _)| key.starts_with("com.docker.compose."));
+    let explicitly_reclaimable = !compose_owned
+        && labels.get(DISKSAGE_OWNER_LABEL).and_then(Value::as_str) == Some("disksage")
+        && labels
+            .get(DISKSAGE_RECLAIMABLE_LABEL)
+            .and_then(Value::as_str)
+            == Some("true");
+    let mut hasher = Sha256::new();
+    hasher.update(domain);
+    for field in fields {
+        hash_frame(&mut hasher, field.as_bytes());
+    }
+    for (key, value) in ordered {
+        hash_frame(&mut hasher, key.as_bytes());
+        hash_frame(&mut hasher, value.as_bytes());
+    }
+    Ok(ResourceOwnershipEvidence {
+        identity_binding: lower_hex(&hasher.finalize()),
+        explicitly_reclaimable,
+    })
+}
+
+fn parse_container_ownership(
+    output: &str,
+    expected_id: &str,
+) -> Result<ResourceOwnershipEvidence, String> {
+    let records = split_json_envelopes(output)?;
+    if records.len() != 1 {
+        return Err("container-inspect-record-count-invalid".into());
+    }
+    let record = &records[0];
+    let id = normalize_hex_id(&string_field(record, &["Id", "ID", "id"])?, "container")?;
+    if id != expected_id {
+        return Err("container-inspect-id-mismatch".into());
+    }
+    let state = record
+        .get("State")
+        .or_else(|| record.get("state"))
+        .and_then(|value| value.get("Status").or_else(|| value.get("status")))
+        .and_then(Value::as_str)
+        .ok_or_else(|| "container-inspect-state-incomplete".to_string())?
+        .to_ascii_lowercase();
+    if !matches!(state.as_str(), "exited" | "created" | "dead" | "stopped") {
+        return Err("container-inspect-not-stopped".into());
+    }
+    let created = string_field(record, &["Created", "created"])?;
+    ownership_binding(
+        b"disksage.container-identity.v1\0",
+        &[&id, &state, &created],
+        parsed_labels(record, Some("Config"))?,
+    )
+}
+
+fn parse_network_ownership(
+    output: &str,
+    expected_id: &str,
+) -> Result<(ResourceOwnershipEvidence, bool), String> {
+    let records = split_json_envelopes(output)?;
+    if records.len() != 1 {
+        return Err("network-inspect-record-count-invalid".into());
+    }
+    let record = &records[0];
+    let id = normalize_hex_id(&string_field(record, &["Id", "ID", "id"])?, "network")?;
+    if id != expected_id {
+        return Err("network-inspect-id-mismatch".into());
+    }
+    let name = validate_resource_name(&string_field(record, &["Name", "name"])?, "network")?;
+    let driver = string_field(record, &["Driver", "driver"])?;
+    let attached = network_has_attached_containers(output)?;
+    let ownership = ownership_binding(
+        b"disksage.container-network-identity.v1\0",
+        &[&id, &name, &driver],
+        parsed_labels(record, None)?,
+    )?;
+    Ok((ownership, attached))
 }
 
 fn inspect_volume_ownership(
@@ -1170,9 +1291,30 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
             OrphanCategory::Container => {
                 let records = parse_container_records(&output)?;
                 let (total, candidates) = classify_container_candidates(&records)?;
-                let candidate_ids: Vec<String> =
-                    candidates.iter().map(|candidate| candidate.id.clone()).collect();
-                let ids: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
+                if candidates.len() > MAX_EXACT_DELETE_CANDIDATES {
+                    return Err("candidate-count-exceeds-bound".to_string());
+                }
+                let mut candidate_ids = Vec::new();
+                let mut identity_bindings = Vec::new();
+                for candidate in candidates {
+                    let mut inspect_args: Vec<&str> =
+                        prefix.iter().skip(1).map(String::as_str).collect();
+                    inspect_args.extend(["container", "inspect", &candidate.id]);
+                    let ownership = parse_container_ownership(
+                        &command_text(
+                            &target.binary_path,
+                            &inspect_args,
+                            ORPHAN_COMMAND_TIMEOUT,
+                            "orphan-container-ownership",
+                        )?,
+                        &candidate.id,
+                    )?;
+                    if ownership.explicitly_reclaimable {
+                        candidate_ids.push(candidate.id.clone());
+                        identity_bindings.push(ownership.identity_binding);
+                    }
+                }
+                let ids: Vec<&str> = identity_bindings.iter().map(String::as_str).collect();
                 (
                     Some(summarize_candidates(category, total, &ids, None)?),
                     candidate_ids,
@@ -1200,7 +1342,12 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                 })?;
                 let refs: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
                 (
-                    Some(summarize_candidates(category, total, &refs, Some(size_sum))?),
+                    Some(summarize_candidates(
+                        category,
+                        total,
+                        &refs,
+                        Some(size_sum),
+                    )?),
                     candidate_ids,
                 )
             }
@@ -1254,6 +1401,7 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
             OrphanCategory::Network => {
                 let records = parse_network_records(&output)?;
                 let mut attached: Vec<String> = Vec::new();
+                let mut ownership_by_id = BTreeMap::new();
                 let mut inspected_candidates = 0usize;
                 for record in &records {
                     if BUILTIN_NETWORK_NAMES.contains(&record.name.as_str())
@@ -1270,55 +1418,64 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                         .as_deref()
                         .ok_or_else(|| "network-id-missing".to_string())
                         .and_then(|id| normalize_hex_id(id, "network"))?;
-                    let has_attached_containers = if target.kind
-                        == ContainerRuntimeKind::PodmanMachine
-                    {
-                        let filter = format!("network={network_id}");
-                        let mut membership_args: Vec<&str> =
-                            prefix.iter().skip(1).map(String::as_str).collect();
-                        membership_args.extend([
-                            "container",
-                            "ps",
-                            "--all",
-                            "--filter",
-                            &filter,
-                            "--format",
-                            "json",
-                        ]);
-                        !split_json_envelopes(&command_text(
-                            &target.binary_path,
-                            &membership_args,
-                            ORPHAN_COMMAND_TIMEOUT,
-                            "orphan-network-membership",
-                        )?)?
-                        .is_empty()
-                    } else {
-                        let mut inspect_args: Vec<&str> =
-                            prefix.iter().skip(1).map(String::as_str).collect();
-                        inspect_args.extend(["network", "inspect", &network_id]);
-                        network_has_attached_containers(&command_text(
-                            &target.binary_path,
-                            &inspect_args,
-                            ORPHAN_COMMAND_TIMEOUT,
-                            "orphan-network-inspect",
-                        )?)?
-                    };
+                    let mut ownership_args: Vec<&str> =
+                        prefix.iter().skip(1).map(String::as_str).collect();
+                    ownership_args.extend(["network", "inspect", &network_id]);
+                    let ownership_output = command_text(
+                        &target.binary_path,
+                        &ownership_args,
+                        ORPHAN_COMMAND_TIMEOUT,
+                        "orphan-network-ownership",
+                    )?;
+                    let (ownership, inspected_attached) =
+                        parse_network_ownership(&ownership_output, &network_id)?;
+                    ownership_by_id.insert(network_id.clone(), ownership);
+                    let has_attached_containers =
+                        if target.kind == ContainerRuntimeKind::PodmanMachine {
+                            let filter = format!("network={network_id}");
+                            let mut membership_args: Vec<&str> =
+                                prefix.iter().skip(1).map(String::as_str).collect();
+                            membership_args.extend([
+                                "container",
+                                "ps",
+                                "--all",
+                                "--filter",
+                                &filter,
+                                "--format",
+                                "json",
+                            ]);
+                            !split_json_envelopes(&command_text(
+                                &target.binary_path,
+                                &membership_args,
+                                ORPHAN_COMMAND_TIMEOUT,
+                                "orphan-network-membership",
+                            )?)?
+                            .is_empty()
+                        } else {
+                            inspected_attached
+                        };
                     if has_attached_containers {
                         attached.push(record.name.clone());
                     }
                 }
                 let (total, candidates) = classify_network_candidates(&records, &attached)?;
-                let candidate_ids: Vec<String> = candidates
-                    .iter()
-                    .map(|candidate| {
-                        candidate
-                            .id
-                            .as_deref()
-                            .ok_or_else(|| "network-id-missing".to_string())
-                            .and_then(|id| normalize_hex_id(id, "network"))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                let ids: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
+                let mut candidate_ids = Vec::new();
+                let mut identity_bindings = Vec::new();
+                for candidate in candidates {
+                    let id = candidate
+                        .id
+                        .as_deref()
+                        .ok_or_else(|| "network-id-missing".to_string())
+                        .and_then(|id| normalize_hex_id(id, "network"))?;
+                    let ownership = ownership_by_id
+                        .get(&id)
+                        .ok_or_else(|| "network-ownership-evidence-missing".to_string())?;
+                    if ownership.explicitly_reclaimable {
+                        candidate_ids.push(id);
+                        identity_bindings.push(ownership.identity_binding.clone());
+                    }
+                }
+                let ids: Vec<&str> = identity_bindings.iter().map(String::as_str).collect();
                 (
                     Some(summarize_candidates(category, total, &ids, None)?),
                     candidate_ids,
@@ -1623,9 +1780,7 @@ mod tests {
 
     #[test]
     fn docker_container_plain_name_is_one_name() {
-        let output = format!(
-            "{{\"ID\":\"{DOCKER_ID_A}\",\"State\":\"exited\",\"Names\":\"web\"}}"
-        );
+        let output = format!("{{\"ID\":\"{DOCKER_ID_A}\",\"State\":\"exited\",\"Names\":\"web\"}}");
         assert_eq!(parse_container_records(&output).unwrap()[0].names, ["web"]);
     }
 
@@ -1807,14 +1962,68 @@ mod tests {
         assert_eq!(evidence.identity_binding.len(), 64);
 
         let compose = r#"[{"Name":"cache-vol","Driver":"local","CreatedAt":"2026-08-30T00:00:00Z","Labels":{"io.contextualwisdomlab.disksage.owner":"disksage","io.contextualwisdomlab.disksage.reclaimable":"true","com.docker.compose.project":"app"}}]"#;
-        assert!(!parse_volume_ownership(compose, "cache-vol")
-            .unwrap()
-            .explicitly_reclaimable);
+        assert!(
+            !parse_volume_ownership(compose, "cache-vol")
+                .unwrap()
+                .explicitly_reclaimable
+        );
 
         let unlabeled = r#"[{"Name":"cache-vol","Driver":"local","CreatedAt":"2026-08-30T00:00:00Z","Labels":null}]"#;
-        assert!(!parse_volume_ownership(unlabeled, "cache-vol")
-            .unwrap()
-            .explicitly_reclaimable);
+        assert!(
+            !parse_volume_ownership(unlabeled, "cache-vol")
+                .unwrap()
+                .explicitly_reclaimable
+        );
+    }
+
+    #[test]
+    fn container_ownership_requires_labels_stopped_state_and_exact_identity() {
+        let owned = format!(
+            r#"[{{"Id":"{DOCKER_ID_A}","Created":"2026-08-30T00:00:00Z","State":{{"Status":"exited"}},"Config":{{"Labels":{{"io.contextualwisdomlab.disksage.owner":"disksage","io.contextualwisdomlab.disksage.reclaimable":"true"}}}}}}]"#
+        );
+        assert!(
+            parse_container_ownership(&owned, DOCKER_ID_A)
+                .unwrap()
+                .explicitly_reclaimable
+        );
+        assert_eq!(
+            parse_container_ownership(&owned.replace("exited", "running"), DOCKER_ID_A)
+                .unwrap_err(),
+            "container-inspect-not-stopped"
+        );
+        let compose = owned.replace(
+            "\"io.contextualwisdomlab.disksage.owner\"",
+            "\"com.docker.compose.project\":\"app\",\"io.contextualwisdomlab.disksage.owner\"",
+        );
+        assert!(
+            !parse_container_ownership(&compose, DOCKER_ID_A)
+                .unwrap()
+                .explicitly_reclaimable
+        );
+        assert_eq!(
+            parse_container_ownership(&owned, DOCKER_ID_B).unwrap_err(),
+            "container-inspect-id-mismatch"
+        );
+    }
+
+    #[test]
+    fn network_ownership_requires_labels_and_no_compose_namespace() {
+        let owned = format!(
+            r#"[{{"Id":"{DOCKER_ID_A}","Name":"cache-net","Driver":"bridge","Containers":{{}},"Labels":{{"io.contextualwisdomlab.disksage.owner":"disksage","io.contextualwisdomlab.disksage.reclaimable":"true"}}}}]"#
+        );
+        let (evidence, attached) = parse_network_ownership(&owned, DOCKER_ID_A).unwrap();
+        assert!(evidence.explicitly_reclaimable);
+        assert!(!attached);
+        let compose = owned.replace(
+            "\"io.contextualwisdomlab.disksage.owner\"",
+            "\"com.docker.compose.network\":\"default\",\"io.contextualwisdomlab.disksage.owner\"",
+        );
+        assert!(
+            !parse_network_ownership(&compose, DOCKER_ID_A)
+                .unwrap()
+                .0
+                .explicitly_reclaimable
+        );
     }
 
     #[test]
@@ -1928,8 +2137,7 @@ mod tests {
             "network-invalid-name"
         );
         assert_eq!(
-            parse_network_records("[{\"driver\":\"bridge\",\"name\":\"-danger\"}]")
-                .unwrap_err(),
+            parse_network_records("[{\"driver\":\"bridge\",\"name\":\"-danger\"}]").unwrap_err(),
             "network-invalid-name"
         );
     }

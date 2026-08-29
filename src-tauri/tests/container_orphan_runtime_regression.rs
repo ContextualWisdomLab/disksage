@@ -175,6 +175,10 @@ case "${{1:-}}" in
       printf '%s\n' '{{"ID":"{FULL_ID}","State":"exited","Names":[]}}'
       exit 0
     fi
+    if [ "${{2:-}}" = "inspect" ] && [ "${{3:-}}" = "{FULL_ID}" ]; then
+      printf '%s\n' '[{{"Id":"{FULL_ID}","Created":"2026-08-30T00:00:00Z","State":{{"Status":"exited"}},"Config":{{"Labels":{{"io.contextualwisdomlab.disksage.owner":"disksage","io.contextualwisdomlab.disksage.reclaimable":"true"}}}}}}]'
+      exit 0
+    fi
     if [ "${{2:-}}" = "rm" ] && [ "${{3:-}}" = "{FULL_ID}" ] && [ "${{4:-}}" = "" ]; then
       printf '%s\n' '{FULL_ID}'
       exit 0
