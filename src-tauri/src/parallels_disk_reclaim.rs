@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const TREE_ALLOCATION_BUDGET: Duration = Duration::from_secs(5);
 const MAX_ENTRIES: usize = 100_000;
+const CLI_FLAGS: [&str; 5] = ["--prlctl", "--disk-tool", "--vm-id", "--bundle", "--disk"];
 
 pub trait ParallelsCommandRunner {
     fn run(&self, executable: &Path, args: &[&str], label: &str) -> Result<String, String>;
@@ -17,6 +18,28 @@ impl ParallelsCommandRunner for ProcessParallelsCommandRunner {
     fn run(&self, executable: &Path, args: &[&str], label: &str) -> Result<String, String> {
         crate::podman_reclaim::run_bounded_provider_text(executable, args, COMMAND_TIMEOUT, label)
     }
+}
+
+/// Rejects unknown positional/flag tokens before the Parallels planner CLI reads values.
+///
+/// Duplicate or missing recognized flags are still diagnosed by the CLI's value extractor; this
+/// admission guard prevents misspelled or trailing options from being silently ignored.
+pub fn validate_cli_argument_tokens(args: &[String]) -> Result<(), String> {
+    let mut index = 0_usize;
+    while index < args.len() {
+        let flag = &args[index];
+        if !CLI_FLAGS.contains(&flag.as_str()) {
+            return Err(format!("지원하지 않는 인자가 있습니다: {flag}"));
+        }
+        let Some(value) = args.get(index + 1) else {
+            return Err(format!("{flag} 값을 지정하세요."));
+        };
+        if value.starts_with('-') {
+            return Err(format!("{flag} 값을 지정하세요."));
+        }
+        index += 2;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
