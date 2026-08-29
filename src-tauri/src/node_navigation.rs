@@ -11,6 +11,7 @@ use crate::scanner::ScanResult;
 use std::path::{Component, Path, PathBuf};
 
 const OUTSIDE_ROOT: &str = "path outside scanned root";
+const NOT_IN_SCAN: &str = "path unavailable in scan result";
 
 fn canonical_navigation_path(res: &ScanResult, path: &Path) -> Result<PathBuf, String> {
     if path.components().any(|component| matches!(component, Component::ParentDir)) {
@@ -47,8 +48,16 @@ fn entry_is_link_or_reparse(path: &Path, file_type: &std::fs::FileType) -> bool 
     }
 }
 
+fn scanned_directory_size(res: &ScanResult, display_path: &Path, canonical_path: &Path) -> Option<u64> {
+    res.dir_sizes
+        .get(display_path)
+        .or_else(|| res.dir_sizes.get(canonical_path))
+        .copied()
+}
+
 /// Return one level of scan navigation only when the requested directory resolves inside the
-/// canonical scanned root.
+/// canonical scanned root and was actually admitted by the scan. Directories pruned by scanner
+/// policy remain absent from navigation even though they still exist on disk.
 pub(crate) fn node_view(res: &ScanResult, path: &Path) -> Result<NodeView, String> {
     let canonical_path = canonical_navigation_path(res, path)?;
     let canonical_root =
@@ -59,6 +68,17 @@ pub(crate) fn node_view(res: &ScanResult, path: &Path) -> Result<NodeView, Strin
     // macOS canonicalizes `/var` to `/private/var`; keep scanner keys and UI paths in
     // the original namespace while reading entries through the verified canonical path.
     let display_path = res.root.join(relative);
+    let view_size = match scanned_directory_size(res, &display_path, &canonical_path) {
+        Some(size) => size,
+        None if res.cancelled && display_path == res.root => {
+            return Ok(NodeView {
+                path: path.to_string_lossy().into_owned(),
+                size: 0,
+                entries: Vec::new(),
+            });
+        }
+        None => return Err(NOT_IN_SCAN.into()),
+    };
     let mut entries = Vec::new();
     for entry in std::fs::read_dir(&canonical_path).map_err(|_| "node directory unavailable".to_string())? {
         let Ok(entry) = entry else { continue };
@@ -67,15 +87,12 @@ pub(crate) fn node_view(res: &ScanResult, path: &Path) -> Result<NodeView, Strin
         if entry_is_link_or_reparse(&entry_path, &file_type) {
             continue;
         }
+        let display_entry_path = display_path.join(entry.file_name());
         let (size, is_dir) = if file_type.is_dir() {
-            (
-                res.dir_sizes
-                    .get(&display_path.join(entry.file_name()))
-                    .or_else(|| res.dir_sizes.get(&entry_path))
-                    .copied()
-                    .unwrap_or_default(),
-                true,
-            )
+            let Some(size) = scanned_directory_size(res, &display_entry_path, &entry_path) else {
+                continue;
+            };
+            (size, true)
         } else {
             (
                 std::fs::symlink_metadata(&entry_path)
@@ -86,10 +103,7 @@ pub(crate) fn node_view(res: &ScanResult, path: &Path) -> Result<NodeView, Strin
         };
         entries.push(EntryView {
             name: entry.file_name().to_string_lossy().into_owned(),
-            path: display_path
-                .join(entry.file_name())
-                .to_string_lossy()
-                .into_owned(),
+            path: display_entry_path.to_string_lossy().into_owned(),
             size,
             is_dir,
         });
@@ -97,13 +111,7 @@ pub(crate) fn node_view(res: &ScanResult, path: &Path) -> Result<NodeView, Strin
     entries.sort_by(|left, right| right.size.cmp(&left.size));
     Ok(NodeView {
         path: path.to_string_lossy().into_owned(),
-        size: res
-            .dir_sizes
-            .get(&display_path)
-            .or_else(|| res.dir_sizes.get(&canonical_path))
-            .or_else(|| res.dir_sizes.get(path))
-            .copied()
-            .unwrap_or_default(),
+        size: view_size,
         entries,
     })
 }
@@ -145,6 +153,54 @@ mod tests {
         assert_eq!(view.entries.len(), 2);
         assert_eq!(view.entries[0].name, "sub");
         assert!(view.entries[0].is_dir);
+    }
+
+    #[test]
+    fn directories_pruned_from_scan_are_hidden_and_not_navigable() {
+        let root = tempfile::tempdir().unwrap();
+        let visible = root.path().join("visible");
+        let pruned = root.path().join("provider-managed");
+        std::fs::create_dir(&visible).unwrap();
+        std::fs::create_dir(&pruned).unwrap();
+        std::fs::write(visible.join("kept.bin"), b"kept").unwrap();
+        std::fs::write(pruned.join("cloud.bin"), b"cloud").unwrap();
+        let mut result = scan(root.path());
+        result.dir_sizes.remove(&pruned);
+
+        let root_view = node_view(&result, root.path()).unwrap();
+        assert!(root_view.entries.iter().any(|entry| entry.name == "visible"));
+        assert!(root_view
+            .entries
+            .iter()
+            .all(|entry| entry.name != "provider-managed"));
+        assert!(matches!(node_view(&result, &pruned), Err(error) if error == NOT_IN_SCAN));
+    }
+
+    #[test]
+    fn legitimate_empty_directory_remains_navigable() {
+        let root = tempfile::tempdir().unwrap();
+        let empty = root.path().join("empty");
+        std::fs::create_dir(&empty).unwrap();
+        let result = scan(root.path());
+
+        let root_view = node_view(&result, root.path()).unwrap();
+        assert!(root_view.entries.iter().any(|entry| entry.name == "empty"));
+        let empty_view = node_view(&result, &empty).unwrap();
+        assert!(empty_view.entries.is_empty());
+        assert_eq!(empty_view.size, 0);
+    }
+
+    #[test]
+    fn immediately_cancelled_scan_keeps_an_empty_root_view() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("unscanned.bin"), b"not observed").unwrap();
+        let result = scan_dir_with_interval(root.path(), &AtomicBool::new(true), 1, |_| {});
+        assert!(result.cancelled);
+        assert!(result.dir_sizes.is_empty());
+
+        let view = node_view(&result, root.path()).unwrap();
+        assert_eq!(view.size, 0);
+        assert!(view.entries.is_empty());
     }
 
     #[test]

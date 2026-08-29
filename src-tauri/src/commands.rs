@@ -361,6 +361,9 @@ pub fn set_settings(
 #[cfg(not(coverage))]
 #[tauri::command]
 pub fn start_scan(root: String, app: AppHandle, state: State<AppState>) -> Result<(), String> {
+    if let Some(issue) = scanner::scan_root_access_issue(Path::new(&root)) {
+        return Err(issue.into());
+    }
     if state.scanning.swap(true, Ordering::SeqCst) {
         return Err("scan already running".into());
     }
