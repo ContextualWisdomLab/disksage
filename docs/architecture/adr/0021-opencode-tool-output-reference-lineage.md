@@ -19,10 +19,12 @@ can authorize Trash movement only when the database/WAL identity remains stable,
 evidence is complete and idle, the exact regular-file identity and SHA-256 remain unchanged, and
 the fresh candidate fingerprint receives an attributed exact-phrase approval. Create-only private
 approval/result records and the existing append-only Trash journal preserve the mutation record.
-Permanent removal is a separate approval boundary. It accepts only successful entries from the
-DiskSage journal, locates only same-name direct children of the user's Trash, reconstructs the
-original candidate fingerprint from the preserved inode/allocation/content identity, and rejects
-source reappearance, database drift, active use, collisions, or identity drift.
+Trash movement and permanent removal are disabled. A path-based Trash API cannot atomically prove
+that the validated inode is the object moved, and a caller-selected shared journal cannot
+authenticate quarantine provenance or one exact batch. Re-enabling mutation requires an
+OS-enforced identity-bound move, current-user ownership, a create-only batch manifest bound to the
+original approval, restart-safe immutable per-item before/after outcomes, and shared-journal batch
+selection. Planning remains read-only and available.
 
 ## Consequences
 
@@ -45,10 +47,11 @@ IDs. Of 63 tool-output files, 59 had exact native metadata references, four did 
 database reported zero free-list pages. OpenCode's native `session delete` command is the supported
 session lifecycle, but this decision grants no authority to choose or delete a session.
 
-The four exact outputs were first moved to Trash and then separately approved and permanently
+Before this fail-closed correction, the four exact outputs were moved to Trash and permanently
 purged. They represented 260,637 logical and 270,336 allocated bytes. Concurrent filesystem writes
 reduced APFS availability across both bounded observations, so DiskSage records no attributable
-physical-space gain from this small purge.
+physical-space gain. Review then found that the mutation protocol did not authenticate the shared
+journal or close replacement and partial-outcome races; both mutation surfaces are now disabled.
 
 ## References
 

@@ -179,6 +179,10 @@ fn root_for(home: &Path) -> Result<PathBuf, String> {
     }
     let canonical_home =
         std::fs::canonicalize(home).map_err(|_| "opencode-home-unavailable".to_string())?;
+    let current_home = current_user_home()?;
+    if canonical_home != current_home {
+        return Err("opencode-home-not-current-user".into());
+    }
     let root = canonical_home.join(".local/share/opencode");
     let metadata = std::fs::symlink_metadata(&root)
         .map_err(|_| "opencode-data-root-unavailable".to_string())?;
@@ -186,6 +190,46 @@ fn root_for(home: &Path) -> Result<PathBuf, String> {
         return Err("opencode-data-root-unsafe".into());
     }
     Ok(root)
+}
+
+#[cfg(unix)]
+fn current_user_home() -> Result<PathBuf, String> {
+    use std::ffi::CStr;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::MetadataExt;
+
+    // SAFETY: `getpwuid` returns process-owned libc storage. We copy the home bytes before any
+    // further libc lookup and reject null/non-absolute/non-current-owner results.
+    let uid = unsafe { libc::getuid() };
+    let record = unsafe { libc::getpwuid(uid) };
+    if record.is_null() {
+        return Err("opencode-current-user-home-unavailable".into());
+    }
+    let directory = unsafe { (*record).pw_dir };
+    if directory.is_null() {
+        return Err("opencode-current-user-home-unavailable".into());
+    }
+    let bytes = unsafe { CStr::from_ptr(directory) }.to_bytes().to_vec();
+    let path = PathBuf::from(std::ffi::OsStr::from_bytes(&bytes));
+    if !path.is_absolute() {
+        return Err("opencode-current-user-home-invalid".into());
+    }
+    let canonical = std::fs::canonicalize(path)
+        .map_err(|_| "opencode-current-user-home-unavailable".to_string())?;
+    let metadata = std::fs::symlink_metadata(&canonical)
+        .map_err(|_| "opencode-current-user-home-unavailable".to_string())?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() || metadata.uid() != uid {
+        return Err("opencode-current-user-home-ownership-invalid".into());
+    }
+    Ok(canonical)
+}
+
+#[cfg(not(unix))]
+fn current_user_home() -> Result<PathBuf, String> {
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .ok_or_else(|| "opencode-current-user-home-unavailable".to_string())?;
+    std::fs::canonicalize(home).map_err(|_| "opencode-current-user-home-unavailable".to_string())
 }
 
 fn sqlite_is_trusted() -> Result<(), String> {
@@ -427,6 +471,22 @@ pub fn execute(
     record_directory: &Path,
     now_ms: u64,
 ) -> Result<OpenCodeArtifactReceipt, String> {
+    // Path-based Trash APIs cannot atomically prove that the validated inode is the object moved,
+    // and the legacy shared journal has no authenticated batch lineage. Keep the complete planner
+    // available, but do not expose mutation until an OS-enforced identity-bound move plus durable
+    // per-item outcome protocol exists.
+    let _ = (
+        home,
+        approved_fingerprint,
+        confirmation,
+        approved_by,
+        rationale,
+        journal_path,
+        record_directory,
+        now_ms,
+    );
+    return Err("opencode-trash-execution-disabled".into());
+    #[allow(unreachable_code)]
     if approved_by.trim().is_empty() || rationale.trim().is_empty() {
         return Err("opencode-approval-attribution-required".into());
     }
@@ -516,6 +576,21 @@ pub fn purge_quarantined(
     record_directory: &Path,
     now_ms: u64,
 ) -> Result<OpenCodeArtifactReceipt, String> {
+    // A caller-selected append-only journal is not authentic quarantine authority. Permanent
+    // deletion remains disabled until the Trash move emits a create-only, ownership-checked batch
+    // manifest and each unlink has replacement-resistant identity plus durable before/after state.
+    let _ = (
+        home,
+        approved_fingerprint,
+        confirmation,
+        approved_by,
+        rationale,
+        journal_path,
+        record_directory,
+        now_ms,
+    );
+    return Err("opencode-permanent-purge-disabled".into());
+    #[allow(unreachable_code)]
     if approved_by.trim().is_empty() || rationale.trim().is_empty() {
         return Err("opencode-purge-approval-attribution-required".into());
     }
@@ -668,6 +743,30 @@ mod tests {
         assert_ne!(
             candidate_fingerprint("db-a", &[original]).unwrap(),
             candidate_fingerprint("db-a", &[changed]).unwrap()
+        );
+    }
+
+    #[test]
+    fn mutation_surfaces_remain_fail_closed_before_path_or_journal_use() {
+        let missing = Path::new("/definitely/not/a/home");
+        assert_eq!(
+            execute(missing, "forged", "forged", "human:test", "test", missing, missing, 1)
+                .unwrap_err(),
+            "opencode-trash-execution-disabled"
+        );
+        assert_eq!(
+            purge_quarantined(
+                missing,
+                "forged",
+                "forged",
+                "human:test",
+                "test",
+                missing,
+                missing,
+                1,
+            )
+            .unwrap_err(),
+            "opencode-permanent-purge-disabled"
         );
     }
 }

@@ -1147,6 +1147,12 @@ runner's private workspace temp root instead of weakening the shared production 
   use immediately before removal. The 260,637 logical bytes and 270,336 allocated bytes are exact;
   APFS availability decreased by 48,730,112 bytes during the external before/after window because
   of concurrent writes, so attributable physical reclaim remains zero rather than being inferred.
+- Current-head security review subsequently proved that the former path-based mutation boundary
+  could not authenticate a caller-selected shared journal, atomically bind the validated inode to
+  the Trash move, isolate repeated batches, or guarantee per-item outcomes after partial failure.
+  Trash execution and permanent purge are therefore fail-closed disabled. Re-enablement requires
+  a current-user-owned create-only batch manifest bound to the prior approval, OS-enforced
+  replacement-resistant movement/unlink, and restart-safe immutable per-item outcomes.
 - The referenced 594,168,241-byte tool output remains preserved despite dominating the sidecar
   directory. Customer-visible large-session selection/export and native session deletion remain a
   product gap; DiskSage will not choose sessions merely to satisfy the 300 GB target.
