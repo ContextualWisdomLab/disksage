@@ -35,6 +35,11 @@ fn take_value(args: &mut impl Iterator<Item = OsString>, option: &str) -> Result
 }
 
 fn parse_args(raw: impl IntoIterator<Item = OsString>) -> Result<Option<Args>, String> {
+    let raw = raw.into_iter().collect::<Vec<_>>();
+    if raw.len() == 1 && matches!(raw[0].to_str(), Some("-h" | "--help")) {
+        return Ok(None);
+    }
+
     let mut data_directory = None;
     let mut psql_path = None;
     let mut pg_ctl_path = None;
@@ -47,7 +52,6 @@ fn parse_args(raw: impl IntoIterator<Item = OsString>) -> Result<Option<Args>, S
     let mut args = raw.into_iter();
     while let Some(arg) = args.next() {
         match arg.to_str() {
-            Some("-h" | "--help") => return Ok(None),
             Some("--data-directory") if data_directory.is_none() => {
                 data_directory = Some(PathBuf::from(take_value(&mut args, "--data-directory")?))
             }
