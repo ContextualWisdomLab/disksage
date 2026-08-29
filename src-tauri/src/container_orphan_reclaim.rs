@@ -388,6 +388,16 @@ struct VolumeRecord {
     name: String,
 }
 
+const DISKSAGE_OWNER_LABEL: &str = "io.contextualwisdomlab.disksage.owner";
+const DISKSAGE_RECLAIMABLE_LABEL: &str = "io.contextualwisdomlab.disksage.reclaimable";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VolumeOwnershipEvidence {
+    name: String,
+    identity_binding: String,
+    explicitly_reclaimable: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NetworkRecord {
     id: Option<String>,
@@ -663,6 +673,82 @@ fn parse_volume_records(output: &str) -> Result<Vec<VolumeRecord>, String> {
         records.push(VolumeRecord { name });
     }
     Ok(records)
+}
+
+fn parse_volume_ownership(
+    output: &str,
+    expected_name: &str,
+) -> Result<VolumeOwnershipEvidence, String> {
+    let records = split_json_envelopes(output)?;
+    if records.len() != 1 {
+        return Err("volume-inspect-record-count-invalid".to_string());
+    }
+    let record = &records[0];
+    let name = validate_resource_name(&string_field(record, &["Name", "name"])?, "volume")?;
+    if name != expected_name {
+        return Err("volume-inspect-name-mismatch".to_string());
+    }
+    let driver = string_field(record, &["Driver", "driver"])?;
+    let created_at = string_field(record, &["CreatedAt", "createdAt", "created_at"])?;
+    if driver.is_empty() || created_at.is_empty() {
+        return Err("volume-inspect-identity-incomplete".to_string());
+    }
+    let empty_labels = serde_json::Map::new();
+    let labels = match record.get("Labels").or_else(|| record.get("labels")) {
+        Some(Value::Object(labels)) => labels,
+        Some(Value::Null) => &empty_labels,
+        Some(_) => return Err("volume-inspect-label-invalid".to_string()),
+        None => return Err("volume-inspect-labels-incomplete".to_string()),
+    };
+    let mut ordered_labels = Vec::with_capacity(labels.len());
+    for (key, value) in labels {
+        let value = value
+            .as_str()
+            .ok_or_else(|| "volume-inspect-label-invalid".to_string())?;
+        ordered_labels.push((key.as_str(), value));
+    }
+    ordered_labels.sort_unstable();
+    let compose_owned = ordered_labels
+        .iter()
+        .any(|(key, _)| key.starts_with("com.docker.compose."));
+    let explicitly_reclaimable = !compose_owned
+        && labels.get(DISKSAGE_OWNER_LABEL).and_then(Value::as_str) == Some("disksage")
+        && labels
+            .get(DISKSAGE_RECLAIMABLE_LABEL)
+            .and_then(Value::as_str)
+            == Some("true");
+    let mut hasher = Sha256::new();
+    hasher.update(b"disksage.container-volume-identity.v1\0");
+    for value in [name.as_bytes(), driver.as_bytes(), created_at.as_bytes()] {
+        hash_frame(&mut hasher, value);
+    }
+    for (key, value) in ordered_labels {
+        hash_frame(&mut hasher, key.as_bytes());
+        hash_frame(&mut hasher, value.as_bytes());
+    }
+    Ok(VolumeOwnershipEvidence {
+        name,
+        identity_binding: lower_hex(&hasher.finalize()),
+        explicitly_reclaimable,
+    })
+}
+
+fn inspect_volume_ownership(
+    target: &ContainerRuntimeTarget,
+    prefix: &[String],
+    volume_name: &str,
+) -> Result<VolumeOwnershipEvidence, String> {
+    let mut args: Vec<&str> = prefix.iter().skip(1).map(String::as_str).collect();
+    args.extend(["volume", "inspect", volume_name]);
+    parse_volume_ownership(
+        &command_text(
+            &target.binary_path,
+            &args,
+            ORPHAN_COMMAND_TIMEOUT,
+            "orphan-volume-ownership",
+        )?,
+        volume_name,
+    )
 }
 
 const BUILTIN_NETWORK_NAMES: [&str; 4] = ["bridge", "host", "none", "podman"];
@@ -1147,9 +1233,19 @@ fn audit_category(target: &ContainerRuntimeTarget, category: OrphanCategory) -> 
                 let records = parse_volume_records(&output)?;
                 let total = u64::try_from(records.len())
                     .map_err(|_| "record-count-overflow".to_string())?;
-                let candidate_ids: Vec<String> =
-                    records.iter().map(|record| record.name.clone()).collect();
-                let ids: Vec<&str> = candidate_ids.iter().map(String::as_str).collect();
+                if records.len() > MAX_EXACT_DELETE_CANDIDATES {
+                    return Err("candidate-count-exceeds-bound".to_string());
+                }
+                let mut candidate_ids = Vec::new();
+                let mut identity_bindings = Vec::new();
+                for record in &records {
+                    let ownership = inspect_volume_ownership(target, &prefix, &record.name)?;
+                    if ownership.explicitly_reclaimable {
+                        candidate_ids.push(ownership.name);
+                        identity_bindings.push(ownership.identity_binding);
+                    }
+                }
+                let ids: Vec<&str> = identity_bindings.iter().map(String::as_str).collect();
                 (
                     Some(summarize_candidates(category, total, &ids, None)?),
                     candidate_ids,
@@ -1701,6 +1797,44 @@ mod tests {
         assert_eq!(parse_volume_records(ndjson).unwrap()[0].name, "data-vol");
         let array = "[{\"name\":\"cache-vol\",\"driver\":\"local\"}]";
         assert_eq!(parse_volume_records(array).unwrap()[0].name, "cache-vol");
+    }
+
+    #[test]
+    fn volume_ownership_requires_explicit_disksage_labels_and_rejects_compose() {
+        let owned = r#"[{"Name":"cache-vol","Driver":"local","CreatedAt":"2026-08-30T00:00:00Z","Labels":{"io.contextualwisdomlab.disksage.owner":"disksage","io.contextualwisdomlab.disksage.reclaimable":"true"}}]"#;
+        let evidence = parse_volume_ownership(owned, "cache-vol").unwrap();
+        assert!(evidence.explicitly_reclaimable);
+        assert_eq!(evidence.identity_binding.len(), 64);
+
+        let compose = r#"[{"Name":"cache-vol","Driver":"local","CreatedAt":"2026-08-30T00:00:00Z","Labels":{"io.contextualwisdomlab.disksage.owner":"disksage","io.contextualwisdomlab.disksage.reclaimable":"true","com.docker.compose.project":"app"}}]"#;
+        assert!(!parse_volume_ownership(compose, "cache-vol")
+            .unwrap()
+            .explicitly_reclaimable);
+
+        let unlabeled = r#"[{"Name":"cache-vol","Driver":"local","CreatedAt":"2026-08-30T00:00:00Z","Labels":null}]"#;
+        assert!(!parse_volume_ownership(unlabeled, "cache-vol")
+            .unwrap()
+            .explicitly_reclaimable);
+    }
+
+    #[test]
+    fn volume_ownership_fails_closed_without_complete_identity_or_labels() {
+        assert_eq!(
+            parse_volume_ownership(
+                r#"[{"Name":"cache-vol","Driver":"local","Labels":{}}]"#,
+                "cache-vol"
+            )
+            .unwrap_err(),
+            "json-field-missing:CreatedAt"
+        );
+        assert_eq!(
+            parse_volume_ownership(
+                r#"[{"Name":"other","Driver":"local","CreatedAt":"now","Labels":{}}]"#,
+                "cache-vol"
+            )
+            .unwrap_err(),
+            "volume-inspect-name-mismatch"
+        );
     }
 
     #[test]

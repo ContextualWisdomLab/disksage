@@ -221,6 +221,60 @@ esac
 
 #[cfg(unix)]
 #[test]
+fn volume_execution_requires_explicit_ownership_and_preserves_compose_volumes() {
+    let (_temp, runtime) = fake_runtime(
+        r#"
+case "${1:-}" in
+  info|container|images|network) exit 0 ;;
+  volume)
+    case "${2:-}" in
+      ls)
+        printf '%s\n' '[{"Name":"owned-cache"},{"Name":"compose-data"}]'
+        ;;
+      inspect)
+        if [ "${3:-}" = "owned-cache" ]; then
+          printf '%s\n' '[{"Name":"owned-cache","Driver":"local","CreatedAt":"2026-08-30T00:00:00Z","Labels":{"io.contextualwisdomlab.disksage.owner":"disksage","io.contextualwisdomlab.disksage.reclaimable":"true"}}]'
+        else
+          printf '%s\n' '[{"Name":"compose-data","Driver":"local","CreatedAt":"2026-08-30T00:00:00Z","Labels":{"com.docker.compose.project":"customer-app"}}]'
+        fi
+        ;;
+      rm)
+        [ "${3:-}" = "owned-cache" ] && [ "${4:-}" = "" ] || exit 97
+        printf '%s\n' 'owned-cache'
+        ;;
+      *) exit 98 ;;
+    esac
+    ;;
+  *) exit 99 ;;
+esac
+"#,
+    );
+    let target = docker_target(&runtime);
+    let plan = probe_container_orphans(&target);
+    let volume = plan
+        .categories
+        .iter()
+        .find(|category| category.category == OrphanCategory::Volume)
+        .expect("volume category");
+    let evidence = volume.evidence.as_ref().expect("volume evidence");
+    assert_eq!(evidence.total_records, 2);
+    assert_eq!(evidence.candidate_records, 1);
+
+    let execution = execute_container_orphan_prune(
+        &target,
+        OrphanCategory::Volume,
+        volume.approval_phrase.as_deref().unwrap(),
+        "Remove only the explicitly owned cache volume after fresh reinspection.",
+        1,
+    )
+    .expect("owned volume removal must succeed");
+    assert!(execution.executed);
+    assert!(execution.stdout.contains("owned-cache"));
+    assert!(!execution.stdout.contains("compose-data"));
+}
+
+#[cfg(unix)]
+#[test]
 fn option_shaped_network_name_is_rejected_before_network_inspect() {
     let (_temp, runtime) = fake_runtime(
         r#"
