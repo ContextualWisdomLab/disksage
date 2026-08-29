@@ -615,20 +615,32 @@ fn update_manifest_name(hasher: &mut blake3::Hasher, name: &std::ffi::OsStr) {
 fn update_cache_manifest(path: &Path, hasher: &mut blake3::Hasher) -> Result<(), String> {
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|_| "cache-target-manifest-metadata-unavailable".to_string())?;
-    if metadata.file_type().is_symlink() || !(metadata.is_file() || metadata.is_dir()) {
+    let is_symlink = metadata.file_type().is_symlink();
+    if !(is_symlink || metadata.is_file() || metadata.is_dir()) {
         return Err("cache-target-type-unsupported".into());
     }
     let name = path
         .file_name()
         .ok_or_else(|| "cache-target-manifest-name-unavailable".to_string())?;
     update_manifest_name(hasher, name);
-    hasher.update(&[u8::from(metadata.is_dir())]);
+    let entry_kind = if is_symlink {
+        2
+    } else if metadata.is_dir() {
+        1
+    } else {
+        0
+    };
+    hasher.update(&[entry_kind]);
     hasher.update(&metadata.len().to_le_bytes());
     hasher.update(&modified_ms(&metadata).to_le_bytes());
     let object_id = crate::safety::filesystem_object_id(path)
         .map_err(|_| "cache-target-identity-unavailable".to_string())?;
     hasher.update(object_id.as_bytes());
-    if metadata.is_file() {
+    if is_symlink {
+        let destination = std::fs::read_link(path)
+            .map_err(|_| "cache-target-manifest-symlink-unavailable".to_string())?;
+        update_manifest_name(hasher, destination.as_os_str());
+    } else if metadata.is_file() {
         use std::io::Read;
         let mut file = std::fs::File::open(path)
             .map_err(|_| "cache-target-manifest-file-unavailable".to_string())?;
