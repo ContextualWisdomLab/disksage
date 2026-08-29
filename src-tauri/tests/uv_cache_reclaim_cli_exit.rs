@@ -109,3 +109,45 @@ fn incomplete_cache_inventory_blocks_native_prune_authority() {
         "incomplete traversal must block native prune authority: {plan}"
     );
 }
+
+#[test]
+fn open_cached_payload_blocks_native_prune_without_global_lock() {
+    let temp = tempfile::tempdir().unwrap();
+    let cache = temp.path().join("cache");
+    fs::create_dir(&cache).unwrap();
+    let payload = cache.join("tool.bin");
+    fs::write(&payload, b"cached executable payload").unwrap();
+    let _open_payload = fs::File::open(&payload).unwrap();
+
+    let uv = temp.path().join("uv");
+    fs::write(
+        &uv,
+        format!(
+            "#!/bin/sh\nset -eu\nif [ \"${{1:-}}\" = '--version' ]; then printf 'uv 0.8.0\\n'; exit 0; fi\nif [ \"${{1:-}}\" = 'cache' ] && [ \"${{2:-}}\" = 'dir' ]; then printf '%s\\n' '{}'; exit 0; fi\nif [ \"${{1:-}}\" = 'cache' ] && [ \"${{2:-}}\" = 'prune' ]; then printf 'unexpected prune\\n' >&2; exit 70; fi\nexit 64\n",
+            cache.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&uv, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let binary = env!("CARGO_BIN_EXE_disksage-uv-cache-reclaim");
+    let output = Command::new(binary)
+        .args(["--uv-bin"])
+        .arg(&uv)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "planning should return active-use evidence: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let plan: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(plan["active_use"]["active"], true);
+    assert_eq!(plan["active_use"]["evidence_complete"], true);
+    let blockers = plan["blockers"].as_array().unwrap();
+    assert!(
+        blockers.iter().any(|blocker| blocker == "cache-is-active"),
+        "an open cache payload must veto native prune authority: {plan}"
+    );
+}
