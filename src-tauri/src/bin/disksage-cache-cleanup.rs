@@ -111,7 +111,7 @@ fn parse_args(raw_args: impl IntoIterator<Item = OsString>) -> Result<Option<Arg
                 }
             }
             Some("-h" | "--help") => return Err(format!("--help must be used alone\n{USAGE}")),
-            Some(value) => return Err(format!("unknown option: {value}\n{USAGE}")),
+            Some(_) => return Err(format!("cache-cleanup-invalid-argument\n{USAGE}")),
             None => return Err(format!("invalid UTF-8 option\n{USAGE}")),
         }
     }
@@ -230,6 +230,14 @@ mod tests {
             duplicate_purge,
             "--purge-proven-cache-trash may be supplied once"
         );
+    }
+
+    #[test]
+    fn unknown_argument_is_not_reflected() {
+        let payload = "--unknown-with-sensitive-value";
+        let error = parse_args([OsString::from(payload)]).unwrap_err();
+        assert!(error.contains("cache-cleanup-invalid-argument"));
+        assert!(!error.contains(payload));
     }
 
     #[test]
