@@ -8,7 +8,8 @@ pub use crate::safety_core::{
     TrashDeleteOutcome,
 };
 pub(crate) use crate::safety_core::{
-    is_shared_temp_path, is_user_owned_shared_temp_tree, PERMANENT_DIRECTORY_ACTIVE_USE_TIMEOUT_MS,
+    is_shared_temp_path, is_user_owned_shared_temp_tree,
+    trash_delete_if_identity_with_verifier, PERMANENT_DIRECTORY_ACTIVE_USE_TIMEOUT_MS,
 };
 
 static CACHE_STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
