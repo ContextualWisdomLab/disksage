@@ -530,6 +530,19 @@ fn clean_artifacts_with_disposition(
             // external process boundary; a write arriving while it runs must make the safety
             // boundary's immediately-before-staging comparison fail closed.
             let permanent_target = if permanent {
+                let refreshed = artifact_manifest(Path::new(&request.path));
+                if !refreshed.scan_complete
+                    || refreshed.skipped != 0
+                    || refreshed.fingerprint != request.fingerprint
+                    || refreshed.object_id != request.object_id
+                {
+                    return DevArtifactCleanResult {
+                        path: request.path.clone(),
+                        ok: false,
+                        error: "development artifact changed after validation; rescan before cleanup"
+                            .into(),
+                    };
+                }
                 match crate::rules::cache_target(Path::new(&request.path)) {
                     Ok(target) => Some(target),
                     Err(_) => {
