@@ -27,18 +27,12 @@ jobs:
       - name: Reclaim preinstalled SDK space unused by DiskSage
         shell: bash
         run: |
-          set -euo pipefail
-          before_bytes=$(df --output=avail -B1 / | tail -1 | tr -d ' ')
           # The official ubuntu-24.04 inventory includes these SDKs. This Rust/Tauri test job does
           # not invoke Android, .NET, or Haskell, so their fixed image-owned roots are out of scope.
-          sudo rm -rf -- /usr/local/lib/android /usr/share/dotnet /opt/ghc
-          after_bytes=$(df --output=avail -B1 / | tail -1 | tr -d ' ')
-          test "$after_bytes" -ge "$before_bytes"
-          {
-            echo "runner_available_bytes_before=$before_bytes"
-            echo "runner_available_bytes_after=$after_bytes"
-            echo "runner_reclaimed_bytes=$((after_bytes - before_bytes))"
-          } >> "$GITHUB_STEP_SUMMARY"
+          bash .github/scripts/reclaim-test-runner-space.sh \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /opt/ghc
       - name: Install Tauri system deps
         run: |
           sudo apt-get update
