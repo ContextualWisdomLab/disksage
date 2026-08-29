@@ -11,6 +11,14 @@ queued or stale status.
 
 ## 2026-08-29 OneDrive local-space recovery observation
 
+- Production use of Foundation ubiquitous-item eviction on anonymized OneDrive files retained
+  uploaded cloud items and reduced local allocation from about 83.46 GB to 21.13 GB; host APFS
+  availability increased by about 61 GiB. DiskSage now admits that path only for a bounded regular
+  file whose fresh File Provider item-and-version fingerprint, upload/current/conflict/policy
+  flags, active-use probe, and exact approval all match immediately before execution. A dataless
+  apparent 10 GB file correctly contributes zero reclaim. Mixed folders, active readers, changed
+  versions, and stale approvals remain blocked.
+
 - A metadata-only inventory completed across 277,410 entries and found 118 locally materialized
   candidates totaling 62,060,163,072 allocated bytes. A fresh plan after provider drift retained
   110 eligible items totaling 58,836,140,032 allocated bytes and excluded eight items; private
@@ -20,20 +28,11 @@ queued or stale status.
   Files On-Demand eviction, observes the primary app separately from its resident File Provider
   helper, and permits only one bounded graceful `SIGTERM` fallback. It never force-kills the sync
   client, deletes a cloud item, or claims reclaimed bytes without post-action allocation proof.
-- The vendor `/unpin` command printed `Failed operation=2 ... status=-2` but exited zero, proving
-  that its exit code is not completion evidence. The same result was observed with the primary
-  OneDrive app running and with both NFC and NFD path spellings, so neither client lifecycle nor
-  Unicode normalization repairs that unsupported boundary. A harmless public-API identity probe against a
-  real OneDrive File Provider item then failed with `NSFileProviderErrorProviderNotFound` (`-2001`).
-  DiskSage therefore blocks OneDrive native execution. The macOS 11 helper and Rust boundary bind
-  item plus domain identity and reject path replacement, but they cannot authorize eviction.
-- The remaining acceptance proof is a reviewed provider-supported eviction on a freshly replanned item,
-  immutable result recording, and observed allocation reduction. Apple exposes OneDrive's registered
-  custom action to the extension implementation, not as a public third-party invocation API.
-  DiskSage now uses public AppKit through its existing opener dependency to select the exact approved
-  items in Finder, records that selection as non-mutating assistance, and verifies retained provider
-  identity plus allocated-byte reduction only after the customer chooses **Free Up Space**. Until
-  that postcheck succeeds, the measured 58.8 GB is opportunity, not reclaimed capacity.
+- The vendor `/unpin` command and cross-provider `NSFileProviderManager` identity probe remain
+  rejected boundaries: their earlier failures cannot prove eviction. The subsequent Foundation
+  FileManager observations supply the missing execution and post-allocation evidence without using
+  either vendor-private commands or cloud-object deletion. Finder remains a customer-controlled
+  fallback when a freshly approved native request fails.
 
 ## 2026-08-28 explicit open-PR worktree cutoff observation
 
@@ -1129,15 +1128,36 @@ runner's private workspace temp root instead of weakening the shared production 
 
 ## 2026-08-29 OneDrive native local-eviction boundary
 
+- Exact release lineage `9c010252fccbf92256ef1d19ffae063ea060becc` produced a macOS artifact ZIP
+  with SHA-256 `c6d2125684237adfa00c1ebef63b38179f7d40561c5f38e768526d0208968af8`.
+  Redacted receipt `disksage-cloud-live-20260829-9c010252` used a mode-0700 directory and
+  mode-0600 files; no private filesystem or cloud path is retained here.
+- The complete bounded iCloud inventory at `1787997809914` ms visited 126 entries and 122
+  files, emitted 120 candidates totaling 20,860,424,192 allocated bytes, and had no issue or
+  truncation. Its plan at `1787997836117` ms admitted zero items and zero allocated bytes,
+  fingerprint `5208ab891669fc55ae6be9265614f0e18b722cd67656d3872689081926856336`, with
+  `no-planned-items`. Receipt SHA-256 values are
+  `5fc603ccc4c0d7de505b38d6bff2262f435eb67ee87c61be6184795b703fce0a` (inventory)
+  and `2954393d0cd6f4dbc6b952dd729009fe44067a4371983af0dd96bd2205c578ce` (plan).
+- The complete OneDrive traversal at `1787997897288` ms visited 277,410 entries and
+  242,891 files. Its allocation-descending top 128 represented 9,792,589,824 allocated
+  bytes; result truncation means this is not whole-root authority. The plan at
+  `1787997919065` ms admitted all 128 emitted items totaling 5,272,006,656 allocated bytes,
+  fingerprint `ad0118c3316579e768df8de2e1942b8109c76e92381b4346b2824e146e01b80a`, with
+  the human-approval blocker. Receipt SHA-256 values are
+  `46f26c492c190129c7378e61be6aa447441819131ce4022133e03a580f415127` (inventory)
+  and `a09ae25b256ac66e0297bf8d9bf81a471857dc8b8116aafc2e20b99d548bf5c1` (plan).
+  These are read-only observations; no eviction or other mutation occurred.
+
 - The selected OneDrive root is a registered macOS File Provider domain. A bounded native status
   probe reported the root uploaded, current, unpaused, untrashed, and eligible for the provider's
   unpin action; its allocated subtree remains roughly 32 GiB. Presence in `CloudStorage` alone is
   not used as upload or eviction authority.
 - DiskSage now reuses its exact-path, provider-status, active-use, fingerprint approval, immutable
   receipt, and post-allocation verification contract for individual OneDrive files. Execution
-  uses exact item evidence, gracefully stops the verified OneDrive app,
-  uses Microsoft's `/unpin` Files On-Demand command, and restarts the client. Exact File Provider
-  item evidence replaces the optional `/getpin` query. It does
+  uses exact item evidence and Foundation's local-only ubiquitous-item eviction. Immediately
+  before that call, DiskSage re-resolves every mutable sync/policy gate plus exact item/version
+  identity. Exact File Provider evidence replaces vendor-command inference. It does
   not require OAuth and never deletes the visible cloud item.
 - The same evidence contract now supports bounded OneDrive batches through the provider-neutral
   `disksage-cloud-local-eviction-batch` CLI. Sync-incomplete items are excluded by index, every
@@ -1155,7 +1175,8 @@ runner's private workspace temp root instead of weakening the shared production 
   authority, but OneDrive's signed `/unpin` process reported `Failed operation=2` with native
   status `-2` for the first item while returning process status zero. DiskSage detected the failure,
   recorded the attempted batch, halted before item two, and reclaimed zero bytes. Replacing the
-  obsolete vendor command with Apple's current File Provider eviction API is therefore a P0 gap;
+  obsolete vendor command motivated the current Foundation boundary; exact-head execution and
+  post-allocation verification remain a P0 acceptance gap.
   the approved cloud items remain intact and locally materialized until that native path passes
   post-allocation verification.
 
@@ -1274,3 +1295,22 @@ runner's private workspace temp root instead of weakening the shared production 
 - The audit performed no mutation. Quarantine planning cannot begin without one survivor per group;
   execution additionally requires the exact plan phrase, fresh full re-audit, inactive files, and
   unchanged filesystem identities before any non-survivor moves to OS Trash.
+
+## 2026-08-29 Google Drive local-allocation boundary
+
+- A metadata-only audit detected four registered Google Drive File Provider roots: two personal,
+  one shared, and one organization root. Two bounded roots completed without evidence gaps; the
+  larger personal root remained incomplete after 11,732 entries because 22 entries could not meet
+  the metadata policy, and the shared root remained incomplete after 194 entries with eight entry
+  errors. No file content was opened or materialized.
+- At the 1 MiB allocation floor, all four roots produced zero local-copy candidates and zero
+  allocated candidate bytes. At the zero-byte reporting floor, only the incomplete personal scan
+  emitted candidates: 59 metadata-sized items totaling 319,488 allocated bytes. This is neither
+  meaningful reclaim nor complete-root eviction evidence.
+- The provider-generic batch planner rejects the Google Drive root before planning because its
+  public Foundation eligibility and postcondition contract has not been verified. DiskSage keeps
+  this fail-closed boundary: it emits no eligibility claim or executable fingerprint, and it does
+  not broaden the OneDrive/iCloud executor merely because Google Drive uses File Provider. The
+  private mode-0700/0600 receipt is identified as
+  `disksage-google-drive-live-20260829-e53df609`; no customer path or provider identifier is
+  recorded here, and no mutation occurred.

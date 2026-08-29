@@ -19,13 +19,13 @@ const BINARIES: [(&str, &str, &str, Option<&str>); 5] = [
     ),
     (
         "disksage-cloud-local-eviction-batch",
-        "usage: disksage-cloud-local-eviction-batch --cloud-root ABSOLUTE_PATH --manifest ABSOLUTE_JSON [--execute --approved-batch-fingerprint HEX64 --confirm-batch-fingerprint HEX64 --approved-by human:IDENTITY --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]",
+        "usage: disksage-cloud-local-eviction-batch --cloud-root ABSOLUTE_PATH --manifest ABSOLUTE_JSON [--execute [--finder-assistance] --approved-batch-fingerprint HEX64 --confirm-batch-fingerprint HEX64 --approved-by human:IDENTITY --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]",
         "알 수 없는 인자",
         Some("icloud-local-eviction-batch-invalid-utf8-argument"),
     ),
     (
         "disksage-icloud-local-eviction-batch",
-        "usage: disksage-icloud-local-eviction-batch --cloud-root ABSOLUTE_PATH --manifest ABSOLUTE_JSON [--execute --approved-batch-fingerprint HEX64 --confirm-batch-fingerprint HEX64 --approved-by human:IDENTITY --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]",
+        "usage: disksage-icloud-local-eviction-batch --cloud-root ABSOLUTE_PATH --manifest ABSOLUTE_JSON [--execute [--finder-assistance] --approved-batch-fingerprint HEX64 --confirm-batch-fingerprint HEX64 --approved-by human:IDENTITY --rationale TEXT --record-dir ABSOLUTE_LOCAL_DIRECTORY]",
         "알 수 없는 인자",
         Some("icloud-local-eviction-batch-invalid-utf8-argument"),
     ),

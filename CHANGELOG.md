@@ -5,6 +5,12 @@ All notable changes to DiskSage are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and released versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Unreleased entries describe integrated source changes only; they are not release evidence until the repository's review, CI, security, packaging, provenance, and release-acceptance gates pass on the exact tagged commit.
 
 ## [Unreleased]
+- Revalidate OneDrive's exact File Provider item/version identity immediately
+  before the Foundation eviction call, including every latest sync, policy,
+  size, eviction-capability, and Files On-Demand gate, and let approved OneDrive batches use
+  the same immutable per-item execution/checkpoint path as iCloud. Finder
+  selection remains available only through the explicit `--finder-assistance`
+  fallback.
 - Keep cloud-inventory argument failures bounded on Unix by reading native
   process arguments explicitly and rejecting non-UTF-8 option payloads with a
   fixed diagnostic instead of allowing Rust's Unicode argument iterator to
@@ -14,6 +20,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Release verified OneDrive local copies through Foundation only after an exact item-and-version
+  fingerprint, current upload/materialization flags, `isKeepDownloaded = 0`, no active handle, and
+  attributed approval survive an immediate re-plan. Postchecks and immutable records distinguish
+  a successful request from measured allocation recovery; dataless files report zero reclaim.
 - Audit non-identical JPEG, PNG, TIFF, and WebP photo candidates with a standards-grounded DCT
   perceptual hash, measured resolution/bit-depth/compression evidence, and an optional unweighted
   Pareto-dominant survivor recommendation. Managed Photos libraries remain excluded; a user must
