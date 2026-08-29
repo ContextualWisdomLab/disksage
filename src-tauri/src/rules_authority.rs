@@ -113,7 +113,7 @@ fn is_hex_digest(value: &str) -> bool {
 }
 
 /// Returns `(reviewed_root_metadata, relocation_stable_tree)` only for the current manifest
-/// version. Old 64-hex manifests intentionally fail closed at irreversible mutation boundaries.
+/// version. Old 64-hex manifests intentionally fail closed at cache-specific mutation boundaries.
 pub(crate) fn cache_manifest_components(manifest: &str) -> Option<(&str, &str)> {
     let mut parts = manifest.split(':');
     let version = parts.next()?;
@@ -138,10 +138,7 @@ fn upgrade_cache_target(mut target: CacheTarget) -> Result<CacheTarget, String> 
     }
     let object_id = crate::safety::filesystem_object_id(path)
         .map_err(|_| "cache-target-identity-unavailable".to_string())?;
-    if object_id != target.object_id {
-        return Err("cache-target-changed-during-authority-snapshot".into());
-    }
-    if modified_ms(&metadata) != target.modified_ms {
+    if object_id != target.object_id || modified_ms(&metadata) != target.modified_ms {
         return Err("cache-target-changed-during-authority-snapshot".into());
     }
 
@@ -157,10 +154,15 @@ fn upgrade_cache_target(mut target: CacheTarget) -> Result<CacheTarget, String> 
     Ok(target)
 }
 
-/// Snapshot one exact cache child with full reviewed-root metadata plus a relocation-stable tree
-/// proof. The split allows the original path to bind Unix ctime while the staged path can be
-/// revalidated after the expected atomic rename changes that ctime.
+/// Preserve the original relocation-stable manifest for generic safety callers that are not part
+/// of cache cleanup. Cache cleanup obtains the stronger reviewed authority via `cache_targets` or
+/// `cache_authority_target` instead.
 pub(crate) fn cache_target(path: &Path) -> Result<CacheTarget, String> {
+    crate::rules_catalog::cache_target(path)
+}
+
+/// Re-snapshot one staged/original cache target with the v2 reviewed-root authority contract.
+pub(crate) fn cache_authority_target(path: &Path) -> Result<CacheTarget, String> {
     upgrade_cache_target(crate::rules_catalog::cache_target(path)?)
 }
 
