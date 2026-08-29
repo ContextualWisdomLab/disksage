@@ -6,6 +6,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+const USAGE: &str = "usage: disksage-icloud-sync-health [--db-dir ABSOLUTE_CLOUDDOCS_DB_DIR] [--output ABSOLUTE_NEW_FILE.json]\n\
+다음 단계: 차단 상태와 근거 시각을 확인하세요. 이 명령은 동기화 데이터베이스를 변경하지 않습니다.";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Args {
     db_dir: PathBuf,
@@ -41,9 +44,7 @@ fn parse_args(args: &[String], home: &Path) -> Result<Args, String> {
                 }
             }
             "--help" | "-h" => {
-                return Err(
-                    "usage: disksage-icloud-sync-health [--db-dir ABSOLUTE_CLOUDDOCS_DB_DIR] [--output ABSOLUTE_NEW_FILE.json]".into(),
-                );
+                return Err(USAGE.into());
             }
             _unknown => return Err("icloud-sync-health-unknown-argument".into()),
         }
@@ -98,9 +99,7 @@ fn command_line_args() -> Result<Vec<String>, String> {
 fn run() -> Result<(), String> {
     let cli_args = command_line_args()?;
     if matches!(cli_args.as_slice(), [flag] if flag == "--help" || flag == "-h") {
-        println!(
-            "usage: disksage-icloud-sync-health [--db-dir ABSOLUTE_CLOUDDOCS_DB_DIR] [--output ABSOLUTE_NEW_FILE.json]"
-        );
+        println!("{USAGE}");
         return Ok(());
     }
 

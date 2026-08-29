@@ -57,8 +57,7 @@ fn assert_non_utf8_argument_is_bounded(binary: &str) {
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
 
-    let opaque =
-        OsString::from_vec(vec![b'-', b'-', b'o', b'p', b'a', b'q', b'u', b'e', 0xff]);
+    let opaque = OsString::from_vec(vec![b'-', b'-', b'o', b'p', b'a', b'q', b'u', b'e', 0xff]);
     let output = Command::new(binary)
         .env_remove("HOME")
         .arg(opaque)
@@ -74,9 +73,11 @@ fn assert_non_utf8_argument_is_bounded(binary: &str) {
         output.stdout.is_empty(),
         "invalid non-UTF-8 input must not emit successful output"
     );
-    let stderr =
-        String::from_utf8(output.stderr).expect("CLI diagnostics must remain valid UTF-8");
-    assert!(!stderr.is_empty(), "invalid non-UTF-8 input must remain visible");
+    let stderr = String::from_utf8(output.stderr).expect("CLI diagnostics must remain valid UTF-8");
+    assert!(
+        !stderr.is_empty(),
+        "invalid non-UTF-8 input must remain visible"
+    );
     assert!(
         !stderr.contains("opaque"),
         "invalid diagnostics must not echo opaque argument payloads"
@@ -90,7 +91,7 @@ fn assert_non_utf8_argument_is_bounded(binary: &str) {
 #[test]
 fn icloud_sync_health_help_is_successful_without_environment_dependency() {
     let binary = env!("CARGO_BIN_EXE_disksage-icloud-sync-health");
-    let expected_usage = "usage: disksage-icloud-sync-health [--db-dir ABSOLUTE_CLOUDDOCS_DB_DIR] [--output ABSOLUTE_NEW_FILE.json]";
+    let expected_usage = "usage: disksage-icloud-sync-health [--db-dir ABSOLUTE_CLOUDDOCS_DB_DIR] [--output ABSOLUTE_NEW_FILE.json]\n다음 단계: 차단 상태와 근거 시각을 확인하세요. 이 명령은 동기화 데이터베이스를 변경하지 않습니다.";
     assert_help_success(binary, "--help", expected_usage);
     assert_help_success(binary, "-h", expected_usage);
     assert_invalid_argument_is_bounded(binary, &["--opaque-option=not-shown"]);
@@ -102,7 +103,7 @@ fn icloud_sync_health_help_is_successful_without_environment_dependency() {
 #[test]
 fn provider_oauth_help_is_successful_without_environment_dependency() {
     let binary = env!("CARGO_BIN_EXE_disksage-provider-oauth");
-    let expected_usage = "usage: disksage-provider-oauth [--home ABSOLUTE_PATH] [--connections ABSOLUTE_PATH] (--list | --connect --cloud-root ABSOLUTE_PATH --client-id ID [--manual-browser] [--write-access] | --verify-capacity --cloud-root ABSOLUTE_PATH | --disconnect --cloud-root ABSOLUTE_PATH)";
+    let expected_usage = "usage: disksage-provider-oauth [--home ABSOLUTE_PATH] [--connections ABSOLUTE_PATH] (--list | --connect --cloud-root ABSOLUTE_PATH --client-id ID [--manual-browser] [--write-access] | --verify-capacity --cloud-root ABSOLUTE_PATH | --disconnect --cloud-root ABSOLUTE_PATH)\n다음 단계: 먼저 --list로 연결을 확인하세요. --connect는 동의 후 자격 증명을 로컬 보안 저장소에 보관하며, --write-access는 명시적으로 선택할 때만 요청됩니다. 출력에는 토큰이 포함되지 않습니다.";
     assert_help_success(binary, "--help", expected_usage);
     assert_help_success(binary, "-h", expected_usage);
     assert_invalid_argument_is_bounded(binary, &["--opaque-option=not-shown"]);
