@@ -977,7 +977,7 @@ fn file_provider_icloud_state(
         is_excluded_from_sync: status.is_excluded_from_sync,
         is_sync_paused: Some(status.is_sync_paused),
         is_trashed: Some(status.is_trashed),
-        allows_eviction: Some(status.allows_eviction),
+        allows_eviction: Some(status.allows_eviction && !status.is_keep_downloaded),
         provider_reported_bytes: Some(status.observed_bytes),
         item_identifier_fingerprint: Some(status.item_identifier_fingerprint.clone()),
     }
@@ -1822,6 +1822,35 @@ mod tests {
             assert!(!plan.eligible_after_human_approval, "{blocker}");
             assert!(plan.blockers.contains(&blocker.to_string()), "{blocker}");
         }
+    }
+
+    #[test]
+    fn keep_downloaded_policy_blocks_local_eviction() {
+        let mut status = crate::provider_sync::FileProviderItemStatus {
+            is_downloaded: true,
+            is_downloading: false,
+            is_most_recent_version_downloaded: true,
+            is_uploaded: true,
+            is_uploading: false,
+            has_unresolved_conflicts: false,
+            is_excluded_from_sync: false,
+            is_sync_paused: false,
+            is_trashed: false,
+            is_keep_downloaded: true,
+            capabilities: 805_306_495,
+            allows_eviction: true,
+            observed_bytes: 100,
+            item_identifier_fingerprint: "a".repeat(64),
+        };
+        assert_eq!(
+            file_provider_icloud_state(true, &status).allows_eviction,
+            Some(false)
+        );
+        status.is_keep_downloaded = false;
+        assert_eq!(
+            file_provider_icloud_state(true, &status).allows_eviction,
+            Some(true)
+        );
     }
 
     #[test]

@@ -201,7 +201,6 @@ impl FileProviderItemStatus {
             && !self.is_excluded_from_sync
             && !self.is_sync_paused
             && !self.is_trashed
-            && !self.is_keep_downloaded
     }
 }
 
@@ -1470,7 +1469,6 @@ mod tests {
             ("isExcludedFromSync = 0", "isExcludedFromSync = 1"),
             ("isSyncPaused = 0", "isSyncPaused = 1"),
             ("isTrashed = 0", "isTrashed = 1"),
-            ("isKeepDownloaded = 0", "isKeepDownloaded = 1"),
         ] {
             let output = uploaded_file_provider_output().replace(field, replacement);
             let snapshot = parse_file_providerctl_snapshot(&output, 42, "content-hash").unwrap();
