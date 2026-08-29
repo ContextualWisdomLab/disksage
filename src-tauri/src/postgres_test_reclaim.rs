@@ -297,6 +297,10 @@ impl PostgresCommandRunner for NativePostgresCommandRunner {
                 None => std::thread::sleep(Duration::from_millis(20)),
             }
         };
+        #[cfg(unix)]
+        unsafe {
+            libc::kill(-(child.id() as i32), libc::SIGKILL);
+        }
         let stdout = stdout_reader
             .join()
             .map_err(|_| "postgres-native-command-stdout-read-failed".to_string())??;
@@ -635,7 +639,11 @@ pub fn plan_with_runner(
     runner: &impl PostgresCommandRunner,
     observed_at_ms: u64,
 ) -> Result<PostgresTestClusterPlan, String> {
-    if !request.data_directory.is_absolute() || request.database_user.trim().is_empty() {
+    if !request.data_directory.is_absolute()
+        || request.database_user.trim().is_empty()
+        || request.database_user != request.database_user.trim()
+        || request.database_user.chars().any(char::is_control)
+    {
         return Err("postgres-plan-input-invalid".into());
     }
     let expected = request
@@ -806,10 +814,9 @@ pub fn execute_with_runner(
             "-D".into(),
             approved_plan.data_directory.clone(),
             "-m".into(),
-            // Smart shutdown establishes PostgreSQL's native admission barrier: new sessions are
-            // rejected and an already-racing client makes the bounded stop fail instead of being
-            // disconnected without approval.
-            "smart".into(),
+            // Fast shutdown terminates racing client sessions and cannot leave a timed-out smart
+            // shutdown continuing after this bounded command returns.
+            "fast".into(),
             "-w".into(),
             "stop".into(),
         ],
@@ -825,10 +832,10 @@ pub fn execute_with_runner(
         .flatten();
     let quarantine = volume_root.join(format!(".disksage-postgres-reclaim-{operation_id}"));
     let mut identity_still_matches = false;
-    let directory_removed = if shutdown_completed
+    let quarantined = shutdown_completed
         && !quarantine.exists()
-        && std::fs::rename(data_directory, &quarantine).is_ok()
-    {
+        && std::fs::rename(data_directory, &quarantine).is_ok();
+    let directory_removed = if quarantined {
         identity_still_matches = directory_identity(&quarantine)
             .is_ok_and(|identity| identity == approved_plan.data_directory_identity)
             && stopped_content_identity.as_ref().is_some_and(|expected| {
@@ -854,6 +861,8 @@ pub fn execute_with_runner(
         "postgres-filesystem-capacity-postcheck-incomplete"
     } else if !shutdown_completed {
         "postgres-shutdown-not-confirmed"
+    } else if !quarantined {
+        "postgres-data-directory-quarantine-failed"
     } else if !identity_still_matches {
         "postgres-data-directory-identity-changed"
     } else {
@@ -934,7 +943,7 @@ mod tests {
             if args.last().map(String::as_str) == Some("stop") {
                 assert!(args
                     .windows(2)
-                    .any(|pair| pair[0] == "-m" && pair[1] == "smart"));
+                    .any(|pair| pair[0] == "-m" && pair[1] == "fast"));
                 self.alive.set(false);
                 let _ = std::fs::remove_file(self.data_directory.join("postmaster.pid"));
                 return Ok(CommandOutput {
@@ -1049,6 +1058,12 @@ mod tests {
         assert_eq!(
             plan_with_runner(&request, &runner, 7).unwrap_err(),
             "postgres-expected-database-allowlist-invalid"
+        );
+        let (_temp, mut request, runner) = fixture();
+        request.database_user = "operator\nignored".into();
+        assert_eq!(
+            plan_with_runner(&request, &runner, 7).unwrap_err(),
+            "postgres-plan-input-invalid"
         );
         assert_eq!(pg_ctl_status_pid("server is running (PID: 42)\n"), Some(42));
         assert_eq!(
