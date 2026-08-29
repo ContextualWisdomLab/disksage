@@ -1,0 +1,89 @@
+#![cfg(unix)]
+
+use disksage_lib::provider_cache_reclaim::{
+    execute, plan_with_runtime, ProviderCacheCleanupMode, ProviderCacheCleanupRequest,
+    ProviderCacheKind,
+};
+use sha2::{Digest, Sha256};
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn fake_podman(temp: &Path, active_raw: &Path) -> PathBuf {
+    let config = temp.join("podman-config");
+    fs::create_dir_all(&config).unwrap();
+    fs::write(
+        config.join("podman-machine-default.json"),
+        format!(r#"{{"ImagePath":{{"Path":"{}"}}}}"#, active_raw.display()),
+    )
+    .unwrap();
+    let podman = temp.join("podman");
+    fs::write(
+        &podman,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'podman version test'; else printf '[{{\"Name\":\"podman-machine-default\",\"ConfigDir\":{{\"Path\":\"{}\"}}}}]'; fi\n",
+            config.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&podman, fs::Permissions::from_mode(0o700)).unwrap();
+    podman
+}
+
+#[test]
+fn permanent_purge_receipt_is_not_owner_writable() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let applications = temp.path().join("Applications");
+    let active_raw = temp.path().join("active.raw");
+    fs::write(&active_raw, b"active").unwrap();
+    let podman = fake_podman(temp.path(), &active_raw);
+
+    let seed_bytes = b"recreatable-podman-machine-seed";
+    let seed_digest = sha256_hex(seed_bytes);
+    let seed_cache = home.join(".local/share/containers/podman/machine/applehv/cache");
+    fs::create_dir_all(&seed_cache).unwrap();
+    fs::write(seed_cache.join(format!("{seed_digest}.raw.zst")), seed_bytes).unwrap();
+
+    let plan = plan_with_runtime(&home, &applications, &podman, 1);
+    assert!(plan.evidence_complete, "{:?}", plan.issues);
+    let candidate = plan
+        .candidates
+        .iter()
+        .find(|candidate| candidate.kind == ProviderCacheKind::PodmanMachineSeed)
+        .unwrap();
+    let request = ProviderCacheCleanupRequest {
+        path: candidate.path.clone(),
+        evidence_fingerprint: candidate.evidence_fingerprint.clone(),
+        object_id: candidate.object_id.clone(),
+    };
+    let data = temp.path().join("data");
+    fs::create_dir_all(&data).unwrap();
+
+    let result = execute(
+        &home,
+        &applications,
+        &podman,
+        &[request],
+        &plan.plan_fingerprint,
+        &plan.plan_fingerprint,
+        plan.exact_approval_phrase.as_deref().unwrap(),
+        "verified regenerable provider cache",
+        &data.join("journal.jsonl"),
+        &data.join("receipts"),
+        ProviderCacheCleanupMode::PermanentPurge,
+        2,
+    )
+    .unwrap();
+
+    let mode = fs::metadata(&result.immutable_receipt_path)
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o222, 0, "immutable receipt retained write bits");
+}
