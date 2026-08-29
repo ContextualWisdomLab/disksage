@@ -117,6 +117,19 @@ fn append_receipt_record(
         .map_err(|_| "photos-receipt-sync-failed".to_string())
 }
 
+fn prepare_receipt_file_with(
+    mut file: std::fs::File,
+    path: &std::path::Path,
+    append: impl FnOnce(&mut std::fs::File) -> Result<(), String>,
+) -> Result<std::fs::File, String> {
+    if let Err(error) = append(&mut file) {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err(error);
+    }
+    Ok(file)
+}
+
 fn hash_json<T: Serialize>(value: &T) -> Result<String, String> {
     let bytes = serde_json::to_vec(value).map_err(|_| "photos-evidence-serialization-failed")?;
     Ok(blake3::hash(&bytes).to_hex().to_string())
@@ -430,12 +443,14 @@ pub async fn execute_photos_duplicate_deletion(
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let mut file = options
+    let file = options
         .open(&path)
         .map_err(|_| "photos-receipt-create-failed")?;
     let mut prepared_receipt = receipt.clone();
     prepared_receipt.system_confirmation_completed = false;
-    append_receipt_record(&mut file, "prepared", &prepared_receipt)?;
+    let mut file = prepare_receipt_file_with(file, &path, |file| {
+        append_receipt_record(file, "prepared", &prepared_receipt)
+    })?;
     let native_plan = plan.clone();
     let native_result =
         match tauri::async_runtime::spawn_blocking(move || native::delete(&native_plan)).await {
@@ -599,6 +614,29 @@ mod tests {
         );
         assert_eq!(records[1]["phase"], "completed");
         assert_eq!(records[1]["receipt"]["system_confirmation_completed"], true);
+    }
+
+    #[test]
+    fn failed_receipt_preparation_removes_retry_blocking_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("receipt.jsonl");
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        let error = prepare_receipt_file_with(file, &path, |file| {
+            file.write_all(b"partial").unwrap();
+            Err("photos-receipt-sync-failed".into())
+        })
+        .unwrap_err();
+        assert_eq!(error, "photos-receipt-sync-failed");
+        assert!(!path.exists());
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .unwrap();
     }
 
     #[test]
