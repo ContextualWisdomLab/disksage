@@ -245,10 +245,12 @@ fn storage_check_evidence(
         schema_version: 1,
         machine: machine.to_string(),
         damaged_layer_records: ids.len() as u64,
-        candidate_set_sha256: fingerprint,
+        candidate_set_sha256: fingerprint.clone(),
         evidence_complete: complete,
         exact_approval_phrase: (complete && !ids.is_empty()).then(|| {
-            format!("DiskSage Podman machine storage repair 승인 {scope_fingerprint}")
+            format!(
+                "DiskSage Podman machine storage repair 승인 {scope_fingerprint} evidence {fingerprint}"
+            )
         }),
         issue: (!complete).then(|| "podman-storage-check-evidence-incomplete".into()),
     };
@@ -258,8 +260,9 @@ fn storage_check_evidence(
 /// Capture bounded native Podman storage-check evidence.
 ///
 /// The candidate fingerprint is evidence about the current damaged-layer set. The approval phrase
-/// is deliberately bound to the selected machine plus the exact broad native repair command,
-/// because `podman system check --repair` cannot be constrained to a caller-supplied layer list.
+/// binds the selected machine, the exact broad native repair command, and that current evidence
+/// fingerprint. Podman's native repair remains machine-scoped, but candidate drift must require a
+/// fresh human confirmation before mutation.
 pub fn plan_podman_storage_repair(
     podman_bin: &Path,
     machine: &str,
