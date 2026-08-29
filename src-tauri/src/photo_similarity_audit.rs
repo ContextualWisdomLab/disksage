@@ -825,7 +825,12 @@ pub fn execute_photo_quarantine(
                     outcome.moved_to_trash,
                     outcome
                         .terminal_journal_error
-                        .map(|_| "photo-quarantine-terminal-journal-failed".into()),
+                        .map(|_| "photo-quarantine-terminal-journal-failed".into())
+                        .or_else(|| {
+                            outcome
+                                .staging_cleanup_error
+                                .map(|_| "photo-quarantine-staging-cleanup-failed".into())
+                        }),
                 ),
                 Err(_) => (false, Some("photo-quarantine-trash-failed".into())),
             }

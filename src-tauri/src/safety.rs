@@ -502,19 +502,28 @@ where
 pub struct TrashDeleteOutcome {
     pub moved_to_trash: bool,
     pub terminal_journal_error: Option<String>,
+    pub staging_cleanup_error: Option<String>,
 }
 
 fn trash_delete_outcome(
     mutation: Result<(), SafetyError>,
     terminal_journal: Result<(), SafetyError>,
+    staging_cleanup_error: Option<String>,
 ) -> Result<TrashDeleteOutcome, SafetyError> {
     match mutation {
         Ok(()) => Ok(TrashDeleteOutcome {
             moved_to_trash: true,
             terminal_journal_error: terminal_journal.err().map(|error| error.to_string()),
+            staging_cleanup_error,
         }),
         Err(error) => Err(error),
     }
+}
+
+fn cleanup_empty_staging_dir(staging_dir: &Path) -> Option<String> {
+    std::fs::remove_dir(staging_dir)
+        .err()
+        .map(|error| format!("staging directory cleanup failed: {error}"))
 }
 
 pub fn trash_delete_if_identity_with_outcome(
@@ -565,6 +574,7 @@ pub fn trash_delete_if_identity_with_outcome(
         return Err(error);
     }
 
+    let mut staging_cleanup_error = None;
     let result = (|| -> Result<(), SafetyError> {
         if let Err(error) = std::fs::rename(path, &staged) {
             let _ = std::fs::remove_dir(&staging_dir);
@@ -601,6 +611,7 @@ pub fn trash_delete_if_identity_with_outcome(
                 }
             };
         }
+        staging_cleanup_error = cleanup_empty_staging_dir(&staging_dir);
         Ok(())
     })();
     entry.outcome = match &result {
@@ -608,7 +619,7 @@ pub fn trash_delete_if_identity_with_outcome(
         Err(error) => format!("error:{error}"),
     };
     let terminal_journal = journal_append(journal_path, &entry);
-    trash_delete_outcome(result, terminal_journal)
+    trash_delete_outcome(result, terminal_journal, staging_cleanup_error)
 }
 
 pub fn trash_delete_if_identity(
@@ -627,6 +638,9 @@ pub fn trash_delete_if_identity(
     )?;
     if let Some(error) = outcome.terminal_journal_error {
         return Err(SafetyError::Journal(error));
+    }
+    if let Some(error) = outcome.staging_cleanup_error {
+        return Err(SafetyError::Trash(error));
     }
     Ok(())
 }
@@ -899,12 +913,22 @@ mod tests {
     #[test]
     fn successful_trash_preserves_moved_state_when_terminal_journal_fails() {
         let outcome =
-            trash_delete_outcome(Ok(()), Err(SafetyError::Journal("disk-full".into()))).unwrap();
+            trash_delete_outcome(Ok(()), Err(SafetyError::Journal("disk-full".into())), None)
+                .unwrap();
         assert!(outcome.moved_to_trash);
         assert_eq!(
             outcome.terminal_journal_error.as_deref(),
             Some("저널 기록 실패: disk-full")
         );
+    }
+
+    #[test]
+    fn successful_trash_removes_its_empty_private_staging_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let staging = tmp.path().join(".disksage-trash-staging");
+        std::fs::create_dir(&staging).unwrap();
+        assert_eq!(cleanup_empty_staging_dir(&staging), None);
+        assert!(!staging.exists());
     }
     use std::path::Path;
 
