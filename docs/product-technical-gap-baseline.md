@@ -20,7 +20,12 @@ queued or stale status.
   Files On-Demand eviction, observes the primary app separately from its resident File Provider
   helper, and permits only one bounded graceful `SIGTERM` fallback. It never force-kills the sync
   client, deletes a cloud item, or claims reclaimed bytes without post-action allocation proof.
-- The remaining acceptance proof is a successful vendor `/unpin` on a freshly replanned item,
+- The vendor `/unpin` command printed `Failed operation=2 ... status=-2` but exited zero, proving
+  that its exit code is not completion evidence. DiskSage now uses Apple's public
+  `NSFileProviderManager` item/domain translation and eviction APIs through a digest-bound native
+  helper, with bounded asynchronous completion and the existing immutable approval/checkpoint
+  contract. No OAuth or cloud-object deletion is involved.
+- The remaining acceptance proof is a reviewed native eviction on a freshly replanned item,
   immutable result recording, and observed allocation reduction. Until then the measured 58.8 GB
   is opportunity, not reclaimed capacity.
 
