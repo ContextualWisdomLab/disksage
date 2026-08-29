@@ -7,6 +7,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ## [Unreleased]
 - Keep a completed Trash move successful when its terminal audit record cannot be confirmed, and
   surface a separate next-action warning across cache, development-artifact, and orphan cleanup.
+- Revalidate every selected photo group member and block the whole quarantine when a survivor or
+  candidate is active, replaced, dataless, or reachable through a hard-link alias.
 - Ship the macOS OneDrive Finder post-action verifier as a checksummed, provenance-attested
   operational CLI, and require fresh provider-sync evidence before allocation reduction counts as
   verified local-space recovery.
