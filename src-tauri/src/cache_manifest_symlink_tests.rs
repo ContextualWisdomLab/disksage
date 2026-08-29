@@ -69,3 +69,95 @@ fn manifest_variable_fields_are_length_framed() {
         "cache manifest must length-frame variable fields before hashing"
     );
 }
+
+#[test]
+fn reviewed_directory_snapshot_binds_root_ctime_before_staging() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let temp = tempfile::tempdir().expect("temporary root-metadata fixture");
+    let target = temp.path().join("generated-cache");
+    fs::create_dir(&target).expect("create generated cache target");
+    fs::write(target.join("payload.bin"), b"generated")
+        .expect("write generated cache payload");
+
+    let reviewed = crate::rules::cache_target(&target).expect("snapshot reviewed cache target");
+    let before = fs::symlink_metadata(&target).expect("read reviewed root metadata");
+    let original_mode = before.permissions().mode() & 0o7777;
+    let temporary_mode = if original_mode & 0o100 != 0 {
+        original_mode & !0o100
+    } else {
+        original_mode | 0o100
+    };
+    let mut permissions = before.permissions();
+    permissions.set_mode(temporary_mode);
+    fs::set_permissions(&target, permissions).expect("temporarily mutate root metadata");
+    let mut permissions = fs::symlink_metadata(&target)
+        .expect("read temporary root metadata")
+        .permissions();
+    permissions.set_mode(original_mode);
+    fs::set_permissions(&target, permissions).expect("restore reviewed permission bits");
+
+    let after = fs::symlink_metadata(&target).expect("read changed root metadata");
+    assert_ne!(
+        (before.ctime(), before.ctime_nsec()),
+        (after.ctime(), after.ctime_nsec()),
+        "fixture must produce a ctime-only root metadata transition"
+    );
+    let live = crate::rules::cache_target(&target).expect("snapshot live cache target");
+    assert_eq!(reviewed.object_id, live.object_id);
+    assert_eq!(reviewed.modified_ms, live.modified_ms);
+    assert_ne!(
+        reviewed, live,
+        "reviewed root metadata changes must invalidate destructive authority before staging"
+    );
+}
+
+#[test]
+fn permanent_delete_rejects_ctime_only_root_drift() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let temp = tempfile::tempdir().expect("temporary permanent-delete fixture");
+    let target_path = temp.path().join("generated-cache");
+    fs::create_dir(&target_path).expect("create generated cache target");
+    fs::write(target_path.join("payload.bin"), b"generated")
+        .expect("write generated cache payload");
+    let reviewed = crate::rules::cache_target(&target_path).expect("snapshot reviewed cache target");
+    let before = fs::symlink_metadata(&target_path).expect("read reviewed root metadata");
+    let original_mode = before.permissions().mode() & 0o7777;
+    let temporary_mode = if original_mode & 0o100 != 0 {
+        original_mode & !0o100
+    } else {
+        original_mode | 0o100
+    };
+    let mut permissions = before.permissions();
+    permissions.set_mode(temporary_mode);
+    fs::set_permissions(&target_path, permissions).expect("temporarily mutate root metadata");
+    let mut permissions = fs::symlink_metadata(&target_path)
+        .expect("read temporary root metadata")
+        .permissions();
+    permissions.set_mode(original_mode);
+    fs::set_permissions(&target_path, permissions).expect("restore reviewed permission bits");
+    let after = fs::symlink_metadata(&target_path).expect("read changed root metadata");
+    assert_ne!(
+        (before.ctime(), before.ctime_nsec()),
+        (after.ctime(), after.ctime_nsec()),
+        "fixture must produce a ctime-only root metadata transition"
+    );
+
+    let journal = temp.path().join("journal.jsonl");
+    let result = crate::safety::permanent_delete_dir_if_identity(
+        &target_path,
+        &reviewed.object_id,
+        reviewed.bytes,
+        reviewed.modified_ms,
+        &reviewed.manifest_fingerprint,
+        &journal,
+        77,
+    );
+
+    assert!(
+        result.is_err(),
+        "stale reviewed root metadata must not authorize irreversible deletion"
+    );
+    assert!(target_path.exists(), "the stale target must remain intact");
+}
