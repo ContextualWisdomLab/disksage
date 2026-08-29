@@ -188,6 +188,12 @@ fn metadata_fingerprint(records: &[String]) -> String {
 /// 모으고(순서 무관), 2패스에서 다른 후보의 하위 경로인 것을 제거한 뒤에야 크기를
 /// 계산해 중첩분을 이중 계산하지 않는다.
 pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArtifact> {
+    // File Provider trees require provider-native state evidence. Treating a cache-shaped
+    // directory inside one as an ordinary local artifact could propagate a Trash mutation to the
+    // cloud account, so this generic cleanup path must not inventory it at all.
+    if crate::cloud::path_inside_managed_file_provider_storage(root) {
+        return Vec::new();
+    }
     let mut candidates: Vec<PathBuf> = Vec::new();
     let walker = walkdir::WalkDir::new(root)
         .follow_links(false)
@@ -203,6 +209,9 @@ pub fn find_artifacts(root: &Path, min_age_days: u64, now_ms: u64) -> Vec<DevArt
             continue;
         }
         let path = e.path();
+        if crate::cloud::path_inside_managed_file_provider_storage(path) {
+            continue;
+        }
         let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
         let Some((_, markers)) = artifact_kind(&name) else { continue };
         let parent = path.parent().unwrap_or(root);
@@ -418,6 +427,21 @@ mod tests {
             [".mypy_cache", ".pytest_cache", ".ruff_cache"].into()
         );
         assert!(!found.iter().any(|artifact| artifact.project == "unowned"));
+    }
+
+    #[test]
+    fn provider_managed_python_cache_is_never_a_cleanup_candidate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let provider_root = tmp.path().join("Library/CloudStorage/OneDrive-Personal");
+        let cache = project(&provider_root, "app", "pytest.ini", ".pytest_cache");
+
+        assert!(find_artifacts(tmp.path(), 0, u64::MAX).is_empty());
+        assert!(cache.exists(), "inventory must not mutate provider content");
+
+        // Re-entering at the provider root must remain fail closed rather than bypassing the
+        // ancestor filter used by a wider scan.
+        assert!(find_artifacts(&provider_root, 0, u64::MAX).is_empty());
+        assert!(cache.exists(), "provider content must remain untouched");
     }
 
     #[test]
