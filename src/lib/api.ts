@@ -206,14 +206,14 @@ export const inspectPodmanReclaim = () =>
   invoke<PodmanReclaimPlan>("inspect_podman_reclaim");
 
 export interface ProviderCacheCandidate {
-  kind: "podman_machine_seed" | "edge_superseded_installed_copy" | "edge_crx_cache" | "one_drive_temporary_cache";
+  kind: "podman_machine_seed" | "edge_superseded_installed_copy" | "edge_crx_cache";
   path: string;
   logical_bytes: number;
   allocated_bytes: number | null;
   object_id: string;
   content_manifest: string;
   evidence_fingerprint: string;
-  active_use: { evidence_complete: boolean; active: boolean; results_truncated: boolean; error: string | null };
+  active_use: ActiveUseEvidence;
   recreation_source: string;
 }
 
