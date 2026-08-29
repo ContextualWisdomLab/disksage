@@ -20,7 +20,8 @@ pub struct ScanResult {
 }
 
 pub const TOP_FILES_CAP: usize = 1000;
-const CLOUD_SCAN_GUIDANCE: &str = "클라우드 파일은 일반 스캔 대신 클라우드 보관 화면에서 확인하세요.";
+const CLOUD_SCAN_GUIDANCE: &str =
+    "클라우드 파일은 일반 스캔 대신 클라우드 보관 화면에서 확인하세요.";
 const FILE_PROVIDER_STORAGE_COMPONENT: &str = "File Provider Storage";
 
 fn macos_provider_managed_roots_for_home(home: &Path) -> Vec<PathBuf> {
@@ -92,8 +93,23 @@ fn is_private_macos_file_provider_storage(path: &Path, roots: &[PathBuf]) -> boo
         .is_some_and(|library| matches_private_file_provider_layout(path, &library))
 }
 
+fn is_live_account_public_provider_storage(path: &Path) -> bool {
+    let Some(library) = live_macos_user_library(path) else {
+        return false;
+    };
+    [
+        library.join("CloudStorage"),
+        library.join("Mobile Documents"),
+    ]
+    .iter()
+    .any(|root| path == root || path.starts_with(root))
+}
+
 fn is_macos_provider_managed_path(path: &Path, roots: &[PathBuf]) -> bool {
-    roots.iter().any(|root| path == root || path.starts_with(root))
+    roots
+        .iter()
+        .any(|root| path == root || path.starts_with(root))
+        || is_live_account_public_provider_storage(path)
         || is_private_macos_file_provider_storage(path, roots)
 }
 
@@ -121,10 +137,7 @@ fn is_provider_managed_path(_path: &Path, _roots: &[PathBuf]) -> bool {
     false
 }
 
-fn scan_root_access_issue_with_roots(
-    root: &Path,
-    roots: &[PathBuf],
-) -> Option<&'static str> {
+fn scan_root_access_issue_with_roots(root: &Path, roots: &[PathBuf]) -> Option<&'static str> {
     let traversal_root = read_only_traversal_root(root);
     is_macos_provider_managed_path(&traversal_root, roots).then_some(CLOUD_SCAN_GUIDANCE)
 }
@@ -153,7 +166,11 @@ pub(crate) fn read_only_traversal_root(root: &Path) -> PathBuf {
     std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf())
 }
 
-pub(crate) fn logical_scan_path(path: &Path, traversal_root: &Path, requested_root: &Path) -> PathBuf {
+pub(crate) fn logical_scan_path(
+    path: &Path,
+    traversal_root: &Path,
+    requested_root: &Path,
+) -> PathBuf {
     path.strip_prefix(traversal_root)
         .map(|relative| requested_root.join(relative))
         .unwrap_or_else(|_| path.to_path_buf())
@@ -202,13 +219,19 @@ pub fn scan_dir_with_interval(
         seen += 1;
         // 순회/메타데이터 오류는 skipped로 집계 — 한 줄 let-else (오류 분기가 플랫폼별 테스트에만
         // 잡히더라도 라인 자체는 항상 실행돼 커버리지가 안정적)
-        let Ok(e) = entry else { stats.skipped += 1; continue };
+        let Ok(e) = entry else {
+            stats.skipped += 1;
+            continue;
+        };
         let logical_path = logical_scan_path(e.path(), &traversal_root, root);
         if e.file_type().is_dir() {
             stats.dirs += 1;
             dir_sizes.entry(logical_path).or_insert(0);
         } else if e.file_type().is_file() {
-            let Ok(md) = e.metadata() else { stats.skipped += 1; continue };
+            let Ok(md) = e.metadata() else {
+                stats.skipped += 1;
+                continue;
+            };
             let size = md.len();
             stats.files += 1;
             stats.bytes += size;
@@ -389,11 +412,13 @@ mod tests {
         let other_home = PathBuf::from("/Users/other");
 
         assert!(is_macos_provider_managed_path(
-            &other_home.join("Library/Containers/com.vendor/Data/File Provider Storage/account/item"),
+            &other_home
+                .join("Library/Containers/com.vendor/Data/File Provider Storage/account/item"),
             &roots,
         ));
         assert!(is_macos_provider_managed_path(
-            &other_home.join("Library/Group Containers/group.vendor/File Provider Storage/account/item"),
+            &other_home
+                .join("Library/Group Containers/group.vendor/File Provider Storage/account/item"),
             &roots,
         ));
         assert!(is_macos_provider_managed_path(
@@ -403,10 +428,30 @@ mod tests {
     }
 
     #[test]
+    fn macos_public_provider_roots_are_excluded_for_every_live_account() {
+        let roots = macos_provider_managed_roots_for_home(Path::new("/Users/current"));
+        for managed in [
+            "/Users/other/Library/CloudStorage/OneDrive/item.bin",
+            "/Users/other/Library/Mobile Documents/com~apple~CloudDocs/item.bin",
+        ] {
+            assert!(is_macos_provider_managed_path(Path::new(managed), &roots));
+        }
+        assert!(!is_macos_provider_managed_path(
+            Path::new("/Volumes/Backup/Users/other/Library/CloudStorage/archive.bin"),
+            &roots,
+        ));
+        assert!(!is_macos_provider_managed_path(
+            Path::new("/Users/current/project/Users/other/Library/CloudStorage/archive.bin"),
+            &roots,
+        ));
+    }
+
+    #[test]
     fn macos_cross_account_fallback_rejects_nested_and_mounted_home_copies() {
         let current_home = PathBuf::from("/Users/current");
         let roots = macos_provider_managed_roots_for_home(&current_home);
-        let private_suffix = "Library/Containers/com.vendor/Data/File Provider Storage/account/item";
+        let private_suffix =
+            "Library/Containers/com.vendor/Data/File Provider Storage/account/item";
 
         assert!(!is_macos_provider_managed_path(
             &current_home.join("project/Users/demo").join(private_suffix),
@@ -563,7 +608,9 @@ mod tests {
     fn unreadable_dir_counts_as_skipped() {
         use std::os::unix::fs::PermissionsExt;
         // root는 권한 비트를 무시하므로 이 테스트는 의미 없음 (한 줄: CI 비-root에서 return 라인 미실행 방지)
-        if running_as_root() { return; }
+        if running_as_root() {
+            return;
+        }
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         let locked = root.join("locked");
@@ -574,7 +621,11 @@ mod tests {
         let res = scan_dir(root, &AtomicBool::new(false), noop);
 
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(res.stats.skipped >= 1, "expected skipped >= 1, got {}", res.stats.skipped);
+        assert!(
+            res.stats.skipped >= 1,
+            "expected skipped >= 1, got {}",
+            res.stats.skipped
+        );
         assert_eq!(res.stats.files, 0);
     }
 
@@ -582,7 +633,9 @@ mod tests {
     #[test]
     fn metadata_failure_counts_as_skipped() {
         use std::os::unix::fs::PermissionsExt;
-        if running_as_root() { return; }
+        if running_as_root() {
+            return;
+        }
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         let noexec = root.join("noexec");
@@ -594,7 +647,11 @@ mod tests {
         let res = scan_dir(root, &AtomicBool::new(false), noop);
 
         fs::set_permissions(&noexec, fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(res.stats.skipped >= 1, "expected skipped >= 1, got {}", res.stats.skipped);
+        assert!(
+            res.stats.skipped >= 1,
+            "expected skipped >= 1, got {}",
+            res.stats.skipped
+        );
         assert_eq!(res.stats.bytes, 0);
     }
 
