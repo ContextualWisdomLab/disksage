@@ -123,6 +123,9 @@ fn canonical_top_level(path: &Path) -> Result<(PathBuf, PathBuf), String> {
     }
     let canonical =
         std::fs::canonicalize(path).map_err(|_| "shared-temp-artifact-unavailable".to_string())?;
+    if canonical.to_str().is_none() {
+        return Err("shared-temp-path-non-utf8-unsupported".into());
+    }
     let parent = canonical
         .parent()
         .ok_or_else(|| "shared-temp-artifact-not-top-level".to_string())?;
@@ -432,6 +435,7 @@ pub fn plan_shared_temp_reclaim(
     } else if active_use.active {
         blockers.push("shared-temp-active-use-detected".into());
     }
+    blockers.push("shared-temp-permanent-execution-disabled".into());
     blockers.sort();
     blockers.dedup();
     let mut plan = SharedTempReclaimPlan {
@@ -449,7 +453,7 @@ pub fn plan_shared_temp_reclaim(
         active_use,
         plan_fingerprint: String::new(),
         exact_approval_phrase: None,
-        eligible_after_human_approval: blockers.is_empty(),
+        eligible_after_human_approval: false,
         blockers,
         filesystem_mutation_executed: false,
     };
@@ -539,7 +543,10 @@ fn private_destination_path(
     {
         return Err(error.into());
     }
-    let parent = destination.parent().filter(|parent| !parent.as_os_str().is_empty()).ok_or_else(|| error.to_string())?;
+    let parent = destination
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| error.to_string())?;
     let parent_metadata = std::fs::symlink_metadata(parent).map_err(|_| error.to_string())?;
     if !parent_metadata.is_dir()
         || parent_metadata.file_type().is_symlink()
@@ -594,91 +601,113 @@ fn validate_journal_path(artifact_path: &Path, journal_path: &Path) -> Result<Pa
 }
 
 /// Freshly revalidate, permanently remove, and persist a create-only read-only receipt.
-#[cfg(unix)]
-pub fn execute_shared_temp_reclaim(
+#[cfg(any())]
+fn disabled_legacy_shared_temp_reclaim(
     approved_plan: &SharedTempReclaimPlan,
     approval: &SharedTempReclaimApproval,
     journal_path: &Path,
     receipt_path: &Path,
     requested_at_ms: u64,
 ) -> Result<SharedTempReclaimReceipt, String> {
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-    if approval.version != SHARED_TEMP_RECLAIM_VERSION
-        || approval.plan_fingerprint != approved_plan.plan_fingerprint
-        || approved_plan.exact_approval_phrase.as_deref() != Some(&approval.exact_approval_phrase)
-        || requested_at_ms < approval.approved_at_ms
-        || requested_at_ms.saturating_sub(approval.approved_at_ms) > MAX_APPROVAL_AGE_MS
+    // Fail closed until producer authenticity and the final revalidation, journal, deletion, and
+    // receipt can be made one OS-enforced atomic authority transition. Same-user marker files and
+    // path-based opens cannot establish that contract without TOCTOU or evidence-loss windows.
+    return Err("shared-temp-permanent-execution-disabled".into());
+    #[allow(unreachable_code)]
     {
-        return Err("shared-temp-execution-approval-invalid-or-stale".into());
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        if approval.version != SHARED_TEMP_RECLAIM_VERSION
+            || approval.plan_fingerprint != approved_plan.plan_fingerprint
+            || approved_plan.exact_approval_phrase.as_deref()
+                != Some(&approval.exact_approval_phrase)
+            || requested_at_ms < approval.approved_at_ms
+            || requested_at_ms.saturating_sub(approval.approved_at_ms) > MAX_APPROVAL_AGE_MS
+        {
+            return Err("shared-temp-execution-approval-invalid-or-stale".into());
+        }
+        let live = plan_shared_temp_reclaim(Path::new(&approved_plan.path), requested_at_ms)?;
+        if live.plan_fingerprint != approved_plan.plan_fingerprint
+            || live.root_object_id != approved_plan.root_object_id
+            || !live.eligible_after_human_approval
+        {
+            return Err("shared-temp-live-plan-mismatch".into());
+        }
+        let artifact_path = Path::new(&live.path);
+        let shared_root = Path::new(&live.shared_root);
+        let receipt_path = validate_receipt_path(artifact_path, receipt_path)?;
+        let journal_path = validate_journal_path(artifact_path, journal_path)?;
+        let before = crate::volume_pressure::snapshot_volume(shared_root, requested_at_ms)
+            .map_err(|_| "shared-temp-volume-before-unavailable".to_string())?;
+        crate::safety::permanent_delete_dir_if_identity(
+            artifact_path,
+            &live.root_object_id,
+            live.allocated_bytes,
+            &journal_path,
+            requested_at_ms,
+        )
+        .map_err(|error| format!("shared-temp-permanent-delete-failed:{error}"))?;
+        let path_absence_verified = !artifact_path.exists();
+        if !path_absence_verified {
+            return Err("shared-temp-path-still-present".into());
+        }
+        let completed_at_ms = crate::cloud::system_now_ms();
+        let after = crate::volume_pressure::snapshot_volume(shared_root, completed_at_ms)
+            .map_err(|_| "shared-temp-volume-after-unavailable".to_string())?;
+        let mut receipt = SharedTempReclaimReceipt {
+            schema_kind: "disksage.shared-temp-reclaim-receipt".into(),
+            version: SHARED_TEMP_RECLAIM_VERSION,
+            receipt_id: String::new(),
+            approval_id: approval.approval_id.clone(),
+            plan_fingerprint: live.plan_fingerprint,
+            completed_at_ms,
+            allocated_bytes_upper_bound: live.allocated_bytes,
+            before_available_bytes: before.available_bytes,
+            after_available_bytes: after.available_bytes,
+            observed_available_gain_bytes: after
+                .available_bytes
+                .saturating_sub(before.available_bytes),
+            path_absence_verified,
+            permanent_delete_executed: true,
+        };
+        receipt.receipt_id = receipt_id(&receipt);
+        let encoded = serde_json::to_vec_pretty(&receipt)
+            .map_err(|_| "shared-temp-receipt-json-invalid".to_string())?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o400)
+            .open(&receipt_path)
+            .map_err(|_| "shared-temp-receipt-create-failed".to_string())?;
+        file.write_all(&encoded)
+            .and_then(|_| file.sync_all())
+            .map_err(|_| "shared-temp-receipt-write-failed".to_string())?;
+        if file
+            .metadata()
+            .map_err(|_| "shared-temp-receipt-metadata-failed".to_string())?
+            .permissions()
+            .mode()
+            & 0o777
+            != 0o400
+        {
+            return Err("shared-temp-receipt-mode-invalid".into());
+        }
+        File::open(receipt_path.parent().unwrap())
+            .and_then(|directory| directory.sync_all())
+            .map_err(|_| "shared-temp-receipt-parent-sync-failed".to_string())?;
+        Ok(receipt)
     }
-    let live = plan_shared_temp_reclaim(Path::new(&approved_plan.path), requested_at_ms)?;
-    if live.plan_fingerprint != approved_plan.plan_fingerprint
-        || live.root_object_id != approved_plan.root_object_id
-        || !live.eligible_after_human_approval
-    {
-        return Err("shared-temp-live-plan-mismatch".into());
-    }
-    let artifact_path = Path::new(&live.path);
-    let shared_root = Path::new(&live.shared_root);
-    let receipt_path = validate_receipt_path(artifact_path, receipt_path)?;
-    let journal_path = validate_journal_path(artifact_path, journal_path)?;
-    let before = crate::volume_pressure::snapshot_volume(shared_root, requested_at_ms)
-        .map_err(|_| "shared-temp-volume-before-unavailable".to_string())?;
-    crate::safety::permanent_delete_dir_if_identity(
-        artifact_path,
-        &live.root_object_id,
-        live.allocated_bytes,
-        &journal_path,
-        requested_at_ms,
-    )
-    .map_err(|error| format!("shared-temp-permanent-delete-failed:{error}"))?;
-    let path_absence_verified = !artifact_path.exists();
-    if !path_absence_verified {
-        return Err("shared-temp-path-still-present".into());
-    }
-    let completed_at_ms = crate::cloud::system_now_ms();
-    let after = crate::volume_pressure::snapshot_volume(shared_root, completed_at_ms)
-        .map_err(|_| "shared-temp-volume-after-unavailable".to_string())?;
-    let mut receipt = SharedTempReclaimReceipt {
-        schema_kind: "disksage.shared-temp-reclaim-receipt".into(),
-        version: SHARED_TEMP_RECLAIM_VERSION,
-        receipt_id: String::new(),
-        approval_id: approval.approval_id.clone(),
-        plan_fingerprint: live.plan_fingerprint,
-        completed_at_ms,
-        allocated_bytes_upper_bound: live.allocated_bytes,
-        before_available_bytes: before.available_bytes,
-        after_available_bytes: after.available_bytes,
-        observed_available_gain_bytes: after.available_bytes.saturating_sub(before.available_bytes),
-        path_absence_verified,
-        permanent_delete_executed: true,
-    };
-    receipt.receipt_id = receipt_id(&receipt);
-    let encoded = serde_json::to_vec_pretty(&receipt)
-        .map_err(|_| "shared-temp-receipt-json-invalid".to_string())?;
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o400)
-        .open(&receipt_path)
-        .map_err(|_| "shared-temp-receipt-create-failed".to_string())?;
-    file.write_all(&encoded)
-        .and_then(|_| file.sync_all())
-        .map_err(|_| "shared-temp-receipt-write-failed".to_string())?;
-    if file
-        .metadata()
-        .map_err(|_| "shared-temp-receipt-metadata-failed".to_string())?
-        .permissions()
-        .mode()
-        & 0o777
-        != 0o400
-    {
-        return Err("shared-temp-receipt-mode-invalid".into());
-    }
-    File::open(receipt_path.parent().unwrap())
-        .and_then(|directory| directory.sync_all())
-        .map_err(|_| "shared-temp-receipt-parent-sync-failed".to_string())?;
-    Ok(receipt)
+}
+
+/// Fail closed because portable path APIs cannot provide an atomic, authenticated deletion proof.
+#[cfg(unix)]
+pub fn execute_shared_temp_reclaim(
+    _approved_plan: &SharedTempReclaimPlan,
+    _approval: &SharedTempReclaimApproval,
+    _journal_path: &Path,
+    _receipt_path: &Path,
+    _requested_at_ms: u64,
+) -> Result<SharedTempReclaimReceipt, String> {
+    Err("shared-temp-permanent-execution-disabled".into())
 }
 
 #[cfg(not(unix))]
@@ -710,29 +739,16 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn completed_artifact_requires_exact_fresh_tree() {
+    fn completed_artifact_is_advisory_while_permanent_execution_is_disabled() {
         let artifact = artifact("disksage-completed-");
         std::fs::write(artifact.path().join("result.bin"), b"done").unwrap();
         seal_completed_temp_artifact(artifact.path(), "disksage:test", 10).unwrap();
         let plan = plan_shared_temp_reclaim(artifact.path(), 11).unwrap();
-        assert!(plan.eligible_after_human_approval, "{:?}", plan.blockers);
-        let phrase = plan.exact_approval_phrase.clone().unwrap();
-        let approval =
-            approve_shared_temp_reclaim(&plan, &phrase, 12, "human:test", "verified completion")
-                .unwrap();
-        std::fs::write(artifact.path().join("result.bin"), b"changed").unwrap();
-        let private = tempfile::tempdir().unwrap();
-        assert_eq!(
-            execute_shared_temp_reclaim(
-                &plan,
-                &approval,
-                &private.path().join("journal.jsonl"),
-                &private.path().join("receipt.json"),
-                13
-            )
-            .unwrap_err(),
-            "shared-temp-live-plan-mismatch"
-        );
+        assert!(!plan.eligible_after_human_approval);
+        assert!(plan.exact_approval_phrase.is_none());
+        assert!(plan
+            .blockers
+            .contains(&"shared-temp-permanent-execution-disabled".into()));
         assert!(artifact.path().exists());
     }
 
@@ -761,45 +777,44 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn successful_reclaim_records_real_volume_observation_and_read_only_receipt() {
-        use std::os::unix::fs::PermissionsExt;
+    fn approval_is_not_issued_while_permanent_execution_is_disabled() {
         let artifact = artifact("disksage-reclaimable-");
         std::fs::write(artifact.path().join("result.bin"), vec![1_u8; 16 * 1024]).unwrap();
         seal_completed_temp_artifact(artifact.path(), "disksage:test", 10).unwrap();
         let plan = plan_shared_temp_reclaim(artifact.path(), 11).unwrap();
-        assert!(plan.eligible_after_human_approval, "{:?}", plan.blockers);
-        let approval = approve_shared_temp_reclaim(
-            &plan,
-            plan.exact_approval_phrase.as_deref().unwrap(),
-            12,
-            "human:test",
-            "producer completion verified",
-        )
-        .unwrap();
-        let path = artifact.keep();
-        let private = tempfile::tempdir().unwrap();
-        let journal = private.path().join(format!(
-            "disksage-shared-temp-journal-{}-{}.jsonl",
-            std::process::id(),
-            &plan.plan_fingerprint[..12]
-        ));
-        let receipt_path = private.path().join("receipt.json");
-        let receipt =
-            execute_shared_temp_reclaim(&plan, &approval, &journal, &receipt_path, 13).unwrap();
-        assert!(!path.exists());
-        assert!(receipt.permanent_delete_executed && receipt.path_absence_verified);
-        assert!(receipt.before_available_bytes > 0 && receipt.after_available_bytes > 0);
         assert_eq!(
-            std::fs::metadata(&receipt_path)
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777,
-            0o400
+            approve_shared_temp_reclaim(
+                &plan,
+                "forged phrase",
+                12,
+                "human:test",
+                "producer completion verified",
+            )
+            .unwrap_err(),
+            "shared-temp-approval-plan-mismatch"
         );
-        let persisted: SharedTempReclaimReceipt =
-            serde_json::from_reader(File::open(&receipt_path).unwrap()).unwrap();
-        assert_eq!(persisted.receipt_id, receipt.receipt_id);
-        let _ = std::fs::remove_file(journal);
+        assert!(artifact.path().exists());
+        let forged = SharedTempReclaimApproval {
+            version: SHARED_TEMP_RECLAIM_VERSION,
+            approval_id: "forged".into(),
+            plan_fingerprint: plan.plan_fingerprint.clone(),
+            exact_approval_phrase: "forged phrase".into(),
+            approved_at_ms: 12,
+            approved_by: "human:forged".into(),
+            rationale: "forged".into(),
+        };
+        let private = tempfile::tempdir().unwrap();
+        assert_eq!(
+            execute_shared_temp_reclaim(
+                &plan,
+                &forged,
+                &private.path().join("journal.jsonl"),
+                &private.path().join("receipt.json"),
+                13,
+            )
+            .unwrap_err(),
+            "shared-temp-permanent-execution-disabled"
+        );
+        assert!(artifact.path().exists());
     }
 }

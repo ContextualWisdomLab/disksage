@@ -8,10 +8,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
-- Plan and permanently reclaim completed DiskSage-owned top-level shared-temporary artifacts only
-  when a create-only completion marker, exact tree fingerprint approval, fresh active-use and
-  identity revalidation, deletion journal, and read-only receipt all agree. Receipts record actual
-  native filesystem available bytes before and after; age alone never grants authority.
+- Inspect completed DiskSage-owned top-level shared-temporary artifacts through create-only
+  lifecycle evidence. Permanent execution and approval fail closed until producer authenticity and
+  atomic revalidation, journal, deletion, and receipt durability have an OS-enforced contract; age
+  or a same-user marker never grants mutation authority.
 - Reclaim regenerable Python tool state from `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `.tox`,
   and `.nox` through the existing identity, active-use, rescan, and journal safety contract;
   `setup.cfg` discovery recognizes the exact tox `[tox:tox]` section.

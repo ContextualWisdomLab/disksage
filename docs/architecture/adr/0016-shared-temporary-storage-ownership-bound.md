@@ -26,14 +26,12 @@ The shared root itself, foreign/system-owned trees, linked objects, and incomple
 remain protected. The candidate's displayed bytes are the sum of the ownership-qualified children,
 not an estimate for the whole shared directory. No age threshold or quality heuristic is used.
 
-For permanent physical reclaim, ownership alone is insufficient. DiskSage supports only a
-top-level directory sealed by its producer with a create-only, read-only completion record bound to
-the directory object. Planning additionally rejects any link, socket, lock/PID file, Git worktree
-marker, database marker/file, or current process reference. Approval binds the complete tree
-fingerprint and allocated byte count. Execution repeats the plan within five minutes, deletes only
-the same object through the existing identity journal, verifies absence, measures native filesystem
-available bytes before and after, and creates a read-only receipt. The shared root is never an
-execution target.
+For permanent physical reclaim, ownership alone is insufficient. DiskSage records advisory
+lifecycle evidence only for a top-level directory sealed by its producer. Permanent execution and
+human approval remain disabled: a same-user marker cannot authenticate the producer, while
+path-based APIs cannot atomically combine final tree revalidation, deletion, journal durability,
+and receipt durability. The shared root and every child therefore remain non-mutation targets in
+this v1 contract.
 
 ## Consequences
 
@@ -43,8 +41,8 @@ execution target.
   large or old.
 - Ownership traversal adds bounded inspection work; over-limit or unreadable trees remain visible
   only as unresolved shared temporary space.
-- A DiskSage producer can make its completed temporary output eligible for permanent reclaim without
-  relying on age. Unsealed or changed output remains ineligible.
+- A DiskSage producer can mark completed temporary output for advisory inspection without relying
+  on age. The marker never grants deletion authority.
 
 ## Alternatives rejected
 
