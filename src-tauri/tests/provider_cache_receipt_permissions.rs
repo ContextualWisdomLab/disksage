@@ -5,13 +5,30 @@ use disksage_lib::provider_cache_reclaim::{
     ProviderCacheKind,
 };
 use sha2::{Digest, Sha256};
+use std::ffi::OsString;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
+struct PathGuard(Option<OsString>);
+
+impl Drop for PathGuard {
+    fn drop(&mut self) {
+        match self.0.take() {
+            Some(path) => unsafe { std::env::set_var("PATH", path) },
+            None => unsafe { std::env::remove_var("PATH") },
+        }
+    }
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn executable(path: &Path, body: &str) {
+    fs::write(path, body).unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
 }
 
 fn fake_podman(temp: &Path, active_raw: &Path) -> PathBuf {
@@ -23,15 +40,13 @@ fn fake_podman(temp: &Path, active_raw: &Path) -> PathBuf {
     )
     .unwrap();
     let podman = temp.join("podman");
-    fs::write(
+    executable(
         &podman,
-        format!(
+        &format!(
             "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'podman version test'; else printf '[{{\"Name\":\"podman-machine-default\",\"ConfigDir\":{{\"Path\":\"{}\"}}}}]'; fi\n",
             config.display()
         ),
-    )
-    .unwrap();
-    fs::set_permissions(&podman, fs::Permissions::from_mode(0o700)).unwrap();
+    );
     podman
 }
 
@@ -49,6 +64,15 @@ fn permanent_purge_receipt_is_not_owner_writable() {
     let seed_cache = home.join(".local/share/containers/podman/machine/applehv/cache");
     fs::create_dir_all(&seed_cache).unwrap();
     fs::write(seed_cache.join(format!("{seed_digest}.raw.zst")), seed_bytes).unwrap();
+
+    // Active-use evidence is part of the cleanup authority. Keep this regression independent of
+    // runner packages by providing deterministic no-holder `lsof` and empty `ps` evidence.
+    let fake_bin = temp.path().join("fake-bin");
+    fs::create_dir(&fake_bin).unwrap();
+    executable(&fake_bin.join("lsof"), "#!/bin/sh\nexit 1\n");
+    executable(&fake_bin.join("ps"), "#!/bin/sh\nexit 0\n");
+    let _path_guard = PathGuard(std::env::var_os("PATH"));
+    unsafe { std::env::set_var("PATH", &fake_bin) };
 
     let plan = plan_with_runtime(&home, &applications, &podman, 1);
     assert!(plan.evidence_complete, "{:?}", plan.issues);
