@@ -120,7 +120,13 @@ fn backing_disk_path(colima_home: &Path, profile: &str) -> Result<PathBuf, Strin
     if home_meta.file_type().is_symlink() || !home_meta.is_dir() {
         return Err("colima-home-not-trusted-directory".into());
     }
-    let instance = colima_home.join("_lima").join(lima_instance_name(profile));
+    let lima_root = colima_home.join("_lima");
+    let lima_root_meta = std::fs::symlink_metadata(&lima_root)
+        .map_err(|_| "colima-lima-storage-unavailable".to_string())?;
+    if lima_root_meta.file_type().is_symlink() || !lima_root_meta.is_dir() {
+        return Err("colima-lima-storage-not-trusted-directory".into());
+    }
+    let instance = lima_root.join(lima_instance_name(profile));
     let instance_meta = std::fs::symlink_metadata(&instance)
         .map_err(|_| "colima-profile-storage-unavailable".to_string())?;
     if instance_meta.file_type().is_symlink() || !instance_meta.is_dir() {
@@ -372,6 +378,23 @@ mod tests {
                 "colima-backing-disk-not-regular"
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn intermediate_lima_symlink_cannot_redirect_backing_disk_authority() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join(".colima");
+        let outside = temp.path().join("outside/colima-work");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        File::create(outside.join("diffdisk")).unwrap();
+        std::os::unix::fs::symlink(temp.path().join("outside"), home.join("_lima")).unwrap();
+
+        assert_eq!(
+            backing_disk_path(&home, "work").unwrap_err(),
+            "colima-lima-storage-not-trusted-directory"
+        );
     }
 
     #[test]
