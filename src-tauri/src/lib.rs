@@ -52,6 +52,8 @@ pub mod cloud_adr;
 pub mod cloud_plan_view;
 pub mod cloud_local_inventory;
 pub mod cloud_local_eviction;
+/// Read-only Colima disk allocation evidence and fail-closed compact capability receipts.
+pub mod colima_disk_reclaim;
 #[cfg(not(coverage))]
 pub mod cloud_local_eviction_batch;
 #[cfg(not(coverage))]
