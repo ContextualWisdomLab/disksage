@@ -165,16 +165,22 @@ fn run_mutation_bounded(
     timeout: Duration,
     label: &str,
 ) -> Result<BoundedOutput, String> {
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    command
         .args(args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command
         .spawn()
         .map_err(|_| format!("{label}-spawn"))?;
 
     let Some(stdout) = child.stdout.take() else {
-        let _ = child.kill();
-        let _ = child.wait();
+        terminate_mutation_process_tree(&mut child);
         return Ok(BoundedOutput {
             status_code: MUTATION_CAPTURE_STATUS_CODE,
             stdout: String::new(),
@@ -182,8 +188,7 @@ fn run_mutation_bounded(
         });
     };
     let Some(stderr) = child.stderr.take() else {
-        let _ = child.kill();
-        let _ = child.wait();
+        terminate_mutation_process_tree(&mut child);
         return Ok(BoundedOutput {
             status_code: MUTATION_CAPTURE_STATUS_CODE,
             stdout: String::new(),
@@ -198,8 +203,7 @@ fn run_mutation_bounded(
         match child.try_wait() {
             Ok(Some(status)) => break status.code().unwrap_or(-1),
             Ok(None) if started.elapsed() >= timeout => {
-                let _ = child.kill();
-                let _ = child.wait();
+                terminate_mutation_process_tree(&mut child);
                 let _ = stdout_reader.join();
                 let _ = stderr_reader.join();
                 return Ok(BoundedOutput {
@@ -210,8 +214,7 @@ fn run_mutation_bounded(
             }
             Ok(None) => thread::sleep(Duration::from_millis(25)),
             Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                terminate_mutation_process_tree(&mut child);
                 let _ = stdout_reader.join();
                 let _ = stderr_reader.join();
                 return Ok(BoundedOutput {
@@ -264,6 +267,15 @@ fn run_mutation_bounded(
         stdout,
         stderr,
     })
+}
+
+fn terminate_mutation_process_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(-(child.id() as i32), libc::SIGKILL);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn run_text(
@@ -677,7 +689,8 @@ mod mutation_runner_tests {
             r#"#!/bin/sh
 root="$(dirname "$0")"
 touch "$root/mutation-ran"
-sleep 2
+sleep 5 &
+wait
 "#,
         )
         .expect("write mutation fixture");
@@ -685,6 +698,7 @@ sleep 2
         permissions.set_mode(0o700);
         fs::set_permissions(&fake, permissions).unwrap();
 
+        let started = Instant::now();
         let output = run_mutation_bounded(
             &fake,
             &[],
@@ -694,6 +708,7 @@ sleep 2
         .expect("spawned timeout must remain representable as output evidence");
 
         assert_eq!(output.status_code, MUTATION_TIMEOUT_STATUS_CODE);
+        assert!(started.elapsed() < Duration::from_secs(1));
         assert!(temp.path().join("mutation-ran").exists());
     }
 }
