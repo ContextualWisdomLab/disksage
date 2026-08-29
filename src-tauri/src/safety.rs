@@ -505,6 +505,18 @@ pub struct TrashDeleteOutcome {
     pub staging_cleanup_error: Option<String>,
 }
 
+/// Return post-mutation warnings without rewriting a completed Trash move as a failed mutation.
+pub fn trash_delete_outcome_warning(outcome: &TrashDeleteOutcome) -> Option<String> {
+    let mut warnings = Vec::new();
+    if let Some(error) = &outcome.terminal_journal_error {
+        warnings.push(format!("trash move completed but terminal audit record failed: {error}"));
+    }
+    if let Some(error) = &outcome.staging_cleanup_error {
+        warnings.push(error.clone());
+    }
+    (!warnings.is_empty()).then(|| warnings.join("; "))
+}
+
 fn trash_delete_outcome(
     mutation: Result<(), SafetyError>,
     terminal_journal: Result<(), SafetyError>,
@@ -933,6 +945,9 @@ mod tests {
             outcome.terminal_journal_error.as_deref(),
             Some("저널 기록 실패: disk-full")
         );
+        let warning = trash_delete_outcome_warning(&outcome).unwrap();
+        assert!(warning.contains("terminal audit record failed"));
+        assert!(warning.contains("disk-full"));
     }
 
     #[test]

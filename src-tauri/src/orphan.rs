@@ -263,23 +263,30 @@ pub fn move_to_trash(
     let mut items = Vec::with_capacity(prepared.len());
     let mut moved_count = 0usize;
     for candidate in prepared {
-        let result = match crate::safety::trash_delete_if_identity(
+        let result = match crate::safety::trash_delete_if_identity_with_outcome(
             &candidate.path,
             &candidate.object_id,
             candidate.bytes,
             journal_path,
             now_ms,
         ) {
-            Ok(()) => {
+            Ok(outcome) if outcome.moved_to_trash => {
                 moved_count += 1;
                 OrphanCleanupItemResult {
                     candidate_id: candidate.candidate_id.clone(),
                     bytes: candidate.bytes,
                     attempted: true,
                     moved_to_trash: true,
-                    error: None,
+                    error: crate::safety::trash_delete_outcome_warning(&outcome),
                 }
             }
+            Ok(_) => OrphanCleanupItemResult {
+                candidate_id: candidate.candidate_id.clone(),
+                bytes: candidate.bytes,
+                attempted: true,
+                moved_to_trash: false,
+                error: Some("orphan-trash-operation-failed".into()),
+            },
             Err(_) => OrphanCleanupItemResult {
                 candidate_id: candidate.candidate_id.clone(),
                 bytes: candidate.bytes,
