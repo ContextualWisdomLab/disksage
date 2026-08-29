@@ -17,7 +17,7 @@ fn write_edge_version(app: PathBuf, version: &str) {
 }
 
 #[test]
-fn permanent_directory_purge_removes_an_unchanged_exact_edge_cache() {
+fn permanent_directory_purge_fails_closed_and_preserves_exact_edge_cache() {
     let temp = tempfile::tempdir().expect("temporary provider-cache fixture");
     let home = temp.path().join("home");
     let applications = temp.path().join("Applications");
@@ -49,7 +49,7 @@ fn permanent_directory_purge_removes_an_unchanged_exact_edge_cache() {
     let data = temp.path().join("data");
     fs::create_dir_all(&data).expect("create audit data directory");
 
-    let result = execute(
+    let error = execute(
         &home,
         &applications,
         Path::new("/missing/podman"),
@@ -65,12 +65,11 @@ fn permanent_directory_purge_removes_an_unchanged_exact_edge_cache() {
         ProviderCacheCleanupMode::PermanentPurge,
         2,
     )
-    .expect("cleanup result envelope");
+    .expect_err("provider directories must never be recursively purged");
 
-    assert_eq!(result.completed_count, 1);
-    assert_eq!(result.items.len(), 1);
-    assert!(result.items[0].completed);
-    assert!(result.items[0].error.is_none());
-    assert!(!stale_cache.exists());
-    assert!(Path::new(&result.immutable_receipt_path).is_file());
+    assert_eq!(error, "provider-cache-permanent-directory-purge-disabled");
+    assert!(stale_cache.is_dir());
+    assert_eq!(fs::read(stale_cache.join("first.bin")).unwrap(), b"first");
+    assert_eq!(fs::read(stale_cache.join("second.bin")).unwrap(), b"second");
+    assert!(!data.join("receipts").exists());
 }
