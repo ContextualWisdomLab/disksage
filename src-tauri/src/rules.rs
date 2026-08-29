@@ -583,7 +583,21 @@ fn modified_ms(metadata: &std::fs::Metadata) -> u64 {
 pub fn cache_targets(dir: &Path) -> Result<Vec<CacheTarget>, String> {
     let root = CatalogRoot::open(dir).ok_or("cache-root-not-current-or-safe")?;
     let shared_temp = cfg!(unix) && dir == shared_temp_root();
-    let paths = root.child_paths();
+    let paths = root
+        .child_paths()
+        .into_iter()
+        .flat_map(|path| {
+            if dir.file_name().and_then(|name| name.to_str()) == Some(".npm")
+                && path.file_name().and_then(|name| name.to_str()) == Some("_npx")
+            {
+                CatalogRoot::open(&path)
+                    .map(|root| root.child_paths())
+                    .unwrap_or_default()
+            } else {
+                vec![path]
+            }
+        })
+        .collect::<Vec<_>>();
     if paths.len() > MAX_CACHE_TARGETS {
         return Err("cache-target-limit-exceeded".into());
     }
@@ -802,6 +816,26 @@ mod tests {
                 .bytes,
             4
         );
+    }
+
+    #[test]
+    fn npm_cache_targets_probe_each_npx_environment_independently() {
+        let tmp = tempfile::tempdir().unwrap();
+        let npm = tmp.path().join(".npm");
+        fs::create_dir_all(npm.join("_npx/live")).unwrap();
+        fs::create_dir(npm.join("_npx/inactive")).unwrap();
+        fs::create_dir(npm.join("_cacache")).unwrap();
+        fs::write(npm.join("_npx/live/package.json"), b"{}").unwrap();
+        fs::write(npm.join("_npx/inactive/package.json"), b"{}").unwrap();
+
+        let targets = cache_targets(&npm).unwrap();
+
+        assert_eq!(targets.len(), 3);
+        assert!(targets.iter().any(|target| target.path.ends_with("_npx/live")));
+        assert!(targets
+            .iter()
+            .any(|target| target.path.ends_with("_npx/inactive")));
+        assert!(targets.iter().all(|target| !target.path.ends_with("_npx")));
     }
 
     #[test]

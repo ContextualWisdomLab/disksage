@@ -22,9 +22,9 @@ collected independently for each reviewed child with bounded, path-local `lsof` 
 - incomplete evidence or an active process leaves that child untouched and returns a stable blocker;
 - an inactive child may be moved through DiskSage's identity-bound OS-Trash path;
 - the cache root and all unrelated children remain untouched;
-- the operation is journaled; pip and Corepack directory children may be deleted permanently after
-  the same complete inactive-use and exact-identity checks because their native managers establish
-  them as disposable download archives. Other normal cache cleanup remains reversible.
+- the operation is journaled; npm, pip, and Corepack directory children may be deleted permanently
+  after the same complete inactive-use and exact-identity checks because their native managers
+  establish them as disposable package archives. Other normal cache cleanup remains reversible.
 - a separate, explicit --purge-proven-cache-trash path may permanently remove only direct
   OS-Trash children whose exact known cache name and structural signature are revalidated, whose
   bounded tree contains no symlink, and whose deletion is journaled as pending/ok/error. No
@@ -38,7 +38,7 @@ treated as evidence that the inactive entry is safe without its own probe.
 
 - A user can clean inactive uv archive entries while active MCP/uv runtimes continue running.
 - Changed, replaced, symlinked, or unreadable entries fail closed before they reach the OS Trash.
-- The normal operation is reversible through the OS Trash. The pip/Corepack exception reclaims
+- The normal operation is reversible through the OS Trash. The npm/pip/Corepack exception reclaims
   inactive directory children immediately; the explicit proven-cache purge remains limited to
   structurally verified cache data already placed in Trash.
 - Cache cleanup does not create cloud-copy receipts, provider-sync evidence, or source-eviction
@@ -48,8 +48,8 @@ treated as evidence that the inactive entry is safe without its own probe.
 
 - **Root-wide active-use probe:** safe but unnecessarily blocks unrelated inactive entries.
 - **Direct recursive deletion of live cache roots:** not reversible and cannot prove per-entry
-  identity at mutation time. Permanent deletion is limited to inactive, identity-bound pip/Corepack
-  directory children or structurally proven cache already in OS Trash.
+  identity at mutation time. Permanent deletion is limited to inactive, identity-bound
+  npm/pip/Corepack directory children or structurally proven cache already in OS Trash.
 - **Copying caches to iCloud/OneDrive/Google Drive:** wastes cloud capacity for reproducible data and
   conflates cache cleanup with user-file lineage.
 
@@ -62,7 +62,7 @@ and Playwright). This is a narrow policy, not a
 general path-based delete rule: each direct child is still bound to its reviewed object identity,
 byte count, and modification time, and the active-use probe must be complete and idle. DiskSage
 staging entries named `.disksage-trash-*` are excluded so a prior cleanup cannot become a recursive
-probe target. The cache root is preserved, pip/Corepack directories use the journaled permanent
+probe target. The cache root is preserved, npm/pip/Corepack directories use the journaled permanent
 generated-directory primitive, other successful operations go to OS Trash, and any child in use is
 reported and left untouched.
 

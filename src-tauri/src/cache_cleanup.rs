@@ -336,7 +336,7 @@ pub(crate) fn clean_regenerable_caches_inner(
                         &targets,
                         journal_path,
                         now_ms,
-                        matches!(candidate.id.as_str(), "pip-cache" | "node-cache"),
+                        matches!(candidate.id.as_str(), "npm-cache" | "pip-cache" | "node-cache"),
                     )
                         .unwrap_or_else(|error| {
                             vec![CleanResult {

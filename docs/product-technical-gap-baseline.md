@@ -1244,3 +1244,7 @@ runner's private workspace temp root instead of weakening the shared production 
   reported free-space counter during the observation, so only the direct allocation delta is
   attributed to this cleanup. After focused verification, `cargo clean` removed its 1.5 GiB target
   and increased APFS availability by 1,528,696 KiB; that build cleanup is accounted separately.
+- The npm `_npx` root held eight environments used by running MCP processes and six independently
+  inactive environments totaling about 480 MiB. DiskSage now expands that root into one
+  identity-bound target per environment, so active tools remain protected while an inactive npx
+  installation can be reclaimed without treating the whole root as active.
