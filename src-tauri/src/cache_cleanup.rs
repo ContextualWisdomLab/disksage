@@ -244,7 +244,6 @@ pub(crate) fn clean_cache_contents_inner(
     requested_targets: &[rules::CacheTarget],
     journal_path: &Path,
     now_ms: u64,
-    permanent_directories: bool,
 ) -> Result<Vec<CleanResult>, String> {
     if !rules::is_catalog_path(bases, dir) {
         return Err("cache-root-not-current-or-safe".into());
@@ -332,14 +331,7 @@ pub(crate) fn clean_regenerable_caches_inner(
             match rules::cache_targets(&path) {
                 Ok(targets) if targets.is_empty() => Vec::new(),
                 Ok(targets) => {
-                    clean_cache_contents_inner(
-                        bases,
-                        &path,
-                        &targets,
-                        journal_path,
-                        now_ms,
-                        false,
-                    )
+                    clean_cache_contents_inner(bases, &path, &targets, journal_path, now_ms)
                     .unwrap_or_else(|error| {
                         vec![CleanResult {
                             path: candidate.path,
@@ -406,7 +398,7 @@ pub fn clean_inactive_npx_environments_headless(
         Err(_) => return Err("cache-root-metadata-unavailable".into()),
     }
     let targets = rules::cache_targets(&npx)?;
-    clean_cache_contents_inner(&bases, &npx, &targets, journal_path, now_ms, false)
+    clean_cache_contents_inner(&bases, &npx, &targets, journal_path, now_ms)
 }
 
 /// Read the exact cache children that may be included in a later identity-bound Trash request.
@@ -436,7 +428,6 @@ pub fn clean_cache_contents(
         &targets,
         &journal_path,
         crate::commands::now_ms(),
-        false,
     )
 }
 
@@ -474,7 +465,7 @@ mod tests {
         fs::create_dir(&bases.temp).unwrap();
         let journal = tmp.path().join("journal.jsonl");
 
-        let error = clean_cache_contents_inner(&bases, tmp.path(), &[], &journal, 1, false)
+        let error = clean_cache_contents_inner(&bases, tmp.path(), &[], &journal, 1)
             .err()
             .expect("non-catalog root must be rejected");
 
@@ -492,7 +483,7 @@ mod tests {
         let mut targets = rules::cache_targets(&bases.temp).unwrap();
         targets[0].bytes += 1;
 
-        let error = clean_cache_contents_inner(&bases, &bases.temp, &targets, &journal, 1, false)
+        let error = clean_cache_contents_inner(&bases, &bases.temp, &targets, &journal, 1)
             .err()
             .expect("stale target snapshot must be rejected");
 
@@ -591,7 +582,7 @@ mod tests {
         std::os::unix::fs::symlink(&outside, &bases.temp).unwrap();
         let journal = tmp.path().join("journal.jsonl");
 
-        let error = clean_cache_contents_inner(&bases, &bases.temp, &[], &journal, 1, false)
+        let error = clean_cache_contents_inner(&bases, &bases.temp, &[], &journal, 1)
             .err()
             .expect("symlink root must be rejected");
         assert_eq!(error, "cache-root-not-current-or-safe");
