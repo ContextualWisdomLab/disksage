@@ -25,7 +25,8 @@ use std::time::{Duration, Instant};
 
 pub const GIT_WORKTREE_AUDIT_SCHEMA_KIND: &str = "disksage.git-worktree-audit/v2";
 const MAX_COMMAND_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
-const MAX_REFERENCE_BYTES: usize = 1_024;
+/// Maximum UTF-8 byte length accepted for a Git reference at the audit boundary.
+pub const MAX_REFERENCE_BYTES: usize = 1_024;
 const MAX_REACHABLE_COMMITS: usize = 100_000;
 const GIT_WORKTREE_REMOVAL_VERSION: u32 = 1;
 const MAX_RATIONALE_BYTES: usize = 1_000;
@@ -328,7 +329,7 @@ fn validate_options(options: GitWorktreeAuditOptions) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_reference(reference: &str) -> Result<(), String> {
+pub fn validate_reference(reference: &str) -> Result<(), String> {
     if reference.is_empty()
         || reference.len() > MAX_REFERENCE_BYTES
         || reference.starts_with('-')
@@ -761,6 +762,10 @@ pub(crate) fn active_use_evidence(
     }
     let mut pids = BTreeSet::new();
     for field in result.stdout.split(|byte| *byte == 0) {
+        // `lsof -F0` terminates each field with NUL and each process/file set with NL. Therefore
+        // every PID field after the first may begin with that set-separator newline. Strip exactly
+        // the protocol separator before interpreting the field; do not trim arbitrary bytes.
+        let field = field.strip_prefix(b"\n").unwrap_or(field);
         let Some(raw_pid) = field.strip_prefix(b"p") else {
             continue;
         };

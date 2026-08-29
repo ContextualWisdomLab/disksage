@@ -1,6 +1,6 @@
 # ADR-0002: Cache cleanup is per-item active-use evidence bound
 
-**Status:** Accepted  
+**Status:** Accepted
 **Date:** 2026-08-20
 
 ## Context

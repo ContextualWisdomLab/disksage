@@ -69,7 +69,7 @@ authoritative, and no merge is claimed from queued or stale status.
 - The implementation head observed before this documentation update was `88001d8`: existing-copy
   adoption no longer requires native-copy staging headroom, so a low-disk user can verify and adopt
   an already-present cloud copy without creating local staging data.
-- Naruon cloud-copy readiness is now schema version 7 and carries the path-free pre-copy evidence
+- Naruon cloud-copy readiness is now schema version 8 and carries the path-free pre-copy evidence
   cohort plus `pre_copy_evidence_met`; missing or incomplete iCloud evidence remains a blocker in
   the exported contract. Focused Rust readiness tests passed: 14 passed, 0 failed.
 - Only stale generated CodeGraph databases were removed from unrelated temporary worktrees during
@@ -222,7 +222,7 @@ At each scheduled or operator loop, update this file only with new dated evidenc
   not a DiskSage transfer completion. The source is retained; only the Finder progress cancel
   control is an operator action, and new copy, attestation, and eviction remain blocked until a
   fresh complete quiet-provider observation.
-- Naruon PR #1434 at exact head `c084801` now accepts DiskSage readiness schema versions 6 and 7
+- Naruon PR #1434 at exact head `c084801` accepts DiskSage readiness schema versions 6 and 7; stacked Naruon PR #1471 adds schema 8 acceptance for the new iCloud File Provider lock/stall blockers
   and validates the current pre-copy/iCloud-native fields in its redacted verifier summary; the
   focused handoff contract passed 48/48. The change keeps the path-free protocol and grants no
   cloud-write or source-eviction authority. Hosted Naruon security, review, and build checks remain

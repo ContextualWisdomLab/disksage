@@ -6,6 +6,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/release.yml"
+      - ".github/scripts/verify-release-artifacts.sh"
       - "src-tauri/**"
       - "src/**"
       - "package.json"
@@ -212,6 +213,27 @@ jobs:
           path: ${{ matrix.bundles }}
           if-no-files-found: error
 
+  download-artifact-pr-compat:
+    if: github.event_name == 'pull_request'
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Download exact release artifact set with v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-disksage-*-${{ github.run_attempt }}
+          path: release-artifacts
+          merge-multiple: false
+      - name: Verify downloaded release artifact contract
+        shell: bash
+        run: bash .github/scripts/verify-release-artifacts.sh release-artifacts "${{ github.run_attempt }}"
+
   attest-release:
     if: startsWith(github.ref, 'refs/tags/')
     needs: build
@@ -231,7 +253,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
 
       - name: Download exact release artifact set
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: release-disksage-*-${{ github.run_attempt }}
           path: release-artifacts
@@ -338,7 +360,7 @@ jobs:
           fi
 
       - name: Generate GitHub build provenance
-        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: release-artifacts/**/*
 
@@ -358,7 +380,7 @@ jobs:
       contents: write
     steps:
       - name: Download attested release artifact set
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: release-disksage-*-${{ github.run_attempt }}
           path: release-artifacts

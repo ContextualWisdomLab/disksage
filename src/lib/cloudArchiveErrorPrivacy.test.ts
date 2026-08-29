@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   boundedCloudArchiveErrorMessage,
+  isCloudCopyCancelled,
   type CloudArchiveErrorOperation,
 } from "./cloudArchiveErrorFeedback";
 
@@ -12,6 +13,7 @@ const operations = [
   "preview",
   "review",
   "copy",
+  "cancel",
   "provider-api-copy",
   "adopt",
   "attest",
@@ -29,6 +31,63 @@ const operations = [
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
 describe("CloudArchive bounded error feedback", () => {
+  it("recognizes only the deliberate cloud-copy cancellation outcome", () => {
+    expect(isCloudCopyCancelled("cloud-copy-cancelled")).toBe(true);
+    expect(isCloudCopyCancelled("cloud-copy-cancelled;failure-record-write-failed")).toBe(true);
+    expect(isCloudCopyCancelled(new Error("cloud-copy-cancelled"))).toBe(true);
+    expect(isCloudCopyCancelled({ message: "cloud-copy-cancelled" })).toBe(true);
+    expect(isCloudCopyCancelled("failure-record-write-failed")).toBe(false);
+    expect(isCloudCopyCancelled(new Error("cloud-copy-failed"))).toBe(false);
+  });
+
+  it("treats a late cancel after the native operation finished as a benign no-op", () => {
+    expect(boundedCloudArchiveErrorMessage("cancel", "cloud-copy-not-active")).toBe("");
+    expect(boundedCloudArchiveErrorMessage("cancel", new Error("cloud-copy-not-active"))).toBe("");
+    expect(boundedCloudArchiveErrorMessage("cancel", { message: "cloud-copy-not-active" })).toBe("");
+    expect(boundedCloudArchiveErrorMessage("cancel", "cloud-copy-operation-mismatch")).not.toBe("");
+  });
+
+  it("does not invoke untrusted object traps while classifying caught values", () => {
+    let accessorInvoked = false;
+    const accessorError = Object.defineProperty({}, "message", {
+      configurable: true,
+      get() {
+        accessorInvoked = true;
+        throw new Error("secret getter detail");
+      },
+    });
+
+    expect(boundedCloudArchiveErrorMessage("cancel", accessorError)).not.toBe("");
+    expect(isCloudCopyCancelled(accessorError)).toBe(false);
+    expect(accessorInvoked).toBe(false);
+
+    const descriptorProxy = new Proxy(
+      {},
+      {
+        getOwnPropertyDescriptor() {
+          throw new Error("secret descriptor detail");
+        },
+      },
+    );
+    expect(boundedCloudArchiveErrorMessage("copy", descriptorProxy)).toBe(
+      "클라우드 복사를 실행하지 못했습니다.",
+    );
+    expect(isCloudCopyCancelled(descriptorProxy)).toBe(false);
+
+    const prototypeProxy = new Proxy(
+      {},
+      {
+        getPrototypeOf() {
+          throw new Error("secret prototype detail");
+        },
+      },
+    );
+    expect(boundedCloudArchiveErrorMessage("copy", prototypeProxy)).toBe(
+      "클라우드 복사를 실행하지 못했습니다.",
+    );
+    expect(isCloudCopyCancelled(prototypeProxy)).toBe(false);
+  });
+
   it("drops arbitrary backend details for every user-visible failure phase", () => {
     const sensitiveDetail =
       "OAuth refresh failed for /Users/alice/private/report.pdf token=sk-sensitive";

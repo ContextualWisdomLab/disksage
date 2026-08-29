@@ -24,7 +24,7 @@ describe('release workflow retry contract', () => {
     );
     expect(
       workflow.split('pattern: release-disksage-*-${{ github.run_attempt }}').length - 1,
-    ).toBe(2);
+    ).toBe(3);
   });
 
   it('documents retry-safe concurrency in authoritative evidence', () => {

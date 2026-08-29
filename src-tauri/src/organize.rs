@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use crate::dupes::FileEntry;
 use crate::inventory::classify;
@@ -130,11 +130,11 @@ fn plan_moves_impl(
         };
         let Some(class) = onto.classes.iter().find(|c| local_name(&c.id) == local) else { continue };
         let Some(template) = onto.resolve_target_with(&reasoner, &class.id) else { continue };
-        let folder = template
-            .replacen('~', &home.to_string_lossy(), 1)
-            .replace("{class}", &local);
-        let dst = Path::new(&folder).join(name);
-        if f.path.parent() == Some(Path::new(&folder)) {
+        let Some(folder_path) = resolve_target_folder(&template, home, &local) else {
+            continue;
+        };
+        let dst = folder_path.join(name);
+        if f.path.parent() == Some(folder_path.as_path()) {
             continue;
         }
         let lineage = match lineage_probe {
@@ -161,6 +161,44 @@ fn plan_moves_impl(
 /// 후보 클래스 로컬명(온톨로지에서). picker에 전달.
 fn local_name(id: &str) -> &str {
     id.rsplit(['#', '/']).next().unwrap_or(id)
+}
+
+/// Resolve an ontology destination without making the process working directory authoritative.
+///
+/// Only an exact `~` or leading `~/` token expands to the supplied absolute home. Relative
+/// targets, named-user tildes, and parent traversal are rejected; an absolute target keeps
+/// literal tildes in its path.
+fn resolve_target_folder(template: &str, home: &Path, local: &str) -> Option<PathBuf> {
+    let resolved_template = template.replace("{class}", local);
+    if resolved_template == "~" {
+        return home.is_absolute().then(|| home.to_path_buf());
+    }
+    #[cfg(windows)]
+    let home_relative = resolved_template
+        .strip_prefix("~/")
+        .or_else(|| resolved_template.strip_prefix("~\\"));
+    #[cfg(not(windows))]
+    let home_relative = resolved_template.strip_prefix("~/");
+    if let Some(relative) = home_relative {
+        if !home.is_absolute() {
+            return None;
+        }
+        let mut folder_path = home.to_path_buf();
+        for component in Path::new(relative).components() {
+            match component {
+                Component::Normal(segment) => folder_path.push(segment),
+                _ => return None,
+            }
+        }
+        return Some(folder_path);
+    }
+
+    let folder_path = PathBuf::from(resolved_template);
+    (folder_path.is_absolute()
+        && !folder_path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir)))
+    .then_some(folder_path)
 }
 
 /// 파일 → (picker 또는 확장자 classify) 로컬 클래스 → targetFolder → 목적지.
@@ -260,6 +298,16 @@ dm:Installer a owl:Class ; rdfs:label "설치파일"@ko ; dm:targetFolder "~/Ins
 
     fn fe_at(p: &str, size: u64, mtime_ms: u64) -> FileEntry {
         FileEntry { path: PathBuf::from(p), size, mtime_ms }
+    }
+
+    fn onto_with_target(target: &str) -> Ontology {
+        let ttl = r#"
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix dm: <https://disksage.app/ontology#> .
+dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "TARGET" .
+"#;
+        parse_ttl(&ttl.replace("TARGET", target)).unwrap()
     }
 
     #[test]
@@ -406,6 +454,77 @@ dm:Image a owl:Class ; rdfs:label "이미지"@ko ; dm:targetFolder "/opt/media/{
         assert_eq!(plans.len(), 1);
         let expected = Path::new("/opt/media/Image").join("pic.png");
         assert_eq!(plans[0].dst, expected.to_string_lossy().to_string());
+    }
+
+    #[test]
+    fn rejects_relative_target_folder_that_depends_on_process_cwd() {
+        let onto = onto_with_target("relative/{class}");
+        let plans = plan_moves(&[fe("/downloads/pic.png", 100)], &onto, Path::new("/home/u"));
+        assert!(plans.is_empty());
+    }
+
+    #[test]
+    fn rejects_parent_traversal_in_home_relative_target_folder() {
+        let onto = onto_with_target("~/Media/../escape/{class}");
+        let plans = plan_moves(&[fe("/downloads/pic.png", 100)], &onto, Path::new("/home/u"));
+        assert!(plans.is_empty());
+    }
+
+    #[test]
+    fn rejects_parent_traversal_in_absolute_target_folder() {
+        let onto = onto_with_target("/opt/media/../escape/{class}");
+        let plans = plan_moves(&[fe("/downloads/pic.png", 100)], &onto, Path::new("/home/u"));
+        assert!(plans.is_empty());
+    }
+
+    #[test]
+    fn rejects_named_tilde_target_that_is_not_home_token() {
+        let onto = onto_with_target("~other/{class}");
+        let plans = plan_moves(&[fe("/downloads/pic.png", 100)], &onto, Path::new("/home/u"));
+        assert!(plans.is_empty());
+    }
+
+    #[test]
+    fn preserves_literal_tilde_inside_absolute_target_folder() {
+        let onto = onto_with_target("/opt/~archive/{class}");
+        let plans = plan_moves(&[fe("/downloads/pic.png", 100)], &onto, Path::new("/home/u"));
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].dst, "/opt/~archive/Image/pic.png");
+    }
+
+    #[test]
+    fn rejects_home_relative_target_when_home_is_relative() {
+        let onto = parse_ttl(ONTO).unwrap();
+        let plans = plan_moves(&[fe("/downloads/pic.png", 100)], &onto, Path::new("."));
+        assert!(plans.is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_home_relative_target_uses_native_absolute_path() {
+        let home = PathBuf::from(r"C:\Users\u");
+        let files = [fe(r"C:\downloads\pic.png", 100)];
+        let plans = plan_moves(&files, &onto_with_target("~/Media/{class}"), &home);
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].dst, r"C:\Users\u\Media\Image\pic.png");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_relative_target_fails_closed() {
+        let home = PathBuf::from(r"C:\Users\u");
+        let files = [fe(r"C:\downloads\pic.png", 100)];
+        assert!(plan_moves(&files, &onto_with_target("relative/{class}"), &home).is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_backslash_home_token_expands_against_home() {
+        let home = PathBuf::from(r"C:\Users\u");
+        assert_eq!(
+            resolve_target_folder(r"~\Media\{class}", &home, "Image"),
+            Some(PathBuf::from(r"C:\Users\u\Media\Image"))
+        );
     }
 
     #[test]
