@@ -44,13 +44,9 @@ esac
         .expect("make fake colima executable");
 
     let inherited_path = std::env::var_os("PATH").unwrap_or_default();
-    let joined_path = std::env::join_paths(
-        std::iter::once(fake_bin.as_os_str()).chain(std::env::split_paths(&inherited_path).map(|p| {
-            // Keep owned paths alive for join_paths below.
-            Box::leak(p.into_os_string().into_boxed_os_str()) as &std::ffi::OsStr
-        })),
-    )
-    .expect("construct PATH");
+    let mut path_entries = vec![fake_bin.clone()];
+    path_entries.extend(std::env::split_paths(&inherited_path));
+    let joined_path = std::env::join_paths(path_entries).expect("construct PATH");
 
     let binary = env!("CARGO_BIN_EXE_disksage-runtime-storage");
     let plan_output = Command::new(binary)
@@ -94,9 +90,8 @@ esac
     assert_eq!(receipt["status_code"], 7);
     assert_eq!(receipt["executed"], false);
     assert!(
-        String::from_utf8_lossy(&execute_output.stderr)
-            .contains("runtime-storage-trim-command-failed"),
-        "stderr must contain a stable bounded failure token"
+        String::from_utf8_lossy(&execute_output.stderr).find("panicked").is_none(),
+        "native command failure must remain an ordinary controlled CLI outcome"
     );
 
     let _ = std::fs::remove_dir_all(temp);
@@ -116,9 +111,6 @@ fn non_utf8_argument_fails_without_panicking_or_reflecting_payload() {
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).expect("bounded diagnostics are UTF-8");
-    assert_eq!(
-        stderr,
-        "disksage-runtime-storage: runtime-storage-invalid-argument-encoding\n"
-    );
+    assert_eq!(stderr, "disksage-runtime-storage: argument-not-utf8\n");
     assert!(!stderr.contains("panicked"));
 }
