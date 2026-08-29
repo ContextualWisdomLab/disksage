@@ -550,7 +550,13 @@ fn permanently_purge_exact(
         } else {
             fs::remove_file(&staged)
         }
-        .map_err(|_| "provider-cache-permanent-delete-failed".to_string())
+        .map_err(|_| {
+            if fs::rename(&staged, path).is_err() {
+                "provider-cache-permanent-delete-failed-rollback-failed".to_string()
+            } else {
+                "provider-cache-permanent-delete-failed".to_string()
+            }
+        })
     };
     journal.outcome = if result.is_ok() { "ok" } else { "error" }.into();
     finish_purge_result(
@@ -750,6 +756,37 @@ mod tests {
             finish_purge_result(Err("delete-failed".into()), Ok(())),
             Err("delete-failed".into())
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_directory_purge_restores_the_original_path() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let cache = temp.path().join("cache");
+        fs::create_dir(&cache).unwrap();
+        fs::write(cache.join("retained"), b"data").unwrap();
+        let candidate = candidate(
+            ProviderCacheKind::EdgeCrxCache,
+            &cache,
+            "recreation-source".into(),
+            None,
+        )
+        .unwrap();
+        fs::set_permissions(&cache, fs::Permissions::from_mode(0o500)).unwrap();
+        let journal = temp.path().join("journal.jsonl");
+        let error = permanently_purge_exact(&candidate, &journal, 1).unwrap_err();
+        assert_eq!(error, "provider-cache-permanent-delete-failed");
+        assert!(cache.exists());
+        assert!(!temp
+            .path()
+            .join(format!(
+                ".disksage-provider-cache-purge-1-{}",
+                &candidate.evidence_fingerprint[..12]
+            ))
+            .exists());
+        fs::set_permissions(&cache, fs::Permissions::from_mode(0o700)).unwrap();
     }
 
     #[test]
