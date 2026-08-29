@@ -33,52 +33,72 @@ fn macos_provider_managed_roots_for_home(home: &Path) -> Vec<PathBuf> {
     ]
 }
 
-fn path_has_file_provider_storage_component(path: &Path) -> bool {
-    path.components().any(|component| {
-        component.as_os_str() == std::ffi::OsStr::new(FILE_PROVIDER_STORAGE_COMPONENT)
-    })
+fn matches_private_file_provider_layout(path: &Path, library: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(library) else {
+        return false;
+    };
+    let components = relative.components().collect::<Vec<_>>();
+
+    if components.len() >= 2
+        && components[0].as_os_str() == std::ffi::OsStr::new("Application Support")
+        && components[1].as_os_str() == std::ffi::OsStr::new("FileProvider")
+    {
+        return true;
+    }
+
+    if components.len() >= 4
+        && components[0].as_os_str() == std::ffi::OsStr::new("Containers")
+        && components[2].as_os_str() == std::ffi::OsStr::new("Data")
+        && components[3..].iter().any(|component| {
+            component.as_os_str() == std::ffi::OsStr::new(FILE_PROVIDER_STORAGE_COMPONENT)
+        })
+    {
+        return true;
+    }
+
+    components.len() >= 3
+        && components[0].as_os_str() == std::ffi::OsStr::new("Group Containers")
+        && components[2..].iter().any(|component| {
+            component.as_os_str() == std::ffi::OsStr::new(FILE_PROVIDER_STORAGE_COMPONENT)
+        })
 }
 
 fn is_private_macos_file_provider_storage(path: &Path, roots: &[PathBuf]) -> bool {
-    roots
+    if roots
         .iter()
         .filter(|root| root.file_name() == Some(std::ffi::OsStr::new("CloudStorage")))
         .filter_map(|root| root.parent())
-        .any(|library| {
-            let containers = library.join("Containers");
-            if let Ok(relative) = path.strip_prefix(&containers) {
-                let components = relative.components().collect::<Vec<_>>();
-                if components.len() >= 3
-                    && components[1].as_os_str() == std::ffi::OsStr::new("Data")
-                    && components[2..].iter().any(|component| {
-                        component.as_os_str()
-                            == std::ffi::OsStr::new(FILE_PROVIDER_STORAGE_COMPONENT)
-                    })
-                {
-                    return true;
-                }
-            }
+        .any(|library| matches_private_file_provider_layout(path, library))
+    {
+        return true;
+    }
 
-            let group_containers = library.join("Group Containers");
-            if let Ok(relative) = path.strip_prefix(&group_containers) {
-                let components = relative.components().collect::<Vec<_>>();
-                if components.len() >= 2
-                    && components[1..].iter().any(|component| {
-                        component.as_os_str()
-                            == std::ffi::OsStr::new(FILE_PROVIDER_STORAGE_COMPONENT)
-                    })
-                {
-                    return true;
+    let components = path.components().collect::<Vec<_>>();
+    components.windows(3).any(|window| {
+        window[0].as_os_str() == std::ffi::OsStr::new("Users")
+            && !window[1].as_os_str().is_empty()
+            && window[2].as_os_str() == std::ffi::OsStr::new("Library")
+            && path
+                .components()
+                .take_while(|component| component != &window[2])
+                .count()
+                <= components.len()
+            && {
+                let mut library = PathBuf::new();
+                for component in components.iter() {
+                    library.push(component.as_os_str());
+                    if component == &window[2] {
+                        break;
+                    }
                 }
+                matches_private_file_provider_layout(path, &library)
             }
-            false
-        })
+    })
 }
 
 fn is_macos_provider_managed_path(path: &Path, roots: &[PathBuf]) -> bool {
     roots.iter().any(|root| path == root || path.starts_with(root))
-        || (path_has_file_provider_storage_component(path)
-            && is_private_macos_file_provider_storage(path, roots))
+        || is_private_macos_file_provider_storage(path, roots)
 }
 
 #[cfg(target_os = "macos")]
