@@ -24,6 +24,7 @@ const operationalAssetNames = [
   'disksage-duplicate-audit-macos-arm64',
   'disksage-cloud-local-eviction-batch-macos-arm64',
   'disksage-icloud-local-eviction-batch-macos-arm64',
+  'disksage-cloud-local-inventory-macos-arm64',
 ] as const;
 
 /** Read one UTF-8 repository file from the source-controlled project root. */
@@ -144,8 +145,11 @@ describe('release artifact provenance contract', () => {
     expect(buildJob).toContain('if ! "$asset_path" --help');
     expect(buildJob).not.toContain('--help 2>&1 || true');
     expect(buildJob).toContain('disksage-icloud-local-eviction-batch-macos-arm64');
+    expect(buildJob).toContain('disksage-cloud-local-inventory-macos-arm64');
     expect(buildJob).not.toContain('disksage-icloud-local-eviction-batch-linux');
     expect(buildJob).not.toContain('disksage-icloud-local-eviction-batch-windows');
+    expect(buildJob).not.toContain('disksage-cloud-local-inventory-linux');
+    expect(buildJob).not.toContain('disksage-cloud-local-inventory-windows');
 
     expect(attestJob).toContain("if: startsWith(github.ref, 'refs/tags/')");
     expect(attestJob).toContain('needs: build');
@@ -160,7 +164,7 @@ describe('release artifact provenance contract', () => {
     expect(attestJob).toContain('subject-path: release-artifacts/**/*');
     expect(attestJob).toContain('Generate and validate source-bound SBOM');
     expect(attestJob).toContain('disksage.spdx.json');
-    expect(attestJob).toContain('expected exactly 26 regular files');
+    expect(attestJob).toContain('expected exactly 28 regular files');
     expect(attestJob).toContain('require_exactly_one_file "$required_name"');
     expect(attestJob).toContain('require_exactly_one_file "$required_name.sha256"');
 

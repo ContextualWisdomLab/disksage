@@ -25,6 +25,7 @@ const operationalAssetNames = [
   'disksage-duplicate-audit-macos-arm64',
   'disksage-cloud-local-eviction-batch-macos-arm64',
   'disksage-icloud-local-eviction-batch-macos-arm64',
+  'disksage-cloud-local-inventory-macos-arm64',
 ] as const;
 
 /** Read one UTF-8 file from the source-controlled repository root. */

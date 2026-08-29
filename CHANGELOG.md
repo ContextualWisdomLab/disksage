@@ -54,6 +54,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Ship the iCloud-named batch planner as a separate checksummed macOS artifact so operators can
   generate the native Foundation-backed plan without compiling source; Linux and Windows retain
   only the provider-generic planner because the iCloud Foundation contract is macOS-specific.
+- Ship the read-only cloud-local allocation inventory as a checksummed macOS artifact so a
+  matching release can produce fresh candidate evidence before either batch planner runs. An
+  inventory from an older executable head remains stale and cannot authorize a new plan.
 
 ### Fixed
 
