@@ -1,4 +1,4 @@
-use disksage_lib::dev_artifact_approval::{clean_artifacts_with_approval, review_selection};
+use disksage_lib::dev_artifact_approval::{clean_artifacts_with_confirmation, review_selection};
 use disksage_lib::dev_artifacts::find_artifacts;
 
 #[test]
@@ -20,7 +20,7 @@ fn bound_cleanup_requires_the_separately_typed_backend_phrase() {
     assert_eq!(candidates.len(), 1);
     let approval = review_selection(temp.path(), &candidates, now_ms).unwrap();
 
-    let results = clean_artifacts_with_approval(
+    let results = clean_artifacts_with_confirmation(
         &candidates,
         temp.path(),
         0,
